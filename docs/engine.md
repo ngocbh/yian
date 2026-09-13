@@ -162,7 +162,7 @@ spawner kind means setting traits on its node; the core never gains a branch. De
 
 Node evaluation may raise (a failed assert, a bad LLM response); the engine catches the
 exception at the evaluation boundary. The dispatcher then prepares and commits a
-schema-5 `NodeFailedRecord` carrying one nested, immutable `Failure`, optional
+schema-6 `NodeFailedRecord` carrying one nested, immutable `Failure`, optional
 model/tool evaluation evidence, and forward capture when retention is enabled.
 Only after the record is appended does the
 reducer expose that same `Failure` through `NodeFailed`, terminal `RunFailed`, and
@@ -196,14 +196,14 @@ canonical JSONL append. The closed record vocabulary is:
 ```
 RunStartedRecord | RunResumedRecord | NodeStartedRecord |
 NodeSucceededRecord | NodeRoutedRecord | NodeExpandedRecord | NodeFailedRecord |
-MemoryFrameLearningStartedRecord | MemoryFrameLearnedRecord |
-MemoryFrameLearningFailedRecord | MemoryCommitRequestedRecord |
-MemoryCommitSucceededRecord | MemoryCommitFailedRecord
+MemoryCommitRequestedRecord |
+MemoryCommitSucceededRecord | MemoryCommitFailedRecord |
+BackwardStartedRecord | BackwardReadyRecord | BackwardFinishedRecord
 ```
 
-Schema-5 node outcome records require forward capture when the recorded run
+Schema-6 node outcome records require forward capture when the recorded run
 has `learn=True` and omit it when `learn=False`. Optional model/tool evaluation
-evidence is separate. There is no separate terminal record: success is derived
+evidence is separate. There is no separate forward terminal record: success is derived
 from the terminal value once the graph is quiescent. Failure is derived either from
 `NodeFailedRecord` or from a reduced route that skip-floods the declared terminal
 output. The first such route latches `graph.terminal_unreachable` with the causal
@@ -212,10 +212,62 @@ later, and persists that failure on the causal `NodeRoutedRecord`. Replay
 structurally revalidates the route before restoring the recorded failure; a later
 explicit node failure still wins immediately.
 
+When retention is enabled, the trace keeps the actual terminal producer and
+accepted invocation contexts through graph pruning. The reverse-feedback fold
+walks those outcomes in reverse acceptance order, collecting every incoming
+message before calling an occurrence's `backward` hook once. Node code owns the
+transformation; recorded input routes carry its validated feedback upstream.
+Opaque expression functions stop transfer. Accepted START results preserve flow
+input feedback even where an input came from a literal or default.
+
+Each occurrence's result carries source and message references for attribution.
+Equal feedback values remain separate contributions. Unreached accepted
+occurrences remain in the inventory with empty feedback, so later learning can
+use their history independently of feedback reachability. This fold does not
+change forward scheduling or the forward result.
+
+## Explicit backward attempts
+
+`FlowEngine` drives forward scheduling only. `learn=True` retains accepted
+execution independently of memory recall, then the public run boundary returns
+the forward result. `RunResult.backward(feedback)` later calls the explicit
+`runtime.backward` driver against the same record/reducer authority. Ordinary
+CODE/TOOL/MODEL/HUMAN_INPUT/WAIT nodes stop feedback; START, END, and a stopping
+LOOP project it mechanically. A reached AGENT uses at most one tool-free model
+call from its accepted prompt, locals, evidence, and effective configuration.
+No default, render, recall, expression function, or forward node is rerun.
+
+The driver validates root feedback before accepting `BackwardStartedRecord`.
+It completes the reverse fold, projects every enabled frame's owner context,
+and runs frame learners in recorded layout order. All proposals must be valid
+before one `BackwardReadyRecord`; a known computation/learner failure can finish
+earlier, and no policy commits occur before Ready. Each enabled policy then gets
+one ordered batch, including an empty one, with a durable
+`MemoryCommitRequestedRecord` before the backend call and an accepted success or
+failure observation afterward. Commit records require a positive `attempt_id`.
+A known commit failure stops later policies. `BackwardFinishedRecord` records
+the separate final outcome, never replacing the forward output or failure.
+
+`runtime.learning` owns shared pure message ordering/transfer validation,
+root projections, attempt state, and owner-context construction. Ready replay
+validates the exact accepted occurrence inventory and routes without invoking
+callbacks or materializing transcript contexts. Owner contexts include all
+accepted outcome kinds and empty/unexecuted frames. Their feedback keeps original
+root-relative execution coordinates; memory scopes select receiver frames.
+
+No effective feedback means no AGENT backward model work, but all enabled frame
+learners still run. A manual retry before the first accepted request recomputes
+the entire attempt with fresh sessions from the original snapshots; Ready
+proposals are never resumed. Any accepted request or successful Finished closes
+retry eligibility. An unconfirmed request remains `unknown`, including when the
+backend returned but its observation could not append. Host/cancellation/log
+faults escape with the accepted prefix and never create a completion record.
+
 `resume_flow(flow, log=path)` locks and validates an existing contiguous prefix,
 checks the authored-flow fingerprint, rebuilds a private graph, and folds every record
 through the same reducer used live. After any incomplete-tail repair, a terminal prefix
-is returned without appending a record. For a nonterminal prefix, one
+is returned without appending a record or invoking backward/memory work, even
+when its last backward attempt was interrupted. For a nonterminal prefix, one
 `RunResumedRecord` places durably started nodes with no durable outcome ahead of the
 ready frontier, then dispatch continues. Original inputs, run ID,
 worker count, typed values, growth seeds, and resolved LLM configuration all come from

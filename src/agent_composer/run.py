@@ -3,8 +3,9 @@
 ``run_flow`` initializes a private copy of a loaded flow, commits its complete
 canonical start state, and drives only post-durable observer notifications.
 ``resume_flow`` reconstructs that state from a locked JSONL prefix and either
-returns a fully settled terminal result unchanged, continues unfinished terminal
-learning, or commits one ``RunResumed`` transition before primary execution.
+returns a terminal result by inspection, or commits one ``RunResumed`` transition
+before primary execution. Retained results accept explicit backward attempts
+after forward execution has returned and released its opened resources.
 
 The runtime borrows an already-open log.  This module owns log creation,
 recovery, locking, tail repair, and closure after the engine's structured drain.
@@ -41,6 +42,7 @@ from agent_composer.events import (
     RunSucceeded,
     StreamChunk,
 )
+from agent_composer.expr.lineage import FeedbackValue
 from agent_composer.memory import (
     LearningResult,
     Memory,
@@ -50,9 +52,12 @@ from agent_composer.memory import (
 )
 from agent_composer.nodes.binding import coerce_inputs
 from agent_composer.runtime.engine import FlowEngine
+from agent_composer.runtime.backward import drive_backward
+from agent_composer.runtime.contracts import BackwardOutcome
 from agent_composer.runtime.log import (
     JsonlRunLog,
     MemoryRunLog,
+    RecordEnvelope,
     RunLog,
     RunStartedRecord,
     decode_record,
@@ -66,11 +71,7 @@ from agent_composer.runtime.state import (
     prepare_run_resumed,
     prepare_run_started,
 )
-from agent_composer.runtime.memory_runtime import (
-    MemoryRuntime,
-    learning_is_settled,
-    learning_result,
-)
+from agent_composer.runtime.memory_runtime import MemoryRuntime
 from agent_composer.typesys.pool import VariablePool
 from agent_composer.typesys.seeding import default_run_id, seed_system_clock
 
@@ -103,8 +104,10 @@ class RunResult:
         events (`list[Any]`):
             Post-durable observers from this fresh or resume segment only.
         learning (`LearningResult | None`):
-            Separate post-terminal learning disposition, or ``None`` when the
-            run did not enable learning.
+            Learning projection of the last observed backward attempt, initially
+            ``None``. It never changes the forward result.
+        backward_outcome (`BackwardOutcome | None`):
+            Last observed accepted backward disposition, initially ``None``.
     """
 
     input: dict[str, Any]
@@ -115,6 +118,126 @@ class RunResult:
     failure: Failure | None = None
     events: list[Any] = field(default_factory=list)
     learning: LearningResult | None = None
+    backward_outcome: BackwardOutcome | None = None
+    _backward_handle: _BackwardHandle | None = field(default=None, init=False, repr=False, compare=False)
+
+    def backward(self, feedback: FeedbackValue = None) -> BackwardOutcome:
+        """Run one explicit backward attempt over retained accepted execution.
+
+        Args:
+            feedback (`FeedbackValue`, *optional*, defaults to `None`): Ordinary
+                text or structured feedback selecting the accepted flow output.
+
+        Returns:
+            `BackwardOutcome`: The accepted attempt result, separate from forward
+                status, output, failure, and events. Learning is its projection.
+
+        Raises:
+            `TypeError`: Feedback has an invalid ordinary-message carrier.
+            `ValueError`: Retention is disabled, feedback is invalid, or accepted
+                history forbids another attempt.
+            `MemorySetupError`: Enabled policies cannot restore their recorded
+                snapshots. Host and log faults also propagate while preserving
+                the accepted prefix.
+            `RuntimeError`: Another backward call on this result is in progress,
+                or its accepted prefix could not be retained after an earlier call.
+
+        Examples:
+            `result.backward("Keep the explanation shorter.")` returns a separate
+            outcome for a run created with `learn=True`.
+        """
+        handle = self._backward_handle
+        if handle is None:
+            raise ValueError("backward requires a run retained with learn=True")
+        if not handle._guard.acquire(blocking=False):
+            raise RuntimeError("a backward call on this result is already in progress")
+        try:
+            try:
+                return handle.backward(feedback)
+            finally:
+                self.backward_outcome = handle.outcome
+                self.learning = None if self.backward_outcome is None else self.backward_outcome.learning
+        finally:
+            handle._guard.release()
+
+
+@dataclass
+class _BackwardHandle:
+    """Private original program and closed append authority for delayed feedback."""
+
+    program: CompiledFlow
+    run_id: str
+    path: Path | None
+    records: tuple[RecordEnvelope, ...]
+    memory: dict[str, Memory] | None
+    outcome: BackwardOutcome | None
+    _guard: Any = field(default_factory=threading.Lock, init=False, repr=False, compare=False)
+    _unusable: bool = field(default=False, init=False, repr=False, compare=False)
+
+    def backward(self, feedback: FeedbackValue) -> BackwardOutcome:
+        """Reconstruct accepted facts and delegate the complete attempt driver."""
+        if self._unusable:
+            raise RuntimeError("backward handle is unavailable after an accepted-prefix refresh failure")
+        authority = MemoryRunLog._from_records(self.records) if self.path is None else JsonlRunLog.resume(self.path)
+        state = None
+        replay_sequence = None
+        primary_error = None
+        try:
+            state = _replay_compiled_run_log(self.program, authority)
+            if state.run_id != self.run_id:
+                raise ValueError("backward log identity differs from the retained run")
+            replay_sequence = state.next_sequence
+
+            def open_memory() -> MemoryRuntime:
+                if self.memory is None:
+                    raise MemorySetupError("backward requires this run's enabled memory mapping")
+                program = copy.deepcopy(self.program)
+                apply_effective_llm_map(program, state.effective_llm_by_static_path)
+                layout, origins = _resolve_runtime_memory_layout(program)
+                if layout != state.memory_layout:
+                    raise ValueError("recorded memory layout does not match the retained program")
+                return MemoryRuntime.open(layout=state.memory_layout, origins=origins,
+                                          memory=self.memory, snapshots=state.memory_snapshots)
+
+            return drive_backward(state, authority, feedback, open_memory=open_memory)
+        except BaseException as exc:
+            primary_error = exc
+            raise
+        finally:
+            try:
+                if replay_sequence is not None:
+                    try:
+                        self._refresh(authority, state, replay_sequence)
+                    except BaseException as refresh_error:
+                        self._unusable = True
+                        if primary_error is None:
+                            primary_error = refresh_error
+                            raise
+                        _note_cleanup_error(primary_error, "backward prefix refresh", refresh_error)
+            finally:
+                _close_owned_log(authority, primary_error)
+
+    def _refresh(self, authority: RunLog, state: RunState, replay_sequence: int) -> None:
+        """Retain accepted facts, replaying an append that outpaced local reduction."""
+        sequence = authority.next_sequence
+        if type(sequence) is not int or sequence < state.next_sequence:
+            raise ValueError("backward log sequence regressed during the call")
+        # Merely reading another handle's work must preserve this result's
+        # existing observation when its own submission accepted no new record.
+        if sequence == replay_sequence:
+            return
+        if state.next_sequence > replay_sequence:
+            self.outcome = state.backward_state.outcome
+        records = tuple(authority)
+        if authority.next_sequence != sequence or len(records) != sequence:
+            raise ValueError("backward log changed during prefix refresh")
+        if self.path is None:
+            self.records = records
+        if sequence > state.next_sequence:
+            accepted = _replay_compiled_run_log(self.program, authority)
+            if accepted.run_id != self.run_id:
+                raise ValueError("backward log identity differs from the retained run")
+            self.outcome = accepted.backward_state.outcome
 
 
 def run_flow(
@@ -165,8 +288,9 @@ def run_flow(
             ``None`` leaves every authored policy dormant. A mapping enables
             recall and records exact per-policy recovery snapshots.
         learn (`bool`, *optional*, defaults to `False`):
-            Run the durable post-terminal learning phase. This requires an
-            enabled ``memory`` mapping and never changes the primary result.
+            Retain accepted execution for a later explicit `RunResult.backward`
+            call. Forward execution performs no learning or commits. Memory is
+            optional; an enabled mapping supplies owned learners for that call.
 
     Returns:
         `RunResult`:
@@ -181,7 +305,7 @@ def run_flow(
             state violates its contract.
         `MemorySetupError`:
             Memory is enabled without a required policy implementation, cannot
-            open an exact run snapshot, or ``learn`` is enabled without memory.
+            open an exact run snapshot, or has an invalid configuration.
         `FileExistsError`:
             ``log`` names an existing path.
         `OSError`:
@@ -221,13 +345,12 @@ def _run_flow_controlled(
         raise TypeError("run_flow expects a ComposedFlow")
     if type(learn) is not bool:
         raise TypeError("learn must be a bool")
-    if memory is None and learn:
-        raise MemorySetupError("learn=True requires an enabled memory mapping")
 
     # Identity belongs to the authored program, before cascade resolution or any
     # per-run copy can change object topology.
     authored_fingerprint = flow_fingerprint(flow.compiled)
     private_flow = copy.deepcopy(flow.compiled)
+    retained_program = copy.deepcopy(private_flow) if learn else None
 
     # Ambient defaults are read exactly once each and become part of RunStarted.
     defaults = {
@@ -290,10 +413,12 @@ def _run_flow_controlled(
 
         # Preparation precedes durable-file creation, so invalid initialization
         # cannot leave an empty path behind.
+        log_path = None if log is None else Path(log)
+        retained_locator = None if log_path is None else log_path.absolute()
         authority = (
             MemoryRunLog(canonical_run_id)
-            if log is None
-            else JsonlRunLog.create(log, canonical_run_id)
+            if log_path is None
+            else JsonlRunLog.create(retained_locator, canonical_run_id)
         )
         events: list[Any] = []
         start_observers = commit_prepared(authority, state, prepared_start)
@@ -317,11 +442,9 @@ def _run_flow_controlled(
             ),
         )
         events.extend(engine.run())
-        if learn:
-            if memory_runtime is None:  # guarded before any setup side effect
-                raise AssertionError("learning has no opened memory runtime")
-            memory_runtime.drive_learning(state, authority)
-        return _result_from_state(state, authority.path, events)
+        return _result_from_state(state, log_path, events,
+                                  handle=_retained_handle(retained_program, state, authority, memory,
+                                                          locator=retained_locator))
     except BaseException as exc:
         primary_error = exc
         raise
@@ -338,7 +461,7 @@ def resume_flow(
     on_stream: StreamHook | None = None,
     memory: dict[str, Memory] | None = None,
 ) -> RunResult:
-    """Recover primary execution and any enabled post-terminal learning.
+    """Recover primary execution or inspect a terminal run without backward work.
 
     Historical records are folded silently.  Recovery never reads ambient model
     defaults, mints a new identity, or accepts fresh input/configuration.
@@ -360,8 +483,9 @@ def resume_flow(
             Callback for new transient stream chunks, which are never replayed.
         memory (`dict[str, Memory] | None`, *optional*, defaults to `None`):
             Host-injected policy implementations required when the recorded run
-            enabled memory and still has unfinished execution or learning. A
-            fully settled terminal run ignores this argument.
+            enabled memory and still has unfinished forward execution. Terminal
+            inspection opens no policies; supplied references remain available
+            for a later eligible explicit backward call.
 
     Returns:
         `RunResult`:
@@ -404,13 +528,18 @@ def _resume_flow_controlled(
     stop_event: threading.Event,
 ) -> RunResult:
     """Recover and drive a durable run with a host-owned stop event."""
-    authority = JsonlRunLog.resume(log)
+    log_path = Path(log)
+    retained_locator = log_path.absolute()
+    authority = JsonlRunLog.resume(retained_locator)
     memory_runtime: MemoryRuntime | None = None
     primary_error: BaseException | None = None
     try:
         state = _replay_run_log(flow, authority)
-        if state.result is not None and learning_is_settled(state):
-            return _result_from_state(state, authority.path, [])
+        retained_program = copy.deepcopy(flow.compiled) if state.learn else None
+        if state.result is not None:
+            return _result_from_state(state, log_path, [],
+                                      handle=_retained_handle(retained_program, state, authority, memory,
+                                                              locator=retained_locator))
 
         if state.memory_layout is not None:
             if memory is None:
@@ -462,11 +591,9 @@ def _resume_flow_controlled(
             )
             events.extend(engine.run())
 
-        if state.learn and not learning_is_settled(state):
-            if memory_runtime is None:
-                raise AssertionError("unfinished learning has no memory runtime")
-            memory_runtime.drive_learning(state, authority)
-        return _result_from_state(state, authority.path, events)
+        return _result_from_state(state, log_path, events,
+                                  handle=_retained_handle(retained_program, state, authority, memory,
+                                                          locator=retained_locator))
     except BaseException as exc:
         primary_error = exc
         raise
@@ -484,6 +611,11 @@ def _replay_run_log(flow: ComposedFlow, log: RunLog) -> RunState:
     """
     if not isinstance(flow, ComposedFlow):
         raise TypeError("_replay_run_log expects a ComposedFlow")
+    return _replay_compiled_run_log(flow.compiled, log)
+
+
+def _replay_compiled_run_log(flow: CompiledFlow, log: RunLog) -> RunState:
+    """Reuse canonical replay for a private original compiled program."""
     source_run_id = log.run_id
     source_sequence = log.next_sequence
     if type(source_run_id) is not str or not source_run_id:
@@ -524,7 +656,7 @@ def _replay_run_log(flow: ComposedFlow, log: RunLog) -> RunState:
     first = canonical[0]
     if not isinstance(first.record, RunStartedRecord):
         raise ValueError("the first run log record must be RunStarted")
-    actual_fingerprint = flow_fingerprint(flow.compiled)
+    actual_fingerprint = flow_fingerprint(flow)
     recorded_fingerprint = first.record.flow_fingerprint
     if actual_fingerprint != recorded_fingerprint:
         raise ValueError(
@@ -532,7 +664,7 @@ def _replay_run_log(flow: ComposedFlow, log: RunLog) -> RunState:
             f"recorded {recorded_fingerprint!r}, supplied {actual_fingerprint!r}"
         )
 
-    private_flow = copy.deepcopy(flow.compiled)
+    private_flow = copy.deepcopy(flow)
     apply_effective_llm_map(
         private_flow,
         first.record.effective_llm_by_static_path,
@@ -614,12 +746,14 @@ def _result_from_state(
     state: RunState,
     path: Path | None,
     events: list[Any],
+    *, handle: _BackwardHandle | None = None,
 ) -> RunResult:
     """Project one terminal reducer state into the exact public result shape."""
     terminal = state.result
-    projected_learning = learning_result(state)
+    outcome = state.backward_state.outcome if handle is None else handle.outcome
+    projected_learning = None if outcome is None else outcome.learning
     if isinstance(terminal, RunSucceeded):
-        return RunResult(
+        result = RunResult(
             input=copy.deepcopy(state.input),
             status="succeeded",
             run_id=_required_state_run_id(state),
@@ -627,9 +761,10 @@ def _result_from_state(
             output=copy.deepcopy(terminal.output),
             events=events,
             learning=projected_learning,
+            backward_outcome=outcome,
         )
-    if isinstance(terminal, RunFailed):
-        return RunResult(
+    elif isinstance(terminal, RunFailed):
+        result = RunResult(
             input=copy.deepcopy(state.input),
             status="failed",
             run_id=_required_state_run_id(state),
@@ -637,8 +772,23 @@ def _result_from_state(
             failure=terminal.failure,
             events=events,
             learning=projected_learning,
+            backward_outcome=outcome,
         )
-    raise RuntimeError("engine returned without deriving a terminal run result")
+    else:
+        raise RuntimeError("engine returned without deriving a terminal run result")
+    result._backward_handle = handle
+    return result
+
+
+def _retained_handle(
+    program: CompiledFlow | None, state: RunState, log: RunLog, memory: dict[str, Memory] | None,
+    *, locator: Path | None,
+) -> _BackwardHandle | None:
+    """Detach delayed authority without keeping an opened session or public wrapper."""
+    if program is None:
+        return None
+    return _BackwardHandle(program, state.run_id, locator, tuple(log) if log.path is None else (),
+                           memory.copy() if type(memory) is dict else memory, state.backward_state.outcome)
 
 
 def _required_state_run_id(state: RunState) -> str:

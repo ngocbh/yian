@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from math import isfinite
 from types import NoneType, TracebackType
@@ -1088,7 +1088,12 @@ class RecallContext:
 
 @dataclass(frozen=True, slots=True, init=False)
 class MemoryEpisode:
-    """One reducer-accepted source-neutral execution episode."""
+    """One reducer-accepted source-neutral execution episode.
+
+    ``execution_seq`` optionally identifies the physical accepted node-start
+    record; it is independent of episode order and outcome-record position.
+    Host-created episodes may omit it, and source coordinate zero is valid.
+    """
 
     run_id: str
     occurrence: MemoryOccurrenceRef
@@ -1101,6 +1106,7 @@ class MemoryEpisode:
     prompt: str | None
     memory_sections: tuple[MemorySection, ...]
     interactions: tuple[VisibleInteraction, ...]
+    execution_seq: int | None
 
     def __init__(
         self,
@@ -1115,9 +1121,22 @@ class MemoryEpisode:
         base_system_prompt: str | None = None,
         prompt: str | None = None,
         memory_sections: tuple[MemorySection, ...] = (),
+        *,
+        execution_seq: int | None = None,
     ) -> None:
-        """Validate one accepted success or failure episode and snapshot its JSON."""
+        """Validate one accepted success or failure episode and snapshot its JSON.
+
+        ``execution_seq`` is an optional exact nonnegative integer. Malformed
+        fields raise ``TypeError``; inconsistent values or excessive JSON nesting
+        raise ``ValueError``. Existing positional host construction is preserved.
+        """
         object.__setattr__(self, "run_id", _require_string(run_id, "run_id"))
+        if execution_seq is not None:
+            if type(execution_seq) is not int:
+                raise TypeError("execution_seq must be an integer or None")
+            if execution_seq < 0:
+                raise ValueError("execution_seq must be non-negative")
+        object.__setattr__(self, "execution_seq", execution_seq)
         if type(occurrence) is not MemoryOccurrenceRef:
             raise TypeError("occurrence must be a MemoryOccurrenceRef")
         MemoryOccurrenceRef(occurrence.frame_ref, occurrence.occurrence_path)
@@ -1228,6 +1247,7 @@ class LearnContext:
                 base_system_prompt=episode.base_system_prompt,
                 prompt=episode.prompt,
                 memory_sections=episode.memory_sections,
+                execution_seq=episode.execution_seq,
             )
             if episode.run_id != self.run_id:
                 raise ValueError("episode run_id must match the learning context")
@@ -1285,6 +1305,36 @@ class MemoryMutation:
         return _thaw_json(self._payload)
 
 
+def _validate_mutations(
+    mutations: tuple[MemoryMutation, ...],
+    *,
+    frame_ref: MemoryFrameRef | None = None,
+) -> tuple[MemoryMutation, ...]:
+    """Revalidate and detach a mutation batch, preserving its semantic order."""
+    if type(mutations) is not tuple:
+        raise TypeError("mutations must be a tuple")
+    copied = []
+    for mutation in mutations:
+        if type(mutation) is not MemoryMutation:
+            raise TypeError("mutations items must be MemoryMutation values")
+        ref = mutation.frame_ref
+        if type(ref) is not MemoryFrameRef:
+            raise TypeError("mutation frame_ref must be a MemoryFrameRef")
+        copied.append(
+            MemoryMutation(
+                mutation.mutation_id,
+                MemoryFrameRef(ref.root_flow_id, ref.static_path, ref.owner),
+                mutation.payload,
+            )
+        )
+        if frame_ref is not None and mutation.frame_ref != frame_ref:
+            raise ValueError("mutation frame_ref must match the learning frame")
+    ids = tuple(mutation.mutation_id for mutation in mutations)
+    if len(ids) != len(set(ids)):
+        raise ValueError("mutation IDs must be unique")
+    return tuple(copied)
+
+
 @dataclass(frozen=True, slots=True)
 class LearningFailure:
     """One frame-local learn or policy-local commit failure in a run result."""
@@ -1323,14 +1373,67 @@ class LearningFailure:
 
 
 @dataclass(frozen=True, slots=True)
+class PolicyCommitOutcome:
+    """One policy's confirmed or still-unresolved commit disposition.
+
+    Attributes:
+        policy_name (`str`): Nonempty configured policy name.
+        status (`str`): `unrequested`, `unknown`, `succeeded`, or `failed`.
+        commit_id (`str | None`): Nonempty protocol identity after a request;
+            defaults to `None` and must be absent when unrequested.
+        failure (`MemoryOperationFailure | None`): Defaults to `None`; required
+            only for a confirmed failed commit. Backend stage and retryability
+            remain unchanged.
+    """
+
+    policy_name: str
+    status: str
+    commit_id: str | None = None
+    failure: MemoryOperationFailure | None = None
+
+    def __post_init__(self) -> None:
+        """Validate exact identities and detach the optional failure carrier."""
+        _require_string(self.policy_name, "policy_name")
+        _require_string(self.status, "status")
+        if self.status not in ("unrequested", "unknown", "succeeded", "failed"):
+            raise ValueError("invalid policy commit status")
+        if self.commit_id is not None:
+            _require_string(self.commit_id, "commit_id")
+        if self.failure is not None:
+            if type(self.failure) is not MemoryOperationFailure:
+                raise TypeError("failure must be a MemoryOperationFailure or None")
+            object.__setattr__(self, "failure", replace(self.failure))
+        if self.status == "unrequested":
+            if self.commit_id is not None or self.failure is not None:
+                raise ValueError("unrequested policy cannot carry commit data")
+        elif self.commit_id is None:
+            raise ValueError("requested policy requires commit_id")
+        if (self.status == "failed") != (self.failure is not None):
+            raise ValueError("only failed policy commits require a failure")
+
+
+@dataclass(frozen=True, slots=True)
 class LearningResult:
-    """Separate post-terminal learning disposition exposed by ``RunResult``."""
+    """Separate learning completion from backend retryability hints.
+
+    Attributes:
+        status (`str`): `succeeded`, `failed`, or `incomplete`. Success requires
+            no failures and only successful supplied policies. Failure requires
+            an actual attributed failure. Incomplete does not infer completion
+            from the known policy dispositions.
+        failures (`tuple[LearningFailure, ...]`): Unique failure attributions in
+            supplied order; defaults to an empty tuple.
+        policies (`tuple[PolicyCommitOutcome, ...]`): Unique policy names in
+            supplied order; defaults to an empty tuple. Recorded run layout
+            owns configured membership and order.
+    """
 
     status: str
     failures: tuple[LearningFailure, ...] = ()
+    policies: tuple[PolicyCommitOutcome, ...] = ()
 
     def __post_init__(self) -> None:
-        """Require one closed status and failures consistent with retryability."""
+        """Validate supplied dispositions without inferring attempt completion."""
         _require_string(self.status, "status")
         if self.status not in ("succeeded", "failed", "incomplete"):
             raise ValueError(
@@ -1338,16 +1441,12 @@ class LearningResult:
             )
         if type(self.failures) is not tuple:
             raise TypeError("learning failures must be a tuple")
+        failures = []
         identities: set[tuple[str, str, MemoryFrameRef | None]] = set()
         for failure in self.failures:
             if type(failure) is not LearningFailure:
                 raise TypeError("failures items must be LearningFailure values")
-            LearningFailure(
-                failure.policy_name,
-                failure.operation,
-                failure.failure,
-                failure.frame_ref,
-            )
+            failures.append(replace(failure))
             identity = (
                 failure.policy_name,
                 failure.operation,
@@ -1356,13 +1455,25 @@ class LearningResult:
             if identity in identities:
                 raise ValueError("learning failure attribution must be unique")
             identities.add(identity)
-        retryable = any(item.failure.retryable for item in self.failures)
+        if type(self.policies) is not tuple:
+            raise TypeError("learning policies must be a tuple")
+        policies = []
+        names: set[str] = set()
+        for policy in self.policies:
+            if type(policy) is not PolicyCommitOutcome:
+                raise TypeError("policies items must be PolicyCommitOutcome values")
+            policies.append(replace(policy))
+            if policy.policy_name in names:
+                raise ValueError("learning policy names must be unique")
+            names.add(policy.policy_name)
+        object.__setattr__(self, "policies", tuple(policies))
+        object.__setattr__(self, "failures", tuple(failures))
         if self.status == "succeeded" and self.failures:
             raise ValueError("succeeded learning cannot carry failures")
-        if self.status == "failed" and (not self.failures or retryable):
-            raise ValueError("failed learning requires only final failures")
-        if self.status == "incomplete" and not retryable:
-            raise ValueError("incomplete learning requires a retryable failure")
+        if self.status == "succeeded" and any(p.status != "succeeded" for p in policies):
+            raise ValueError("succeeded learning requires succeeded policies")
+        if self.status == "failed" and not self.failures:
+            raise ValueError("failed learning requires at least one failure")
 
 
 class MemoryOperationError(Exception):

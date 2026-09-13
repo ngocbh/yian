@@ -67,8 +67,9 @@ def _engine(
 ) -> FlowEngine:
     """Prepare one in-memory authority and return the final direct engine surface."""
     inputs = dict(run_inputs or {})
+    effective_llm = {}
     if learn:
-        resolve_llm_cascade(flow, {}, defaults={"provider": "test", "model": "test"})
+        effective_llm = resolve_llm_cascade(flow, {}, defaults={"provider": "test", "model": "test"})
         apply_execution_layout(flow, resolve_execution_layout(flow))
     state = RunState(flow)
     pool = VariablePool(start_id=flow.start_id)
@@ -84,7 +85,7 @@ def _engine(
             start_wiring_override={
                 name: f"${{input.{name}}}" for name in inputs
             },
-            effective_llm_by_static_path={},
+            effective_llm_by_static_path=effective_llm,
             num_workers=num_workers,
             memory_layout=memory_layout,
             memory_snapshots=memory_snapshots,

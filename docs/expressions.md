@@ -121,11 +121,12 @@ A **prompt** is the strict context: it reads local inputs as bare `${name}`;
 AGENT prompts also read their own declared variables. It renders in
 `STRICT_RAISE` mode and may call a builtin.
 
-## builtins — the prompt formatters
+## builtins — pure expression functions
 
-A prompt span may be a plain reference or a call to a pure builtin over the node's
-local values. A deliberate, bounded bend of "all computation is a node": builtins
-are read-only formatting, mint no graph node, and are unavailable in bindings/`when:`.
+A template span may be a plain reference or a call to a pure builtin. Prompts use
+local values; bindings and conditions use their existing resolver. The same
+closed registry serves these contexts. Builtins are read-only formatting and
+create no graph node.
 
 | Builtin | Does |
 |---------|------|
@@ -134,6 +135,22 @@ are read-only formatting, mint no graph node, and are unavailable in bindings/`w
 | `upper(s)` / `lower(s)` | case-fold |
 
 New builtins register with `@register_template_fn()`.
+
+## Retained expression routes
+
+With `learn=True`, binding evaluation records the route in the same walk that
+produces the delivered value. References retain the actual accepted producer;
+record/list construction, selection, coalescing, concatenation, and repetition
+preserve their structural routes. Equal values never establish source identity.
+An explicit backward call uses those routes without evaluating the expression or
+calling a registered function again. Opaque operations stop mechanical transfer
+and retain local context; literal/default inputs have no invented upstream source.
+
+Feedback is ordinary text, a partial record, an exact-length positional list, or
+`None`. Whole-value text stays unchanged; interpretation context accompanies it
+separately. Validate every nested length before treating an all-`None` selection
+as empty. See [the Python API](api.md#explicit-backward-feedback) for examples and
+failed-forward rules.
 
 ## Why this shape
 

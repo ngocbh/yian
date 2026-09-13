@@ -11,15 +11,21 @@ import json
 from typing import Literal
 
 from agent_composer.diagnostics import Failure, OriginRef
-from agent_composer.expr.lineage import SourceRef, ValueRoute
+from agent_composer.expr.lineage import (
+    FeedbackValue, SourceRef, ValueRoute, validate_feedback,
+)
 from agent_composer.memory.contracts import (
     LearningResult,
     MemoryFrameRef,
+    MemoryMutation,
     MemoryOperationFailure,
+    _validate_mutations,
     JsonObject,
     JsonValue,
 )
-from agent_composer.nodes.base import BackwardResult, _copy_backward_value
+from agent_composer.nodes.base import (
+    BackwardResult, _copy_backward_value, _validate_declared_names, _validate_input_output_paths,
+)
 from agent_composer.nodes.contracts import ExecutionScope
 
 
@@ -147,6 +153,65 @@ def _validate_route(route: ValueRoute) -> None:
 
 
 @dataclass(frozen=True, slots=True, init=False)
+class BackwardCapture:
+    """Transient detached inventories, scope, and node material from one invocation.
+
+    This worker-owned snapshot becomes durable only through an accepted
+    ForwardCapture. It contains neither bound values nor outcomes.
+    """
+
+    input_names: tuple[str, ...]
+    variable_names: tuple[str, ...]
+    scope: ExecutionScope | None
+    _node_data: JsonObject = field(repr=False)
+
+    def __init__(
+        self,
+        input_names: tuple[str, ...] = (),
+        variable_names: tuple[str, ...] = (),
+        scope: ExecutionScope | None = None,
+        node_data: JsonObject | None = None,
+    ) -> None:
+        """Validate common declarations and copy optional node-owned invocation data.
+
+        Args:
+            input_names (`tuple[str, ...]`, *optional*, defaults to `()`): Distinct
+                eligible input names, snapshotted before binding can fail.
+            variable_names (`tuple[str, ...]`, *optional*, defaults to `()`):
+                Distinct local variable names in their declaration order.
+            scope (`ExecutionScope | None`, *optional*, defaults to `None`):
+                This invocation's authored path and dynamic positions, if known.
+            node_data (`JsonObject | None`, *optional*, defaults to `None`):
+                Finite JSON static material and optional actual render data.
+                `None` uses `{}`, including on early binding failure.
+
+        Raises:
+            `TypeError`: If inventories, scope, or JSON containers are malformed.
+            `ValueError`: If names repeat, scope or output paths are invalid,
+                or node data contains non-finite numbers.
+        """
+        _validate_declared_names(input_names, "input_names")
+        _validate_declared_names(variable_names, "variable_names")
+        if scope is not None:
+            if type(scope) is not ExecutionScope:
+                raise TypeError("scope must be an ExecutionScope or None")
+            ExecutionScope(scope.static_path, scope.flow_path, scope.occurrence_path, scope.boundary)
+        data = {} if node_data is None else node_data
+        if type(data) is not dict:
+            raise TypeError("node_data must be a dictionary")
+        _validate_input_output_paths(data, input_names)
+        object.__setattr__(self, "input_names", input_names)
+        object.__setattr__(self, "variable_names", variable_names)
+        object.__setattr__(self, "scope", scope)
+        object.__setattr__(self, "_node_data", _copy_backward_value(data, "node_data"))
+
+    @property
+    def node_data(self) -> JsonObject:
+        """Return detached invocation data without exposing the worker's snapshot."""
+        return _copy_backward_value(self._node_data, "node_data")
+
+
+@dataclass(frozen=True, slots=True, init=False)
 class ForwardCapture:
     """Detached canonical inputs and routes from one actual binding operation.
 
@@ -161,7 +226,9 @@ class ForwardCapture:
     evaluated_keys: frozenset[str]
     items: tuple[tuple[int, ForwardCapture], ...]
     scope: ExecutionScope | None
-    _node_data: JsonValue = field(repr=False)
+    _node_data: JsonObject | None = field(repr=False)
+    input_names: tuple[str, ...]
+    variable_names: tuple[str, ...]
 
     def __init__(
         self,
@@ -170,9 +237,36 @@ class ForwardCapture:
         evaluated_keys: frozenset[str] = frozenset(),
         items: tuple[tuple[int, ForwardCapture], ...] = (),
         scope: ExecutionScope | None = None,
-        node_data: JsonValue = None,
+        node_data: JsonObject | None = None,
+        *,
+        input_names: tuple[str, ...] = (),
+        variable_names: tuple[str, ...] = (),
     ) -> None:
-        """Validate immutable routes and detach already-canonical input data."""
+        """Validate immutable routes and detach canonical invocation data.
+
+        Args:
+            bound_inputs (`JsonObject | None`): Actual completed input record;
+                `None` marks unfinished binding and forbids usable item inputs.
+            route (`ValueRoute`): Record-shaped routes for the captured fields.
+            evaluated_keys (`frozenset[str]`, *optional*, defaults to empty):
+                Captured keys whose template expressions were evaluated here.
+            items (`tuple[tuple[int, ForwardCapture], ...]`, *optional*, defaults
+                to `()`): Per-item bindings in increasing explicit index order.
+            scope (`ExecutionScope | None`, *optional*, defaults to `None`):
+                Captured authored location and occurrence, when available.
+            node_data (`JsonObject | None`, *optional*, defaults to `None`):
+                Detached node-owned static backward material, if captured.
+            input_names (`tuple[str, ...]`, *optional*, defaults to `()`):
+                Distinct eligible input names retained for this invocation.
+            variable_names (`tuple[str, ...]`, *optional*, defaults to `()`):
+                Distinct local variable names retained for this invocation.
+
+        Raises:
+            `TypeError`: If a carrier, immutable container, or JSON value has an
+                invalid type.
+            `ValueError`: If routes, inventory names, scope, output paths, or
+                input/item presence violate the capture contract.
+        """
         _validate_route(route)
         if route.kind != "record":
             raise ValueError("input route must be a record")
@@ -196,7 +290,8 @@ class ForwardCapture:
             if type(capture) is not ForwardCapture:
                 raise TypeError("item capture must be a ForwardCapture")
             ForwardCapture(capture.bound_inputs, capture.route, capture.evaluated_keys,
-                           capture.items, capture.scope, capture.node_data)
+                           capture.items, capture.scope, capture.node_data,
+                           input_names=capture.input_names, variable_names=capture.variable_names)
             if bound_inputs is None and capture.bound_inputs is not None:
                 raise ValueError("unfinished binding cannot retain usable item inputs")
             previous_index = index
@@ -204,12 +299,20 @@ class ForwardCapture:
             if type(scope) is not ExecutionScope:
                 raise TypeError("scope must be an ExecutionScope or None")
             ExecutionScope(scope.static_path, scope.flow_path, scope.occurrence_path, scope.boundary)
+        _validate_declared_names(input_names, "input_names")
+        _validate_declared_names(variable_names, "variable_names")
+        if node_data is not None:
+            if type(node_data) is not dict:
+                raise TypeError("node_data must be a dictionary or None")
+            _validate_input_output_paths(node_data, input_names)
         object.__setattr__(self, "_bound_inputs", _copy_backward_value(bound_inputs, "bound_inputs"))
         object.__setattr__(self, "route", route)
         object.__setattr__(self, "evaluated_keys", evaluated_keys)
         object.__setattr__(self, "items", items)
         object.__setattr__(self, "scope", scope)
         object.__setattr__(self, "_node_data", _copy_backward_value(node_data, "node_data"))
+        object.__setattr__(self, "input_names", input_names)
+        object.__setattr__(self, "variable_names", variable_names)
 
     @property
     def bound_inputs(self) -> JsonObject | None:
@@ -217,9 +320,137 @@ class ForwardCapture:
         return _copy_backward_value(self._bound_inputs, "bound_inputs")
 
     @property
-    def node_data(self) -> JsonValue:
-        """Return detached optional data reserved for the node's backward hook."""
+    def node_data(self) -> JsonObject | None:
+        """Return detached optional static data for the node's backward hook."""
         return _copy_backward_value(self._node_data, "node_data")
+
+
+@dataclass(frozen=True, slots=True)
+class BackwardAttribution:
+    """Reference one input message transfer and its sender's incoming positions.
+
+    Sender/input/message identify a returned input batch slot; contribution is
+    its ordinal in the existing pure route transfer. Parents index the sender's
+    ordered received messages. A root seed has no sender or parents. These
+    coordinates retain expression stops and contexts without copying source data.
+    """
+
+    sender: SourceRef | None
+    input_name: str | None
+    message_index: int
+    contribution_index: int | None
+    parents: tuple[int, ...]
+
+    def __post_init__(self) -> None:
+        """Reject malformed root/transfer coordinates and mutable inventories."""
+        if type(self.message_index) is not int or self.message_index < 0:
+            raise ValueError("message_index must be a non-negative integer")
+        if type(self.parents) is not tuple or any(type(i) is not int or i < 0 for i in self.parents):
+            raise TypeError("parents must be a tuple of non-negative integer positions")
+        if tuple(sorted(set(self.parents))) != self.parents:
+            raise ValueError("parents must be distinct ordered positions")
+        if self.sender is None:
+            if (self.input_name is not None or self.message_index != 0
+                    or self.contribution_index is not None or self.parents):
+                raise ValueError("root attribution cannot carry sender coordinates")
+        else:
+            _validate_source(self.sender)
+            if self.sender.execution_seq == 0 or self.sender.path:
+                raise ValueError("attribution sender must identify an accepted occurrence")
+            if type(self.input_name) is not str or not self.input_name:
+                raise ValueError("transfer attribution requires an input name")
+            if type(self.contribution_index) is not int or self.contribution_index < 0:
+                raise ValueError("transfer attribution requires a non-negative contribution index")
+            if not self.parents:
+                raise ValueError("transfer attribution requires incoming parent positions")
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class AttributedBackwardResult:
+    """Detached feedback and a result for every accepted forward occurrence."""
+
+    source: SourceRef
+    _feedback: tuple[FeedbackValue, ...] = field(repr=False)
+    attribution: tuple[BackwardAttribution, ...]
+    result: BackwardResult
+    invoked: bool
+
+    def __init__(
+        self, source: SourceRef, feedback: tuple[FeedbackValue, ...],
+        attribution: tuple[BackwardAttribution, ...], result: BackwardResult, invoked: bool,
+    ) -> None:
+        """Validate aligned attribution and copy mutable message containers.
+
+        Args:
+            source (`SourceRef`): Accepted forward occurrence identity, never
+                source zero.
+            feedback (`tuple[FeedbackValue, ...]`): Ordered ordinary messages
+                delivered to its callback.
+            attribution (`tuple[BackwardAttribution, ...]`): One source-neutral
+                transfer reference per message.
+            result (`BackwardResult`): Its validated three-channel result, empty
+                when unreached.
+            invoked (`bool`): Whether the fold invoked this occurrence's callback.
+
+        Raises:
+            `TypeError`: For noncanonical carriers or mutable batch containers.
+            `ValueError`: For invalid coordinates, misalignment, or nonempty
+                material on an unreached occurrence.
+        """
+        _validate_source(source)
+        if source.execution_seq == 0 or source.path:
+            raise ValueError("backward result source must identify an accepted occurrence")
+        if type(feedback) is not tuple or type(attribution) is not tuple:
+            raise TypeError("feedback and attribution must be tuples")
+        if len(feedback) != len(attribution):
+            raise ValueError("feedback and attribution must align")
+        for message in feedback:
+            validate_feedback(message, message)
+        for item in attribution:
+            if type(item) is not BackwardAttribution:
+                raise TypeError("attribution requires exact BackwardAttribution values")
+            BackwardAttribution.__post_init__(item)
+        if type(result) is not BackwardResult or type(invoked) is not bool:
+            raise TypeError("result and invoked must be a BackwardResult and bool")
+        checked = BackwardResult(result.input_feedback, result.self_feedback, result.variable_feedback)
+        if not invoked and (feedback or checked != BackwardResult()):
+            raise ValueError("unreached occurrences cannot carry backward material")
+        if invoked and not feedback:
+            raise ValueError("invoked occurrences require received feedback")
+        object.__setattr__(self, "source", source)
+        object.__setattr__(self, "_feedback", tuple(_copy_backward_value(m, "feedback") for m in feedback))
+        object.__setattr__(self, "attribution", attribution)
+        object.__setattr__(self, "result", checked)
+        object.__setattr__(self, "invoked", invoked)
+
+    @property
+    def feedback(self) -> tuple[FeedbackValue, ...]:
+        """Return an isolated copy of the ordered ordinary message batch."""
+        return tuple(_copy_backward_value(message, "feedback") for message in self._feedback)
+
+
+@dataclass(frozen=True, slots=True)
+class FrameProposal:
+    """Detached ordered mutations proposed for one recorded owning frame.
+
+    Attributes:
+        frame_ref (`MemoryFrameRef`): Exact ownership identity; policy membership
+            comes from the recorded layout.
+        mutations (`tuple[MemoryMutation, ...]`): Frame-local mutations with unique
+            IDs, retained in proposal order. An empty batch is valid.
+    """
+
+    frame_ref: MemoryFrameRef
+    mutations: tuple[MemoryMutation, ...]
+
+    def __post_init__(self) -> None:
+        """Validate ownership and retain independent canonical mutation payloads."""
+        if type(self.frame_ref) is not MemoryFrameRef:
+            raise TypeError("frame_ref must be a MemoryFrameRef")
+        object.__setattr__(self, "frame_ref", replace(self.frame_ref))
+        object.__setattr__(
+            self, "mutations", _validate_mutations(self.mutations, frame_ref=self.frame_ref),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -351,9 +582,12 @@ class BackwardOutcome:
         if self.learning is not None:
             if type(self.learning) is not LearningResult:
                 raise TypeError("learning must be a LearningResult or None")
-            LearningResult.__post_init__(self.learning)
+            object.__setattr__(self, "learning", replace(self.learning))
             if self.status == "succeeded" and self.learning.status != "succeeded":
                 raise ValueError("succeeded backward requires succeeded learning")
 
 
-__all__ = ["BackwardFailure", "BackwardOutcome", "ForwardCapture"]
+__all__ = [
+    "AttributedBackwardResult", "BackwardAttribution", "BackwardCapture",
+    "BackwardFailure", "BackwardOutcome", "ForwardCapture", "FrameProposal",
+]

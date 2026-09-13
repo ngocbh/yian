@@ -13,6 +13,7 @@ from typing import Any, Callable, Iterator, Optional
 
 from agent_composer.diagnostics import OriginRef
 from agent_composer.expr.template import render_template_record
+from agent_composer.expr.lineage import FeedbackValue
 from agent_composer.memory.contracts import (
     EvaluationTrace,
     MemoryPolicySpec,
@@ -22,9 +23,10 @@ from agent_composer.memory.contracts import (
     _rewrite_memory_policy_origin,
 )
 from agent_composer.nodes.agent.modes import DEFAULT_SYSTEM, MODES, AgentRunContext
+from agent_composer.nodes.agent.backward import backward_agent
 from agent_composer.nodes.agent.modes.tool_calling import MAX_TOOL_ITERATIONS
 from agent_composer.nodes.agent.structured import _structured_validation_path
-from agent_composer.nodes.base import Node, NodeKind, Output, _HostStop
+from agent_composer.nodes.base import BackwardContext, BackwardResult, Node, NodeKind, Output, _CapabilityFault, _HostStop
 from agent_composer.nodes.binding import apply_defaults
 from agent_composer.nodes.contracts import (
     Parameter,
@@ -32,6 +34,7 @@ from agent_composer.nodes.contracts import (
     _iter_origin_carrier,
     _rewrite_origin_carrier,
 )
+from agent_composer.typesys.types import canonical_type_label
 from agent_composer.typesys.values import build_value_as
 
 DEFAULT_MODE = "plain"
@@ -52,6 +55,7 @@ class AgentNode(Node):
     needs_stop_event = True
     needs_evaluation_trace = True
     needs_memory_recall = True
+    needs_render_capture = True
 
     def __init__(
         self,
@@ -201,14 +205,71 @@ class AgentNode(Node):
         stop_event=None,
         evaluation_trace: EvaluationTrace | None = None,
         recall_memory: Callable[[str, str], tuple[MemorySection, ...]] | None = None,
+        capture_render: Callable[[dict[str, Any]], None] | None = None,
     ) -> Output:
-        """Render inputs with fresh variable defaults and run the selected mode."""
-        input_names = set(inputs) | {parameter.name for parameter in (self.params or [])}
-        for variable in self.variables:
-            if variable.name in input_names:
-                raise ValueError(f"variable {variable.name!r} collides with an input name")
-        variables = self._resolve_variables()
-        prompt = render_template_record(self.prompt, {**inputs, **variables})
+        """Render fresh locals once, publish established capture, and run the mode.
+
+        ``capture_render`` is an optional evaluator-owned sink. It receives the
+        actual template, resolved variable values/domains, and rendered prompt
+        once, including established partial locals if preparation fails. Unknown
+        variables or an unfinished prompt remain None; capture faults propagate.
+        No invocation state is stored on the node.
+
+        Args:
+            inputs (`dict`): Delivered inputs, kept separate from local variables.
+            stop_event (*optional*, defaults to `None`): Cooperative host stop
+                signal checked before recall and mode execution.
+            evaluation_trace (`EvaluationTrace | None`, *optional*, defaults to `None`):
+                Write-only visible prompt and interaction collector.
+            recall_memory (`Callable | None`, *optional*, defaults to `None`):
+                Recall ordered sections from the base and actual rendered prompt.
+            capture_render (`Callable | None`, *optional*, defaults to `None`):
+                Publish one dictionary of actual or explicitly unavailable locals.
+                Omission leaves render capture dormant.
+
+        Returns:
+            `Output`: The selected mode's result.
+
+        Raises:
+            `ValueError`: A variable collides with a declared or delivered input.
+            `_CapabilityFault`: Capture-only preparation fails; the evaluator
+                re-raises its original host exception.
+            `_HostStop`: The host has requested cooperative cancellation.
+        """
+        captured = None if capture_render is None else {
+            "prompt_template": self.prompt, "variables": None,
+            "variable_domains": None, "rendered_prompt": None,
+        }
+        try:
+            input_names = set(inputs) | {parameter.name for parameter in (self.params or [])}
+            for variable in self.variables:
+                if variable.name in input_names:
+                    raise ValueError(f"variable {variable.name!r} collides with an input name")
+            if captured is not None:
+                try:
+                    captured["variable_domains"] = {
+                        variable.name: canonical_type_label(variable.contract.type) for variable in self.variables
+                    }
+                except (_CapabilityFault, _HostStop):
+                    raise
+                except Exception as exc:
+                    raise _CapabilityFault(exc) from exc
+            variables = self._resolve_variables()
+            template = self.prompt
+            if captured is not None:
+                try:
+                    captured["variables"] = deepcopy(variables)
+                except (_CapabilityFault, _HostStop):
+                    raise
+                except Exception as exc:
+                    raise _CapabilityFault(exc) from exc
+                captured["prompt_template"] = template
+            prompt = render_template_record(template, {**inputs, **variables})
+            if captured is not None:
+                captured["rendered_prompt"] = prompt
+        finally:
+            if capture_render is not None:
+                capture_render(captured)
         if stop_event is not None and stop_event.is_set():
             raise _HostStop(primary=False)
         memory_sections = (
@@ -230,6 +291,30 @@ class AgentNode(Node):
     def _resolve_variables(self) -> dict[str, Any]:
         """Resolve validated literal defaults into one detached invocation record."""
         return deepcopy(apply_defaults(self.variables, {}))
+
+    def backward(self, context: BackwardContext, feedback: tuple[FeedbackValue, ...]) -> BackwardResult:
+        """Use only recorded invocation material for one tool-free backward call.
+
+        Args:
+            context (`BackwardContext`): Accepted context, including recorded model
+                configuration and render/evidence components; live node fields are unused.
+            feedback (`tuple[FeedbackValue, ...]`): Ordered ordinary output messages.
+                Empty effective feedback skips model construction.
+
+        Returns:
+            `BackwardResult`: Independent input, self, and variable channels for
+                common result validation by the caller before upstream routing.
+
+        Raises:
+            `TypeError`: Context, feedback, captured fields, or response channels are malformed.
+            `ValueError`: Feedback shape, required capture, or response JSON is invalid.
+                Model and host exceptions propagate to the existing driver boundary.
+
+        Examples:
+            `node.backward(recorded_context, ())` returns empty channels without
+            constructing a model. Effective messages use only that recorded context.
+        """
+        return backward_agent(context, feedback)
 
     def declared_variables(self) -> tuple[Parameter, ...]:
         """Return the canonical local declarations in their authored order."""

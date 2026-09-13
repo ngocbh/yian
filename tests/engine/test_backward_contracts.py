@@ -24,6 +24,39 @@ from agent_composer.nodes.contracts import ExecutionPosition, ExecutionScope
 from agent_composer.runtime.contracts import BackwardFailure, BackwardOutcome
 
 
+def test_attributed_backward_result_detaches_messages_and_keeps_reference_coordinates():
+    from agent_composer.expr.lineage import SourceRef
+    from agent_composer.runtime.contracts import AttributedBackwardResult, BackwardAttribution
+
+    source = SourceRef("run", 1)
+    sender = SourceRef("run", 4)
+    attribution = BackwardAttribution(sender, "items", 0, 1, (0, 2))
+    message = ["first", None]
+    result = AttributedBackwardResult(
+        source, (message,), (attribution,), BackwardResult(self_feedback=("note",)), True,
+    )
+    message[0] = "changed"
+    result.feedback[0][0] = "also changed"
+    assert result.feedback == (["first", None],)
+    assert result.attribution == (attribution,)
+    assert result.result.self_feedback == ("note",)
+    assert not hasattr(attribution, "order")
+
+
+@pytest.mark.parametrize("args", [
+    (None, "input", 0, None, ()),
+    (None, None, 1, None, ()),
+    (None, None, 0, 0, ()),
+    (None, None, 0, None, (0,)),
+    ("sender", "input", 0, 0, ()),
+])
+def test_backward_attribution_rejects_malformed_root_coordinates(args):
+    from agent_composer.runtime.contracts import BackwardAttribution
+
+    with pytest.raises((TypeError, ValueError)):
+        BackwardAttribution(*args)
+
+
 @pytest.mark.parametrize("inputs", [{"topic": "reefs"}, None])
 def test_declared_variables_supply_local_backward_targets_without_activating_hooks(inputs):
     from agent_composer.compose.helpers.types import read_variables
@@ -290,7 +323,7 @@ def test_backward_context_and_outcome_do_not_expose_mutable_authority() -> None:
         traceback="debugging detail",
     )
     learning = LearningResult(
-        "incomplete", (LearningFailure("history", "learn", cause, frame),)
+        "failed", (LearningFailure("history", "learn", cause, frame),)
     )
     feedback = BackwardResult(input_feedback={"tags": ([None, "Irrelevant."],)})
     outcome = BackwardOutcome("failed", feedback, failure, learning)
@@ -413,3 +446,21 @@ def test_backward_outcome_can_succeed_without_memory() -> None:
     assert outcome.feedback == result
     assert outcome.failure is None
     assert outcome.learning is None
+
+
+def test_backward_outcome_copy_preserves_ordered_policy_dispositions() -> None:
+    from dataclasses import replace
+    from agent_composer.memory import PolicyCommitOutcome
+
+    policies = (PolicyCommitOutcome("second", "unknown", "commit-2"),
+                PolicyCommitOutcome("first", "unrequested"))
+    learning = LearningResult("incomplete", (), policies)
+    feedback = BackwardResult()
+    outcome = BackwardOutcome("failed", feedback,
+                              BackwardFailure("commit", "interrupted", ""), learning)
+    copied = replace(outcome)
+    assert copied.feedback == feedback
+    assert copied.learning == learning
+    assert copied.learning is not learning
+    assert copied.learning.policies == policies
+    assert copied.learning.policies[0] is not policies[0]

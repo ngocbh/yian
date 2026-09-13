@@ -10,7 +10,7 @@ capabilities: MAP receives `bind_item`, a cooperatively blocking node may receiv
 `stop_event`, and a scoped AGENT may receive narrow recall plus a write-only
 `evaluation_trace`. Failure is **not** a variant — a failing node `raise`s; expected
 evaluator rejection becomes a canonical `EvaluationFailure(Failure)` retained by the
-schema-5 failure record. A streaming
+accepted failure record. A streaming
 kind is a generator that yields `StreamChunk` and *returns* its `NodeResult` (drained
 by `_drain_node_generator`).
 
@@ -29,9 +29,9 @@ from typing import Any, Callable, ClassVar, Iterator, Optional, Union
 from agent_composer.diagnostics import Failure, OriginRef
 from agent_composer.expr import ExpressionError
 from agent_composer.expr.expressions import evaluate_when_record
-from agent_composer.expr.lineage import FeedbackValue, validate_feedback
+from agent_composer.expr.lineage import FeedbackValue, has_feedback, validate_feedback
 from agent_composer.memory.contracts import MemoryScope
-from agent_composer.nodes.binding import BindingError, ReservedBinder, apply_defaults
+from agent_composer.nodes.binding import BindingError, ReservedBinder, _validate_parameters, apply_defaults
 from agent_composer.nodes.contracts import (
     Assertion,
     ExecutionScope,
@@ -227,6 +227,22 @@ def _validate_declared_names(names: tuple[str, ...], field_name: str) -> None:
         raise ValueError(f"{field_name} must contain unique names")
 
 
+def _validate_input_output_paths(data: dict[str, Any], input_names: tuple[str, ...]) -> None:
+    """Validate optional source-neutral paths from declared inputs into the output."""
+    if "input_output_paths" not in data:
+        return
+    paths = data["input_output_paths"]
+    if type(paths) is not dict:
+        raise TypeError("input_output_paths must be a dictionary")
+    for name, path in paths.items():
+        if type(name) is not str or name not in input_names:
+            raise ValueError("input_output_paths must name declared inputs")
+        if type(path) is not list:
+            raise TypeError("input_output_paths values must be lists")
+        if any(type(part) is not str and (type(part) is not int or part < 0) for part in path):
+            raise ValueError("output path components must be strings or non-negative integers")
+
+
 @dataclass(frozen=True, slots=True, init=False)
 class BackwardContext:
     """Detached forward material and attribution supplied to one backward hook.
@@ -321,6 +337,7 @@ class BackwardContext:
         data = {} if node_data is None else node_data
         if type(data) is not dict:
             raise TypeError("node_data must be a dictionary")
+        _validate_input_output_paths(data, input_names)
         if type(downstream_context) is not tuple:
             raise TypeError("downstream_context must be a tuple")
         if any(type(item) is not dict for item in downstream_context):
@@ -400,6 +417,56 @@ def validate_backward_result(result: BackwardResult, context: BackwardContext) -
     for name in checked.variable_feedback:
         if name not in context.variable_names:
             raise ValueError(f"variable_feedback selects undeclared variable {name!r}")
+
+
+def _project_structural_feedback(
+    context: BackwardContext, feedback: tuple[FeedbackValue, ...],
+) -> BackwardResult:
+    """Select input messages through captured output paths without rewriting text."""
+    if type(feedback) is not tuple:
+        raise TypeError("feedback must be a tuple of independent messages")
+    inputs = context.inputs
+    if inputs is None:
+        return BackwardResult()
+    data = context.node_data
+    _validate_input_output_paths(data, context.input_names)
+    if "input_output_paths" not in data:
+        raise ValueError("structural backward requires captured input_output_paths")
+    output = None if context.failure is not None else context.output
+    for message in feedback:
+        validate_feedback(message, output)
+    projected: dict[str, tuple[FeedbackValue, ...]] = {}
+    paths = data["input_output_paths"]
+    for name in context.input_names:
+        if name not in inputs or name not in paths:
+            continue
+        path = paths[name]
+        if context.failure is None:
+            value = output
+            for part in path:
+                if type(part) is str and type(value) is dict and part in value:
+                    value = value[part]
+                elif type(part) is int and type(value) is list and part < len(value):
+                    value = value[part]
+                else:
+                    raise ValueError("captured output path does not exist in the accepted output")
+        messages = []
+        for message in feedback:
+            selected = message
+            for part in path:
+                if selected is None or type(selected) is str:
+                    break
+                selected = (
+                    selected.get(part) if type(selected) is dict
+                    else selected[part]
+                )
+            if has_feedback(selected):
+                messages.append(selected)
+        if messages:
+            projected[name] = tuple(messages)
+    result = BackwardResult(input_feedback=projected)
+    validate_backward_result(result, context)
+    return result
 
 
 class _HostStop(Exception):
@@ -593,6 +660,9 @@ class Node(ABC):
     # write-only invocation-local trace only when evidence capture is enabled and this exact
     # trait is True. AgentNode is the sole built-in opt-in; the runtime remains kind-blind.
     needs_evaluation_trace: ClassVar[bool] = False
+    # Declares "I can publish actual render locals for retained backward context".
+    # The evaluator supplies a single-write capture callable only during retention.
+    needs_render_capture: ClassVar[bool] = False
 
     def __init__(
         self,
@@ -977,13 +1047,59 @@ class Node(ABC):
         """Return this node's canonical local declarations as an immutable inventory."""
         return ()
 
-    def backward(self, *args: Any, **caps: Any) -> None:
-        """Reserve the node-owned reverse hook without defining feedback semantics.
+    def backward_input_names(self) -> tuple[str, ...]:
+        """Return declared inputs eligible for feedback in this node's contract.
 
-        The runtime does not call this hook. A future reverse-DAG feature can narrow
-        its contract once producer lineage and durable feedback records exist.
+        Returns:
+            `tuple[str, ...]`: Canonical parameter names in declaration order.
+                Kinds with control-only parameters override this inventory.
+
+        Raises:
+            `TypeError`: If params is not a canonical list of `Parameter` values.
         """
-        return None
+        parameters = [] if self.params is None else self.params
+        _validate_parameters(parameters)
+        return tuple(parameter.name for parameter in parameters)
+
+    def capture_backward_context(self) -> dict[str, Any]:
+        """Return static backward material before this invocation runs.
+
+        This pure hook reads authored layout only. It does not resolve defaults,
+        render prompts, or execute the body. Common input and variable names are
+        captured separately. With retention enabled, the base run template calls
+        this hook after defaults and before assertions or body execution. A custom
+        run override retains the evaluator's completed-binding, pre-run boundary.
+
+        Returns:
+            `dict[str, Any]`: Finite JSON material, empty by default. The reserved
+                `input_output_paths` mapping addresses declared inputs by paths
+                of string fields or non-negative list indices into the output.
+        """
+        return {}
+
+    def backward(
+        self, context: BackwardContext, feedback: tuple[FeedbackValue, ...],
+    ) -> BackwardResult:
+        """Stop feedback at the default behavioral boundary with empty channels.
+
+        Args:
+            context (`BackwardContext`): Detached recorded inputs, optional
+                accepted output or failure, declaration names, and node-owned
+                static material for this invocation. Read this snapshot rather
+                than mutable node fields when interpreting feedback.
+            feedback (`tuple[FeedbackValue, ...]`): Ordered independent messages.
+                Each is ordinary text, a partial record, an exact-length nested
+                item list, or `None`; a list is one positional message.
+
+        Returns:
+            `BackwardResult`: Input, self, and variable feedback channels. This
+                default returns all three empty and performs no model call.
+
+        Examples:
+            `node.backward(BackwardContext(None), ("Review.",))` returns an empty
+            result for a node that inherits this behavioral stopping rule.
+        """
+        return BackwardResult()
 
     def on_failure(self, exc: Exception, inputs: dict[str, Any], **caps: Any) -> "NodeResult":
         """Reserved error-strategy seam, not currently driven by ``eval_node``. Default: re-raise."""

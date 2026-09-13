@@ -1,4 +1,4 @@
-"""Schema-5 run-record contracts for source-neutral memory evidence and learning."""
+"""Run-record contracts for source-neutral memory evidence and learning."""
 
 from __future__ import annotations
 
@@ -40,9 +40,7 @@ from agent_composer.runtime.log import (
     MemoryCommitFailedRecord,
     MemoryCommitRequestedRecord,
     MemoryCommitSucceededRecord,
-    MemoryFrameLearnedRecord,
-    MemoryFrameLearningFailedRecord,
-    MemoryFrameLearningStartedRecord,
+    BackwardReadyRecord,
     NodeExpandedRecord,
     NodeFailedRecord,
     NodeRoutedRecord,
@@ -53,6 +51,8 @@ from agent_composer.runtime.log import (
     encode_pool,
     encode_record,
 )
+from agent_composer.nodes.base import BackwardResult
+from agent_composer.runtime.contracts import FrameProposal
 from agent_composer.typesys import VariablePool
 
 
@@ -493,59 +493,55 @@ def test_existing_outcome_records_round_trip_with_no_evidence() -> None:
         assert decoded.evidence is None
 
 
-def test_every_memory_learning_record_round_trips() -> None:
+def test_every_memory_commit_record_round_trips() -> None:
     ref = _agent_ref()
-    occurrences = (
-        MemoryOccurrenceRef(ref),
-        MemoryOccurrenceRef(ref, (_segment(),)),
-    )
     mutations = (
         MemoryMutation("m1", ref, {"action": "add"}),
         MemoryMutation("m2", ref, {"action": "revise"}),
     )
     failure = MemoryOperationFailure("learn", "provider.error", "failed", True)
     records = (
-        MemoryFrameLearningStartedRecord("reflective", ref, occurrences),
-        MemoryFrameLearnedRecord("reflective", ref, mutations),
-        MemoryFrameLearningFailedRecord("reflective", ref, failure),
-        MemoryCommitRequestedRecord("reflective", "commit-1", mutations),
-        MemoryCommitSucceededRecord("reflective", "commit-1"),
-        MemoryCommitFailedRecord("reflective", "commit-1", failure),
+        MemoryCommitRequestedRecord("reflective", "commit-1", mutations, attempt_id=1),
+        MemoryCommitSucceededRecord("reflective", "commit-1", attempt_id=1),
+        MemoryCommitFailedRecord("reflective", "commit-1", failure, attempt_id=1),
     )
 
     for record in records:
         assert _round_trip(record) == record
 
 
-def test_learning_records_reject_wrong_ownership_order_and_duplicate_ids() -> None:
+@pytest.mark.parametrize("attempt_id", [1, 2])
+def test_memory_commit_wire_requires_an_explicit_positive_attempt_slot(attempt_id):
+    failure = MemoryOperationFailure("backend", "failed", "Failed.", False)
+    records = (
+        MemoryCommitRequestedRecord("history", "commit-1", (), attempt_id=attempt_id),
+        MemoryCommitSucceededRecord("history", "commit-1", attempt_id=attempt_id),
+        MemoryCommitFailedRecord("history", "commit-1", failure, attempt_id=attempt_id),
+    )
+    for record in records:
+        wire = json.loads(encode_record(RecordEnvelope(SCHEMA_VERSION, "run", 0, record)))
+        assert wire["payload"]["attempt_id"] == attempt_id
+        del wire["payload"]["attempt_id"]
+        with pytest.raises(ValueError, match="attempt_id"):
+            decode_record(json.dumps(wire).encode())
+
+
+def test_proposals_preserve_order_and_reject_wrong_ownership_or_duplicate_ids() -> None:
     ref = _agent_ref()
     other = MemoryFrameRef("root", ("root", "other"), MemoryOwner.AGENT)
-    base = MemoryOccurrenceRef(ref)
-    mapped = MemoryOccurrenceRef(ref, (_segment(),))
-
     with pytest.raises(ValueError, match="frame_ref"):
-        MemoryFrameLearningStartedRecord(
-            "reflective", ref, (MemoryOccurrenceRef(other),)
-        )
-    with pytest.raises(ValueError, match="sorted and unique"):
-        MemoryFrameLearningStartedRecord("reflective", ref, (mapped, base))
-    with pytest.raises(ValueError, match="sorted and unique"):
-        MemoryFrameLearningStartedRecord("reflective", ref, (base, base))
-    with pytest.raises(ValueError, match="frame_ref"):
-        MemoryFrameLearnedRecord(
-            "reflective", ref, (MemoryMutation("m1", other, {}),)
-        )
+        FrameProposal(ref, (MemoryMutation("m1", other, {}),))
     ordered = (
         MemoryMutation("m2", ref, {"sequence": 1}),
         MemoryMutation("m1", ref, {"sequence": 2}),
     )
-    assert MemoryFrameLearnedRecord("reflective", ref, ordered).mutations == ordered
+    assert FrameProposal(ref, ordered).mutations == ordered
     with pytest.raises(ValueError, match="unique"):
         MemoryCommitRequestedRecord(
             "reflective",
             "commit",
             (MemoryMutation("same", ref, {}), MemoryMutation("same", other, {})),
-        )
+         attempt_id=1)
 
 
 class _OrderedStructuredModel:
@@ -588,9 +584,9 @@ def test_reflective_multi_action_order_survives_records_and_commit(
         )
 
     assert [mutation.payload["lesson_id"] for mutation in proposals] == ["z", "a"]
-    learned = _round_trip(MemoryFrameLearnedRecord("reflective", ref, proposals))
+    ready = _round_trip(BackwardReadyRecord(1, BackwardResult(), (), (FrameProposal(ref, proposals),)))
     requested = _round_trip(
-        MemoryCommitRequestedRecord("reflective", "commit", learned.mutations)
+        MemoryCommitRequestedRecord("reflective", "commit", ready.frame_proposals[0].mutations, attempt_id=1)
     )
     assert [mutation.payload["lesson_id"] for mutation in requested.mutations] == [
         "z",
@@ -640,7 +636,7 @@ def test_records_reject_forged_nested_carrier_subclasses() -> None:
             "reflective",
             "commit",
             (forged_mutation,),
-        )
+         attempt_id=1)
 
 
 def test_nested_frozen_carriers_are_revalidated_before_recording() -> None:
@@ -671,7 +667,7 @@ def test_nested_frozen_carriers_are_revalidated_before_recording() -> None:
     mutation = MemoryMutation("m1", mutation_ref, {})
     object.__setattr__(mutation_ref, "root_flow_id", _StringSubclass("root"))
     with pytest.raises(TypeError, match="root_flow_id"):
-        MemoryCommitRequestedRecord("reflective", "commit", (mutation,))
+        MemoryCommitRequestedRecord("reflective", "commit", (mutation,), attempt_id=1)
 
 
 def test_codec_revalidates_carriers_mutated_after_record_construction() -> None:
@@ -689,24 +685,17 @@ def test_codec_revalidates_carriers_mutated_after_record_construction() -> None:
 
 
 def test_codec_replays_outer_record_invariants_after_forging() -> None:
-    started = MemoryFrameLearningStartedRecord(
-        "reflective",
-        _agent_ref(),
-        (MemoryOccurrenceRef(_agent_ref()),),
-    )
-    object.__setattr__(
-        started,
-        "occurrences",
-        (MemoryOccurrenceRef(_flow_ref()),),
-    )
+    proposal = FrameProposal(_agent_ref(), (MemoryMutation("m1", _agent_ref(), {}),))
+    ready = BackwardReadyRecord(1, BackwardResult(), (), (proposal,))
+    object.__setattr__(ready.frame_proposals[0].mutations[0], "frame_ref", _flow_ref())
     with pytest.raises(ValueError, match="frame_ref"):
-        encode_record(RecordEnvelope(SCHEMA_VERSION, "run", 0, started))
+        encode_record(RecordEnvelope(SCHEMA_VERSION, "run", 0, ready))
 
     commit = MemoryCommitRequestedRecord(
         "reflective",
         "commit",
         (MemoryMutation("m1", _agent_ref(), {}),),
-    )
+     attempt_id=1)
     object.__setattr__(commit, "mutations", list(commit.mutations))
     with pytest.raises(TypeError, match="tuple"):
         encode_record(RecordEnvelope(SCHEMA_VERSION, "run", 0, commit))
@@ -714,7 +703,7 @@ def test_codec_replays_outer_record_invariants_after_forging() -> None:
     operation_failure = MemoryOperationFailure(
         "commit", "provider.error", "failed", False
     )
-    failed = MemoryCommitFailedRecord("reflective", "commit", operation_failure)
+    failed = MemoryCommitFailedRecord("reflective", "commit", operation_failure, attempt_id=1)
     object.__setattr__(operation_failure, "retryable", 0)
     with pytest.raises(TypeError, match="boolean"):
         encode_record(RecordEnvelope(SCHEMA_VERSION, "run", 0, failed))
@@ -783,7 +772,7 @@ def test_schema_four_rejects_origin_and_extra_memory_operation_fields() -> None:
         "reflective",
         "commit",
         MemoryOperationFailure("commit", "provider.error", "sanitized", False),
-    )
+     attempt_id=1)
     failed_wire = json.loads(
         encode_record(RecordEnvelope(SCHEMA_VERSION, "run", 0, failed))
     )
@@ -815,7 +804,7 @@ def test_run_log_copying_isolated_from_new_carrier_accessors() -> None:
             "reflective",
             "commit",
             (MemoryMutation("m1", _agent_ref(), {"items": [1]}),),
-        )
+         attempt_id=1)
     )
 
     record.mutations[0].payload["items"].append(2)

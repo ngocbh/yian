@@ -6,7 +6,7 @@ from dataclasses import FrozenInstanceError, dataclass
 from datetime import date, datetime, timezone
 import json
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterator, get_args
 
 import pytest
 
@@ -20,6 +20,7 @@ from agent_composer.runtime.log import (
     NodeSucceededRecord,
     RecordEnvelope,
     RunLog,
+    RunRecord,
     RunResumedRecord,
     RunStartedRecord,
     canonical_seed,
@@ -38,8 +39,17 @@ _TOPOLOGY_DIGEST = "b" * 64
 
 def _records():
     """Return one representative value for every closed run-record variant."""
+    from agent_composer.memory import MemoryFrameRef, MemoryMutation, MemoryOperationFailure, MemoryOwner
+    from agent_composer.runtime.log import (
+        MemoryCommitFailedRecord, MemoryCommitRequestedRecord, MemoryCommitSucceededRecord,
+    )
+    from tests.engine.test_backward_records import _backward_records
+
     pool = VariablePool(start_id="start")
     pool.set("start", {"name": "Ada"})
+    frame = MemoryFrameRef("root", ("root", "agent"), MemoryOwner.AGENT)
+    mutations = (MemoryMutation("m1", frame, {"text": "Remember."}),)
+    failure = MemoryOperationFailure("backend", "backend.failed", "Failed.", True)
     return [
         RunStartedRecord(
             flow_fingerprint=_FINGERPRINT,
@@ -74,6 +84,10 @@ def _records():
                 traceback="Traceback (most recent call last): ...",
             ),
         ),
+        MemoryCommitRequestedRecord("history", "commit-1", mutations, attempt_id=1),
+        MemoryCommitSucceededRecord("history", "commit-1", attempt_id=1),
+        MemoryCommitFailedRecord("history", "commit-1", failure, attempt_id=1),
+        *_backward_records(),
     ]
 
 
@@ -95,6 +109,40 @@ def test_every_record_round_trips_through_a_validated_envelope(record):
     assert isinstance(decoded.payload, dict)
 
 
+def test_record_wire_examples_cover_the_closed_record_inventory():
+    assert {type(record) for record in _records()} == set(get_args(RunRecord))
+
+
+@pytest.mark.parametrize("kind,extra", [
+    ("memory_frame_learning_started", {"occurrences": []}),
+    ("memory_frame_learned", {"mutations": []}),
+    ("memory_frame_learning_failed", {"failure": {
+        "stage": "learn", "code": "declined", "message": "Declined.", "retryable": True,
+    }}),
+])
+def test_removed_frame_learning_wire_kinds_are_rejected(kind, extra):
+    wire = {"schema": SCHEMA_VERSION, "run_id": "run", "seq": 0, "kind": kind,
+            "payload": {"policy_name": "history", "frame_ref": {
+                "root_flow_id": "root", "static_path": ["root"], "owner": "flow",
+            }, **extra}}
+    with pytest.raises(ValueError, match="kind"):
+        decode_record(json.dumps(wire).encode())
+
+
+@pytest.mark.parametrize("kind,payload", [
+    ("memory_commit_requested", {"mutations": []}),
+    ("memory_commit_succeeded", {}),
+    ("memory_commit_failed", {"failure": {
+        "stage": "commit", "code": "declined", "message": "Declined.", "retryable": True,
+    }}),
+])
+def test_memory_commit_wire_requires_a_positive_attempt(kind, payload):
+    wire = {"schema": SCHEMA_VERSION, "run_id": "run", "seq": 0, "kind": kind,
+            "payload": {"policy_name": "history", "commit_id": "commit-1", "attempt_id": None, **payload}}
+    with pytest.raises(ValueError):
+        decode_record(json.dumps(wire).encode())
+
+
 def test_record_encoding_is_canonical_newline_free_and_byte_stable():
     envelope = RecordEnvelope(
         schema=SCHEMA_VERSION,
@@ -107,7 +155,7 @@ def test_record_encoding_is_canonical_newline_free_and_byte_stable():
 
     assert encoded == (
         b'{"kind":"node_started","payload":{"node_id":"work"},'
-        b'"run_id":"run-canonical","schema":5,"seq":0}'
+        b'"run_id":"run-canonical","schema":6,"seq":0}'
     )
     assert not encoded.endswith(b"\n")
     assert encode_record(decode_record(encoded)) == encoded
@@ -133,7 +181,7 @@ def test_node_failure_encoding_nests_one_canonical_failure():
     encoded = encode_record(envelope)
 
     assert json.loads(encoded) == {
-        "schema": 5,
+        "schema": 6,
         "run_id": "run-failure",
         "seq": 7,
         "kind": "node_failed",
@@ -239,42 +287,42 @@ def _json_bytes(value: object) -> bytes:
             "payload": {"node_id": "work"},
         },
         {
-            "schema": 5.0,
+            "schema": 6.0,
             "run_id": "run",
             "seq": 0,
             "kind": "node_started",
             "payload": {"node_id": "work"},
         },
         {
-            "schema": 5,
+            "schema": 6,
             "run_id": "",
             "seq": 0,
             "kind": "node_started",
             "payload": {"node_id": "work"},
         },
         {
-            "schema": 5,
+            "schema": 6,
             "run_id": "run",
             "seq": -1,
             "kind": "node_started",
             "payload": {"node_id": "work"},
         },
         {
-            "schema": 5,
+            "schema": 6,
             "run_id": "run",
             "seq": True,
             "kind": "node_started",
             "payload": {"node_id": "work"},
         },
         {
-            "schema": 5,
+            "schema": 6,
             "run_id": "run",
             "seq": 0,
             "kind": "not_a_record",
             "payload": {},
         },
         {
-            "schema": 5,
+            "schema": 6,
             "run_id": "run",
             "seq": 0,
             "kind": "node_started",
@@ -282,7 +330,7 @@ def _json_bytes(value: object) -> bytes:
             "unexpected": True,
         },
         {
-            "schema": 5,
+            "schema": 6,
             "run_id": "run",
             "seq": 0,
             "kind": "node_started",
@@ -298,28 +346,28 @@ def test_decode_rejects_invalid_envelopes(wire):
     "wire",
     [
         {
-            "schema": 5,
+            "schema": 6,
             "run_id": "run",
             "seq": 0,
             "kind": "node_started",
             "payload": {"node_id": "work", "unexpected": True},
         },
         {
-            "schema": 5,
+            "schema": 6,
             "run_id": "run",
             "seq": 0,
             "kind": "node_started",
             "payload": {},
         },
         {
-            "schema": 5,
+            "schema": 6,
             "run_id": "run",
             "seq": 0,
             "kind": "node_started",
             "payload": {"node_id": 7},
         },
         {
-            "schema": 5,
+            "schema": 6,
             "run_id": "run",
             "seq": 0,
             "kind": "node_succeeded",
@@ -330,7 +378,7 @@ def test_decode_rejects_invalid_envelopes(wire):
             },
         },
         {
-            "schema": 5,
+            "schema": 6,
             "run_id": "run",
             "seq": 0,
             "kind": "node_failed",
@@ -354,9 +402,9 @@ def test_decode_rejects_unknown_missing_and_wrong_payload_fields(wire):
 
 
 def _node_failure_wire() -> dict[str, Any]:
-    """Return one independently mutable valid schema-5 node-failure object."""
+    """Return one independently mutable valid schema-6 node-failure object."""
     return {
-        "schema": 5,
+        "schema": 6,
         "run_id": "run",
         "seq": 0,
         "kind": "node_failed",
@@ -465,8 +513,8 @@ def test_decode_rejects_malformed_nested_failures(case, mutate):
 
 
 @pytest.mark.parametrize("field", ["locator", "range"])
-def test_schema_5_node_failure_rejects_legacy_location_fields(field):
-    """The schema-5 failure payload has one exact authority: `failure`."""
+def test_schema_6_node_failure_rejects_legacy_location_fields(field):
+    """The schema-6 failure payload has one exact authority: `failure`."""
     wire = _node_failure_wire()
     wire["payload"][field] = None
 
@@ -474,7 +522,7 @@ def test_schema_5_node_failure_rejects_legacy_location_fields(field):
         decode_record(_json_bytes(wire))
 
 
-@pytest.mark.parametrize("schema", [1, 2, 3, 4])
+@pytest.mark.parametrize("schema", [1, 2, 3, 4, 5])
 def test_decode_rejects_old_schemas_even_with_a_nested_failure(schema):
     wire = _node_failure_wire()
     wire["schema"] = schema
@@ -500,7 +548,7 @@ def test_decode_rejects_flattened_failure_aliases():
 
 def test_decode_requires_explicit_route_terminal_failure_field():
     wire = {
-        "schema": 5,
+        "schema": 6,
         "run_id": "run",
         "seq": 0,
         "kind": "node_routed",
@@ -513,7 +561,7 @@ def test_decode_requires_explicit_route_terminal_failure_field():
 
 def test_decode_rejects_extra_nested_route_terminal_failure_field():
     wire = {
-        "schema": 5,
+        "schema": 6,
         "run_id": "run",
         "seq": 0,
         "kind": "node_routed",
@@ -539,7 +587,7 @@ def test_decode_rejects_extra_nested_route_terminal_failure_field():
 
 def test_decode_rejects_duplicate_keys_at_any_object_depth():
     duplicate_payload_key = (
-        b'{"schema":5,"run_id":"run","seq":0,"kind":"node_started",'
+        b'{"schema":6,"run_id":"run","seq":0,"kind":"node_started",'
         b'"payload":{"node_id":"first","node_id":"second"}}'
     )
 
@@ -547,7 +595,7 @@ def test_decode_rejects_duplicate_keys_at_any_object_depth():
         decode_record(duplicate_payload_key)
 
     duplicate_origin_key = (
-        b'{"schema":5,"run_id":"run","seq":0,"kind":"node_failed",'
+        b'{"schema":6,"run_id":"run","seq":0,"kind":"node_failed",'
         b'"payload":{"failure":{"code":"node.execute","message":"boom",'
         b'"node_id":"work","trace":[{"key":"one","key":"two"}],'
         b'"cause_type":null,"traceback":null}}}'
@@ -645,7 +693,7 @@ def test_canonical_json_rejects_lone_unicode_surrogates_as_value_errors():
         )
     with pytest.raises(ValueError, match="Unicode surrogate"):
         decode_record(
-            '{"schema":5,"run_id":"run","seq":0,"kind":"node_started",'
+            '{"schema":6,"run_id":"run","seq":0,"kind":"node_started",'
             '"payload":{"node_id":"\\ud800"}}'
         )
 
@@ -664,7 +712,7 @@ def test_canonical_data_rejects_excessive_nesting_as_a_value_error():
 def test_decode_record_rejects_excessive_nesting_as_a_value_error():
     nested = '{"nested":' * 1_500 + "null" + "}" * 1_500
     wire = (
-        '{"schema":5,"run_id":"run","seq":0,"kind":"node_started",'
+        '{"schema":6,"run_id":"run","seq":0,"kind":"node_started",'
         f'"payload":{{"node_id":"work","extra":{nested}}}}}'
     )
 
@@ -713,6 +761,80 @@ def test_seed_canonicalizes_tuple_date_and_file_ref():
     }
     assert decoded == wire
     assert canonical_seed(decoded)[0] == wire
+
+
+def test_strict_seed_keeps_supported_values_and_independent_canonical_copies():
+    value = {"files": (FileRef(uri="memory://answer"),), "count": 4, "ratio": 0.5}
+    wire, decoded = canonical_seed(value, reject_nonfinite=True)
+    assert wire == canonical_seed(value)[0] == decoded
+    assert type(decoded["count"]) is int
+    decoded["files"][0]["uri"] = "changed"
+    assert wire["files"][0]["uri"] == "memory://answer"
+    assert value["files"][0].uri == "memory://answer"
+    with pytest.raises(TypeError, match="reject_nonfinite"):
+        canonical_seed(value, reject_nonfinite=1)
+
+
+@pytest.mark.parametrize("number", [float("inf"), float("-inf"), float("nan")])
+@pytest.mark.parametrize("container", ["raw", "dict", "tuple", "model", "dataclass", "typed"])
+def test_strict_seed_rejects_nonfinite_before_json_mode_normalization(number, container):
+    from pydantic import BaseModel
+    from agent_composer.typesys.values import ObjectValue
+
+    class Model(BaseModel):
+        value: float
+
+    @dataclass
+    class Box:
+        value: float
+
+    value = {
+        "raw": number,
+        "dict": {"nested": [number]},
+        "tuple": (number,),
+        "model": Model(value=number),
+        "dataclass": Box(number),
+        "typed": ObjectValue(value={"nested": number}),
+    }[container]
+    with pytest.raises(ValueError, match="non-finite"):
+        canonical_seed(value, reject_nonfinite=True)
+    if container == "raw":
+        assert canonical_seed(value) == (None, None)
+
+
+@pytest.mark.parametrize("number", [float("inf"), float("-inf"), float("nan")])
+@pytest.mark.parametrize("nested", [False, True])
+def test_strict_seed_rejects_nonfinite_pydantic_extras(number, nested):
+    from pydantic import BaseModel, ConfigDict, RootModel
+
+    class Extras(BaseModel):
+        model_config = ConfigDict(extra="allow")
+        declared: int = 1
+
+    value = Extras(lost=number)
+    if nested:
+        value = RootModel[Extras](Extras(child={"items": (value,)}))
+    with pytest.raises(ValueError, match="non-finite"):
+        canonical_seed(value, reject_nonfinite=True)
+    expected = {"declared": 1, "lost": None}
+    if nested:
+        expected = {"declared": 1, "child": {"items": [expected]}}
+    assert canonical_seed(value) == (expected, expected)
+
+
+def test_strict_seed_preserves_finite_pydantic_extras_and_file_values():
+    from pydantic import BaseModel, ConfigDict, RootModel
+
+    class Extras(BaseModel):
+        model_config = ConfigDict(extra="allow")
+
+    value = RootModel[Extras](Extras(child=Extras(score=0.5, file=FileRef(uri="memory://answer"))))
+    expected = {"child": {"score": 0.5, "file": {"uri": "memory://answer", "mime": None, "name": None}}}
+    wire, decoded = canonical_seed(value, reject_nonfinite=True)
+    assert wire == decoded == expected
+    decoded["child"]["score"] = 1
+    assert wire == expected
+    assert value.root.child.score == 0.5
 
 
 def test_canonical_helpers_reject_unordered_containers():

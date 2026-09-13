@@ -30,9 +30,26 @@ so it preserves that boundary, and it happens **exactly once** here in the node 
 evaluates `.expression`, reports `.display`, and diagnoses failure through the exact
 carrier's `.origin`. `forward` returns ONE of the closed sum:
 
-`Node.backward(*args, **caps) -> None` is a dormant default hook. The runtime does
-not call it, and its argument contract remains deliberately unspecified until a
-future lineage-aware reverse pass is designed.
+`Node.backward(context: BackwardContext, feedback: tuple[FeedbackValue, ...])`
+returns a `BackwardResult` with input, self, and variable channels. The default
+returns empty channels. Structural nodes route from captured invocation layout;
+ordinary forward execution never calls this hook. `backward_input_names()` owns
+the eligible input inventory, while `declared_variables()` owns the local variable
+declarations. Snapshot their names independently from the empty-default
+`capture_backward_context()` payload. END excludes assertion parameters through
+its output layout; CASE excludes its generated control inputs in node code.
+
+`runtime.backward.compute_backward(trace, feedback)` gathers messages in one
+reverse walk over accepted outcomes. It uses `trace.backward_context` and the
+accepted bound inputs; it never reruns bindings or node capture hooks. Validate
+the complete returned `BackwardResult` before transferring any input message.
+The result inventory includes every accepted occurrence, with empty material for
+unreached nodes. Preserve distinct equal messages through source and contribution
+references; materialized context and ordering keys remain transient.
+`runtime.learning` shares pure ordering, transfer, root projection, and complete
+result validation with the reducer; replay invokes no callback or transcript
+materializer. AGENT backward uses one tool-free call from accepted prompt/locals,
+evidence, and exact recorded config. It never rerenders, recalls, or grants tools.
 
 | Return | Meaning |
 |--------|---------|
@@ -63,7 +80,7 @@ A streaming kind is a generator that yields `StreamChunk` and *returns* a
 evaluation boundary returns `EvaluationFailure(Failure)` for expected rejection;
 host control, stream callbacks, unexpected binder faults, and malformed setup
 escape. Result preparation constructs the same canonical value for expected
-output, route, and growth rejection. One strict schema-5 record boundary handles
+output, route, and growth rejection. One strict schema-6 record boundary handles
 both paths, carries forward capture when retention is enabled, may retain
 optional model/tool evaluation evidence, and carries
 the nested value through the reducer to `NodeFailed`/`RunFailed` observers and
@@ -147,7 +164,7 @@ rejected rather than migrated.
 **Invariants:** a node never receives the pool (the `eval_node` seam binds its
 inputs); a node never writes the pool (it *describes* `Output(value)`, the engine
 records it, and the reducer performs the write). Nodes stay graph-state
-isolated; the dispatcher is the sole live state writer. `Node.origin` is optional opaque diagnostic
+isolated; the dispatcher alone drives forward transitions through the reducer. `Node.origin` is optional opaque diagnostic
 provenance for the authored node context, not execution state; it is unrelated to
 the LOOP-only `origin_id` attribution field. Generated `Node.origin_context` is
 not another authored provenance slot.
@@ -262,32 +279,53 @@ WAIT are never timed by that watchdog.
 | `NodeRoutedRecord` | select one named outgoing handle and retain optional terminal failure and evaluation evidence |
 | `NodeExpandedRecord` | rebuild and verify one canonical seed/digest with optional evaluation evidence, then splice its fragment |
 | `NodeFailedRecord` | retain the semantic `Failure` and optional evaluation evidence that make the run terminal-failed |
-| `MemoryFrameLearningStartedRecord` | start learning for one frame from its canonical occurrence set |
-| `MemoryFrameLearnedRecord` | retain one frame's proposed mutation batch |
-| `MemoryFrameLearningFailedRecord` | retain one frame-local learning failure; typed policy messages are durable, while unexpected/invalid results are sanitized |
-| `MemoryCommitRequestedRecord` | request one policy's atomic idempotent mutation commit |
+| `MemoryCommitRequestedRecord` | request one policy's exact ordered batch, including an empty batch, for a required positive `attempt_id` |
 | `MemoryCommitSucceededRecord` | confirm one policy commit completed successfully |
-| `MemoryCommitFailedRecord` | retain one policy commit failure under the same typed/unexpected boundary |
+| `MemoryCommitFailedRecord` | retain one known policy commit failure for the matching positive attempt/request |
+| `BackwardStartedRecord` | retain an attempt ID and its original ordinary root feedback |
+| `BackwardReadyRecord` | retain completed root feedback, the complete occurrence attribution inventory, and ordered owned frame proposals |
+| `BackwardFinishedRecord` | retain an attempt's outcome, including completed feedback when a later learner fails |
 
 `FlowEngine` borrows one initialized `RunState` plus a matching open `RunLog`.
 Workers only evaluate; the dispatcher prepares a total transition, appends its
 record, applies it, then publishes transient observers. `StreamChunk` callbacks are
 explicitly non-durable. The engine never closes its log: package-root `run.py` owns
 `MemoryRunLog`/`JsonlRunLog` creation, locking, recovery, tail repair, and closure.
+The explicit backward driver uses the same prepare/append/reduce path after the
+forward result returns, with no observer publication. Schema remains 6; removed
+per-frame records and nullable legacy commit attempt IDs are not accepted.
 
 `run_flow(..., log=None)` uses process-local authority; a path selects a durable
 JSONL log. `memory={name: implementation}` opens one snapshot-isolated session
-per policy selected by an authored `long_term_memory:` declaration; `learn=True`
-adds the record-authoritative post-terminal phase.
+per policy selected by an authored `long_term_memory:` declaration for independent
+recall. `learn=True` retains accepted execution for explicit
+`RunResult.backward(feedback=None)` and does not require a memory policy. Forward
+never calls learners or commits. The explicit attempt completes the reverse fold
+and all enabled frame proposals before Ready, then requests/observes one batch
+per policy in layout order. Empty/unexecuted frames still learn; even empty policy
+batches commit once. Known failures stop the attempt, preserving completed
+feedback when computation already finished. Host faults escape with the prefix.
+
+Policy observations are `unrequested`, `unknown`, `succeeded`, and `failed`.
+An accepted request or successful Finished closes retry eligibility. Only a manual
+precommit retry can recompute the whole attempt with fresh sessions/original
+snapshots; Ready is inspectable but never resumed. An unconfirmed request stays
+unknown, and all confirmations without Finished still describe an interruption.
+
 `resume_flow(flow, *, log=..., num_workers=None, memory=None)` validates the
 authored flow fingerprint, silently folds the locked contiguous prefix through
 the same reducer. An unfinished primary appends one
 `RunResumedRecord` before retrying starts in original dispatch order; a terminal
-primary with retryable learning appends only learning records; and a fully settled
-run returns unchanged. An unfinished memory-enabled run also requires exact
-recorded snapshots. `RunResult` exposes exactly `input`,
-`status`, `run_id`, `log`, `output`, `failure`, this invocation's post-durable
-`events`, and the independent optional `learning` disposition.
+primary returns silent inspection, even after interrupted backward. An unfinished
+memory-enabled forward run requires exact recorded snapshots; terminal inspection
+opens no policies. Supplied mapping references support a later explicit call.
+The retained handle keeps private program/data and a locator anchored at log
+acquisition, with no idle sessions/workers/lock. Each call is guarded, replays
+fresh authority, and closes resources while retaining the accepted prefix.
+`RunResult` exposes `input`, `status`, `run_id`, `log`, `output`, `failure`,
+`events`, plus separately observed `backward_outcome` and its `learning`
+projection. Invalid submissions preserve previous observations; backward leaves
+all forward fields unchanged.
 
 ## OCaml analogue map (design from this)
 
@@ -879,12 +917,12 @@ never runtime ids, graph topology, or a text heuristic.
   structural error path through the effective target contract's exact,
   nearest-ancestor, or default origin, then falls back to the executing node;
   other canonicalization errors use the contract default. Route and growth use
-  the executing node origin. Schema-5 output rejection retains its cause type
+  the executing node origin. Schema-6 output rejection retains its cause type
   inside `Failure`, forward capture when retention is enabled, and optional
   model/tool evaluation evidence beside it. Execution scope in the capture is
   separate from diagnostic provenance.
 - **Runtime boundary:** evaluator and dispatcher rejection construct one
-  canonical `Failure`; schema-5 `NodeFailedRecord` stores that value, forward
+  canonical `Failure`; schema-6 `NodeFailedRecord` stores that value, forward
   capture when retention is enabled, and optional model/tool evaluation evidence.
   Reducer state, `NodeFailed`, `RunFailed`,
   and `RunResult.failure` carry no semantic aliases. The first route whose skip

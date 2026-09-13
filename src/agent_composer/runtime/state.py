@@ -34,11 +34,11 @@ from agent_composer.events import (
     RunSucceeded,
 )
 from agent_composer.expr import ExpressionError, expr_refs_of
+from agent_composer.expr.lineage import SourceRef
 from agent_composer.memory import (
     EvaluationEvidence,
     MemoryFrameRef,
     MemoryFrameSpec,
-    MemoryMutation,
     MemoryOccurrenceRef,
     MemoryScope,
     MemorySnapshotEnvelope,
@@ -56,16 +56,19 @@ from agent_composer.nodes.contracts import (
     output_contract_type,
     validate_output_contract,
 )
-from agent_composer.runtime.contracts import ForwardCapture
-from agent_composer.runtime.trace import RetainedTrace, TraceDelta, prepare_trace, select_seed_route
+from agent_composer.runtime.contracts import ForwardCapture, _validate_source
+from agent_composer.runtime.trace import (
+    RetainedTrace, SourceEntry, TraceDelta, TraceOccurrence, TraceTerminal,
+    _copy_memory_scope, prepare_trace, select_seed_route,
+)
 from agent_composer.runtime.log import (
     SCHEMA_VERSION,
+    BackwardStartedRecord,
+    BackwardReadyRecord,
+    BackwardFinishedRecord,
     MemoryCommitFailedRecord,
     MemoryCommitRequestedRecord,
     MemoryCommitSucceededRecord,
-    MemoryFrameLearnedRecord,
-    MemoryFrameLearningFailedRecord,
-    MemoryFrameLearningStartedRecord,
     NodeExpandedRecord,
     NodeFailedRecord,
     NodeRoutedRecord,
@@ -84,13 +87,10 @@ from agent_composer.runtime.log import (
     encode_record,
 )
 from agent_composer.runtime.learning import (
-    FrameLearningState,
-    FrameLearningStatus,
-    PolicyCommitState,
-    PolicyCommitStatus,
     RuntimeLearningState,
-    memory_commit_id,
+    RuntimeBackwardState,
     project_outcome_episodes,
+    reduce_backward_record,
 )
 from agent_composer.typesys.pool import VariablePool
 from agent_composer.typesys.values import (
@@ -233,7 +233,9 @@ class RunState:
             Accepted executions, immutable producer entries and private backward
             handlers, enabled by recorded learning independently of memory scopes.
         learning_state (`RuntimeLearningState`):
-            Immutable episode, frame-learning, and policy-commit reducer projection.
+            Pure immutable episode and recorded frame/policy inventory.
+        backward_state (`RuntimeBackwardState`):
+            Immutable accepted backward attempts and irreversible commit facts.
         initial_static_ids (`frozenset[str]`):
             Immutable node IDs adopted before any runtime expansion.  Safe pruning
             may retire only later dynamic-overlay nodes.
@@ -268,6 +270,7 @@ class RunState:
         self.learn = False
         self.trace: RetainedTrace | None = None
         self.learning_state = RuntimeLearningState()
+        self.backward_state = RuntimeBackwardState()
         self._memory_authority = _MemoryAuthority(
             layout=None,
             snapshots=None,
@@ -355,6 +358,7 @@ class _RunStartedApply:
     memory_snapshots: tuple[MemorySnapshotEnvelope, ...] | None
     learn: bool
     learning_state: RuntimeLearningState
+    backward_state: RuntimeBackwardState
     memory_authority: _MemoryAuthority
     observers: tuple[Any, ...]
 
@@ -537,8 +541,8 @@ class _GrowthPlan:
 
 
 @dataclass(frozen=True, slots=True)
-class _LearningPlan:
-    """Opaque authority anchors and one immutable post-terminal learning state."""
+class _BackwardPlan:
+    """Canonical record authority and a detached post-terminal attempt delta."""
 
     originating_state: RunState
     originating_flow: CompiledFlow
@@ -548,7 +552,8 @@ class _LearningPlan:
     end_id: str
     end_node_identity: int | None
     originating_learning_state: RuntimeLearningState
-    next_learning_state: RuntimeLearningState
+    originating_backward_state: RuntimeBackwardState
+    next_backward_state: RuntimeBackwardState
     trace_delta: TraceDelta | None = None
 
 
@@ -646,7 +651,7 @@ class PreparedTransition:
         | _RoutePlan
         | _FailurePlan
         | _GrowthPlan
-        | _LearningPlan
+        | _BackwardPlan
     )
     observers: tuple[Any, ...]
 
@@ -1136,16 +1141,14 @@ def prepare_record(
     """Validate one supported authoritative record against the current frontier.
 
     This is the shared reducer seam for live dispatch and later historical replay.
-    Graph records require an initialized nonterminal state. Memory learning and
-    commit records require an initialized primary terminal with learning enabled.
+    Graph records require an initialized nonterminal state. Backward and memory
+    records require an initialized primary terminal with learning enabled.
 
     Args:
         state (`RunState`):
             Initialized reducer state immediately before ``record``.
         record (`RunRecord`):
-            One supported graph/frontier record, or one of the six durable
-            ``MemoryFrameLearning*`` / ``MemoryFrameLearned`` /
-            ``MemoryCommit*`` post-terminal records, to validate and copy.
+            One supported graph/frontier or backward-attempt record to validate and copy.
         grow_builder (`GrowBuilder | None`, *optional*):
             Required only for ``NodeExpandedRecord`` replay; rebuilds and verifies
             the recorded fragment through the same injected path used live.
@@ -1163,18 +1166,9 @@ def prepare_record(
     if type(state) is not RunState:
         raise TypeError("prepare_record expects a RunState")
 
-    if isinstance(
-        record,
-        (
-            MemoryFrameLearningStartedRecord,
-            MemoryFrameLearnedRecord,
-            MemoryFrameLearningFailedRecord,
-            MemoryCommitRequestedRecord,
-            MemoryCommitSucceededRecord,
-            MemoryCommitFailedRecord,
-        ),
-    ):
-        return _prepare_learning_transition(state, record)
+    if isinstance(record, (BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord,
+                           MemoryCommitRequestedRecord, MemoryCommitSucceededRecord, MemoryCommitFailedRecord)):
+        return _prepare_backward_transition(state, record)
 
     _require_initialized_nonterminal(state)
 
@@ -1295,7 +1289,10 @@ def _prepare_success_transition(
     if canonical_record != record:
         raise ValueError("NodeSucceededRecord is not in canonical wire form")
     next_learning_state = state.learning_state.append_episodes(
-        project_outcome_episodes(run_id, canonical_record)
+        project_outcome_episodes(
+            run_id, canonical_record,
+            execution_seq=state.trace.started[canonical_record.node_id] if state.trace is not None else None,
+        )
     )
 
     start_id = state.flow.start_id
@@ -1331,7 +1328,12 @@ def _prepare_success_transition(
         record=canonical_record,
         expected_run_id=canonical_envelope.run_id,
         expected_sequence=canonical_envelope.seq,
-        _plan=replace(plan, trace_delta=_prepare_record_trace(state, canonical_envelope)),
+        _plan=replace(plan, trace_delta=_prepare_record_trace(
+            state, canonical_envelope,
+            terminal_succeeded=terminal.succeeded if terminal is not None else None,
+            terminal_output_bytes=terminal.output_bytes if terminal is not None else None,
+            terminal_failure=terminal.failure if terminal is not None else None,
+        )),
         observers=observers,
     )
 
@@ -1390,7 +1392,10 @@ def _prepare_route_transition(
             terminal_unreachable_failure=canonical_record.terminal_failure,
         )
     next_learning_state = state.learning_state.append_episodes(
-        project_outcome_episodes(run_id, canonical_record)
+        project_outcome_episodes(
+            run_id, canonical_record,
+            execution_seq=state.trace.started[canonical_record.node_id] if state.trace is not None else None,
+        )
     )
 
     terminal = _prepare_terminal_delta(
@@ -1429,7 +1434,12 @@ def _prepare_route_transition(
         record=canonical_record,
         expected_run_id=canonical_envelope.run_id,
         expected_sequence=canonical_envelope.seq,
-        _plan=replace(plan, trace_delta=_prepare_record_trace(state, canonical_envelope)),
+        _plan=replace(plan, trace_delta=_prepare_record_trace(
+            state, canonical_envelope,
+            terminal_succeeded=terminal.succeeded if terminal is not None else None,
+            terminal_output_bytes=terminal.output_bytes if terminal is not None else None,
+            terminal_failure=terminal.failure if terminal is not None else None,
+        )),
         observers=observers,
     )
 
@@ -1464,7 +1474,10 @@ def _prepare_failure_transition(
 
     failure = canonical_record.failure
     next_learning_state = state.learning_state.append_episodes(
-        project_outcome_episodes(run_id, canonical_record)
+        project_outcome_episodes(
+            run_id, canonical_record,
+            execution_seq=state.trace.started[canonical_record.failure.node_id] if state.trace is not None else None,
+        )
     )
     start_id = state.flow.start_id
     end_id = state.flow.end_id
@@ -1486,7 +1499,9 @@ def _prepare_failure_transition(
         record=canonical_record,
         expected_run_id=canonical_envelope.run_id,
         expected_sequence=canonical_envelope.seq,
-        _plan=replace(plan, trace_delta=_prepare_record_trace(state, canonical_envelope)),
+        _plan=replace(plan, trace_delta=_prepare_record_trace(
+            state, canonical_envelope, terminal_succeeded=False, terminal_failure=failure,
+        )),
         observers=_failure_observers(failure),
     )
 
@@ -1575,7 +1590,10 @@ def _prepare_growth_transition(
                     f"seed connection {connection.seed_path!r} was not captured"
                 ))
     next_learning_state = state.learning_state.append_episodes(
-        project_outcome_episodes(run_id, canonical_record)
+        project_outcome_episodes(
+            run_id, canonical_record,
+            execution_seq=state.trace.started[canonical_record.spawner_id] if state.trace is not None else None,
+        )
     )
 
     start_id = state.flow.start_id
@@ -1607,249 +1625,22 @@ def _prepare_growth_transition(
     )
 
 
-def _prepare_learning_transition(
-    state: RunState,
-    record: (
-        MemoryFrameLearningStartedRecord
-        | MemoryFrameLearnedRecord
-        | MemoryFrameLearningFailedRecord
-        | MemoryCommitRequestedRecord
-        | MemoryCommitSucceededRecord
-        | MemoryCommitFailedRecord
-    ),
-) -> PreparedTransition:
-    """Freeze one validated post-terminal learning or commit transition."""
-    _require_initialized_terminal_learning(state)
-    run_id = state.run_id
-    if not isinstance(run_id, str):  # established by initialized-state validation
-        raise ValueError("run state is not initialized")
-    canonical_bytes = encode_record(
-        RecordEnvelope(
-            schema=SCHEMA_VERSION,
-            run_id=run_id,
-            seq=state.next_sequence,
-            record=record,
-        )
+def _prepare_backward_transition(state: RunState, record: RunRecord) -> PreparedTransition:
+    """Validate all backward data and prepare its detached state before append."""
+    _require_initialized_terminal_backward(state)
+    encoded = encode_record(RecordEnvelope(SCHEMA_VERSION, state.run_id, state.next_sequence, record))
+    envelope = decode_record(encoded)
+    if type(envelope.record) is not type(record) or envelope.record != record:
+        raise ValueError("backward record is not in canonical wire form")
+    next_backward = reduce_backward_record(state.trace, state.backward_state, envelope.record)
+    start_id, end_id = state.flow.start_id, state.flow.end_id
+    plan = _BackwardPlan(
+        state, state.flow, encoded, start_id, id(state.flow.nodes[start_id]),
+        end_id, id(state.flow.nodes[end_id]) if end_id in state.flow.nodes else None,
+        state.learning_state, state.backward_state, next_backward,
+        _prepare_record_trace(state, envelope),
     )
-    canonical_envelope = decode_record(canonical_bytes)
-    canonical_record = canonical_envelope.record
-    if type(canonical_record) is not type(record) or canonical_record != record:
-        raise ValueError(
-            f"{type(record).__name__} is not in canonical wire form"
-        )
-    if not isinstance(
-        canonical_record,
-        (
-            MemoryFrameLearningStartedRecord,
-            MemoryFrameLearnedRecord,
-            MemoryFrameLearningFailedRecord,
-            MemoryCommitRequestedRecord,
-            MemoryCommitSucceededRecord,
-            MemoryCommitFailedRecord,
-        ),
-    ):
-        raise TypeError("learning envelope decoded to a different record kind")
-
-    next_learning_state = _reduce_learning_record(state, canonical_record)
-    start_id = state.flow.start_id
-    end_id = state.flow.end_id
-    plan = _LearningPlan(
-        originating_state=state,
-        originating_flow=state.flow,
-        envelope_bytes=canonical_bytes,
-        start_id=start_id,
-        start_node_identity=id(state.flow.nodes[start_id]),
-        end_id=end_id,
-        end_node_identity=(
-            id(state.flow.nodes[end_id]) if end_id in state.flow.nodes else None
-        ),
-        originating_learning_state=state.learning_state,
-        next_learning_state=next_learning_state,
-    )
-    return PreparedTransition(
-        record=canonical_record,
-        expected_run_id=canonical_envelope.run_id,
-        expected_sequence=canonical_envelope.seq,
-        _plan=replace(plan, trace_delta=_prepare_record_trace(state, canonical_envelope)),
-        observers=(),
-    )
-
-
-def _reduce_learning_record(
-    state: RunState,
-    record: (
-        MemoryFrameLearningStartedRecord
-        | MemoryFrameLearnedRecord
-        | MemoryFrameLearningFailedRecord
-        | MemoryCommitRequestedRecord
-        | MemoryCommitSucceededRecord
-        | MemoryCommitFailedRecord
-    ),
-) -> RuntimeLearningState:
-    """Return the immutable next learning projection for one canonical record."""
-    learning = state.learning_state
-    layout = state.memory_layout
-    if type(layout) is not tuple:
-        raise ValueError("learning requires an enabled recorded memory layout")
-
-    if isinstance(
-        record,
-        (
-            MemoryFrameLearningStartedRecord,
-            MemoryFrameLearnedRecord,
-            MemoryFrameLearningFailedRecord,
-        ),
-    ):
-        spec = _memory_frame_spec(state, record.frame_ref)
-        if record.policy_name != spec.policy_name:
-            raise ValueError(
-                "learning record policy_name does not match recorded frame policy"
-            )
-        current = learning.frame_state(record.frame_ref)
-
-        if isinstance(record, MemoryFrameLearningStartedRecord):
-            if learning.active_frame is not None:
-                raise ValueError("another memory frame learning operation is active")
-            if current.status not in (
-                FrameLearningStatus.PENDING,
-                FrameLearningStatus.FAILED_RETRYABLE,
-            ):
-                raise ValueError(
-                    f"frame learning cannot start from {current.status.value}"
-                )
-            expected = learning.occurrence_inventory(record.frame_ref)
-            if record.occurrences != expected:
-                raise ValueError(
-                    "learning start occurrences must exactly equal accepted inventory"
-                )
-            return learning.with_frame_state(
-                record.frame_ref,
-                FrameLearningState(
-                    status=FrameLearningStatus.STARTED,
-                    occurrences=record.occurrences,
-                ),
-            )
-
-        if learning.active_frame != record.frame_ref or (
-            current.status is not FrameLearningStatus.STARTED
-        ):
-            raise ValueError("learning result must match the active memory frame")
-        if isinstance(record, MemoryFrameLearnedRecord):
-            _validate_policy_mutation_ids(
-                layout,
-                learning,
-                spec,
-                record.mutations,
-            )
-            return learning.with_frame_state(
-                record.frame_ref,
-                FrameLearningState(
-                    status=FrameLearningStatus.LEARNED,
-                    occurrences=current.occurrences,
-                    mutations=record.mutations,
-                ),
-            )
-        status = (
-            FrameLearningStatus.FAILED_RETRYABLE
-            if record.failure.retryable
-            else FrameLearningStatus.FAILED_FINAL
-        )
-        return learning.with_frame_state(
-            record.frame_ref,
-            FrameLearningState(
-                status=status,
-                occurrences=current.occurrences,
-                failure=record.failure,
-            ),
-        )
-
-    policy_name = record.policy_name
-    current_commit = learning.commit_state(policy_name)
-    if isinstance(record, MemoryCommitRequestedRecord):
-        if current_commit.status not in (
-            PolicyCommitStatus.UNREQUESTED,
-            PolicyCommitStatus.FAILED_RETRYABLE,
-        ):
-            raise ValueError(
-                f"memory commit cannot be requested from {current_commit.status.value}"
-            )
-        expected_mutations = learning.policy_mutations(policy_name)
-        if record.mutations != expected_mutations:
-            raise ValueError(
-                "memory commit batch must exactly aggregate learned frame mutations"
-            )
-        expected_commit_id = memory_commit_id(
-            state.run_id,
-            policy_name,
-            expected_mutations,
-        )
-        if record.commit_id != expected_commit_id:
-            raise ValueError("memory commit_id does not match its canonical batch")
-        return learning.with_commit_state(
-            policy_name,
-            PolicyCommitState(
-                status=PolicyCommitStatus.REQUESTED,
-                commit_id=record.commit_id,
-                mutations=record.mutations,
-            ),
-        )
-
-    if current_commit.status is not PolicyCommitStatus.REQUESTED:
-        raise ValueError("memory commit result requires one active request")
-    if record.commit_id != current_commit.commit_id:
-        raise ValueError("memory commit result does not match the active commit_id")
-    if isinstance(record, MemoryCommitSucceededRecord):
-        return learning.with_commit_state(
-            policy_name,
-            PolicyCommitState(
-                status=PolicyCommitStatus.SUCCEEDED,
-                commit_id=current_commit.commit_id,
-                mutations=current_commit.mutations,
-            ),
-        )
-    status = (
-        PolicyCommitStatus.FAILED_RETRYABLE
-        if record.failure.retryable
-        else PolicyCommitStatus.FAILED_FINAL
-    )
-    return learning.with_commit_state(
-        policy_name,
-        PolicyCommitState(
-            status=status,
-            commit_id=current_commit.commit_id,
-            mutations=current_commit.mutations,
-            failure=record.failure,
-        ),
-    )
-
-
-def _validate_policy_mutation_ids(
-    layout: tuple[MemoryFrameSpec, ...],
-    learning: RuntimeLearningState,
-    spec: MemoryFrameSpec,
-    mutations: tuple[MemoryMutation, ...],
-) -> None:
-    """Reject policy-wide mutation identity collisions at reducer authority."""
-    prior_ids = {
-        mutation.mutation_id
-        for other in layout
-        if other.policy_name == spec.policy_name and other.ref != spec.ref
-        for mutation in learning.frame_state(other.ref).mutations
-    }
-    if any(mutation.mutation_id in prior_ids for mutation in mutations):
-        raise ValueError("memory mutation ids must be unique within one policy commit")
-
-
-def _memory_frame_spec(state: RunState, ref: MemoryFrameRef) -> MemoryFrameSpec:
-    """Return the exact recorded frame specification for one identity."""
-    layout = state.memory_layout
-    if type(layout) is not tuple:
-        raise ValueError("memory layout is disabled")
-    index = state.learning_state._frame_index(ref)
-    spec = layout[index]
-    if spec.ref != ref:
-        raise ValueError("memory frame is absent from recorded layout")
-    return spec
+    return PreparedTransition(envelope.record, envelope.run_id, envelope.seq, plan, ())
 
 
 def commit_prepared(
@@ -1892,10 +1683,14 @@ def commit_prepared(
         raise TypeError("commit_prepared expects a PreparedTransition")
     if not isinstance(prepared._plan, (
         _RunStartedPlan, _FrontierPlan, _SuccessPlan, _RoutePlan,
-        _FailurePlan, _GrowthPlan, _LearningPlan,
+        _FailurePlan, _GrowthPlan, _BackwardPlan,
     )):
         raise TypeError("unsupported prepared transition plan")
     trace_delta = prepared._plan.trace_delta
+    if isinstance(prepared._plan, _BackwardPlan):
+        _require_postterminal_trace_delta(state, trace_delta)
+    elif isinstance(prepared._plan, _FrontierPlan):
+        _require_frontier_trace_delta(state, prepared)
     if trace_delta is not None:
         trace_delta.validate_origin(state.trace)
     if isinstance(prepared._plan, _RunStartedPlan):
@@ -1910,8 +1705,8 @@ def commit_prepared(
         observers = _commit_failure(log, state, prepared)
     elif isinstance(prepared._plan, _GrowthPlan):
         observers = _commit_growth(log, state, prepared)
-    elif isinstance(prepared._plan, _LearningPlan):
-        observers = _commit_learning(log, state, prepared)
+    elif isinstance(prepared._plan, _BackwardPlan):
+        observers = _commit_backward(log, state, prepared)
     else:
         raise TypeError("unsupported prepared transition plan")
     if trace_delta is not None:
@@ -1923,19 +1718,144 @@ def _prepare_record_trace(
     state: RunState, envelope: RecordEnvelope, *,
     input_connections: tuple[SeedConnection, ...] = (),
     child_boundaries: tuple[ChildFlowBoundary, ...] = (),
+    terminal_succeeded: bool | None = None,
+    terminal_output_bytes: bytes | None = None,
+    terminal_failure: Failure | None = None,
 ) -> TraceDelta | None:
     """Prepare accepted trace data while the actual executing node still exists."""
     record = envelope.record
-    if isinstance(record, NodeFailedRecord):
-        node_id = record.failure.node_id
-    elif isinstance(record, NodeExpandedRecord):
-        node_id = record.spawner_id
-    elif isinstance(record, (NodeSucceededRecord, NodeRoutedRecord)):
-        node_id = record.node_id
-    else:
-        node_id = None
+    node_id = _outcome_node_id(record)
     return prepare_trace(state.trace, envelope, state.flow.nodes.get(node_id),
-                         input_connections=input_connections, child_boundaries=child_boundaries)
+                         input_connections=input_connections, child_boundaries=child_boundaries,
+                         root_end_id=state.flow.end_id if isinstance(record, RunStartedRecord) else None,
+                         root_input_names=(
+                             state.flow.nodes[state.flow.start_id].backward_input_names()
+                             if isinstance(record, RunStartedRecord) and record.learn else None
+                         ),
+                         terminal_succeeded=terminal_succeeded,
+                         terminal_output_bytes=terminal_output_bytes,
+                         terminal_failure=terminal_failure)
+
+
+def _outcome_node_id(record: RunRecord) -> str | None:
+    """Select the physical executing node from canonical outcome authority."""
+    if isinstance(record, NodeFailedRecord):
+        return record.failure.node_id
+    if isinstance(record, NodeExpandedRecord):
+        return record.spawner_id
+    if isinstance(record, (NodeSucceededRecord, NodeRoutedRecord)):
+        return record.node_id
+    return None
+
+
+def _require_outcome_trace_scope(state: RunState, prepared: PreparedTransition) -> None:
+    """Match detached scope to the canonical physical node before append/prune.
+
+    Callers have checked the record against its immutable prepared envelope. The
+    adopted graph remains authority until apply; neither a commit target nor a
+    substituted occurrence can select the historical owner.
+    """
+    delta = prepared._plan.trace_delta
+    if state.trace is None:
+        if delta is not None:
+            raise ValueError("an unretained outcome cannot carry a trace delta")
+        return
+    if type(delta) is not TraceDelta or type(delta.occurrence) is not TraceOccurrence:
+        raise ValueError("a retained outcome requires its physical trace occurrence")
+    node_id = _outcome_node_id(prepared.record)
+    node = state.flow.nodes.get(node_id)
+    if not isinstance(node, Node):
+        raise ValueError("outcome memory scope requires its physical executing node")
+    if delta.occurrence.memory_scope != _copy_memory_scope(node.memory_scope):
+        raise ValueError("outcome memory scope disagrees with the physical executing node")
+
+
+def _require_outcome_trace_terminal(state: RunState, prepared: PreparedTransition) -> None:
+    """Match physical occurrence, terminal facts, and source latches to authority.
+
+    The terminal disposition was already derived during preparation. Validate
+    its trace projection without repeating quiescence or invoking node hooks.
+    Writer and route-latch updates also constrain later terminal projections.
+    """
+    trace = state.trace
+    if trace is None:
+        return
+    plan, record = prepared._plan, prepared.record
+    delta = plan.trace_delta
+    if (type(delta.sequence) is not int or delta.sequence != prepared.expected_sequence
+            or delta.initialized is not None or delta.started is not None or delta.resumed is not False):
+        raise ValueError("outcome trace cannot change initialization or dispatch authority")
+    node_id = _outcome_node_id(record)
+    source = SourceRef(state.run_id, trace.started[node_id])
+    occurrence = delta.occurrence
+    _validate_source(occurrence.source)
+    if (occurrence.source != source or type(occurrence.node_id) is not str or occurrence.node_id != node_id
+            or type(occurrence.outcome_seq) is not int or occurrence.outcome_seq != prepared.expected_sequence
+            or type(occurrence._record_bytes) is not bytes or occurrence._record_bytes != plan.envelope_bytes):
+        raise ValueError("physical trace occurrence disagrees with the accepted outcome")
+    root_start_source = source if node_id == trace.start_id and trace.root_start_source is None else None
+    if delta.root_start_source is not None:
+        _validate_source(delta.root_start_source)
+    if delta.root_start_source != root_start_source:
+        raise ValueError("terminal trace root START source disagrees with the accepted outcome")
+    writer = None
+    if isinstance(plan, _SuccessPlan):
+        if (type(delta.writer) is not tuple or len(delta.writer) != 2
+                or type(delta.writer[0]) is not str or delta.writer[0] != record.commit_target):
+            raise ValueError("physical trace writer disagrees with the accepted output target")
+        writer = SourceEntry(source, prepared.expected_sequence, plan.delta.value_bytes)
+    elif delta.writer is not None:
+        raise ValueError("only an accepted output can install a physical trace writer")
+    root_writer = writer if writer is not None and record.commit_target == state.flow.end_id else None
+    for actual, expected_writer, label in (
+        (delta.writer[1] if delta.writer is not None else None, writer, "physical trace writer"),
+        (delta.root_writer, root_writer, "terminal trace root writer"),
+    ):
+        if actual is not None:
+            if (type(actual) is not SourceEntry or type(actual.outcome_seq) is not int
+                    or type(actual._value_bytes) is not bytes):
+                raise ValueError(f"{label} must be an exact accepted entry")
+            if actual.source is not None:
+                _validate_source(actual.source)
+        if actual != expected_writer:
+            raise ValueError(f"{label} disagrees with the accepted outcome")
+
+    causal_source = (
+        source if isinstance(record, NodeRoutedRecord) and record.terminal_failure is not None
+        and trace._causal_route_source is None else None
+    )
+    if delta.causal_route_source is not None:
+        _validate_source(delta.causal_route_source)
+    if delta.causal_route_source != causal_source:
+        raise ValueError("terminal trace causal source disagrees with the accepted outcome")
+
+    expected = (
+        _TerminalDelta(False, None, plan.failure) if isinstance(plan, _FailurePlan)
+        else plan.terminal if isinstance(plan, (_SuccessPlan, _RoutePlan)) else None
+    )
+    terminal = delta.terminal
+    if expected is None:
+        if terminal is not None:
+            raise ValueError("nonterminal outcome cannot install a terminal trace")
+        return
+    if type(terminal) is not TraceTerminal:
+        raise ValueError("terminal outcome requires an exact terminal trace")
+    TraceTerminal.__post_init__(terminal)
+    if expected.succeeded:
+        accepted_writer = root_writer or trace._root_writer
+        if accepted_writer is None:
+            raise ValueError("terminal trace requires its accepted root writer")
+        terminal_source = accepted_writer.source
+    else:
+        terminal_source = (
+            source if isinstance(plan, _FailurePlan)
+            else causal_source or trace._causal_route_source
+        )
+        if terminal_source is None:
+            raise ValueError("terminal trace failure requires its accepted causal occurrence")
+    if (terminal.succeeded is not expected.succeeded or terminal.source != terminal_source
+            or terminal.output_bytes != expected.output_bytes or terminal.failure != expected.failure):
+        raise ValueError("terminal trace disagrees with the prepared terminal outcome")
 
 
 def _replay_records(
@@ -2106,6 +2026,8 @@ def _commit_success(
     _require_initialized_nonterminal(state)
     _require_authority_coordinates(log, state, prepared, initialized=True)
     _require_unchanged_record(prepared, plan.envelope_bytes)
+    _require_outcome_trace_scope(state, prepared)
+    _require_outcome_trace_terminal(state, prepared)
     delta = plan.delta
     if not (
         prepared.record.node_id == delta.node_id
@@ -2144,6 +2066,8 @@ def _commit_route(
     _require_initialized_nonterminal(state)
     _require_authority_coordinates(log, state, prepared, initialized=True)
     _require_unchanged_record(prepared, plan.envelope_bytes)
+    _require_outcome_trace_scope(state, prepared)
+    _require_outcome_trace_terminal(state, prepared)
     delta = plan.delta
     if not (
         prepared.record.node_id == delta.node_id
@@ -2189,6 +2113,8 @@ def _commit_failure(
     _require_initialized_nonterminal(state)
     _require_authority_coordinates(log, state, prepared, initialized=True)
     _require_unchanged_record(prepared, plan.envelope_bytes)
+    _require_outcome_trace_scope(state, prepared)
+    _require_outcome_trace_terminal(state, prepared)
     if prepared.record.failure is not plan.failure:
         raise ValueError("failure record and prevalidated authority disagree")
     node_id = plan.failure.node_id
@@ -2221,6 +2147,8 @@ def _commit_growth(
     _require_initialized_nonterminal(state)
     _require_authority_coordinates(log, state, prepared, initialized=True)
     _require_unchanged_record(prepared, plan.envelope_bytes)
+    _require_outcome_trace_scope(state, prepared)
+    _require_outcome_trace_terminal(state, prepared)
     delta = plan.delta
     if not (
         prepared.record.spawner_id == delta.spawner_id
@@ -2248,42 +2176,76 @@ def _commit_growth(
     return apply.observers
 
 
-def _commit_learning(
-    log: RunLog,
-    state: RunState,
-    prepared: PreparedTransition,
-) -> tuple[Any, ...]:
-    """Validate, append, and install one post-terminal learning transition."""
+def _require_postterminal_trace_delta(
+    state: RunState, delta: TraceDelta | None,
+) -> None:
+    """Require the exact sequence-only trace change before accepting a record."""
+    if (type(delta) is not TraceDelta or delta.originating_trace is not state.trace
+            or type(delta.sequence) is not int or delta.sequence != state.next_sequence
+            or delta.resumed is not False):
+        raise ValueError("postterminal trace delta must only advance the accepted sequence")
+    if any(value is not None for value in (
+        delta.initialized, delta.started, delta.occurrence, delta.handler, delta.writer,
+        delta.consumed_connection, delta.boundary_update, delta.root_start_source,
+        delta.root_writer, delta.causal_route_source, delta.terminal,
+    )) or any(type(values) is not tuple or len(values) != 0 for values in (
+        delta.prune_ids, delta.connections, delta.boundaries,
+    )):
+        raise ValueError("postterminal trace delta must only advance the accepted sequence")
+
+
+def _require_frontier_trace_delta(state: RunState, prepared: PreparedTransition) -> None:
+    """Permit only the canonical dispatch or resume operation before append."""
+    delta, record = prepared._plan.trace_delta, prepared.record
+    if state.trace is None:
+        if delta is not None:
+            raise ValueError("an unretained frontier cannot carry a frontier trace delta")
+        return
+    if (type(delta) is not TraceDelta or delta.originating_trace is not state.trace
+            or type(delta.sequence) is not int or delta.sequence != state.next_sequence):
+        raise ValueError("frontier trace delta requires its exact accepted sequence")
+    if isinstance(record, NodeStartedRecord):
+        if (type(delta.started) is not tuple or len(delta.started) != 2
+                or type(delta.started[0]) is not str or delta.started[0] != record.node_id
+                or type(delta.started[1]) is not int or delta.started[1] != prepared.expected_sequence
+                or delta.resumed is not False):
+            raise ValueError("frontier trace start disagrees with its canonical record")
+    elif isinstance(record, RunResumedRecord):
+        if delta.started is not None or delta.resumed is not True:
+            raise ValueError("frontier trace resume disagrees with its canonical record")
+    else:
+        raise ValueError("frontier trace requires a dispatch or resume record")
+    if any(value is not None for value in (
+        delta.initialized, delta.occurrence, delta.handler, delta.writer,
+        delta.consumed_connection, delta.boundary_update, delta.root_start_source,
+        delta.root_writer, delta.causal_route_source, delta.terminal,
+    )) or any(type(values) is not tuple or len(values) != 0 for values in (
+        delta.prune_ids, delta.connections, delta.boundaries,
+    )):
+        raise ValueError("frontier trace cannot change outcome or terminal history")
+
+
+def _commit_backward(log: RunLog, state: RunState, prepared: PreparedTransition) -> tuple[Any, ...]:
+    """Verify the complete prepared authority, append, then replace attempt state."""
     plan = prepared._plan
-    if not isinstance(plan, _LearningPlan):
-        raise TypeError("learning commit requires a learning plan")
-    if not isinstance(
-        prepared.record,
-        (
-            MemoryFrameLearningStartedRecord,
-            MemoryFrameLearnedRecord,
-            MemoryFrameLearningFailedRecord,
-            MemoryCommitRequestedRecord,
-            MemoryCommitSucceededRecord,
-            MemoryCommitFailedRecord,
-        ),
-    ):
-        raise TypeError("learning plan requires a memory learning record")
+    if type(plan) is not _BackwardPlan:
+        raise TypeError("backward commit requires its exact plan")
     _require_prepared_origin(state, plan)
     _require_learning_plan_origin(state, plan)
-    _require_initialized_terminal_learning(state)
+    if state.backward_state is not plan.originating_backward_state:
+        raise ValueError("prepared backward transition has stale attempt authority")
+    _require_initialized_terminal_backward(state)
     _require_authority_coordinates(log, state, prepared, initialized=True)
     _require_unchanged_record(prepared, plan.envelope_bytes)
-    if not (
-        plan.next_learning_state.frame_order
-        is state._memory_authority.frame_order
-        and plan.next_learning_state.policy_order
-        is state._memory_authority.policy_order
-    ):
-        raise ValueError("learning plan changed RunStarted memory inventories")
-
+    envelope = decode_record(plan.envelope_bytes)
+    expected = reduce_backward_record(state.trace, state.backward_state, envelope.record)
+    if type(plan.next_backward_state) is not RuntimeBackwardState:
+        raise TypeError("backward plan requires an exact next state")
+    RuntimeBackwardState.__post_init__(plan.next_backward_state)
+    if expected != plan.next_backward_state:
+        raise ValueError("backward plan state disagrees with its canonical record")
     _append_and_verify(log, prepared)
-    state.learning_state = plan.next_learning_state
+    state.backward_state = expected
     state.next_sequence = prepared.expected_sequence + 1
     return ()
 
@@ -2297,7 +2259,7 @@ def _require_prepared_origin(
         | _RoutePlan
         | _FailurePlan
         | _GrowthPlan
-        | _LearningPlan
+        | _BackwardPlan
     ),
 ) -> None:
     """Require the exact state, adopted flow, and boundary objects from preparation."""
@@ -2310,7 +2272,7 @@ def _require_prepared_origin(
 
 def _require_learning_plan_origin(
     state: RunState,
-    plan: _SuccessPlan | _RoutePlan | _FailurePlan | _GrowthPlan | _LearningPlan,
+    plan: _SuccessPlan | _RoutePlan | _FailurePlan | _GrowthPlan | _BackwardPlan,
 ) -> None:
     """Require the exact immutable learning projection used during preparation."""
     if state.learning_state is not plan.originating_learning_state:
@@ -2392,6 +2354,7 @@ def _require_initialized(state: RunState) -> None:
         and type(state.input) is dict
         and type(state.effective_llm_by_static_path) is dict
         and type(state.learning_state) is RuntimeLearningState
+        and type(state.backward_state) is RuntimeBackwardState
         and type(state._memory_authority) is _MemoryAuthority
         and type(state.initial_static_ids) is frozenset
     )
@@ -2439,13 +2402,13 @@ def _require_initialized_nonterminal(state: RunState) -> None:
         raise ValueError("terminal run state cannot prepare another graph transition")
 
 
-def _require_initialized_terminal_learning(state: RunState) -> None:
-    """Require an initialized primary terminal with durable learning enabled."""
+def _require_initialized_terminal_backward(state: RunState) -> None:
+    """Require the accepted retained terminal, independently from memory policies."""
     _require_initialized(state)
     if not isinstance(state.result, (RunSucceeded, RunFailed)):
-        raise ValueError("memory learning records require a primary terminal result")
-    if state.learn is not True or state.memory_layout is None:
-        raise ValueError("memory learning records require enabled learning")
+        raise ValueError("backward records require an accepted terminal result")
+    if state.learn is not True or state.trace is None or state.trace.terminal is None:
+        raise ValueError("backward records require recorded learning and terminal trace authority")
 
 
 def _validate_runtime_memory_configuration(state: RunState) -> None:
@@ -2460,6 +2423,10 @@ def _validate_runtime_memory_configuration(state: RunState) -> None:
         and state.learn is authority.learn
         and state.learning_state.frame_order is authority.frame_order
         and state.learning_state.policy_order is authority.policy_order
+        and state.backward_state.layout is authority.layout
+        and state.backward_state.frame_order is authority.frame_order
+        and state.backward_state.policy_order is authority.policy_order
+        and state.backward_state.policy_frame_indices is authority.policy_frame_indices
         and (
             state.learning_state.policy_frame_indices
             is authority.policy_frame_indices
@@ -4233,6 +4200,7 @@ def _require_pristine(state: RunState) -> None:
         and type(state.input) is dict
         and type(state.effective_llm_by_static_path) is dict
         and type(state.learning_state) is RuntimeLearningState
+        and type(state.backward_state) is RuntimeBackwardState
         and type(state._memory_authority) is _MemoryAuthority
         and type(state.initial_static_ids) is frozenset
     )
@@ -4266,6 +4234,7 @@ def _require_pristine(state: RunState) -> None:
         and state.learn is False
         and state.trace is None
         and state.learning_state == RuntimeLearningState()
+        and state.backward_state == RuntimeBackwardState()
         and state._memory_authority.layout is None
         and state._memory_authority.snapshots is None
         and state._memory_authority.learn is False
@@ -4289,7 +4258,7 @@ def _require_originating_flow(
         | _RoutePlan
         | _FailurePlan
         | _GrowthPlan
-        | _LearningPlan
+        | _BackwardPlan
     ),
 ) -> None:
     """Reject replacement of the adopted flow object or either boundary identity.
@@ -4351,6 +4320,10 @@ def _materialize_run_started(
         raise TypeError("canonical START input is not a dict")
 
     learning_state = RuntimeLearningState.for_layout(record.memory_layout)
+    backward_state = RuntimeBackwardState(
+        record.memory_layout, learning_state.frame_order, learning_state.policy_order,
+        learning_state.policy_frame_indices,
+    )
     memory_authority = _MemoryAuthority(
         layout=record.memory_layout,
         snapshots=record.memory_snapshots,
@@ -4378,6 +4351,7 @@ def _materialize_run_started(
         memory_snapshots=record.memory_snapshots,
         learn=record.learn,
         learning_state=learning_state,
+        backward_state=backward_state,
         memory_authority=memory_authority,
         observers=(RunStarted(),),
     )
@@ -4403,6 +4377,7 @@ def _apply_run_started(state: RunState, apply: _RunStartedApply) -> None:
     state.memory_snapshots = apply.memory_snapshots
     state.learn = apply.learn
     state.learning_state = apply.learning_state
+    state.backward_state = apply.backward_state
     state._memory_authority = apply.memory_authority
     state.next_sequence = apply.next_sequence
 

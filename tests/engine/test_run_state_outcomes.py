@@ -58,6 +58,7 @@ from agent_composer.runtime.state import (
 )
 from agent_composer.typesys import Type, ValueKind, VariablePool
 from tests.engine._fakes import FuncNode
+from tests.engine._graph_builder import _forward_capture
 
 
 _FINGERPRINT = "b" * 64
@@ -103,7 +104,7 @@ def _fanout_flow() -> CompiledFlow:
 
 
 def _initialized_and_started(
-    flow: CompiledFlow,
+    flow: CompiledFlow, *, learn: bool = False,
 ) -> tuple[RunState, MemoryRunLog]:
     """Return a state/log after a replay-valid RunStarted and START dispatch."""
     pool = VariablePool(start_id=flow.start_id)
@@ -123,6 +124,7 @@ def _initialized_and_started(
                 start_wiring_override={},
                 effective_llm_by_static_path={},
                 num_workers=2,
+                learn=learn,
             ),
         ),
     )
@@ -143,6 +145,7 @@ def _commit_start_success(
             state,
             START_ID,
             {"items": ["canonical"]} if output is None else output,
+            forward_capture=_forward_capture(state.flow.nodes[START_ID], {}) if state.learn else None,
         ),
     )
 
@@ -2345,8 +2348,9 @@ def test_terminal_unreachable_latch_replays_before_and_at_quiescence():
     )
 
 
-def test_terminal_unreachable_latch_survives_pruning_its_dynamic_cause():
-    state, log = _initialized_and_started(_terminal_prune_parent_flow())
+@pytest.mark.parametrize("learn", [False, True])
+def test_terminal_unreachable_latch_survives_pruning_its_dynamic_cause(learn):
+    state, log = _initialized_and_started(_terminal_prune_parent_flow(), learn=learn)
     _commit_start_success(state, log)
     commit_prepared(log, state, prepare_node_started(state, "creator"))
     commit_prepared(log, state, prepare_node_started(state, "pruner"))
@@ -2358,6 +2362,7 @@ def test_terminal_unreachable_latch_survives_pruning_its_dynamic_cause():
             "creator",
             Grow(seed={}),
             lambda spawner, _seed: _terminal_router_fragment(spawner.id),
+            forward_capture=_forward_capture(state.flow.nodes["creator"], {}) if learn else None,
         ),
     )
     router_id = "creator/child/router"
@@ -2369,11 +2374,13 @@ def test_terminal_unreachable_latch_survives_pruning_its_dynamic_cause():
     commit_prepared(
         log,
         state,
-        prepare_node_succeeded(state, "creator/child/start", {}),
+        prepare_node_succeeded(state, "creator/child/start", {},
+                               forward_capture=_forward_capture(state.flow.nodes["creator/child/start"], {}) if learn else None),
     )
     commit_prepared(log, state, prepare_node_started(state, router_id))
 
-    route = prepare_node_routed(state, router_id, "go")
+    route = prepare_node_routed(state, router_id, "go",
+                               forward_capture=_forward_capture(state.flow.nodes[router_id], {}) if learn else None)
     failure = route._plan.delta.terminal_unreachable_failure
     commit_prepared(log, state, route)
 
@@ -2395,6 +2402,7 @@ def test_terminal_unreachable_latch_survives_pruning_its_dynamic_cause():
             "pruner",
             Grow(seed={}, prune=frozenset({router_id})),
             lambda spawner, _seed: _terminal_pruner_fragment(spawner.id),
+            forward_capture=_forward_capture(state.flow.nodes["pruner"], {}) if learn else None,
         ),
     )
 
@@ -2410,7 +2418,8 @@ def test_terminal_unreachable_latch_survives_pruning_its_dynamic_cause():
     commit_prepared(
         log,
         state,
-        prepare_node_succeeded(state, "pruner/child/start", {}),
+        prepare_node_succeeded(state, "pruner/child/start", {},
+                               forward_capture=_forward_capture(state.flow.nodes["pruner/child/start"], {}) if learn else None),
     )
     commit_prepared(
         log,
@@ -2420,13 +2429,23 @@ def test_terminal_unreachable_latch_survives_pruning_its_dynamic_cause():
     observers = commit_prepared(
         log,
         state,
-        prepare_node_succeeded(state, "pruner/child/end", {}),
+        prepare_node_succeeded(state, "pruner/child/end", {},
+                               forward_capture=_forward_capture(state.flow.nodes["pruner/child/end"], {}) if learn else None),
     )
 
     assert observers[-1] == RunFailed(failure)
     assert observers[-1].failure is failure
     assert state.result.failure is failure
     assert state.terminal_unreachable_failure is failure
+
+    if learn:
+        from agent_composer.runtime.backward import compute_backward
+
+        causal = next(item for item in state.trace.occurrences if item.node_id == router_id)
+        assert state.trace.terminal.source == causal.source
+        root, results = compute_backward(state.trace, "review pruned failure")
+        assert root.input_feedback == {}
+        assert next(item for item in results if item.source == causal.source).invoked
 
 
 def test_terminal_skip_diagnosis_scans_only_end_beyond_touched_route_joins(

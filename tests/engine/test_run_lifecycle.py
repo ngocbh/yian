@@ -504,6 +504,8 @@ def test_final_run_boundary_signatures_and_result_fields_are_exact() -> None:
         "failure",
         "events",
         "learning",
+        "backward_outcome",
+        "_backward_handle",
     ]
 
 

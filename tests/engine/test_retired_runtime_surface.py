@@ -184,6 +184,8 @@ def test_final_log_only_runtime_and_public_surface():
         "failure",
         "events",
         "learning",
+        "backward_outcome",
+        "_backward_handle",
     ]
 
 

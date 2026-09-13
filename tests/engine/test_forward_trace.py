@@ -14,6 +14,344 @@ from agent_composer.runtime.log import (
 )
 
 
+def test_forward_capture_round_trips_invocation_names_and_structural_layout():
+    from agent_composer.runtime.contracts import ForwardCapture
+
+    data = {"input_output_paths": {"result": []}}
+    capture = ForwardCapture(
+        {"result": {"items": [1]}},
+        ValueRoute.record((("result", ValueRoute.literal({"items": [1]})),)),
+        node_data=data, input_names=("result",), variable_names=("instruction",),
+    )
+    data["input_output_paths"]["result"].append("changed")
+    record = NodeSucceededRecord("end", "end", canonical_typed({"items": [1]}, None)[0], forward_capture=capture)
+    envelope = RecordEnvelope(SCHEMA_VERSION, "run", 3, record)
+    decoded = decode_record(encode_record(envelope))
+    assert decoded == envelope
+    assert decoded.record.forward_capture.input_names == ("result",)
+    assert decoded.record.forward_capture.variable_names == ("instruction",)
+    assert decoded.record.forward_capture.node_data == {"input_output_paths": {"result": []}}
+    assert SCHEMA_VERSION == 6
+    old = json.loads(encode_record(envelope))
+    old["schema"] = 5
+    with pytest.raises(ValueError, match="schema"):
+        decode_record(json.dumps(old))
+
+
+@pytest.mark.parametrize("field,value", [
+    ("input_names", None), ("input_names", ["result", "result"]), ("input_names", [1]),
+    ("variable_names", ["instruction", "instruction"]), ("variable_names", [False]),
+    ("node_data", {"input_output_paths": []}),
+    ("node_data", {"input_output_paths": {"unknown": []}}),
+    ("node_data", {"input_output_paths": {"result": [True]}}),
+    ("node_data", {"input_output_paths": {"result": [-1]}}),
+    ("node_data", {"input_output_paths": {"result": "result"}}),
+])
+def test_forward_capture_rejects_malformed_invocation_inventory_and_paths(field, value):
+    from agent_composer.runtime.contracts import ForwardCapture
+
+    capture = ForwardCapture({"result": 1}, ValueRoute.record((("result", ValueRoute.literal(1)),)),
+                             input_names=("result",), variable_names=("instruction",))
+    envelope = RecordEnvelope(SCHEMA_VERSION, "run", 3, NodeSucceededRecord(
+        "end", "end", canonical_typed(1, None)[0], forward_capture=capture,
+    ))
+    wire = json.loads(encode_record(envelope))
+    wire["payload"]["forward_capture"][field] = value
+    with pytest.raises((TypeError, ValueError)):
+        decode_record(json.dumps(wire))
+
+
+@pytest.mark.parametrize("field", ["input_names", "variable_names"])
+def test_schema_six_requires_explicit_invocation_inventories(field):
+    from agent_composer.runtime.contracts import ForwardCapture
+
+    capture = ForwardCapture({}, ValueRoute.record(()))
+    envelope = RecordEnvelope(SCHEMA_VERSION, "run", 3, NodeSucceededRecord(
+        "work", "work", canonical_typed(None, None)[0], forward_capture=capture,
+    ))
+    wire = json.loads(encode_record(envelope))
+    wire["payload"]["forward_capture"].pop(field)
+    with pytest.raises(ValueError):
+        decode_record(json.dumps(wire))
+
+
+def test_accepted_backward_inventories_and_layout_replay_without_recapturing(monkeypatch):
+    import copy
+    from agent_composer.compile.expand import build_grow
+    from agent_composer.compile.model import END_ID, START_ID
+    from agent_composer.compose import load_flow
+    from agent_composer.nodes.base import BackwardContext, Node
+    from agent_composer.nodes.code import CodeNode
+    from agent_composer.nodes.end import EndNode
+    from agent_composer.nodes.start import StartNode
+    from agent_composer.runtime.state import RunState, _replay_records
+    from tests.engine._graph_builder import _engine
+
+    flow = load_flow("""id: captured_layout
+name: captured_layout
+input: {topic: 'str = reefs'}
+nodes:
+  work:
+    kind: code
+    input: {topic: '${input.topic}'}
+    code: return inputs['topic']
+    output: str
+output: ${work.output}
+asserts: ["${work.output} != null"]
+""").compiled
+    engine = _engine(flow, learn=True)
+    original = copy.deepcopy(engine.state.flow)
+    list(engine.run())
+    occurrences = {item.node_id: item for item in engine.state.trace.occurrences}
+    start = occurrences[START_ID].record.forward_capture
+    terminal = occurrences[END_ID].record.forward_capture
+    assert start.input_names == ("topic",) and start.bound_inputs == {"topic": "reefs"}
+    assert terminal.input_names == ("result",)
+    assert len(terminal.bound_inputs) > 1
+    assert terminal.node_data == {"input_output_paths": {"result": []}}
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("replay executed or recaptured a node")
+
+    monkeypatch.setattr(CodeNode, "forward", forbidden)
+    input_names = Node.backward_input_names
+    initialized_roots = []
+
+    def root_inventory_only(node):
+        assert node.id == START_ID
+        initialized_roots.append(node.id)
+        return input_names(node)
+
+    monkeypatch.setattr(Node, "backward_input_names", root_inventory_only)
+    monkeypatch.setattr(Node, "declared_variables", forbidden)
+    for kind in (Node, StartNode, EndNode):
+        monkeypatch.setattr(kind, "capture_backward_context", forbidden)
+    replay = _replay_records(RunState(original), tuple(engine.log), grow_builder=build_grow)
+    assert initialized_roots == [START_ID]
+    assert replay.trace.occurrences == engine.state.trace.occurrences
+    occurrence = next(item for item in replay.trace.occurrences if item.node_id == END_ID)
+    handler = replay.trace.backward_handlers[occurrence.source]
+    handler.__self__._names[:] = ["changed", "afterward"]
+    handler.__self__.params.clear()
+    capture = occurrence.record.forward_capture
+    context = BackwardContext(
+        capture.bound_inputs, input_names=capture.input_names, variable_names=capture.variable_names,
+        output=replay.trace.sources[occurrence.source].value, node_data=capture.node_data,
+    )
+    assert handler(context, ("Review the answer.",)).input_feedback == {"result": ("Review the answer.",)}
+
+
+def test_static_capture_host_fault_does_not_append_a_node_outcome():
+    from agent_composer.compile.model import END_ID, START_ID
+    from agent_composer.runtime.log import NodeStartedRecord
+    from tests.engine._fakes import FuncNode
+    from tests.engine._graph_builder import _engine, _graph
+
+    expected = ValueError("capture failed")
+    node = FuncNode("work", lambda _inputs: "body must not run")
+
+    def fail():
+        raise expected
+
+    node.capture_backward_context = fail
+    engine = _engine(_graph([node], [(START_ID, "work"), ("work", END_ID)]), learn=True)
+    with pytest.raises(ValueError) as caught:
+        list(engine.run())
+    assert caught.value is expected
+    assert tuple(engine.log)[-1].record == NodeStartedRecord("work")
+    assert all(item.node_id != "work" for item in engine.state.trace.occurrences)
+    assert engine.state.pool.get("work") is None
+
+
+def test_nested_agent_render_capture_uses_authored_model_map_and_replays_without_execution(monkeypatch):
+    import copy
+    import agent_composer.nodes.agent.node as agent_module
+    from agent_composer.compile.expand import build_grow
+    from agent_composer.compose import load_flow
+    from agent_composer.events import RunSucceeded
+    from agent_composer.nodes.agent import AgentNode
+    from agent_composer.nodes.base import Output
+    from agent_composer.runtime.state import RunState, _replay_records
+    from tests.engine._graph_builder import _engine
+
+    flow = load_flow("""id: captured_models
+name: captured_models
+llm_config: {provider: test, model: root, temperature: 0.2}
+defs:
+  leaf:
+    input: {topic: str}
+    nodes:
+      writer:
+        kind: agent
+        mode: plain
+        input: {topic: '${input.topic}'}
+        prompt: '${topic}: ${instruction}'
+        variables: {instruction: 'str = clearly'}
+        output: {topic: str}
+    output: ${writer.output}
+  repeat_left:
+    llm_config: {model: left}
+    input: {topic: str}
+    nodes:
+      twice:
+        kind: loop
+        call: leaf
+        times: 2
+        input: {topic: '${input.topic}'}
+    output: ${twice.output}
+  repeat_right:
+    llm_config: {model: right}
+    input: {topic: str}
+    nodes:
+      twice:
+        kind: loop
+        call: leaf
+        times: 2
+        input: {topic: '${input.topic}'}
+    output: ${twice.output}
+nodes:
+  left:
+    kind: call
+    call: repeat_left
+    input: {topic: reefs}
+  right:
+    kind: map
+    call: repeat_right
+    over: [reefs, reefs]
+    input: {topic: '${item}'}
+output: {left: '${left.output}', right: '${right.output}'}
+""").compiled
+    rendered = []
+
+    def mode(ctx):
+        rendered.append((ctx.prompt, dict(ctx.llm_config)))
+        return Output({"topic": ctx.prompt})
+
+    monkeypatch.setitem(agent_module.MODES, "plain", mode)
+    engine = _engine(flow, learn=True)
+    original = copy.deepcopy(engine.state.flow)
+    list(engine.run())
+    assert isinstance(engine.state.result, RunSucceeded), engine.state.result
+    trace = engine.state.trace
+    agents = [item for item in trace.occurrences if item.record.forward_capture.variable_names == ("instruction",)]
+    assert len(agents) == len(rendered) == 6
+    assert engine.state.effective_llm_by_static_path == {
+        "left/twice/writer": {"provider": "test", "model": "left", "temperature": 0.2},
+        "right/twice/writer": {"provider": "test", "model": "right", "temperature": 0.2},
+    }
+    positions = set()
+    for occurrence in agents:
+        capture = occurrence.record.forward_capture
+        scope, data = capture.scope, capture.node_data
+        expected = engine.state.effective_llm_by_static_path["/".join(scope.static_path)]
+        assert data["effective_llm_config"] == expected
+        assert data["prompt_template"] == "${topic}: ${instruction}"
+        assert data["variables"] == {"instruction": "clearly"}
+        assert data["rendered_prompt"] == capture.bound_inputs["topic"] + ": clearly"
+        assert scope.static_path in (("left", "twice", "writer"), ("right", "twice", "writer"))
+        assert [item.kind for item in scope.occurrence_path] == (
+            ["call", "loop_body"] if scope.static_path[0] == "left" else ["map_item", "loop_body"]
+        )
+        positions.add((scope.static_path, scope.occurrence_path))
+    assert len(positions) == 6
+    assert any(item.node_id not in engine.state.flow.nodes for item in agents)
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("replay tried to resolve, render, capture, or invoke a model")
+
+    monkeypatch.setattr(AgentNode, "_resolve_variables", forbidden)
+    monkeypatch.setattr(AgentNode, "capture_backward_context", forbidden)
+    monkeypatch.setattr(agent_module, "render_template_record", forbidden)
+    monkeypatch.setitem(agent_module.MODES, "plain", forbidden)
+    replay = _replay_records(RunState(original), tuple(engine.log), grow_builder=build_grow)
+    assert replay.trace.occurrences == trace.occurrences
+    for occurrence in agents:
+        handler = replay.trace.backward_handlers[occurrence.source].__self__
+        handler.prompt = "later prompt"
+        handler.llm_config["model"] = "later model"
+        data = replay.trace.backward_context(occurrence.source).node_data
+        evidence = data.pop("_evaluation_evidence")
+        assert evidence["interactions"] == []
+        assert data == occurrence.record.forward_capture.node_data
+
+
+@pytest.mark.parametrize("failure_at", ["capture", "append"])
+def test_agent_render_capture_host_and_append_failures_do_not_install_worker_data(monkeypatch, failure_at):
+    import agent_composer.nodes.agent.node as agent_module
+    import agent_composer.runtime.eval_node as evaluator
+    from agent_composer.compile.model import END_ID, START_ID
+    from agent_composer.nodes.agent import AgentNode
+    from agent_composer.nodes.base import Output
+    from agent_composer.runtime.log import NodeStartedRecord
+    from tests.engine._graph_builder import _engine, _graph
+
+    expected = OSError("capture or append unavailable")
+    node = AgentNode("writer", prompt="actual prompt")
+    modes = []
+    monkeypatch.setitem(agent_module.MODES, "plain", lambda ctx: modes.append(ctx.prompt) or Output(ctx.prompt))
+    engine = _engine(_graph([node], [(START_ID, "writer"), ("writer", END_ID)]), learn=True)
+    canonical, append = evaluator.canonical_seed, engine.log.append
+
+    def fail_capture(value, **kwargs):
+        if type(value) is dict and "rendered_prompt" in value:
+            raise expected
+        return canonical(value, **kwargs)
+
+    def fail_append(record):
+        if type(record) is NodeSucceededRecord and record.node_id == "writer":
+            assert record.forward_capture.node_data["rendered_prompt"] == "actual prompt"
+            raise expected
+        return append(record)
+
+    if failure_at == "capture":
+        monkeypatch.setattr(evaluator, "canonical_seed", fail_capture)
+    else:
+        monkeypatch.setattr(engine.log, "append", fail_append)
+    with pytest.raises(OSError) as caught:
+        list(engine.run())
+    assert caught.value is expected
+    assert modes == ([] if failure_at == "capture" else ["actual prompt"])
+    assert tuple(engine.log)[-1].record == NodeStartedRecord("writer")
+    assert all(item.node_id != "writer" for item in engine.state.trace.occurrences)
+    assert "writer" not in engine.state.trace.current_writers
+    assert engine.state.pool.get("writer") is None
+
+
+def test_discarded_agent_worker_keeps_render_capture_out_of_accepted_trace(monkeypatch):
+    import threading
+    import agent_composer.nodes.agent.node as agent_module
+    from agent_composer.compile.model import END_ID, START_ID
+    from agent_composer.nodes.agent import AgentNode
+    from agent_composer.nodes.base import Output
+    from tests.engine._fakes import FuncNode
+    from tests.engine._graph_builder import _engine, _graph
+
+    entered, stop = threading.Event(), threading.Event()
+    rendered = []
+
+    def mode(ctx):
+        rendered.append(ctx.prompt)
+        entered.set()
+        assert stop.wait(5)
+        return Output(ctx.prompt)
+
+    def fail(_inputs):
+        assert entered.wait(5)
+        raise ValueError("sibling failed")
+
+    monkeypatch.setitem(agent_module.MODES, "plain", mode)
+    slow = AgentNode("slow", prompt="captured but discarded")
+    flow = _graph([slow, FuncNode("bad", fail)], [
+        (START_ID, "slow"), (START_ID, "bad"), ("slow", END_ID), ("bad", END_ID),
+    ])
+    engine = _engine(flow, learn=True, num_workers=2, stop_event=stop)
+    list(engine.run())
+    assert rendered == ["captured but discarded"]
+    assert "slow" in engine.state.trace.started
+    assert [item.node_id for item in engine.state.trace.occurrences] == [START_ID, "bad"]
+    assert "slow" not in engine.state.trace.current_writers
+
+
 def test_forward_capture_round_trips_without_memory_scope():
     from agent_composer.runtime.contracts import ForwardCapture
 
@@ -44,7 +382,7 @@ def test_forward_capture_round_trips_without_memory_scope():
     assert capture.node_data == {"saved": [2]}
     with pytest.raises(FrozenInstanceError):
         capture.scope = None
-    assert SCHEMA_VERSION == 5
+    assert SCHEMA_VERSION == 6
     old = json.loads(encode_record(envelope))
     old["schema"] = 4
     with pytest.raises(ValueError, match="schema"):
@@ -263,6 +601,10 @@ def test_pooled_lookup_keeps_value_and_producer_identity_together(monkeypatch):
 def test_discarded_pooled_outcomes_are_not_trace_occurrences():
     import threading
     from agent_composer.compile.model import START_ID, END_ID
+    from agent_composer.runtime.backward import compute_backward
+    from agent_composer.runtime.contracts import BackwardOutcome
+    from agent_composer.runtime.log import BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord
+    from agent_composer.runtime.state import prepare_record, commit_prepared
     from tests.engine._fakes import FuncNode
     from tests.engine._graph_builder import _engine, _graph
 
@@ -291,6 +633,713 @@ def test_discarded_pooled_outcomes_are_not_trace_occurrences():
     assert [entry.node_id for entry in trace.occurrences] == [START_ID, "bad"]
     assert "slow" not in trace.current_writers
     assert all(handler.__self__.id != "slow" for handler in trace.backward_handlers.values())
+    with pytest.raises(ValueError):
+        prepare_record(engine.state, BackwardStartedRecord(1, [None]))
+    root, attributed = compute_backward(trace, None)
+    for record in (BackwardStartedRecord(1, None), BackwardReadyRecord(1, root, attributed, ()),
+                   BackwardFinishedRecord(1, BackwardOutcome("succeeded", root))):
+        assert commit_prepared(engine.log, engine.state, prepare_record(engine.state, record)) == ()
+    assert len(attributed) == 2 and all(not item.invoked for item in attributed)
+    assert engine.state.backward_state.outcome.feedback == root
+
+
+def test_trace_memory_scope_is_detached_and_replayed_without_evidence():
+    from copy import deepcopy
+    from agent_composer.compile.expand import build_grow
+    from agent_composer.compile.model import START_ID, FlowOutput
+    from agent_composer.memory import MemoryFrameRef, MemoryFrameSpec, MemoryOwner, MemoryScope, MemorySnapshotEnvelope
+    from agent_composer.runtime.state import RunState, _replay_records
+    from tests.engine._fakes import FuncNode
+    from tests.engine._graph_builder import _engine, _graph
+
+    frame = MemoryFrameRef("root", ("root",), MemoryOwner.FLOW)
+    scope = MemoryScope("root", ("root", "code"), (frame,))
+    node = FuncNode("code", lambda _: {"items": [1]})
+    node.memory_scope = scope
+    engine = _engine(_graph([node], [(START_ID, "code")], outputs=[FlowOutput("value", "${code.output}")]),
+                     learn=True, memory_layout=(MemoryFrameSpec(frame, "memory", {}),),
+                     memory_snapshots=(MemorySnapshotEnvelope("memory", {}),))
+    original = deepcopy(engine.state.flow)
+    list(engine.run())
+    occurrence = next(item for item in engine.state.trace.occurrences if item.node_id == "code")
+    expected = deepcopy(scope)
+    assert occurrence.record.evidence is None
+    assert occurrence.memory_scope == expected and occurrence.memory_scope is not scope
+    assert "memory_scope" not in json.loads(occurrence._record_bytes)["payload"]
+    engine.state.flow.nodes["code"].memory_scope = None
+    object.__setattr__(scope, "frame_stack", [])
+    detached = occurrence.memory_scope
+    object.__setattr__(detached, "static_path", ("foreign",))
+    assert occurrence.memory_scope == expected
+    replay = _replay_records(RunState(original), tuple(engine.log), grow_builder=build_grow)
+    assert replay.trace.occurrence(occurrence.source).memory_scope == expected
+
+
+@pytest.mark.parametrize("bad", ["carrier", "nested"])
+def test_trace_rejects_forged_memory_scope_before_append_and_when_copied(bad):
+    from copy import deepcopy
+    from dataclasses import replace
+    from agent_composer.memory import MemoryFrameRef, MemoryFrameSpec, MemoryOwner, MemoryScope
+    from agent_composer.runtime.state import prepare_node_succeeded, commit_prepared
+    from tests.engine._fakes import FuncNode
+    from tests.engine._graph_builder import _forward_capture
+    from tests.engine.test_runtime_memory_learning import _start_trace_node
+
+    frame = MemoryFrameRef("root", ("root",), MemoryOwner.FLOW)
+    node = FuncNode("code", lambda _: "done")
+    node.memory_scope = MemoryScope("root", ("root", "code"), (frame,))
+    state, log = _start_trace_node(node, layout=(MemoryFrameSpec(frame, "memory", {}),), learn=True)
+    prepared = prepare_node_succeeded(state, node.id, "done", forward_capture=_forward_capture(node, {}))
+    occurrence = prepared._plan.trace_delta.occurrence
+    malformed = object() if bad == "carrier" else deepcopy(node.memory_scope)
+    if bad == "nested":
+        object.__setattr__(malformed, "frame_stack", [])
+    with pytest.raises(TypeError):
+        replace(occurrence, _memory_scope=malformed)
+    object.__setattr__(occurrence, "_memory_scope", malformed)
+    sequence = state.next_sequence
+    with pytest.raises(TypeError):
+        commit_prepared(log, state, prepared)
+    assert state.next_sequence == state.trace.next_sequence == log.next_sequence == sequence
+
+
+def _prepared_scoped_outcome(kind, *, scoped=True):
+    """Prepare one physical outcome using the existing direct reducer fixture."""
+    from copy import deepcopy
+    from agent_composer.compile.model import END_ID
+    from agent_composer.diagnostics import Failure
+    from agent_composer.memory import MemoryFrameRef, MemoryFrameSpec, MemoryOwner, MemoryScope
+    from agent_composer.nodes.base import Grow
+    from agent_composer.runtime.state import prepare_expanded, prepare_node_failed, prepare_node_routed, prepare_node_succeeded
+    from tests.engine._fakes import FuncNode
+    from tests.engine._graph_builder import _forward_capture
+    from tests.engine.test_runtime_memory_learning import _start_trace_node
+    from tests.engine.test_run_state_growth import _fragment
+
+    class Spawner(FuncNode):
+        is_spawner = True
+
+    node = (Spawner if kind == "growth" else FuncNode)("physical", lambda _: "done")
+    frame = MemoryFrameRef("root", ("root",), MemoryOwner.FLOW)
+    node.memory_scope = MemoryScope("root", ("root", node.id), (frame,)) if scoped else None
+    state, log = _start_trace_node(node, layout=(MemoryFrameSpec(frame, "memory", {}),), learn=True,
+                                   route_handle="go" if kind == "route" else None)
+    original = deepcopy(state.flow)
+    kwargs = {"forward_capture": _forward_capture(node, {})}
+    builder = lambda spawner, _seed: _fragment(spawner.id)
+    if kind == "success":
+        prepared = prepare_node_succeeded(state, node.id, "done", commit_as=END_ID, **kwargs)
+    elif kind == "route":
+        prepared = prepare_node_routed(state, node.id, "go", **kwargs)
+    elif kind == "failure":
+        prepared = prepare_node_failed(state, Failure("node.execute", "failed", node.id), **kwargs)
+    else:
+        prepared = prepare_expanded(state, node.id, Grow(seed={}), builder, **kwargs)
+    return node, state, log, prepared, original, builder
+
+
+def test_terminal_trace_output_must_match_the_prepared_outcome_before_append():
+    from dataclasses import replace
+    from agent_composer.runtime.state import commit_prepared
+    from agent_composer.typesys.values import ANY_VALUE_ADAPTER
+    from tests.engine.test_run_state_outcomes import _state_snapshot
+
+    _node, state, log, prepared, _original, _builder = _prepared_scoped_outcome("success")
+    delta = prepared._plan.trace_delta
+    forged = replace(delta.terminal, output_bytes=ANY_VALUE_ADAPTER.dump_json(
+        canonical_typed("forged", None)[1], warnings="error",
+    ))
+    prepared = replace(prepared, _plan=replace(prepared._plan, trace_delta=replace(delta, terminal=forged)))
+    records, before_state, before_trace = tuple(log), _state_snapshot(state), _trace_snapshot(state.trace)
+
+    with pytest.raises(ValueError, match="terminal trace"):
+        commit_prepared(log, state, prepared)
+
+    assert tuple(log) == records
+    assert _state_snapshot(state) == before_state
+    assert _trace_snapshot(state.trace) == before_trace
+    assert log.next_sequence == state.next_sequence == state.trace.next_sequence
+
+
+def _prepared_terminal_route(*, sibling=False):
+    from copy import deepcopy
+    from agent_composer.compile.model import START_ID
+    from agent_composer.runtime.state import commit_prepared, prepare_node_started, prepare_node_succeeded, prepare_node_routed
+    from tests.engine._graph_builder import _engine, _forward_capture
+    from tests.engine.test_run_state_outcomes import _terminal_skip_route_flow
+
+    engine = _engine(_terminal_skip_route_flow(sibling=sibling), learn=True)
+    state, log = engine.state, engine.log
+    original = deepcopy(state.flow)
+    commit_prepared(log, state, prepare_node_started(state, START_ID))
+    commit_prepared(log, state, prepare_node_succeeded(
+        state, START_ID, {}, forward_capture=_forward_capture(state.flow.nodes[START_ID], {}),
+    ))
+    for node_id in (("router", "unrelated") if sibling else ("router",)):
+        commit_prepared(log, state, prepare_node_started(state, node_id))
+    prepared = prepare_node_routed(
+        state, "router", "go", forward_capture=_forward_capture(state.flow.nodes["router"], {}),
+    )
+    return state, log, prepared, original
+
+
+def _prepared_trace_frontier(kind):
+    from copy import deepcopy
+    from agent_composer.compile.model import START_ID
+    from agent_composer.runtime.state import commit_prepared, prepare_node_started, prepare_node_succeeded, prepare_run_resumed
+    from tests.engine._graph_builder import _engine, _forward_capture
+    from tests.engine.test_run_state_outcomes import _terminal_skip_route_flow
+
+    engine = _engine(_terminal_skip_route_flow(), learn=True)
+    state, log = engine.state, engine.log
+    original = deepcopy(state.flow)
+    commit_prepared(log, state, prepare_node_started(state, START_ID))
+    commit_prepared(log, state, prepare_node_succeeded(
+        state, START_ID, {}, forward_capture=_forward_capture(state.flow.nodes[START_ID], {}),
+    ))
+    prepared = prepare_node_started(state, "router")
+    if kind == "resumed":
+        commit_prepared(log, state, prepared)
+        prepared = prepare_run_resumed(state, num_workers=0)
+    return state, log, prepared, original
+
+
+def test_frontier_trace_cannot_inject_a_causal_terminal_source_before_append():
+    from dataclasses import replace
+    from agent_composer.runtime.state import commit_prepared
+    from tests.engine.test_run_state_outcomes import _state_snapshot
+
+    state, log, prepared, _original = _prepared_trace_frontier("started")
+    delta = replace(prepared._plan.trace_delta, causal_route_source=SourceRef(state.run_id, 0))
+    prepared = replace(prepared, _plan=replace(prepared._plan, trace_delta=delta))
+    records, before_state, before_trace = tuple(log), _state_snapshot(state), _trace_snapshot(state.trace)
+
+    with pytest.raises(ValueError, match="frontier trace"):
+        commit_prepared(log, state, prepared)
+
+    assert tuple(log) == records and _state_snapshot(state) == before_state
+    assert _trace_snapshot(state.trace) == before_trace
+    assert log.next_sequence == state.next_sequence == state.trace.next_sequence
+
+
+def test_outcome_trace_source_must_match_the_physical_accepted_start_before_append():
+    from dataclasses import replace
+    from agent_composer.runtime.state import commit_prepared
+    from tests.engine.test_run_state_outcomes import _state_snapshot
+
+    _node, state, log, prepared, _original, _builder = _prepared_scoped_outcome("failure")
+    delta = prepared._plan.trace_delta
+    occurrence = replace(delta.occurrence, source=SourceRef(state.run_id, 0))
+    prepared = replace(prepared, _plan=replace(prepared._plan, trace_delta=replace(delta, occurrence=occurrence)))
+    records, before_state, before_trace = tuple(log), _state_snapshot(state), _trace_snapshot(state.trace)
+
+    with pytest.raises(ValueError, match="physical.*occurrence|occurrence.*physical"):
+        commit_prepared(log, state, prepared)
+
+    assert tuple(log) == records and _state_snapshot(state) == before_state
+    assert _trace_snapshot(state.trace) == before_trace
+    assert log.next_sequence == state.next_sequence == state.trace.next_sequence
+
+
+@pytest.mark.parametrize("kind", ["started", "resumed"])
+@pytest.mark.parametrize("field", [
+    "missing", "sequence", "initialized", "started", "resumed", "occurrence", "handler", "writer",
+    "prune_ids", "connections", "consumed_connection", "boundaries", "boundary_update",
+    "root_start_source", "root_writer", "causal_route_source", "terminal",
+])
+def test_frontier_trace_rejects_inappropriate_fields_before_append(kind, field):
+    from dataclasses import replace
+    from agent_composer.runtime.state import commit_prepared
+    from agent_composer.runtime.trace import TraceTerminal
+    from tests.engine.test_run_state_outcomes import _state_snapshot
+
+    state, log, prepared, _original = _prepared_trace_frontier(kind)
+    delta = prepared._plan.trace_delta
+
+    class EmptyChanges(tuple):
+        def __iter__(self):
+            pytest.fail("iterated forged frontier changes")
+
+    class UnavailableChange:
+        def __iter__(self):
+            pytest.fail("iterated forged frontier authority")
+
+    writer = next(iter(state.trace.current_writers.items()))
+    values = {
+        "sequence": float(delta.sequence), "initialized": state.trace,
+        "started": list(delta.started) if delta.started is not None else ("router", delta.sequence),
+        "resumed": int(delta.resumed), "occurrence": state.trace.occurrences[-1],
+        "handler": lambda *_: pytest.fail("invoked a forged frontier handler"), "writer": writer,
+        "prune_ids": EmptyChanges(), "connections": EmptyChanges(), "boundaries": EmptyChanges(),
+        "consumed_connection": UnavailableChange(), "boundary_update": UnavailableChange(),
+        "root_start_source": SourceRef(state.run_id, 0), "root_writer": writer[1],
+        "causal_route_source": SourceRef(state.run_id, 0),
+        "terminal": TraceTerminal(True, writer[1].source, writer[1]._value_bytes, None),
+    }
+    delta = None if field == "missing" else replace(delta, **{field: values[field]})
+    changed = replace(prepared, _plan=replace(prepared._plan, trace_delta=delta))
+    records, before_state, before_trace = tuple(log), _state_snapshot(state), _trace_snapshot(state.trace)
+
+    with pytest.raises(ValueError, match="frontier trace"):
+        commit_prepared(log, state, changed)
+
+    assert tuple(log) == records and _state_snapshot(state) == before_state
+    assert _trace_snapshot(state.trace) == before_trace
+    assert type(state.trace.next_sequence) is int
+    assert log.next_sequence == state.next_sequence == state.trace.next_sequence
+
+
+@pytest.mark.parametrize("change", ["node", "sequence", "float_sequence", "tuple_subclass"])
+def test_frontier_trace_started_identity_is_exact(change):
+    from dataclasses import replace
+    from agent_composer.compile.model import START_ID
+    from agent_composer.runtime.state import commit_prepared
+    from tests.engine.test_run_state_outcomes import _state_snapshot
+
+    state, log, prepared, _original = _prepared_trace_frontier("started")
+    delta = prepared._plan.trace_delta
+
+    class StartedAlias(tuple):
+        def __iter__(self):
+            return iter((START_ID, 0))
+
+    values = {
+        "node": (START_ID, delta.sequence), "sequence": ("router", 0),
+        "float_sequence": ("router", float(delta.sequence)), "tuple_subclass": StartedAlias(delta.started),
+    }
+    changed = replace(prepared, _plan=replace(prepared._plan, trace_delta=replace(delta, started=values[change])))
+    records, before_state, before_trace = tuple(log), _state_snapshot(state), _trace_snapshot(state.trace)
+    with pytest.raises(ValueError, match="frontier trace start"):
+        commit_prepared(log, state, changed)
+    assert tuple(log) == records and _state_snapshot(state) == before_state
+    assert _trace_snapshot(state.trace) == before_trace
+
+
+@pytest.mark.parametrize("kind", ["success", "route", "failure", "growth"])
+@pytest.mark.parametrize("method", ["replace", "mutate"])
+@pytest.mark.parametrize("change", ["source", "source_float", "node", "sequence", "float_sequence", "record"])
+def test_outcome_trace_occurrence_identity_matches_the_canonical_record(kind, method, change):
+    from copy import deepcopy
+    from dataclasses import replace
+    from agent_composer.compile.model import START_ID
+    from agent_composer.runtime.state import commit_prepared
+    from tests.engine.test_run_state_outcomes import _state_snapshot
+
+    _node, state, log, prepared, _original, _builder = _prepared_scoped_outcome(kind)
+    delta = prepared._plan.trace_delta
+    occurrence = deepcopy(delta.occurrence)
+    if change == "source":
+        object.__setattr__(occurrence, "source", SourceRef(state.run_id, 0))
+    elif change == "source_float":
+        object.__setattr__(occurrence.source, "execution_seq", float(occurrence.source.execution_seq))
+    elif change == "node":
+        object.__setattr__(occurrence, "node_id", START_ID)
+    elif change == "sequence":
+        object.__setattr__(occurrence, "outcome_seq", occurrence.outcome_seq + 1)
+    elif change == "float_sequence":
+        object.__setattr__(occurrence, "outcome_seq", float(occurrence.outcome_seq))
+    else:
+        object.__setattr__(occurrence, "_record_bytes", encode_record(tuple(log)[-1]))
+    if method == "replace":
+        changed = replace(prepared, _plan=replace(prepared._plan, trace_delta=replace(delta, occurrence=occurrence)))
+    else:
+        object.__setattr__(delta, "occurrence", occurrence)
+        changed = prepared
+    records, before_state, before_trace = tuple(log), _state_snapshot(state), _trace_snapshot(state.trace)
+
+    with pytest.raises(ValueError, match="physical trace occurrence|source execution_seq"):
+        commit_prepared(log, state, changed)
+
+    assert tuple(log) == records and _state_snapshot(state) == before_state
+    assert _trace_snapshot(state.trace) == before_trace
+    assert log.next_sequence == state.next_sequence == state.trace.next_sequence
+
+
+@pytest.mark.parametrize("kind", ["success", "route", "failure", "growth"])
+@pytest.mark.parametrize("field", ["initialized", "started", "resumed", "sequence"])
+def test_outcome_trace_cannot_override_dispatch_authority(kind, field):
+    from dataclasses import replace
+    from agent_composer.runtime.state import commit_prepared
+    from tests.engine.test_run_state_outcomes import _state_snapshot
+
+    _node, state, log, prepared, _original, _builder = _prepared_scoped_outcome(kind)
+    delta = prepared._plan.trace_delta
+    value = {
+        "initialized": state.trace, "started": ("physical", 0),
+        "resumed": True, "sequence": float(delta.sequence),
+    }[field]
+    changed = replace(prepared, _plan=replace(prepared._plan, trace_delta=replace(delta, **{field: value})))
+    records, before_state, before_trace = tuple(log), _state_snapshot(state), _trace_snapshot(state.trace)
+    with pytest.raises(ValueError, match="outcome trace"):
+        commit_prepared(log, state, changed)
+    assert tuple(log) == records and _state_snapshot(state) == before_state
+    assert _trace_snapshot(state.trace) == before_trace
+
+
+@pytest.mark.parametrize("change", ["target", "source", "sequence", "float_sequence", "value", "missing", "tuple"])
+def test_outcome_trace_writer_matches_the_same_accepted_physical_output(change):
+    from dataclasses import replace
+    from agent_composer.runtime.state import commit_prepared, prepare_node_succeeded
+    from tests.engine._graph_builder import _forward_capture
+    from tests.engine.test_run_state_outcomes import _state_snapshot
+
+    node, state, log, _prepared, _original, _builder = _prepared_scoped_outcome("success")
+    prepared = prepare_node_succeeded(state, node.id, "done", forward_capture=_forward_capture(node, {}))
+    delta = prepared._plan.trace_delta
+    target, writer = delta.writer
+    values = {
+        "target": (state.flow.start_id, writer), "source": (target, replace(writer, source=SourceRef(state.run_id, 0))),
+        "sequence": (target, replace(writer, outcome_seq=writer.outcome_seq + 1)),
+        "float_sequence": (target, replace(writer, outcome_seq=float(writer.outcome_seq))),
+        "value": (target, replace(writer, _value_bytes=next(iter(state.trace.sources.values()))._value_bytes)),
+        "missing": None, "tuple": [target, writer],
+    }
+    changed = replace(prepared, _plan=replace(prepared._plan, trace_delta=replace(delta, writer=values[change])))
+    records, before_state, before_trace = tuple(log), _state_snapshot(state), _trace_snapshot(state.trace)
+    with pytest.raises(ValueError, match="physical trace writer"):
+        commit_prepared(log, state, changed)
+    assert tuple(log) == records and _state_snapshot(state) == before_state
+    assert _trace_snapshot(state.trace) == before_trace
+
+
+@pytest.mark.parametrize("kind", ["started", "resumed"])
+def test_frontier_trace_and_terminal_source_match_live_replay_without_repreparing(kind, monkeypatch):
+    from copy import deepcopy
+    from dataclasses import replace
+    from agent_composer.compile.expand import build_grow
+    from agent_composer.runtime.backward import compute_backward
+    import agent_composer.runtime.state as state_module
+    from tests.engine._graph_builder import _forward_capture
+
+    state, log, prepared, original = _prepared_trace_frontier(kind)
+    prepared = replace(prepared, _plan=replace(prepared._plan, trace_delta=replace(prepared._plan.trace_delta)))
+    with monkeypatch.context() as patch:
+        patch.setattr(state_module, "_prepare_record_trace", lambda *_a, **_k: pytest.fail("trace was reprepared"))
+        state_module.commit_prepared(log, state, prepared)
+    if kind == "resumed":
+        state_module.commit_prepared(log, state, state_module.prepare_node_started(state, "router"))
+    physical = SourceRef(state.run_id, state.trace.started["router"])
+    state_module.commit_prepared(log, state, state_module.prepare_node_routed(
+        state, "router", "go", forward_capture=_forward_capture(state.flow.nodes["router"], {}),
+    ))
+    assert state.trace.terminal.source == physical and physical.execution_seq > 0
+    root, results = compute_backward(state.trace, "Review.")
+    assert next(item for item in results if item.source == physical).invoked
+    replay = state_module._replay_records(state_module.RunState(deepcopy(original)), tuple(log), grow_builder=build_grow)
+    assert _trace_snapshot(replay.trace) == _trace_snapshot(state.trace)
+    assert compute_backward(replay.trace, "Review.") == (root, results)
+
+
+@pytest.mark.parametrize("kind", ["success", "route", "failure"])
+@pytest.mark.parametrize("method", ["replace", "mutate"])
+@pytest.mark.parametrize("change", [
+    "none", "carrier", "source_none", "source_sequence", "source_run", "source_float",
+    "succeeded", "disposition", "output", "failure",
+])
+def test_terminal_trace_rejects_forged_fields_before_append(kind, method, change):
+    from copy import deepcopy
+    from dataclasses import replace
+    from agent_composer.diagnostics import Failure
+    from agent_composer.runtime.state import commit_prepared
+    from agent_composer.runtime.trace import TraceTerminal
+    from agent_composer.typesys.values import ANY_VALUE_ADAPTER
+    from tests.engine.test_run_state_outcomes import _state_snapshot
+
+    if kind == "route":
+        state, log, prepared, _original = _prepared_terminal_route()
+    else:
+        _node, state, log, prepared, _original, _builder = _prepared_scoped_outcome(kind)
+    delta = prepared._plan.trace_delta
+    forged = deepcopy(delta.terminal)
+    if change == "none":
+        forged = None
+    elif change == "carrier":
+        forged = object()
+    elif change.startswith("source_"):
+        source = forged.source
+        if change == "source_none":
+            source = None
+        elif change == "source_sequence":
+            source = SourceRef(state.run_id, 0)
+        elif change == "source_run":
+            source = SourceRef("foreign-run", source.execution_seq)
+        else:
+            object.__setattr__(source, "execution_seq", float(source.execution_seq))
+        object.__setattr__(forged, "source", source)
+    elif change == "succeeded":
+        object.__setattr__(forged, "succeeded", int(forged.succeeded))
+    elif change == "disposition":
+        value_bytes = ANY_VALUE_ADAPTER.dump_json(canonical_typed("forged", None)[1], warnings="error")
+        forged = TraceTerminal(
+            not forged.succeeded, forged.source,
+            None if forged.succeeded else value_bytes,
+            Failure("node.execute", "forged", "router") if forged.succeeded else None,
+        )
+    elif change == "output":
+        object.__setattr__(forged, "output_bytes", ANY_VALUE_ADAPTER.dump_json(
+            canonical_typed("forged", None)[1], warnings="error",
+        ))
+    else:
+        object.__setattr__(forged, "failure", Failure("node.execute", "forged", "router"))
+    if method == "replace":
+        prepared = replace(prepared, _plan=replace(prepared._plan, trace_delta=replace(delta, terminal=forged)))
+    else:
+        object.__setattr__(delta, "terminal", forged)
+    records, before_state, before_trace = tuple(log), _state_snapshot(state), _trace_snapshot(state.trace)
+
+    with pytest.raises((TypeError, ValueError)):
+        commit_prepared(log, state, prepared)
+
+    assert tuple(log) == records and _state_snapshot(state) == before_state
+    assert _trace_snapshot(state.trace) == before_trace
+    assert log.next_sequence == state.next_sequence == state.trace.next_sequence
+
+
+@pytest.mark.parametrize("kind", ["success", "route", "growth"])
+@pytest.mark.parametrize("field", ["terminal", "root_writer", "causal_route_source", "root_start_source"])
+def test_nonterminal_outcome_rejects_fabricated_terminal_trace_authority(kind, field):
+    from dataclasses import replace
+    from agent_composer.diagnostics import Failure
+    from agent_composer.runtime.state import commit_prepared, prepare_node_succeeded
+    from agent_composer.runtime.trace import TraceTerminal
+    from tests.engine._graph_builder import _forward_capture
+    from tests.engine.test_run_state_outcomes import _state_snapshot
+
+    node, state, log, prepared, _original, _builder = _prepared_scoped_outcome(kind)
+    if kind == "success":
+        prepared = prepare_node_succeeded(state, node.id, "done", forward_capture=_forward_capture(node, {}))
+    delta = prepared._plan.trace_delta
+    assert delta.terminal is None
+    source = delta.occurrence.source
+    forged = {
+        "terminal": TraceTerminal(False, source, None, Failure("node.execute", "forged", node.id)),
+        "root_writer": next(iter(state.trace.current_writers.values())),
+        "causal_route_source": source,
+        "root_start_source": source,
+    }[field]
+    prepared = replace(prepared, _plan=replace(prepared._plan, trace_delta=replace(delta, **{field: forged})))
+    records, before_state, before_trace = tuple(log), _state_snapshot(state), _trace_snapshot(state.trace)
+
+    with pytest.raises(ValueError, match="terminal trace"):
+        commit_prepared(log, state, prepared)
+
+    assert tuple(log) == records and _state_snapshot(state) == before_state
+    assert _trace_snapshot(state.trace) == before_trace
+
+
+@pytest.mark.parametrize("change", ["none", "source", "sequence", "float_sequence", "value"])
+def test_terminal_trace_root_writer_must_be_the_physical_accepted_output(change):
+    from dataclasses import replace
+    from agent_composer.runtime.state import commit_prepared
+    from tests.engine.test_run_state_outcomes import _state_snapshot
+
+    _node, state, log, prepared, _original, _builder = _prepared_scoped_outcome("success")
+    delta = prepared._plan.trace_delta
+    writer = delta.root_writer
+    if change == "none":
+        forged = None
+    elif change == "source":
+        forged = replace(writer, source=SourceRef(state.run_id, 0))
+    elif change == "sequence":
+        forged = replace(writer, outcome_seq=writer.outcome_seq + 1)
+    elif change == "float_sequence":
+        forged = replace(writer, outcome_seq=float(writer.outcome_seq))
+    else:
+        forged = replace(writer, _value_bytes=next(iter(state.trace.current_writers.values()))._value_bytes)
+    prepared = replace(prepared, _plan=replace(prepared._plan, trace_delta=replace(delta, root_writer=forged)))
+    records, before_state, before_trace = tuple(log), _state_snapshot(state), _trace_snapshot(state.trace)
+
+    with pytest.raises(ValueError, match="terminal trace root writer"):
+        commit_prepared(log, state, prepared)
+
+    assert tuple(log) == records and _state_snapshot(state) == before_state
+    assert _trace_snapshot(state.trace) == before_trace
+
+
+@pytest.mark.parametrize("change", ["none", "sequence", "run", "float_sequence"])
+def test_terminal_trace_root_start_latch_must_match_the_accepted_start(change):
+    from dataclasses import replace
+    from agent_composer.compile.model import START_ID, END_ID
+    from agent_composer.runtime.state import commit_prepared, prepare_node_started, prepare_node_succeeded
+    from tests.engine._graph_builder import _engine, _forward_capture, _graph
+    from tests.engine.test_run_state_outcomes import _state_snapshot
+
+    engine = _engine(_graph([], [(START_ID, END_ID)]), learn=True)
+    state, log = engine.state, engine.log
+    commit_prepared(log, state, prepare_node_started(state, START_ID))
+    prepared = prepare_node_succeeded(
+        state, START_ID, {}, forward_capture=_forward_capture(state.flow.nodes[START_ID], {}),
+    )
+    delta = prepared._plan.trace_delta
+    source = delta.root_start_source
+    if change == "none":
+        forged = None
+    elif change == "sequence":
+        forged = SourceRef(state.run_id, 0)
+    elif change == "run":
+        forged = SourceRef("foreign-run", source.execution_seq)
+    else:
+        forged = replace(source)
+        object.__setattr__(forged, "execution_seq", float(source.execution_seq))
+    changed = replace(prepared, _plan=replace(prepared._plan, trace_delta=replace(delta, root_start_source=forged)))
+    records, before_state, before_trace = tuple(log), _state_snapshot(state), _trace_snapshot(state.trace)
+
+    with pytest.raises(ValueError):
+        commit_prepared(log, state, changed)
+
+    assert tuple(log) == records and _state_snapshot(state) == before_state
+    assert _trace_snapshot(state.trace) == before_trace
+    commit_prepared(log, state, prepared)
+    assert state.trace.root_start_source == source
+
+
+@pytest.mark.parametrize("kind", ["success", "route", "failure"])
+def test_terminal_trace_accepts_detached_authority_without_repreparing(kind, monkeypatch):
+    from copy import deepcopy
+    from dataclasses import replace
+    from agent_composer.compile.expand import build_grow
+    import agent_composer.runtime.state as state_module
+
+    if kind == "route":
+        state, log, prepared, original = _prepared_terminal_route()
+        builder = build_grow
+    else:
+        _node, state, log, prepared, original, builder = _prepared_scoped_outcome(kind)
+    delta = prepared._plan.trace_delta
+    detached = replace(delta, terminal=deepcopy(delta.terminal), root_writer=deepcopy(delta.root_writer),
+                       root_start_source=deepcopy(delta.root_start_source),
+                       causal_route_source=deepcopy(delta.causal_route_source))
+    prepared = replace(prepared, _plan=replace(prepared._plan, trace_delta=detached))
+    with monkeypatch.context() as patch:
+        patch.setattr(state_module, "_prepare_record_trace", lambda *_a, **_k: pytest.fail("trace was reprepared"))
+        patch.setattr(state_module, "_prepare_terminal_delta", lambda *_a, **_k: pytest.fail("terminal was rederived"))
+        state_module.commit_prepared(log, state, prepared)
+    assert state.trace.terminal == detached.terminal
+    replay = state_module._replay_records(state_module.RunState(original), tuple(log), grow_builder=builder)
+    assert _trace_snapshot(replay.trace) == _trace_snapshot(state.trace)
+    assert replay.result == state.result
+
+
+@pytest.mark.parametrize("explicit_failure", [False, True])
+def test_terminal_trace_uses_the_accepted_route_latch_until_an_explicit_failure(explicit_failure):
+    from copy import deepcopy
+    from dataclasses import replace
+    from agent_composer.compile.expand import build_grow
+    from agent_composer.diagnostics import Failure
+    from agent_composer.runtime.state import RunState, _replay_records, commit_prepared, prepare_node_failed, prepare_node_succeeded
+    from tests.engine._graph_builder import _forward_capture
+    from tests.engine.test_run_state_outcomes import _state_snapshot
+
+    state, log, route, original = _prepared_terminal_route(sibling=True)
+    delta = route._plan.trace_delta
+    assert delta.terminal is None
+    causal = delta.causal_route_source
+    sibling = SourceRef(state.run_id, state.trace.started["unrelated"])
+    for source in (None, sibling):
+        forged = replace(route, _plan=replace(route._plan, trace_delta=replace(delta, causal_route_source=source)))
+        records, before_state, before_trace = tuple(log), _state_snapshot(state), _trace_snapshot(state.trace)
+        with pytest.raises(ValueError, match="terminal trace causal source"):
+            commit_prepared(log, state, forged)
+        assert tuple(log) == records and _state_snapshot(state) == before_state
+        assert _trace_snapshot(state.trace) == before_trace
+    commit_prepared(log, state, route)
+    capture = _forward_capture(state.flow.nodes["unrelated"], {})
+    if explicit_failure:
+        final = prepare_node_failed(state, Failure("node.execute", "later failure", "unrelated"), forward_capture=capture)
+    else:
+        final = prepare_node_succeeded(state, "unrelated", "done", forward_capture=capture)
+    expected_source, wrong_source = (sibling, causal) if explicit_failure else (causal, sibling)
+    terminal = final._plan.trace_delta.terminal
+    forged = replace(final, _plan=replace(final._plan, trace_delta=replace(
+        final._plan.trace_delta, terminal=replace(terminal, source=wrong_source),
+    )))
+    records, before_state, before_trace = tuple(log), _state_snapshot(state), _trace_snapshot(state.trace)
+    with pytest.raises(ValueError, match="terminal trace"):
+        commit_prepared(log, state, forged)
+    assert tuple(log) == records and _state_snapshot(state) == before_state
+    assert _trace_snapshot(state.trace) == before_trace
+    commit_prepared(log, state, replace(final, _plan=replace(final._plan, trace_delta=replace(
+        final._plan.trace_delta, terminal=deepcopy(terminal),
+    ))))
+    assert state.trace.terminal.source == expected_source
+    assert state.trace.terminal.failure == state.result.failure
+    for length in range(1, len(tuple(log)) + 1):
+        replay = _replay_records(RunState(deepcopy(original)), tuple(log)[:length], grow_builder=build_grow)
+        assert replay.trace.terminal == (state.trace.terminal if length == len(tuple(log)) else None)
+
+
+@pytest.mark.parametrize("kind", ["success", "route", "failure", "growth"])
+@pytest.mark.parametrize("method", ["replace", "mutate"])
+@pytest.mark.parametrize("change", ["none", "foreign_path", "foreign_frame"])
+def test_outcome_rejects_valid_scope_substitution_before_append(kind, method, change):
+    from dataclasses import replace
+    from agent_composer.memory import MemoryFrameRef, MemoryOwner, MemoryScope
+    from agent_composer.runtime.log import encode_pool
+    from agent_composer.runtime.state import commit_prepared
+
+    node, state, log, prepared, _original, _builder = _prepared_scoped_outcome(kind)
+    scope = node.memory_scope
+    if change == "none":
+        forged = None
+    elif change == "foreign_path":
+        forged = MemoryScope("root", ("root", "other"), scope.frame_stack)
+    else:
+        foreign_frame = MemoryFrameRef("root", scope.static_path, MemoryOwner.AGENT)
+        forged = MemoryScope("root", scope.static_path, (foreign_frame,))
+    delta = prepared._plan.trace_delta
+    if method == "replace":
+        prepared = replace(prepared, _plan=replace(prepared._plan, trace_delta=replace(
+            delta, occurrence=replace(delta.occurrence, _memory_scope=forged),
+        )))
+    else:
+        object.__setattr__(delta.occurrence, "_memory_scope", forged)
+    accepted, pool, nodes = tuple(log), encode_pool(state.pool), state.flow.nodes
+    sequence = state.next_sequence
+    with pytest.raises(ValueError, match="physical.*memory scope|memory scope.*physical"):
+        commit_prepared(log, state, prepared)
+    assert tuple(log) == accepted and encode_pool(state.pool) == pool and state.flow.nodes is nodes
+    assert state.next_sequence == state.trace.next_sequence == log.next_sequence == sequence
+
+
+@pytest.mark.parametrize("kind", ["success", "route", "failure", "growth"])
+@pytest.mark.parametrize("change", ["display_node", "delta", "occurrence"])
+def test_outcome_scope_authority_cannot_be_selected_or_omitted_by_trace_delta(kind, change):
+    from dataclasses import replace
+    from agent_composer.compile.model import START_ID
+    from agent_composer.runtime.state import commit_prepared
+
+    _node, state, log, prepared, _original, _builder = _prepared_scoped_outcome(kind)
+    delta = prepared._plan.trace_delta
+    if change == "display_node":
+        delta = replace(delta, occurrence=replace(delta.occurrence, node_id=START_ID, _memory_scope=None))
+    elif change == "delta":
+        delta = None
+    else:
+        delta = replace(delta, occurrence=None)
+    prepared = replace(prepared, _plan=replace(prepared._plan, trace_delta=delta))
+    sequence = state.next_sequence
+    with pytest.raises(ValueError):
+        commit_prepared(log, state, prepared)
+    assert state.next_sequence == state.trace.next_sequence == log.next_sequence == sequence
+
+
+@pytest.mark.parametrize("kind", ["success", "route", "failure", "growth"])
+@pytest.mark.parametrize("scoped", [False, True])
+def test_outcome_accepts_detached_physical_scope_and_replays_it(kind, scoped):
+    from copy import deepcopy
+    from dataclasses import replace
+    from agent_composer.runtime.state import RunState, _replay_records, commit_prepared
+
+    node, state, log, prepared, original, builder = _prepared_scoped_outcome(kind, scoped=scoped)
+    delta = prepared._plan.trace_delta
+    prepared = replace(prepared, _plan=replace(prepared._plan, trace_delta=replace(
+        delta, occurrence=replace(delta.occurrence, _memory_scope=deepcopy(node.memory_scope)),
+    )))
+    commit_prepared(log, state, prepared)
+    occurrence = state.trace.occurrences[-1]
+    assert occurrence.memory_scope == node.memory_scope
+    replay = _replay_records(RunState(original), tuple(log), grow_builder=builder)
+    assert replay.trace.occurrence(occurrence.source).memory_scope == occurrence.memory_scope
 
 
 def test_learn_false_omits_backward_capture():
@@ -345,6 +1394,8 @@ def test_reducer_requires_capture_exactly_when_learning():
 
 def _trace_snapshot(trace):
     return (
+        trace.end_id, trace.root_input_names, trace.root_start_source, trace.terminal,
+        trace._root_writer, trace._causal_route_source,
         trace.occurrences, dict(trace.sources), dict(trace.current_writers),
         dict(trace.started), trace.next_sequence, trace.boundaries, dict(trace.pending_connections),
         {source: (handler.__self__.id, handler.__self__.execution_scope,
@@ -591,7 +1642,7 @@ def test_seed_connections_wait_for_append_and_survive_unfinished_start_retry(mon
     evaluated = engine._evaluate("spawn", emit_stream=None)
     prepared = prepare_expanded(
         engine.state, "spawn", evaluated.outcome, engine.grow_builder,
-        forward_capture=capture_bindings(evaluated.bindings, engine.state.flow.nodes["spawn"].execution_scope),
+        forward_capture=capture_bindings(evaluated.bindings, evaluated.backward_capture),
     )
     before = (_trace_snapshot(engine.state.trace), tuple(engine.state.flow.nodes), engine.state.next_sequence)
     original_append = engine.log.append

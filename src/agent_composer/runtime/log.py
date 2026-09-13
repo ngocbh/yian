@@ -9,7 +9,7 @@ logs without creating an authority cycle.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, fields, is_dataclass
+from dataclasses import asdict, dataclass, field, fields, is_dataclass, replace
 import fcntl
 import json
 import math
@@ -33,6 +33,8 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
 from agent_composer.diagnostics import Failure, FailureCode, OriginRef
 from agent_composer.memory import (
     EvaluationEvidence,
+    LearningFailure,
+    LearningResult,
     MemoryBoundary,
     MemoryBoundaryKind,
     MemoryFrameRef,
@@ -48,12 +50,24 @@ from agent_composer.memory import (
     MemorySnapshotEnvelope,
     ModelTextInteraction,
     ModelValueInteraction,
+    PolicyCommitOutcome,
     ToolCallInteraction,
     ToolResultInteraction,
     VisibleInteraction,
 )
-from agent_composer.runtime.contracts import ForwardCapture, _validate_route
-from agent_composer.expr.lineage import SourceRef, ValueRoute
+from agent_composer.memory.contracts import _validate_mutations
+from agent_composer.runtime.contracts import (
+    AttributedBackwardResult,
+    BackwardAttribution,
+    BackwardFailure,
+    BackwardOutcome,
+    ForwardCapture,
+    FrameProposal,
+    _validate_route,
+    _validate_source,
+)
+from agent_composer.expr.lineage import FeedbackValue, SourceRef, ValueRoute, validate_feedback
+from agent_composer.nodes.base import BackwardResult, _copy_backward_value
 from agent_composer.nodes.contracts import ExecutionPosition, ExecutionScope
 from agent_composer.typesys.pool import VariablePool
 from agent_composer.typesys.values import (
@@ -66,7 +80,7 @@ from agent_composer.typesys.values import (
 )
 
 
-SCHEMA_VERSION: Final = 5
+SCHEMA_VERSION: Final = 6
 """The one run-record wire schema understood by this release."""
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
@@ -186,99 +200,147 @@ class NodeFailedRecord:
         _validate_optional_capture(self.forward_capture)
 
 
-@dataclass(frozen=True, slots=True)
-class MemoryFrameLearningStartedRecord:
-    """Start learning for one frame from its canonical occurrence set."""
+def _validate_attempt_id(attempt_id: int) -> None:
+    """Require an exact positive accepted-attempt identity."""
+    if type(attempt_id) is not int:
+        raise TypeError("attempt_id must be an integer")
+    if attempt_id <= 0:
+        raise ValueError("attempt_id must be positive")
 
-    policy_name: str
-    frame_ref: MemoryFrameRef
-    occurrences: tuple[MemoryOccurrenceRef, ...]
 
-    def __post_init__(self) -> None:
-        """Validate policy, ownership, uniqueness, and canonical occurrence order."""
-        _require_nonempty_string(self.policy_name, "policy_name")
-        if type(self.frame_ref) is not MemoryFrameRef:
-            raise TypeError("frame_ref must be a MemoryFrameRef")
-        MemoryFrameRef(
-            self.frame_ref.root_flow_id,
-            self.frame_ref.static_path,
-            self.frame_ref.owner,
-        )
-        if type(self.occurrences) is not tuple:
-            raise TypeError("occurrences must be a tuple")
-        for occurrence in self.occurrences:
-            if type(occurrence) is not MemoryOccurrenceRef:
-                raise TypeError("occurrences items must be MemoryOccurrenceRef values")
-            MemoryOccurrenceRef(
-                occurrence.frame_ref,
-                occurrence.occurrence_path,
+def _copy_backward_result(result: BackwardResult) -> BackwardResult:
+    """Revalidate the exact three-channel carrier before copying its public values."""
+    if type(result) is not BackwardResult:
+        raise TypeError("result must be an exact BackwardResult")
+    if type(result._input_feedback) is not dict or type(result._variable_feedback) is not dict:
+        raise TypeError("backward result channels must be exact dictionaries")
+    return BackwardResult(result.input_feedback, result.self_feedback, result.variable_feedback)
+
+
+def _copy_attributed_results(
+    results: tuple[AttributedBackwardResult, ...],
+) -> tuple[AttributedBackwardResult, ...]:
+    """Detach exact occurrence results without inferring whole-trace membership."""
+    if type(results) is not tuple:
+        raise TypeError("attributed_results must be a tuple")
+    copied = []
+    for item in results:
+        if type(item) is not AttributedBackwardResult:
+            raise TypeError("attributed_results require exact AttributedBackwardResult values")
+        if type(item._feedback) is not tuple:
+            raise TypeError("attributed feedback must be a tuple")
+        copied.append(
+            AttributedBackwardResult(
+                item.source, item.feedback, item.attribution,
+                _copy_backward_result(item.result), item.invoked,
             )
-            if occurrence.frame_ref != self.frame_ref:
-                raise ValueError("occurrence frame_ref must match the learning frame")
-        keys = tuple(_occurrence_key(item) for item in self.occurrences)
-        if keys != tuple(sorted(set(keys))):
-            raise ValueError("occurrences must be sorted and unique")
+        )
+    return tuple(copied)
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class BackwardStartedRecord:
+    """Start one backward attempt with detached ordinary root feedback."""
+
+    attempt_id: int
+    _feedback: FeedbackValue = field(repr=False)
+
+    def __init__(self, attempt_id: int, feedback: FeedbackValue) -> None:
+        """Validate an attempt identity and snapshot the supplied message.
+
+        Args:
+            attempt_id (`int`): Exact positive identity within this run.
+            feedback (`FeedbackValue`): One ordinary root message; output-shape
+                agreement is checked by the reducer.
+
+        Raises:
+            `TypeError`: For an unsupported identity or message type.
+            `ValueError`: For a nonpositive identity or invalid nested message.
+        """
+        _validate_attempt_id(attempt_id)
+        validate_feedback(feedback, feedback)
+        object.__setattr__(self, "attempt_id", attempt_id)
+        object.__setattr__(self, "_feedback", _copy_backward_value(feedback, "feedback"))
+
+    @property
+    def feedback(self) -> FeedbackValue:
+        """Return a detached copy of the attempt's original root message."""
+        return _copy_backward_value(self._feedback, "feedback")
 
 
 @dataclass(frozen=True, slots=True)
-class MemoryFrameLearnedRecord:
-    """Retain one frame's canonical proposed mutation batch."""
+class BackwardReadyRecord:
+    """Retain a computed root result, occurrence inventory, and frame proposals.
 
-    policy_name: str
-    frame_ref: MemoryFrameRef
-    mutations: tuple[MemoryMutation, ...]
+    Attributes:
+        attempt_id (`int`): Exact positive identity within this run.
+        root_result (`BackwardResult`): Completed three-channel root feedback.
+        attributed_results (`tuple[AttributedBackwardResult, ...]`): Ordered
+            accepted occurrence results, including unreached occurrences.
+        frame_proposals (`tuple[FrameProposal, ...]`): Ordered detached proposals.
+            Recorded layout membership and attempt agreement belong to reduction.
+    """
+
+    attempt_id: int
+    root_result: BackwardResult
+    attributed_results: tuple[AttributedBackwardResult, ...]
+    frame_proposals: tuple[FrameProposal, ...]
 
     def __post_init__(self) -> None:
-        """Validate frame ownership and canonical unique mutation identities."""
-        _require_nonempty_string(self.policy_name, "policy_name")
-        if type(self.frame_ref) is not MemoryFrameRef:
-            raise TypeError("frame_ref must be a MemoryFrameRef")
-        MemoryFrameRef(
-            self.frame_ref.root_flow_id,
-            self.frame_ref.static_path,
-            self.frame_ref.owner,
-        )
-        _validate_mutations(self.mutations, frame_ref=self.frame_ref)
+        """Detach exact carriers; ownership and attempt agreement belong to reduction."""
+        _validate_attempt_id(self.attempt_id)
+        object.__setattr__(self, "root_result", _copy_backward_result(self.root_result))
+        object.__setattr__(self, "attributed_results", _copy_attributed_results(self.attributed_results))
+        if type(self.frame_proposals) is not tuple:
+            raise TypeError("frame_proposals must be a tuple")
+        if any(type(proposal) is not FrameProposal for proposal in self.frame_proposals):
+            raise TypeError("frame_proposals require exact FrameProposal values")
+        object.__setattr__(self, "frame_proposals", tuple(replace(p) for p in self.frame_proposals))
 
 
 @dataclass(frozen=True, slots=True)
-class MemoryFrameLearningFailedRecord:
-    """Retain one sanitized frame-local learning failure."""
+class BackwardFinishedRecord:
+    """Settle one backward attempt with its outcome and completed inventory.
 
-    policy_name: str
-    frame_ref: MemoryFrameRef
-    failure: MemoryOperationFailure
+    Attributes:
+        attempt_id (`int`): Exact positive identity within this run.
+        outcome (`BackwardOutcome`): Backward and learning dispositions, keeping
+            completed root feedback when a later operation fails.
+        attributed_results (`tuple[AttributedBackwardResult, ...]`): Defaults to
+            an empty tuple. A supplied completed inventory must agree with the
+            attempt's accepted computation; the reducer checks that agreement.
+    """
+
+    attempt_id: int
+    outcome: BackwardOutcome
+    attributed_results: tuple[AttributedBackwardResult, ...] = ()
 
     def __post_init__(self) -> None:
-        """Validate exact policy, frame, and failure carriers."""
-        _require_nonempty_string(self.policy_name, "policy_name")
-        if type(self.frame_ref) is not MemoryFrameRef:
-            raise TypeError("frame_ref must be a MemoryFrameRef")
-        MemoryFrameRef(
-            self.frame_ref.root_flow_id,
-            self.frame_ref.static_path,
-            self.frame_ref.owner,
-        )
-        if type(self.failure) is not MemoryOperationFailure:
-            raise TypeError("failure must be a MemoryOperationFailure")
-        MemoryOperationFailure(
-            self.failure.stage,
-            self.failure.code,
-            self.failure.message,
-            self.failure.retryable,
-        )
+        """Detach exact outcome data without reconstructing missing computation."""
+        _validate_attempt_id(self.attempt_id)
+        if type(self.outcome) is not BackwardOutcome:
+            raise TypeError("outcome must be an exact BackwardOutcome")
+        if self.outcome.feedback is not None:
+            _copy_backward_result(self.outcome.feedback)
+        object.__setattr__(self, "outcome", replace(self.outcome))
+        object.__setattr__(self, "attributed_results", _copy_attributed_results(self.attributed_results))
 
 
 @dataclass(frozen=True, slots=True)
 class MemoryCommitRequestedRecord:
-    """Request one policy's atomic idempotent mutation commit."""
+    """Request one policy's atomic idempotent mutation commit.
+
+    The required keyword-only `attempt_id` identifies the accepted backward attempt.
+    """
 
     policy_name: str
     commit_id: str
     mutations: tuple[MemoryMutation, ...]
+    attempt_id: int = field(kw_only=True)
 
     def __post_init__(self) -> None:
         """Validate exact identity and canonical unique mutations."""
+        _validate_attempt_id(self.attempt_id)
         _require_nonempty_string(self.policy_name, "policy_name")
         _require_nonempty_string(self.commit_id, "commit_id")
         _validate_mutations(self.mutations)
@@ -286,27 +348,39 @@ class MemoryCommitRequestedRecord:
 
 @dataclass(frozen=True, slots=True)
 class MemoryCommitSucceededRecord:
-    """Confirm one policy commit completed successfully."""
+    """Confirm one policy commit completed successfully.
+
+    The required positive keyword-only `attempt_id` identifies the accepted
+    backward attempt whose policy request this confirmation settles.
+    """
 
     policy_name: str
     commit_id: str
+    attempt_id: int = field(kw_only=True)
 
     def __post_init__(self) -> None:
         """Validate the exact policy and commit identities."""
+        _validate_attempt_id(self.attempt_id)
         _require_nonempty_string(self.policy_name, "policy_name")
         _require_nonempty_string(self.commit_id, "commit_id")
 
 
 @dataclass(frozen=True, slots=True)
 class MemoryCommitFailedRecord:
-    """Retain one sanitized policy commit failure."""
+    """Retain one observed policy commit failure.
+
+    The required positive keyword-only `attempt_id` identifies the accepted
+    backward attempt whose policy request this failure settles.
+    """
 
     policy_name: str
     commit_id: str
     failure: MemoryOperationFailure
+    attempt_id: int = field(kw_only=True)
 
     def __post_init__(self) -> None:
         """Validate exact identities and failure carrier."""
+        _validate_attempt_id(self.attempt_id)
         _require_nonempty_string(self.policy_name, "policy_name")
         _require_nonempty_string(self.commit_id, "commit_id")
         if type(self.failure) is not MemoryOperationFailure:
@@ -327,12 +401,12 @@ RunRecord: TypeAlias = (
     | NodeRoutedRecord
     | NodeExpandedRecord
     | NodeFailedRecord
-    | MemoryFrameLearningStartedRecord
-    | MemoryFrameLearnedRecord
-    | MemoryFrameLearningFailedRecord
     | MemoryCommitRequestedRecord
     | MemoryCommitSucceededRecord
     | MemoryCommitFailedRecord
+    | BackwardStartedRecord
+    | BackwardReadyRecord
+    | BackwardFinishedRecord
 )
 """The exhaustive durable transition vocabulary for one run."""
 
@@ -344,12 +418,12 @@ _RUN_RECORD_TYPES = (
     NodeRoutedRecord,
     NodeExpandedRecord,
     NodeFailedRecord,
-    MemoryFrameLearningStartedRecord,
-    MemoryFrameLearnedRecord,
-    MemoryFrameLearningFailedRecord,
     MemoryCommitRequestedRecord,
     MemoryCommitSucceededRecord,
     MemoryCommitFailedRecord,
+    BackwardStartedRecord,
+    BackwardReadyRecord,
+    BackwardFinishedRecord,
 )
 
 
@@ -365,22 +439,6 @@ def _require_nonempty_string(value: object, name: str) -> str:
 def _frame_key(ref: MemoryFrameRef) -> tuple[str, tuple[str, ...], str]:
     """Return the canonical sortable identity of one memory frame."""
     return (ref.root_flow_id, ref.static_path, ref.owner.value)
-
-
-def _occurrence_key(
-    occurrence: MemoryOccurrenceRef,
-) -> tuple[
-    tuple[str, tuple[str, ...], str],
-    tuple[tuple[str, tuple[str, ...], int], ...],
-]:
-    """Return the canonical sortable identity of one dynamic occurrence."""
-    return (
-        _frame_key(occurrence.frame_ref),
-        tuple(
-            (segment.kind.value, segment.static_path, segment.index)
-            for segment in occurrence.occurrence_path
-        ),
-    )
 
 
 def _validate_optional_evidence(evidence: EvaluationEvidence | None) -> None:
@@ -441,25 +499,6 @@ def _validate_run_memory_configuration(
         raise ValueError(
             "memory_snapshots policy names must equal memory_layout policy names"
         )
-
-
-def _validate_mutations(
-    mutations: tuple[MemoryMutation, ...],
-    *,
-    frame_ref: MemoryFrameRef | None = None,
-) -> None:
-    """Validate carriers, ownership, unique IDs, and semantic proposal order."""
-    if type(mutations) is not tuple:
-        raise TypeError("mutations must be a tuple")
-    for mutation in mutations:
-        if type(mutation) is not MemoryMutation:
-            raise TypeError("mutations items must be MemoryMutation values")
-        MemoryMutation(mutation.mutation_id, mutation.frame_ref, mutation.payload)
-        if frame_ref is not None and mutation.frame_ref != frame_ref:
-            raise ValueError("mutation frame_ref must match the learning frame")
-    ids = tuple(mutation.mutation_id for mutation in mutations)
-    if len(ids) != len(set(ids)):
-        raise ValueError("mutation IDs must be unique")
 
 
 @dataclass(frozen=True, slots=True)
@@ -563,6 +602,23 @@ class MemoryRunLog:
         self._records: list[RecordEnvelope] = []
         self._next_sequence = 0
         self._closed = False
+
+    @classmethod
+    def _from_records(cls, records: tuple[RecordEnvelope, ...]) -> MemoryRunLog:
+        """Reopen a detached canonical prefix without renumbering accepted records."""
+        if type(records) is not tuple or not records:
+            raise ValueError("reopening requires a nonempty record tuple")
+        if any(type(envelope) is not RecordEnvelope for envelope in records):
+            raise TypeError("reopening requires exact RecordEnvelope values")
+        canonical = tuple(_copy_envelope(envelope) for envelope in records)
+        run_id = canonical[0].run_id
+        for sequence, envelope in enumerate(canonical):
+            if envelope.run_id != run_id or envelope.seq != sequence:
+                raise ValueError("reopened prefix must have one run and contiguous sequences")
+        log = cls(run_id)
+        log._records = list(canonical)
+        log._next_sequence = len(canonical)
+        return log
 
     @property
     def run_id(self) -> str:
@@ -927,7 +983,9 @@ class _ForwardCapturePayload(_StrictModel):
     evaluated_keys: list[str]
     items: list[_ItemCapturePayload]
     scope: _ExecutionScopePayload | None
-    node_data: Any
+    node_data: dict[str, Any] | None
+    input_names: list[str]
+    variable_names: list[str]
 
     @field_validator("evaluated_keys")
     @classmethod
@@ -1157,35 +1215,12 @@ class _NodeFailedPayload(_StrictModel):
     forward_capture: _ForwardCapturePayload | None
 
 
-class _MemoryFrameLearningStartedPayload(_StrictModel):
-    """Strict wire payload for frame-learning start."""
-
-    policy_name: str = Field(min_length=1)
-    frame_ref: _MemoryFrameRefPayload
-    occurrences: list[_MemoryOccurrenceRefPayload]
-
-
-class _MemoryFrameLearnedPayload(_StrictModel):
-    """Strict wire payload for frame-local proposed mutations."""
-
-    policy_name: str = Field(min_length=1)
-    frame_ref: _MemoryFrameRefPayload
-    mutations: list[_MemoryMutationPayload]
-
-
-class _MemoryFrameLearningFailedPayload(_StrictModel):
-    """Strict wire payload for one frame-learning failure."""
-
-    policy_name: str = Field(min_length=1)
-    frame_ref: _MemoryFrameRefPayload
-    failure: _MemoryOperationFailurePayload
-
-
 class _MemoryCommitRequestedPayload(_StrictModel):
     """Strict wire payload for one atomic policy commit request."""
 
     policy_name: str = Field(min_length=1)
     commit_id: str = Field(min_length=1)
+    attempt_id: int = Field(gt=0)
     mutations: list[_MemoryMutationPayload]
 
 
@@ -1194,6 +1229,7 @@ class _MemoryCommitSucceededPayload(_StrictModel):
 
     policy_name: str = Field(min_length=1)
     commit_id: str = Field(min_length=1)
+    attempt_id: int = Field(gt=0)
 
 
 class _MemoryCommitFailedPayload(_StrictModel):
@@ -1201,7 +1237,125 @@ class _MemoryCommitFailedPayload(_StrictModel):
 
     policy_name: str = Field(min_length=1)
     commit_id: str = Field(min_length=1)
+    attempt_id: int = Field(gt=0)
     failure: _MemoryOperationFailurePayload
+
+
+class _BackwardResultPayload(_StrictModel):
+    """Ordinary input messages and the two independent textual channels."""
+
+    input_feedback: dict[str, list[Any]]
+    self_feedback: list[str]
+    variable_feedback: dict[str, list[str]]
+
+
+class _BackwardAttributionPayload(_StrictModel):
+    """Reference-only ancestry coordinates for one received message."""
+
+    sender: _SourceRefPayload | None
+    input_name: str | None
+    message_index: int = Field(ge=0)
+    contribution_index: int | None
+    parents: list[int]
+
+
+class _AttributedBackwardResultPayload(_StrictModel):
+    """One accepted occurrence's feedback, ancestry, and callback result."""
+
+    source: _SourceRefPayload
+    feedback: list[Any]
+    attribution: list[_BackwardAttributionPayload]
+    result: _BackwardResultPayload
+    invoked: bool
+
+
+class _FrameProposalPayload(_StrictModel):
+    """One frame's detached ordered mutation batch."""
+
+    frame_ref: _MemoryFrameRefPayload
+    mutations: list[_MemoryMutationPayload]
+
+
+class _LearningFailurePayload(_StrictModel):
+    """Frame-local learn or policy-local commit failure attribution."""
+
+    policy_name: str = Field(min_length=1)
+    operation: Literal["learn", "commit"]
+    failure: _MemoryOperationFailurePayload
+    frame_ref: _MemoryFrameRefPayload | None
+
+
+class _PolicyCommitOutcomePayload(_StrictModel):
+    """A policy disposition without inferred attempt completion."""
+
+    policy_name: str = Field(min_length=1)
+    status: Literal["unrequested", "unknown", "succeeded", "failed"]
+    commit_id: str | None
+    failure: _MemoryOperationFailurePayload | None
+
+
+class _LearningResultPayload(_StrictModel):
+    """Ordered failures and policy commit dispositions."""
+
+    status: Literal["succeeded", "failed", "incomplete"]
+    failures: list[_LearningFailurePayload]
+    policies: list[_PolicyCommitOutcomePayload]
+
+
+class _BackwardFailureCausePayload(_FailurePayload):
+    """Strict semantic cause with the diagnostic carrier's optional node identity."""
+
+    node_id: str | None
+
+
+class _BackwardFailurePayload(_StrictModel):
+    """A backward-operation diagnostic and its optional lower-layer cause."""
+
+    stage: str = Field(min_length=1)
+    code: str = Field(min_length=1)
+    message: str
+    scope: _ExecutionScopePayload | None
+    run_id: str | None
+    node_id: str | None
+    node_started_seq: int | None
+    policy_name: str | None
+    frame_ref: _MemoryFrameRefPayload | None
+    cause: _BackwardFailureCausePayload | _MemoryOperationFailurePayload | None
+    cause_type: str | None
+    traceback: str | None
+
+
+class _BackwardOutcomePayload(_StrictModel):
+    """The settled backward disposition, separate from forward status."""
+
+    status: Literal["succeeded", "failed"]
+    feedback: _BackwardResultPayload | None
+    failure: _BackwardFailurePayload | None
+    learning: _LearningResultPayload | None
+
+
+class _BackwardStartedPayload(_StrictModel):
+    """One explicit attempt identity and original ordinary root feedback."""
+
+    attempt_id: int = Field(gt=0)
+    feedback: Any
+
+
+class _BackwardReadyPayload(_StrictModel):
+    """Completed compute results and ordered frame proposals."""
+
+    attempt_id: int = Field(gt=0)
+    root_result: _BackwardResultPayload
+    attributed_results: list[_AttributedBackwardResultPayload]
+    frame_proposals: list[_FrameProposalPayload]
+
+
+class _BackwardFinishedPayload(_StrictModel):
+    """An attempt outcome and optional completed attribution inventory."""
+
+    attempt_id: int = Field(gt=0)
+    outcome: _BackwardOutcomePayload
+    attributed_results: list[_AttributedBackwardResultPayload]
 
 
 _KIND_TO_MODEL: dict[str, type[_StrictModel]] = {
@@ -1212,12 +1366,12 @@ _KIND_TO_MODEL: dict[str, type[_StrictModel]] = {
     "node_routed": _NodeRoutedPayload,
     "node_expanded": _NodeExpandedPayload,
     "node_failed": _NodeFailedPayload,
-    "memory_frame_learning_started": _MemoryFrameLearningStartedPayload,
-    "memory_frame_learned": _MemoryFrameLearnedPayload,
-    "memory_frame_learning_failed": _MemoryFrameLearningFailedPayload,
     "memory_commit_requested": _MemoryCommitRequestedPayload,
     "memory_commit_succeeded": _MemoryCommitSucceededPayload,
     "memory_commit_failed": _MemoryCommitFailedPayload,
+    "backward_started": _BackwardStartedPayload,
+    "backward_ready": _BackwardReadyPayload,
+    "backward_finished": _BackwardFinishedPayload,
 }
 
 _TYPE_TO_KIND: dict[type[Any], str] = {
@@ -1228,12 +1382,12 @@ _TYPE_TO_KIND: dict[type[Any], str] = {
     NodeRoutedRecord: "node_routed",
     NodeExpandedRecord: "node_expanded",
     NodeFailedRecord: "node_failed",
-    MemoryFrameLearningStartedRecord: "memory_frame_learning_started",
-    MemoryFrameLearnedRecord: "memory_frame_learned",
-    MemoryFrameLearningFailedRecord: "memory_frame_learning_failed",
     MemoryCommitRequestedRecord: "memory_commit_requested",
     MemoryCommitSucceededRecord: "memory_commit_succeeded",
     MemoryCommitFailedRecord: "memory_commit_failed",
+    BackwardStartedRecord: "backward_started",
+    BackwardReadyRecord: "backward_ready",
+    BackwardFinishedRecord: "backward_finished",
 }
 
 
@@ -1272,13 +1426,15 @@ def canonical_typed(
         raise ValueError("canonical data nesting exceeds the supported depth") from exc
 
 
-def canonical_seed(value: Any) -> tuple[Any, Any]:
-    """Canonicalize an opaque growth seed through Pydantic's JSON mode.
+def canonical_seed(value: Any, *, reject_nonfinite: bool = False) -> tuple[Any, Any]:
+    """Canonicalize a supported node value through Pydantic's JSON mode.
 
     Args:
         value (`Any`):
-            Node-produced builder input.  Tuples, dates, datetimes, and Pydantic
-            models such as `FileRef` are converted to their JSON representations.
+            Builder input or invocation data. Tuples, dates, datetimes, and
+            Pydantic models such as `FileRef` become their JSON representations.
+        reject_nonfinite (`bool`, *optional*, defaults to `False`): Reject raw
+            non-finite floats before JSON-mode conversion can normalize them.
 
     Returns:
         `tuple[Any, Any]`:
@@ -1287,10 +1443,15 @@ def canonical_seed(value: Any) -> tuple[Any, Any]:
 
     Raises:
         `ValueError`:
-            The seed contains an unsupported or non-finite JSON value.
+            The value is not canonicalizable, or contains raw non-finite numbers
+            when `reject_nonfinite` is enabled.
+        `TypeError`:
+            `reject_nonfinite` is not an exact bool.
     """
+    if type(reject_nonfinite) is not bool:
+        raise TypeError("reject_nonfinite must be a bool")
     try:
-        _reject_unordered_containers(value)
+        _reject_unordered_containers(value, reject_nonfinite=reject_nonfinite)
         dumped = _ANY_ADAPTER.dump_python(value, mode="json", warnings="error")
         wire = _copy_json(dumped)
         return wire, _copy_json(wire)
@@ -1700,7 +1861,51 @@ def _validate_optional_capture(capture: ForwardCapture | None) -> None:
     if type(capture) is not ForwardCapture:
         raise TypeError("forward_capture must be a ForwardCapture or None")
     ForwardCapture(capture.bound_inputs, capture.route, capture.evaluated_keys,
-                   capture.items, capture.scope, capture.node_data)
+                   capture.items, capture.scope, capture.node_data,
+                   input_names=capture.input_names, variable_names=capture.variable_names)
+
+
+def _source_payload(source: SourceRef | None) -> dict[str, Any] | None:
+    """Encode a revalidated source reference without copying its produced value."""
+    if source is None:
+        return None
+    _validate_source(source)
+    return {"run_id": source.run_id, "execution_seq": source.execution_seq, "path": list(source.path)}
+
+
+def _source_from_payload(payload: dict[str, Any] | None) -> SourceRef | None:
+    """Decode an already strictly shaped source reference."""
+    if payload is None:
+        return None
+    source = SourceRef(payload["run_id"], payload["execution_seq"], tuple(payload["path"]))
+    _validate_source(source)
+    return source
+
+
+def _execution_scope_payload(scope: ExecutionScope | None) -> dict[str, Any] | None:
+    """Encode the shared memory-independent execution scope."""
+    if scope is None:
+        return None
+    if type(scope) is not ExecutionScope:
+        raise TypeError("scope must be an exact ExecutionScope")
+    ExecutionScope.__post_init__(scope)
+    return {
+        "static_path": list(scope.static_path), "flow_path": list(scope.flow_path),
+        "occurrence_path": [{"kind": position.kind, "static_path": list(position.static_path),
+                             "index": position.index} for position in scope.occurrence_path],
+        "boundary": scope.boundary,
+    }
+
+
+def _execution_scope_from_payload(payload: dict[str, Any] | None) -> ExecutionScope | None:
+    """Decode a strictly shaped authored and occurrence scope."""
+    if payload is None:
+        return None
+    return ExecutionScope(
+        tuple(payload["static_path"]), tuple(payload["flow_path"]),
+        tuple(ExecutionPosition(position["kind"], tuple(position["static_path"]), position["index"])
+              for position in payload["occurrence_path"]), payload["boundary"],
+    )
 
 
 def _route_payload(route: ValueRoute) -> dict[str, Any]:
@@ -1708,11 +1913,7 @@ def _route_payload(route: ValueRoute) -> dict[str, Any]:
     _validate_route(route)
     return {
         "kind": route.kind,
-        "source": None if route.source is None else {
-            "run_id": route.source.run_id,
-            "execution_seq": route.source.execution_seq,
-            "path": list(route.source.path),
-        },
+        "source": _source_payload(route.source),
         "value_json": route.value_json,
         "children": [_route_payload(child) for child in route.children],
         "expression": route.expression,
@@ -1732,9 +1933,7 @@ def _route_from_payload(payload: dict[str, Any]) -> ValueRoute:
     source = payload["source"]
     route = ValueRoute(
         kind=payload["kind"],
-        source=None if source is None else SourceRef(
-            source["run_id"], source["execution_seq"], tuple(source["path"]),
-        ),
+        source=_source_from_payload(source),
         value_json=payload["value_json"],
         children=tuple(_route_from_payload(child) for child in payload["children"]),
         expression=payload["expression"], names=tuple(payload["names"]),
@@ -1759,13 +1958,10 @@ def _capture_payload(capture: ForwardCapture | None) -> dict[str, Any] | None:
         "route": _route_payload(capture.route),
         "evaluated_keys": sorted(capture.evaluated_keys),
         "items": [{"index": index, "capture": _capture_payload(item)} for index, item in capture.items],
-        "scope": None if scope is None else {
-            "static_path": list(scope.static_path), "flow_path": list(scope.flow_path),
-            "occurrence_path": [{"kind": position.kind, "static_path": list(position.static_path),
-                                 "index": position.index} for position in scope.occurrence_path],
-            "boundary": scope.boundary,
-        },
+        "scope": _execution_scope_payload(scope),
         "node_data": capture.node_data,
+        "input_names": list(capture.input_names),
+        "variable_names": list(capture.variable_names),
     }
 
 
@@ -1778,12 +1974,10 @@ def _capture_from_payload(payload: dict[str, Any] | None) -> ForwardCapture | No
         payload["bound_inputs"], _route_from_payload(payload["route"]),
         frozenset(payload["evaluated_keys"]),
         tuple((item["index"], _capture_from_payload(item["capture"])) for item in payload["items"]),
-        None if scope is None else ExecutionScope(
-            tuple(scope["static_path"]), tuple(scope["flow_path"]),
-            tuple(ExecutionPosition(position["kind"], tuple(position["static_path"]), position["index"])
-                  for position in scope["occurrence_path"]), scope["boundary"],
-        ),
+        _execution_scope_from_payload(scope),
         payload["node_data"],
+        input_names=tuple(payload["input_names"]),
+        variable_names=tuple(payload["variable_names"]),
     )
 
 
@@ -1888,6 +2082,197 @@ def _memory_failure_from_payload(payload: dict[str, Any]) -> MemoryOperationFail
     )
 
 
+def _backward_result_payload(result: BackwardResult) -> dict[str, Any]:
+    """Encode the three explicit channels, preserving independent batch order."""
+    checked = _copy_backward_result(result)
+    return {
+        "input_feedback": {name: list(batch) for name, batch in checked.input_feedback.items()},
+        "self_feedback": list(checked.self_feedback),
+        "variable_feedback": {name: list(batch) for name, batch in checked.variable_feedback.items()},
+    }
+
+
+def _backward_result_from_payload(payload: dict[str, Any]) -> BackwardResult:
+    """Decode ordinary messages without the narrower memory JSON gate."""
+    return BackwardResult(
+        {name: tuple(batch) for name, batch in payload["input_feedback"].items()},
+        tuple(payload["self_feedback"]),
+        {name: tuple(batch) for name, batch in payload["variable_feedback"].items()},
+    )
+
+
+def _attribution_payload(item: BackwardAttribution) -> dict[str, Any]:
+    """Encode exact transfer coordinates without materialized downstream context."""
+    if type(item) is not BackwardAttribution:
+        raise TypeError("attribution must be an exact BackwardAttribution")
+    BackwardAttribution.__post_init__(item)
+    return {
+        "sender": _source_payload(item.sender), "input_name": item.input_name,
+        "message_index": item.message_index, "contribution_index": item.contribution_index,
+        "parents": list(item.parents),
+    }
+
+
+def _attribution_from_payload(payload: dict[str, Any]) -> BackwardAttribution:
+    """Decode local ancestry coordinates; trace agreement belongs to reduction."""
+    return BackwardAttribution(
+        _source_from_payload(payload["sender"]), payload["input_name"],
+        payload["message_index"], payload["contribution_index"], tuple(payload["parents"]),
+    )
+
+
+def _attributed_result_payload(item: AttributedBackwardResult) -> dict[str, Any]:
+    """Encode one detached occurrence result and its reference-only attribution."""
+    checked = _copy_attributed_results((item,))[0]
+    return {
+        "source": _source_payload(checked.source), "feedback": list(checked.feedback),
+        "attribution": [_attribution_payload(a) for a in checked.attribution],
+        "result": _backward_result_payload(checked.result), "invoked": checked.invoked,
+    }
+
+
+def _attributed_result_from_payload(payload: dict[str, Any]) -> AttributedBackwardResult:
+    """Decode one result without reconstructing an invocation or route."""
+    return AttributedBackwardResult(
+        _source_from_payload(payload["source"]), tuple(payload["feedback"]),
+        tuple(_attribution_from_payload(a) for a in payload["attribution"]),
+        _backward_result_from_payload(payload["result"]), payload["invoked"],
+    )
+
+
+def _frame_proposal_payload(proposal: FrameProposal) -> dict[str, Any]:
+    """Encode one revalidated frame-owned proposal using the mutation codec."""
+    if type(proposal) is not FrameProposal:
+        raise TypeError("proposal must be an exact FrameProposal")
+    checked = replace(proposal)
+    return {
+        "frame_ref": _frame_ref_payload(checked.frame_ref),
+        "mutations": [_mutation_payload(m) for m in checked.mutations],
+    }
+
+
+def _frame_proposal_from_payload(payload: dict[str, Any]) -> FrameProposal:
+    """Decode and locally validate one frame's mutation ownership and order."""
+    return FrameProposal(
+        _frame_ref_from_payload(payload["frame_ref"]),
+        tuple(_mutation_from_payload(m) for m in payload["mutations"]),
+    )
+
+
+def _learning_result_payload(result: LearningResult) -> dict[str, Any]:
+    """Encode independent failure attribution and ordered policy dispositions."""
+    if type(result) is not LearningResult:
+        raise TypeError("learning must be an exact LearningResult")
+    checked = replace(result)
+    return {
+        "status": checked.status,
+        "failures": [
+            {
+                "policy_name": item.policy_name,
+                "operation": item.operation,
+                "failure": _memory_failure_payload(item.failure),
+                "frame_ref": None if item.frame_ref is None else _frame_ref_payload(item.frame_ref),
+            }
+            for item in checked.failures
+        ],
+        "policies": [
+            {
+                "policy_name": item.policy_name,
+                "status": item.status,
+                "commit_id": item.commit_id,
+                "failure": None if item.failure is None else _memory_failure_payload(item.failure),
+            }
+            for item in checked.policies
+        ],
+    }
+
+
+def _learning_result_from_payload(payload: dict[str, Any]) -> LearningResult:
+    """Decode leaf dispositions without inferring whole-attempt completion."""
+    return LearningResult(
+        payload["status"],
+        tuple(
+            LearningFailure(
+                item["policy_name"], item["operation"],
+                _memory_failure_from_payload(item["failure"]),
+                None if item["frame_ref"] is None else _frame_ref_from_payload(item["frame_ref"]),
+            )
+            for item in payload["failures"]
+        ),
+        tuple(
+            PolicyCommitOutcome(
+                item["policy_name"], item["status"], item["commit_id"],
+                None if item["failure"] is None else _memory_failure_from_payload(item["failure"]),
+            )
+            for item in payload["policies"]
+        ),
+    )
+
+
+def _backward_failure_payload(failure: BackwardFailure) -> dict[str, Any]:
+    """Encode one attributed diagnostic with an explicit closed lower cause."""
+    if type(failure) is not BackwardFailure:
+        raise TypeError("failure must be an exact BackwardFailure")
+    checked = replace(failure)
+    cause = checked.cause
+    cause_payload = None
+    if type(cause) is Failure:
+        cause_payload = _failure_payload(cause, carrier="BackwardFailure")
+    elif cause is not None:
+        cause_payload = _memory_failure_payload(cause)
+    return {
+        "stage": checked.stage, "code": checked.code, "message": checked.message,
+        "scope": _execution_scope_payload(checked.scope), "run_id": checked.run_id,
+        "node_id": checked.node_id, "node_started_seq": checked.node_started_seq,
+        "policy_name": checked.policy_name,
+        "frame_ref": None if checked.frame_ref is None else _frame_ref_payload(checked.frame_ref),
+        "cause": cause_payload,
+        "cause_type": checked.cause_type, "traceback": checked.traceback,
+    }
+
+
+def _backward_failure_from_payload(payload: dict[str, Any]) -> BackwardFailure:
+    """Decode the two disjoint strict cause payload shapes without inference."""
+    cause = payload["cause"]
+    decoded_cause = None
+    if cause is not None:
+        decoded_cause = (
+            _memory_failure_from_payload(cause) if "stage" in cause else _failure_from_payload(cause)
+        )
+    return BackwardFailure(
+        stage=payload["stage"], code=payload["code"], message=payload["message"],
+        scope=_execution_scope_from_payload(payload["scope"]), run_id=payload["run_id"],
+        node_id=payload["node_id"], node_started_seq=payload["node_started_seq"],
+        policy_name=payload["policy_name"],
+        frame_ref=None if payload["frame_ref"] is None else _frame_ref_from_payload(payload["frame_ref"]),
+        cause=decoded_cause,
+        cause_type=payload["cause_type"], traceback=payload["traceback"],
+    )
+
+
+def _backward_outcome_payload(outcome: BackwardOutcome) -> dict[str, Any]:
+    """Encode the independent backward outcome and optional learning result."""
+    if type(outcome) is not BackwardOutcome:
+        raise TypeError("outcome must be an exact BackwardOutcome")
+    checked = replace(outcome)
+    return {
+        "status": checked.status,
+        "feedback": None if checked.feedback is None else _backward_result_payload(checked.feedback),
+        "failure": None if checked.failure is None else _backward_failure_payload(checked.failure),
+        "learning": None if checked.learning is None else _learning_result_payload(checked.learning),
+    }
+
+
+def _backward_outcome_from_payload(payload: dict[str, Any]) -> BackwardOutcome:
+    """Decode recorded outcome data without fabricating missing computation."""
+    return BackwardOutcome(
+        payload["status"],
+        None if payload["feedback"] is None else _backward_result_from_payload(payload["feedback"]),
+        None if payload["failure"] is None else _backward_failure_from_payload(payload["failure"]),
+        None if payload["learning"] is None else _learning_result_from_payload(payload["learning"]),
+    )
+
+
 def _revalidate_run_record(record: RunRecord) -> None:
     """Replay exact outer and nested invariants before any record is encoded."""
     if type(record) is RunStartedRecord:
@@ -1942,43 +2327,33 @@ def _revalidate_run_record(record: RunRecord) -> None:
         NodeFailedRecord(record.failure, record.evidence, record.forward_capture)
         _failure_payload(record.failure, carrier="NodeFailedRecord")
         return
-    if type(record) is MemoryFrameLearningStartedRecord:
-        MemoryFrameLearningStartedRecord(
-            record.policy_name,
-            record.frame_ref,
-            record.occurrences,
-        )
-        return
-    if type(record) is MemoryFrameLearnedRecord:
-        MemoryFrameLearnedRecord(
-            record.policy_name,
-            record.frame_ref,
-            record.mutations,
-        )
-        return
-    if type(record) is MemoryFrameLearningFailedRecord:
-        MemoryFrameLearningFailedRecord(
-            record.policy_name,
-            record.frame_ref,
-            record.failure,
-        )
-        return
     if type(record) is MemoryCommitRequestedRecord:
         MemoryCommitRequestedRecord(
             record.policy_name,
             record.commit_id,
             record.mutations,
+            attempt_id=record.attempt_id,
         )
         return
     if type(record) is MemoryCommitSucceededRecord:
-        MemoryCommitSucceededRecord(record.policy_name, record.commit_id)
+        MemoryCommitSucceededRecord(record.policy_name, record.commit_id, attempt_id=record.attempt_id)
         return
     if type(record) is MemoryCommitFailedRecord:
         MemoryCommitFailedRecord(
             record.policy_name,
             record.commit_id,
             record.failure,
+            attempt_id=record.attempt_id,
         )
+        return
+    if type(record) is BackwardStartedRecord:
+        BackwardStartedRecord(record.attempt_id, record.feedback)
+        return
+    if type(record) is BackwardReadyRecord:
+        BackwardReadyRecord(record.attempt_id, record.root_result, record.attributed_results, record.frame_proposals)
+        return
+    if type(record) is BackwardFinishedRecord:
+        BackwardFinishedRecord(record.attempt_id, record.outcome, record.attributed_results)
         return
     raise TypeError(f"unsupported run record: {type(record).__name__}")
 
@@ -2070,33 +2445,11 @@ def _payload_for_record(record: RunRecord) -> dict[str, Any]:
             "evidence": _evidence_payload(record.evidence),
             "forward_capture": _capture_payload(record.forward_capture),
         }
-    elif isinstance(record, MemoryFrameLearningStartedRecord):
-        raw = {
-            "policy_name": record.policy_name,
-            "frame_ref": _frame_ref_payload(record.frame_ref),
-            "occurrences": [
-                _occurrence_ref_payload(occurrence)
-                for occurrence in record.occurrences
-            ],
-        }
-    elif isinstance(record, MemoryFrameLearnedRecord):
-        raw = {
-            "policy_name": record.policy_name,
-            "frame_ref": _frame_ref_payload(record.frame_ref),
-            "mutations": [
-                _mutation_payload(mutation) for mutation in record.mutations
-            ],
-        }
-    elif isinstance(record, MemoryFrameLearningFailedRecord):
-        raw = {
-            "policy_name": record.policy_name,
-            "frame_ref": _frame_ref_payload(record.frame_ref),
-            "failure": _memory_failure_payload(record.failure),
-        }
     elif isinstance(record, MemoryCommitRequestedRecord):
         raw = {
             "policy_name": record.policy_name,
             "commit_id": record.commit_id,
+            "attempt_id": record.attempt_id,
             "mutations": [
                 _mutation_payload(mutation) for mutation in record.mutations
             ],
@@ -2105,12 +2458,29 @@ def _payload_for_record(record: RunRecord) -> dict[str, Any]:
         raw = {
             "policy_name": record.policy_name,
             "commit_id": record.commit_id,
+            "attempt_id": record.attempt_id,
         }
     elif isinstance(record, MemoryCommitFailedRecord):
         raw = {
             "policy_name": record.policy_name,
             "commit_id": record.commit_id,
+            "attempt_id": record.attempt_id,
             "failure": _memory_failure_payload(record.failure),
+        }
+    elif isinstance(record, BackwardStartedRecord):
+        raw = {"attempt_id": record.attempt_id, "feedback": record.feedback}
+    elif isinstance(record, BackwardReadyRecord):
+        raw = {
+            "attempt_id": record.attempt_id,
+            "root_result": _backward_result_payload(record.root_result),
+            "attributed_results": [_attributed_result_payload(item) for item in record.attributed_results],
+            "frame_proposals": [_frame_proposal_payload(proposal) for proposal in record.frame_proposals],
+        }
+    elif isinstance(record, BackwardFinishedRecord):
+        raw = {
+            "attempt_id": record.attempt_id,
+            "outcome": _backward_outcome_payload(record.outcome),
+            "attributed_results": [_attributed_result_payload(item) for item in record.attributed_results],
         }
     else:  # protected by _kind_for_record; retained for exhaustive local reasoning
         raise TypeError(f"unsupported run record: {type(record).__name__}")
@@ -2200,34 +2570,11 @@ def _record_from_payload(kind: str, payload: _StrictModel) -> RunRecord:
             evidence=_evidence_from_payload(values["evidence"]),
             forward_capture=_capture_from_payload(values["forward_capture"]),
         )
-    if kind == "memory_frame_learning_started":
-        return MemoryFrameLearningStartedRecord(
-            policy_name=values["policy_name"],
-            frame_ref=_frame_ref_from_payload(values["frame_ref"]),
-            occurrences=tuple(
-                _occurrence_ref_from_payload(occurrence)
-                for occurrence in values["occurrences"]
-            ),
-        )
-    if kind == "memory_frame_learned":
-        return MemoryFrameLearnedRecord(
-            policy_name=values["policy_name"],
-            frame_ref=_frame_ref_from_payload(values["frame_ref"]),
-            mutations=tuple(
-                _mutation_from_payload(mutation)
-                for mutation in values["mutations"]
-            ),
-        )
-    if kind == "memory_frame_learning_failed":
-        return MemoryFrameLearningFailedRecord(
-            policy_name=values["policy_name"],
-            frame_ref=_frame_ref_from_payload(values["frame_ref"]),
-            failure=_memory_failure_from_payload(values["failure"]),
-        )
     if kind == "memory_commit_requested":
         return MemoryCommitRequestedRecord(
             policy_name=values["policy_name"],
             commit_id=values["commit_id"],
+            attempt_id=values["attempt_id"],
             mutations=tuple(
                 _mutation_from_payload(mutation)
                 for mutation in values["mutations"]
@@ -2237,12 +2584,27 @@ def _record_from_payload(kind: str, payload: _StrictModel) -> RunRecord:
         return MemoryCommitSucceededRecord(
             policy_name=values["policy_name"],
             commit_id=values["commit_id"],
+            attempt_id=values["attempt_id"],
         )
     if kind == "memory_commit_failed":
         return MemoryCommitFailedRecord(
             policy_name=values["policy_name"],
             commit_id=values["commit_id"],
+            attempt_id=values["attempt_id"],
             failure=_memory_failure_from_payload(values["failure"]),
+        )
+    if kind == "backward_started":
+        return BackwardStartedRecord(values["attempt_id"], values["feedback"])
+    if kind == "backward_ready":
+        return BackwardReadyRecord(
+            values["attempt_id"], _backward_result_from_payload(values["root_result"]),
+            tuple(_attributed_result_from_payload(item) for item in values["attributed_results"]),
+            tuple(_frame_proposal_from_payload(item) for item in values["frame_proposals"]),
+        )
+    if kind == "backward_finished":
+        return BackwardFinishedRecord(
+            values["attempt_id"], _backward_outcome_from_payload(values["outcome"]),
+            tuple(_attributed_result_from_payload(item) for item in values["attributed_results"]),
         )
     raise ValueError(f"unknown run-record kind: {kind!r}")
 
@@ -2286,8 +2648,11 @@ def _reject_unordered_containers(
     value: Any,
     *,
     _active: set[int] | None = None,
+    reject_nonfinite: bool = False,
 ) -> None:
     """Reject unordered, cyclic, or non-string-keyed canonical input containers."""
+    if reject_nonfinite and isinstance(value, float) and not math.isfinite(value):
+        raise ValueError("non-finite numbers are not valid canonical JSON")
     if type(value) is str:
         _validated_json_string(value)
         return
@@ -2307,31 +2672,38 @@ def _reject_unordered_containers(
     active.add(identity)
     try:
         if isinstance(value, TypedValue):
-            _reject_unordered_containers(value.to_object(), _active=active)
+            _reject_unordered_containers(value.to_object(), _active=active, reject_nonfinite=reject_nonfinite)
             return
         if isinstance(value, BaseModel):
             for field_name in type(value).model_fields:
                 _reject_unordered_containers(
                     getattr(value, field_name),
                     _active=active,
+                    reject_nonfinite=reject_nonfinite,
                 )
+            _reject_unordered_containers(
+                value.model_extra,
+                _active=active,
+                reject_nonfinite=reject_nonfinite,
+            )
             return
         if is_dataclass(value) and not isinstance(value, type):
             for field in fields(value):
                 _reject_unordered_containers(
                     getattr(value, field.name),
                     _active=active,
+                    reject_nonfinite=reject_nonfinite,
                 )
             return
         if isinstance(value, dict):
             if any(type(key) is not str for key in value):
                 raise ValueError("canonical JSON object keys must be strings")
             for key, item in value.items():
-                _reject_unordered_containers(key, _active=active)
-                _reject_unordered_containers(item, _active=active)
+                _reject_unordered_containers(key, _active=active, reject_nonfinite=reject_nonfinite)
+                _reject_unordered_containers(item, _active=active, reject_nonfinite=reject_nonfinite)
             return
         for item in value:
-            _reject_unordered_containers(item, _active=active)
+            _reject_unordered_containers(item, _active=active, reject_nonfinite=reject_nonfinite)
     finally:
         active.remove(identity)
 
@@ -2492,14 +2864,14 @@ def _release_fd(descriptor: int, *, locked: bool) -> None:
 
 __all__ = [
     "SCHEMA_VERSION",
+    "BackwardStartedRecord",
+    "BackwardReadyRecord",
+    "BackwardFinishedRecord",
     "JsonlRunLog",
     "MemoryRunLog",
     "MemoryCommitFailedRecord",
     "MemoryCommitRequestedRecord",
     "MemoryCommitSucceededRecord",
-    "MemoryFrameLearnedRecord",
-    "MemoryFrameLearningFailedRecord",
-    "MemoryFrameLearningStartedRecord",
     "NodeExpandedRecord",
     "NodeFailedRecord",
     "NodeRoutedRecord",

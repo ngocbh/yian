@@ -39,6 +39,8 @@ def test_failure_carriers_have_no_parallel_location_fields() -> None:
         "failure",
         "events",
         "learning",
+        "backward_outcome",
+        "_backward_handle",
     ]
 
 

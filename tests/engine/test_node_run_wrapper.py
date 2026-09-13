@@ -16,6 +16,8 @@ import pytest
 
 from agent_composer.diagnostics import OriginRef
 from agent_composer.nodes.base import (
+    BackwardContext,
+    BackwardResult,
     Node,
     NodeAssertFailed,
     NodeKind,
@@ -41,11 +43,11 @@ class _ImplNode(Node):
         return Output(value=self.value)
 
 
-def test_default_backward_is_a_dormant_noop():
-    """The reserved reverse hook has no behavior until a future reverse pass drives it."""
+def test_default_backward_stops_feedback_with_empty_channels():
+    """Behavioral nodes have no automatic input or behavior feedback rule."""
     node = _ImplNode("n", value=None)
 
-    assert node.backward(object(), feedback="unused") is None
+    assert node.backward(BackwardContext({}), ("unused",)) == BackwardResult()
 
 
 def test_runtime_does_not_drive_backward():

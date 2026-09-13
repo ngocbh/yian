@@ -391,6 +391,64 @@ def test_scope_free_model_evidence_is_accepted_with_forward_capture(monkeypatch)
     assert project_outcome_episodes(engine.state.run_id, record) == ()
 
 
+@pytest.mark.parametrize("stage", ["recall", "factory", "model", "success"])
+def test_actual_render_capture_survives_later_failures_without_fabricating_evidence(monkeypatch, stage):
+    from agent_composer.compose.helpers.types import read_variables
+    from agent_composer.memory import MemoryRecallError, MemorySection
+
+    node = AgentNode("work", prompt="${instruction}: ${topic}", variables=read_variables({
+        "instruction": "str = Summarize clearly",
+    }, {}), llm_config={"provider": "test", "model": "chosen"})
+    node.params = [Parameter("topic")]
+    node.memory_scope = _scope(node.id)
+    section = MemorySection(node.memory_scope.frame_stack[0], "Relevant memory.")
+    factory_calls, model_calls, recall_calls = [], [], []
+
+    def recall(scope, context):
+        recall_calls.append((scope, context))
+        if stage == "recall":
+            raise MemoryRecallError("recall failed")
+        return (section,)
+
+    class Chat:
+        def invoke(self, messages):
+            model_calls.append(messages)
+            if stage == "model":
+                raise ValueError("model failed")
+            return AIMessage(content="answer", response_metadata={"private": "not retained"})
+
+    def factory(config):
+        factory_calls.append(dict(config))
+        if stage == "factory":
+            raise ValueError("factory failed")
+        return Chat()
+
+    monkeypatch.setattr(llm_clients, "model_from_config", factory)
+    layout, snapshots = _learning_configuration(node)
+    engine = _engine(_graph([node], [(START_ID, "work"), ("work", END_ID)],
+                            wiring={"work": {"topic": "reefs"}}), learn=True,
+                     memory_layout=layout, memory_snapshots=snapshots, memory_recall=recall)
+    list(engine.run())
+    record = next(item.record for item in engine.state.trace.occurrences if item.node_id == "work")
+    assert type(record) is (NodeSucceededRecord if stage == "success" else NodeFailedRecord)
+    assert record.forward_capture.bound_inputs == {"topic": "reefs"}
+    assert record.forward_capture.node_data == {
+        "prompt_template": "${instruction}: ${topic}",
+        "variables": {"instruction": "Summarize clearly"},
+        "variable_domains": {"instruction": "str"},
+        "rendered_prompt": "Summarize clearly: reefs",
+        "effective_llm_config": {"provider": "test", "model": "chosen"},
+    }
+    visible_prompt = stage in ("model", "success")
+    assert len(recall_calls) == 1
+    assert len(factory_calls) == (stage != "recall")
+    assert len(model_calls) == visible_prompt
+    assert record.evidence.prompt == ("Summarize clearly: reefs" if visible_prompt else None)
+    assert record.evidence.base_system_prompt == (DEFAULT_SYSTEM if visible_prompt else None)
+    assert record.evidence.memory_sections == ((section,) if visible_prompt else ())
+    assert record.evidence.interactions == ((ModelTextInteraction("answer"),) if stage == "success" else ())
+
+
 def test_capture_gate_requires_exact_flag_and_trait(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

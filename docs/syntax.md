@@ -267,10 +267,13 @@ frame.
 
 Authored long-term-memory declarations are dormant unless a Python host passes a
 `memory={...}` registry to `run_flow`, keyed by the selected policy names.
-Supplying the registry enables recall. Passing `learn=True` additionally runs
-durable post-terminal learning after either primary success or primary failure.
-The `ac run` CLI does not inject memory implementations or expose learning flags
-yet.
+Supplying the registry enables recall. Independently, `learn=True` retains
+accepted execution for an explicit `result.backward(feedback)` call after forward
+returns. Forward never learns or commits. A call with no external feedback still
+presents history to every enabled memory frame; backward outcomes stay separate
+from the forward result. See [the Python API](api.md#explicit-backward-feedback).
+The `ac run` CLI does not inject memory implementations or expose backward or
+learning commands.
 
 ## Node kinds
 

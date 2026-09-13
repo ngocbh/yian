@@ -50,8 +50,10 @@ class Node:
     def forward(self, inputs, **caps) -> NodeResult:
         ...
 
-    def backward(self, *args, **caps) -> None:
-        return None  # reserved; the runtime does not call this hook
+    def backward(
+        self, context: BackwardContext, feedback: tuple[FeedbackValue, ...],
+    ) -> BackwardResult:
+        return BackwardResult()  # default behavioral stop: all channels empty
 
     def skipped_output_target(self) -> NodeId:
         return self.id if self.commit_as is None else self.commit_as
@@ -72,9 +74,17 @@ class Node:
 kind — so they are protocol, not kind behavior, and live in the base template. See
 [the engine loop](engine.md#the-loop-read-eval-record-reduce).
 
-`backward` only reserves the name for future reverse-DAG feedback. Its default is a
-no-op, its argument contract is intentionally not yet defined, and neither the runtime
-nor memory learning calls it today.
+The runtime calls `backward` only during the explicit reverse fold started by
+[`RunResult.backward(...)`](api.md#explicit-backward-feedback), never during forward
+execution. A reached accepted occurrence receives its detached `BackwardContext`
+and an ordered tuple of ordinary feedback messages. The default returns empty
+channels and stops propagation.
+
+An override returns a `BackwardResult` with three channels: `input_feedback`,
+`self_feedback`, and `variable_feedback`. The runtime validates the complete result
+against the captured declaration names and recorded value shapes before routing
+any input feedback through retained expression routes. Self and variable feedback
+remain attributed to this occurrence; only input feedback propagates upstream.
 
 `skipped_output_target()` is a pure, deterministic topology hook, not another
 effectful body method. It must derive only from execution state represented in

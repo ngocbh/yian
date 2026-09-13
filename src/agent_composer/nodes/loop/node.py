@@ -23,7 +23,10 @@ from typing import Any, Callable, ClassVar, Iterator, Optional
 
 from agent_composer.diagnostics import OriginRef
 from agent_composer.expr.expressions import evaluate_when_record
-from agent_composer.nodes.base import Grow, Node, NodeKind, Output
+from agent_composer.expr.lineage import FeedbackValue
+from agent_composer.nodes.base import (
+    BackwardContext, BackwardResult, Grow, Node, NodeKind, Output, _project_structural_feedback,
+)
 from agent_composer.nodes.contracts import (
     ExecutionPosition,
     ExecutionScope,
@@ -168,6 +171,40 @@ class LoopNode(Node):
         if self.predicate_kind == "while":
             return not truth                         # while: stop on FALSE
         return k >= 1 and truth                      # until (do-while): stop on TRUE, k >= 1
+
+    def capture_backward_context(self) -> dict:
+        """Capture every carried input, including fields the body does not consume.
+
+        Returns:
+            `dict`: The `input_output_paths` mapping from each carried input name
+                to its same-named field in a stopped driver's record output.
+        """
+        return {"input_output_paths": {name: [name] for name in self.backward_input_names()}}
+
+    def backward(
+        self, context: BackwardContext, feedback: tuple[FeedbackValue, ...],
+    ) -> BackwardResult:
+        """Project a stopped driver's recorded carried output without testing its predicate.
+
+        Args:
+            context (`BackwardContext`): Recorded carried inputs, accepted output
+                or failure, full input inventory, and captured named paths.
+            feedback (`tuple[FeedbackValue, ...]`): Ordered text or structural
+                selections over the accepted carried record.
+
+        Returns:
+            `BackwardResult`: Input messages for a successful stopping driver.
+                Failed or continuing drivers stop; growth connections handle the
+                separate continuation boundary.
+
+        Raises:
+            `TypeError`: If a message batch or captured path has an invalid type.
+            `ValueError`: If feedback or a captured path does not match the
+                recorded output, or the required structural layout is absent.
+        """
+        if context.failure is not None or type(context.output) is not dict:
+            return BackwardResult()
+        return _project_structural_feedback(context, feedback)
 
     def respawn(self, k: int) -> "LoopNode":
         """A fresh driver clone for iteration `k` at id `f"{origin}~{k}"`, carrying the SAME baked

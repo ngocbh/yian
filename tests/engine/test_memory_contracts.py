@@ -487,6 +487,41 @@ def test_episode_status_enforces_output_or_failure_shape() -> None:
         )
 
 
+@pytest.mark.parametrize("sequence", [0, 17])
+def test_episode_execution_sequence_is_optional_and_survives_context_copy(sequence) -> None:
+    """Physical identity extends the existing positional host constructor."""
+    occurrence = MemoryOccurrenceRef(_agent_ref())
+    legacy = MemoryEpisode("run", occurrence, _agent_ref().static_path,
+                           MemoryEpisodeStatus.SUCCEEDED, {}, "answer", None, (), None, None, ())
+    assert legacy.execution_seq is None
+    inputs = {"items": [1]}
+    episode = MemoryEpisode("run", occurrence, _agent_ref().static_path,
+                            MemoryEpisodeStatus.SUCCEEDED, inputs, "answer", execution_seq=sequence)
+    context = LearnContext("run", _agent_ref(), (episode,))
+    inputs["items"].append(2)
+    assert context.episodes[0].execution_seq == sequence
+    assert context.episodes[0].inputs == {"items": [1]}
+    object.__setattr__(episode, "execution_seq", True)
+    with pytest.raises(TypeError, match="execution_seq"):
+        LearnContext("run", _agent_ref(), (episode,))
+
+
+@pytest.mark.parametrize("sequence", [False, True, -1, 1.0, "1"])
+def test_episode_rejects_nonphysical_execution_sequences(sequence) -> None:
+    with pytest.raises((TypeError, ValueError), match="execution_seq"):
+        MemoryEpisode("run", MemoryOccurrenceRef(_agent_ref()), _agent_ref().static_path,
+                      MemoryEpisodeStatus.SUCCEEDED, {}, execution_seq=sequence)
+
+
+def test_episode_rejects_integer_subclass_execution_sequence() -> None:
+    class Sequence(int):
+        pass
+
+    with pytest.raises(TypeError, match="execution_seq"):
+        MemoryEpisode("run", MemoryOccurrenceRef(_agent_ref()), _agent_ref().static_path,
+                      MemoryEpisodeStatus.SUCCEEDED, {}, execution_seq=Sequence(1))
+
+
 def test_learn_context_requires_frame_local_episode_identity() -> None:
     """A learning batch contains only episodes assigned to its run and frame."""
     outer_flow_episode = MemoryEpisode(
@@ -649,7 +684,7 @@ def test_memory_errors_expose_typed_fields_and_origin() -> None:
 
 
 def test_learning_result_keeps_primary_independent_failure_attribution() -> None:
-    """The public carrier distinguishes retryable work from settled failure."""
+    """Completion and failure attribution are independent of backend retry hints."""
     retryable = LearningFailure(
         "reflective",
         "learn",
@@ -666,10 +701,8 @@ def test_learning_result_keeps_primary_independent_failure_attribution() -> None
     assert LearningResult("failed", (final,)).status == "failed"
     result = LearningResult("incomplete", (retryable, final))
     assert result.failures == (retryable, final)
-    with pytest.raises(ValueError, match="requires only final"):
-        LearningResult("failed", (retryable,))
-    with pytest.raises(ValueError, match="retryable"):
-        LearningResult("incomplete", (final,))
+    assert LearningResult("failed", (retryable,)).failures == (retryable,)
+    assert LearningResult("incomplete", (final,)).failures == (final,)
     with pytest.raises(ValueError, match="frame_ref"):
         LearningFailure("reflective", "learn", final.failure)
     with pytest.raises(ValueError, match="cannot carry"):
@@ -745,3 +778,89 @@ for forbidden in (
         check=True,
         text=True,
     )
+
+
+@pytest.mark.parametrize("status,commit_id,has_failure", [
+    ("unrequested", None, False), ("unknown", "commit-1", False),
+    ("succeeded", "commit-1", False), ("failed", "commit-1", True),
+])
+def test_policy_commit_outcome_keeps_protocol_identity_and_backend_hints(status, commit_id, has_failure):
+    from agent_composer.memory import PolicyCommitOutcome
+
+    failure = MemoryOperationFailure("backend-stage", "retry", "Try later.", True) if has_failure else None
+    outcome = PolicyCommitOutcome("history", status, commit_id, failure)
+    assert (outcome.policy_name, outcome.status, outcome.commit_id, outcome.failure) == (
+        "history", status, commit_id, failure,
+    )
+    with pytest.raises(FrozenInstanceError):
+        outcome.status = "succeeded"
+
+
+def test_learning_completion_is_independent_of_retryability_and_policy_confirmation():
+    from agent_composer.memory import PolicyCommitOutcome
+
+    failure = LearningFailure("history", "commit", MemoryOperationFailure("backend", "busy", "Retry.", True))
+    succeeded = PolicyCommitOutcome("history", "succeeded", "commit-1")
+    pending = PolicyCommitOutcome("other", "unrequested")
+    assert LearningResult("failed", (failure,)).failures == (failure,)
+    assert LearningResult("incomplete").policies == ()
+    assert LearningResult("incomplete", policies=(succeeded, pending)).policies == (succeeded, pending)
+    assert LearningResult("incomplete", policies=(succeeded,)).status == "incomplete"
+    assert LearningResult("succeeded", policies=(succeeded,)).policies == (succeeded,)
+    with pytest.raises(ValueError):
+        LearningResult("succeeded", policies=(pending,))
+    with pytest.raises(ValueError):
+        LearningResult("failed")
+    with pytest.raises(ValueError):
+        LearningResult("incomplete", policies=(succeeded, succeeded))
+
+
+@pytest.mark.parametrize("status, commit_id, with_failure", [
+    ("unrequested", "commit-1", False), ("unrequested", None, True),
+    ("unknown", None, False), ("unknown", "commit-1", True),
+    ("succeeded", None, False), ("succeeded", "commit-1", True),
+    ("failed", None, True), ("failed", "commit-1", False), ("other", None, False),
+])
+def test_policy_commit_outcome_rejects_inconsistent_optional_fields(status, commit_id, with_failure):
+    from agent_composer.memory import PolicyCommitOutcome
+
+    failure = MemoryOperationFailure("backend", "error", "Failed.", False) if with_failure else None
+    with pytest.raises(ValueError):
+        PolicyCommitOutcome("history", status, commit_id, failure)
+
+
+@pytest.mark.parametrize("field", ["policy_name", "status", "commit_id"])
+@pytest.mark.parametrize("invalid", ["", "\ud800", 1, True])
+def test_policy_commit_outcome_requires_exact_valid_unicode_identities(field, invalid):
+    from agent_composer.memory import PolicyCommitOutcome
+
+    values = {"policy_name": "history", "status": "unknown", "commit_id": "commit-1"}
+    values[field] = invalid
+    with pytest.raises((TypeError, ValueError)):
+        PolicyCommitOutcome(**values)
+
+
+def test_learning_result_revalidates_exact_nested_policy_carriers():
+    from agent_composer.memory import PolicyCommitOutcome
+
+    first = PolicyCommitOutcome("second", "unknown", "commit-2")
+    second = PolicyCommitOutcome("first", "unrequested")
+    result = LearningResult("incomplete", (), (first, second))
+    assert result.policies == (first, second)
+    assert result.policies[0] is not first
+    with pytest.raises(TypeError, match="tuple"):
+        LearningResult("incomplete", policies=[first])
+
+    class PolicySubclass(PolicyCommitOutcome):
+        pass
+
+    with pytest.raises(TypeError, match="PolicyCommitOutcome"):
+        LearningResult("incomplete", policies=(PolicySubclass("history", "unrequested"),))
+    object.__setattr__(first, "commit_id", None)
+    with pytest.raises(ValueError, match="commit_id"):
+        LearningResult("incomplete", policies=(first,))
+
+    failure = MemoryOperationFailure("backend", "failed", "Failed.", True)
+    object.__setattr__(failure, "retryable", 1)
+    with pytest.raises(TypeError, match="retryable"):
+        PolicyCommitOutcome("history", "failed", "commit-1", failure)

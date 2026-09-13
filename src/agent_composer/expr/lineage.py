@@ -352,6 +352,15 @@ def _capture_literal(value: Any, active: set[int], depth: int = 0) -> ValueRoute
     return ValueRoute("literal", value_json=encoded, expression=encoded)
 
 
+def _recorded_at_path(value: Any, path: tuple[str | int, ...]) -> Any:
+    """Select available snapshot structure without disguising ordinary path faults."""
+    for step in path:
+        if value is _UNAVAILABLE_RESULT:
+            return _UNAVAILABLE_RESULT
+        value = value[step]
+    return value
+
+
 def _route_value(route: ValueRoute, lookup: Callable[[SourceRef], Any]) -> Any:
     if route.kind == "source":
         source = route.source
@@ -369,7 +378,7 @@ def _route_value(route: ValueRoute, lookup: Callable[[SourceRef], Any]) -> Any:
     if route.kind == "selected":
         return _route_value(route.children[0], lookup)
     if route.kind == "project":
-        return _at_path(_route_value(route.children[0], lookup), route.path)
+        return _recorded_at_path(_route_value(route.children[0], lookup), route.path)
     if route.kind == "list":
         return [_route_value(child, lookup) for child in route.children]
     if route.kind == "record":
@@ -378,11 +387,20 @@ def _route_value(route: ValueRoute, lookup: Callable[[SourceRef], Any]) -> Any:
             for name, child in zip(route.names, route.children)
         }
     if route.kind == "concat":
-        return [
-            item for child in route.children for item in _route_value(child, lookup)
-        ]
+        values = []
+        unavailable = False
+        # Inspect known siblings too: unavailable snapshots must not mask real faults.
+        for child in route.children:
+            value = _route_value(child, lookup)
+            if value is _UNAVAILABLE_RESULT:
+                unavailable = True
+            else:
+                values.extend(value)
+        return _UNAVAILABLE_RESULT if unavailable else values
     if route.kind == "repeat":
         content = _route_value(route.children[route.content_index], lookup)
+        if content is _UNAVAILABLE_RESULT and route.count > 0:
+            return _UNAVAILABLE_RESULT
         return [item for _ in range(max(0, route.count)) for item in content]
     raise ValueError(f"unknown route kind {route.kind!r}")
 
@@ -397,6 +415,8 @@ def route_feedback(
     route: ValueRoute,
     feedback: FeedbackValue,
     lookup: Callable[[SourceRef], Any],
+    *,
+    recorded_value: Any = _UNAVAILABLE_RESULT,
 ) -> RoutedFeedback:
     """Transfer feedback using recorded composition and accepted source values.
 
@@ -405,6 +425,11 @@ def route_feedback(
         feedback (`FeedbackValue`): One message selecting this route's result.
         lookup (`Callable[[SourceRef], Any]`): Returns an accepted root value for
             an identity with an empty path. It must use the original snapshot.
+        recorded_value (`Any`, *optional*): The accepted canonical result, when
+            available. It supplies complete feedback shape when a supported
+            forward value had an unavailable temporary snapshot. Omission uses
+            route snapshots. This value supplies no producer mappings and is
+            propagated only through recorded structural selections.
 
     Returns:
         `RoutedFeedback`: Ordered, independent source-shaped contributions and
@@ -414,6 +439,8 @@ def route_feedback(
         `TypeError`: Raised for unsupported feedback data.
         `ValueError`: Raised for feedback that does not match the result shape.
     """
+    if recorded_value is not _UNAVAILABLE_RESULT:
+        validate_feedback(feedback, recorded_value)
     contributions: list[SourceFeedback] = []
     stopped: list[StoppedFeedback] = []
 
@@ -421,30 +448,38 @@ def route_feedback(
         current: ValueRoute,
         message: FeedbackValue,
         context: tuple[RouteContext, ...] = (),
+        known_value: Any = _UNAVAILABLE_RESULT,
+        selection: tuple[str | int, ...] = (),
     ) -> None:
         if message is None:
             return
         value = _route_value(current, lookup)
-        validate_feedback(message, value)
+        selected_value = _recorded_at_path(value, selection)
+        validate_feedback(
+            message, selected_value if known_value is _UNAVAILABLE_RESULT else known_value,
+        )
         if not has_feedback(message):
             return
         if current.kind == "source":
             source = current.source
             root = SourceRef(source.run_id, source.execution_seq)
             original = lookup(root)
-            lifted = _lift_feedback(message, original, source.path)
+            path = (*source.path, *selection)
+            validate_feedback(message, _at_path(original, path))
+            lifted = _lift_feedback(message, original, path)
             validate_feedback(lifted, original)
+            selected_source = SourceRef(source.run_id, source.execution_seq, path)
             detail = RouteContext(
                 current.expression,
                 None,
-                (source,),
-                "projection" if source.path else "source",
-                source.path or None,
+                (selected_source,),
+                "projection" if path else "source",
+                path or None,
             )
             contributions.append(SourceFeedback(root, lifted, (*context, detail)))
             return
         elif current.kind == "selected":
-            visit(current.children[0], message, context)
+            visit(current.children[0], message, context, known_value, selection)
             return
         elif current.kind == "literal":
             return
@@ -473,18 +508,25 @@ def route_feedback(
             )
 
         if current.kind == "project":
-            parent = current.children[0]
-            lifted = _lift_feedback(message, _route_value(parent, lookup), current.path)
-            visit(parent, lifted, with_context("projection", current.path))
+            visit(
+                current.children[0], message, with_context("projection", current.path),
+                known_value, (*current.path, *selection),
+            )
         elif current.kind in ("list", "record"):
             for index, child in enumerate(current.children):
-                if isinstance(message, str):
+                operand = index if current.kind == "list" else current.names[index]
+                if selection and operand != selection[0]:
+                    continue
+                if selection or isinstance(message, str):
                     selected = message
                 elif current.kind == "list":
                     selected = message[index]
                 else:
-                    selected = message.get(current.names[index])
-                operand = index if current.kind == "list" else current.names[index]
+                    selected = message.get(operand)
+                child_value = (
+                    known_value if selection or known_value is _UNAVAILABLE_RESULT
+                    else known_value[operand]
+                )
                 positions = ((index,),) if current.kind == "list" else ()
                 visit(
                     child,
@@ -494,15 +536,26 @@ def route_feedback(
                         operand,
                         positions,
                     ),
+                    child_value, selection[1:],
                 )
         elif current.kind == "concat":
+            if selection and (type(selection[0]) is not int
+                              or not 0 <= selection[0] < sum(current.sizes)):
+                raise IndexError("concat projection index is outside its recorded sizes")
             offset = 0
             for index, (child, size) in enumerate(zip(current.children, current.sizes)):
+                if selection and not offset <= selection[0] < offset + size:
+                    offset += size
+                    continue
+                child_value = (
+                    known_value if selection or known_value is _UNAVAILABLE_RESULT
+                    else known_value[offset : offset + size]
+                )
                 visit(
                     child,
                     (
                         message
-                        if isinstance(message, str)
+                        if selection or isinstance(message, str)
                         else message[offset : offset + size]
                     ),
                     with_context(
@@ -511,6 +564,8 @@ def route_feedback(
                         tuple((offset + item,) for item in range(size)),
                         (offset, offset + size),
                     ),
+                    child_value,
+                    (selection[0] - offset, *selection[1:]) if selection else (),
                 )
                 offset += size
         elif current.kind == "repeat":
@@ -518,14 +573,29 @@ def route_feedback(
             content = current.children[content_index]
             size = current.sizes[0]
             copies = max(0, current.count)
-            if isinstance(message, str):
+            if selection and (type(selection[0]) is not int
+                              or not 0 <= selection[0] < copies * size):
+                raise IndexError("repeat projection index is outside its recorded copies")
+            if selection:
+                offset = (selection[0] // size) * size
+                visit(
+                    content, message,
+                    with_context("content", content_index, tuple((offset + i,) for i in range(size))),
+                    known_value, (selection[0] % size, *selection[1:]),
+                )
+            elif isinstance(message, str):
                 positions = tuple(
                     tuple(copy * size + i for copy in range(copies))
                     for i in range(size)
                 )
                 for index, child in enumerate(current.children):
                     role = "content" if index == content_index else "count"
-                    visit(child, message, with_context(role, index, positions))
+                    child_value = (
+                        known_value[:size]
+                        if index == content_index and copies > 0
+                        and known_value is not _UNAVAILABLE_RESULT else _UNAVAILABLE_RESULT
+                    )
+                    visit(child, message, with_context(role, index, positions), child_value)
             else:
                 for copy in range(copies):
                     offset = copy * size
@@ -538,8 +608,12 @@ def route_feedback(
                             content_index,
                             positions,
                         ),
+                        known_value[offset : offset + size]
+                        if known_value is not _UNAVAILABLE_RESULT else _UNAVAILABLE_RESULT,
                     )
         elif current.kind in ("scalar", "interpolation"):
+            if selection:
+                message = _lift_feedback(message, value, selection)
             for index, child in enumerate(current.children):
                 span = current.spans[index] if current.kind == "interpolation" else None
                 visit(
@@ -552,9 +626,11 @@ def route_feedback(
                     ),
                 )
         elif current.kind == "opaque":
+            if selection and _recorded_at_path(value, selection[:-1]) is not _UNAVAILABLE_RESULT:
+                message = _lift_feedback(message, value, selection)
             stopped.append(StoppedFeedback(message, with_context("opaque")))
 
-    visit(route, feedback)
+    visit(route, feedback, known_value=recorded_value)
     return RoutedFeedback(tuple(contributions), tuple(stopped))
 
 

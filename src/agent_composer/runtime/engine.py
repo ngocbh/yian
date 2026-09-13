@@ -268,14 +268,14 @@ class FlowEngine:
         """Prepare node data, append its record, and apply the total reducer plan.
 
         Evaluator and dispatcher rejection paths both hand one canonical
-        ``Failure`` to the schema-5 reducer boundary.
+        ``Failure`` to the accepted record reducer boundary.
         """
         if type(evaluated) is not EvaluatedOutcome:
             raise TypeError("FlowEngine outcome must be an EvaluatedOutcome")
         outcome = evaluated.outcome
         evidence = evaluated.evidence
         forward_capture = (
-            capture_bindings(evaluated.bindings, self.state.flow.nodes[node_id].execution_scope)
+            capture_bindings(evaluated.bindings, evaluated.backward_capture)
             if self.state.learn else None
         )
         if isinstance(outcome, EvaluationFailure):
@@ -417,6 +417,7 @@ class FlowEngine:
             emit_stream=emit_stream,
             capture_evidence=self.state.learn,
             capture_bindings=self.state.learn,
+            effective_llm_by_static_path=self.state.effective_llm_by_static_path,
             source_resolver=None if self.state.trace is None else self.state.trace.resolve,
             memory_recall=self.memory_recall,
         )

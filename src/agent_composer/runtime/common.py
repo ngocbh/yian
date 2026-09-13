@@ -1,7 +1,8 @@
-"""Dependency-free scheduler-state vocabulary shared across engine layers.
+"""Small runtime-owned scheduler vocabulary shared by runtime modules.
 
-This internal leaf lets compiled topology and the authoritative run-log reducer
-agree on node and edge state without introducing an import between those layers.
+This module has no project dependencies so runtime state and its helpers can
+agree on execution dispositions without assigning that runtime concern to the
+compiled-flow model.
 """
 
 from enum import Enum

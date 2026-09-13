@@ -17,9 +17,9 @@ from agent_composer.compile.model import (
     Edge,
     END_ID,
     Flow,
-    NodeState,
     START_ID,
 )
+from agent_composer.runtime.common import NodeState
 from agent_composer.diagnostics import Failure, OriginRef
 from agent_composer.events import (
     NodeFailed,

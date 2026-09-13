@@ -15,7 +15,7 @@ Knows about:   diagnostics, nodes, expr, typesys, and the LLM configuration merg
 Never imports: compose, runtime, the package-root run boundary, CLI, or provider SDKs.
 """
 
-from agent_composer.compile.model import END_ID, START_ID, Edge, CompiledFlow, NodeState
+from agent_composer.compile.model import END_ID, START_ID, Edge, CompiledFlow
 from agent_composer.compile.execution_layout import (
     apply_execution_layout,
     resolve_execution_layout,
@@ -31,7 +31,6 @@ __all__ = [
     "START_ID",
     "Edge",
     "CompiledFlow",
-    "NodeState",
     "apply_execution_layout",
     "resolve_execution_layout",
     "iter_flow_origins",

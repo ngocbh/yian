@@ -449,7 +449,7 @@ diagnostics  <-  events
                    ^   ^
       typesys + expr    └──────  llm_clients
 
-_state + compile runtime contracts <── runtime
+compile runtime contracts <── runtime
 compose + compile.expand + runtime <── package-root run.py
 ```
 
@@ -465,9 +465,9 @@ Arrows never reverse: a package imports only lower-level or peer packages. See t
 the shared contract to `common.py` / a leaf, or invert via a seam). Dynamic growth is
 the concrete example: nodes return seeds, compile owns `build_grow`, `run.py` injects
 it, and runtime never imports `compile.expand`. Spawner seed schemas live in their
-owning node packages. The scheduling-state vocabulary sits in the internal
-`_state.py` leaf shared by compile and runtime. Runtime owns records, log codecs,
-append-before-apply reducer state, and dispatch; the package-root run boundary owns
+owning node packages. `runtime/common.py` owns the scheduling-state vocabulary.
+Runtime owns records, log codecs, append-before-apply reducer state, and dispatch;
+the package-root run boundary owns
 fresh-log creation, locked prefix recovery, and log closure.
 
 The same direction governs provenance: nodes describe their local origin slots

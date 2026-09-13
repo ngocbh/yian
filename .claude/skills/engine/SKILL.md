@@ -499,8 +499,8 @@ Most are just the functional model (above) made enforceable:
 Write a short plan: the **OCaml analogue** you're borrowing and its type; what you
 simplify/drop and why; where it lands in the layer map
 (`diagnostics` below `events`, with nodes combining `diagnostics`, `typesys`, and
-`expr` before `compile ← compose`; the internal `_state.py` leaf shared by
-compile and runtime; and runtime consuming compile's execution contracts but not
+`expr` before `compile ← compose`; runtime owning its scheduler-state vocabulary
+in `common.py` and consuming compile's execution contracts but not
 `compile.expand`); and the **seam** if it
 touches an external dependency. Flag any non-obvious choice and confirm before
 coding (CLAUDE.md "ask when uncertain").
@@ -517,8 +517,8 @@ Follow the **`structure` skill** for where files and folders go — package char
 in `__init__.py`, `common.py` vs `utils.py`, one-way imports, no cycles. The
 engine's layer ladder starts at the dependency-free `diagnostics` value spine.
 `events` imports that leaf; nodes combine it with the independent `typesys` and
-`expr` leaves before `compile ← compose`, while `_state.py` feeds compile and
-runtime. This is an instance of that framework.
+`expr` leaves before `compile ← compose`, while runtime keeps its scheduling
+vocabulary in `runtime/common.py`. This is an instance of that framework.
 The package-root `run.py` sits above compose and runtime and wires cross-layer
 capabilities: notably it owns log lifecycle/recovery and injects compile's
 `build_grow` into the kind-blind runtime.

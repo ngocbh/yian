@@ -16,9 +16,9 @@ from agent_composer.compile.model import (
     END_ID,
     Flow,
     GrowthRejected,
-    NodeState,
     START_ID,
 )
+from agent_composer.runtime.common import NodeState
 from agent_composer.diagnostics import OriginRef
 from agent_composer.events import NodeExpanded
 from agent_composer.nodes.base import Grow, Node, NodeKind

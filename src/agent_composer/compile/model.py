@@ -1,10 +1,9 @@
-"""The compiled flow graph: nodes, edges, adjacency, and the node-state vocabulary.
+"""The compiled flow graph: nodes, edges, adjacency, and growth validation.
 
 `CompiledFlow` carries authored topology — the nodes and how they connect. Mutable
 dispositions live in ``RunState``, and the run boundary deep-copies the graph before a
 growth reducer splices or prunes dynamic topology, so one authored flow can back many
-independent runs. `NodeState` is the shared per-node state vocabulary tracked against
-that topology; it is re-exported here for compatibility.
+independent runs.
 
 Growth fragments also carry source-neutral seed connections and actual child
 boundary pairs. Their graph validation lives here so manifests and accepted-state
@@ -19,7 +18,6 @@ and re-exported here so runtime consumers can import them alongside the graph ty
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from agent_composer._state import NodeState
 from agent_composer.memory.contracts import MemoryPolicySpec
 from agent_composer.nodes.base import Node
 from agent_composer.nodes.contracts import (
@@ -40,7 +38,6 @@ END_ID = EndNode.ID
 __all__ = [
     "START_ID",
     "END_ID",
-    "NodeState",
     "GrowthRejected",
     "Edge",
     "FlowOutput",

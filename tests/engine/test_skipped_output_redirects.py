@@ -10,9 +10,9 @@ from agent_composer.compile.model import (
     CompiledFlow,
     Edge,
     END_ID,
-    NodeState,
     START_ID,
 )
+from agent_composer.runtime.common import NodeState
 from agent_composer.events import RunFailed, RunSucceeded
 from agent_composer.nodes.call import CallNode
 from agent_composer.nodes.end import EndNode

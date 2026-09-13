@@ -212,7 +212,6 @@ principal consumer; this is a boundary map, not every import.
 ```mermaid
 flowchart TB
     diagnostics["diagnostics"]
-    state["_state"]
     typesys["typesys"]
     expr["expr"]
     memory["memory"]
@@ -234,14 +233,12 @@ flowchart TB
     llm --> nodes
     tools --> nodes
 
-    state --> compile
     nodes --> compile
     memory --> compile
     compile --> compose
     diagnostics --> compose
 
     events --> runtime
-    state --> runtime
     typesys --> runtime
     memory --> runtime
     nodes --> runtime

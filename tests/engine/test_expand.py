@@ -52,7 +52,8 @@ def test_rens_internal_computed_whole_span_renamespaces_all_leaves():
 # --- live CALL Grow path — clone namespaced, substitute spawner, fire out-edge ----------- #
 
 from agent_composer.events import RunSucceeded
-from agent_composer.compile.model import CompiledFlow, Edge, FlowOutput, NodeState, START_ID, END_ID
+from agent_composer.compile.model import CompiledFlow, Edge, FlowOutput, START_ID, END_ID
+from agent_composer.runtime.common import NodeState
 from agent_composer.compose.helpers.types import read_type
 from agent_composer.nodes.code import CodeNode
 from agent_composer.nodes.contracts import Parameter, ValueContract

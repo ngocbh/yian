@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from agent_composer.compile.expand import build_grow
-from agent_composer.compile.model import END_ID, NodeState
+from agent_composer.compile.model import END_ID
+from agent_composer.runtime.common import NodeState
 from agent_composer.compose import load_flow
 from agent_composer.events import RunFailed
 from agent_composer.runtime.log import NodeExpandedRecord, NodeRoutedRecord

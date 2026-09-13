@@ -9,7 +9,8 @@ from typing import Any, Callable
 
 import pytest
 
-from agent_composer.compile.model import CompiledFlow, Edge, END_ID, NodeState, START_ID
+from agent_composer.compile.model import CompiledFlow, Edge, END_ID, START_ID
+from agent_composer.runtime.common import NodeState
 from agent_composer.events import RunStarted
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode

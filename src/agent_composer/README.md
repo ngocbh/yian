@@ -38,7 +38,6 @@ know the shape of it:
 diagnostics.py semantic failures, resolved presentation, origins/resolver routing [leaf]
 typesys/      typed value system (values) + variable pool                 [leaf]
 events.py     transient run/node observer vocabulary; imports diagnostics
-_state.py     shared scheduler-state vocabulary                          [leaf]
 expr/         one ${...} grammar: parse -> AST -> evaluate / infer type / ref-walk
 nodes/        pure Node contract + per-kind implementations; spawners return seeds
               (start, end, agent, code, model, tool, case, call, map,
@@ -49,7 +48,8 @@ compose/      Compose-YAML front end: text -> CompiledFlow; source/ owns YAML
               construction/navigation and opaque-origin resolution; later phases
               lower file-private children
               (source/helpers/nodes/parse/desugar/edges/validate/build/loader)
-runtime/      run records/logs, reducer-owned state, forward dispatcher/worker pool,
+runtime/      run records/logs, scheduler-state vocabulary, reducer-owned state,
+              forward dispatcher/worker pool,
               explicit backward driver and pure learning/context projections
 run.py        public run/recovery boundary and retained RunResult.backward handle
 llm_clients/  provider clients (lazy-imported) + LLMConfig + model_from_config
@@ -61,8 +61,9 @@ _settings.py  environment-based default provider/model
 The main import direction is acyclic: `diagnostics` is the lowest
 source-neutral leaf; `events` imports it, and nodes may combine it with the
 independent `typesys` and `expr` leaves before `compile <- compose`. Runtime
-consumes the event/state leaves plus compile's topology, identity, and validation
-contracts, but never imports `compile.expand` or `compose`.
+consumes the event leaf plus compile's topology, identity, and validation
+contracts, but never imports `compile.expand` or `compose`. Its `common.py`
+module owns the scheduler-state vocabulary used by the reducer.
 Compose imports `SourceRange` directly from `diagnostics`; `events` does not
 re-export that front-end presentation coordinate.
 The package facade lazy-loads its declared root exports, so importing a leaf

@@ -16,7 +16,6 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any, NoReturn
 
-from agent_composer._state import NodeState
 from agent_composer.compile.manifest import expansion_digest
 from agent_composer.compile.model import CompiledFlow, Edge, Flow, GrowthRejected, validate_growth_metadata
 from agent_composer.compile.validation import _classify_path
@@ -57,6 +56,7 @@ from agent_composer.nodes.contracts import (
     validate_output_contract,
 )
 from agent_composer.runtime.contracts import ForwardCapture, _validate_source
+from agent_composer.runtime.common import NodeState
 from agent_composer.runtime.trace import (
     RetainedTrace, SourceEntry, TraceDelta, TraceOccurrence, TraceTerminal,
     _copy_memory_scope, prepare_trace, select_seed_route,

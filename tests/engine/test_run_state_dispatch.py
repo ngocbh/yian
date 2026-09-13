@@ -14,7 +14,8 @@ from typing import Any
 import pytest
 
 import agent_composer.runtime.state as state_module
-from agent_composer.compile.model import CompiledFlow, Edge, END_ID, NodeState, START_ID
+from agent_composer.compile.model import CompiledFlow, Edge, END_ID, START_ID
+from agent_composer.runtime.common import NodeState
 from agent_composer.diagnostics import Failure
 from agent_composer.events import NodeStarted, RunFailed, RunResumed
 from agent_composer.nodes.end import EndNode

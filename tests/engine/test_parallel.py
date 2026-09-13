@@ -10,7 +10,8 @@ import threading
 import time
 
 from agent_composer.events import NodeRouted, NodeSucceeded, RunFailed, RunSucceeded
-from agent_composer.compile.model import END_ID, START_ID, Edge, CompiledFlow, NodeState, FlowOutput
+from agent_composer.compile.model import END_ID, START_ID, Edge, CompiledFlow, FlowOutput
+from agent_composer.runtime.common import NodeState
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
 from agent_composer.runtime.log import NodeRoutedRecord

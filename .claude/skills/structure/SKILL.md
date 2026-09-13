@@ -66,7 +66,7 @@ diagnostics  <-  events
                    ^   ^
       typesys + expr    └──────  llm_clients
 
-_state + compile runtime contracts <── runtime
+compile runtime contracts <── runtime
 compose + compile.expand + runtime <── package-root run.py
 ```
 
@@ -82,13 +82,12 @@ never reverse.** In particular, nodes return canonical growth seeds and never
 import `compile`; runtime may consume compile's topology, identity, and validation
 contracts but never imports `compile.expand`. `run.py` injects
 `compile.expand.build_grow` into runtime instead. Runtime owns run-record/log
-codecs, append-before-apply reducer state, and dispatch; `run.py` owns fresh-log
+codecs, scheduler-state vocabulary, append-before-apply reducer state, and dispatch; `run.py` owns fresh-log
 creation, locked prefix recovery, delayed backward handles, and log closure.
 A retained handle holds private program/data and policy references, not open
 sessions or a lock; its guarded call reopens authority and fresh recorded-snapshot
-resources. Spawner seed schemas are owned by their node packages; the internal
-`_state.py` leaf carries the scheduling-state vocabulary shared by compile and
-runtime.
+resources. Spawner seed schemas are owned by their node packages; runtime's
+`common.py` owns the scheduling-state vocabulary used by its reducer.
 `tests/engine/test_layer_direction.py` ratchets these boundaries.
 When you add a package, name what it sits *above* and what it sits *below*, and
 record that in its charter's "Knows / Never imports".

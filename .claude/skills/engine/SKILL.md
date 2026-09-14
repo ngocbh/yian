@@ -464,6 +464,17 @@ Most are just the functional model (above) made enforceable:
   enabled frame learner in layout order, including empty/unexecuted histories.
   A receiver writes only its own frame; descendant evidence preserves original
   execution coordinates. No learner mutates an inherited parent frame.
+- **Episodic memory appends canonical execution history** — import the built-in
+  process-local backend from `agent_composer.memory.episodic`. An authored
+  `long_term_memory: episodic` frame accepts positive `max_episodes` and
+  `recall_limit` settings. Learning deterministically proposes one append per
+  owner-scoped episode. After the attempt reaches Ready, the engine requests the
+  policy batch; the backend commits it atomically and idempotently, then evicts
+  the oldest entries beyond the frame bound. Context-free recall is
+  chronological. Contextual recall ranks lexical
+  overlap and then recency within its limit. Sessions retain immutable JSON
+  snapshots; stale sessions may recall their pinned view but cannot learn or
+  commit. The backend owns no file or database persistence.
 - **One attempt barrier precedes commits** — accept Started, complete backward
   results and all frame proposals, then accept Ready. Commit each enabled policy
   once in recorded order, even with an empty batch, accepting its positive-attempt

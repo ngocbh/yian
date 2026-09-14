@@ -259,6 +259,38 @@ available to recall. `reflective.reset()` explicitly starts a fresh generation.
 `ReflectiveMemory` is process-local; persistence and other policy families are
 separate future backends.
 
+For model-free execution history, use the built-in episodic policy:
+
+```python
+from agent_composer.memory.episodic import EpisodicMemory
+
+episodic = EpisodicMemory(max_episodes=100, recall_limit=10)
+result = run_flow(
+    loaded,
+    {"question": "What happened last time?"},
+    memory={"episodic": episodic},
+    learnable=True,
+)
+result.backward()  # Appends retained episodes after the reverse pass.
+```
+
+The corresponding declaration is `long_term_memory: episodic`. Its mapping form
+accepts `config.max_episodes` and `config.recall_limit`, which override the
+constructor defaults for that static frame. Each successful backward attempt
+appends the complete owner-scoped execution records in their recorded order;
+`max_episodes` then evicts the oldest records. Recall without a context returns
+the whole bounded history chronologically. AGENT recall ranks records by lexical
+overlap with the system prompt, rendered prompt, and canonical inputs, breaks
+ties by recency, and returns at most `recall_limit` records. The returned text is
+newline-separated canonical JSON so each episode keeps its run and execution
+attribution.
+
+`EpisodicMemory` is process-local. Reuse the same object to share committed
+history across fresh runs in one process. `reset()` clears history and starts a
+new generation. A session snapshot is detached JSON suitable for the engine's
+recorded recovery boundary or for restoring a pristine `EpisodicMemory`; the
+backend does not write snapshots to external storage.
+
 Application-specific implementations use the source-neutral `Memory`,
 `MemorySession`, and `MemoryFrame` protocols exported by
 `agent_composer.memory`. The host implements session snapshots, frame recall and

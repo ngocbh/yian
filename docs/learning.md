@@ -130,6 +130,29 @@ invent lessons or perform backend-specific writes. See
 interfaces and [AGENT memory](agent.md#memory-is-an-outer-to-local-stack) for
 recall order.
 
+## Episodic memory
+
+`EpisodicMemory` is the built-in deterministic history policy. Import it from
+`agent_composer.memory.episodic` and inject it under the authored `episodic`
+name. It proposes one append mutation for every owner-scoped `MemoryEpisode` it
+receives, including executions without external feedback. Nothing is appended
+during forward execution: `learnable=True` retains the episode, and a successful
+later `backward()` attempt commits it.
+
+Each static frame has two positive integer settings. `max_episodes` bounds the
+stored history and evicts its oldest entries after a commit. `recall_limit`
+bounds contextual AGENT recall. Contextual recall uses deterministic lexical
+overlap and recency; context-free recall returns the complete bounded history in
+chronological order. Entries are canonical JSON and preserve the run ID,
+occurrence, owner path, inputs, outcome or failure, prompts, recalled sections,
+visible model/tool interactions, and accepted execution sequence.
+
+The backend lives only in the current process. Reusing one instance shares
+committed episodes with later fresh runs; `reset()` clears them. Run sessions pin
+an immutable snapshot, so recall remains stable while another session commits.
+Recorded JSON snapshots can restore a pristine instance for recovery, but the
+backend provides no database or file persistence of its own.
+
 ## Compute first, then commit
 
 One backward attempt has two phases:

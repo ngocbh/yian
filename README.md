@@ -141,6 +141,19 @@ learning separate from the forward output and failure. See the
 [Python API](docs/api.md#explicit-backward-feedback) for feedback shapes, memory,
 and silent terminal recovery.
 
+The built-in [`EpisodicMemory`](docs/learning.md#episodic-memory) keeps bounded,
+model-free execution history for later runs. A flow declares
+`long_term_memory: episodic`; its host injects the process-local backend and
+commits retained episodes through explicit backward:
+
+```python
+from agent_composer.memory.episodic import EpisodicMemory
+
+history = EpisodicMemory()
+result = run_flow(flow, inputs, memory={"episodic": history}, learnable=True)
+result.backward()
+```
+
 ## Documentation
 
 - [Agent](docs/agent.md) — what “agent,” node, flow, child flow, memory, and run

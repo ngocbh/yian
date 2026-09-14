@@ -879,10 +879,20 @@ resumed. No rollback, rebase, or automatic recovery of backward work occurs.
 
 Memory learning belongs to each frame's policy. Each frame owned by a flow or
 AGENT node writes only its own policy state. Node feedback propagation remains a
-runtime operation; a memory callback does not mutate the authored graph. Concrete implementations
-live behind the source-neutral `Memory`/`MemorySession`/`MemoryFrame` protocols; the provided
+runtime operation; a memory callback does not mutate the authored graph. Concrete
+implementations live behind the source-neutral
+`Memory`/`MemorySession`/`MemoryFrame` protocols. The provided
 `ReflectiveMemory` is a process-local backend whose model call and query rewrite
-are policy-owned.
+are policy-owned. The provided
+`agent_composer.memory.episodic.EpisodicMemory` is a model-free process-local
+backend. Its learner deterministically proposes one canonical append per owned
+episode; commit applies a complete batch atomically and idempotently, then bounds
+each frame by its `max_episodes` setting. Contextual recall ranks lexical overlap
+and then recency up to `recall_limit`; context-free recall returns the full
+bounded history chronologically. Sessions read immutable snapshots, including
+after newer commits, while stale sessions cannot learn or commit. Public JSON
+snapshots support the existing recovery boundary or restoration into a pristine
+instance; external persistence remains a host concern.
 
 ## Durable recovery
 

@@ -2,10 +2,13 @@
 
 This package owns stable memory-frame identity, occurrence identity, learning
 payloads, detached conversation checkpoints, and the narrow protocols implemented
-by host-provided memory objects. Conversation capabilities are optional and do
-not expand the mandatory memory protocols.
-Concrete storage and reflection backends live in separate modules so importing
-this facade remains dependency-light.
+by host-provided memory objects. Conversation capabilities are optional, leave
+the mandatory memory protocols unchanged, and await runtime/provider integration.
+``contracts.py`` owns that vocabulary; ``conversation.py`` owns its pure fold,
+strict codecs, and digests; ``session.py`` owns process-local conversation views,
+FIFO leases, and recovery fences. Concrete session, episodic, and reflection
+backends are imported from their own modules, never eagerly by this contracts-only
+facade.
 
 Knows about:   the standard library and agent_composer.diagnostics.
 Never imports: nodes, compile, compose, runtime, run, CLI, LangChain, Pydantic,

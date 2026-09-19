@@ -327,6 +327,53 @@ fresh authority, and closes resources while retaining the accepted prefix.
 projection. Invalid submissions preserve previous observations; backward leaves
 all forward fields unchanged.
 
+## Session conversation foundation
+
+`SessionMemory` in `agent_composer.memory.session` implements process-local
+conversation state. It is not wired into runtime, AGENT, API-provider, Codex, or
+CLI execution yet, and introduces no RunLog record or schema change. The
+`agent_composer.memory` facade remains contracts-only. `MemorySession` still names
+the mandatory run-handle protocol; optional `ConversationSession`,
+`ConversationFrame`, and `ConversationTurn` add conversation capabilities without
+expanding it.
+
+`memory/contracts.py` owns immutable checkpoints/views. The source-neutral
+`memory/conversation.py` owns the pure fold and strict codecs/digests;
+`memory/session.py` interprets it through injected checkpoint and stop callables.
+Neither imports runtime, nodes, compile, compose, or providers. A later runtime
+reducer must reuse the fold, not implement another conversation transition model.
+
+The backend has no constructor settings and accepts only `{}` frame config.
+Conversation identity is `(frame_ref, consumer_static_path)`, not a MAP/LOOP
+occurrence or runtime ID. A flow-owned frame therefore has independent leaf
+conversations and FIFO queues, with no fork selector. Acquire the lease before
+reading current live history. Run snapshots remain detached and pinned; their
+closed version-1 envelope contains namespace, generation, and complete views,
+never coordination state. No durable storage is implemented.
+
+For each turn, the injected sink must accept, apply, and acknowledge admission,
+request, observation, and close checkpoints. It runs outside the backend lock.
+Only an exact acknowledgement plus a healthy lease permits the requested effect;
+observe completed truth before honoring stop. Preparation must not publish.
+Duplicate application requires the actual historical predecessor and ledger proof
+and returns the exact historical result. Released or poisoned leases cannot publish
+new checkpoints; duplicate readback cannot reactivate them.
+
+Uncertain acceptance is fenced before lease release, and unresolved effects block
+admission. Reconciliation validates a complete accepted baseline plus its
+admission-led segment before publishing missing history atomically, even after
+opening an older snapshot. Preserve that snapshot, unrelated keys, and newer live
+state. A fence needs its exact checkpoint in the segment, not just a baseline
+digest. Reconciliation grants no effect permission and repeats no provider call;
+unknown effects are never retried automatically.
+
+History updates through this optional capability do not depend on `learnable`.
+Recall returns empty text, learn returns no mutations, and only empty commits are
+supported. Exact compatibility changes require reset. Backend-wide `reset()` fails
+unchanged if any turn is active or queued; otherwise it clears local history and
+fences, advances generation, and makes old handles/tokens stale. It does not delete
+external provider history or files.
+
 ## OCaml analogue map (design from this)
 
 | Our construct | OCaml concept | Why it holds |

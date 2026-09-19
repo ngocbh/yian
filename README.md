@@ -154,6 +154,11 @@ result = run_flow(flow, inputs, memory={"episodic": history}, learnable=True)
 result.backward()
 ```
 
+[`SessionMemory`](docs/api.md#sessionmemory-foundation) provides a lower-level,
+process-local conversation foundation with FIFO turns and checkpoint recovery.
+Runtime, AGENT, API-provider, Codex, and CLI integration is still pending; it does
+not yet enable persistent agents through `run_flow`.
+
 ## Documentation
 
 - [Agent](docs/agent.md) — what “agent,” node, flow, child flow, memory, and run

@@ -45,6 +45,109 @@ The run-loop primitives live in `agent_composer.run`.
 
 ::: agent_composer.memory.PolicyCommitOutcome
 
+## Session memory foundation
+
+These lower-level contracts and the process-local backend are available now;
+runtime, AGENT, API-provider, Codex, and CLI integration is pending. They do not yet
+enable persistent agent conversations through `run_flow`. See
+[SessionMemory foundation](api.md#sessionmemory-foundation) for ownership,
+checkpoint acceptance, recovery, and reset semantics.
+
+Import the concrete backend from `agent_composer.memory.session`. The
+`agent_composer.memory` facade remains contracts-only; `MemorySession` is the
+existing run-handle protocol, not the concrete `SessionMemory` backend.
+
+::: agent_composer.memory.session.SessionMemory
+
+### Optional capabilities
+
+These extend participating implementations without changing the mandatory
+`Memory`, `MemorySession`, or `MemoryFrame` protocols.
+
+::: agent_composer.memory.ConversationFrame
+
+::: agent_composer.memory.ConversationSession
+
+::: agent_composer.memory.ConversationTurn
+
+### Immutable conversation carriers
+
+::: agent_composer.memory.ConversationKey
+    options:
+      merge_init_into_class: true
+
+::: agent_composer.memory.ConversationInvocation
+    options:
+      merge_init_into_class: true
+
+::: agent_composer.memory.ConversationRequest
+    options:
+      merge_init_into_class: true
+
+::: agent_composer.memory.ConversationItem
+    options:
+      merge_init_into_class: true
+
+::: agent_composer.memory.ConversationReference
+    options:
+      merge_init_into_class: true
+
+::: agent_composer.memory.ConversationEffectState
+    options:
+      merge_init_into_class: true
+
+::: agent_composer.memory.ConversationCompletion
+    options:
+      merge_init_into_class: true
+
+::: agent_composer.memory.ConversationApplied
+    options:
+      merge_init_into_class: true
+
+::: agent_composer.memory.ConversationView
+    options:
+      merge_init_into_class: true
+
+::: agent_composer.memory.ConversationAuthority
+    options:
+      merge_init_into_class: true
+
+::: agent_composer.memory.ConversationStamp
+    options:
+      merge_init_into_class: true
+
+::: agent_composer.memory.ConversationAdmitted
+    options:
+      merge_init_into_class: true
+
+::: agent_composer.memory.ConversationEffectRequested
+    options:
+      merge_init_into_class: true
+
+::: agent_composer.memory.ConversationEffectObserved
+    options:
+      merge_init_into_class: true
+
+::: agent_composer.memory.ConversationClosed
+    options:
+      merge_init_into_class: true
+
+### Pure fold and wire codecs
+
+::: agent_composer.memory.conversation.advance_conversation
+
+::: agent_composer.memory.conversation.conversation_content_digest
+
+::: agent_composer.memory.conversation.checkpoint_digest
+
+::: agent_composer.memory.conversation.conversation_view_to_json
+
+::: agent_composer.memory.conversation.conversation_view_from_json
+
+::: agent_composer.memory.conversation.conversation_checkpoint_to_json
+
+::: agent_composer.memory.conversation.conversation_checkpoint_from_json
+
 ## Compose source provenance
 
 Compose owns immutable source views separately from the source-neutral engine.

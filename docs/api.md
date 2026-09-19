@@ -338,6 +338,102 @@ epoch restores successfully. Its later frame `learn` fails with
 `reflective.stale_generation` without rebasing; the backward outcome retains
 the completed feedback.
 
+## SessionMemory foundation
+
+`agent_composer.memory.session.SessionMemory` is a process-local conversation
+backend for callers implementing the optional conversation capabilities. Runtime,
+AGENT, API-provider, Codex, and CLI integration is **not implemented yet**. Injecting
+this backend into `run_flow` does not currently retain an agent conversation.
+
+`SessionMemory` is the concrete backend; the existing `MemorySession` name still
+means the run-scoped protocol returned by a memory backend. The mandatory `Memory`,
+`MemorySession`, and `MemoryFrame` protocols are unchanged. The contracts-only
+`agent_composer.memory` facade exports immutable conversation carriers and the
+optional `ConversationSession`, `ConversationFrame`, and `ConversationTurn`
+protocols. Import the concrete backend from its own module:
+
+```python
+from agent_composer.memory.session import SessionMemory
+
+memory = SessionMemory()
+with memory.open_run() as opened:
+    snapshot = opened.snapshot  # Detached JSON, pinned when this run handle opened.
+
+restored = SessionMemory()
+with restored.open_run(snapshot=snapshot) as opened:
+    assert opened.snapshot == snapshot
+
+memory.reset()  # Backend-wide; allowed only while no turn is active or queued.
+```
+
+The constructor takes no settings and frame configuration must be `{}`. A public
+snapshot has exactly `version` (currently `1`), `namespace`, `generation`, and
+`conversations`. It contains complete conversation views, not queues, leases, or
+temporary recovery fences. A pristine backend can adopt a snapshot; an already
+used backend accepts only proven history in its current namespace and generation,
+without rewinding live state. Every snapshot getter returns a detached copy of
+the original opening snapshot, even after turns or reconciliation advance live
+history. The backend writes no files or database; optional durable storage is
+future work.
+
+### Conversation ownership and updates
+
+A conversation key combines the existing authored memory frame with the leaf's
+`consumer_static_path`. Repeated invocations of that authored leaf share one
+conversation and always queue in FIFO order. Distinct leaf/callsite keys remain
+independent, including under a flow-owned frame: there is no flow-wide conversation
+or queue. MAP items and LOOP iterations do not create new conversation identities;
+there is no fork option. The low-level caller supplies these authored identities;
+the backend neither inspects a graph nor derives identity from runtime node IDs.
+
+Entering `ConversationFrame.open_turn(...)` reserves the queue position before
+reading the latest live conversation baseline. The injected `checkpoint` callback
+must accept and apply each admission, effect request, observation, and close, then
+return its exact resulting view. A turn grants permission for a requested external
+effect only after that acknowledgement and a live-lease check. Cooperative stop
+checks run while waiting and between effects; actual observations are retained
+before honoring a stop that arrived during the effect.
+
+These updates advance automatically through the turn capability, independently of
+`learnable` or backward. Session history is not rendered again as recall text:
+`recall()` returns `""`, `learn()` returns `[]`, and `commit()` accepts only an empty
+mutation tuple. Learnable notes and native-provider learning are not implemented.
+Changing the exact compatibility descriptor for an existing conversation requires
+a reset; no provider-specific compatibility rules are implemented here.
+
+### Acceptance, recovery, and reset
+
+`ConversationSession.prepare_checkpoint(checkpoint, before=...)` validates without
+publishing state and returns a callable to apply **after acceptance**. The caller
+must retain the actual complete predecessor. A historical duplicate needs that
+predecessor plus matching ledger evidence and returns its exact historical result;
+the backend does not reconstruct old views from the latest state or keep a hidden
+view archive. The pure fold and strict JSON codecs/digests live in
+`agent_composer.memory.conversation`. These checkpoints are not yet RunLog records;
+the runtime record vocabulary and schema are unchanged.
+
+Lost or uncertain checkpoint acknowledgements block further admission through a
+private recovery fence. `fail_turn(...)` installs the necessary fence before
+releasing the lease; a proven pre-acceptance rejection does not install one.
+Unresolved effects also block admission. There is no automatic external-effect
+retry, and completed observations survive later turn failure or cancellation.
+
+`reconcile(ConversationAuthority(...))` validates a complete accepted baseline and
+its contiguous admission-led checkpoint segment, then atomically installs proven
+missing history. It can advance a conversation after opening an older snapshot
+without changing that pinned snapshot, unrelated conversations, or newer live
+history. It returns the segment's exact result, without replaying provider calls
+or granting effect permission. Clearing a fence requires its exact failed
+checkpoint in that accepted segment; a digest in the baseline alone is not proof.
+If that evidence is unavailable, an idle reset is required.
+
+`reset()` immediately raises `MemoryOperationError` with code `session.busy`
+without changing state if **any** turn is active or queued. When idle, it clears
+all local conversations and fences and advances the generation. Older run/frame
+handles and prepared apply callables then fail as stale. Reset does not delete
+external provider history or files. See the [rendered contracts](reference.md#session-memory-foundation)
+for the lower-level signatures.
+
 ## Diagnosing a failed run
 
 ```python

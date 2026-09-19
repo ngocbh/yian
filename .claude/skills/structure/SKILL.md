@@ -123,6 +123,24 @@ auto-learning driver or per-frame attempt state remains.
 validates them through the shared growth boundary before `runtime.trace` joins
 them to accepted binding routes. Runtime never dispatches on spawner kind.
 
+Memory conversation ownership follows the same lower-layer boundary.
+`memory/contracts.py` owns immutable conversation carriers and optional
+`ConversationFrame`/`ConversationSession`/`ConversationTurn` protocols alongside the
+unchanged mandatory memory protocols. `memory/conversation.py` owns the pure fold,
+strict codecs, and digests. `memory/session.py` owns the concrete process-local
+`SessionMemory` backend: views, FIFO leases, and private acceptance fences. It
+depends on those lower modules and injected checkpoint/stop callables, never on
+nodes, runtime, compile, compose, or provider SDKs. A future runtime integration
+must consume the fold rather than move backend state into the scheduler or
+duplicate transition rules. That integration is not implemented yet.
+
+The `memory` facade exports contracts only: concrete session, episodic, and
+reflection backends must be imported from their own modules, not eagerly from
+`memory/__init__.py`. Keep mutable queue/lease/fence state private to the backend;
+public snapshots contain conversation values, not coordination objects. The
+memory import ratchet in `tests/engine/test_layer_direction.py` enforces this
+direction, including direct-facade and relative-import spellings.
+
 Compiled-origin traversal follows the same direction. Semantic carriers and
 nodes own their local origin slots and static-child hooks; `diagnostics` owns the
 exact resolver table; and `compile/origins.py` owns flow wiring, outputs,

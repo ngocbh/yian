@@ -475,6 +475,30 @@ Most are just the functional model (above) made enforceable:
   overlap and then recency within its limit. Sessions retain immutable JSON
   snapshots; stale sessions may recall their pinned view but cannot learn or
   commit. The backend owns no file or database persistence.
+- **Session conversation state has a lower-level foundation** — import
+  `SessionMemory` from `agent_composer.memory.session`, not the contracts-only
+  facade. Optional `ConversationFrame`/`ConversationSession`/`ConversationTurn`
+  capabilities leave mandatory memory protocols unchanged. Runtime, AGENT,
+  API-provider, Codex, and CLI integration is pending; do not claim `run_flow`
+  already retains conversations or add checkpoint records by implication.
+  `memory.conversation` owns the pure fold, strict codecs, and digests;
+  `memory.session` owns live views, FIFO leases, and recovery fences. Both stay
+  below nodes/runtime/providers. Later integration must reuse the fold.
+  One authored frame plus leaf static path owns a conversation and queue;
+  MAP/LOOP positions do not fork it. Acquire the FIFO lease before reading live
+  history while keeping the run-opening snapshot pinned. Effect permission
+  requires an exact acceptance/application acknowledgement and a healthy lease.
+  Record actual observations before honoring stop. Preparation cannot publish;
+  old duplicates require their actual predecessor and ledger proof, not a guessed
+  historical view. Fence uncertain acceptance before releasing a lease; never
+  retry unknown effects automatically. Reconciliation may install accepted
+  baseline history after an older snapshot was opened, but must preserve that
+  snapshot, newer live state, and other keys, and grants no effect permission.
+  Clear a fence only with its exact checkpoint in the accepted segment or an idle
+  reset. Reset is backend-wide, fails unchanged while any turn is active or queued,
+  and invalidates old-generation handles/tokens. Frame config is empty; recall
+  and learning are empty, only empty commits are supported, and conversation
+  updates through the optional turn capability are independent of `learnable`.
 - **One attempt barrier precedes commits** — accept Started, complete backward
   results and all frame proposals, then accept Ready. Commit each enabled policy
   once in recorded order, even with an empty batch, accepting its positive-attempt

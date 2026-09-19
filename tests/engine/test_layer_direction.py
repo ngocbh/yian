@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+import sys
 
 
 SOURCE_ROOT = Path(__file__).parents[2] / "src"
@@ -26,12 +27,15 @@ def _parse_import_targets(
     *,
     package: tuple[str, ...],
     filename: str = "<import-ratchet>",
+    include_from_bases: bool = True,
 ) -> list[tuple[int, str, str]]:
     """Return ``(line, target, source)`` for imports in one module body.
 
     ``ImportFrom`` statements include both their resolved base and each imported
     name.  That catches equivalent spellings such as ``from agent_composer import
     compile`` and ``from .. import compile`` as well as direct module imports.
+    With ``include_from_bases=False``, omit only the synthetic base of a named
+    ``ImportFrom``; direct imports and wildcard bases remain actual targets.
     """
     lines = source.splitlines()
     tree = ast.parse(source, filename=filename)
@@ -52,7 +56,9 @@ def _parse_import_targets(
         else:
             base = node.module or ""
 
-        if base:
+        if base and (
+            include_from_bases or any(alias.name == "*" for alias in node.names)
+        ):
             targets.append((node.lineno, base, line))
         targets.extend(
             (node.lineno, ".".join(part for part in (base, alias.name) if part), line)
@@ -199,3 +205,134 @@ def test_runtime_never_imports_compile_expand() -> None:
         "runtime must not import compile.expand; the run boundary injects build_grow:\n"
         + "\n".join(violations)
     )
+
+
+def _memory_leaf_violations(module: str, source: str) -> list[str]:
+    """Check one declared memory leaf through the shared import target scanner."""
+    leaf = {
+        "contracts": "agent_composer.diagnostics",
+        "conversation": "agent_composer.memory.contracts",
+    }[module]
+    targets = _parse_import_targets(
+        source,
+        package=("agent_composer", "memory"),
+        include_from_bases=False,
+    )
+    violations = []
+    for line, target, statement in targets:
+        if target.split(".")[0] in sys.stdlib_module_names:
+            continue
+        if target == leaf or target.startswith(f"{leaf}."):
+            continue
+        violations.append(f"memory/{module}.py:{line}: {statement} -> {target}")
+    return violations
+
+
+def test_memory_leaf_ratchet_rejects_absolute_and_relative_imports() -> None:
+    """Prove the lower-memory boundary using snippets, not production mutations."""
+    for module in ("contracts", "conversation"):
+        for forbidden in (
+            "nodes",
+            "compile",
+            "compose",
+            "runtime",
+            "run",
+            "llm_clients",
+        ):
+            for source in (
+                f"import agent_composer.{forbidden}\n",
+                f"from agent_composer import {forbidden}\n",
+                f"from .. import {forbidden}\n",
+                f"from ..{forbidden} import Something\n",
+            ):
+                assert _memory_leaf_violations(module, source), source
+        for backend in ("episodic", "reflective", "session"):
+            for source in (
+                f"import agent_composer.memory.{backend}\n",
+                f"from . import {backend}\n",
+                f"from .{backend} import Something\n",
+            ):
+                assert _memory_leaf_violations(module, source), source
+        for sdk in ("langchain", "openai", "anthropic", "codex"):
+            assert _memory_leaf_violations(module, f"import {sdk}\n")
+    assert _memory_leaf_violations(
+        "contracts", "from .conversation import advance_conversation\n"
+    )
+    assert _memory_leaf_violations(
+        "conversation", "from ..diagnostics import Failure\n"
+    )
+
+
+def test_memory_leaf_ratchet_accepts_only_declared_leaves_and_stdlib() -> None:
+    """Normalize import bases without accidentally allowing a package facade."""
+    for module, sources in (
+        (
+            "contracts",
+            (
+                "from agent_composer.diagnostics import OriginRef\n",
+                "from ..diagnostics import OriginRef\n",
+                "from agent_composer import diagnostics\n",
+            ),
+        ),
+        (
+            "conversation",
+            (
+                "import agent_composer.memory.contracts as c\n",
+                "from .contracts import ConversationView\n",
+                "from . import contracts\n",
+                "from agent_composer.memory import contracts\n",
+            ),
+        ),
+    ):
+        for source in sources:
+            assert not _memory_leaf_violations(module, source), source
+        assert not _memory_leaf_violations(
+            module, "import json\nfrom typing import Callable\n"
+        )
+        assert _memory_leaf_violations(module, "import agent_composer\n")
+        assert _memory_leaf_violations(module, "import agent_composer.memory\n")
+    assert _memory_leaf_violations("conversation", "from . import contracts, session\n")
+
+
+def test_memory_leaf_ratchet_never_exempts_direct_imports_on_a_shared_line() -> None:
+    """An allowed leaf cannot authorize a facade in another import or alias."""
+    cases = (
+        (
+            "conversation",
+            "import agent_composer.memory, agent_composer.memory.contracts",
+        ),
+        ("conversation", "import agent_composer.memory; from . import contracts"),
+        ("contracts", "import agent_composer, agent_composer.diagnostics"),
+    )
+    missed = [
+        source
+        for module, source in cases
+        if not _memory_leaf_violations(module, source)
+    ]
+    assert not missed, f"direct facade imports escaped the memory ratchet: {missed}"
+
+
+def test_memory_leaf_ratchet_checks_wildcard_import_bases() -> None:
+    """Wildcard imports have no named targets, so their own base remains checked."""
+    assert not _memory_leaf_violations("conversation", "from .contracts import *")
+    assert not _memory_leaf_violations("contracts", "from ..diagnostics import *")
+    for module in ("contracts", "conversation"):
+        for source in (
+            "from . import *",
+            "from agent_composer import *",
+            "from .session import *",
+            "from ..runtime import *",
+            "from openai import *",
+        ):
+            assert _memory_leaf_violations(module, source), source
+
+
+def test_memory_conversation_leaves_import_only_declared_leaves() -> None:
+    """Keep contracts below the pure conversation fold and both below backends."""
+    violations = []
+    for module in ("contracts", "conversation"):
+        path = PACKAGE_ROOT / "memory" / f"{module}.py"
+        violations.extend(_memory_leaf_violations(module, path.read_text()))
+    assert (
+        not violations
+    ), "lower memory imports undeclared dependencies:\n" + "\n".join(violations)

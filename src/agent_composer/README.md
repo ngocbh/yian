@@ -39,6 +39,7 @@ diagnostics.py semantic failures, resolved presentation, origins/resolver routin
 typesys/      typed value system (values) + variable pool                 [leaf]
 events.py     transient run/node observer vocabulary; imports diagnostics
 expr/         one ${...} grammar: parse -> AST -> evaluate / infer type / ref-walk
+memory/       memory contracts, pure conversation fold/codecs, process-local backends
 nodes/        pure Node contract + per-kind implementations; spawners return seeds
               (start, end, agent, code, model, tool, case, call, map,
                loop, human_input, wait)
@@ -893,6 +894,66 @@ bounded history chronologically. Sessions read immutable snapshots, including
 after newer commits, while stale sessions cannot learn or commit. Public JSON
 snapshots support the existing recovery boundary or restoration into a pristine
 instance; external persistence remains a host concern.
+
+### Session conversation foundation
+
+`agent_composer.memory.session.SessionMemory` supplies the lower-level conversation
+backend. Runtime, AGENT, API-provider, Codex, and CLI integration is pending:
+`run_flow` does not yet drive its conversation capabilities. This foundation adds
+no RunLog records or schema change. `SessionMemory` is a concrete backend;
+`MemorySession` remains the existing run-handle protocol. Optional
+`ConversationFrame`, `ConversationSession`, and `ConversationTurn` protocols leave
+the mandatory memory interfaces unchanged.
+
+The ownership split is a pure state fold plus an effectful interpreter:
+`memory/contracts.py` defines immutable carriers, `memory/conversation.py` owns
+`advance_conversation`, strict JSON codecs, and digests, and `memory/session.py`
+owns live views, FIFO leases, and private acceptance fences. The fold and backend
+import only the standard library and lower memory modules, never nodes, runtime,
+compile, compose, or providers. The facade exports contracts only; concrete
+backends are imported explicitly from their own modules. Later runtime integration
+must reuse the pure fold rather than duplicate its transition rules.
+
+`SessionMemory()` takes no arguments and accepts only empty frame configuration.
+Its conversation key is the authored frame plus the leaf consumer's static path,
+supplied by the caller. Each key has one FIFO queue; different leaves under a
+flow-owned frame have separate conversations and queues. MAP/LOOP occurrence
+positions do not change identity, and no fork mode exists. A turn reads its live
+baseline only after acquiring the lease. The run handle's detached opening
+snapshot stays pinned, including after accepted-history reconciliation. Public
+version-1 snapshots contain namespace, generation, and complete conversation views,
+not transient queues, leases, or fences. Storage remains process-local.
+
+An injected checkpoint sink accepts and applies admission, request, observation,
+and close checkpoints and acknowledges the exact resulting view. Only an
+acknowledged request on a still-healthy lease grants effect permission. The sink
+runs without the backend condition lock held. Cooperative stop checks can cancel
+queued work; actual observations are retained before honoring a stop during an
+effect. Conversation progress is independent of `learnable`: recall is empty,
+learning proposes no mutations, and only empty commit batches are supported.
+
+Preparation is pure and uses the actual complete predecessor. Applying a proven
+historical duplicate returns its exact historical result, even if live history is
+newer; no archive or reconstruction from the latest view supplies missing history.
+Unapplied tokens cannot publish after lease release, poisoning, or generation
+change. Failed checkpoint channels fence uncertain admission before releasing the
+lease; pending effects also prevent a new turn. There is no automatic effect retry.
+
+`reconcile` validates the complete accepted baseline plus an admission-led segment
+before atomically installing missing history. It works after opening an older
+snapshot without rewinding newer live state, changing the pinned snapshot, or
+touching other keys. It grants no effect permission and replays no provider call.
+A fence clears only when the segment proves its exact failed checkpoint; a baseline
+digest alone is insufficient. Otherwise an idle reset is required. A changed exact
+compatibility descriptor also requires reset; provider-specific compatibility
+rules are not part of this backend.
+
+Backend-wide `reset()` fails immediately and unchanged with `session.busy` while
+any turn is active or queued. When idle, it clears every local conversation and
+fence and advances the generation, invalidating old handles and prepared tokens.
+It does not delete external provider history or files. The
+[Python API guide](../../docs/api.md#sessionmemory-foundation) shows the available
+lower-level snapshot/reset interface.
 
 ## Durable recovery
 

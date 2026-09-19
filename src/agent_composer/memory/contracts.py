@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field, replace
 from enum import Enum
+import json
 from math import isfinite
 from types import NoneType, TracebackType
-from typing import Callable, Iterator, Protocol, TypeAlias, runtime_checkable
+from typing import Callable, Iterator, Literal, Protocol, TypeAlias, runtime_checkable
 
 from agent_composer.diagnostics import OriginRef
 
@@ -1605,4 +1607,821 @@ class Memory(Protocol):
 
     def reset(self) -> None:
         """Clear current memory state according to the backend's policy."""
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationKey:
+    """One authored leaf conversation within its owning memory frame."""
+
+    frame_ref: MemoryFrameRef
+    consumer_static_path: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        """Require an exact AGENT owner or a FLOW owner's strict descendant."""
+        if type(self.frame_ref) is not MemoryFrameRef:
+            raise TypeError("frame_ref must be a MemoryFrameRef")
+        ref = replace(self.frame_ref)
+        path = _require_path(self.consumer_static_path, "consumer_static_path")
+        if ref.owner is MemoryOwner.AGENT:
+            if path != ref.static_path:
+                raise ValueError("AGENT consumer must equal the frame owner path")
+        elif (
+            len(path) <= len(ref.static_path)
+            or path[: len(ref.static_path)] != ref.static_path
+        ):
+            raise ValueError("FLOW consumer must be a strict descendant of the frame")
+        object.__setattr__(self, "frame_ref", ref)
+
+
+def _require_counter(value: object, name: str, *, positive: bool = False) -> int:
+    """Require an exact integer counter without accepting booleans."""
+    if type(value) is not int:
+        raise TypeError(f"{name} must be an integer")
+    if value < (1 if positive else 0):
+        raise ValueError(f"{name} must be {'positive' if positive else 'non-negative'}")
+    return value
+
+
+def _copy_invocation(value: object) -> ConversationInvocation:
+    """Validate and detach one exact invocation identity."""
+    if type(value) is not ConversationInvocation:
+        raise TypeError("invocation must be a ConversationInvocation")
+    return replace(value)
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationInvocation:
+    """One run's accepted node start, independent of its conversation owner."""
+
+    run_id: str
+    start_sequence: int
+
+    def __post_init__(self) -> None:
+        """Require a nonempty run identifier and positive start sequence."""
+        _require_string(self.run_id, "run_id")
+        _require_counter(self.start_sequence, "start_sequence", positive=True)
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class ConversationRequest:
+    """An invocation's authored consumer and detached compatibility descriptor."""
+
+    consumer_static_path: tuple[str, ...]
+    invocation: ConversationInvocation
+    _compatibility: _FrozenJsonObject = field(repr=False)
+
+    def __init__(
+        self,
+        consumer_static_path: tuple[str, ...],
+        invocation: ConversationInvocation,
+        compatibility: JsonObject,
+    ) -> None:
+        """Validate identity and snapshot the opaque JSON descriptor.
+
+        Args:
+            consumer_static_path (`tuple[str, ...]`): Nonempty authored leaf path.
+            invocation (`ConversationInvocation`): Exact accepted node-start identity.
+            compatibility (`JsonObject`): Exact JSON compatibility descriptor.
+
+        Raises:
+            TypeError: An argument has the wrong exact carrier or JSON type.
+            ValueError: A path, identifier, or JSON value is invalid.
+        """
+        object.__setattr__(
+            self,
+            "consumer_static_path",
+            _require_path(consumer_static_path, "consumer_static_path"),
+        )
+        object.__setattr__(self, "invocation", _copy_invocation(invocation))
+        object.__setattr__(
+            self, "_compatibility", _freeze_json_object(compatibility, "compatibility")
+        )
+
+    @property
+    def compatibility(self) -> JsonObject:
+        """Return a fresh JSON copy of the requested compatibility descriptor."""
+        return _thaw_json_object(self._compatibility)
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class ConversationItem:
+    """One immutable, uniquely identified opaque conversation payload."""
+
+    item_id: str
+    format: str
+    _payload: _FrozenJsonObject = field(repr=False)
+
+    def __init__(self, item_id: str, format: str, payload: JsonObject) -> None:
+        """Require stable nonempty identifiers and detach the JSON payload.
+
+        Args:
+            item_id (`str`): Nonempty stable identifier unique in its conversation.
+            format (`str`): Nonempty opaque payload format identifier.
+            payload (`JsonObject`): Exact JSON data, not a provider SDK object.
+
+        Raises:
+            TypeError: An identifier or payload has the wrong exact type.
+            ValueError: An identifier or JSON value is invalid.
+        """
+        object.__setattr__(self, "item_id", _require_string(item_id, "item_id"))
+        object.__setattr__(self, "format", _require_string(format, "format"))
+        object.__setattr__(self, "_payload", _freeze_json_object(payload, "payload"))
+
+    @property
+    def payload(self) -> JsonObject:
+        """Return a fresh JSON copy without exposing retained state."""
+        return _thaw_json_object(self._payload)
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationReference:
+    """An opaque provider-native session association, never a live handle."""
+
+    provider: str
+    session_id: str
+
+    def __post_init__(self) -> None:
+        """Require nonempty opaque strings."""
+        _require_string(self.provider, "provider")
+        _require_string(self.session_id, "session_id")
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationStamp:
+    """The owner, generation, predecessor revision, and operation identity."""
+
+    policy_name: str
+    key: ConversationKey
+    invocation: ConversationInvocation
+    namespace: str
+    generation: int
+    expected_revision: int
+    ordinal: int
+
+    def __post_init__(self) -> None:
+        """Detach exact identity carriers and validate nonnegative counters."""
+        _require_string(self.policy_name, "policy_name")
+        _require_string(self.namespace, "namespace")
+        if type(self.key) is not ConversationKey:
+            raise TypeError("key must be a ConversationKey")
+        object.__setattr__(self, "key", replace(self.key))
+        object.__setattr__(self, "invocation", _copy_invocation(self.invocation))
+        _require_counter(self.generation, "generation")
+        _require_counter(self.expected_revision, "expected_revision")
+        _require_counter(self.ordinal, "ordinal")
+
+
+ConversationEffectKind: TypeAlias = Literal["model", "tool", "native_session"]
+ConversationEffectStatus: TypeAlias = Literal[
+    "pending", "completed", "failed", "interrupted"
+]
+ConversationTurnStatus: TypeAlias = Literal["completed", "failed", "interrupted"]
+
+
+def _require_effect_kind(value: object) -> ConversationEffectKind:
+    """Require one exact member of the closed effect vocabulary."""
+    _require_string(value, "kind")
+    if value not in ("model", "tool", "native_session"):
+        raise ValueError("invalid conversation effect kind")
+    return value
+
+
+def _require_turn_status(value: object) -> ConversationTurnStatus:
+    """Require a terminal disposition without interpreting its cause."""
+    _require_string(value, "status")
+    if value not in ("completed", "failed", "interrupted"):
+        raise ValueError("invalid conversation turn status")
+    return value
+
+
+def _copy_effect_failure(
+    status: object,
+    failure: object,
+) -> MemoryOperationFailure | None:
+    """Validate an effect disposition and detach its optional known failure."""
+    _require_string(status, "status")
+    if status not in ("pending", "completed", "failed", "interrupted"):
+        raise ValueError("invalid conversation effect status")
+    if failure is not None:
+        if type(failure) is not MemoryOperationFailure:
+            raise TypeError("failure must be a MemoryOperationFailure or None")
+        failure = replace(failure)
+    if status in ("pending", "completed") and failure is not None:
+        raise ValueError("pending or completed effect cannot carry a failure")
+    if status == "failed" and failure is None:
+        raise ValueError("failed effect requires a failure")
+    return failure
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class ConversationEffectState:
+    """One requested effect with its actual ordered observation disposition."""
+
+    invocation: ConversationInvocation
+    effect_ordinal: int
+    kind: ConversationEffectKind
+    _request: _FrozenJsonObject = field(repr=False)
+    status: ConversationEffectStatus
+    observation_ordinals: tuple[int, ...]
+    failure: MemoryOperationFailure | None
+
+    def __init__(
+        self,
+        invocation: ConversationInvocation,
+        effect_ordinal: int,
+        kind: ConversationEffectKind,
+        request: JsonObject,
+        status: ConversationEffectStatus,
+        observation_ordinals: tuple[int, ...],
+        failure: MemoryOperationFailure | None,
+    ) -> None:
+        """Snapshot the request and validate ordered, later observation ordinals.
+
+        Args:
+            invocation (`ConversationInvocation`): Exact requesting invocation.
+            effect_ordinal (`int`): Positive request ordinal within that invocation.
+            kind (`ConversationEffectKind`): Model, tool, or native-session effect.
+            request (`JsonObject`): Detached original effect request.
+            status (`ConversationEffectStatus`): Actual latest disposition.
+            observation_ordinals (`tuple[int, ...]`): Strictly increasing positive
+                ordinals after the request; required for a terminal disposition.
+            failure (`MemoryOperationFailure | None`): Required for failed, optional
+                for interrupted, and absent for pending or completed effects.
+
+        Raises:
+            TypeError: An argument has the wrong exact carrier or JSON type.
+            ValueError: Identity, ordering, JSON, or disposition rules are violated.
+        """
+        object.__setattr__(self, "invocation", _copy_invocation(invocation))
+        object.__setattr__(
+            self,
+            "effect_ordinal",
+            _require_counter(effect_ordinal, "effect_ordinal", positive=True),
+        )
+        object.__setattr__(self, "kind", _require_effect_kind(kind))
+        object.__setattr__(self, "_request", _freeze_json_object(request, "request"))
+        object.__setattr__(self, "failure", _copy_effect_failure(status, failure))
+        if type(observation_ordinals) is not tuple:
+            raise TypeError("observation_ordinals must be a tuple")
+        previous = effect_ordinal
+        for ordinal in observation_ordinals:
+            _require_counter(ordinal, "observation ordinal", positive=True)
+            if ordinal <= previous:
+                raise ValueError("observation ordinals must increase after the request")
+            previous = ordinal
+        if status != "pending" and not observation_ordinals:
+            raise ValueError("terminal effect requires an observation")
+        object.__setattr__(self, "status", status)
+        object.__setattr__(self, "observation_ordinals", observation_ordinals)
+
+    @property
+    def request(self) -> JsonObject:
+        """Return a fresh JSON copy of the original effect request."""
+        return _thaw_json_object(self._request)
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationCompletion:
+    """An invocation's actual closed ordinal and terminal disposition."""
+
+    invocation: ConversationInvocation
+    closed_ordinal: int
+    status: ConversationTurnStatus
+
+    def __post_init__(self) -> None:
+        """Require an exact invocation, positive ordinal, and terminal status."""
+        object.__setattr__(self, "invocation", _copy_invocation(self.invocation))
+        _require_counter(self.closed_ordinal, "closed_ordinal", positive=True)
+        _require_turn_status(self.status)
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationApplied:
+    """Content evidence for one exactly identified applied checkpoint."""
+
+    operation_id: str
+    event_digest: str
+    before_digest: str
+    after_digest: str
+
+    def __post_init__(self) -> None:
+        """Validate canonical operation identity and lowercase SHA-256 shape."""
+        _require_string(self.operation_id, "operation_id")
+        parts = json.loads(self.operation_id)
+        if type(parts) is not list or len(parts) != 3:
+            raise ValueError(
+                "operation_id must encode [run_id, start_sequence, ordinal]"
+            )
+        _require_string(parts[0], "run_id")
+        _require_counter(parts[1], "start_sequence", positive=True)
+        _require_counter(parts[2], "ordinal")
+        if (
+            json.dumps(parts, ensure_ascii=False, separators=(",", ":"))
+            != self.operation_id
+        ):
+            raise ValueError("operation_id must be canonical JSON")
+        for name in ("event_digest", "before_digest", "after_digest"):
+            digest = _require_string(getattr(self, name), name)
+            if len(digest) != 64 or any(
+                char not in "0123456789abcdef" for char in digest
+            ):
+                raise ValueError(f"{name} must be a lowercase SHA-256 digest")
+
+
+def _copy_conversation_items(value: object) -> tuple[ConversationItem, ...]:
+    """Detach an exact item tuple while preserving order and unique IDs."""
+    if type(value) is not tuple:
+        raise TypeError("items must be a tuple")
+    result = []
+    seen: set[str] = set()
+    for item in value:
+        if type(item) is not ConversationItem:
+            raise TypeError("items must contain ConversationItem values")
+        detached = ConversationItem(item.item_id, item.format, item.payload)
+        if detached.item_id in seen:
+            raise ValueError("conversation item IDs must be unique")
+        seen.add(detached.item_id)
+        result.append(detached)
+    return tuple(result)
+
+
+def _copy_conversation_reference(value: object) -> ConversationReference | None:
+    """Detach an optional exact native-session reference."""
+    if value is None:
+        return None
+    if type(value) is not ConversationReference:
+        raise TypeError("reference must be a ConversationReference or None")
+    return replace(value)
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class ConversationView:
+    """Complete detached conversation state with shaped application evidence.
+
+    Construction checks carrier shape and identity uniqueness. The pure
+    conversation fold separately proves cross-event ordering and content digests.
+    """
+
+    namespace: str
+    generation: int
+    revision: int
+    key: ConversationKey
+    _compatibility: _FrozenJsonObject = field(repr=False)
+    items: tuple[ConversationItem, ...]
+    reference: ConversationReference | None
+    effects: tuple[ConversationEffectState, ...]
+    closed_invocations: tuple[ConversationCompletion, ...]
+    applied: tuple[ConversationApplied, ...]
+
+    def __init__(
+        self,
+        namespace: str,
+        generation: int,
+        revision: int,
+        key: ConversationKey,
+        compatibility: JsonObject,
+        items: tuple[ConversationItem, ...],
+        reference: ConversationReference | None,
+        effects: tuple[ConversationEffectState, ...],
+        closed_invocations: tuple[ConversationCompletion, ...],
+        applied: tuple[ConversationApplied, ...],
+    ) -> None:
+        """Detach all supplied state and reject malformed or duplicate identities.
+
+        Args:
+            namespace (`str`): Nonempty backend namespace identity.
+            generation (`int`): Nonnegative reset generation.
+            revision (`int`): Nonnegative count of accepted checkpoints.
+            key (`ConversationKey`): Exact authored conversation owner.
+            compatibility (`JsonObject`): Retained opaque compatibility descriptor.
+            items (`tuple[ConversationItem, ...]`): Ordered items with unique IDs.
+            reference (`ConversationReference | None`): Native session association.
+            effects (`tuple[ConversationEffectState, ...]`): Unique invocation and
+                request-ordinal pairs in retained order.
+            closed_invocations (`tuple[ConversationCompletion, ...]`): One actual
+                completion per closed invocation, in retained order.
+            applied (`tuple[ConversationApplied, ...]`): One unique operation entry
+                per revision. Digest-chain proof belongs to the conversation fold.
+
+        Raises:
+            TypeError: An argument has the wrong exact carrier or JSON type.
+            ValueError: Shape, identity, uniqueness, or revision rules are violated.
+        """
+        object.__setattr__(self, "namespace", _require_string(namespace, "namespace"))
+        object.__setattr__(
+            self, "generation", _require_counter(generation, "generation")
+        )
+        object.__setattr__(self, "revision", _require_counter(revision, "revision"))
+        if type(key) is not ConversationKey:
+            raise TypeError("key must be a ConversationKey")
+        object.__setattr__(self, "key", replace(key))
+        object.__setattr__(
+            self, "_compatibility", _freeze_json_object(compatibility, "compatibility")
+        )
+        object.__setattr__(self, "items", _copy_conversation_items(items))
+        object.__setattr__(self, "reference", _copy_conversation_reference(reference))
+        if type(effects) is not tuple:
+            raise TypeError("effects must be a tuple")
+        detached_effects = []
+        effect_ids: set[tuple[ConversationInvocation, int]] = set()
+        for effect in effects:
+            if type(effect) is not ConversationEffectState:
+                raise TypeError("effects must contain ConversationEffectState values")
+            detached = ConversationEffectState(
+                effect.invocation,
+                effect.effect_ordinal,
+                effect.kind,
+                effect.request,
+                effect.status,
+                effect.observation_ordinals,
+                effect.failure,
+            )
+            identity = (detached.invocation, detached.effect_ordinal)
+            if identity in effect_ids:
+                raise ValueError("conversation effect identities must be unique")
+            effect_ids.add(identity)
+            detached_effects.append(detached)
+        object.__setattr__(self, "effects", tuple(detached_effects))
+        if type(closed_invocations) is not tuple:
+            raise TypeError("closed_invocations must be a tuple")
+        completions = []
+        closed_ids: set[ConversationInvocation] = set()
+        for completion in closed_invocations:
+            if type(completion) is not ConversationCompletion:
+                raise TypeError(
+                    "closed_invocations must contain ConversationCompletion values"
+                )
+            detached = replace(completion)
+            if detached.invocation in closed_ids:
+                raise ValueError("closed invocation identities must be unique")
+            closed_ids.add(detached.invocation)
+            completions.append(detached)
+        object.__setattr__(self, "closed_invocations", tuple(completions))
+        if type(applied) is not tuple:
+            raise TypeError("applied must be a tuple")
+        entries = []
+        operation_ids: set[str] = set()
+        for entry in applied:
+            if type(entry) is not ConversationApplied:
+                raise TypeError("applied must contain ConversationApplied values")
+            detached = replace(entry)
+            if detached.operation_id in operation_ids:
+                raise ValueError("applied operation IDs must be unique")
+            operation_ids.add(detached.operation_id)
+            entries.append(detached)
+        object.__setattr__(self, "applied", tuple(entries))
+        if len(applied) != revision:
+            raise ValueError(
+                "conversation revision requires one applied entry per checkpoint"
+            )
+        if revision == 0 and (
+            items or reference is not None or effects or closed_invocations
+        ):
+            raise ValueError("revision-zero conversation must have empty history")
+
+    @property
+    def compatibility(self) -> JsonObject:
+        """Return a fresh JSON copy of the retained compatibility descriptor."""
+        return _thaw_json_object(self._compatibility)
+
+
+def _copy_conversation_view(value: object) -> ConversationView:
+    """Reconstruct one exact view without retaining any nested input carrier."""
+    if type(value) is not ConversationView:
+        raise TypeError("baseline must be a ConversationView")
+    return ConversationView(
+        value.namespace,
+        value.generation,
+        value.revision,
+        value.key,
+        value.compatibility,
+        value.items,
+        value.reference,
+        value.effects,
+        value.closed_invocations,
+        value.applied,
+    )
+
+
+def _copy_conversation_stamp(
+    value: object, *, admission: bool = False
+) -> ConversationStamp:
+    """Detach an exact stamp and require its operation's ordinal domain."""
+    if type(value) is not ConversationStamp:
+        raise TypeError("stamp must be a ConversationStamp")
+    stamp = replace(value)
+    if (stamp.ordinal == 0) != admission:
+        raise ValueError("only conversation admission has ordinal zero")
+    return stamp
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationAdmitted:
+    """Admission checkpoint with the complete predecessor conversation view."""
+
+    stamp: ConversationStamp
+    baseline: ConversationView
+
+    def __post_init__(self) -> None:
+        """Detach the baseline and require exact stamped predecessor identity."""
+        stamp = _copy_conversation_stamp(self.stamp, admission=True)
+        baseline = _copy_conversation_view(self.baseline)
+        if (
+            stamp.key != baseline.key
+            or stamp.namespace != baseline.namespace
+            or stamp.generation != baseline.generation
+            or stamp.expected_revision != baseline.revision
+        ):
+            raise ValueError("admission stamp must match its baseline")
+        object.__setattr__(self, "stamp", stamp)
+        object.__setattr__(self, "baseline", baseline)
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class ConversationEffectRequested:
+    """One effect request carrying only newly retained conversation items."""
+
+    stamp: ConversationStamp
+    kind: ConversationEffectKind
+    _payload: _FrozenJsonObject = field(repr=False)
+    items: tuple[ConversationItem, ...]
+
+    def __init__(
+        self,
+        stamp: ConversationStamp,
+        kind: ConversationEffectKind,
+        payload: JsonObject,
+        items: tuple[ConversationItem, ...],
+    ) -> None:
+        """Detach an exact positive-ordinal request, JSON payload, and new items.
+
+        Args:
+            stamp (`ConversationStamp`): Exact identity with a positive ordinal.
+            kind (`ConversationEffectKind`): Model, tool, or native-session effect.
+            payload (`JsonObject`): Detached external-effect request data.
+            items (`tuple[ConversationItem, ...]`): Newly retained items only;
+                duplicates within this tuple are rejected.
+
+        Raises:
+            TypeError: An argument has the wrong exact carrier or JSON type.
+            ValueError: Identity, ordinal, JSON, or item uniqueness is invalid.
+        """
+        object.__setattr__(self, "stamp", _copy_conversation_stamp(stamp))
+        object.__setattr__(self, "kind", _require_effect_kind(kind))
+        object.__setattr__(self, "_payload", _freeze_json_object(payload, "payload"))
+        object.__setattr__(self, "items", _copy_conversation_items(items))
+
+    @property
+    def payload(self) -> JsonObject:
+        """Return a fresh JSON copy of the requested external effect."""
+        return _thaw_json_object(self._payload)
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationEffectObserved:
+    """An actual observation of a prior requested effect within one invocation."""
+
+    stamp: ConversationStamp
+    effect_ordinal: int
+    status: ConversationEffectStatus
+    items: tuple[ConversationItem, ...]
+    reference: ConversationReference | None
+    failure: MemoryOperationFailure | None
+
+    def __post_init__(self) -> None:
+        """Detach observation evidence without inventing a terminal disposition."""
+        stamp = _copy_conversation_stamp(self.stamp)
+        _require_counter(self.effect_ordinal, "effect_ordinal", positive=True)
+        if self.effect_ordinal >= stamp.ordinal:
+            raise ValueError("observed effect ordinal must precede the observation")
+        object.__setattr__(self, "stamp", stamp)
+        object.__setattr__(self, "items", _copy_conversation_items(self.items))
+        object.__setattr__(
+            self, "reference", _copy_conversation_reference(self.reference)
+        )
+        object.__setattr__(
+            self, "failure", _copy_effect_failure(self.status, self.failure)
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationClosed:
+    """A positive-ordinal checkpoint closing one admitted invocation."""
+
+    stamp: ConversationStamp
+    status: ConversationTurnStatus
+
+    def __post_init__(self) -> None:
+        """Detach the exact stamp and require an actual terminal disposition."""
+        object.__setattr__(self, "stamp", _copy_conversation_stamp(self.stamp))
+        _require_turn_status(self.status)
+
+
+ConversationCheckpoint: TypeAlias = (
+    ConversationAdmitted
+    | ConversationEffectRequested
+    | ConversationEffectObserved
+    | ConversationClosed
+)
+
+
+def _copy_conversation_checkpoint(value: object) -> ConversationCheckpoint:
+    """Detach one member of the closed checkpoint sum."""
+    if type(value) is ConversationEffectRequested:
+        return ConversationEffectRequested(
+            value.stamp, value.kind, value.payload, value.items
+        )
+    if type(value) in (
+        ConversationAdmitted,
+        ConversationEffectObserved,
+        ConversationClosed,
+    ):
+        return replace(value)
+    raise TypeError("checkpoints must contain exact ConversationCheckpoint values")
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationAuthority:
+    """An admission-led contiguous accepted segment over its complete baseline.
+
+    This carrier validates segment identity and ordinal continuity; the pure
+    fold separately proves effect transitions and application digests.
+    """
+
+    baseline: ConversationView
+    checkpoints: tuple[ConversationCheckpoint, ...]
+
+    def __post_init__(self) -> None:
+        """Detach the segment and reject gaps, mixed invocations, or late events."""
+        baseline = _copy_conversation_view(self.baseline)
+        if type(self.checkpoints) is not tuple:
+            raise TypeError("checkpoints must be a tuple")
+        checkpoints = tuple(
+            _copy_conversation_checkpoint(item) for item in self.checkpoints
+        )
+        if not checkpoints or type(checkpoints[0]) is not ConversationAdmitted:
+            raise ValueError("authority must begin with conversation admission")
+        first = checkpoints[0]
+        if first.baseline != baseline:
+            raise ValueError("authority admission must carry its exact baseline")
+        for ordinal, checkpoint in enumerate(checkpoints):
+            stamp = checkpoint.stamp
+            if (
+                stamp.key != first.stamp.key
+                or stamp.namespace != first.stamp.namespace
+                or stamp.generation != first.stamp.generation
+                or stamp.policy_name != first.stamp.policy_name
+                or stamp.invocation != first.stamp.invocation
+                or stamp.ordinal != ordinal
+                or stamp.expected_revision != baseline.revision + ordinal
+            ):
+                raise ValueError(
+                    "authority checkpoints must have contiguous matching stamps"
+                )
+            if ordinal and type(checkpoint) is ConversationAdmitted:
+                raise ValueError("authority may contain only one admission")
+            if (
+                type(checkpoint) is ConversationClosed
+                and ordinal != len(checkpoints) - 1
+            ):
+                raise ValueError("authority cannot carry checkpoints after closure")
+        object.__setattr__(self, "baseline", baseline)
+        object.__setattr__(self, "checkpoints", checkpoints)
+
+
+CheckpointSink: TypeAlias = Callable[[ConversationCheckpoint], ConversationView]
+CheckStopped: TypeAlias = Callable[[], None]
+PreparedConversationApply: TypeAlias = Callable[[], ConversationView]
+ConversationAcceptance: TypeAlias = Literal["unaccepted", "accepted", "uncertain"]
+
+
+class ConversationTurn(Protocol):
+    """A leased invocation whose effect calls require checkpoint acknowledgement."""
+
+    @property
+    def view(self) -> ConversationView:
+        """Return the latest acknowledged detached conversation view."""
+        ...
+
+    def request(
+        self,
+        kind: ConversationEffectKind,
+        payload: JsonObject,
+        *,
+        items: tuple[ConversationItem, ...] = (),
+    ) -> int:
+        """Acknowledge one request before returning its positive effect ordinal.
+
+        Args:
+            kind (`ConversationEffectKind`): The external-effect category.
+            payload (`JsonObject`): Opaque source-neutral request data.
+            items (`tuple[ConversationItem, ...]`): New retained items; defaults
+                to an empty tuple.
+
+        Returns:
+            `int`: Positive request ordinal, only after acknowledgement.
+        """
+        ...
+
+    def observe(
+        self,
+        effect_ordinal: int,
+        status: ConversationEffectStatus,
+        *,
+        items: tuple[ConversationItem, ...] = (),
+        reference: ConversationReference | None = None,
+        failure: MemoryOperationFailure | None = None,
+    ) -> None:
+        """Acknowledge only actual observation evidence for a requested effect.
+
+        Args:
+            effect_ordinal (`int`): Positive request ordinal from this turn.
+            status (`ConversationEffectStatus`): The actual observed disposition.
+            items (`tuple[ConversationItem, ...]`): New retained evidence; defaults
+                to an empty tuple.
+            reference (`ConversationReference | None`): Native session association;
+                defaults to `None`.
+            failure (`MemoryOperationFailure | None`): Known failure, required for
+                failed and optional for interrupted; defaults to `None`.
+        """
+        ...
+
+
+@runtime_checkable
+class ConversationFrame(Protocol):
+    """Optional frame capability for a serialized authored leaf conversation."""
+
+    def open_turn(
+        self,
+        request: ConversationRequest,
+        *,
+        checkpoint: CheckpointSink,
+        check_stopped: CheckStopped,
+    ) -> AbstractContextManager[ConversationTurn]:
+        """Acquire one turn with injected checkpoint and cooperative-stop seams.
+
+        Args:
+            request (`ConversationRequest`): Authored consumer, invocation, and
+                compatibility descriptor without backend-owned identity.
+            checkpoint (`CheckpointSink`): Accept and acknowledge each checkpoint.
+            check_stopped (`CheckStopped`): Raise when cooperative stop is requested.
+
+        Returns:
+            `AbstractContextManager[ConversationTurn]`: The queued turn lease.
+        """
+        ...
+
+
+@runtime_checkable
+class ConversationSession(Protocol):
+    """Optional run-session capability for preparing and reconciling conversation state."""
+
+    def prepare_checkpoint(
+        self,
+        checkpoint: ConversationCheckpoint,
+        *,
+        before: ConversationView,
+    ) -> PreparedConversationApply:
+        """Validate against the actual predecessor without mutating live state.
+
+        Args:
+            checkpoint (`ConversationCheckpoint`): Exact proposed checkpoint.
+            before (`ConversationView`): Actual predecessor, including for a
+                duplicate historical checkpoint; never a guessed reconstruction.
+
+        Returns:
+            `PreparedConversationApply`: Apply the validated transition after its
+                acceptance and return its exact resulting view.
+        """
+        ...
+
+    def fail_turn(
+        self,
+        invocation: ConversationInvocation,
+        *,
+        checkpoint: ConversationCheckpoint | None,
+        acceptance: ConversationAcceptance,
+    ) -> None:
+        """Invalidate one turn and retain its checkpoint-acceptance uncertainty.
+
+        Args:
+            invocation (`ConversationInvocation`): Exact failed turn identity.
+            checkpoint (`ConversationCheckpoint | None`): Failed checkpoint if
+                known; `None` when no exact checkpoint is available.
+            acceptance (`ConversationAcceptance`): Proven unaccepted, accepted, or
+                uncertain checkpoint disposition.
+        """
+        ...
+
+    def reconcile(self, authority: ConversationAuthority) -> ConversationView:
+        """Reconcile accepted authority without repeating an external effect.
+
+        Args:
+            authority (`ConversationAuthority`): Complete accepted baseline and
+                contiguous checkpoint segment supplied by the authority owner.
+
+        Returns:
+            `ConversationView`: The exact segment's resulting detached state.
+        """
         ...

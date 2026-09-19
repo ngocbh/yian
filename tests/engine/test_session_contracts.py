@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError, replace
+import hashlib
 import inspect
+import json
 from typing import get_args, get_type_hints
 
 import pytest
@@ -654,3 +656,770 @@ def test_effect_checkpoints_reject_zero_ordinal_and_list_items():
         c.ConversationEffectRequested(_stamp(1, 1), "model", {}, [])
     with pytest.raises(TypeError, match="tuple"):
         c.ConversationEffectObserved(_stamp(2, 2), 1, "pending", [], None, None)
+
+
+def test_content_digest_excludes_ledger():
+    from agent_composer.memory.conversation import conversation_content_digest
+
+    first = _view(revision=1, applied=(_applied(),))
+    second = _view(revision=1, applied=(replace(_applied(), event_digest="d" * 64),))
+    assert conversation_content_digest(first) == conversation_content_digest(second)
+    assert conversation_content_digest(first) != conversation_content_digest(_view())
+    assert len(conversation_content_digest(first)) == 64
+    variants = [_view(compatibility={"number": value}) for value in (True, 1, 1.0)]
+    assert len({conversation_content_digest(value) for value in variants}) == 3
+
+
+def test_admission_advances_revision_once():
+    from agent_composer.memory.conversation import (
+        advance_conversation,
+        checkpoint_digest,
+        conversation_content_digest,
+    )
+
+    before = _view()
+    checkpoint = c.ConversationAdmitted(_stamp(), before)
+    after = advance_conversation(before, checkpoint)
+    assert before == _view()
+    assert after.revision == 1
+    assert after.items == () and after.effects == () and after.closed_invocations == ()
+    assert after.applied == (
+        c.ConversationApplied(
+            '["run",1,0]',
+            checkpoint_digest(checkpoint),
+            conversation_content_digest(before),
+            conversation_content_digest(after),
+        ),
+    )
+    with pytest.raises(c.MemoryOperationError) as caught:
+        advance_conversation(after, checkpoint)
+    assert caught.value.code == "session.conflict"
+
+
+def _admitted():
+    from agent_composer.memory.conversation import advance_conversation
+
+    baseline = _view()
+    return advance_conversation(baseline, c.ConversationAdmitted(_stamp(), baseline))
+
+
+def test_request_appends_new_items_and_pending_effect():
+    from agent_composer.memory.conversation import advance_conversation
+
+    before = _admitted()
+    item = c.ConversationItem("user-1", "message", {"role": "user", "text": "Hi"})
+    event = c.ConversationEffectRequested(
+        _stamp(1, 1), "model", {"model": "fake"}, (item,)
+    )
+    after = advance_conversation(before, event)
+    assert before.items == () and before.effects == ()
+    assert after.items == (item,)
+    assert after.effects == (
+        c.ConversationEffectState(
+            _invocation(), 1, "model", {"model": "fake"}, "pending", (), None
+        ),
+    )
+    assert after.revision == 2
+    second = c.ConversationEffectRequested(_stamp(2, 2), "tool", {"arguments": [1]}, ())
+    appended = advance_conversation(after, second)
+    assert appended.items == after.items
+    assert appended.effects[0] == after.effects[0]
+    assert appended.effects[1].effect_ordinal == 2
+
+
+def _requested():
+    from agent_composer.memory.conversation import advance_conversation
+
+    return advance_conversation(
+        _admitted(), c.ConversationEffectRequested(_stamp(1, 1), "model", {}, ())
+    )
+
+
+def test_observation_changes_only_matching_effect():
+    from agent_composer.memory.conversation import advance_conversation
+
+    before = advance_conversation(
+        _requested(), c.ConversationEffectRequested(_stamp(2, 2), "tool", {}, ())
+    )
+    item = c.ConversationItem("assistant-1", "message", {"text": "Hi"})
+    reference = c.ConversationReference("fake", "thread")
+    after = advance_conversation(
+        before,
+        c.ConversationEffectObserved(
+            _stamp(3, 3), 1, "pending", (item,), reference, None
+        ),
+    )
+    assert before.items == () and before.effects[0].observation_ordinals == ()
+    assert after.items == (item,) and after.reference == reference
+    assert after.effects[0].observation_ordinals == (3,)
+    assert after.effects[0].status == "pending"
+    assert after.effects[1] == before.effects[1]
+    complete = advance_conversation(
+        after,
+        c.ConversationEffectObserved(_stamp(4, 4), 1, "completed", (), None, None),
+    )
+    assert complete.effects[0].status == "completed"
+    assert complete.effects[0].observation_ordinals == (3, 4)
+    assert complete.reference == reference
+    assert complete.effects[1] == before.effects[1]
+
+
+@pytest.mark.parametrize("status", ["failed", "interrupted"])
+def test_close_preserves_unresolved_effects(status):
+    from agent_composer.memory.conversation import advance_conversation
+
+    before = _requested()
+    after = advance_conversation(before, c.ConversationClosed(_stamp(2, 2), status))
+    assert after.effects == before.effects
+    assert after.items == before.items
+    assert after.closed_invocations == (
+        c.ConversationCompletion(_invocation(), 2, status),
+    )
+    with pytest.raises(c.MemoryOperationError) as caught:
+        advance_conversation(before, c.ConversationClosed(_stamp(2, 2), "completed"))
+    assert caught.value.code == "session.conflict"
+    assert before.closed_invocations == () and before.revision == 2
+
+
+def test_transition_rejects_skipped_ordinal():
+    from agent_composer.memory.conversation import advance_conversation
+
+    before = _admitted()
+    event = c.ConversationEffectRequested(_stamp(2, 1), "model", {}, ())
+    original = c._copy_conversation_view(before)
+    with pytest.raises(c.MemoryOperationError) as caught:
+        advance_conversation(before, event)
+    assert caught.value.code == "session.conflict" and not caught.value.retryable
+    assert before == original and event.stamp.ordinal == 2
+
+
+@pytest.mark.parametrize("status", [None, "pending", "completed", "closed_failed"])
+def test_admission_does_not_bypass_unresolved_or_unclosed_effects(status):
+    from agent_composer.memory.conversation import advance_conversation
+
+    before = _requested()
+    if status in ("pending", "completed"):
+        before = advance_conversation(
+            before,
+            c.ConversationEffectObserved(_stamp(2, 2), 1, status, (), None, None),
+        )
+    elif status == "closed_failed":
+        before = advance_conversation(
+            before, c.ConversationClosed(_stamp(2, 2), "failed")
+        )
+    event = c.ConversationAdmitted(
+        replace(
+            _stamp(revision=before.revision),
+            invocation=c.ConversationInvocation("next", 1),
+        ),
+        before,
+    )
+    original = c._copy_conversation_view(before)
+    with pytest.raises(c.MemoryOperationError) as caught:
+        advance_conversation(before, event)
+    assert caught.value.code == "session.recovery_required"
+    assert before == original
+
+
+def test_admission_can_follow_effect_free_unclosed_invocation():
+    from agent_composer.memory.conversation import advance_conversation
+
+    before = _admitted()
+    event = c.ConversationAdmitted(
+        replace(_stamp(revision=1), invocation=c.ConversationInvocation("next", 1)),
+        before,
+    )
+    after = advance_conversation(before, event)
+    assert after.revision == 2 and after.closed_invocations == ()
+
+
+def _complete_history():
+    from agent_composer.memory.conversation import advance_conversation
+
+    baseline = _view(compatibility={"provider": "fake", "options": [True, 1, 1.0]})
+    events = (
+        c.ConversationAdmitted(_stamp(), baseline),
+        c.ConversationEffectRequested(
+            _stamp(1, 1),
+            "native_session",
+            {"arguments": [True, 1, 1.0]},
+            (c.ConversationItem("user", "message", {"text": "héllo"}),),
+        ),
+        c.ConversationEffectObserved(
+            _stamp(2, 2),
+            1,
+            "completed",
+            (c.ConversationItem("assistant", "message", {"text": "hello"}),),
+            c.ConversationReference("fake", "native-thread"),
+            None,
+        ),
+        c.ConversationClosed(_stamp(3, 3), "completed"),
+    )
+    views = [baseline]
+    for event in events:
+        views.append(advance_conversation(views[-1], event))
+    return views, events
+
+
+def test_conversation_codecs_round_trip_complete_history_and_detach():
+    from agent_composer.memory.conversation import (
+        checkpoint_digest,
+        conversation_checkpoint_from_json,
+        conversation_checkpoint_to_json,
+        conversation_view_from_json,
+        conversation_view_to_json,
+    )
+
+    views, events = _complete_history()
+    for view in views:
+        encoded = conversation_view_to_json(view)
+        decoded = conversation_view_from_json(encoded)
+        assert decoded == view and decoded is not view
+        assert conversation_view_to_json(decoded) == encoded
+        encoded["compatibility"]["options"].clear()
+        assert decoded.compatibility["options"] == [True, 1, 1.0]
+    for event in events:
+        encoded = conversation_checkpoint_to_json(event)
+        decoded = conversation_checkpoint_from_json(encoded)
+        assert decoded == event and decoded is not event
+        wire = json.dumps(
+            encoded,
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        assert checkpoint_digest(event) == hashlib.sha256(wire.encode()).hexdigest()
+
+
+@pytest.mark.parametrize(
+    "damage", ["missing", "extra", "tuple", "bool", "owner", "path"]
+)
+def test_view_codec_rejects_wrong_closed_wire_shape(damage):
+    from agent_composer.memory.conversation import (
+        conversation_view_from_json,
+        conversation_view_to_json,
+    )
+
+    wire = conversation_view_to_json(_view())
+    if damage == "missing":
+        del wire["reference"]
+    elif damage == "extra":
+        wire["extra"] = None
+    elif damage == "tuple":
+        wire["items"] = ()
+    elif damage == "bool":
+        wire["revision"] = False
+    elif damage == "owner":
+        wire["key"]["frame_ref"]["owner"] = "other"
+    else:
+        wire["key"]["consumer_static_path"] = ["other", "agent"]
+    with pytest.raises((TypeError, ValueError)):
+        conversation_view_from_json(wire)
+
+
+@pytest.mark.parametrize(
+    "damage", ["final", "adjacency", "anchor", "ordinal", "length"]
+)
+def test_view_codec_rejects_broken_digest_chain(damage):
+    from agent_composer.memory.conversation import (
+        conversation_view_from_json,
+        conversation_view_to_json,
+    )
+
+    views, _ = _complete_history()
+    wire = conversation_view_to_json(views[-1])
+    if damage == "final":
+        wire["applied"][-1]["after_digest"] = "0" * 64
+    elif damage == "adjacency":
+        wire["applied"][1]["before_digest"] = "0" * 64
+    elif damage == "anchor":
+        wire["applied"][0]["before_digest"] = "0" * 64
+    elif damage == "ordinal":
+        wire["applied"][1]["operation_id"] = '["run",1,8]'
+    else:
+        wire["applied"].pop()
+    with pytest.raises(ValueError):
+        conversation_view_from_json(wire)
+    with pytest.raises(ValueError):
+        conversation_view_to_json(_view(revision=1, applied=(_applied(),)))
+
+
+def _changed_view(view, **changes):
+    values = {
+        name: getattr(view, name)
+        for name in (
+            "namespace",
+            "generation",
+            "revision",
+            "key",
+            "compatibility",
+            "items",
+            "reference",
+            "effects",
+            "closed_invocations",
+            "applied",
+        )
+    }
+    values.update(changes)
+    return c.ConversationView(**values)
+
+
+def _reseal(view):
+    from agent_composer.memory.conversation import conversation_content_digest
+
+    return _changed_view(
+        view,
+        applied=view.applied[:-1]
+        + (replace(view.applied[-1], after_digest=conversation_content_digest(view)),),
+    )
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "missing_effect",
+        "foreign_effect",
+        "overlap",
+        "early_close",
+        "pending_success",
+        "foreign_close",
+    ],
+)
+def test_view_codec_rejects_impossible_history_even_with_matching_final_digest(damage):
+    from agent_composer.memory.conversation import conversation_view_to_json
+
+    views, _ = _complete_history()
+    view = views[-1]
+    effect = view.effects[0]
+    if damage == "missing_effect":
+        view = _changed_view(view, effects=())
+    elif damage == "foreign_effect":
+        effect = c.ConversationEffectState(
+            c.ConversationInvocation("foreign", 1),
+            1,
+            "model",
+            {},
+            "completed",
+            (2,),
+            None,
+        )
+        view = _changed_view(view, effects=(effect,))
+    elif damage == "overlap":
+        effect = c.ConversationEffectState(
+            _invocation(), 1, "model", {}, "completed", (3,), None
+        )
+        view = _changed_view(view, effects=(effect,))
+    elif damage == "early_close":
+        view = _changed_view(
+            view,
+            closed_invocations=(
+                c.ConversationCompletion(_invocation(), 2, "completed"),
+            ),
+        )
+    elif damage == "pending_success":
+        effect = c.ConversationEffectState(
+            _invocation(), 1, "model", {}, "pending", (2,), None
+        )
+        view = _changed_view(view, effects=(effect,))
+    else:
+        view = _changed_view(
+            view,
+            closed_invocations=(
+                c.ConversationCompletion(
+                    c.ConversationInvocation("foreign", 1), 3, "completed"
+                ),
+            ),
+        )
+    view = _reseal(view)
+    with pytest.raises(ValueError):
+        conversation_view_to_json(view)
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        "before_admit",
+        "terminal_effect",
+        "closed",
+        "missing_request",
+        "foreign_invocation",
+        "foreign_key",
+        "namespace",
+        "generation",
+        "revision",
+        "duplicate_request_item",
+        "duplicate_observed_item",
+        "baseline_descriptor",
+    ],
+)
+def test_invalid_transitions_preserve_input_evidence(scenario):
+    from agent_composer.memory.conversation import advance_conversation
+
+    views, _ = _complete_history()
+    before = views[1]
+    event = c.ConversationEffectRequested(_stamp(1, 1), "model", {}, ())
+    if scenario == "before_admit":
+        before = views[0]
+        event = c.ConversationEffectRequested(_stamp(1, 0), "model", {}, ())
+    elif scenario == "terminal_effect":
+        before = views[3]
+        event = c.ConversationEffectObserved(
+            _stamp(3, 3), 1, "completed", (), None, None
+        )
+    elif scenario == "closed":
+        before = views[4]
+        event = c.ConversationEffectRequested(_stamp(4, 4), "model", {}, ())
+    elif scenario == "missing_request":
+        before = advance_conversation(
+            _requested(),
+            c.ConversationEffectObserved(_stamp(2, 2), 1, "pending", (), None, None),
+        )
+        event = c.ConversationEffectObserved(
+            _stamp(3, 3), 2, "completed", (), None, None
+        )
+    elif scenario in ("duplicate_request_item", "duplicate_observed_item"):
+        before = views[2]
+        if scenario == "duplicate_request_item":
+            event = c.ConversationEffectRequested(
+                _stamp(2, 2), "tool", {}, before.items
+            )
+        else:
+            event = c.ConversationEffectObserved(
+                _stamp(2, 2), 1, "pending", before.items, None, None
+            )
+    elif scenario == "baseline_descriptor":
+        before = _view(compatibility={"value": True})
+        event = c.ConversationAdmitted(_stamp(), _view(compatibility={"value": 1}))
+    else:
+        field, value = {
+            "foreign_invocation": (
+                "invocation",
+                c.ConversationInvocation("foreign", 1),
+            ),
+            "foreign_key": (
+                "key",
+                c.ConversationKey(_frame_ref(), ("root", "child", "other")),
+            ),
+            "namespace": ("namespace", "foreign"),
+            "generation": ("generation", 1),
+            "revision": ("expected_revision", 2),
+        }[scenario]
+        event = c.ConversationEffectRequested(
+            replace(event.stamp, **{field: value}), "model", {}, ()
+        )
+    original = c._copy_conversation_view(before)
+    original_event = c._copy_conversation_checkpoint(event)
+    with pytest.raises(c.MemoryOperationError) as caught:
+        advance_conversation(before, event)
+    assert (
+        caught.value.stage == "conversation" and caught.value.code == "session.conflict"
+    )
+    assert before == original and event == original_event
+
+
+def test_later_invocation_reuses_local_ordinals_without_replacing_prior_effects():
+    from agent_composer.memory.conversation import (
+        advance_conversation,
+        conversation_view_from_json,
+        conversation_view_to_json,
+    )
+
+    views, _ = _complete_history()
+    first = views[-1]
+    invocation = c.ConversationInvocation("second", 2)
+    stamps = [
+        replace(_stamp(ordinal, 4 + ordinal), invocation=invocation)
+        for ordinal in range(4)
+    ]
+    events = (
+        c.ConversationAdmitted(stamps[0], first),
+        c.ConversationEffectRequested(stamps[1], "tool", {"tool": "fake"}, ()),
+        c.ConversationEffectObserved(stamps[2], 1, "failed", (), None, _failure()),
+        c.ConversationClosed(stamps[3], "failed"),
+    )
+    after = first
+    for event in events:
+        after = advance_conversation(after, event)
+    assert [effect.effect_ordinal for effect in after.effects] == [1, 1]
+    assert after.effects[0] == first.effects[0]
+    assert after.effects[1].invocation == invocation
+    assert after.reference == first.reference and after.items == first.items
+    assert conversation_view_from_json(conversation_view_to_json(after)) == after
+
+
+@pytest.mark.parametrize("index", range(4))
+@pytest.mark.parametrize(
+    "damage", ["extra", "missing", "discriminator", "stamp", "bool", "array"]
+)
+def test_checkpoint_codec_rejects_malformed_closed_wire(index, damage):
+    from agent_composer.memory.conversation import (
+        conversation_checkpoint_from_json,
+        conversation_checkpoint_to_json,
+    )
+
+    _, events = _complete_history()
+    wire = conversation_checkpoint_to_json(events[index])
+    if damage == "extra":
+        wire["extra"] = None
+    elif damage == "missing":
+        del wire["stamp"]
+    elif damage == "discriminator":
+        wire["type"] = "unknown"
+    elif damage == "stamp":
+        wire["stamp"]["invocation"]["extra"] = None
+    elif damage == "bool":
+        wire["stamp"]["ordinal"] = True
+    else:
+        wire["stamp"]["key"]["consumer_static_path"] = "root/child/agent"
+    with pytest.raises((TypeError, ValueError)):
+        conversation_checkpoint_from_json(wire)
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), "\ud800", (), object()])
+def test_codecs_reject_non_json_nested_values(bad):
+    from agent_composer.memory.conversation import (
+        conversation_view_from_json,
+        conversation_view_to_json,
+    )
+
+    wire = conversation_view_to_json(_view())
+    wire["compatibility"]["bad"] = bad
+    with pytest.raises((TypeError, ValueError)):
+        conversation_view_from_json(wire)
+
+
+def test_codecs_reject_cycles_and_non_string_keys():
+    from agent_composer.memory.conversation import (
+        conversation_view_from_json,
+        conversation_view_to_json,
+    )
+
+    wire = conversation_view_to_json(_view())
+    wire["compatibility"]["cycle"] = wire
+    with pytest.raises(ValueError, match="circular"):
+        conversation_view_from_json(wire)
+    wire = conversation_view_to_json(_view())
+    wire["compatibility"][1] = "invalid"
+    with pytest.raises(TypeError):
+        conversation_view_from_json(wire)
+
+
+@pytest.mark.parametrize("depth", [120, 123, 124, 125, 126, 127, 128])
+def test_wire_nesting_is_checked_before_fold_and_encoder_return(depth):
+    from agent_composer.memory.conversation import (
+        advance_conversation,
+        conversation_checkpoint_from_json,
+        conversation_checkpoint_to_json,
+        conversation_view_from_json,
+        conversation_view_to_json,
+    )
+
+    nested = "value"
+    for _ in range(depth):
+        nested = {"nested": nested}
+    item = c.ConversationItem("deep", "message", nested)
+    event = c.ConversationEffectRequested(_stamp(1, 1), "model", {}, (item,))
+    before = _admitted()
+    try:
+        wire = conversation_checkpoint_to_json(event)
+    except ValueError:
+        with pytest.raises(ValueError):
+            advance_conversation(before, event)
+        assert before.revision == 1 and not before.items
+    else:
+        assert conversation_checkpoint_from_json(wire) == event
+        if depth == 125:
+            # A request can fit while its future admission baseline cannot.
+            with pytest.raises(ValueError, match="nesting"):
+                advance_conversation(before, event)
+            assert before.revision == 1 and not before.items
+        else:
+            after = advance_conversation(before, event)
+            assert (
+                conversation_view_from_json(conversation_view_to_json(after)) == after
+            )
+
+
+@pytest.mark.parametrize("depth", [124, 125])
+def test_publishable_view_can_complete_and_become_the_next_admission_baseline(depth):
+    from agent_composer.memory.conversation import (
+        advance_conversation,
+        conversation_checkpoint_from_json,
+        conversation_checkpoint_to_json,
+        conversation_view_from_json,
+        conversation_view_to_json,
+    )
+
+    nested = "value"
+    for _ in range(depth):
+        nested = {"nested": nested}
+    item = c.ConversationItem("deep", "message", nested)
+    request = c.ConversationEffectRequested(_stamp(1, 1), "model", {}, (item,))
+    before = _admitted()
+    original = c._copy_conversation_view(before)
+    try:
+        requested = advance_conversation(before, request)
+    except ValueError:
+        assert depth == 125
+        assert before == original
+        return
+    observed = advance_conversation(
+        requested,
+        c.ConversationEffectObserved(_stamp(2, 2), 1, "completed", (), None, None),
+    )
+    closed = advance_conversation(
+        observed, c.ConversationClosed(_stamp(3, 3), "completed")
+    )
+    stamp = replace(_stamp(revision=4), invocation=c.ConversationInvocation("next", 1))
+    admission = c.ConversationAdmitted(stamp, closed)
+    wire = conversation_checkpoint_to_json(admission)
+    assert conversation_checkpoint_from_json(wire) == admission
+    resumed = advance_conversation(closed, admission)
+    assert conversation_view_from_json(conversation_view_to_json(resumed)) == resumed
+    assert before == original
+
+
+@pytest.mark.parametrize("direction", ["encode", "decode"])
+def test_view_codec_reserves_the_next_admission_baseline_wrapper(direction):
+    from agent_composer.memory.conversation import (
+        checkpoint_digest,
+        conversation_view_from_json,
+        conversation_view_to_json,
+    )
+
+    nested = "value"
+    for _ in range(125):
+        nested = {"nested": nested}
+    item = c.ConversationItem("deep", "message", nested)
+    request = c.ConversationEffectRequested(_stamp(1, 1), "model", {}, (item,))
+    shallow = _requested()
+    entries = shallow.applied[:-1] + (
+        replace(shallow.applied[-1], event_digest=checkpoint_digest(request)),
+    )
+    candidate = _reseal(_changed_view(shallow, items=(item,), applied=entries))
+    wire = conversation_view_to_json(shallow)
+    wire["items"] = [
+        {"item_id": item.item_id, "format": item.format, "payload": nested}
+    ]
+    wire["applied"][-1]["event_digest"] = candidate.applied[-1].event_digest
+    wire["applied"][-1]["after_digest"] = candidate.applied[-1].after_digest
+    with pytest.raises(ValueError, match="nesting"):
+        if direction == "encode":
+            conversation_view_to_json(candidate)
+        else:
+            conversation_view_from_json(wire)
+
+
+def test_checkpoint_digest_includes_complete_admission_ledger():
+    from agent_composer.memory.conversation import checkpoint_digest
+
+    views, _ = _complete_history()
+    baseline = views[-1]
+    changed = _changed_view(
+        baseline,
+        applied=(replace(baseline.applied[0], event_digest="0" * 64),)
+        + baseline.applied[1:],
+    )
+    stamp = replace(_stamp(revision=4), invocation=c.ConversationInvocation("next", 1))
+    assert checkpoint_digest(
+        c.ConversationAdmitted(stamp, baseline)
+    ) != checkpoint_digest(c.ConversationAdmitted(stamp, changed))
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "duplicate_item",
+        "duplicate_operation",
+        "bad_status",
+        "failure_type",
+        "key_extra",
+        "float_sequence",
+    ],
+)
+def test_view_codec_rejects_invalid_nested_values(damage):
+    from agent_composer.memory.conversation import (
+        conversation_view_from_json,
+        conversation_view_to_json,
+    )
+
+    views, _ = _complete_history()
+    wire = conversation_view_to_json(views[-1])
+    if damage == "duplicate_item":
+        wire["items"].append(wire["items"][0])
+    elif damage == "duplicate_operation":
+        wire["applied"][-1]["operation_id"] = wire["applied"][0]["operation_id"]
+    elif damage == "bad_status":
+        wire["effects"][0]["status"] = "unknown"
+    elif damage == "failure_type":
+        wire["effects"][0]["status"] = "failed"
+        wire["effects"][0]["failure"] = {
+            "stage": "effect",
+            "code": "fake.failed",
+            "message": "Failed",
+            "retryable": 0,
+        }
+    elif damage == "key_extra":
+        wire["key"]["frame_ref"]["extra"] = None
+    else:
+        wire["effects"][0]["invocation"]["start_sequence"] = 1.0
+    original = json.dumps(wire, sort_keys=True)
+    with pytest.raises((TypeError, ValueError)):
+        conversation_view_from_json(wire)
+    assert json.dumps(wire, sort_keys=True) == original
+
+
+def test_view_codec_rejects_admission_after_unclosed_effectful_invocation():
+    from agent_composer.memory.conversation import (
+        conversation_content_digest,
+        conversation_view_to_json,
+    )
+
+    views, _ = _complete_history()
+    before = views[3]
+    entry = c.ConversationApplied(
+        '["next",1,0]', "0" * 64, conversation_content_digest(before), "0" * 64
+    )
+    after = _reseal(
+        _changed_view(before, revision=4, applied=before.applied + (entry,))
+    )
+    with pytest.raises(ValueError, match="unresolved"):
+        conversation_view_to_json(after)
+
+
+def test_fold_and_codecs_revalidate_tampered_exact_carriers():
+    from agent_composer.memory.conversation import (
+        advance_conversation,
+        conversation_checkpoint_to_json,
+        conversation_view_to_json,
+    )
+
+    before = _admitted()
+    checkpoint = c.ConversationEffectRequested(_stamp(1, 1), "model", {}, ())
+    object.__setattr__(checkpoint.stamp.invocation, "start_sequence", True)
+    with pytest.raises(TypeError):
+        advance_conversation(before, checkpoint)
+    with pytest.raises(TypeError):
+        conversation_checkpoint_to_json(checkpoint)
+    assert before == _admitted()
+    object.__setattr__(before, "generation", True)
+    with pytest.raises(TypeError):
+        conversation_view_to_json(before)
+
+
+def test_fold_does_not_mask_unexpected_host_fault(monkeypatch):
+    import agent_composer.memory.conversation as conversation
+
+    before = _admitted()
+    checkpoint = c.ConversationEffectRequested(_stamp(1, 1), "model", {}, ())
+    fault = RuntimeError("host digest fault")
+
+    def fail(_value):
+        raise fault
+
+    monkeypatch.setattr(conversation.hashlib, "sha256", fail)
+    with pytest.raises(RuntimeError) as caught:
+        conversation.advance_conversation(before, checkpoint)
+    assert caught.value is fault
+    assert before.revision == 1 and before.effects == ()

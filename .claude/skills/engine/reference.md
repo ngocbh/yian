@@ -343,7 +343,7 @@ all forward fields unchanged.
 `SessionMemory` in `agent_composer.memory.session` implements process-local
 conversation state and direct turn updates for API-backed AGENT execution.
 The host injects the backend into `run_flow` under the declared policy name.
-Codex, summaries, durable storage, and CLI activation remain pending. The
+Codex, durable storage, and CLI activation remain pending. The
 `agent_composer.memory` facade remains contracts-only. `MemorySession` still names
 the mandatory run-handle protocol; optional `ConversationFrame` and
 `ConversationTurn` add conversation capabilities without
@@ -391,14 +391,15 @@ and tool actions may repeat; no exactly-once or mid-request continuation is prom
 The backend owns saved history; runtime does not reconstruct it from the run log
 or fabricate results for unknown effects.
 
-The backend has no constructor settings and accepts only `{}` frame config.
+Host-only constructor settings are `history_budget_chars=32_000` (positive int)
+and `recent_turns=4` (nonnegative int); frame config stays `{}`.
 Conversation identity is `(frame_ref, consumer_static_path)`, not a MAP/LOOP
 occurrence or runtime ID. A flow-owned frame therefore has independent leaf
 conversations and FIFO queues, with no fork selector. FIFO means admission order,
 not MAP input-index order. Acquire the lease before
 reading current live history. Run snapshots remain detached and pinned; their
 closed version-2 envelope contains namespace, generation, complete views, and
-learned notes, never coordination state or the private commit ledger. Accept
+learned notes, never coordination state, derived summary cache, or commit ledger. Accept
 version-1 history as no notes and preserve its exact envelope when pinned.
 No durable storage is implemented.
 
@@ -417,6 +418,22 @@ observations while finishing; no other turn may overlap its external call. Relea
 turns cannot append. Reopening an older compatible snapshot preserves its pinned
 export while consuming newer live history. A pristine backend has only the supplied
 snapshot; later progress requires backend retention, not reconstruction from RunLog.
+
+API active-context preparation is an optional concrete-turn capability, not a
+mandatory protocol method. Memory owns admission-led whole-turn selection, prefix
+proofs, and the private cache; the API adapter injects safe projection and the
+current unbound model. Callbacks run outside the Condition under the same lease.
+Preserve four prior whole turns plus the active invocation, including failed or
+empty interrupted admissions, without deleting raw history. Count projected
+historical context against a soft character budget; instructions, new input,
+tool schemas, and learned notes are separate. Reuse or extend a valid cached
+prefix only when necessary. Oversized valid summary text stays intact without
+automatic retry. Reset clears the cache; reopening old snapshots never rewinds it.
+Summary callback/response errors remain ordinary node failures; other codec or
+backend errors remain capability faults. Prepare before tool binding and outside
+structured retries. The final structured pass must keep the prepared prior prefix
+plus a fresh safe active-turn projection, not all history or unvalidated raw local
+messages. Summaries/repairs never become `new_messages`, raw items, or learned notes.
 
 History updates through this optional capability do not depend on `learnable`.
 Explicit API backward self-feedback becomes deterministic notes through existing

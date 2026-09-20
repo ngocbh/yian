@@ -6,8 +6,10 @@ by host-provided memory objects. Conversation capabilities are optional and leav
 the mandatory memory protocols unchanged.
 ``contracts.py`` owns that vocabulary; ``conversation.py`` owns its pure fold,
 strict codecs, and digests; ``session.py`` owns process-local conversation views,
-FIFO leases, atomic turn updates, and learned self-feedback notes. Concrete
-session, episodic, and reflection
+FIFO leases, atomic turn updates, and learned self-feedback notes.
+``summary.py`` owns pure whole-turn selection and summary-cache proofs; the
+backend invokes injected projection/model callbacks without importing providers.
+Concrete session, episodic, and reflection
 backends are imported from their own modules, never eagerly by this contracts-only
 facade.
 

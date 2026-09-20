@@ -269,7 +269,9 @@ Authored long-term-memory declarations are dormant unless a Python host passes a
 `memory={...}` registry to `run_flow`, keyed by the selected policy names.
 Supplying the registry enables recall and any optional conversation capability.
 For API conversation continuity, declare `long_term_memory: session` and inject
-`SessionMemory()` under `"session"`. It currently accepts no frame config.
+`SessionMemory()` under `"session"`. It accepts no frame config. The host can set
+`SessionMemory(history_budget_chars=32_000, recent_turns=4)` for API context
+summaries; these settings do not belong in YAML and do not truncate raw history.
 The innermost conversation-capable frame owns a separate conversation for each
 authored AGENT leaf; other frames still provide recall. Repeated calls queue in
 admission order, including LOOP iterations and MAP items. MAP does not fork

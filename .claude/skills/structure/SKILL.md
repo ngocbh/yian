@@ -128,9 +128,11 @@ Memory conversation ownership follows the same lower-layer boundary.
 `ConversationFrame`/`ConversationTurn` protocols alongside the
 unchanged mandatory memory protocols. `memory/conversation.py` owns the pure fold,
 strict codecs, and digests. `memory/session.py` owns the concrete process-local
-`SessionMemory` backend: views, FIFO leases, and atomic history publication. It
-depends on those lower modules and an injected stop callable, never on
-nodes, runtime, compile, compose, or provider SDKs.
+`SessionMemory` backend: views, FIFO leases, atomic history/note publication, and
+derived summary state. `memory/summary.py` owns pure whole-turn selection and
+summary-cache prefix proofs. The backend depends on those lower modules and
+injected stop/projection/summary callables, never on nodes, runtime, compile,
+compose, or provider SDKs.
 There is no runtime conversation projection or recovery channel. `runtime.state`
 privately validates the four legacy wrappers owned by `runtime.log` and advances
 record/trace sequencing only. Those inert wrappers neither reconstruct history nor
@@ -140,7 +142,9 @@ binds authored scope and accepted invocation identity; `eval_node` owns the lazy
 turn lifetime through execution/cleanup, never provider message encoding.
 `nodes/agent/conversation.py` owns stateless API message encoding and effect
 publication through the turn. It may import memory contracts and provider message
-types, but owns no history or queue. API execution is integrated; Codex and CLI
+types, but owns no history or queue. It injects safe projection and the current
+unbound model into optional memory-owned context preparation; summary callbacks
+run outside the backend lock under its existing lease. API execution is integrated; Codex and CLI
 activation remain pending.
 
 The `memory` facade exports contracts only: concrete session, episodic, and

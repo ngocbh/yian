@@ -392,7 +392,11 @@ old tool calls. Explicit API backward self-feedback can become committed notes
 for the owning conversation through the existing frame learn/session commit/recall
 lifecycle, without another model call or YAML selector. Notes are recalled from
 the run-opening snapshot and do not rewrite raw conversation history. No-feedback
-backward adds no session notes. Codex execution, summaries, and durable storage
+backward adds no session notes. API summary settings are host constructor options,
+`history_budget_chars=32_000` and `recent_turns=4`, never frame YAML. The current
+model summarizes older context without deleting raw history or truncating recent
+whole turns. Budget is soft; oversized valid summaries are not retried or cut.
+Codex execution and durable storage
 remain pending.
 `learnable=True` independently retains execution; forward does not run frame
 learners or commit learned mutations.

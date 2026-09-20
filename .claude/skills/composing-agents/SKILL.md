@@ -249,7 +249,10 @@ items. Session history updates automatically during forward, without learning.
 Explicit API backward self-feedback can become committed SessionMemory notes for
 future calls through the same policy, without another model call or YAML option.
 Notes stay scoped to the owning frame and authored leaf; recall is pinned when
-the run opens. Codex execution, summaries, durable storage, and CLI activation
+the run opens. Host-only `SessionMemory(history_budget_chars=32_000, recent_turns=4)`
+controls API summaries of older context; do not put these settings in YAML.
+Raw history and recent whole turns stay intact, even above the soft budget.
+Codex execution, durable storage, and CLI activation
 are pending.
 Independently, `learnable=True` retains
 execution for a later explicit `result.backward(feedback)` call; forward returns

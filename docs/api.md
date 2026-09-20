@@ -345,7 +345,8 @@ the completed feedback.
 conversations across calls to `run_flow`. The backend owns history updates and
 FIFO admission directly; runtime owns only the optional turn's lifetime and
 authored scope. Explicit backward learning retains self-feedback as notes through
-the same memory lifecycle. Codex, summaries, durable storage, and CLI
+the same memory lifecycle. Older API context can be summarized without deleting
+raw history. Codex, durable storage, and CLI
 activation are **not implemented yet**.
 
 Declare `long_term_memory: session` on a flow or AGENT node and reuse the same
@@ -402,10 +403,12 @@ with restored.open_run(snapshot=snapshot) as opened:
 memory.reset()  # Backend-wide; allowed only while no turn is active or queued.
 ```
 
-The constructor takes no settings and frame configuration must be `{}`. A public
+The host constructor accepts `history_budget_chars=32_000` and `recent_turns=4`;
+these settings are not flow YAML. Frame configuration must be `{}`. A public
 snapshot has exactly `version` (currently `2`), `namespace`, `generation`,
 `conversations`, and `notes`. It contains complete conversation views and learned
-notes, not queues, leases, or the private commit ledger. Version-1 snapshots remain
+notes, not queues, leases, the private summary cache, or the commit ledger.
+Version-1 snapshots remain
 readable as history without notes; an opened version-1 snapshot stays exactly
 version 1 when returned by that run handle.
 A pristine backend can adopt a snapshot; an already
@@ -452,6 +455,41 @@ history; changing provider or message format requires explicit reset. Every call
 uses current instructions, recall, and tool grants. Historical system/developer
 instructions are not reinstated as current instructions.
 
+### API history summaries
+
+```python
+memory = SessionMemory(history_budget_chars=32_000, recent_turns=4)
+```
+
+`history_budget_chars` is a positive integer soft target for projected historical
+context; `recent_turns` is a nonnegative integer. These are host settings, not a
+provider token-window estimate. Current instructions, new input, tool schemas,
+and learned-note recall are outside this history budget.
+The count is the character length of the canonical JSON message-dictionary
+projection of prior context, plus the cached summary text when present. Summary
+labels and current-turn context are not included in that count.
+
+When older context exceeds the budget, SessionMemory can request a summary using
+the agent's current, unbound model. It always preserves the latest four prior
+whole turns by default, plus the active turn. A turn includes all its model/tool
+exchanges and structured correction attempts; failed and interrupted admissions
+also count. `recent_turns=0` still preserves the active turn. Recent turns are
+never truncated, even when they alone exceed the budget.
+
+Summarization changes only active context. Raw messages, actual tool results,
+and learned notes remain intact. The summary is labelled historical data, not a
+new instruction or executable tool request. Summaries are cached privately and
+extended only when more older turns need compaction; an oversized valid summary
+is retained as-is, without truncation or an automatic retry. Reopening an older
+run snapshot does not rewind live history or its cache. Reset clears the cache.
+
+Summary work happens under the same conversation's FIFO lease, outside the
+backend's condition lock. Other authored conversations can proceed independently.
+A failed, malformed, empty, or tool-request summary response fails that invocation
+without deleting history or making the normal answer request. Summary work does
+not run backward learning or enter structured-output correction retries. Native
+Codex context management is separate from this API-only capability.
+
 ### Learned notes
 
 With `learnable=True`, explicit `result.backward(feedback)` can produce textual
@@ -477,8 +515,8 @@ Recall uses the run-opening pinned notes, while conversation history uses the
 latest live view after FIFO admission. A run already open when notes commit keeps
 its earlier recall view. Notes are separate from raw messages, so learning never
 rewrites model/tool history and does not replay tools. They are also separate
-from the planned transcript-summary history budget. Backend-wide `reset()` clears
-notes and history, retaining commit deduplication so replay cannot resurrect
+from the transcript-summary history budget. Backend-wide `reset()` clears
+notes, history, and derived summaries, retaining commit deduplication so replay cannot resurrect
 cleared notes. Native-provider backward learning remains deferred.
 
 ### Partial history, retry, and reset

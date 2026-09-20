@@ -57,7 +57,10 @@ soft-budget watchdog lives in `nodes/code/watchdog.py`. Putting it around every
 evaluation in `runtime/` would both misstate ownership and broaden behavior.
 Likewise, API conversation encoding belongs in `nodes/agent/conversation.py`:
 it adapts provider messages to lower memory contracts without storing history.
-`memory/session.py` owns history and FIFO admission. Runtime only binds authored
+`memory/session.py` owns history, FIFO admission, and derived summary publication;
+`memory/summary.py` owns pure whole-turn selection and cache-prefix proofs. The
+API adapter injects projection and current-model callbacks, never stores summaries.
+Runtime only binds authored
 scope/accepted invocation identity and manages the lazy capability lifetime;
 it neither encodes provider messages nor reconstructs history from the run log.
 

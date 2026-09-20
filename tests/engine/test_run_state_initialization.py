@@ -107,6 +107,8 @@ def _snapshot(state: RunState) -> dict[str, Any]:
         "edge_state": dict(state.edge_state),
         "ready": tuple(state.ready),
         "in_flight": tuple(state.in_flight),
+        "accepted_starts": dict(state.accepted_starts),
+        "conversation_state": state.conversation_state,
         "result": state.result,
         "depth": dict(state.depth),
         "wiring_overrides": deepcopy(state.wiring_overrides),
@@ -132,6 +134,10 @@ def test_run_state_starts_pristine_around_the_owned_graph():
     assert state.edge_state == {edge.id: NodeState.UNKNOWN for edge in flow.edges}
     assert tuple(state.ready) == ()
     assert state.in_flight == {}
+    assert state.accepted_starts == {}
+    assert state.conversation_state.segments == ()
+    assert state.conversation_state.views == ()
+    assert state.conversation_state.retired_invocations == frozenset()
     assert state.result is None
     assert state.depth == {}
     assert state.wiring_overrides == {}
@@ -141,6 +147,53 @@ def test_run_state_starts_pristine_around_the_owned_graph():
     assert state.num_workers == 0
     assert state.input == {}
     assert state.effective_llm_by_static_path == {}
+
+
+def test_historical_start_prepares_recorded_schema_bytes():
+    from agent_composer.runtime.log import decode_record, encode_record
+
+    state = RunState(_flow())
+    before = _snapshot(state)
+    prepared = prepare_run_started(state, _start_data(state.flow), schema=7)
+    expected = RecordEnvelope(7, _RUN_ID, 0, prepared.record)
+    assert prepared._plan.envelope_bytes == encode_record(expected)
+    assert decode_record(prepared._plan.envelope_bytes).schema == 7
+    assert _snapshot(state) == before
+
+
+@pytest.mark.parametrize("schema", [True, 7.0, "7", 6, 99])
+def test_historical_start_requires_an_exact_supported_schema(schema):
+    state = RunState(_flow())
+    before = _snapshot(state)
+    with pytest.raises((TypeError, ValueError)):
+        prepare_run_started(state, _start_data(state.flow), schema=schema)
+    assert _snapshot(state) == before
+
+
+@pytest.mark.parametrize("corruption", ["schema", "numeric_payload"])
+def test_append_result_must_preserve_the_complete_validated_envelope(corruption):
+    class CorruptingLog(MemoryRunLog):
+        """Return a value-equal payload or invalid schema after a valid append."""
+
+        def append(self, record):
+            envelope = super().append(record)
+            if corruption == "schema":
+                object.__setattr__(envelope, "schema", True)
+            else:
+                envelope.record.start_wiring_override["numeric"] = 1.0
+                assert envelope.record == record
+            return envelope
+
+    state = RunState(_flow())
+    data = _start_data(state.flow)
+    data.start_wiring_override["numeric"] = 1
+    prepared = prepare_run_started(state, data)
+    before = _snapshot(state)
+    log = CorruptingLog(_RUN_ID)
+    with pytest.raises((TypeError, ValueError)):
+        commit_prepared(log, state, prepared)
+    assert _snapshot(state) == before
+    assert log.next_sequence == 1
 
 
 def test_run_started_preparation_is_immutable_and_commit_restores_complete_state():

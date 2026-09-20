@@ -35,6 +35,10 @@ from agent_composer.events import (
 from agent_composer.expr import ExpressionError, expr_refs_of
 from agent_composer.expr.lineage import SourceRef
 from agent_composer.memory import (
+    ConversationAdmitted,
+    ConversationClosed,
+    ConversationEffectRequested,
+    ConversationInvocation,
     EvaluationEvidence,
     MemoryFrameRef,
     MemoryFrameSpec,
@@ -57,6 +61,9 @@ from agent_composer.nodes.contracts import (
 )
 from agent_composer.runtime.contracts import ForwardCapture, _validate_source
 from agent_composer.runtime.common import NodeState
+from agent_composer.runtime.conversation import (
+    RuntimeConversationState, prepare_conversation_checkpoint, _require_prepared_projection,
+)
 from agent_composer.runtime.trace import (
     RetainedTrace, SourceEntry, TraceDelta, TraceOccurrence, TraceTerminal,
     _copy_memory_scope, prepare_trace, select_seed_route,
@@ -66,6 +73,10 @@ from agent_composer.runtime.log import (
     BackwardStartedRecord,
     BackwardReadyRecord,
     BackwardFinishedRecord,
+    ConversationAdmittedRecord,
+    ConversationEffectRequestedRecord,
+    ConversationEffectObservedRecord,
+    ConversationClosedRecord,
     MemoryCommitFailedRecord,
     MemoryCommitRequestedRecord,
     MemoryCommitSucceededRecord,
@@ -109,6 +120,11 @@ MAX_REF_DEPTH = 5
 
 GrowBuilder = Callable[[Node, Any], Flow]
 """Injected kind-aware interpreter from a spawner and canonical seed to a fragment."""
+
+_CONVERSATION_RECORD_TYPES = (
+    ConversationAdmittedRecord, ConversationEffectRequestedRecord,
+    ConversationEffectObservedRecord, ConversationClosedRecord,
+)
 
 
 def _node_output_type(node: Node) -> Type | None:
@@ -202,6 +218,11 @@ class RunState:
             Dispatcher-owned FIFO of nodes eligible to start.
         in_flight (`dict[str, None]`):
             Ordered set of durably started nodes without a durable outcome.
+        accepted_starts (`dict[str, int]`):
+            Original accepted start sequence for each unfinished invocation.
+        conversation_state (`RuntimeConversationState`):
+            Accepted conversation segments, views, and retired invocation identities,
+            retained independently of learning and live graph pruning.
         result (`RunSucceeded | RunFailed | None`):
             Derived terminal result, or ``None`` while the run remains live.
         terminal_unreachable_failure (`Failure | None`):
@@ -255,6 +276,7 @@ class RunState:
         }
         self.ready: deque[str] = deque()
         self.in_flight: dict[str, None] = {}
+        self.accepted_starts: dict[str, int] = {}
         self.result: RunSucceeded | RunFailed | None = None
         self.terminal_unreachable_failure: Failure | None = None
         self.depth: dict[str, int] = {}
@@ -271,6 +293,7 @@ class RunState:
         self.trace: RetainedTrace | None = None
         self.learning_state = RuntimeLearningState()
         self.backward_state = RuntimeBackwardState()
+        self.conversation_state = RuntimeConversationState()
         self._memory_authority = _MemoryAuthority(
             layout=None,
             snapshots=None,
@@ -345,6 +368,7 @@ class _RunStartedApply:
     edge_state: dict[str, NodeState]
     ready: deque[str]
     in_flight: dict[str, None]
+    accepted_starts: dict[str, int]
     terminal_unreachable_failure: Failure | None
     depth: dict[str, int]
     wiring_overrides: dict[str, dict[str, Any]]
@@ -359,6 +383,7 @@ class _RunStartedApply:
     learnable: bool
     learning_state: RuntimeLearningState
     backward_state: RuntimeBackwardState
+    conversation_state: RuntimeConversationState
     memory_authority: _MemoryAuthority
     observers: tuple[Any, ...]
 
@@ -396,6 +421,8 @@ class _RunResumedDelta:
 
     retry_node_ids: tuple[str, ...]
     num_workers: int
+    originating_conversation_state: RuntimeConversationState
+    next_conversation_state: RuntimeConversationState
 
 
 @dataclass(frozen=True, slots=True)
@@ -558,6 +585,22 @@ class _BackwardPlan:
 
 
 @dataclass(frozen=True, slots=True)
+class _ConversationPlan:
+    """Canonical checkpoint authority and its pure run-local successor."""
+
+    originating_state: RunState
+    originating_flow: CompiledFlow
+    envelope_bytes: bytes
+    start_id: str
+    start_node_identity: int
+    end_id: str
+    end_node_identity: int | None
+    originating_conversation_state: RuntimeConversationState
+    next_conversation_state: RuntimeConversationState
+    trace_delta: TraceDelta | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class _GrowthDelta:
     """Immutable scalar authority for one flat deterministic expansion."""
 
@@ -585,6 +628,7 @@ class _GrowthTopology:
     edge_state: tuple[tuple[str, NodeState], ...]
     ready: tuple[str, ...]
     in_flight: tuple[str, ...]
+    accepted_starts: tuple[tuple[str, int], ...]
     depth: tuple[tuple[str, int], ...]
     wiring_overrides: tuple[tuple[str, dict[str, Any]], ...]
 
@@ -603,6 +647,7 @@ class _GrowthApply:
     edge_state: dict[str, NodeState]
     ready: deque[str]
     in_flight: dict[str, None]
+    accepted_starts: dict[str, int]
     depth: dict[str, int]
     wiring_overrides: dict[str, dict[str, Any]]
     observers: tuple[Any, ...]
@@ -652,6 +697,7 @@ class PreparedTransition:
         | _FailurePlan
         | _GrowthPlan
         | _BackwardPlan
+        | _ConversationPlan
     )
     observers: tuple[Any, ...]
 
@@ -690,25 +736,30 @@ class _HistoricalLogCursor:
         """Match and consume one historical envelope without writing it again."""
         if self._next_sequence >= len(self._envelope_bytes):
             raise ValueError("replay attempted to append beyond the historical prefix")
+        expected = self._envelope_bytes[self._next_sequence]
+        envelope = decode_record(expected)
         candidate = encode_record(
             RecordEnvelope(
-                schema=SCHEMA_VERSION,
+                schema=envelope.schema,
                 run_id=self._run_id,
                 seq=self._next_sequence,
                 record=record,
             )
         )
-        expected = self._envelope_bytes[self._next_sequence]
         if candidate != expected:
             raise ValueError(
                 "prepared transition does not match the historical run record"
             )
-        envelope = decode_record(expected)
         self._next_sequence += 1
         return envelope
 
 
-def prepare_run_started(state: RunState, data: RunStartData) -> PreparedTransition:
+def prepare_run_started(
+    state: RunState,
+    data: RunStartData,
+    *,
+    schema: int = SCHEMA_VERSION,
+) -> PreparedTransition:
     """Prepare canonical initialization without mutating ``state``.
 
     Args:
@@ -716,6 +767,9 @@ def prepare_run_started(state: RunState, data: RunStartData) -> PreparedTransiti
             A pristine state whose private graph contains its synthesized START node.
         data (`RunStartData`):
             Complete pool, identity, configuration, and worker selection for the run.
+        schema (`int`, *optional*, defaults to `SCHEMA_VERSION`):
+            Exact supported envelope version; historical replay supplies the
+            recorded version without rewriting accepted authority.
 
     Returns:
         `PreparedTransition`:
@@ -769,7 +823,7 @@ def prepare_run_started(state: RunState, data: RunStartData) -> PreparedTransiti
     # bytes immediately so the prepared record is exactly what either log will retain.
     canonical_bytes = encode_record(
         RecordEnvelope(
-            schema=SCHEMA_VERSION,
+            schema=schema,
             run_id=data.run_id,
             seq=state.next_sequence,
             record=candidate,
@@ -1137,21 +1191,26 @@ def prepare_record(
     record: RunRecord,
     *,
     grow_builder: GrowBuilder | None = None,
+    schema: int = SCHEMA_VERSION,
 ) -> PreparedTransition:
     """Validate one supported authoritative record against the current frontier.
 
     This is the shared reducer seam for live dispatch and later historical replay.
-    Graph records require an initialized nonterminal state. Backward and memory
+    Graph records require an initialized nonterminal state. Conversation records
+    belong to unfinished accepted invocations, independently of learning; a failed
+    run permits only their observation/close drain. Backward and memory-commit
     records require an initialized primary terminal with learning enabled.
 
     Args:
         state (`RunState`):
             Initialized reducer state immediately before ``record``.
         record (`RunRecord`):
-            One supported graph/frontier or backward-attempt record to validate and copy.
+            One supported graph/frontier, conversation, or backward-attempt record.
         grow_builder (`GrowBuilder | None`, *optional*):
             Required only for ``NodeExpandedRecord`` replay; rebuilds and verifies
             the recorded fragment through the same injected path used live.
+        schema (`int`, *optional*, defaults to `SCHEMA_VERSION`):
+            Exact supported envelope version belonging to this transition.
 
     Returns:
         `PreparedTransition`:
@@ -1166,24 +1225,27 @@ def prepare_record(
     if type(state) is not RunState:
         raise TypeError("prepare_record expects a RunState")
 
+    if type(record) in _CONVERSATION_RECORD_TYPES:
+        return prepare_conversation_record(state, record, schema=schema)
+
     if isinstance(record, (BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord,
                            MemoryCommitRequestedRecord, MemoryCommitSucceededRecord, MemoryCommitFailedRecord)):
-        return _prepare_backward_transition(state, record)
+        return _prepare_backward_transition(state, record, schema=schema)
 
     _require_initialized_nonterminal(state)
 
     if isinstance(record, NodeSucceededRecord):
         typed = _validate_success_value(state, record)
-        return _prepare_success_transition(state, record, typed)
+        return _prepare_success_transition(state, record, typed, schema=schema)
     if isinstance(record, NodeRoutedRecord):
         _validate_route_record(state, record)
-        return _prepare_route_transition(state, record)
+        return _prepare_route_transition(state, record, schema=schema)
     if isinstance(record, NodeExpandedRecord):
         if not callable(grow_builder):
             raise TypeError("NodeExpandedRecord replay requires a callable grow_builder")
-        return _prepare_growth_record(state, record, grow_builder)
+        return _prepare_growth_record(state, record, grow_builder, schema=schema)
     if isinstance(record, NodeFailedRecord):
-        return _prepare_failure_transition(state, record)
+        return _prepare_failure_transition(state, record, schema=schema)
     if isinstance(record, NodeStartedRecord):
         _validate_node_started(state, record)
     elif isinstance(record, RunResumedRecord):
@@ -1198,7 +1260,7 @@ def prepare_record(
         raise ValueError("run state is not initialized")
     canonical_bytes = encode_record(
         RecordEnvelope(
-            schema=SCHEMA_VERSION,
+            schema=schema,
             run_id=run_id,
             seq=state.next_sequence,
             record=record,
@@ -1243,6 +1305,8 @@ def prepare_record(
             delta=_RunResumedDelta(
                 retry_node_ids=canonical_record.retry_node_ids,
                 num_workers=canonical_record.num_workers,
+                originating_conversation_state=state.conversation_state,
+                next_conversation_state=_prepare_retired_conversations(state),
             ),
         )
     return PreparedTransition(
@@ -1258,6 +1322,8 @@ def _prepare_success_transition(
     state: RunState,
     record: NodeSucceededRecord,
     typed: TypedValue,
+    *,
+    schema: int = SCHEMA_VERSION,
 ) -> PreparedTransition:
     """Freeze one fully validated success delta and its canonical public record."""
     _validate_node_evidence(state, record.node_id, record.evidence)
@@ -1276,7 +1342,7 @@ def _prepare_success_transition(
         raise ValueError("run state is not initialized")
     canonical_bytes = encode_record(
         RecordEnvelope(
-            schema=SCHEMA_VERSION,
+            schema=schema,
             run_id=run_id,
             seq=state.next_sequence,
             record=record,
@@ -1351,6 +1417,7 @@ def _prepare_route_transition(
     record: NodeRoutedRecord,
     *,
     derive_terminal_failure: bool = False,
+    schema: int = SCHEMA_VERSION,
 ) -> PreparedTransition:
     """Freeze one fully validated route delta and its canonical public record."""
     _validate_node_evidence(state, record.node_id, record.evidence)
@@ -1372,7 +1439,7 @@ def _prepare_route_transition(
         raise ValueError("run state is not initialized")
     canonical_bytes = encode_record(
         RecordEnvelope(
-            schema=SCHEMA_VERSION,
+            schema=schema,
             run_id=run_id,
             seq=state.next_sequence,
             record=record_for_wire,
@@ -1447,6 +1514,8 @@ def _prepare_route_transition(
 def _prepare_failure_transition(
     state: RunState,
     record: NodeFailedRecord,
+    *,
+    schema: int = SCHEMA_VERSION,
 ) -> PreparedTransition:
     """Freeze one validated terminal diagnostic and its canonical public record."""
     _validate_failure_record(state, record)
@@ -1459,7 +1528,7 @@ def _prepare_failure_transition(
     )
     canonical_bytes = encode_record(
         RecordEnvelope(
-            schema=SCHEMA_VERSION,
+            schema=schema,
             run_id=run_id,
             seq=state.next_sequence,
             record=record_for_wire,
@@ -1510,6 +1579,8 @@ def _prepare_growth_record(
     state: RunState,
     record: NodeExpandedRecord,
     grow_builder: GrowBuilder,
+    *,
+    schema: int = SCHEMA_VERSION,
 ) -> PreparedTransition:
     """Rebuild and verify one historical expansion through the live builder path."""
     _validate_growth_record(state, record)
@@ -1535,6 +1606,7 @@ def _prepare_growth_record(
             fragment,
             actual_digest=actual_digest,
             validated_fragment=validated_fragment,
+            schema=schema,
         )
     except GrowthRejected as exc:
         original = exc.original
@@ -1548,6 +1620,7 @@ def _prepare_growth_transition(
     *,
     actual_digest: str | None = None,
     validated_fragment: tuple[tuple[str, ...], tuple[str, ...]] | None = None,
+    schema: int = SCHEMA_VERSION,
 ) -> PreparedTransition:
     """Freeze one validated fragment, final topology, and canonical public record."""
     _validate_growth_record(state, record)
@@ -1571,7 +1644,7 @@ def _prepare_growth_transition(
         raise ValueError("run state is not initialized")
     canonical_bytes = encode_record(
         RecordEnvelope(
-            schema=SCHEMA_VERSION,
+            schema=schema,
             run_id=run_id,
             seq=state.next_sequence,
             record=record,
@@ -1625,10 +1698,110 @@ def _prepare_growth_transition(
     )
 
 
-def _prepare_backward_transition(state: RunState, record: RunRecord) -> PreparedTransition:
+def prepare_conversation_record(
+    state: RunState, record: RunRecord, *, schema: int = SCHEMA_VERSION,
+) -> PreparedTransition:
+    """Prepare a conversation checkpoint without invoking a memory backend.
+
+    Args:
+        state (`RunState`): Initialized state at the checkpoint's accepted start.
+        record (`RunRecord`): One exact conversation record wrapper.
+        schema (`int`, *optional*, defaults to `SCHEMA_VERSION`): Envelope version;
+            conversation records require `8`, the current new-write version.
+
+    Returns:
+        `PreparedTransition`: Detached checkpoint and a pure projection delta,
+            with no output binding, execution episode, or public observer.
+
+    Raises:
+        `TypeError`: State, record, or nested carrier has an invalid exact type.
+        `ValueError`: Scope, invocation, lifecycle, or checkpoint authority is invalid.
+        `MemoryOperationError`: The conversation fold rejects effect ordering.
+
+    Example:
+        `commit_prepared(log, state, prepare_conversation_record(state, record))`
+        accepts a checkpoint before a separate backend may acknowledge it.
+    """
+    if type(state) is not RunState or type(record) not in _CONVERSATION_RECORD_TYPES:
+        raise TypeError("conversation preparation requires exact state and record carriers")
+    _require_initialized(state)
+    encoded = encode_record(RecordEnvelope(schema, state.run_id, state.next_sequence, record))
+    envelope = decode_record(encoded)
+    _validate_conversation_record(state, envelope.record)
+    successor = prepare_conversation_checkpoint(state.conversation_state, envelope.record.checkpoint)
+    start_id, end_id = state.flow.start_id, state.flow.end_id
+    plan = _ConversationPlan(
+        state, state.flow, encoded, start_id, id(state.flow.nodes[start_id]),
+        end_id, id(state.flow.nodes[end_id]) if end_id in state.flow.nodes else None,
+        state.conversation_state, successor, _prepare_record_trace(state, envelope),
+    )
+    return PreparedTransition(envelope.record, envelope.run_id, envelope.seq, plan, ())
+
+
+def _validate_conversation_record(state: RunState, record: RunRecord) -> None:
+    """Validate lifecycle and durable invocation ownership, without backend state."""
+    checkpoint = record.checkpoint
+    stamp = checkpoint.stamp
+    invocation = stamp.invocation
+    if invocation.run_id != state.run_id:
+        raise ValueError("conversation invocation belongs to another run")
+    if invocation in state.conversation_state.retired_invocations:
+        raise ValueError("conversation invocation is retired")
+    if state.backward_state.attempts or isinstance(state.result, RunSucceeded):
+        raise ValueError("conversation checkpoint is after success or backward start")
+    if isinstance(state.result, RunFailed) and type(record) not in (
+        ConversationEffectObservedRecord, ConversationClosedRecord,
+    ):
+        raise ValueError("failed run permits only existing observations and close")
+    node_id = next((node_id for node_id, sequence in state.accepted_starts.items()
+                    if sequence == invocation.start_sequence), None)
+    if node_id is None or node_id not in state.in_flight:
+        raise ValueError("conversation invocation has no unfinished accepted start")
+    index = state.conversation_state.index(invocation)
+    if type(checkpoint) is not ConversationAdmitted:
+        if index is None:
+            raise ValueError("conversation checkpoint requires an admitted invocation")
+        return
+    if index is not None:
+        raise ValueError("conversation invocation was already admitted")
+    frames = tuple(spec for spec in (state.memory_layout or ())
+                   if spec.ref == stamp.key.frame_ref and spec.policy_name == stamp.policy_name)
+    if len(frames) != 1:
+        raise ValueError("conversation frame and policy must be enabled in the recorded layout")
+    node = state.flow.nodes.get(node_id)
+    scope = node.memory_scope if node is not None else None
+    if type(scope) is not MemoryScope:
+        raise ValueError("conversation admission requires an exact compiled memory scope")
+    MemoryScope(scope.root_flow_id, scope.static_path, scope.frame_stack,
+                scope.occurrence_path, scope.boundary)
+    if (scope.static_path != stamp.key.consumer_static_path
+            or scope.frame_stack != state.learning_state.applicable_frames(scope.root_flow_id, scope.static_path)
+            or stamp.key.frame_ref not in scope.frame_stack):
+        raise ValueError("conversation admission disagrees with its compiled consumer scope")
+
+
+def _prepare_retired_conversations(state: RunState) -> RuntimeConversationState:
+    """Retire only effect-free admitted starts superseded by generic recovery."""
+    current = state.conversation_state
+    retired = set(current.retired_invocations)
+    for node_id in state.in_flight:
+        invocation = ConversationInvocation(state.run_id, state.accepted_starts[node_id])
+        index = current.index(invocation)
+        if index is None:
+            continue
+        if any(type(checkpoint) is ConversationEffectRequested
+               for checkpoint in current.segments[index].checkpoints):
+            raise ValueError("cannot retry an unfinished invocation with accepted conversation effects")
+        retired.add(invocation)
+    return replace(current, retired_invocations=frozenset(retired))
+
+
+def _prepare_backward_transition(
+    state: RunState, record: RunRecord, *, schema: int = SCHEMA_VERSION,
+) -> PreparedTransition:
     """Validate all backward data and prepare its detached state before append."""
     _require_initialized_terminal_backward(state)
-    encoded = encode_record(RecordEnvelope(SCHEMA_VERSION, state.run_id, state.next_sequence, record))
+    encoded = encode_record(RecordEnvelope(schema, state.run_id, state.next_sequence, record))
     envelope = decode_record(encoded)
     if type(envelope.record) is not type(record) or envelope.record != record:
         raise ValueError("backward record is not in canonical wire form")
@@ -1683,12 +1856,18 @@ def commit_prepared(
         raise TypeError("commit_prepared expects a PreparedTransition")
     if not isinstance(prepared._plan, (
         _RunStartedPlan, _FrontierPlan, _SuccessPlan, _RoutePlan,
-        _FailurePlan, _GrowthPlan, _BackwardPlan,
+        _FailurePlan, _GrowthPlan, _BackwardPlan, _ConversationPlan,
     )):
         raise TypeError("unsupported prepared transition plan")
     trace_delta = prepared._plan.trace_delta
     if isinstance(prepared._plan, _BackwardPlan):
         _require_postterminal_trace_delta(state, trace_delta)
+    elif isinstance(prepared._plan, _ConversationPlan):
+        if state.trace is None:
+            if trace_delta is not None:
+                raise ValueError("unretained conversation cannot carry a trace delta")
+        else:
+            _require_postterminal_trace_delta(state, trace_delta)
     elif isinstance(prepared._plan, _FrontierPlan):
         _require_frontier_trace_delta(state, prepared)
     if trace_delta is not None:
@@ -1707,6 +1886,8 @@ def commit_prepared(
         observers = _commit_growth(log, state, prepared)
     elif isinstance(prepared._plan, _BackwardPlan):
         observers = _commit_backward(log, state, prepared)
+    elif isinstance(prepared._plan, _ConversationPlan):
+        observers = _commit_conversation(log, state, prepared)
     else:
         raise TypeError("unsupported prepared transition plan")
     if trace_delta is not None:
@@ -1933,12 +2114,15 @@ def _replay_records(
             memory_snapshots=start.memory_snapshots,
             learnable=start.learnable,
         ),
+        schema=first.schema,
     )
     commit_prepared(cursor, state, prepared)
 
     for encoded in canonical_bytes[1:]:
-        record = decode_record(encoded).record
-        prepared = prepare_record(state, record, grow_builder=grow_builder)
+        envelope = decode_record(encoded)
+        prepared = prepare_record(
+            state, envelope.record, grow_builder=grow_builder, schema=envelope.schema,
+        )
         commit_prepared(cursor, state, prepared)
 
     if cursor.next_sequence != len(canonical_bytes):
@@ -1990,10 +2174,23 @@ def _commit_frontier(
     if isinstance(prepared.record, NodeStartedRecord) and isinstance(
         delta, _NodeStartedDelta
     ):
+        if delta.node_id != prepared.record.node_id:
+            raise ValueError("frontier start delta disagrees with its record")
         observers: tuple[Any, ...] = (NodeStarted(node_id=delta.node_id),)
     elif isinstance(prepared.record, RunResumedRecord) and isinstance(
         delta, _RunResumedDelta
     ):
+        expected_conversations = _prepare_retired_conversations(state)
+        candidate = delta.next_conversation_state
+        if type(candidate) is not RuntimeConversationState:
+            raise TypeError("resume plan requires an exact conversation projection")
+        checked = RuntimeConversationState(candidate.segments, candidate.views, candidate.retired_invocations)
+        if (delta.retry_node_ids != prepared.record.retry_node_ids
+                or type(delta.num_workers) is not int
+                or delta.num_workers != prepared.record.num_workers
+                or delta.originating_conversation_state is not state.conversation_state
+                or checked != expected_conversations):
+            raise ValueError("frontier resume delta disagrees with its record or conversation authority")
         observers = (RunResumed(),)
     else:
         raise TypeError("frontier record and prevalidated delta disagree")
@@ -2002,9 +2199,12 @@ def _commit_frontier(
     if isinstance(delta, _NodeStartedDelta):
         state.ready.popleft()
         state.in_flight[delta.node_id] = None
+        state.accepted_starts[delta.node_id] = prepared.expected_sequence
     else:
         state.ready.extendleft(reversed(delta.retry_node_ids))
         state.in_flight.clear()
+        state.accepted_starts.clear()
+        state.conversation_state = expected_conversations
         state.num_workers = delta.num_workers
     state.next_sequence = prepared.expected_sequence + 1
     return observers
@@ -2028,6 +2228,7 @@ def _commit_success(
     _require_unchanged_record(prepared, plan.envelope_bytes)
     _require_outcome_trace_scope(state, prepared)
     _require_outcome_trace_terminal(state, prepared)
+    _require_closed_conversation(state, prepared.record.node_id)
     delta = plan.delta
     if not (
         prepared.record.node_id == delta.node_id
@@ -2042,6 +2243,7 @@ def _commit_success(
     for edge_id in delta.outgoing_edge_ids:
         state.edge_state[edge_id] = NodeState.TAKEN
     del state.in_flight[delta.node_id]
+    del state.accepted_starts[delta.node_id]
     state.ready.extend(delta.newly_ready_ids)
     if apply.terminal is not None:
         state.result = apply.terminal.result
@@ -2088,6 +2290,7 @@ def _commit_route(
     for node_id in delta.skipped_node_ids:
         state.node_state[node_id] = NodeState.SKIPPED
     del state.in_flight[delta.node_id]
+    del state.accepted_starts[delta.node_id]
     state.ready.extend(delta.newly_ready_ids)
     state.terminal_unreachable_failure = delta.terminal_unreachable_failure
     if apply.terminal is not None:
@@ -2125,6 +2328,7 @@ def _commit_failure(
     _append_and_verify(log, prepared)
     state.node_state[node_id] = NodeState.TAKEN
     del state.in_flight[node_id]
+    del state.accepted_starts[node_id]
     state.result = apply.result
     state.learning_state = plan.next_learning_state
     state.next_sequence = prepared.expected_sequence + 1
@@ -2169,6 +2373,7 @@ def _commit_growth(
     state.edge_state = apply.edge_state
     state.ready = apply.ready
     state.in_flight = apply.in_flight
+    state.accepted_starts = apply.accepted_starts
     state.depth = apply.depth
     state.wiring_overrides = apply.wiring_overrides
     state.learning_state = plan.next_learning_state
@@ -2250,6 +2455,27 @@ def _commit_backward(log: RunLog, state: RunState, prepared: PreparedTransition)
     return ()
 
 
+def _commit_conversation(log: RunLog, state: RunState, prepared: PreparedTransition) -> tuple[Any, ...]:
+    """Verify checkpoint authority, append, then install its pure successor."""
+    plan = prepared._plan
+    if type(plan) is not _ConversationPlan or type(prepared.record) not in _CONVERSATION_RECORD_TYPES:
+        raise TypeError("conversation commit requires its exact plan and record")
+    _require_prepared_origin(state, plan)
+    _require_initialized(state)
+    _require_authority_coordinates(log, state, prepared, initialized=True)
+    _require_unchanged_record(prepared, plan.envelope_bytes)
+    if state.conversation_state is not plan.originating_conversation_state:
+        raise ValueError("prepared conversation transition has stale authority")
+    envelope = decode_record(plan.envelope_bytes)
+    _validate_conversation_record(state, envelope.record)
+    expected = prepare_conversation_checkpoint(state.conversation_state, envelope.record.checkpoint)
+    _require_prepared_projection(state.conversation_state, plan.next_conversation_state, expected)
+    _append_and_verify(log, prepared)
+    state.conversation_state = expected
+    state.next_sequence = prepared.expected_sequence + 1
+    return ()
+
+
 def _require_prepared_origin(
     state: RunState,
     plan: (
@@ -2260,6 +2486,7 @@ def _require_prepared_origin(
         | _FailurePlan
         | _GrowthPlan
         | _BackwardPlan
+        | _ConversationPlan
     ),
 ) -> None:
     """Require the exact state, adopted flow, and boundary objects from preparation."""
@@ -2317,9 +2544,15 @@ def _require_unchanged_record(
     envelope_bytes: bytes,
 ) -> None:
     """Reject mutation or mismatched construction of the public record carrier."""
+    frozen = decode_record(envelope_bytes)
+    if (
+        frozen.run_id != prepared.expected_run_id
+        or frozen.seq != prepared.expected_sequence
+    ):
+        raise ValueError("prepared coordinates changed after validation")
     current_bytes = encode_record(
         RecordEnvelope(
-            schema=SCHEMA_VERSION,
+            schema=frozen.schema,
             run_id=prepared.expected_run_id,
             seq=prepared.expected_sequence,
             record=prepared.record,
@@ -2337,6 +2570,7 @@ def _append_and_verify(log: RunLog, prepared: PreparedTransition) -> None:
         or envelope.seq != prepared.expected_sequence
         or envelope.record != prepared.record
         or log.next_sequence != prepared.expected_sequence + 1
+        or encode_record(envelope) != prepared._plan.envelope_bytes
     ):
         raise ValueError("run-log append result does not match prepared transition")
 
@@ -2349,12 +2583,14 @@ def _require_initialized(state: RunState) -> None:
         and type(state.edge_state) is dict
         and type(state.ready) is deque
         and type(state.in_flight) is dict
+        and type(state.accepted_starts) is dict
         and type(state.depth) is dict
         and type(state.wiring_overrides) is dict
         and type(state.input) is dict
         and type(state.effective_llm_by_static_path) is dict
         and type(state.learning_state) is RuntimeLearningState
         and type(state.backward_state) is RuntimeBackwardState
+        and type(state.conversation_state) is RuntimeConversationState
         and type(state._memory_authority) is _MemoryAuthority
         and type(state.initial_static_ids) is frozenset
     )
@@ -2366,6 +2602,11 @@ def _require_initialized(state: RunState) -> None:
         raise ValueError("run state is not initialized with a flow fingerprint")
     if type(state.next_sequence) is not int or state.next_sequence < 1:
         raise ValueError("run state is not initialized with a valid sequence")
+    if (state.accepted_starts.keys() != state.in_flight.keys()
+            or any(type(sequence) is not int or not 0 < sequence < state.next_sequence
+                   for sequence in state.accepted_starts.values())
+            or len(set(state.accepted_starts.values())) != len(state.accepted_starts)):
+        raise ValueError("accepted starts must match the unfinished invocation inventory")
     if type(state.num_workers) is not int or state.num_workers < 0:
         raise ValueError("run state has an invalid worker count")
     if state.terminal_unreachable_failure is not None:
@@ -2482,6 +2723,7 @@ def _validate_run_resumed(state: RunState, record: RunResumedRecord) -> None:
             )
         if state.in_flight[node_id] is not None:
             raise ValueError("in-flight must be an ordered set with None values")
+    _prepare_retired_conversations(state)
 
 
 def _require_succeeding_node(state: RunState, node_id: str) -> None:
@@ -2494,6 +2736,15 @@ def _require_succeeding_node(state: RunState, node_id: str) -> None:
         raise ValueError(f"NodeSucceeded node {node_id!r} is not in-flight")
     if state.in_flight[node_id] is not None:
         raise ValueError("in-flight must be an ordered set with None values")
+    _require_closed_conversation(state, node_id)
+
+
+def _require_closed_conversation(state: RunState, node_id: str) -> None:
+    """Require an admitted invocation's close before accepting its success."""
+    invocation = ConversationInvocation(state.run_id, state.accepted_starts[node_id])
+    index = state.conversation_state.index(invocation)
+    if index is not None and type(state.conversation_state.segments[index].checkpoints[-1]) is not ConversationClosed:
+        raise ValueError("node success requires its conversation handle to be closed")
 
 
 def _require_routing_node(state: RunState, node_id: str) -> None:
@@ -2702,6 +2953,7 @@ def _prepare_growth_topology(
         edge_state=tuple(edge_state.items()),
         ready=ready,
         in_flight=in_flight,
+        accepted_starts=tuple((node_id, state.accepted_starts[node_id]) for node_id in in_flight),
         depth=tuple(depth.items()),
         wiring_overrides=tuple(wiring_overrides.items()),
     )
@@ -4195,12 +4447,14 @@ def _require_pristine(state: RunState) -> None:
         and type(state.edge_state) is dict
         and type(state.ready) is deque
         and type(state.in_flight) is dict
+        and type(state.accepted_starts) is dict
         and type(state.depth) is dict
         and type(state.wiring_overrides) is dict
         and type(state.input) is dict
         and type(state.effective_llm_by_static_path) is dict
         and type(state.learning_state) is RuntimeLearningState
         and type(state.backward_state) is RuntimeBackwardState
+        and type(state.conversation_state) is RuntimeConversationState
         and type(state._memory_authority) is _MemoryAuthority
         and type(state.initial_static_ids) is frozenset
     )
@@ -4217,6 +4471,7 @@ def _require_pristine(state: RunState) -> None:
         and all(value is NodeState.UNKNOWN for value in state.edge_state.values())
         and not state.ready
         and not state.in_flight
+        and not state.accepted_starts
         and state.result is None
         and state.terminal_unreachable_failure is None
         and not state.depth
@@ -4235,6 +4490,7 @@ def _require_pristine(state: RunState) -> None:
         and state.trace is None
         and state.learning_state == RuntimeLearningState()
         and state.backward_state == RuntimeBackwardState()
+        and state.conversation_state == RuntimeConversationState()
         and state._memory_authority.layout is None
         and state._memory_authority.snapshots is None
         and state._memory_authority.learnable is False
@@ -4259,6 +4515,7 @@ def _require_originating_flow(
         | _FailurePlan
         | _GrowthPlan
         | _BackwardPlan
+        | _ConversationPlan
     ),
 ) -> None:
     """Reject replacement of the adopted flow object or either boundary identity.
@@ -4338,6 +4595,7 @@ def _materialize_run_started(
         edge_state=dict(state.edge_state),
         ready=deque((start_id,)),
         in_flight={},
+        accepted_starts={},
         terminal_unreachable_failure=None,
         depth={},
         wiring_overrides={start_id: canonical_wiring},
@@ -4352,6 +4610,7 @@ def _materialize_run_started(
         learnable=record.learnable,
         learning_state=learning_state,
         backward_state=backward_state,
+        conversation_state=RuntimeConversationState(),
         memory_authority=memory_authority,
         observers=(RunStarted(),),
     )
@@ -4364,6 +4623,7 @@ def _apply_run_started(state: RunState, apply: _RunStartedApply) -> None:
     state.edge_state = apply.edge_state
     state.ready = apply.ready
     state.in_flight = apply.in_flight
+    state.accepted_starts = apply.accepted_starts
     state.result = None
     state.terminal_unreachable_failure = apply.terminal_unreachable_failure
     state.depth = apply.depth
@@ -4378,6 +4638,7 @@ def _apply_run_started(state: RunState, apply: _RunStartedApply) -> None:
     state.learnable = apply.learnable
     state.learning_state = apply.learning_state
     state.backward_state = apply.backward_state
+    state.conversation_state = apply.conversation_state
     state._memory_authority = apply.memory_authority
     state.next_sequence = apply.next_sequence
 
@@ -4508,6 +4769,7 @@ def _materialize_growth(plan: _GrowthPlan) -> _GrowthApply:
         edge_state=dict(topology.edge_state),
         ready=deque(topology.ready),
         in_flight={node_id: None for node_id in topology.in_flight},
+        accepted_starts=dict(topology.accepted_starts),
         depth=dict(topology.depth),
         wiring_overrides={
             node_id: copy.deepcopy(wiring)
@@ -4526,6 +4788,7 @@ __all__ = [
     "RunState",
     "commit_prepared",
     "prepare_expanded",
+    "prepare_conversation_record",
     "prepare_node_failed",
     "prepare_node_routed",
     "prepare_node_started",

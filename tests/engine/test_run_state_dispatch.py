@@ -101,6 +101,13 @@ def _assert_committed_path(log: MemoryRunLog, *tail: Any) -> None:
     assert tuple(envelope.record for envelope in envelopes[1:]) == tail
 
 
+def _start_frontier(state: RunState, log: MemoryRunLog, *node_ids: str) -> None:
+    """Accept starts from an isolated test frontier through the real reducer."""
+    state.ready = deque(node_ids)
+    for node_id in node_ids:
+        commit_prepared(log, state, prepare_node_started(state, node_id))
+
+
 def _state_snapshot(state: RunState) -> dict[str, Any]:
     """Return every reducer coordinate in an equality-friendly detached form."""
     return {
@@ -115,6 +122,9 @@ def _state_snapshot(state: RunState) -> dict[str, Any]:
         "ready_identity": id(state.ready),
         "in_flight": tuple(state.in_flight),
         "in_flight_identity": id(state.in_flight),
+        "accepted_starts": dict(state.accepted_starts),
+        "accepted_starts_identity": id(state.accepted_starts),
+        "conversation_state": state.conversation_state,
         "result": state.result,
         "terminal_unreachable_failure": state.terminal_unreachable_failure,
         "depth": dict(state.depth),
@@ -149,6 +159,7 @@ def test_node_started_requires_and_removes_the_exact_ready_head():
     assert observers == (NodeStarted(node_id=START_ID),)
     assert tuple(state.ready) == ()
     assert tuple(state.in_flight) == (START_ID,)
+    assert state.accepted_starts == {START_ID: 1}
     assert state.node_state[START_ID] is NodeState.UNKNOWN
     assert state.next_sequence == 2
     _assert_committed_path(log, NodeStartedRecord(node_id=START_ID))
@@ -195,11 +206,12 @@ def test_node_started_requires_unknown_disposition_and_no_existing_flight():
         prepare_node_started(state, "first")
 
     state.node_state["first"] = NodeState.UNKNOWN
-    state.in_flight["first"] = None
+    _start_frontier(state, log, "first")
+    state.ready.append("first")
     with pytest.raises(ValueError, match="in-flight"):
         prepare_node_started(state, "first")
 
-    assert log.next_sequence == 1
+    assert log.next_sequence == 2
 
 
 def test_retried_node_can_start_again_in_a_valid_record_sequence():
@@ -211,6 +223,7 @@ def test_retried_node_can_start_again_in_a_valid_record_sequence():
 
     assert tuple(state.ready) == ()
     assert tuple(state.in_flight) == (START_ID,)
+    assert state.accepted_starts == {START_ID: 3}
     _assert_committed_path(
         log,
         NodeStartedRecord(node_id=START_ID),
@@ -221,8 +234,8 @@ def test_retried_node_can_start_again_in_a_valid_record_sequence():
 
 def test_node_started_preparation_keeps_existing_frontier_live():
     state, log, _ = _initialized()
+    _start_frontier(state, log, "first", "second")
     state.ready = deque(("ordinary",))
-    state.in_flight = {"first": None, "second": None}
 
     prepared = prepare_node_started(state, "ordinary")
 
@@ -230,7 +243,7 @@ def test_node_started_preparation_keeps_existing_frontier_live():
     assert prepared._plan.delta.node_id == "ordinary"
     assert tuple(state.ready) == ("ordinary",)
     assert tuple(state.in_flight) == ("first", "second")
-    _assert_committed_path(log)
+    _assert_committed_path(log, NodeStartedRecord("first"), NodeStartedRecord("second"))
 
 
 class _InspectingLog(MemoryRunLog):
@@ -249,11 +262,13 @@ class _InspectingLog(MemoryRunLog):
         self._state = state
         self._expected_ready = expected_ready
         self._expected_in_flight = expected_in_flight
+        self._expected_accepted_starts = dict(state.accepted_starts)
         self.saw_append = False
 
     def append(self, record):
         assert tuple(self._state.ready) == self._expected_ready
         assert tuple(self._state.in_flight) == self._expected_in_flight
+        assert self._state.accepted_starts == self._expected_accepted_starts
         self.saw_append = True
         return super().append(record)
 
@@ -285,6 +300,7 @@ def test_run_resumed_appends_before_applying_the_frontier_delta():
     assert log.saw_append
     assert tuple(state.ready) == (START_ID,)
     assert state.in_flight == {}
+    assert state.accepted_starts == {}
     assert state.num_workers == 6
     _assert_committed_path(
         log,
@@ -295,7 +311,7 @@ def test_run_resumed_appends_before_applying_the_frontier_delta():
 
 def test_run_resumed_preparation_preserves_retry_order_ahead_of_ready_work():
     state, log, _ = _initialized(num_workers=2)
-    state.in_flight = {"first": None, "second": None}
+    _start_frontier(state, log, "first", "second")
     state.ready = deque(("ordinary", END_ID))
     before = _state_snapshot(state)
 
@@ -314,7 +330,7 @@ def test_run_resumed_preparation_preserves_retry_order_ahead_of_ready_work():
     assert state.num_workers == 2
     assert state.node_state["first"] is NodeState.UNKNOWN
     assert state.node_state["second"] is NodeState.UNKNOWN
-    _assert_committed_path(log)
+    _assert_committed_path(log, NodeStartedRecord("first"), NodeStartedRecord("second"))
 
 
 @pytest.mark.parametrize("num_workers", [-1, True, 1.5, "3", None])
@@ -399,27 +415,29 @@ def test_run_resumed_validation_does_not_read_the_ready_frontier():
 
 
 @pytest.mark.parametrize(
-    ("in_flight", "node_state", "match"),
+    ("case", "match"),
     [
-        (("missing",), {}, "does not exist"),
-        (("first",), {"first": NodeState.TAKEN}, "UNKNOWN"),
+        ("missing", "does not exist"),
+        ("taken", "UNKNOWN"),
     ],
 )
 def test_run_resumed_rejects_invalid_retry_frontiers(
-    in_flight: tuple[str, ...],
-    node_state: dict[str, NodeState],
+    case: str,
     match: str,
 ):
     state, log, _ = _initialized()
-    state.in_flight = dict.fromkeys(in_flight)
-    state.node_state.update(node_state)
+    _start_frontier(state, log, "first")
+    if case == "missing":
+        del state.flow.nodes["first"]
+    else:
+        state.node_state["first"] = NodeState.TAKEN
     before = _state_snapshot(state)
 
     with pytest.raises(ValueError, match=match):
         prepare_run_resumed(state, num_workers=3)
 
     assert _state_snapshot(state) == before
-    assert log.next_sequence == 1
+    assert log.next_sequence == 2
 
 
 @pytest.mark.parametrize(
@@ -435,7 +453,7 @@ def test_prepare_record_requires_the_exact_ordered_resume_retry_list(
     retry_node_ids: tuple[str, ...],
 ):
     state, log, _ = _initialized()
-    state.in_flight = {"first": None, "second": None}
+    _start_frontier(state, log, "first", "second")
     before = _state_snapshot(state)
 
     with pytest.raises(ValueError, match="retry_node_ids"):
@@ -445,7 +463,7 @@ def test_prepare_record_requires_the_exact_ordered_resume_retry_list(
         )
 
     assert _state_snapshot(state) == before
-    assert log.next_sequence == 1
+    assert log.next_sequence == 3
 
 
 def test_prepare_record_accepts_exact_dispatch_and_resume_records():
@@ -556,14 +574,14 @@ def test_non_start_commit_requires_exact_log_identity_before_append(mismatch: st
 
 def test_resume_rejects_cross_state_before_append():
     state, log, flow = _initialized()
-    state.in_flight = {"first": None, "second": None}
+    _start_frontier(state, log, "first", "second")
     state.ready = deque(("ordinary",))
     prepared = prepare_run_resumed(state, num_workers=4)
 
     other = RunState(flow)
     with pytest.raises(ValueError, match="originating RunState"):
         commit_prepared(log, other, prepared)
-    assert log.next_sequence == 1
+    assert log.next_sequence == 3
 
 
 def test_dispatch_rejects_adopted_flow_or_boundary_replacement_before_append():

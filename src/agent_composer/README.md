@@ -50,7 +50,7 @@ compose/      Compose-YAML front end: text -> CompiledFlow; source/ owns YAML
               lower file-private children
               (source/helpers/nodes/parse/desugar/edges/validate/build/loader)
 runtime/      run records/logs, scheduler-state vocabulary, reducer-owned state,
-              forward dispatcher/worker pool,
+              pure conversation projection, forward dispatcher/worker pool,
               explicit backward driver and pure learning/context projections
 run.py        public run/recovery boundary and retained RunResult.backward handle
 llm_clients/  provider clients (lazy-imported) + LLMConfig + model_from_config
@@ -147,8 +147,8 @@ supplies a local origin. Unsupported growth kinds and arbitrary builder, compile
 spawner/fragment-copy, digest, topology-materialization, reducer, append, or log
 faults escape rather than becoming flow failures.
 
-At the schema-7 boundary, every diagnostic trace item becomes an exact base
-`OriginRef(key)`: front-end-specific subclasses are valid in memory, but class
+At the failure boundary introduced in schema 7, every diagnostic trace item
+becomes an exact base `OriginRef(key)`: front-end-specific subclasses are valid in memory, but class
 identity is intentionally absent from the single-key wire. The reducer carries
 that canonical immutable `Failure` through `NodeFailed`, terminal `RunFailed`,
 and `RunResult.failure` without flattened aliases; live carriers share the same
@@ -576,7 +576,7 @@ targets, and floods the target's outgoing edges.
 Failure is a `raise`, not another result variant. `eval_node` structurally turns
 expected binding, assertion, body, and result rejection into
 `EvaluationFailure(Failure)`. Result preparation constructs the same canonical
-value for expected output, route, and growth rejection. Schema 7 carries that
+value for expected output, route, and growth rejection. Schemas 7 and 8 carry that
 value unchanged through the durable record, reducer, observer events, and public
 result; the durable outcome may also retain optional source-neutral evaluation
 evidence. Host control, stream callbacks, unexpected binder faults, malformed
@@ -685,10 +685,20 @@ RunStartedRecord | RunResumedRecord | NodeStartedRecord |
 NodeSucceededRecord | NodeRoutedRecord | NodeExpandedRecord | NodeFailedRecord |
 MemoryCommitRequestedRecord |
 MemoryCommitSucceededRecord | MemoryCommitFailedRecord |
-BackwardStartedRecord | BackwardReadyRecord | BackwardFinishedRecord
+BackwardStartedRecord | BackwardReadyRecord | BackwardFinishedRecord |
+ConversationAdmittedRecord | ConversationEffectRequestedRecord |
+ConversationEffectObservedRecord | ConversationClosedRecord
 ```
 
-The exact wire version is schema 7. The recorded `learnable` flag controls retention:
+New records use schema 8. Readers accept exactly schemas 7 and 8: the thirteen
+pre-existing record kinds retain their unchanged payload validation in both;
+the four conversation kinds require schema 8. Unsupported versions are rejected.
+Preparation and replay retain each historical envelope's actual schema and
+canonical bytes, including trace comparison, prepared-record tamper checks, and
+append verification. Recovery appends schema-8 records without rewriting or
+relabelling the accepted schema-7 prefix; mixed-version logs reopen normally.
+
+The recorded `learnable` flag controls forward retention:
 `learnable=True` requires every accepted node outcome to carry a `ForwardCapture`;
 `learnable=False` omits it. The capture contains canonical bound inputs or an
 incomplete-binding marker, input routes, indexed item captures, execution scope,
@@ -720,7 +730,7 @@ evaluated a second time to capture it.
 Model/tool evaluation evidence is separate and may
 have no memory scope; recalled sections still require
 a matching scope and follow its frame order. `NodeFailedRecord` owns one canonical
-nested `Failure`. Earlier schemas are rejected rather than migrated. Terminal
+nested `Failure`. Terminal
 success remains derived from the END value. The first
 route whose skip closure reaches END persists its causal `Failure` on that
 `NodeRoutedRecord`; replay revalidates the route before restoring it, and no
@@ -898,9 +908,10 @@ instance; external persistence remains a host concern.
 ### Session conversation foundation
 
 `agent_composer.memory.session.SessionMemory` supplies the lower-level conversation
-backend. Runtime, AGENT, API-provider, Codex, and CLI integration is pending:
-`run_flow` does not yet drive its conversation capabilities. This foundation adds
-no RunLog records or schema change. `SessionMemory` is a concrete backend;
+backend. Checkpoint RunLog records and pure reducer/replay support are available;
+the automatic checkpoint channel, session harness, AGENT, API-provider, Codex, and
+CLI integration are pending. `run_flow` does not yet drive conversation turns.
+`SessionMemory` is a concrete backend;
 `MemorySession` remains the existing run-handle protocol. Optional
 `ConversationFrame`, `ConversationSession`, and `ConversationTurn` protocols leave
 the mandatory memory interfaces unchanged.
@@ -911,8 +922,14 @@ The ownership split is a pure state fold plus an effectful interpreter:
 owns live views, FIFO leases, and private acceptance fences. The fold and backend
 import only the standard library and lower memory modules, never nodes, runtime,
 compile, compose, or providers. The facade exports contracts only; concrete
-backends are imported explicitly from their own modules. Later runtime integration
-must reuse the pure fold rather than duplicate its transition rules.
+backends are imported explicitly from their own modules.
+
+`runtime/conversation.py` sits above the lower memory fold and below
+`runtime/state.py`. Its immutable `RuntimeConversationState` pairs each invocation's
+admission-led `ConversationAuthority` segment with its resulting view, and retains
+retired invocation identities. `prepare_conversation_checkpoint` advances that
+projection through the existing `advance_conversation`; it imports only the
+standard library and lower memory contracts/fold, never backends or drivers.
 
 `SessionMemory()` takes no arguments and accepts only empty frame configuration.
 Its conversation key is the authored frame plus the leaf consumer's static path,
@@ -955,6 +972,33 @@ It does not delete external provider history or files. The
 [Python API guide](../../docs/api.md#sessionmemory-foundation) shows the available
 lower-level snapshot/reset interface.
 
+### Conversation record authority
+
+The four schema-8 wrappers carry exact detached admission, effect-request,
+effect-observation, and close checkpoints. `RunState.accepted_starts` tracks each
+unfinished invocation's original accepted `NodeStartedRecord` sequence separately
+from retained forward capture. Together with the run ID, that sequence identifies
+the invocation; a dynamic node name does not. `conversation_state` starts empty,
+including for historical schema-7 runs, and survives graph pruning independently
+of `learnable`.
+
+`prepare_conversation_record` validates the accepted start, run identity, enabled
+frame/policy, compiled consumer `MemoryScope`, and checkpoint lifecycle before
+preparing a pure successor. The lower fold validates baseline, revision, ordinal,
+and effect ordering. Each invocation admits at most one conversation handle.
+Commit verifies the frozen record and recomputed successor before append, then
+installs the projection. These records do not bind outputs, advance the frontier,
+produce execution episodes, or publish observers; retained trace handling advances
+only its record sequence. Neither preparation nor replay opens a backend or calls
+a session, node, or provider.
+
+An admitted handle must close before `NodeSucceededRecord` can be accepted. After
+primary failure, only observations and close for an already-admitted, still
+unfinished invocation may drain; a node with an accepted outcome is no longer
+unfinished. All checkpoints are rejected after primary success or any backward
+start, including a finished backward attempt. The automatic live checkpoint
+channel that connects worker turns to this reducer remains future work.
+
 ## Durable recovery
 
 `run_flow(..., log=path)` exclusively creates a new JSONL authority. Its first
@@ -967,12 +1011,21 @@ the same nested CALL/MAP/LOOP graph without re-running the spawner.
 `resume_flow(flow, log=path)` locks an existing log, durably removes bytes after
 the final complete newline, validates its canonical contiguous prefix, and checks
 the supplied flow fingerprint. It folds historical records silently through the
-same reducer and injected growth builder used live. A nonterminal primary prefix
-gets exactly one `RunResumedRecord`, which puts durably started nodes with no
+same reducer and injected growth builder used live. An eligible nonterminal primary
+prefix gets exactly one `RunResumedRecord`, which puts durably started nodes with no
 durable outcome back ahead of the ready frontier before dispatch continues. A
 terminal primary returns its observed backward prefix without appending records
 or invoking graph nodes, backward callbacks, learners, or commits. Recovery uses the
 recorded input, run ID, and complete LLM map rather than current ambient defaults.
+
+An unfinished invocation with any accepted `ConversationEffectRequestedRecord`
+cannot be generically retried, even if that request was observed or the handle
+closed. Only requests in that invocation's accepted segment count, not effects
+inherited from its admission baseline. Recovery fails closed before appending
+`RunResumedRecord`. For an effect-free admitted invocation, an accepted resume
+retires its old identity without changing its accepted segment/view or fabricating
+close, completion, or effect records. Its next accepted start has a new sequence;
+late checkpoints for the retired identity are rejected.
 
 When an unfinished recorded run enabled memory, recovery requires the named host
 implementations and verifies that opening each session reproduces the exact
@@ -991,7 +1044,9 @@ and accepted prefix; a handle that cannot refresh its authority becomes unusable
 instead of reusing stale proposals or requests.
 
 This provides deterministic engine-state recovery, not exactly-once external
-effects: an interrupted node with a durable start and no outcome is retried.
+effects. An interrupted node with a durable start and no outcome is retried when
+the conversation-effect guard permits it; memory-free nodes retain ordinary retry
+behavior, so their external effects must still tolerate repetition.
 
 ## Blocking effects and structured drain
 

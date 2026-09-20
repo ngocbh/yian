@@ -60,3 +60,18 @@ def harness(memory=None, *, policy="session", ref=REF):
 def append_reply(turn, item_id, text):
     ordinal = turn.request("model", {"prompt": text})
     turn.observe(ordinal, "completed", items=(item(item_id, text),))
+
+
+def admission(invocation, *, baseline=None, policy="session", ref=REF,
+              consumer=("root", "agent")):
+    """Build a detached lower-level admission without opening a backend."""
+    if baseline is None:
+        baseline = c.ConversationView(
+            "test-namespace", 0, 0, c.ConversationKey(ref, consumer),
+            {"format": "fake-v1"}, (), None, (), (), (),
+        )
+    return c.ConversationAdmitted(
+        c.ConversationStamp(policy, baseline.key, invocation, baseline.namespace,
+                            baseline.generation, baseline.revision, 0),
+        baseline,
+    )

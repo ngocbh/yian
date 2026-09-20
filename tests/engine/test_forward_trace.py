@@ -14,7 +14,8 @@ from agent_composer.runtime.log import (
 )
 
 
-def test_forward_capture_round_trips_invocation_names_and_structural_layout():
+@pytest.mark.parametrize("schema", [7, 8])
+def test_forward_capture_round_trips_invocation_names_and_structural_layout(schema):
     from agent_composer.runtime.contracts import ForwardCapture
 
     data = {"input_output_paths": {"result": []}}
@@ -25,13 +26,13 @@ def test_forward_capture_round_trips_invocation_names_and_structural_layout():
     )
     data["input_output_paths"]["result"].append("changed")
     record = NodeSucceededRecord("end", "end", canonical_typed({"items": [1]}, None)[0], forward_capture=capture)
-    envelope = RecordEnvelope(SCHEMA_VERSION, "run", 3, record)
+    envelope = RecordEnvelope(schema, "run", 3, record)
     decoded = decode_record(encode_record(envelope))
     assert decoded == envelope
     assert decoded.record.forward_capture.input_names == ("result",)
     assert decoded.record.forward_capture.variable_names == ("instruction",)
     assert decoded.record.forward_capture.node_data == {"input_output_paths": {"result": []}}
-    assert SCHEMA_VERSION == 7
+    assert decoded.schema == schema
     old = json.loads(encode_record(envelope))
     old["schema"] = 6
     with pytest.raises(ValueError, match="schema"):
@@ -352,7 +353,8 @@ def test_discarded_agent_worker_keeps_render_capture_out_of_accepted_trace(monke
     assert "slow" not in engine.state.trace.current_writers
 
 
-def test_forward_capture_round_trips_without_memory_scope():
+@pytest.mark.parametrize("schema", [7, 8])
+def test_forward_capture_round_trips_without_memory_scope(schema):
     from agent_composer.runtime.contracts import ForwardCapture
 
     inputs = {"value": [1, None]}
@@ -372,7 +374,7 @@ def test_forward_capture_round_trips_without_memory_scope():
         "work", "work", canonical_typed(None, None)[0],
         evidence=evidence, forward_capture=capture,
     )
-    envelope = RecordEnvelope(SCHEMA_VERSION, "run", 3, record)
+    envelope = RecordEnvelope(schema, "run", 3, record)
     decoded = decode_record(encode_record(envelope))
     assert decoded == envelope
     assert decoded.record.forward_capture.bound_inputs == {"value": [1, None]}
@@ -382,7 +384,7 @@ def test_forward_capture_round_trips_without_memory_scope():
     assert capture.node_data == {"saved": [2]}
     with pytest.raises(FrozenInstanceError):
         capture.scope = None
-    assert SCHEMA_VERSION == 7
+    assert decoded.schema == schema
     old = json.loads(encode_record(envelope))
     old["schema"] = 6
     with pytest.raises(ValueError, match="schema"):

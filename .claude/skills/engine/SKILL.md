@@ -114,7 +114,7 @@ this model whenever you design anything:
   effective commit target's contract. Missing contract provenance falls back to
   the parameter or executing node, while invalid defaults retain their default
   origin. Non-type output canonicalization uses the contract default. Route and
-  growth use the executing node origin. All paths feed one schema-7
+  growth use the executing node origin. All paths feed one
   `NodeFailedRecord` boundary carrying the failure, optional evaluation evidence,
   and forward capture when retention is enabled;
   reducer state, `NodeFailed`, `RunFailed`, and `RunResult.failure` retain that
@@ -331,7 +331,11 @@ Most are just the functional model (above) made enforceable:
   then every node start and accepted outcome. A transition is validated and prepared,
   appended to its `RunLog`, and only then applied to `RunState`; observers become
   visible after append + apply. Recovery validates a contiguous prefix and folds
-  it through the same reducer path before recording the ordered retry frontier.
+  it through the same reducer path before recording an eligible ordered retry
+  frontier. New writes use schema 8; readers accept exactly 7 and 8, preserving
+  historical envelope schemas and canonical bytes through preparation, replay,
+  trace, and append checks. Do not rewrite accepted prefixes. The thirteen older
+  kinds retain identical payload validation; four conversation kinds require 8.
 - **Blocking authorable effects return ordinary outputs** — an AGENT node's
   explicitly
   granted `ask_user` tool and HUMAN_INPUT call the process-owned handler inside
@@ -434,7 +438,7 @@ Most are just the functional model (above) made enforceable:
   position. Do not parse runtime IDs or change memory ownership to derive these
   execution positions.
 - **Retained history follows accepted records** — the recorded `learnable` flag
-  controls retention. Schema 7 requires `ForwardCapture` on every accepted node
+  controls retention. Schemas 7 and 8 require `ForwardCapture` on every accepted node
   outcome when `learnable=True` and omits it when `learnable=False`. Model/tool evidence
   remains separate from general capture and may have no memory scope; recalled
   sections still require matching ordered
@@ -475,15 +479,27 @@ Most are just the functional model (above) made enforceable:
   overlap and then recency within its limit. Sessions retain immutable JSON
   snapshots; stale sessions may recall their pinned view but cannot learn or
   commit. The backend owns no file or database persistence.
-- **Session conversation state has a lower-level foundation** — import
+- **Session conversations share one pure fold and record authority** — import
   `SessionMemory` from `agent_composer.memory.session`, not the contracts-only
   facade. Optional `ConversationFrame`/`ConversationSession`/`ConversationTurn`
-  capabilities leave mandatory memory protocols unchanged. Runtime, AGENT,
-  API-provider, Codex, and CLI integration is pending; do not claim `run_flow`
-  already retains conversations or add checkpoint records by implication.
+  capabilities leave mandatory memory protocols unchanged. Checkpoint records and
+  pure reducer/replay support exist; the automatic runtime checkpoint channel,
+  session harness, AGENT, API-provider, Codex, and CLI integration remain pending.
+  Do not claim `run_flow` already retains conversations.
   `memory.conversation` owns the pure fold, strict codecs, and digests;
   `memory.session` owns live views, FIFO leases, and recovery fences. Both stay
-  below nodes/runtime/providers. Later integration must reuse the fold.
+  below nodes/runtime/providers. `runtime.conversation` reuses the lower fold for
+  immutable admission-led segments/views and retired invocation identities;
+  `runtime.state` validates and commits their four schema-8 wrappers. Keep this
+  projection free of backends, sessions, drivers, and callbacks. Accepted-start
+  identity is run ID plus original start sequence, independent of `learnable` and
+  graph pruning. Checkpoints bind no output, advance no frontier, and create no
+  episode or observer. Require closure before node success; after primary failure,
+  permit only observations/close for admitted still-unfinished invocations. Reject
+  all checkpoints after success or any backward start. Generic retry fails closed
+  if the unfinished invocation requested any effect, even if observed or closed;
+  effect-free retry retires its identity without changing accepted history. See
+  [the conversation authority and recovery contract](reference.md#session-conversation-foundation).
   One authored frame plus leaf static path owns a conversation and queue;
   MAP/LOOP positions do not fork it. Acquire the FIFO lease before reading live
   history while keeping the run-opening snapshot pinned. Effect permission

@@ -46,6 +46,288 @@ from agent_composer.runtime.state import (
 from agent_composer.typesys import VariablePool
 
 
+# Original schema-7 writer output; keep these bytes independent of the current codec.
+_SCHEMA_SEVEN_GROWTH_PREFIX = (
+    (
+        b'{"kind":"run_started","payload":{"effective_llm_by_static_path":{},'
+        b'"flow_fingerprint":"f1d89a1792c63e9f6ab2bdb87eb8cabe5a4ff3ef58f732cb5d65c52c6c0e0eb0",'
+        b'"initial_pool":{"start_id":"__start__","store":{"__start__":{"kind":"object","value":{}}},'
+        b'"system":{"now":{"kind":"datetime","value":"2026-09-20T01:23:31.303163+00:00"},'
+        b'"run_id":{"kind":"str","value":"historical-growth"},"today":{"kind":"date",'
+        b'"value":"2026-09-20"}}},"learnable":true,"memory_layout":[{"config":{},'
+        b'"policy_name":"episodic","ref":{"owner":"flow","root_flow_id":"recovery-matrix-growth",'
+        b'"static_path":["recovery-matrix-growth"]}},{"config":{},"policy_name":"reflective",'
+        b'"ref":{"owner":"flow","root_flow_id":"recovery-matrix-growth",'
+        b'"static_path":["recovery-matrix-growth","outer"]}}],'
+        b'"memory_snapshots":[{"policy_name":"episodic","snapshot":{"epoch":0,'
+        b'"format":"agent_composer.episodic_memory","frames":[{"config":{"max_episodes":100,'
+        b'"recall_limit":10},"episodes":[],"policy_name":"episodic","ref":{"owner":"flow",'
+        b'"root_flow_id":"recovery-matrix-growth","static_path":["recovery-matrix-growth"]}}],'
+        b'"namespace":"581e810e9b54407e8463be3d1cdb7d76","revision":0,"version":1}},'
+        b'{"policy_name":"reflective","snapshot":{"epoch":0,"format":"agent_composer.reflective_memory",'
+        b'"frames":[{"config":{"max_items":100,"recall_limit":20},"lessons":[],'
+        b'"policy_name":"reflective","ref":{"owner":"flow","root_flow_id":"recovery-matrix-growth",'
+        b'"static_path":["recovery-matrix-growth","outer"]}}],"llm_config":{"anthropic_effort":null,'
+        b'"google_thinking_level":null,"model":"claude-sonnet-4-5","openai_reasoning_effort":null,'
+        b'"provider":"anthropic","temperature":null},"namespace":"33f37e507bcb4469bc43a6a974337f04",'
+        b'"revision":0,"version":1}}],"num_workers":0,"start_wiring_override":{}},'
+        b'"run_id":"historical-growth","schema":7,"seq":0}'
+    ),
+    (
+        b'{"kind":"node_started","payload":{"node_id":"__start__"},"run_id":"historical-growth",'
+        b'"schema":7,"seq":1}'
+    ),
+    (
+        b'{"kind":"node_succeeded","payload":{"commit_target":"__start__","evidence":null,'
+        b'"forward_capture":{"bound_inputs":{},"evaluated_keys":[],"input_names":[],"items":[],'
+        b'"node_data":{"input_output_paths":{}},"route":{"children":[],"content_index":0,"count":0,'
+        b'"expression":"{}","kind":"record","names":[],"path":[],"result_type":null,"sizes":[],'
+        b'"snapshot":null,"source":null,"spans":[],"value_json":null},"scope":{"boundary":"start",'
+        b'"flow_path":[],"occurrence_path":[],"static_path":["__start__"]},"variable_names":[]},'
+        b'"node_id":"__start__","value":{"kind":"object","value":{}}},"run_id":"historical-growth",'
+        b'"schema":7,"seq":2}'
+    ),
+    (
+        b'{"kind":"node_started","payload":{"node_id":"outer"},"run_id":"historical-growth","schema":7,'
+        b'"seq":3}'
+    ),
+    (
+        b'{"kind":"node_expanded","payload":{"evidence":null,"forward_capture":{"bound_inputs":{},'
+        b'"evaluated_keys":[],"input_names":[],"items":[],"node_data":{},"route":{"children":[],'
+        b'"content_index":0,"count":0,"expression":"{}","kind":"record","names":[],"path":[],'
+        b'"result_type":null,"sizes":[],"snapshot":null,"source":null,"spans":[],"value_json":null},'
+        b'"scope":{"boundary":null,"flow_path":[],"occurrence_path":[],"static_path":["outer"]},'
+        b'"variable_names":[]},"prune_ids":[],"seed":{},"spawner_id":"outer",'
+        b'"topology_digest":"a99de1538df593752120f06f64a03e2338a426bae5b3192dcd024e10bdb56407"},'
+        b'"run_id":"historical-growth","schema":7,"seq":4}'
+    ),
+    (
+        b'{"kind":"node_started","payload":{"node_id":"outer/__start__"},"run_id":"historical-growth",'
+        b'"schema":7,"seq":5}'
+    ),
+    (
+        b'{"kind":"node_succeeded","payload":{"commit_target":"outer/__start__","evidence":null,'
+        b'"forward_capture":{"bound_inputs":{},"evaluated_keys":[],"input_names":[],"items":[],'
+        b'"node_data":{"input_output_paths":{}},"route":{"children":[],"content_index":0,"count":0,'
+        b'"expression":"{}","kind":"record","names":[],"path":[],"result_type":null,"sizes":[],'
+        b'"snapshot":null,"source":null,"spans":[],"value_json":null},"scope":{"boundary":"start",'
+        b'"flow_path":["outer"],"occurrence_path":[{"index":null,"kind":"call","static_path":["outer"]}],'
+        b'"static_path":["outer","__start__"]},"variable_names":[]},"node_id":"outer/__start__",'
+        b'"value":{"kind":"object","value":{}}},"run_id":"historical-growth","schema":7,"seq":6}'
+    ),
+    (
+        b'{"kind":"node_started","payload":{"node_id":"outer/mapped"},"run_id":"historical-growth",'
+        b'"schema":7,"seq":7}'
+    ),
+    (
+        b'{"kind":"node_expanded","payload":{"evidence":null,'
+        b'"forward_capture":{"bound_inputs":{"over":[1,2]},"evaluated_keys":["over"],'
+        b'"input_names":["value"],"items":[{"capture":{"bound_inputs":{"value":1},'
+        b'"evaluated_keys":["value"],"input_names":[],"items":[],"node_data":{},'
+        b'"route":{"children":[{"children":[{"children":[{"children":[{"children":[],"content_index":0,'
+        b'"count":0,"expression":"1","kind":"literal","names":[],"path":[],"result_type":null,"sizes":[],'
+        b'"snapshot":null,"source":null,"spans":[],"value_json":"1"},{"children":[],"content_index":0,'
+        b'"count":0,"expression":"2","kind":"literal","names":[],"path":[],"result_type":null,"sizes":[],'
+        b'"snapshot":null,"source":null,"spans":[],"value_json":"2"}],"content_index":0,"count":0,'
+        b'"expression":"[1, 2]","kind":"list","names":[],"path":[],"result_type":null,"sizes":[],'
+        b'"snapshot":null,"source":null,"spans":[],"value_json":null}],"content_index":0,"count":0,'
+        b'"expression":"[1, 2][0]","kind":"project","names":[],"path":[0],"result_type":null,"sizes":[],'
+        b'"snapshot":null,"source":null,"spans":[],"value_json":null}],"content_index":0,"count":0,'
+        b'"expression":"item","kind":"selected","names":[],"path":[],"result_type":null,"sizes":[],'
+        b'"snapshot":null,"source":null,"spans":[],"value_json":null}],"content_index":0,"count":0,'
+        b'"expression":"{value: item}","kind":"record","names":["value"],"path":[],"result_type":null,'
+        b'"sizes":[],"snapshot":null,"source":null,"spans":[],"value_json":null},"scope":null,'
+        b'"variable_names":[]},"index":0},{"capture":{"bound_inputs":{"value":2},'
+        b'"evaluated_keys":["value"],"input_names":[],"items":[],"node_data":{},'
+        b'"route":{"children":[{"children":[{"children":[{"children":[{"children":[],"content_index":0,'
+        b'"count":0,"expression":"1","kind":"literal","names":[],"path":[],"result_type":null,"sizes":[],'
+        b'"snapshot":null,"source":null,"spans":[],"value_json":"1"},{"children":[],"content_index":0,'
+        b'"count":0,"expression":"2","kind":"literal","names":[],"path":[],"result_type":null,"sizes":[],'
+        b'"snapshot":null,"source":null,"spans":[],"value_json":"2"}],"content_index":0,"count":0,'
+        b'"expression":"[1, 2]","kind":"list","names":[],"path":[],"result_type":null,"sizes":[],'
+        b'"snapshot":null,"source":null,"spans":[],"value_json":null}],"content_index":0,"count":0,'
+        b'"expression":"[1, 2][1]","kind":"project","names":[],"path":[1],"result_type":null,"sizes":[],'
+        b'"snapshot":null,"source":null,"spans":[],"value_json":null}],"content_index":0,"count":0,'
+        b'"expression":"item","kind":"selected","names":[],"path":[],"result_type":null,"sizes":[],'
+        b'"snapshot":null,"source":null,"spans":[],"value_json":null}],"content_index":0,"count":0,'
+        b'"expression":"{value: item}","kind":"record","names":["value"],"path":[],"result_type":null,'
+        b'"sizes":[],"snapshot":null,"source":null,"spans":[],"value_json":null},"scope":null,'
+        b'"variable_names":[]},"index":1}],"node_data":{},'
+        b'"route":{"children":[{"children":[{"children":[],"content_index":0,"count":0,"expression":"1",'
+        b'"kind":"literal","names":[],"path":[],"result_type":null,"sizes":[],"snapshot":null,'
+        b'"source":null,"spans":[],"value_json":"1"},{"children":[],"content_index":0,"count":0,'
+        b'"expression":"2","kind":"literal","names":[],"path":[],"result_type":null,"sizes":[],'
+        b'"snapshot":null,"source":null,"spans":[],"value_json":"2"}],"content_index":0,"count":0,'
+        b'"expression":"[1, 2]","kind":"list","names":[],"path":[],"result_type":null,"sizes":[],'
+        b'"snapshot":null,"source":null,"spans":[],"value_json":null}],"content_index":0,"count":0,'
+        b'"expression":"{over: [1, 2]}","kind":"record","names":["over"],"path":[],"result_type":null,'
+        b'"sizes":[],"snapshot":null,"source":null,"spans":[],"value_json":null},'
+        b'"scope":{"boundary":null,"flow_path":["outer"],"occurrence_path":[{"index":null,"kind":"call",'
+        b'"static_path":["outer"]}],"static_path":["outer","mapped"]},"variable_names":[]},'
+        b'"prune_ids":[],"seed":[{"value":1},{"value":2}],"spawner_id":"outer/mapped",'
+        b'"topology_digest":"8b0f3e24016bdd6cb652a3514aa79a527c17e8466940a4adae0aa1f7dc9fa0a8"},'
+        b'"run_id":"historical-growth","schema":7,"seq":8}'
+    ),
+    (
+        b'{"kind":"node_started","payload":{"node_id":"outer/repeated"},"run_id":"historical-growth",'
+        b'"schema":7,"seq":9}'
+    ),
+    (
+        b'{"kind":"node_expanded","payload":{"evidence":null,'
+        b'"forward_capture":{"bound_inputs":{"exited":false,"n":0},"evaluated_keys":[],'
+        b'"input_names":["n","exited"],"items":[],"node_data":{"input_output_paths":{"exited":["exited"],'
+        b'"n":["n"]}},"route":{"children":[{"children":[],"content_index":0,"count":0,"expression":"0",'
+        b'"kind":"literal","names":[],"path":[],"result_type":null,"sizes":[],"snapshot":null,'
+        b'"source":null,"spans":[],"value_json":"0"},{"children":[],"content_index":0,"count":0,'
+        b'"expression":"false","kind":"literal","names":[],"path":[],"result_type":null,"sizes":[],'
+        b'"snapshot":null,"source":null,"spans":[],"value_json":"false"}],"content_index":0,"count":0,'
+        b'"expression":"{n: 0, exited: false}","kind":"record","names":["n","exited"],"path":[],'
+        b'"result_type":null,"sizes":[],"snapshot":null,"source":null,"spans":[],"value_json":null},'
+        b'"scope":{"boundary":null,"flow_path":["outer"],"occurrence_path":[{"index":null,"kind":"call",'
+        b'"static_path":["outer"]},{"index":0,"kind":"loop_driver","static_path":["outer","repeated"]}],'
+        b'"static_path":["outer","repeated"]},"variable_names":[]},"prune_ids":[],'
+        b'"seed":[{"exited":false,"n":0},0],"spawner_id":"outer/repeated",'
+        b'"topology_digest":"0e73507a96feb5997c6eaed03da58fb9fef3bb88e22b12c52e2b41560ae2a056"},'
+        b'"run_id":"historical-growth","schema":7,"seq":10}'
+    ),
+    (
+        b'{"kind":"node_started","payload":{"node_id":"outer/mapped/__start__"},'
+        b'"run_id":"historical-growth","schema":7,"seq":11}'
+    ),
+    (
+        b'{"kind":"node_succeeded","payload":{"commit_target":"outer/mapped/__start__","evidence":null,'
+        b'"forward_capture":{"bound_inputs":{},"evaluated_keys":[],"input_names":[],"items":[],'
+        b'"node_data":{"input_output_paths":{}},"route":{"children":[],"content_index":0,"count":0,'
+        b'"expression":"{}","kind":"record","names":[],"path":[],"result_type":null,"sizes":[],'
+        b'"snapshot":null,"source":null,"spans":[],"value_json":null},"scope":{"boundary":null,'
+        b'"flow_path":["outer"],"occurrence_path":[{"index":null,"kind":"call","static_path":["outer"]}],'
+        b'"static_path":["outer","mapped"]},"variable_names":[]},"node_id":"outer/mapped/__start__",'
+        b'"value":{"kind":"object","value":{}}},"run_id":"historical-growth","schema":7,"seq":12}'
+    ),
+    (
+        b'{"kind":"node_started","payload":{"node_id":"outer/repeated#0/__start__"},'
+        b'"run_id":"historical-growth","schema":7,"seq":13}'
+    ),
+    (
+        b'{"kind":"node_succeeded","payload":{"commit_target":"outer/repeated#0/__start__",'
+        b'"evidence":null,"forward_capture":{"bound_inputs":{"exited":false,"n":0},"evaluated_keys":[],'
+        b'"input_names":["n","exited"],"items":[],"node_data":{"input_output_paths":{"exited":["exited"],'
+        b'"n":["n"]}},"route":{"children":[{"children":[],"content_index":0,"count":0,"expression":"0",'
+        b'"kind":"literal","names":[],"path":[],"result_type":null,"sizes":[],"snapshot":null,'
+        b'"source":null,"spans":[],"value_json":"0"},{"children":[],"content_index":0,"count":0,'
+        b'"expression":"false","kind":"literal","names":[],"path":[],"result_type":null,"sizes":[],'
+        b'"snapshot":null,"source":null,"spans":[],"value_json":"false"}],"content_index":0,"count":0,'
+        b'"expression":"{n: 0, exited: false}","kind":"record","names":["n","exited"],"path":[],'
+        b'"result_type":null,"sizes":[],"snapshot":null,"source":null,"spans":[],"value_json":null},'
+        b'"scope":{"boundary":"start","flow_path":["outer","repeated"],"occurrence_path":[{"index":null,'
+        b'"kind":"call","static_path":["outer"]},{"index":0,"kind":"loop_body","static_path":["outer",'
+        b'"repeated"]}],"static_path":["outer","repeated","__start__"]},"variable_names":[]},'
+        b'"node_id":"outer/repeated#0/__start__","value":{"kind":"object","value":{"exited":false,'
+        b'"n":0}}},"run_id":"historical-growth","schema":7,"seq":14}'
+    ),
+    (
+        b'{"kind":"node_started","payload":{"node_id":"outer/mapped#0/__start__"},'
+        b'"run_id":"historical-growth","schema":7,"seq":15}'
+    ),
+    (
+        b'{"kind":"node_succeeded","payload":{"commit_target":"outer/mapped#0/__start__","evidence":null,'
+        b'"forward_capture":{"bound_inputs":{"value":1},"evaluated_keys":[],"input_names":["value"],'
+        b'"items":[],"node_data":{"input_output_paths":{"value":["value"]}},'
+        b'"route":{"children":[{"children":[],"content_index":0,"count":0,"expression":"1",'
+        b'"kind":"literal","names":[],"path":[],"result_type":null,"sizes":[],"snapshot":null,'
+        b'"source":null,"spans":[],"value_json":"1"}],"content_index":0,"count":0,'
+        b'"expression":"{value: 1}","kind":"record","names":["value"],"path":[],"result_type":null,'
+        b'"sizes":[],"snapshot":null,"source":null,"spans":[],"value_json":null},'
+        b'"scope":{"boundary":"start","flow_path":["outer","mapped"],"occurrence_path":[{"index":null,'
+        b'"kind":"call","static_path":["outer"]},{"index":0,"kind":"map_item","static_path":["outer",'
+        b'"mapped"]}],"static_path":["outer","mapped","__start__"]},"variable_names":[]},'
+        b'"node_id":"outer/mapped#0/__start__","value":{"kind":"object","value":{"value":1}}},'
+        b'"run_id":"historical-growth","schema":7,"seq":16}'
+    ),
+    (
+        b'{"kind":"node_started","payload":{"node_id":"outer/mapped#1/__start__"},'
+        b'"run_id":"historical-growth","schema":7,"seq":17}'
+    ),
+    (
+        b'{"kind":"node_succeeded","payload":{"commit_target":"outer/mapped#1/__start__","evidence":null,'
+        b'"forward_capture":{"bound_inputs":{"value":2},"evaluated_keys":[],"input_names":["value"],'
+        b'"items":[],"node_data":{"input_output_paths":{"value":["value"]}},'
+        b'"route":{"children":[{"children":[],"content_index":0,"count":0,"expression":"2",'
+        b'"kind":"literal","names":[],"path":[],"result_type":null,"sizes":[],"snapshot":null,'
+        b'"source":null,"spans":[],"value_json":"2"}],"content_index":0,"count":0,'
+        b'"expression":"{value: 2}","kind":"record","names":["value"],"path":[],"result_type":null,'
+        b'"sizes":[],"snapshot":null,"source":null,"spans":[],"value_json":null},'
+        b'"scope":{"boundary":"start","flow_path":["outer","mapped"],"occurrence_path":[{"index":null,'
+        b'"kind":"call","static_path":["outer"]},{"index":1,"kind":"map_item","static_path":["outer",'
+        b'"mapped"]}],"static_path":["outer","mapped","__start__"]},"variable_names":[]},'
+        b'"node_id":"outer/mapped#1/__start__","value":{"kind":"object","value":{"value":2}}},'
+        b'"run_id":"historical-growth","schema":7,"seq":18}'
+    ),
+    (
+        b'{"kind":"node_started","payload":{"node_id":"outer/repeated#0/bump"},'
+        b'"run_id":"historical-growth","schema":7,"seq":19}'
+    ),
+    (
+        b'{"kind":"node_succeeded","payload":{"commit_target":"outer/repeated#0/bump","evidence":null,'
+        b'"forward_capture":{"bound_inputs":{"exited":false,"n":0},"evaluated_keys":["exited","n"],'
+        b'"input_names":["n","exited"],"items":[],"node_data":{},"route":{"children":[{"children":[],'
+        b'"content_index":0,"count":0,"expression":"outer/repeated#0/__start__.output.n","kind":"source",'
+        b'"names":[],"path":[],"result_type":null,"sizes":[],"snapshot":null,'
+        b'"source":{"execution_seq":13,"path":["n"],"run_id":"historical-growth"},"spans":[],'
+        b'"value_json":null},{"children":[],"content_index":0,"count":0,'
+        b'"expression":"outer/repeated#0/__start__.output.exited","kind":"source","names":[],"path":[],'
+        b'"result_type":null,"sizes":[],"snapshot":null,"source":{"execution_seq":13,"path":["exited"],'
+        b'"run_id":"historical-growth"},"spans":[],"value_json":null}],"content_index":0,"count":0,'
+        b'"expression":"{n: outer/repeated#0/__start__.output.n,'
+        b' exited: outer/repeated#0/__start__.output.exited}","kind":"record","names":["n","exited"],'
+        b'"path":[],"result_type":null,"sizes":[],"snapshot":null,"source":null,"spans":[],'
+        b'"value_json":null},"scope":{"boundary":null,"flow_path":["outer","repeated"],'
+        b'"occurrence_path":[{"index":null,"kind":"call","static_path":["outer"]},{"index":0,'
+        b'"kind":"loop_body","static_path":["outer","repeated"]}],"static_path":["outer","repeated",'
+        b'"bump"]},"variable_names":[]},"node_id":"outer/repeated#0/bump","value":{"kind":"object",'
+        b'"value":{"exited":false,"n":1}}},"run_id":"historical-growth","schema":7,"seq":20}'
+    ),
+    (
+        b'{"kind":"node_started","payload":{"node_id":"outer/mapped#0/echo"},'
+        b'"run_id":"historical-growth","schema":7,"seq":21}'
+    ),
+    (
+        b'{"kind":"node_succeeded","payload":{"commit_target":"outer/mapped#0/echo","evidence":null,'
+        b'"forward_capture":{"bound_inputs":{"x":1},"evaluated_keys":["x"],"input_names":["x"],'
+        b'"items":[],"node_data":{},"route":{"children":[{"children":[],"content_index":0,"count":0,'
+        b'"expression":"outer/mapped#0/__start__.output.value","kind":"source","names":[],"path":[],'
+        b'"result_type":null,"sizes":[],"snapshot":null,"source":{"execution_seq":15,"path":["value"],'
+        b'"run_id":"historical-growth"},"spans":[],"value_json":null}],"content_index":0,"count":0,'
+        b'"expression":"{x: outer/mapped#0/__start__.output.value}","kind":"record","names":["x"],'
+        b'"path":[],"result_type":null,"sizes":[],"snapshot":null,"source":null,"spans":[],'
+        b'"value_json":null},"scope":{"boundary":null,"flow_path":["outer","mapped"],'
+        b'"occurrence_path":[{"index":null,"kind":"call","static_path":["outer"]},{"index":0,'
+        b'"kind":"map_item","static_path":["outer","mapped"]}],"static_path":["outer","mapped","echo"]},'
+        b'"variable_names":[]},"node_id":"outer/mapped#0/echo","value":{"kind":"int","value":1}},'
+        b'"run_id":"historical-growth","schema":7,"seq":22}'
+    ),
+    (
+        b'{"kind":"node_started","payload":{"node_id":"outer/mapped#1/echo"},'
+        b'"run_id":"historical-growth","schema":7,"seq":23}'
+    ),
+    (
+        b'{"kind":"node_succeeded","payload":{"commit_target":"outer/mapped#1/echo","evidence":null,'
+        b'"forward_capture":{"bound_inputs":{"x":2},"evaluated_keys":["x"],"input_names":["x"],'
+        b'"items":[],"node_data":{},"route":{"children":[{"children":[],"content_index":0,"count":0,'
+        b'"expression":"outer/mapped#1/__start__.output.value","kind":"source","names":[],"path":[],'
+        b'"result_type":null,"sizes":[],"snapshot":null,"source":{"execution_seq":17,"path":["value"],'
+        b'"run_id":"historical-growth"},"spans":[],"value_json":null}],"content_index":0,"count":0,'
+        b'"expression":"{x: outer/mapped#1/__start__.output.value}","kind":"record","names":["x"],'
+        b'"path":[],"result_type":null,"sizes":[],"snapshot":null,"source":null,"spans":[],'
+        b'"value_json":null},"scope":{"boundary":null,"flow_path":["outer","mapped"],'
+        b'"occurrence_path":[{"index":null,"kind":"call","static_path":["outer"]},{"index":1,'
+        b'"kind":"map_item","static_path":["outer","mapped"]}],"static_path":["outer","mapped","echo"]},'
+        b'"variable_names":[]},"node_id":"outer/mapped#1/echo","value":{"kind":"int","value":2}},'
+        b'"run_id":"historical-growth","schema":7,"seq":24}'
+    ),
+)
+
+
 _RUN_ID = "recovery-matrix"
 _SYSTEM_TODAY = "2026-08-14"
 _SYSTEM_NOW = "2026-08-14T12:00:00+00:00"
@@ -150,6 +432,82 @@ nodes:
       repeated: ${repeated.output}
 output: ${outer.output}
 """
+
+
+def _schema_seven_growth_flow():
+    """Build the authored program retained by the fixed historical wire sample."""
+    source = _NESTED_GROWTH.replace(
+        "name: recovery_matrix_growth\n",
+        "name: recovery_matrix_growth\nlong_term_memory: episodic\n",
+    ).replace(
+        "  composite:\n    nodes:",
+        "  composite:\n    long_term_memory: reflective\n    nodes:",
+    )
+    return load_flow(source)
+
+
+def test_schema_seven_nested_growth_resumes_with_exact_memory_and_trace(tmp_path, monkeypatch):
+    from agent_composer.memory.episodic import EpisodicMemory
+    from agent_composer.memory.reflective import ReflectiveMemory
+    from agent_composer.nodes.code import CodeNode
+    from agent_composer.runtime.log import JsonlRunLog, SCHEMA_VERSION, decode_record, encode_record
+
+    flow = _schema_seven_growth_flow()
+    path = tmp_path / "historical-growth.jsonl"
+    prefix = b"\n".join(_SCHEMA_SEVEN_GROWTH_PREFIX) + b"\n"
+    path.write_bytes(prefix)
+    initial = decode_record(_SCHEMA_SEVEN_GROWTH_PREFIX[0]).record
+    snapshots = {item.policy_name: item.snapshot for item in initial.memory_snapshots}
+    assert set(snapshots) == {"episodic", "reflective"}
+    for name, snapshot in snapshots.items():
+        assert snapshot["format"] == "agent_composer." + name + "_memory"
+        assert snapshot["version"] == 1
+    memory = {"episodic": EpisodicMemory(), "reflective": ReflectiveMemory()}
+    restored = {}
+    for name, backend in memory.items():
+        original_open = backend.open_run
+
+        def open_run(*, snapshot=None, name=name, original_open=original_open):
+            session = original_open(snapshot=snapshot)
+            restored[name] = session.snapshot
+            return session
+
+        monkeypatch.setattr(backend, "open_run", open_run)
+    original_forward = CodeNode.forward
+    calls = []
+
+    def forward(node, *args, **kwargs):
+        calls.append(node.id)
+        assert node.id == "outer/repeated#1/bump", "accepted historical CODE reran"
+        return original_forward(node, *args, **kwargs)
+
+    monkeypatch.setattr(CodeNode, "forward", forward)
+    result = run_module.resume_flow(flow, log=path, memory=memory)
+    assert result.status == "succeeded"
+    assert result.output == {"mapped": [1, 2], "repeated": {"n": 2, "exited": False}}
+    assert calls == ["outer/repeated#1/bump"]
+    assert restored == snapshots
+    assert path.read_bytes().startswith(prefix)
+    with JsonlRunLog.resume(path) as log:
+        envelopes = tuple(log)
+        replayed = run_module._replay_run_log(flow, log)
+    length = len(_SCHEMA_SEVEN_GROWTH_PREFIX)
+    assert tuple(encode_record(item) for item in envelopes[:length]) == _SCHEMA_SEVEN_GROWTH_PREFIX
+    assert all(item.schema == SCHEMA_VERSION for item in envelopes[length:])
+    assert replayed.flow_fingerprint == initial.flow_fingerprint == flow_fingerprint(flow.compiled)
+    assert replayed.effective_llm_by_static_path == initial.effective_llm_by_static_path
+    assert replayed.learnable is True
+    historical = [item for item in replayed.trace.occurrences if item.outcome_seq < length]
+    assert {item.node_id for item in historical if isinstance(item.record, NodeExpandedRecord)} == {
+        "outer", "outer/mapped", "outer/repeated",
+    }
+    for occurrence in historical:
+        assert occurrence._record_bytes == _SCHEMA_SEVEN_GROWTH_PREFIX[occurrence.outcome_seq]
+    complete = path.read_bytes()
+    inspected = run_module.resume_flow(flow, log=path, memory={"episodic": object(), "reflective": object()})
+    assert inspected.output == result.output and inspected.events == []
+    assert path.read_bytes() == complete and calls == ["outer/repeated#1/bump"]
+
 
 _NESTED_HUMAN_EFFECTS = {
     "call": """

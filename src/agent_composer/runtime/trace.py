@@ -28,6 +28,8 @@ from agent_composer.nodes.binding import BindingCapture
 from agent_composer.nodes.contracts import ChildFlowBoundary, ExecutionScope, SeedConnection
 from agent_composer.runtime.contracts import BackwardCapture, ForwardCapture, _validate_source
 from agent_composer.runtime.log import (
+    ConversationAdmittedRecord, ConversationEffectRequestedRecord,
+    ConversationEffectObservedRecord, ConversationClosedRecord,
     NodeExpandedRecord, NodeFailedRecord, NodeRoutedRecord, NodeStartedRecord,
     NodeSucceededRecord, RecordEnvelope, RunResumedRecord, RunStartedRecord,
     _decode_typed, _evidence_payload, canonical_seed, decode_pool, decode_record, encode_record,
@@ -481,6 +483,9 @@ def prepare_trace(
         if tuple(trace._started) != record.retry_node_ids:
             raise ValueError("trace unfinished starts disagree with retry frontier")
         return TraceDelta(trace, envelope.seq, resumed=True)
+    if type(record) in (ConversationAdmittedRecord, ConversationEffectRequestedRecord,
+                        ConversationEffectObservedRecord, ConversationClosedRecord):
+        return TraceDelta(trace, envelope.seq)
     if type(record) not in (NodeSucceededRecord, NodeRoutedRecord, NodeExpandedRecord, NodeFailedRecord):
         return TraceDelta(trace, envelope.seq)
     if type(capture) is not ForwardCapture:

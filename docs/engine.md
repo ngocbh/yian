@@ -162,7 +162,7 @@ spawner kind means setting traits on its node; the core never gains a branch. De
 
 Node evaluation may raise (a failed assert, a bad LLM response); the engine catches the
 exception at the evaluation boundary. The dispatcher then prepares and commits a
-schema-7 `NodeFailedRecord` carrying one nested, immutable `Failure`, optional
+schema-8 `NodeFailedRecord` carrying one nested, immutable `Failure`, optional
 model/tool evaluation evidence, and forward capture when retention is enabled.
 Only after the record is appended does the
 reducer expose that same `Failure` through `NodeFailed`, terminal `RunFailed`, and
@@ -198,10 +198,18 @@ RunStartedRecord | RunResumedRecord | NodeStartedRecord |
 NodeSucceededRecord | NodeRoutedRecord | NodeExpandedRecord | NodeFailedRecord |
 MemoryCommitRequestedRecord |
 MemoryCommitSucceededRecord | MemoryCommitFailedRecord |
-BackwardStartedRecord | BackwardReadyRecord | BackwardFinishedRecord
+BackwardStartedRecord | BackwardReadyRecord | BackwardFinishedRecord |
+ConversationAdmittedRecord | ConversationEffectRequestedRecord |
+ConversationEffectObservedRecord | ConversationClosedRecord
 ```
 
-Schema-7 node outcome records require forward capture when the recorded run
+New records use schema 8; readers accept exactly schemas 7 and 8. The thirteen
+pre-existing kinds retain unchanged strict payload validation in both versions,
+while the four conversation kinds require schema 8. Recovery preserves accepted
+historical schemas and canonical bytes, appending new records without rewriting
+the prefix; mixed schema-7/8 logs reopen normally. Other versions are rejected.
+
+In both schemas, node outcome records require forward capture when the recorded run
 has `learnable=True` and omit it when `learnable=False`. Optional model/tool evaluation
 evidence is separate. There is no separate forward terminal record: success is derived
 from the terminal value once the graph is quiescent. Failure is derived either from
@@ -211,6 +219,13 @@ router and its complete `failure_trace()`, even when unrelated pooled work drain
 later, and persists that failure on the causal `NodeRoutedRecord`. Replay
 structurally revalidates the route before restoring the recorded failure; a later
 explicit node failure still wins immediately.
+
+Conversation records have pure reducer/replay support through the lower memory
+fold, independently of `learnable`. They bind no outputs, advance no frontier,
+and publish no observers. The automatic checkpoint channel and session execution
+harness remain pending, including AGENT, API-provider, Codex, and CLI integration;
+`run_flow` does not yet retain agent conversations. See
+[SessionMemory foundation](api.md#sessionmemory-foundation).
 
 When retention is enabled, the trace keeps the actual terminal producer and
 accepted invocation contexts through graph pruning. The reverse-feedback fold
@@ -267,11 +282,20 @@ faults escape with the accepted prefix and never create a completion record.
 checks the authored-flow fingerprint, rebuilds a private graph, and folds every record
 through the same reducer used live. After any incomplete-tail repair, a terminal prefix
 is returned without appending a record or invoking backward/memory work, even
-when its last backward attempt was interrupted. For a nonterminal prefix, one
+when its last backward attempt was interrupted. For an eligible nonterminal prefix, one
 `RunResumedRecord` places durably started nodes with no durable outcome ahead of the
 ready frontier, then dispatch continues. Original inputs, run ID,
 worker count, typed values, growth seeds, and resolved LLM configuration all come from
-the log rather than current process defaults. See the [Python API](api.md).
+the log rather than current process defaults.
+
+An unfinished invocation with any accepted conversation effect request is not
+eligible for generic retry, even if the request was observed or the handle closed.
+Only requests in that invocation's segment count, not effects inherited through
+its baseline. An accepted effect-free retry retires the old invocation identity
+without changing its segment/view or fabricating closure; the new start gets a new
+sequence, and late checkpoints for the retired identity are rejected. Memory-free
+nodes retain ordinary retry behavior, so their external effects must still tolerate
+repetition. See the [Python API recovery contract](api.md#durable-recovery-with-resume_flow).
 
 ## Serial and parallel, one contract
 

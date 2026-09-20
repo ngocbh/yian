@@ -125,28 +125,24 @@ them to accepted binding routes. Runtime never dispatches on spawner kind.
 
 Memory conversation ownership follows the same lower-layer boundary.
 `memory/contracts.py` owns immutable conversation carriers and optional
-`ConversationFrame`/`ConversationSession`/`ConversationTurn` protocols alongside the
+`ConversationFrame`/`ConversationTurn` protocols alongside the
 unchanged mandatory memory protocols. `memory/conversation.py` owns the pure fold,
 strict codecs, and digests. `memory/session.py` owns the concrete process-local
-`SessionMemory` backend: views, FIFO leases, and private acceptance fences. It
-depends on those lower modules and injected checkpoint/stop callables, never on
+`SessionMemory` backend: views, FIFO leases, and atomic history publication. It
+depends on those lower modules and an injected stop callable, never on
 nodes, runtime, compile, compose, or provider SDKs.
-`runtime/conversation.py` sits above that pure fold and below `runtime/state.py`.
-It owns immutable accepted segments/views and retired invocation identities, and
-imports only the standard library plus `memory.contracts` and
-`memory.conversation`. State validates and commits the four checkpoint wrappers
-owned by `runtime.log`; this pure reducer/replay support neither opens backend
-sessions nor grants effects. Keep mutable backend coordination out of the scheduler
-and reuse the lower fold, not a second transition model. The automatic checkpoint
-channel, session harness, and AGENT/provider/CLI execution integration remain pending.
+There is no runtime conversation projection or recovery channel. `runtime.state`
+privately validates the four legacy wrappers owned by `runtime.log` and advances
+record/trace sequencing only. Those inert wrappers neither reconstruct history nor
+grant effects. Keep mutable backend coordination and stored conversation state out
+of the scheduler. AGENT/provider/CLI execution integration remains pending.
 
 The `memory` facade exports contracts only: concrete session, episodic, and
 reflection backends must be imported from their own modules, not eagerly from
-`memory/__init__.py`. Keep mutable queue/lease/fence state private to the backend;
+`memory/__init__.py`. Keep mutable queue/lease state private to the backend;
 public snapshots contain conversation values, not coordination objects. The
 memory import ratchet in `tests/engine/test_layer_direction.py` enforces this
-direction, including direct-facade and relative-import spellings, and separately
-restricts the pure runtime conversation projection to its lower imports.
+direction, including direct-facade and relative-import spellings.
 
 Compiled-origin traversal follows the same direction. Semantic carriers and
 nodes own their local origin slots and static-child hooks; `diagnostics` owns the

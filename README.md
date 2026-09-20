@@ -155,10 +155,10 @@ result.backward()
 ```
 
 [`SessionMemory`](docs/api.md#sessionmemory-foundation) provides a lower-level,
-process-local conversation foundation with FIFO turns, checkpoint RunLog records,
-and pure reducer/replay support. Automatic session execution, AGENT, API-provider,
-Codex, and CLI integration is still pending; it does not yet enable persistent
-agents through `run_flow`.
+process-local conversation foundation with backend-owned history and FIFO turns.
+Historical RunLog wrappers remain readable as inert metadata; they do not rebuild
+conversation history. AGENT, API-provider, Codex, and CLI integration is still
+pending; this foundation does not yet enable persistent agents through `run_flow`.
 
 ## Documentation
 

@@ -341,17 +341,16 @@ the completed feedback.
 ## SessionMemory foundation
 
 `agent_composer.memory.session.SessionMemory` is a process-local conversation
-backend for callers implementing the optional conversation capabilities. Checkpoint
-RunLog records and pure reducer/replay support are available. The automatic runtime
-checkpoint channel, session harness, AGENT, API-provider, Codex, and CLI integration
-are **not implemented yet**. Injecting this backend into `run_flow` does not
-currently retain an agent conversation.
+backend for callers using the optional turn capability. The backend owns history
+updates and FIFO admission directly; runtime does not own a conversation store.
+AGENT, API-provider, Codex, and CLI integration are **not implemented yet**.
+Injecting this backend into `run_flow` does not currently retain an agent conversation.
 
 `SessionMemory` is the concrete backend; the existing `MemorySession` name still
 means the run-scoped protocol returned by a memory backend. The mandatory `Memory`,
 `MemorySession`, and `MemoryFrame` protocols are unchanged. The contracts-only
 `agent_composer.memory` facade exports immutable conversation carriers and the
-optional `ConversationSession`, `ConversationFrame`, and `ConversationTurn`
+optional `ConversationFrame` and `ConversationTurn`
 protocols. Import the concrete backend from its own module:
 
 ```python
@@ -370,11 +369,11 @@ memory.reset()  # Backend-wide; allowed only while no turn is active or queued.
 
 The constructor takes no settings and frame configuration must be `{}`. A public
 snapshot has exactly `version` (currently `1`), `namespace`, `generation`, and
-`conversations`. It contains complete conversation views, not queues, leases, or
-temporary recovery fences. A pristine backend can adopt a snapshot; an already
+`conversations`. It contains complete conversation views, not queues or leases.
+A pristine backend can adopt a snapshot; an already
 used backend accepts only proven history in its current namespace and generation,
 without rewinding live state. Every snapshot getter returns a detached copy of
-the original opening snapshot, even after turns or reconciliation advance live
+the original opening snapshot, even after turns advance live
 history. The backend writes no files or database; optional durable storage is
 future work.
 
@@ -388,13 +387,13 @@ or queue. MAP items and LOOP iterations do not create new conversation identitie
 there is no fork option. The low-level caller supplies these authored identities;
 the backend neither inspects a graph nor derives identity from runtime node IDs.
 
-Entering `ConversationFrame.open_turn(...)` reserves the queue position before
-reading the latest live conversation baseline. The injected `checkpoint` callback
-must accept and apply each admission, effect request, observation, and close, then
-return its exact resulting view. A turn grants permission for a requested external
-effect only after that acknowledgement and a live-lease check. Cooperative stop
-checks run while waiting and between effects; actual observations are retained
-before honoring a stop that arrived during the effect.
+Entering `frame.open_turn(request, check_stopped=check)` reserves the queue position
+before reading the latest live conversation. The turn's `request(...)` and
+`observe(...)` methods validate and publish directly in SessionMemory. No runtime
+checkpoint callback or acknowledgment is required. The caller executes a provider
+or tool between those calls, outside the backend lock. Cooperative stop checks run
+while waiting and between effects; actual observations are retained before honoring
+a stop that arrived during the effect.
 
 These updates advance automatically through the turn capability, independently of
 `learnable` or backward. Session history is not rendered again as recall text:
@@ -403,54 +402,40 @@ mutation tuple. Learnable notes and native-provider learning are not implemented
 Changing the exact compatibility descriptor for an existing conversation requires
 a reset; no provider-specific compatibility rules are implemented here.
 
-### Acceptance, recovery, and reset
+### Partial history, retry, and reset
 
-`ConversationSession.prepare_checkpoint(checkpoint, before=...)` validates without
-publishing state and returns a callable to apply **after acceptance**. The caller
-must retain the actual complete predecessor. A historical duplicate needs that
-predecessor plus matching ledger evidence and returns its exact historical result;
-the backend does not reconstruct old views from the latest state or keep a hidden
-view archive. The pure fold and strict JSON codecs/digests live in
-`agent_composer.memory.conversation`. Four schema-8 RunLog wrappers now retain
-these checkpoints: `ConversationAdmittedRecord`, `ConversationEffectRequestedRecord`,
-`ConversationEffectObservedRecord`, and `ConversationClosedRecord`.
+Failed or interrupted turns retain completed observations. An unobserved request
+stays pending, meaning its result is unknown. A new invocation may continue after
+that incomplete turn; it receives its own identity and does not turn old unknown
+results into successes. The memory backend does not execute tools or providers.
+Restoring saved history is not an instruction to execute stored tool calls, but
+ordinary node retry may send a request again and repeat actions. Exactly-once
+execution and exact mid-request continuation are not promised.
 
-The separate `agent_composer.runtime.conversation.RuntimeConversationState`
-projection retains admission-led accepted segments, their resulting views, and
-retired invocation identities. `prepare_conversation_checkpoint` reuses the lower
-fold without accessing backend state. Runtime's `prepare_conversation_record`
-validates the run ID, original accepted start sequence, enabled frame/policy,
-compiled consumer scope, and lifecycle before `commit_prepared` appends and applies
-the checkpoint. Replay uses the same path without session or provider calls.
-This reducer support does not yet supply the live checkpoint callback to workers.
+Closing a run handle cancels its queued turns and prevents new requests. An active
+turn retains its lease until its owner exits, so another run cannot overlap a
+provider call that is still finishing. Actual observations can still be retained
+by that owner before release. A released turn cannot append late results.
 
-Checkpoint records advance conversation history independently of `learnable` and
-survive graph pruning. They do not bind outputs, advance the ready frontier, create
-execution episodes, or publish observers; retained trace handling advances only its
-record sequence. One invocation can admit only one handle, which must close before
-its node success is accepted. After primary failure, only observations and close
-for an already-admitted, still-unfinished invocation may drain. After primary
-success or any backward start, all checkpoints are rejected.
+The run-opening snapshot stays immutable. Reopening a compatible older snapshot
+against the same backend uses its latest live history without rewinding it. A new
+process restored only from that old snapshot has only that snapshot's history:
+later progress requires retained backend state or optional durable storage, which
+is not implemented yet. The run log does not rebuild SessionMemory.
 
-Lost or uncertain checkpoint acknowledgements block further admission through a
-private recovery fence. `fail_turn(...)` installs the necessary fence before
-releasing the lease; a proven pre-acceptance rejection does not install one.
-Unresolved effects also block admission. There is no automatic external-effect
-retry, and completed observations survive later turn failure or cancellation.
-
-`reconcile(ConversationAuthority(...))` validates a complete accepted baseline and
-its contiguous admission-led checkpoint segment, then atomically installs proven
-missing history. It can advance a conversation after opening an older snapshot
-without changing that pinned snapshot, unrelated conversations, or newer live
-history. It returns the segment's exact result, without replaying provider calls
-or granting effect permission. Clearing a fence requires its exact failed
-checkpoint in that accepted segment; a digest in the baseline alone is not proof.
-If that evidence is unavailable, an idle reset is required.
+The four schema-8 conversation RunLog wrappers remain readable as inert historical
+metadata. Runtime validates canonical payloads, run identity, unfinished accepted
+start, enabled frame/policy, compiled consumer scope, and outer lifecycle. It
+advances only record/trace sequencing, with no transcript reconstruction, output
+binding, frontier changes, execution episodes, observers, or backend calls.
+After primary failure, only observations and close for still-unfinished starts
+are accepted; no wrapper is accepted after primary success or any backward start,
+or after its originating start completes or is replaced by retry.
 
 `reset()` immediately raises `MemoryOperationError` with code `session.busy`
 without changing state if **any** turn is active or queued. When idle, it clears
-all local conversations and fences and advances the generation. Older run/frame
-handles and prepared apply callables then fail as stale. Reset does not delete
+all local conversations and advances the generation. Older run/frame
+handles then fail as stale. Reset does not delete
 external provider history or files. See the [rendered contracts](reference.md#session-memory-foundation)
 for the lower-level signatures.
 
@@ -505,7 +490,7 @@ or failure is derived from node transitions. `NodeFailedRecord` stores
 the nested `Failure` directly beside any evidence. A causal `NodeRoutedRecord`
 stores the optional derived terminal-unreachable `Failure` that replay
 revalidates before restoring; no separate forward terminal record exists.
-Historical schema-7 runs begin with an empty conversation projection.
+Historical schema-7 runs require no conversation state in the runtime.
 
 Backward attempts use `BackwardStartedRecord`, then one `BackwardReadyRecord`
 after the complete backward fold and every frame proposal, then ordered policy
@@ -606,13 +591,13 @@ outcome, and continues the ready frontier. `num_workers=None` preserves the
 recorded worker count; an integer selects and records the new segment's count.
 Fresh inputs, `run_id`, and LLM configuration cannot be supplied during recovery.
 
-An unfinished invocation with any accepted conversation effect request is not
-eligible for generic retry, even after an observation or close. Recovery rejects
-it before appending a resume record; effects inherited from earlier invocations in
-the admission baseline do not count. An accepted resume instead retires effect-free
-admitted invocation identities while preserving their accepted segments/views,
-without fabricating closure or completion. A retried start receives a new sequence,
-and late checkpoints for a retired identity are rejected.
+Historical conversation records do not block this retry. A retried node may
+resend requests and repeat tool actions; recovery does not provide exactly-once
+execution or resume an external request midway through. The new accepted start
+receives a new sequence, and metadata for its old unfinished start is rejected.
+Runtime neither reconstructs a transcript from the run log nor fabricates results
+for unknown effects. SessionMemory owns whatever conversation history was saved;
+the run log is not a durable replacement for that memory backend.
 
 After incomplete-tail repair, terminal inspection appends no records and invokes
 no graph nodes, backward hooks, or memory learners/commits. It projects the last
@@ -631,11 +616,11 @@ prefix-refresh failure makes that handle unusable rather than permitting a stale
 retry. Log/cleanup faults preserve the primary exception and accepted records.
 
 !!! important "Recovery may retry an interrupted node"
-    A durable `NodeStarted` with no durable outcome is run again unless an accepted
-    conversation effect request blocks retry. Memory-free nodes retain ordinary
-    retry behavior, so their external effects must tolerate repetition. The log
-    makes engine state deterministic, but cannot make an interrupted external
-    effect exactly-once.
+    An eligible durable `NodeStarted` with no durable outcome is run again.
+    Callers using the optional SessionMemory turn capability consume the backend's
+    latest saved history, but may resend requests or repeat external effects.
+    The log makes engine state deterministic, but cannot make an interrupted
+    external effect exactly-once.
 
 ## CLI path policy
 

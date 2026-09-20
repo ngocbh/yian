@@ -193,8 +193,30 @@ def _replay(state, log, *, sibling=False):
     reducer._replay_records(
         replayed, tuple(log), grow_builder=lambda *_: pytest.fail("builder called")
     )
-    assert replayed.conversation_state == state.conversation_state
-    assert replayed.accepted_starts == state.accepted_starts
+    # The final snapshot entry holds live node identities, not replay semantics.
+    assert _snapshot(replayed)[:-1] == _snapshot(state)[:-1]
+    assert replayed.initial_static_ids == state.initial_static_ids
+    assert replayed.flow.start_id == state.flow.start_id
+    assert replayed.flow.end_id == state.flow.end_id
+    assert replayed.flow.edges == state.flow.edges
+    assert replayed.flow.wiring == state.flow.wiring
+    assert replayed.flow._incoming == state.flow._incoming
+    assert replayed.flow._outgoing == state.flow._outgoing
+    assert {
+        name: (type(node), node.memory_scope, node.execution_scope, node.commit_as)
+        for name, node in replayed.flow.nodes.items()
+    } == {
+        name: (type(node), node.memory_scope, node.execution_scope, node.commit_as)
+        for name, node in state.flow.nodes.items()
+    }
+    traces = (_trace_snapshot(replayed.trace), _trace_snapshot(state.trace))
+    for trace in traces:
+        if trace is not None:
+            trace["_backward_handlers"] = {
+                source: (type(handler.__self__), handler.__self__.id, handler.__func__)
+                for source, handler in trace["_backward_handlers"].items()
+            }
+    assert traces[0] == traces[1]
     return replayed
 
 
@@ -772,6 +794,27 @@ def test_conversation_state_constructor_detaches_all_supplied_history():
     object.__setattr__(segment.checkpoints[0].stamp, "ordinal", True)
     assert state.views[0].revision == 1 and type(state.views[0].revision) is int
     assert state.segments[0].checkpoints[0].stamp.ordinal == 0
+
+
+def test_conversation_state_constructor_detaches_retired_invocations():
+    source = c.ConversationInvocation("run", 3)
+    first = admission(source)
+    view = advance_conversation(first.baseline, first)
+    segment = c.ConversationAuthority(first.baseline, (first,))
+    supplied = frozenset((source,))
+
+    state = RuntimeConversationState((segment,), (view,), supplied)
+
+    retained = next(iter(state.retired_invocations))
+    assert state.retired_invocations is not supplied
+    assert retained is not source
+    object.__setattr__(source, "start_sequence", 99)
+    expected = c.ConversationInvocation("run", 3)
+    assert state.retired_invocations == frozenset((expected,))
+    assert retained == state.segments[0].checkpoints[0].stamp.invocation
+    assert state.index(expected) == 0
+    with pytest.raises(ValueError, match="retired"):
+        prepare_conversation_checkpoint(state, first)
 
 
 def test_checkpoint_advances_only_its_invocation_without_refolding_older_segments(

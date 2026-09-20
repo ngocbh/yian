@@ -72,14 +72,17 @@ class RuntimeConversationState:
             invocations.add(invocation)
         if type(self.retired_invocations) is not frozenset:
             raise TypeError("retired invocations must be a frozenset")
+        retired_invocations = []
         for invocation in self.retired_invocations:
             if type(invocation) is not ConversationInvocation:
                 raise TypeError("retired invocations require exact identities")
-            replace(invocation)
-        if not self.retired_invocations <= invocations:
+            retired_invocations.append(replace(invocation))
+        retired = frozenset(retired_invocations)
+        if not retired <= invocations:
             raise ValueError("only admitted invocations can be retired")
         object.__setattr__(self, "segments", tuple(segments))
         object.__setattr__(self, "views", tuple(views))
+        object.__setattr__(self, "retired_invocations", retired)
 
     def index(self, invocation: ConversationInvocation) -> int | None:
         """Find an admitted invocation, including one retired during recovery.

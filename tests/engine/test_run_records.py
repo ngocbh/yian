@@ -131,6 +131,30 @@ def test_prepared_record_tamper_check_uses_frozen_schema(change):
     assert _snapshot(state) == before
 
 
+def test_append_result_wrong_schema_is_protocol_fault():
+    from dataclasses import replace
+    from agent_composer.runtime.log import MemoryRunLog
+    from agent_composer.runtime.state import RunState, commit_prepared, prepare_run_started
+    from tests.engine.test_run_state_initialization import _flow, _snapshot, _start_data
+
+    class WrongSchemaLog(MemoryRunLog):
+        def append(self, record):
+            accepted = super().append(record)
+            assert accepted.schema == 8
+            return RecordEnvelope(7, accepted.run_id, accepted.seq, accepted.record)
+
+    state = RunState(_flow())
+    prepared = prepare_run_started(state, replace(_start_data(state.flow), learnable=True))
+    before = _snapshot(state)
+    log = WrongSchemaLog(prepared.expected_run_id)
+    with pytest.raises(ValueError, match="append result"):
+        commit_prepared(log, state, prepared)
+    assert _snapshot(state) == before
+    assert state.trace is None
+    assert log.next_sequence == 1
+    assert encode_record(log.records()[0]) == prepared._plan.envelope_bytes
+
+
 @pytest.mark.parametrize("kind", ["success", "route", "failure", "growth"])
 def test_historical_outcomes_keep_schema_in_trace_bytes(kind):
     import agent_composer.run as run_module
@@ -188,15 +212,19 @@ def _records():
     """Return one representative value for every closed run-record variant."""
     from agent_composer.memory import MemoryFrameRef, MemoryMutation, MemoryOperationFailure, MemoryOwner
     from agent_composer.runtime.log import (
+        ConversationAdmittedRecord, ConversationEffectRequestedRecord,
+        ConversationEffectObservedRecord, ConversationClosedRecord,
         MemoryCommitFailedRecord, MemoryCommitRequestedRecord, MemoryCommitSucceededRecord,
     )
     from tests.engine.test_backward_records import _backward_records
+    from tests.engine.test_session_records import _conversation_checkpoints
 
     pool = VariablePool(start_id="start")
     pool.set("start", {"name": "Ada"})
     frame = MemoryFrameRef("root", ("root", "agent"), MemoryOwner.AGENT)
     mutations = (MemoryMutation("m1", frame, {"text": "Remember."}),)
     failure = MemoryOperationFailure("backend", "backend.failed", "Failed.", True)
+    admitted, requested, observed, closed = _conversation_checkpoints()
     return [
         RunStartedRecord(
             flow_fingerprint=_FINGERPRINT,
@@ -235,6 +263,10 @@ def _records():
         MemoryCommitSucceededRecord("history", "commit-1", attempt_id=1),
         MemoryCommitFailedRecord("history", "commit-1", failure, attempt_id=1),
         *_backward_records(),
+        ConversationAdmittedRecord(admitted),
+        ConversationEffectRequestedRecord(requested),
+        ConversationEffectObservedRecord(observed),
+        ConversationClosedRecord(closed),
     ]
 
 
@@ -292,7 +324,7 @@ def test_memory_commit_wire_requires_a_positive_attempt(kind, payload):
 
 def test_record_encoding_is_canonical_newline_free_and_byte_stable():
     envelope = RecordEnvelope(
-        schema=SCHEMA_VERSION,
+        schema=7,
         run_id="run-canonical",
         seq=0,
         record=NodeStartedRecord(node_id="work"),
@@ -310,7 +342,7 @@ def test_record_encoding_is_canonical_newline_free_and_byte_stable():
 
 def test_node_failure_encoding_nests_one_canonical_failure():
     envelope = RecordEnvelope(
-        schema=SCHEMA_VERSION,
+        schema=7,
         run_id="run-failure",
         seq=7,
         record=NodeFailedRecord(

@@ -32,6 +32,11 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
 
 from agent_composer.diagnostics import Failure, FailureCode, OriginRef
 from agent_composer.memory import (
+    ConversationAdmitted,
+    ConversationCheckpoint,
+    ConversationClosed,
+    ConversationEffectObserved,
+    ConversationEffectRequested,
     EvaluationEvidence,
     LearningFailure,
     LearningResult,
@@ -56,6 +61,10 @@ from agent_composer.memory import (
     VisibleInteraction,
 )
 from agent_composer.memory.contracts import _validate_mutations
+from agent_composer.memory.conversation import (
+    conversation_checkpoint_from_json,
+    conversation_checkpoint_to_json,
+)
 from agent_composer.runtime.contracts import (
     AttributedBackwardResult,
     BackwardAttribution,
@@ -80,8 +89,8 @@ from agent_composer.typesys.values import (
 )
 
 
-SCHEMA_VERSION: Final = 7
-"""The one run-record wire schema understood by this release."""
+SCHEMA_VERSION: Final = 8
+"""The schema for new records; readers also retain schema-7 wire authority."""
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _ANY_ADAPTER = TypeAdapter(Any)
@@ -393,6 +402,88 @@ class MemoryCommitFailedRecord:
         )
 
 
+def _copy_record_checkpoint(
+    checkpoint: ConversationCheckpoint,
+    expected: type[ConversationCheckpoint],
+) -> ConversationCheckpoint:
+    """Validate an exact checkpoint arm and detach it through its strict codec."""
+    if type(checkpoint) is not expected:
+        raise TypeError(f"checkpoint must be an exact {expected.__name__}")
+    return conversation_checkpoint_from_json(conversation_checkpoint_to_json(checkpoint))
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationAdmittedRecord:
+    """Retain one admission checkpoint and its complete predecessor view.
+
+    Attributes:
+        checkpoint (`ConversationAdmitted`): Exact detached admission evidence.
+    """
+
+    checkpoint: ConversationAdmitted
+
+    def __post_init__(self) -> None:
+        """Validate and detach the exact admission checkpoint."""
+        object.__setattr__(
+            self, "checkpoint",
+            _copy_record_checkpoint(self.checkpoint, ConversationAdmitted),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationEffectRequestedRecord:
+    """Retain one conversation effect request before external execution.
+
+    Attributes:
+        checkpoint (`ConversationEffectRequested`): Exact detached request data.
+    """
+
+    checkpoint: ConversationEffectRequested
+
+    def __post_init__(self) -> None:
+        """Validate and detach the exact request checkpoint."""
+        object.__setattr__(
+            self, "checkpoint",
+            _copy_record_checkpoint(self.checkpoint, ConversationEffectRequested),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationEffectObservedRecord:
+    """Retain one actual observation of a conversation effect.
+
+    Attributes:
+        checkpoint (`ConversationEffectObserved`): Exact detached effect observation.
+    """
+
+    checkpoint: ConversationEffectObserved
+
+    def __post_init__(self) -> None:
+        """Validate and detach the exact observation checkpoint."""
+        object.__setattr__(
+            self, "checkpoint",
+            _copy_record_checkpoint(self.checkpoint, ConversationEffectObserved),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationClosedRecord:
+    """Retain the terminal disposition of one admitted conversation invocation.
+
+    Attributes:
+        checkpoint (`ConversationClosed`): Exact detached invocation disposition.
+    """
+
+    checkpoint: ConversationClosed
+
+    def __post_init__(self) -> None:
+        """Validate and detach the exact close checkpoint."""
+        object.__setattr__(
+            self, "checkpoint",
+            _copy_record_checkpoint(self.checkpoint, ConversationClosed),
+        )
+
+
 RunRecord: TypeAlias = (
     RunStartedRecord
     | RunResumedRecord
@@ -407,6 +498,10 @@ RunRecord: TypeAlias = (
     | BackwardStartedRecord
     | BackwardReadyRecord
     | BackwardFinishedRecord
+    | ConversationAdmittedRecord
+    | ConversationEffectRequestedRecord
+    | ConversationEffectObservedRecord
+    | ConversationClosedRecord
 )
 """The exhaustive durable transition vocabulary for one run."""
 
@@ -424,6 +519,10 @@ _RUN_RECORD_TYPES = (
     BackwardStartedRecord,
     BackwardReadyRecord,
     BackwardFinishedRecord,
+    ConversationAdmittedRecord,
+    ConversationEffectRequestedRecord,
+    ConversationEffectObservedRecord,
+    ConversationClosedRecord,
 )
 
 
@@ -517,8 +616,7 @@ class RecordEnvelope:
 
     def __post_init__(self) -> None:
         """Reject invalid envelope identity before it can reach a log implementation."""
-        if type(self.schema) is not int or self.schema != SCHEMA_VERSION:
-            raise ValueError(f"unsupported run-record schema: {self.schema!r}")
+        _require_schema_kind(self.schema, _kind_for_record(self.record))
         if type(self.run_id) is not str or not self.run_id:
             raise ValueError("run-record envelope run_id must be a non-empty string")
         if type(self.seq) is not int or self.seq < 0:
@@ -873,7 +971,7 @@ class _StrictModel(BaseModel):
 class _EnvelopeWire(_StrictModel):
     """Strict top-level JSON object shared by every record kind."""
 
-    schema_version: Literal[SCHEMA_VERSION] = Field(alias="schema")
+    schema_version: Literal[7, 8] = Field(alias="schema")
     run_id: str = Field(min_length=1)
     seq: int = Field(ge=0)
     kind: str = Field(min_length=1)
@@ -1358,6 +1456,12 @@ class _BackwardFinishedPayload(_StrictModel):
     attributed_results: list[_AttributedBackwardResultPayload]
 
 
+class _ConversationCheckpointPayload(_StrictModel):
+    """One closed checkpoint whose lower-memory codec owns nested validation."""
+
+    checkpoint: dict[str, Any]
+
+
 _KIND_TO_MODEL: dict[str, type[_StrictModel]] = {
     "run_started": _RunStartedPayload,
     "run_resumed": _RunResumedPayload,
@@ -1372,6 +1476,10 @@ _KIND_TO_MODEL: dict[str, type[_StrictModel]] = {
     "backward_started": _BackwardStartedPayload,
     "backward_ready": _BackwardReadyPayload,
     "backward_finished": _BackwardFinishedPayload,
+    "conversation_admitted": _ConversationCheckpointPayload,
+    "conversation_effect_requested": _ConversationCheckpointPayload,
+    "conversation_effect_observed": _ConversationCheckpointPayload,
+    "conversation_closed": _ConversationCheckpointPayload,
 }
 
 _TYPE_TO_KIND: dict[type[Any], str] = {
@@ -1388,7 +1496,33 @@ _TYPE_TO_KIND: dict[type[Any], str] = {
     BackwardStartedRecord: "backward_started",
     BackwardReadyRecord: "backward_ready",
     BackwardFinishedRecord: "backward_finished",
+    ConversationAdmittedRecord: "conversation_admitted",
+    ConversationEffectRequestedRecord: "conversation_effect_requested",
+    ConversationEffectObservedRecord: "conversation_effect_observed",
+    ConversationClosedRecord: "conversation_closed",
 }
+
+_SCHEMA_SEVEN_KINDS = frozenset({
+    "run_started", "run_resumed", "node_started", "node_succeeded", "node_routed",
+    "node_expanded", "node_failed", "memory_commit_requested",
+    "memory_commit_succeeded", "memory_commit_failed", "backward_started",
+    "backward_ready", "backward_finished",
+})
+_SCHEMA_KINDS = {
+    7: _SCHEMA_SEVEN_KINDS,
+    8: _SCHEMA_SEVEN_KINDS | {
+        "conversation_admitted", "conversation_effect_requested",
+        "conversation_effect_observed", "conversation_closed",
+    },
+}
+
+
+def _require_schema_kind(schema: int, kind: str) -> None:
+    """Reject unsupported schemas and kinds outside each version's closed sum."""
+    if type(schema) is not int or schema not in _SCHEMA_KINDS:
+        raise ValueError(f"unsupported run-record schema: {schema!r}")
+    if kind not in _SCHEMA_KINDS[schema]:
+        raise ValueError(f"run-record kind {kind!r} is unsupported in schema {schema}")
 
 
 def canonical_typed(
@@ -1533,6 +1667,7 @@ def encode_record(envelope: RecordEnvelope) -> bytes:
     """
     if not isinstance(envelope, RecordEnvelope):
         raise TypeError("encode_record expects a RecordEnvelope")
+    _require_schema_kind(envelope.schema, envelope.kind)
     raw = _copy_json(
         {
             "schema": envelope.schema,
@@ -1577,6 +1712,7 @@ def decode_record(data: bytes | str) -> RecordEnvelope:
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise ValueError("invalid run-record JSON") from exc
     envelope = _EnvelopeWire.model_validate(raw)
+    _require_schema_kind(envelope.schema_version, envelope.kind)
     model_type = _KIND_TO_MODEL.get(envelope.kind)
     if model_type is None:
         raise ValueError(f"unknown run-record kind: {envelope.kind!r}")
@@ -2355,6 +2491,18 @@ def _revalidate_run_record(record: RunRecord) -> None:
     if type(record) is BackwardFinishedRecord:
         BackwardFinishedRecord(record.attempt_id, record.outcome, record.attributed_results)
         return
+    if type(record) is ConversationAdmittedRecord:
+        ConversationAdmittedRecord(record.checkpoint)
+        return
+    if type(record) is ConversationEffectRequestedRecord:
+        ConversationEffectRequestedRecord(record.checkpoint)
+        return
+    if type(record) is ConversationEffectObservedRecord:
+        ConversationEffectObservedRecord(record.checkpoint)
+        return
+    if type(record) is ConversationClosedRecord:
+        ConversationClosedRecord(record.checkpoint)
+        return
     raise TypeError(f"unsupported run record: {type(record).__name__}")
 
 
@@ -2482,6 +2630,11 @@ def _payload_for_record(record: RunRecord) -> dict[str, Any]:
             "outcome": _backward_outcome_payload(record.outcome),
             "attributed_results": [_attributed_result_payload(item) for item in record.attributed_results],
         }
+    elif type(record) in (
+        ConversationAdmittedRecord, ConversationEffectRequestedRecord,
+        ConversationEffectObservedRecord, ConversationClosedRecord,
+    ):
+        raw = {"checkpoint": conversation_checkpoint_to_json(record.checkpoint)}
     else:  # protected by _kind_for_record; retained for exhaustive local reasoning
         raise TypeError(f"unsupported run record: {type(record).__name__}")
 
@@ -2605,6 +2758,22 @@ def _record_from_payload(kind: str, payload: _StrictModel) -> RunRecord:
         return BackwardFinishedRecord(
             values["attempt_id"], _backward_outcome_from_payload(values["outcome"]),
             tuple(_attributed_result_from_payload(item) for item in values["attributed_results"]),
+        )
+    if kind == "conversation_admitted":
+        return ConversationAdmittedRecord(
+            conversation_checkpoint_from_json(values["checkpoint"])
+        )
+    if kind == "conversation_effect_requested":
+        return ConversationEffectRequestedRecord(
+            conversation_checkpoint_from_json(values["checkpoint"])
+        )
+    if kind == "conversation_effect_observed":
+        return ConversationEffectObservedRecord(
+            conversation_checkpoint_from_json(values["checkpoint"])
+        )
+    if kind == "conversation_closed":
+        return ConversationClosedRecord(
+            conversation_checkpoint_from_json(values["checkpoint"])
         )
     raise ValueError(f"unknown run-record kind: {kind!r}")
 
@@ -2867,6 +3036,10 @@ __all__ = [
     "BackwardStartedRecord",
     "BackwardReadyRecord",
     "BackwardFinishedRecord",
+    "ConversationAdmittedRecord",
+    "ConversationEffectRequestedRecord",
+    "ConversationEffectObservedRecord",
+    "ConversationClosedRecord",
     "JsonlRunLog",
     "MemoryRunLog",
     "MemoryCommitFailedRecord",

@@ -374,17 +374,25 @@ def test_replay_applies_logged_llm_map_before_rebuilding_growth(monkeypatch):
 def test_historical_cursor_matches_each_envelopes_schema():
     from agent_composer.runtime.log import decode_record, encode_record
 
-    cursor = state_module._HistoricalLogCursor(_SCHEMA_SEVEN_LINEAR)
-    for wire in _SCHEMA_SEVEN_LINEAR:
+    old_prefix = _SCHEMA_SEVEN_LINEAR[:4]
+    with MemoryRunLog._from_records(tuple(decode_record(wire) for wire in old_prefix)) as log:
+        new_suffix = tuple(
+            encode_record(log.append(decode_record(wire).record))
+            for wire in _SCHEMA_SEVEN_LINEAR[4:]
+        )
+    assert all(decode_record(wire).schema == 8 for wire in new_suffix)
+    wires = old_prefix + new_suffix
+    cursor = state_module._HistoricalLogCursor(wires)
+    for wire in wires:
         expected = decode_record(wire)
         before = cursor.next_sequence
         with pytest.raises(ValueError, match="historical"):
             cursor.append(NodeStartedRecord("wrong"))
         assert cursor.next_sequence == before
         accepted = cursor.append(expected.record)
-        assert accepted.schema == expected.schema == 7
+        assert accepted.schema == expected.schema
         assert encode_record(accepted) == wire
-    assert cursor.next_sequence == len(_SCHEMA_SEVEN_LINEAR)
+    assert cursor.next_sequence == len(wires)
 
 
 @pytest.mark.parametrize("prefix_length", [5, 6])

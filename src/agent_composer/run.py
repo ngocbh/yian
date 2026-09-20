@@ -134,8 +134,9 @@ class RunResult:
 
         Raises:
             `TypeError`: Feedback has an invalid ordinary-message carrier.
-            `ValueError`: Retention is disabled, feedback is invalid, or accepted
-                history forbids another attempt.
+            `ValueError`: Retention is disabled, feedback is invalid, accepted
+                execution used a forward-only Codex agent, or accepted history
+                forbids another attempt.
             `MemorySetupError`: Enabled policies cannot restore their recorded
                 snapshots. Host and log faults also propagate while preserving
                 the accepted prefix.
@@ -187,6 +188,18 @@ class _BackwardHandle:
             if state.run_id != self.run_id:
                 raise ValueError("backward log identity differs from the retained run")
             replay_sequence = state.next_sequence
+            if state.trace is not None:
+                for occurrence in state.trace.occurrences:
+                    capture = occurrence.record.forward_capture
+                    if capture is None or capture.scope is None:
+                        continue
+                    path = "/".join(capture.scope.static_path)
+                    config = state.effective_llm_by_static_path.get(path)
+                    if config is not None and config["provider"].lower() == "codex":
+                        raise ValueError(
+                            f"backward() is unavailable for this run: Codex agent {path!r} "
+                            "is forward-only. Use API-backed agents for backward learning."
+                        )
 
             def open_memory() -> MemoryRuntime:
                 if self.memory is None:

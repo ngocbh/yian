@@ -83,6 +83,11 @@ an attempt. An empty string is still feedback. Calling `backward()` with no
 external feedback skips AGENT model work when nothing reaches an AGENT, while
 enabled memory frames can still learn from their accepted history.
 
+One forward-only exception is recorded Codex execution: `backward()` rejects the
+entire pass before any API or memory-learning call, even with no feedback or in a
+mixed-provider run. Unexecuted Codex branches do not disable learning for the
+accepted API-only history. No backward record is appended by this rejection.
+
 For the complete public call and exact feedback examples, see
 [explicit backward feedback](api.md#explicit-backward-feedback).
 

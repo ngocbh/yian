@@ -338,6 +338,12 @@ fresh authority, and closes resources while retaining the accepted prefix.
 projection. Invalid submissions preserve previous observations; backward leaves
 all forward fields unchanged.
 
+The package-root boundary rejects a backward pass when an accepted occurrence's
+authored scope joins to a recorded Codex provider. This runs before the driver,
+memory opening, or record append, including mixed-provider and no-feedback calls.
+Unexecuted Codex paths and mutable live configuration do not decide the result.
+Keep the gate outside runtime; no new node hook or log field is needed.
+
 ## Session conversation foundation
 
 `SessionMemory` in `agent_composer.memory.session` implements process-local

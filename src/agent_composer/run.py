@@ -286,11 +286,13 @@ def run_flow(
         memory (`dict[str, Memory] | None`, *optional*, defaults to `None`):
             Host-injected policy implementations keyed by authored policy name.
             ``None`` leaves every authored policy dormant. A mapping enables
-            recall and records exact per-policy recovery snapshots.
+            recall and optional conversation history, and records exact per-policy
+            recovery snapshots. Session history advances during forward execution.
         learnable (`bool`, *optional*, defaults to `False`):
             Retain accepted execution for a later explicit `RunResult.backward`
-            call. Forward execution performs no learning or commits. Memory is
-            optional; an enabled mapping supplies owned learners for that call.
+            call. Forward execution runs no frame learners or learned-mutation
+            commits. Memory is optional; an enabled mapping supplies owned learners
+            for that call. Automatic session history is independent of retention.
 
     Returns:
         `RunResult`:

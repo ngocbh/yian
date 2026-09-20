@@ -267,9 +267,20 @@ frame.
 
 Authored long-term-memory declarations are dormant unless a Python host passes a
 `memory={...}` registry to `run_flow`, keyed by the selected policy names.
-Supplying the registry enables recall. Independently, `learnable=True` retains
+Supplying the registry enables recall and any optional conversation capability.
+For API conversation continuity, declare `long_term_memory: session` and inject
+`SessionMemory()` under `"session"`. It currently accepts no frame config.
+The innermost conversation-capable frame owns a separate conversation for each
+authored AGENT leaf; other frames still provide recall. Repeated calls queue in
+admission order, including LOOP iterations and MAP items. MAP does not fork
+history or guarantee input-index admission order; use non-session memory when
+items should be independent. History updates automatically during forward,
+without enabling learning. See [SessionMemory](api.md#sessionmemory-foundation).
+
+Independently, `learnable=True` retains
 accepted execution for an explicit `result.backward(feedback)` call after forward
-returns. Forward never learns or commits. A call with no external feedback still
+returns. Forward does not run frame learners or commit learned mutations; session
+history updates are separate. A call with no external feedback still
 presents history to every enabled memory frame; backward outcomes stay separate
 from the forward result. See [the Python API](api.md#explicit-backward-feedback).
 The `ac run` CLI does not inject memory implementations or expose backward or

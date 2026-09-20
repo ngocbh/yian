@@ -55,6 +55,11 @@ preserving the declared package-root API.
 Kind-specific support follows the entity row: for example, CODE's in-process
 soft-budget watchdog lives in `nodes/code/watchdog.py`. Putting it around every
 evaluation in `runtime/` would both misstate ownership and broaden behavior.
+Likewise, API conversation encoding belongs in `nodes/agent/conversation.py`:
+it adapts provider messages to lower memory contracts without storing history.
+`memory/session.py` owns history and FIFO admission. Runtime only binds authored
+scope/accepted invocation identity and manages the lazy capability lifetime;
+it neither encodes provider messages nor reconstructs history from the run log.
 
 ## Import-direction smell test
 

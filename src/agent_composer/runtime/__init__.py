@@ -8,6 +8,11 @@ source-neutral frame contracts and injected policy sessions; its learning intent
 follow the same append-before-apply reducer path. Pooled drives own their workers
 through a full join and signal cooperative stop before that join when dispatch
 exits abnormally.
+Optional conversation admission captures accepted invocation identity before
+worker submission. The evaluator binds that identity with authored scope and owns
+the lazy turn lifetime through wrapped execution and cleanup; memory owns history,
+and nodes own provider effects.
+No transcript or live lease enters a worker result or the run-state reducer.
 Accepted forward captures and paired producer reads follow the same reducer
 for live execution and replay; private backward handlers stay outside records.
 Shared forward/backward contracts live below the log and driver;

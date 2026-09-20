@@ -381,7 +381,16 @@ Other node kinds and anonymous inline children cannot carry the declaration. The
 YAML contains no credentials, tenant/backend paths, persistence locations, or
 Python imports. A library host injects implementations under the selected policy
 name with `run_flow(..., memory={NAME: implementation})` to enable recall.
-`learnable=True` independently retains execution; forward never learns or commits.
+For API session history, use `long_term_memory: session` with a host-injected
+`SessionMemory()` (no frame config). The innermost conversation-capable frame
+owns each authored AGENT leaf's conversation; all frames still provide recall.
+Repeated MAP/LOOP executions share it and queue in admission order, not guaranteed
+MAP input order. Use non-session memory for independent MAP items. History advances
+automatically during forward, independently of `learnable` or backward. Current
+instructions and tool permissions still apply; restoring history never executes
+old tool calls. Codex, summaries, learned notes, and durable storage remain pending.
+`learnable=True` independently retains execution; forward does not run frame
+learners or commit learned mutations.
 Call `result.backward(feedback)` explicitly after forward returns, and inspect
 its separate outcome. With `None` feedback, enabled memory frames still learn
 from accepted history without AGENT backward model work. Terminal resume is silent

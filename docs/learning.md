@@ -33,17 +33,21 @@ during forward execution.
 
 `memory=` is separate host-provided infrastructure for recall and durable policy
 updates. An authored `long_term_memory` declaration chooses a policy name; the
-host supplies its implementation under that name. Recall can be enabled without
-`learnable=True`, and a learnable run can operate without any memory policy.
+host supplies its implementation under that name. Recall and optional session
+history can be enabled without `learnable=True`, and a learnable run can operate
+without any memory policy.
 
 | Setting | What it enables | What forward execution does |
 | --- | --- | --- |
 | `learnable=True` | Retained execution and a later `backward()` call | Records accepted facts; does not learn or commit |
-| `memory={...}` | Recall for declared memory frames | Opens policy snapshots and provides recalled context |
-| Both | Feedback-informed frame learning | Retains execution and recalls; still does not write memory |
+| `memory={...}` | Recall and optional session history for declared frames | Opens policy snapshots, recalls context, and advances enabled session history |
+| Both | Feedback-informed frame learning plus forward memory capabilities | Retains execution and uses memory; does not run learners or commit learned mutations |
 
 This separation lets an application collect evaluator feedback without a memory
 backend, or use recalled context in an ordinary non-learnable run.
+[`SessionMemory`](api.md#sessionmemory-foundation) saves actual API conversation
+exchanges automatically during forward. These history updates are not learning;
+its backward learned-note support is still pending.
 
 ## Start an explicit backward attempt
 

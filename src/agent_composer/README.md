@@ -907,9 +907,10 @@ instance; external persistence remains a host concern.
 
 ### Session conversation foundation
 
-`agent_composer.memory.session.SessionMemory` supplies the lower-level conversation
-backend. It owns history updates directly. AGENT, API-provider, Codex, and CLI
-integration are pending; `run_flow` does not yet drive conversation turns.
+`agent_composer.memory.session.SessionMemory` supplies conversation continuity
+for API-backed AGENT execution through `run_flow`. It owns history updates
+directly. Codex, summaries, learned notes, durable storage, and CLI activation
+remain pending.
 `SessionMemory` is a concrete backend;
 `MemorySession` remains the existing run-handle protocol. Optional
 `ConversationFrame` and `ConversationTurn` protocols leave
@@ -923,11 +924,33 @@ import only the standard library and lower memory modules, never nodes, runtime,
 compile, compose, or providers. The facade exports contracts only; concrete
 backends are imported explicitly from their own modules.
 
+Runtime consumes only the optional capability. `MemoryRuntime` selects the
+innermost conversation-capable frame without hiding ordinary recall. The engine
+captures accepted run/start identity before observers or worker submission;
+`eval_node` binds that identity and authored scope into a lazy, single-use
+`begin_conversation` callback. The callback takes compatibility, never owner IDs.
+The evaluator keeps the lease through the node body, generator drain,
+post-assertions, and result-shape validation. Completion means wrapped execution
+finished, not that the dispatcher subsequently accepted typed output. Cleanup
+preserves primary errors; no live lease travels in worker results. Nodes without
+the trait and calls without a capable frame remain dormant.
+
+`nodes/agent/conversation.py` is a stateless provider adapter, not a second store.
+It encodes detached finite-JSON LangChain messages and actual effect observations
+through the admitted turn. Provider plus message format define compatibility;
+compatible model changes retain history. Current instructions, recall, and tool
+grants apply on every call. Historical system instructions do not become current
+instructions. Restoring history never dispatches tools. Context-only projections
+make missing tool results unknown and schema pseudo-calls inert; raw history is
+unchanged. Replies, including native structured raw replies, are saved before
+cancellation or parsing. Memory faults bypass structured/provider retry loops.
+
 `SessionMemory()` takes no arguments and accepts only empty frame configuration.
 Its conversation key is the authored frame plus the leaf consumer's static path,
 supplied by the caller. Each key has one FIFO queue; different leaves under a
 flow-owned frame have separate conversations and queues. MAP/LOOP occurrence
-positions do not change identity, and no fork mode exists. A turn reads its live
+positions do not change identity, and no fork mode exists. FIFO is admission
+order, not a MAP input-index guarantee. A turn reads its live
 baseline only after acquiring the lease. The run handle's detached opening
 snapshot stays pinned as live turns advance history. Public
 version-1 snapshots contain namespace, generation, and complete conversation views,
@@ -962,8 +985,8 @@ Backend-wide `reset()` fails immediately and unchanged with `session.busy` while
 any turn is active or queued. When idle, it clears every local conversation and
 advances the generation, invalidating old handles.
 It does not delete external provider history or files. The
-[Python API guide](../../docs/api.md#sessionmemory-foundation) shows the available
-lower-level snapshot/reset interface.
+[Python API guide](../../docs/api.md#sessionmemory-foundation) shows host injection
+and the lower-level snapshot/reset interface.
 
 ### Historical conversation records
 

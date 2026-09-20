@@ -458,12 +458,15 @@ Most are just the functional model (above) made enforceable:
   identity. Static capture remains separate. Accepted evidence retains base system
   prompt, ordered recall sections, and visible interactions; the private
   `_evaluation_evidence` backward-context bridge comes only from that record.
-- **Memory is host-injected and record-authoritative** — authored
+- **Memory setup and learning are record-authoritative** — authored
   `long_term_memory:` declarations select policies that resolve to static frames
   owned by flows or AGENT nodes; MAP items and LOOP iterations reuse those frames.
-  `memory=None` is dormant, while an injected registry opens snapshot-isolated
-  sessions and supplies a kind-blind recall callback, independently of `learnable`.
-  `learnable=True` retains execution only; forward returns before learning/commits.
+  `memory=None` is dormant, while a host-injected registry opens run-scoped
+  sessions with pinned opening snapshots and supplies kind-blind recall and
+  optional conversation capabilities, independently of `learnable`. SessionMemory
+  reads latest live history after admission, not a frozen opening transcript.
+  `learnable=True` retains execution only; forward runs no learners or
+  learned-mutation commits. Automatic conversation updates are separate.
   Explicit `RunResult.backward(feedback)` performs the reverse fold, then every
   enabled frame learner in layout order, including empty/unexecuted histories.
   A receiver writes only its own frame; descendant evidence preserves original
@@ -482,13 +485,20 @@ Most are just the functional model (above) made enforceable:
 - **SessionMemory owns conversation state and FIFO admission** — import
   `SessionMemory` from `agent_composer.memory.session`, not the contracts-only
   facade. Optional `ConversationFrame`/`ConversationTurn` capabilities leave
-  mandatory memory protocols unchanged. AGENT, API-provider, Codex, and CLI
-  integration remain pending.
-  Do not claim `run_flow` already retains conversations.
+  mandatory memory protocols unchanged. API-backed AGENT execution through
+  `run_flow` retains conversations when the host injects the backend. Codex,
+  summaries, learned notes, durable storage, and CLI activation remain pending.
   `memory.conversation` owns the pure fold, strict codecs, and digests;
   `memory.session` owns live views, FIFO leases, and atomic publication. Both stay
   below nodes/runtime/providers. Runtime keeps no conversation projection, effect
-  ledger, checkpoint callback, or reconciliation channel. Four schema-8 wrappers
+  ledger, checkpoint callback, or reconciliation channel. It selects the
+  innermost capable frame and binds authored scope plus accepted run/start
+  identity into one lazy evaluator-owned turn. Capture that identity before
+  observers/submission; never recover it from mutable state in a worker. Keep the
+  lease through stream cleanup, post-assertions, and result-shape validation;
+  later dispatcher acceptance is not part of turn completion. No lease travels
+  in worker results. The stateless AGENT adapter owns provider encoding/effects,
+  not stored history. Four schema-8 wrappers
   remain strict, inert historical metadata: validate run/start/frame/policy/scope
   and lifecycle, append before applying record/trace sequencing only. They grant
   no effects and create no output, frontier change, episode, or observer. Reject
@@ -498,7 +508,9 @@ Most are just the functional model (above) made enforceable:
   log or require conversation closure before node success. See
   [the conversation and retry contract](reference.md#session-conversation-foundation).
   One authored frame plus leaf static path owns a conversation and queue;
-  MAP/LOOP positions do not fork it. Acquire the FIFO lease before reading live
+  MAP/LOOP positions do not fork it. FIFO is admission order, not MAP input order.
+  All ordinary recall frames remain active; a local non-session frame does not
+  hide an enclosing conversation frame. Acquire the FIFO lease before reading live
   history while keeping the run-opening snapshot pinned. Publish requests and
   observations directly in the backend; external calls and stop checks run outside
   its condition lock. Preserve observations before honoring stop and keep unknown
@@ -509,6 +521,12 @@ Most are just the functional model (above) made enforceable:
   and invalidates old-generation handles. Frame config is empty; recall
   and learning are empty, only empty commits are supported, and conversation
   updates through the optional turn capability are independent of `learnable`.
+  API compatibility uses provider plus versioned message format; compatible
+  model changes retain history. Apply current instructions/recall/tool grants
+  on each call. Never dispatch old tool calls while restoring history. Keep raw
+  history intact when projecting unknown tool results or inert structured-schema
+  calls for provider context. Retain native raw replies before parsing, and keep
+  memory/codec faults outside structured-output retry catches.
 - **One attempt barrier precedes commits** — accept Started, complete backward
   results and all frame proposals, then accept Ready. Commit each enabled policy
   once in recorded order, even with an empty batch, accepting its positive-attempt

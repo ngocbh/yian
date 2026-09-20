@@ -575,6 +575,11 @@ Most are just the functional model (above) made enforceable:
   prefix; poison an unrefreshable handle. Invalid submissions leave prior observed
   outcome objects unchanged. Terminal resume is inspection only, opening no
   policies and invoking no backward/learning work. Forward fields never change.
+  Before the driver or policy opening, the package-root boundary rejects a whole
+  backward pass containing recorded Codex execution, even with no feedback. Join
+  accepted occurrence scopes to the recorded effective LLM map; ignore unexecuted
+  paths and live config changes. Keep this forward-only gate outside runtime,
+  without new record fields or node hooks; rejection appends no backward records.
 - **`Node.env` is engine-opaque** — a per-node `dict[str,Any]` of static config the compiler
   bakes at build (`{**flow_env, **node_env}`, node wins, flow-local). The engine NEVER reads it;
   only a node's own `forward()` interprets known keys (e.g. an AGENT node's `max_tool_iterations`). It is the

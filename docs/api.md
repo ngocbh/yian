@@ -203,6 +203,15 @@ effective model configuration. Tool interactions in that evidence are inert
 data. No prompt/default/recall is evaluated again, and variable feedback does not
 update variables, model configuration, or the graph.
 
+For the forward-only Codex release, `backward()` raises `ValueError` if the
+recorded run executed a Codex-backed AGENT. This rejects the whole pass, including
+mixed-provider runs and calls with no feedback, before opening memory, invoking
+any model or learner, or appending backward records. A declared but unexecuted
+Codex branch does not trigger this restriction. The check uses recorded execution
+scopes and provider configuration, not mutable live node settings; terminal
+recovery preserves it. Rejection leaves the forward result and prior backward
+observations unchanged. Codex forward/provider integration remains separate work.
+
 Known callback/result failures return a failed outcome without partial root
 feedback. A later learner or commit failure retains already completed feedback.
 Host errors, cancellation, setup errors, and log faults propagate while leaving

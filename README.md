@@ -147,6 +147,10 @@ learning separate from the forward output and failure. See the
 [Python API](docs/api.md#explicit-backward-feedback) for feedback shapes, memory,
 and silent terminal recovery.
 
+The forward-only Codex restriction rejects `backward()` for a run with recorded
+Codex execution, before any model or memory-learning calls. API-only executed
+history keeps its existing backward behavior.
+
 The built-in [`EpisodicMemory`](docs/learning.md#episodic-memory) keeps bounded,
 model-free execution history for later runs. A flow declares
 `long_term_memory: episodic`; its host injects the process-local backend and

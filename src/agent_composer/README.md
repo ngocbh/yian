@@ -881,6 +881,14 @@ unchanged and exposes a separate `BackwardOutcome`; `RunResult.learning` is the
 learning projection of that observed outcome. With no effective feedback, the
 node callback fold does no work, but every enabled static frame still learns.
 
+The package-root backward boundary rejects recorded Codex execution before the
+attempt driver, policy opening, or backward records. Join accepted occurrence
+scopes to the recorded effective LLM map; never inspect mutable live node config
+or infer provider from arbitrary node payloads. The restriction covers the whole
+pass, including mixed-provider/no-feedback calls, but not unexecuted Codex paths.
+This forward-only provider gate stays outside kind-blind runtime and adds no
+record fields or node hooks. Rejected submissions preserve prior observations.
+
 `runtime.learning` owns pure root seeding/projection, ordered message transfer,
 complete attributed-result validation, and owner-context construction. The
 callback driver imports those helpers; state/replay never imports the driver or

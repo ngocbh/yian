@@ -16,7 +16,6 @@ from agent_composer.memory.contracts import (
     _thaw_json_object,
 )
 
-
 _VERSION = 1
 _SCHEMA = (
     "CREATE TABLE memory_state ("
@@ -25,7 +24,9 @@ _SCHEMA = (
 
 
 def _error(reason: str, message: str) -> MemoryOperationError:
-    return MemoryOperationError("storage", f"storage.{reason}", message, reason == "busy")
+    return MemoryOperationError(
+        "storage", f"storage.{reason}", message, reason == "busy"
+    )
 
 
 def _io_error(error: OSError | sqlite3.Error) -> MemoryOperationError:
@@ -52,12 +53,18 @@ def _object_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
 
 
 def _encode(backend: str, state: JsonObject | None) -> str:
-    envelope = _thaw_json_object(_freeze_json_object(
-        {"version": _VERSION, "backend": backend, "state": state}, "storage envelope",
-    ))
+    envelope = _thaw_json_object(
+        _freeze_json_object(
+            {"version": _VERSION, "backend": backend, "state": state},
+            "storage envelope",
+        )
+    )
     return json.dumps(
         envelope,
-        ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
     )
 
 
@@ -65,9 +72,12 @@ def _decode(raw: object, backend: str) -> JsonObject | None:
     try:
         if type(raw) is not str:
             raise ValueError("envelope must be text")
-        envelope = _thaw_json_object(_freeze_json_object(
-            json.loads(raw, object_pairs_hook=_object_pairs), "storage envelope",
-        ))
+        envelope = _thaw_json_object(
+            _freeze_json_object(
+                json.loads(raw, object_pairs_hook=_object_pairs),
+                "storage envelope",
+            )
+        )
         if set(envelope) != {"version", "backend", "state"}:
             raise ValueError("invalid envelope fields")
         if type(envelope["version"]) is not int or envelope["version"] != _VERSION:
@@ -80,7 +90,9 @@ def _decode(raw: object, backend: str) -> JsonObject | None:
             return None
         return _thaw_json_object(_freeze_json_object(state, "state"))
     except (TypeError, ValueError, RecursionError):
-        raise _error("corrupt", "Memory storage contains an invalid state envelope.") from None
+        raise _error(
+            "corrupt", "Memory storage contains an invalid state envelope."
+        ) from None
 
 
 class SQLiteStorage:
@@ -107,11 +119,18 @@ class SQLiteStorage:
         try:
             self._backend = _require_string(backend, "backend")
         except (TypeError, ValueError):
-            raise _error("backend", "Memory storage requires a nonempty backend kind.") from None
+            raise _error(
+                "backend", "Memory storage requires a nonempty backend kind."
+            ) from None
         try:
             raw_path = os.fspath(path)
-            if (type(raw_path) is not str or not raw_path or raw_path == ":memory:"
-                    or raw_path.lower().startswith("file:") or "\x00" in raw_path):
+            if (
+                type(raw_path) is not str
+                or not raw_path
+                or raw_path == ":memory:"
+                or raw_path.lower().startswith("file:")
+                or "\x00" in raw_path
+            ):
                 raise ValueError("invalid file path")
             raw_path.encode("utf-8")
             self._path = os.path.realpath(raw_path)
@@ -126,7 +145,9 @@ class SQLiteStorage:
         self._poisoned = False
         try:
             try:
-                descriptor = os.open(self._path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                descriptor = os.open(
+                    self._path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600
+                )
             except FileExistsError:
                 pass
             else:
@@ -142,13 +163,18 @@ class SQLiteStorage:
             if not stat.S_ISREG(os.stat(self._path).st_mode):
                 raise _error("path", "Memory storage requires a regular file.")
             self._connection = sqlite3.connect(
-                self._path, timeout=0, isolation_level=None, check_same_thread=False,
+                self._path,
+                timeout=0,
+                isolation_level=None,
+                check_same_thread=False,
             )
             connection = self._connection
             connection.execute("PRAGMA locking_mode = EXCLUSIVE")
             connection.execute("PRAGMA synchronous = EXTRA")
             if connection.execute("PRAGMA journal_mode").fetchone() != ("delete",):
-                raise _error("schema", "Memory storage requires rollback-journal format.")
+                raise _error(
+                    "schema", "Memory storage requires rollback-journal format."
+                )
             connection.execute("BEGIN EXCLUSIVE")
             # A creator can die before SQLite initialization. Only genuinely empty
             # files may initialize; an unrelated empty SQLite database is not ours.
@@ -174,7 +200,9 @@ class SQLiteStorage:
             raise
 
     def _validate_schema(self, connection: sqlite3.Connection) -> None:
-        rows = connection.execute("SELECT type, name, tbl_name, sql FROM sqlite_master").fetchall()
+        rows = connection.execute(
+            "SELECT type, name, tbl_name, sql FROM sqlite_master"
+        ).fetchall()
         if rows != [("table", "memory_state", "memory_state", _SCHEMA)]:
             raise _error("schema", "Memory storage schema is unsupported.")
         if connection.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
@@ -183,7 +211,9 @@ class SQLiteStorage:
     def _read(self, connection: sqlite3.Connection) -> JsonObject | None:
         rows = connection.execute("SELECT id, envelope FROM memory_state").fetchall()
         if len(rows) != 1 or rows[0][0] != 1:
-            raise _error("corrupt", "Memory storage must contain exactly one state envelope.")
+            raise _error(
+                "corrupt", "Memory storage must contain exactly one state envelope."
+            )
         return _decode(rows[0][1], self._backend)
 
     def _before_lock(self) -> None:
@@ -197,7 +227,10 @@ class SQLiteStorage:
         if self._closed:
             raise _error("closed", "Memory storage is closed.")
         if self._poisoned:
-            raise _error("poisoned", "Memory storage must be closed and reopened after an I/O failure.")
+            raise _error(
+                "poisoned",
+                "Memory storage must be closed and reopened after an I/O failure.",
+            )
         assert self._connection is not None
         return self._connection
 
@@ -256,10 +289,14 @@ class SQLiteStorage:
                 detached = _thaw_json_object(_freeze_json_object(state, "state"))
                 encoded = _encode(self._backend, detached)
             except (TypeError, ValueError, RecursionError):
-                raise _error("invalid_state", "Memory storage requires a finite JSON object.") from None
+                raise _error(
+                    "invalid_state", "Memory storage requires a finite JSON object."
+                ) from None
             try:
                 connection.execute("BEGIN EXCLUSIVE")
-                connection.execute("UPDATE memory_state SET envelope = ? WHERE id = 1", (encoded,))
+                connection.execute(
+                    "UPDATE memory_state SET envelope = ? WHERE id = 1", (encoded,)
+                )
                 connection.commit()
             except BaseException as error:
                 self._poisoned = True

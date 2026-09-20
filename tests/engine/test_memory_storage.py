@@ -49,7 +49,9 @@ def _crash_at_commit(path, cut):
                 os._exit(23)
             return result
 
-    with patch("sqlite3.connect", lambda *a, **kw: connect(*a, **kw, factory=Connection)):
+    with patch(
+        "sqlite3.connect", lambda *a, **kw: connect(*a, **kw, factory=Connection)
+    ):
         store = SQLiteStorage(path, "session")
         store._connection.armed = True
         store.save({"value": "new", "large": "x" * 100_000})
@@ -69,7 +71,12 @@ def _hold_until_killed(path, pipe):
 
 def _inherited_operations(store, pipe):
     outcomes = []
-    for operation in (store.ensure_open, store.load, lambda: store.save({}), store.close):
+    for operation in (
+        store.ensure_open,
+        store.load,
+        lambda: store.save({}),
+        store.close,
+    ):
         try:
             operation()
         except MemoryOperationError as error:
@@ -128,9 +135,19 @@ def test_roundtrip_is_detached_and_survives_reopen(tmp_path):
         reopened.close()
 
 
-@pytest.mark.parametrize("invalid", [None, [], {"x": float("nan")}, {"x": float("inf")},
-                                     {"x": object()}, {1: "bad"}, {"x": (1,)},
-                                     {"x": "\ud800"}])
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        None,
+        [],
+        {"x": float("nan")},
+        {"x": float("inf")},
+        {"x": object()},
+        {1: "bad"},
+        {"x": (1,)},
+        {"x": "\ud800"},
+    ],
+)
 def test_invalid_candidate_is_rejected_without_poisoning(tmp_path, invalid):
     store = SQLiteStorage(tmp_path / "memory.sqlite", "session")
     try:
@@ -206,8 +223,10 @@ def test_maximum_valid_envelope_depth_roundtrips(tmp_path):
         reopened.close()
 
 
-@pytest.mark.parametrize("path", ["", ":memory:", "file:memory.sqlite", b"memory.sqlite", None,
-                                 "bad\x00path"])
+@pytest.mark.parametrize(
+    "path",
+    ["", ":memory:", "file:memory.sqlite", b"memory.sqlite", None, "bad\x00path"],
+)
 def test_only_file_paths_are_accepted(path):
     with pytest.raises(MemoryOperationError) as caught:
         SQLiteStorage(path, "session")
@@ -240,8 +259,12 @@ def test_new_file_permissions_and_connection_settings(tmp_path):
     try:
         assert stat.S_IMODE(path.stat().st_mode) == 0o600
         assert store._connection.execute("PRAGMA synchronous").fetchone() == (3,)
-        assert store._connection.execute("PRAGMA locking_mode").fetchone() == ("exclusive",)
-        assert store._connection.execute("PRAGMA journal_mode").fetchone() == ("delete",)
+        assert store._connection.execute("PRAGMA locking_mode").fetchone() == (
+            "exclusive",
+        )
+        assert store._connection.execute("PRAGMA journal_mode").fetchone() == (
+            "delete",
+        )
         assert store._connection.execute("PRAGMA busy_timeout").fetchone() == (0,)
     finally:
         store.close()
@@ -282,9 +305,24 @@ def test_zero_byte_file_initializes_without_changing_permissions(tmp_path):
         store.close()
 
 
-@pytest.mark.parametrize("damage", ["kind", "version", "boolean_version", "extra_field", "missing_field",
-                                   "duplicate_key", "bad_json", "nonfinite", "not_object", "no_row",
-                                   "extra_table", "altered_schema", "blob"])
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "kind",
+        "version",
+        "boolean_version",
+        "extra_field",
+        "missing_field",
+        "duplicate_key",
+        "bad_json",
+        "nonfinite",
+        "not_object",
+        "no_row",
+        "extra_table",
+        "altered_schema",
+        "blob",
+    ],
+)
 def test_invalid_store_rejected_without_overwriting_or_leaking_owner(tmp_path, damage):
     path = tmp_path / "memory.sqlite"
     store = SQLiteStorage(path, "session")
@@ -358,18 +396,30 @@ def test_lifetime_owner_survives_commits_and_failed_competitors(tmp_path, alias)
             with pytest.raises(MemoryOperationError) as caught:
                 SQLiteStorage(contender, "session")
             _assert_error(caught.value, "busy")
-            assert _child_result(_attempt_open, contender) == ("storage", "storage.busy", True)
+            assert _child_result(_attempt_open, contender) == (
+                "storage",
+                "storage.busy",
+                True,
+            )
             assert store.load() == {"value": value}
     finally:
         store.close()
     assert _child_result(_attempt_open, contender) == "opened"
 
 
-@pytest.mark.parametrize("failure", [sqlite3.OperationalError("secret-host-path"),
-                                    OSError("secret-host-path"), KeyboardInterrupt("stop"),
-                                    SystemExit(7)])
+@pytest.mark.parametrize(
+    "failure",
+    [
+        sqlite3.OperationalError("secret-host-path"),
+        OSError("secret-host-path"),
+        KeyboardInterrupt("stop"),
+        SystemExit(7),
+    ],
+)
 @pytest.mark.parametrize("after_commit", [False, True])
-def test_failed_save_poisoning_retains_ownership_and_primary(tmp_path, monkeypatch, failure, after_commit):
+def test_failed_save_poisoning_retains_ownership_and_primary(
+    tmp_path, monkeypatch, failure, after_commit
+):
     connect = sqlite3.connect
 
     class Connection(sqlite3.Connection):
@@ -382,7 +432,9 @@ def test_failed_save_poisoning_retains_ownership_and_primary(tmp_path, monkeypat
                 super().commit()
             raise failure
 
-    monkeypatch.setattr(sqlite3, "connect", lambda *a, **kw: connect(*a, **kw, factory=Connection))
+    monkeypatch.setattr(
+        sqlite3, "connect", lambda *a, **kw: connect(*a, **kw, factory=Connection)
+    )
     path = tmp_path / "memory.sqlite"
     store = SQLiteStorage(path, "session")
     store.save({"old": True})
@@ -411,7 +463,9 @@ def test_failed_save_poisoning_retains_ownership_and_primary(tmp_path, monkeypat
         reopened.close()
 
 
-def test_close_is_idempotent_and_closed_methods_do_not_touch_os_or_sqlite(tmp_path, monkeypatch):
+def test_close_is_idempotent_and_closed_methods_do_not_touch_os_or_sqlite(
+    tmp_path, monkeypatch
+):
     store = SQLiteStorage(tmp_path / "memory.sqlite", "session")
     store.close()
 
@@ -427,9 +481,17 @@ def test_close_is_idempotent_and_closed_methods_do_not_touch_os_or_sqlite(tmp_pa
         _assert_error(caught.value, "closed")
 
 
-@pytest.mark.parametrize("failure", [KeyboardInterrupt("stop"), SystemExit(7),
-                                    sqlite3.OperationalError("secret-host-path")])
-def test_failed_constructor_rolls_back_and_releases_connection(tmp_path, monkeypatch, failure):
+@pytest.mark.parametrize(
+    "failure",
+    [
+        KeyboardInterrupt("stop"),
+        SystemExit(7),
+        sqlite3.OperationalError("secret-host-path"),
+    ],
+)
+def test_failed_constructor_rolls_back_and_releases_connection(
+    tmp_path, monkeypatch, failure
+):
     connect = sqlite3.connect
     connections = []
 
@@ -461,7 +523,9 @@ def test_failed_constructor_rolls_back_and_releases_connection(tmp_path, monkeyp
         reopened.close()
 
 
-def test_rollback_failure_does_not_replace_save_failure_or_release_owner(tmp_path, monkeypatch):
+def test_rollback_failure_does_not_replace_save_failure_or_release_owner(
+    tmp_path, monkeypatch
+):
     connect = sqlite3.connect
     primary = KeyboardInterrupt("original")
 
@@ -478,7 +542,9 @@ def test_rollback_failure_does_not_replace_save_failure_or_release_owner(tmp_pat
                 raise SystemExit("cleanup")
             return super().rollback()
 
-    monkeypatch.setattr(sqlite3, "connect", lambda *a, **kw: connect(*a, **kw, factory=Connection))
+    monkeypatch.setattr(
+        sqlite3, "connect", lambda *a, **kw: connect(*a, **kw, factory=Connection)
+    )
     path = tmp_path / "memory.sqlite"
     store = SQLiteStorage(path, "session")
     store.save({"old": True})
@@ -508,7 +574,9 @@ def test_load_io_failure_poisoning_preserves_owner(tmp_path, monkeypatch):
                 raise sqlite3.OperationalError("secret-host-path")
             return super().execute(sql, *args)
 
-    monkeypatch.setattr(sqlite3, "connect", lambda *a, **kw: connect(*a, **kw, factory=Connection))
+    monkeypatch.setattr(
+        sqlite3, "connect", lambda *a, **kw: connect(*a, **kw, factory=Connection)
+    )
     path = tmp_path / "memory.sqlite"
     store = SQLiteStorage(path, "session")
     store._connection.armed = True
@@ -549,12 +617,18 @@ def test_process_crash_at_commit_is_atomic(tmp_path, cut):
     store = SQLiteStorage(path, "session")
     store.save({"value": "old"})
     store.close()
-    process = multiprocessing.get_context("spawn").Process(target=_crash_at_commit, args=(path, cut))
+    process = multiprocessing.get_context("spawn").Process(
+        target=_crash_at_commit, args=(path, cut)
+    )
     process.start()
     _join(process, expected=23)
     reopened = SQLiteStorage(path, "session")
     try:
-        expected = {"value": "old"} if cut == "before" else {"value": "new", "large": "x" * 100_000}
+        expected = (
+            {"value": "old"}
+            if cut == "before"
+            else {"value": "new", "large": "x" * 100_000}
+        )
         assert reopened.load() == expected
     finally:
         reopened.close()
@@ -562,7 +636,9 @@ def test_process_crash_at_commit_is_atomic(tmp_path, cut):
 
 def test_creation_crash_leaves_recoverable_empty_file(tmp_path):
     path = tmp_path / "memory.sqlite"
-    process = multiprocessing.get_context("spawn").Process(target=_crash_before_connect, args=(path,))
+    process = multiprocessing.get_context("spawn").Process(
+        target=_crash_before_connect, args=(path,)
+    )
     process.start()
     _join(process, expected=23)
     assert path.read_bytes() == b""
@@ -599,14 +675,19 @@ def test_process_death_releases_owner_and_preserves_commit(tmp_path):
         store.close()
 
 
-@pytest.mark.skipif("fork" not in multiprocessing.get_all_start_methods(), reason="requires fork")
+@pytest.mark.skipif(
+    "fork" not in multiprocessing.get_all_start_methods(), reason="requires fork"
+)
 def test_postfork_guard_precedes_python_lock_and_sqlite(tmp_path):
     path = tmp_path / "memory.sqlite"
     store = SQLiteStorage(path, "session")
     store.save({"parent": True})
     try:
         with store._lock:
-            assert _child_result(_inherited_operations, store, context="fork") == ["storage.forked"] * 4
+            assert (
+                _child_result(_inherited_operations, store, context="fork")
+                == ["storage.forked"] * 4
+            )
         assert store.load() == {"parent": True}
         with pytest.raises(MemoryOperationError) as caught:
             SQLiteStorage(path, "session")

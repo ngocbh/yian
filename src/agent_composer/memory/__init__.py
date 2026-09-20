@@ -9,13 +9,16 @@ strict codecs, and digests; ``session.py`` owns process-local conversation views
 FIFO leases, atomic turn updates, and learned self-feedback notes.
 ``summary.py`` owns pure whole-turn selection and summary-cache proofs; the
 backend invokes injected projection/model callbacks without importing providers.
+The private ``storage.py`` adapter owns
+single-host SQLite file locking and atomic finite-JSON state transactions below
+the concrete backends; it owns no run sessions or provider behavior.
 Concrete session, episodic, and reflection
 backends are imported from their own modules, never eagerly by this contracts-only
 facade.
 
 Knows about:   the standard library and agent_composer.diagnostics.
 Never imports: nodes, compile, compose, runtime, run, CLI, LangChain, Pydantic,
-               llm_clients, or concrete persistence backends.
+               llm_clients, or third-party persistence frameworks.
 """
 
 from agent_composer.memory.contracts import (

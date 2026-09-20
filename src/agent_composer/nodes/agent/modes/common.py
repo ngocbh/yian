@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from threading import Event
 from typing import Any, Callable
 
-from agent_composer.memory.contracts import EvaluationTrace, MemorySection
+from agent_composer.memory.contracts import ConversationTurn, EvaluationTrace, MemorySection
 from agent_composer.nodes.base import Output, _HostStop
 
 DEFAULT_SYSTEM = (
@@ -39,6 +39,7 @@ class AgentRunContext:
     stop_event: Event | None = None  # transient host lifecycle; absent for direct mode tests
     evaluation_trace: EvaluationTrace | None = None  # write-only visible evidence sink
     memory_sections: tuple[MemorySection, ...] = ()  # ordered outer-flow to local-agent recall
+    conversation_turn: ConversationTurn | None = None  # optional admitted memory-owned turn
 
     def check_stopped(self) -> None:
         """Unwind before starting another external effect after host cancellation."""

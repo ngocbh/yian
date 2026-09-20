@@ -154,11 +154,23 @@ result = run_flow(flow, inputs, memory={"episodic": history}, learnable=True)
 result.backward()
 ```
 
-[`SessionMemory`](docs/api.md#sessionmemory-foundation) provides a lower-level,
-process-local conversation foundation with backend-owned history and FIFO turns.
-Historical RunLog wrappers remain readable as inert metadata; they do not rebuild
-conversation history. AGENT, API-provider, Codex, and CLI integration is still
-pending; this foundation does not yet enable persistent agents through `run_flow`.
+[`SessionMemory`](docs/api.md#sessionmemory-foundation) keeps API-backed agents'
+conversation history across runs in the same process. Declare
+`long_term_memory: session` and reuse the backend:
+
+```python
+from agent_composer.memory.session import SessionMemory
+
+session = SessionMemory()
+first = run_flow(flow, first_inputs, memory={"session": session})
+second = run_flow(flow, next_inputs, memory={"session": session})
+session.reset()  # Starts fresh; fails while any turn is active or queued.
+```
+
+History advances automatically, without `learnable=True` or backward. Repeated
+calls to the same authored agent queue in admission order; other authored agents
+keep separate conversations. Run logs do not reconstruct history. Codex,
+summaries, learned notes, durable storage, and CLI activation remain pending.
 
 ## Documentation
 

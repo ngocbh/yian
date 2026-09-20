@@ -269,12 +269,20 @@ For `investigate`, recall is ordered root-flow → child-flow → AGENT-local.
 Each YAML declaration selects the `reflective` host policy by name; a Python host
 enables it by passing `memory={"reflective": implementation}` to `run_flow`. No
 `${memory}` reference is required. `learnable=True` independently retains accepted
-execution; forward returns before learning or commits. The host calls
+execution; forward returns before frame learning or learned-mutation commits. The host calls
 `result.backward(feedback)` explicitly afterward. Every enabled frame then
 receives its own history and descendant evidence, including empty histories,
 and can propose writes only for itself. New committed lessons can affect later
 fresh runs when the host reuses the memory implementation. See
 [Injecting agent memory](api.md#injecting-agent-memory) for the host API.
+
+For API conversation continuity, the host can inject
+[`SessionMemory`](api.md#sessionmemory-foundation) under a declared policy name.
+The innermost conversation-capable frame owns one conversation per authored AGENT
+leaf; other frames still provide recall. History advances during forward without
+learning. Repeated invocations queue, including MAP and LOOP occurrences; MAP
+does not fork conversations. Each new call applies current instructions and tool
+grants, and restoring historical tool calls never executes them.
 
 ### AGENT backward uses the recorded invocation
 

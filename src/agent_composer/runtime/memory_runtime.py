@@ -3,7 +3,8 @@
 The compile layer supplies one canonical tuple of source-neutral frame specs and
 their optional authored origins.  This module validates the host registry, opens
 exactly one session per referenced policy, opens every static frame, captures the
-public recovery snapshots, and exposes ordered recall to the evaluator.  It does
+public recovery snapshots, and exposes ordered recall and optional conversation
+selection to the evaluator. It does
 not resolve YAML, inspect node kinds, or construct a concrete memory backend.
 The explicit backward path stages complete frame proposals and performs accepted
 commit requests separately; the attempt driver owns their records and ordering.
@@ -13,12 +14,17 @@ from __future__ import annotations
 
 from asyncio import CancelledError as AsyncCancelledError
 from concurrent.futures import CancelledError as FutureCancelledError
+from contextlib import AbstractContextManager, nullcontext
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
 from agent_composer.diagnostics import OriginRef
 from agent_composer.memory import (
+    CheckStopped,
+    ConversationFrame,
+    ConversationRequest,
+    ConversationTurn,
     LearnContext,
     Memory,
     MemoryFrame,
@@ -387,6 +393,60 @@ class MemoryRuntime:
             frames=opened_frames,
             snapshots=tuple(captured),
         )
+
+    def open_conversation(
+        self,
+        scope: MemoryScope,
+        request: ConversationRequest,
+        *,
+        check_stopped: CheckStopped,
+    ) -> AbstractContextManager[ConversationTurn | None]:
+        """Select the innermost optional conversation frame without entering it.
+
+        Args:
+            scope (`MemoryScope`): Exact compiled consumer scope over opened frames.
+            request (`ConversationRequest`): Matching consumer path, accepted start,
+                and detached compatibility descriptor.
+            check_stopped (`CheckStopped`): Cooperative-stop callable passed to the
+                selected backend; the runtime does not invoke it here.
+
+        Returns:
+            `AbstractContextManager[ConversationTurn | None]`: The backend turn
+            context, or a null context when no opened frame offers conversations.
+
+        Raises:
+            TypeError: A carrier or callback has the wrong type.
+            ValueError: A carrier is invalid or the consumer paths disagree.
+            RuntimeError: The runtime is closed or the scope names unopened frames.
+            Exception: A selected backend's opening failure propagates unchanged.
+        """
+        if self._closed:
+            raise RuntimeError("memory runtime is closed")
+        if type(scope) is not MemoryScope:
+            raise TypeError("conversation scope must be a MemoryScope")
+        scope = MemoryScope(
+            scope.root_flow_id, scope.static_path, scope.frame_stack,
+            scope.occurrence_path, scope.boundary,
+        )
+        if type(request) is not ConversationRequest:
+            raise TypeError("conversation request must be a ConversationRequest")
+        request = ConversationRequest(
+            request.consumer_static_path, request.invocation, request.compatibility,
+        )
+        if not callable(check_stopped):
+            raise TypeError("check_stopped must be callable")
+        if request.consumer_static_path != scope.static_path:
+            raise ValueError("conversation request does not match the consumer scope")
+        selected = None
+        for ref in scope.frame_stack:
+            opened = self._frames.get(ref)
+            if opened is None:
+                raise RuntimeError("memory scope names a frame outside the opened layout")
+            if isinstance(opened.frame, ConversationFrame):
+                selected = opened.frame
+        if selected is None:
+            return nullcontext(None)
+        return selected.open_turn(request, check_stopped=check_stopped)
 
     def recall(
         self,

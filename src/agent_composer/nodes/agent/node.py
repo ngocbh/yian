@@ -1,9 +1,10 @@
 """AGENT node — one authored node running one local model/tool loop.
 
-The selected mode owns the conversation for the duration of ``run``. Tools,
-including the host-installed ``ask_user``, are ordinary explicitly authored
-tool grants. A crash or host interruption unwinds the node; no conversation or
-continuation state is stored in the graph or variable pool.
+The selected mode drives the local loop. An optional memory backend owns
+conversation admission and retained history; the evaluator owns the turn's
+lifetime. Tools, including the host-installed ``ask_user``, are ordinary
+explicitly authored tool grants. A crash or host interruption unwinds the node;
+no conversation or continuation state is stored in the graph or variable pool.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from agent_composer.diagnostics import OriginRef
 from agent_composer.expr.template import render_template_record
 from agent_composer.expr.lineage import FeedbackValue
 from agent_composer.memory.contracts import (
+    ConversationTurn,
     EvaluationTrace,
     MemoryPolicySpec,
     MemoryRecallError,
@@ -23,6 +25,7 @@ from agent_composer.memory.contracts import (
     _rewrite_memory_policy_origin,
 )
 from agent_composer.nodes.agent.modes import DEFAULT_SYSTEM, MODES, AgentRunContext
+from agent_composer.nodes.agent.conversation import compatibility
 from agent_composer.nodes.agent.backward import backward_agent
 from agent_composer.nodes.agent.modes.tool_calling import MAX_TOOL_ITERATIONS
 from agent_composer.nodes.agent.structured import _structured_validation_path
@@ -55,6 +58,7 @@ class AgentNode(Node):
     needs_stop_event = True
     needs_evaluation_trace = True
     needs_memory_recall = True
+    needs_conversation = True
     needs_render_capture = True
 
     def __init__(
@@ -157,6 +161,7 @@ class AgentNode(Node):
         stop_event=None,
         evaluation_trace: EvaluationTrace | None = None,
         memory_sections: tuple[MemorySection, ...] = (),
+        conversation_turn: ConversationTurn | None = None,
     ) -> AgentRunContext:
         """Build the complete process-local context for one mode invocation."""
         output_type = (
@@ -175,6 +180,7 @@ class AgentNode(Node):
             stop_event=stop_event,
             evaluation_trace=evaluation_trace,
             memory_sections=memory_sections,
+            conversation_turn=conversation_turn,
         )
 
     def exception_origin(self, exception: Exception) -> OriginRef | None:
@@ -206,6 +212,7 @@ class AgentNode(Node):
         evaluation_trace: EvaluationTrace | None = None,
         recall_memory: Callable[[str, str], tuple[MemorySection, ...]] | None = None,
         capture_render: Callable[[dict[str, Any]], None] | None = None,
+        begin_conversation: Callable[[dict[str, Any]], ConversationTurn | None] | None = None,
     ) -> Output:
         """Render fresh locals once, publish established capture, and run the mode.
 
@@ -226,14 +233,17 @@ class AgentNode(Node):
             capture_render (`Callable | None`, *optional*, defaults to `None`):
                 Publish one dictionary of actual or explicitly unavailable locals.
                 Omission leaves render capture dormant.
+            begin_conversation (`Callable | None`, *optional*, defaults to `None`):
+                Lazily admit one memory-owned turn after prompt preparation and
+                recall. The evaluator binds identity and owns its lifetime.
 
         Returns:
             `Output`: The selected mode's result.
 
         Raises:
             `ValueError`: A variable collides with a declared or delivered input.
-            `_CapabilityFault`: Capture-only preparation fails; the evaluator
-                re-raises its original host exception.
+            `_CapabilityFault`: Capture or conversation access fails; the
+                evaluator re-raises its original host exception.
             `_HostStop`: The host has requested cooperative cancellation.
         """
         captured = None if capture_render is None else {
@@ -279,12 +289,17 @@ class AgentNode(Node):
         )
         if stop_event is not None and stop_event.is_set():
             raise _HostStop(primary=False)
+        conversation_turn = (
+            None if begin_conversation is None
+            else begin_conversation(compatibility(self.llm_config))
+        )
         return MODES[self.mode](
             self._ctx(
                 prompt,
                 stop_event=stop_event,
                 evaluation_trace=evaluation_trace,
                 memory_sections=memory_sections,
+                conversation_turn=conversation_turn,
             )
         )
 

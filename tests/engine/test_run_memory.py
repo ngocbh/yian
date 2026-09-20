@@ -3,15 +3,20 @@
 from __future__ import annotations
 
 from pathlib import Path
+import importlib
 
 import pytest
 
 from agent_composer.compose import load_flow
-from agent_composer.events import NodeExpanded, RunStarted
+from agent_composer.events import NodeExpanded, NodeStarted, RunStarted
 from agent_composer.memory import (
+    ConversationItem,
     MemoryOperationError,
     MemorySetupError,
 )
+from agent_composer.memory.session import SessionMemory
+from agent_composer.nodes.code import CodeNode
+from agent_composer.nodes.base import Output
 from agent_composer.run import resume_flow, run_flow
 from agent_composer.runtime.log import (
     JsonlRunLog,
@@ -77,6 +82,81 @@ def _records(path: Path):
     """Return the canonical durable records without retaining the file lock."""
     with JsonlRunLog.resume(path) as log:
         return tuple(envelope.record for envelope in log)
+
+
+@pytest.mark.parametrize("resume", [False, True])
+@pytest.mark.parametrize("num_workers", [0, 2])
+@pytest.mark.parametrize("learnable", [False, True])
+def test_conversation_opener_uses_same_runtime_on_fresh_and_resume(
+    tmp_path, monkeypatch, resume, num_workers, learnable,
+):
+    path = tmp_path / "conversation.jsonl"
+    memory = SessionMemory()
+    entered = []
+    engines = []
+    boundary = importlib.import_module("agent_composer.run")
+    original_engine = boundary.FlowEngine
+
+    def engine(*args, **kwargs):
+        assert kwargs["conversation_opener"].__self__ is kwargs["memory_recall"].__self__
+        engines.append(kwargs["conversation_opener"].__self__)
+        return original_engine(*args, **kwargs)
+
+    def forward(node, inputs, *, begin_conversation):
+        turn = begin_conversation({"format": "test-v1"})
+        entered.append(turn.view.key.consumer_static_path)
+        ordinal = turn.request("model", {"input": "test"})
+        turn.observe(ordinal, "completed", items=(ConversationItem("reply", "test-v1", {"value": 7}),))
+        return Output(7)
+
+    # Keep the real canonical CODE manifest, replacing only this test's execution.
+    monkeypatch.setattr(CodeNode, "needs_conversation", True)
+    monkeypatch.setattr(CodeNode, "forward", forward)
+    monkeypatch.setattr(boundary, "FlowEngine", engine)
+    flow = load_flow(_FLOW)
+    if resume:
+        def interrupt(event):
+            if isinstance(event, NodeStarted) and event.node_id == "work":
+                raise RuntimeError("interrupt before body")
+        with pytest.raises(RuntimeError, match="interrupt before body"):
+            run_flow(flow, {}, log=path, memory={"test": memory},
+                     num_workers=num_workers, on_event=interrupt, learnable=learnable)
+        assert entered == []
+        before = path.read_bytes()
+        result = resume_flow(flow, log=path, memory={"test": memory})
+        assert path.read_bytes().startswith(before)
+    else:
+        result = run_flow(flow, {}, log=path, memory={"test": memory},
+                          num_workers=num_workers, learnable=learnable)
+    assert result.output == 7
+    assert entered == [("memory-run", "work")]
+    assert len(engines) == (2 if resume else 1)
+    assert all(runtime._closed for runtime in engines)
+    assert not any(type(record).__name__.startswith("Conversation") for record in _records(path))
+    with memory.open_run() as opened:
+        histories = opened.snapshot["conversations"]
+    assert len(histories) == 1
+    assert histories[0]["closed_invocations"][-1]["status"] == "completed"
+    assert histories[0]["items"][0]["payload"] == {"value": 7}
+
+
+@pytest.mark.parametrize("num_workers", [0, 2])
+def test_conversation_completes_before_dispatcher_output_contract_acceptance(
+    tmp_path, monkeypatch, num_workers,
+):
+    memory = SessionMemory()
+    def forward(node, inputs, *, begin_conversation):
+        begin_conversation({})
+        return Output("not an integer")
+    monkeypatch.setattr(CodeNode, "needs_conversation", True)
+    monkeypatch.setattr(CodeNode, "forward", forward)
+    result = run_flow(load_flow(_FLOW), {}, log=tmp_path / "rejected.jsonl",
+                      memory={"test": memory}, num_workers=num_workers)
+    assert result.status == "failed"
+    assert result.failure.code == "contract.output"
+    with memory.open_run() as opened:
+        history = opened.snapshot["conversations"][0]
+    assert history["closed_invocations"][-1]["status"] == "completed"
 
 
 def test_authored_policy_is_dormant_when_memory_is_none(tmp_path: Path) -> None:

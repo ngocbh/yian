@@ -126,9 +126,10 @@ terminal. Stored defaults are not coerced.
   The resolved map and process defaults are captured at initialization.
 - `memory` — host-created implementations keyed by the policy name selected by
   each authored `long_term_memory` declaration. `None` leaves all declarations
-  dormant. A mapping opens one snapshot-isolated session per referenced policy,
-  enables recall for AGENT nodes, and records the exact public snapshots needed
-  by recovery.
+  dormant. A mapping opens one run-scoped session per referenced policy, enables
+  recall and optional conversation history for AGENT nodes, and records exact
+  opening snapshots for recovery. Those snapshots stay pinned; SessionMemory
+  reads latest live history after turn admission.
 - `learnable` — retain accepted inputs, outputs, routes, and invocation context for
   a later explicit `result.backward(feedback)` call. It defaults to `False` and
   needs no memory policy. Forward execution never calls backward hooks, frame
@@ -340,11 +341,44 @@ the completed feedback.
 
 ## SessionMemory foundation
 
-`agent_composer.memory.session.SessionMemory` is a process-local conversation
-backend for callers using the optional turn capability. The backend owns history
-updates and FIFO admission directly; runtime does not own a conversation store.
-AGENT, API-provider, Codex, and CLI integration are **not implemented yet**.
-Injecting this backend into `run_flow` does not currently retain an agent conversation.
+`agent_composer.memory.session.SessionMemory` retains API-backed AGENT
+conversations across calls to `run_flow`. The backend owns history updates and
+FIFO admission directly; runtime owns only the optional turn's lifetime and
+authored scope. Codex, summaries, learned notes, durable storage, and CLI
+activation are **not implemented yet**.
+
+Declare `long_term_memory: session` on a flow or AGENT node and reuse the same
+backend under that policy name. For example:
+
+```python
+from agent_composer import load_flow, run_flow
+from agent_composer.memory.session import SessionMemory
+
+flow = load_flow("""
+id: remembered-chat
+name: remembered_chat
+long_term_memory: session
+input: {question: str}
+nodes:
+  answer:
+    kind: agent
+    mode: plain
+    input: {question: "${input.question}"}
+    prompt: ${question}
+    output: str
+output: ${answer.output}
+""")
+memory = SessionMemory()
+model = {"provider": "ollama", "model": "llama3.2:3b"}
+first = run_flow(flow, {"question": "My project is called Atlas."},
+                 memory={"session": memory}, llm_config=model)
+second = run_flow(flow, {"question": "What is my project's name?"},
+                  memory={"session": memory}, llm_config=model)
+```
+
+The second invocation receives the first invocation's messages. Neither
+`learnable=True` nor `backward()` is needed. Without a SessionMemory-capable
+frame, API calls keep their existing fresh-conversation behavior.
 
 `SessionMemory` is the concrete backend; the existing `MemorySession` name still
 means the run-scoped protocol returned by a memory backend. The mandatory `Memory`,
@@ -384,8 +418,12 @@ A conversation key combines the existing authored memory frame with the leaf's
 conversation and always queue in FIFO order. Distinct leaf/callsite keys remain
 independent, including under a flow-owned frame: there is no flow-wide conversation
 or queue. MAP items and LOOP iterations do not create new conversation identities;
-there is no fork option. The low-level caller supplies these authored identities;
-the backend neither inspects a graph nor derives identity from runtime node IDs.
+there is no fork option. Queue order is admission order, not a promise of MAP
+input-index order. Use non-session memory for independent MAP items.
+The innermost frame supporting conversations owns the turn; all applicable
+frames still provide ordinary recall. A local non-session frame does not hide
+an enclosing SessionMemory frame. Runtime supplies authored identity and the
+accepted invocation's run ID/start sequence; the backend never inspects a graph.
 
 Entering `frame.open_turn(request, check_stopped=check)` reserves the queue position
 before reading the latest live conversation. The turn's `request(...)` and
@@ -395,12 +433,20 @@ or tool between those calls, outside the backend lock. Cooperative stop checks r
 while waiting and between effects; actual observations are retained before honoring
 a stop that arrived during the effect.
 
+The evaluator keeps the lease through the node body, stream cleanup,
+post-assertions, and result-shape validation, then releases it before returning
+to the dispatcher. A completed turn records completion of that execution, not
+acceptance of a later typed-output validation or run-log append.
+
 These updates advance automatically through the turn capability, independently of
 `learnable` or backward. Session history is not rendered again as recall text:
 `recall()` returns `""`, `learn()` returns `[]`, and `commit()` accepts only an empty
 mutation tuple. Learnable notes and native-provider learning are not implemented.
-Changing the exact compatibility descriptor for an existing conversation requires
-a reset; no provider-specific compatibility rules are implemented here.
+The API adapter's compatibility descriptor contains the resolved provider and
+versioned message format. Compatible model, prompt, and tool-grant changes keep
+history; changing provider or message format requires explicit reset. Every call
+uses current instructions, recall, and tool grants. Historical system/developer
+instructions are not reinstated as current instructions.
 
 ### Partial history, retry, and reset
 
@@ -411,6 +457,14 @@ results into successes. The memory backend does not execute tools or providers.
 Restoring saved history is not an instruction to execute stored tool calls, but
 ordinary node retry may send a request again and repeat actions. Exactly-once
 execution and exact mid-request continuation are not promised.
+
+API history retains actual model replies, tool results, and structured-output
+corrections. Native structured replies are retained before local parsing, so a
+parsing failure does not erase a received reply. A failed memory write fails the
+invocation rather than triggering a provider retry. For provider input only, the
+adapter makes incomplete tool exchanges explicit as unknown/error context and
+renders schema-formatting calls as inert context. These projections never alter
+raw history, invent a successful result, or execute a historical tool call.
 
 Closing a run handle cancels its queued turns and prevents new requests. An active
 turn retains its lease until its owner exits, so another run cannot overlap a

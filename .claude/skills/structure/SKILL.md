@@ -135,7 +135,13 @@ There is no runtime conversation projection or recovery channel. `runtime.state`
 privately validates the four legacy wrappers owned by `runtime.log` and advances
 record/trace sequencing only. Those inert wrappers neither reconstruct history nor
 grant effects. Keep mutable backend coordination and stored conversation state out
-of the scheduler. AGENT/provider/CLI execution integration remains pending.
+of the scheduler. Runtime selects the innermost optional conversation frame and
+binds authored scope and accepted invocation identity; `eval_node` owns the lazy
+turn lifetime through execution/cleanup, never provider message encoding.
+`nodes/agent/conversation.py` owns stateless API message encoding and effect
+publication through the turn. It may import memory contracts and provider message
+types, but owns no history or queue. API execution is integrated; Codex and CLI
+activation remain pending.
 
 The `memory` facade exports contracts only: concrete session, episodic, and
 reflection backends must be imported from their own modules, not eagerly from

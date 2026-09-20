@@ -656,6 +656,8 @@ class Node(ABC):
     # when the run boundary injected recall and this node carries a compiled memory scope.
     # AgentNode is the sole built-in opt-in; the runtime remains kind-blind.
     needs_memory_recall: ClassVar[bool] = False
+    # Declares lazy access to one optional memory-owned conversation for this execution.
+    needs_conversation: ClassVar[bool] = False
     # Declares "I can emit visible prompt/model/tool evidence". The evaluator supplies a
     # write-only invocation-local trace only when evidence capture is enabled and this exact
     # trait is True. AgentNode is the sole built-in opt-in; the runtime remains kind-blind.
@@ -935,7 +937,7 @@ class Node(ABC):
         Returns a `NodeResult` (`Output | Route | Grow`), or — for a streaming kind —
         a generator that yields `StreamChunk` and *returns* a `NodeResult`. Narrow effect caps
         are passed only to nodes whose traits request them (``bind_item``,
-        ``stop_event``, ``recall_memory``, and ``evaluation_trace``).
+        ``stop_event``, ``recall_memory``, ``begin_conversation``, and ``evaluation_trace``).
         Expected rejection is a `raise`, not a result variant; the evaluator classifies
         its structural stage before the dispatcher records the canonical `Failure`."""
         params = self.params if self.params is not None else []
@@ -1163,6 +1165,7 @@ class Node(ABC):
                     _HostStop,
                     _BindingStageError,
                     _DeferredBindingFault,
+                    _CapabilityFault,
                     _NodeBodyError,
                 ):
                     raise

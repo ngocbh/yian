@@ -224,8 +224,11 @@ Historical conversation records remain readable as inert compatibility metadata,
 independently of `learnable`. Runtime validates their envelope, unfinished start,
 and memory scope, but does not reconstruct conversations or restore memory. They
 bind no outputs, advance no frontier, and publish no observers. SessionMemory owns
-saved conversation state. AGENT, API-provider, Codex, and CLI integration remains
-pending; `run_flow` does not yet retain agent conversations. See
+saved conversation state. API-backed AGENT execution uses an optional turn from
+the innermost capable frame; the evaluator owns its lifetime through wrapped
+execution and cleanup, not later dispatcher acceptance. Runtime binds authored
+scope and accepted run/start identity without interpreting provider messages.
+Codex, summaries, learned notes, durable storage, and CLI activation remain pending. See
 [SessionMemory foundation](api.md#sessionmemory-foundation).
 
 When retention is enabled, the trace keeps the actual terminal producer and

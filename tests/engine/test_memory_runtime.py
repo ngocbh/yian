@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from contextlib import contextmanager
 from typing import Any
 
 import pytest
 
 from agent_composer.diagnostics import OriginRef
 from agent_composer.memory import (
+    ConversationInvocation,
+    ConversationRequest,
     LearnContext,
     MemoryFrameRef,
     MemoryFrameSpec,
@@ -207,6 +210,66 @@ def _context() -> RecallContext:
         {"question": "why"},
         ("root", "agent"),
     )
+
+
+@pytest.mark.parametrize("capable", [(True, True), (True, False), (False, False)])
+def test_conversation_selects_innermost_capable_frame_without_changing_recall(capable):
+    layout, origins = _layout()
+    policies = {name: _Memory(name, [], values={spec.ref: name for spec in layout})
+                for name in ("alpha", "beta")}
+    runtime = MemoryRuntime.open(layout=layout, origins=origins, memory=policies)
+    calls = []
+
+    def opener(ref):
+        @contextmanager
+        def open_turn(request, *, check_stopped):
+            calls.append((ref, request))
+            check_stopped()
+            yield ref
+        return open_turn
+
+    try:
+        for spec, enabled in zip(layout, capable):
+            if enabled:
+                policies[spec.policy_name].session.frames[spec.ref].open_turn = opener(spec.ref)
+        for leaf in ("agent", "sibling"):
+            # A sibling inherits the flow frame, never the first leaf's local frame.
+            scope = _scope(layout) if leaf == "agent" else MemoryScope(
+                "root", ("root", leaf), (layout[0].ref,),
+            )
+            request = ConversationRequest(scope.static_path, ConversationInvocation("run", 1), {})
+            with runtime.open_conversation(scope, request, check_stopped=lambda: None) as selected:
+                expected = next((spec.ref for spec, enabled in reversed(tuple(zip(layout, capable)))
+                                 if enabled and spec.ref in scope.frame_stack), None)
+                assert selected == expected
+        assert [section.text for section in runtime.recall(_scope(layout), _context())] == ["beta", "alpha"]
+        assert all(request.consumer_static_path[-1] in {"agent", "sibling"} for _, request in calls)
+    finally:
+        runtime.close()
+
+
+def test_conversation_validates_scope_request_and_full_opened_coverage():
+    layout, origins = _layout()
+    runtime = MemoryRuntime.open(layout=layout[1:], origins={layout[1].ref: origins[layout[1].ref]},
+                                 memory={"alpha": _Memory("alpha", [])})
+    scope = _scope(layout)
+    request = ConversationRequest(scope.static_path, ConversationInvocation("run", 1), {})
+    try:
+        with pytest.raises(TypeError, match="MemoryScope"):
+            runtime.open_conversation(None, request, check_stopped=lambda: None)
+        with pytest.raises(TypeError, match="ConversationRequest"):
+            runtime.open_conversation(scope, None, check_stopped=lambda: None)
+        with pytest.raises(TypeError, match="callable"):
+            runtime.open_conversation(scope, request, check_stopped=None)
+        wrong = ConversationRequest(("root", "other"), request.invocation, {})
+        with pytest.raises(ValueError, match="scope"):
+            runtime.open_conversation(scope, wrong, check_stopped=lambda: None)
+        with pytest.raises(RuntimeError, match="opened layout"):
+            runtime.open_conversation(scope, request, check_stopped=lambda: None)
+    finally:
+        runtime.close()
+    with pytest.raises(RuntimeError, match="closed"):
+        runtime.open_conversation(scope, request, check_stopped=lambda: None)
 
 
 def _terminal_learning_state(

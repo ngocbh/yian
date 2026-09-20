@@ -20,9 +20,10 @@ from typing import Any
 from agent_composer.compile.model import GrowthRejected
 from agent_composer.diagnostics import Failure, FailureCode, OriginRef
 from agent_composer.events import RunFailed, StreamChunk
-from agent_composer.memory import EvaluationEvidence
+from agent_composer.memory import ConversationInvocation, EvaluationEvidence
 from agent_composer.nodes.base import Grow, Output, Route, _HostStop
 from agent_composer.runtime.eval_node import (
+    ConversationOpener,
     EvaluatedOutcome,
     EvaluationFailure,
     MemoryRecall,
@@ -87,8 +88,16 @@ class FlowEngine:
         on_stream: Callable[[StreamChunk], None] | None = None,
         stop_event: threading.Event | None = None,
         memory_recall: MemoryRecall | None = None,
+        conversation_opener: ConversationOpener | None = None,
     ) -> None:
-        """Borrow a prepared state/log pair and configure one bounded drive."""
+        """Borrow a prepared state/log pair and configure one bounded drive.
+
+        ``conversation_opener`` optionally selects a memory-owned turn from a
+        compiled scope and accepted invocation. Only trait-enabled nodes receive
+        lazy access to it. It defaults to ``None`` (no conversation capability);
+        a non-callable value raises ``TypeError``. The dispatcher captures each
+        accepted start before evaluating or submitting its worker.
+        """
         if type(state) is not RunState:
             raise TypeError("FlowEngine expects a RunState")
         if not isinstance(log, RunLog):
@@ -105,6 +114,8 @@ class FlowEngine:
             raise TypeError("on_stream must be callable or None")
         if memory_recall is not None and not callable(memory_recall):
             raise TypeError("memory_recall must be callable or None")
+        if conversation_opener is not None and not callable(conversation_opener):
+            raise TypeError("conversation_opener must be callable or None")
         self.state = state
         self.log = log
         self.grow_builder = grow_builder
@@ -113,6 +124,7 @@ class FlowEngine:
         self.on_stream = on_stream
         self.stop_event = stop_event if stop_event is not None else threading.Event()
         self.memory_recall = memory_recall
+        self.conversation_opener = conversation_opener
 
     def run(self) -> Iterator[Any]:
         """Drive newly ready work and yield only post-durable observer notifications."""
@@ -158,11 +170,13 @@ class FlowEngine:
                     raise RuntimeError("FlowEngine reached nonterminal quiescence")
                 node_id = self.state.ready[0]
                 observers = self._commit_started(node_id)
+                invocation = ConversationInvocation(self.state.run_id, self.state.accepted_starts[node_id])
                 yield from self._publish(observers)
                 self._raise_if_stopped()
 
                 outcome = self._evaluate(
                     node_id,
+                    invocation,
                     emit_stream=self._emit_serial_stream,
                 )
                 self._raise_if_stopped()
@@ -194,12 +208,13 @@ class FlowEngine:
                 while self.state.ready and len(active) < self.num_workers:
                     node_id = self.state.ready[0]
                     observers = self._commit_started(node_id)
+                    invocation = ConversationInvocation(self.state.run_id, self.state.accepted_starts[node_id])
                     yield from self._publish(observers)
                     self._raise_if_stopped()
 
                     # Submission is deliberately after the durable start and its observer.
                     # A submit failure therefore leaves one recoverable unfinished start.
-                    future = executor.submit(self._evaluate_worker, node_id, messages)
+                    future = executor.submit(self._evaluate_worker, node_id, invocation, messages)
                     active[future] = node_id
                     submitted.append(future)
                     future.add_done_callback(
@@ -403,6 +418,7 @@ class FlowEngine:
     def _evaluate(
         self,
         node_id: str,
+        invocation: ConversationInvocation,
         *,
         emit_stream: Callable[[StreamChunk], None] | None,
     ) -> EvaluatedOutcome:
@@ -420,16 +436,20 @@ class FlowEngine:
             effective_llm_by_static_path=self.state.effective_llm_by_static_path,
             source_resolver=None if self.state.trace is None else self.state.trace.resolve,
             memory_recall=self.memory_recall,
+            conversation_opener=self.conversation_opener,
+            conversation_invocation=invocation,
         )
 
     def _evaluate_worker(
         self,
         node_id: str,
+        invocation: ConversationInvocation,
         messages: queue.Queue,
     ) -> EvaluatedOutcome:
         """Evaluate one claimed node and enqueue only its transient stream chunks."""
         return self._evaluate(
             node_id,
+            invocation,
             emit_stream=lambda chunk: messages.put(_RecordedStream(node_id, chunk)),
         )
 

@@ -47,10 +47,11 @@ The run-loop primitives live in `agent_composer.run`.
 
 ## Session memory foundation
 
-The lower-level turn contracts and process-local backend are available now.
-Historical conversation RunLog wrappers remain readable as inert metadata. AGENT,
-API-provider, Codex, and CLI integration is pending; `run_flow` does not yet retain
-agent conversations. See
+The optional turn contracts and process-local backend support API-backed AGENT
+conversation history through host injection into `run_flow`. Historical
+conversation RunLog wrappers remain readable as inert metadata; they do not
+rebuild history. Codex, summaries, learned notes, durable storage, and CLI
+activation remain pending. See
 [SessionMemory foundation](api.md#sessionmemory-foundation) for ownership,
 history updates, retry, and reset semantics.
 

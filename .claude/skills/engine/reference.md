@@ -305,11 +305,13 @@ replay, trace comparison, tamper checks, and append verification. Recovery appen
 new schema-8 records without rewriting a schema-7 accepted prefix; mixed logs reopen.
 
 `run_flow(..., log=None)` uses process-local authority; a path selects a durable
-JSONL log. `memory={name: implementation}` opens one snapshot-isolated session
-per policy selected by an authored `long_term_memory:` declaration for independent
-recall. `learnable=True` retains accepted execution for explicit
+JSONL log. `memory={name: implementation}` opens one run-scoped session per policy
+selected by an authored `long_term_memory:` declaration for recall and optional
+conversation history. Opening snapshots remain pinned; SessionMemory reads latest
+live history after admission. `learnable=True` retains accepted execution for explicit
 `RunResult.backward(feedback=None)` and does not require a memory policy. Forward
-never calls learners or commits. The explicit attempt completes the reverse fold
+never calls frame learners or learned-mutation commits; automatic conversation
+updates are separate. The explicit attempt completes the reverse fold
 and all enabled frame proposals before Ready, then requests/observes one batch
 per policy in layout order. Empty/unexecuted frames still learn; even empty policy
 batches commit once. Known failures stop the attempt, preserving completed
@@ -339,9 +341,9 @@ all forward fields unchanged.
 ## Session conversation foundation
 
 `SessionMemory` in `agent_composer.memory.session` implements process-local
-conversation state and direct turn updates. AGENT, API-provider, Codex, and CLI
-execution integration remain pending; `run_flow`
-does not yet drive conversation turns. The
+conversation state and direct turn updates for API-backed AGENT execution.
+The host injects the backend into `run_flow` under the declared policy name.
+Codex, summaries, learned notes, durable storage, and CLI activation remain pending. The
 `agent_composer.memory` facade remains contracts-only. `MemorySession` still names
 the mandatory run-handle protocol; optional `ConversationFrame` and
 `ConversationTurn` add conversation capabilities without
@@ -351,6 +353,24 @@ expanding it.
 `memory/conversation.py` owns the pure fold and strict codecs/digests;
 `memory/session.py` publishes directly through that fold with an injected stop callable.
 Neither imports runtime, nodes, compile, compose, or providers.
+`MemoryRuntime` chooses the innermost frame with conversation capability;
+ordinary recall still includes all applicable frames, even a nearer non-session
+frame. A trait-enabled node receives one lazy `begin_conversation(compatibility)`
+callback. Runtime captures immutable accepted run/start identity before observers
+or worker submission; the evaluator binds it with the authored scope and holds the turn through
+body execution, generator drain, post-assertions, and result-shape checks. Later
+dispatcher typed validation is outside this lifetime. No live lease enters a
+worker result, record, or reducer; primary failures survive cleanup.
+
+`nodes/agent/conversation.py` adapts actual LangChain messages and effect
+observations without storing history itself. Compatibility includes provider and
+versioned message format; current instructions/recall/grants apply on every call,
+and compatible model changes keep history. Historical instructions do not become
+current instructions. Provider input may project unknown tool results or inert
+schema-formatting calls, but raw history remains unchanged and restoring it never
+dispatches tools. Native structured calls retain raw replies before parsing.
+Memory/codec faults must bypass provider/schema retries.
+
 `RunState.accepted_starts` captures the original accepted start sequence for each
 unfinished invocation independently of forward retention. Run ID plus that
 sequence identifies a conversation invocation, not its dynamic node name.
@@ -374,7 +394,8 @@ or fabricate results for unknown effects.
 The backend has no constructor settings and accepts only `{}` frame config.
 Conversation identity is `(frame_ref, consumer_static_path)`, not a MAP/LOOP
 occurrence or runtime ID. A flow-owned frame therefore has independent leaf
-conversations and FIFO queues, with no fork selector. Acquire the lease before
+conversations and FIFO queues, with no fork selector. FIFO means admission order,
+not MAP input-index order. Acquire the lease before
 reading current live history. Run snapshots remain detached and pinned; their
 closed version-1 envelope contains namespace, generation, and complete views,
 never coordination state. No durable storage is implemented.

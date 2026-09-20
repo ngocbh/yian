@@ -239,9 +239,17 @@ per-item/per-iteration frames.
 Other node kinds and anonymous inline child flows cannot carry this declaration.
 It remains dormant under ordinary `ac run`; library hosts enable recall by
 registering the selected policy with
-`run_flow(..., memory={NAME: implementation})`. Independently, `learnable=True` retains
+`run_flow(..., memory={NAME: implementation})`. For API conversation continuity,
+declare `long_term_memory: session` and inject `SessionMemory()` as `"session"`;
+frame config is empty. The innermost conversation-capable frame owns one
+conversation per authored AGENT leaf; other frames still provide recall. Repeated
+calls queue, including MAP items and LOOP iterations. MAP does not fork history
+or promise input-index admission order; use non-session memory for independent
+items. Session history updates automatically during forward, without learning.
+Codex, summaries, learned notes, durable storage, and CLI activation are pending.
+Independently, `learnable=True` retains
 execution for a later explicit `result.backward(feedback)` call; forward returns
-before learning or commits. `result.backward()` with no external feedback still
+before frame learning or learned-mutation commits. `result.backward()` with no external feedback still
 runs every enabled frame learner, while unreached AGENT backward model calls are
 skipped. The separate outcome never changes forward values or updates local
 variables. Terminal `resume_flow` inspects without learning; it does not retry a

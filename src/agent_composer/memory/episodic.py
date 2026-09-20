@@ -1,18 +1,21 @@
-"""Process-local episodic memory with snapshot-isolated run sessions.
+"""Episodic memory with snapshot-isolated runs and optional SQLite persistence.
 
 The backend owns retained episode history behind the source-neutral memory
 protocols.  This module establishes the session, frame, snapshot, and commit
-boundaries without depending on the workflow engine or storage services.
+boundaries without depending on the workflow engine or providers. Optional
+durability uses the private single-owner storage adapter below this backend.
 """
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 import hashlib
 import json
+import os
 from threading import RLock
 from types import TracebackType
-from typing import cast
+from typing import Iterator, cast
 from uuid import uuid4
 
 from agent_composer.memory.contracts import (
@@ -38,6 +41,7 @@ from agent_composer.memory.contracts import (
     VisibleInteraction,
     _MAX_JSON_NESTING,
 )
+from agent_composer.memory.storage import SQLiteStorage
 
 _SNAPSHOT_FORMAT = "agent_composer.episodic_memory"
 _SNAPSHOT_VERSION = 1
@@ -567,8 +571,66 @@ def _compatible(
     return all(ref in current or not state.episodes for ref, state in recorded.items())
 
 
+def _parse_inventory(value: object) -> tuple[
+    tuple[str, int, int, dict[MemoryFrameRef, _FrameState]],
+    dict[str, str],
+    bool,
+    bool,
+    bool,
+]:
+    """Validate complete private storage state before adopting any of it."""
+    try:
+        data = _copy_object(value, "inventory")
+        if set(data) != {
+            "version",
+            "snapshot",
+            "applied_commits",
+            "ever_opened",
+            "ever_reset",
+            "ever_committed",
+        }:
+            raise ValueError("invalid inventory fields")
+        if type(data["version"]) is not int or data["version"] != 1:
+            raise ValueError("unsupported inventory version")
+        snapshot = _parse_snapshot(data["snapshot"])
+        _, epoch, revision, frames = snapshot
+        opened, reset, committed = (
+            data[key] for key in ("ever_opened", "ever_reset", "ever_committed")
+        )
+        if any(type(flag) is not bool for flag in (opened, reset, committed)):
+            raise ValueError("invalid inventory flags")
+        commits = _copy_object(data["applied_commits"], "applied_commits")
+        for commit_id, digest in commits.items():
+            _json_string(commit_id, "commit_id", nonempty=True)
+            _json_string(digest, "digest", nonempty=True)
+            if len(digest) != 64 or any(
+                char not in "0123456789abcdef" for char in digest
+            ):
+                raise ValueError("invalid commit digest")
+        if (
+            not opened
+            and (frames or revision or committed or commits)
+            or not committed
+            and (revision or commits)
+            or reset
+            and epoch == 0
+            or not opened
+            and not reset
+            and epoch != 0
+            or committed
+            and revision == 0
+            and not reset
+        ):
+            raise ValueError("inconsistent inventory flags")
+        return snapshot, cast(dict[str, str], commits), opened, reset, committed
+    except (TypeError, ValueError, RecursionError, MemoryOperationError):
+        raise _operation_error(
+            "storage", "episodic.invalid_storage", "stored episodic state is invalid"
+        ) from None
+
+
 class EpisodicMemory:
-    """Process-local memory that retains bounded canonical episodes.
+    """Retain bounded canonical episodes, optionally in a local SQLite file.
 
     Examples:
         Inject one instance under the name selected by an authored
@@ -588,9 +650,19 @@ class EpisodicMemory:
         )
         result.backward()
         ```
+
+        Use ``with EpisodicMemory(storage="memory.sqlite") as memory:`` to retain
+        episodes across restarts and explicitly release the single file owner.
+        Closing idle run handles is not required before closing this backend.
     """
 
-    def __init__(self, max_episodes: int = 100, recall_limit: int = 10) -> None:
+    def __init__(
+        self,
+        max_episodes: int = 100,
+        recall_limit: int = 10,
+        *,
+        storage: str | os.PathLike[str] | None = None,
+    ) -> None:
         """Create one isolated episodic-memory namespace.
 
         Args:
@@ -598,14 +670,23 @@ class EpisodicMemory:
                 Maximum retained episodes for each frame.
             recall_limit (`int`, defaults to `10`):
                 Maximum episodes returned by contextual recall.
+            storage (`str | PathLike[str] | None`, defaults to `None`):
+                Optional local SQLite file with an existing parent. This backend
+                owns it until explicit close or context exit. None is process-local.
+                Current limits default only new frames, never saved frame settings.
 
         Raises:
             TypeError: Raised when either limit is not an exact integer.
             ValueError: Raised when either limit is not positive.
+            MemoryOperationError: Storage is unavailable, occupied, or invalid.
         """
         self._default_max_episodes = _positive_int(max_episodes, "max_episodes")
         self._default_recall_limit = _positive_int(recall_limit, "recall_limit")
         self._lock = RLock()
+        self._pid = os.getpid()
+        self._storage: SQLiteStorage | None = None
+        self._closed = False
+        self._active_operations = 0
         self._namespace = uuid4().hex
         self._epoch = 0
         self._revision = 0
@@ -614,6 +695,151 @@ class EpisodicMemory:
         self._ever_opened = False
         self._ever_reset = False
         self._ever_committed = False
+        if storage is not None:
+            self._storage = SQLiteStorage(storage, _POLICY_NAME)
+            try:
+                saved = self._storage.load()
+                if saved is None:
+                    self._save_state(
+                        _snapshot_json(
+                            self._namespace, self._epoch, self._revision, self._frames
+                        )
+                    )
+                else:
+                    snapshot, commits, opened, reset, committed = _parse_inventory(
+                        saved
+                    )
+                    self._namespace, self._epoch, self._revision, self._frames = (
+                        snapshot
+                    )
+                    self._applied_commits = commits
+                    self._ever_opened = opened
+                    self._ever_reset = reset
+                    self._ever_committed = committed
+            except BaseException as primary:
+                try:
+                    self._storage.close()
+                except BaseException as cleanup:
+                    if hasattr(primary, "add_note"):
+                        primary.add_note(
+                            f"EpisodicMemory cleanup failed: {type(cleanup).__name__}"
+                        )
+                raise
+
+    def _check_pid(self) -> None:
+        """Reject inherited durable handles before touching any Python lock."""
+        if self._storage is not None and os.getpid() != self._pid:
+            raise MemoryOperationError(
+                "storage",
+                "storage.forked",
+                "Memory storage cannot be used after fork.",
+                False,
+            )
+
+    @contextmanager
+    def _operation(self) -> Iterator[None]:
+        """Hold one operation independently of run-handle lifetime."""
+        self._check_pid()
+        with self._lock:
+            if self._closed:
+                raise _operation_error(
+                    "session", "episodic.closed", "memory backend is closed"
+                )
+            if self._storage is not None:
+                self._storage.ensure_open()
+            self._active_operations += 1
+            try:
+                yield
+            finally:
+                self._active_operations -= 1
+
+    def _save_state(
+        self,
+        snapshot: JsonObject,
+        *,
+        applied_commits: dict[str, str] | None = None,
+        ever_opened: bool | None = None,
+        ever_reset: bool | None = None,
+        ever_committed: bool | None = None,
+    ) -> None:
+        """Validate and persist a complete candidate before live RAM publication."""
+        if self._storage is None:
+            return
+        inventory = {
+            "version": 1,
+            "snapshot": snapshot,
+            "applied_commits": (
+                self._applied_commits if applied_commits is None else applied_commits
+            ),
+            "ever_opened": self._ever_opened if ever_opened is None else ever_opened,
+            "ever_reset": self._ever_reset if ever_reset is None else ever_reset,
+            "ever_committed": (
+                self._ever_committed if ever_committed is None else ever_committed
+            ),
+        }
+        _parse_inventory(inventory)
+        self._storage.save(inventory)
+
+    def __enter__(self) -> EpisodicMemory:
+        """Enter this still-open backend; exit releases its storage ownership.
+
+        Returns:
+            `EpisodicMemory`: This backend.
+
+        Raises:
+            `MemoryOperationError`: The backend or storage handle is unusable.
+        """
+        with self._operation():
+            return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        """Close the backend without replacing an initiating exception.
+
+        Args:
+            exc_type (`type[BaseException] | None`): Active exception type, if any.
+            exc (`BaseException | None`): Original exception to preserve.
+            traceback (`TracebackType | None`): Original exception traceback.
+
+        Raises:
+            `MemoryOperationError`: Close fails without an initiating exception.
+        """
+        try:
+            self.close()
+        except BaseException as cleanup:
+            if exc is None:
+                raise
+            if hasattr(exc, "add_note"):
+                exc.add_note(f"EpisodicMemory cleanup failed: {type(cleanup).__name__}")
+
+    def close(self) -> None:
+        """Release storage and invalidate idle handles; repeated closes are inert.
+
+        Raises:
+            MemoryOperationError: Active work makes close busy without waiting or
+                interrupting it; an inherited handle or storage cleanup fails.
+        """
+        self._check_pid()
+        if not self._lock.acquire(blocking=False):
+            raise MemoryOperationError(
+                "close", "episodic.busy", "memory backend is active", True
+            )
+        try:
+            if self._closed:
+                return
+            if self._active_operations:
+                raise MemoryOperationError(
+                    "close", "episodic.busy", "memory backend is active", True
+                )
+            if self._storage is not None:
+                self._storage.close()
+            self._closed = True
+        finally:
+            self._lock.release()
 
     def open_run(self, *, snapshot: JsonObject | None = None) -> _EpisodicSession:
         """Open a run session over one pinned memory snapshot.
@@ -626,10 +852,12 @@ class EpisodicMemory:
             `_EpisodicSession`: The isolated run-scoped session.
 
         Raises:
-            MemoryOperationError: Raised when a snapshot is invalid or incompatible.
+            MemoryOperationError: The snapshot is invalid or incompatible, the
+                backend is closed, or durable state cannot be read or saved.
         """
-        parsed = None if snapshot is None else _parse_snapshot(snapshot)
-        with self._lock:
+        with self._operation():
+            parsed = None if snapshot is None else _parse_snapshot(snapshot)
+            adopt = False
             if parsed is None:
                 namespace = self._namespace
                 epoch = self._epoch
@@ -650,13 +878,7 @@ class EpisodicMemory:
                     )
                     if not pristine:
                         raise _snapshot_error()
-                    self._namespace = namespace
-                    self._epoch = epoch
-                    self._revision = revision
-                    self._frames = {
-                        ref: _copy_state(state) for ref, state in frames.items()
-                    }
-                    self._ever_committed = revision > 0
+                    adopt = True
                 else:
                     if epoch != self._epoch or revision > self._revision:
                         raise _snapshot_error()
@@ -665,12 +887,43 @@ class EpisodicMemory:
                     ):
                         raise _snapshot_error()
                 frames = {ref: _copy_state(state) for ref, state in frames.items()}
-            self._ever_opened = True
+            if adopt or not self._ever_opened:
+                adopted_frames = (
+                    {ref: _copy_state(state) for ref, state in frames.items()}
+                    if adopt
+                    else self._frames
+                )
+                candidate = (
+                    _snapshot_json(namespace, epoch, revision, frames)
+                    if adopt
+                    else _snapshot_json(
+                        self._namespace, self._epoch, self._revision, self._frames
+                    )
+                )
+                self._save_state(
+                    candidate,
+                    ever_opened=True,
+                    ever_committed=revision > 0 if adopt else self._ever_committed,
+                )
+                if adopt:
+                    self._namespace = namespace
+                    self._epoch = epoch
+                    self._revision = revision
+                    self._frames = adopted_frames
+                    self._ever_committed = revision > 0
+                self._ever_opened = True
             return _EpisodicSession(self, namespace, epoch, revision, frames)
 
     def reset(self) -> None:
-        """Clear episodes and begin a new memory generation."""
-        with self._lock:
+        """Clear episodes and begin a new generation, retaining commit tombstones.
+
+        Raises:
+            `MemoryOperationError`: The backend is closed or storage cannot save.
+        """
+        with self._operation():
+            self._save_state(
+                _snapshot_json(self._namespace, self._epoch + 1, 0, {}), ever_reset=True
+            )
             self._frames = {}
             self._epoch += 1
             self._revision = 0
@@ -678,15 +931,16 @@ class EpisodicMemory:
 
     def rewrite_query(self, context: RecallContext) -> str:
         """Derive deterministic lexical retrieval text from visible context."""
-        if type(context) is not RecallContext:
-            raise TypeError("context must be a RecallContext")
-        return "\n".join(
-            (
-                context.base_system_prompt,
-                context.prompt,
-                _canonical_json(context.inputs),
+        with self._operation():
+            if type(context) is not RecallContext:
+                raise TypeError("context must be a RecallContext")
+            return "\n".join(
+                (
+                    context.base_system_prompt,
+                    context.prompt,
+                    _canonical_json(context.inputs),
+                )
             )
-        )
 
 
 class _EpisodicSession:
@@ -718,7 +972,7 @@ class _EpisodicSession:
     @property
     def snapshot(self) -> JsonObject:
         """Return a defensive public snapshot pinned for this run."""
-        with self._memory._lock:
+        with self._memory._operation():
             self._ensure_open()
             frames = {ref: _copy_state(state) for ref, state in self._frames.items()}
             for ref, frame in self._opened.items():
@@ -727,7 +981,7 @@ class _EpisodicSession:
 
     def __enter__(self) -> _EpisodicSession:
         """Enter this still-open session."""
-        with self._memory._lock:
+        with self._memory._operation():
             self._ensure_open()
             return self
 
@@ -741,7 +995,8 @@ class _EpisodicSession:
         self.close()
 
     def close(self) -> None:
-        """Idempotently close this process-local session."""
+        """Idempotently close this session, without closing its backend."""
+        self._memory._check_pid()
         with self._memory._lock:
             self._closed = True
 
@@ -793,7 +1048,7 @@ class _EpisodicSession:
 
     def open_frame(self, spec: MemoryFrameSpec) -> _EpisodicFrame:
         """Open one frame idempotently against the pinned snapshot."""
-        with self._memory._lock:
+        with self._memory._operation():
             self._ensure_open()
             if type(spec) is not MemoryFrameSpec:
                 raise _operation_error(
@@ -866,7 +1121,7 @@ class _EpisodicSession:
 
     def commit(self, commit_id: str, mutations: tuple[MemoryMutation, ...]) -> None:
         """Atomically append one exact idempotent mutation batch."""
-        with self._memory._lock:
+        with self._memory._operation():
             self._ensure_open()
             try:
                 commit_id = _json_string(commit_id, "commit_id", nonempty=True)
@@ -941,9 +1196,18 @@ class _EpisodicSession:
                 raise _operation_error(
                     "commit", "episodic.invalid_batch", "mutation batch is invalid"
                 ) from exc
+            commits = {**self._memory._applied_commits, commit_id: digest}
+            revision = self._memory._revision + 1
+            self._memory._save_state(
+                _snapshot_json(
+                    self._memory._namespace, self._memory._epoch, revision, frames
+                ),
+                applied_commits=commits,
+                ever_committed=True,
+            )
             self._memory._frames = frames
-            self._memory._applied_commits[commit_id] = digest
-            self._memory._revision += 1
+            self._memory._applied_commits = commits
+            self._memory._revision = revision
             self._memory._ever_committed = True
 
 
@@ -962,7 +1226,7 @@ class _EpisodicFrame:
 
     def recall(self, context: RecallContext | None = None) -> str:
         """Render pinned retained history, optionally ranked by lexical relevance."""
-        with self._session._memory._lock:
+        with self._session._memory._operation():
             self._session._ensure_open()
             if context is not None and type(context) is not RecallContext:
                 raise _operation_error(
@@ -996,7 +1260,7 @@ class _EpisodicFrame:
 
     def learn(self, context: LearnContext) -> list[MemoryMutation]:
         """Propose one deterministic append for every owner-scoped episode."""
-        with self._session._memory._lock:
+        with self._session._memory._operation():
             self._session._ensure_open()
             if type(context) is not LearnContext or context.frame_ref != self._spec.ref:
                 raise _operation_error(

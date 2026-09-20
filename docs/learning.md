@@ -161,11 +161,20 @@ chronological order. Entries are canonical JSON and preserve the run ID,
 occurrence, owner path, inputs, outcome or failure, prompts, recalled sections,
 visible model/tool interactions, and accepted execution sequence.
 
-The backend lives only in the current process. Reusing one instance shares
+By default the backend lives only in the current process. Reusing one instance shares
 committed episodes with later fresh runs; `reset()` clears them. Run sessions pin
 an immutable snapshot, so recall remains stable while another session commits.
-Recorded JSON snapshots can restore a pristine instance for recovery, but the
-backend provides no database or file persistence of its own.
+Recorded JSON snapshots can restore a pristine instance for recovery.
+
+All three built-in backends support optional `storage="./memory.sqlite"` on their
+constructors. Episodic episodes, reflective lessons, and session history/notes
+then survive restarts, along with private commit deduplication. A file has one
+owning backend until explicit close or context exit. Idle run handles allow close;
+active operations and queued turns do not. Storage does not trigger learning:
+episodes and lessons still require explicit backward, while session conversations
+advance automatically during forward execution. See
+[durable memory](api.md#optional-durable-memory) for the complete lifetime and
+recovery contract.
 
 ## Compute first, then commit
 

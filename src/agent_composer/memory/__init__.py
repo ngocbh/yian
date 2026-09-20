@@ -5,7 +5,7 @@ payloads, detached conversation checkpoints, and the narrow protocols implemente
 by host-provided memory objects. Conversation capabilities are optional and leave
 the mandatory memory protocols unchanged.
 ``contracts.py`` owns that vocabulary; ``conversation.py`` owns its pure fold,
-strict codecs, and digests; ``session.py`` owns process-local conversation views,
+strict codecs, and digests; ``session.py`` owns conversation views,
 FIFO leases, atomic turn updates, and learned self-feedback notes.
 ``summary.py`` owns pure whole-turn selection and summary-cache proofs; the
 backend invokes injected projection/model callbacks without importing providers.

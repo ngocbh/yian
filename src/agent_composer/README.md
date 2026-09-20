@@ -39,7 +39,7 @@ diagnostics.py semantic failures, resolved presentation, origins/resolver routin
 typesys/      typed value system (values) + variable pool                 [leaf]
 events.py     transient run/node observer vocabulary; imports diagnostics
 expr/         one ${...} grammar: parse -> AST -> evaluate / infer type / ref-walk
-memory/       memory contracts, pure conversation fold/codecs, process-local backends
+memory/       memory contracts, pure conversation fold/codecs, optionally durable backends
 nodes/        pure Node contract + per-kind implementations; spawners return seeds
               (start, end, agent, code, model, tool, case, call, map,
                loop, human_input, wait)
@@ -940,9 +940,9 @@ AGENT node writes only its own policy state. Node feedback propagation remains a
 runtime operation; a memory callback does not mutate the authored graph. Concrete
 implementations live behind the source-neutral
 `Memory`/`MemorySession`/`MemoryFrame` protocols. The provided
-`ReflectiveMemory` is a process-local backend whose model call and query rewrite
+`ReflectiveMemory` is a backend whose model call and query rewrite
 are policy-owned. The provided
-`agent_composer.memory.episodic.EpisodicMemory` is a model-free process-local
+`agent_composer.memory.episodic.EpisodicMemory` is a model-free
 backend. Its learner deterministically proposes one canonical append per owned
 episode; commit applies a complete batch atomically and idempotently, then bounds
 each frame by its `max_episodes` setting. Contextual recall ranks lexical overlap
@@ -950,13 +950,38 @@ and then recency up to `recall_limit`; context-free recall returns the full
 bounded history chronologically. Sessions read immutable snapshots, including
 after newer commits, while stale sessions cannot learn or commit. Public JSON
 snapshots support the existing recovery boundary or restoration into a pristine
-instance; external persistence remains a host concern.
+instance. Both default to process-local state and support host-only `storage=path`.
+
+### Optional backend durability
+
+`memory/storage.py` is a private lower-level SQLite value adapter shared by all
+three concrete backends. One instance owns a local file for its lifetime; a
+second owner fails immediately. Backends validate complete semantic candidates,
+commit detached finite JSON in a transaction, then publish RAM. Private inventory
+includes commit tombstones and adoption flags; SessionMemory also preserves its
+derived summary cache. Public snapshots retain their existing formats and exact
+opening pins. No callback, queue, handle, or provider client is serialized.
+
+Host constructor defaults remain outside private storage. Current defaults apply
+to new frames and future reflective learning; saved frame limits and recorded run
+model settings remain pinned. Current session history settings apply on reopen,
+and a larger recent-turn count must recover raw context hidden by older caches.
+Paths stay outside YAML and runtime records. `storage=None` performs no storage I/O.
+
+Backend `close()` permits idle run handles and invalidates them, but fails
+immediately while operations or queued turns are active. In-flight model and
+summary callbacks remain protected even after their run handle closes. Cleanup
+must drain ownership without replacing a primary exception; inherited handles
+check PID before any lock, including context finalizers. Failed I/O poisons the
+handle until close/reopen. Reset preserves commit deduplication and never deletes
+provider resources. This does not supply exactly-once external execution or
+shared-cluster storage.
 
 ### Session conversation foundation
 
 `agent_composer.memory.session.SessionMemory` supplies conversation continuity
 for API-backed AGENT execution through `run_flow`. It owns history updates
-directly. Codex, durable storage, and CLI activation
+directly. Codex and CLI activation
 remain pending.
 `SessionMemory` is a concrete backend;
 `MemorySession` remains the existing run-handle protocol. Optional
@@ -1005,7 +1030,7 @@ snapshot stays pinned as live turns advance history. Public
 version-2 snapshots contain namespace, generation, complete conversation views,
 and learned notes, not transient queues, leases, summary cache, or commit bookkeeping.
 Version-1 snapshots remain readable as history without notes and retain their
-exact envelope when pinned. Storage remains process-local. Reopening an older
+exact envelope when pinned. Storage defaults to process-local. Reopening an older
 snapshot against a used backend reads latest compatible live history without
 rewinding it; a pristine backend can restore only the history in the snapshot.
 

@@ -64,6 +64,12 @@ Runtime only binds authored
 scope/accepted invocation identity and manages the lazy capability lifetime;
 it neither encodes provider messages nor reconstructs history from the run log.
 
+Optional persistence belongs below concrete memory policies in
+`memory/storage.py`: it owns one local SQLite file and finite-JSON transactions,
+not semantic snapshots, run handles, clients, or queues. Backends validate and
+save candidates before publishing live state. Host-only storage paths never enter
+YAML or runtime records, and the memory facade remains contracts-only.
+
 ## Import-direction smell test
 
 - Importing *upward* (leaf reaches into a root package) → wrong package, or needs a seam.

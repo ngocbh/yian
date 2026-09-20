@@ -346,10 +346,10 @@ Keep the gate outside runtime; no new node hook or log field is needed.
 
 ## Session conversation foundation
 
-`SessionMemory` in `agent_composer.memory.session` implements process-local
+`SessionMemory` in `agent_composer.memory.session` implements
 conversation state and direct turn updates for API-backed AGENT execution.
 The host injects the backend into `run_flow` under the declared policy name.
-Codex, durable storage, and CLI activation remain pending. The
+Codex and CLI activation remain pending. The
 `agent_composer.memory` facade remains contracts-only. `MemorySession` still names
 the mandatory run-handle protocol; optional `ConversationFrame` and
 `ConversationTurn` add conversation capabilities without
@@ -407,7 +407,19 @@ reading current live history. Run snapshots remain detached and pinned; their
 closed version-2 envelope contains namespace, generation, complete views, and
 learned notes, never coordination state, derived summary cache, or commit ledger. Accept
 version-1 history as no notes and preserve its exact envelope when pinned.
-No durable storage is implemented.
+Optional host-only `storage=path` persists the complete private inventory, including
+commit deduplication and derived summaries, without changing those public formats.
+All built-in backends share the lower `memory.storage` SQLite adapter. It owns one
+file for the backend lifetime and commits finite-JSON candidates before RAM
+publication. Defaults remain process-local. Current host settings govern future
+work; saved limits and recorded snapshots remain pinned. A cached summary must
+not cover turns newly protected by a larger current `recent_turns` setting.
+
+Backend close permits idle run handles, invalidates them, and rejects active
+operations or queued turns without interrupting them. In-flight callbacks remain
+protected after run-handle close. Check process identity before all locks,
+including cleanup, and preserve initiating exceptions. Storage never serializes
+coordination objects, host defaults, or clients, and runtime never owns file paths.
 
 `frame.open_turn(request, check_stopped=check)` returns a queued context manager.
 Its request/observe operations validate the complete candidate snapshot before

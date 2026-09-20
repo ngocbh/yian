@@ -396,8 +396,10 @@ backward adds no session notes. API summary settings are host constructor option
 `history_budget_chars=32_000` and `recent_turns=4`, never frame YAML. The current
 model summarizes older context without deleting raw history or truncating recent
 whole turns. Budget is soft; oversized valid summaries are not retried or cut.
-Codex execution and durable storage
-remain pending.
+All three built-in backends optionally persist through host-only `storage=path`;
+`None` remains process-local. SQLite ownership lasts until backend close. Closing
+rejects active/queued work, but idle run handles do not block it. Storage paths
+never belong in YAML. Codex execution remains pending.
 `learnable=True` independently retains execution; forward does not run frame
 learners or commit learned mutations.
 Call `result.backward(feedback)` explicitly after forward returns, and inspect

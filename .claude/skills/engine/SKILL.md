@@ -483,7 +483,7 @@ Most are just the functional model (above) made enforceable:
   A receiver writes only its own frame; descendant evidence preserves original
   execution coordinates. No learner mutates an inherited parent frame.
 - **Episodic memory appends canonical execution history** — import the built-in
-  process-local backend from `agent_composer.memory.episodic`. An authored
+  backend from `agent_composer.memory.episodic`. An authored
   `long_term_memory: episodic` frame accepts positive `max_episodes` and
   `recall_limit` settings. Learning deterministically proposes one append per
   owner-scoped episode. After the attempt reaches Ready, the engine requests the
@@ -492,13 +492,26 @@ Most are just the functional model (above) made enforceable:
   chronological. Contextual recall ranks lexical
   overlap and then recency within its limit. Sessions retain immutable JSON
   snapshots; stale sessions may recall their pinned view but cannot learn or
-  commit. The backend owns no file or database persistence.
+  commit. Optional host-only `storage=path` preserves complete private state.
+- **Durable memory belongs to the backend, not runtime** — all three built-in
+  backends default to `storage=None` with no I/O. `memory.storage` supplies one
+  lifetime SQLite owner and finite-JSON transactions. Persist validated candidates
+  before RAM publication, including reset/adoption and private commit tombstones;
+  preserve public snapshot formats and exact run-opening pins. Do not store host
+  constructor defaults, callbacks, live handles, queues, or clients. Current host
+  settings govern future work after reopening; saved frame limits and recorded
+  model settings stay pinned. Session summary caches retain exact prefix proofs;
+  ignore coverage that would hide newly protected recent turns. Close rejects
+  active operations/queued turns immediately, but permits idle run handles and
+  invalidates them. Run-handle close never releases active callback protection.
+  Check process identity before locks, including cleanup, and preserve primary
+  exceptions. No runtime storage branch or new log field is needed.
 - **SessionMemory owns conversation state and FIFO admission** — import
   `SessionMemory` from `agent_composer.memory.session`, not the contracts-only
   facade. Optional `ConversationFrame`/`ConversationTurn` capabilities leave
   mandatory memory protocols unchanged. API-backed AGENT execution through
-  `run_flow` retains conversations when the host injects the backend. Codex,
-  durable storage and CLI activation remain pending.
+  `run_flow` retains conversations when the host injects the backend. Codex
+  and CLI activation remain pending.
   `memory.conversation` owns the pure fold, strict codecs, and digests;
   `memory.session` owns live views, FIFO leases, and atomic publication;
   `memory.summary` owns pure whole-turn selection and cache-prefix proofs. These stay

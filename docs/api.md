@@ -266,8 +266,8 @@ print(outcome.status, outcome.learning)
 
 Passing the same memory object to later fresh runs makes committed lessons
 available to recall. `reflective.reset()` explicitly starts a fresh generation.
-`ReflectiveMemory` is process-local; persistence and other policy families are
-separate future backends.
+`ReflectiveMemory` is process-local by default; `storage=path` enables the optional
+SQLite backend described below.
 
 For model-free execution history, use the built-in episodic policy:
 
@@ -295,11 +295,66 @@ ties by recency, and returns at most `recall_limit` records. The returned text i
 newline-separated canonical JSON so each episode keeps its run and execution
 attribution.
 
-`EpisodicMemory` is process-local. Reuse the same object to share committed
+`EpisodicMemory` is process-local by default. Reuse the same object to share committed
 history across fresh runs in one process. `reset()` clears history and starts a
 new generation. A session snapshot is detached JSON suitable for the engine's
-recorded recovery boundary or for restoring a pristine `EpisodicMemory`; the
-backend does not write snapshots to external storage.
+recorded recovery boundary or for restoring a pristine `EpisodicMemory`.
+Use `storage=path` to retain complete backend state across restarts.
+
+### Optional durable memory
+
+`EpisodicMemory`, `ReflectiveMemory`, and `SessionMemory` accept the host-only
+keyword `storage="path/to/memory.sqlite"`. `storage=None`, the default, opens no
+database. Use a separate file for each backend; its parent directory must already
+exist. Paths are not flow YAML, public snapshot fields, or run-log settings.
+
+```python
+from agent_composer.memory.session import SessionMemory
+
+with SessionMemory(storage="./session.sqlite") as memory:
+    first = run_flow(flow, first_inputs, memory={"session": memory})
+
+# A later process can reopen the same file after the first owner closes it.
+with SessionMemory(storage="./session.sqlite") as memory:
+    second = run_flow(flow, next_inputs, memory={"session": memory})
+```
+
+The local SQLite file has one owning backend instance at a time, including
+between operations. A second owner fails immediately. This is a single-host,
+single-owning-process backend, not shared-cluster storage. New files use mode
+`0600`; contents are not encrypted and can include prompts, replies, tool output,
+and learned notes. Use an access-controlled local filesystem with reliable SQLite
+locking and durability; network/shared filesystem guarantees are not provided.
+
+Use `close()` or the backend's `with` block to release ownership. Idle `open_run()`
+handles do not block close, but become unusable afterward. Active operations,
+including reflective model callbacks, and active or queued session turns reject
+close immediately without interrupting work. Closing a run handle cannot release
+the protection of an external call still finishing. Context cleanup preserves an
+initiating exception; handles inherited across `fork()` are not usable.
+
+Each accepted backend mutation is saved transactionally before it becomes visible
+in memory. An I/O failure leaves the handle unusable until it is closed and
+reopened; do not blindly retry effects. Reopening rejects incompatible, malformed,
+or unsupported stored state instead of overwriting it. `reset()` clears policy
+content and starts a new generation, while retaining commit deduplication so
+replayed commits cannot resurrect cleared content. It does not remove the file or
+external provider resources.
+
+Private storage retains state omitted from public snapshots: commit deduplication,
+pristine/adoption flags, and SessionMemory's derived summary cache. It never saves
+live handles, queues, callbacks, or provider clients. Public run-opening snapshots
+stay pinned, and reopening an older snapshot does not rewind newer live history.
+The run log is not a substitute for this store, and repeating an interrupted
+model request or tool effect remains possible.
+
+Current constructor settings control future work after reopening. Existing frame
+limits and recorded run snapshots remain unchanged; new frames use current
+defaults, and future reflective learning uses the current host `llm_config`.
+SessionMemory uses the current history budget and recent-turn count. Increasing
+the recent-turn count restores raw context for newly protected turns instead of
+hiding them behind an older summary. These settings and storage ownership belong
+to the host; CLI activation is separate work.
 
 Application-specific implementations use the source-neutral `Memory`,
 `MemorySession`, and `MemoryFrame` protocols exported by
@@ -355,7 +410,7 @@ conversations across calls to `run_flow`. The backend owns history updates and
 FIFO admission directly; runtime owns only the optional turn's lifetime and
 authored scope. Explicit backward learning retains self-feedback as notes through
 the same memory lifecycle. Older API context can be summarized without deleting
-raw history. Codex, durable storage, and CLI
+raw history. Codex and CLI
 activation are **not implemented yet**.
 
 Declare `long_term_memory: session` on a flow or AGENT node and reuse the same
@@ -412,7 +467,8 @@ with restored.open_run(snapshot=snapshot) as opened:
 memory.reset()  # Backend-wide; allowed only while no turn is active or queued.
 ```
 
-The host constructor accepts `history_budget_chars=32_000` and `recent_turns=4`;
+The host constructor accepts `history_budget_chars=32_000`, `recent_turns=4`, and
+optional `storage=path`;
 these settings are not flow YAML. Frame configuration must be `{}`. A public
 snapshot has exactly `version` (currently `2`), `namespace`, `generation`,
 `conversations`, and `notes`. It contains complete conversation views and learned
@@ -424,8 +480,8 @@ A pristine backend can adopt a snapshot; an already
 used backend accepts only proven history in its current namespace and generation,
 without rewinding live state. Every snapshot getter returns a detached copy of
 the original opening snapshot, even after turns advance live
-history. The backend writes no files or database; optional durable storage is
-future work.
+history. Without `storage`, the backend writes no files or database. See
+[optional durable memory](#optional-durable-memory) for restart persistence.
 
 ### Conversation ownership and updates
 
@@ -554,8 +610,8 @@ by that owner before release. A released turn cannot append late results.
 The run-opening snapshot stays immutable. Reopening a compatible older snapshot
 against the same backend uses its latest live history without rewinding it. A new
 process restored only from that old snapshot has only that snapshot's history:
-later progress requires retained backend state or optional durable storage, which
-is not implemented yet. The run log does not rebuild SessionMemory.
+later progress requires retained backend state or reopening its durable storage.
+The run log does not rebuild SessionMemory.
 
 The four schema-8 conversation RunLog wrappers remain readable as inert historical
 metadata. Runtime validates canonical payloads, run identity, unfinished accepted

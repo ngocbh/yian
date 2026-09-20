@@ -1,28 +1,35 @@
-"""Process-local conversations and learned notes behind the memory protocols.
+"""Conversations and learned notes with optional single-owner SQLite storage.
 
 This backend owns FIFO turn persistence and atomic learned-note commits. It
 accepts an injected cooperative-stop check but owns no provider, scheduler,
-run log, model call, or durable storage.
+run log, or model call. Durable values use the lower private storage adapter.
 """
 
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 import hashlib
 import json
+import os
 from threading import Condition
 from types import TracebackType
 from uuid import uuid4
 
 import agent_composer.memory.contracts as c
 from agent_composer.memory.conversation import (
+    _invocation_from_json,
+    _invocation_json,
+    _key_from_json,
+    _key_json,
     advance_conversation,
     conversation_content_digest,
     conversation_view_from_json,
     conversation_view_to_json,
 )
+from agent_composer.memory.storage import SQLiteStorage
 from agent_composer.memory.summary import Summary, admissions, prefix_digest
 
 
@@ -216,6 +223,96 @@ def _parse_snapshot(
         ) from exc
 
 
+def _summary_json(summary: Summary) -> c.JsonObject:
+    return {
+        "namespace": summary.namespace,
+        "generation": summary.generation,
+        "key": _key_json(summary.key),
+        "projection_version": summary.projection_version,
+        "covered": [_invocation_json(value) for value in summary.covered],
+        "digest": summary.digest,
+        "text": summary.text,
+    }
+
+
+def _parse_inventory(value: object) -> tuple[
+    c.JsonObject,
+    dict[c.ConversationKey, c.ConversationView],
+    tuple[c.JsonObject, ...],
+    bool,
+    dict[str, str],
+    dict[tuple[c.ConversationKey, str], Summary],
+]:
+    """Prove every saved value, including private cache ownership and lineage."""
+    try:
+        data = _wire(value)
+        if set(data) != {"version", "snapshot", "used", "applied_commits", "summaries"}:
+            raise ValueError("invalid inventory fields")
+        if type(data["version"]) is not int or data["version"] != 1:
+            raise ValueError("unsupported inventory version")
+        snapshot, views, notes = _parse_snapshot(data["snapshot"])
+        if type(data["used"]) is not bool:
+            raise ValueError("invalid inventory use flag")
+        commits = _wire(data["applied_commits"])
+        for commit_id, digest in commits.items():
+            c._require_string(commit_id, "commit_id")
+            c._require_string(digest, "digest")
+            if len(digest) != 64 or any(
+                char not in "0123456789abcdef" for char in digest
+            ):
+                raise ValueError("invalid commit digest")
+        if type(data["summaries"]) is not list:
+            raise ValueError("summaries must be an array")
+        summaries = {}
+        for raw in data["summaries"]:
+            if type(raw) is not dict or set(raw) != {
+                "namespace",
+                "generation",
+                "key",
+                "projection_version",
+                "covered",
+                "digest",
+                "text",
+            }:
+                raise ValueError("invalid summary fields")
+            c._require_string(raw["namespace"], "namespace")
+            c._require_counter(raw["generation"], "generation")
+            c._require_string(raw["projection_version"], "projection_version")
+            c._require_string(raw["digest"], "digest")
+            if type(raw["covered"]) is not list:
+                raise ValueError("covered invocations must be an array")
+            summary = Summary(
+                raw["namespace"],
+                raw["generation"],
+                _key_from_json(raw["key"]),
+                raw["projection_version"],
+                tuple(_invocation_from_json(v) for v in raw["covered"]),
+                raw["digest"],
+                raw["text"],
+            )
+            cache_key = (summary.key, summary.projection_version)
+            view = views.get(summary.key)
+            if (
+                cache_key in summaries
+                or view is None
+                or len(summary.covered) >= len(admissions(view))
+                or not summary.matches(
+                    view, admissions(view), summary.projection_version
+                )
+            ):
+                raise ValueError("summary has foreign or invalid raw-prefix evidence")
+            summaries[cache_key] = summary
+        if not data["used"] and (
+            snapshot["generation"] or views or notes or commits or summaries
+        ):
+            raise ValueError("unused inventory contains retained work")
+        return snapshot, views, notes, data["used"], commits, summaries
+    except (TypeError, ValueError, RecursionError, c.MemoryOperationError):
+        raise _error(
+            "invalid_storage", "stored session state is invalid", stage="storage"
+        ) from None
+
+
 @dataclass(eq=False)
 class _Lease:
     session: _Session
@@ -229,16 +326,22 @@ class _Lease:
 
 
 class SessionMemory:
-    """Own process-local authored-leaf conversations and learned self-feedback.
+    """Own authored-leaf conversations and notes, optionally in local SQLite.
 
     Example:
         ``memory = SessionMemory()`` creates an isolated namespace. Injected
         conversation-capable callers use ``memory.open_run()``; runtime and
         provider integration are separate from this backend.
+        ``with SessionMemory(storage="memory.sqlite") as memory:`` retains values
+        across restarts and releases the single file owner on context exit.
     """
 
     def __init__(
-        self, *, history_budget_chars: int = 32_000, recent_turns: int = 4
+        self,
+        *,
+        history_budget_chars: int = 32_000,
+        recent_turns: int = 4,
+        storage: str | os.PathLike[str] | None = None,
     ) -> None:
         """Create an empty namespace with an optional API context budget.
 
@@ -247,10 +350,15 @@ class SessionMemory:
                 defaults to 32,000. Raw history is never removed.
             recent_turns (`int`): Nonnegative number of whole prior turns kept
                 unsummarized; defaults to four. The current turn is always kept.
+            storage (`str | PathLike[str] | None`): Optional local SQLite file with
+                an existing parent; defaults to `None` for process-local values.
+                Ownership lasts until close. Current history settings control
+                future preparation without changing stored raw history or pins.
 
         Raises:
             `TypeError`: A setting is not an exact integer.
             `ValueError`: A setting is outside its supported range.
+            `MemoryOperationError`: Storage is unavailable, occupied, or invalid.
         """
         for name, value, minimum in (
             ("history_budget_chars", history_budget_chars, 1),
@@ -264,6 +372,9 @@ class SessionMemory:
         self._recent_turns = recent_turns
         self._summaries: dict[tuple[c.ConversationKey, str], Summary] = {}
         self._condition = Condition()
+        self._pid = os.getpid()
+        self._closed = False
+        self._storage: SQLiteStorage | None = None
         self._namespace = uuid4().hex
         self._generation = 0
         self._used = False
@@ -273,6 +384,141 @@ class SessionMemory:
         self._queues: dict[c.ConversationKey, deque[_Lease]] = {}
         self._active: dict[c.ConversationKey, _Lease] = {}
         self._next_ticket = 0
+        if storage is not None:
+            self._storage = SQLiteStorage(storage, "session")
+            try:
+                saved = self._storage.load()
+                if saved is None:
+                    self._save_state(
+                        _snapshot(
+                            self._namespace, self._generation, self._views, self._notes
+                        )
+                    )
+                else:
+                    pinned, views, notes, used, commits, summaries = _parse_inventory(
+                        saved
+                    )
+                    self._namespace, self._generation = (
+                        pinned["namespace"],
+                        pinned["generation"],
+                    )
+                    self._views, self._notes, self._used = views, notes, used
+                    self._applied_commits, self._summaries = commits, summaries
+            except BaseException as primary:
+                try:
+                    self._storage.close()
+                except BaseException as cleanup:
+                    _secondary(primary, cleanup)
+                raise
+
+    def _check_pid(self) -> None:
+        """Reject inherited durable handles before touching any Python lock."""
+        if self._storage is not None and os.getpid() != self._pid:
+            raise c.MemoryOperationError(
+                "storage",
+                "storage.forked",
+                "Memory storage cannot be used after fork.",
+                False,
+            )
+
+    @contextmanager
+    def _locked(self, *, cleanup: bool = False) -> Iterator[None]:
+        """Guard a value operation, allowing coordination cleanup after failure."""
+        self._check_pid()
+        with self._condition:
+            if not cleanup:
+                if self._closed:
+                    raise _error("closed", "memory backend is closed", stage="session")
+                if self._storage is not None:
+                    self._storage.ensure_open()
+            yield
+
+    def _save_state(
+        self,
+        snapshot: c.JsonObject,
+        *,
+        used: bool | None = None,
+        commits: dict[str, str] | None = None,
+        summaries: dict[tuple[c.ConversationKey, str], Summary] | None = None,
+    ) -> None:
+        """Save a complete validated candidate before publishing it in RAM."""
+        if self._storage is None:
+            return
+        inventory = {
+            "version": 1,
+            "snapshot": snapshot,
+            "used": self._used if used is None else used,
+            "applied_commits": self._applied_commits if commits is None else commits,
+            "summaries": [
+                _summary_json(summary)
+                for summary in (
+                    self._summaries if summaries is None else summaries
+                ).values()
+            ],
+        }
+        _parse_inventory(inventory)
+        self._storage.save(inventory)
+
+    def __enter__(self) -> SessionMemory:
+        """Enter this still-open backend.
+
+        Returns:
+            `SessionMemory`: This backend.
+
+        Raises:
+            `MemoryOperationError`: The backend or its storage is unusable.
+        """
+        with self._locked():
+            return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        """Close the backend without replacing an initiating exception.
+
+        Args:
+            exc_type (`type[BaseException] | None`): Active exception type, if any.
+            exc (`BaseException | None`): Original exception to preserve.
+            traceback (`TracebackType | None`): Original exception traceback.
+
+        Raises:
+            `MemoryOperationError`: Close fails without an initiating exception.
+        """
+        try:
+            self.close()
+        except BaseException as cleanup:
+            if exc is None:
+                raise
+            _secondary(exc, cleanup)
+
+    def close(self) -> None:
+        """Release storage and invalidate idle handles without interrupting work.
+
+        Repeated closes are inert. Active turns and queued tickets retain their
+        ownership even after their run handle closes.
+
+        Raises:
+            `MemoryOperationError`: Active work makes close immediately busy,
+                or an inherited handle or storage cleanup fails.
+        """
+        self._check_pid()
+        if not self._condition.acquire(blocking=False):
+            raise _error("busy", "memory backend is active", stage="close")
+        try:
+            if self._closed:
+                return
+            if self._active or self._queues:
+                raise _error(
+                    "busy", "cannot close active or queued conversations", stage="close"
+                )
+            if self._storage is not None:
+                self._storage.close()
+            self._closed = True
+        finally:
+            self._condition.release()
 
     def open_run(self, *, snapshot: c.JsonObject | None = None) -> _Session:
         """Open a run with a detached, pinned public snapshot.
@@ -289,7 +535,13 @@ class SessionMemory:
                 pristine backend may adopt a snapshot's namespace and history.
         """
         parsed = None if snapshot is None else _parse_snapshot(snapshot)
-        with self._condition:
+        with self._locked():
+            namespace, generation, live_views, live_notes = (
+                self._namespace,
+                self._generation,
+                self._views,
+                self._notes,
+            )
             if parsed is None:
                 pinned = _snapshot(
                     self._namespace, self._generation, self._views, self._notes
@@ -297,10 +549,8 @@ class SessionMemory:
             else:
                 pinned, views, notes = parsed
                 if not self._used:
-                    self._namespace = pinned["namespace"]
-                    self._generation = pinned["generation"]
-                    self._views = views
-                    self._notes = notes
+                    namespace, generation = pinned["namespace"], pinned["generation"]
+                    live_views, live_notes = views, notes
                 elif (
                     (pinned["namespace"], pinned["generation"])
                     != (
@@ -319,6 +569,12 @@ class SessionMemory:
                         "snapshot is not proven history of this backend",
                         stage="snapshot",
                     )
+            if not self._used:
+                self._save_state(
+                    _snapshot(namespace, generation, live_views, live_notes), used=True
+                )
+            self._namespace, self._generation = namespace, generation
+            self._views, self._notes = live_views, live_notes
             self._used = True
             return _Session(self, pinned)
 
@@ -326,23 +582,36 @@ class SessionMemory:
         """Clear conversations and notes and invalidate older generation handles.
 
         Commit tombstones remain so exact retries cannot resurrect cleared notes.
-        The operation is process-local and does not delete provider resources.
+        The operation does not delete provider resources.
 
         Raises:
             `MemoryOperationError`: Any conversation has an active lease or queued
                 ticket. Busy reset fails immediately without modifying state.
         """
-        with self._condition:
-            if self._active or self._queues:
-                raise _error(
-                    "busy", "cannot reset active or queued conversations", stage="reset"
+        self._check_pid()
+        if not self._condition.acquire(blocking=False):
+            raise _error("busy", "memory backend is active", stage="reset")
+        try:
+            with self._locked():
+                if self._active or self._queues:
+                    raise _error(
+                        "busy",
+                        "cannot reset active or queued conversations",
+                        stage="reset",
+                    )
+                self._save_state(
+                    _snapshot(self._namespace, self._generation + 1, {}, ()),
+                    used=True,
+                    summaries={},
                 )
-            self._views.clear()
-            self._notes = ()
-            self._summaries.clear()
-            self._generation += 1
-            self._used = True
-            self._condition.notify_all()
+                self._views.clear()
+                self._notes = ()
+                self._summaries.clear()
+                self._generation += 1
+                self._used = True
+                self._condition.notify_all()
+        finally:
+            self._condition.release()
 
 
 class _Session:
@@ -377,13 +646,13 @@ class _Session:
         Raises:
             `MemoryOperationError`: This run handle is closed or reset-stale.
         """
-        with self._memory._condition:
+        with self._memory._locked():
             self._ensure_live()
             return _wire(self._pinned)
 
     def __enter__(self) -> _Session:
         """Enter this still-open, current-generation session."""
-        with self._memory._condition:
+        with self._memory._locked():
             self._ensure_live()
         return self
 
@@ -394,7 +663,12 @@ class _Session:
         traceback: TracebackType | None,
     ) -> None:
         """Close the run handle without suppressing a body exception."""
-        self.close()
+        try:
+            self.close()
+        except BaseException as cleanup:
+            if exc is None:
+                raise
+            _secondary(exc, cleanup)
 
     def close(self) -> None:
         """Close this run handle idempotently and remove its queued tickets.
@@ -402,7 +676,7 @@ class _Session:
         Active owners retain their leases until their turn finalizes, so closing
         a session cannot overlap an in-flight external effect with another turn.
         """
-        with self._memory._condition:
+        with self._memory._locked(cleanup=True):
             if self._closed:
                 return
             self._closed = True
@@ -413,7 +687,7 @@ class _Session:
 
     def _release(self, lease: _Lease) -> None:
         """Release a lease or ticket while holding the backend condition."""
-        with self._memory._condition:
+        with self._memory._locked(cleanup=True):
             memory = self._memory
             if memory._active.get(lease.key) is lease:
                 del memory._active[lease.key]
@@ -437,7 +711,7 @@ class _Session:
         """Reserve FIFO position before selecting the current live baseline."""
         memory = self._memory
         key = c.ConversationKey(frame._spec.ref, request.consumer_static_path)
-        with memory._condition:
+        with memory._locked():
             self._ensure_live()
             if request.invocation in self._leases:
                 raise _error("conflict", "invocation already has a session lease")
@@ -449,7 +723,7 @@ class _Session:
         try:
             while True:
                 check_stopped()
-                with memory._condition:
+                with memory._locked():
                     self._ensure_live()
                     if lease.released:
                         raise _error("stale", "conversation ticket was released")
@@ -490,8 +764,11 @@ class _Session:
                         lease.before = before
                         return lease
                     memory._condition.wait(timeout=0.05)
-        except BaseException:
-            self._release(lease)
+        except BaseException as primary:
+            try:
+                self._release(lease)
+            except BaseException as cleanup:
+                _secondary(primary, cleanup)
             raise
 
     def open_frame(self, spec: c.MemoryFrameSpec) -> _Frame:
@@ -513,7 +790,7 @@ class _Session:
         if type(spec) is not c.MemoryFrameSpec:
             raise TypeError("spec must be a MemoryFrameSpec")
         detached = c.MemoryFrameSpec(spec.ref, spec.policy_name, spec.config)
-        with self._memory._condition:
+        with self._memory._locked():
             self._ensure_live()
             if detached.config:
                 raise _error(
@@ -552,7 +829,7 @@ class _Session:
         c._require_string(commit_id, "commit_id")
         if type(mutations) is not tuple:
             raise TypeError("mutations must be a tuple")
-        with self._memory._condition:
+        with self._memory._locked():
             self._ensure_live()
             try:
                 mutations = c._validate_mutations(mutations)
@@ -621,14 +898,23 @@ class _Session:
                     "invalid_batch", "mutation batch is invalid", stage="commit"
                 ) from exc
             commits = {**self._memory._applied_commits, commit_id: digest}
+            self._memory._save_state(
+                _snapshot(
+                    self._namespace, self._generation, self._memory._views, candidate
+                ),
+                commits=commits,
+            )
             self._memory._notes = candidate
             self._memory._applied_commits = commits
 
     def _candidate_snapshot(self, view: c.ConversationView) -> None:
-        """Prove that publishing a view cannot make public snapshots unrestorable."""
+        """Validate and save a complete view before publishing it in RAM."""
         views = dict(self._memory._views)
         views[view.key] = view
-        _snapshot(self._namespace, self._generation, views, self._memory._notes)
+        candidate = _snapshot(
+            self._namespace, self._generation, views, self._memory._notes
+        )
+        self._memory._save_state(candidate)
 
     def _ensure_lease(
         self, lease: _Lease | None, *, allow_closed: bool = False
@@ -673,7 +959,7 @@ class _Frame:
         """
         if context is not None and type(context) is not c.RecallContext:
             raise TypeError("context must be a RecallContext or None")
-        with self._session._memory._condition:
+        with self._session._memory._locked():
             self._session._ensure_live()
             if context is None:
                 return ""
@@ -707,7 +993,7 @@ class _Frame:
         """
         if type(context) is not c.LearnContext:
             raise TypeError("context must be a LearnContext")
-        with self._session._memory._condition:
+        with self._session._memory._locked():
             self._session._ensure_live()
             try:
                 if context.frame_ref != self._spec.ref:
@@ -847,6 +1133,7 @@ class _Turn:
         self._stop_error: BaseException | None = None
 
     def _check(self) -> None:
+        self._session._memory._check_pid()
         if self._stop_error is not None:
             raise self._stop_error
         try:
@@ -868,7 +1155,7 @@ class _Turn:
 
     def _publish(self, checkpoint: c.ConversationCheckpoint) -> None:
         """Validate the whole candidate snapshot before atomically publishing."""
-        with self._session._memory._condition:
+        with self._session._memory._locked():
             self._session._ensure_lease(
                 self._lease,
                 allow_closed=type(checkpoint)
@@ -906,12 +1193,12 @@ class _Turn:
         self._entered = True
         self._lease = self._session._reserve(self._frame, self._request, self._check)
         try:
-            with self._session._memory._condition:
+            with self._session._memory._locked():
                 self._session._ensure_lease(self._lease)
                 self._view = self._lease.before
             self._publish(c.ConversationAdmitted(self._stamp(), self._view))
             self._check()
-            with self._session._memory._condition:
+            with self._session._memory._locked():
                 self._session._ensure_lease(self._lease)
             return self
         except BaseException as exc:
@@ -928,7 +1215,7 @@ class _Turn:
         Raises:
             `MemoryOperationError`: The turn is not active or belongs to a stale run.
         """
-        with self._session._memory._condition:
+        with self._session._memory._locked():
             self._session._ensure_lease(self._lease)
             return conversation_view_from_json(conversation_view_to_json(self._view))
 
@@ -956,17 +1243,17 @@ class _Turn:
             `ValueError`: Kind, item identity, finite JSON, or nesting is invalid.
             `MemoryOperationError`: The lease is stale or its history conflicts.
         """
-        with self._session._memory._condition:
+        with self._session._memory._locked():
             self._session._ensure_lease(self._lease)
         self._check()
-        with self._session._memory._condition:
+        with self._session._memory._locked():
             self._session._ensure_lease(self._lease)
             checkpoint = c.ConversationEffectRequested(
                 self._stamp(), kind, payload, items
             )
         self._publish(checkpoint)
         self._check()
-        with self._session._memory._condition:
+        with self._session._memory._locked():
             self._session._ensure_lease(self._lease)
         return checkpoint.stamp.ordinal
 
@@ -1005,7 +1292,7 @@ class _Turn:
             raise TypeError("history callbacks must be callable")
         memory = self._session._memory
         self._check()
-        with memory._condition:
+        with memory._locked():
             self._session._ensure_lease(self._lease)
             view = conversation_view_from_json(conversation_view_to_json(self._view))
             prior = tuple(
@@ -1014,15 +1301,17 @@ class _Turn:
                 if invocation != self._request.invocation
             )
             cache_key = (view.key, projection_version)
+            eligible = max(0, len(prior) - memory._recent_turns)
             cached = memory._summaries.get(cache_key)
-            if cached is not None and not cached.matches(
-                view, prior, projection_version
+            if cached is not None and (
+                len(cached.covered) > eligible
+                or not cached.matches(view, prior, projection_version)
             ):
                 cached = None
 
         def ready():
             self._check()
-            with memory._condition:
+            with memory._locked():
                 self._session._ensure_lease(self._lease)
 
         def project_text(selected):
@@ -1035,7 +1324,6 @@ class _Turn:
         covered = 0 if cached is None else len(cached.covered)
         text = None if cached is None else cached.text
         recent = project_text(prior[covered:])
-        eligible = max(0, len(prior) - memory._recent_turns)
         candidate = None
         if (
             len(recent) + (0 if text is None else len(text))
@@ -1063,7 +1351,7 @@ class _Turn:
                 prefix_digest(view, eligible),
                 text,
             )
-        with memory._condition:
+        with memory._locked():
             # A surfaced summary remains useful evidence after cooperative stop
             # or session close; ownership must still hold until the callback drains.
             self._session._ensure_lease(self._lease, allow_closed=True)
@@ -1073,9 +1361,19 @@ class _Turn:
             if candidate is not None:
                 if not candidate.matches(live, prior, projection_version):
                     raise _error("conflict", "summary prefix no longer matches history")
-                memory._summaries[cache_key] = candidate
+                summaries = {**memory._summaries, cache_key: candidate}
+                memory._save_state(
+                    _snapshot(
+                        memory._namespace,
+                        memory._generation,
+                        memory._views,
+                        memory._notes,
+                    ),
+                    summaries=summaries,
+                )
+                memory._summaries = summaries
         self._check()
-        with memory._condition:
+        with memory._locked():
             self._session._ensure_lease(self._lease)
         return text, recent
 
@@ -1107,7 +1405,7 @@ class _Turn:
             `MemoryOperationError`: The lease is stale or the effect transition
                 is invalid. Stop failures propagate after actual truth is retained.
         """
-        with self._session._memory._condition:
+        with self._session._memory._locked():
             self._session._ensure_lease(self._lease, allow_closed=True)
             checkpoint = c.ConversationEffectObserved(
                 self._stamp(), effect_ordinal, status, items, reference, failure
@@ -1128,7 +1426,7 @@ class _Turn:
                 elif primary is not stop:
                     _secondary(primary, stop)
             if self._ordinal:
-                with self._session._memory._condition:
+                with self._session._memory._locked():
                     status = (
                         "interrupted"
                         if self._stop_error is not None
@@ -1139,10 +1437,17 @@ class _Turn:
                     self._publish(c.ConversationClosed(self._stamp(), status))
         except BaseException as cleanup:
             if primary is None:
-                raise
-            _secondary(primary, cleanup)
+                primary = cleanup
+            else:
+                _secondary(primary, cleanup)
         finally:
-            self._session._release(lease)
+            try:
+                self._session._release(lease)
+            except BaseException as cleanup:
+                if primary is None:
+                    primary = cleanup
+                else:
+                    _secondary(primary, cleanup)
         if primary is not None:
             raise primary
 

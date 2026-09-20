@@ -29,18 +29,18 @@ python -m pip install ".[anthropic]"   # Claude  (langchain-anthropic)
 python -m pip install ".[openai]"      # GPT     (langchain-openai)
 python -m pip install ".[google]"      # Gemini  (langchain-google-genai)
 python -m pip install ".[ollama]"      # local   (langchain-ollama)
-python -m pip install ".[all]"         # all provider extras, including Codex groundwork
+python -m pip install ".[codex]"       # native Codex SDK and bundled runtime
+python -m pip install ".[all]"         # all provider extras
 ```
 
 Run these commands from the repository root.
 
-For development of the private Codex worker boundary, `python -m pip install
-".[codex]"` installs the pinned official `openai-codex==0.155.1` SDK and its runtime.
-Codex provider selection, the Composer tool bridge, and native SessionMemory
-execution are not available yet. The worker's compatibility tests use an offline
-fake app-server; they do not require credentials or make model calls.
-The private worker currently requires a POSIX host with process-group support;
-unsupported hosts are rejected before launch.
+The `codex` extra pins the unchanged official `openai-codex==0.155.1` SDK and its
+bundled runtime. Composer uses its lower-level client in a supervised worker;
+upgrades require compatibility testing because that SDK interface is internal.
+This path requires a POSIX host with process-group support; unsupported hosts
+are rejected before launch. Offline compatibility tests use a fake app-server,
+without credentials or model calls.
 
 Provider SDKs are imported **lazily** — only when a flow actually runs an AGENT node
 against that provider. Importing a provider you haven't installed raises a clear
@@ -64,7 +64,40 @@ When you `ac run` a flow whose AGENT nodes need a provider key that isn't set, t
 prompts for it up front (in an interactive terminal) and continues once entered —
 so a missing key surfaces as a prompt rather than a failure on the first model
 call. Off a terminal (CI, a pipe) a missing required key is a clean error before
-the run starts; keyless providers like Ollama are skipped.
+the run starts. Ollama and native Codex are skipped; Codex handles its own
+authentication.
+
+### Codex with existing authentication
+
+Composer reuses the SDK's existing Codex authentication. ChatGPT sign-in uses
+your eligible subscription; API-key sign-in uses separately billed API access.
+Account limits and workspace permissions still apply. If the Codex CLI is already
+installed, `codex login` starts browser sign-in. See the
+[official authentication guide](https://learn.chatgpt.com/docs/auth).
+
+Alternatively, the pinned SDK provides an explicit host-side login helper:
+
+```python
+from openai_codex import Codex
+
+with Codex() as codex:
+    login = codex.login_chatgpt()
+    print(login.auth_url)  # Open this URL to sign in.
+    print(login.wait().success)
+```
+
+Run login separately, before executing flows. Composer adds no login or
+credential-management path and never falls back to an API provider. The SDK bundles its runtime,
+so a global `codex` executable is not required for Composer execution. See the
+[official SDK guide](https://learn.chatgpt.com/docs/codex-sdk).
+
+Use `llm_config: {provider: codex, model: your-codex-model}` with
+`mode: tool_calling` and `tools: [builtin_tools]`. Filesystem access defaults to
+read-only; `llm_config.sandbox: workspace-write` permits workspace writes.
+This explicitly enables Codex's configured tool environment, including enabled
+MCP/app tools, and is not a complete native-tool allowlist. See
+[native execution](syntax.md#codex-native-execution) for the complete example,
+tool boundary, and forward-only restrictions.
 
 ### Local models with Ollama
 

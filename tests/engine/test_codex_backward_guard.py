@@ -1,6 +1,7 @@
 """Reject backward effects when accepted execution used the Codex provider."""
 
 from copy import deepcopy
+import json
 
 from langchain_core.messages import AIMessage
 import pytest
@@ -9,7 +10,8 @@ import agent_composer.llm_clients as llm_clients
 import agent_composer.run as run_module
 from agent_composer.compose import load_flow
 from agent_composer.nodes.agent import AgentNode
-from agent_composer.nodes.base import Node
+from agent_composer.nodes.agent import codex
+from agent_composer.nodes.base import Node, Output
 from agent_composer.nodes.code import CodeNode
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.loop import LoopNode
@@ -53,12 +55,15 @@ def _mixed_flow(*, provider="codex", memory=False):
             "name: mixed_providers", "name: mixed_providers\nlong_term_memory: test"
         )
     flow = load_flow(source)
-    # Native selection is still private; these tests exercise recorded policy
-    # through programmatic authored config and an offline model factory.
+    # These policy tests isolate forward execution; native behavior has its own
+    # offline worker integration tests.
     flow.compiled.nodes["native"].own_llm_config = {
         "provider": provider,
         "model": "offline-test",
     }
+    if provider.lower() == "codex":
+        flow.compiled.nodes["native"].mode = "tool_calling"
+        flow.compiled.nodes["native"].tools = ["builtin_tools"]
     return flow
 
 
@@ -70,6 +75,15 @@ def _forward_model(monkeypatch, reply=None):
         return _BackwardChat([AIMessage(content="answer") if reply is None else reply])
 
     monkeypatch.setattr(llm_clients, "model_from_config", factory)
+
+    def native_forward(ctx, **_kwargs):
+        answer = factory(ctx.llm_config).invoke([])
+        value = answer.content
+        if ctx.output_type is not None:
+            value = json.loads(value)
+        return Output(value)
+
+    monkeypatch.setattr(codex, "execute", native_forward)
     return configs
 
 
@@ -383,6 +397,8 @@ output: ${outer.output}
         .child.nodes["native"]
     )
     native.own_llm_config = {"provider": "codex", "model": "no-structured-sentinel"}
+    native.mode = "tool_calling"
+    native.tools = ["builtin_tools"]
     configs = _forward_model(monkeypatch, AIMessage(content='{"n": 1}'))
     result = run_flow(flow, {}, log=tmp_path / "nested.jsonl", learnable=True)
     assert result.status == "succeeded", result.failure

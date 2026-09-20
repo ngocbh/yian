@@ -202,11 +202,19 @@ Native Codex selection uses `llm_config.provider: codex`, with `sandbox` and `cw
 in the same config, never `env.sandbox`. Default sandbox is read-only; opt into
 workspace writes with `workspace-write`. The launch directory resolves omitted
 or relative cwd, and recovery keeps its recorded absolute path. Codex rejects
-temperature and cannot use an API chat-model factory; native execution/bridging
-remain separate work.
+temperature and cannot use an API chat-model factory. Require `mode: tool_calling`
+and `tools: [builtin_tools]`; `plain` and tool-free native execution are unsupported.
+The marker opts into Codex's configured environment, including enabled MCP/app
+tools, not a complete native allowlist. To also expose a registered Composer tool,
+use `tools: [search_papers, builtin_tools]`; native sandboxing does not constrain
+host-tool effects. There is no implicit `ask_user` grant; native approvals are
+declined noninteractively. Install the `codex` extra and authenticate Codex
+separately; Composer reuses existing authentication and skips API-key prompts.
 Tune a node's non-model behavior with a static `env:` block (flow-level default +
 per-node override, node wins): e.g. `env: {max_tool_iterations: 300}` bounds an
-AGENT node's tool-calling loop (default `-1` = no cap).
+API AGENT's tool-calling loop (default `-1` = no cap). For Codex, an explicit or
+inherited value warns and is ignored; omit it. `retries` still bounds native
+typed-output correction, not tool, transport, authentication, or stop failures.
 
 ### Agent-owned variables — `variables:`
 
@@ -266,7 +274,14 @@ turns block close, idle run handles do not. In `ac run`, repeat
 `--memory-storage POLICY=PATH` to persist selected declared policies; others stay
 process-local and lose state on exit. Supply the same stores on unfinished
 resume; terminal inspection opens none. CLI activation does not run backward
-learning. Codex execution remains pending.
+learning. Codex SessionMemory resumes the native thread; without SessionMemory,
+each invocation starts fresh, including under other recall frames. Compatible
+model changes retain the thread; changed bridged tool names/descriptions/schemas
+require explicit reset. Current instructions, cwd, sandbox, and grants apply on
+resume. Missing native history fails, never silently starts fresh. Durable Composer
+storage retains references, not Codex thread files; preserve both. A run with
+recorded Codex execution rejects all backward learning, including mixed-provider
+and no-feedback passes; an unexecuted Codex branch does not block API learning.
 Independently, `learnable=True` retains
 execution for a later explicit `result.backward(feedback)` call; forward returns
 before frame learning or learned-mutation commits. `result.backward()` with no external feedback still

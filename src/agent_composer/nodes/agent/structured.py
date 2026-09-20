@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from concurrent.futures import CancelledError as FutureCancelledError
 import json
+from types import CodeType
 from typing import Annotated, Any, Callable, List, Literal, Optional
 
 from langchain_core.messages import HumanMessage
@@ -441,6 +442,8 @@ def _validated_by_schema(exception: ValidationError, schema: type[BaseModel]) ->
 def _structured_validation_path(
     exception: Exception,
     expected_type: Type,
+    *,
+    native_generator: CodeType | None = None,
 ) -> tuple[str | int, ...] | None:
     """Project an owned structured-output error to a contract-relative path.
 
@@ -449,7 +452,9 @@ def _structured_validation_path(
     semantic type object, the frame's final-error identity, and an exact Pydantic
     validation frame for the generated schema. A native parser may preserve that
     validation error as the exhausted error's direct cause; deeper cause chains are not
-    followed. Record locations already match contract paths; scalar/list wrapper fields
+    followed. The node may inject one additional exact native generator code object;
+    this does not relax schema, semantic type, or final-exception identity checks.
+    Record locations already match contract paths; scalar/list wrapper fields
     are removed. ``()`` identifies the output-contract root, while ``None`` means the
     exception is not generated structured output.
     """
@@ -471,6 +476,7 @@ def _structured_validation_path(
             (
                 frame.f_code is _generate_native.__code__
                 or frame.f_code is _generate_fallback.__code__
+                or frame.f_code is native_generator
             )
             and frame.f_locals.get("typ") is expected_type
             and frame.f_locals.get("last_err") is exception

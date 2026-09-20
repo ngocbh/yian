@@ -170,8 +170,7 @@ upstream, so changing the pin requires the offline compatibility tests. This
 boundary requires POSIX process-group support and rejects unsupported hosts
 before launching a worker. The package never imports nodes, tools, memory,
 compile, compose, or runtime. Codex selection is native-only; API chat-model
-factories reject it without importing the SDK or falling back. Node execution and
-native SessionMemory integration remain separate work.
+factories reject it without importing the SDK or falling back.
 
 Native `sandbox` and `cwd` are ordinary optional LLM configuration fields. The
 pure compile cascade accepts a host-injected launch directory, defaults native
@@ -186,8 +185,35 @@ The caller retains host callables and receives native events, actual operation
 results, and tool callbacks on one execution lane. Results can be observed before
 cancellation propagates, so a returned native thread ID need not be lost. No live
 SDK object or memory handle crosses the process boundary. A fresh worker does not
-imply a fresh native conversation: future SessionMemory integration will own the
-persisted thread reference independently.
+imply a fresh native conversation: SessionMemory owns the persisted thread
+reference independently through injected start/resume callbacks. Its concrete
+turn publishes the returned `thread.id` before stop; missing native history
+fails without automatically starting a new thread.
+
+`nodes/agent/codex.py` is the node-owned adapter, selected only for Codex
+`tool_calling` execution. It requires `builtin_tools` as explicit opt-in to the
+configured Codex environment, including enabled MCP/app tools; this is not an
+exhaustive native allowlist. Other authored tool IDs become detached dynamic-tool
+descriptors from their public schemas. Every callback checks the current grant
+and uses the existing host invocation boundary; native filesystem sandboxing does
+not constrain host-side tools. Native approvals are declined noninteractively,
+and unknown or credential callbacks fail explicitly.
+
+The adapter prepares provider-aware compatibility before conversation admission.
+Native descriptors pin the bridge declaration because resume cannot replace
+dynamic tools; compatible model changes retain history. Current instructions,
+recall, cwd, and sandbox apply on start and resume. With no conversation-capable
+frame, each invocation starts fresh. No native call goes through the API model
+factory, API summary projection, or API backward path. An explicitly inherited
+`max_tool_iterations` warns and is ignored; `plain` is rejected.
+
+Native output comes from completed agent-message events, preferring final-answer
+phase and excluding commentary; terminal `turn.items` is not output authority.
+The terminal notification publishes model truth before stop, without duplicating
+it on the later result callback. Structured output uses native `outputSchema` and
+a bounded same-thread correction loop only for output deviations. AgentNode
+supplies the native generator's exact code object to the lower structured-error
+origin helper; the helper does not import the adapter or keep a mutable registry.
 
 Native tool callbacks must match the active thread and turn and have a unique
 call ID within that turn before the host handler runs. A callback that arrives
@@ -204,7 +230,8 @@ the owned group or of a wedged worker after abrupt parent death.
 
 The core does not require the `codex` extra. With it installed, run the offline
 compatibility checks using `PYTHONPATH=src python -m pytest
-tests/test_codex_worker.py tests/test_codex_worker_integration.py`. These tests
+tests/test_codex_worker.py tests/test_codex_worker_integration.py
+tests/engine/test_codex_agent.py tests/engine/test_codex_flow_integration.py`. These tests
 launch a fake app-server through the SDK's test seam, without authentication,
 credentials, or inference.
 
@@ -998,9 +1025,9 @@ shared-cluster storage.
 ### Session conversation foundation
 
 `agent_composer.memory.session.SessionMemory` supplies conversation continuity
-for API-backed AGENT execution through `run_flow`. It owns history updates
-directly. The CLI automatically hosts declared built-in policies; Codex execution
-remains pending.
+for API-backed AGENT execution and native Codex threads through `run_flow`. It
+owns history updates and native start/resume directly. The CLI automatically
+hosts declared built-in policies.
 `SessionMemory` is a concrete backend;
 `MemorySession` remains the existing run-handle protocol. Optional
 `ConversationFrame` and `ConversationTurn` protocols leave

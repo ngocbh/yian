@@ -272,7 +272,7 @@ YAML. Custom policies require Python host injection. For Python calls, declarati
 remain dormant unless the host passes a `memory={...}` registry to `run_flow`,
 keyed by the selected policy names. Supplying the registry enables recall and any
 optional conversation capability.
-For API conversation continuity, declare `long_term_memory: session`; Python hosts
+For API or native Codex continuity, declare `long_term_memory: session`; Python hosts
 inject `SessionMemory()` under `"session"`. It accepts no frame config. The host can set
 `SessionMemory(history_budget_chars=32_000, recent_turns=4)` for API context
 summaries; these settings do not belong in YAML and do not truncate raw history.
@@ -398,7 +398,62 @@ sandboxing. Omitted or relative `cwd` is anchored to the launch directory and
 recorded as an absolute path. Recovery reuses that recorded path, not the current
 process directory. These options are ignored by API providers. Codex rejects
 `temperature`, and API chat-model factories reject Codex instead of falling back.
-Native forward execution and tool bridging are separate from this configuration.
+
+#### Codex native execution
+
+```yaml
+id: native-assistant
+name: native_assistant
+long_term_memory: session
+llm_config:
+  provider: codex
+  model: your-codex-model
+  sandbox: read-only          # use workspace-write to permit workspace writes
+  cwd: .                     # resolved once against the launch directory
+input: {question: str}
+nodes:
+  answer:
+    kind: agent
+    mode: tool_calling
+    tools: [builtin_tools]
+    input: {question: '${input.question}'}
+    prompt: ${question}
+    output: str
+output: ${answer.output}
+```
+
+Install the `codex` extra and authenticate Codex first; see
+[setup](installation.md#codex-with-existing-authentication). This is the existing
+AGENT kind and `tool_calling` mode, not a new backend or mode selector. `plain`
+mode is rejected. `builtin_tools` is required: omitting it is rejected because
+the pinned runtime cannot guarantee complete native-tool exclusion.
+
+The marker opts into **Codex's configured tool environment**, including enabled
+MCP/app tools. It is not a native allowlist. To also grant a registered Composer
+tool, use `tools: [search_papers, builtin_tools]`; only explicitly named Composer
+tools are bridged. The native filesystem sandbox does **not** contain host-side
+Composer tool effects. Use trusted tools and flows. Native approval requests are
+declined noninteractively, and native user-input requests do not implicitly grant
+Composer's `ask_user` tool.
+
+Codex controls its own native loop. An explicitly set or inherited
+`env.max_tool_iterations` emits a warning and is ignored, even if malformed;
+omitting it is quiet. `retries` still bounds typed-output correction attempts on
+the same thread. Tool, memory, transport, authentication, and stop failures are
+not output-correction retries.
+
+SessionMemory owns the native thread reference and start/resume decision. Without
+it, every invocation starts a fresh thread, including with EpisodicMemory or
+ReflectiveMemory. Compatible model changes keep the thread; changing bridged tool
+names, descriptions, or schemas requires explicit memory reset. Current
+instructions, recall, cwd, sandbox, and tool grants still apply on resume. See
+[native session memory](api.md#native-codex-sessions).
+
+For the ordinary API path, use an API provider, for example
+`llm_config: {provider: openai, model: your-api-model}`, and omit `builtin_tools`
+from the tool list. API tool-loop limits and backward learning retain their
+existing behavior. A recorded run that executed Codex rejects the entire
+`backward()` pass, even in mixed-provider runs or without feedback.
 
 #### Agent-owned variables
 

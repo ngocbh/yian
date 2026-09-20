@@ -12,6 +12,12 @@ ac run FLOW.yaml --resume PATH [--memory-storage POLICY=PATH]... [-w N] [--quiet
 Commands below that use `examples/...` assume a repository clone and run from
 its root; those files are not installed with the Python package.
 
+Native Codex uses the ordinary provider/model options and skips API-key prompts.
+Authenticate Codex separately; Composer does not start a login flow. The AGENT
+must use `mode: tool_calling` and explicitly include `builtin_tools`. Set native
+`sandbox` and `cwd` through `llm_config`, not new CLI flags; omitted sandbox is
+read-only. See [Codex setup](installation.md#codex-with-existing-authentication).
+
 ## Durable logs and recovery
 
 Before execution, a fresh invocation reports its selected JSONL path on stderr,
@@ -95,6 +101,10 @@ same durable stores. Run logs do not reconstruct session history; an interrupted
 request can be repeated against the latest stored history. A terminal resume
 only prints the recorded result and does not open memory stores. Older logs
 that recorded no enabled memory remain dormant when resumed.
+
+For Codex, the session store retains the native thread reference. Keep Codex's
+own thread files too: Composer's SQLite file does not back up native history.
+Without a SessionMemory-capable frame, Codex starts a fresh thread on every call.
 
 ## Supplying inputs
 

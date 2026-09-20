@@ -358,14 +358,27 @@ Most are just the functional model (above) made enforceable:
   Positive faults/cancellation close admission
   and trigger bounded owned-process-group cleanup, never a silent-inference
   timeout. Already-running host callbacks drain before return or exception.
-  Native thread identity is independent of worker lifetime. This private seam
-  does not yet enable native node/session execution. Codex selection is native-only;
+  Native thread identity is independent of worker lifetime. The node-owned
+  `nodes/agent/codex.py` adapter selects native `tool_calling` execution; it
+  requires explicit `builtin_tools` opt-in to Codex's configured environment,
+  including enabled MCP/app tools. This is not a complete native allowlist.
+  Only other explicitly named Composer tools are bridged, from public schemas;
+  check current grants on every callback. Host tools are outside the native
+  filesystem sandbox. Native approvals are declined and unknown/credential
+  callbacks fail. Codex selection is native-only;
   chat-model factories reject it without API fallback or SDK imports. Native
   sandbox/cwd reuse the existing LLM cascade: inject the host launch directory
   into pure resolution, default sandbox to read-only, and record absolute cwd.
   Replay uses those recorded values without ambient resolution. Keep API maps
   unchanged by omission and preserve exact historical reflective snapshot pins
   when their config predates these optional fields.
+  `plain` is unsupported; explicit inherited `max_tool_iterations` warns and is
+  ignored, including malformed values. Native structured correction stays on one
+  thread and retries only output deviations. Use completed agent-message events,
+  not commentary or terminal `turn.items`, as output evidence. Publish terminal
+  model truth before stop and only once across event/result callbacks. Inject the
+  exact native generator code into the lower structured-origin helper; do not
+  add a reverse import or mutable registry.
 - **Domain-agnostic** — no domain-specific field names or types in the engine;
   domain lives at the contract/boundary (the loader/builder). The `system`
   namespace is generic.
@@ -523,8 +536,14 @@ Most are just the functional model (above) made enforceable:
   `SessionMemory` from `agent_composer.memory.session`, not the contracts-only
   facade. Optional `ConversationFrame`/`ConversationTurn` capabilities leave
   mandatory memory protocols unchanged. API-backed AGENT execution through
-  `run_flow` retains conversations when the host injects the backend. The CLI
-  hosts declared built-in policies automatically; Codex execution remains pending.
+  `run_flow` retains conversations when the host injects the backend. Native
+  Codex uses the concrete turn's injected start/resume capability; memory owns
+  the native reference and never imports provider code. The CLI hosts declared
+  built-in policies automatically. No SessionMemory means a fresh native thread,
+  even with other recall frames. Native bridge declarations are compatibility
+  pins; model changes may remain compatible. Current instructions, sandbox, cwd,
+  and grants apply on resume. Missing native history fails without auto-start.
+  Durable Composer state preserves references, not Codex's own thread files.
   `memory.conversation` owns the pure fold, strict codecs, and digests;
   `memory.session` owns live views, FIFO leases, and atomic publication;
   `memory.summary` owns pure whole-turn selection and cache-prefix proofs. These stay

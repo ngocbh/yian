@@ -71,12 +71,15 @@ Provider extras can be installed separately: `anthropic`, `openai`, `google`,
 or `ollama`. The core engine and CLI do not require a provider SDK; a flow needs
 one only when it contains an AGENT node.
 
-The `codex` extra installs the pinned `openai-codex==0.155.1` dependency for the
-private, supervised SDK boundary (also included in `all`). This is groundwork:
-Codex configuration is recognized, but native forward execution, the Composer
-tool bridge, and native SessionMemory integration are not available yet.
-The boundary's tests use an offline fake app-server;
-they do not log in or make model calls.
+The `codex` extra (also in `all`) runs the unchanged official
+`openai-codex==0.155.1` SDK in a supervised worker on POSIX hosts. It reuses Codex
+authentication, including ChatGPT sign-in, without requiring a Composer API key.
+Select `llm_config.provider: codex`, `mode: tool_calling`, and
+`tools: [builtin_tools]`. Add explicitly registered Composer tool names to that
+list when needed. This forward-only release supports native SessionMemory resume;
+`plain` mode and backward learning are unsupported. See
+[Codex setup](docs/installation.md#codex-with-existing-authentication) and
+[native tools and sandboxing](docs/syntax.md#codex-native-execution).
 
 ## Run a flow
 
@@ -196,7 +199,9 @@ with SessionMemory(storage="./session.sqlite") as session:
 Each local SQLite file has one owning backend until `close()` or context exit.
 Idle run handles do not block closing; active work or queued turns do. Omit
 `storage` to keep memory process-local. See [durable memory](docs/api.md#optional-durable-memory)
-for ownership and recovery. Codex execution remains pending.
+for ownership and recovery. With Codex, SessionMemory stores the native thread
+reference and resumes it; without SessionMemory, each invocation starts fresh.
+Durable Composer storage does not back up Codex's own thread files.
 
 `ac run` automatically activates declared `episodic`, `reflective`, and `session`
 policies. They stay process-local unless a repeatable CLI option selects storage:

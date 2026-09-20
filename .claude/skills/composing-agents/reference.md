@@ -336,7 +336,15 @@ Default sandbox is `read-only`; workspace writes require `workspace-write`.
 relative/omitted cwd once at launch; recovery uses the recorded absolute path.
 Do not put sandbox in `env` or add a backend selector. API providers ignore these
 native fields. Codex rejects temperature and cannot use an API chat-model factory.
-Native execution and bridging remain separate from configuration support.
+Native execution requires `mode: tool_calling` and `tools: [builtin_tools]`.
+The marker explicitly enables Codex's configured tools, including enabled MCP/app
+tools, and is not a full native allowlist. Only other explicitly named Composer
+tools are bridged. Host-tool effects are outside native filesystem sandboxing.
+Native approvals are declined, with no implicit Composer `ask_user` grant.
+Codex reuses existing authentication via the pinned `codex` extra on POSIX hosts;
+Composer does not log in or request an API key. `plain` is unsupported. Explicit
+`env.max_tool_iterations` warns and is ignored; native `retries` bounds only
+typed-output correction on the same thread, not tool or transport failures.
 
 Model fields resolve **per field, most-specific wins**. An AGENT node fills only the fields
 it leaves unset from the layer outside it. Precedence (most specific first):
@@ -413,7 +421,15 @@ whole turns. Budget is soft; oversized valid summaries are not retried or cut.
 All three built-in backends optionally persist through host-only `storage=path`;
 `None` remains process-local. SQLite ownership lasts until backend close. Closing
 rejects active/queued work, but idle run handles do not block it. Storage paths
-never belong in YAML. Codex execution remains pending.
+never belong in YAML. Codex SessionMemory uses native start/resume and retains
+the thread reference, not API messages. Without SessionMemory it starts fresh,
+including with episodic/reflective recall. Model changes may retain compatible
+history; changed Composer bridge names/descriptions/schemas require reset.
+Current instructions, cwd, sandbox, and grants apply on resume. Missing native
+history fails without automatic replacement. Durable Composer state does not back
+up Codex's thread files; preserve both stores. Any recorded Codex execution rejects
+the entire backward pass, including mixed-provider/no-feedback cases, before any
+model or memory-learning calls. Unexecuted Codex branches do not block learning.
 `learnable=True` independently retains execution; forward does not run frame
 learners or commit learned mutations.
 Call `result.backward(feedback)` explicitly after forward returns, and inspect

@@ -440,6 +440,9 @@ def _run_flow_controlled(
             memory_recall=(
                 None if memory_runtime is None else memory_runtime.recall
             ),
+            conversation_opener=(
+                None if memory_runtime is None else memory_runtime.open_conversation
+            ),
         )
         events.extend(engine.run())
         return _result_from_state(state, log_path, events,
@@ -587,6 +590,9 @@ def _resume_flow_controlled(
                 stop_event=stop_event,
                 memory_recall=(
                     None if memory_runtime is None else memory_runtime.recall
+                ),
+                conversation_opener=(
+                    None if memory_runtime is None else memory_runtime.open_conversation
                 ),
             )
             events.extend(engine.run())

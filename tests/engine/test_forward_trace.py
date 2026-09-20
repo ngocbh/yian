@@ -6,7 +6,7 @@ import json
 import pytest
 
 from agent_composer.expr.lineage import SourceRef, ValueRoute
-from agent_composer.memory import EvaluationEvidence
+from agent_composer.memory import ConversationInvocation, EvaluationEvidence
 from agent_composer.nodes.contracts import ExecutionScope
 from agent_composer.runtime.log import (
     SCHEMA_VERSION, NodeSucceededRecord, RecordEnvelope, canonical_typed,
@@ -1551,7 +1551,8 @@ def test_growth_recipe_tampering_fails_replay_before_apply(change):
     original = copy.deepcopy(engine.state.flow)
     for node_id in (START_ID, "spawn"):
         engine._commit_started(node_id)
-        engine._commit_outcome(node_id, engine._evaluate(node_id, emit_stream=None))
+        invocation = ConversationInvocation(engine.state.run_id, engine.state.accepted_starts[node_id])
+        engine._commit_outcome(node_id, engine._evaluate(node_id, invocation, emit_stream=None))
     record = tuple(engine.log)[-1].record
 
     def changed_builder(spawner, seed):
@@ -1639,9 +1640,11 @@ def test_seed_connections_wait_for_append_and_survive_unfinished_start_retry(mon
 
     engine = _engine(_seed_call_flow(), {"seed": 7}, learnable=True)
     engine._commit_started(START_ID)
-    engine._commit_outcome(START_ID, engine._evaluate(START_ID, emit_stream=None))
+    invocation = ConversationInvocation(engine.state.run_id, engine.state.accepted_starts[START_ID])
+    engine._commit_outcome(START_ID, engine._evaluate(START_ID, invocation, emit_stream=None))
     engine._commit_started("spawn")
-    evaluated = engine._evaluate("spawn", emit_stream=None)
+    invocation = ConversationInvocation(engine.state.run_id, engine.state.accepted_starts["spawn"])
+    evaluated = engine._evaluate("spawn", invocation, emit_stream=None)
     prepared = prepare_expanded(
         engine.state, "spawn", evaluated.outcome, engine.grow_builder,
         forward_capture=capture_bindings(evaluated.bindings, evaluated.backward_capture),

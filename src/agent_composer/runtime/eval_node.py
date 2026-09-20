@@ -29,13 +29,19 @@ import inspect
 import threading
 import traceback as _tb
 from collections.abc import Callable, Generator
+from contextlib import AbstractContextManager, ExitStack, contextmanager
+from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any, TypeAlias
+from typing import Any, Protocol, TypeAlias
 
 from agent_composer.diagnostics import Failure, FailureCode, OriginRef
 from agent_composer.events import StreamChunk
 from agent_composer.expr.lineage import ResolvedValue, ValueRoute
 from agent_composer.memory import (
+    CheckStopped,
+    ConversationInvocation,
+    ConversationRequest,
+    ConversationTurn,
     EvaluationEvidence,
     EvaluationTrace,
     MemoryRecallError,
@@ -348,12 +354,111 @@ def _memory_recall_capability(
     return recall_memory
 
 
-def _result_contract_failure(node, message: str) -> EvaluationFailure:
-    """Create one synthetic result-contract exception with a useful traceback."""
+class ConversationOpener(Protocol):
+    """Host-injected selection of an optional memory-owned conversation turn."""
+
+    def __call__(
+        self, scope: MemoryScope, request: ConversationRequest, *, check_stopped: CheckStopped,
+    ) -> AbstractContextManager[ConversationTurn | None]:
+        """Select a turn context for a bound request without entering it."""
+        ...
+
+
+def _note_conversation_cleanup(primary: BaseException, cleanup: BaseException) -> None:
+    """Retain secondary cleanup evidence without replacing the initiating error."""
+    if cleanup is primary:
+        return
     try:
-        raise RuntimeError(message)
-    except RuntimeError as exc:
-        return _evaluation_failure(node, "contract.node_result", exc)
+        add_note = getattr(primary, "add_note", None)
+        if callable(add_note):
+            add_note(f"Conversation cleanup failed: {type(cleanup).__name__}: {cleanup}")
+    except BaseException:
+        pass
+
+
+def _copy_cleanup_notes(source: BaseException, target: BaseException) -> None:
+    """Preserve backend notes when generator close is secondary to a host error."""
+    if source is target:
+        return
+    try:
+        add_note = getattr(target, "add_note", None)
+        if callable(add_note):
+            for note in tuple(getattr(source, "__notes__", ())):
+                add_note(note)
+    except BaseException:
+        pass
+
+
+@contextmanager
+def _conversation_capability(scope, opener, invocation, stop_event, close_error):
+    """Bind a lazy single-entry capability to this execution's resource lifetime."""
+    stack = ExitStack()
+    closed = used = False
+
+    def check_stopped():
+        if stop_event.is_set():
+            raise _HostStop(primary=False)
+
+    def begin_conversation(compatibility):
+        nonlocal used
+        if closed:
+            raise RuntimeError("conversation capability is closed")
+        try:
+            if used:
+                raise RuntimeError("conversation capability was already entered")
+            used = True
+            if opener is None or scope is None or not scope.frame_stack:
+                return None
+            request = ConversationRequest(scope.static_path, invocation, compatibility)
+            return stack.enter_context(opener(scope, request, check_stopped=check_stopped))
+        except (_HostStop, _CapabilityFault):
+            raise
+        except Exception as exc:
+            raise _CapabilityFault(exc) from exc
+
+    try:
+        yield begin_conversation
+    except BaseException as primary:
+        closed = True
+        if isinstance(primary, _HostStop) and primary.primary:
+            stop_event.set()
+        # Backend cleanup sees the real failure, not the evaluator's stage marker,
+        # so any retained cleanup notes survive later failure conversion.
+        original = (
+            primary.original
+            if isinstance(primary, (_CapabilityFault, _NodeBodyError, _AssertionStageError,
+                                    _BindingStageError, _DeferredBindingFault, _ResultContractError))
+            else primary
+        )
+        try:
+            stack.__exit__(type(original), original, original.__traceback__)
+        except BaseException as cleanup:
+            _note_conversation_cleanup(original, cleanup)
+        finally:
+            if close_error:
+                _copy_cleanup_notes(original, close_error[0])
+        raise
+    else:
+        closed = True
+        try:
+            stack.close()
+        except (_HostStop, _CapabilityFault):
+            raise
+        except Exception as exc:
+            raise _CapabilityFault(exc) from exc
+    finally:
+        closed = True
+
+
+class _ResultContractError(Exception):
+    """Carry the result-validation stage across conversation cleanup."""
+
+    def __init__(self, message):
+        try:
+            raise RuntimeError(message)
+        except RuntimeError as original:
+            self.original = original
+        super().__init__(message)
 
 
 def _evaluate_node_stream(
@@ -365,6 +470,10 @@ def _evaluate_node_stream(
     stop_event=None,
     evaluation_trace: _EvaluationTraceCollector | None = None,
     memory_recall: MemoryRecall | None = None,
+    conversation_opener: ConversationOpener | None = None,
+    conversation_invocation: ConversationInvocation | None = None,
+    conversation_scope: MemoryScope | None = None,
+    close_error: list[BaseException] | None = None,
     binding_collector: BindingCollector | None = None,
     capture_inputs: Callable[[dict[str, Any]], None] | None = None,
     capture_render: Callable[[dict[str, Any]], None] | None = None,
@@ -508,21 +617,34 @@ def _evaluate_node_stream(
         caps["capture_render"] = capture_render
 
     try:
-        outcome = (
-            node._run_for_evaluator(
-                record,
-                _capture_inputs=capture_inputs,
-                **caps,
+        with _conversation_capability(
+            conversation_scope, conversation_opener, conversation_invocation, stop_event, close_error,
+        ) as begin:
+            if node.needs_conversation is True:
+                caps["begin_conversation"] = begin
+            outcome = (
+                node._run_for_evaluator(
+                    record,
+                    _capture_inputs=capture_inputs,
+                    **caps,
+                )
+                if uses_base_template
+                else node.run(record, **caps)
             )
-            if uses_base_template
-            else node.run(record, **caps)
-        )
-        streamed = inspect.isgenerator(outcome)
-        result = (
-            (yield from node._drain_node_generator(outcome))
-            if streamed
-            else outcome
-        )
+            streamed = inspect.isgenerator(outcome)
+            result = (yield from node._drain_node_generator(outcome)) if streamed else outcome
+            if not isinstance(result, (Output, Route, Grow)):
+                message = (
+                    f"node {node.id!r} generator did not return a NodeResult" if streamed
+                    else f"node {node.id!r} run() returned {type(result).__name__}, not a NodeResult"
+                )
+                raise _ResultContractError(message)
+            if isinstance(result, Grow) and not node.is_spawner:
+                # Kind is diagnostic text only; the spawner trait owns this gate.
+                raise _ResultContractError(
+                    f"node {node.id!r} (kind {node.kind.value}) returned a Grow but is not a "
+                    "spawner (CALL/MAP/LOOP); only spawner kinds may grow the graph"
+                )
     except _HostStop:
         raise
     except _DeferredBindingFault as wrapped:
@@ -531,6 +653,12 @@ def _evaluate_node_stream(
     except _CapabilityFault as wrapped:
         original = wrapped.original
         raise original.with_traceback(original.__traceback__) from None
+    except _ResultContractError as wrapped:
+        original = wrapped.original
+        return _evaluation_failure(
+            node, "contract.node_result", original,
+            traceback_text=_format_exception(original),
+        )
     except _BindingStageError as wrapped:
         original = wrapped.original
         if not uses_base_template:
@@ -586,24 +714,6 @@ def _evaluate_node_stream(
             origin=node.exception_origin(exc),
         )
 
-    if not isinstance(result, (Output, Route, Grow)):
-        if streamed:
-            return _result_contract_failure(
-                node,
-                f"node {node.id!r} generator did not return a NodeResult",
-            )
-        return _result_contract_failure(
-            node,
-            f"node {node.id!r} run() returned {type(result).__name__}, not a NodeResult",
-        )
-    if isinstance(result, Grow) and not node.is_spawner:
-        # `node.kind.value` is message-only; the gate remains the kind-blind trait.
-        kind_value = node.kind.value
-        return _result_contract_failure(
-            node,
-            f"node {node.id!r} (kind {kind_value}) returned a Grow but is not a "
-            "spawner (CALL/MAP/LOOP); only spawner kinds may grow the graph",
-        )
     return result
 
 
@@ -617,6 +727,8 @@ def eval_node(
     emit_stream: Callable[[StreamChunk], None] | None = None,
     capture_evidence: bool = False,
     memory_recall: MemoryRecall | None = None,
+    conversation_opener: ConversationOpener | None = None,
+    conversation_invocation: ConversationInvocation | None = None,
     capture_bindings: bool = False,
     source_resolver: SourceResolver | None = None,
     effective_llm_by_static_path: dict[str, dict[str, Any]] | None = None,
@@ -629,6 +741,17 @@ def eval_node(
     are discarded. ``capture_evidence`` must be an exact bool; its default leaves tracing
     dormant. ``memory_recall`` reaches only a scoped, opted-in node through a narrower
     capability. ``_HostStop`` likewise propagates unchanged.
+    ``conversation_opener`` is an optional callable selecting a context manager
+    from a compiled memory scope, ``ConversationRequest``, and keyword-only
+    cooperative-stop check. ``conversation_invocation`` is the exact immutable
+    ``ConversationInvocation`` captured from the accepted node start. Both default
+    to ``None``. A node declaring ``needs_conversation`` receives only
+    ``begin_conversation(compatibility)``; opening is lazy and single-use. With no
+    opener or no memory frames, it returns ``None``. Otherwise the invocation is
+    required. The evaluator closes the turn after execution/result-shape checks,
+    before failure conversion, never after dispatcher acceptance. Invalid callback
+    or identity types raise ``TypeError``; invalid identities raise ``ValueError``.
+    Opener and cleanup host faults propagate without becoming node failures.
     ``capture_bindings`` independently retains input values and expression routes,
     with ``source_resolver`` supplying paired reads when available. It snapshots
     common input/variable inventories and scope before binding. The base run
@@ -650,6 +773,26 @@ def eval_node(
         raise TypeError("source_resolver must be callable or None")
     if memory_recall is not None and not callable(memory_recall):
         raise TypeError("memory_recall must be callable or None")
+    if conversation_opener is not None and not callable(conversation_opener):
+        raise TypeError("conversation_opener must be callable or None")
+    if conversation_invocation is not None:
+        if type(conversation_invocation) is not ConversationInvocation:
+            raise TypeError("conversation_invocation must be a ConversationInvocation or None")
+        conversation_invocation = ConversationInvocation(
+            conversation_invocation.run_id, conversation_invocation.start_sequence,
+        )
+    if stop_event is None:
+        stop_event = threading.Event()
+    conversation_scope = None
+    if node.needs_conversation is True and node.memory_scope is not None:
+        if type(node.memory_scope) is not MemoryScope:
+            raise TypeError("node memory_scope must be an exact MemoryScope or None")
+        conversation_scope = deepcopy(node.memory_scope)
+        MemoryScope(
+            conversation_scope.root_flow_id, conversation_scope.static_path,
+            conversation_scope.frame_stack, conversation_scope.occurrence_path,
+            conversation_scope.boundary,
+        )
     if effective_llm_by_static_path is not None and type(effective_llm_by_static_path) is not dict:
         raise TypeError("effective_llm_by_static_path must be a dict or None")
     evaluation_trace = _new_evaluation_trace(
@@ -718,6 +861,9 @@ def eval_node(
         except Exception as exc:
             raise _CapabilityFault(exc) from exc
 
+    # A callback failure remains outside the user generator. This transient reference
+    # routes cleanup notes back to it while close() still delivers GeneratorExit.
+    close_error: list[BaseException] = []
     stream = _evaluate_node_stream(
         node,
         flow,
@@ -726,6 +872,10 @@ def eval_node(
         stop_event=stop_event,
         evaluation_trace=evaluation_trace,
         memory_recall=memory_recall,
+        conversation_opener=conversation_opener,
+        conversation_invocation=conversation_invocation,
+        conversation_scope=conversation_scope,
+        close_error=close_error,
         binding_collector=binding_collector,
         capture_inputs=capture_inputs if capture_bindings else None,
         capture_render=capture_render if render_enabled else None,
@@ -742,11 +892,14 @@ def eval_node(
                 # Host-owned transport/callback boundary: keep this OUTSIDE the evaluator's
                 # exception funnel so callback failures propagate with identity intact.
                 emit_stream(chunk)
-    except BaseException:
+    except BaseException as primary:
         # A callback can abort while the node's streaming generator is suspended at a
         # yield.  Close the shared evaluator explicitly so ``yield from`` propagates
         # GeneratorExit into the node and releases its resources before this boundary
         # returns the initiating exception. Cleanup must not replace that primary error.
+        if isinstance(primary, _HostStop) and primary.primary:
+            stop_event.set()
+        close_error.append(primary)
         try:
             stream.close()
         except BaseException:

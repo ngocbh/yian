@@ -10,6 +10,7 @@ from __future__ import annotations
 from langchain_core.messages import HumanMessage, SystemMessage
 
 import agent_composer.llm_clients as llm_clients
+from agent_composer.nodes.agent.conversation import history_messages, invoke_model
 from agent_composer.nodes.agent.modes.common import (
     DEFAULT_SYSTEM,
     AgentRunContext,
@@ -40,8 +41,15 @@ def plain(ctx: AgentRunContext) -> Output:
     # A constrained type -> structured generation; only a bare str keeps the text path.
     schema = type_to_schema(ctx.output_type) if ctx.output_type is not None else None
     if schema is None:
-        reply = model.invoke(msgs)
-        ctx.check_stopped()
+        if ctx.conversation_turn is None:
+            reply = model.invoke(msgs)
+            ctx.check_stopped()
+        else:
+            contextual = [msgs[0], *history_messages(ctx.conversation_turn), *msgs[1:]]
+            reply = invoke_model(
+                ctx.conversation_turn, lambda: model.invoke(contextual),
+                new_messages=msgs, check_stopped=ctx.check_stopped,
+            )
         text = text_of(reply)
         record_model_text(ctx.evaluation_trace, text)
         return Output(value=text)

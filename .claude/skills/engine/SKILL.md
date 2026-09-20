@@ -498,7 +498,7 @@ Most are just the functional model (above) made enforceable:
   facade. Optional `ConversationFrame`/`ConversationTurn` capabilities leave
   mandatory memory protocols unchanged. API-backed AGENT execution through
   `run_flow` retains conversations when the host injects the backend. Codex,
-  summaries, learned notes, durable storage, and CLI activation remain pending.
+  summaries, durable storage, and CLI activation remain pending.
   `memory.conversation` owns the pure fold, strict codecs, and digests;
   `memory.session` owns live views, FIFO leases, and atomic publication. Both stay
   below nodes/runtime/providers. Runtime keeps no conversation projection, effect
@@ -529,9 +529,17 @@ Most are just the functional model (above) made enforceable:
   run cancels its waiters but retains an active lease until its owner exits; no
   later turn may overlap the finishing external call. Released turns cannot write.
   Reset is backend-wide, fails unchanged while any turn is active or queued,
-  and invalidates old-generation handles. Frame config is empty; recall
-  and learning are empty, only empty commits are supported, and conversation
+  and invalidates old-generation handles. Frame config is empty; conversation
   updates through the optional turn capability are independent of `learnable`.
+  Explicit API backward self-feedback becomes deterministic learned-note mutations
+  through existing frame learn/session commit. Only the actually admitted owning
+  frame and leaf learn a note; join feedback execution sequence to the episode's
+  root-prefixed owner path, never guess from a dynamic node name. No extra model
+  call or runtime note projection. Commit validates the entire batch before
+  atomic publication and retains idempotency bookkeeping across reset. Contextual
+  recall uses pinned opening notes for the requested leaf; context-free recall
+  is empty. Notes never rewrite raw conversations. New public snapshots use
+  version 2; accept version 1 as no notes and preserve its exact pinned envelope.
   API compatibility uses provider plus versioned message format; compatible
   model changes retain history. Apply current instructions/recall/tool grants
   on each call. Never dispatch old tool calls while restoring history. Keep raw

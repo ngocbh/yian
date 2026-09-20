@@ -228,7 +228,9 @@ saved conversation state. API-backed AGENT execution uses an optional turn from
 the innermost capable frame; the evaluator owns its lifetime through wrapped
 execution and cleanup, not later dispatcher acceptance. Runtime binds authored
 scope and accepted run/start identity without interpreting provider messages.
-Codex, summaries, learned notes, durable storage, and CLI activation remain pending. See
+Learned notes reuse the existing frame learning/commit/recall lifecycle; they do
+not add runtime conversation state. Codex execution, summaries, durable storage,
+and CLI activation remain pending. See
 [SessionMemory foundation](api.md#sessionmemory-foundation).
 
 When retention is enabled, the trace keeps the actual terminal producer and

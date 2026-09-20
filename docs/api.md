@@ -344,7 +344,8 @@ the completed feedback.
 `agent_composer.memory.session.SessionMemory` retains API-backed AGENT
 conversations across calls to `run_flow`. The backend owns history updates and
 FIFO admission directly; runtime owns only the optional turn's lifetime and
-authored scope. Codex, summaries, learned notes, durable storage, and CLI
+authored scope. Explicit backward learning retains self-feedback as notes through
+the same memory lifecycle. Codex, summaries, durable storage, and CLI
 activation are **not implemented yet**.
 
 Declare `long_term_memory: session` on a flow or AGENT node and reuse the same
@@ -402,8 +403,11 @@ memory.reset()  # Backend-wide; allowed only while no turn is active or queued.
 ```
 
 The constructor takes no settings and frame configuration must be `{}`. A public
-snapshot has exactly `version` (currently `1`), `namespace`, `generation`, and
-`conversations`. It contains complete conversation views, not queues or leases.
+snapshot has exactly `version` (currently `2`), `namespace`, `generation`,
+`conversations`, and `notes`. It contains complete conversation views and learned
+notes, not queues, leases, or the private commit ledger. Version-1 snapshots remain
+readable as history without notes; an opened version-1 snapshot stays exactly
+version 1 when returned by that run handle.
 A pristine backend can adopt a snapshot; an already
 used backend accepts only proven history in its current namespace and generation,
 without rewinding live state. Every snapshot getter returns a detached copy of
@@ -439,14 +443,43 @@ to the dispatcher. A completed turn records completion of that execution, not
 acceptance of a later typed-output validation or run-log append.
 
 These updates advance automatically through the turn capability, independently of
-`learnable` or backward. Session history is not rendered again as recall text:
-`recall()` returns `""`, `learn()` returns `[]`, and `commit()` accepts only an empty
-mutation tuple. Learnable notes and native-provider learning are not implemented.
+`learnable` or backward. Session history is not rendered again as recall text;
+contextual recall supplies committed learned notes for that authored leaf instead.
+Context-free `recall()` returns `""`.
 The API adapter's compatibility descriptor contains the resolved provider and
 versioned message format. Compatible model, prompt, and tool-grant changes keep
 history; changing provider or message format requires explicit reset. Every call
 uses current instructions, recall, and tool grants. Historical system/developer
 instructions are not reinstated as current instructions.
+
+### Learned notes
+
+With `learnable=True`, explicit `result.backward(feedback)` can produce textual
+`self_feedback` in the existing API backward model call. SessionMemory's frame
+learner turns that feedback into deterministic note mutations; the existing
+memory commit publishes the batch atomically and idempotently. There is no
+additional note-generation model call. For the flow and model above:
+
+```python
+reviewed = run_flow(flow, {"question": "Describe Atlas concisely."},
+                    memory={"session": memory}, llm_config=model, learnable=True)
+outcome = reviewed.backward("State assumptions before presenting conclusions.")
+```
+
+Any self-feedback successfully committed by that backward attempt is available
+to later runs through ordinary memory recall. Merely enabling `learnable` does
+not add notes; backward without effective feedback adds none. Notes belong to
+the frame and authored leaf that actually admitted the conversation. Sibling
+leaves and enclosing recall-only frames do not learn duplicate notes, and
+executions that failed before admission produce no session note.
+
+Recall uses the run-opening pinned notes, while conversation history uses the
+latest live view after FIFO admission. A run already open when notes commit keeps
+its earlier recall view. Notes are separate from raw messages, so learning never
+rewrites model/tool history and does not replay tools. They are also separate
+from the planned transcript-summary history budget. Backend-wide `reset()` clears
+notes and history, retaining commit deduplication so replay cannot resurrect
+cleared notes. Native-provider backward learning remains deferred.
 
 ### Partial history, retry, and reset
 

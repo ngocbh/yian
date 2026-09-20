@@ -275,7 +275,9 @@ authored AGENT leaf; other frames still provide recall. Repeated calls queue in
 admission order, including LOOP iterations and MAP items. MAP does not fork
 history or guarantee input-index admission order; use non-session memory when
 items should be independent. History updates automatically during forward,
-without enabling learning. See [SessionMemory](api.md#sessionmemory-foundation).
+without enabling learning. Explicit API backward learning can commit self-feedback
+as notes for future runs through the same memory policy; it requires no additional
+YAML selector. See [SessionMemory](api.md#sessionmemory-foundation).
 
 Independently, `learnable=True` retains
 accepted execution for an explicit `result.backward(feedback)` call after forward

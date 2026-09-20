@@ -948,7 +948,7 @@ instance; external persistence remains a host concern.
 
 `agent_composer.memory.session.SessionMemory` supplies conversation continuity
 for API-backed AGENT execution through `run_flow`. It owns history updates
-directly. Codex, summaries, learned notes, durable storage, and CLI activation
+directly. Codex, summaries, durable storage, and CLI activation
 remain pending.
 `SessionMemory` is a concrete backend;
 `MemorySession` remains the existing run-handle protocol. Optional
@@ -992,8 +992,10 @@ positions do not change identity, and no fork mode exists. FIFO is admission
 order, not a MAP input-index guarantee. A turn reads its live
 baseline only after acquiring the lease. The run handle's detached opening
 snapshot stays pinned as live turns advance history. Public
-version-1 snapshots contain namespace, generation, and complete conversation views,
-not transient queues or leases. Storage remains process-local. Reopening an older
+version-2 snapshots contain namespace, generation, complete conversation views,
+and learned notes, not transient queues, leases, or private commit bookkeeping.
+Version-1 snapshots remain readable as history without notes and retain their
+exact envelope when pinned. Storage remains process-local. Reopening an older
 snapshot against a used backend reads latest compatible live history without
 rewinding it; a pristine backend can restore only the history in the snapshot.
 
@@ -1003,8 +1005,19 @@ in the backend. Provider/tool calls and stop callbacks run outside the condition
 lock. There is no checkpoint sink, prepared-apply callback, or reconciliation
 channel. Cooperative stop checks can cancel queued work; actual observations are
 retained before honoring a stop during an effect. Conversation progress is
-independent of `learnable`: recall is empty,
-learning proposes no mutations, and only empty commit batches are supported.
+independent of `learnable`.
+
+Explicit API backward learning reuses the existing self-feedback as learned
+notes through frame `learn`, session `commit`, and contextual frame `recall`.
+There is no extra model call. Feedback's accepted execution sequence joins to
+the episode's root-prefixed authored leaf path; only the frame that actually
+admitted that invocation learns notes. Commit validates the whole deterministic
+mutation batch before atomic publication and rejects conflicting commit IDs.
+Notes are separate from raw conversation values and never rewrite history.
+Recall selects the requested leaf's notes from the run-opening pinned snapshot,
+not the latest admission-time history; context-free recall stays empty. New
+commits affect later runs. Reset clears history and notes while retaining commit
+deduplication to prevent replay from resurrecting cleared notes.
 
 Failed/interrupted turns keep completed observations and leave unobserved requests
 pending, not falsely successful. A new invocation can continue that history;

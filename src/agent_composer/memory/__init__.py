@@ -2,11 +2,12 @@
 
 This package owns stable memory-frame identity, occurrence identity, learning
 payloads, detached conversation checkpoints, and the narrow protocols implemented
-by host-provided memory objects. Conversation capabilities are optional, leave
-the mandatory memory protocols unchanged, and await runtime/provider integration.
+by host-provided memory objects. Conversation capabilities are optional and leave
+the mandatory memory protocols unchanged.
 ``contracts.py`` owns that vocabulary; ``conversation.py`` owns its pure fold,
 strict codecs, and digests; ``session.py`` owns process-local conversation views,
-FIFO leases, and atomic turn updates. Concrete session, episodic, and reflection
+FIFO leases, atomic turn updates, and learned self-feedback notes. Concrete
+session, episodic, and reflection
 backends are imported from their own modules, never eagerly by this contracts-only
 facade.
 

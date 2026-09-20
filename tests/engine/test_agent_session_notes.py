@@ -1,0 +1,241 @@
+"""Explicit API backward feedback becomes conversation-local recalled notes."""
+
+import json
+
+from langchain_core.messages import AIMessage
+import pytest
+
+import agent_composer.llm_clients as llm_clients
+from agent_composer import load_flow, run_flow
+from agent_composer.memory.session import SessionMemory
+from agent_composer.run import resume_flow
+from tests.engine.test_agent_session import _Model
+
+NOTE = "Check the measurement units before answering."
+FLOW = """id: learned-session
+name: learned_session
+long_term_memory: session
+llm_config: {provider: openai, model: test-model}
+input: {question: str}
+nodes:
+  answer:
+    kind: agent
+    mode: plain
+    input: {question: "${input.question}"}
+    prompt: ${question}
+    output: str
+output: ${answer.output}
+"""
+
+
+def _feedback():
+    return AIMessage(
+        content=json.dumps(
+            {
+                "input_feedback": {},
+                "self_feedback": [NOTE],
+                "variable_feedback": {},
+            }
+        )
+    )
+
+
+def _snapshot(memory):
+    with memory.open_run() as opened:
+        return opened.snapshot
+
+
+@pytest.mark.parametrize("ownership", ["flow", "leaf", "nested"])
+def test_backward_reuses_self_feedback_without_an_extra_model_call(
+    monkeypatch, ownership
+):
+    source = FLOW
+    if ownership in {"leaf", "nested"}:
+        source = source.replace(
+            "    mode: plain", "    mode: plain\n    long_term_memory: session"
+        )
+    if ownership == "leaf":
+        source = source.replace("long_term_memory: session\n", "", 1)
+    flow = load_flow(source)
+    model = _Model(
+        [
+            AIMessage(content="first answer"),
+            _feedback(),
+            AIMessage(content="next answer"),
+        ]
+    )
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _: model)
+    memory = SessionMemory()
+    first = run_flow(
+        flow, {"question": "first question"}, memory={"session": memory}, learnable=True
+    )
+    assert first.status == "succeeded"
+    history = _snapshot(memory)["conversations"]
+
+    outcome = first.backward("The answer used inconsistent units.")
+    assert outcome.status == "succeeded"
+    assert (
+        len(model.calls) == 2
+    )  # Existing forward + backward; no note-generation call.
+    assert _snapshot(memory)["conversations"] == history
+
+    second = run_flow(flow, {"question": "next question"}, memory={"session": memory})
+    assert second.status == "succeeded" and second.output == "next answer"
+    assert len(model.calls) == 3
+    assert sum(str(message.content).count(NOTE) for message in model.calls[-1]) == 1
+    assert (
+        len(_snapshot(memory)["notes"]) == 1
+    )  # Nested recall-only owners do not duplicate it.
+
+
+def test_backward_without_feedback_adds_no_notes_or_model_call(monkeypatch):
+    model = _Model([AIMessage(content="answer")])
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _: model)
+    memory = SessionMemory()
+    result = run_flow(
+        load_flow(FLOW),
+        {"question": "question"},
+        memory={"session": memory},
+        learnable=True,
+    )
+    history = _snapshot(memory)["conversations"]
+    assert result.backward().status == "succeeded"
+    assert len(model.calls) == 1
+    assert _snapshot(memory)["conversations"] == history
+    assert _snapshot(memory).get("notes", []) == []
+
+
+def test_forward_without_learning_keeps_history_but_adds_no_notes(monkeypatch):
+    model = _Model(
+        [AIMessage(content="first answer"), AIMessage(content="next answer")]
+    )
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _: model)
+    memory = SessionMemory()
+    flow = load_flow(FLOW)
+    for question in ("first question", "next question"):
+        result = run_flow(flow, {"question": question}, memory={"session": memory})
+        assert result.status == "succeeded" and result.learning is None
+    assert len(model.calls) == 2
+    assert "first answer" in [message.content for message in model.calls[-1]]
+    assert _snapshot(memory).get("notes", []) == []
+
+
+def test_learned_notes_do_not_cross_sibling_conversations(monkeypatch):
+    flow = load_flow("""id: sibling-notes
+name: sibling_notes
+long_term_memory: session
+llm_config: {provider: openai, model: test-model}
+input: {question: str}
+nodes:
+  left:
+    kind: agent
+    mode: plain
+    input: {question: "${input.question}"}
+    prompt: "left: ${question}"
+    output: str
+  right:
+    kind: agent
+    mode: plain
+    input: {question: "${input.question}"}
+    prompt: "right: ${question}"
+    output: str
+output:
+  left: ${left.output}
+  right: ${right.output}
+""")
+    model = _Model(
+        [
+            AIMessage(content="answer"),
+            AIMessage(content="answer"),
+            _feedback(),
+            AIMessage(content="answer"),
+            AIMessage(content="answer"),
+        ]
+    )
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _: model)
+    memory = SessionMemory()
+    first = run_flow(
+        flow, {"question": "first question"}, memory={"session": memory}, learnable=True
+    )
+    assert first.status == "succeeded"
+    assert first.backward({"left": "Check units.", "right": None}).status == "succeeded"
+    assert len(model.calls) == 3
+    assert (
+        run_flow(flow, {"question": "next question"}, memory={"session": memory}).status
+        == "succeeded"
+    )
+    assert len(model.calls) == 5
+    for messages in model.calls[3:]:
+        leaf = str(messages[-1].content).split(":", 1)[0]
+        assert leaf in {"left", "right"}
+        assert any(NOTE in str(message.content) for message in messages) == (
+            leaf == "left"
+        )
+
+
+def test_admitted_failed_forward_can_learn_without_rewriting_history(monkeypatch):
+    model = _Model(
+        [
+            RuntimeError("provider could not answer"),
+            _feedback(),
+            AIMessage(content="recovered"),
+        ]
+    )
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _: model)
+    memory = SessionMemory()
+    flow = load_flow(FLOW)
+    first = run_flow(
+        flow, {"question": "first question"}, memory={"session": memory}, learnable=True
+    )
+    assert first.status == "failed"
+    history = _snapshot(memory)["conversations"]
+    assert first.backward("Check the input units.").status == "succeeded"
+    assert _snapshot(memory)["conversations"] == history
+    second = run_flow(flow, {"question": "next question"}, memory={"session": memory})
+    assert second.status == "succeeded"
+    assert len(model.calls) == 3
+    assert any(NOTE in str(message.content) for message in model.calls[-1])
+
+
+def test_recorded_version_one_memory_snapshot_can_resume_and_learn(
+    monkeypatch, tmp_path
+):
+    model = _Model(
+        [
+            AIMessage(content="old answer"),
+            _feedback(),
+            AIMessage(content="new answer"),
+        ]
+    )
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _: model)
+    memory = SessionMemory()
+    legacy = _snapshot(memory)
+    legacy["version"] = 1
+    legacy.pop("notes", None)
+
+    class LegacyOpening:
+        def open_run(self, *, snapshot=None):
+            return memory.open_run(snapshot=legacy if snapshot is None else snapshot)
+
+        def reset(self):
+            memory.reset()
+
+    flow = load_flow(FLOW)
+    log = tmp_path / "legacy-session.jsonl"
+    first = run_flow(
+        flow,
+        {"question": "old question"},
+        memory={"session": LegacyOpening()},
+        log=log,
+        learnable=True,
+    )
+    assert first.status == "succeeded"
+    restored = resume_flow(flow, log=log, memory={"session": memory})
+    assert restored.status == "succeeded" and len(model.calls) == 1
+    assert restored.backward("Check units.").status == "succeeded"
+    assert (
+        run_flow(flow, {"question": "new question"}, memory={"session": memory}).status
+        == "succeeded"
+    )
+    assert len(model.calls) == 3
+    assert any(NOTE in str(message.content) for message in model.calls[-1])

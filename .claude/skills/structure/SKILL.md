@@ -150,6 +150,15 @@ public snapshots contain conversation values, not coordination objects. The
 memory import ratchet in `tests/engine/test_layer_direction.py` enforces this
 direction, including direct-facade and relative-import spellings.
 
+`llm_clients/codex/` is a private provider leaf, below nodes and independent of
+memory and runtime. Its `protocol.py` owns finite-JSON IPC, `worker.py` alone
+imports the pinned native SDK, and `client.py` owns process supervision and
+caller-lane callbacks. Never import tools, memory, nodes, compile, compose, or
+runtime into this package. Inject host callables; do not send them, memory
+handles, or live SDK objects across IPC. Conversation persistence is not worker
+process persistence. Provider selection and native session integration remain
+separate from this private boundary.
+
 Compiled-origin traversal follows the same direction. Semantic carriers and
 nodes own their local origin slots and static-child hooks; `diagnostics` owns the
 exact resolver table; and `compile/origins.py` owns flow wiring, outputs,

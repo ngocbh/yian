@@ -53,7 +53,8 @@ runtime/      run records/logs, scheduler-state vocabulary, reducer-owned state,
               forward dispatcher/worker pool,
               explicit backward driver and pure learning/context projections
 run.py        public run/recovery boundary and retained RunResult.backward handle
-llm_clients/  provider clients (lazy-imported) + LLMConfig + model_from_config
+llm_clients/  provider clients (lazy-imported) + LLMConfig + model_from_config;
+              codex/ owns the private supervised native-SDK boundary
 tools/        tool registry + process-owned ask_user interaction seam
 cli/          `ac` commands + main-thread terminal broker
 _settings.py  environment-based default provider/model
@@ -159,6 +160,44 @@ skip-floods END latches
 the route and restores the recorded value, including its complete trace, even if
 the supplied graph now carries rebased origins. No additional terminal record
 is added, and an explicit node failure still supersedes the latch.
+
+### Private Codex SDK boundary
+
+`llm_clients/codex/` owns finite-JSON IPC and invocation-local process supervision
+for the unchanged official Python SDK, pinned to `openai-codex==0.155.1`. The
+worker alone imports its lower-level `CodexClient`; that interface is internal
+upstream, so changing the pin requires the offline compatibility tests. This
+boundary requires POSIX process-group support and rejects unsupported hosts
+before launching a worker. The package never imports nodes, tools, memory,
+compile, compose, or runtime. Provider selection, node execution, and native
+SessionMemory integration are separate work; the API chat-model factory does
+not return this client.
+
+The caller retains host callables and receives native events, actual operation
+results, and tool callbacks on one execution lane. Results can be observed before
+cancellation propagates, so a returned native thread ID need not be lost. No live
+SDK object or memory handle crosses the process boundary. A fresh worker does not
+imply a fresh native conversation: future SessionMemory integration will own the
+persisted thread reference independently.
+
+Native tool callbacks must match the active thread and turn and have a unique
+call ID within that turn before the host handler runs. A callback that arrives
+before the turn-start response waits for that response's identity; it is not
+treated as permission to run a tool. Tool grants remain the caller's policy.
+
+Positive transport failures close admission permanently. Cancellation or failed
+shutdown triggers bounded cleanup of the worker's POSIX process group, including
+the direct app-server. There is no silent-inference timeout or automatic request
+retry. Already-running host callbacks must finish before the call returns, even
+if the worker has been terminated; a nonreturning host callback therefore keeps
+its caller busy. Cleanup cannot guarantee termination of native jobs that escape
+the owned group or of a wedged worker after abrupt parent death.
+
+The core does not require the `codex` extra. With it installed, run the offline
+compatibility checks using `PYTHONPATH=src python -m pytest
+tests/test_codex_worker.py tests/test_codex_worker_integration.py`. These tests
+launch a fake app-server through the SDK's test seam, without authentication,
+credentials, or inference.
 
 ## Semantic IR carriers
 

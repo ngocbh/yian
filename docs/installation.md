@@ -29,10 +29,18 @@ python -m pip install ".[anthropic]"   # Claude  (langchain-anthropic)
 python -m pip install ".[openai]"      # GPT     (langchain-openai)
 python -m pip install ".[google]"      # Gemini  (langchain-google-genai)
 python -m pip install ".[ollama]"      # local   (langchain-ollama)
-python -m pip install ".[all]"         # all four
+python -m pip install ".[all]"         # all provider extras, including Codex groundwork
 ```
 
 Run these commands from the repository root.
+
+For development of the private Codex worker boundary, `python -m pip install
+".[codex]"` installs the pinned official `openai-codex==0.155.1` SDK and its runtime.
+Codex provider selection, the Composer tool bridge, and native SessionMemory
+execution are not available yet. The worker's compatibility tests use an offline
+fake app-server; they do not require credentials or make model calls.
+The private worker currently requires a POSIX host with process-group support;
+unsupported hosts are rejected before launch.
 
 Provider SDKs are imported **lazily** — only when a flow actually runs an AGENT node
 against that provider. Importing a provider you haven't installed raises a clear

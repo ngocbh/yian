@@ -349,6 +349,17 @@ Most are just the functional model (above) made enforceable:
   skills (tools), and a mode imports langchain + `agent_composer.llm_clients` and
   builds its own model via `model_from_config`. Prefer seams for *new* external
   deps, but model access in agent modes is a direct call.
+- **Native SDK process boundary stays a provider leaf** —
+  `llm_clients/codex/` supervises the unchanged, pinned `openai-codex==0.155.1`
+  lower-level client in an exec'd worker. It imports no node, tool, memory, or
+  runtime code; host callables remain in the caller. Events, actual operation
+  results, and callbacks use one caller-side execution lane. Observed results
+  reach the caller's publication hook before cancellation propagates.
+  Positive faults/cancellation close admission
+  and trigger bounded owned-process-group cleanup, never a silent-inference
+  timeout. Already-running host callbacks drain before return or exception.
+  Native thread identity is independent of worker lifetime. This private seam
+  does not yet enable Codex provider selection or native session execution.
 - **Domain-agnostic** — no domain-specific field names or types in the engine;
   domain lives at the contract/boundary (the loader/builder). The `system`
   namespace is generic.

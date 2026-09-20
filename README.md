@@ -71,6 +71,12 @@ Provider extras can be installed separately: `anthropic`, `openai`, `google`,
 or `ollama`. The core engine and CLI do not require a provider SDK; a flow needs
 one only when it contains an AGENT node.
 
+The `codex` extra installs the pinned `openai-codex==0.155.1` dependency for the
+private, supervised SDK boundary (also included in `all`). This is groundwork:
+`provider: codex`, the Composer tool bridge, and native SessionMemory integration
+are not available yet. The boundary's tests use an offline fake app-server;
+they do not log in or make model calls.
+
 ## Run a flow
 
 ```console

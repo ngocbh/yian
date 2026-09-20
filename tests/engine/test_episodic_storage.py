@@ -1,5 +1,6 @@
 """Optional episodic persistence preserves state and backend ownership."""
 
+from contextlib import ExitStack
 from copy import deepcopy
 import json
 import multiprocessing
@@ -545,6 +546,69 @@ def _fork_inside_run_context(path, interrupt):
 @pytest.mark.parametrize("interrupt", [False, True])
 def test_run_context_fork_cleanup_preserves_primary(tmp_path, interrupt):
     _bounded(_fork_inside_run_context, (str(tmp_path / "memory.sqlite"), interrupt))
+
+
+def _fork_inside_query_callback(path, fail, managed):
+    memory = EpisodicMemory(storage=path)
+    opened = memory.open_run()
+    frame = opened.open_frame(_spec())
+    child_pid = None
+    primary = KeyboardInterrupt("query interrupted after fork")
+
+    def rewrite(context):
+        nonlocal child_pid
+        child_pid = os.fork()
+        if child_pid == 0:
+            signal.signal(signal.SIGALRM, lambda *_: os._exit(91))
+            signal.alarm(2)
+            if fail:
+                raise primary
+        return "query"
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(memory, "rewrite_query", rewrite)
+        try:
+            with ExitStack() as contexts:
+                if managed:
+                    contexts.enter_context(memory)
+                    contexts.enter_context(opened)
+                assert (
+                    frame.recall(c.RecallContext("", "query", {}, _ref().static_path))
+                    == ""
+                )
+                if child_pid == 0:
+                    os._exit(42)
+        except BaseException as error:
+            if child_pid == 0:
+                valid = (
+                    error is primary
+                    if fail
+                    else (
+                        isinstance(error, c.MemoryOperationError)
+                        and error.code == "storage.forked"
+                    )
+                )
+                os._exit(0 if valid else 92)
+            raise
+        try:
+            _, status = os.waitpid(child_pid, 0)
+            exit_code = os.waitstatus_to_exitcode(status)
+            assert exit_code == 0, f"forked query callback exit code {exit_code}"
+        finally:
+            opened.close()
+            memory.close()
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="requires fork")
+@pytest.mark.parametrize("fail", [False, True])
+@pytest.mark.parametrize("managed", [False, True])
+def test_query_callback_fork_rejects_before_return_and_preserves_primary(
+    tmp_path, fail, managed
+):
+    _bounded(
+        _fork_inside_query_callback,
+        (str(tmp_path / "memory.sqlite"), fail, managed),
+    )
 
 
 def test_invalid_limits_do_not_create_storage(tmp_path):

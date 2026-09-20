@@ -1249,6 +1249,7 @@ class _EpisodicFrame:
                     raise _operation_error(
                         "recall", "episodic.invalid_query", "query rewriting failed"
                     ) from exc
+                self._session._memory._check_pid()
                 if type(query) is not str:
                     raise _operation_error(
                         "recall",

@@ -676,19 +676,42 @@ def _fork_inside_callback(path, phase, fail=False, managed=False):
         assert not thread.is_alive()
 
     class Model:
+        inspected = False
+
         def with_structured_output(self, schema):
+            if child_pid == 0:
+                os._exit(95)
+            if phase == "structured":
+                callback()
             return self
 
-        def invoke(self, messages):
-            callback()
+        @property
+        def invoke(self):
+            if child_pid == 0:
+                os._exit(97)
+            if phase == "inspection" and not self.inspected:
+                self.inspected = True
+                callback()
+            return self._invoke
+
+        def _invoke(self, messages):
+            if child_pid == 0:
+                os._exit(96)
+            if phase == "invoke":
+                callback()
             return {"actions": [{"action": "noop"}]}
+
+    def construct(config):
+        if phase == "construction":
+            callback()
+        return Model()
 
     def rewrite(context):
         callback()
         return "query"
 
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(reflective, "model_from_config", lambda _: Model())
+        patch.setattr(reflective, "model_from_config", construct)
         patch.setattr(memory, "rewrite_query", rewrite)
         try:
             with ExitStack() as contexts:
@@ -719,25 +742,61 @@ def _fork_inside_callback(path, phase, fail=False, managed=False):
 
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="requires fork")
-@pytest.mark.parametrize("phase", ["query", "invoke"])
+@pytest.mark.parametrize(
+    "phase", ["construction", "structured", "inspection", "query", "invoke"]
+)
 def test_callback_fork_rejects_before_cleanup_acquires_inherited_lock(tmp_path, phase):
     _bounded(_fork_inside_callback, (str(tmp_path / "memory.sqlite"), phase))
 
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="requires fork")
-@pytest.mark.parametrize("phase", ["query", "invoke"])
+@pytest.mark.parametrize(
+    "phase", ["construction", "structured", "inspection", "query", "invoke"]
+)
 def test_callback_fork_cleanup_preserves_primary_exception(tmp_path, phase):
     _bounded(_fork_inside_callback, (str(tmp_path / "memory.sqlite"), phase, True))
 
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="requires fork")
-@pytest.mark.parametrize("phase", ["query", "invoke"])
+@pytest.mark.parametrize(
+    "phase", ["construction", "structured", "inspection", "query", "invoke"]
+)
 @pytest.mark.parametrize("fail", [False, True])
 def test_callback_fork_contexts_preserve_primary_exception(tmp_path, phase, fail):
     _bounded(
         _fork_inside_callback,
         (str(tmp_path / "memory.sqlite"), phase, fail, True),
     )
+
+
+@pytest.mark.parametrize("raises", [False, True])
+def test_structured_result_inspection_preserves_error_translation(
+    tmp_path, monkeypatch, raises
+):
+    primary = RuntimeError("private inspection failure")
+
+    class Model:
+        def with_structured_output(self, schema):
+            return self
+
+        @property
+        def invoke(self):
+            if raises:
+                raise primary
+            return None
+
+    monkeypatch.setattr(reflective, "model_from_config", lambda _: Model())
+    with _memory(tmp_path / "memory.sqlite") as memory:
+        with memory.open_run() as opened:
+            with pytest.raises(c.MemoryOperationError) as caught:
+                opened.open_frame(_spec()).learn(_context())
+    assert caught.value.code == "reflective.structured_output"
+    assert caught.value.retryable is False
+    if raises:
+        assert caught.value.__cause__ is primary
+        assert "private inspection failure" not in str(caught.value)
+    else:
+        assert type(caught.value.__cause__) is TypeError
 
 
 @pytest.mark.parametrize("run_context", [False, True])

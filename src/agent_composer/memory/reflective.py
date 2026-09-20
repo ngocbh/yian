@@ -1655,9 +1655,20 @@ class _ReflectiveFrame:
                 "reflector model construction failed",
                 retryable=False,
             ) from exc
+        self._session._memory._check_pid()
         try:
             structured = model.with_structured_output(_ReflectionResponse)
-            if not callable(getattr(structured, "invoke", None)):
+        except Exception as exc:
+            raise _operation_error(
+                "learn",
+                "reflective.structured_output",
+                "reflector does not support the required structured output",
+                retryable=False,
+            ) from exc
+        self._session._memory._check_pid()
+        try:
+            invoke = getattr(structured, "invoke", None)
+            if not callable(invoke):
                 raise TypeError("structured model must provide invoke()")
         except Exception as exc:
             raise _operation_error(
@@ -1666,8 +1677,9 @@ class _ReflectiveFrame:
                 "reflector does not support the required structured output",
                 retryable=False,
             ) from exc
+        self._session._memory._check_pid()
         try:
-            raw_response = structured.invoke([system, human])
+            raw_response = invoke([system, human])
         except (OutputParserException, ValidationError) as exc:
             raise _operation_error(
                 "learn",

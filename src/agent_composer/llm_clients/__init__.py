@@ -1,9 +1,11 @@
 """LLM client wrappers and `LLMConfig` for AGENT nodes — agent_composer's model seam.
 
-The single place the engine reaches a chat model: `LLMConfig` (the selection
+The model-access leaf: `LLMConfig` (the selection
 carrier) and `model_from_config` (resolve it to a ready `BaseChatModel`), plus the
 per-provider client wrappers behind `create_llm_client`. The AGENT node and the
 Compose loader's `llm_config:` field draw on this; `chat/` and `cli/` use it too.
+The private `codex/` package isolates the pinned native SDK in a supervised
+process; it does not yet add Codex to provider selection or the chat-model factory.
 
 Knows about:   the package env-based defaults (`_settings`), langchain, provider SDKs.
 Never imports: any other agent_composer subpackage — it is a leaf (peer of state /

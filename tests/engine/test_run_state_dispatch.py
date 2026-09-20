@@ -124,7 +124,6 @@ def _state_snapshot(state: RunState) -> dict[str, Any]:
         "in_flight_identity": id(state.in_flight),
         "accepted_starts": dict(state.accepted_starts),
         "accepted_starts_identity": id(state.accepted_starts),
-        "conversation_state": state.conversation_state,
         "result": state.result,
         "terminal_unreachable_failure": state.terminal_unreachable_failure,
         "depth": dict(state.depth),

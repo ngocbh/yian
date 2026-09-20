@@ -1,4 +1,4 @@
-"""Pure accepted conversation history and its append-before-apply reducer."""
+"""Inert legacy conversation metadata through the append-before-apply reducer."""
 
 from copy import deepcopy
 from dataclasses import replace
@@ -16,18 +16,12 @@ from agent_composer.expr.lineage import ValueRoute
 from agent_composer.runtime.contracts import ForwardCapture
 from agent_composer.runtime.learning import project_outcome_episodes
 from agent_composer.runtime import state as reducer
-from agent_composer.runtime.conversation import (
-    RuntimeConversationState,
-    prepare_conversation_checkpoint,
-)
 from agent_composer.runtime.log import (
     ConversationAdmittedRecord,
     ConversationEffectRequestedRecord,
     ConversationEffectObservedRecord,
     ConversationClosedRecord,
     MemoryRunLog,
-    RunResumedRecord,
-    RecordEnvelope,
     BackwardStartedRecord,
     BackwardFinishedRecord,
 )
@@ -110,7 +104,6 @@ def _snapshot(state):
         dict(state.accepted_starts),
         state.result,
         state.next_sequence,
-        state.conversation_state,
         state.learning_state,
         state.backward_state,
         dict(state.depth),
@@ -155,7 +148,6 @@ _RECORDS = {
 def _accept(state, log, checkpoint):
     prepared = reducer.prepare_record(state, _RECORDS[type(checkpoint)](checkpoint))
     assert reducer.commit_prepared(log, state, prepared) == ()
-    return state.conversation_state.views[-1]
 
 
 def _checkpoints(first):
@@ -186,6 +178,29 @@ def _checkpoints(first):
         "completed",
     )
     return first, requested, observed, closed
+
+
+@pytest.mark.parametrize("learnable", [False, True])
+@pytest.mark.parametrize("count", [2, 3, 4])
+def test_legacy_effect_metadata_allows_ordered_interrupted_node_retry(
+    monkeypatch, learnable, count,
+):
+    monkeypatch.setattr(
+        SessionMemory, "open_run",
+        lambda *args, **kwargs: pytest.fail("retry opened a memory backend"),
+    )
+    state, log = _started(learnable=learnable, sibling=True)
+    reducer.commit_prepared(log, state, reducer.prepare_node_started(state, "sibling"))
+    for checkpoint in _checkpoints(_admit(state))[:count]:
+        wrapper = _RECORDS[type(checkpoint)](checkpoint)
+        reducer.commit_prepared(log, state, reducer.prepare_record(state, wrapper))
+    before = tuple(state.in_flight)
+    prepared = reducer.prepare_run_resumed(state, num_workers=0)
+    assert prepared.record.retry_node_ids == before == ("agent", "sibling")
+    reducer.commit_prepared(log, state, prepared)
+    assert tuple(state.ready) == before
+    assert state.in_flight == state.accepted_starts == {}
+    assert not hasattr(state, "conversation_state")
 
 
 def _replay(state, log, *, sibling=False):
@@ -222,7 +237,7 @@ def _replay(state, log, *, sibling=False):
 
 @pytest.mark.parametrize("learnable", [False, True])
 @pytest.mark.parametrize("index", range(4))
-def test_prepare_conversation_record_is_pure(learnable, index):
+def test_prepare_legacy_conversation_record_is_pure(learnable, index):
     state, log = _started(learnable=learnable)
     checkpoints = _checkpoints(_admit(state))
     for checkpoint in checkpoints[:index]:
@@ -232,7 +247,7 @@ def test_prepare_conversation_record_is_pure(learnable, index):
     backend_before = snapshot(backend)
     before = _snapshot(state)
     trace_before = _trace_snapshot(state.trace)
-    prepared = reducer.prepare_conversation_record(
+    prepared = reducer.prepare_record(
         state, _RECORDS[type(checkpoint)](checkpoint)
     )
     assert _snapshot(state) == before
@@ -240,28 +255,7 @@ def test_prepare_conversation_record_is_pure(learnable, index):
     assert snapshot(backend) == backend_before
     assert prepared.observers == ()
     assert log.next_sequence == state.next_sequence
-    assert prepared._plan.next_conversation_state != state.conversation_state
-
-
-def test_pure_projection_uses_the_lower_conversation_fold():
-    checkpoint = admission(c.ConversationInvocation("run", 3))
-    before = RuntimeConversationState()
-    after = prepare_conversation_checkpoint(before, checkpoint)
-    assert before == RuntimeConversationState()
-    assert after.segments[0].checkpoints == (checkpoint,)
-    assert after.views[0].revision == 1
-    with pytest.raises(ValueError, match="admitted"):
-        prepare_conversation_checkpoint(after, checkpoint)
-
-
-def test_projection_rejects_a_view_from_different_segment_authority():
-    first = admission(c.ConversationInvocation("run", 3))
-    other = replace(first, stamp=replace(first.stamp, policy_name="other"))
-    wrong_view = advance_conversation(other.baseline, other)
-    with pytest.raises(ValueError, match="view"):
-        RuntimeConversationState(
-            (c.ConversationAuthority(first.baseline, (first,)),), (wrong_view,)
-        )
+    assert not hasattr(state, "conversation_state")
 
 
 @pytest.mark.parametrize("learnable", [False, True])
@@ -283,7 +277,7 @@ def test_append_failure_does_not_apply_conversation_delta(learnable, index):
         def append(self, record):
             raise failure
 
-    prepared = reducer.prepare_conversation_record(
+    prepared = reducer.prepare_record(
         state, _RECORDS[type(checkpoint)](checkpoint)
     )
     before = _snapshot(state)
@@ -298,7 +292,7 @@ def test_append_failure_does_not_apply_conversation_delta(learnable, index):
 
 
 @pytest.mark.parametrize("learnable", [False, True])
-def test_live_and_replay_conversation_state_match(learnable):
+def test_legacy_metadata_live_and_replay_state_match(learnable):
     state, log = _started(learnable=learnable)
     for checkpoint in _checkpoints(_admit(state)):
         _accept(state, log, checkpoint)
@@ -316,7 +310,7 @@ def test_session_records_do_not_require_learning_or_bind_outputs(learnable):
         _accept(state, log, checkpoint)
     after = _snapshot(state)
     assert after[:7] == before[:7]
-    assert after[9:] == before[9:]
+    assert after[8:] == before[8:]
     assert state.next_sequence == before[7] + 4
     if learnable:
         trace_after = _trace_snapshot(state.trace)
@@ -329,7 +323,8 @@ def test_session_records_do_not_require_learning_or_bind_outputs(learnable):
 @pytest.mark.parametrize(
     "corruption", ["run", "start", "policy", "frame", "consumer", "stack", "disabled"]
 )
-def test_checkpoint_rejects_foreign_or_out_of_order_invocation(corruption):
+@pytest.mark.parametrize("index", range(4))
+def test_legacy_metadata_rejects_foreign_invocation_and_scope(corruption, index):
     state, log = _started(enabled=corruption != "disabled")
     first = _admit(state)
     if corruption == "run":
@@ -355,91 +350,70 @@ def test_checkpoint_rejects_foreign_or_out_of_order_invocation(corruption):
         state.flow.nodes["agent"].memory_scope = c.MemoryScope(
             "root", ("root", "agent"), (), (), None
         )
+    checkpoint = _checkpoints(first)[index]
     before = _snapshot(state)
     with pytest.raises((TypeError, ValueError)):
-        reducer.prepare_record(state, ConversationAdmittedRecord(first))
+        reducer.prepare_record(state, _RECORDS[type(checkpoint)](checkpoint))
     assert _snapshot(state) == before
     assert log.next_sequence == state.next_sequence
 
 
-@pytest.mark.parametrize(
-    "corruption",
-    [
-        "ordinal",
-        "revision",
-        "foreign-key",
-        "policy",
-        "duplicate",
-        "second-admission",
-        "second-key",
-        "post-close",
-    ],
-)
-def test_admitted_invocation_rejects_invalid_checkpoint_order(corruption):
+@pytest.mark.parametrize("case", [
+    "ordinal", "revision", "duplicate", "second-admission", "post-close",
+    "request-without-admission", "observation-without-request",
+])
+def test_legacy_metadata_does_not_enforce_conversation_order(case):
     state, log = _started()
     first, request, observation, close = _checkpoints(_admit(state))
-    _accept(state, log, first)
-    bad = request
-    if corruption == "ordinal":
-        bad = c.ConversationEffectRequested(
-            replace(request.stamp, ordinal=2), "model", {}, ()
+    if case == "ordinal":
+        changed = c.ConversationEffectRequested(
+            replace(request.stamp, ordinal=9), request.kind, request.payload, request.items,
         )
-    elif corruption == "revision":
-        bad = c.ConversationEffectRequested(
-            replace(request.stamp, expected_revision=5), "model", {}, ()
+        checkpoints = (first, changed)
+    elif case == "revision":
+        changed = c.ConversationEffectRequested(
+            replace(request.stamp, expected_revision=99), request.kind, request.payload, request.items,
         )
-    elif corruption == "foreign-key":
-        bad = c.ConversationEffectRequested(
-            replace(request.stamp, key=c.ConversationKey(REF, ("root", "other"))),
-            "model",
-            {},
-            (),
-        )
-    elif corruption == "policy":
-        bad = c.ConversationEffectRequested(
-            replace(request.stamp, policy_name="other"), "model", {}, ()
-        )
-    elif corruption == "duplicate":
-        _accept(state, log, request)
-        bad = c.ConversationEffectRequested(
-            request.stamp, "model", {"different": True}, ()
-        )
-    elif corruption == "second-admission":
-        bad = first
-    elif corruption == "second-key":
-        bad = admission(first.stamp.invocation, consumer=("root", "other"))
-    elif corruption == "post-close":
-        for checkpoint in (request, observation, close):
-            _accept(state, log, checkpoint)
-        bad = c.ConversationEffectRequested(
-            replace(close.stamp, expected_revision=4, ordinal=4), "model", {}, ()
-        )
-    before = _snapshot(state)
-    with pytest.raises((TypeError, ValueError, c.MemoryOperationError)):
-        reducer.prepare_record(state, _RECORDS[type(bad)](bad))
-    assert _snapshot(state) == before
-
-
-def test_success_requires_closed_handle_and_durable_start_inventory():
-    state, log = _started()
-    first = _admit(state)
-    _accept(state, log, first)
-    with pytest.raises(ValueError, match="closed"):
-        reducer.prepare_node_succeeded(state, "agent", "value")
-    close = c.ConversationClosed(
-        replace(first.stamp, expected_revision=1, ordinal=1), "completed"
-    )
-    _accept(state, log, close)
-    reducer.commit_prepared(
-        log, state, reducer.prepare_node_succeeded(state, "agent", "value")
-    )
-    assert "agent" not in state.accepted_starts
-    assert len(state.conversation_state.segments) == 1
+        checkpoints = (first, changed)
+    elif case == "duplicate":
+        checkpoints = (first, request, request)
+    elif case == "second-admission":
+        checkpoints = (first, first)
+    elif case == "post-close":
+        checkpoints = (first, request, observation, close, request)
+    elif case == "request-without-admission":
+        checkpoints = (request,)
+    else:
+        checkpoints = (observation,)
+    for checkpoint in checkpoints:
+        _accept(state, log, checkpoint)
+    assert not hasattr(state, "conversation_state")
+    assert tuple(state.in_flight) == ("agent",)
     _replay(state, log)
 
 
 @pytest.mark.parametrize("learnable", [False, True])
-@pytest.mark.parametrize("tamper", ["trace", "successor", "record", "stale"])
+@pytest.mark.parametrize("count", [0, 1, 2, 3])
+def test_node_success_does_not_require_legacy_conversation_close(learnable, count):
+    state, log = _started(learnable=learnable)
+    checkpoints = _checkpoints(_admit(state))
+    for checkpoint in checkpoints[:count]:
+        _accept(state, log, checkpoint)
+    reducer.commit_prepared(
+        log, state, reducer.prepare_node_succeeded(
+            state, "agent", "value", forward_capture=_capture(state),
+        ),
+    )
+    assert "agent" not in state.accepted_starts
+    assert not hasattr(state, "conversation_state")
+    for checkpoint in checkpoints:
+        with pytest.raises(ValueError, match="unfinished accepted start"):
+            reducer.prepare_record(state, _RECORDS[type(checkpoint)](checkpoint))
+    _replay(state, log)
+
+
+@pytest.mark.parametrize("learnable", [False, True])
+@pytest.mark.parametrize("tamper", ["trace", "sequence", "record", "scope"])
 def test_forged_conversation_plan_is_rejected_before_append(learnable, tamper):
     state, log = _started(learnable=learnable)
     prepared = reducer.prepare_record(state, ConversationAdmittedRecord(_admit(state)))
@@ -452,13 +426,8 @@ def test_forged_conversation_plan_is_rejected_before_append(learnable, tamper):
             else TraceDelta(None, state.next_sequence)
         )
         prepared = replace(prepared, _plan=replace(prepared._plan, trace_delta=delta))
-    elif tamper == "successor":
-        prepared = replace(
-            prepared,
-            _plan=replace(
-                prepared._plan, next_conversation_state=RuntimeConversationState()
-            ),
-        )
+    elif tamper == "sequence":
+        prepared = replace(prepared, expected_sequence=prepared.expected_sequence + 1)
     elif tamper == "record":
         prepared = replace(
             prepared,
@@ -467,7 +436,7 @@ def test_forged_conversation_plan_is_rejected_before_append(learnable, tamper):
             ),
         )
     else:
-        state.conversation_state = RuntimeConversationState()
+        state.flow.nodes["agent"].memory_scope = None
     before = _snapshot(state)
     with pytest.raises((TypeError, ValueError)):
         reducer.commit_prepared(log, state, prepared)
@@ -581,26 +550,6 @@ def test_success_closes_the_checkpoint_window():
         reducer.prepare_record(state, ConversationAdmittedRecord(first))
 
 
-@pytest.mark.parametrize("count", [2, 3, 4])
-def test_resume_rejects_external_effects_without_node_outcome(count):
-    state, log = _started()
-    for checkpoint in _checkpoints(_admit(state))[:count]:
-        _accept(state, log, checkpoint)
-    before = _snapshot(state)
-    with pytest.raises(ValueError, match="accepted conversation effects"):
-        reducer.prepare_run_resumed(state, num_workers=1)
-    assert _snapshot(state) == before
-    forged = RecordEnvelope(
-        8, "run", state.next_sequence, RunResumedRecord(("agent",), 1)
-    )
-    with pytest.raises(ValueError, match="accepted conversation effects"):
-        reducer._replay_records(
-            reducer.RunState(_flow()),
-            tuple(log) + (forged,),
-            grow_builder=lambda *_: pytest.fail("builder called"),
-        )
-
-
 def test_resume_allows_memory_free_unfinished_invocations():
     state, log = _started(enabled=False)
     first_sequence = state.accepted_starts["agent"]
@@ -610,11 +559,13 @@ def test_resume_allows_memory_free_unfinished_invocations():
     assert state.accepted_starts == {}
     reducer.commit_prepared(log, state, reducer.prepare_node_started(state, "agent"))
     assert state.accepted_starts["agent"] > first_sequence
-    assert state.conversation_state == RuntimeConversationState()
+    assert not hasattr(state, "conversation_state")
     _replay(state, log)
 
 
-def test_resume_ignores_prior_completed_baseline_effects():
+def test_resume_does_not_project_prior_completed_baseline_effects():
+    from agent_composer.runtime.log import encode_record
+
     old = admission(c.ConversationInvocation("previous-run", 1))
     baseline = old.baseline
     for checkpoint in _checkpoints(old):
@@ -622,53 +573,54 @@ def test_resume_ignores_prior_completed_baseline_effects():
     state, log = _started()
     first = _admit(state, baseline=baseline)
     _accept(state, log, first)
-    original = state.conversation_state
+    original = tuple(encode_record(envelope) for envelope in log)
     reducer.commit_prepared(
         log, state, reducer.prepare_run_resumed(state, num_workers=0)
     )
-    assert first.stamp.invocation in state.conversation_state.retired_invocations
-    assert state.conversation_state.views == original.views
-    assert state.conversation_state.segments == original.segments
+    assert not hasattr(state, "conversation_state")
+    assert tuple(encode_record(envelope) for envelope in tuple(log)[:-1]) == original
     _replay(state, log)
 
 
-def test_two_effect_free_resume_cycles_retire_without_inventing_history():
-    state, log = _started()
-    originals = []
-    for _ in range(2):
-        baseline = state.conversation_state.views[-1] if originals else None
-        first = _admit(state, baseline=baseline)
-        _accept(state, log, first)
-        originals.append((first, state.conversation_state.views[-1]))
-        reducer.commit_prepared(
-            log, state, reducer.prepare_run_resumed(state, num_workers=0)
-        )
-        reducer.commit_prepared(
-            log, state, reducer.prepare_node_started(state, "agent")
-        )
-    final = _admit(state, baseline=state.conversation_state.views[-1])
-    effects = []
-    for checkpoint in _checkpoints(final):
-        _accept(state, log, checkpoint)
-        if type(checkpoint) is c.ConversationEffectRequested:
-            effects.append("actual fake effect")
-    assert effects == ["actual fake effect"]
-    ids = [first.stamp.invocation for first, _ in originals] + [final.stamp.invocation]
-    assert len({value.start_sequence for value in ids}) == 3
-    assert state.conversation_state.retired_invocations == frozenset(ids[:2])
-    for index, (first, view) in enumerate(originals):
-        assert state.conversation_state.segments[index].checkpoints == (first,)
-        assert state.conversation_state.views[index] == view
-        assert not view.closed_invocations and not view.items and not view.effects
-        late = c.ConversationClosed(
-            replace(first.stamp, expected_revision=view.revision, ordinal=1),
-            "interrupted",
-        )
-        with pytest.raises(ValueError, match="retired"):
-            reducer.prepare_record(state, ConversationClosedRecord(late))
-    reducer.commit_prepared(
-        log, state, reducer.prepare_node_succeeded(state, "agent", "done")
+@pytest.mark.parametrize("learnable", [False, True])
+def test_mixed_legacy_history_retries_without_rewriting_accepted_bytes(monkeypatch, learnable):
+    from agent_composer.runtime.log import encode_record
+
+    monkeypatch.setattr(
+        SessionMemory, "open_run",
+        lambda *args, **kwargs: pytest.fail("replay opened a memory backend"),
     )
+    _, current = _started(learnable=learnable)
+    historical = tuple(replace(envelope, schema=7) for envelope in current)
+    log = MemoryRunLog._from_records(historical)
+    state = reducer._replay_records(
+        reducer.RunState(_flow()), historical,
+        grow_builder=lambda *_: pytest.fail("replay invoked growth"),
+    )
+    invocations = []
+    for count in (2, 3, 4):
+        checkpoints = _checkpoints(_admit(state))
+        invocations.append(checkpoints[0].stamp.invocation)
+        for checkpoint in checkpoints[:count]:
+            _accept(state, log, checkpoint)
+        accepted = tuple(encode_record(envelope) for envelope in log)
+        reducer.commit_prepared(
+            log, state, reducer.prepare_run_resumed(state, num_workers=0),
+        )
+        assert tuple(encode_record(envelope) for envelope in tuple(log)[:-1]) == accepted
+        for checkpoint in checkpoints:
+            with pytest.raises(ValueError, match="unfinished accepted start"):
+                reducer.prepare_record(state, _RECORDS[type(checkpoint)](checkpoint))
+        _replay(state, log)
+        reducer.commit_prepared(log, state, reducer.prepare_node_started(state, "agent"))
+    assert len({invocation.start_sequence for invocation in invocations}) == 3
+    for invocation in invocations:
+        late = admission(invocation)
+        with pytest.raises(ValueError, match="unfinished accepted start"):
+            reducer.prepare_record(state, ConversationAdmittedRecord(late))
+    assert [envelope.schema for envelope in tuple(log)[:4]] == [7] * 4
+    assert all(envelope.schema == 8 for envelope in tuple(log)[4:])
+    assert not hasattr(state, "conversation_state")
     _replay(state, log)
 
 
@@ -685,7 +637,7 @@ def test_old_run_started_has_no_synthesized_conversations():
     wires = _SCHEMA_SEVEN_LINEAR[:4]
     records = tuple(decode_record(wire) for wire in wires)
     replayed = run_module._replay_run_log(load_flow(_LINEAR), _ReadOnlyLog(records))
-    assert replayed.conversation_state == RuntimeConversationState()
+    assert not hasattr(replayed, "conversation_state")
     reopened = MemoryRunLog._from_records(records)
     reducer.commit_prepared(
         reopened, replayed, reducer.prepare_run_resumed(replayed, num_workers=0)
@@ -695,36 +647,28 @@ def test_old_run_started_has_no_synthesized_conversations():
     again = run_module._replay_run_log(
         load_flow(_LINEAR), _ReadOnlyLog(tuple(reopened))
     )
-    assert again.conversation_state == RuntimeConversationState()
+    assert not hasattr(again, "conversation_state")
 
 
-def test_admitted_checkpoint_drain_does_not_lookup_a_pruned_node():
+@pytest.mark.parametrize("index", range(4))
+def test_legacy_metadata_requires_its_current_compiled_scope(index):
     state, log = _started()
-    first, request, observation, close = _checkpoints(_admit(state))
-    _accept(state, log, first)
-    _accept(state, log, request)
-    # Admission's scope is already durable; later truth is invocation-owned.
+    checkpoint = _checkpoints(_admit(state))[index]
     state.flow.nodes.pop("agent")
-    _accept(state, log, observation)
-    _accept(state, log, close)
-    assert (
-        state.conversation_state.views[-1].closed_invocations[0].status == "completed"
-    )
+    before = _snapshot(state)
+    with pytest.raises(ValueError, match="compiled memory scope"):
+        reducer.prepare_record(state, _RECORDS[type(checkpoint)](checkpoint))
+    assert _snapshot(state) == before
 
 
-def test_forged_resume_projection_cannot_omit_retirement():
+def test_forged_resume_plan_cannot_change_the_retry_frontier():
     state, log = _started()
-    first = _admit(state)
-    _accept(state, log, first)
+    for checkpoint in _checkpoints(_admit(state))[:2]:
+        _accept(state, log, checkpoint)
     prepared = reducer.prepare_run_resumed(state, num_workers=0)
-    forged = replace(prepared._plan.delta.next_conversation_state)
-    object.__setattr__(forged, "retired_invocations", frozenset())
     prepared = replace(
         prepared,
-        _plan=replace(
-            prepared._plan,
-            delta=replace(prepared._plan.delta, next_conversation_state=forged),
-        ),
+        _plan=replace(prepared._plan, delta=replace(prepared._plan.delta, retry_node_ids=())),
     )
     before = _snapshot(state)
     with pytest.raises(ValueError):
@@ -739,23 +683,12 @@ def test_forged_checkpoint_plan_rejects_equality_collapsing_payload_change():
     requested = c.ConversationEffectRequested(
         replace(first.stamp, expected_revision=1, ordinal=1), "model", {"count": 1}, ()
     )
-    prepared = reducer.prepare_record(
-        state, ConversationEffectRequestedRecord(requested)
-    )
-    next_state = prepared._plan.next_conversation_state
-    changed = c.ConversationEffectRequested(
-        requested.stamp, "model", {"count": 1.0}, ()
-    )
-    segment = c.ConversationAuthority(first.baseline, (first, changed))
-    forged = object.__new__(RuntimeConversationState)
-    object.__setattr__(forged, "segments", (segment,))
-    object.__setattr__(forged, "views", next_state.views)
-    object.__setattr__(forged, "retired_invocations", next_state.retired_invocations)
-    prepared = replace(
-        prepared, _plan=replace(prepared._plan, next_conversation_state=forged)
-    )
+    prepared = reducer.prepare_record(state, ConversationEffectRequestedRecord(requested))
+    changed = c.ConversationEffectRequested(requested.stamp, "model", {"count": 1.0}, ())
+    assert changed.payload == requested.payload
+    prepared = replace(prepared, record=ConversationEffectRequestedRecord(changed))
     before = _snapshot(state)
-    with pytest.raises(ValueError, match="canonical checkpoint"):
+    with pytest.raises(ValueError, match="prepared record changed"):
         reducer.commit_prepared(log, state, prepared)
     assert _snapshot(state) == before
 
@@ -783,61 +716,6 @@ def test_checkpoint_trace_cannot_inject_an_outcome_or_terminal(field):
     assert log.next_sequence == state.next_sequence
 
 
-def test_conversation_state_constructor_detaches_all_supplied_history():
-    first = admission(c.ConversationInvocation("run", 3))
-    view = advance_conversation(first.baseline, first)
-    segment = c.ConversationAuthority(first.baseline, (first,))
-    state = RuntimeConversationState((segment,), (view,))
-    assert state.segments[0] is not segment
-    assert state.views[0] is not view
-    object.__setattr__(view, "revision", True)
-    object.__setattr__(segment.checkpoints[0].stamp, "ordinal", True)
-    assert state.views[0].revision == 1 and type(state.views[0].revision) is int
-    assert state.segments[0].checkpoints[0].stamp.ordinal == 0
-
-
-def test_conversation_state_constructor_detaches_retired_invocations():
-    source = c.ConversationInvocation("run", 3)
-    first = admission(source)
-    view = advance_conversation(first.baseline, first)
-    segment = c.ConversationAuthority(first.baseline, (first,))
-    supplied = frozenset((source,))
-
-    state = RuntimeConversationState((segment,), (view,), supplied)
-
-    retained = next(iter(state.retired_invocations))
-    assert state.retired_invocations is not supplied
-    assert retained is not source
-    object.__setattr__(source, "start_sequence", 99)
-    expected = c.ConversationInvocation("run", 3)
-    assert state.retired_invocations == frozenset((expected,))
-    assert retained == state.segments[0].checkpoints[0].stamp.invocation
-    assert state.index(expected) == 0
-    with pytest.raises(ValueError, match="retired"):
-        prepare_conversation_checkpoint(state, first)
-
-
-def test_checkpoint_advances_only_its_invocation_without_refolding_older_segments(
-    monkeypatch,
-):
-    import agent_composer.runtime.conversation as projection
-
-    first = admission(c.ConversationInvocation("run", 3))
-    current = prepare_conversation_checkpoint(RuntimeConversationState(), first)
-    second = admission(c.ConversationInvocation("run", 5), consumer=("root", "other"))
-    current = prepare_conversation_checkpoint(current, second)
-    calls = []
-    advance = projection.advance_conversation
-
-    def tracked(before, checkpoint):
-        calls.append(checkpoint.stamp.invocation)
-        return advance(before, checkpoint)
-
-    monkeypatch.setattr(projection, "advance_conversation", tracked)
-    close = c.ConversationClosed(
-        replace(second.stamp, expected_revision=1, ordinal=1), "completed"
-    )
-    after = prepare_conversation_checkpoint(current, close)
-    assert calls == [second.stamp.invocation]
-    assert after.segments[0] is current.segments[0]
-    assert after.views[0] is current.views[0]
+def test_active_conversation_preparation_is_not_exported():
+    assert not hasattr(reducer, "prepare_conversation_record")
+    assert "prepare_conversation_record" not in reducer.__all__

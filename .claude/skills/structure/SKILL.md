@@ -171,7 +171,7 @@ imports the pinned native SDK, and `client.py` owns process supervision and
 caller-lane callbacks. Never import tools, memory, nodes, compile, compose, or
 runtime into this package. Inject host callables; do not send them, memory
 handles, or live SDK objects across IPC. Conversation persistence is not worker
-process persistence. Provider selection and native session integration remain
+process persistence. Native execution and session integration remain
 separate from this private boundary.
 
 Compiled-origin traversal follows the same direction. Semantic carriers and

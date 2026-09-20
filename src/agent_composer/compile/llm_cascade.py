@@ -10,16 +10,17 @@ child flow is deep-copied at every CALL/MAP/LOOP callsite before either resoluti
 replay.  A root-level copy alone preserves aliases between shared descendant defs and
 would let one parent's cascade overwrite another's.
 
-Layer: compile — imports nodes and the LLM merge primitive only; never runtime or
-``_settings``.
+Layer: compile — imports nodes and LLM configuration primitives; never runtime or
+``_settings``. Directory normalization is lexical and requires an injected base.
 """
 
 from __future__ import annotations
 
 import copy
+import os.path
 from typing import Any
 
-from agent_composer.llm_clients.config import merge_llm_config
+from agent_composer.llm_clients.config import LLMConfig, merge_llm_config
 from agent_composer.nodes.agent import AgentNode
 
 _REQUIRED_SELECTION_FIELDS = ("provider", "model")
@@ -30,6 +31,7 @@ def resolve_llm_cascade(
     parent_config: dict[str, Any],
     *,
     defaults: dict[str, Any],
+    launch_cwd: str | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Bake and return every AGENT node's complete effective configuration.
 
@@ -47,6 +49,9 @@ def resolve_llm_cascade(
         defaults (`dict[str, Any]`):
             Explicit lowest-precedence process defaults.  Must supply concrete
             ``provider`` and ``model`` values; this module never reads the environment.
+        launch_cwd (`str | None`, defaults to `None`):
+            Absolute host launch directory for omitted or relative Codex `cwd`.
+            The host supplies it; resolution performs no filesystem access.
 
     Returns:
         `dict[str, dict[str, Any]]`:
@@ -54,9 +59,17 @@ def resolve_llm_cascade(
 
     Raises:
         `ValueError`:
-            If an effective agent selection lacks a concrete provider or model.
+            If selection or native options are invalid, or a Codex directory needs
+            an omitted or invalid `launch_cwd`.
     """
     _require_concrete_selection(defaults, path="defaults")
+    if launch_cwd is not None and (
+        not isinstance(launch_cwd, str)
+        or not launch_cwd
+        or "\x00" in launch_cwd
+        or not os.path.isabs(launch_cwd)
+    ):
+        raise ValueError("launch_cwd must be an absolute path without NUL characters")
     effective: dict[str, dict[str, Any]] = {}
     _resolve_flow(
         flow,
@@ -64,6 +77,7 @@ def resolve_llm_cascade(
         defaults=copy.deepcopy(defaults),
         path=(),
         effective=effective,
+        launch_cwd=launch_cwd,
     )
     return effective
 
@@ -86,7 +100,8 @@ def apply_effective_llm_map(
 
     Raises:
         `ValueError`:
-            If paths are missing/extra or a config lacks provider/model.
+            If paths are missing/extra, a config lacks provider/model, or native
+            options lack a concrete sandbox and absolute working directory.
         `TypeError`:
             If the map or one of its configurations is not a dictionary.
     """
@@ -110,6 +125,15 @@ def apply_effective_llm_map(
         if not isinstance(config, dict):
             raise TypeError(f"effective LLM config for {path!r} must be a dict")
         _require_concrete_selection(config, path=path)
+        if config["provider"].lower() == "codex":
+            _validate_native(config)
+            if config.get("sandbox") is None:
+                raise ValueError(f"recorded Codex config for {path!r} lacks sandbox")
+            cwd = config.get("cwd")
+            if cwd is None or not os.path.isabs(cwd):
+                raise ValueError(
+                    f"recorded Codex config for {path!r} lacks absolute cwd"
+                )
 
     _apply_flow(flow, effective, path=())
 
@@ -121,6 +145,7 @@ def _resolve_flow(
     defaults: dict[str, Any],
     path: tuple[str, ...],
     effective: dict[str, dict[str, Any]],
+    launch_cwd: str | None,
 ) -> None:
     """Resolve one flow scope recursively into ``effective``."""
     flow_layer = merge_llm_config(
@@ -136,6 +161,18 @@ def _resolve_flow(
             config = merge_llm_config(copy.deepcopy(node.own_llm_config), base)
             path_key = _path_key(node_path)
             _require_concrete_selection(config, path=path_key)
+            if config["provider"].lower() == "codex":
+                _validate_native(config)
+                config.setdefault("sandbox", "read-only")
+                cwd = config.get("cwd")
+                if cwd is None or not os.path.isabs(cwd):
+                    if launch_cwd is None:
+                        raise ValueError(
+                            f"Codex config for {path_key!r} requires launch_cwd "
+                            "to resolve its working directory"
+                        )
+                    cwd = os.path.join(launch_cwd, cwd or "")
+                config["cwd"] = os.path.normpath(cwd)
             node.llm_config = copy.deepcopy(config)
             effective[path_key] = copy.deepcopy(config)
 
@@ -150,6 +187,7 @@ def _resolve_flow(
                 defaults=defaults,
                 path=node_path,
                 effective=effective,
+                launch_cwd=launch_cwd,
             )
 
 
@@ -190,6 +228,11 @@ def _apply_flow(
 def _path_key(path: tuple[str, ...]) -> str:
     """Encode one non-empty static author path."""
     return "/".join(path)
+
+
+def _validate_native(config: dict[str, Any]) -> None:
+    """Validate native options without normalizing the recorded configuration."""
+    LLMConfig.model_validate({**config, "provider": "codex"}, strict=True)
 
 
 def _require_concrete_selection(config: dict[str, Any], *, path: str) -> None:

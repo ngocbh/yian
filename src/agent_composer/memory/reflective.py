@@ -436,6 +436,11 @@ def _parse_snapshot(
         complete_llm = cast(
             JsonObject, validated_llm.model_dump(mode="json", exclude_none=False)
         )
+        # Older snapshots predate these optional provider fields. Preserve their
+        # exact pinned shape while still requiring every original config field.
+        for field in ("sandbox", "cwd"):
+            if field not in llm_config and complete_llm[field] is None:
+                del complete_llm[field]
         if _canonical_json(llm_config) != _canonical_json(complete_llm):
             raise ValueError("snapshot.llm_config must be complete and canonical")
         provider = _nonempty_string(

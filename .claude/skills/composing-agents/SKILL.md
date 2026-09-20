@@ -198,6 +198,12 @@ an AGENT node ordinary tools: `tools: [tool_id, ...]` (requires `mode: tool_call
 A node may pin its model via `llm_config:`; otherwise the process defaults captured
 once when the run initializes apply. `inherit: false` skips authored flow/parent/CLI
 layers but still receives those provider/model defaults.
+Native Codex selection uses `llm_config.provider: codex`, with `sandbox` and `cwd`
+in the same config, never `env.sandbox`. Default sandbox is read-only; opt into
+workspace writes with `workspace-write`. The launch directory resolves omitted
+or relative cwd, and recovery keeps its recorded absolute path. Codex rejects
+temperature and cannot use an API chat-model factory; native execution/bridging
+remain separate work.
 Tune a node's non-model behavior with a static `env:` block (flow-level default +
 per-node override, node wins): e.g. `env: {max_tool_iterations: 300}` bounds an
 AGENT node's tool-calling loop (default `-1` = no cap).

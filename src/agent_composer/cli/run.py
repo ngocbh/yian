@@ -1242,7 +1242,9 @@ def _agent_providers(loaded, cli_cfg: Dict[str, Any]) -> List[str]:
         "provider": default_llm_provider().lower(),
         "model": default_llm_model(),
     }
-    effective = resolve_llm_cascade(probe, dict(cli_cfg), defaults=defaults)
+    effective = resolve_llm_cascade(
+        probe, dict(cli_cfg), defaults=defaults, launch_cwd=os.getcwd()
+    )
 
     seen: List[str] = []
     for config in effective.values():
@@ -1256,7 +1258,8 @@ def _ensure_provider_keys(loaded, cli_cfg: Dict[str, Any]) -> None:
     """Prompt for any API key the flow's agents will need, before the run starts.
 
     Turns a cryptic mid-run "missing key" API failure into an upfront interactive
-    prompt. Keyless (`ollama`) and unknown providers are skipped inside
+    prompt. Native Codex uses its own authentication and bypasses this API-key
+    check. Keyless (`ollama`) and unknown providers are skipped inside
     [`ensure_api_key`][agent_composer.cli.utils.ensure_api_key]; a required-but-missing
     key with no TTY re-raises the `RuntimeError` for `run` to surface cleanly.
 
@@ -1269,7 +1272,8 @@ def _ensure_provider_keys(loaded, cli_cfg: Dict[str, Any]) -> None:
     from agent_composer.cli.utils import ensure_api_key
 
     for provider in _agent_providers(loaded, cli_cfg):
-        ensure_api_key(provider)
+        if provider.lower() != "codex":
+            ensure_api_key(provider)
 
 
 def _validate_run_log_options(
@@ -1478,6 +1482,9 @@ def run(
             _ensure_provider_keys(loaded, cli_cfg)
         except RuntimeError as exc:
             err_console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(code=1)
+        except (OSError, TypeError, ValueError) as exc:
+            _render_host_run_error("run", exc, engine_trace=engine_trace)
             raise typer.Exit(code=1)
 
         run_id = default_run_id()

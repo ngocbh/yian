@@ -359,7 +359,13 @@ Most are just the functional model (above) made enforceable:
   and trigger bounded owned-process-group cleanup, never a silent-inference
   timeout. Already-running host callbacks drain before return or exception.
   Native thread identity is independent of worker lifetime. This private seam
-  does not yet enable Codex provider selection or native session execution.
+  does not yet enable native node/session execution. Codex selection is native-only;
+  chat-model factories reject it without API fallback or SDK imports. Native
+  sandbox/cwd reuse the existing LLM cascade: inject the host launch directory
+  into pure resolution, default sandbox to read-only, and record absolute cwd.
+  Replay uses those recorded values without ambient resolution. Keep API maps
+  unchanged by omission and preserve exact historical reflective snapshot pins
+  when their config predates these optional fields.
 - **Domain-agnostic** — no domain-specific field names or types in the engine;
   domain lives at the contract/boundary (the loader/builder). The `system`
   namespace is generic.

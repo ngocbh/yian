@@ -14,6 +14,7 @@ from agent_composer.llm_clients.capabilities import get_capabilities
 from agent_composer.llm_clients.config import LLMConfig, SUPPORTED_LLM_PROVIDERS
 from agent_composer.llm_clients.factory import (
     _DEDICATED_PROVIDERS,
+    _NATIVE_PROVIDERS,
     _OPENAI_COMPATIBLE,
 )
 
@@ -21,6 +22,7 @@ from agent_composer.llm_clients.factory import (
 _FACTORY_SUPPORTED_PROVIDERS = (
     *_OPENAI_COMPATIBLE,
     *_DEDICATED_PROVIDERS,
+    *_NATIVE_PROVIDERS,
 )
 
 

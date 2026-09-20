@@ -18,9 +18,13 @@ _OPENAI_COMPATIBLE = (
     "openrouter", "vllm",
 )
 _DEDICATED_PROVIDERS = ("ollama", "anthropic", "google", "azure")
+_NATIVE_PROVIDERS = ("codex",)
 
-_ROUTED_PROVIDERS = frozenset((*_OPENAI_COMPATIBLE, *_DEDICATED_PROVIDERS))
-if _ROUTED_PROVIDERS != frozenset(SUPPORTED_LLM_PROVIDERS):
+_ROUTED_PROVIDERS = (*_OPENAI_COMPATIBLE, *_DEDICATED_PROVIDERS, *_NATIVE_PROVIDERS)
+if (
+    frozenset(_ROUTED_PROVIDERS) != frozenset(SUPPORTED_LLM_PROVIDERS)
+    or len(_ROUTED_PROVIDERS) != len(set(_ROUTED_PROVIDERS))
+):
     raise RuntimeError(
         "LLM factory routes and LLMConfig provider vocabulary are out of sync"
     )
@@ -63,7 +67,8 @@ def create_llm_client(
             Provider name; case-insensitive. OpenAI-compatible names (`openai`, `xai`,
             `deepseek`, `qwen`, `qwen-cn`, `glm`, `glm-cn`, `minimax`, `minimax-cn`,
             `openrouter`, and `vllm`) route to the OpenAI client; `ollama`, `anthropic`,
-            `google`, and `azure` route to dedicated clients.
+            `google`, and `azure` route to dedicated clients. `codex` is native-only
+            and cannot be constructed as an API chat client.
         model (`str`):
             The provider-specific model id.
         base_url (`str`, *optional*, defaults to `None`):
@@ -75,12 +80,17 @@ def create_llm_client(
         `BaseLLMClient`: A configured client whose `get_llm()` yields the chat model.
 
     Raises:
-        ValueError: If `provider` is not supported.
+        ValueError: If `provider` is unsupported or requires native AGENT execution.
         ImportError: If the provider's optional dependency extra is not installed.
     """
     provider_lower = provider.lower()
     if provider_lower not in SUPPORTED_LLM_PROVIDERS:
         raise ValueError(f"Unsupported LLM provider: {provider}")
+    if provider_lower in _NATIVE_PROVIDERS:
+        raise ValueError(
+            "Codex uses the native AGENT execution path, not an API chat-model "
+            "factory. Select llm_config.provider: codex on an AGENT node."
+        )
 
     if provider_lower in _OPENAI_COMPATIBLE:
         try:
@@ -132,7 +142,7 @@ def model_from_config(config) -> BaseChatModel:
     package's env-based defaults (`_settings.default_llm_*`); provider-specific reasoning
     knobs apply only when they match the selected provider; transient errors get
     exponential-backoff retries. The returned model is ready for `.bind_tools(...)`. Shared
-    by every LLM-backed engine seam (today the AGENT `llm_client`).
+    by API-backed model seams; native Codex AGENT execution uses a separate path.
 
     Args:
         config (`LLMConfig` or `dict`):
@@ -143,7 +153,7 @@ def model_from_config(config) -> BaseChatModel:
         `BaseChatModel`: A langchain chat model, ready for `.bind_tools(...)`.
 
     Raises:
-        ValueError: If the resolved provider is not supported.
+        ValueError: If the provider is unsupported or requires native AGENT execution.
         ImportError: If the resolved provider's optional dependency extra is not installed.
     """
     if isinstance(config, dict):

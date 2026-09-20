@@ -330,6 +330,14 @@ prove `bool`. This is the shape `ac chat` runs; see `chat.yaml` (and
 
 ## Model selection — the `llm_config` cascade
 
+Codex selection uses the same cascade, with native `sandbox` and `cwd` fields.
+Default sandbox is `read-only`; workspace writes require `workspace-write`.
+`danger-full-access` disables native filesystem sandboxing. The host resolves
+relative/omitted cwd once at launch; recovery uses the recorded absolute path.
+Do not put sandbox in `env` or add a backend selector. API providers ignore these
+native fields. Codex rejects temperature and cannot use an API chat-model factory.
+Native execution and bridging remain separate from configuration support.
+
 Model fields resolve **per field, most-specific wins**. An AGENT node fills only the fields
 it leaves unset from the layer outside it. Precedence (most specific first):
 

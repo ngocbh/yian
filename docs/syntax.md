@@ -390,6 +390,16 @@ provider/model defaults; it ignores enclosing flow, parent-flow, and CLI layers:
       inherit: false            # own config + process defaults; no flow/CLI layers
 ```
 
+Codex is a native-only provider selection. Its `llm_config` accepts the native
+option names `sandbox` and `cwd`; there is no separate backend selector or
+`env.sandbox` alias. Omitted sandbox resolves to `read-only`; `workspace-write`
+allows workspace writes, and `danger-full-access` disables native filesystem
+sandboxing. Omitted or relative `cwd` is anchored to the launch directory and
+recorded as an absolute path. Recovery reuses that recorded path, not the current
+process directory. These options are ignored by API providers. Codex rejects
+`temperature`, and API chat-model factories reject Codex instead of falling back.
+Native forward execution and tool bridging are separate from this configuration.
+
 #### Agent-owned variables
 
 Declare local prompt settings in `variables:`. Every entry needs a type and an

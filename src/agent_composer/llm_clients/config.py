@@ -2,16 +2,15 @@
 
 Lives with the clients that consume it: the AGENT node and the Compose loader's
 `llm_config:` field carry an `LLMConfig` (or the plain dict that normalizes to one),
-and `factory.model_from_config` turns it into a ready chat model. Was in the
-agent_composer `common/` grab-bag before this cleanup; moved here because it IS the
-clients' input contract.
+and `factory.model_from_config` turns API selections into ready chat models.
+Native Codex selection belongs to the AGENT execution path instead.
 """
 
 from __future__ import annotations
 
 from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 
 # One provider vocabulary shared by the validated config carrier and the factory that
@@ -33,6 +32,7 @@ SUPPORTED_LLM_PROVIDERS: tuple[str, ...] = (
     "anthropic",
     "google",
     "azure",
+    "codex",
 )
 # `typing.Literal` flattens a tuple argument into its member values. Deriving the type
 # from the tuple keeps Pydantic's enum validation/schema and the factory gate in lockstep.
@@ -41,7 +41,7 @@ LLMProvider = Literal[SUPPORTED_LLM_PROVIDERS]  # type: ignore[valid-type]
 
 class LLMConfig(BaseModel):
     """
-    LLM selection for an AGENT node — resolved into a chat model by `model_from_config`.
+    LLM selection for an AGENT node, including the native Codex execution path.
 
     Every field is optional: an unset `provider`/`model` falls back to the package's
     env-based defaults, and the reasoning knobs apply only when they match the selected
@@ -51,7 +51,7 @@ class LLMConfig(BaseModel):
         provider (`str`, *optional*, defaults to `None`):
             One of `openai`, `xai`, `deepseek`, `qwen`, `qwen-cn`, `glm`, `glm-cn`,
             `minimax`, `minimax-cn`, `openrouter`, `vllm`, `ollama`, `anthropic`,
-            `google`, or `azure`. `None` inherits the global default provider.
+            `google`, `azure`, or `codex`. `None` inherits the global default provider.
         model (`str`, *optional*, defaults to `None`):
             Provider-specific model id. `None` inherits the global default model.
         anthropic_effort (`str`, *optional*, defaults to `None`):
@@ -61,7 +61,15 @@ class LLMConfig(BaseModel):
         google_thinking_level (`str`, *optional*, defaults to `None`):
             Google thinking level; ignored for other providers.
         temperature (`float`, *optional*, defaults to `None`):
-            Sampling temperature; `None` leaves the provider default.
+            Sampling temperature; `None` leaves the provider default. Unsupported
+            by Codex.
+        sandbox (`str`, *optional*, defaults to `None`):
+            Codex filesystem mode: `read-only`, `workspace-write`, or
+            `danger-full-access`. Resolution defaults Codex to `read-only`.
+            Ignored by API providers.
+        cwd (`str`, *optional*, defaults to `None`):
+            Codex working directory. Resolution anchors relative or omitted values
+            to the host's launch directory. Ignored by API providers.
     """
 
     provider: Optional[LLMProvider] = None
@@ -70,11 +78,30 @@ class LLMConfig(BaseModel):
     openai_reasoning_effort: Optional[Literal["high", "medium", "low"]] = None
     google_thinking_level: Optional[str] = None
     temperature: Optional[float] = None
+    sandbox: Optional[Literal["read-only", "workspace-write", "danger-full-access"]] = (
+        None
+    )
+    cwd: Optional[str] = None
 
     # `model` is a regular field here; don't warn on the model_ namespace.
     # extra="forbid" makes typo'd llm_config: keys (e.g. `temparature` instead of
     # `temperature`) loud at LOAD time, not silent.
     model_config = ConfigDict(protected_namespaces=(), extra="forbid")
+
+    @field_validator("cwd")
+    @classmethod
+    def _valid_cwd(cls, value: str | None) -> str | None:
+        """Reject unusable path strings before provider work."""
+        if value is not None and (not value.strip() or "\x00" in value):
+            raise ValueError("cwd must be a nonempty path without NUL characters")
+        return value
+
+    @model_validator(mode="after")
+    def _native_options(self) -> LLMConfig:
+        """Reject API-only sampling control for native Codex."""
+        if self.provider == "codex" and self.temperature is not None:
+            raise ValueError("temperature is unsupported for the Codex provider")
+        return self
 
 
 def merge_llm_config(specific: dict, base: dict) -> dict:

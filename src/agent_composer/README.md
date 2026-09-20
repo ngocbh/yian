@@ -169,9 +169,18 @@ worker alone imports its lower-level `CodexClient`; that interface is internal
 upstream, so changing the pin requires the offline compatibility tests. This
 boundary requires POSIX process-group support and rejects unsupported hosts
 before launching a worker. The package never imports nodes, tools, memory,
-compile, compose, or runtime. Provider selection, node execution, and native
-SessionMemory integration are separate work; the API chat-model factory does
-not return this client.
+compile, compose, or runtime. Codex selection is native-only; API chat-model
+factories reject it without importing the SDK or falling back. Node execution and
+native SessionMemory integration remain separate work.
+
+Native `sandbox` and `cwd` are ordinary optional LLM configuration fields. The
+pure compile cascade accepts a host-injected launch directory, defaults native
+sandbox to `read-only`, and records an absolute cwd. Replay validates and applies
+that exact configuration without consulting a current directory. API selections
+gain no new effective fields by omission; unrelated provider reasoning knobs
+keep their existing behavior. Native temperature is unsupported. Adding these
+optional fields does not invalidate historical reflective-memory snapshots:
+permit only these missing optional defaults and preserve the exact recorded pin.
 
 The caller retains host callables and receives native events, actual operation
 results, and tool callbacks on one execution lane. Results can be observed before

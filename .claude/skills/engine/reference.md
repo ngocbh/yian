@@ -537,6 +537,12 @@ model made enforceable.
   authored layer; the run boundary reads process provider/model defaults exactly once
   at initialization and passes them as the explicit final fallback. `inherit: false`
   skips authored flow/parent/CLI layers but still receives those process defaults.
+  Native Codex options reuse that cascade: accept an explicit host launch directory
+  in the pure resolver, default sandbox to read-only, and record absolute cwd.
+  Replay validates the recorded values without filesystem/environment resolution.
+  Do not add these fields to API effective maps when omitted. Chat factories
+  reject native-only selection with no API fallback. Historical reflective
+  snapshots may omit the new optional fields; retain their exact pinned shape.
   `apply_effective_llm_map` replays a recorded complete map without reading ambient
   settings and deep-copies every callsite again. `RunStartedRecord` stores that complete
   map; recovery applies it to a private copy of the supplied static graph before folding

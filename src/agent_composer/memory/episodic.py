@@ -992,7 +992,15 @@ class _EpisodicSession:
         traceback: TracebackType | None,
     ) -> None:
         """Close this session without suppressing an exception."""
-        self.close()
+        try:
+            self.close()
+        except BaseException as cleanup:
+            if exc is None:
+                raise
+            if hasattr(exc, "add_note"):
+                exc.add_note(
+                    f"Episodic session cleanup failed: {type(cleanup).__name__}"
+                )
 
     def close(self) -> None:
         """Idempotently close this session, without closing its backend."""

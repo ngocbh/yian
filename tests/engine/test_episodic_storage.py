@@ -507,6 +507,46 @@ def test_inherited_handle_rejects_before_an_inherited_backend_lock(tmp_path):
     _bounded(_fork_while_locked, (str(tmp_path / "memory.sqlite"),))
 
 
+def _fork_inside_run_context(path, interrupt):
+    memory = EpisodicMemory(storage=path)
+    parent = os.getpid()
+    primary = KeyboardInterrupt("original callback interruption")
+    try:
+        with memory.open_run():
+            pid = os.fork()
+            if pid == 0:
+                signal.alarm(3)
+                if interrupt:
+                    raise primary
+            else:
+                _, status = os.waitpid(pid, 0)
+                assert os.waitstatus_to_exitcode(status) == 0
+    except BaseException as error:
+        if os.getpid() != parent:
+            valid = (
+                error is primary
+                if interrupt
+                else (
+                    isinstance(error, c.MemoryOperationError)
+                    and error.code == "storage.forked"
+                )
+            )
+            os._exit(0 if valid else 2)
+        raise
+    else:
+        if os.getpid() != parent:
+            os._exit(3)
+    finally:
+        if os.getpid() == parent:
+            memory.close()
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="requires fork")
+@pytest.mark.parametrize("interrupt", [False, True])
+def test_run_context_fork_cleanup_preserves_primary(tmp_path, interrupt):
+    _bounded(_fork_inside_run_context, (str(tmp_path / "memory.sqlite"), interrupt))
+
+
 def test_invalid_limits_do_not_create_storage(tmp_path):
     path = tmp_path / "memory.sqlite"
     with pytest.raises(ValueError):

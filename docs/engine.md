@@ -220,11 +220,12 @@ later, and persists that failure on the causal `NodeRoutedRecord`. Replay
 structurally revalidates the route before restoring the recorded failure; a later
 explicit node failure still wins immediately.
 
-Conversation records have pure reducer/replay support through the lower memory
-fold, independently of `learnable`. They bind no outputs, advance no frontier,
-and publish no observers. The automatic checkpoint channel and session execution
-harness remain pending, including AGENT, API-provider, Codex, and CLI integration;
-`run_flow` does not yet retain agent conversations. See
+Historical conversation records remain readable as inert compatibility metadata,
+independently of `learnable`. Runtime validates their envelope, unfinished start,
+and memory scope, but does not reconstruct conversations or restore memory. They
+bind no outputs, advance no frontier, and publish no observers. SessionMemory owns
+saved conversation state. AGENT, API-provider, Codex, and CLI integration remains
+pending; `run_flow` does not yet retain agent conversations. See
 [SessionMemory foundation](api.md#sessionmemory-foundation).
 
 When retention is enabled, the trace keeps the actual terminal producer and
@@ -288,14 +289,13 @@ ready frontier, then dispatch continues. Original inputs, run ID,
 worker count, typed values, growth seeds, and resolved LLM configuration all come from
 the log rather than current process defaults.
 
-An unfinished invocation with any accepted conversation effect request is not
-eligible for generic retry, even if the request was observed or the handle closed.
-Only requests in that invocation's segment count, not effects inherited through
-its baseline. An accepted effect-free retry retires the old invocation identity
-without changing its segment/view or fabricating closure; the new start gets a new
-sequence, and late checkpoints for the retired identity are rejected. Memory-free
-nodes retain ordinary retry behavior, so their external effects must still tolerate
-repetition. See the [Python API recovery contract](api.md#durable-recovery-with-resume_flow).
+Conversation metadata does not block ordinary node retry. A retried node may
+resend a model request or repeat tool actions: recovery provides no exactly-once
+guarantee. Each retried start receives a new sequence, and metadata for the old
+unfinished start is no longer accepted. Runtime does not reconstruct a transcript
+or fabricate completion for an unknown result. Saved conversation history belongs
+to the memory backend, not the run log. See the
+[Python API recovery contract](api.md#durable-recovery-with-resume_flow).
 
 ## Serial and parallel, one contract
 

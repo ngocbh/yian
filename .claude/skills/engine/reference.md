@@ -273,7 +273,7 @@ WAIT are never timed by that watchdog.
 | Record | Transition |
 |--------|------------|
 | `RunStartedRecord` | complete initial pool, flow fingerprint, START override, resolved LLM map, worker count, and optional memory configuration |
-| `RunResumedRecord` | eligible ordered unfinished starts to retry, retirement of effect-free admitted invocations, and the selected worker count |
+| `RunResumedRecord` | eligible ordered unfinished starts to retry and the selected worker count |
 | `NodeStartedRecord` | move the exact ready head into the ordered in-flight set before evaluation/submission |
 | `NodeSucceededRecord` | commit one canonical typed value under an already-resolved target, with optional evaluation evidence |
 | `NodeRoutedRecord` | select one named outgoing handle and retain optional terminal failure and evaluation evidence |
@@ -285,10 +285,10 @@ WAIT are never timed by that watchdog.
 | `BackwardStartedRecord` | retain an attempt ID and its original ordinary root feedback |
 | `BackwardReadyRecord` | retain completed root feedback, the complete occurrence attribution inventory, and ordered owned frame proposals |
 | `BackwardFinishedRecord` | retain an attempt's outcome, including completed feedback when a later learner fails |
-| `ConversationAdmittedRecord` | retain one invocation's admission and complete baseline |
-| `ConversationEffectRequestedRecord` | retain an effect request before external execution |
-| `ConversationEffectObservedRecord` | retain the actual observation of a requested effect |
-| `ConversationClosedRecord` | retain an admitted invocation's terminal disposition |
+| `ConversationAdmittedRecord` | inert historical admission metadata |
+| `ConversationEffectRequestedRecord` | inert historical request metadata |
+| `ConversationEffectObservedRecord` | inert historical observation metadata |
+| `ConversationClosedRecord` | inert historical turn-disposition metadata |
 
 `FlowEngine` borrows one initialized `RunState` plus a matching open `RunLog`.
 Workers only evaluate; the dispatcher prepares a total transition, appends its
@@ -339,50 +339,37 @@ all forward fields unchanged.
 ## Session conversation foundation
 
 `SessionMemory` in `agent_composer.memory.session` implements process-local
-conversation state. Checkpoint records and pure reducer/replay support are
-implemented. The automatic checkpoint channel, session harness, AGENT,
-API-provider, Codex, and CLI execution integration remain pending; `run_flow`
+conversation state and direct turn updates. AGENT, API-provider, Codex, and CLI
+execution integration remain pending; `run_flow`
 does not yet drive conversation turns. The
 `agent_composer.memory` facade remains contracts-only. `MemorySession` still names
-the mandatory run-handle protocol; optional `ConversationSession`,
-`ConversationFrame`, and `ConversationTurn` add conversation capabilities without
+the mandatory run-handle protocol; optional `ConversationFrame` and
+`ConversationTurn` add conversation capabilities without
 expanding it.
 
 `memory/contracts.py` owns immutable checkpoints/views. The source-neutral
 `memory/conversation.py` owns the pure fold and strict codecs/digests;
-`memory/session.py` interprets it through injected checkpoint and stop callables.
+`memory/session.py` publishes directly through that fold with an injected stop callable.
 Neither imports runtime, nodes, compile, compose, or providers.
-`runtime/conversation.py` sits above that fold and below `runtime/state.py`.
-Its immutable `RuntimeConversationState` pairs admission-led accepted segments
-with resulting views and retains retired invocation identities.
-`prepare_conversation_checkpoint` advances it through `advance_conversation`;
-this module imports only the standard library and lower memory contracts/fold,
-never backends, sessions, drivers, or callbacks.
-
 `RunState.accepted_starts` captures the original accepted start sequence for each
 unfinished invocation independently of forward retention. Run ID plus that
 sequence identifies a conversation invocation, not its dynamic node name.
-`conversation_state` starts empty even on a schema-7 run and survives pruning
-independently of `learnable`. `prepare_conversation_record` validates accepted
-start, run, enabled frame/policy, compiled consumer scope, and lifecycle, then
-prepares the pure fold. Commit rechecks frozen bytes and the recomputed successor
-before append and applies only afterward. Checkpoints bind no outputs, advance
-no frontier, create no execution episodes, and publish no observers; trace
-handling advances only the accepted record sequence. Replay calls no backend.
+Runtime has no conversation projection. Its private legacy path in `prepare_record`
+validates canonical payloads, accepted start, run, enabled frame/policy, compiled
+consumer scope, and outer lifecycle for every wrapper. Commit rechecks frozen
+bytes and ownership before append, then advances only record/trace sequencing.
+These wrappers bind no outputs, advance no frontier, create no execution episodes,
+publish no observers, and invoke no backend. Do not restore a runtime transcript,
+effect ledger, reconciliation channel, or close-before-success requirement.
 
-An invocation may admit only one handle and must close it before node success.
-After primary failure, only observations and close for already-admitted,
-still-unfinished invocations may drain; a node with an accepted outcome is no
-longer unfinished. All checkpoints are forbidden after primary success or any
-backward start, even after that attempt finishes.
-
-Generic recovery rejects an unfinished invocation with any accepted effect request,
-even if observed or closed. Count only requests in its accepted segment, not
-effects inherited through its baseline. An accepted effect-free retry retires the
-old invocation without changing its accepted segment/view or fabricating close,
-completion, or effect records. A new accepted start gets a new sequence; reject
-late checkpoints for retired identities. Memory-free retry behavior is unchanged;
-external effects outside this checkpoint authority must still tolerate repetition.
+After primary failure, only observations and close for still-unfinished starts are
+accepted. Reject all wrappers after primary success or any backward start, even
+after that attempt finishes, or once their originating start completes or is
+replaced by retry. Ordinary recovery may retry a node after historical conversation
+requests, observations, or closure. The new start gets a new sequence. Requests
+and tool actions may repeat; no exactly-once or mid-request continuation is promised.
+The backend owns saved history; runtime does not reconstruct it from the run log
+or fabricate results for unknown effects.
 
 The backend has no constructor settings and accepts only `{}` frame config.
 Conversation identity is `(frame_ref, consumer_static_path)`, not a MAP/LOOP
@@ -392,27 +379,27 @@ reading current live history. Run snapshots remain detached and pinned; their
 closed version-1 envelope contains namespace, generation, and complete views,
 never coordination state. No durable storage is implemented.
 
-For each turn, the injected sink must accept, apply, and acknowledge admission,
-request, observation, and close checkpoints. It runs outside the backend lock.
-Only an exact acknowledgement plus a healthy lease permits the requested effect;
-observe completed truth before honoring stop. Preparation must not publish.
-Duplicate application requires the actual historical predecessor and ledger proof
-and returns the exact historical result. Released or poisoned leases cannot publish
-new checkpoints; duplicate readback cannot reactivate them.
+`frame.open_turn(request, check_stopped=check)` returns a queued context manager.
+Its request/observe operations validate the complete candidate snapshot before
+atomic publication under the backend condition. Provider/tool execution and stop
+callbacks happen outside that lock. Observe completed truth before honoring stop;
+caught cancellation must not reactivate the turn. A failed or interrupted invocation
+may leave pending requests whose outcomes remain unknown. Later invocations may
+continue, and successful closure checks only the current invocation's effects.
+Never fabricate successful results for older incomplete work.
 
-Uncertain acceptance is fenced before lease release, and unresolved effects block
-admission. Reconciliation validates a complete accepted baseline plus its
-admission-led segment before publishing missing history atomically, even after
-opening an older snapshot. Preserve that snapshot, unrelated keys, and newer live
-state. A fence needs its exact checkpoint in the segment, not just a baseline
-digest. Reconciliation grants no effect permission and repeats no provider call;
-unknown effects are never retried automatically.
+Closing a run handle cancels its own queued tickets and prevents new requests but
+retains an active lease until the turn owner exits. The owner can retain actual
+observations while finishing; no other turn may overlap its external call. Released
+turns cannot append. Reopening an older compatible snapshot preserves its pinned
+export while consuming newer live history. A pristine backend has only the supplied
+snapshot; later progress requires backend retention, not reconstruction from RunLog.
 
 History updates through this optional capability do not depend on `learnable`.
 Recall returns empty text, learn returns no mutations, and only empty commits are
 supported. Exact compatibility changes require reset. Backend-wide `reset()` fails
 unchanged if any turn is active or queued; otherwise it clears local history and
-fences, advances generation, and makes old handles/tokens stale. It does not delete
+advances generation, and makes old handles stale. It does not delete
 external provider history or files.
 
 ## OCaml analogue map (design from this)

@@ -40,9 +40,9 @@ log. `--resume` therefore rejects `--input`, `--inputs`, `--provider`, `--model`
 and `--log` before input prompts or provider setup. After repairing any incomplete
 tail, an already terminal log gets no new records and prints its recorded result.
 An eligible unfinished log appends a resume segment and retries nodes with a durable
-start but no durable outcome. Recovery rejects an unfinished invocation with any
-accepted conversation effect request in its own segment, even if observed or
-closed; inherited baseline effects do not block retry. See the
+start but no durable outcome. Historical conversation records do not block this
+retry. Requests and tool actions may repeat; the run log neither reconstructs
+session memory nor provides exactly-once execution. See the
 [Python API recovery contract](api.md#durable-recovery-with-resume_flow).
 
 Expected host-side failures while creating or recovering a log (for example a

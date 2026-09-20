@@ -228,37 +228,6 @@ def _memory_leaf_violations(module: str, source: str) -> list[str]:
     return violations
 
 
-def _runtime_conversation_violations(source: str) -> list[str]:
-    """Keep the run-local projection below all runtime drivers and backends."""
-    allowed = ("agent_composer.memory.contracts", "agent_composer.memory.conversation")
-    targets = _parse_import_targets(
-        source, package=("agent_composer", "runtime"), include_from_bases=False,
-    )
-    return [f"{line}: {statement} -> {target}" for line, target, statement in targets
-            if target.split(".")[0] not in sys.stdlib_module_names
-            and not any(target == leaf or target.startswith(f"{leaf}.") for leaf in allowed)]
-
-
-def test_runtime_conversation_imports_only_lower_memory_leaves():
-    path = PACKAGE_ROOT / "runtime" / "conversation.py"
-    assert not _runtime_conversation_violations(path.read_text())
-    for target in ("runtime.state", "runtime.engine", "runtime.memory_runtime",
-                   "memory.session", "memory.reflective", "memory.episodic",
-                   "nodes", "compile", "compose", "llm_clients", "run"):
-        for source in (f"import agent_composer.{target}",
-                       f"from agent_composer import {target.split('.')[0]}",
-                       f"from ..{target} import Something"):
-            assert _runtime_conversation_violations(source), source
-    for source in ("import codex", "import openai", "from .state import RunState",
-                   "from . import state", "from ..memory import SessionMemory",
-                   "import agent_composer.memory; from ..memory import contracts",
-                   "from ..memory import *"):
-        assert _runtime_conversation_violations(source), source
-    for source in ("from ..memory.contracts import ConversationView",
-                   "from ..memory.conversation import advance_conversation",
-                   "from ..memory import contracts, conversation",
-                   "import json\nfrom dataclasses import dataclass"):
-        assert not _runtime_conversation_violations(source), source
 
 
 def test_memory_leaf_ratchet_rejects_absolute_and_relative_imports() -> None:

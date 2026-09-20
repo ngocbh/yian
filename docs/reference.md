@@ -47,12 +47,12 @@ The run-loop primitives live in `agent_composer.run`.
 
 ## Session memory foundation
 
-The lower-level contracts, process-local backend, checkpoint RunLog records, and
-pure reducer/replay support are available now. Automatic session execution, AGENT,
+The lower-level turn contracts and process-local backend are available now.
+Historical conversation RunLog wrappers remain readable as inert metadata. AGENT,
 API-provider, Codex, and CLI integration is pending; `run_flow` does not yet retain
 agent conversations. See
 [SessionMemory foundation](api.md#sessionmemory-foundation) for ownership,
-checkpoint acceptance, recovery, and reset semantics.
+history updates, retry, and reset semantics.
 
 Import the concrete backend from `agent_composer.memory.session`. The
 `agent_composer.memory` facade remains contracts-only; `MemorySession` is the
@@ -66,8 +66,6 @@ These extend participating implementations without changing the mandatory
 `Memory`, `MemorySession`, or `MemoryFrame` protocols.
 
 ::: agent_composer.memory.ConversationFrame
-
-::: agent_composer.memory.ConversationSession
 
 ::: agent_composer.memory.ConversationTurn
 
@@ -106,10 +104,6 @@ These extend participating implementations without changing the mandatory
       merge_init_into_class: true
 
 ::: agent_composer.memory.ConversationView
-    options:
-      merge_init_into_class: true
-
-::: agent_composer.memory.ConversationAuthority
     options:
       merge_init_into_class: true
 
@@ -182,22 +176,6 @@ The lower-level runtime surface is deliberately scoped to
 
 ::: agent_composer.runtime.commit_prepared
 
-### Conversation projection and preparation
-
-These pure runtime primitives consume the lower memory fold without opening a
-backend or granting effects. They retain run-local admission-led segments and
-views independently of learning and live graph pruning. Checkpoint records bind
-no outputs and publish no observers. The automatic worker checkpoint channel is
-not yet implemented.
-
-::: agent_composer.runtime.conversation.RuntimeConversationState
-    options:
-      merge_init_into_class: true
-
-::: agent_composer.runtime.conversation.prepare_conversation_checkpoint
-
-::: agent_composer.runtime.state.prepare_conversation_record
-
 ### Durable run records
 
 The log stores only this closed transition vocabulary. Run success and failure
@@ -206,6 +184,9 @@ terminal record. Backward attempts have their own Started/Ready/Finished records
 New writes use schema 8. Readers retain schemas 7 and 8 with unchanged validation
 for the thirteen pre-existing kinds; conversation records require schema 8.
 Historical accepted bytes are preserved when new records extend an older prefix.
+The four conversation wrappers are inert compatibility metadata. Runtime validates
+their unfinished-start ownership and scope but retains no conversation projection,
+restores no memory, and grants no external effects.
 
 ::: agent_composer.runtime.log.RecordEnvelope
 

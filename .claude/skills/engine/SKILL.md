@@ -479,40 +479,34 @@ Most are just the functional model (above) made enforceable:
   overlap and then recency within its limit. Sessions retain immutable JSON
   snapshots; stale sessions may recall their pinned view but cannot learn or
   commit. The backend owns no file or database persistence.
-- **Session conversations share one pure fold and record authority** — import
+- **SessionMemory owns conversation state and FIFO admission** — import
   `SessionMemory` from `agent_composer.memory.session`, not the contracts-only
-  facade. Optional `ConversationFrame`/`ConversationSession`/`ConversationTurn`
-  capabilities leave mandatory memory protocols unchanged. Checkpoint records and
-  pure reducer/replay support exist; the automatic runtime checkpoint channel,
-  session harness, AGENT, API-provider, Codex, and CLI integration remain pending.
+  facade. Optional `ConversationFrame`/`ConversationTurn` capabilities leave
+  mandatory memory protocols unchanged. AGENT, API-provider, Codex, and CLI
+  integration remain pending.
   Do not claim `run_flow` already retains conversations.
   `memory.conversation` owns the pure fold, strict codecs, and digests;
-  `memory.session` owns live views, FIFO leases, and recovery fences. Both stay
-  below nodes/runtime/providers. `runtime.conversation` reuses the lower fold for
-  immutable admission-led segments/views and retired invocation identities;
-  `runtime.state` validates and commits their four schema-8 wrappers. Keep this
-  projection free of backends, sessions, drivers, and callbacks. Accepted-start
-  identity is run ID plus original start sequence, independent of `learnable` and
-  graph pruning. Checkpoints bind no output, advance no frontier, and create no
-  episode or observer. Require closure before node success; after primary failure,
-  permit only observations/close for admitted still-unfinished invocations. Reject
-  all checkpoints after success or any backward start. Generic retry fails closed
-  if the unfinished invocation requested any effect, even if observed or closed;
-  effect-free retry retires its identity without changing accepted history. See
-  [the conversation authority and recovery contract](reference.md#session-conversation-foundation).
+  `memory.session` owns live views, FIFO leases, and atomic publication. Both stay
+  below nodes/runtime/providers. Runtime keeps no conversation projection, effect
+  ledger, checkpoint callback, or reconciliation channel. Four schema-8 wrappers
+  remain strict, inert historical metadata: validate run/start/frame/policy/scope
+  and lifecycle, append before applying record/trace sequencing only. They grant
+  no effects and create no output, frontier change, episode, or observer. Reject
+  wrappers after success/backward or after their originating start is no longer
+  unfinished; after failure permit only observations/close. Ordinary retry may
+  resend requests and repeat tool actions. Do not reconstruct memory from the run
+  log or require conversation closure before node success. See
+  [the conversation and retry contract](reference.md#session-conversation-foundation).
   One authored frame plus leaf static path owns a conversation and queue;
   MAP/LOOP positions do not fork it. Acquire the FIFO lease before reading live
-  history while keeping the run-opening snapshot pinned. Effect permission
-  requires an exact acceptance/application acknowledgement and a healthy lease.
-  Record actual observations before honoring stop. Preparation cannot publish;
-  old duplicates require their actual predecessor and ledger proof, not a guessed
-  historical view. Fence uncertain acceptance before releasing a lease; never
-  retry unknown effects automatically. Reconciliation may install accepted
-  baseline history after an older snapshot was opened, but must preserve that
-  snapshot, newer live state, and other keys, and grants no effect permission.
-  Clear a fence only with its exact checkpoint in the accepted segment or an idle
-  reset. Reset is backend-wide, fails unchanged while any turn is active or queued,
-  and invalidates old-generation handles/tokens. Frame config is empty; recall
+  history while keeping the run-opening snapshot pinned. Publish requests and
+  observations directly in the backend; external calls and stop checks run outside
+  its condition lock. Preserve observations before honoring stop and keep unknown
+  requests pending across later invocations, never inventing success. Closing a
+  run cancels its waiters but retains an active lease until its owner exits; no
+  later turn may overlap the finishing external call. Released turns cannot write.
+  Reset is backend-wide, fails unchanged while any turn is active or queued,
+  and invalidates old-generation handles. Frame config is empty; recall
   and learning are empty, only empty commits are supported, and conversation
   updates through the optional turn capability are independent of `learnable`.
 - **One attempt barrier precedes commits** — accept Started, complete backward

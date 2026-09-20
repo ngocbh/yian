@@ -182,10 +182,9 @@ its accepted backward prefix and opens no memory sessions. Inputs, run identity,
 resolved model configuration, dynamic growth, and memory snapshots come from
 the log rather than current defaults.
 
-An unfinished invocation with an accepted conversation effect request in its own
-segment blocks generic retry, even if observed or closed; effects inherited through
-its admission baseline do not count. Effect-free admitted invocations can be
-retired by an accepted resume without rewriting their history. See the
+Historical conversation metadata does not block ordinary retry. Conversation
+history belongs to the memory backend; runtime does not reconstruct it from the
+run log or claim to resume an external request midway through. See the
 [Python API recovery contract](api.md#durable-recovery-with-resume_flow).
 
 Replay makes engine state deterministic; it cannot make arbitrary external

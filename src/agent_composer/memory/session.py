@@ -1,7 +1,7 @@
-"""Process-local conversations with FIFO leases and accepted-checkpoint state.
+"""Process-local conversations with FIFO leases and atomic history updates.
 
-This backend interprets the pure conversation fold through injected checkpoint
-and stop callables. It owns no provider, scheduler, run log, or durable storage.
+This backend owns turn persistence and accepts an injected cooperative-stop check.
+It owns no provider, scheduler, run log, or durable storage.
 """
 
 from __future__ import annotations
@@ -16,8 +16,6 @@ from uuid import uuid4
 import agent_composer.memory.contracts as c
 from agent_composer.memory.conversation import (
     advance_conversation,
-    conversation_checkpoint_from_json,
-    conversation_checkpoint_to_json,
     conversation_content_digest,
     conversation_view_from_json,
     conversation_view_to_json,
@@ -134,18 +132,7 @@ class _Lease:
     ticket: int
     active: bool = False
     released: bool = False
-    poisoned: bool = False
     before: c.ConversationView | None = None
-    failure: c.ConversationAcceptance | None = None
-
-
-@dataclass(frozen=True)
-class _AdmissionFence:
-    namespace: str
-    generation: int
-    invocation: c.ConversationInvocation
-    checkpoint: c.ConversationCheckpoint | None
-    acceptance: c.ConversationAcceptance
 
 
 class SessionMemory:
@@ -166,7 +153,6 @@ class SessionMemory:
         self._views: dict[c.ConversationKey, c.ConversationView] = {}
         self._queues: dict[c.ConversationKey, deque[_Lease]] = {}
         self._active: dict[c.ConversationKey, _Lease] = {}
-        self._fences: dict[c.ConversationKey, _AdmissionFence] = {}
         self._next_ticket = 0
 
     def open_run(self, *, snapshot: c.JsonObject | None = None) -> _Session:
@@ -209,7 +195,7 @@ class SessionMemory:
             return _Session(self, pinned)
 
     def reset(self) -> None:
-        """Clear all conversations and fences and invalidate older generation handles.
+        """Clear all conversations and invalidate older generation handles.
 
         The operation is process-local and does not delete provider resources.
 
@@ -223,7 +209,6 @@ class SessionMemory:
                     "busy", "cannot reset active or queued conversations", stage="reset"
                 )
             self._views.clear()
-            self._fences.clear()
             self._generation += 1
             self._used = True
             self._condition.notify_all()
@@ -283,22 +268,16 @@ class _Session:
     def close(self) -> None:
         """Close this run handle idempotently and remove its queued tickets.
 
-        Active turns are poisoned and fenced before release. Other run handles
-        remain usable; this backend's fences survive the closed handle.
+        Active owners retain their leases until their turn finalizes, so closing
+        a session cannot overlap an in-flight external effect with another turn.
         """
         with self._memory._condition:
             if self._closed:
                 return
-            for lease in self._leases.values():
-                if lease.active:
-                    self.fail_turn(
-                        lease.request.invocation,
-                        checkpoint=None,
-                        acceptance="uncertain",
-                    )
-                elif not lease.released:
-                    self._release(lease)
             self._closed = True
+            for lease in self._leases.values():
+                if not lease.active and not lease.released:
+                    self._release(lease)
             self._memory._condition.notify_all()
 
     def _release(self, lease: _Lease) -> None:
@@ -343,11 +322,6 @@ class _Session:
                     self._ensure_live()
                     if lease.released:
                         raise _error("stale", "conversation ticket was released")
-                    if key in memory._fences:
-                        raise _error(
-                            "recovery_required",
-                            "conversation acceptance must be reconciled or reset",
-                        )
                     queue = memory._queues[key]
                     if queue[0] is lease and key not in memory._active:
                         queue.popleft()
@@ -451,281 +425,29 @@ class _Session:
             if mutations:
                 raise ValueError("SessionMemory does not support learning mutations")
 
-    def prepare_checkpoint(
-        self, checkpoint: c.ConversationCheckpoint, *, before: c.ConversationView
-    ) -> c.PreparedConversationApply:
-        """Prepare an exact checkpoint without publishing before acceptance.
-
-        Args:
-            checkpoint (`ConversationCheckpoint`): Proposed or duplicate event.
-            before (`ConversationView`): Actual complete predecessor, including
-                for historical duplicates; never reconstructed from live state.
-
-        Returns:
-            `PreparedConversationApply`: An idempotent post-acceptance callable.
-
-        Raises:
-            `TypeError`: A checkpoint or predecessor has the wrong exact shape.
-            `ValueError`: Carrier, digest, or JSON nesting validation fails.
-            `MemoryOperationError`: The predecessor conflicts with live history,
-                compatibility differs, or the run/lease is stale or fenced. The
-                returned callable repeats these checks before any publication.
-        """
-        with self._memory._condition:
-            self._ensure_live()
-        checkpoint = conversation_checkpoint_from_json(
-            conversation_checkpoint_to_json(checkpoint)
-        )
-        before = conversation_view_from_json(conversation_view_to_json(before))
-        after = advance_conversation(before, checkpoint)
-        with self._memory._condition:
-            self._ensure_live()
-            lease = self._leases.get(checkpoint.stamp.invocation)
-            self._validate_apply(checkpoint, before, after, lease)
-            self._candidate_snapshot(after)
-
-        def apply() -> c.ConversationView:
-            with self._memory._condition:
-                self._ensure_live()
-                duplicate = self._validate_apply(checkpoint, before, after, lease)
-                if not duplicate:
-                    self._candidate_snapshot(after)
-                    self._memory._views[after.key] = after
-                return conversation_view_from_json(conversation_view_to_json(after))
-
-        return apply
-
     def _candidate_snapshot(self, view: c.ConversationView) -> None:
         """Prove that publishing a view cannot make public snapshots unrestorable."""
         views = dict(self._memory._views)
         views[view.key] = view
         _snapshot(self._namespace, self._generation, views)
 
-    def _ensure_lease(self, lease: _Lease | None) -> None:
-        self._ensure_live()
+    def _ensure_lease(
+        self, lease: _Lease | None, *, allow_closed: bool = False
+    ) -> None:
+        if not allow_closed:
+            self._ensure_live()
         if (
-            lease is None
+            (self._namespace, self._generation)
+            != (self._memory._namespace, self._memory._generation)
+            or lease is None
             or lease.session is not self
             or not lease.active
             or lease.released
-            or lease.poisoned
             or self._memory._active.get(lease.key) is not lease
+            or self._leases.get(lease.request.invocation) is not lease
+            or self._frames.get(lease.frame._spec.ref) is not lease.frame
         ):
             raise _error("stale", "conversation lease is no longer active")
-        if lease.key in self._memory._fences:
-            raise _error(
-                "recovery_required", "conversation is fenced pending reconciliation"
-            )
-
-    def _validate_apply(
-        self,
-        checkpoint: c.ConversationCheckpoint,
-        before: c.ConversationView,
-        after: c.ConversationView,
-        lease: _Lease | None,
-    ) -> bool:
-        """Return whether exact accepted evidence already proves this operation."""
-        stamp = checkpoint.stamp
-        if (stamp.namespace, stamp.generation) != (self._namespace, self._generation):
-            raise _error("stale", "checkpoint belongs to another backend generation")
-        live = self._memory._views.get(before.key)
-        if live is None:
-            live = _zero(
-                self._namespace, self._generation, before.key, before.compatibility
-            )
-        if _canonical(live.compatibility) != _canonical(before.compatibility):
-            raise _error("incompatible", "conversation compatibility changed")
-        operation = after.applied[-1]
-        for index, entry in enumerate(live.applied):
-            if entry.operation_id != operation.operation_id:
-                continue
-            if (
-                index != before.revision
-                or entry != operation
-                or not _prefix(before, live)
-                or not _prefix(after, live)
-            ):
-                raise _error(
-                    "conflict",
-                    "duplicate checkpoint does not prove its exact predecessor and result",
-                )
-            return True
-        self._ensure_lease(lease)
-        if _canonical(before.compatibility) != _canonical(lease.request.compatibility):
-            raise _error(
-                "incompatible",
-                "checkpoint compatibility differs from its reserved turn",
-            )
-        if (
-            lease.key != stamp.key
-            or lease.request.invocation != stamp.invocation
-            or lease.frame._spec.policy_name != stamp.policy_name
-        ):
-            raise _error(
-                "conflict", "checkpoint does not belong to this lease and policy"
-            )
-        if not _same(live, before):
-            raise _error(
-                "conflict", "checkpoint predecessor is not the current live view"
-            )
-        return False
-
-    def fail_turn(
-        self,
-        invocation: c.ConversationInvocation,
-        *,
-        checkpoint: c.ConversationCheckpoint | None,
-        acceptance: c.ConversationAcceptance,
-    ) -> None:
-        """Poison one owned lease and fence uncertain acceptance before release.
-
-        Args:
-            invocation (`ConversationInvocation`): Exact invocation previously
-                reserved by this run session, never a foreign lease selector.
-            checkpoint (`ConversationCheckpoint | None`): Exact failed checkpoint,
-                or `None` when the channel cannot identify it.
-            acceptance (`ConversationAcceptance`): `unaccepted` for proven
-                pre-append rejection, `accepted` for known acceptance, or
-                `uncertain` when the result is unknown. Finalization is idempotent.
-
-        Raises:
-            `TypeError`: The invocation or checkpoint has an invalid exact type.
-            `ValueError`: Carrier shape or the acceptance value is invalid.
-            `MemoryOperationError`: The handle is stale, the invocation is foreign,
-                or the supplied checkpoint does not belong to its lease.
-        """
-        invocation = c._copy_invocation(invocation)
-        if type(acceptance) is not str or acceptance not in (
-            "unaccepted",
-            "accepted",
-            "uncertain",
-        ):
-            raise ValueError("acceptance must be unaccepted, accepted, or uncertain")
-        if checkpoint is not None:
-            checkpoint = conversation_checkpoint_from_json(
-                conversation_checkpoint_to_json(checkpoint)
-            )
-        with self._memory._condition:
-            self._ensure_live()
-            lease = self._leases.get(invocation)
-            if lease is None:
-                raise _error("conflict", "invocation has no lease in this session")
-            if checkpoint is not None:
-                stamp = checkpoint.stamp
-                if (
-                    stamp.invocation != invocation
-                    or stamp.key != lease.key
-                    or stamp.policy_name != lease.frame._spec.policy_name
-                    or (stamp.namespace, stamp.generation)
-                    != (self._namespace, self._generation)
-                ):
-                    raise _error(
-                        "conflict", "failure checkpoint belongs to another lease"
-                    )
-            if lease.released:
-                # The channel owner already finalized its disposition. A worker's
-                # fallback cannot turn a proven rejection into uncertainty.
-                return
-            lease.poisoned = True
-            lease.failure = acceptance
-            if acceptance != "unaccepted":
-                self._memory._fences[lease.key] = _AdmissionFence(
-                    self._namespace,
-                    self._generation,
-                    invocation,
-                    checkpoint,
-                    acceptance,
-                )
-            self._release(lease)
-
-    def reconcile(self, authority: c.ConversationAuthority) -> c.ConversationView:
-        """Atomically install proven accepted history without granting effect permission.
-
-        Args:
-            authority (`ConversationAuthority`): Complete baseline and one
-                admission-led accepted checkpoint segment.
-
-        Returns:
-            `ConversationView`: Exact segment result, even when live history is
-                already newer. A matching checkpoint can clear its private fence.
-
-        Raises:
-            `TypeError`: Authority contains an invalid exact carrier or JSON type.
-            `ValueError`: The segment shape, digests, or snapshot nesting are invalid.
-            `MemoryOperationError`: Authority conflicts with live history or a
-                competing lease, does not prove a fence's exact checkpoint, has an
-                incompatible descriptor, or belongs to a stale generation.
-        """
-        with self._memory._condition:
-            self._ensure_live()
-        if type(authority) is not c.ConversationAuthority:
-            raise TypeError("authority must be a ConversationAuthority")
-        authority = c.ConversationAuthority(authority.baseline, authority.checkpoints)
-        baseline = conversation_view_from_json(
-            conversation_view_to_json(authority.baseline)
-        )
-        states = [baseline]
-        for checkpoint in authority.checkpoints:
-            states.append(advance_conversation(states[-1], checkpoint))
-        target = states[-1]
-        _snapshot(target.namespace, target.generation, {target.key: target})
-        with self._memory._condition:
-            self._ensure_live()
-            memory = self._memory
-            if (target.namespace, target.generation) != (
-                self._namespace,
-                self._generation,
-            ):
-                raise _error(
-                    "stale", "accepted authority belongs to another backend generation"
-                )
-            zero = _zero(
-                self._namespace, self._generation, target.key, target.compatibility
-            )
-            if not _prefix(zero, baseline):
-                raise _error(
-                    "conflict", "accepted baseline is not anchored in this conversation"
-                )
-            live = memory._views.get(target.key, zero)
-            if _canonical(live.compatibility) != _canonical(target.compatibility):
-                raise _error(
-                    "incompatible",
-                    "accepted authority has another compatibility descriptor",
-                )
-            if live.revision <= baseline.revision:
-                matches = _prefix(live, baseline)
-            elif live.revision <= target.revision:
-                matches = _same(live, states[live.revision - baseline.revision])
-            else:
-                matches = _prefix(target, live)
-            if not matches:
-                raise _error(
-                    "conflict",
-                    "accepted authority conflicts with live conversation evidence",
-                )
-            fence = memory._fences.get(target.key)
-            if fence is not None:
-                if fence.checkpoint is None or not any(
-                    _canonical(conversation_checkpoint_to_json(checkpoint))
-                    == _canonical(conversation_checkpoint_to_json(fence.checkpoint))
-                    for checkpoint in authority.checkpoints
-                ):
-                    raise _error(
-                        "recovery_required",
-                        "authority does not prove the exact fenced checkpoint",
-                    )
-            publish = live.revision < target.revision
-            if (publish or fence is not None) and target.key in memory._active:
-                raise _error(
-                    "conflict", "cannot reconcile a competing live conversation lease"
-                )
-            if publish:
-                self._candidate_snapshot(target)
-                memory._views[target.key] = target
-            if fence is not None:
-                del memory._fences[target.key]
-            memory._condition.notify_all()
-            return conversation_view_from_json(conversation_view_to_json(target))
 
 
 class _Frame:
@@ -756,7 +478,7 @@ class _Frame:
             return ""
 
     def learn(self, context: c.LearnContext) -> list[c.MemoryMutation]:
-        """Return no mutations; automatic forward checkpoints retain history.
+        """Return no mutations; automatic turn updates retain history.
 
         Args:
             context (`LearnContext`): Exact validated frame learning context.
@@ -779,38 +501,35 @@ class _Frame:
         self,
         request: c.ConversationRequest,
         *,
-        checkpoint: c.CheckpointSink,
         check_stopped: c.CheckStopped,
     ) -> _Turn:
-        """Build a queued turn using explicit checkpoint and stop callbacks.
+        """Build a queued turn that persists directly through this backend.
 
         Args:
             request (`ConversationRequest`): Authored consumer, unique invocation,
                 and exact compatibility descriptor. The frame determines ownership.
-            checkpoint (`CheckpointSink`): Accept, apply, and return the exact view
-                for each proposed checkpoint. Failures propagate unchanged.
             check_stopped (`CheckStopped`): Cooperative check that raises on stop;
                 checked during queuing and between effects, never before recording
                 an actual observation. Failures propagate unchanged.
 
         Returns:
             `_Turn`: A single-entry context manager; entering waits in FIFO order
-                for this authored leaf and acknowledges admission before returning.
+                for this authored leaf and persists admission before returning.
 
         Raises:
             `TypeError`: The request or callbacks have the wrong type.
             `ValueError`: A malformed request has invalid identity or JSON.
             `MemoryOperationError`: On entry, the handle is stale, compatibility
-                changed, invocation conflicts, or history requires reconciliation.
+                changed, or the invocation conflicts with retained history.
         """
         if type(request) is not c.ConversationRequest:
             raise TypeError("request must be a ConversationRequest")
-        if not callable(checkpoint) or not callable(check_stopped):
-            raise TypeError("checkpoint and check_stopped must be callable")
+        if not callable(check_stopped):
+            raise TypeError("check_stopped must be callable")
         request = c.ConversationRequest(
             request.consumer_static_path, request.invocation, request.compatibility
         )
-        return _Turn(self, request, checkpoint, check_stopped)
+        return _Turn(self, request, check_stopped)
 
 
 def _secondary(primary: BaseException, cleanup: BaseException) -> None:
@@ -825,19 +544,17 @@ def _secondary(primary: BaseException, cleanup: BaseException) -> None:
 
 
 class _Turn:
-    """One FIFO lease whose acknowledged requests grant external-effect permission."""
+    """One FIFO lease that persists requests and actual observations directly."""
 
     def __init__(
         self,
         frame: _Frame,
         request: c.ConversationRequest,
-        checkpoint: c.CheckpointSink,
         check_stopped: c.CheckStopped,
     ) -> None:
         self._frame = frame
         self._session = frame._session
         self._request = request
-        self._checkpoint = checkpoint
         self._check_stopped = check_stopped
         self._lease: _Lease | None = None
         self._view: c.ConversationView | None = None
@@ -865,64 +582,41 @@ class _Turn:
             self._ordinal,
         )
 
-    def _fail(
-        self,
-        checkpoint: c.ConversationCheckpoint | None,
-        acceptance: c.ConversationAcceptance,
-        primary: BaseException,
-    ) -> None:
-        try:
-            with self._session._memory._condition:
-                if self._lease is not None and not self._lease.released:
-                    self._session.fail_turn(
-                        self._request.invocation,
-                        checkpoint=checkpoint,
-                        acceptance=acceptance,
-                    )
-        except BaseException as cleanup:
-            _secondary(primary, cleanup)
-
-    def _accept(self, checkpoint: c.ConversationCheckpoint) -> None:
-        try:
-            with self._session._memory._condition:
-                self._session._ensure_lease(self._lease)
-                expected = advance_conversation(self._view, checkpoint)
-                self._session._candidate_snapshot(expected)
-        except BaseException as exc:
-            # Local validation can reject the checkpoint's wire representation.
-            # Proven non-acceptance needs no checkpoint evidence to finalize.
-            self._fail(None, "unaccepted", exc)
-            raise
-        try:
-            # The checkpoint owner may wait for a dispatcher on another thread.
-            # Holding the backend condition across this seam would deadlock it.
-            reply = self._checkpoint(checkpoint)
-            try:
-                reply = conversation_view_from_json(conversation_view_to_json(reply))
-            except (TypeError, ValueError) as exc:
+    def _publish(self, checkpoint: c.ConversationCheckpoint) -> None:
+        """Validate the whole candidate snapshot before atomically publishing."""
+        with self._session._memory._condition:
+            self._session._ensure_lease(
+                self._lease,
+                allow_closed=type(checkpoint)
+                in (c.ConversationEffectObserved, c.ConversationClosed),
+            )
+            lease = self._lease
+            stamp = checkpoint.stamp
+            if (
+                stamp.key != lease.key
+                or stamp.invocation != lease.request.invocation
+                or stamp.policy_name != lease.frame._spec.policy_name
+                or (stamp.namespace, stamp.generation)
+                != (self._session._namespace, self._session._generation)
+            ):
+                raise _error("conflict", "checkpoint does not belong to this lease")
+            if _canonical(self._view.compatibility) != _canonical(
+                lease.request.compatibility
+            ):
+                raise _error("incompatible", "turn compatibility changed")
+            live = self._session._memory._views.get(lease.key, lease.before)
+            if not _same(self._view, live):
                 raise _error(
-                    "conflict", "checkpoint acknowledgement is malformed"
-                ) from exc
-            if not _same(reply, expected):
-                raise _error(
-                    "conflict", "checkpoint acknowledgement is not its exact result"
+                    "conflict", "turn predecessor is not the current live view"
                 )
-            with self._session._memory._condition:
-                self._session._ensure_lease(self._lease)
-                live = self._session._memory._views.get(expected.key)
-                if live is None or not _same(live, expected):
-                    raise _error(
-                        "conflict",
-                        "acknowledged checkpoint was not applied to this live lease",
-                    )
-                self._view = reply
-                self._ordinal += 1
-        except BaseException as exc:
-            self._fail(checkpoint, "uncertain", exc)
-            raise
+            after = advance_conversation(self._view, checkpoint)
+            self._session._candidate_snapshot(after)
+            self._session._memory._views[after.key] = after
+            self._view = after
+            self._ordinal += 1
 
     def __enter__(self) -> _Turn:
-        """Acquire the authored conversation and acknowledge its admission."""
+        """Acquire the authored conversation and persist its admission."""
         if self._entered:
             raise _error("stale", "a turn context can be entered only once")
         self._entered = True
@@ -931,7 +625,7 @@ class _Turn:
             with self._session._memory._condition:
                 self._session._ensure_lease(self._lease)
                 self._view = self._lease.before
-            self._accept(c.ConversationAdmitted(self._stamp(), self._view))
+            self._publish(c.ConversationAdmitted(self._stamp(), self._view))
             self._check()
             with self._session._memory._condition:
                 self._session._ensure_lease(self._lease)
@@ -942,7 +636,7 @@ class _Turn:
 
     @property
     def view(self) -> c.ConversationView:
-        """Return the last acknowledged detached state while the lease is live.
+        """Return the last persisted detached state while the lease is live.
 
         Returns:
             `ConversationView`: Immutable carrier with defensive JSON properties.
@@ -961,7 +655,7 @@ class _Turn:
         *,
         items: tuple[c.ConversationItem, ...] = (),
     ) -> int:
-        """Acknowledge an effect request before allowing its external execution.
+        """Persist an effect request before allowing its external execution.
 
         Args:
             kind (`ConversationEffectKind`): `model`, `tool`, or `native_session`.
@@ -970,14 +664,13 @@ class _Turn:
                 IDs; defaults to the empty tuple.
 
         Returns:
-            `int`: Positive effect ordinal, only after acknowledgement and live-lease
-                and stop checks. Callback failures propagate unchanged.
+            `int`: Positive effect ordinal, only after persistence, live-lease,
+                and stop checks. Stop failures propagate unchanged.
 
         Raises:
             `TypeError`: An argument has the wrong exact carrier or JSON type.
             `ValueError`: Kind, item identity, finite JSON, or nesting is invalid.
-            `MemoryOperationError`: The lease is stale/fenced, history conflicts, or
-                the checkpoint acknowledgement does not prove the expected result.
+            `MemoryOperationError`: The lease is stale or its history conflicts.
         """
         with self._session._memory._condition:
             self._session._ensure_lease(self._lease)
@@ -987,7 +680,7 @@ class _Turn:
             checkpoint = c.ConversationEffectRequested(
                 self._stamp(), kind, payload, items
             )
-        self._accept(checkpoint)
+        self._publish(checkpoint)
         self._check()
         with self._session._memory._condition:
             self._session._ensure_lease(self._lease)
@@ -1018,16 +711,15 @@ class _Turn:
         Raises:
             `TypeError`: An argument has the wrong exact carrier or JSON type.
             `ValueError`: Ordinal, status, item, failure, or nesting shape is invalid.
-            `MemoryOperationError`: The lease is stale/fenced, the effect transition
-                is invalid, or acknowledgement is not exact. Callback failures
-                propagate unchanged, after completed truth is recorded when possible.
+            `MemoryOperationError`: The lease is stale or the effect transition
+                is invalid. Stop failures propagate after actual truth is retained.
         """
         with self._session._memory._condition:
-            self._session._ensure_lease(self._lease)
+            self._session._ensure_lease(self._lease, allow_closed=True)
             checkpoint = c.ConversationEffectObserved(
                 self._stamp(), effect_ordinal, status, items, reference, failure
             )
-        self._accept(checkpoint)
+        self._publish(checkpoint)
         self._check()
 
     def _finish(self, primary: BaseException | None) -> None:
@@ -1042,15 +734,17 @@ class _Turn:
                     primary = stop
                 elif primary is not stop:
                     _secondary(primary, stop)
-            status = (
-                "interrupted"
-                if self._stop_error is not None
-                or (primary is not None and not isinstance(primary, Exception))
-                else "failed" if primary is not None else "completed"
-            )
-            self._accept(c.ConversationClosed(self._stamp(), status))
+            if self._ordinal:
+                with self._session._memory._condition:
+                    status = (
+                        "interrupted"
+                        if self._stop_error is not None
+                        or self._session._closed
+                        or (primary is not None and not isinstance(primary, Exception))
+                        else "failed" if primary is not None else "completed"
+                    )
+                    self._publish(c.ConversationClosed(self._stamp(), status))
         except BaseException as cleanup:
-            self._fail(None, "uncertain", cleanup)
             if primary is None:
                 raise
             _secondary(primary, cleanup)
@@ -1065,5 +759,5 @@ class _Turn:
         exc: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        """Acknowledge a truthful close, release the lease, and preserve body errors."""
+        """Persist a truthful close, release the lease, and preserve body errors."""
         self._finish(exc)

@@ -210,7 +210,6 @@ def _snapshot(state: RunState) -> dict[str, Any]:
         "ready": tuple(state.ready),
         "in_flight": tuple(state.in_flight),
         "accepted_starts": dict(state.accepted_starts),
-        "conversation_state": state.conversation_state,
         "result": state.result,
         "depth": dict(state.depth),
         "wiring_overrides": deepcopy(state.wiring_overrides),

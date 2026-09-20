@@ -50,7 +50,7 @@ compose/      Compose-YAML front end: text -> CompiledFlow; source/ owns YAML
               lower file-private children
               (source/helpers/nodes/parse/desugar/edges/validate/build/loader)
 runtime/      run records/logs, scheduler-state vocabulary, reducer-owned state,
-              pure conversation projection, forward dispatcher/worker pool,
+              forward dispatcher/worker pool,
               explicit backward driver and pure learning/context projections
 run.py        public run/recovery boundary and retained RunResult.backward handle
 llm_clients/  provider clients (lazy-imported) + LLMConfig + model_from_config
@@ -908,28 +908,20 @@ instance; external persistence remains a host concern.
 ### Session conversation foundation
 
 `agent_composer.memory.session.SessionMemory` supplies the lower-level conversation
-backend. Checkpoint RunLog records and pure reducer/replay support are available;
-the automatic checkpoint channel, session harness, AGENT, API-provider, Codex, and
-CLI integration are pending. `run_flow` does not yet drive conversation turns.
+backend. It owns history updates directly. AGENT, API-provider, Codex, and CLI
+integration are pending; `run_flow` does not yet drive conversation turns.
 `SessionMemory` is a concrete backend;
 `MemorySession` remains the existing run-handle protocol. Optional
-`ConversationFrame`, `ConversationSession`, and `ConversationTurn` protocols leave
+`ConversationFrame` and `ConversationTurn` protocols leave
 the mandatory memory interfaces unchanged.
 
 The ownership split is a pure state fold plus an effectful interpreter:
 `memory/contracts.py` defines immutable carriers, `memory/conversation.py` owns
 `advance_conversation`, strict JSON codecs, and digests, and `memory/session.py`
-owns live views, FIFO leases, and private acceptance fences. The fold and backend
+owns live views and FIFO leases. The fold and backend
 import only the standard library and lower memory modules, never nodes, runtime,
 compile, compose, or providers. The facade exports contracts only; concrete
 backends are imported explicitly from their own modules.
-
-`runtime/conversation.py` sits above the lower memory fold and below
-`runtime/state.py`. Its immutable `RuntimeConversationState` pairs each invocation's
-admission-led `ConversationAuthority` segment with its resulting view, and retains
-retired invocation identities. `prepare_conversation_checkpoint` advances that
-projection through the existing `advance_conversation`; it imports only the
-standard library and lower memory contracts/fold, never backends or drivers.
 
 `SessionMemory()` takes no arguments and accepts only empty frame configuration.
 Its conversation key is the authored frame plus the leaf consumer's static path,
@@ -937,67 +929,64 @@ supplied by the caller. Each key has one FIFO queue; different leaves under a
 flow-owned frame have separate conversations and queues. MAP/LOOP occurrence
 positions do not change identity, and no fork mode exists. A turn reads its live
 baseline only after acquiring the lease. The run handle's detached opening
-snapshot stays pinned, including after accepted-history reconciliation. Public
+snapshot stays pinned as live turns advance history. Public
 version-1 snapshots contain namespace, generation, and complete conversation views,
-not transient queues, leases, or fences. Storage remains process-local.
+not transient queues or leases. Storage remains process-local. Reopening an older
+snapshot against a used backend reads latest compatible live history without
+rewinding it; a pristine backend can restore only the history in the snapshot.
 
-An injected checkpoint sink accepts and applies admission, request, observation,
-and close checkpoints and acknowledges the exact resulting view. Only an
-acknowledged request on a still-healthy lease grants effect permission. The sink
-runs without the backend condition lock held. Cooperative stop checks can cancel
-queued work; actual observations are retained before honoring a stop during an
-effect. Conversation progress is independent of `learnable`: recall is empty,
+`frame.open_turn(request, check_stopped=check)` acquires the conversation lease.
+Its `request` and `observe` methods validate and publish directly and atomically
+in the backend. Provider/tool calls and stop callbacks run outside the condition
+lock. There is no checkpoint sink, prepared-apply callback, or reconciliation
+channel. Cooperative stop checks can cancel queued work; actual observations are
+retained before honoring a stop during an effect. Conversation progress is
+independent of `learnable`: recall is empty,
 learning proposes no mutations, and only empty commit batches are supported.
 
-Preparation is pure and uses the actual complete predecessor. Applying a proven
-historical duplicate returns its exact historical result, even if live history is
-newer; no archive or reconstruction from the latest view supplies missing history.
-Unapplied tokens cannot publish after lease release, poisoning, or generation
-change. Failed checkpoint channels fence uncertain admission before releasing the
-lease; pending effects also prevent a new turn. There is no automatic effect retry.
+Failed/interrupted turns keep completed observations and leave unobserved requests
+pending, not falsely successful. A new invocation can continue that history;
+successful closure checks only its own effects. Restoring context never itself
+executes stored tools, but ordinary node retry may resend requests and repeat
+actions. The backend does not call providers or tools. A changed exact compatibility
+descriptor requires reset; provider-specific compatibility rules are not part of
+this backend.
 
-`reconcile` validates the complete accepted baseline plus an admission-led segment
-before atomically installing missing history. It works after opening an older
-snapshot without rewinding newer live state, changing the pinned snapshot, or
-touching other keys. It grants no effect permission and replays no provider call.
-A fence clears only when the segment proves its exact failed checkpoint; a baseline
-digest alone is insufficient. Otherwise an idle reset is required. A changed exact
-compatibility descriptor also requires reset; provider-specific compatibility
-rules are not part of this backend.
+Closing a run handle cancels its queued tickets and prevents further requests,
+but an active lease stays held until its owner exits. This prevents overlap while
+an external call is still finishing and lets the owner retain its actual result.
+Released turns cannot append late observations. Cancellation stays effective even
+if caller code catches the original stop exception.
 
 Backend-wide `reset()` fails immediately and unchanged with `session.busy` while
 any turn is active or queued. When idle, it clears every local conversation and
-fence and advances the generation, invalidating old handles and prepared tokens.
+advances the generation, invalidating old handles.
 It does not delete external provider history or files. The
 [Python API guide](../../docs/api.md#sessionmemory-foundation) shows the available
 lower-level snapshot/reset interface.
 
-### Conversation record authority
+### Historical conversation records
 
-The four schema-8 wrappers carry exact detached admission, effect-request,
-effect-observation, and close checkpoints. `RunState.accepted_starts` tracks each
-unfinished invocation's original accepted `NodeStartedRecord` sequence separately
-from retained forward capture. Together with the run ID, that sequence identifies
-the invocation; a dynamic node name does not. `conversation_state` starts empty,
-including for historical schema-7 runs, and survives graph pruning independently
-of `learnable`.
+The four schema-8 wrappers retain their strict wire format for reading existing
+logs. Their detached admission, request, observation, and close payloads are now
+inert metadata, not runtime conversation authority. `RunState.accepted_starts`
+tracks each unfinished invocation's original accepted `NodeStartedRecord`
+sequence independently of learning. Together with the run ID, that sequence
+identifies the invocation; a dynamic node name does not.
 
-`prepare_conversation_record` validates the accepted start, run identity, enabled
-frame/policy, compiled consumer `MemoryScope`, and checkpoint lifecycle before
-preparing a pure successor. The lower fold validates baseline, revision, ordinal,
-and effect ordering. Each invocation admits at most one conversation handle.
-Commit verifies the frozen record and recomputed successor before append, then
-installs the projection. These records do not bind outputs, advance the frontier,
-produce execution episodes, or publish observers; retained trace handling advances
-only its record sequence. Neither preparation nor replay opens a backend or calls
-a session, node, or provider.
+The private legacy path in `prepare_record` validates canonical payloads, run
+identity, unfinished accepted start, enabled frame/policy, and compiled consumer
+`MemoryScope`. Commit revalidates the frozen record before appending, then advances
+only record sequencing and the existing trace sequence. Runtime keeps no baseline,
+transcript, effect ledger, or conversation projection. These records do not bind
+outputs, advance the frontier, create execution episodes, publish observers, open
+memory, or grant permission for an external effect.
 
-An admitted handle must close before `NodeSucceededRecord` can be accepted. After
-primary failure, only observations and close for an already-admitted, still
-unfinished invocation may drain; a node with an accepted outcome is no longer
-unfinished. All checkpoints are rejected after primary success or any backward
-start, including a finished backward attempt. The automatic live checkpoint
-channel that connects worker turns to this reducer remains future work.
+After primary failure, only observations and close for a still-unfinished start
+are accepted. All four wrappers are rejected after primary success or any backward
+start, including a finished backward attempt, or after their originating start
+has completed or been replaced by retry. Conversation metadata does not require
+a close before node success. No live runtime conversation-record channel exists.
 
 ## Durable recovery
 
@@ -1018,14 +1007,12 @@ terminal primary returns its observed backward prefix without appending records
 or invoking graph nodes, backward callbacks, learners, or commits. Recovery uses the
 recorded input, run ID, and complete LLM map rather than current ambient defaults.
 
-An unfinished invocation with any accepted `ConversationEffectRequestedRecord`
-cannot be generically retried, even if that request was observed or the handle
-closed. Only requests in that invocation's accepted segment count, not effects
-inherited from its admission baseline. Recovery fails closed before appending
-`RunResumedRecord`. For an effect-free admitted invocation, an accepted resume
-retires its old identity without changing its accepted segment/view or fabricating
-close, completion, or effect records. Its next accepted start has a new sequence;
-late checkpoints for the retired identity are rejected.
+Historical conversation records do not block ordinary node retry. The new start
+receives a new sequence, and metadata for the old unfinished start is rejected.
+A retry may resend model requests or repeat tool actions; there is no exactly-once
+guarantee or exact mid-request continuation. Runtime does not reconstruct a
+conversation or fabricate completion for unknown effects. SessionMemory owns the
+latest saved history, and the run log is not a replacement memory store.
 
 When an unfinished recorded run enabled memory, recovery requires the named host
 implementations and verifies that opening each session reproduces the exact
@@ -1044,9 +1031,9 @@ and accepted prefix; a handle that cannot refresh its authority becomes unusable
 instead of reusing stale proposals or requests.
 
 This provides deterministic engine-state recovery, not exactly-once external
-effects. An interrupted node with a durable start and no outcome is retried when
-the conversation-effect guard permits it; memory-free nodes retain ordinary retry
-behavior, so their external effects must still tolerate repetition.
+effects. An eligible interrupted node with a durable start and no outcome is
+retried. Callers using the optional SessionMemory turn capability consume the
+backend's latest saved history, but requests and external effects may repeat.
 
 ## Blocking effects and structured drain
 

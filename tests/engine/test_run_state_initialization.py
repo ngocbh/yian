@@ -108,7 +108,6 @@ def _snapshot(state: RunState) -> dict[str, Any]:
         "ready": tuple(state.ready),
         "in_flight": tuple(state.in_flight),
         "accepted_starts": dict(state.accepted_starts),
-        "conversation_state": state.conversation_state,
         "result": state.result,
         "depth": dict(state.depth),
         "wiring_overrides": deepcopy(state.wiring_overrides),
@@ -135,9 +134,7 @@ def test_run_state_starts_pristine_around_the_owned_graph():
     assert tuple(state.ready) == ()
     assert state.in_flight == {}
     assert state.accepted_starts == {}
-    assert state.conversation_state.segments == ()
-    assert state.conversation_state.views == ()
-    assert state.conversation_state.retired_invocations == frozenset()
+    assert not hasattr(state, "conversation_state")
     assert state.result is None
     assert state.depth == {}
     assert state.wiring_overrides == {}

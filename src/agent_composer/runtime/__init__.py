@@ -16,12 +16,11 @@ The internal reverse fold walks accepted outcomes once without writing state,
 logs, or memory. Trace-owned terminal authority and context reconstruction are
 shared below that fold; durable attribution references values instead of copying
 materialized downstream histories.
-Run-local conversation projection reuses the lower memory fold. It retains
-accepted invocation segments independently of learning and graph pruning, without
-opening sessions or granting effects. State validates checkpoints and retires
-effect-free interrupted invocations only through accepted recovery records.
+Legacy conversation wrappers remain readable as inert compatibility metadata.
+State validates their unfinished invocation and compiled memory scope, then advances
+record sequencing without retaining conversations, restoring memory, or granting effects.
 
-Knows about:   events, memory contracts and pure conversation fold, typesys, nodes, and compile
+Knows about:   events, memory contracts and wire codecs, typesys, nodes, and compile
                topology/identity/validation contracts.
 Never imports: compile.expand, compose, the package-root run boundary, CLI, or provider
                SDKs.

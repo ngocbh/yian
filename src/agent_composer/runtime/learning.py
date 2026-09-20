@@ -36,6 +36,10 @@ from agent_composer.memory import (
 from agent_composer.nodes.base import BackwardContext, BackwardResult, _copy_backward_value, validate_backward_result
 from agent_composer.runtime.contracts import AttributedBackwardResult, BackwardAttribution, BackwardFailure, BackwardOutcome
 from agent_composer.runtime.log import (
+    ConversationAdmittedRecord,
+    ConversationEffectRequestedRecord,
+    ConversationEffectObservedRecord,
+    ConversationClosedRecord,
     BackwardStartedRecord,
     BackwardReadyRecord,
     BackwardFinishedRecord,
@@ -1074,6 +1078,10 @@ def project_outcome_episodes(
         | NodeRoutedRecord
         | NodeExpandedRecord
         | NodeFailedRecord
+        | ConversationAdmittedRecord
+        | ConversationEffectRequestedRecord
+        | ConversationEffectObservedRecord
+        | ConversationClosedRecord
     ),
     *,
     execution_seq: int | None = None,
@@ -1081,6 +1089,9 @@ def project_outcome_episodes(
     """Project one canonical accepted graph outcome into every scoped frame."""
     if type(run_id) is not str or not run_id:
         raise ValueError("episode projection requires a non-empty run_id")
+    if type(record) in (ConversationAdmittedRecord, ConversationEffectRequestedRecord,
+                        ConversationEffectObservedRecord, ConversationClosedRecord):
+        return ()
     evidence = record.evidence
     if evidence is None:
         return ()

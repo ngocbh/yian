@@ -209,6 +209,8 @@ def _snapshot(state: RunState) -> dict[str, Any]:
         "edge_state": dict(state.edge_state),
         "ready": tuple(state.ready),
         "in_flight": tuple(state.in_flight),
+        "accepted_starts": dict(state.accepted_starts),
+        "conversation_state": state.conversation_state,
         "result": state.result,
         "depth": dict(state.depth),
         "wiring_overrides": deepcopy(state.wiring_overrides),
@@ -1471,8 +1473,8 @@ def test_growth_prunes_only_named_settled_dynamic_overlay_coordinates():
 def test_growth_preserves_unrelated_in_flight_siblings_and_fifo_order():
     state, log = _initialized_spawner(_parent_flow(sibling=True))
     assert tuple(state.ready) == ("side",)
-    state.ready.popleft()
-    state.in_flight["side"] = None
+    commit_prepared(log, state, prepare_node_started(state, "side"))
+    side_start = state.accepted_starts["side"]
 
     commit_prepared(
         log,
@@ -1486,6 +1488,7 @@ def test_growth_preserves_unrelated_in_flight_siblings_and_fifo_order():
     )
 
     assert tuple(state.in_flight) == ("side",)
+    assert state.accepted_starts == {"side": side_start}
     assert tuple(state.ready) == ("spawn/child/start",)
     assert state.node_state["side"] is NodeState.UNKNOWN
 
@@ -1554,7 +1557,8 @@ def test_growth_rejects_unsafe_pruning_matrix_atomically(case: str):
         prune_ids = frozenset({old_id})
     elif case == "unrelated-in-flight":
         state.node_state[old_id] = NodeState.UNKNOWN
-        state.in_flight[old_id] = None
+        state.ready.appendleft(old_id)
+        commit_prepared(log, state, prepare_node_started(state, old_id))
         prune_ids = frozenset({old_id})
     elif case == "unsettled":
         state.node_state[old_id] = NodeState.UNKNOWN
@@ -1563,7 +1567,8 @@ def test_growth_rejects_unsafe_pruning_matrix_atomically(case: str):
         clone = _Spawner("clone")
         state.flow.add_subgraph({"clone": clone}, [], {"clone": {}})
         state.node_state["clone"] = NodeState.UNKNOWN
-        state.in_flight = {"clone": None}
+        state.ready.appendleft("clone")
+        commit_prepared(log, state, prepare_node_started(state, "clone"))
         executing = "clone"
         prune_ids = frozenset({"clone"})
     elif case == "loop-missing-origin":
@@ -1581,7 +1586,8 @@ def test_growth_rejects_unsafe_pruning_matrix_atomically(case: str):
         clone.params = []
         state.flow.add_subgraph({clone.id: clone}, [], {clone.id: {}})
         state.node_state[clone.id] = NodeState.UNKNOWN
-        state.in_flight = {clone.id: None}
+        state.ready.appendleft(clone.id)
+        commit_prepared(log, state, prepare_node_started(state, clone.id))
         executing = clone.id
         prune_ids = frozenset({clone.id})
     elif case == "loop-pruned-origin":
@@ -1605,7 +1611,8 @@ def test_growth_rejects_unsafe_pruning_matrix_atomically(case: str):
         )
         state.node_state[origin.id] = NodeState.TAKEN
         state.node_state[clone.id] = NodeState.UNKNOWN
-        state.in_flight = {clone.id: None}
+        state.ready.appendleft(clone.id)
+        commit_prepared(log, state, prepare_node_started(state, clone.id))
         executing = clone.id
         prune_ids = frozenset({origin.id, clone.id})
     else:
@@ -1627,6 +1634,7 @@ def test_growth_rejects_unsafe_pruning_matrix_atomically(case: str):
         prune_ids = frozenset({old_id})
 
     before = _snapshot(state)
+    sequence = log.next_sequence
     with pytest.raises(GrowthRejected) as caught:
         prepare_expanded(
             state,
@@ -1637,7 +1645,7 @@ def test_growth_rejects_unsafe_pruning_matrix_atomically(case: str):
 
     assert type(caught.value.original) is ValueError
     assert _snapshot(state) == before
-    assert log.next_sequence == 4
+    assert log.next_sequence == sequence
 
 
 def test_growth_rejects_a_binding_wrapped_dependency_on_a_pruned_node():
@@ -1724,7 +1732,8 @@ def test_loop_clone_record_uses_actual_id_self_prunes_and_inherits_depth_zero():
     for edge_id in set(state.edge_state) - {"start-spawn", "spawn-end"}:
         state.edge_state[edge_id] = NodeState.TAKEN
     state.ready.clear()
-    state.in_flight = {"spawn~1": None}
+    state.ready.append("spawn~1")
+    commit_prepared(log, state, prepare_node_started(state, "spawn~1"))
 
     clone = state.flow.nodes["spawn~1"]
     grow = clone.run({})
@@ -1737,6 +1746,7 @@ def test_loop_clone_record_uses_actual_id_self_prunes_and_inherits_depth_zero():
 
     assert observers[0].node_id == "spawn~1"
     assert "spawn~1" not in state.flow.nodes
+    assert "spawn~1" not in state.accepted_starts
     assert "spawn" in state.flow.nodes
     assert state.node_state["spawn"] is NodeState.EXPANDED
     assert "spawn~2" in state.flow.nodes

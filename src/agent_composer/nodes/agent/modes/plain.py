@@ -32,6 +32,9 @@ def plain(ctx: AgentRunContext) -> Output:
     ctx.check_stopped()
     system_prompt = system_prompt_with_memory(DEFAULT_SYSTEM, ctx.memory_sections)
     msgs = [SystemMessage(content=system_prompt), HumanMessage(content=ctx.prompt)]
+    new_messages = list(msgs)
+    if ctx.conversation_turn is not None:
+        msgs = [msgs[0], *history_messages(ctx.conversation_turn), *msgs[1:]]
     if ctx.evaluation_trace is not None:
         ctx.evaluation_trace.record_prompt(
             DEFAULT_SYSTEM,
@@ -45,10 +48,9 @@ def plain(ctx: AgentRunContext) -> Output:
             reply = model.invoke(msgs)
             ctx.check_stopped()
         else:
-            contextual = [msgs[0], *history_messages(ctx.conversation_turn), *msgs[1:]]
             reply = invoke_model(
-                ctx.conversation_turn, lambda: model.invoke(contextual),
-                new_messages=msgs, check_stopped=ctx.check_stopped,
+                ctx.conversation_turn, lambda: model.invoke(msgs),
+                new_messages=new_messages, check_stopped=ctx.check_stopped,
             )
         text = text_of(reply)
         record_model_text(ctx.evaluation_trace, text)
@@ -62,5 +64,7 @@ def plain(ctx: AgentRunContext) -> Output:
             llm_config=ctx.llm_config,
             check_stopped=ctx.check_stopped,
             evaluation_trace=ctx.evaluation_trace,
+            conversation_turn=ctx.conversation_turn,
+            new_messages=new_messages,
         )
     )

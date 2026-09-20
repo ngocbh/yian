@@ -13,9 +13,10 @@ from concurrent.futures import CancelledError as FutureCancelledError
 from contextlib import contextmanager
 from copy import deepcopy
 import json
+from typing import Any
 from uuid import uuid4
 
-from langchain_core.messages import BaseMessage, ChatMessage, SystemMessage, message_to_dict, messages_from_dict
+from langchain_core.messages import AIMessage, BaseMessage, ChatMessage, HumanMessage, SystemMessage, ToolMessage, message_to_dict, messages_from_dict
 
 from agent_composer._settings import default_llm_provider
 from agent_composer.memory import (
@@ -133,13 +134,16 @@ def decode_message(item: ConversationItem) -> BaseMessage:
 
 
 def history_messages(turn: ConversationTurn) -> list[BaseMessage]:
-    """Restore actual messages without reactivating historical system instructions.
+    """Project history into provider context without replaying effects or instructions.
 
     Args:
         turn (`ConversationTurn`): Admitted backend-owned turn providing prior items.
 
     Returns:
-        `list[BaseMessage]`: Ordered messages excluding prior system/developer roles.
+        `list[BaseMessage]`: Prior messages with context-only missing-result repairs,
+            inert unpairable calls, and truthful failure/interruption annotations.
+            Historical system/developer instructions are excluded. Repairs are not
+            observations and must never be persisted as new input deltas.
 
     Raises:
         `_CapabilityFault`: Reading or decoding retained history fails.
@@ -147,23 +151,108 @@ def history_messages(turn: ConversationTurn) -> list[BaseMessage]:
     """
     messages = []
     with _memory_boundary():
-        for item in turn.view.items:
-            message = decode_message(item)
+        view = turn.view
+        decoded = [(item, decode_message(item)) for item in view.items]
+        purposes = {effect.request["exchange_id"]: effect.request.get("purpose", "chat")
+                    for effect in view.effects if effect.kind == "model"}
+        tool_effects = {(effect.request.get("model_exchange_id"), effect.request.get("call_index")): effect
+                        for effect in view.effects if effect.kind == "tool"}
+        consumed = set()
+        for index, (item, message) in enumerate(decoded):
+            if item.item_id in consumed:
+                continue
             if isinstance(message, SystemMessage) or (
                 isinstance(message, ChatMessage) and message.role in {"system", "developer"}
             ):
                 continue
+            exchange = item.payload["exchange_id"]
+            if isinstance(message, ToolMessage):
+                messages.append(_inert_message(message, "unpaired tool result"))
+                continue
+            if isinstance(message, AIMessage):
+                if purposes.get(exchange) == "structured_native" or not _pairable_calls(message):
+                    messages.append(_inert_message(message, "structured or unpairable model reply"))
+                    continue
+                messages.append(message)
+                for call_index, call in enumerate(message.tool_calls):
+                    matches = [(other, result) for other, result in decoded[index + 1:]
+                               if other.payload["exchange_id"] == exchange
+                               and isinstance(result, ToolMessage) and result.tool_call_id == call["id"]]
+                    if len(matches) == 1:
+                        other, result = matches[0]
+                        consumed.add(other.item_id)
+                        messages.append(result)
+                    else:
+                        effect = tool_effects.get((exchange, call_index))
+                        status = None if effect is None else effect.status
+                        if status == "completed":
+                            note = "Tool execution completed; represented result unavailable."
+                        elif status == "failed":
+                            note = "Tool invocation failed; result unavailable."
+                        else:
+                            note = f"Tool result unavailable; execution outcome unknown (status: {status or 'unrecorded'})."
+                        messages.append(ToolMessage(content=note, tool_call_id=call["id"], status="error"))
+                continue
             messages.append(message)
+        statuses = [{"invocation": entry.status} for entry in view.closed_invocations if entry.status != "completed"]
+        closed = {entry.invocation for entry in view.closed_invocations}
+        unclosed = dict.fromkeys(effect.invocation for effect in view.effects if effect.invocation not in closed)
+        statuses += [{"invocation": "still open; completion unknown"} for _ in unclosed]
+        statuses += [{"effect": effect.kind, "status": effect.status} for effect in view.effects if effect.status != "completed"]
+        if statuses:
+            messages.append(HumanMessage(content="Session history status (context only): " + _canonical(statuses)))
     return messages
+
+
+def _inert_message(message: BaseMessage, reason: str) -> HumanMessage:
+    """Render prior data as labelled text with no actionable message metadata."""
+    return HumanMessage(content=f"Prior {reason} (context only, not an executable request): "
+                        + _canonical(message_to_dict(message)))
+
+
+def _pairable_calls(message: AIMessage) -> bool:
+    """Require unambiguous tool correlations and no hidden provider call shape."""
+    if message.invalid_tool_calls or "function_call" in message.additional_kwargs:
+        return False
+    if isinstance(message.content, list) and any(
+        isinstance(block, dict) and isinstance(block.get("type"), str)
+        and ("tool" in block["type"] or block["type"] == "function_call")
+        for block in message.content
+    ):
+        return False
+    calls = message.tool_calls
+    if any(type(call.get("name")) is not str or not call["name"] or type(call.get("args")) is not dict
+           for call in calls):
+        return False
+    ids = [call.get("id") for call in calls]
+    if any(type(value) is not str or not value for value in ids) or len(set(ids)) != len(ids):
+        return False
+    raw = message.additional_kwargs.get("tool_calls")
+    if raw is not None:
+        if type(raw) is not list or len(raw) != len(calls):
+            return False
+        try:
+            for encoded, call in zip(raw, calls):
+                if encoded["type"] != "function" or encoded["id"] != call["id"]:
+                    return False
+                function = encoded["function"]
+                if function["name"] != call["name"] or _canonical(json.loads(function["arguments"])) != _canonical(call["args"]):
+                    return False
+        except (KeyError, TypeError, ValueError):
+            return False
+    return True
 
 
 def invoke_model(
     turn: ConversationTurn,
-    invoke: Callable[[], BaseMessage],
+    invoke: Callable[[], Any],
     *,
     new_messages: Sequence[BaseMessage],
     check_stopped: Callable[[], None],
-) -> BaseMessage:
+    exchange_id: str | None = None,
+    purpose: str = "chat",
+    raw_reply: Callable[[Any], BaseMessage] | None = None,
+) -> Any:
     """Persist request/reply deltas around exactly one external model invocation.
 
     New messages are the actual input delta, not the full provider context.
@@ -175,38 +264,119 @@ def invoke_model(
         invoke (`Callable`): One model call, invoked outside the memory boundary.
         new_messages (`Sequence[BaseMessage]`): Only newly submitted input messages.
         check_stopped (`Callable`): Cooperative stop check after reply publication.
+        exchange_id (`str | None`): Optional caller-owned correlation identity;
+            omission generates one unique ID for this model exchange.
+        purpose (`str`): Request purpose; defaults to ordinary `chat` generation.
+        raw_reply (`Callable | None`): Extract a raw message from a native structured
+            carrier. Omission treats the returned value as the raw message.
 
     Returns:
-        `BaseMessage`: The actual surfaced reply, before caller-owned parsing.
+        `Any`: The actual provider return, before caller-owned parsing.
 
     Raises:
         `_CapabilityFault`: Encoding or publishing messages fails.
         `_HostStop`: Cooperative cancellation was requested. Provider exceptions
             also propagate unchanged, including when failure publication fails.
     """
-    exchange_id = uuid4().hex
+    exchange_id = exchange_id or uuid4().hex
     with _memory_boundary():
         items = tuple(encode_message(message, exchange_id) for message in new_messages)
-        ordinal = turn.request("model", {"exchange_id": exchange_id}, items=items)
+        ordinal = turn.request("model", {"exchange_id": exchange_id, "purpose": purpose}, items=items)
     try:
         reply = invoke()
     except BaseException as primary:
-        interrupted = isinstance(primary, (_HostStop, AsyncCancelledError, FutureCancelledError)) or not isinstance(primary, Exception)
-        status = "interrupted" if interrupted else "failed"
-        # Provider exception text may contain credentials or request headers.
-        failure = MemoryOperationFailure("model", "api.model." + status,
-                                         f"Model invocation {status} ({type(primary).__name__}).", False)
-        try:
-            turn.observe(ordinal, status, failure=failure)
-        except BaseException as secondary:
-            if secondary is not primary:
-                try:
-                    if hasattr(primary, "add_note"):
-                        primary.add_note(f"Conversation observation failed: {type(secondary).__name__}: {secondary}")
-                except BaseException:
-                    pass
+        _observe_failure(turn, ordinal, "model", primary)
         raise
     with _memory_boundary():
-        turn.observe(ordinal, "completed", items=(encode_message(reply, exchange_id),))
+        raw = reply if raw_reply is None else raw_reply(reply)
+        turn.observe(ordinal, "completed", items=(encode_message(raw, exchange_id),))
     check_stopped()
     return reply
+
+
+def _observe_preserving_error(turn, ordinal, status, primary, *, failure=None):
+    """Preserve initiating identity while marking publication faults non-retryable.
+
+    Ordinary errors use the existing evaluator-unwrapped capability carrier when
+    publication also fails. BaseException cancellation and existing carriers retain
+    their control identity; in particular `_HostStop.primary` must stay visible.
+    """
+    try:
+        turn.observe(ordinal, status, failure=failure)
+    except BaseException as secondary:
+        original = primary.original if isinstance(primary, _CapabilityFault) else primary
+        if secondary is not primary and secondary is not original:
+            try:
+                if hasattr(original, "add_note"):
+                    original.add_note(f"Conversation observation failed: {type(secondary).__name__}: {secondary}")
+            except BaseException:
+                pass
+        if isinstance(primary, Exception) and not isinstance(
+            primary, (_CapabilityFault, _HostStop)
+        ):
+            raise _CapabilityFault(primary) from secondary
+
+
+def _observe_failure(turn, ordinal, operation, primary):
+    """Record a sanitized external-effect failure, preserving its exact exception."""
+    interrupted = isinstance(primary, (_HostStop, AsyncCancelledError, FutureCancelledError)) or not isinstance(primary, Exception)
+    status = "interrupted" if interrupted else "failed"
+    # External exception text may contain credentials or request headers.
+    failure = MemoryOperationFailure(operation, f"api.{operation}.{status}",
+                                     f"{operation.capitalize()} invocation {status} ({type(primary).__name__}).", False)
+    _observe_preserving_error(turn, ordinal, status, primary, failure=failure)
+
+
+def invoke_tool_effect(
+    turn: ConversationTurn,
+    invoke: Callable[[], Any],
+    *,
+    name: str,
+    arguments: JsonObject,
+    model_exchange_id: str,
+    call_index: int,
+    tool_call_id: str,
+    check_stopped: Callable[[], None],
+) -> ToolMessage:
+    """Persist one public tool invocation separately from result representation.
+
+    Args:
+        turn (`ConversationTurn`): Admitted backend-owned turn to update.
+        invoke (`Callable`): Existing public tool validation and invocation boundary.
+        name (`str`): Currently granted tool name.
+        arguments (`JsonObject`): Actual requested public tool arguments.
+        model_exchange_id (`str`): Unique model exchange that requested this call.
+        call_index (`int`): Zero-based call position within that model reply.
+        tool_call_id (`str`): Provider correlation ID, which may repeat across exchanges.
+        check_stopped (`Callable`): Cooperative stop check after publishing the result.
+
+    Returns:
+        `ToolMessage`: Actual represented result, already retained in session memory.
+
+    Raises:
+        `_CapabilityFault`: Encoding or memory access fails.
+        `_HostStop`: Cooperative cancellation occurs. Tool and representation errors
+            propagate unchanged; a representation error does not mark execution failed.
+    """
+    with _memory_boundary():
+        ordinal = turn.request("tool", {
+            "name": name, "arguments": arguments, "model_exchange_id": model_exchange_id,
+            "call_index": call_index, "tool_call_id": tool_call_id,
+        })
+    try:
+        result = invoke()
+    except BaseException as primary:
+        _observe_failure(turn, ordinal, "tool", primary)
+        raise
+    try:
+        text = str(result)
+        with _memory_boundary():
+            message = ToolMessage(content=text, tool_call_id=tool_call_id)
+            item = encode_message(message, model_exchange_id)
+    except BaseException as primary:
+        _observe_preserving_error(turn, ordinal, "completed", primary)
+        raise
+    with _memory_boundary():
+        turn.observe(ordinal, "completed", items=(item,))
+    check_stopped()
+    return message

@@ -352,13 +352,15 @@ def test_request_is_stored_before_provider_and_failed_effect_remains_truthful(mo
     with memory.open_run() as opened:
         assert "secret-marker" not in json.dumps(opened.snapshot)
     assert run_flow(flow, {"question": "second"}, memory={"session": memory}).output == "later"
-    assert [message.content for message in model.calls[-1][1:]] == ["first", "second"]
+    assert [message.content for message in model.calls[-1][1:]] == [
+        "first", 'Session history status (context only): [{"invocation":"failed"},{"effect":"model","status":"failed"}]', "second",
+    ]
 
 
 @pytest.mark.parametrize("host_stop", [False, True])
 def test_failed_observation_does_not_replace_provider_or_host_error(host_stop):
     from agent_composer.nodes.agent.conversation import invoke_model
-    from agent_composer.nodes.base import _HostStop
+    from agent_composer.nodes.base import _CapabilityFault, _HostStop
     primary = _HostStop("provider cancelled") if host_stop else ValueError("provider failed")
     seen = []
     def invoke():
@@ -367,9 +369,9 @@ def test_failed_observation_does_not_replace_provider_or_host_error(host_stop):
         seen.append(status)
         raise RuntimeError("cannot save failure")
     turn = SimpleNamespace(request=lambda *args, **kwargs: 1, observe=observe)
-    with pytest.raises(type(primary)) as caught:
+    with pytest.raises(type(primary) if host_stop else _CapabilityFault) as caught:
         invoke_model(turn, invoke, new_messages=[HumanMessage(content="input")], check_stopped=lambda: None)
-    assert caught.value is primary
+    assert (caught.value if host_stop else caught.value.original) is primary
     assert seen == ["interrupted" if host_stop else "failed"]
     if hasattr(primary, "add_note"):
         assert any("cannot save failure" in note for note in primary.__notes__)
@@ -403,7 +405,8 @@ def test_reply_after_stop_is_saved_and_resume_retries_using_latest_history(monke
     resumed = resume_flow(flow, log=path, memory={"session": memory})
     assert resumed.output == "retry done" and path.read_bytes().startswith(prefix)
     assert [message.content for message in model.calls[-1][1:]] == [
-        "question", "surfaced before cancellation", "question",
+        "question", "surfaced before cancellation",
+        'Session history status (context only): [{"invocation":"interrupted"}]', "question",
     ]
     view = _view(memory)
     assert len(view.effects) == 2 and len(view.items) == 6

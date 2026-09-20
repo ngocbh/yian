@@ -184,8 +184,18 @@ as committed notes for future runs, without another model call. API history uses
 soft 32,000-character context budget and preserves the latest four whole turns;
 older context can be summarized without deleting raw history. Configure these
 defaults on `SessionMemory(history_budget_chars=32_000, recent_turns=4)`.
-Run logs do not reconstruct history. Codex execution, durable storage, and CLI
-activation remain pending.
+Run logs do not reconstruct history. All three built-in memory backends optionally
+retain their state across restarts with `storage="./memory.sqlite"`:
+
+```python
+with SessionMemory(storage="./session.sqlite") as session:
+    result = run_flow(flow, inputs, memory={"session": session})
+```
+
+Each local SQLite file has one owning backend until `close()` or context exit.
+Idle run handles do not block closing; active work or queued turns do. Omit
+`storage` to keep memory process-local. See [durable memory](docs/api.md#optional-durable-memory)
+for ownership and recovery. Codex execution and CLI activation remain pending.
 
 ## Documentation
 

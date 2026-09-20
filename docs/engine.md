@@ -230,8 +230,9 @@ execution and cleanup, not later dispatcher acceptance. Runtime binds authored
 scope and accepted run/start identity without interpreting provider messages.
 Learned notes reuse the existing frame learning/commit/recall lifecycle; they do
 not add runtime conversation state. API summary selection and derived cache also
-belong to SessionMemory, with injected adapter/model callbacks. Codex execution, durable storage,
-and CLI activation remain pending. See
+belong to SessionMemory, with injected adapter/model callbacks. Optional SQLite
+storage belongs to the memory backends, not runtime. Codex execution and CLI
+activation remain pending. See
 [SessionMemory foundation](api.md#sessionmemory-foundation).
 
 When retention is enabled, the trace keeps the actual terminal producer and

@@ -252,7 +252,10 @@ Notes stay scoped to the owning frame and authored leaf; recall is pinned when
 the run opens. Host-only `SessionMemory(history_budget_chars=32_000, recent_turns=4)`
 controls API summaries of older context; do not put these settings in YAML.
 Raw history and recent whole turns stay intact, even above the soft budget.
-Codex execution, durable storage, and CLI activation
+All three built-in backend constructors accept optional `storage=path` for local
+SQLite durability; the default `None` remains process-local. Never put a storage
+path in YAML. A file has one owner until backend close; active work or queued
+turns block close, idle run handles do not. Codex execution and CLI activation
 are pending.
 Independently, `learnable=True` retains
 execution for a later explicit `result.backward(feedback)` call; forward returns

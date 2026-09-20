@@ -269,7 +269,7 @@ def test_closed_session_rejects_every_operation() -> None:
         assert exc.value.code == "episodic.session_closed"
 
 
-def test_module_imports_only_stdlib_and_memory_contracts() -> None:
+def test_module_imports_only_stdlib_and_lower_memory_modules() -> None:
     tree = ast.parse(Path(episodic.__file__ or "").read_text())
     imported = {
         a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names
@@ -279,14 +279,17 @@ def test_module_imports_only_stdlib_and_memory_contracts() -> None:
     )
     assert imported <= {
         "__future__",
+        "contextlib",
         "dataclasses",
         "hashlib",
         "json",
+        "os",
         "threading",
         "types",
         "typing",
         "uuid",
         "agent_composer.memory.contracts",
+        "agent_composer.memory.storage",
     }
 
 

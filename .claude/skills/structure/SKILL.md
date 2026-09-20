@@ -127,12 +127,17 @@ Memory conversation ownership follows the same lower-layer boundary.
 `memory/contracts.py` owns immutable conversation carriers and optional
 `ConversationFrame`/`ConversationTurn` protocols alongside the
 unchanged mandatory memory protocols. `memory/conversation.py` owns the pure fold,
-strict codecs, and digests. `memory/session.py` owns the concrete process-local
+strict codecs, and digests. `memory/session.py` owns the concrete
 `SessionMemory` backend: views, FIFO leases, atomic history/note publication, and
 derived summary state. `memory/summary.py` owns pure whole-turn selection and
 summary-cache prefix proofs. The backend depends on those lower modules and
 injected stop/projection/summary callables, never on nodes, runtime, compile,
-compose, or provider SDKs.
+compose, or provider SDKs. The private `memory/storage.py` adapter sits below all
+three concrete backends and owns single-host SQLite lifetime locking and atomic
+finite-JSON replacement. Backends validate semantic candidates and save before
+publishing RAM. Storage never imports concrete backends or serializes their live
+handles, queues, or callbacks. Optional host-only paths do not reach runtime,
+public snapshots, or YAML; the contracts-only facade does not export the adapter.
 There is no runtime conversation projection or recovery channel. `runtime.state`
 privately validates the four legacy wrappers owned by `runtime.log` and advances
 record/trace sequencing only. Those inert wrappers neither reconstruct history nor

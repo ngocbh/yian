@@ -1,13 +1,15 @@
-"""Process-local conversations with FIFO leases and atomic history updates.
+"""Process-local conversations and learned notes behind the memory protocols.
 
-This backend owns turn persistence and accepts an injected cooperative-stop check.
-It owns no provider, scheduler, run log, or durable storage.
+This backend owns FIFO turn persistence and atomic learned-note commits. It
+accepts an injected cooperative-stop check but owns no provider, scheduler,
+run log, model call, or durable storage.
 """
 
 from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
+import hashlib
 import json
 from threading import Condition
 from types import TracebackType
@@ -48,17 +50,88 @@ def _same(left: c.ConversationView, right: c.ConversationView) -> bool:
     )
 
 
+def _frame_json(ref: c.MemoryFrameRef) -> c.JsonObject:
+    return {
+        "root_flow_id": ref.root_flow_id,
+        "static_path": list(ref.static_path),
+        "owner": ref.owner.value,
+    }
+
+
+def _note_id(source: c.JsonObject) -> str:
+    return hashlib.sha256(_canonical(source).encode("utf-8")).hexdigest()
+
+
+def _admitted(
+    views: dict[c.ConversationKey, c.ConversationView],
+    key: c.ConversationKey,
+    run_id: str,
+    execution_seq: int,
+) -> bool:
+    view = views.get(key)
+    identity = _canonical([run_id, execution_seq, 0])
+    return view is not None and any(
+        entry.operation_id == identity for entry in view.applied
+    )
+
+
+def _validate_note(value: object) -> tuple[c.JsonObject, c.ConversationKey]:
+    """Detach a closed note and prove its source identity and lexical ownership."""
+    note = _wire(value)
+    if set(note) != {
+        "note_id",
+        "frame_ref",
+        "consumer_static_path",
+        "run_id",
+        "execution_seq",
+        "message_index",
+        "text",
+    }:
+        raise ValueError("note fields do not match the supported shape")
+    raw_ref = note["frame_ref"]
+    if type(raw_ref) is not dict or set(raw_ref) != {
+        "root_flow_id",
+        "static_path",
+        "owner",
+    }:
+        raise ValueError("invalid note frame identity")
+    if (
+        type(raw_ref["static_path"]) is not list
+        or type(note["consumer_static_path"]) is not list
+    ):
+        raise TypeError("note paths must be arrays")
+    c._require_string(raw_ref["owner"], "owner")
+    ref = c.MemoryFrameRef(
+        raw_ref["root_flow_id"],
+        tuple(raw_ref["static_path"]),
+        c.MemoryOwner(raw_ref["owner"]),
+    )
+    key = c.ConversationKey(ref, tuple(note["consumer_static_path"]))
+    c._require_string(note["run_id"], "run_id")
+    c._require_counter(note["execution_seq"], "execution_seq")
+    c._require_counter(note["message_index"], "message_index")
+    c._require_string(note["text"], "text", nonempty=False)
+    c._require_string(note["note_id"], "note_id")
+    if note["note_id"] != _note_id({k: v for k, v in note.items() if k != "note_id"}):
+        raise ValueError("note identity does not match its source")
+    return note, key
+
+
 def _snapshot(
-    namespace: str, generation: int, views: dict[c.ConversationKey, c.ConversationView]
+    namespace: str,
+    generation: int,
+    views: dict[c.ConversationKey, c.ConversationView],
+    notes: tuple[c.JsonObject, ...],
 ) -> c.JsonObject:
     return _wire(
         {
-            "version": 1,
+            "version": 2,
             "namespace": namespace,
             "generation": generation,
             "conversations": [
                 conversation_view_to_json(view) for view in views.values()
             ],
+            "notes": list(notes),
         }
     )
 
@@ -95,14 +168,20 @@ def _prefix(earlier: c.ConversationView, later: c.ConversationView) -> bool:
 
 def _parse_snapshot(
     value: object,
-) -> tuple[c.JsonObject, dict[c.ConversationKey, c.ConversationView]]:
+) -> tuple[
+    c.JsonObject, dict[c.ConversationKey, c.ConversationView], tuple[c.JsonObject, ...]
+]:
     """Decode the closed public envelope without normalizing its supplied order."""
     try:
         data = _wire(value)
-        if set(data) != {"version", "namespace", "generation", "conversations"}:
+        version = data.get("version")
+        if type(version) is not int or version not in (1, 2):
+            raise ValueError("snapshot version must be 1 or 2")
+        fields = {"version", "namespace", "generation", "conversations"}
+        if version == 2:
+            fields.add("notes")
+        if set(data) != fields:
             raise ValueError("snapshot fields do not match the supported version")
-        if type(data["version"]) is not int or data["version"] != 1:
-            raise ValueError("snapshot version must be 1")
         c._require_string(data["namespace"], "namespace")
         c._require_counter(data["generation"], "generation")
         if type(data["conversations"]) is not list:
@@ -116,7 +195,19 @@ def _parse_snapshot(
             ) or view.key in views:
                 raise ValueError("snapshot contains foreign or duplicate conversations")
             views[view.key] = view
-        return data, views
+        raw_notes = data.get("notes", [])
+        if type(raw_notes) is not list:
+            raise TypeError("notes must be an array")
+        notes, ids = [], set()
+        for raw in raw_notes:
+            note, key = _validate_note(raw)
+            if note["note_id"] in ids or not _admitted(
+                views, key, note["run_id"], note["execution_seq"]
+            ):
+                raise ValueError("snapshot contains duplicate or unadmitted notes")
+            ids.add(note["note_id"])
+            notes.append(note)
+        return data, views, tuple(notes)
     except (TypeError, ValueError) as exc:
         raise _error(
             "invalid_snapshot", "invalid SessionMemory snapshot", stage="snapshot"
@@ -136,7 +227,7 @@ class _Lease:
 
 
 class SessionMemory:
-    """Own process-local authored-leaf conversations behind memory protocols.
+    """Own process-local authored-leaf conversations and learned self-feedback.
 
     Example:
         ``memory = SessionMemory()`` creates an isolated namespace. Injected
@@ -151,6 +242,8 @@ class SessionMemory:
         self._generation = 0
         self._used = False
         self._views: dict[c.ConversationKey, c.ConversationView] = {}
+        self._notes: tuple[c.JsonObject, ...] = ()
+        self._applied_commits: dict[str, str] = {}
         self._queues: dict[c.ConversationKey, deque[_Lease]] = {}
         self._active: dict[c.ConversationKey, _Lease] = {}
         self._next_ticket = 0
@@ -172,19 +265,28 @@ class SessionMemory:
         parsed = None if snapshot is None else _parse_snapshot(snapshot)
         with self._condition:
             if parsed is None:
-                pinned = _snapshot(self._namespace, self._generation, self._views)
+                pinned = _snapshot(
+                    self._namespace, self._generation, self._views, self._notes
+                )
             else:
-                pinned, views = parsed
+                pinned, views, notes = parsed
                 if not self._used:
                     self._namespace = pinned["namespace"]
                     self._generation = pinned["generation"]
                     self._views = views
-                elif (pinned["namespace"], pinned["generation"]) != (
-                    self._namespace,
-                    self._generation,
-                ) or any(
-                    key not in self._views or not _prefix(view, self._views[key])
-                    for key, view in views.items()
+                    self._notes = notes
+                elif (
+                    (pinned["namespace"], pinned["generation"])
+                    != (
+                        self._namespace,
+                        self._generation,
+                    )
+                    or any(
+                        key not in self._views or not _prefix(view, self._views[key])
+                        for key, view in views.items()
+                    )
+                    or _canonical(list(notes))
+                    != _canonical(list(self._notes[: len(notes)]))
                 ):
                     raise _error(
                         "invalid_snapshot",
@@ -195,8 +297,9 @@ class SessionMemory:
             return _Session(self, pinned)
 
     def reset(self) -> None:
-        """Clear all conversations and invalidate older generation handles.
+        """Clear conversations and notes and invalidate older generation handles.
 
+        Commit tombstones remain so exact retries cannot resurrect cleared notes.
         The operation is process-local and does not delete provider resources.
 
         Raises:
@@ -209,6 +312,7 @@ class SessionMemory:
                     "busy", "cannot reset active or queued conversations", stage="reset"
                 )
             self._views.clear()
+            self._notes = ()
             self._generation += 1
             self._used = True
             self._condition.notify_all()
@@ -404,32 +508,100 @@ class _Session:
             return frame
 
     def commit(self, commit_id: str, mutations: tuple[c.MemoryMutation, ...]) -> None:
-        """Accept empty learning batches idempotently without changing history.
+        """Atomically append one exact idempotent batch of learned notes.
 
         Args:
-            commit_id (`str`): Nonempty caller-owned batch identity. Empty commits
-                require no retained commit journal.
-            mutations (`tuple[MemoryMutation, ...]`): Exact empty tuple; learning
-                mutations are unsupported in this backend version.
+            commit_id (`str`): Nonempty caller-owned batch identity. Exact replays
+                remain inert even after reset; a different batch is a collision.
+            mutations (`tuple[MemoryMutation, ...]`): Exact append-note proposals
+                for frames opened by this run handle. Empty batches are allowed.
 
         Raises:
             `TypeError`: The identity or batch has the wrong exact type.
-            `ValueError`: The identity is invalid or the batch is nonempty.
-            `MemoryOperationError`: This run handle is closed or reset-stale.
+            `ValueError`: The identity is empty or invalid.
+            `MemoryOperationError`: The batch is malformed, foreign, unadmitted,
+                or collides with a prior commit; the handle is closed or stale.
         """
         c._require_string(commit_id, "commit_id")
         if type(mutations) is not tuple:
             raise TypeError("mutations must be a tuple")
         with self._memory._condition:
             self._ensure_live()
-            if mutations:
-                raise ValueError("SessionMemory does not support learning mutations")
+            try:
+                mutations = c._validate_mutations(mutations)
+                additions, batch = [], []
+                for mutation in mutations:
+                    if mutation.frame_ref not in self._frames:
+                        raise ValueError(
+                            "mutation frame was not opened by this session"
+                        )
+                    payload = mutation.payload
+                    if (
+                        type(payload) is not dict
+                        or set(payload) != {"operation", "note"}
+                        or payload["operation"] != "append_note"
+                    ):
+                        raise ValueError(
+                            "mutation must be a closed append-note operation"
+                        )
+                    note, key = _validate_note(payload["note"])
+                    if (
+                        key.frame_ref != mutation.frame_ref
+                        or note["note_id"] != mutation.mutation_id
+                    ):
+                        raise ValueError("mutation and note identities must match")
+                    additions.append((note, key))
+                    batch.append(
+                        {
+                            "mutation_id": mutation.mutation_id,
+                            "frame_ref": _frame_json(mutation.frame_ref),
+                            "payload": payload,
+                        }
+                    )
+                digest = hashlib.sha256(_canonical(batch).encode("utf-8")).hexdigest()
+            except (TypeError, ValueError) as exc:
+                raise _error(
+                    "invalid_batch", "mutation batch is invalid", stage="commit"
+                ) from exc
+            previous = self._memory._applied_commits.get(commit_id)
+            if previous is not None:
+                if previous == digest:
+                    return
+                raise _error(
+                    "commit_collision",
+                    "commit id identifies a different batch",
+                    stage="commit",
+                )
+            try:
+                notes = {note["note_id"]: note for note in self._memory._notes}
+                for note, key in additions:
+                    if not _admitted(
+                        self._memory._views, key, note["run_id"], note["execution_seq"]
+                    ):
+                        raise ValueError("note has no matching conversation admission")
+                    retained = notes.get(note["note_id"])
+                    if retained is not None and _canonical(retained) != _canonical(
+                        note
+                    ):
+                        raise ValueError("note id identifies different content")
+                    notes[note["note_id"]] = note
+                candidate = tuple(notes.values())
+                _snapshot(
+                    self._namespace, self._generation, self._memory._views, candidate
+                )
+            except (TypeError, ValueError) as exc:
+                raise _error(
+                    "invalid_batch", "mutation batch is invalid", stage="commit"
+                ) from exc
+            commits = {**self._memory._applied_commits, commit_id: digest}
+            self._memory._notes = candidate
+            self._memory._applied_commits = commits
 
     def _candidate_snapshot(self, view: c.ConversationView) -> None:
         """Prove that publishing a view cannot make public snapshots unrestorable."""
         views = dict(self._memory._views)
         views[view.key] = view
-        _snapshot(self._namespace, self._generation, views)
+        _snapshot(self._namespace, self._generation, views, self._memory._notes)
 
     def _ensure_lease(
         self, lease: _Lease | None, *, allow_closed: bool = False
@@ -458,14 +630,15 @@ class _Frame:
         self._spec = spec
 
     def recall(self, context: c.RecallContext | None = None) -> str:
-        """Return no recall text; conversation history uses the turn capability.
+        """Recall this frame's pinned notes for exactly one authored consumer.
 
         Args:
             context (`RecallContext | None`): Optional exact visible-context carrier;
-                defaults to `None`. Session history is not rendered as recall text.
+                defaults to `None`, which yields no notes. Raw conversation
+                history is not rendered as recall text.
 
         Returns:
-            `str`: Always the empty string.
+            `str`: Notes from the run-opening snapshot, in retained order.
 
         Raises:
             `TypeError`: A supplied context is not an exact recall-context carrier.
@@ -475,27 +648,111 @@ class _Frame:
             raise TypeError("context must be a RecallContext or None")
         with self._session._memory._condition:
             self._session._ensure_live()
-            return ""
+            if context is None:
+                return ""
+            context = c.RecallContext(
+                context.base_system_prompt,
+                context.prompt,
+                context.inputs,
+                context.consumer_static_path,
+            )
+            return "\n".join(
+                note["text"]
+                for note in self._session._pinned.get("notes", [])
+                if note["frame_ref"] == _frame_json(self._spec.ref)
+                and note["consumer_static_path"] == list(context.consumer_static_path)
+            )
 
     def learn(self, context: c.LearnContext) -> list[c.MemoryMutation]:
-        """Return no mutations; automatic turn updates retain history.
+        """Propose notes from self-feedback for this frame's admitted invocations.
 
         Args:
             context (`LearnContext`): Exact validated frame learning context.
 
         Returns:
-            `list[MemoryMutation]`: A fresh empty list; learning notes are not
-                implemented by this backend version.
+            `list[MemoryMutation]`: Deterministic append-note proposals. Automatic
+                history is unchanged, and no provider or model is called.
 
         Raises:
             `TypeError`: The context is not an exact learning-context carrier.
-            `MemoryOperationError`: This frame's run handle is closed or reset-stale.
+            `MemoryOperationError`: The context is invalid for this frame, or its
+                run handle is closed or reset-stale.
         """
         if type(context) is not c.LearnContext:
             raise TypeError("context must be a LearnContext")
         with self._session._memory._condition:
             self._session._ensure_live()
-            return []
+            try:
+                if context.frame_ref != self._spec.ref:
+                    raise ValueError("learning context belongs to another frame")
+                context = c.LearnContext(
+                    context.run_id,
+                    context.frame_ref,
+                    context.episodes,
+                    context.feedback,
+                )
+                episodes = {}
+                for episode in context.episodes:
+                    path = episode.owner_static_path
+                    owner = self._spec.ref.static_path
+                    if path[: len(owner)] != owner or (
+                        self._spec.ref.owner is c.MemoryOwner.AGENT and path != owner
+                    ):
+                        raise ValueError("episode is outside its owning frame")
+                    if episode.execution_seq is not None:
+                        if episode.execution_seq in episodes:
+                            raise ValueError(
+                                "episode execution coordinates must be unique"
+                            )
+                        episodes[episode.execution_seq] = episode
+                notes = {}
+                for feedback in context.feedback:
+                    if (
+                        type(feedback) is not dict
+                        or feedback.get("channel") != "self"
+                        or feedback.get("root") is True
+                    ):
+                        continue
+                    sequence = feedback.get("execution_seq")
+                    if sequence is None:
+                        continue
+                    c._require_counter(sequence, "execution_seq")
+                    episode = episodes.get(sequence)
+                    if episode is None:
+                        continue
+                    # Structural flow episodes have no authored leaf conversation.
+                    if (
+                        self._spec.ref.owner is c.MemoryOwner.FLOW
+                        and episode.owner_static_path == self._spec.ref.static_path
+                    ):
+                        continue
+                    key = c.ConversationKey(self._spec.ref, episode.owner_static_path)
+                    if not _admitted(
+                        self._session._memory._views, key, context.run_id, sequence
+                    ):
+                        continue
+                    source = {
+                        "frame_ref": _frame_json(self._spec.ref),
+                        "consumer_static_path": list(episode.owner_static_path),
+                        "run_id": context.run_id,
+                        "execution_seq": sequence,
+                        "message_index": feedback.get("message_index"),
+                        "text": feedback.get("value"),
+                    }
+                    note, _ = _validate_note({"note_id": _note_id(source), **source})
+                    notes[note["note_id"]] = note
+                return [
+                    c.MemoryMutation(
+                        note_id,
+                        self._spec.ref,
+                        {"operation": "append_note", "note": note},
+                    )
+                    for note_id, note in notes.items()
+                ]
+            except (TypeError, ValueError) as exc:
+                raise _error(
+                    "invalid_context", "learning context is invalid", stage="learn"
+                ) from exc
 
     def open_turn(
         self,

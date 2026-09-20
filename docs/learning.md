@@ -46,8 +46,10 @@ without any memory policy.
 This separation lets an application collect evaluator feedback without a memory
 backend, or use recalled context in an ordinary non-learnable run.
 [`SessionMemory`](api.md#sessionmemory-foundation) saves actual API conversation
-exchanges automatically during forward. These history updates are not learning;
-its backward learned-note support is still pending.
+exchanges automatically during forward. These history updates are not learning.
+Explicit API backward self-feedback can become committed notes for future calls
+through the existing memory lifecycle, without another model call. No-feedback
+backward adds no session notes; raw conversation history stays unchanged.
 
 ## Start an explicit backward attempt
 

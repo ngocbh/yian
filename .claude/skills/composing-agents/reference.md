@@ -388,7 +388,12 @@ Repeated MAP/LOOP executions share it and queue in admission order, not guarante
 MAP input order. Use non-session memory for independent MAP items. History advances
 automatically during forward, independently of `learnable` or backward. Current
 instructions and tool permissions still apply; restoring history never executes
-old tool calls. Codex, summaries, learned notes, and durable storage remain pending.
+old tool calls. Explicit API backward self-feedback can become committed notes
+for the owning conversation through the existing frame learn/session commit/recall
+lifecycle, without another model call or YAML selector. Notes are recalled from
+the run-opening snapshot and do not rewrite raw conversation history. No-feedback
+backward adds no session notes. Codex execution, summaries, and durable storage
+remain pending.
 `learnable=True` independently retains execution; forward does not run frame
 learners or commit learned mutations.
 Call `result.backward(feedback)` explicitly after forward returns, and inspect

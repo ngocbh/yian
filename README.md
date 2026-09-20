@@ -175,8 +175,10 @@ session.reset()  # Starts fresh; fails while any turn is active or queued.
 
 History advances automatically, without `learnable=True` or backward. Repeated
 calls to the same authored agent queue in admission order; other authored agents
-keep separate conversations. Run logs do not reconstruct history. Codex,
-summaries, learned notes, durable storage, and CLI activation remain pending.
+keep separate conversations. Explicit backward learning reuses API self-feedback
+as committed notes for future runs, without another model call. Run logs do not
+reconstruct history. Codex execution, summaries, durable storage, and CLI
+activation remain pending.
 
 ## Documentation
 

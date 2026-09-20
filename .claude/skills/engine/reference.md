@@ -343,7 +343,7 @@ all forward fields unchanged.
 `SessionMemory` in `agent_composer.memory.session` implements process-local
 conversation state and direct turn updates for API-backed AGENT execution.
 The host injects the backend into `run_flow` under the declared policy name.
-Codex, summaries, learned notes, durable storage, and CLI activation remain pending. The
+Codex, summaries, durable storage, and CLI activation remain pending. The
 `agent_composer.memory` facade remains contracts-only. `MemorySession` still names
 the mandatory run-handle protocol; optional `ConversationFrame` and
 `ConversationTurn` add conversation capabilities without
@@ -397,8 +397,10 @@ occurrence or runtime ID. A flow-owned frame therefore has independent leaf
 conversations and FIFO queues, with no fork selector. FIFO means admission order,
 not MAP input-index order. Acquire the lease before
 reading current live history. Run snapshots remain detached and pinned; their
-closed version-1 envelope contains namespace, generation, and complete views,
-never coordination state. No durable storage is implemented.
+closed version-2 envelope contains namespace, generation, complete views, and
+learned notes, never coordination state or the private commit ledger. Accept
+version-1 history as no notes and preserve its exact envelope when pinned.
+No durable storage is implemented.
 
 `frame.open_turn(request, check_stopped=check)` returns a queued context manager.
 Its request/observe operations validate the complete candidate snapshot before
@@ -417,11 +419,17 @@ export while consuming newer live history. A pristine backend has only the suppl
 snapshot; later progress requires backend retention, not reconstruction from RunLog.
 
 History updates through this optional capability do not depend on `learnable`.
-Recall returns empty text, learn returns no mutations, and only empty commits are
-supported. Exact compatibility changes require reset. Backend-wide `reset()` fails
-unchanged if any turn is active or queued; otherwise it clears local history and
-advances generation, and makes old handles stale. It does not delete
-external provider history or files.
+Explicit API backward self-feedback becomes deterministic notes through existing
+frame learn/session commit, without another model call. Match actual admissions
+for this frame and authored leaf; use the episode's root-prefixed owner path
+joined by execution sequence. Ancestor recall-only frames must not duplicate
+learning. Commit validates the whole batch before atomic publication and deduplicates
+replays. Contextual recall selects this leaf's pinned run-opening notes; no-context
+recall is empty. Learning changes neither raw conversation values nor their ledger.
+Exact compatibility changes require reset. Backend-wide `reset()` fails unchanged
+if any turn is active or queued; otherwise it clears history and notes, retains
+commit deduplication, advances generation, and makes old handles stale. It does
+not delete external provider history or files.
 
 ## OCaml analogue map (design from this)
 

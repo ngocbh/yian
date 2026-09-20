@@ -246,7 +246,11 @@ conversation per authored AGENT leaf; other frames still provide recall. Repeate
 calls queue, including MAP items and LOOP iterations. MAP does not fork history
 or promise input-index admission order; use non-session memory for independent
 items. Session history updates automatically during forward, without learning.
-Codex, summaries, learned notes, durable storage, and CLI activation are pending.
+Explicit API backward self-feedback can become committed SessionMemory notes for
+future calls through the same policy, without another model call or YAML option.
+Notes stay scoped to the owning frame and authored leaf; recall is pinned when
+the run opens. Codex execution, summaries, durable storage, and CLI activation
+are pending.
 Independently, `learnable=True` retains
 execution for a later explicit `result.backward(feedback)` call; forward returns
 before frame learning or learned-mutation commits. `result.backward()` with no external feedback still

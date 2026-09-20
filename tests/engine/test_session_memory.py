@@ -249,13 +249,13 @@ def test_session_recall_is_empty():
             h.frame.recall({})
 
 
-def test_session_learn_and_commit_accept_empty_only():
+def test_session_learn_and_commit_accept_empty_batches():
     with harness() as h:
         before = snapshot(h.memory)
         assert h.frame.learn(c.LearnContext("a", REF, ())) == []
         h.session.commit("same", ())
         h.session.commit("same", ())
-        with pytest.raises(ValueError):
+        with pytest.raises(c.MemoryOperationError):
             h.session.commit("same", (c.MemoryMutation("m", REF, {}),))
         with pytest.raises(TypeError):
             h.session.commit("same", [])
@@ -830,7 +830,7 @@ def test_snapshot_rejects_invalid_container_or_nonfinite_json(case):
     elif case == "version_bool":
         exported["version"] = True
     elif case == "version_unknown":
-        exported["version"] = 2
+        exported["version"] = 3
     elif case == "generation_bool":
         exported["generation"] = False
     elif case == "generation_negative":

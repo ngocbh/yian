@@ -36,6 +36,48 @@ from agent_composer.runtime.state import (
 from agent_composer.typesys import VariablePool
 
 
+# Original schema-7 writer output; keep these bytes independent of the current codec.
+_SCHEMA_SEVEN_LINEAR = (
+    (
+        b'{"kind":"run_started","payload":{"effective_llm_by_static_path":{},'
+        b'"flow_fingerprint":"f9dc393826a54789e40a098e4605a49c79aa199a801ad1b4b7a7ed1295949e74",'
+        b'"initial_pool":{"start_id":"__start__","store":{"__start__":{"kind":"object",'
+        b'"value":{"x":"Ada"}}},"system":{"now":{"kind":"datetime",'
+        b'"value":"2026-09-20T01:23:31.293007+00:00"},"run_id":{"kind":"str",'
+        b'"value":"historical-linear"},"today":{"kind":"date","value":"2026-09-20"}}},"learnable":false,'
+        b'"memory_layout":null,"memory_snapshots":null,"num_workers":0,'
+        b'"start_wiring_override":{"x":"${input.x}"}},"run_id":"historical-linear","schema":7,"seq":0}'
+    ),
+    (
+        b'{"kind":"node_started","payload":{"node_id":"__start__"},"run_id":"historical-linear",'
+        b'"schema":7,"seq":1}'
+    ),
+    (
+        b'{"kind":"node_succeeded","payload":{"commit_target":"__start__","evidence":null,'
+        b'"forward_capture":null,"node_id":"__start__","value":{"kind":"object","value":{"x":"Ada"}}},'
+        b'"run_id":"historical-linear","schema":7,"seq":2}'
+    ),
+    (
+        b'{"kind":"node_started","payload":{"node_id":"n"},"run_id":"historical-linear","schema":7,'
+        b'"seq":3}'
+    ),
+    (
+        b'{"kind":"node_succeeded","payload":{"commit_target":"n","evidence":null,"forward_capture":null,'
+        b'"node_id":"n","value":{"kind":"str","value":"Ada"}},"run_id":"historical-linear","schema":7,'
+        b'"seq":4}'
+    ),
+    (
+        b'{"kind":"node_started","payload":{"node_id":"__end__"},"run_id":"historical-linear","schema":7,'
+        b'"seq":5}'
+    ),
+    (
+        b'{"kind":"node_succeeded","payload":{"commit_target":"__end__","evidence":null,'
+        b'"forward_capture":null,"node_id":"__end__","value":{"kind":"str","value":"Ada"}},'
+        b'"run_id":"historical-linear","schema":7,"seq":6}'
+    ),
+)
+
+
 _RUN_ID = "recovery-run"
 
 _LINEAR = """
@@ -327,6 +369,56 @@ def test_replay_applies_logged_llm_map_before_rebuilding_growth(monkeypatch):
     assert source.append_calls == 0
     assert source.close_calls == 0
     assert flow_manifest(loaded.compiled) == original_manifest
+
+
+def test_historical_cursor_matches_each_envelopes_schema():
+    from agent_composer.runtime.log import decode_record, encode_record
+
+    cursor = state_module._HistoricalLogCursor(_SCHEMA_SEVEN_LINEAR)
+    for wire in _SCHEMA_SEVEN_LINEAR:
+        expected = decode_record(wire)
+        before = cursor.next_sequence
+        with pytest.raises(ValueError, match="historical"):
+            cursor.append(NodeStartedRecord("wrong"))
+        assert cursor.next_sequence == before
+        accepted = cursor.append(expected.record)
+        assert accepted.schema == expected.schema == 7
+        assert encode_record(accepted) == wire
+    assert cursor.next_sequence == len(_SCHEMA_SEVEN_LINEAR)
+
+
+@pytest.mark.parametrize("prefix_length", [5, 6])
+def test_schema_seven_public_resume_keeps_completed_code_and_wire(tmp_path, monkeypatch, prefix_length):
+    from agent_composer.nodes.code import CodeNode
+    from agent_composer.runtime.log import JsonlRunLog, decode_record, encode_record
+
+    flow = load_flow(_LINEAR)
+    prefix = b"\n".join(_SCHEMA_SEVEN_LINEAR[:prefix_length]) + b"\n"
+    path = tmp_path / "historical.jsonl"
+    path.write_bytes(prefix)
+    monkeypatch.setattr(CodeNode, "forward", lambda *args, **kwargs: pytest.fail("accepted CODE reran"))
+    monkeypatch.setattr(run_module, "default_llm_provider", lambda: pytest.fail("read current defaults"))
+    monkeypatch.setattr(run_module, "default_llm_model", lambda: pytest.fail("read current defaults"))
+
+    result = run_module.resume_flow(flow, log=path)
+
+    assert result.status == "succeeded" and result.output == "Ada"
+    assert result.run_id == "historical-linear" and result.input == {"x": "Ada"}
+    assert path.read_bytes().startswith(prefix)
+    with JsonlRunLog.resume(path) as log:
+        envelopes = tuple(log)
+        replayed = run_module._replay_run_log(flow, log)
+    assert tuple(encode_record(item) for item in envelopes[:prefix_length]) == _SCHEMA_SEVEN_LINEAR[:prefix_length]
+    assert all(item.schema == SCHEMA_VERSION for item in envelopes[prefix_length:])
+    start = decode_record(_SCHEMA_SEVEN_LINEAR[0]).record
+    assert replayed.flow_fingerprint == start.flow_fingerprint == flow_fingerprint(flow.compiled)
+    assert replayed.effective_llm_by_static_path == start.effective_llm_by_static_path
+    assert replayed.num_workers == start.num_workers == 0
+    assert replayed.learnable is False and replayed.trace is None
+    complete = path.read_bytes()
+    inspected = run_module.resume_flow(flow, log=path)
+    assert inspected.output == result.output and inspected.events == []
+    assert path.read_bytes() == complete
 
 
 def test_replay_rejects_changed_but_valid_growth_digest(monkeypatch):

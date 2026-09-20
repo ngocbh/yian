@@ -12,6 +12,37 @@ def _frame(name="agent"):
     return MemoryFrameRef("root", ("root", name), MemoryOwner.AGENT)
 
 
+@pytest.mark.parametrize("failed,index", [
+    (False, 7), (False, 8), (False, 9), (False, 10), (False, 11),
+    (True, 10), (True, 11),
+], ids=["started", "ready", "requested", "succeeded", "finished", "failed", "failed-finished"])
+def test_historical_backward_prepares_recorded_schema_bytes(failed, index):
+    import agent_composer.run as run_module
+    from agent_composer.compose import load_flow
+    from agent_composer.runtime.log import decode_record
+    from agent_composer.runtime.state import _HistoricalLogCursor, commit_prepared, prepare_record
+    from tests.engine.test_backward_recovery import (
+        _SCHEMA_SEVEN_BACKWARD, _SCHEMA_SEVEN_BACKWARD_FAILED, _SCHEMA_SEVEN_BACKWARD_FLOW,
+    )
+    from tests.engine.test_run_recovery_prefixes import _ReadOnlyLog
+
+    wires = (_SCHEMA_SEVEN_BACKWARD_FAILED if failed else _SCHEMA_SEVEN_BACKWARD)[:index + 1]
+    state = run_module._replay_run_log(
+        load_flow(_SCHEMA_SEVEN_BACKWARD_FLOW),
+        _ReadOnlyLog(tuple(decode_record(wire) for wire in wires[:-1])),
+    )
+    before = state.backward_state
+    prepared = prepare_record(state, decode_record(wires[-1]).record, schema=7)
+    assert prepared._plan.envelope_bytes == wires[-1]
+    assert state.backward_state is before
+    cursor = _HistoricalLogCursor(wires)
+    for wire in wires[:-1]:
+        cursor.append(decode_record(wire).record)
+    commit_prepared(cursor, state, prepared)
+    assert state.next_sequence == index + 1
+    assert state.backward_state is not before
+
+
 def test_frame_proposal_owns_detached_mutations_in_supplied_order():
     from agent_composer.runtime.contracts import FrameProposal
 

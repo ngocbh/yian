@@ -25,6 +25,270 @@ from tests.engine.test_run_log import _FileProxy
 from tests.engine.test_run_memory import _records
 
 
+# Original schema-7 writer output; keep these bytes independent of the current codec.
+_SCHEMA_SEVEN_BACKWARD = (
+    (
+        b'{"kind":"run_started","payload":{"effective_llm_by_static_path":{},'
+        b'"flow_fingerprint":"ed4fe1caf92173a60b1390193175e7dafa56280c31d28dbd62f8f073e2254320",'
+        b'"initial_pool":{"start_id":"__start__","store":{"__start__":{"kind":"object","value":{}}},'
+        b'"system":{"now":{"kind":"datetime","value":"2026-09-20T01:23:31.401520+00:00"},'
+        b'"run_id":{"kind":"str","value":"historical-backward"},"today":{"kind":"date",'
+        b'"value":"2026-09-20"}}},"learnable":true,"memory_layout":[{"config":{},"policy_name":"test",'
+        b'"ref":{"owner":"flow","root_flow_id":"historical-backward",'
+        b'"static_path":["historical-backward"]}}],"memory_snapshots":[{"policy_name":"test",'
+        b'"snapshot":{"namespace":"test"}}],"num_workers":0,"start_wiring_override":{}},'
+        b'"run_id":"historical-backward","schema":7,"seq":0}'
+    ),
+    (
+        b'{"kind":"node_started","payload":{"node_id":"__start__"},"run_id":"historical-backward",'
+        b'"schema":7,"seq":1}'
+    ),
+    (
+        b'{"kind":"node_succeeded","payload":{"commit_target":"__start__","evidence":null,'
+        b'"forward_capture":{"bound_inputs":{},"evaluated_keys":[],"input_names":[],"items":[],'
+        b'"node_data":{"input_output_paths":{}},"route":{"children":[],"content_index":0,"count":0,'
+        b'"expression":"{}","kind":"record","names":[],"path":[],"result_type":null,"sizes":[],'
+        b'"snapshot":null,"source":null,"spans":[],"value_json":null},"scope":{"boundary":"start",'
+        b'"flow_path":[],"occurrence_path":[],"static_path":["__start__"]},"variable_names":[]},'
+        b'"node_id":"__start__","value":{"kind":"object","value":{}}},"run_id":"historical-backward",'
+        b'"schema":7,"seq":2}'
+    ),
+    (
+        b'{"kind":"node_started","payload":{"node_id":"work"},"run_id":"historical-backward","schema":7,'
+        b'"seq":3}'
+    ),
+    (
+        b'{"kind":"node_succeeded","payload":{"commit_target":"work","evidence":null,'
+        b'"forward_capture":{"bound_inputs":{},"evaluated_keys":[],"input_names":[],"items":[],'
+        b'"node_data":{},"route":{"children":[],"content_index":0,"count":0,"expression":"{}",'
+        b'"kind":"record","names":[],"path":[],"result_type":null,"sizes":[],"snapshot":null,'
+        b'"source":null,"spans":[],"value_json":null},"scope":{"boundary":null,"flow_path":[],'
+        b'"occurrence_path":[],"static_path":["work"]},"variable_names":[]},"node_id":"work",'
+        b'"value":{"kind":"int","value":3}},"run_id":"historical-backward","schema":7,"seq":4}'
+    ),
+    (
+        b'{"kind":"node_started","payload":{"node_id":"__end__"},"run_id":"historical-backward",'
+        b'"schema":7,"seq":5}'
+    ),
+    (
+        b'{"kind":"node_succeeded","payload":{"commit_target":"__end__","evidence":null,'
+        b'"forward_capture":{"bound_inputs":{"result":3},"evaluated_keys":["result"],'
+        b'"input_names":["result"],"items":[],"node_data":{"input_output_paths":{"result":[]}},'
+        b'"route":{"children":[{"children":[],"content_index":0,"count":0,"expression":"work.output",'
+        b'"kind":"source","names":[],"path":[],"result_type":null,"sizes":[],"snapshot":null,'
+        b'"source":{"execution_seq":3,"path":[],"run_id":"historical-backward"},"spans":[],'
+        b'"value_json":null}],"content_index":0,"count":0,"expression":"{result: work.output}",'
+        b'"kind":"record","names":["result"],"path":[],"result_type":null,"sizes":[],"snapshot":null,'
+        b'"source":null,"spans":[],"value_json":null},"scope":{"boundary":"end","flow_path":[],'
+        b'"occurrence_path":[],"static_path":["__end__"]},"variable_names":[]},"node_id":"__end__",'
+        b'"value":{"kind":"int","value":3}},"run_id":"historical-backward","schema":7,"seq":6}'
+    ),
+    (
+        b'{"kind":"backward_started","payload":{"attempt_id":1,"feedback":null},'
+        b'"run_id":"historical-backward","schema":7,"seq":7}'
+    ),
+    (
+        b'{"kind":"backward_ready","payload":{"attempt_id":1,"attributed_results":[{"attribution":[],'
+        b'"feedback":[],"invoked":false,"result":{"input_feedback":{},"self_feedback":[],'
+        b'"variable_feedback":{}},"source":{"execution_seq":1,"path":[],"run_id":"historical-backward"}},'
+        b'{"attribution":[],"feedback":[],"invoked":false,"result":{"input_feedback":{},'
+        b'"self_feedback":[],"variable_feedback":{}},"source":{"execution_seq":3,"path":[],'
+        b'"run_id":"historical-backward"}},{"attribution":[],"feedback":[],"invoked":false,'
+        b'"result":{"input_feedback":{},"self_feedback":[],"variable_feedback":{}},'
+        b'"source":{"execution_seq":5,"path":[],"run_id":"historical-backward"}}],'
+        b'"frame_proposals":[{"frame_ref":{"owner":"flow","root_flow_id":"historical-backward",'
+        b'"static_path":["historical-backward"]},"mutations":[]}],"root_result":{"input_feedback":{},'
+        b'"self_feedback":[],"variable_feedback":{}}},"run_id":"historical-backward","schema":7,"seq":8}'
+    ),
+    (
+        b'{"kind":"memory_commit_requested","payload":{"attempt_id":1,'
+        b'"commit_id":"ac-memory-v1:a3620f10df9d89d0432ae7ed0e27ae97b71ffa6832536fac075bc0053d749dd9",'
+        b'"mutations":[],"policy_name":"test"},"run_id":"historical-backward","schema":7,"seq":9}'
+    ),
+    (
+        b'{"kind":"memory_commit_succeeded","payload":{"attempt_id":1,'
+        b'"commit_id":"ac-memory-v1:a3620f10df9d89d0432ae7ed0e27ae97b71ffa6832536fac075bc0053d749dd9",'
+        b'"policy_name":"test"},"run_id":"historical-backward","schema":7,"seq":10}'
+    ),
+    (
+        b'{"kind":"backward_finished","payload":{"attempt_id":1,"attributed_results":[],'
+        b'"outcome":{"failure":null,"feedback":{"input_feedback":{},"self_feedback":[],'
+        b'"variable_feedback":{}},"learning":{"failures":[],'
+        b'"policies":[{"commit_id":"ac-memory-v1:a3620f10df9d89d0432ae7ed0e27ae97b71ffa6832536fac075bc005'
+        b'3d749dd9","failure":null,"policy_name":"test","status":"succeeded"}],"status":"succeeded"},'
+        b'"status":"succeeded"}},"run_id":"historical-backward","schema":7,"seq":11}'
+    ),
+)
+
+
+# Original schema-7 writer output; keep these bytes independent of the current codec.
+_SCHEMA_SEVEN_BACKWARD_FAILED = (
+    (
+        b'{"kind":"run_started","payload":{"effective_llm_by_static_path":{},'
+        b'"flow_fingerprint":"ed4fe1caf92173a60b1390193175e7dafa56280c31d28dbd62f8f073e2254320",'
+        b'"initial_pool":{"start_id":"__start__","store":{"__start__":{"kind":"object","value":{}}},'
+        b'"system":{"now":{"kind":"datetime","value":"2026-09-20T01:23:31.431818+00:00"},'
+        b'"run_id":{"kind":"str","value":"historical-backward_failed"},"today":{"kind":"date",'
+        b'"value":"2026-09-20"}}},"learnable":true,"memory_layout":[{"config":{},"policy_name":"test",'
+        b'"ref":{"owner":"flow","root_flow_id":"historical-backward",'
+        b'"static_path":["historical-backward"]}}],"memory_snapshots":[{"policy_name":"test",'
+        b'"snapshot":{"namespace":"test"}}],"num_workers":0,"start_wiring_override":{}},'
+        b'"run_id":"historical-backward_failed","schema":7,"seq":0}'
+    ),
+    (
+        b'{"kind":"node_started","payload":{"node_id":"__start__"},"run_id":"historical-backward_failed",'
+        b'"schema":7,"seq":1}'
+    ),
+    (
+        b'{"kind":"node_succeeded","payload":{"commit_target":"__start__","evidence":null,'
+        b'"forward_capture":{"bound_inputs":{},"evaluated_keys":[],"input_names":[],"items":[],'
+        b'"node_data":{"input_output_paths":{}},"route":{"children":[],"content_index":0,"count":0,'
+        b'"expression":"{}","kind":"record","names":[],"path":[],"result_type":null,"sizes":[],'
+        b'"snapshot":null,"source":null,"spans":[],"value_json":null},"scope":{"boundary":"start",'
+        b'"flow_path":[],"occurrence_path":[],"static_path":["__start__"]},"variable_names":[]},'
+        b'"node_id":"__start__","value":{"kind":"object","value":{}}},'
+        b'"run_id":"historical-backward_failed","schema":7,"seq":2}'
+    ),
+    (
+        b'{"kind":"node_started","payload":{"node_id":"work"},"run_id":"historical-backward_failed",'
+        b'"schema":7,"seq":3}'
+    ),
+    (
+        b'{"kind":"node_succeeded","payload":{"commit_target":"work","evidence":null,'
+        b'"forward_capture":{"bound_inputs":{},"evaluated_keys":[],"input_names":[],"items":[],'
+        b'"node_data":{},"route":{"children":[],"content_index":0,"count":0,"expression":"{}",'
+        b'"kind":"record","names":[],"path":[],"result_type":null,"sizes":[],"snapshot":null,'
+        b'"source":null,"spans":[],"value_json":null},"scope":{"boundary":null,"flow_path":[],'
+        b'"occurrence_path":[],"static_path":["work"]},"variable_names":[]},"node_id":"work",'
+        b'"value":{"kind":"int","value":3}},"run_id":"historical-backward_failed","schema":7,"seq":4}'
+    ),
+    (
+        b'{"kind":"node_started","payload":{"node_id":"__end__"},"run_id":"historical-backward_failed",'
+        b'"schema":7,"seq":5}'
+    ),
+    (
+        b'{"kind":"node_succeeded","payload":{"commit_target":"__end__","evidence":null,'
+        b'"forward_capture":{"bound_inputs":{"result":3},"evaluated_keys":["result"],'
+        b'"input_names":["result"],"items":[],"node_data":{"input_output_paths":{"result":[]}},'
+        b'"route":{"children":[{"children":[],"content_index":0,"count":0,"expression":"work.output",'
+        b'"kind":"source","names":[],"path":[],"result_type":null,"sizes":[],"snapshot":null,'
+        b'"source":{"execution_seq":3,"path":[],"run_id":"historical-backward_failed"},"spans":[],'
+        b'"value_json":null}],"content_index":0,"count":0,"expression":"{result: work.output}",'
+        b'"kind":"record","names":["result"],"path":[],"result_type":null,"sizes":[],"snapshot":null,'
+        b'"source":null,"spans":[],"value_json":null},"scope":{"boundary":"end","flow_path":[],'
+        b'"occurrence_path":[],"static_path":["__end__"]},"variable_names":[]},"node_id":"__end__",'
+        b'"value":{"kind":"int","value":3}},"run_id":"historical-backward_failed","schema":7,"seq":6}'
+    ),
+    (
+        b'{"kind":"backward_started","payload":{"attempt_id":1,"feedback":null},'
+        b'"run_id":"historical-backward_failed","schema":7,"seq":7}'
+    ),
+    (
+        b'{"kind":"backward_ready","payload":{"attempt_id":1,"attributed_results":[{"attribution":[],'
+        b'"feedback":[],"invoked":false,"result":{"input_feedback":{},"self_feedback":[],'
+        b'"variable_feedback":{}},"source":{"execution_seq":1,"path":[],'
+        b'"run_id":"historical-backward_failed"}},{"attribution":[],"feedback":[],"invoked":false,'
+        b'"result":{"input_feedback":{},"self_feedback":[],"variable_feedback":{}},'
+        b'"source":{"execution_seq":3,"path":[],"run_id":"historical-backward_failed"}},'
+        b'{"attribution":[],"feedback":[],"invoked":false,"result":{"input_feedback":{},'
+        b'"self_feedback":[],"variable_feedback":{}},"source":{"execution_seq":5,"path":[],'
+        b'"run_id":"historical-backward_failed"}}],"frame_proposals":[{"frame_ref":{"owner":"flow",'
+        b'"root_flow_id":"historical-backward","static_path":["historical-backward"]},"mutations":[]}],'
+        b'"root_result":{"input_feedback":{},"self_feedback":[],"variable_feedback":{}}},'
+        b'"run_id":"historical-backward_failed","schema":7,"seq":8}'
+    ),
+    (
+        b'{"kind":"memory_commit_requested","payload":{"attempt_id":1,'
+        b'"commit_id":"ac-memory-v1:524eef5946458186de942076e92679a3e00381563591f272b64438d0e8d95a06",'
+        b'"mutations":[],"policy_name":"test"},"run_id":"historical-backward_failed","schema":7,"seq":9}'
+    ),
+    (
+        b'{"kind":"memory_commit_failed","payload":{"attempt_id":1,'
+        b'"commit_id":"ac-memory-v1:524eef5946458186de942076e92679a3e00381563591f272b64438d0e8d95a06",'
+        b'"failure":{"code":"declined","message":"Declined.","retryable":false,"stage":"commit"},'
+        b'"policy_name":"test"},"run_id":"historical-backward_failed","schema":7,"seq":10}'
+    ),
+    (
+        b'{"kind":"backward_finished","payload":{"attempt_id":1,"attributed_results":[],'
+        b'"outcome":{"failure":{"cause":{"code":"declined","message":"Declined.","retryable":false,'
+        b'"stage":"commit"},"cause_type":null,"code":"declined","frame_ref":null,"message":"Declined.",'
+        b'"node_id":null,"node_started_seq":null,"policy_name":"test","run_id":null,"scope":null,'
+        b'"stage":"commit","traceback":null},"feedback":{"input_feedback":{},"self_feedback":[],'
+        b'"variable_feedback":{}},"learning":{"failures":[{"failure":{"code":"declined",'
+        b'"message":"Declined.","retryable":false,"stage":"commit"},"frame_ref":null,'
+        b'"operation":"commit","policy_name":"test"}],'
+        b'"policies":[{"commit_id":"ac-memory-v1:524eef5946458186de942076e92679a3e00381563591f272b64438d0'
+        b'e8d95a06","failure":{"code":"declined","message":"Declined.","retryable":false,'
+        b'"stage":"commit"},"policy_name":"test","status":"failed"}],"status":"failed"},'
+        b'"status":"failed"}},"run_id":"historical-backward_failed","schema":7,"seq":11}'
+    ),
+)
+
+
+# Original schema-7 writer output; keep these bytes independent of the current codec.
+_SCHEMA_SEVEN_FAILURE = (
+    (
+        b'{"kind":"run_started","payload":{"effective_llm_by_static_path":{},'
+        b'"flow_fingerprint":"15578df17c126020f89d79a2fd9d3f5b30a501769ab0b4e5191ccf399ebc12d6",'
+        b'"initial_pool":{"start_id":"__start__","store":{"__start__":{"kind":"object","value":{}}},'
+        b'"system":{"now":{"kind":"datetime","value":"2026-09-20T01:23:31.462855+00:00"},'
+        b'"run_id":{"kind":"str","value":"historical-failure"},"today":{"kind":"date",'
+        b'"value":"2026-09-20"}}},"learnable":true,"memory_layout":[{"config":{},"policy_name":"test",'
+        b'"ref":{"owner":"flow","root_flow_id":"historical-backward",'
+        b'"static_path":["historical-backward"]}}],"memory_snapshots":[{"policy_name":"test",'
+        b'"snapshot":{"namespace":"test"}}],"num_workers":0,"start_wiring_override":{}},'
+        b'"run_id":"historical-failure","schema":7,"seq":0}'
+    ),
+    (
+        b'{"kind":"node_started","payload":{"node_id":"__start__"},"run_id":"historical-failure",'
+        b'"schema":7,"seq":1}'
+    ),
+    (
+        b'{"kind":"node_succeeded","payload":{"commit_target":"__start__","evidence":null,'
+        b'"forward_capture":{"bound_inputs":{},"evaluated_keys":[],"input_names":[],"items":[],'
+        b'"node_data":{"input_output_paths":{}},"route":{"children":[],"content_index":0,"count":0,'
+        b'"expression":"{}","kind":"record","names":[],"path":[],"result_type":null,"sizes":[],'
+        b'"snapshot":null,"source":null,"spans":[],"value_json":null},"scope":{"boundary":"start",'
+        b'"flow_path":[],"occurrence_path":[],"static_path":["__start__"]},"variable_names":[]},'
+        b'"node_id":"__start__","value":{"kind":"object","value":{}}},"run_id":"historical-failure",'
+        b'"schema":7,"seq":2}'
+    ),
+    (
+        b'{"kind":"node_started","payload":{"node_id":"work"},"run_id":"historical-failure","schema":7,'
+        b'"seq":3}'
+    ),
+    (
+        b'{"kind":"node_failed","payload":{"evidence":null,"failure":{"cause_type":"TypeCheckError",'
+        b'"code":"contract.output","message":"\'bad\' does not match declared type int","node_id":"work",'
+        b'"trace":[{"key":"/s:root/s:node/s:work/s:output/s:contract/s:root"}],'
+        b'"traceback":"Traceback (most recent call last):\\n  File \\"/gpfs/radev/pi/ying_rex/nhb25/agent-c'
+        b'omposer/src/agent_composer/runtime/state.py\\", line 896,'
+        b' in prepare_node_succeeded\\n    value_wire,'
+        b' typed = _canonical_output_value(\\n                        ^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \\"/'
+        b'gpfs/radev/pi/ying_rex/nhb25/agent-composer/src/agent_composer/runtime/state.py\\", line 127,'
+        b' in _canonical_output_value\\n    return canonical_typed(output,'
+        b' declared_type)\\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \\"/gpfs/radev/pi/yin'
+        b'g_rex/nhb25/agent-composer/src/agent_composer/runtime/log.py\\", line 1418,'
+        b' in canonical_typed\\n    typed = build_value(value) if declared is None else build_value_as(dec'
+        b'lared, value)\\n                                                        ^^^^^^^^^^^^^^^^^^^^^^^^'
+        b'^^^^^^^\\n  File \\"/gpfs/radev/pi/ying_rex/nhb25/agent-composer/src/agent_composer/typesys/value'
+        b's.py\\", line 649, in build_value_as\\n    return _build_for_type(typ,'
+        b' value)\\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \\"/gpfs/radev/pi/ying_rex/nhb25/agent-c'
+        b'omposer/src/agent_composer/typesys/values.py\\", line 756,'
+        b' in _build_for_type\\n    return _build_scalar_or_list(typ.kind, value,'
+        b' path=path)\\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \\"/gpfs/radev'
+        b'/pi/ying_rex/nhb25/agent-composer/src/agent_composer/typesys/values.py\\", line 798,'
+        b' in _build_scalar_or_list\\n    raise TypeCheckError(\\nagent_composer.typesys.values.TypeCheckEr'
+        b'ror: \'bad\' does not match declared type int\\n"},"forward_capture":{"bound_inputs":{},'
+        b'"evaluated_keys":[],"input_names":[],"items":[],"node_data":{},"route":{"children":[],'
+        b'"content_index":0,"count":0,"expression":"{}","kind":"record","names":[],"path":[],'
+        b'"result_type":null,"sizes":[],"snapshot":null,"source":null,"spans":[],"value_json":null},'
+        b'"scope":{"boundary":null,"flow_path":[],"occurrence_path":[],"static_path":["work"]},'
+        b'"variable_names":[]}},"run_id":"historical-failure","schema":7,"seq":4}'
+    ),
+)
+
+
 _CHAIN = """id: backward-recovery
 name: backward_recovery
 long_term_memory: test
@@ -49,6 +313,18 @@ output: ${second.output}
 """
 
 
+_SCHEMA_SEVEN_BACKWARD_FLOW = """id: historical-backward
+name: historical_backward
+long_term_memory: test
+nodes:
+  work:
+    kind: code
+    code: return 3
+    output: int
+output: ${work.output}
+"""
+
+
 def _chain(tmp_path, monkeypatch, *, workers=0, backend=None):
     """Run the same real two-AGENT public flow before installing backward replies."""
     flow = load_flow(_CHAIN)
@@ -61,6 +337,96 @@ def _chain(tmp_path, monkeypatch, *, workers=0, backend=None):
     assert result.status == "succeeded" and result.output == "answer"
     assert chat.calls == 2 and backend.learn_contexts == backend.commit_calls == []
     return flow, path, backend, result, chat
+
+
+@pytest.mark.parametrize("failed", [False, True], ids=["success", "failure"])
+def test_schema_seven_terminal_inspection_is_inert(tmp_path, monkeypatch, failed):
+    from agent_composer.nodes.code import CodeNode
+    from agent_composer.runtime.log import decode_record
+
+    flow = load_flow(_SCHEMA_SEVEN_BACKWARD_FLOW.replace("return 3", 'return "bad"') if failed else _SCHEMA_SEVEN_BACKWARD_FLOW)
+    wires = _SCHEMA_SEVEN_FAILURE if failed else _SCHEMA_SEVEN_BACKWARD[:7]
+    path = tmp_path / "terminal.jsonl"
+    original = b"\n".join(wires) + b"\n"
+    path.write_bytes(original)
+    backend = _Memory()
+    monkeypatch.setattr(CodeNode, "forward", lambda *args, **kwargs: pytest.fail("terminal forward"))
+    monkeypatch.setattr(CodeNode, "backward", lambda *args, **kwargs: pytest.fail("terminal backward"))
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda *args, **kwargs: pytest.fail("terminal model"))
+    monkeypatch.setattr(JsonlRunLog, "append", lambda *args, **kwargs: pytest.fail("terminal append"))
+
+    result = resume_flow(flow, log=path, memory={"test": backend})
+    repeated = resume_flow(flow, log=path, memory={"test": backend})
+
+    assert result.status == ("failed" if failed else "succeeded")
+    assert result.output == (None if failed else 3)
+    assert result.events == repeated.events == []
+    assert result.backward_outcome is None
+    if failed:
+        assert result.failure == decode_record(wires[-1]).record.failure == repeated.failure
+    assert backend.open_snapshots == backend.learn_contexts == backend.commit_calls == []
+    assert backend.close_count == 0
+    assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("failed_commit,boundary,disposition,eligible", [
+    (False, 7, "unrequested", True),
+    (False, 8, "unrequested", True),
+    (False, 9, "unknown", False),
+    (False, 10, "succeeded", False),
+    (False, 11, "succeeded", False),
+    (True, 10, "failed", False),
+    (True, 11, "failed", False),
+])
+def test_schema_seven_backward_history_preserves_retry_and_commit_guards(
+    tmp_path, monkeypatch, failed_commit, boundary, disposition, eligible,
+):
+    from agent_composer.nodes.code import CodeNode
+    from agent_composer.runtime.log import SCHEMA_VERSION, decode_record
+
+    flow = load_flow(_SCHEMA_SEVEN_BACKWARD_FLOW)
+    wires = (_SCHEMA_SEVEN_BACKWARD_FAILED if failed_commit else _SCHEMA_SEVEN_BACKWARD)[:boundary + 1]
+    path = tmp_path / "attempt.jsonl"
+    original = b"\n".join(wires) + b"\n"
+    path.write_bytes(original)
+    backend = _Memory()
+    monkeypatch.setattr(CodeNode, "forward", lambda *args, **kwargs: pytest.fail("historical forward reran"))
+    monkeypatch.setattr(CodeNode, "backward", lambda *args, **kwargs: pytest.fail("empty backward called node"))
+    appended = []
+    append = JsonlRunLog.append
+
+    def observe_append(log, record):
+        appended.append(record)
+        return append(log, record)
+
+    monkeypatch.setattr(JsonlRunLog, "append", observe_append)
+    result = resume_flow(flow, log=path, memory={"test": backend})
+    assert result.status == "succeeded" and result.output == 3 and result.events == []
+    assert result.backward_outcome.learning.policies[0].status == disposition
+    assert appended == [] and path.read_bytes() == original
+    assert backend.open_snapshots == backend.learn_contexts == backend.commit_calls == []
+
+    if eligible:
+        outcome = result.backward()
+        assert outcome.status == "succeeded"
+        assert backend.open_snapshots == [{"namespace": "test"}]
+        assert len(backend.learn_contexts) == len(backend.commit_calls) == 1
+        assert [record.attempt_id for record in appended if isinstance(record, BackwardStartedRecord)] == [2]
+        current = path.read_bytes()
+        assert current.startswith(original)
+        added = current.splitlines()[len(wires):]
+        assert added and all(decode_record(line).schema == SCHEMA_VERSION for line in added)
+        before_reopen = len(appended)
+        inspected = resume_flow(flow, log=path, memory={"test": object()})
+        assert inspected.backward_outcome == outcome and inspected.events == []
+        assert len(appended) == before_reopen and path.read_bytes() == current
+    else:
+        previous = result.backward_outcome
+        with pytest.raises(ValueError):
+            result.backward()
+        assert result.backward_outcome is previous
+        assert appended == [] and path.read_bytes() == original
+        assert backend.open_snapshots == []
 
 
 @pytest.mark.parametrize("failed,value,output_type,feedback", [

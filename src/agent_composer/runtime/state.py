@@ -690,25 +690,30 @@ class _HistoricalLogCursor:
         """Match and consume one historical envelope without writing it again."""
         if self._next_sequence >= len(self._envelope_bytes):
             raise ValueError("replay attempted to append beyond the historical prefix")
+        expected = self._envelope_bytes[self._next_sequence]
+        envelope = decode_record(expected)
         candidate = encode_record(
             RecordEnvelope(
-                schema=SCHEMA_VERSION,
+                schema=envelope.schema,
                 run_id=self._run_id,
                 seq=self._next_sequence,
                 record=record,
             )
         )
-        expected = self._envelope_bytes[self._next_sequence]
         if candidate != expected:
             raise ValueError(
                 "prepared transition does not match the historical run record"
             )
-        envelope = decode_record(expected)
         self._next_sequence += 1
         return envelope
 
 
-def prepare_run_started(state: RunState, data: RunStartData) -> PreparedTransition:
+def prepare_run_started(
+    state: RunState,
+    data: RunStartData,
+    *,
+    schema: int = SCHEMA_VERSION,
+) -> PreparedTransition:
     """Prepare canonical initialization without mutating ``state``.
 
     Args:
@@ -716,6 +721,9 @@ def prepare_run_started(state: RunState, data: RunStartData) -> PreparedTransiti
             A pristine state whose private graph contains its synthesized START node.
         data (`RunStartData`):
             Complete pool, identity, configuration, and worker selection for the run.
+        schema (`int`, *optional*, defaults to `SCHEMA_VERSION`):
+            Exact supported envelope version; historical replay supplies the
+            recorded version without rewriting accepted authority.
 
     Returns:
         `PreparedTransition`:
@@ -769,7 +777,7 @@ def prepare_run_started(state: RunState, data: RunStartData) -> PreparedTransiti
     # bytes immediately so the prepared record is exactly what either log will retain.
     canonical_bytes = encode_record(
         RecordEnvelope(
-            schema=SCHEMA_VERSION,
+            schema=schema,
             run_id=data.run_id,
             seq=state.next_sequence,
             record=candidate,
@@ -1137,6 +1145,7 @@ def prepare_record(
     record: RunRecord,
     *,
     grow_builder: GrowBuilder | None = None,
+    schema: int = SCHEMA_VERSION,
 ) -> PreparedTransition:
     """Validate one supported authoritative record against the current frontier.
 
@@ -1152,6 +1161,8 @@ def prepare_record(
         grow_builder (`GrowBuilder | None`, *optional*):
             Required only for ``NodeExpandedRecord`` replay; rebuilds and verifies
             the recorded fragment through the same injected path used live.
+        schema (`int`, *optional*, defaults to `SCHEMA_VERSION`):
+            Exact supported envelope version belonging to this transition.
 
     Returns:
         `PreparedTransition`:
@@ -1168,22 +1179,22 @@ def prepare_record(
 
     if isinstance(record, (BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord,
                            MemoryCommitRequestedRecord, MemoryCommitSucceededRecord, MemoryCommitFailedRecord)):
-        return _prepare_backward_transition(state, record)
+        return _prepare_backward_transition(state, record, schema=schema)
 
     _require_initialized_nonterminal(state)
 
     if isinstance(record, NodeSucceededRecord):
         typed = _validate_success_value(state, record)
-        return _prepare_success_transition(state, record, typed)
+        return _prepare_success_transition(state, record, typed, schema=schema)
     if isinstance(record, NodeRoutedRecord):
         _validate_route_record(state, record)
-        return _prepare_route_transition(state, record)
+        return _prepare_route_transition(state, record, schema=schema)
     if isinstance(record, NodeExpandedRecord):
         if not callable(grow_builder):
             raise TypeError("NodeExpandedRecord replay requires a callable grow_builder")
-        return _prepare_growth_record(state, record, grow_builder)
+        return _prepare_growth_record(state, record, grow_builder, schema=schema)
     if isinstance(record, NodeFailedRecord):
-        return _prepare_failure_transition(state, record)
+        return _prepare_failure_transition(state, record, schema=schema)
     if isinstance(record, NodeStartedRecord):
         _validate_node_started(state, record)
     elif isinstance(record, RunResumedRecord):
@@ -1198,7 +1209,7 @@ def prepare_record(
         raise ValueError("run state is not initialized")
     canonical_bytes = encode_record(
         RecordEnvelope(
-            schema=SCHEMA_VERSION,
+            schema=schema,
             run_id=run_id,
             seq=state.next_sequence,
             record=record,
@@ -1258,6 +1269,8 @@ def _prepare_success_transition(
     state: RunState,
     record: NodeSucceededRecord,
     typed: TypedValue,
+    *,
+    schema: int = SCHEMA_VERSION,
 ) -> PreparedTransition:
     """Freeze one fully validated success delta and its canonical public record."""
     _validate_node_evidence(state, record.node_id, record.evidence)
@@ -1276,7 +1289,7 @@ def _prepare_success_transition(
         raise ValueError("run state is not initialized")
     canonical_bytes = encode_record(
         RecordEnvelope(
-            schema=SCHEMA_VERSION,
+            schema=schema,
             run_id=run_id,
             seq=state.next_sequence,
             record=record,
@@ -1351,6 +1364,7 @@ def _prepare_route_transition(
     record: NodeRoutedRecord,
     *,
     derive_terminal_failure: bool = False,
+    schema: int = SCHEMA_VERSION,
 ) -> PreparedTransition:
     """Freeze one fully validated route delta and its canonical public record."""
     _validate_node_evidence(state, record.node_id, record.evidence)
@@ -1372,7 +1386,7 @@ def _prepare_route_transition(
         raise ValueError("run state is not initialized")
     canonical_bytes = encode_record(
         RecordEnvelope(
-            schema=SCHEMA_VERSION,
+            schema=schema,
             run_id=run_id,
             seq=state.next_sequence,
             record=record_for_wire,
@@ -1447,6 +1461,8 @@ def _prepare_route_transition(
 def _prepare_failure_transition(
     state: RunState,
     record: NodeFailedRecord,
+    *,
+    schema: int = SCHEMA_VERSION,
 ) -> PreparedTransition:
     """Freeze one validated terminal diagnostic and its canonical public record."""
     _validate_failure_record(state, record)
@@ -1459,7 +1475,7 @@ def _prepare_failure_transition(
     )
     canonical_bytes = encode_record(
         RecordEnvelope(
-            schema=SCHEMA_VERSION,
+            schema=schema,
             run_id=run_id,
             seq=state.next_sequence,
             record=record_for_wire,
@@ -1510,6 +1526,8 @@ def _prepare_growth_record(
     state: RunState,
     record: NodeExpandedRecord,
     grow_builder: GrowBuilder,
+    *,
+    schema: int = SCHEMA_VERSION,
 ) -> PreparedTransition:
     """Rebuild and verify one historical expansion through the live builder path."""
     _validate_growth_record(state, record)
@@ -1535,6 +1553,7 @@ def _prepare_growth_record(
             fragment,
             actual_digest=actual_digest,
             validated_fragment=validated_fragment,
+            schema=schema,
         )
     except GrowthRejected as exc:
         original = exc.original
@@ -1548,6 +1567,7 @@ def _prepare_growth_transition(
     *,
     actual_digest: str | None = None,
     validated_fragment: tuple[tuple[str, ...], tuple[str, ...]] | None = None,
+    schema: int = SCHEMA_VERSION,
 ) -> PreparedTransition:
     """Freeze one validated fragment, final topology, and canonical public record."""
     _validate_growth_record(state, record)
@@ -1571,7 +1591,7 @@ def _prepare_growth_transition(
         raise ValueError("run state is not initialized")
     canonical_bytes = encode_record(
         RecordEnvelope(
-            schema=SCHEMA_VERSION,
+            schema=schema,
             run_id=run_id,
             seq=state.next_sequence,
             record=record,
@@ -1625,10 +1645,12 @@ def _prepare_growth_transition(
     )
 
 
-def _prepare_backward_transition(state: RunState, record: RunRecord) -> PreparedTransition:
+def _prepare_backward_transition(
+    state: RunState, record: RunRecord, *, schema: int = SCHEMA_VERSION,
+) -> PreparedTransition:
     """Validate all backward data and prepare its detached state before append."""
     _require_initialized_terminal_backward(state)
-    encoded = encode_record(RecordEnvelope(SCHEMA_VERSION, state.run_id, state.next_sequence, record))
+    encoded = encode_record(RecordEnvelope(schema, state.run_id, state.next_sequence, record))
     envelope = decode_record(encoded)
     if type(envelope.record) is not type(record) or envelope.record != record:
         raise ValueError("backward record is not in canonical wire form")
@@ -1933,12 +1955,15 @@ def _replay_records(
             memory_snapshots=start.memory_snapshots,
             learnable=start.learnable,
         ),
+        schema=first.schema,
     )
     commit_prepared(cursor, state, prepared)
 
     for encoded in canonical_bytes[1:]:
-        record = decode_record(encoded).record
-        prepared = prepare_record(state, record, grow_builder=grow_builder)
+        envelope = decode_record(encoded)
+        prepared = prepare_record(
+            state, envelope.record, grow_builder=grow_builder, schema=envelope.schema,
+        )
         commit_prepared(cursor, state, prepared)
 
     if cursor.next_sequence != len(canonical_bytes):
@@ -2317,9 +2342,15 @@ def _require_unchanged_record(
     envelope_bytes: bytes,
 ) -> None:
     """Reject mutation or mismatched construction of the public record carrier."""
+    frozen = decode_record(envelope_bytes)
+    if (
+        frozen.run_id != prepared.expected_run_id
+        or frozen.seq != prepared.expected_sequence
+    ):
+        raise ValueError("prepared coordinates changed after validation")
     current_bytes = encode_record(
         RecordEnvelope(
-            schema=SCHEMA_VERSION,
+            schema=frozen.schema,
             run_id=prepared.expected_run_id,
             seq=prepared.expected_sequence,
             record=prepared.record,
@@ -2337,6 +2368,7 @@ def _append_and_verify(log: RunLog, prepared: PreparedTransition) -> None:
         or envelope.seq != prepared.expected_sequence
         or envelope.record != prepared.record
         or log.next_sequence != prepared.expected_sequence + 1
+        or encode_record(envelope) != prepared._plan.envelope_bytes
     ):
         raise ValueError("run-log append result does not match prepared transition")
 

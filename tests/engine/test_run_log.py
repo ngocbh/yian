@@ -28,6 +28,14 @@ from agent_composer.runtime.log import (
 _DIGEST = "d" * 64
 
 
+def test_schema_seven_record_keeps_wire_identity():
+    wire = (b'{"kind":"node_started","payload":{"node_id":"work"},'
+            b'"run_id":"legacy","schema":7,"seq":0}')
+    envelope = log_module.decode_record(wire)
+    assert envelope.schema == 7
+    assert encode_record(envelope) == wire
+
+
 class _FileProxy:
     """Delegate a binary file while exposing narrow failure/counting hooks."""
 

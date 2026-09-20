@@ -33,8 +33,155 @@ from agent_composer.runtime.log import (
 from agent_composer.typesys import FileRef, ValueKind, VariablePool
 
 
+# Original schema-7 writer output for the source-free causal-route graph.
+_SCHEMA_SEVEN_ROUTE = (
+    (
+        b'{"kind":"run_started","payload":{"effective_llm_by_static_path":{},'
+        b'"flow_fingerprint":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",'
+        b'"initial_pool":{"start_id":"__start__","store":{"__start__":{"kind":"object","value":{}}},'
+        b'"system":{"run_id":{"kind":"str","value":"direct-engine-test"}}},"learnable":true,'
+        b'"memory_layout":null,"memory_snapshots":null,"num_workers":0,"start_wiring_override":{}},'
+        b'"run_id":"direct-engine-test","schema":7,"seq":0}'
+    ),
+    (
+        b'{"kind":"node_started","payload":{"node_id":"__start__"},"run_id":"direct-engine-test",'
+        b'"schema":7,"seq":1}'
+    ),
+    (
+        b'{"kind":"node_succeeded","payload":{"commit_target":"__start__","evidence":null,'
+        b'"forward_capture":{"bound_inputs":{},"evaluated_keys":[],"input_names":[],"items":[],'
+        b'"node_data":{"input_output_paths":{}},"route":{"children":[],"content_index":0,"count":0,'
+        b'"expression":"{}","kind":"record","names":[],"path":[],"result_type":null,"sizes":[],'
+        b'"snapshot":null,"source":null,"spans":[],"value_json":null},"scope":{"boundary":"start",'
+        b'"flow_path":[],"occurrence_path":[],"static_path":["__start__"]},"variable_names":[]},'
+        b'"node_id":"__start__","value":{"kind":"object","value":{}}},"run_id":"direct-engine-test",'
+        b'"schema":7,"seq":2}'
+    ),
+    (
+        b'{"kind":"node_started","payload":{"node_id":"router"},"run_id":"direct-engine-test","schema":7,'
+        b'"seq":3}'
+    ),
+    (
+        b'{"kind":"node_routed","payload":{"evidence":null,"forward_capture":{"bound_inputs":{},'
+        b'"evaluated_keys":[],"input_names":[],"items":[],"node_data":{},"route":{"children":[],'
+        b'"content_index":0,"count":0,"expression":"{}","kind":"record","names":[],"path":[],'
+        b'"result_type":null,"sizes":[],"snapshot":null,"source":null,"spans":[],"value_json":null},'
+        b'"scope":{"boundary":null,"flow_path":[],"occurrence_path":[],"static_path":["router"]},'
+        b'"variable_names":[]},"handle":"go","node_id":"router","terminal_failure":{"cause_type":null,'
+        b'"code":"graph.terminal_unreachable","message":"terminal output \'zeta\' skipped",'
+        b'"node_id":"router","trace":[],"traceback":null}},"run_id":"direct-engine-test","schema":7,'
+        b'"seq":4}'
+    ),
+)
+
+
 _FINGERPRINT = "a" * 64
 _TOPOLOGY_DIGEST = "b" * 64
+
+
+@pytest.mark.parametrize("resumed", [False, True], ids=["started", "resumed"])
+def test_historical_frontier_prepares_recorded_schema_bytes(resumed):
+    from copy import deepcopy
+    from agent_composer.compile.expand import build_grow
+    from agent_composer.runtime.state import RunState, _replay_records, prepare_record
+    from tests.engine.test_run_recovery_prefixes import _linear_history
+
+    _, state, log, _ = _linear_history()
+    state = _replay_records(RunState(deepcopy(state.flow)), tuple(log)[:1], grow_builder=build_grow)
+    record = RunResumedRecord((), 0) if resumed else NodeStartedRecord(state.flow.start_id)
+    prepared = prepare_record(state, record, schema=7)
+    assert prepared._plan.envelope_bytes == encode_record(RecordEnvelope(7, state.run_id, 1, record))
+    assert state.next_sequence == 1
+
+
+@pytest.mark.parametrize("schema", [True, 7.0, "7", 6, 99])
+def test_historical_record_requires_an_exact_supported_schema(schema):
+    import agent_composer.run as run_module
+    from agent_composer.compose import load_flow
+    from agent_composer.runtime.state import prepare_record
+    from tests.engine.test_run_recovery_prefixes import _LINEAR, _ReadOnlyLog, _SCHEMA_SEVEN_LINEAR
+
+    state = run_module._replay_run_log(
+        load_flow(_LINEAR), _ReadOnlyLog((decode_record(_SCHEMA_SEVEN_LINEAR[0]),)),
+    )
+    before = (state.next_sequence, tuple(state.ready), dict(state.in_flight))
+    with pytest.raises((TypeError, ValueError)):
+        prepare_record(state, NodeStartedRecord(state.flow.start_id), schema=schema)
+    assert (state.next_sequence, tuple(state.ready), dict(state.in_flight)) == before
+
+
+@pytest.mark.parametrize("change", ["payload", "run_id", "sequence"])
+def test_prepared_record_tamper_check_uses_frozen_schema(change):
+    from dataclasses import replace
+    from agent_composer.runtime.state import _require_unchanged_record, prepare_run_started, RunState
+    from tests.engine.test_run_state_initialization import _flow, _snapshot, _start_data
+
+    state = RunState(_flow())
+    prepared = prepare_run_started(state, _start_data(state.flow), schema=7)
+    before = _snapshot(state)
+    _require_unchanged_record(prepared, prepared._plan.envelope_bytes)
+    if change == "payload":
+        prepared.record.start_wiring_override["new"] = "tampered"
+    elif change == "run_id":
+        prepared = replace(prepared, expected_run_id="other")
+    else:
+        prepared = replace(prepared, expected_sequence=1)
+    with pytest.raises(ValueError, match="prepared"):
+        _require_unchanged_record(prepared, prepared._plan.envelope_bytes)
+    assert _snapshot(state) == before
+
+
+@pytest.mark.parametrize("kind", ["success", "route", "failure", "growth"])
+def test_historical_outcomes_keep_schema_in_trace_bytes(kind):
+    import agent_composer.run as run_module
+    from agent_composer.compile.execution_layout import apply_execution_layout, resolve_execution_layout
+    from agent_composer.compile.expand import build_grow
+    from agent_composer.compose import load_flow
+    from agent_composer.runtime.state import (
+        RunState, _HistoricalLogCursor, _replay_records, commit_prepared, prepare_record,
+    )
+    from tests.engine.test_backward_recovery import (
+        _SCHEMA_SEVEN_BACKWARD, _SCHEMA_SEVEN_BACKWARD_FLOW, _SCHEMA_SEVEN_FAILURE,
+    )
+    from tests.engine.test_run_recovery_matrix import (
+        _SCHEMA_SEVEN_GROWTH_PREFIX, _schema_seven_growth_flow,
+    )
+    from tests.engine.test_run_recovery_prefixes import _ReadOnlyLog
+    from tests.engine.test_run_state_outcomes import _terminal_skip_route_flow
+
+    if kind == "route":
+        wires = _SCHEMA_SEVEN_ROUTE
+        flow = _terminal_skip_route_flow()
+        apply_execution_layout(flow, resolve_execution_layout(flow))
+        state = _replay_records(
+            RunState(flow), tuple(decode_record(wire) for wire in wires[:-1]),
+            grow_builder=build_grow,
+        )
+    else:
+        if kind == "growth":
+            wires = _SCHEMA_SEVEN_GROWTH_PREFIX[:5]
+            flow = _schema_seven_growth_flow()
+        elif kind == "failure":
+            wires = _SCHEMA_SEVEN_FAILURE
+            flow = load_flow(_SCHEMA_SEVEN_BACKWARD_FLOW.replace("return 3", 'return "bad"'))
+        else:
+            wires = _SCHEMA_SEVEN_BACKWARD[:5]
+            flow = load_flow(_SCHEMA_SEVEN_BACKWARD_FLOW)
+        state = run_module._replay_run_log(
+            flow, _ReadOnlyLog(tuple(decode_record(wire) for wire in wires[:-1])),
+        )
+    expected = decode_record(wires[-1])
+    before = state.trace.occurrences
+    prepared = prepare_record(state, expected.record, grow_builder=build_grow, schema=7)
+    assert prepared._plan.envelope_bytes == wires[-1]
+    assert state.trace.occurrences == before
+    cursor = _HistoricalLogCursor(wires)
+    for wire in wires[:-1]:
+        cursor.append(decode_record(wire).record)
+    commit_prepared(cursor, state, prepared)
+    assert state.trace.occurrences[:-1] == before
+    assert state.trace.occurrences[-1]._record_bytes == wires[-1]
+    assert decode_record(state.trace.occurrences[-1]._record_bytes).schema == 7
 
 
 def _records():

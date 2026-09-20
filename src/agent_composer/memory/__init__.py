@@ -6,7 +6,7 @@ by host-provided memory objects. Conversation capabilities are optional, leave
 the mandatory memory protocols unchanged, and await runtime/provider integration.
 ``contracts.py`` owns that vocabulary; ``conversation.py`` owns its pure fold,
 strict codecs, and digests; ``session.py`` owns process-local conversation views,
-FIFO leases, and recovery fences. Concrete session, episodic, and reflection
+FIFO leases, and atomic turn updates. Concrete session, episodic, and reflection
 backends are imported from their own modules, never eagerly by this contracts-only
 facade.
 
@@ -16,12 +16,9 @@ Never imports: nodes, compile, compose, runtime, run, CLI, LangChain, Pydantic,
 """
 
 from agent_composer.memory.contracts import (
-    CheckpointSink,
     CheckStopped,
-    ConversationAcceptance,
     ConversationAdmitted,
     ConversationApplied,
-    ConversationAuthority,
     ConversationCheckpoint,
     ConversationClosed,
     ConversationCompletion,
@@ -36,12 +33,10 @@ from agent_composer.memory.contracts import (
     ConversationKey,
     ConversationReference,
     ConversationRequest,
-    ConversationSession,
     ConversationStamp,
     ConversationTurn,
     ConversationTurnStatus,
     ConversationView,
-    PreparedConversationApply,
     JsonObject,
     JsonScalar,
     JsonValue,
@@ -82,12 +77,9 @@ from agent_composer.memory.contracts import (
 )
 
 __all__ = [
-    "CheckpointSink",
     "CheckStopped",
-    "ConversationAcceptance",
     "ConversationAdmitted",
     "ConversationApplied",
-    "ConversationAuthority",
     "ConversationCheckpoint",
     "ConversationClosed",
     "ConversationCompletion",
@@ -102,12 +94,10 @@ __all__ = [
     "ConversationKey",
     "ConversationReference",
     "ConversationRequest",
-    "ConversationSession",
     "ConversationStamp",
     "ConversationTurn",
     "ConversationTurnStatus",
     "ConversationView",
-    "PreparedConversationApply",
     "JsonObject",
     "JsonScalar",
     "JsonValue",

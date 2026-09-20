@@ -388,98 +388,23 @@ def test_closed_accepts_only_turn_dispositions(status):
         c.ConversationClosed(_stamp(), status)
 
 
-def test_authority_detaches_baseline_and_checkpoints():
-    baseline = _view()
-    events = (
-        c.ConversationAdmitted(_stamp(), baseline),
-        c.ConversationClosed(_stamp(1, 1), "completed"),
-    )
-    authority = c.ConversationAuthority(baseline, events)
-    assert authority.baseline == baseline and authority.baseline is not baseline
-    assert authority.checkpoints == events
-    assert all(
-        copy is not original for copy, original in zip(authority.checkpoints, events)
-    )
-
-
-@pytest.mark.parametrize(
-    "scenario",
-    [
-        "empty",
-        "list",
-        "wrong_first",
-        "gap",
-        "revision",
-        "post_close",
-        "second_admit",
-        "baseline",
-        "invocation",
-        "policy",
-    ],
-)
-def test_authority_rejects_noncontiguous_or_mismatched_segment(scenario):
-    baseline = _view()
-    first = c.ConversationAdmitted(_stamp(), baseline)
-    close = c.ConversationClosed(_stamp(1, 1), "completed")
-    events = (first, close)
-    if scenario == "empty":
-        events = ()
-    elif scenario == "list":
-        events = list(events)
-    elif scenario == "wrong_first":
-        events = (close,)
-    elif scenario == "gap":
-        events = (first, c.ConversationClosed(_stamp(2, 1), "completed"))
-    elif scenario == "revision":
-        events = (first, c.ConversationClosed(_stamp(1, 2), "completed"))
-    elif scenario == "post_close":
-        events += (c.ConversationClosed(_stamp(2, 2), "completed"),)
-    elif scenario == "second_admit":
-        events += (first,)
-    elif scenario == "baseline":
-        baseline = _view(compatibility={"provider": "different"})
-    elif scenario == "invocation":
-        events = (
-            first,
-            replace(
-                close,
-                stamp=replace(
-                    close.stamp, invocation=c.ConversationInvocation("other", 1)
-                ),
-            ),
-        )
-    elif scenario == "policy":
-        events = (
-            first,
-            replace(close, stamp=replace(close.stamp, policy_name="other")),
-        )
-    with pytest.raises((TypeError, ValueError)):
-        c.ConversationAuthority(baseline, events)
-
-
 def test_conversation_capabilities_are_optional_and_exact():
     memory = _Memory()
     session = memory.open_run()
     frame = session.open_frame(c.MemoryFrameSpec(_frame_ref(), "session", {}))
-    assert not isinstance(session, c.ConversationSession)
     assert not isinstance(frame, c.ConversationFrame)
-    assert set(get_args(c.ConversationAcceptance)) == {
-        "unaccepted",
-        "accepted",
-        "uncertain",
-    }
     assert set(get_args(c.ConversationCheckpoint)) == {
         c.ConversationAdmitted,
         c.ConversationEffectRequested,
         c.ConversationEffectObserved,
         c.ConversationClosed,
     }
-    for protocol in (c.ConversationFrame, c.ConversationSession, c.ConversationTurn):
+    for protocol in (c.ConversationFrame, c.ConversationTurn):
         for member in vars(protocol).values():
             if inspect.isfunction(member):
                 get_type_hints(member)
-    prepare = inspect.signature(c.ConversationSession.prepare_checkpoint)
-    assert prepare.parameters["before"].kind is inspect.Parameter.KEYWORD_ONLY
+    turn_parameters = inspect.signature(c.ConversationFrame.open_turn).parameters
+    assert "checkpoint" not in turn_parameters
     assert (
         inspect.signature(c.ConversationFrame.open_turn)
         .parameters["check_stopped"]
@@ -512,13 +437,8 @@ def test_conversation_contracts_are_exported_without_concrete_backend():
         "ConversationEffectObserved",
         "ConversationClosed",
         "ConversationCheckpoint",
-        "ConversationAuthority",
-        "CheckpointSink",
         "CheckStopped",
-        "PreparedConversationApply",
-        "ConversationAcceptance",
         "ConversationFrame",
-        "ConversationSession",
         "ConversationTurn",
     )
     for name in names:
@@ -526,6 +446,15 @@ def test_conversation_contracts_are_exported_without_concrete_backend():
         assert getattr(memory, name) is getattr(c, name)
     assert "SessionMemory" not in memory.__all__
     assert "SessionMemory" not in vars(memory)
+    for name in (
+        "ConversationAuthority",
+        "CheckpointSink",
+        "PreparedConversationApply",
+        "ConversationAcceptance",
+        "ConversationSession",
+    ):
+        assert name not in vars(c)
+        assert name not in vars(memory)
 
 
 @pytest.mark.parametrize("value", ["", "\ud800", 1, None])
@@ -601,11 +530,11 @@ def test_nested_carrier_subclasses_are_rejected():
         )
     baseline = _view()
     with pytest.raises(TypeError, match="ConversationView"):
-        c.ConversationAuthority(
+        c.ConversationAdmitted(
+            _stamp(),
             ViewSubclass(
                 baseline.namespace, 0, 0, baseline.key, {}, (), None, (), (), ()
             ),
-            (),
         )
 
 
@@ -794,7 +723,7 @@ def test_transition_rejects_skipped_ordinal():
 
 
 @pytest.mark.parametrize("status", [None, "pending", "completed", "closed_failed"])
-def test_admission_does_not_bypass_unresolved_or_unclosed_effects(status):
+def test_admission_preserves_unresolved_or_unclosed_effects(status):
     from agent_composer.memory.conversation import advance_conversation
 
     before = _requested()
@@ -815,9 +744,10 @@ def test_admission_does_not_bypass_unresolved_or_unclosed_effects(status):
         before,
     )
     original = c._copy_conversation_view(before)
-    with pytest.raises(c.MemoryOperationError) as caught:
-        advance_conversation(before, event)
-    assert caught.value.code == "session.recovery_required"
+    after = advance_conversation(before, event)
+    assert after.effects == before.effects
+    assert after.closed_invocations == before.closed_invocations
+    assert after.revision == before.revision + 1
     assert before == original
 
 
@@ -1370,22 +1300,24 @@ def test_view_codec_rejects_invalid_nested_values(damage):
     assert json.dumps(wire, sort_keys=True) == original
 
 
-def test_view_codec_rejects_admission_after_unclosed_effectful_invocation():
+def test_view_codec_accepts_admission_after_unclosed_effectful_invocation():
     from agent_composer.memory.conversation import (
-        conversation_content_digest,
+        advance_conversation,
+        conversation_view_from_json,
         conversation_view_to_json,
     )
 
     views, _ = _complete_history()
     before = views[3]
-    entry = c.ConversationApplied(
-        '["next",1,0]', "0" * 64, conversation_content_digest(before), "0" * 64
+    admission = c.ConversationAdmitted(
+        replace(
+            _stamp(revision=before.revision),
+            invocation=c.ConversationInvocation("next", 1),
+        ),
+        before,
     )
-    after = _reseal(
-        _changed_view(before, revision=4, applied=before.applied + (entry,))
-    )
-    with pytest.raises(ValueError, match="unresolved"):
-        conversation_view_to_json(after)
+    after = advance_conversation(before, admission)
+    assert conversation_view_from_json(conversation_view_to_json(after)) == after
 
 
 def test_fold_and_codecs_revalidate_tampered_exact_carriers():

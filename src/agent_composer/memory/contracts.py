@@ -2241,67 +2241,15 @@ def _copy_conversation_checkpoint(value: object) -> ConversationCheckpoint:
     raise TypeError("checkpoints must contain exact ConversationCheckpoint values")
 
 
-@dataclass(frozen=True, slots=True)
-class ConversationAuthority:
-    """An admission-led contiguous accepted segment over its complete baseline.
-
-    This carrier validates segment identity and ordinal continuity; the pure
-    fold separately proves effect transitions and application digests.
-    """
-
-    baseline: ConversationView
-    checkpoints: tuple[ConversationCheckpoint, ...]
-
-    def __post_init__(self) -> None:
-        """Detach the segment and reject gaps, mixed invocations, or late events."""
-        baseline = _copy_conversation_view(self.baseline)
-        if type(self.checkpoints) is not tuple:
-            raise TypeError("checkpoints must be a tuple")
-        checkpoints = tuple(
-            _copy_conversation_checkpoint(item) for item in self.checkpoints
-        )
-        if not checkpoints or type(checkpoints[0]) is not ConversationAdmitted:
-            raise ValueError("authority must begin with conversation admission")
-        first = checkpoints[0]
-        if first.baseline != baseline:
-            raise ValueError("authority admission must carry its exact baseline")
-        for ordinal, checkpoint in enumerate(checkpoints):
-            stamp = checkpoint.stamp
-            if (
-                stamp.key != first.stamp.key
-                or stamp.namespace != first.stamp.namespace
-                or stamp.generation != first.stamp.generation
-                or stamp.policy_name != first.stamp.policy_name
-                or stamp.invocation != first.stamp.invocation
-                or stamp.ordinal != ordinal
-                or stamp.expected_revision != baseline.revision + ordinal
-            ):
-                raise ValueError(
-                    "authority checkpoints must have contiguous matching stamps"
-                )
-            if ordinal and type(checkpoint) is ConversationAdmitted:
-                raise ValueError("authority may contain only one admission")
-            if (
-                type(checkpoint) is ConversationClosed
-                and ordinal != len(checkpoints) - 1
-            ):
-                raise ValueError("authority cannot carry checkpoints after closure")
-        object.__setattr__(self, "baseline", baseline)
-        object.__setattr__(self, "checkpoints", checkpoints)
-
-
-CheckpointSink: TypeAlias = Callable[[ConversationCheckpoint], ConversationView]
 CheckStopped: TypeAlias = Callable[[], None]
-PreparedConversationApply: TypeAlias = Callable[[], ConversationView]
-ConversationAcceptance: TypeAlias = Literal["unaccepted", "accepted", "uncertain"]
 
 
 class ConversationTurn(Protocol):
-    """A leased invocation whose effect calls require checkpoint acknowledgement."""
+    """A leased invocation that directly retains requests and actual observations."""
 
     @property
     def view(self) -> ConversationView:
-        """Return the latest acknowledged detached conversation view."""
+        """Return the latest persisted detached conversation view."""
         ...
 
     def request(
@@ -2311,7 +2259,7 @@ class ConversationTurn(Protocol):
         *,
         items: tuple[ConversationItem, ...] = (),
     ) -> int:
-        """Acknowledge one request before returning its positive effect ordinal.
+        """Persist one request before returning its positive effect ordinal.
 
         Args:
             kind (`ConversationEffectKind`): The external-effect category.
@@ -2320,7 +2268,7 @@ class ConversationTurn(Protocol):
                 to an empty tuple.
 
         Returns:
-            `int`: Positive request ordinal, only after acknowledgement.
+            `int`: Positive request ordinal, only after atomic persistence.
         """
         ...
 
@@ -2333,7 +2281,7 @@ class ConversationTurn(Protocol):
         reference: ConversationReference | None = None,
         failure: MemoryOperationFailure | None = None,
     ) -> None:
-        """Acknowledge only actual observation evidence for a requested effect.
+        """Persist only actual observation evidence for a requested effect.
 
         Args:
             effect_ordinal (`int`): Positive request ordinal from this turn.
@@ -2356,72 +2304,16 @@ class ConversationFrame(Protocol):
         self,
         request: ConversationRequest,
         *,
-        checkpoint: CheckpointSink,
         check_stopped: CheckStopped,
     ) -> AbstractContextManager[ConversationTurn]:
-        """Acquire one turn with injected checkpoint and cooperative-stop seams.
+        """Acquire one turn with an injected cooperative-stop check.
 
         Args:
             request (`ConversationRequest`): Authored consumer, invocation, and
                 compatibility descriptor without backend-owned identity.
-            checkpoint (`CheckpointSink`): Accept and acknowledge each checkpoint.
             check_stopped (`CheckStopped`): Raise when cooperative stop is requested.
 
         Returns:
             `AbstractContextManager[ConversationTurn]`: The queued turn lease.
-        """
-        ...
-
-
-@runtime_checkable
-class ConversationSession(Protocol):
-    """Optional run-session capability for preparing and reconciling conversation state."""
-
-    def prepare_checkpoint(
-        self,
-        checkpoint: ConversationCheckpoint,
-        *,
-        before: ConversationView,
-    ) -> PreparedConversationApply:
-        """Validate against the actual predecessor without mutating live state.
-
-        Args:
-            checkpoint (`ConversationCheckpoint`): Exact proposed checkpoint.
-            before (`ConversationView`): Actual predecessor, including for a
-                duplicate historical checkpoint; never a guessed reconstruction.
-
-        Returns:
-            `PreparedConversationApply`: Apply the validated transition after its
-                acceptance and return its exact resulting view.
-        """
-        ...
-
-    def fail_turn(
-        self,
-        invocation: ConversationInvocation,
-        *,
-        checkpoint: ConversationCheckpoint | None,
-        acceptance: ConversationAcceptance,
-    ) -> None:
-        """Invalidate one turn and retain its checkpoint-acceptance uncertainty.
-
-        Args:
-            invocation (`ConversationInvocation`): Exact failed turn identity.
-            checkpoint (`ConversationCheckpoint | None`): Failed checkpoint if
-                known; `None` when no exact checkpoint is available.
-            acceptance (`ConversationAcceptance`): Proven unaccepted, accepted, or
-                uncertain checkpoint disposition.
-        """
-        ...
-
-    def reconcile(self, authority: ConversationAuthority) -> ConversationView:
-        """Reconcile accepted authority without repeating an external effect.
-
-        Args:
-            authority (`ConversationAuthority`): Complete accepted baseline and
-                contiguous checkpoint segment supplied by the authority owner.
-
-        Returns:
-            `ConversationView`: The exact segment's resulting detached state.
         """
         ...

@@ -508,7 +508,6 @@ def _validate_history(
         for ordinal in effect.observation_ordinals:
             claim(effect.invocation, ordinal)
 
-    closed = set()
     previous = -1
     for completion in view.closed_invocations:
         position = claim(completion.invocation, completion.closed_ordinal)
@@ -518,7 +517,6 @@ def _validate_history(
         ):
             raise ValueError("closure must be the invocation's last accepted operation")
         previous = position
-        closed.add(completion.invocation)
         if completion.status == "completed" and any(
             effect.status == "pending"
             for effect in effects_by_invocation.get(completion.invocation, ())
@@ -530,16 +528,6 @@ def _validate_history(
         raise ValueError(
             "every positive operation must have retained effect or closure evidence"
         )
-    invocations = tuple(last_ordinals)
-    for invocation in invocations[:-1]:
-        effects = effects_by_invocation.get(invocation, ())
-        if effects and (
-            invocation not in closed
-            or any(effect.status == "pending" for effect in effects)
-        ):
-            raise ValueError(
-                "admission cannot bypass unresolved prior invocation effects"
-            )
     if view.items and not view.effects:
         raise ValueError("retained items require an accepted effect request")
     if view.reference is not None and not any(
@@ -567,8 +555,7 @@ def advance_conversation(
     Raises:
         TypeError: An input contains a wrong exact carrier or JSON type.
         ValueError: An input's shape or retained history evidence is invalid.
-        MemoryOperationError: The operation conflicts with the predecessor or
-            unresolved effects require explicit recovery.
+        MemoryOperationError: The operation conflicts with its predecessor.
 
     Example:
         `after = advance_conversation(before, admission)` advances revision once;
@@ -606,17 +593,6 @@ def advance_conversation(
             )
         if any(_operation(entry)[0] == stamp.invocation for entry in before.applied):
             raise _conflict("invocation was already admitted")
-        closed = {completion.invocation for completion in completions}
-        if any(
-            effect.status == "pending" or effect.invocation not in closed
-            for effect in effects
-        ):
-            raise c.MemoryOperationError(
-                "conversation",
-                "session.recovery_required",
-                "prior effects require explicit recovery before a new admission",
-                False,
-            )
     else:
         if not before.applied:
             raise _conflict("checkpoint requires an admitted invocation")
@@ -674,7 +650,8 @@ def advance_conversation(
                 reference = checkpoint.reference
         elif type(checkpoint) is c.ConversationClosed:
             if checkpoint.status == "completed" and any(
-                effect.status == "pending" for effect in effects
+                effect.invocation == invocation and effect.status == "pending"
+                for effect in effects
             ):
                 raise _conflict("successful closure cannot leave pending effects")
             completions += (

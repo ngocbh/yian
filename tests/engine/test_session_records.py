@@ -1,19 +1,21 @@
 """Strict conversation checkpoint records and their versioned run-log boundary."""
 
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from copy import deepcopy
 import json
 
 import pytest
 
 from agent_composer.runtime import log as run_log
+from agent_composer.memory import contracts as c
+from agent_composer.memory.conversation import advance_conversation
 from agent_composer.runtime.log import (
     ConversationAdmittedRecord,
     ConversationClosedRecord,
     ConversationEffectObservedRecord,
     ConversationEffectRequestedRecord,
 )
-from tests.engine._session_fakes import append_reply, harness, request
+from tests.engine._session_fakes import admission, item, request
 
 _RECORD_TYPES = (
     ConversationAdmittedRecord,
@@ -30,13 +32,30 @@ _KINDS = (
 
 
 def _conversation_checkpoints():
-    """Return four real accepted checkpoint arms from the lower-level harness."""
-    with harness() as h:
-        with h.frame.open_turn(
-            request(), checkpoint=h.checkpoint, check_stopped=lambda: None
-        ) as turn:
-            append_reply(turn, "reply", "hello")
-        return tuple(h.accepted)
+    """Build four legacy checkpoint arms through the strict lower-level fold."""
+    first = admission(request().invocation)
+    view = advance_conversation(first.baseline, first)
+    requested = c.ConversationEffectRequested(
+        replace(first.stamp, expected_revision=view.revision, ordinal=1),
+        "model",
+        {"prompt": "hello"},
+        (),
+    )
+    view = advance_conversation(view, requested)
+    observed = c.ConversationEffectObserved(
+        replace(first.stamp, expected_revision=view.revision, ordinal=2),
+        1,
+        "completed",
+        (item("reply", "hello"),),
+        None,
+        None,
+    )
+    view = advance_conversation(view, observed)
+    closed = c.ConversationClosed(
+        replace(first.stamp, expected_revision=view.revision, ordinal=3), "completed"
+    )
+    advance_conversation(view, closed)
+    return first, requested, observed, closed
 
 
 @pytest.fixture

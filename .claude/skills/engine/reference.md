@@ -347,17 +347,26 @@ Keep the gate outside runtime; no new node hook or log field is needed.
 ## Session conversation foundation
 
 `SessionMemory` in `agent_composer.memory.session` implements
-conversation state and direct turn updates for API-backed AGENT execution.
+conversation state and direct turn updates for API-backed AGENT execution and
+native Codex thread references.
 The host injects the backend into `run_flow` under the declared policy name.
 The CLI hosts declared built-in policies lazily through `cli.memory`; its
 repeatable `--memory-storage POLICY=PATH` option selects optional durable files.
 Terminal inspection and old dormant logs open no memory backend. The controller
-owns cleanup after execution drains; runtime constructs no backend. Codex
-execution remains pending. The
+owns cleanup after execution drains; runtime constructs no backend. The
 `agent_composer.memory` facade remains contracts-only. `MemorySession` still names
 the mandatory run-handle protocol; optional `ConversationFrame` and
 `ConversationTurn` add conversation capabilities without
 expanding it.
+
+The concrete turn's optional native-session method owns start/resume through
+injected callbacks. Publish the actual `thread.id` before stop, not merely after
+a callback returns. Do not retry a missing thread by starting a fresh one. Native
+bridge declarations are compatibility pins because resume cannot replace dynamic
+tools; current instructions, cwd, sandbox, and grants still apply. Without a
+conversation-capable frame, the node starts fresh. SQLite persists Composer
+state and native references, not provider files. Native context management does
+not invoke API summary models.
 
 `memory/contracts.py` owns immutable checkpoints/views. The source-neutral
 `memory/conversation.py` owns the pure fold and strict codecs/digests;
@@ -537,6 +546,12 @@ model made enforceable.
   authored layer; the run boundary reads process provider/model defaults exactly once
   at initialization and passes them as the explicit final fallback. `inherit: false`
   skips authored flow/parent/CLI layers but still receives those process defaults.
+  Native Codex options reuse that cascade: accept an explicit host launch directory
+  in the pure resolver, default sandbox to read-only, and record absolute cwd.
+  Replay validates the recorded values without filesystem/environment resolution.
+  Do not add these fields to API effective maps when omitted. Chat factories
+  reject native-only selection with no API fallback. Historical reflective
+  snapshots may omit the new optional fields; retain their exact pinned shape.
   `apply_effective_llm_map` replays a recorded complete map without reading ambient
   settings and deep-copies every callsite again. `RunStartedRecord` stores that complete
   map; recovery applies it to a private copy of the supplied static graph before folding

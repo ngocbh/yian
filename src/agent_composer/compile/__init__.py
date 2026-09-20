@@ -11,7 +11,7 @@ positions, child boundary associations, and source-neutral materialized seed rec
 The shared model validates those recipes; expansion digests cover their topology
 without adding derived state to authored fingerprints.
 
-Knows about:   diagnostics, nodes, expr, typesys, and the LLM configuration merge primitive.
+Knows about:   diagnostics, nodes, expr, typesys, and LLM configuration validation/merge.
 Never imports: compose, runtime, the package-root run boundary, CLI, or provider SDKs.
 """
 

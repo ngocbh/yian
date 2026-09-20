@@ -94,6 +94,9 @@ One forward-only exception is recorded Codex execution: `backward()` rejects the
 entire pass before any API or memory-learning call, even with no feedback or in a
 mixed-provider run. Unexecuted Codex branches do not disable learning for the
 accepted API-only history. No backward record is appended by this rejection.
+Native SessionMemory still advances automatically during forward and resumes
+the retained Codex thread. Composer's API summaries and learned-note generation
+do not run on this native path; native backward learning is deferred.
 
 For the complete public call and exact feedback examples, see
 [explicit backward feedback](api.md#explicit-backward-feedback).

@@ -149,8 +149,13 @@ turn lifetime through execution/cleanup, never provider message encoding.
 publication through the turn. It may import memory contracts and provider message
 types, but owns no history or queue. It injects safe projection and the current
 unbound model into optional memory-owned context preparation; summary callbacks
-run outside the backend lock under its existing lease. API execution is integrated;
-Codex execution remains pending.
+run outside the backend lock under its existing lease.
+`nodes/agent/codex.py` owns native event/output adaptation and the explicit Composer
+tool bridge. It consumes the supervised worker and optional native session
+capability; it owns no persistent worker, reference registry, or queue. The
+concrete memory turn selects start/resume through injected callbacks. Keep exact
+structured-error producer recognition below the adapter by passing its code object
+from AgentNode, never by a reverse import or mutable producer registry.
 
 `cli/memory.py` owns lazy CLI policy selection and backend lifetime. It reads the
 pure static memory layout and lower memory contracts, importing only selected
@@ -171,8 +176,8 @@ imports the pinned native SDK, and `client.py` owns process supervision and
 caller-lane callbacks. Never import tools, memory, nodes, compile, compose, or
 runtime into this package. Inject host callables; do not send them, memory
 handles, or live SDK objects across IPC. Conversation persistence is not worker
-process persistence. Provider selection and native session integration remain
-separate from this private boundary.
+process persistence. Node execution and memory integration consume this private
+boundary from above; they do not move policy into the worker.
 
 Compiled-origin traversal follows the same direction. Semantic carriers and
 nodes own their local origin slots and static-child hooks; `diagnostics` owns the

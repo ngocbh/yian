@@ -376,6 +376,7 @@ def _run_flow_controlled(
         private_flow,
         llm_config or {},
         defaults=defaults,
+        launch_cwd=os.getcwd(),
     )
 
     if learnable:

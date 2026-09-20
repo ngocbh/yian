@@ -203,6 +203,8 @@ def test_snapshot_contains_only_public_pinned_model_configuration() -> None:
         "openai_reasoning_effort",
         "google_thinking_level",
         "temperature",
+        "sandbox",
+        "cwd",
     }
     assert not {"api_key", "backend_token", "tenant_id"} & set(llm_config)
 
@@ -232,6 +234,8 @@ def test_defaults_are_read_once_and_recorded_snapshot_never_rereads_them(
         "openai_reasoning_effort": None,
         "provider": "ollama",
         "temperature": 0.2,
+        "sandbox": None,
+        "cwd": None,
     }
 
     calls.clear()

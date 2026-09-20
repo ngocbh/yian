@@ -210,7 +210,7 @@ any model or learner, or appending backward records. A declared but unexecuted
 Codex branch does not trigger this restriction. The check uses recorded execution
 scopes and provider configuration, not mutable live node settings; terminal
 recovery preserves it. Rejection leaves the forward result and prior backward
-observations unchanged. Codex forward/provider integration remains separate work.
+observations unchanged.
 
 Known callback/result failures return a failed outcome without partial root
 feedback. A later learner or commit failure retains already completed feedback.
@@ -410,12 +410,12 @@ the completed feedback.
 ## SessionMemory foundation
 
 `agent_composer.memory.session.SessionMemory` retains API-backed AGENT
-conversations across calls to `run_flow`. The backend owns history updates and
+conversations or native Codex thread references across calls to `run_flow`.
+The backend owns history updates and
 FIFO admission directly; runtime owns only the optional turn's lifetime and
 authored scope. Explicit backward learning retains self-feedback as notes through
 the same memory lifecycle. Older API context can be summarized without deleting
-raw history. `ac run` activates declared built-in policies automatically; Codex
-execution is **not implemented yet**.
+raw history. `ac run` activates declared built-in policies automatically.
 
 Declare `long_term_memory: session` on a flow or AGENT node and reuse the same
 backend under that policy name. For example:
@@ -523,6 +523,39 @@ versioned message format. Compatible model, prompt, and tool-grant changes keep
 history; changing provider or message format requires explicit reset. Every call
 uses current instructions, recall, and tool grants. Historical system/developer
 instructions are not reinstated as current instructions.
+
+### Native Codex sessions
+
+Use the same `long_term_memory: session` declaration and `SessionMemory` backend
+with a Codex-backed `tool_calling` AGENT. Include `builtin_tools` explicitly;
+see [native configuration](syntax.md#codex-native-execution).
+
+SessionMemory owns the opaque native thread reference and decides whether the
+SDK starts or resumes a thread. Worker processes remain invocation-local; a
+persistent conversation does not require a persistent worker. With no
+SessionMemory-capable frame, every Codex invocation starts fresh, even if other
+long-term memory frames provide recall.
+
+Native history stays in Codex. Composer retains observed native/model/tool
+effects and the actual thread reference, publishing returned facts before
+cooperative stop. It does not replay API messages or call an API model to
+summarize native history. The same per-authored-leaf FIFO queue, reset, and
+innermost-frame ownership rules apply.
+
+Compatible model changes preserve a native conversation. Bridged Composer tool
+names, descriptions, and public schemas are pinned: changing these requires
+`memory.reset()` because the pinned native resume API cannot replace the original
+dynamic-tool declarations. Current tool grants are checked for each callback;
+current instructions, recall, cwd, and sandbox are sent on start and resume.
+A missing native thread fails rather than silently starting a new one.
+
+`SessionMemory(storage="./session.sqlite")` and CLI
+`--memory-storage session=./session.sqlite` preserve Composer's state and native
+reference. This is not a backup of Codex's thread files; retain both stores for
+restart continuity. Reset clears Composer's session state, not provider files.
+Run-log recovery does not reconstruct conversations; a crash retry may repeat
+model or tool requests. The first Codex release is forward-only: recorded Codex
+execution rejects the whole `backward()` pass before any model or memory learner.
 
 ### API history summaries
 

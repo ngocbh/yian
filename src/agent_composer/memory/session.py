@@ -1257,6 +1257,89 @@ class _Turn:
             self._session._ensure_lease(self._lease)
         return checkpoint.stamp.ordinal
 
+    def native_session(
+        self,
+        *,
+        provider: str,
+        start: Callable[[Callable[[str], None]], object],
+        resume: Callable[[str, Callable[[str], None]], object],
+    ) -> c.ConversationReference:
+        """Start or resume the retained native association under this FIFO lease.
+
+        Args:
+            provider (`str`): Nonempty provider identity; it must match any saved
+                reference. Compatibility remains the admission's exact descriptor.
+            start (`Callable`): Start a fresh session and synchronously call the
+                supplied `accept(session_id)` once for its actual response.
+            resume (`Callable`): Resume the supplied saved session ID and call
+                `accept(session_id)` once for its actual response. Return values
+                from both callbacks are ignored; no failure triggers a fallback.
+
+        Returns:
+            `ConversationReference`: The accepted provider-native association.
+
+        Raises:
+            `TypeError`: The provider, callbacks, or accepted ID have wrong types.
+            `ValueError`: The provider or accepted ID is empty or invalid.
+            `MemoryOperationError`: The provider or resumed ID conflicts, acceptance
+                is missing, duplicated, or late, or the lease/storage is unusable.
+                Callback and cooperative-stop exceptions propagate unchanged.
+        """
+        c._require_string(provider, "provider")
+        if not callable(start) or not callable(resume):
+            raise TypeError("native session callbacks must be callable")
+        previous = self.view.reference
+        if previous is not None and previous.provider != provider:
+            raise _error(
+                "incompatible", "native session provider changed; reset is required"
+            )
+        payload = {
+            "provider": provider,
+            "operation": "start" if previous is None else "resume",
+        }
+        if previous is not None:
+            payload["session_id"] = previous.session_id
+        ordinal = self.request("native_session", payload)
+        active = True
+        used = False
+        accepted = None
+
+        def accept(session_id: str) -> None:
+            nonlocal used, accepted
+            with self._session._memory._locked():
+                self._session._ensure_lease(self._lease, allow_closed=True)
+                if not active or used:
+                    raise _error(
+                        "conflict", "native session acceptance is late or repeated"
+                    )
+                reference = c.ConversationReference(provider, session_id)
+                if previous is not None and reference != previous:
+                    raise _error(
+                        "conflict", "native resume returned a different session ID"
+                    )
+                used = True
+            # observe publishes before checking stop. A subsequent exception must
+            # not invent a second terminal observation for this completed effect.
+            self.observe(ordinal, "completed", reference=reference)
+            accepted = reference
+
+        try:
+            if previous is None:
+                start(accept)
+            else:
+                resume(previous.session_id, accept)
+        finally:
+            active = False
+        self._check()
+        with self._session._memory._locked():
+            self._session._ensure_lease(self._lease)
+        if accepted is None:
+            raise _error(
+                "incomplete",
+                "native session callback returned without accepting its response",
+            )
+        return accepted
+
     def prepare_history(
         self,
         *,

@@ -1706,17 +1706,17 @@ def prepare_conversation_record(
     Args:
         state (`RunState`): Initialized state at the checkpoint's accepted start.
         record (`RunRecord`): One exact conversation record wrapper.
-        schema (`int`, *optional*, defaults to `SCHEMA_VERSION`): Exact supported
-            envelope version for this record.
+        schema (`int`, *optional*, defaults to `SCHEMA_VERSION`): Envelope version;
+            conversation records require `8`, the current new-write version.
 
     Returns:
         `PreparedTransition`: Detached checkpoint and a pure projection delta,
             with no output binding, execution episode, or public observer.
 
     Raises:
-        TypeError: State, record, or nested carrier has an invalid exact type.
-        ValueError: Scope, invocation, lifecycle, or checkpoint authority is invalid.
-        MemoryOperationError: The conversation fold rejects effect ordering.
+        `TypeError`: State, record, or nested carrier has an invalid exact type.
+        `ValueError`: Scope, invocation, lifecycle, or checkpoint authority is invalid.
+        `MemoryOperationError`: The conversation fold rejects effect ordering.
 
     Example:
         `commit_prepared(log, state, prepare_conversation_record(state, record))`

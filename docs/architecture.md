@@ -172,14 +172,21 @@ canonically and fsynced. `resume_flow(flow, log=path)` then:
 3. rebuilds a private graph and folds the prefix through the same reducer used
    during live execution;
 4. after any incomplete-tail repair, returns a terminal forward result without
-   appending records, or continues unfinished forward execution.
+   appending records, or continues unfinished forward execution when eligible
+   for retry.
 
-If primary execution is unfinished, recovery appends one `RunResumedRecord`,
+If primary execution is unfinished and eligible, recovery appends one `RunResumedRecord`,
 retries nodes that have a durable start but no durable outcome, and continues
 the recorded frontier. If the primary result is terminal, recovery only inspects
 its accepted backward prefix and opens no memory sessions. Inputs, run identity,
 resolved model configuration, dynamic growth, and memory snapshots come from
 the log rather than current defaults.
+
+An unfinished invocation with an accepted conversation effect request in its own
+segment blocks generic retry, even if observed or closed; effects inherited through
+its admission baseline do not count. Effect-free admitted invocations can be
+retired by an accepted resume without rewriting their history. See the
+[Python API recovery contract](api.md#durable-recovery-with-resume_flow).
 
 Replay makes engine state deterministic; it cannot make arbitrary external
 effects exactly once. An interrupted node can run again, so effectful node

@@ -80,8 +80,8 @@ A streaming kind is a generator that yields `StreamChunk` and *returns* a
 evaluation boundary returns `EvaluationFailure(Failure)` for expected rejection;
 host control, stream callbacks, unexpected binder faults, and malformed setup
 escape. Result preparation constructs the same canonical value for expected
-output, route, and growth rejection. One strict schema-7 record boundary handles
-both paths, carries forward capture when retention is enabled, may retain
+output, route, and growth rejection. One strict record boundary, introduced in
+schema 7, handles both paths, carries forward capture when retention is enabled, may retain
 optional model/tool evaluation evidence, and carries
 the nested value through the reducer to `NodeFailed`/`RunFailed` observers and
 `RunResult.failure`.
@@ -158,8 +158,8 @@ flattening semantic fields.
 The durable boundary normalizes valid `OriginRef` subclasses to exact base
 `OriginRef(key)` values because the wire owns only that key. Live record, reducer,
 observer, and public-result carriers share the resulting immutable `Failure`;
-replay reconstructs an equal canonical value. Earlier schemas are deliberately
-rejected rather than migrated.
+replay reconstructs an equal canonical value. Schemas 7 and 8 retain this same
+failure payload; unsupported versions are rejected rather than migrated.
 
 **Invariants:** a node never receives the pool (the `eval_node` seam binds its
 inputs); a node never writes the pool (it *describes* `Output(value)`, the engine
@@ -273,7 +273,7 @@ WAIT are never timed by that watchdog.
 | Record | Transition |
 |--------|------------|
 | `RunStartedRecord` | complete initial pool, flow fingerprint, START override, resolved LLM map, worker count, and optional memory configuration |
-| `RunResumedRecord` | ordered unfinished starts to retry plus the selected worker count |
+| `RunResumedRecord` | eligible ordered unfinished starts to retry, retirement of effect-free admitted invocations, and the selected worker count |
 | `NodeStartedRecord` | move the exact ready head into the ordered in-flight set before evaluation/submission |
 | `NodeSucceededRecord` | commit one canonical typed value under an already-resolved target, with optional evaluation evidence |
 | `NodeRoutedRecord` | select one named outgoing handle and retain optional terminal failure and evaluation evidence |
@@ -285,6 +285,10 @@ WAIT are never timed by that watchdog.
 | `BackwardStartedRecord` | retain an attempt ID and its original ordinary root feedback |
 | `BackwardReadyRecord` | retain completed root feedback, the complete occurrence attribution inventory, and ordered owned frame proposals |
 | `BackwardFinishedRecord` | retain an attempt's outcome, including completed feedback when a later learner fails |
+| `ConversationAdmittedRecord` | retain one invocation's admission and complete baseline |
+| `ConversationEffectRequestedRecord` | retain an effect request before external execution |
+| `ConversationEffectObservedRecord` | retain the actual observation of a requested effect |
+| `ConversationClosedRecord` | retain an admitted invocation's terminal disposition |
 
 `FlowEngine` borrows one initialized `RunState` plus a matching open `RunLog`.
 Workers only evaluate; the dispatcher prepares a total transition, appends its
@@ -292,8 +296,13 @@ record, applies it, then publishes transient observers. `StreamChunk` callbacks 
 explicitly non-durable. The engine never closes its log: package-root `run.py` owns
 `MemoryRunLog`/`JsonlRunLog` creation, locking, recovery, tail repair, and closure.
 The explicit backward driver uses the same prepare/append/reduce path after the
-forward result returns, with no observer publication. Schema remains 6; removed
-per-frame records and nullable legacy commit attempt IDs are not accepted.
+forward result returns, with no observer publication. New writes use schema 8;
+readers accept exactly schemas 7 and 8. The thirteen pre-existing kinds retain
+unchanged strict payload validation in both; the four conversation kinds require
+8. Removed per-frame records and nullable legacy commit attempt IDs remain invalid.
+Preserve each historical envelope's schema and canonical bytes through preparation,
+replay, trace comparison, tamper checks, and append verification. Recovery appends
+new schema-8 records without rewriting a schema-7 accepted prefix; mixed logs reopen.
 
 `run_flow(..., log=None)` uses process-local authority; a path selects a durable
 JSONL log. `memory={name: implementation}` opens one snapshot-isolated session
@@ -314,7 +323,7 @@ unknown, and all confirmations without Finished still describe an interruption.
 
 `resume_flow(flow, *, log=..., num_workers=None, memory=None)` validates the
 authored flow fingerprint, silently folds the locked contiguous prefix through
-the same reducer. An unfinished primary appends one
+the same reducer. An eligible unfinished primary appends one
 `RunResumedRecord` before retrying starts in original dispatch order; a terminal
 primary returns silent inspection, even after interrupted backward. An unfinished
 memory-enabled forward run requires exact recorded snapshots; terminal inspection
@@ -330,8 +339,10 @@ all forward fields unchanged.
 ## Session conversation foundation
 
 `SessionMemory` in `agent_composer.memory.session` implements process-local
-conversation state. It is not wired into runtime, AGENT, API-provider, Codex, or
-CLI execution yet, and introduces no RunLog record or schema change. The
+conversation state. Checkpoint records and pure reducer/replay support are
+implemented. The automatic checkpoint channel, session harness, AGENT,
+API-provider, Codex, and CLI execution integration remain pending; `run_flow`
+does not yet drive conversation turns. The
 `agent_composer.memory` facade remains contracts-only. `MemorySession` still names
 the mandatory run-handle protocol; optional `ConversationSession`,
 `ConversationFrame`, and `ConversationTurn` add conversation capabilities without
@@ -340,8 +351,38 @@ expanding it.
 `memory/contracts.py` owns immutable checkpoints/views. The source-neutral
 `memory/conversation.py` owns the pure fold and strict codecs/digests;
 `memory/session.py` interprets it through injected checkpoint and stop callables.
-Neither imports runtime, nodes, compile, compose, or providers. A later runtime
-reducer must reuse the fold, not implement another conversation transition model.
+Neither imports runtime, nodes, compile, compose, or providers.
+`runtime/conversation.py` sits above that fold and below `runtime/state.py`.
+Its immutable `RuntimeConversationState` pairs admission-led accepted segments
+with resulting views and retains retired invocation identities.
+`prepare_conversation_checkpoint` advances it through `advance_conversation`;
+this module imports only the standard library and lower memory contracts/fold,
+never backends, sessions, drivers, or callbacks.
+
+`RunState.accepted_starts` captures the original accepted start sequence for each
+unfinished invocation independently of forward retention. Run ID plus that
+sequence identifies a conversation invocation, not its dynamic node name.
+`conversation_state` starts empty even on a schema-7 run and survives pruning
+independently of `learnable`. `prepare_conversation_record` validates accepted
+start, run, enabled frame/policy, compiled consumer scope, and lifecycle, then
+prepares the pure fold. Commit rechecks frozen bytes and the recomputed successor
+before append and applies only afterward. Checkpoints bind no outputs, advance
+no frontier, create no execution episodes, and publish no observers; trace
+handling advances only the accepted record sequence. Replay calls no backend.
+
+An invocation may admit only one handle and must close it before node success.
+After primary failure, only observations and close for already-admitted,
+still-unfinished invocations may drain; a node with an accepted outcome is no
+longer unfinished. All checkpoints are forbidden after primary success or any
+backward start, even after that attempt finishes.
+
+Generic recovery rejects an unfinished invocation with any accepted effect request,
+even if observed or closed. Count only requests in its accepted segment, not
+effects inherited through its baseline. An accepted effect-free retry retires the
+old invocation without changing its accepted segment/view or fabricating close,
+completion, or effect records. A new accepted start gets a new sequence; reject
+late checkpoints for retired identities. Memory-free retry behavior is unchanged;
+external effects outside this checkpoint authority must still tolerate repetition.
 
 The backend has no constructor settings and accepts only `{}` frame config.
 Conversation identity is `(frame_ref, consumer_static_path)`, not a MAP/LOOP
@@ -426,7 +467,7 @@ model made enforceable.
   may end after a start when host control interrupts evaluation. Preparation is
   side-effect-free; `commit_prepared` appends before applying the frozen reducer plan
   and exposes observers only afterward. Recovery validates a contiguous prefix, folds
-  it through that same path, and records the ordered retry frontier in
+  it through that same path, and records an eligible ordered retry frontier in
   `RunResumedRecord` before continuing.
 - **Blocking authorable effects are live** — an AGENT node's `ask_user`, HUMAN_INPUT, and
   WAIT return `Output` from the same invocation and never create continuation topology.
@@ -964,12 +1005,12 @@ never runtime ids, graph topology, or a text heuristic.
   structural error path through the effective target contract's exact,
   nearest-ancestor, or default origin, then falls back to the executing node;
   other canonicalization errors use the contract default. Route and growth use
-  the executing node origin. Schema-7 output rejection retains its cause type
+  the executing node origin. Schema-7/8 output rejection retains its cause type
   inside `Failure`, forward capture when retention is enabled, and optional
   model/tool evaluation evidence beside it. Execution scope in the capture is
   separate from diagnostic provenance.
 - **Runtime boundary:** evaluator and dispatcher rejection construct one
-  canonical `Failure`; schema-7 `NodeFailedRecord` stores that value, forward
+  canonical `Failure`; schema-7/8 `NodeFailedRecord` stores that value, forward
   capture when retention is enabled, and optional model/tool evaluation evidence.
   Reducer state, `NodeFailed`, `RunFailed`,
   and `RunResult.failure` carry no semantic aliases. The first route whose skip

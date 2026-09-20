@@ -416,8 +416,13 @@ def _copy_record_checkpoint(
 class ConversationAdmittedRecord:
     """Retain one admission checkpoint and its complete predecessor view.
 
-    Attributes:
-        checkpoint (`ConversationAdmitted`): Exact detached admission evidence.
+    Args:
+        checkpoint (`ConversationAdmitted`): Required exact admission carrier,
+            including its complete baseline. Validated and detached on construction.
+
+    Example:
+        `record = ConversationAdmittedRecord(admission)` wraps an existing
+        `ConversationAdmitted` checkpoint for a schema-8 envelope.
     """
 
     checkpoint: ConversationAdmitted
@@ -434,8 +439,13 @@ class ConversationAdmittedRecord:
 class ConversationEffectRequestedRecord:
     """Retain one conversation effect request before external execution.
 
-    Attributes:
-        checkpoint (`ConversationEffectRequested`): Exact detached request data.
+    Args:
+        checkpoint (`ConversationEffectRequested`): Required exact effect-request
+            carrier. Validated and detached on construction.
+
+    Example:
+        `record = ConversationEffectRequestedRecord(request)` wraps an existing
+        `ConversationEffectRequested` checkpoint for a schema-8 envelope.
     """
 
     checkpoint: ConversationEffectRequested
@@ -452,8 +462,13 @@ class ConversationEffectRequestedRecord:
 class ConversationEffectObservedRecord:
     """Retain one actual observation of a conversation effect.
 
-    Attributes:
-        checkpoint (`ConversationEffectObserved`): Exact detached effect observation.
+    Args:
+        checkpoint (`ConversationEffectObserved`): Required exact observation
+            carrier. Validated and detached on construction.
+
+    Example:
+        `record = ConversationEffectObservedRecord(observation)` wraps an existing
+        `ConversationEffectObserved` checkpoint for a schema-8 envelope.
     """
 
     checkpoint: ConversationEffectObserved
@@ -470,8 +485,13 @@ class ConversationEffectObservedRecord:
 class ConversationClosedRecord:
     """Retain the terminal disposition of one admitted conversation invocation.
 
-    Attributes:
-        checkpoint (`ConversationClosed`): Exact detached invocation disposition.
+    Args:
+        checkpoint (`ConversationClosed`): Required exact invocation-disposition
+            carrier. Validated and detached on construction.
+
+    Example:
+        `record = ConversationClosedRecord(close)` wraps an existing
+        `ConversationClosed` checkpoint for a schema-8 envelope.
     """
 
     checkpoint: ConversationClosed

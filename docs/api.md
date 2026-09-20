@@ -341,9 +341,11 @@ the completed feedback.
 ## SessionMemory foundation
 
 `agent_composer.memory.session.SessionMemory` is a process-local conversation
-backend for callers implementing the optional conversation capabilities. Runtime,
-AGENT, API-provider, Codex, and CLI integration is **not implemented yet**. Injecting
-this backend into `run_flow` does not currently retain an agent conversation.
+backend for callers implementing the optional conversation capabilities. Checkpoint
+RunLog records and pure reducer/replay support are available. The automatic runtime
+checkpoint channel, session harness, AGENT, API-provider, Codex, and CLI integration
+are **not implemented yet**. Injecting this backend into `run_flow` does not
+currently retain an agent conversation.
 
 `SessionMemory` is the concrete backend; the existing `MemorySession` name still
 means the run-scoped protocol returned by a memory backend. The mandatory `Memory`,
@@ -409,8 +411,26 @@ must retain the actual complete predecessor. A historical duplicate needs that
 predecessor plus matching ledger evidence and returns its exact historical result;
 the backend does not reconstruct old views from the latest state or keep a hidden
 view archive. The pure fold and strict JSON codecs/digests live in
-`agent_composer.memory.conversation`. These checkpoints are not yet RunLog records;
-the runtime record vocabulary and schema are unchanged.
+`agent_composer.memory.conversation`. Four schema-8 RunLog wrappers now retain
+these checkpoints: `ConversationAdmittedRecord`, `ConversationEffectRequestedRecord`,
+`ConversationEffectObservedRecord`, and `ConversationClosedRecord`.
+
+The separate `agent_composer.runtime.conversation.RuntimeConversationState`
+projection retains admission-led accepted segments, their resulting views, and
+retired invocation identities. `prepare_conversation_checkpoint` reuses the lower
+fold without accessing backend state. Runtime's `prepare_conversation_record`
+validates the run ID, original accepted start sequence, enabled frame/policy,
+compiled consumer scope, and lifecycle before `commit_prepared` appends and applies
+the checkpoint. Replay uses the same path without session or provider calls.
+This reducer support does not yet supply the live checkpoint callback to workers.
+
+Checkpoint records advance conversation history independently of `learnable` and
+survive graph pruning. They do not bind outputs, advance the ready frontier, create
+execution episodes, or publish observers; retained trace handling advances only its
+record sequence. One invocation can admit only one handle, which must close before
+its node success is accepted. After primary failure, only observations and close
+for an already-admitted, still-unfinished invocation may drain. After primary
+success or any backward start, all checkpoints are rejected.
 
 Lost or uncertain checkpoint acknowledgements block further admission through a
 private recovery fence. `fail_turn(...)` installs the necessary fence before
@@ -462,21 +482,30 @@ library callers use the same method when they need presentation-ready frames.
 
 ## Authoritative run logs
 
-Every execution is reduced from one ordered schema-7 `RunLog`, including
-process-local runs. The closed durable record vocabulary is `RunStartedRecord`,
+Every execution is reduced from one ordered `RunLog`, including process-local runs.
+New records use schema 8; readers accept exactly schemas 7 and 8. The thirteen
+pre-existing kinds have the same strict payload validation in both versions; the
+four conversation kinds require schema 8. Other versions are rejected. Recovery
+preserves each accepted schema-7 record's canonical bytes, schema, and meaning,
+then appends schema-8 records without rewriting or relabelling the prefix.
+Mixed-version logs can be reopened.
+
+The closed durable record vocabulary is `RunStartedRecord`,
 `RunResumedRecord`, `NodeStartedRecord`, `NodeSucceededRecord`,
 `NodeRoutedRecord`, `NodeExpandedRecord`, `NodeFailedRecord`,
 `MemoryCommitRequestedRecord`,
 `MemoryCommitSucceededRecord`, `MemoryCommitFailedRecord`,
-`BackwardStartedRecord`, `BackwardReadyRecord`, and `BackwardFinishedRecord`. The four node
+`BackwardStartedRecord`, `BackwardReadyRecord`, `BackwardFinishedRecord`,
+`ConversationAdmittedRecord`, `ConversationEffectRequestedRecord`,
+`ConversationEffectObservedRecord`, and `ConversationClosedRecord`. The four node
 outcome records carry canonical forward inputs and routes when the recorded
 run has `learnable=True`; `learnable=False` omits that capture. Optional model/tool
 evaluation evidence is separate. Terminal success
 or failure is derived from node transitions. `NodeFailedRecord` stores
 the nested `Failure` directly beside any evidence. A causal `NodeRoutedRecord`
 stores the optional derived terminal-unreachable `Failure` that replay
-revalidates before restoring; no separate forward terminal record exists. Earlier
-schemas are deliberately rejected rather than migrated.
+revalidates before restoring; no separate forward terminal record exists.
+Historical schema-7 runs begin with an empty conversation projection.
 
 Backward attempts use `BackwardStartedRecord`, then one `BackwardReadyRecord`
 after the complete backward fold and every frame proposal, then ordered policy
@@ -571,11 +600,19 @@ explicit backward call.
 For later backward on a memory-enabled log, pass the original policy mapping to
 `resume_flow(..., memory=...)`; terminal inspection retains it without opening it.
 
-If primary execution is unfinished, recovery appends one `RunResumedRecord`,
-retries the exact ordered set of nodes that have a durable start but no durable
+If primary execution is unfinished and eligible for retry, recovery appends one
+`RunResumedRecord`, retries the exact ordered set of nodes that have a durable start but no durable
 outcome, and continues the ready frontier. `num_workers=None` preserves the
 recorded worker count; an integer selects and records the new segment's count.
 Fresh inputs, `run_id`, and LLM configuration cannot be supplied during recovery.
+
+An unfinished invocation with any accepted conversation effect request is not
+eligible for generic retry, even after an observation or close. Recovery rejects
+it before appending a resume record; effects inherited from earlier invocations in
+the admission baseline do not count. An accepted resume instead retires effect-free
+admitted invocation identities while preserving their accepted segments/views,
+without fabricating closure or completion. A retried start receives a new sequence,
+and late checkpoints for a retired identity are rejected.
 
 After incomplete-tail repair, terminal inspection appends no records and invokes
 no graph nodes, backward hooks, or memory learners/commits. It projects the last
@@ -594,10 +631,11 @@ prefix-refresh failure makes that handle unusable rather than permitting a stale
 retry. Log/cleanup faults preserve the primary exception and accepted records.
 
 !!! important "Recovery may retry an interrupted node"
-    A durable `NodeStarted` with no durable outcome is intentionally run again.
-    Code that performs external side effects must therefore tolerate retry; the
-    log makes engine state deterministic, but it cannot make an interrupted
-    external effect exactly-once.
+    A durable `NodeStarted` with no durable outcome is run again unless an accepted
+    conversation effect request blocks retry. Memory-free nodes retain ordinary
+    retry behavior, so their external effects must tolerate repetition. The log
+    makes engine state deterministic, but cannot make an interrupted external
+    effect exactly-once.
 
 ## CLI path policy
 

@@ -22,12 +22,20 @@ from agent_composer.memory.conversation import (
 class RuntimeConversationState:
     """Accepted admission-led segments and views, including retired invocations.
 
-    Attributes:
-        segments (`tuple[ConversationAuthority, ...]`): One accepted segment per
-            invocation in admission order, preserved after graph pruning.
-        views (`tuple[ConversationView, ...]`): Corresponding resulting views.
-        retired_invocations (`frozenset[ConversationInvocation]`): Effect-free
-            invocations superseded by an accepted recovery frontier.
+    Args:
+        segments (`tuple[ConversationAuthority, ...]`, *optional*, defaults to `()`):
+            One accepted admission-led segment per invocation, in admission order,
+            preserved after graph pruning. Validated and detached on construction.
+        views (`tuple[ConversationView, ...]`, *optional*, defaults to `()`):
+            Corresponding resulting views, one per segment. Each must equal the
+            lower fold of that segment and is detached on construction.
+        retired_invocations (`frozenset[ConversationInvocation]`, *optional*, defaults to `frozenset()`):
+            Admitted effect-free invocations superseded by an accepted recovery
+            frontier. Each identity must belong to a retained segment.
+
+    Example:
+        `current = RuntimeConversationState()` creates an empty projection before
+        `prepare_conversation_checkpoint(current, admission)` prepares a successor.
     """
 
     segments: tuple[ConversationAuthority, ...] = ()
@@ -157,9 +165,9 @@ def prepare_conversation_checkpoint(
         `RuntimeConversationState`: Projection with the accepted segment advanced.
 
     Raises:
-        TypeError: A projection or checkpoint has an invalid exact type.
-        ValueError: The invocation is retired, missing, or already admitted.
-        MemoryOperationError: The lower fold rejects the checkpoint's predecessor
+        `TypeError`: A projection or checkpoint has an invalid exact type.
+        `ValueError`: The invocation is retired, missing, or already admitted.
+        `MemoryOperationError`: The lower fold rejects the checkpoint's predecessor
             or effect ordering.
 
     Example:

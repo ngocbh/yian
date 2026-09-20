@@ -50,6 +50,9 @@ exchanges automatically during forward. These history updates are not learning.
 Explicit API backward self-feedback can become committed notes for future calls
 through the existing memory lifecycle, without another model call. No-feedback
 backward adds no session notes; raw conversation history stays unchanged.
+API context summaries are separate from learning: forward execution may summarize
+older turns with the current model while preserving raw history and recent whole
+turns. The history budget does not include learned-note recall.
 
 ## Start an explicit backward attempt
 

@@ -176,8 +176,11 @@ session.reset()  # Starts fresh; fails while any turn is active or queued.
 History advances automatically, without `learnable=True` or backward. Repeated
 calls to the same authored agent queue in admission order; other authored agents
 keep separate conversations. Explicit backward learning reuses API self-feedback
-as committed notes for future runs, without another model call. Run logs do not
-reconstruct history. Codex execution, summaries, durable storage, and CLI
+as committed notes for future runs, without another model call. API history uses a
+soft 32,000-character context budget and preserves the latest four whole turns;
+older context can be summarized without deleting raw history. Configure these
+defaults on `SessionMemory(history_budget_chars=32_000, recent_turns=4)`.
+Run logs do not reconstruct history. Codex execution, durable storage, and CLI
 activation remain pending.
 
 ## Documentation

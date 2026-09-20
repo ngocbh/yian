@@ -948,7 +948,7 @@ instance; external persistence remains a host concern.
 
 `agent_composer.memory.session.SessionMemory` supplies conversation continuity
 for API-backed AGENT execution through `run_flow`. It owns history updates
-directly. Codex, summaries, durable storage, and CLI activation
+directly. Codex, durable storage, and CLI activation
 remain pending.
 `SessionMemory` is a concrete backend;
 `MemorySession` remains the existing run-handle protocol. Optional
@@ -984,7 +984,9 @@ make missing tool results unknown and schema pseudo-calls inert; raw history is
 unchanged. Replies, including native structured raw replies, are saved before
 cancellation or parsing. Memory faults bypass structured/provider retry loops.
 
-`SessionMemory()` takes no arguments and accepts only empty frame configuration.
+`SessionMemory(history_budget_chars=32_000, recent_turns=4)` accepts a positive
+history budget and nonnegative prior-turn count as host-only keyword settings;
+frame configuration stays empty.
 Its conversation key is the authored frame plus the leaf consumer's static path,
 supplied by the caller. Each key has one FIFO queue; different leaves under a
 flow-owned frame have separate conversations and queues. MAP/LOOP occurrence
@@ -993,7 +995,7 @@ order, not a MAP input-index guarantee. A turn reads its live
 baseline only after acquiring the lease. The run handle's detached opening
 snapshot stays pinned as live turns advance history. Public
 version-2 snapshots contain namespace, generation, complete conversation views,
-and learned notes, not transient queues, leases, or private commit bookkeeping.
+and learned notes, not transient queues, leases, summary cache, or commit bookkeeping.
 Version-1 snapshots remain readable as history without notes and retain their
 exact envelope when pinned. Storage remains process-local. Reopening an older
 snapshot against a used backend reads latest compatible live history without
@@ -1006,6 +1008,28 @@ lock. There is no checkpoint sink, prepared-apply callback, or reconciliation
 channel. Cooperative stop checks can cancel queued work; actual observations are
 retained before honoring a stop during an effect. Conversation progress is
 independent of `learnable`.
+
+API context preparation uses an optional concrete-turn `prepare_history`
+capability without changing mandatory protocols. `memory/summary.py` owns pure
+admission-led selection and cache-prefix proofs; SessionMemory owns cache
+publication. Project and summarize callbacks run outside the Condition under the
+existing FIFO lease. They receive detached values, never runtime state.
+The stateless API adapter projects selected invocations safely, excludes old
+system/developer instructions, and uses the current unbound model for a summary
+before tool binding or structured-output generation. A callback model/response
+failure remains an ordinary node failure; codec/backend failures remain capability
+faults. Do not turn a summary failure into an answer or structured retry.
+
+The soft character budget applies to historical projection and summaries, not
+fresh instructions/input, tool schemas, or learned notes. Preserve the latest
+four prior whole admissions plus the active invocation, including failed or empty
+interrupted turns. Keep all raw history. A valid oversized summary is retained
+without truncation or automatic retry; cached prefixes extend only when needed.
+Cache identity proves the exact covered raw prefix and projection version, not
+the current live-view revision. Old snapshots never rewind this derived state.
+The final structured pass uses prepared prior context plus a fresh safe projection
+of the active invocation; it must not re-expand old history or retain summaries
+and synthetic repairs as new raw messages. Reset clears derived summaries.
 
 Explicit API backward learning reuses the existing self-feedback as learned
 notes through frame `learn`, session `commit`, and contextual frame `recall`.
@@ -1023,7 +1047,7 @@ Failed/interrupted turns keep completed observations and leave unobserved reques
 pending, not falsely successful. A new invocation can continue that history;
 successful closure checks only its own effects. Restoring context never itself
 executes stored tools, but ordinary node retry may resend requests and repeat
-actions. The backend does not call providers or tools. A changed exact compatibility
+actions. The backend owns no provider or tool client. A changed exact compatibility
 descriptor requires reset; provider-specific compatibility rules are not part of
 this backend.
 

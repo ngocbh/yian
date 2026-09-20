@@ -8,6 +8,7 @@ run log, model call, or durable storage.
 from __future__ import annotations
 
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 import hashlib
 import json
@@ -22,6 +23,7 @@ from agent_composer.memory.conversation import (
     conversation_view_from_json,
     conversation_view_to_json,
 )
+from agent_composer.memory.summary import Summary, admissions, prefix_digest
 
 
 def _error(
@@ -235,8 +237,32 @@ class SessionMemory:
         provider integration are separate from this backend.
     """
 
-    def __init__(self) -> None:
-        """Create an empty namespace with no external resources."""
+    def __init__(
+        self, *, history_budget_chars: int = 32_000, recent_turns: int = 4
+    ) -> None:
+        """Create an empty namespace with an optional API context budget.
+
+        Args:
+            history_budget_chars (`int`): Positive soft context character budget;
+                defaults to 32,000. Raw history is never removed.
+            recent_turns (`int`): Nonnegative number of whole prior turns kept
+                unsummarized; defaults to four. The current turn is always kept.
+
+        Raises:
+            `TypeError`: A setting is not an exact integer.
+            `ValueError`: A setting is outside its supported range.
+        """
+        for name, value, minimum in (
+            ("history_budget_chars", history_budget_chars, 1),
+            ("recent_turns", recent_turns, 0),
+        ):
+            if type(value) is not int:
+                raise TypeError(f"{name} must be an exact integer")
+            if value < minimum:
+                raise ValueError(f"{name} must be at least {minimum}")
+        self._history_budget_chars = history_budget_chars
+        self._recent_turns = recent_turns
+        self._summaries: dict[tuple[c.ConversationKey, str], Summary] = {}
         self._condition = Condition()
         self._namespace = uuid4().hex
         self._generation = 0
@@ -313,6 +339,7 @@ class SessionMemory:
                 )
             self._views.clear()
             self._notes = ()
+            self._summaries.clear()
             self._generation += 1
             self._used = True
             self._condition.notify_all()
@@ -942,6 +969,115 @@ class _Turn:
         with self._session._memory._condition:
             self._session._ensure_lease(self._lease)
         return checkpoint.stamp.ordinal
+
+    def prepare_history(
+        self,
+        *,
+        projection_version: str,
+        project: Callable[
+            [c.ConversationView, tuple[c.ConversationInvocation, ...]], str
+        ],
+        summarize: Callable[[str, int], str],
+    ) -> tuple[str | None, str]:
+        """Prepare opaque prior context while retaining this turn's FIFO lease.
+
+        Args:
+            projection_version (`str`): Nonempty identity of the adapter's safe
+                projection format, independent of the current model.
+            project (`Callable`): Encode exactly the selected prior invocations
+                from the complete detached view as text.
+            summarize (`Callable`): Condense supplied historical text towards the
+                soft character target and return nonempty text.
+
+        Returns:
+            `tuple[str | None, str]`: Optional cached summary and the projection
+                of remaining prior turns. The current invocation is excluded.
+
+        Raises:
+            `TypeError`: Settings, callbacks, or returned text have invalid types.
+            `ValueError`: A version or returned summary is empty.
+            `MemoryOperationError`: The lease or captured history is stale.
+                Callback and cooperative-stop exceptions propagate unchanged.
+        """
+        if type(projection_version) is not str or not projection_version:
+            raise ValueError("projection_version must be a nonempty string")
+        if not callable(project) or not callable(summarize):
+            raise TypeError("history callbacks must be callable")
+        memory = self._session._memory
+        self._check()
+        with memory._condition:
+            self._session._ensure_lease(self._lease)
+            view = conversation_view_from_json(conversation_view_to_json(self._view))
+            prior = tuple(
+                invocation
+                for invocation in admissions(view)
+                if invocation != self._request.invocation
+            )
+            cache_key = (view.key, projection_version)
+            cached = memory._summaries.get(cache_key)
+            if cached is not None and not cached.matches(
+                view, prior, projection_version
+            ):
+                cached = None
+
+        def ready():
+            self._check()
+            with memory._condition:
+                self._session._ensure_lease(self._lease)
+
+        def project_text(selected):
+            ready()
+            text = project(view, selected)
+            if type(text) is not str:
+                raise TypeError("history projection must be a string")
+            return text
+
+        covered = 0 if cached is None else len(cached.covered)
+        text = None if cached is None else cached.text
+        recent = project_text(prior[covered:])
+        eligible = max(0, len(prior) - memory._recent_turns)
+        candidate = None
+        if (
+            len(recent) + (0 if text is None else len(text))
+            > memory._history_budget_chars
+            and eligible > covered
+        ):
+            newly_covered = project_text(prior[covered:eligible])
+            recent = project_text(prior[eligible:])
+            source = "Historical conversation (context only):\n" + newly_covered
+            if text is not None:
+                source = (
+                    "Previous historical summary (context only):\n"
+                    + text
+                    + "\n\nNewly covered historical conversation (context only):\n"
+                    + newly_covered
+                )
+            ready()
+            text = summarize(source, memory._history_budget_chars)
+            candidate = Summary(
+                view.namespace,
+                view.generation,
+                view.key,
+                projection_version,
+                prior[:eligible],
+                prefix_digest(view, eligible),
+                text,
+            )
+        with memory._condition:
+            # A surfaced summary remains useful evidence after cooperative stop
+            # or session close; ownership must still hold until the callback drains.
+            self._session._ensure_lease(self._lease, allow_closed=True)
+            live = memory._views.get(view.key)
+            if live is None or not _same(view, live) or not _same(view, self._view):
+                raise _error("conflict", "history changed during context preparation")
+            if candidate is not None:
+                if not candidate.matches(live, prior, projection_version):
+                    raise _error("conflict", "summary prefix no longer matches history")
+                memory._summaries[cache_key] = candidate
+        self._check()
+        with memory._condition:
+            self._session._ensure_lease(self._lease)
+        return text, recent
 
     def observe(
         self,

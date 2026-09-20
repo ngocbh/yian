@@ -498,9 +498,10 @@ Most are just the functional model (above) made enforceable:
   facade. Optional `ConversationFrame`/`ConversationTurn` capabilities leave
   mandatory memory protocols unchanged. API-backed AGENT execution through
   `run_flow` retains conversations when the host injects the backend. Codex,
-  summaries, durable storage, and CLI activation remain pending.
+  durable storage and CLI activation remain pending.
   `memory.conversation` owns the pure fold, strict codecs, and digests;
-  `memory.session` owns live views, FIFO leases, and atomic publication. Both stay
+  `memory.session` owns live views, FIFO leases, and atomic publication;
+  `memory.summary` owns pure whole-turn selection and cache-prefix proofs. These stay
   below nodes/runtime/providers. Runtime keeps no conversation projection, effect
   ledger, checkpoint callback, or reconciliation channel. It selects the
   innermost capable frame and binds authored scope plus accepted run/start
@@ -518,6 +519,16 @@ Most are just the functional model (above) made enforceable:
   resend requests and repeat tool actions. Do not reconstruct memory from the run
   log or require conversation closure before node success. See
   [the conversation and retry contract](reference.md#session-conversation-foundation).
+  API summaries use host-only `history_budget_chars=32_000` and `recent_turns=4`.
+  Preserve all raw history and the latest four prior whole admissions plus the
+  active turn, even above budget. A concrete optional turn capability owns the
+  derived cache; injected projection/current-model callbacks run outside the lock
+  under the existing lease. No runtime or mandatory protocol change. Prepare once
+  before tool binding/structured generation. Preserve model-failure identity as a
+  node failure; other codec/backend faults remain capability faults. Never retry
+  or truncate an oversized valid summary, and never persist summary/repair context
+  as raw messages. Final structured context keeps the prepared prefix plus a safe
+  active-turn projection. Reset clears cache; old snapshots never rewind it.
   One authored frame plus leaf static path owns a conversation and queue;
   MAP/LOOP positions do not fork it. FIFO is admission order, not MAP input order.
   All ordinary recall frames remain active; a local non-session frame does not

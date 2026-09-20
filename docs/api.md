@@ -239,8 +239,11 @@ nodes:
 output: ${answer.output}
 ```
 
-The host owns the backend, model configuration, credentials, tenant identity,
-and lifetime:
+The Python host owns the backend, model configuration, credentials, tenant
+identity, and lifetime. `run_flow(..., memory=None)` still leaves declarations
+dormant. The `ac run` host supplies declared built-in policies automatically;
+see [CLI memory](cli.md#memory-policies-and-storage). Python injection supports
+custom policies and constructor settings:
 
 ```python
 from pathlib import Path
@@ -354,7 +357,8 @@ defaults, and future reflective learning uses the current host `llm_config`.
 SessionMemory uses the current history budget and recent-turn count. Increasing
 the recent-turn count restores raw context for newly protected turns instead of
 hiding them behind an older summary. These settings and storage ownership belong
-to the host; CLI activation is separate work.
+to the host. `ac run` exposes storage selection through
+`--memory-storage POLICY=PATH` and otherwise uses constructor defaults.
 
 Application-specific implementations use the source-neutral `Memory`,
 `MemorySession`, and `MemoryFrame` protocols exported by
@@ -410,8 +414,8 @@ conversations across calls to `run_flow`. The backend owns history updates and
 FIFO admission directly; runtime owns only the optional turn's lifetime and
 authored scope. Explicit backward learning retains self-feedback as notes through
 the same memory lifecycle. Older API context can be summarized without deleting
-raw history. Codex and CLI
-activation are **not implemented yet**.
+raw history. `ac run` activates declared built-in policies automatically; Codex
+execution is **not implemented yet**.
 
 Declare `long_term_memory: session` on a flow or AGENT node and reuse the same
 backend under that policy name. For example:
@@ -825,6 +829,10 @@ policy on top:
   fresh inputs, a second log path, or provider/model configuration;
 - omitting `-w` on resume preserves the recorded worker count, while an explicit
   value affects the new segment only;
+- `ac run` supplies declared built-in memory policies and closes their backends
+  after execution drains. Repeated `--memory-storage POLICY=PATH` selects optional
+  durable files on fresh runs or resume; omitted policies remain process-local.
+  Terminal inspection and old dormant logs open no memory backend;
 - each `ac chat` attempt, including a failed-turn restart, receives a separate
   reported default path.
 

@@ -349,7 +349,11 @@ Keep the gate outside runtime; no new node hook or log field is needed.
 `SessionMemory` in `agent_composer.memory.session` implements
 conversation state and direct turn updates for API-backed AGENT execution.
 The host injects the backend into `run_flow` under the declared policy name.
-Codex and CLI activation remain pending. The
+The CLI hosts declared built-in policies lazily through `cli.memory`; its
+repeatable `--memory-storage POLICY=PATH` option selects optional durable files.
+Terminal inspection and old dormant logs open no memory backend. The controller
+owns cleanup after execution drains; runtime constructs no backend. Codex
+execution remains pending. The
 `agent_composer.memory` facade remains contracts-only. `MemorySession` still names
 the mandatory run-handle protocol; optional `ConversationFrame` and
 `ConversationTurn` add conversation capabilities without

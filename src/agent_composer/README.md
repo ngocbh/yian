@@ -873,6 +873,15 @@ outcome, including visible model retries within that invocation. Reducer-rejecte
 node proposals are represented by their accepted canonical failure. Discarded
 late siblings and transient stream chunks do not become learning evidence.
 
+The `ac run` host discovers policy names through the same pure static layout and
+injects lazy built-in wrappers from `cli.memory`. Concrete backends open only when
+the run boundary requests `open_run`; terminal inspection and old dormant logs
+acquire no memory resources. Repeated `--memory-storage POLICY=PATH` selects
+host-owned durable files; other policies remain process-local. The controller
+closes backends after engine work drains. Custom policies require Python host
+injection. Runtime does not construct policies, and CLI activation does not enable
+backward learning or change Python's `memory=None` behavior.
+
 `learnable=True` enables retention only, with or without an enabled memory policy.
 Forward returns before any backward hook, learner, or commit. An explicit
 `RunResult.backward(feedback=None)` starts the separate attempt driver after
@@ -981,8 +990,8 @@ shared-cluster storage.
 
 `agent_composer.memory.session.SessionMemory` supplies conversation continuity
 for API-backed AGENT execution through `run_flow`. It owns history updates
-directly. Codex and CLI activation
-remain pending.
+directly. The CLI automatically hosts declared built-in policies; Codex execution
+remains pending.
 `SessionMemory` is a concrete backend;
 `MemorySession` remains the existing run-handle protocol. Optional
 `ConversationFrame` and `ConversationTurn` protocols leave

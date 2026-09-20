@@ -5,8 +5,8 @@ recovers them from a durable log, drives the flow to a terminal state, and
 prints the output.
 
 ```console
-ac run FLOW.yaml [--inputs inputs.json] [--input k=v]... [--log PATH] [-w N] [--provider NAME] [--model NAME] [--quiet] [--verbose] [--engine-trace]
-ac run FLOW.yaml --resume PATH [-w N] [--quiet] [--verbose] [--engine-trace]
+ac run FLOW.yaml [--inputs inputs.json] [--input k=v]... [--log PATH] [--memory-storage POLICY=PATH]... [-w N] [--provider NAME] [--model NAME] [--quiet] [--verbose] [--engine-trace]
+ac run FLOW.yaml --resume PATH [--memory-storage POLICY=PATH]... [-w N] [--quiet] [--verbose] [--engine-trace]
 ```
 
 Commands below that use `examples/...` assume a repository clone and run from
@@ -52,6 +52,49 @@ corrupt, mismatched, or locked log) are reported as concise errors. Pass
 `ac chat` uses the same default directory and reports one new path for its initial
 run. If a failed turn restarts the immutable chat flow from the last completed
 transcript, that restart gets a separate log rather than reusing the failed run.
+
+## Memory policies and storage
+
+`ac run` automatically supplies the built-in policies named by the flow's
+`long_term_memory` declarations: `episodic`, `reflective`, and `session`. It
+discovers declarations in nested flows too and shares one backend per policy
+for that CLI invocation. A flow without declarations opens no memory backend.
+Custom policies require the Python API's `memory={...}` registry; the CLI reports
+an error if execution needs one.
+
+By default, backends are process-local and their state is lost when `ac run`
+exits. Opt selected policies into local SQLite storage with repeatable
+`--memory-storage POLICY=PATH` flags. Each policy must be declared in the flow,
+appear at most once in the flags, and use its own file in an existing directory:
+
+```console
+# A flow declaring session memory
+ac run flow.yaml --input question="First question" --log ./first.jsonl --memory-storage session=./session.sqlite
+ac run flow.yaml --input question="Follow-up" --log ./second.jsonl --memory-storage session=./session.sqlite
+
+# A flow declaring both policies
+ac run layered.yaml --memory-storage session=./session.sqlite --memory-storage episodic=./episodes.sqlite
+
+# Recover an unfinished run using the same memory store
+ac run flow.yaml --resume ./first.jsonl --memory-storage session=./session.sqlite
+```
+
+Policies without a storage flag remain process-local. Storage paths belong to
+the CLI, not YAML or run logs. The files contain sensitive memory data, are
+unencrypted, and allow one owning backend at a time on a single host; do not
+use a shared network filesystem. Backends close after execution drains. See
+[durable memory](api.md#optional-durable-memory) for the full ownership contract.
+
+Session history advances automatically during execution. This does not enable
+learning: `ac run` neither sets `learnable=True` nor calls `backward()`. Episodic
+and reflective policies can recall saved state, but adding learned episodes or
+lessons still requires explicit Python API backward learning.
+
+To resume an unfinished memory-enabled run across CLI processes, supply the
+same durable stores. Run logs do not reconstruct session history; an interrupted
+request can be repeated against the latest stored history. A terminal resume
+only prints the recorded result and does not open memory stores. Older logs
+that recorded no enabled memory remain dormant when resumed.
 
 ## Supplying inputs
 

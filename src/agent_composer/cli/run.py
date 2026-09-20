@@ -14,6 +14,10 @@ structures or explicit null come from `--inputs`.
 Fresh runs use a reported durable log under ``~/.agent_composer/runs`` unless
 ``--log`` selects a new path. ``--resume`` recovers an existing path without gathering
 fresh inputs or model configuration.
+Declared memory policies use CLI-owned built-in backends. Repeated
+``--memory-storage POLICY=PATH`` opts selected policies into durable storage;
+omitted policies remain process-local. Backends open lazily inside the controller
+and close only after the run boundary drains its workers.
 
 The engine runs behind a main-thread terminal broker: blocking HUMAN_INPUT and
 agent ``ask_user`` calls wait for that broker and then continue inside the same
@@ -49,10 +53,12 @@ from rich.syntax import Syntax
 from rich.text import Text
 
 from agent_composer.compile.model import END_ID, START_ID
+from agent_composer.cli.memory import MemoryHost
 from agent_composer.cli.terminal import PromptRequest, TerminalBroker
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.loader import load_flow
 from agent_composer.diagnostics import Diagnostic
+from agent_composer.memory.contracts import MemoryOperationError
 from agent_composer.run import (
     RunResult,
     _resume_flow_controlled,
@@ -1349,6 +1355,13 @@ def run(
         "log flags are forbidden.",
     ),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress per-node progress."),
+    memory_storage: List[str] = typer.Option(
+        None,
+        "--memory-storage",
+        metavar="POLICY=PATH",
+        help="Persist a declared built-in memory policy at PATH (repeatable). "
+        "Omitted policies remain process-local; also accepted with --resume.",
+    ),
     verbose: bool = typer.Option(
         False, "--verbose", "-v", help="Also print each node's output as it finishes."
     ),
@@ -1398,6 +1411,12 @@ def run(
             err_console.print_exception()
         raise typer.Exit(code=1)
 
+    try:
+        memory_host = MemoryHost(loaded.compiled, memory_storage or [])
+    except (TypeError, ValueError) as exc:
+        raise typer.BadParameter(str(exc), param_hint="--memory-storage") from exc
+    memory_options = {"memory": memory_host.registry} if memory_host.registry else {}
+
     # The "what am I running" banner (flow name/description/version) — stderr, like
     # progress; suppressed under --quiet.
     if not quiet:
@@ -1420,13 +1439,15 @@ def run(
             _render: Callable[[Callable[[], None]], None],
         ) -> RunResult:
             """Recover one run while the helper owns its terminal broker."""
-            return _resume_flow_controlled(
-                loaded,
-                log=selected_log,
-                num_workers=num_workers,
-                on_event=on_event,
-                stop_event=stop_event,
-            )
+            with memory_host:
+                return _resume_flow_controlled(
+                    loaded,
+                    log=selected_log,
+                    num_workers=num_workers,
+                    on_event=on_event,
+                    stop_event=stop_event,
+                    **memory_options,
+                )
 
     else:
         supplied: Dict[str, Any] = {}
@@ -1475,16 +1496,18 @@ def run(
             _render: Callable[[Callable[[], None]], None],
         ) -> RunResult:
             """Drive one fresh run while the helper owns its terminal broker."""
-            return _run_flow_controlled(
-                loaded,
-                supplied,
-                log=selected_log,
-                run_id=run_id,
-                on_event=on_event,
-                llm_config=cli_cfg or None,
-                num_workers=selected_workers,
-                stop_event=stop_event,
-            )
+            with memory_host:
+                return _run_flow_controlled(
+                    loaded,
+                    supplied,
+                    log=selected_log,
+                    run_id=run_id,
+                    on_event=on_event,
+                    llm_config=cli_cfg or None,
+                    num_workers=selected_workers,
+                    stop_event=stop_event,
+                    **memory_options,
+                )
 
     try:
         result = _run_with_terminal_controller(
@@ -1503,7 +1526,7 @@ def run(
         # ordinary cancellation outcome used by pre-run prompts.
         err_console.print("[yellow]run cancelled[/yellow]")
         raise typer.Exit(code=1)
-    except (OSError, TypeError, ValueError) as exc:
+    except (OSError, TypeError, ValueError, MemoryOperationError) as exc:
         action = "resume" if resume is not None else "run"
         _render_host_run_error(action, exc, engine_trace=engine_trace)
         raise typer.Exit(code=1)

@@ -149,8 +149,14 @@ turn lifetime through execution/cleanup, never provider message encoding.
 publication through the turn. It may import memory contracts and provider message
 types, but owns no history or queue. It injects safe projection and the current
 unbound model into optional memory-owned context preparation; summary callbacks
-run outside the backend lock under its existing lease. API execution is integrated; Codex and CLI
-activation remain pending.
+run outside the backend lock under its existing lease. API execution is integrated;
+Codex execution remains pending.
+
+`cli/memory.py` owns lazy CLI policy selection and backend lifetime. It reads the
+pure static memory layout and lower memory contracts, importing only selected
+built-in implementations when `open_run` is requested. `cli/run.py` injects that
+registry and owns its context until engine work drains. Storage flags remain
+host-only; runtime never imports this module or constructs memory policies.
 
 The `memory` facade exports contracts only: concrete session, episodic, and
 reflection backends must be imported from their own modules, not eagerly from

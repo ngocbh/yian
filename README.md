@@ -195,7 +195,20 @@ with SessionMemory(storage="./session.sqlite") as session:
 Each local SQLite file has one owning backend until `close()` or context exit.
 Idle run handles do not block closing; active work or queued turns do. Omit
 `storage` to keep memory process-local. See [durable memory](docs/api.md#optional-durable-memory)
-for ownership and recovery. Codex execution and CLI activation remain pending.
+for ownership and recovery. Codex execution remains pending.
+
+`ac run` automatically activates declared `episodic`, `reflective`, and `session`
+policies. They stay process-local unless a repeatable CLI option selects storage:
+
+```bash
+ac run flow.yaml --memory-storage session=./session.sqlite
+ac run flow.yaml --resume ./run.jsonl --memory-storage session=./session.sqlite
+```
+
+The flow must declare the selected policy. Use the same store on resume; a run
+log is not a memory backup. The CLI does not run backward learning. Custom
+policies still require Python host injection. See
+[CLI memory](docs/cli.md#memory-policies-and-storage) for lifetime and examples.
 
 ## Documentation
 

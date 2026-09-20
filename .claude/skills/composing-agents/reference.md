@@ -381,6 +381,12 @@ Other node kinds and anonymous inline children cannot carry the declaration. The
 YAML contains no credentials, tenant/backend paths, persistence locations, or
 Python imports. A library host injects implementations under the selected policy
 name with `run_flow(..., memory={NAME: implementation})` to enable recall.
+`ac run` automatically hosts declared built-in `episodic`, `reflective`, and
+`session` policies. Repeat `--memory-storage POLICY=PATH` to persist selected
+policies in separate local files; unspecified policies remain process-local.
+Use the same stores on unfinished resume. Paths never belong in YAML or run logs;
+terminal inspection and old dormant logs open no backend. Custom policies require
+Python host injection, and Python's `memory=None` remains dormant.
 For API session history, use `long_term_memory: session` with a host-injected
 `SessionMemory()` (no frame config). The innermost conversation-capable frame
 owns each authored AGENT leaf's conversation; all frames still provide recall.
@@ -406,8 +412,8 @@ Call `result.backward(feedback)` explicitly after forward returns, and inspect
 its separate outcome. With `None` feedback, enabled memory frames still learn
 from accepted history without AGENT backward model work. Terminal resume is silent
 inspection; manual whole-attempt retry is allowed only before an accepted commit
-request or successful backward completion. The CLI leaves memory declarations
-dormant and has no backward command.
+request or successful backward completion. The CLI activates declared built-in
+memory but has no backward command and never enables learning implicitly.
 
 ## Validate
 

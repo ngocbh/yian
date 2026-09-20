@@ -37,6 +37,13 @@ host supplies its implementation under that name. Recall and optional session
 history can be enabled without `learnable=True`, and a learnable run can operate
 without any memory policy.
 
+`ac run` acts as a host for declared built-in policies automatically. Its
+`--memory-storage POLICY=PATH` option enables persistence for selected policies;
+others remain process-local. It does not enable learning or call `backward()`.
+Session history still advances during forward, while saving episodic or reflective
+learning requires the explicit Python API. See
+[CLI memory](cli.md#memory-policies-and-storage).
+
 | Setting | What it enables | What forward execution does |
 | --- | --- | --- |
 | `learnable=True` | Retained execution and a later `backward()` call | Records accepted facts; does not learn or commit |

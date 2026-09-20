@@ -70,6 +70,11 @@ not semantic snapshots, run handles, clients, or queues. Backends validate and
 save candidates before publishing live state. Host-only storage paths never enter
 YAML or runtime records, and the memory facade remains contracts-only.
 
+CLI activation belongs in `cli/memory.py`, above pure layout discovery and memory
+contracts. It owns lazy built-in backend selection and cleanup; `cli/run.py`
+injects the registry into the existing run boundary. Runtime does not select or
+construct implementations, and terminal inspection acquires no memory resources.
+
 ## Import-direction smell test
 
 - Importing *upward* (leaf reaches into a root package) → wrong package, or needs a seam.

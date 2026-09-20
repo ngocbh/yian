@@ -54,8 +54,9 @@ rebuild history. Explicit API backward self-feedback can be committed as notes
 for future recall. API context summaries preserve raw history and recent whole
 turns. Host-only `storage=path` optionally preserves complete backend state across
 restarts; `storage=None` remains process-local. See
-[durable memory](api.md#optional-durable-memory). Codex execution and CLI activation
-remain pending. See
+[durable memory](api.md#optional-durable-memory). `ac run` activates declared built-in
+policies; optional `--memory-storage POLICY=PATH` preserves selected policies across
+CLI processes. It does not run backward learning. Codex execution remains pending. See
 [SessionMemory foundation](api.md#sessionmemory-foundation) for ownership,
 history updates, retry, and reset semantics.
 

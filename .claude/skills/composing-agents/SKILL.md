@@ -237,10 +237,11 @@ may add its own local frame. Each frame writes only itself. MAP/LOOP executions
 reuse the frames authored on their flows and AGENT nodes rather than creating
 per-item/per-iteration frames.
 Other node kinds and anonymous inline child flows cannot carry this declaration.
-It remains dormant under ordinary `ac run`; library hosts enable recall by
-registering the selected policy with
-`run_flow(..., memory={NAME: implementation})`. For API conversation continuity,
-declare `long_term_memory: session` and inject `SessionMemory()` as `"session"`;
+`ac run` automatically hosts declared `episodic`, `reflective`, and `session`
+policies; custom policies require Python injection. Library hosts enable recall
+with `run_flow(..., memory={NAME: implementation})`; `memory=None` stays dormant.
+For API conversation continuity, declare `long_term_memory: session`; Python hosts
+inject `SessionMemory()` as `"session"`;
 frame config is empty. The innermost conversation-capable frame owns one
 conversation per authored AGENT leaf; other frames still provide recall. Repeated
 calls queue, including MAP items and LOOP iterations. MAP does not fork history
@@ -255,8 +256,11 @@ Raw history and recent whole turns stay intact, even above the soft budget.
 All three built-in backend constructors accept optional `storage=path` for local
 SQLite durability; the default `None` remains process-local. Never put a storage
 path in YAML. A file has one owner until backend close; active work or queued
-turns block close, idle run handles do not. Codex execution and CLI activation
-are pending.
+turns block close, idle run handles do not. In `ac run`, repeat
+`--memory-storage POLICY=PATH` to persist selected declared policies; others stay
+process-local and lose state on exit. Supply the same stores on unfinished
+resume; terminal inspection opens none. CLI activation does not run backward
+learning. Codex execution remains pending.
 Independently, `learnable=True` retains
 execution for a later explicit `result.backward(feedback)` call; forward returns
 before frame learning or learned-mutation commits. `result.backward()` with no external feedback still

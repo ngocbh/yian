@@ -482,6 +482,13 @@ Most are just the functional model (above) made enforceable:
   enabled frame learner in layout order, including empty/unexecuted histories.
   A receiver writes only its own frame; descendant evidence preserves original
   execution coordinates. No learner mutates an inherited parent frame.
+- **CLI memory is host-owned and lazy** — `cli.memory` uses the pure static layout
+  to supply one backend per declared built-in policy. Repeated
+  `--memory-storage POLICY=PATH` selects durable files outside YAML and run records;
+  omitted policies stay process-local. Open only when runtime requests `open_run`
+  and close after controller work drains. Terminal inspection and old dormant
+  logs open no backend. Custom policies require Python injection. Never construct
+  policies in runtime, enable learning implicitly, or change `memory=None` dormancy.
 - **Episodic memory appends canonical execution history** — import the built-in
   backend from `agent_composer.memory.episodic`. An authored
   `long_term_memory: episodic` frame accepts positive `max_episodes` and
@@ -510,8 +517,8 @@ Most are just the functional model (above) made enforceable:
   `SessionMemory` from `agent_composer.memory.session`, not the contracts-only
   facade. Optional `ConversationFrame`/`ConversationTurn` capabilities leave
   mandatory memory protocols unchanged. API-backed AGENT execution through
-  `run_flow` retains conversations when the host injects the backend. Codex
-  and CLI activation remain pending.
+  `run_flow` retains conversations when the host injects the backend. The CLI
+  hosts declared built-in policies automatically; Codex execution remains pending.
   `memory.conversation` owns the pure fold, strict codecs, and digests;
   `memory.session` owns live views, FIFO leases, and atomic publication;
   `memory.summary` owns pure whole-turn selection and cache-prefix proofs. These stay

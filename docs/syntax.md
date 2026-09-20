@@ -265,11 +265,15 @@ node. `long_term_memory:` is invalid on other node kinds and on anonymous inline
 CALL/MAP/LOOP bodies; use a named `defs:` flow when the child itself needs a flow
 frame.
 
-Authored long-term-memory declarations are dormant unless a Python host passes a
-`memory={...}` registry to `run_flow`, keyed by the selected policy names.
-Supplying the registry enables recall and any optional conversation capability.
-For API conversation continuity, declare `long_term_memory: session` and inject
-`SessionMemory()` under `"session"`. It accepts no frame config. The host can set
+`ac run` automatically supplies declared `episodic`, `reflective`, and `session`
+policies. They are process-local unless the host flag
+`--memory-storage POLICY=PATH` selects a durable store; storage never belongs in
+YAML. Custom policies require Python host injection. For Python calls, declarations
+remain dormant unless the host passes a `memory={...}` registry to `run_flow`,
+keyed by the selected policy names. Supplying the registry enables recall and any
+optional conversation capability.
+For API conversation continuity, declare `long_term_memory: session`; Python hosts
+inject `SessionMemory()` under `"session"`. It accepts no frame config. The host can set
 `SessionMemory(history_budget_chars=32_000, recent_turns=4)` for API context
 summaries; these settings do not belong in YAML and do not truncate raw history.
 The innermost conversation-capable frame owns a separate conversation for each
@@ -287,8 +291,8 @@ returns. Forward does not run frame learners or commit learned mutations; sessio
 history updates are separate. A call with no external feedback still
 presents history to every enabled memory frame; backward outcomes stay separate
 from the forward result. See [the Python API](api.md#explicit-backward-feedback).
-The `ac run` CLI does not inject memory implementations or expose backward or
-learning commands.
+The `ac run` CLI activates memory but does not expose backward or learning
+commands. See [CLI memory](cli.md#memory-policies-and-storage).
 
 ## Node kinds
 

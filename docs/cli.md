@@ -266,7 +266,8 @@ execute concurrently:
 
 ```console
 # the debate diamond argues both sides at once instead of one after the other
-ac run examples/debate.yaml --input question="Adopt a monorepo?" --num-workers 4
+ac run examples/debate.yaml --provider codex --model YOUR_CODEX_MODEL \
+  --input question="Adopt a monorepo?" --num-workers 4
 ```
 
 - A fresh run with no worker flag uses `0`, the single-threaded deterministic

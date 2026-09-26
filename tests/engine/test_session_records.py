@@ -48,7 +48,6 @@ def _conversation_checkpoints():
         "completed",
         (item("reply", "hello"),),
         None,
-        None,
     )
     view = advance_conversation(view, observed)
     closed = c.ConversationClosed(

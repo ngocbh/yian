@@ -49,7 +49,7 @@ def admission(invocation, *, baseline=None, policy="session", ref=REF,
     if baseline is None:
         baseline = c.ConversationView(
             "test-namespace", 0, 0, c.ConversationKey(ref, consumer),
-            {"format": "fake-v1"}, (), None, (), (), (),
+            {"format": "fake-v1"}, (), (), (), (),
         )
     return c.ConversationAdmitted(
         c.ConversationStamp(policy, baseline.key, invocation, baseline.namespace,

@@ -22,7 +22,7 @@ from langchain_core.exceptions import OutputParserException
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from agent_composer._settings import default_llm_model, default_llm_provider
+from agent_composer.llm_clients.connection import legacy_connection_config, resolve_model_config, split_model_config
 from agent_composer.llm_clients import LLMConfig, model_from_config
 from agent_composer.memory.contracts import (
     JsonObject,
@@ -432,15 +432,16 @@ def _parse_snapshot(
         if type(data["version"]) is not int or data["version"] != _SNAPSHOT_VERSION:
             raise ValueError("snapshot version is unsupported")
         llm_config = _copy_json_object(data["llm_config"], "snapshot.llm_config")
-        validated_llm = LLMConfig.model_validate(llm_config, strict=True)
+        # Preserve the exact historical snapshot for its recorded digest while
+        # validating inert defaults removed from the current public carrier.
+        retired_nulls = {key: None for key in ("sandbox", "cwd") if key in llm_config and llm_config[key] is None}
+        validated_llm, connection = split_model_config({key: value for key, value in llm_config.items() if key not in retired_nulls})
         complete_llm = cast(
             JsonObject, validated_llm.model_dump(mode="json", exclude_none=False)
         )
-        # Older snapshots predate these optional provider fields. Preserve their
-        # exact pinned shape while still requiring every original config field.
-        for field in ("sandbox", "cwd"):
-            if field not in llm_config and complete_llm[field] is None:
-                del complete_llm[field]
+        complete_llm.update(retired_nulls)
+        if connection is not None:
+            complete_llm["_connection"] = connection
         if _canonical_json(llm_config) != _canonical_json(complete_llm):
             raise ValueError("snapshot.llm_config must be complete and canonical")
         provider = _nonempty_string(
@@ -881,14 +882,11 @@ class ReflectiveMemory:
         """Resolve ambient defaults exactly once for one fresh session."""
         config = _copy_json_object(self._llm_config, "llm_config")
         try:
-            if config.get("provider") is None:
-                config["provider"] = default_llm_provider()
-            if config.get("model") is None:
-                config["model"] = default_llm_model()
-            validated = LLMConfig.model_validate(config, strict=True)
-            complete = cast(
-                JsonObject, validated.model_dump(mode="json", exclude_none=False)
-            )
+            resolved = resolve_model_config(config)
+            validated, connection = split_model_config(resolved)
+            complete = cast(JsonObject, validated.model_dump(mode="json", exclude_none=False))
+            if connection is not None:
+                complete["_connection"] = connection
             _nonempty_string(complete.get("provider"), "llm_config.provider")
             model = _nonempty_string(complete.get("model"), "llm_config.model")
             if not model.strip():
@@ -1652,7 +1650,7 @@ class _ReflectiveFrame:
         )
         human = HumanMessage(content=prompt)
         try:
-            model = model_from_config(llm_config)
+            model = model_from_config(legacy_connection_config(llm_config))
         except Exception as exc:
             raise _operation_error(
                 "learn",

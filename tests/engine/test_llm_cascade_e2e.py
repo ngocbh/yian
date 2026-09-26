@@ -6,6 +6,7 @@ those authored outer layers while retaining process provider/model defaults."""
 import agent_composer.llm_clients as llm_clients_mod
 from agent_composer.compose.loader import load_flow
 from agent_composer.run import run_flow
+from agent_composer.llm_clients.connection import resolve_model_config
 
 # Top flow sets provider+temperature; calls `sub`. Inside `sub`, `inner` overrides only
 # `model` (so it fills provider/temperature from the flow and the CLI fields), while
@@ -64,4 +65,4 @@ def test_cascade_end_to_end_with_cli_layer(monkeypatch):
         "max_tokens": 256,
     }
     # solo: inherit:false — own complete selection, no authored flow/CLI layers
-    assert by_model["gpt-5.5"] == {"provider": "openai", "model": "gpt-5.5"}
+    assert by_model["gpt-5.5"] == resolve_model_config({"provider": "openai", "model": "gpt-5.5"})

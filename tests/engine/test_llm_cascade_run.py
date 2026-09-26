@@ -2,6 +2,7 @@
 
 from agent_composer.compose.loader import load_flow
 from agent_composer.run import run_flow
+from agent_composer.llm_clients.connection import resolve_model_config
 
 
 def test_run_flow_applies_cli_llm_config(monkeypatch):
@@ -29,4 +30,4 @@ def test_run_flow_applies_cli_llm_config(monkeypatch):
     )
     loaded = load_flow(text)
     run_flow(loaded, {}, llm_config={"provider": "openai", "model": "gpt-5.5"})
-    assert captured["cfg"] == {"provider": "openai", "model": "gpt-5.5"}
+    assert captured["cfg"] == resolve_model_config({"provider": "openai", "model": "gpt-5.5"})

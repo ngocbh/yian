@@ -224,7 +224,7 @@ Historical conversation records remain readable as inert compatibility metadata,
 independently of `learnable`. Runtime validates their envelope, unfinished start,
 and memory scope, but does not reconstruct conversations or restore memory. They
 bind no outputs, advance no frontier, and publish no observers. SessionMemory owns
-saved conversation state. API and native Codex AGENT execution use an optional turn from
+saved conversation state. AGENT execution uses an optional turn from
 the innermost capable frame; the evaluator owns its lifetime through wrapped
 execution and cleanup, not later dispatcher acceptance. Runtime binds authored
 scope and accepted run/start identity without interpreting provider messages.
@@ -233,12 +233,7 @@ not add runtime conversation state. API summary selection and derived cache also
 belong to SessionMemory, with injected adapter/model callbacks. Optional SQLite
 storage belongs to the memory backends. The CLI supplies declared built-in
 policies lazily and owns their lifetime; runtime never constructs them.
-`nodes/agent/codex.py` adapts native events and explicitly declared Composer tools
-to an invocation-local supervised SDK worker. SessionMemory owns native
-start/resume and the thread reference; it imports no provider code. Actual native
-results publish before stop, and host tool callbacks drain before the conversation
-lease releases. This adds no runtime provider branch. See
-[SessionMemory foundation](api.md#sessionmemory-foundation).
+See [SessionMemory foundation](api.md#sessionmemory-foundation).
 
 When retention is enabled, the trace keeps the actual terminal producer and
 accepted invocation contexts through graph pruning. The reverse-feedback fold

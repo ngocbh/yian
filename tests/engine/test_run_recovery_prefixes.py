@@ -357,15 +357,15 @@ def test_replay_applies_logged_llm_map_before_rebuilding_growth(monkeypatch):
     def unexpected_default():
         pytest.fail("recovery read an ambient LLM default")
 
-    monkeypatch.setattr(run_module, "default_llm_provider", unexpected_default)
-    monkeypatch.setattr(run_module, "default_llm_model", unexpected_default)
+    monkeypatch.setattr(run_module, "connection_snapshot", unexpected_default)
 
     recovered = run_module._replay_run_log(loaded, source)
 
     assert _state_snapshot(recovered) == _state_snapshot(live)
     assert recovered.effective_llm_by_static_path == effective
     assert isinstance(recovered.flow.nodes["gate/leaf"], AgentNode)
-    assert recovered.flow.nodes["gate/leaf"].llm_config == effective["gate/leaf"]
+    from agent_composer.llm_clients.connection import legacy_connection_config
+    assert recovered.flow.nodes["gate/leaf"].llm_config == legacy_connection_config(effective["gate/leaf"])
     assert source.append_calls == 0
     assert source.close_calls == 0
     assert flow_manifest(loaded.compiled) == original_manifest
@@ -405,8 +405,7 @@ def test_schema_seven_public_resume_keeps_completed_code_and_wire(tmp_path, monk
     path = tmp_path / "historical.jsonl"
     path.write_bytes(prefix)
     monkeypatch.setattr(CodeNode, "forward", lambda *args, **kwargs: pytest.fail("accepted CODE reran"))
-    monkeypatch.setattr(run_module, "default_llm_provider", lambda: pytest.fail("read current defaults"))
-    monkeypatch.setattr(run_module, "default_llm_model", lambda: pytest.fail("read current defaults"))
+    monkeypatch.setattr(run_module, "connection_snapshot", lambda: pytest.fail("read current defaults"))
 
     result = run_module.resume_flow(flow, log=path)
 

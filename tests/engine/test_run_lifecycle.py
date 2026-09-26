@@ -680,18 +680,7 @@ def test_terminal_resume_is_read_only_silent_and_unlocks(
     def forbidden_default() -> str:
         raise AssertionError("terminal recovery consulted an ambient LLM default")
 
-    monkeypatch.setattr(
-        run_module,
-        "default_llm_provider",
-        forbidden_default,
-        raising=False,
-    )
-    monkeypatch.setattr(
-        run_module,
-        "default_llm_model",
-        forbidden_default,
-        raising=False,
-    )
+    monkeypatch.setattr(run_module, "connection_snapshot", forbidden_default)
     monkeypatch.setattr(settings_module, "default_llm_provider", forbidden_default)
     monkeypatch.setattr(settings_module, "default_llm_model", forbidden_default)
 
@@ -901,18 +890,7 @@ def test_nonterminal_resume_restores_recorded_llm_without_reading_defaults(
         raise AssertionError("nonterminal recovery consulted an ambient LLM default")
 
     monkeypatch.setattr(llm_clients_module, "model_from_config", model_from_config)
-    monkeypatch.setattr(
-        run_module,
-        "default_llm_provider",
-        forbidden_default,
-        raising=False,
-    )
-    monkeypatch.setattr(
-        run_module,
-        "default_llm_model",
-        forbidden_default,
-        raising=False,
-    )
+    monkeypatch.setattr(run_module, "connection_snapshot", forbidden_default)
     monkeypatch.setattr(settings_module, "default_llm_provider", forbidden_default)
     monkeypatch.setattr(settings_module, "default_llm_model", forbidden_default)
 
@@ -921,7 +899,8 @@ def test_nonterminal_resume_restores_recorded_llm_without_reading_defaults(
     assert result.status == "succeeded"
     assert result.input == {"topic": "Ada"}
     assert result.output == "recorded reply"
-    assert captured == [effective["answer"]]
+    from agent_composer.llm_clients.connection import legacy_connection_config
+    assert captured == [legacy_connection_config(effective["answer"])]
     assert isinstance(result.events[0], RunResumed)
     assert not any(isinstance(event, RunStarted) for event in result.events)
     assert not any(

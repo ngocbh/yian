@@ -1,4 +1,8 @@
-"""The `ac` command-line interface — a brokered host over the run boundary.
+"""The `ac` command-line interface — provider setup and a brokered run host.
+
+`ac auth openai` stages subscription or API-key authentication, presents available
+models, and saves the selected method and default model together. It owns prompts;
+provider services own the protocol and credential storage.
 
 `ac run FLOW.yaml` loads a Compose flow, gathers fresh inputs from flags and an
 available interactive prompt, selects and reports a durable run-log path, and drives
@@ -28,6 +32,7 @@ from __future__ import annotations
 import typer
 
 from agent_composer.cli.chat.command import chat as _chat
+from agent_composer.cli.auth import auth as _auth
 from agent_composer.cli.run import run as _run
 
 app = typer.Typer(
@@ -46,6 +51,7 @@ def _root() -> None:
 
 app.command("run")(_run)
 app.command("chat")(_chat)
+app.command("auth")(_auth)
 
 
 def main() -> None:

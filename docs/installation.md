@@ -29,18 +29,10 @@ python -m pip install ".[anthropic]"   # Claude  (langchain-anthropic)
 python -m pip install ".[openai]"      # GPT     (langchain-openai)
 python -m pip install ".[google]"      # Gemini  (langchain-google-genai)
 python -m pip install ".[ollama]"      # local   (langchain-ollama)
-python -m pip install ".[codex]"       # native Codex SDK and bundled runtime
 python -m pip install ".[all]"         # all provider extras
 ```
 
 Run these commands from the repository root.
-
-The `codex` extra pins the unchanged official `openai-codex==0.155.1` SDK and its
-bundled runtime. Composer uses its lower-level client in a supervised worker;
-upgrades require compatibility testing because that SDK interface is internal.
-This path requires a POSIX host with process-group support; unsupported hosts
-are rejected before launch. Offline compatibility tests use a fake app-server,
-without credentials or model calls.
 
 Provider SDKs are imported **lazily** — only when a flow actually runs an AGENT node
 against that provider. Importing a provider you haven't installed raises a clear
@@ -48,8 +40,9 @@ against that provider. Importing a provider you haven't installed raises a clear
 
 ## Choosing a provider and model
 
-The default provider and model are read from the environment, plus each
-provider's own credential variable:
+OpenAI is the default provider. Run `ac auth openai` to choose authentication
+and a model. Environment variables can override the saved provider/model
+defaults; other providers use their own credential variables:
 
 ```console
 export AGENT_COMPOSER_DEFAULT_PROVIDER=anthropic        # or openai / google / ollama
@@ -57,47 +50,60 @@ export AGENT_COMPOSER_DEFAULT_MODEL=claude-sonnet-4-5
 export ANTHROPIC_API_KEY=...                            # the provider's own key var
 ```
 
-A flow can also pin its own model per AGENT node; the environment defaults apply
-only where a node leaves the model unset.
+A flow can also pin its own provider and model per AGENT node. Defaults fill
+only fields left unset by the flow or CLI. A default model belongs to its
+provider: selecting another provider never borrows the OpenAI model. Without
+a matching saved or environment model, OpenAI uses `gpt-5.5` and Anthropic uses
+`claude-sonnet-4-5`; other providers require an explicit model.
 
 When you `ac run` a flow whose AGENT nodes need a provider key that isn't set, the CLI
 prompts for it up front (in an interactive terminal) and continues once entered —
 so a missing key surfaces as a prompt rather than a failure on the first model
 call. Off a terminal (CI, a pipe) a missing required key is a clean error before
-the run starts. Ollama and native Codex are skipped; Codex handles its own
-authentication.
+the run starts. Ollama is keyless; saved OpenAI authentication is checked through
+the selected connection method.
 
-### Codex with existing authentication
+### OpenAI authentication
 
-Composer reuses the SDK's existing Codex authentication. ChatGPT sign-in uses
-your eligible subscription; API-key sign-in uses separately billed API access.
-Account limits and workspace permissions still apply. If the Codex CLI is already
-installed, `codex login` starts browser sign-in. See the
-[official authentication guide](https://learn.chatgpt.com/docs/auth).
-
-Alternatively, the pinned SDK provides an explicit host-side login helper:
-
-```python
-from openai_codex import Codex
-
-with Codex() as codex:
-    login = codex.login_chatgpt()
-    print(login.auth_url)  # Open this URL to sign in.
-    print(login.wait().success)
+```console
+ac auth openai
 ```
 
-Run login separately, before executing flows. Composer adds no login or
-credential-management path and never falls back to an API provider. The SDK bundles its runtime,
-so a global `codex` executable is not required for Composer execution. See the
-[official SDK guide](https://learn.chatgpt.com/docs/codex-sdk).
+Choose ChatGPT subscription sign-in (browser or device login for SSH) or an
+OpenAI API key, then select a model. Successful setup saves the method and model
+as the default together. Cancelled or failed setup leaves the previous selection
+intact. The `openai` extra supports both methods.
+Subscription-backed nodes must omit `llm_config.temperature`, which that
+transport does not accept.
 
-Use `llm_config: {provider: codex, model: your-codex-model}` with
-`mode: tool_calling` and `tools: [builtin_tools]`. Filesystem access defaults to
-read-only; `llm_config.sandbox: workspace-write` permits workspace writes.
-This explicitly enables Codex's configured tool environment, including enabled
-MCP/app tools, and is not a complete native-tool allowlist. See
-[native execution](syntax.md#codex-native-execution) for the complete example,
-tool boundary, and forward-only restrictions.
+For SSH, select device login. Flags can supply choices without interactive
+menus; subscription login still requires completing sign-in in a browser:
+
+```console
+ac auth openai --method subscription --login device --model gpt-5.5
+ac auth openai --method api-key --model gpt-5.5
+```
+
+API-key setup reads `OPENAI_API_KEY`, or prompts without echoing the key in a
+terminal. `--api-key-env NAME` selects another environment variable. Model
+choices come from the selected account's authenticated catalog.
+
+Credentials belong to Composer's private user-local store; tokens never belong
+in flow YAML or run logs. Subscription selection takes precedence over an
+incidental `OPENAI_API_KEY`. Selecting an API key uses separately billed API
+access. Reconnecting changes the connection identity; an unfinished run cannot
+silently switch accounts or billing methods.
+
+The store is `$XDG_CONFIG_HOME/agent-composer/auth.json`, falling back to
+`~/.config/agent-composer/auth.json`. Set `AGENT_COMPOSER_AUTH_FILE` to choose
+another private file. The store uses private filesystem permissions and atomic
+writes on POSIX hosts; it is not encrypted. Token refresh preserves the selected connection.
+Failed authentication never falls back to another billing method.
+
+Migrate native flows to `provider: openai` and remove `sandbox`, `cwd`, and
+`builtin_tools`. Grant registered Composer tools explicitly. Use fresh memory
+for old native sessions; ordinary message histories remain supported. Historical
+native execution requires the prior Composer version to resume.
 
 ### Local models with Ollama
 

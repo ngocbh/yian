@@ -13,6 +13,7 @@ from agent_composer.compile.llm_cascade import (
 
 
 _DEFAULTS = {"provider": "anthropic", "model": "default-model"}
+_PROVIDER_MODELS = {"openai": "openai-default", "google": "google-default"}
 
 
 def test_merge_specific_wins_per_field():
@@ -77,7 +78,7 @@ nodes:
 output: ${a.output}
 """
     loaded = load_flow(text)
-    resolve_llm_cascade(loaded.compiled, {"temperature": 0.3}, defaults=_DEFAULTS)
+    resolve_llm_cascade(loaded.compiled, {"temperature": 0.3}, defaults=_DEFAULTS, provider_models=_PROVIDER_MODELS)
     a = loaded.compiled.nodes["a"]
     # node sets model; flow fills provider; CLI fills temperature
     assert a.llm_config == {
@@ -110,7 +111,7 @@ output: ${a.output}
         "temperature": None,
     }
 
-    effective = resolve_llm_cascade(loaded.compiled, {}, defaults=_DEFAULTS)
+    effective = resolve_llm_cascade(loaded.compiled, {}, defaults=_DEFAULTS, provider_models=_PROVIDER_MODELS)
 
     assert effective["a"] == {
         "provider": "anthropic",
@@ -130,7 +131,7 @@ nodes:
 output: ${a.output}
 """
     loaded = load_flow(text)
-    resolve_llm_cascade(loaded.compiled, {"temperature": 0.1}, defaults=_DEFAULTS)
+    resolve_llm_cascade(loaded.compiled, {"temperature": 0.1}, defaults=_DEFAULTS, provider_models=_PROVIDER_MODELS)
     assert loaded.compiled.nodes["a"].llm_config == {
         "model": "m",
         "provider": "anthropic",
@@ -143,10 +144,10 @@ def test_resolution_is_idempotent_from_own():
     text = "id: f\nname: f\nnodes:\n  a: {kind: agent, prompt: hi, llm_config: {model: m}}\noutput: ${a.output}\n"
     loaded = load_flow(text)
     resolve_llm_cascade(
-        loaded.compiled, {"provider": "openai"}, defaults=_DEFAULTS
+        loaded.compiled, {"provider": "openai"}, defaults=_DEFAULTS, provider_models=_PROVIDER_MODELS
     )
     resolve_llm_cascade(
-        loaded.compiled, {"provider": "google"}, defaults=_DEFAULTS
+        loaded.compiled, {"provider": "google"}, defaults=_DEFAULTS, provider_models=_PROVIDER_MODELS
     )
     assert loaded.compiled.nodes["a"].llm_config == {
         "model": "m",
@@ -170,7 +171,7 @@ output: ${c.output}
 """
     loaded = load_flow(text)
     resolve_llm_cascade(
-        loaded.compiled, {"model": "claude-opus-4-8"}, defaults=_DEFAULTS
+        loaded.compiled, {"model": "claude-opus-4-8"}, defaults=_DEFAULTS, provider_models=_PROVIDER_MODELS
     )
     call = loaded.compiled.nodes["c"]
     inner = call.child.nodes["inner"]
@@ -217,12 +218,12 @@ output: ${invoke.output}
     named_effective = resolve_llm_cascade(
         named.compiled,
         caller,
-        defaults=_DEFAULTS,
+        defaults=_DEFAULTS, provider_models=_PROVIDER_MODELS,
     )
     inline_effective = resolve_llm_cascade(
         inline.compiled,
         caller,
-        defaults=_DEFAULTS,
+        defaults=_DEFAULTS, provider_models=_PROVIDER_MODELS,
     )
 
     assert inline_effective == named_effective == {
@@ -258,14 +259,14 @@ output: ${c.output}
     resolve_llm_cascade(
         loaded.compiled,
         {"provider": "openai", "model": "x"},
-        defaults=_DEFAULTS,
+        defaults=_DEFAULTS, provider_models=_PROVIDER_MODELS,
     )
     resolve_llm_cascade(
-        loaded.compiled, {"provider": "google"}, defaults=_DEFAULTS
+        loaded.compiled, {"provider": "google"}, defaults=_DEFAULTS, provider_models=_PROVIDER_MODELS
     )
     inner = loaded.compiled.nodes["c"].child.nodes["inner"]
     # second run dropped `model` (not in the new CLI layer); did not retain it from run 1
-    assert inner.llm_config == {"provider": "google", "model": "default-model"}
+    assert inner.llm_config == {"provider": "google", "model": "google-default"}
 
 
 def test_cascade_reaches_loop_body_agents():
@@ -305,7 +306,7 @@ output: ${chat_loop.output}
 """
     loaded = load_flow(text)
     resolve_llm_cascade(
-        loaded.compiled, {"model": "claude-opus-4-8"}, defaults=_DEFAULTS
+        loaded.compiled, {"model": "claude-opus-4-8"}, defaults=_DEFAULTS, provider_models=_PROVIDER_MODELS
     )
     think = loaded.compiled.nodes["chat_loop"].child.nodes["think"]
     # the body agent sets nothing -> fills from top flow (provider) + CLI (model)
@@ -332,12 +333,12 @@ def test_effective_map_round_trips_static_paths():
     effective = resolve_llm_cascade(
         resolved.compiled,
         {"provider": "openai"},
-        defaults=_DEFAULTS,
+        defaults=_DEFAULTS, provider_models=_PROVIDER_MODELS,
     )
 
     assert effective == {
         "outer": {"provider": "openai", "model": "outer-model"},
-        "invoke/inner": {"provider": "openai", "model": "default-model"},
+        "invoke/inner": {"provider": "openai", "model": "openai-default"},
     }
     assert effective["outer"] is not resolved.compiled.nodes["outer"].llm_config
     assert effective["outer"] is not effective["invoke/inner"]
@@ -359,7 +360,7 @@ def test_effective_map_round_trips_static_paths():
 def test_effective_map_rejects_missing_or_extra_paths():
     loaded = load_flow(_PATH_FLOW)
     effective = resolve_llm_cascade(
-        loaded.compiled, {}, defaults=_DEFAULTS
+        loaded.compiled, {}, defaults=_DEFAULTS, provider_models=_PROVIDER_MODELS
     )
 
     missing = copy.deepcopy(effective)
@@ -404,7 +405,7 @@ def test_shared_child_is_dealiased_per_parent_provider():
     right_call = loaded.compiled.nodes["right"].child.nodes["leaf_call"]
     assert left_call.child is right_call.child
 
-    effective = resolve_llm_cascade(loaded.compiled, {}, defaults=_DEFAULTS)
+    effective = resolve_llm_cascade(loaded.compiled, {}, defaults=_DEFAULTS, provider_models=_PROVIDER_MODELS)
 
     left_call = loaded.compiled.nodes["left"].child.nodes["leaf_call"]
     right_call = loaded.compiled.nodes["right"].child.nodes["leaf_call"]
@@ -419,17 +420,16 @@ def test_effective_map_resolves_environment_defaults_once(monkeypatch):
     import agent_composer.run as run_mod
     import agent_composer.llm_clients.factory as factory_mod
 
-    calls = {"provider": 0, "model": 0}
+    from agent_composer.llm_clients.connection import connection_snapshot
+    calls = []
+    monkeypatch.setenv("AGENT_COMPOSER_DEFAULT_PROVIDER", "AZURE")
+    monkeypatch.setenv("AGENT_COMPOSER_DEFAULT_MODEL", "environment-model")
 
-    def provider():
-        calls["provider"] += 1
-        # Azure is factory-supported but was outside LLMConfig's old provider Literal.
-        # Baking defaults must not turn this formerly-valid environment choice invalid.
-        return "AZURE"
-
-    def model():
-        calls["model"] += 1
-        return "environment-model"
+    def snapshot():
+        calls.append("snapshot")
+        result = connection_snapshot()
+        monkeypatch.setenv("AGENT_COMPOSER_DEFAULT_MODEL", "later-model")
+        return result
 
     seen = []
 
@@ -448,12 +448,7 @@ def test_effective_map_resolves_environment_defaults_once(monkeypatch):
         seen.append({"provider": provider, "model": model})
         return _Client()
 
-    monkeypatch.setattr(run_mod, "default_llm_provider", provider)
-    monkeypatch.setattr(run_mod, "default_llm_model", model)
-    # `model_from_config` imports these names lazily. If cascade resolution left a gap,
-    # either call would increment the count a second time.
-    monkeypatch.setattr("agent_composer._settings.default_llm_provider", provider)
-    monkeypatch.setattr("agent_composer._settings.default_llm_model", model)
+    monkeypatch.setattr(run_mod, "connection_snapshot", snapshot)
     monkeypatch.setattr(factory_mod, "create_llm_client", fake_create_llm_client)
 
     loaded = load_flow(
@@ -464,7 +459,7 @@ def test_effective_map_resolves_environment_defaults_once(monkeypatch):
     result = run_mod.run_flow(loaded, {})
 
     assert result.status == "succeeded"
-    assert calls == {"provider": 1, "model": 1}
+    assert calls == ["snapshot"]
     assert seen == [{"provider": "azure", "model": "environment-model"}]
 
 
@@ -477,6 +472,7 @@ def test_replay_uses_logged_map_after_environment_changes(monkeypatch):
         original.compiled,
         {},
         defaults={"provider": "openai", "model": "recorded-model"},
+        provider_models={"anthropic": "recorded-anthropic"},
     )
     monkeypatch.setenv("AGENT_COMPOSER_DEFAULT_PROVIDER", "anthropic")
     monkeypatch.setenv("AGENT_COMPOSER_DEFAULT_MODEL", "changed-model")

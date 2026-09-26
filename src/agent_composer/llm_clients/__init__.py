@@ -4,12 +4,11 @@ The model-access leaf: `LLMConfig` (the selection
 carrier) and `model_from_config` (resolve it to a ready `BaseChatModel`), plus the
 per-provider client wrappers behind `create_llm_client`. The AGENT node and the
 Compose loader's `llm_config:` field draw on this; `chat/` and `cli/` use it too.
-Codex is a native-only selection: the chat-model factories reject it rather than
-falling back to an API provider. The private `codex/` package isolates the pinned
-native SDK in a supervised process, without owning agent policy or session memory.
 The direct OpenAI subscription transport accepts an injected access source and
 returns a normal chat model; it owns no login, credential persistence, or tool loop.
-It is an internal construction seam pending authentication/factory integration.
+Both OpenAI authentication methods use this model interface. `auth/` owns staged
+login, private atomic credential storage, and refresh. `connection` snapshots
+nonsecret selections for the host and resolves pinned credentials for requests.
 OpenAI Responses messages retain their full continuation blocks; presentation
 extracts text without mutating the messages used for the next request.
 

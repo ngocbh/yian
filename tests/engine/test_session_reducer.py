@@ -167,7 +167,6 @@ def _checkpoints(first):
         "completed",
         (item("reply", "world"),),
         None,
-        None,
     )
     closed = c.ConversationClosed(
         replace(

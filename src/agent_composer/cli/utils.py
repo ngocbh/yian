@@ -70,6 +70,13 @@ def ensure_api_key(provider: str, *, interactive: bool = True) -> Optional[str]:
             `_MAX_KEY_PROMPTS` times in a row. A single empty answer is not an
             error — it re-prompts.
     """
+    if provider.lower() == "openai":
+        from agent_composer.llm_clients.connection import connection_credentials, connection_snapshot
+        from agent_composer.llm_clients.auth import ApiKeyCredentials
+        connection = connection_snapshot().connections["openai"]
+        if connection["source"] == "store":
+            credentials = connection_credentials(connection)
+            return credentials.api_key if isinstance(credentials, ApiKeyCredentials) else None
     env_var = get_api_key_env(provider)
     if env_var is None:
         return None  # keyless (e.g. ollama) or unknown provider — nothing to ensure
@@ -80,6 +87,7 @@ def ensure_api_key(provider: str, *, interactive: bool = True) -> Optional[str]:
         raise RuntimeError(
             f"provider {provider!r} needs an API key but ${env_var} is not set "
             f"(set it in the environment, or run interactively to be prompted)"
+            + (". Or run 'ac auth openai' to choose a connection" if provider.lower() == "openai" else "")
         )
     import questionary
 

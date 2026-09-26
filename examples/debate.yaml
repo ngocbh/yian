@@ -8,11 +8,11 @@
 # are always argued before a verdict — an improvising agent might skip one; this
 # structure can't. There is no `edges:` block: the graph is inferred from `${...}`.
 #
-# All four AGENT nodes opt into Codex's configured tool environment.
-# For an API provider, remove builtin_tools from each node's tools list.
+# All four AGENT nodes use the connected default model.
 #
 # Run it with:
-#   ac run examples/debate.yaml --provider codex --model YOUR_CODEX_MODEL \
+#   ac auth openai
+#   ac run examples/debate.yaml \
 #     --input question="Should a small team adopt a monorepo?"
 
 id: debate
@@ -25,8 +25,7 @@ input:
 nodes:
   frame:
     kind: agent
-    mode: tool_calling
-    tools: [builtin_tools]
+    mode: plain
     input:
       question: ${input.question}
     output: str
@@ -34,8 +33,7 @@ nodes:
 
   for_case:
     kind: agent
-    mode: tool_calling
-    tools: [builtin_tools]
+    mode: plain
     input:
       brief: ${frame.output}            # edge: frame -> for_case
     output: str
@@ -43,8 +41,7 @@ nodes:
 
   against_case:
     kind: agent
-    mode: tool_calling
-    tools: [builtin_tools]
+    mode: plain
     input:
       brief: ${frame.output}            # edge: frame -> against_case (parallel with for_case)
     output: str
@@ -52,8 +49,7 @@ nodes:
 
   verdict:
     kind: agent
-    mode: tool_calling
-    tools: [builtin_tools]
+    mode: plain
     input:
       for_case: ${for_case.output}      # fan-in: verdict waits for BOTH sides
       against_case: ${against_case.output}

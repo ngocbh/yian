@@ -1,5 +1,6 @@
 """Optional session persistence retains raw history and private derived state."""
 
+from contextlib import closing
 from copy import deepcopy
 import json
 import multiprocessing
@@ -39,10 +40,14 @@ def _mutation():
     )
 
 
-def test_completed_history_and_identity_survive_reopen(tmp_path):
+@pytest.mark.parametrize("version", [1, 2])
+def test_completed_history_and_identity_survive_reopen(tmp_path, version):
     path = tmp_path / "memory.sqlite"
     with SessionMemory(storage=path) as memory:
         opening = snapshot(memory)
+        if version == 1:
+            opening["version"] = 1
+            del opening["notes"]
         _complete(memory)
         saved = snapshot(memory)
     with SessionMemory(storage=path) as memory:
@@ -56,15 +61,13 @@ def test_completed_history_and_identity_survive_reopen(tmp_path):
         assert len(snapshot(memory)["conversations"][0]["items"]) == 2
 
 
-def test_partial_native_observation_and_unknown_request_survive_reopen(tmp_path):
+def test_partial_model_observation_and_unknown_request_survive_reopen(tmp_path):
     path = tmp_path / "memory.sqlite"
     with SessionMemory(storage=path) as memory:
         with harness(memory) as h:
             turn = h.frame.open_turn(request(), check_stopped=lambda: None).__enter__()
-            ordinal = turn.request("native_session", {"start": True})
-            turn.observe(
-                ordinal, "pending", reference=c.ConversationReference("codex", "thread")
-            )
+            ordinal = turn.request("model", {"prompt": "question"})
+            turn.observe(ordinal, "pending", items=(item("partial", "working"),))
             h.session._release(turn._lease)
         saved = snapshot(memory)
     with SessionMemory(storage=path) as memory:
@@ -73,9 +76,9 @@ def test_partial_native_observation_and_unknown_request_survive_reopen(tmp_path)
             with h.frame.open_turn(
                 request("retry"), check_stopped=lambda: None
             ) as turn:
-                assert turn.view.reference == c.ConversationReference("codex", "thread")
+                assert turn.view.items == (item("partial", "working"),)
                 assert turn.view.effects[0].status == "pending"
-                repeated = turn.request("native_session", {"start": True})
+                repeated = turn.request("model", {"prompt": "question"})
                 turn.observe(repeated, "completed")
         assert [
             e["status"] for e in snapshot(memory)["conversations"][0]["effects"]
@@ -894,3 +897,100 @@ def test_poisoned_storage_still_drains_queued_and_active_owners(tmp_path):
     opened.close()
     other.close()
     memory.close()
+
+
+def _message_snapshot_fixture():
+    from pathlib import Path
+
+    path = Path(__file__).parents[1] / "fixtures" / "session_message_snapshot.json"
+    return json.loads(path.read_text())
+
+
+def test_pre_removal_message_snapshot_preserves_history_and_digests(tmp_path):
+    from agent_composer.memory.conversation import (
+        checkpoint_digest,
+        conversation_view_from_json,
+    )
+
+    original = _message_snapshot_fixture()
+    expected = deepcopy(original)
+    baseline = conversation_view_from_json(original["conversations"][0])
+    observation = c.ConversationEffectObserved(
+        c.ConversationStamp(
+            "session",
+            baseline.key,
+            c.ConversationInvocation("baseline", 1),
+            baseline.namespace,
+            0,
+            2,
+            2,
+        ),
+        1,
+        "completed",
+        (item("output", "Hello back"),),
+        None,
+    )
+    assert checkpoint_digest(observation) == baseline.applied[2].event_digest
+    path = tmp_path / "memory.sqlite"
+    with SessionMemory(storage=path) as memory:
+        with memory.open_run(snapshot=original) as restored:
+            assert restored.snapshot == expected
+        assert snapshot(memory) == expected
+    with SessionMemory(storage=path) as memory:
+        assert snapshot(memory) == expected
+        with harness(memory) as h:
+            with h.frame.open_turn(request("next"), check_stopped=lambda: None) as turn:
+                assert turn.view.items == (
+                    item("input", "Hello", "user"),
+                    item("output", "Hello back"),
+                )
+                append_reply(turn, "next", "Continued")
+        view = snapshot(memory)["conversations"][0]
+        assert view["applied"][:4] == expected["conversations"][0]["applied"]
+    assert original == expected
+
+
+@pytest.mark.parametrize("legacy", ["reference", "native_session"])
+def test_legacy_native_snapshot_is_rejected_without_mutation(tmp_path, legacy):
+    original = _message_snapshot_fixture()
+    view = original["conversations"][0]
+    if legacy == "reference":
+        view["reference"] = {"provider": "codex", "session_id": "thread"}
+    else:
+        view["effects"][0]["kind"] = "native_session"
+    expected = deepcopy(original)
+    path = tmp_path / "memory.sqlite"
+    with SessionMemory(storage=path) as memory:
+        before = snapshot(memory)
+        stored = memory._storage.load()
+        with pytest.raises(c.MemoryOperationError, match="unsupported|reset"):
+            memory.open_run(snapshot=original)
+        assert snapshot(memory) == before
+        assert memory._storage.load() == stored
+    assert original == expected
+    with SessionMemory(storage=path) as memory:
+        assert snapshot(memory) == before
+
+
+@pytest.mark.parametrize("legacy", ["reference", "native_session"])
+def test_legacy_native_storage_is_rejected_without_rewriting(tmp_path, legacy):
+    path = tmp_path / "memory.sqlite"
+    with SessionMemory(storage=path) as memory:
+        _complete(memory)
+    with closing(SQLiteStorage(path, "session")) as storage:
+        value = storage.load()
+        view = value["snapshot"]["conversations"][0]
+        if legacy == "reference":
+            view["reference"] = {"provider": "codex", "session_id": "thread"}
+        else:
+            view["effects"][0]["kind"] = "native_session"
+        storage.save(value)
+    original_bytes = path.read_bytes()
+    with pytest.raises(
+        c.MemoryOperationError, match="use fresh SessionMemory"
+    ) as caught:
+        SessionMemory(storage=path)
+    assert caught.value.code == "session.unsupported_history"
+    assert path.read_bytes() == original_bytes
+    with closing(SQLiteStorage(path, "session")) as storage:
+        assert storage.load() == value

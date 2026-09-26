@@ -149,7 +149,7 @@ def _zero(
     namespace: str, generation: int, key: c.ConversationKey, compatibility: c.JsonObject
 ) -> c.ConversationView:
     return c.ConversationView(
-        namespace, generation, 0, key, compatibility, (), None, (), (), ()
+        namespace, generation, 0, key, compatibility, (), (), (), ()
     )
 
 
@@ -307,7 +307,13 @@ def _parse_inventory(value: object) -> tuple[
         ):
             raise ValueError("unused inventory contains retained work")
         return snapshot, views, notes, data["used"], commits, summaries
-    except (TypeError, ValueError, RecursionError, c.MemoryOperationError):
+    except c.MemoryOperationError as exc:
+        if exc.code == "session.unsupported_history":
+            raise
+        raise _error(
+            "invalid_storage", "stored session state is invalid", stage="storage"
+        ) from None
+    except (TypeError, ValueError, RecursionError):
         raise _error(
             "invalid_storage", "stored session state is invalid", stage="storage"
         ) from None
@@ -1229,7 +1235,7 @@ class _Turn:
         """Persist an effect request before allowing its external execution.
 
         Args:
-            kind (`ConversationEffectKind`): `model`, `tool`, or `native_session`.
+            kind (`ConversationEffectKind`): `model` or `tool`.
             payload (`JsonObject`): Exact finite JSON describing the external request.
             items (`tuple[ConversationItem, ...]`): Newly retained items with unique
                 IDs; defaults to the empty tuple.
@@ -1256,89 +1262,6 @@ class _Turn:
         with self._session._memory._locked():
             self._session._ensure_lease(self._lease)
         return checkpoint.stamp.ordinal
-
-    def native_session(
-        self,
-        *,
-        provider: str,
-        start: Callable[[Callable[[str], None]], object],
-        resume: Callable[[str, Callable[[str], None]], object],
-    ) -> c.ConversationReference:
-        """Start or resume the retained native association under this FIFO lease.
-
-        Args:
-            provider (`str`): Nonempty provider identity; it must match any saved
-                reference. Compatibility remains the admission's exact descriptor.
-            start (`Callable`): Start a fresh session and synchronously call the
-                supplied `accept(session_id)` once for its actual response.
-            resume (`Callable`): Resume the supplied saved session ID and call
-                `accept(session_id)` once for its actual response. Return values
-                from both callbacks are ignored; no failure triggers a fallback.
-
-        Returns:
-            `ConversationReference`: The accepted provider-native association.
-
-        Raises:
-            `TypeError`: The provider, callbacks, or accepted ID have wrong types.
-            `ValueError`: The provider or accepted ID is empty or invalid.
-            `MemoryOperationError`: The provider or resumed ID conflicts, acceptance
-                is missing, duplicated, or late, or the lease/storage is unusable.
-                Callback and cooperative-stop exceptions propagate unchanged.
-        """
-        c._require_string(provider, "provider")
-        if not callable(start) or not callable(resume):
-            raise TypeError("native session callbacks must be callable")
-        previous = self.view.reference
-        if previous is not None and previous.provider != provider:
-            raise _error(
-                "incompatible", "native session provider changed; reset is required"
-            )
-        payload = {
-            "provider": provider,
-            "operation": "start" if previous is None else "resume",
-        }
-        if previous is not None:
-            payload["session_id"] = previous.session_id
-        ordinal = self.request("native_session", payload)
-        active = True
-        used = False
-        accepted = None
-
-        def accept(session_id: str) -> None:
-            nonlocal used, accepted
-            with self._session._memory._locked():
-                self._session._ensure_lease(self._lease, allow_closed=True)
-                if not active or used:
-                    raise _error(
-                        "conflict", "native session acceptance is late or repeated"
-                    )
-                reference = c.ConversationReference(provider, session_id)
-                if previous is not None and reference != previous:
-                    raise _error(
-                        "conflict", "native resume returned a different session ID"
-                    )
-                used = True
-            # observe publishes before checking stop. A subsequent exception must
-            # not invent a second terminal observation for this completed effect.
-            self.observe(ordinal, "completed", reference=reference)
-            accepted = reference
-
-        try:
-            if previous is None:
-                start(accept)
-            else:
-                resume(previous.session_id, accept)
-        finally:
-            active = False
-        self._check()
-        with self._session._memory._locked():
-            self._session._ensure_lease(self._lease)
-        if accepted is None:
-            raise _error(
-                "incomplete",
-                "native session callback returned without accepting its response",
-            )
-        return accepted
 
     def prepare_history(
         self,
@@ -1466,7 +1389,6 @@ class _Turn:
         status: c.ConversationEffectStatus,
         *,
         items: tuple[c.ConversationItem, ...] = (),
-        reference: c.ConversationReference | None = None,
         failure: c.MemoryOperationFailure | None = None,
     ) -> None:
         """Record actual evidence before honoring a stop that arrived in the effect.
@@ -1477,8 +1399,6 @@ class _Turn:
                 `failed`, or `interrupted` disposition.
             items (`tuple[ConversationItem, ...]`): New evidence with unique IDs;
                 defaults to the empty tuple.
-            reference (`ConversationReference | None`): Opaque native association;
-                defaults to `None`, which preserves the previous association.
             failure (`MemoryOperationFailure | None`): Required for `failed`,
                 optional for `interrupted`, absent otherwise; defaults to `None`.
 
@@ -1491,7 +1411,7 @@ class _Turn:
         with self._session._memory._locked():
             self._session._ensure_lease(self._lease, allow_closed=True)
             checkpoint = c.ConversationEffectObserved(
-                self._stamp(), effect_ordinal, status, items, reference, failure
+                self._stamp(), effect_ordinal, status, items, failure
             )
         self._publish(checkpoint)
         self._check()

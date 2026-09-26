@@ -1,6 +1,6 @@
-"""AGENT node — one authored leaf invoking an API mode or the native Codex adapter.
+"""AGENT node — one authored leaf invoking a model through its selected mode.
 
-API modes drive their local model/tool loop; Codex uses its native harness.
+Modes drive their local model/tool loop through the shared provider interface.
 An optional memory backend owns
 conversation admission and retained history; the evaluator owns the turn's
 lifetime. Tools, including the host-installed ``ask_user``, are ordinary
@@ -12,7 +12,6 @@ from __future__ import annotations
 
 from copy import deepcopy
 from typing import Any, Callable, Iterator, Optional
-import warnings
 
 from agent_composer.diagnostics import OriginRef
 from agent_composer.expr.template import render_template_record
@@ -28,7 +27,6 @@ from agent_composer.memory.contracts import (
 )
 from agent_composer.nodes.agent.modes import DEFAULT_SYSTEM, MODES, AgentRunContext
 from agent_composer.nodes.agent.conversation import compatibility
-from agent_composer.nodes.agent import codex
 from agent_composer.nodes.agent.backward import backward_agent
 from agent_composer.nodes.agent.modes.tool_calling import MAX_TOOL_ITERATIONS
 from agent_composer.nodes.agent.structured import _structured_validation_path
@@ -49,9 +47,8 @@ DEFAULT_MODE = "plain"
 class AgentNode(Node):
     """An LLM-backed leaf configured by a prompt, mode, and authored tools.
 
-    API modes normalize ``llm_config`` through the call-time ``model_from_config``
-    seam. Native Codex consumes the resolved configuration directly, without an
-    API model factory or fallback. An optional
+    Modes normalize ``llm_config`` through the call-time ``model_from_config``
+    seam. An optional
     ``memory_policy`` is authored identity only until compile derives runtime scope.
     ``variables`` retains typed local declarations with mandatory literal defaults,
     resolved into a fresh prompt record for each invocation.
@@ -81,6 +78,11 @@ class AgentNode(Node):
         super().__init__(node_id, title=title)
         self.prompt = prompt or ""
         self.tools = tools or []
+        if "builtin_tools" in self.tools:
+            raise ValueError(
+                "builtin_tools belonged to the removed native Codex integration. "
+                "Remove it and grant registered Composer tools explicitly."
+            )
         # own_llm_config is the authored source re-resolved by each cascade pass;
         # llm_config is the effective config baked for this run.
         self.own_llm_config: dict[str, Any] = dict(llm_config) if llm_config else {}
@@ -149,14 +151,6 @@ class AgentNode(Node):
 
     def _max_tool_iterations(self) -> int:
         """Return the positive authored loop bound or ``-1`` for no bound."""
-        if compatibility(self.llm_config)["provider"] == "codex":
-            if "max_tool_iterations" in self.env:
-                warnings.warn(
-                    "env.max_tool_iterations is ignored for Codex agents",
-                    UserWarning,
-                    stacklevel=2,
-                )
-            return -1
         raw = self.env.get("max_tool_iterations", MAX_TOOL_ITERATIONS)
         if isinstance(raw, bool) or not isinstance(raw, int) or (raw < 1 and raw != -1):
             raise ValueError(
@@ -210,7 +204,7 @@ class AgentNode(Node):
         if type(contract) is not ValueContract:
             return super().exception_origin(exception)
         path = _structured_validation_path(
-            exception, contract.type, native_generator=codex._generate_codex.__code__
+            exception, contract.type
         )
         if path is None:
             return super().exception_origin(exception)
@@ -303,30 +297,10 @@ class AgentNode(Node):
         if stop_event is not None and stop_event.is_set():
             raise _HostStop(primary=False)
         descriptor = compatibility(self.llm_config)
-        native = descriptor["provider"] == "codex"
-        bridge = ()
-        if native:
-            if self.mode != "tool_calling":
-                raise ValueError(
-                    "Codex agents require tool_calling mode; plain mode is unsupported"
-                )
-            bridge = codex.prepare_tools(self.tools)
-            descriptor = codex.compatibility(bridge)
         conversation_turn = (
             None if begin_conversation is None
             else begin_conversation(descriptor)
         )
-        if native:
-            return codex.execute(
-                self._ctx(
-                    prompt,
-                    stop_event=stop_event,
-                    evaluation_trace=evaluation_trace,
-                    memory_sections=memory_sections,
-                    conversation_turn=conversation_turn,
-                ),
-                bridge=bridge,
-            )
         return MODES[self.mode](
             self._ctx(
                 prompt,

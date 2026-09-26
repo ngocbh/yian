@@ -170,6 +170,14 @@ public snapshots contain conversation values, not coordination objects. The
 memory import ratchet in `tests/engine/test_layer_direction.py` enforces this
 direction, including direct-facade and relative-import spellings.
 
+`llm_clients/auth/` is a private authentication leaf below model construction and
+host settings. It owns immutable credential/selection carriers, provider login
+and refresh protocols, and private atomic storage. It imports no model SDK,
+CLI, node, memory, compiler, or runtime module. Callers inject presentation and
+HTTP effects; only the CLI prompts, and only an explicit save activates staged
+credentials and the provider/model default. Refresh preserves the selected
+connection identity. Keep tokens out of model configuration and history.
+
 `llm_clients/codex/` is a private provider leaf, below nodes and independent of
 memory and runtime. Its `protocol.py` owns finite-JSON IPC, `worker.py` alone
 imports the pinned native SDK, and `client.py` owns process supervision and

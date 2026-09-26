@@ -148,6 +148,36 @@ def test_unpairable_provider_call_shapes_become_inert_context_only(monkeypatch, 
     assert _view(memory).items[2].payload == original
 
 
+@pytest.mark.parametrize("change", [
+    {"call_id": "other"},
+    {"name": "other"},
+    {"arguments": '{"value": true}'},
+    {"arguments": "{"},
+    {"namespace": "hidden"},
+    {"async": True},
+    {"duplicate": True},
+])
+def test_mismatched_responses_call_blocks_are_inert_history(monkeypatch, change):
+    block = {"type": "function_call", "call_id": "call", "name": "lookup",
+             "arguments": '{"value": 1}'}
+    block.update(change)
+    blocks = [block, block.copy()] if block.pop("duplicate", False) else [block]
+    reply = AIMessage(content=blocks, tool_calls=[
+        {"name": "lookup", "args": {"value": 1}, "id": "call"}
+    ])
+    chat, memory = _Chat([reply, AIMessage(content="later")]), SessionMemory()
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _: chat)
+    flow = load_flow(_FLOW)
+    run_flow(flow, {"question": "first"}, memory={"session": memory})
+    original = _view(memory).items[-1].payload
+    assert run_flow(flow, {"question": "second"}, memory={"session": memory}).output == "later"
+    history = chat.calls[-1]
+    assert any(isinstance(message, HumanMessage) and "context only" in message.content
+               for message in history)
+    assert not any(getattr(message, "tool_calls", None) for message in history)
+    assert _view(memory).items[2].payload == original
+
+
 @pytest.mark.parametrize("stage", ["before_model", "after_model", "after_tool"])
 def test_stop_boundaries_retain_surfaced_tool_truth_before_unwind(monkeypatch, stage):
     from agent_composer.nodes.agent import AgentNode

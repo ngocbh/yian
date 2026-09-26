@@ -161,6 +161,32 @@ the route and restores the recorded value, including its complete trace, even if
 the supplied graph now carries rebased origins. No additional terminal record
 is added, and an explicit node failure still supersedes the latch.
 
+### OpenAI model transport
+
+`llm_clients/openai_subscription.py` constructs a direct ChatGPT subscription
+model through the normal LangChain chat interface, with injected access
+credentials and optional caller-owned HTTP clients. It performs no login,
+credential persistence, tool dispatch, or conversation storage. Authentication
+and model-factory integration are separate follow-up work; this construction seam
+does not change the existing `provider: codex` behavior.
+
+The transport requires a completed Responses event before returning a model
+reply. Early EOF and incomplete replies raise rather than exposing tool calls
+for execution. Cooperative cancellation closes the stream; network operations
+have an explicit timeout. Access-source refresh/locking remains the caller's
+responsibility. The OpenAI dependency is pinned to the version tested against
+these request and streaming hooks.
+
+Both the direct transport and the existing OpenAI API-key client preserve
+Responses content blocks, including opaque continuation data. Agent output and
+evaluation evidence extract visible text separately; SessionMemory retains the
+full provider message through its existing codec. The API history projection
+preserves Responses function-call blocks only when they match the ordered,
+canonical tool calls exactly. Ambiguous calls remain inert context. Projection
+version 2 invalidates summaries made with the older block projection.
+Summary extraction accepts validated reasoning blocks alongside visible text,
+and still rejects tool calls, unsupported content, and empty summaries.
+
 ### Private Codex SDK boundary
 
 `llm_clients/codex/` owns finite-JSON IPC and invocation-local process supervision

@@ -7,6 +7,11 @@ Compose loader's `llm_config:` field draw on this; `chat/` and `cli/` use it too
 Codex is a native-only selection: the chat-model factories reject it rather than
 falling back to an API provider. The private `codex/` package isolates the pinned
 native SDK in a supervised process, without owning agent policy or session memory.
+The direct OpenAI subscription transport accepts an injected access source and
+returns a normal chat model; it owns no login, credential persistence, or tool loop.
+It is an internal construction seam pending authentication/factory integration.
+OpenAI Responses messages retain their full continuation blocks; presentation
+extracts text without mutating the messages used for the next request.
 
 Knows about:   the package env-based defaults (`_settings`), langchain, provider SDKs.
 Never imports: any other agent_composer subpackage — it is a leaf (peer of state /

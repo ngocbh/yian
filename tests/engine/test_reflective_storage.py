@@ -112,8 +112,7 @@ def test_constructor_persists_identity_without_resolving_model(monkeypatch, tmp_
     def forbidden():
         raise AssertionError("ambient model must not be resolved at construction")
 
-    monkeypatch.setattr(reflective, "default_llm_provider", forbidden)
-    monkeypatch.setattr(reflective, "default_llm_model", forbidden)
+    monkeypatch.setattr(reflective, "resolve_model_config", forbidden)
     path = tmp_path / "memory.sqlite"
     memory = ReflectiveMemory(storage=path)
     namespace = memory._namespace
@@ -142,11 +141,11 @@ def test_constructor_persists_identity_without_resolving_model(monkeypatch, tmp_
 
 def test_ambient_config_is_current_after_reopen(monkeypatch, tmp_path):
     path = tmp_path / "memory.sqlite"
-    monkeypatch.setattr(reflective, "default_llm_provider", lambda: "ollama")
-    monkeypatch.setattr(reflective, "default_llm_model", lambda: "old")
+    monkeypatch.setenv("AGENT_COMPOSER_DEFAULT_PROVIDER", "ollama")
+    monkeypatch.setenv("AGENT_COMPOSER_DEFAULT_MODEL", "old")
     with ReflectiveMemory(storage=path) as memory:
         saved = _snapshot(memory)
-    monkeypatch.setattr(reflective, "default_llm_model", lambda: "new")
+    monkeypatch.setenv("AGENT_COMPOSER_DEFAULT_MODEL", "new")
     with ReflectiveMemory(storage=path) as memory:
         with memory.open_run(snapshot=saved) as resumed:
             assert resumed.snapshot == saved

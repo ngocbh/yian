@@ -18,9 +18,8 @@ _OPENAI_COMPATIBLE = (
     "openrouter", "vllm",
 )
 _DEDICATED_PROVIDERS = ("ollama", "anthropic", "google", "azure")
-_NATIVE_PROVIDERS = ("codex",)
 
-_ROUTED_PROVIDERS = (*_OPENAI_COMPATIBLE, *_DEDICATED_PROVIDERS, *_NATIVE_PROVIDERS)
+_ROUTED_PROVIDERS = (*_OPENAI_COMPATIBLE, *_DEDICATED_PROVIDERS)
 if (
     frozenset(_ROUTED_PROVIDERS) != frozenset(SUPPORTED_LLM_PROVIDERS)
     or len(_ROUTED_PROVIDERS) != len(set(_ROUTED_PROVIDERS))
@@ -67,8 +66,7 @@ def create_llm_client(
             Provider name; case-insensitive. OpenAI-compatible names (`openai`, `xai`,
             `deepseek`, `qwen`, `qwen-cn`, `glm`, `glm-cn`, `minimax`, `minimax-cn`,
             `openrouter`, and `vllm`) route to the OpenAI client; `ollama`, `anthropic`,
-            `google`, and `azure` route to dedicated clients. `codex` is native-only
-            and cannot be constructed as an API chat client.
+            `google`, and `azure` route to dedicated clients.
         model (`str`):
             The provider-specific model id.
         base_url (`str`, *optional*, defaults to `None`):
@@ -80,17 +78,12 @@ def create_llm_client(
         `BaseLLMClient`: A configured client whose `get_llm()` yields the chat model.
 
     Raises:
-        ValueError: If `provider` is unsupported or requires native AGENT execution.
+        ValueError: If `provider` is unsupported.
         ImportError: If the provider's optional dependency extra is not installed.
     """
     provider_lower = provider.lower()
     if provider_lower not in SUPPORTED_LLM_PROVIDERS:
         raise ValueError(f"Unsupported LLM provider: {provider}")
-    if provider_lower in _NATIVE_PROVIDERS:
-        raise ValueError(
-            "Codex uses the native AGENT execution path, not an API chat-model "
-            "factory. Select llm_config.provider: codex on an AGENT node."
-        )
 
     if provider_lower in _OPENAI_COMPATIBLE:
         try:
@@ -135,33 +128,47 @@ def model_from_config(config) -> BaseChatModel:
 
     Accepts `dict | LLMConfig` so both the engine's interior carrier (a dict) AND the
     chat-side carrier (an `LLMConfig` instance from `chat/assistant.py`) work end-to-end.
-    Dicts are normalized to `LLMConfig` at the top (this is also where `extra="forbid"`
-    triggers if a key is unknown).
+    Public fields are validated through `LLMConfig`; host-owned connection metadata
+    is validated separately. Unset provider/model use one saved/environment selection
+    snapshot. Recorded connections use their pinned method and identity, resolving
+    fresh credentials per request without changing accounts after a reconnect.
 
-    Absorbs the former model-builder seam: unset provider/model fall back to the
-    package's env-based defaults (`_settings.default_llm_*`); provider-specific reasoning
-    knobs apply only when they match the selected provider; transient errors get
-    exponential-backoff retries. The returned model is ready for `.bind_tools(...)`. Shared
-    by API-backed model seams; native Codex AGENT execution uses a separate path.
+    Provider-specific reasoning knobs apply only to the selected provider. The
+    returned model supports ordinary tool binding, structured output, and invocation.
 
     Args:
         config (`LLMConfig` or `dict`):
             The model selection. A `dict` is validated into an `LLMConfig` (raising on
-            unknown keys); unset `provider`/`model` inherit the env-based defaults.
+            unknown keys); unset `provider`/`model` inherit matching provider defaults.
 
     Returns:
         `BaseChatModel`: A langchain chat model, ready for `.bind_tools(...)`.
 
     Raises:
-        ValueError: If the provider is unsupported or requires native AGENT execution.
+        ValueError: If the provider is unsupported.
         ImportError: If the resolved provider's optional dependency extra is not installed.
     """
-    if isinstance(config, dict):
-        config = LLMConfig(**config)
-    from agent_composer._settings import default_llm_model, default_llm_provider
+    from .connection import connection_credentials, resolve_model_config, split_model_config
 
-    provider = (config.provider or default_llm_provider()).lower()
-    model = config.model or default_llm_model()
+    resolved = resolve_model_config(config)
+    config, connection = split_model_config(resolved)
+    provider, model = config.provider, config.model
+    if connection is not None and connection["method"] == "subscription":
+        if config.temperature is not None:
+            raise ValueError("OpenAI subscription connections do not accept temperature; remove that setting")
+        try:
+            from .openai_subscription import SubscriptionAccess, create_subscription_model
+        except ImportError as exc:
+            raise _missing_provider("openai", exc) from exc
+
+        def access_source():
+            credentials = connection_credentials(connection)
+            return SubscriptionAccess(credentials.access_token, credentials.account_id, credentials.residency)
+
+        return create_subscription_model(
+            model, access_source=access_source,
+            reasoning_effort=config.openai_reasoning_effort,
+        )
 
     kwargs: dict[str, Any] = {}
     if provider == "anthropic" and config.anthropic_effort:
@@ -177,4 +184,9 @@ def model_from_config(config) -> BaseChatModel:
     # so lean on the provider SDK's exponential backoff (notably on HTTP 429).
     kwargs.setdefault("max_retries", 6)
 
+    if connection is not None:
+        # The SDK calls this per request, so re-login cannot redirect an existing
+        # model instance to a different account between tool iterations.
+        kwargs["api_key"] = lambda: connection_credentials(connection).api_key
+        kwargs["base_url"] = connection["endpoint"]
     return create_llm_client(provider=provider, model=model, **kwargs).get_llm()

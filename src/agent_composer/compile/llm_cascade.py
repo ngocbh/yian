@@ -11,16 +11,16 @@ replay.  A root-level copy alone preserves aliases between shared descendant def
 would let one parent's cascade overwrite another's.
 
 Layer: compile — imports nodes and LLM configuration primitives; never runtime or
-``_settings``. Directory normalization is lexical and requires an injected base.
+``_settings``. Defaults are injected by the host.
 """
 
 from __future__ import annotations
 
 import copy
-import os.path
 from typing import Any
 
 from agent_composer.llm_clients.config import LLMConfig, merge_llm_config
+from agent_composer.llm_clients.connection import validate_connection
 from agent_composer.nodes.agent import AgentNode
 
 _REQUIRED_SELECTION_FIELDS = ("provider", "model")
@@ -31,7 +31,7 @@ def resolve_llm_cascade(
     parent_config: dict[str, Any],
     *,
     defaults: dict[str, Any],
-    launch_cwd: str | None = None,
+    provider_models: dict[str, str] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Bake and return every AGENT node's complete effective configuration.
 
@@ -47,11 +47,11 @@ def resolve_llm_cascade(
             The outermost gap-fill layer.  At the root this is the CLI/host layer; in a
             child it is the already-accumulated enclosing flow layer.
         defaults (`dict[str, Any]`):
-            Explicit lowest-precedence process defaults.  Must supply concrete
-            ``provider`` and ``model`` values; this module never reads the environment.
-        launch_cwd (`str | None`, defaults to `None`):
-            Absolute host launch directory for omitted or relative Codex `cwd`.
-            The host supplies it; resolution performs no filesystem access.
+            Explicit lowest-precedence process defaults. Must supply ``provider``;
+            ``model`` is a fallback only for that provider. No environment is read.
+        provider_models (`dict[str, str] | None`):
+            Matching fallback models for other providers. An authored model still
+            wins per field; a provider with no matching fallback needs an explicit model.
 
     Returns:
         `dict[str, dict[str, Any]]`:
@@ -59,25 +59,23 @@ def resolve_llm_cascade(
 
     Raises:
         `ValueError`:
-            If selection or native options are invalid, or a Codex directory needs
-            an omitted or invalid `launch_cwd`.
+            If a provider or model selection is invalid.
     """
-    _require_concrete_selection(defaults, path="defaults")
-    if launch_cwd is not None and (
-        not isinstance(launch_cwd, str)
-        or not launch_cwd
-        or "\x00" in launch_cwd
-        or not os.path.isabs(launch_cwd)
-    ):
-        raise ValueError("launch_cwd must be an absolute path without NUL characters")
+    _validate_layer(parent_config)
+    _validate_layer(defaults)
+    if not isinstance(defaults.get("provider"), str) or not defaults["provider"]:
+        raise ValueError("defaults lacks concrete provider")
+    models = dict(provider_models or {})
+    if defaults.get("model"):
+        models.setdefault(defaults["provider"], defaults["model"])
     effective: dict[str, dict[str, Any]] = {}
     _resolve_flow(
         flow,
         copy.deepcopy(parent_config),
         defaults=copy.deepcopy(defaults),
+        provider_models=models,
         path=(),
         effective=effective,
-        launch_cwd=launch_cwd,
     )
     return effective
 
@@ -100,8 +98,7 @@ def apply_effective_llm_map(
 
     Raises:
         `ValueError`:
-            If paths are missing/extra, a config lacks provider/model, or native
-            options lack a concrete sandbox and absolute working directory.
+            If paths are missing/extra or a config lacks provider/model.
         `TypeError`:
             If the map or one of its configurations is not a dictionary.
     """
@@ -125,15 +122,6 @@ def apply_effective_llm_map(
         if not isinstance(config, dict):
             raise TypeError(f"effective LLM config for {path!r} must be a dict")
         _require_concrete_selection(config, path=path)
-        if config["provider"].lower() == "codex":
-            _validate_native(config)
-            if config.get("sandbox") is None:
-                raise ValueError(f"recorded Codex config for {path!r} lacks sandbox")
-            cwd = config.get("cwd")
-            if cwd is None or not os.path.isabs(cwd):
-                raise ValueError(
-                    f"recorded Codex config for {path!r} lacks absolute cwd"
-                )
 
     _apply_flow(flow, effective, path=())
 
@@ -143,36 +131,31 @@ def _resolve_flow(
     parent_config: dict[str, Any],
     *,
     defaults: dict[str, Any],
+    provider_models: dict[str, str],
     path: tuple[str, ...],
     effective: dict[str, dict[str, Any]],
-    launch_cwd: str | None,
 ) -> None:
     """Resolve one flow scope recursively into ``effective``."""
+    authored_flow = copy.deepcopy(getattr(flow, "flow_llm_config", {}))
+    _validate_layer(authored_flow)
     flow_layer = merge_llm_config(
-        copy.deepcopy(getattr(flow, "flow_llm_config", {})),
+        authored_flow,
         parent_config,
     )
-    inherited_layer = merge_llm_config(flow_layer, defaults)
 
     for node_id, node in flow.nodes.items():
         node_path = (*path, node_id)
         if isinstance(node, AgentNode):
-            base = defaults if not node.llm_inherit else inherited_layer
-            config = merge_llm_config(copy.deepcopy(node.own_llm_config), base)
+            _validate_layer(node.own_llm_config)
+            base = {} if not node.llm_inherit else flow_layer
+            authored = merge_llm_config(copy.deepcopy(node.own_llm_config), base)
+            config = merge_llm_config(authored, {key: value for key, value in defaults.items() if key != "model"})
+            if not authored.get("model"):
+                config["model"] = provider_models.get(config["provider"])
+                if not config["model"]:
+                    raise ValueError(f"Provider {config['provider']!r} needs an explicit model; set llm_config.model or --model")
             path_key = _path_key(node_path)
             _require_concrete_selection(config, path=path_key)
-            if config["provider"].lower() == "codex":
-                _validate_native(config)
-                config.setdefault("sandbox", "read-only")
-                cwd = config.get("cwd")
-                if cwd is None or not os.path.isabs(cwd):
-                    if launch_cwd is None:
-                        raise ValueError(
-                            f"Codex config for {path_key!r} requires launch_cwd "
-                            "to resolve its working directory"
-                        )
-                    cwd = os.path.join(launch_cwd, cwd or "")
-                config["cwd"] = os.path.normpath(cwd)
             node.llm_config = copy.deepcopy(config)
             effective[path_key] = copy.deepcopy(config)
 
@@ -185,9 +168,9 @@ def _resolve_flow(
                 node.child,
                 flow_layer,
                 defaults=defaults,
+                provider_models=provider_models,
                 path=node_path,
                 effective=effective,
-                launch_cwd=launch_cwd,
             )
 
 
@@ -230,13 +213,9 @@ def _path_key(path: tuple[str, ...]) -> str:
     return "/".join(path)
 
 
-def _validate_native(config: dict[str, Any]) -> None:
-    """Validate native options without normalizing the recorded configuration."""
-    LLMConfig.model_validate({**config, "provider": "codex"}, strict=True)
-
-
 def _require_concrete_selection(config: dict[str, Any], *, path: str) -> None:
     """Reject a config that could fall through to ambient provider/model settings."""
+    _validate_layer(config)
     missing = [
         field
         for field in _REQUIRED_SELECTION_FIELDS
@@ -246,3 +225,13 @@ def _require_concrete_selection(config: dict[str, Any], *, path: str) -> None:
         raise ValueError(
             f"effective LLM config for {path!r} lacks concrete fields: {missing}"
         )
+
+
+def _validate_layer(config: dict[str, Any]) -> None:
+    """Reject retired options and malformed host metadata before composition."""
+    if str(config.get("provider", "")).lower() == "codex" or any(key in config for key in ("sandbox", "cwd")):
+        LLMConfig(**config)
+    if "_connection" in config:
+        if config.get("provider") != "openai":
+            raise ValueError("Internal connection metadata requires provider openai")
+        validate_connection(config["_connection"])

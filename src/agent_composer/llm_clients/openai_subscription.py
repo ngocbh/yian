@@ -85,6 +85,12 @@ class _SubscriptionChatOpenAI(ChatOpenAI):
         if self.stop_check is not None:
             self.stop_check()
 
+    def with_structured_output(self, schema, *, method=None, **kwargs):
+        """Use the subscription transport's ordinary function-tool protocol."""
+        return super().with_structured_output(
+            schema, method=method or "function_calling", **kwargs
+        )
+
     def _get_request_payload(self, input_, *, stop=None, **kwargs) -> dict:
         access = kwargs.pop(_ACCESS_ARGUMENT, None)
         messages = self._convert_input(input_).to_messages()

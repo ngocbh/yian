@@ -22,7 +22,7 @@ from pathlib import Path
 import threading
 from typing import Any, Callable
 
-from agent_composer._settings import default_llm_model, default_llm_provider
+from agent_composer.llm_clients.connection import connection_snapshot, legacy_connection_map
 from agent_composer.compile.execution_layout import apply_execution_layout, resolve_execution_layout
 from agent_composer.compile.expand import build_grow
 from agent_composer.compile.llm_cascade import (
@@ -134,8 +134,8 @@ class RunResult:
 
         Raises:
             `TypeError`: Feedback has an invalid ordinary-message carrier.
-            `ValueError`: Retention is disabled, feedback is invalid, accepted
-                execution used a forward-only Codex agent, or accepted history
+            `ValueError`: Retention is disabled, feedback is invalid, or accepted
+                history
                 forbids another attempt.
             `MemorySetupError`: Enabled policies cannot restore their recorded
                 snapshots. Host and log faults also propagate while preserving
@@ -188,24 +188,12 @@ class _BackwardHandle:
             if state.run_id != self.run_id:
                 raise ValueError("backward log identity differs from the retained run")
             replay_sequence = state.next_sequence
-            if state.trace is not None:
-                for occurrence in state.trace.occurrences:
-                    capture = occurrence.record.forward_capture
-                    if capture is None or capture.scope is None:
-                        continue
-                    path = "/".join(capture.scope.static_path)
-                    config = state.effective_llm_by_static_path.get(path)
-                    if config is not None and config["provider"].lower() == "codex":
-                        raise ValueError(
-                            f"backward() is unavailable for this run: Codex agent {path!r} "
-                            "is forward-only. Use API-backed agents for backward learning."
-                        )
 
             def open_memory() -> MemoryRuntime:
                 if self.memory is None:
                     raise MemorySetupError("backward requires this run's enabled memory mapping")
                 program = copy.deepcopy(self.program)
-                apply_effective_llm_map(program, state.effective_llm_by_static_path)
+                apply_effective_llm_map(program, legacy_connection_map(state.effective_llm_by_static_path))
                 layout, origins = _resolve_runtime_memory_layout(program)
                 if layout != state.memory_layout:
                     raise ValueError("recorded memory layout does not match the retained program")
@@ -367,17 +355,15 @@ def _run_flow_controlled(
     private_flow = copy.deepcopy(flow.compiled)
     retained_program = copy.deepcopy(private_flow) if learnable else None
 
-    # Ambient defaults are read exactly once each and become part of RunStarted.
-    defaults = {
-        "provider": default_llm_provider().lower(),
-        "model": default_llm_model(),
-    }
-    effective_llm = resolve_llm_cascade(
+    # One selection snapshot determines every static agent before RunStarted.
+    snapshot = connection_snapshot()
+    effective_llm = snapshot.bind(resolve_llm_cascade(
         private_flow,
         llm_config or {},
-        defaults=defaults,
-        launch_cwd=os.getcwd(),
-    )
+        defaults=snapshot.defaults,
+        provider_models=snapshot.provider_models,
+    ))
+    apply_effective_llm_map(private_flow, effective_llm)
 
     if learnable:
         apply_execution_layout(private_flow, resolve_execution_layout(private_flow))
@@ -689,7 +675,7 @@ def _replay_compiled_run_log(flow: CompiledFlow, log: RunLog) -> RunState:
     private_flow = copy.deepcopy(flow)
     apply_effective_llm_map(
         private_flow,
-        first.record.effective_llm_by_static_path,
+        legacy_connection_map(first.record.effective_llm_by_static_path),
     )
     if first.record.learnable:
         apply_execution_layout(private_flow, resolve_execution_layout(private_flow))

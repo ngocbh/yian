@@ -14,6 +14,7 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 
 import agent_composer.llm_clients as llm_clients
+from agent_composer.llm_clients.connection import legacy_connection_config
 from agent_composer.expr.lineage import FeedbackValue, has_feedback, validate_feedback
 from agent_composer.nodes.agent.modes.utils import text_of
 from agent_composer.nodes.base import BackwardContext, BackwardResult
@@ -149,6 +150,6 @@ def backward_agent(context: BackwardContext, feedback: tuple[FeedbackValue, ...]
     }
     prompt = json.dumps(material, ensure_ascii=False, allow_nan=False)
     prompt.encode("utf-8")
-    model = llm_clients.model_from_config(data["effective_llm_config"])
+    model = llm_clients.model_from_config(legacy_connection_config(data["effective_llm_config"]))
     response = model.invoke([SystemMessage(content=_SYSTEM), HumanMessage(content=prompt)])
     return _parse_result(text_of(response))

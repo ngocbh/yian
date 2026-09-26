@@ -1234,16 +1234,13 @@ def _agent_providers(loaded, cli_cfg: Dict[str, Any]) -> List[str]:
     """
     import copy
 
-    from agent_composer._settings import default_llm_model, default_llm_provider
+    from agent_composer.llm_clients.connection import connection_snapshot
     from agent_composer.compile.llm_cascade import resolve_llm_cascade
 
     probe = copy.deepcopy(loaded.compiled)
-    defaults = {
-        "provider": default_llm_provider().lower(),
-        "model": default_llm_model(),
-    }
+    snapshot = connection_snapshot()
     effective = resolve_llm_cascade(
-        probe, dict(cli_cfg), defaults=defaults, launch_cwd=os.getcwd()
+        probe, dict(cli_cfg), defaults=snapshot.defaults, provider_models=snapshot.provider_models
     )
 
     seen: List[str] = []
@@ -1258,8 +1255,8 @@ def _ensure_provider_keys(loaded, cli_cfg: Dict[str, Any]) -> None:
     """Prompt for any API key the flow's agents will need, before the run starts.
 
     Turns a cryptic mid-run "missing key" API failure into an upfront interactive
-    prompt. Native Codex uses its own authentication and bypasses this API-key
-    check. Keyless (`ollama`) and unknown providers are skipped inside
+    prompt. Saved OpenAI connections resolve their selected credentials without an
+    API-key prompt. Keyless (`ollama`) and unknown providers are skipped inside
     [`ensure_api_key`][agent_composer.cli.utils.ensure_api_key]; a required-but-missing
     key with no TTY re-raises the `RuntimeError` for `run` to surface cleanly.
 
@@ -1272,8 +1269,7 @@ def _ensure_provider_keys(loaded, cli_cfg: Dict[str, Any]) -> None:
     from agent_composer.cli.utils import ensure_api_key
 
     for provider in _agent_providers(loaded, cli_cfg):
-        if provider.lower() != "codex":
-            ensure_api_key(provider)
+        ensure_api_key(provider)
 
 
 def _validate_run_log_options(

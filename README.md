@@ -71,15 +71,11 @@ Provider extras can be installed separately: `anthropic`, `openai`, `google`,
 or `ollama`. The core engine and CLI do not require a provider SDK; a flow needs
 one only when it contains an AGENT node.
 
-The `codex` extra (also in `all`) runs the unchanged official
-`openai-codex==0.155.1` SDK in a supervised worker on POSIX hosts. It reuses Codex
-authentication, including ChatGPT sign-in, without requiring a Composer API key.
-Select `llm_config.provider: codex`, `mode: tool_calling`, and
-`tools: [builtin_tools]`. Add explicitly registered Composer tool names to that
-list when needed. This forward-only release supports native SessionMemory resume;
-`plain` mode and backward learning are unsupported. See
-[Codex setup](docs/installation.md#codex-with-existing-authentication) and
-[native tools and sandboxing](docs/syntax.md#codex-native-execution).
+Connect OpenAI with `ac auth openai`, choose ChatGPT subscription sign-in or an
+API key, and select a default model. Both methods use `provider: openai` with
+Composer's ordinary tools and memory. OpenAI is the default provider; successful
+setup saves your chosen model for subsequent runs. See
+[authentication setup](docs/installation.md#openai-authentication).
 
 ## Run a flow
 
@@ -151,10 +147,6 @@ learning separate from the forward output and failure. See the
 [Python API](docs/api.md#explicit-backward-feedback) for feedback shapes, memory,
 and silent terminal recovery.
 
-The forward-only Codex restriction rejects `backward()` for a run with recorded
-Codex execution, before any model or memory-learning calls. API-only executed
-history keeps its existing backward behavior.
-
 The built-in [`EpisodicMemory`](docs/learning.md#episodic-memory) keeps bounded,
 model-free execution history for later runs. A flow declares
 `long_term_memory: episodic`; its host injects the process-local backend and
@@ -199,9 +191,7 @@ with SessionMemory(storage="./session.sqlite") as session:
 Each local SQLite file has one owning backend until `close()` or context exit.
 Idle run handles do not block closing; active work or queued turns do. Omit
 `storage` to keep memory process-local. See [durable memory](docs/api.md#optional-durable-memory)
-for ownership and recovery. With Codex, SessionMemory stores the native thread
-reference and resumes it; without SessionMemory, each invocation starts fresh.
-Durable Composer storage does not back up Codex's own thread files.
+for ownership and recovery.
 
 `ac run` automatically activates declared `episodic`, `reflective`, and `session`
 policies. They stay process-local unless a repeatable CLI option selects storage:

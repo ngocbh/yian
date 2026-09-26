@@ -1735,19 +1735,6 @@ class ConversationItem:
 
 
 @dataclass(frozen=True, slots=True)
-class ConversationReference:
-    """An opaque provider-native session association, never a live handle."""
-
-    provider: str
-    session_id: str
-
-    def __post_init__(self) -> None:
-        """Require nonempty opaque strings."""
-        _require_string(self.provider, "provider")
-        _require_string(self.session_id, "session_id")
-
-
-@dataclass(frozen=True, slots=True)
 class ConversationStamp:
     """The owner, generation, predecessor revision, and operation identity."""
 
@@ -1772,7 +1759,7 @@ class ConversationStamp:
         _require_counter(self.ordinal, "ordinal")
 
 
-ConversationEffectKind: TypeAlias = Literal["model", "tool", "native_session"]
+ConversationEffectKind: TypeAlias = Literal["model", "tool"]
 ConversationEffectStatus: TypeAlias = Literal[
     "pending", "completed", "failed", "interrupted"
 ]
@@ -1782,8 +1769,8 @@ ConversationTurnStatus: TypeAlias = Literal["completed", "failed", "interrupted"
 def _require_effect_kind(value: object) -> ConversationEffectKind:
     """Require one exact member of the closed effect vocabulary."""
     _require_string(value, "kind")
-    if value not in ("model", "tool", "native_session"):
-        raise ValueError("invalid conversation effect kind")
+    if value not in ("model", "tool"):
+        raise ValueError("unsupported conversation effect kind")
     return value
 
 
@@ -1841,7 +1828,7 @@ class ConversationEffectState:
         Args:
             invocation (`ConversationInvocation`): Exact requesting invocation.
             effect_ordinal (`int`): Positive request ordinal within that invocation.
-            kind (`ConversationEffectKind`): Model, tool, or native-session effect.
+            kind (`ConversationEffectKind`): Model or tool effect.
             request (`JsonObject`): Detached original effect request.
             status (`ConversationEffectStatus`): Actual latest disposition.
             observation_ordinals (`tuple[int, ...]`): Strictly increasing positive
@@ -1946,15 +1933,6 @@ def _copy_conversation_items(value: object) -> tuple[ConversationItem, ...]:
     return tuple(result)
 
 
-def _copy_conversation_reference(value: object) -> ConversationReference | None:
-    """Detach an optional exact native-session reference."""
-    if value is None:
-        return None
-    if type(value) is not ConversationReference:
-        raise TypeError("reference must be a ConversationReference or None")
-    return replace(value)
-
-
 @dataclass(frozen=True, slots=True, init=False)
 class ConversationView:
     """Complete detached conversation state with shaped application evidence.
@@ -1969,7 +1947,6 @@ class ConversationView:
     key: ConversationKey
     _compatibility: _FrozenJsonObject = field(repr=False)
     items: tuple[ConversationItem, ...]
-    reference: ConversationReference | None
     effects: tuple[ConversationEffectState, ...]
     closed_invocations: tuple[ConversationCompletion, ...]
     applied: tuple[ConversationApplied, ...]
@@ -1982,7 +1959,6 @@ class ConversationView:
         key: ConversationKey,
         compatibility: JsonObject,
         items: tuple[ConversationItem, ...],
-        reference: ConversationReference | None,
         effects: tuple[ConversationEffectState, ...],
         closed_invocations: tuple[ConversationCompletion, ...],
         applied: tuple[ConversationApplied, ...],
@@ -1996,7 +1972,6 @@ class ConversationView:
             key (`ConversationKey`): Exact authored conversation owner.
             compatibility (`JsonObject`): Retained opaque compatibility descriptor.
             items (`tuple[ConversationItem, ...]`): Ordered items with unique IDs.
-            reference (`ConversationReference | None`): Native session association.
             effects (`tuple[ConversationEffectState, ...]`): Unique invocation and
                 request-ordinal pairs in retained order.
             closed_invocations (`tuple[ConversationCompletion, ...]`): One actual
@@ -2020,7 +1995,6 @@ class ConversationView:
             self, "_compatibility", _freeze_json_object(compatibility, "compatibility")
         )
         object.__setattr__(self, "items", _copy_conversation_items(items))
-        object.__setattr__(self, "reference", _copy_conversation_reference(reference))
         if type(effects) is not tuple:
             raise TypeError("effects must be a tuple")
         detached_effects = []
@@ -2075,9 +2049,7 @@ class ConversationView:
             raise ValueError(
                 "conversation revision requires one applied entry per checkpoint"
             )
-        if revision == 0 and (
-            items or reference is not None or effects or closed_invocations
-        ):
+        if revision == 0 and (items or effects or closed_invocations):
             raise ValueError("revision-zero conversation must have empty history")
 
     @property
@@ -2097,7 +2069,6 @@ def _copy_conversation_view(value: object) -> ConversationView:
         value.key,
         value.compatibility,
         value.items,
-        value.reference,
         value.effects,
         value.closed_invocations,
         value.applied,
@@ -2158,7 +2129,7 @@ class ConversationEffectRequested:
 
         Args:
             stamp (`ConversationStamp`): Exact identity with a positive ordinal.
-            kind (`ConversationEffectKind`): Model, tool, or native-session effect.
+            kind (`ConversationEffectKind`): Model or tool effect.
             payload (`JsonObject`): Detached external-effect request data.
             items (`tuple[ConversationItem, ...]`): Newly retained items only;
                 duplicates within this tuple are rejected.
@@ -2186,7 +2157,6 @@ class ConversationEffectObserved:
     effect_ordinal: int
     status: ConversationEffectStatus
     items: tuple[ConversationItem, ...]
-    reference: ConversationReference | None
     failure: MemoryOperationFailure | None
 
     def __post_init__(self) -> None:
@@ -2197,9 +2167,6 @@ class ConversationEffectObserved:
             raise ValueError("observed effect ordinal must precede the observation")
         object.__setattr__(self, "stamp", stamp)
         object.__setattr__(self, "items", _copy_conversation_items(self.items))
-        object.__setattr__(
-            self, "reference", _copy_conversation_reference(self.reference)
-        )
         object.__setattr__(
             self, "failure", _copy_effect_failure(self.status, self.failure)
         )
@@ -2278,7 +2245,6 @@ class ConversationTurn(Protocol):
         status: ConversationEffectStatus,
         *,
         items: tuple[ConversationItem, ...] = (),
-        reference: ConversationReference | None = None,
         failure: MemoryOperationFailure | None = None,
     ) -> None:
         """Persist only actual observation evidence for a requested effect.
@@ -2288,8 +2254,6 @@ class ConversationTurn(Protocol):
             status (`ConversationEffectStatus`): The actual observed disposition.
             items (`tuple[ConversationItem, ...]`): New retained evidence; defaults
                 to an empty tuple.
-            reference (`ConversationReference | None`): Native session association;
-                defaults to `None`.
             failure (`MemoryOperationFailure | None`): Known failure, required for
                 failed and optional for interrupted; defaults to `None`.
         """

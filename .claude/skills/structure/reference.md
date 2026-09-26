@@ -60,15 +60,9 @@ it adapts provider messages to lower memory contracts without storing history.
 `memory/session.py` owns history, FIFO admission, and derived summary publication;
 `memory/summary.py` owns pure whole-turn selection and cache-prefix proofs. The
 API adapter injects projection and current-model callbacks, never stores summaries.
-Native execution belongs in `nodes/agent/codex.py`: it bridges explicit host tools
-and native events/output above the supervised `llm_clients/codex` provider leaf.
-Memory owns the native reference and start/resume decision through injected
-callbacks, not provider imports. Workers are invocation-local; neither node nor
-worker owns a session registry. Inject exact generator identity into lower
-structured-output provenance helpers instead of creating a reverse dependency.
-Runtime only binds authored
-scope/accepted invocation identity and manages the lazy capability lifetime;
-it neither encodes provider messages nor reconstructs history from the run log.
+Runtime only binds authored scope and accepted invocation identity and manages
+the lazy capability lifetime; it neither encodes provider messages nor
+reconstructs history from the run log.
 
 Optional persistence belongs below concrete memory policies in
 `memory/storage.py`: it owns one local SQLite file and finite-JSON transactions,

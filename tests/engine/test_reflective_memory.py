@@ -203,8 +203,6 @@ def test_snapshot_contains_only_public_pinned_model_configuration() -> None:
         "openai_reasoning_effort",
         "google_thinking_level",
         "temperature",
-        "sandbox",
-        "cwd",
     }
     assert not {"api_key", "backend_token", "tenant_id"} & set(llm_config)
 
@@ -213,20 +211,17 @@ def test_defaults_are_read_once_and_recorded_snapshot_never_rereads_them(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[str] = []
-    monkeypatch.setattr(
-        reflective,
-        "default_llm_provider",
-        lambda: calls.append("provider") or "ollama",
-    )
-    monkeypatch.setattr(
-        reflective,
-        "default_llm_model",
-        lambda: calls.append("model") or "qwen",
-    )
+    original = reflective.resolve_model_config
+    monkeypatch.setenv("AGENT_COMPOSER_DEFAULT_PROVIDER", "ollama")
+    monkeypatch.setenv("AGENT_COMPOSER_DEFAULT_MODEL", "qwen")
+    def resolve(config):
+        calls.append("snapshot")
+        return original(config)
+    monkeypatch.setattr(reflective, "resolve_model_config", resolve)
     first = ReflectiveMemory({"temperature": 0.2})
     with first.open_run() as session:
         snapshot = session.snapshot
-    assert calls == ["provider", "model"]
+    assert calls == ["snapshot"]
     assert snapshot["llm_config"] == {
         "anthropic_effort": None,
         "google_thinking_level": None,
@@ -234,8 +229,6 @@ def test_defaults_are_read_once_and_recorded_snapshot_never_rereads_them(
         "openai_reasoning_effort": None,
         "provider": "ollama",
         "temperature": 0.2,
-        "sandbox": None,
-        "cwd": None,
     }
 
     calls.clear()
@@ -248,50 +241,39 @@ def test_defaults_are_read_once_and_recorded_snapshot_never_rereads_them(
 def test_empty_ambient_model_is_rejected_and_open_session_config_is_pinned(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(reflective, "default_llm_provider", lambda: "ollama")
-    monkeypatch.setattr(reflective, "default_llm_model", lambda: "")
+    original = reflective.resolve_model_config
+    monkeypatch.setenv("AGENT_COMPOSER_DEFAULT_PROVIDER", "ollama")
+    monkeypatch.setenv("AGENT_COMPOSER_DEFAULT_MODEL", "")
     with pytest.raises(MemoryOperationError) as exc:
         ReflectiveMemory().open_run()
     assert exc.value.code == "reflective.config"
     assert exc.value.retryable is False
 
     default_failure = RuntimeError("default-resolution-secret")
-
-    def fail_default() -> str:
+    def fail_default(config):
         raise default_failure
-
-    monkeypatch.setattr(reflective, "default_llm_provider", fail_default)
+    monkeypatch.setattr(reflective, "resolve_model_config", fail_default)
     with pytest.raises(MemoryOperationError) as default_error:
         ReflectiveMemory().open_run()
     assert default_error.value.code == "reflective.config"
     assert "default-resolution-secret" not in str(default_error.value)
     assert default_error.value.__cause__ is default_failure
 
-    secret = "secret-provider-value"
-    monkeypatch.setattr(reflective, "default_llm_provider", lambda: secret)
-    monkeypatch.setattr(reflective, "default_llm_model", lambda: "qwen")
+    monkeypatch.setattr(reflective, "resolve_model_config", original)
+    monkeypatch.setenv("AGENT_COMPOSER_DEFAULT_PROVIDER", "secret-provider-value")
+    monkeypatch.setenv("AGENT_COMPOSER_DEFAULT_MODEL", "qwen")
     with pytest.raises(MemoryOperationError) as config_error:
         ReflectiveMemory().open_run()
     assert config_error.value.code == "reflective.config"
-    assert secret not in str(config_error.value)
+    assert "secret-provider-value" not in str(config_error.value)
     assert config_error.value.__cause__ is not None
 
-    monkeypatch.setattr(reflective, "default_llm_provider", lambda: "ollama")
-    monkeypatch.setattr(reflective, "default_llm_model", lambda: "qwen")
+    monkeypatch.setenv("AGENT_COMPOSER_DEFAULT_PROVIDER", "ollama")
     memory = ReflectiveMemory()
     session = memory.open_run()
     frame = session.open_frame(_spec())
     pinned = session.snapshot["llm_config"]
-    monkeypatch.setattr(
-        reflective,
-        "default_llm_provider",
-        lambda: pytest.fail("provider default was reread"),
-    )
-    monkeypatch.setattr(
-        reflective,
-        "default_llm_model",
-        lambda: pytest.fail("model default was reread"),
-    )
+    monkeypatch.setattr(reflective, "resolve_model_config", lambda config: pytest.fail("defaults were reread"))
     _, configs = _install_model(
         monkeypatch,
         {"actions": [{"action": "noop", "lesson_id": None, "text": None}]},
@@ -1035,3 +1017,38 @@ def test_reflective_memory_implements_protocol_and_imports_only_lower_layers() -
         for imported in imports
     )
     json.dumps(ReflectiveMemory().open_run().snapshot, sort_keys=True)
+
+
+def test_old_api_snapshot_keeps_digest_and_api_semantics(monkeypatch):
+    import hashlib
+    from agent_composer.llm_clients.connection import legacy_connection_config
+    original = ReflectiveMemory({"provider": "openai", "model": "old-model"})
+    with original.open_run() as session:
+        old = session.snapshot
+    old["llm_config"].pop("_connection")
+    old["llm_config"].update(sandbox=None, cwd=None)
+    wire = json.dumps(old, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(wire.encode()).hexdigest()
+    monkeypatch.setattr(reflective, "resolve_model_config", lambda config: pytest.fail("historical selection read current defaults"))
+    restored = ReflectiveMemory()
+    with restored.open_run(snapshot=old) as session:
+        assert session.snapshot == old
+        assert hashlib.sha256(json.dumps(session.snapshot, sort_keys=True, separators=(",", ":")).encode()).hexdigest() == digest
+        frame = session.open_frame(_spec())
+        _, configs = _install_model(monkeypatch, {"actions": [{"action": "noop", "lesson_id": None, "text": None}]})
+        assert frame.learn(_context()) == []
+    assert configs == [legacy_connection_config(old["llm_config"])]
+    assert configs[0]["_connection"]["source"] == "legacy_environment"
+    assert "sandbox" not in configs[0] and "cwd" not in configs[0]
+
+
+@pytest.mark.parametrize("field,value", [("sandbox", "read-only"), ("cwd", "/tmp"), ("provider", "codex")])
+def test_old_reflective_snapshot_rejects_active_retired_options(field, value):
+    memory = ReflectiveMemory({"provider": "openai", "model": "old-model"})
+    with memory.open_run() as session:
+        old = session.snapshot
+    old["llm_config"].pop("_connection")
+    old["llm_config"].update(sandbox=None, cwd=None)
+    old["llm_config"][field] = value
+    with pytest.raises(MemoryOperationError):
+        ReflectiveMemory().open_run(snapshot=old)

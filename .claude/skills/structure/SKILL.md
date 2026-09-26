@@ -150,13 +150,6 @@ publication through the turn. It may import memory contracts and provider messag
 types, but owns no history or queue. It injects safe projection and the current
 unbound model into optional memory-owned context preparation; summary callbacks
 run outside the backend lock under its existing lease.
-`nodes/agent/codex.py` owns native event/output adaptation and the explicit Composer
-tool bridge. It consumes the supervised worker and optional native session
-capability; it owns no persistent worker, reference registry, or queue. The
-concrete memory turn selects start/resume through injected callbacks. Keep exact
-structured-error producer recognition below the adapter by passing its code object
-from AgentNode, never by a reverse import or mutable producer registry.
-
 `cli/memory.py` owns lazy CLI policy selection and backend lifetime. It reads the
 pure static memory layout and lower memory contracts, importing only selected
 built-in implementations when `open_run` is requested. `cli/run.py` injects that
@@ -177,15 +170,9 @@ CLI, node, memory, compiler, or runtime module. Callers inject presentation and
 HTTP effects; only the CLI prompts, and only an explicit save activates staged
 credentials and the provider/model default. Refresh preserves the selected
 connection identity. Keep tokens out of model configuration and history.
-
-`llm_clients/codex/` is a private provider leaf, below nodes and independent of
-memory and runtime. Its `protocol.py` owns finite-JSON IPC, `worker.py` alone
-imports the pinned native SDK, and `client.py` owns process supervision and
-caller-lane callbacks. Never import tools, memory, nodes, compile, compose, or
-runtime into this package. Inject host callables; do not send them, memory
-handles, or live SDK objects across IPC. Conversation persistence is not worker
-process persistence. Node execution and memory integration consume this private
-boundary from above; they do not move policy into the worker.
+`llm_clients/connection.py` combines saved selections with environment defaults
+and supplies pinned request-time credential callbacks. The run host owns the
+snapshot; compiler resolution stays pure and receives provider-scoped defaults.
 
 Compiled-origin traversal follows the same direction. Semantic carriers and
 nodes own their local origin slots and static-child hooks; `diagnostics` owns the

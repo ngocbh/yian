@@ -203,15 +203,6 @@ effective model configuration. Tool interactions in that evidence are inert
 data. No prompt/default/recall is evaluated again, and variable feedback does not
 update variables, model configuration, or the graph.
 
-For the forward-only Codex release, `backward()` raises `ValueError` if the
-recorded run executed a Codex-backed AGENT. This rejects the whole pass, including
-mixed-provider runs and calls with no feedback, before opening memory, invoking
-any model or learner, or appending backward records. A declared but unexecuted
-Codex branch does not trigger this restriction. The check uses recorded execution
-scopes and provider configuration, not mutable live node settings; terminal
-recovery preserves it. Rejection leaves the forward result and prior backward
-observations unchanged.
-
 Known callback/result failures return a failed outcome without partial root
 feedback. A later learner or commit failure retains already completed feedback.
 Host errors, cancellation, setup errors, and log faults propagate while leaving
@@ -409,8 +400,8 @@ the completed feedback.
 
 ## SessionMemory foundation
 
-`agent_composer.memory.session.SessionMemory` retains API-backed AGENT
-conversations or native Codex thread references across calls to `run_flow`.
+`agent_composer.memory.session.SessionMemory` retains AGENT
+message conversations across calls to `run_flow`.
 The backend owns history updates and
 FIFO admission directly; runtime owns only the optional turn's lifetime and
 authored scope. Explicit backward learning retains self-feedback as notes through
@@ -524,39 +515,6 @@ history; changing provider or message format requires explicit reset. Every call
 uses current instructions, recall, and tool grants. Historical system/developer
 instructions are not reinstated as current instructions.
 
-### Native Codex sessions
-
-Use the same `long_term_memory: session` declaration and `SessionMemory` backend
-with a Codex-backed `tool_calling` AGENT. Include `builtin_tools` explicitly;
-see [native configuration](syntax.md#codex-native-execution).
-
-SessionMemory owns the opaque native thread reference and decides whether the
-SDK starts or resumes a thread. Worker processes remain invocation-local; a
-persistent conversation does not require a persistent worker. With no
-SessionMemory-capable frame, every Codex invocation starts fresh, even if other
-long-term memory frames provide recall.
-
-Native history stays in Codex. Composer retains observed native/model/tool
-effects and the actual thread reference, publishing returned facts before
-cooperative stop. It does not replay API messages or call an API model to
-summarize native history. The same per-authored-leaf FIFO queue, reset, and
-innermost-frame ownership rules apply.
-
-Compatible model changes preserve a native conversation. Bridged Composer tool
-names, descriptions, and public schemas are pinned: changing these requires
-`memory.reset()` because the pinned native resume API cannot replace the original
-dynamic-tool declarations. Current tool grants are checked for each callback;
-current instructions, recall, cwd, and sandbox are sent on start and resume.
-A missing native thread fails rather than silently starting a new one.
-
-`SessionMemory(storage="./session.sqlite")` and CLI
-`--memory-storage session=./session.sqlite` preserve Composer's state and native
-reference. This is not a backup of Codex's thread files; retain both stores for
-restart continuity. Reset clears Composer's session state, not provider files.
-Run-log recovery does not reconstruct conversations; a crash retry may repeat
-model or tool requests. The first Codex release is forward-only: recorded Codex
-execution rejects the whole `backward()` pass before any model or memory learner.
-
 ### API history summaries
 
 ```python
@@ -589,8 +547,7 @@ Summary work happens under the same conversation's FIFO lease, outside the
 backend's condition lock. Other authored conversations can proceed independently.
 A failed, malformed, empty, or tool-request summary response fails that invocation
 without deleting history or making the normal answer request. Summary work does
-not run backward learning or enter structured-output correction retries. Native
-Codex context management is separate from this API-only capability.
+not run backward learning or enter structured-output correction retries.
 
 ### Learned notes
 
@@ -619,7 +576,7 @@ its earlier recall view. Notes are separate from raw messages, so learning never
 rewrites model/tool history and does not replay tools. They are also separate
 from the transcript-summary history budget. Backend-wide `reset()` clears
 notes, history, and derived summaries, retaining commit deduplication so replay cannot resurrect
-cleared notes. Native-provider backward learning remains deferred.
+cleared notes.
 
 ### Partial history, retry, and reset
 

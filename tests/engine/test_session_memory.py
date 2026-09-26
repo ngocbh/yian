@@ -38,17 +38,14 @@ def test_turn_publishes_history_without_a_checkpoint_sink():
 
 @pytest.mark.parametrize("restore", [False, True])
 @pytest.mark.parametrize("closed", [False, True])
-def test_new_turn_preserves_incomplete_history_and_native_reference(restore, closed):
+def test_new_turn_preserves_incomplete_history(restore, closed):
     memory = SessionMemory()
-    reference = c.ConversationReference("codex", "opaque-thread")
     with memory.open_run() as session:
         frame = session.open_frame(c.MemoryFrameSpec(REF, "session", {}))
         turn = frame.open_turn(request("a"), check_stopped=lambda: None)
         turn.__enter__()
-        ordinal = turn.request("native_session", {}, items=(item("a-in", "first"),))
-        turn.observe(
-            ordinal, "pending", items=(item("a-out", "partial"),), reference=reference
-        )
+        ordinal = turn.request("model", {}, items=(item("a-in", "first"),))
+        turn.observe(ordinal, "pending", items=(item("a-out", "partial"),))
         if closed:
             primary = RuntimeError("interrupted effect")
             with pytest.raises(RuntimeError) as caught:
@@ -66,7 +63,6 @@ def test_new_turn_preserves_incomplete_history_and_native_reference(restore, clo
         frame = session.open_frame(c.MemoryFrameSpec(REF, "session", {}))
         for name in ("b", "c"):
             with frame.open_turn(request(name), check_stopped=lambda: None) as later:
-                assert later.view.reference == reference
                 assert later.view.effects[0].status == "pending"
                 assert later.view.items[:2] == (
                     item("a-in", "first"),
@@ -170,22 +166,20 @@ def test_same_agent_reuses_conversation_across_runs():
             assert turn.view.items == (item("one", "hello"),)
 
 
-def test_distinct_consumer_has_no_reference_or_history():
+def test_distinct_consumer_has_no_history():
     with harness() as h:
         with h.frame.open_turn(request(), check_stopped=lambda: None) as turn:
-            ordinal = turn.request("native_session", {})
+            ordinal = turn.request("model", {})
             turn.observe(
                 ordinal,
                 "completed",
                 items=(item("one", "hello"),),
-                reference=c.ConversationReference("codex", "opaque"),
             )
         with h.frame.open_turn(
             request("b", consumer=("root", "other")),
             check_stopped=lambda: None,
         ) as turn:
             assert turn.view.items == ()
-            assert turn.view.reference is None
 
 
 def test_open_session_snapshot_stays_pinned():
@@ -1184,9 +1178,7 @@ def test_malformed_request_never_publishes_partial_evidence(malformed):
             append_reply(turn, "valid", "retained")
 
 
-@pytest.mark.parametrize(
-    "malformed", ["ordinal", "status", "failure", "items", "reference"]
-)
+@pytest.mark.parametrize("malformed", ["ordinal", "status", "failure", "items"])
 def test_malformed_observation_leaves_pending_evidence_unchanged(malformed):
     with harness() as h:
         with h.frame.open_turn(request(), check_stopped=lambda: None) as turn:
@@ -1200,8 +1192,6 @@ def test_malformed_observation_leaves_pending_evidence_unchanged(malformed):
                 values["status"] = "failed"
             elif malformed == "items":
                 values["items"] = [item("partial", "no")]
-            else:
-                values["reference"] = {"provider": "fake", "session_id": "no"}
             before = snapshot(h.memory)
             with pytest.raises((TypeError, ValueError)):
                 turn.observe(**values)
@@ -1242,3 +1232,15 @@ def test_an_invocation_identity_cannot_be_reused(new_session):
                     pytest.fail("reused invocation entered")
             assert caught.value.code == "session.conflict"
         assert snapshot(h.memory) == before
+
+
+def test_turn_exposes_only_message_effects_without_native_tracking():
+    assert not hasattr(c, "ConversationReference")
+    with harness() as h:
+        with h.frame.open_turn(request(), check_stopped=lambda: None) as turn:
+            assert not hasattr(turn, "native_session")
+            assert not hasattr(turn.view, "reference")
+            before = snapshot(h.memory)
+            with pytest.raises(ValueError, match="unsupported"):
+                turn.request("native_session", {})
+            assert snapshot(h.memory) == before

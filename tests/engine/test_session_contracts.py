@@ -113,16 +113,6 @@ def test_item_payload_is_detached():
     )
 
 
-@pytest.mark.parametrize(
-    "provider,session_id",
-    [("", "id"), ("fake", ""), ("\ud800", "id"), (None, "id"), ("fake", 1)],
-)
-def test_reference_requires_nonempty_strings(provider, session_id):
-    with pytest.raises((TypeError, ValueError)):
-        c.ConversationReference(provider, session_id)
-    assert c.ConversationReference("fake", "id").session_id == "id"
-
-
 @pytest.mark.parametrize("field", ["generation", "expected_revision", "ordinal"])
 @pytest.mark.parametrize("value", [True, -1, 1.0, "1"])
 def test_stamp_requires_nonnegative_exact_counters(field, value):
@@ -170,7 +160,7 @@ def _failure():
     return c.MemoryOperationFailure("effect", "fake.failed", "Failed", False)
 
 
-@pytest.mark.parametrize("kind", ["model", "tool", "native_session"])
+@pytest.mark.parametrize("kind", ["model", "tool"])
 @pytest.mark.parametrize("status", ["pending", "completed", "failed", "interrupted"])
 def test_effect_state_preserves_invocation_and_status(kind, status):
     invocation = _invocation()
@@ -248,7 +238,6 @@ def _view(**changes):
         key=_key(),
         compatibility={"provider": "fake"},
         items=(),
-        reference=None,
         effects=(),
         closed_invocations=(),
         applied=(),
@@ -272,11 +261,10 @@ def test_empty_view_has_exact_detached_shape():
     assert (view.namespace, view.generation, view.revision) == ("namespace", 0, 0)
     assert (
         view.items,
-        view.reference,
         view.effects,
         view.closed_invocations,
         view.applied,
-    ) == ((), None, (), (), ())
+    ) == ((), (), (), ())
     with pytest.raises(FrozenInstanceError):
         view.revision = 1
 
@@ -304,7 +292,7 @@ def test_view_requires_one_applied_entry_per_revision():
 
 def test_zero_revision_view_cannot_carry_history():
     with pytest.raises(ValueError, match="empty"):
-        _view(reference=c.ConversationReference("fake", "session"))
+        _view(items=(c.ConversationItem("id", "message", {}),))
 
 
 @pytest.mark.parametrize("field", ["effects", "closed_invocations", "applied"])
@@ -353,7 +341,7 @@ def test_requested_retains_only_new_items():
 def test_observed_rejects_invalid_terminal_failure(status, has_failure):
     failure = _failure() if has_failure else None
     with pytest.raises(ValueError):
-        c.ConversationEffectObserved(_stamp(2, 2), 1, status, (), None, failure)
+        c.ConversationEffectObserved(_stamp(2, 2), 1, status, (), failure)
     with pytest.raises(ValueError):
         c.ConversationEffectState(_invocation(), 1, "model", {}, status, (2,), failure)
 
@@ -362,12 +350,8 @@ def test_observed_rejects_invalid_terminal_failure(status, has_failure):
 def test_observed_preserves_detached_payload_and_actual_status(status):
     failure = _failure() if status in ("failed", "interrupted") else None
     item = c.ConversationItem("id", "text", {})
-    reference = c.ConversationReference("fake", "thread")
-    event = c.ConversationEffectObserved(
-        _stamp(2, 2), 1, status, (item,), reference, failure
-    )
+    event = c.ConversationEffectObserved(_stamp(2, 2), 1, status, (item,), failure)
     assert event.status == status
-    assert event.reference == reference and event.reference is not reference
     assert event.items == (item,) and event.items[0] is not item
     if failure is not None:
         assert event.failure == failure and event.failure is not failure
@@ -376,7 +360,7 @@ def test_observed_preserves_detached_payload_and_actual_status(status):
 @pytest.mark.parametrize("ordinal", [True, 0, 2, 3])
 def test_observed_requires_a_prior_effect(ordinal):
     with pytest.raises((TypeError, ValueError)):
-        c.ConversationEffectObserved(_stamp(2, 2), ordinal, "completed", (), None, None)
+        c.ConversationEffectObserved(_stamp(2, 2), ordinal, "completed", (), None)
 
 
 @pytest.mark.parametrize("status", ["completed", "failed", "interrupted"])
@@ -424,7 +408,6 @@ def test_conversation_contracts_are_exported_without_concrete_backend():
         "ConversationInvocation",
         "ConversationRequest",
         "ConversationItem",
-        "ConversationReference",
         "ConversationStamp",
         "ConversationEffectKind",
         "ConversationEffectStatus",
@@ -532,9 +515,7 @@ def test_nested_carrier_subclasses_are_rejected():
     with pytest.raises(TypeError, match="ConversationView"):
         c.ConversationAdmitted(
             _stamp(),
-            ViewSubclass(
-                baseline.namespace, 0, 0, baseline.key, {}, (), None, (), (), ()
-            ),
+            ViewSubclass(baseline.namespace, 0, 0, baseline.key, {}, (), (), (), ()),
         )
 
 
@@ -544,12 +525,10 @@ def test_nested_view_carriers_are_revalidated_and_detached():
     )
     completion = c.ConversationCompletion(_invocation(), 3, "failed")
     item = c.ConversationItem("id", "text", {})
-    reference = c.ConversationReference("fake", "thread")
     entry = _applied()
     view = _view(
         revision=1,
         items=(item,),
-        reference=reference,
         effects=(effect,),
         closed_invocations=(completion,),
         applied=(entry,),
@@ -562,12 +541,10 @@ def test_nested_view_carriers_are_revalidated_and_detached():
     object.__setattr__(item, "item_id", "changed")
     object.__setattr__(effect, "status", "pending")
     object.__setattr__(completion, "status", "completed")
-    object.__setattr__(reference, "session_id", "changed")
     object.__setattr__(entry, "event_digest", "d" * 64)
     assert view.items[0].item_id == "id"
     assert view.effects[0].status == "failed"
     assert view.closed_invocations[0].status == "failed"
-    assert view.reference.session_id == "thread"
     assert view.applied[0].event_digest == "a" * 64
 
 
@@ -584,7 +561,7 @@ def test_effect_checkpoints_reject_zero_ordinal_and_list_items():
     with pytest.raises(TypeError, match="tuple"):
         c.ConversationEffectRequested(_stamp(1, 1), "model", {}, [])
     with pytest.raises(TypeError, match="tuple"):
-        c.ConversationEffectObserved(_stamp(2, 2), 1, "pending", [], None, None)
+        c.ConversationEffectObserved(_stamp(2, 2), 1, "pending", [], None)
 
 
 def test_content_digest_excludes_ledger():
@@ -671,25 +648,22 @@ def test_observation_changes_only_matching_effect():
         _requested(), c.ConversationEffectRequested(_stamp(2, 2), "tool", {}, ())
     )
     item = c.ConversationItem("assistant-1", "message", {"text": "Hi"})
-    reference = c.ConversationReference("fake", "thread")
     after = advance_conversation(
         before,
-        c.ConversationEffectObserved(
-            _stamp(3, 3), 1, "pending", (item,), reference, None
-        ),
+        c.ConversationEffectObserved(_stamp(3, 3), 1, "pending", (item,), None),
     )
     assert before.items == () and before.effects[0].observation_ordinals == ()
-    assert after.items == (item,) and after.reference == reference
+    assert after.items == (item,)
     assert after.effects[0].observation_ordinals == (3,)
     assert after.effects[0].status == "pending"
     assert after.effects[1] == before.effects[1]
     complete = advance_conversation(
         after,
-        c.ConversationEffectObserved(_stamp(4, 4), 1, "completed", (), None, None),
+        c.ConversationEffectObserved(_stamp(4, 4), 1, "completed", (), None),
     )
     assert complete.effects[0].status == "completed"
     assert complete.effects[0].observation_ordinals == (3, 4)
-    assert complete.reference == reference
+    assert complete.items == (item,)
     assert complete.effects[1] == before.effects[1]
 
 
@@ -730,7 +704,7 @@ def test_admission_preserves_unresolved_or_unclosed_effects(status):
     if status in ("pending", "completed"):
         before = advance_conversation(
             before,
-            c.ConversationEffectObserved(_stamp(2, 2), 1, status, (), None, None),
+            c.ConversationEffectObserved(_stamp(2, 2), 1, status, (), None),
         )
     elif status == "closed_failed":
         before = advance_conversation(
@@ -771,7 +745,7 @@ def _complete_history():
         c.ConversationAdmitted(_stamp(), baseline),
         c.ConversationEffectRequested(
             _stamp(1, 1),
-            "native_session",
+            "model",
             {"arguments": [True, 1, 1.0]},
             (c.ConversationItem("user", "message", {"text": "héllo"}),),
         ),
@@ -780,7 +754,6 @@ def _complete_history():
             1,
             "completed",
             (c.ConversationItem("assistant", "message", {"text": "hello"}),),
-            c.ConversationReference("fake", "native-thread"),
             None,
         ),
         c.ConversationClosed(_stamp(3, 3), "completed"),
@@ -885,7 +858,6 @@ def _changed_view(view, **changes):
             "key",
             "compatibility",
             "items",
-            "reference",
             "effects",
             "closed_invocations",
             "applied",
@@ -994,20 +966,16 @@ def test_invalid_transitions_preserve_input_evidence(scenario):
         event = c.ConversationEffectRequested(_stamp(1, 0), "model", {}, ())
     elif scenario == "terminal_effect":
         before = views[3]
-        event = c.ConversationEffectObserved(
-            _stamp(3, 3), 1, "completed", (), None, None
-        )
+        event = c.ConversationEffectObserved(_stamp(3, 3), 1, "completed", (), None)
     elif scenario == "closed":
         before = views[4]
         event = c.ConversationEffectRequested(_stamp(4, 4), "model", {}, ())
     elif scenario == "missing_request":
         before = advance_conversation(
             _requested(),
-            c.ConversationEffectObserved(_stamp(2, 2), 1, "pending", (), None, None),
+            c.ConversationEffectObserved(_stamp(2, 2), 1, "pending", (), None),
         )
-        event = c.ConversationEffectObserved(
-            _stamp(3, 3), 2, "completed", (), None, None
-        )
+        event = c.ConversationEffectObserved(_stamp(3, 3), 2, "completed", (), None)
     elif scenario in ("duplicate_request_item", "duplicate_observed_item"):
         before = views[2]
         if scenario == "duplicate_request_item":
@@ -1016,7 +984,7 @@ def test_invalid_transitions_preserve_input_evidence(scenario):
             )
         else:
             event = c.ConversationEffectObserved(
-                _stamp(2, 2), 1, "pending", before.items, None, None
+                _stamp(2, 2), 1, "pending", before.items, None
             )
     elif scenario == "baseline_descriptor":
         before = _view(compatibility={"value": True})
@@ -1065,7 +1033,7 @@ def test_later_invocation_reuses_local_ordinals_without_replacing_prior_effects(
     events = (
         c.ConversationAdmitted(stamps[0], first),
         c.ConversationEffectRequested(stamps[1], "tool", {"tool": "fake"}, ()),
-        c.ConversationEffectObserved(stamps[2], 1, "failed", (), None, _failure()),
+        c.ConversationEffectObserved(stamps[2], 1, "failed", (), _failure()),
         c.ConversationClosed(stamps[3], "failed"),
     )
     after = first
@@ -1074,7 +1042,7 @@ def test_later_invocation_reuses_local_ordinals_without_replacing_prior_effects(
     assert [effect.effect_ordinal for effect in after.effects] == [1, 1]
     assert after.effects[0] == first.effects[0]
     assert after.effects[1].invocation == invocation
-    assert after.reference == first.reference and after.items == first.items
+    assert after.items == first.items
     assert conversation_view_from_json(conversation_view_to_json(after)) == after
 
 
@@ -1196,7 +1164,7 @@ def test_publishable_view_can_complete_and_become_the_next_admission_baseline(de
         return
     observed = advance_conversation(
         requested,
-        c.ConversationEffectObserved(_stamp(2, 2), 1, "completed", (), None, None),
+        c.ConversationEffectObserved(_stamp(2, 2), 1, "completed", (), None),
     )
     closed = advance_conversation(
         observed, c.ConversationClosed(_stamp(3, 3), "completed")
@@ -1355,3 +1323,29 @@ def test_fold_does_not_mask_unexpected_host_fault(monkeypatch):
         conversation.advance_conversation(before, checkpoint)
     assert caught.value is fault
     assert before.revision == 1 and before.effects == ()
+
+
+@pytest.mark.parametrize("event_index", [0, 1, 2])
+def test_checkpoint_codec_rejects_retired_native_state_without_rewriting(event_index):
+    from copy import deepcopy
+
+    from agent_composer.memory.conversation import (
+        conversation_checkpoint_from_json,
+        conversation_checkpoint_to_json,
+    )
+
+    _, events = _complete_history()
+    wire = conversation_checkpoint_to_json(events[event_index])
+    if event_index == 0:
+        wire["baseline"]["reference"] = {"provider": "codex", "session_id": "thread"}
+    elif event_index == 1:
+        wire["kind"] = "native_session"
+    else:
+        wire["reference"] = {"provider": "codex", "session_id": "thread"}
+    original = deepcopy(wire)
+    with pytest.raises(
+        c.MemoryOperationError, match="use fresh SessionMemory"
+    ) as caught:
+        conversation_checkpoint_from_json(wire)
+    assert caught.value.code == "session.unsupported_history"
+    assert wire == original

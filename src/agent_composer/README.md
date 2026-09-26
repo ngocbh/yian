@@ -53,8 +53,7 @@ runtime/      run records/logs, scheduler-state vocabulary, reducer-owned state,
               forward dispatcher/worker pool,
               explicit backward driver and pure learning/context projections
 run.py        public run/recovery boundary and retained RunResult.backward handle
-llm_clients/  provider clients (lazy-imported) + LLMConfig + model_from_config;
-              codex/ owns the private supervised native-SDK boundary
+llm_clients/  provider clients, authentication, LLMConfig and model_from_config
 tools/        tool registry + process-owned ask_user interaction seam
 cli/          `ac` commands + main-thread terminal broker
 _settings.py  environment-based default provider/model
@@ -166,9 +165,24 @@ is added, and an explicit node failure still supersedes the latch.
 `llm_clients/openai_subscription.py` constructs a direct ChatGPT subscription
 model through the normal LangChain chat interface, with injected access
 credentials and optional caller-owned HTTP clients. It performs no login,
-credential persistence, tool dispatch, or conversation storage. Authentication
-and model-factory integration are separate follow-up work; this construction seam
-does not change the existing `provider: codex` behavior.
+credential persistence, tool dispatch, or conversation storage. The OpenAI provider
+selects this transport for saved subscription authentication;
+API-key authentication uses the same Composer model/tool/memory pipeline.
+
+`llm_clients/auth/` owns staged login, private atomic credential storage, token
+refresh, and authenticated model discovery. `ac auth openai` activates credentials
+and the provider/model default together. `llm_clients/connection.py` snapshots
+nonsecret method, credential identity, endpoint, and store location into the
+effective model map. Request-time callbacks resolve credentials and refresh
+tokens for that identity. Reconnection or a changed environment key fails a
+pinned request rather than changing its account or billing method.
+
+The fresh-run host reads environment and saved defaults once. Model defaults
+are provider-scoped, with environment overrides above saved choices; explicit
+authored fields retain their existing per-field precedence. Recovery and
+backward calls retain the recorded connection. OpenAI records predating this
+metadata retain their environment API-key semantics, never today's subscription
+selection. Connection metadata is internal and is not an authored YAML field.
 
 The transport requires a completed Responses event before returning a model
 reply. Early EOF and incomplete replies raise rather than exposing tool calls
@@ -186,80 +200,6 @@ canonical tool calls exactly. Ambiguous calls remain inert context. Projection
 version 2 invalidates summaries made with the older block projection.
 Summary extraction accepts validated reasoning blocks alongside visible text,
 and still rejects tool calls, unsupported content, and empty summaries.
-
-### Private Codex SDK boundary
-
-`llm_clients/codex/` owns finite-JSON IPC and invocation-local process supervision
-for the unchanged official Python SDK, pinned to `openai-codex==0.155.1`. The
-worker alone imports its lower-level `CodexClient`; that interface is internal
-upstream, so changing the pin requires the offline compatibility tests. This
-boundary requires POSIX process-group support and rejects unsupported hosts
-before launching a worker. The package never imports nodes, tools, memory,
-compile, compose, or runtime. Codex selection is native-only; API chat-model
-factories reject it without importing the SDK or falling back.
-
-Native `sandbox` and `cwd` are ordinary optional LLM configuration fields. The
-pure compile cascade accepts a host-injected launch directory, defaults native
-sandbox to `read-only`, and records an absolute cwd. Replay validates and applies
-that exact configuration without consulting a current directory. API selections
-gain no new effective fields by omission; unrelated provider reasoning knobs
-keep their existing behavior. Native temperature is unsupported. Adding these
-optional fields does not invalidate historical reflective-memory snapshots:
-permit only these missing optional defaults and preserve the exact recorded pin.
-
-The caller retains host callables and receives native events, actual operation
-results, and tool callbacks on one execution lane. Results can be observed before
-cancellation propagates, so a returned native thread ID need not be lost. No live
-SDK object or memory handle crosses the process boundary. A fresh worker does not
-imply a fresh native conversation: SessionMemory owns the persisted thread
-reference independently through injected start/resume callbacks. Its concrete
-turn publishes the returned `thread.id` before stop; missing native history
-fails without automatically starting a new thread.
-
-`nodes/agent/codex.py` is the node-owned adapter, selected only for Codex
-`tool_calling` execution. It requires `builtin_tools` as explicit opt-in to the
-configured Codex environment, including enabled MCP/app tools; this is not an
-exhaustive native allowlist. Other authored tool IDs become detached dynamic-tool
-descriptors from their public schemas. Every callback checks the current grant
-and uses the existing host invocation boundary; native filesystem sandboxing does
-not constrain host-side tools. Native approvals are declined noninteractively,
-and unknown or credential callbacks fail explicitly.
-
-The adapter prepares provider-aware compatibility before conversation admission.
-Native descriptors pin the bridge declaration because resume cannot replace
-dynamic tools; compatible model changes retain history. Current instructions,
-recall, cwd, and sandbox apply on start and resume. With no conversation-capable
-frame, each invocation starts fresh. No native call goes through the API model
-factory, API summary projection, or API backward path. An explicitly inherited
-`max_tool_iterations` warns and is ignored; `plain` is rejected.
-
-Native output comes from completed agent-message events, preferring final-answer
-phase and excluding commentary; terminal `turn.items` is not output authority.
-The terminal notification publishes model truth before stop, without duplicating
-it on the later result callback. Structured output uses native `outputSchema` and
-a bounded same-thread correction loop only for output deviations. AgentNode
-supplies the native generator's exact code object to the lower structured-error
-origin helper; the helper does not import the adapter or keep a mutable registry.
-
-Native tool callbacks must match the active thread and turn and have a unique
-call ID within that turn before the host handler runs. A callback that arrives
-before the turn-start response waits for that response's identity; it is not
-treated as permission to run a tool. Tool grants remain the caller's policy.
-
-Positive transport failures close admission permanently. Cancellation or failed
-shutdown triggers bounded cleanup of the worker's POSIX process group, including
-the direct app-server. There is no silent-inference timeout or automatic request
-retry. Already-running host callbacks must finish before the call returns, even
-if the worker has been terminated; a nonreturning host callback therefore keeps
-its caller busy. Cleanup cannot guarantee termination of native jobs that escape
-the owned group or of a wedged worker after abrupt parent death.
-
-The core does not require the `codex` extra. With it installed, run the offline
-compatibility checks using `PYTHONPATH=src python -m pytest
-tests/test_codex_worker.py tests/test_codex_worker_integration.py
-tests/engine/test_codex_agent.py tests/engine/test_codex_flow_integration.py`. These tests
-launch a fake app-server through the SDK's test seam, without authentication,
-credentials, or inference.
 
 ## Semantic IR carriers
 
@@ -952,14 +892,6 @@ unchanged and exposes a separate `BackwardOutcome`; `RunResult.learning` is the
 learning projection of that observed outcome. With no effective feedback, the
 node callback fold does no work, but every enabled static frame still learns.
 
-The package-root backward boundary rejects recorded Codex execution before the
-attempt driver, policy opening, or backward records. Join accepted occurrence
-scopes to the recorded effective LLM map; never inspect mutable live node config
-or infer provider from arbitrary node payloads. The restriction covers the whole
-pass, including mixed-provider/no-feedback calls, but not unexecuted Codex paths.
-This forward-only provider gate stays outside kind-blind runtime and adds no
-record fields or node hooks. Rejected submissions preserve prior observations.
-
 `runtime.learning` owns pure root seeding/projection, ordered message transfer,
 complete attributed-result validation, and owner-context construction. The
 callback driver imports those helpers; state/replay never imports the driver or
@@ -1051,13 +983,16 @@ shared-cluster storage.
 ### Session conversation foundation
 
 `agent_composer.memory.session.SessionMemory` supplies conversation continuity
-for API-backed AGENT execution and native Codex threads through `run_flow`. It
-owns history updates and native start/resume directly. The CLI automatically
+for AGENT execution through `run_flow`. It
+owns message history updates directly. The CLI automatically
 hosts declared built-in policies.
 `SessionMemory` is a concrete backend;
 `MemorySession` remains the existing run-handle protocol. Optional
 `ConversationFrame` and `ConversationTurn` protocols leave
 the mandatory memory interfaces unchanged.
+The backend has no provider session references or start/resume callbacks. Existing
+message-history digests retain reserved null fields in their wire format; nonempty
+legacy native references require fresh memory and cannot be adopted.
 
 The ownership split is a pure state fold plus an effectful interpreter:
 `memory/contracts.py` defines immutable carriers, `memory/conversation.py` owns
@@ -1274,6 +1209,6 @@ while CASE identity includes predicate handle/expression semantics but excludes
 each predicate origin. Thus source formatting, origin rebasing, and Python object
 identity cannot change program or expansion identity. `resolve_llm_cascade` returns a
 complete map keyed by slash-separated paths of static AGENT nodes. The run boundary reads
-process provider/model defaults once at fresh-run initialization;
+process provider/model defaults and nonsecret connection selections once at fresh-run initialization;
 `apply_effective_llm_map` restores the
 recorded map during recovery without consulting the environment.

@@ -12,11 +12,26 @@ ac run FLOW.yaml --resume PATH [--memory-storage POLICY=PATH]... [-w N] [--quiet
 Commands below that use `examples/...` assume a repository clone and run from
 its root; those files are not installed with the Python package.
 
-Native Codex uses the ordinary provider/model options and skips API-key prompts.
-Authenticate Codex separately; Composer does not start a login flow. The AGENT
-must use `mode: tool_calling` and explicitly include `builtin_tools`. Set native
-`sandbox` and `cwd` through `llm_config`, not new CLI flags; omitted sandbox is
-read-only. See [Codex setup](installation.md#codex-with-existing-authentication).
+Run `ac auth openai` to select subscription sign-in or API-key access and save a
+default model. Both methods use the same flow commands and `provider: openai`.
+See [authentication setup](installation.md#openai-authentication).
+
+## Authentication
+
+```console
+ac auth openai [--method subscription|api-key] [--login browser|device] [--model MODEL] [--api-key-env NAME]
+```
+
+Interactive setup defaults to ChatGPT subscription access and lists models
+available to the account. Browser login uses a local callback; device login
+works over SSH. API-key setup reads `OPENAI_API_KEY` (or `--api-key-env NAME`)
+and uses a hidden prompt when needed. Off a terminal, supply the method, model,
+and subscription login mode explicitly.
+
+Setup saves credentials, method, and default model together after successful
+authentication and model selection. Cancellation or failure preserves the
+previous selection. Saved subscription access takes precedence over an ambient
+API key; changing billing method requires running setup again.
 
 ## Durable logs and recovery
 
@@ -42,7 +57,9 @@ model configuration, and failure tracebacks. Treat it as sensitive data: do not
 commit or publish it.
 
 Recovery reads the original inputs, run identity, and resolved model map from the
-log. `--resume` therefore rejects `--input`, `--inputs`, `--provider`, `--model`,
+log, including the OpenAI connection identity and endpoint without credentials.
+Re-authentication cannot silently redirect an unfinished run to a new account.
+`--resume` therefore rejects `--input`, `--inputs`, `--provider`, `--model`,
 and `--log` before input prompts or provider setup. After repairing any incomplete
 tail, an already terminal log gets no new records and prints its recorded result.
 An eligible unfinished log appends a resume segment and retries nodes with a durable
@@ -101,10 +118,6 @@ same durable stores. Run logs do not reconstruct session history; an interrupted
 request can be repeated against the latest stored history. A terminal resume
 only prints the recorded result and does not open memory stores. Older logs
 that recorded no enabled memory remain dormant when resumed.
-
-For Codex, the session store retains the native thread reference. Keep Codex's
-own thread files too: Composer's SQLite file does not back up native history.
-Without a SessionMemory-capable frame, Codex starts a fresh thread on every call.
 
 ## Supplying inputs
 
@@ -266,7 +279,7 @@ execute concurrently:
 
 ```console
 # the debate diamond argues both sides at once instead of one after the other
-ac run examples/debate.yaml --provider codex --model YOUR_CODEX_MODEL \
+ac run examples/debate.yaml \
   --input question="Adopt a monorepo?" --num-workers 4
 ```
 

@@ -37,13 +37,11 @@ dependencies = [
 anthropic = ["langchain-anthropic>=0.3.15"]
 # Request/stream hooks are covered against this version; verify before upgrading.
 openai = ["langchain-openai==1.6.2"]
-codex = ["openai-codex==0.155.1"]
 google = ["langchain-google-genai>=4.0.0"]
 ollama = ["langchain-ollama>=1.1.0"]
 all = [
     "langchain-anthropic>=0.3.15",
     "langchain-openai==1.6.2",
-    "openai-codex==0.155.1",
     "langchain-google-genai>=4.0.0",
     "langchain-ollama>=1.1.0",
 ]

@@ -44,12 +44,6 @@ def _item_json(value: c.ConversationItem) -> c.JsonObject:
     return {"item_id": value.item_id, "format": value.format, "payload": value.payload}
 
 
-def _reference_json(value: c.ConversationReference | None) -> c.JsonObject | None:
-    if value is None:
-        return None
-    return {"provider": value.provider, "session_id": value.session_id}
-
-
 def _failure_json(value: c.MemoryOperationFailure | None) -> c.JsonObject | None:
     if value is None:
         return None
@@ -84,7 +78,8 @@ def _view_json(value: c.ConversationView, *, ledger: bool = True) -> c.JsonObjec
         "key": _key_json(value.key),
         "compatibility": value.compatibility,
         "items": [_item_json(item) for item in value.items],
-        "reference": _reference_json(value.reference),
+        # Retain this inert field so message-only snapshot digests stay valid.
+        "reference": None,
         "effects": [_effect_json(effect) for effect in value.effects],
         "closed_invocations": [
             _completion_json(completion) for completion in value.closed_invocations
@@ -148,10 +143,15 @@ def _items_from_json(value: object) -> tuple[c.ConversationItem, ...]:
     )
 
 
-def _reference_from_json(value: object) -> c.ConversationReference | None:
-    if value is None:
-        return None
-    return c.ConversationReference(**_object(value, "provider session_id"))
+def _reject_native_history(data: c.JsonObject) -> None:
+    """Reject retired wire state without adopting or rewriting its history."""
+    if data.get("reference") is not None or data.get("kind") == "native_session":
+        raise c.MemoryOperationError(
+            "snapshot",
+            "session.unsupported_history",
+            "Native session history is unsupported; use fresh SessionMemory.",
+            False,
+        )
 
 
 def _failure_from_json(value: object) -> c.MemoryOperationFailure | None:
@@ -165,6 +165,7 @@ def _effect_from_json(value: object) -> c.ConversationEffectState:
         value,
         "invocation effect_ordinal kind request status observation_ordinals failure",
     )
+    _reject_native_history(data)
     return c.ConversationEffectState(
         _invocation_from_json(data["invocation"]),
         data["effect_ordinal"],
@@ -220,6 +221,7 @@ def conversation_view_from_json(value: c.JsonObject) -> c.ConversationView:
     Raises:
         TypeError: A wire value has the wrong exact type.
         ValueError: Fields, identity, history, digest evidence, or nesting is invalid.
+        MemoryOperationError: Retired provider-native history requires fresh memory.
 
     Example:
         `view = conversation_view_from_json(saved_view)` validates before use.
@@ -231,6 +233,7 @@ def conversation_view_from_json(value: c.JsonObject) -> c.ConversationView:
             "closed_invocations applied"
         ),
     )
+    _reject_native_history(data)
     view = c.ConversationView(
         data["namespace"],
         data["generation"],
@@ -238,7 +241,6 @@ def conversation_view_from_json(value: c.JsonObject) -> c.ConversationView:
         _key_from_json(data["key"]),
         data["compatibility"],
         _items_from_json(data["items"]),
-        _reference_from_json(data["reference"]),
         tuple(_effect_from_json(item) for item in _array(data["effects"])),
         tuple(
             _completion_from_json(item) for item in _array(data["closed_invocations"])
@@ -313,7 +315,8 @@ def _checkpoint_json(value: c.ConversationCheckpoint) -> c.JsonObject:
             "effect_ordinal": value.effect_ordinal,
             "status": value.status,
             "items": [_item_json(item) for item in value.items],
-            "reference": _reference_json(value.reference),
+            # The original checkpoint digest includes this inert wire field.
+            "reference": None,
             "failure": _failure_json(value.failure),
         }
     if type(value) is c.ConversationClosed:
@@ -374,6 +377,7 @@ def conversation_checkpoint_from_json(value: c.JsonObject) -> c.ConversationChec
     Raises:
         TypeError: A wire value has the wrong exact type.
         ValueError: Fields, discriminator, shape, baseline evidence, or nesting is invalid.
+        MemoryOperationError: Retired provider-native history requires fresh memory.
 
     Example:
         `checkpoint = conversation_checkpoint_from_json(saved_checkpoint)`.
@@ -390,6 +394,7 @@ def conversation_checkpoint_from_json(value: c.JsonObject) -> c.ConversationChec
     if kind not in names:
         raise ValueError("unsupported conversation checkpoint type")
     _object(data, names[kind])
+    _reject_native_history(data)
     stamp = _stamp_from_json(data["stamp"])
     if kind == "admitted":
         return c.ConversationAdmitted(
@@ -405,7 +410,6 @@ def conversation_checkpoint_from_json(value: c.JsonObject) -> c.ConversationChec
             data["effect_ordinal"],
             data["status"],
             _items_from_json(data["items"]),
-            _reference_from_json(data["reference"]),
             _failure_from_json(data["failure"]),
         )
     return c.ConversationClosed(stamp, data["status"])
@@ -439,7 +443,6 @@ def _zero_view(view: c.ConversationView) -> c.ConversationView:
         view.key,
         view.compatibility,
         (),
-        None,
         (),
         (),
         (),
@@ -530,10 +533,6 @@ def _validate_history(
         )
     if view.items and not view.effects:
         raise ValueError("retained items require an accepted effect request")
-    if view.reference is not None and not any(
-        effect.observation_ordinals for effect in view.effects
-    ):
-        raise ValueError("native reference requires an accepted effect observation")
 
 
 def _conflict(message: str) -> c.MemoryOperationError:
@@ -577,9 +576,8 @@ def advance_conversation(
     )
     if any(entry.operation_id == operation_id for entry in before.applied):
         raise _conflict("checkpoint operation has already been applied")
-    items, reference, effects, completions = (
+    items, effects, completions = (
         before.items,
-        before.reference,
         before.effects,
         before.closed_invocations,
     )
@@ -646,8 +644,6 @@ def advance_conversation(
                 checkpoint.failure,
             )
             effects = effects[:index] + (observed,) + effects[index + 1 :]
-            if checkpoint.reference is not None:
-                reference = checkpoint.reference
         elif type(checkpoint) is c.ConversationClosed:
             if checkpoint.status == "completed" and any(
                 effect.invocation == invocation and effect.status == "pending"
@@ -676,7 +672,6 @@ def advance_conversation(
         before.key,
         before.compatibility,
         items,
-        reference,
         effects,
         completions,
         before.applied + (entry,),
@@ -694,7 +689,6 @@ def advance_conversation(
         after.key,
         after.compatibility,
         after.items,
-        after.reference,
         after.effects,
         after.closed_invocations,
         before.applied + (entry,),

@@ -11,11 +11,11 @@ from .validators import validate_model
 
 
 class NormalizedChatOpenAI(ChatOpenAI):
-    """ChatOpenAI with normalized content output and capability-aware binding.
+    """ChatOpenAI with capability-aware binding and lossless Responses messages.
 
-    The Responses API returns content as a list of typed blocks
-    (reasoning, text, etc.). ``invoke`` normalizes to string for
-    consistent downstream handling.
+    Responses content blocks retain reasoning and tool continuation data for
+    subsequent requests. Agent presentation extracts visible text separately.
+    Chat Completions responses keep the existing string normalization.
 
     ``with_structured_output`` consults the per-model capability table
     (``capabilities.get_capabilities``) to pick the method and to decide
@@ -30,7 +30,10 @@ class NormalizedChatOpenAI(ChatOpenAI):
     """
 
     def invoke(self, input, config=None, **kwargs):
-        return normalize_content(super().invoke(input, config, **kwargs))
+        response = super().invoke(input, config, **kwargs)
+        if self.use_responses_api or response.response_metadata.get("object") == "response":
+            return response
+        return normalize_content(response)
 
     def with_structured_output(self, schema, *, method=None, **kwargs):
         caps = get_capabilities(self.model_name)

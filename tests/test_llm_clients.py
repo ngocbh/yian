@@ -182,3 +182,25 @@ def test_ollama_drops_unsupported_kwargs():
     # the client must filter it rather than crash on construction.
     m = create_llm_client("ollama", "qwen3.5:35b", max_retries=6).get_llm()
     assert m.model == "qwen3.5:35b"
+
+
+def test_openai_responses_preserve_reasoning_for_next_tool_turn():
+    import httpx
+    from langchain_core.messages import HumanMessage, ToolMessage
+    from agent_composer.nodes.agent.modes.utils import text_of
+    from tests.fixtures.openai_responses import ResponsesServer
+
+    server = ResponsesServer()
+    with httpx.Client(transport=httpx.MockTransport(server)) as client:
+        model = create_llm_client(
+            "openai", "gpt-5.5", api_key="synthetic-api-key", http_client=client,
+        ).get_llm()
+        first = model.invoke([HumanMessage("Double 3.")])
+        assert isinstance(first.content, list)
+        assert any(block.get("encrypted_content") == "synthetic-continuation" for block in first.content)
+        final = model.invoke([
+            HumanMessage("Double 3."), first, ToolMessage("6", tool_call_id="call_test"),
+        ])
+        assert text_of(final) == "6"
+    assert any(item.get("encrypted_content") == "synthetic-continuation" for item in server.bodies[1]["input"])
+    assert server.requests[0].headers["Authorization"] == "Bearer synthetic-api-key"

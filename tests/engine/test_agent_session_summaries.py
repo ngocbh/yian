@@ -67,6 +67,9 @@ def test_adapter_summary_is_context_only_and_uses_same_model():
     [
         AIMessage(content=""),
         AIMessage(content="   "),
+        AIMessage(content=[{"type": "reasoning", "encrypted_content": "opaque"}]),
+        AIMessage(content=[{"type": "reasoning", "opaque": object()},
+                           {"type": "text", "text": "summary"}]),
         "not a message",
         AIMessage(content="", tool_calls=[{"name": "tool", "args": {}, "id": "call"}]),
         AIMessage(

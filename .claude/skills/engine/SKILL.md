@@ -602,6 +602,20 @@ Most are just the functional model (above) made enforceable:
   history intact when projecting unknown tool results or inert structured-schema
   calls for provider context. Retain native raw replies before parsing, and keep
   memory/codec faults outside structured-output retry catches.
+  OpenAI Responses clients preserve content blocks, including opaque continuation
+  data; visible text extraction must not mutate the stored/provider message.
+  API history projection v2 preserves Responses function-call blocks only when
+  their ordered ids, names, and parsed arguments match canonical tool calls;
+  unknown namespaces and asynchronous calls remain inert context. A projection
+  change must invalidate derived summary caches without changing raw history.
+  Summaries extract visible text from validated text/reasoning replies; tool
+  calls, unknown content blocks, and empty visible summaries remain invalid.
+  The direct OpenAI subscription construction seam in
+  `llm_clients/openai_subscription.py` consumes an injected access source, requires
+  a completed response before surfacing tool calls, and closes streams on failure
+  or cooperative stop. It owns no login, credential store, tool loop, or history.
+  Keep its request/stream hooks covered against the pinned OpenAI integration.
+  This seam alone does not alter native `provider: codex` selection.
 - **One attempt barrier precedes commits** — accept Started, complete backward
   results and all frame proposals, then accept Ready. Commit each enabled policy
   once in recorded order, even with an empty batch, accepting its positive-attempt

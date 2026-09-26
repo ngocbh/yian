@@ -40,7 +40,7 @@ from agent_composer.memory.summary import admissions
 from agent_composer.nodes.base import _CapabilityFault, _HostStop
 
 MESSAGE_FORMAT = "agent-composer.langchain-message.v1"
-HISTORY_PROJECTION = "agent-composer.api-history.v1"
+HISTORY_PROJECTION = "agent-composer.api-history.v2"
 
 
 def compatibility(config) -> JsonObject:
@@ -372,14 +372,20 @@ def prepare_history(
                 type(block) is str
                 or (
                     type(block) is dict
-                    and block.get("type") == "text"
-                    and type(block.get("text")) is str
+                    and (
+                        block.get("type") == "reasoning"
+                        or (
+                            block.get("type") == "text"
+                            and type(block.get("text")) is str
+                        )
+                    )
                 )
                 for block in reply.content
             ):
                 result = "".join(
-                    block if type(block) is str else block["text"]
+                    block if type(block) is str else block.get("text", "")
                     for block in reply.content
+                    if type(block) is str or block.get("type") == "text"
                 )
             else:
                 raise ValueError("summary reply must contain only text")
@@ -448,11 +454,12 @@ def _pairable_calls(message: AIMessage) -> bool:
     """Require unambiguous tool correlations and no hidden provider call shape."""
     if message.invalid_tool_calls or "function_call" in message.additional_kwargs:
         return False
-    if isinstance(message.content, list) and any(
+    blocks = message.content if isinstance(message.content, list) else []
+    if any(
         isinstance(block, dict)
         and isinstance(block.get("type"), str)
-        and ("tool" in block["type"] or block["type"] == "function_call")
-        for block in message.content
+        and "tool" in block["type"]
+        for block in blocks
     ):
         return False
     calls = message.tool_calls
@@ -468,6 +475,26 @@ def _pairable_calls(message: AIMessage) -> bool:
         set(ids)
     ) != len(ids):
         return False
+    encoded_calls = [
+        block for block in blocks
+        if isinstance(block, dict) and block.get("type") == "function_call"
+    ]
+    if encoded_calls:
+        if len(encoded_calls) != len(calls):
+            return False
+        try:
+            for encoded, call in zip(encoded_calls, calls):
+                if (
+                    encoded["call_id"] != call["id"]
+                    or encoded["name"] != call["name"]
+                    or encoded.get("namespace") is not None
+                    or encoded.get("async") not in (None, False)
+                    or _canonical(json.loads(encoded["arguments"]))
+                    != _canonical(call["args"])
+                ):
+                    return False
+        except (KeyError, TypeError, ValueError):
+            return False
     raw = message.additional_kwargs.get("tool_calls")
     if raw is not None:
         if type(raw) is not list or len(raw) != len(calls):

@@ -12,6 +12,9 @@ returns a normal chat model; it owns no login, credential persistence, or tool l
 It is an internal construction seam pending authentication/factory integration.
 OpenAI Responses messages retain their full continuation blocks; presentation
 extracts text without mutating the messages used for the next request.
+The private `auth/` leaf stages provider login credentials and stores the selected
+method/model atomically. Its refresh coordination owns no model, tool, or memory
+state. CLI prompts and model-factory activation remain separate integration work.
 
 Knows about:   the package env-based defaults (`_settings`), langchain, provider SDKs.
 Never imports: any other agent_composer subpackage — it is a leaf (peer of state /

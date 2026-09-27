@@ -100,7 +100,7 @@ run_flow(
     *,
     log: str | os.PathLike[str] | None = None,
     run_id: str | None = None,
-    num_workers: int = 0,
+    num_workers: int = 8,
     on_event: Callable[[Any], None] | None = None,
     on_stream: Callable[[StreamChunk], None] | None = None,
     llm_config: dict[str, Any] | None = None,
@@ -118,7 +118,8 @@ terminal. Stored defaults are not coerced.
   existing file is never replaced.
 - `run_id` — host-injected run identity (readable as `${system.run_id}`); minted
   when omitted and retained by every record.
-- `num_workers` — `0` runs serially; a positive value bounds the worker pool.
+- `num_workers` — defaults to `8`; `0` runs serially, and a positive value bounds
+  the worker pool.
 - `on_event` — receives post-durable observer events as they occur.
 - `on_stream` — receives transient `StreamChunk` values. Chunks are neither
   durable records nor members of `RunResult.events`.

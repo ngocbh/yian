@@ -88,6 +88,10 @@ ac run FLOW.yaml [--inputs inputs.json] [--input k=v]... \
 Repeatable `--input k=v` supplies scalar overrides. In a terminal, the CLI
 prompts for declared inputs that are still missing.
 
+New runs use up to eight workers for independent ready nodes. Set
+`--num-workers N` / `-w N` to override the count, or `-w 0` for serial execution.
+Resuming without a worker flag preserves the count recorded in the run log.
+
 The CLI reports its selected JSONL path before execution. Once runtime
 initialization commits `RunStarted`, that file is the authoritative log. The
 default is `~/.agent_composer/runs/<run_id>.jsonl`; choose another new path with

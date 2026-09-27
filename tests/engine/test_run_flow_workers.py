@@ -5,8 +5,13 @@ terminal output must be identical — workers are pure executors, so the result 
 worker-count-independent (only intra-run concurrency changes).
 """
 
+import threading
+
+import pytest
+
 from agent_composer.compose import load_flow
-from agent_composer.run import run_flow
+from agent_composer.run import _run_flow_controlled, run_flow
+from agent_composer.runtime.log import JsonlRunLog
 
 # topic -> {positive, cautious} in parallel -> a code node fans them in.
 _FANOUT = """
@@ -47,7 +52,12 @@ def test_run_flow_serial_and_pooled_same_output():
     assert serial.output == pooled.output
 
 
-def test_run_flow_defaults_to_serial():
+@pytest.mark.parametrize("runner", [run_flow, _run_flow_controlled])
+def test_run_flow_defaults_to_eight_workers(runner, tmp_path):
     loaded = load_flow(_FANOUT)
-    res = run_flow(loaded, {"topic": "X"})  # no num_workers -> 0
+    path = tmp_path / "run.jsonl"
+    kwargs = {"stop_event": threading.Event()} if runner is _run_flow_controlled else {}
+    res = runner(loaded, {"topic": "X"}, log=path, **kwargs)
     assert res.status == "succeeded", res.failure
+    with JsonlRunLog.resume(path) as log:
+        assert next(iter(log)).record.num_workers == 8

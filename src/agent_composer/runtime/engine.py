@@ -14,6 +14,7 @@ import threading
 import traceback as _tb
 from collections.abc import Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
+from contextvars import copy_context
 from dataclasses import dataclass
 from typing import Any
 
@@ -214,7 +215,10 @@ class FlowEngine:
 
                     # Submission is deliberately after the durable start and its observer.
                     # A submit failure therefore leaves one recoverable unfinished start.
-                    future = executor.submit(self._evaluate_worker, node_id, invocation, messages)
+                    # Preserve host context while isolating each node's local changes.
+                    future = executor.submit(
+                        copy_context().run, self._evaluate_worker, node_id, invocation, messages
+                    )
                     active[future] = node_id
                     submitted.append(future)
                     future.add_done_callback(

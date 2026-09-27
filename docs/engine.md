@@ -312,6 +312,9 @@ stream chunks. The dispatcher alone prepares, appends, and applies outcomes, so 
 number of nodes in flight differs. A pooled drive owns its workers through a full join:
 abnormal dispatch exit first signals cooperative stop, then joins every submitted worker
 before the run boundary releases the log.
+Each pooled node runs in a separate copy of the host's context variables, so
+host effects retain their cancellation context and node-local context changes
+do not leak into the dispatcher or later worker calls.
 
 ## The core node interface
 

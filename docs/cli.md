@@ -272,19 +272,18 @@ does not cancel the surrounding conversation.
 
 ## Concurrency (`--num-workers`)
 
-Fresh runs default to single-threaded execution: ready nodes run one at a time in
-a deterministic order. Pass `--num-workers N` / `-w N` to run with a worker pool
-of size `N`, so **independent** ready nodes — the parallel arms of a fan-out —
-execute concurrently:
+Fresh runs default to a pool of eight workers, so **independent** ready nodes
+execute concurrently. Pass `--num-workers N` / `-w N` to choose a different pool
+size, or `-w 0` to execute ready nodes serially in a deterministic order:
 
 ```console
-# the debate diamond argues both sides at once instead of one after the other
+# limit the debate flow to four concurrent workers
 ac run examples/debate.yaml \
   --input question="Adopt a monorepo?" --num-workers 4
 ```
 
-- A fresh run with no worker flag uses `0`, the single-threaded deterministic
-  drain. A resumed run with no flag preserves the latest count in its log.
+- A fresh run with no worker flag uses `8`. A resumed run with no flag preserves
+  the latest count in its log.
 - On resume, an explicit `-w N` records `N` for the new segment and changes only
   future scheduling; it does not rewrite historical work.
 - `>=1` sets the maximum concurrent worker count. Nodes cannot mutate graph state, and a

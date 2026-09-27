@@ -456,8 +456,8 @@ def test_num_workers_0_and_4_same_terminal():
     assert isinstance(ev0[-1], RunSucceeded) and isinstance(ev4[-1], RunSucceeded)
 
 
-def test_bare_num_workers_defaults_serial():
-    # The default knob is serial (num_workers=0) — run.py's run_flow relies on it.
+def test_fixture_engine_defaults_serial():
+    # This test helper explicitly selects serial evaluation for deterministic checks.
     eng = _engine(_graph([RecordNode("a", [])], [(START_ID, "a"), ("a", END_ID)]))
     assert eng.num_workers == 0
 

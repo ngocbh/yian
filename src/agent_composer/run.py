@@ -247,7 +247,7 @@ def run_flow(
     *,
     log: str | os.PathLike[str] | None = None,
     run_id: str | None = None,
-    num_workers: int = 0,
+    num_workers: int = 8,
     on_event: EventHook | None = None,
     on_stream: StreamHook | None = None,
     llm_config: dict[str, Any] | None = None,
@@ -273,7 +273,7 @@ def run_flow(
         run_id (`str | None`, *optional*, defaults to `None`):
             Non-empty identity exposed as ``system.run_id`` and retained by every
             record. ``None`` mints a fresh identity.
-        num_workers (`int`, *optional*, defaults to `0`):
+        num_workers (`int`, *optional*, defaults to `8`):
             Non-negative worker bound recorded at initialization. Zero selects
             serial evaluation.
         on_event (`Callable[[Any], None] | None`, *optional*, defaults to `None`):
@@ -335,7 +335,7 @@ def _run_flow_controlled(
     *,
     log: str | os.PathLike[str] | None = None,
     run_id: str | None = None,
-    num_workers: int = 0,
+    num_workers: int = 8,
     on_event: EventHook | None = None,
     on_stream: StreamHook | None = None,
     llm_config: dict[str, Any] | None = None,

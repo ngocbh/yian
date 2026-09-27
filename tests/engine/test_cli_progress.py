@@ -190,7 +190,7 @@ def test_cli_quiet_suppresses_events(monkeypatch, tmp_path):
 
 
 def test_cli_num_workers_threads_through(monkeypatch, tmp_path):
-    """`--num-workers N` is forwarded to run_flow; default is 0 (serial)."""
+    """Fresh runs use eight workers unless explicitly overridden, including zero."""
     seen = {}
 
     def fake_run_flow(loaded, supplied, *, on_event=None, llm_config=None, num_workers=0, **kw):
@@ -209,11 +209,13 @@ def test_cli_num_workers_threads_through(monkeypatch, tmp_path):
     f.write_text(_FLOW)
 
     assert CliRunner().invoke(_app(), [str(f)]).exit_code == 0
-    assert seen["num_workers"] == 0
+    assert seen["num_workers"] == 8
     assert CliRunner().invoke(_app(), [str(f), "--num-workers", "4"]).exit_code == 0
     assert seen["num_workers"] == 4
     assert CliRunner().invoke(_app(), [str(f), "-w", "2"]).exit_code == 0
     assert seen["num_workers"] == 2
+    assert CliRunner().invoke(_app(), [str(f), "-w", "0"]).exit_code == 0
+    assert seen["num_workers"] == 0
 
 
 def test_cli_rejects_negative_workers(monkeypatch, tmp_path):

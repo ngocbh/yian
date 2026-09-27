@@ -612,6 +612,11 @@ Most are just the functional model (above) made enforceable:
   consumes the forward ready frontier and commits its reducer transitions. It records each start before
   submission and each accepted outcome before applying it. A pooled drive owns workers
   until its full join; abnormal dispatch exit must signal cooperative stop before joining.
+- **Worker defaults belong to the run boundary** — fresh CLI and Python runs use
+  eight workers unless overridden. Zero selects serial evaluation. Omitted worker
+  counts on resume preserve recorded authority, not the fresh-run default.
+  Submit each pooled node with its own copy of the host context so nested host
+  effects retain cancellation and node-local context changes do not leak.
 - **Single-process CLI target** — dispatch and workers remain in-process. Durability
   is the small `RunLog` seam with memory and locked JSONL implementations; no DB,
   server, or remote scheduler is baked into the core.

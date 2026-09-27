@@ -8,6 +8,9 @@ Two things to prove:
 
 import threading
 import time
+from contextvars import ContextVar
+
+import pytest
 
 from agent_composer.events import NodeRouted, NodeSucceeded, RunFailed, RunSucceeded
 from agent_composer.compile.model import END_ID, START_ID, Edge, CompiledFlow, FlowOutput
@@ -36,6 +39,30 @@ def _sleepy(node_id, seconds, log=None):
         return {"output": node_id}
 
     return FuncNode(node_id, fn)
+
+
+@pytest.mark.parametrize("num_workers", [1, 8])
+def test_workers_inherit_host_context_without_leaking_node_changes(num_workers):
+    context = ContextVar("worker_context", default="missing")
+    seen = []
+
+    def evaluate(_pool):
+        seen.append(context.get())
+        context.set("node-local")
+        return {"output": "done"}
+
+    graph = _graph(
+        [FuncNode("a", evaluate), FuncNode("b", evaluate)],
+        [(START_ID, "a"), ("a", "b"), ("b", END_ID)],
+    )
+    token = context.set("host")
+    try:
+        events = _run(_engine(graph, num_workers=num_workers))
+        assert isinstance(events[-1], RunSucceeded)
+        assert seen == ["host", "host"]
+        assert context.get() == "host"
+    finally:
+        context.reset(token)
 
 
 def test_linear_is_deterministic_under_workers():

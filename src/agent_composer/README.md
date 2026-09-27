@@ -1175,6 +1175,12 @@ backend's latest saved history, but requests and external effects may repeat.
 
 ## Blocking effects and structured drain
 
+Fresh CLI and Python runs default to eight workers. An explicit `num_workers=0`
+selects serial evaluation; positive values bound concurrent node execution.
+Resume without a worker override preserves the latest recorded count.
+Each pooled node inherits a fresh copy of the host's context variables, preserving
+host cancellation for nested flows while isolating node-local context changes.
+
 Authorable blocking effects stay inside their node calls. An AGENT node may invoke the
 explicitly granted `ask_user` tool, HUMAN_INPUT always invokes the same host-owned
 interaction seam, and WAIT blocks on its absolute UTC deadline. The AGENT node checks the

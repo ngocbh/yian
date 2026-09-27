@@ -461,7 +461,7 @@ def test_final_run_boundary_signatures_and_result_fields_are_exact() -> None:
     )
     assert fresh.parameters["log"].default is None
     assert fresh.parameters["run_id"].default is None
-    assert fresh.parameters["num_workers"].default == 0
+    assert fresh.parameters["num_workers"].default == 8
     assert fresh.parameters["memory"].default is None
     assert fresh.parameters["learnable"].default is False
     assert "stop_event" not in fresh.parameters

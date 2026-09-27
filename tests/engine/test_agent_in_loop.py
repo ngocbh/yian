@@ -211,7 +211,7 @@ def test_tool_calling_agent_in_loop_retries_whole_node_after_process_loss(
     records = _durable_records(path)
     assert [
         record for record in records if isinstance(record, RunResumedRecord)
-    ] == [RunResumedRecord(retry_node_ids=(retry_id,), num_workers=0)]
+    ] == [RunResumedRecord(retry_node_ids=(retry_id,), num_workers=8)]
     assert sum(
         isinstance(record, NodeStartedRecord) and record.node_id == retry_id
         for record in records

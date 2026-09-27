@@ -1370,8 +1370,8 @@ def run(
         "--num-workers",
         "-w",
         min=0,
-        help="Worker pool size. Omitted means 0 for a fresh run and preserves "
-        "the recorded value on resume.",
+        help="Worker pool size. Omitted means 8 for a fresh run and preserves "
+        "the recorded value on resume. Use 0 for serial execution.",
     ),
     provider: Optional[str] = typer.Option(
         None, "--provider", help="Override the LLM provider for agents that set none (cascade)."
@@ -1489,7 +1489,7 @@ def run(
         except (OSError, TypeError, ValueError) as exc:
             _render_host_run_error("run", exc, engine_trace=engine_trace)
             raise typer.Exit(code=1)
-        selected_workers = 0 if num_workers is None else num_workers
+        selected_workers = 8 if num_workers is None else num_workers
         _report_run_log(selected_log)
 
         def controller(

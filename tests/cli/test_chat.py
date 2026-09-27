@@ -24,6 +24,7 @@ import agent_composer.cli.chat.command as chat_command
 from agent_composer.cli.chat import tools as chat_tools
 import agent_composer.cli.run as run_cli
 from agent_composer.cli.terminal import PromptRequest
+from agent_composer.compose import load_flow
 from agent_composer.nodes.base import _HostStop
 
 runner = CliRunner()
@@ -755,7 +756,8 @@ def test_chat_tool_call_through_the_loop(tmp_path, monkeypatch):
     assert "turn failed" not in r.output       # the tool call was handled, not looped to the cap
 
 
-def test_nested_chat_wait_observes_outer_controller_stop(tmp_path, monkeypatch):
+@pytest.mark.parametrize("num_workers", [0, 8])
+def test_nested_chat_wait_observes_outer_controller_stop(tmp_path, monkeypatch, num_workers):
     """Outer cancellation wakes a WAIT running inside the chat ``run_flow`` tool."""
     (tmp_path / "wait.yaml").write_text(
         "id: nested-wait\n"
@@ -773,13 +775,22 @@ def test_nested_chat_wait_observes_outer_controller_stop(tmp_path, monkeypatch):
         "output: ${done.output}\n"
     )
     monkeypatch.setattr(chat_tools, "_WORKSPACE", tmp_path.resolve())
+    outer = load_flow(
+        "id: outer\nname: outer\nkind: code\noutput: str\ncode: |\n"
+        "  from agent_composer.cli.chat.tools import _CONTROLLER_STOP, run_flow\n"
+        # Fail before the unbounded WAIT if the worker lost its cancellation context.
+        "  assert _CONTROLLER_STOP.get() is not None\n"
+        "  return run_flow('wait.yaml')\n"
+    )
 
     def controller(stop_event, on_event, ask_user, render):
         timer = threading.Timer(0.05, stop_event.set)
         timer.start()
         try:
             with chat_tools._bind_controller_stop(stop_event):
-                return chat_tools.run_flow("wait.yaml")
+                return run_cli._run_flow_controlled(
+                    outer, {}, stop_event=stop_event, num_workers=num_workers
+                )
         finally:
             timer.cancel()
             timer.join()

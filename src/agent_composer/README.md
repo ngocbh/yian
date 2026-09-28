@@ -701,7 +701,7 @@ connections and execution topology; authored fingerprints exclude them.
 The runtime core is **kind-blind**. It dispatches on this result sum and consults
 node-owned execution-semantic traits/hooks (`is_spawner`, `binds_per_item`, `item_source_key`,
 `bind_reserved`, `validate_execution_setup`, `grow_depth_delta`, `is_loop`,
-`needs_stop_event`, `needs_memory_recall`, `needs_evaluation_trace`,
+`needs_stop_event`, `needs_memory_context`, `needs_evaluation_trace`,
 `memory_scope`, and `skipped_output_target`) plus the diagnostic-only projections
 `exception_origin` and `failure_trace`; it never branches behavior on `NodeKind`.
 A kind label may appear in diagnostic text. The diagnostic projections do not
@@ -987,9 +987,14 @@ for AGENT execution through `run_flow`. It
 owns message history updates directly. The CLI automatically
 hosts declared built-in policies.
 `SessionMemory` is a concrete backend;
-`MemorySession` remains the existing run-handle protocol. Optional
-`ConversationFrame` and `ConversationTurn` protocols leave
-the mandatory memory interfaces unchanged.
+`MemorySession` remains the run-handle protocol. `MemoryFrame.recall()` returns
+text or `MemoryContent(text, transcript)`. SessionMemory contributes both pinned
+learned notes and a `TranscriptSource`; other policies can supply plain text or
+the same rich carrier. This is one context interface with distinct content forms:
+notes are instructions/facts, while the transcript retains structured messages.
+`MemoryContextRequest` combines recall inputs, accepted invocation identity, and
+message compatibility. The admitted `MemoryContext` carries ordered sections and
+an optional `ConversationTurn`; live handles never enter snapshots or run logs.
 The backend has no provider session references or start/resume callbacks. Existing
 message-history digests retain reserved null fields in their wire format; nonempty
 legacy native references require fresh memory and cannot be adopted.
@@ -1002,18 +1007,22 @@ import only the standard library and lower memory modules, never nodes, runtime,
 compile, compose, or providers. The facade exports contracts only; concrete
 backends are imported explicitly from their own modules.
 
-Runtime consumes only the optional capability. `MemoryRuntime` selects the
-innermost conversation-capable frame without hiding ordinary recall. The engine
+`MemoryRuntime.open_context` recalls every visible frame once, keeps nonempty
+text sections in outer-to-local order, and admits only the innermost contributed
+transcript. Runtime does not inspect backend classes or detect transcript methods
+on frames. Text-only memories contribute through the same entry point. The engine
 captures accepted run/start identity before observers or worker submission;
 `eval_node` binds that identity and authored scope into a lazy, single-use
-`begin_conversation` callback. The callback takes compatibility, never owner IDs.
+`open_memory_context` callback. The callback takes current instructions, rendered
+prompt, and compatibility, never owner IDs.
+`AgentRunContext.memory_context` replaces separate recall and conversation fields.
 The evaluator keeps the lease through the node body, generator drain,
 post-assertions, and result-shape validation. Completion means wrapped execution
 finished, not that the dispatcher subsequently accepted typed output. Cleanup
 preserves primary errors; no live lease travels in worker results. Nodes without
 the trait and calls without a capable frame remain dormant.
 
-`nodes/agent/conversation.py` is a stateless provider adapter, not a second store.
+`nodes/agent/context.py` is a stateless provider adapter, not a second store.
 It encodes detached finite-JSON LangChain messages and actual effect observations
 through the admitted turn. Provider plus message format define compatibility;
 compatible model changes retain history. Current instructions, recall, and tool
@@ -1078,7 +1087,8 @@ admitted that invocation learns notes. Commit validates the whole deterministic
 mutation batch before atomic publication and rejects conflicting commit IDs.
 Notes are separate from raw conversation values and never rewrite history.
 Recall selects the requested leaf's notes from the run-opening pinned snapshot,
-not the latest admission-time history; context-free recall stays empty. New
+not the latest admission-time history. Context-free recall supplies empty text
+alongside the transcript source. New
 commits affect later runs. Reset clears history and notes while retaining commit
 deduplication to prevent replay from resurrecting cleared notes.
 

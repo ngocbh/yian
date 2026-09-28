@@ -69,10 +69,16 @@ existing run-handle protocol, not the concrete `SessionMemory` backend.
 
 ### Optional capabilities
 
-These extend participating implementations without changing the mandatory
-`Memory`, `MemorySession`, or `MemoryFrame` protocols.
+Frame recall returns text or `MemoryContent`. Rich content can supply a transcript
+source alongside notes; the evaluator admits it into one transient context.
 
-::: agent_composer.memory.ConversationFrame
+::: agent_composer.memory.MemoryContent
+
+::: agent_composer.memory.MemoryContextRequest
+
+::: agent_composer.memory.MemoryContext
+
+::: agent_composer.memory.TranscriptSource
 
 ::: agent_composer.memory.ConversationTurn
 

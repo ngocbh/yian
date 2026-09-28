@@ -5,13 +5,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from contextlib import contextmanager
 from typing import Any
+from types import SimpleNamespace
 
 import pytest
 
 from agent_composer.diagnostics import OriginRef
 from agent_composer.memory import (
     ConversationInvocation,
-    ConversationRequest,
+    MemoryContent,
+    MemoryContextRequest,
     LearnContext,
     MemoryFrameRef,
     MemoryFrameSpec,
@@ -212,8 +214,19 @@ def _context() -> RecallContext:
     )
 
 
-@pytest.mark.parametrize("capable", [(True, True), (True, False), (False, False)])
-def test_conversation_selects_innermost_capable_frame_without_changing_recall(capable):
+def _enter_context(runtime, scope, request, *, check_stopped):
+    with runtime.open_context(scope, request, check_stopped=check_stopped) as context:
+        return context
+
+
+def _recall_sections(runtime, scope, context):
+    request = MemoryContextRequest(context, None, {})
+    with runtime.open_context(scope, request, check_stopped=lambda: None) as admitted:
+        return admitted.sections
+
+
+@pytest.mark.parametrize("capable", [(True, True), (True, False), (False, True), (False, False)])
+def test_context_recalls_every_frame_and_opens_only_innermost_contributed_source(capable):
     layout, origins = _layout()
     policies = {name: _Memory(name, [], values={spec.ref: name for spec in layout})
                 for name in ("alpha", "beta")}
@@ -231,45 +244,62 @@ def test_conversation_selects_innermost_capable_frame_without_changing_recall(ca
     try:
         for spec, enabled in zip(layout, capable):
             if enabled:
-                policies[spec.policy_name].session.frames[spec.ref].open_turn = opener(spec.ref)
+                frame = policies[spec.policy_name].session.frames[spec.ref]
+                source = SimpleNamespace(open_turn=opener(spec.ref))
+                frame.value = MemoryContent(frame.value, source)
         for leaf in ("agent", "sibling"):
             # A sibling inherits the flow frame, never the first leaf's local frame.
             scope = _scope(layout) if leaf == "agent" else MemoryScope(
                 "root", ("root", leaf), (layout[0].ref,),
             )
-            request = ConversationRequest(scope.static_path, ConversationInvocation("run", 1), {})
-            with runtime.open_conversation(scope, request, check_stopped=lambda: None) as selected:
+            request = MemoryContextRequest(
+                RecallContext("system", "prompt", {}, scope.static_path),
+                ConversationInvocation("run", 1), {},
+            )
+            with runtime.open_context(scope, request, check_stopped=lambda: None) as context:
                 expected = next((spec.ref for spec, enabled in reversed(tuple(zip(layout, capable)))
                                  if enabled and spec.ref in scope.frame_stack), None)
-                assert selected == expected
-        assert [section.text for section in runtime.recall(_scope(layout), _context())] == ["beta", "alpha"]
+                assert context.transcript == expected
+                assert [section.text for section in context.sections] == (
+                    ["beta", "alpha"] if leaf == "agent" else ["beta"]
+                )
+        assert len(calls) == sum(bool(any(enabled and spec.ref in scope.frame_stack
+            for spec, enabled in zip(layout, capable)))
+            for scope in (_scope(layout), MemoryScope("root", ("root", "sibling"), (layout[0].ref,))))
+        assert len(policies["beta"].session.calls[layout[0].ref]) == 2
+        assert len(policies["alpha"].session.calls[layout[1].ref]) == 1
         assert all(request.consumer_static_path[-1] in {"agent", "sibling"} for _, request in calls)
     finally:
         runtime.close()
 
 
-def test_conversation_validates_scope_request_and_full_opened_coverage():
+def test_context_validates_scope_request_and_full_opened_coverage():
     layout, origins = _layout()
     runtime = MemoryRuntime.open(layout=layout[1:], origins={layout[1].ref: origins[layout[1].ref]},
                                  memory={"alpha": _Memory("alpha", [])})
     scope = _scope(layout)
-    request = ConversationRequest(scope.static_path, ConversationInvocation("run", 1), {})
+    request = MemoryContextRequest(
+                RecallContext("system", "prompt", {}, scope.static_path),
+                ConversationInvocation("run", 1), {},
+            )
     try:
         with pytest.raises(TypeError, match="MemoryScope"):
-            runtime.open_conversation(None, request, check_stopped=lambda: None)
-        with pytest.raises(TypeError, match="ConversationRequest"):
-            runtime.open_conversation(scope, None, check_stopped=lambda: None)
+            _enter_context(runtime, None, request, check_stopped=lambda: None)
+        with pytest.raises(TypeError, match="MemoryContextRequest"):
+            _enter_context(runtime, scope, None, check_stopped=lambda: None)
         with pytest.raises(TypeError, match="callable"):
-            runtime.open_conversation(scope, request, check_stopped=None)
-        wrong = ConversationRequest(("root", "other"), request.invocation, {})
+            _enter_context(runtime, scope, request, check_stopped=None)
+        wrong = MemoryContextRequest(
+            RecallContext("system", "prompt", {}, ("root", "other")), request.invocation, {},
+        )
         with pytest.raises(ValueError, match="scope"):
-            runtime.open_conversation(scope, wrong, check_stopped=lambda: None)
+            _enter_context(runtime, scope, wrong, check_stopped=lambda: None)
         with pytest.raises(RuntimeError, match="opened layout"):
-            runtime.open_conversation(scope, request, check_stopped=lambda: None)
+            _enter_context(runtime, scope, request, check_stopped=lambda: None)
     finally:
         runtime.close()
     with pytest.raises(RuntimeError, match="closed"):
-        runtime.open_conversation(scope, request, check_stopped=lambda: None)
+        _enter_context(runtime, scope, request, check_stopped=lambda: None)
 
 
 def _terminal_learning_state(
@@ -520,7 +550,7 @@ def test_recall_returns_nonempty_outer_to_local_sections_with_exact_context() ->
     )
     context = _context()
 
-    sections = runtime.recall(_scope(layout), context)
+    sections = _recall_sections(runtime, _scope(layout), context)
 
     # Empty outer recall is omitted but local identity remains explicit.
     assert len(sections) == 1
@@ -550,7 +580,7 @@ def test_recall_wraps_typed_policy_failure_with_exact_frame_origin() -> None:
     )
 
     with pytest.raises(MemoryRecallError, match="index unavailable") as exc:
-        runtime.recall(_scope(layout), _context())
+        _recall_sections(runtime, _scope(layout), _context())
 
     assert exc.value.origin == origins[layout[0].ref]
     assert exc.value.__cause__ is failure
@@ -572,9 +602,79 @@ def test_recall_wraps_noncanonical_policy_text_without_exposing_it() -> None:
         },
     )
 
-    with pytest.raises(MemoryRecallError, match="invalid recall text") as exc:
-        runtime.recall(_scope(layout), _context())
+    with pytest.raises(MemoryRecallError, match="invalid recall content") as exc:
+        _recall_sections(runtime, _scope(layout), _context())
 
     assert "secret" not in str(exc.value)
     assert exc.value.origin == origins[layout[0].ref]
     runtime.close()
+
+
+def test_context_ignores_uncontributed_frame_capabilities():
+    layout, origins = _layout()
+    alpha = _Memory("alpha", [], values={layout[1].ref: "local notes"})
+    beta = _Memory("beta", [], values={layout[0].ref: "outer notes"})
+    runtime = MemoryRuntime.open(layout=layout, origins=origins, memory={"alpha": alpha, "beta": beta})
+    def forbidden(*args, **kwargs):
+        pytest.fail("a frame's incidental open_turn is not a recall contribution")
+    alpha.session.frames[layout[1].ref].open_turn = forbidden
+    try:
+        request = MemoryContextRequest(_context(), None, {})
+        with runtime.open_context(_scope(layout), request, check_stopped=lambda: None) as context:
+            assert context.transcript is None
+            assert [section.text for section in context.sections] == ["outer notes", "local notes"]
+    finally:
+        runtime.close()
+
+
+def test_transcript_admission_requires_invocation_before_opening_source():
+    layout, origins = _layout()
+    def forbidden(*args, **kwargs):
+        pytest.fail("missing invocation must reject admission before the source opens")
+    source = SimpleNamespace(open_turn=forbidden)
+    alpha = _Memory("alpha", [], values={layout[1].ref: MemoryContent(transcript=source)})
+    runtime = MemoryRuntime.open(layout=layout, origins=origins, memory={"alpha": alpha, "beta": _Memory("beta", [])})
+    try:
+        with pytest.raises(ValueError, match="accepted invocation"):
+            with runtime.open_context(_scope(layout), MemoryContextRequest(_context(), None, {}), check_stopped=lambda: None):
+                pytest.fail("missing invocation admitted")
+    finally:
+        runtime.close()
+
+
+def test_stop_during_recall_prevents_transcript_source_acquisition():
+    from threading import Event
+    from agent_composer.nodes.base import _HostStop
+
+    layout, origins = _layout()
+    alpha, beta = _Memory("alpha", []), _Memory("beta", [])
+    runtime = MemoryRuntime.open(
+        layout=layout, origins=origins, memory={"alpha": alpha, "beta": beta},
+    )
+    stopped = Event()
+    source_calls = []
+    stop = _HostStop(primary=False)
+
+    @contextmanager
+    def open_turn(request, *, check_stopped):
+        source_calls.append(request)
+        yield object()
+
+    def recall(context):
+        stopped.set()
+        return MemoryContent("notes", SimpleNamespace(open_turn=open_turn))
+
+    def check_stopped():
+        if stopped.is_set():
+            raise stop
+
+    alpha.session.frames[layout[1].ref].recall = recall
+    request = MemoryContextRequest(_context(), ConversationInvocation("run", 1), {})
+    try:
+        with pytest.raises(_HostStop) as caught:
+            with runtime.open_context(_scope(layout), request, check_stopped=check_stopped):
+                check_stopped()
+        assert caught.value is stop
+        assert source_calls == []
+    finally:
+        runtime.close()

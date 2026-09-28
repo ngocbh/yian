@@ -249,7 +249,10 @@ policies; custom policies require Python injection. Library hosts enable recall
 with `run_flow(..., memory={NAME: implementation})`; `memory=None` stays dormant.
 For API conversation continuity, declare `long_term_memory: session`; Python hosts
 inject `SessionMemory()` as `"session"`;
-frame config is empty. The innermost conversation-capable frame owns one
+frame config is empty. All policies contribute through one memory context:
+SessionMemory supplies a structured transcript, while ordinary memories supply
+notes/instructions. Preserve transcript roles and tool results; do not flatten
+history into a note. The innermost frame contributing a transcript owns one
 conversation per authored AGENT leaf; other frames still provide recall. Repeated
 calls queue, including MAP items and LOOP iterations. MAP does not fork history
 or promise input-index admission order; use non-session memory for independent

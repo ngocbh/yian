@@ -63,7 +63,7 @@ def _engine(
     memory_layout: tuple[MemoryFrameSpec, ...] | None = None,
     memory_snapshots: tuple[MemorySnapshotEnvelope, ...] | None = None,
     learnable: bool = False,
-    memory_recall=None,
+    memory_context_opener=None,
 ) -> FlowEngine:
     """Prepare one in-memory authority and return the final direct engine surface."""
     inputs = dict(run_inputs or {})
@@ -101,7 +101,7 @@ def _engine(
         on_event=on_event,
         on_stream=on_stream,
         stop_event=stop_event,
-        memory_recall=memory_recall,
+        memory_context_opener=memory_context_opener,
     )
 
 

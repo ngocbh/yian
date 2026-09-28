@@ -376,21 +376,21 @@ def test_conversation_capabilities_are_optional_and_exact():
     memory = _Memory()
     session = memory.open_run()
     frame = session.open_frame(c.MemoryFrameSpec(_frame_ref(), "session", {}))
-    assert not isinstance(frame, c.ConversationFrame)
+    assert not isinstance(frame, c.TranscriptSource)
     assert set(get_args(c.ConversationCheckpoint)) == {
         c.ConversationAdmitted,
         c.ConversationEffectRequested,
         c.ConversationEffectObserved,
         c.ConversationClosed,
     }
-    for protocol in (c.ConversationFrame, c.ConversationTurn):
+    for protocol in (c.TranscriptSource, c.ConversationTurn):
         for member in vars(protocol).values():
             if inspect.isfunction(member):
                 get_type_hints(member)
-    turn_parameters = inspect.signature(c.ConversationFrame.open_turn).parameters
+    turn_parameters = inspect.signature(c.TranscriptSource.open_turn).parameters
     assert "checkpoint" not in turn_parameters
     assert (
-        inspect.signature(c.ConversationFrame.open_turn)
+        inspect.signature(c.TranscriptSource.open_turn)
         .parameters["check_stopped"]
         .kind
         is inspect.Parameter.KEYWORD_ONLY
@@ -421,7 +421,7 @@ def test_conversation_contracts_are_exported_without_concrete_backend():
         "ConversationClosed",
         "ConversationCheckpoint",
         "CheckStopped",
-        "ConversationFrame",
+        "TranscriptSource",
         "ConversationTurn",
     )
     for name in names:
@@ -1349,3 +1349,68 @@ def test_checkpoint_codec_rejects_retired_native_state_without_rewriting(event_i
         conversation_checkpoint_from_json(wire)
     assert caught.value.code == "session.unsupported_history"
     assert wire == original
+
+
+def test_memory_context_request_detaches_every_value_boundary():
+    inputs = {"nested": ["original"]}
+    compatibility = {"provider": "test", "format": {"version": 1}}
+    recall = c.RecallContext("system", "prompt", inputs, ("root", "agent"))
+    invocation = c.ConversationInvocation("run", 3)
+    request = c.MemoryContextRequest(recall, invocation, compatibility)
+    inputs["nested"].append("outside")
+    request.recall.inputs["nested"].append("returned")
+    compatibility["format"]["version"] = 2
+    request.compatibility["format"]["version"] = 3
+    object.__setattr__(recall, "prompt", "mutated")
+    object.__setattr__(invocation, "run_id", "mutated")
+    assert request.recall.inputs == {"nested": ["original"]}
+    assert request.recall.prompt == "prompt"
+    assert request.compatibility == {"provider": "test", "format": {"version": 1}}
+    assert request.invocation == c.ConversationInvocation("run", 3)
+    with pytest.raises(FrozenInstanceError):
+        request.recall = recall
+    assert c.MemoryContextRequest(request.recall, None, {}).invocation is None
+
+
+@pytest.mark.parametrize("field,value", [
+    ("recall", None), ("recall", {}),
+    ("invocation", {}), ("invocation", "run"),
+    ("compatibility", []), ("compatibility", {"value": float("nan")}),
+])
+def test_memory_context_request_rejects_invalid_carriers(field, value):
+    args = {
+        "recall": c.RecallContext("", "", {}, ("root", "agent")),
+        "invocation": c.ConversationInvocation("run", 1),
+        "compatibility": {},
+    }
+    args[field] = value
+    with pytest.raises((TypeError, ValueError)):
+        c.MemoryContextRequest(**args)
+
+
+def test_memory_content_validates_explicit_transcript_sources():
+    from types import SimpleNamespace
+
+    source = SimpleNamespace(open_turn=lambda request, **kwargs: None)
+    content = c.MemoryContent("notes", source)
+    assert content.text == "notes"
+    assert content.transcript is source
+    assert c.MemoryContent() == c.MemoryContent("", None)
+    for text in (None, 7, "\ud800"):
+        with pytest.raises((TypeError, ValueError)):
+            c.MemoryContent(text)
+    for source in (object(), SimpleNamespace(open_turn=None)):
+        with pytest.raises(TypeError, match="open_turn"):
+            c.MemoryContent(transcript=source)
+    with pytest.raises(FrozenInstanceError):
+        content.text = "changed"
+
+
+def test_memory_context_carriers_are_contracts_only_exports():
+    import agent_composer.memory as memory
+
+    for name in ("MemoryContent", "MemoryContext", "MemoryContextRequest", "TranscriptSource"):
+        assert name in memory.__all__
+        assert getattr(memory, name) is getattr(c, name)
+    assert "ConversationFrame" not in vars(memory)
+    assert "ConversationFrame" not in vars(c)

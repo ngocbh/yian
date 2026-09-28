@@ -348,7 +348,7 @@ repeatable `--memory-storage POLICY=PATH` option selects optional durable files.
 Terminal inspection and old dormant logs open no memory backend. The controller
 owns cleanup after execution drains; runtime constructs no backend. The
 `agent_composer.memory` facade remains contracts-only. `MemorySession` still names
-the mandatory run-handle protocol; optional `ConversationFrame` and
+the mandatory run-handle protocol; optional `TranscriptSource` and
 `ConversationTurn` add conversation capabilities without
 expanding it.
 
@@ -356,16 +356,17 @@ expanding it.
 `memory/conversation.py` owns the pure fold and strict codecs/digests;
 `memory/session.py` publishes directly through that fold with an injected stop callable.
 Neither imports runtime, nodes, compile, compose, or providers.
-`MemoryRuntime` chooses the innermost frame with conversation capability;
-ordinary recall still includes all applicable frames, even a nearer non-session
-frame. A trait-enabled node receives one lazy `begin_conversation(compatibility)`
+`MemoryFrame.recall()` returns text or `MemoryContent(text, transcript)`.
+`MemoryRuntime.open_context` recalls every visible frame once, keeps labelled notes
+in outer-to-local order, and admits only the innermost contributed transcript.
+It never discovers transcript methods on frames or imports concrete backends. A trait-enabled node receives one lazy `open_memory_context(system, prompt, compatibility)`
 callback. Runtime captures immutable accepted run/start identity before observers
 or worker submission; the evaluator binds it with the authored scope and holds the turn through
 body execution, generator drain, post-assertions, and result-shape checks. Later
 dispatcher typed validation is outside this lifetime. No live lease enters a
 worker result, record, or reducer; primary failures survive cleanup.
 
-`nodes/agent/conversation.py` adapts actual LangChain messages and effect
+`nodes/agent/context.py` adapts actual LangChain messages and effect
 observations without storing history itself. Compatibility includes provider and
 versioned message format; current instructions/recall/grants apply on every call,
 and compatible model changes keep history. Historical instructions do not become
@@ -456,8 +457,8 @@ frame learn/session commit, without another model call. Match actual admissions
 for this frame and authored leaf; use the episode's root-prefixed owner path
 joined by execution sequence. Ancestor recall-only frames must not duplicate
 learning. Commit validates the whole batch before atomic publication and deduplicates
-replays. Contextual recall selects this leaf's pinned run-opening notes; no-context
-recall is empty. Learning changes neither raw conversation values nor their ledger.
+replays. Contextual recall supplies this leaf's pinned run-opening notes plus the
+transcript source. Context-free recall supplies empty text with that source. Learning changes neither raw conversation values nor their ledger.
 Exact compatibility changes require reset. Backend-wide `reset()` fails unchanged
 if any turn is active or queued; otherwise it clears history and notes, retains
 commit deduplication, advances generation, and makes old handles stale. It does

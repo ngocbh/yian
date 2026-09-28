@@ -1545,8 +1545,8 @@ class EvaluationTrace(Protocol):
 class MemoryFrame(Protocol):
     """One opened frame through which a policy recalls and proposes learning."""
 
-    def recall(self, context: RecallContext | None = None) -> str:
-        """Return the memory text visible to one AGENT invocation."""
+    def recall(self, context: RecallContext | None = None) -> str | MemoryContent:
+        """Return notes and an optional transcript source for one invocation."""
         ...
 
     def learn(self, context: LearnContext) -> list[MemoryMutation]:
@@ -2261,8 +2261,8 @@ class ConversationTurn(Protocol):
 
 
 @runtime_checkable
-class ConversationFrame(Protocol):
-    """Optional frame capability for a serialized authored leaf conversation."""
+class TranscriptSource(Protocol):
+    """Explicit recall contribution that admits a serialized session transcript."""
 
     def open_turn(
         self,
@@ -2281,3 +2281,116 @@ class ConversationFrame(Protocol):
             `AbstractContextManager[ConversationTurn]`: The queued turn lease.
         """
         ...
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryContent:
+    """One frame's transient notes and optional structured transcript source.
+
+    Args:
+        text (`str`, defaults to `""`): Exact UTF-8 notes; empty text contributes
+            no visible section.
+        transcript (`TranscriptSource | None`, defaults to `None`): Explicit live
+            source with callable `open_turn`; retained only for this admission.
+
+    Raises:
+        `TypeError`: Text is not an exact string or the source lacks `open_turn`.
+        `ValueError`: Text is not valid UTF-8.
+
+    Example:
+        Return `MemoryContent("Prefer concise answers.")` from a notes frame, or
+        `MemoryContent(transcript=self)` from a frame that owns a session.
+    """
+
+    text: str = ""
+    transcript: TranscriptSource | None = None
+
+    def __post_init__(self) -> None:
+        """Validate visible notes and the explicitly contributed source."""
+        _require_string(self.text, "text", nonempty=False)
+        if self.transcript is not None and not callable(
+            getattr(self.transcript, "open_turn", None)
+        ):
+            raise TypeError("transcript must supply open_turn or be None")
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class MemoryContextRequest:
+    """Detached recall inputs and accepted invocation for one context admission."""
+
+    recall: RecallContext
+    invocation: ConversationInvocation | None
+    _compatibility: _FrozenJsonObject = field(repr=False)
+
+    def __init__(
+        self,
+        recall: RecallContext,
+        invocation: ConversationInvocation | None,
+        compatibility: JsonObject,
+    ) -> None:
+        """Validate and detach recall inputs, identity, and compatibility.
+
+        Args:
+            recall (`RecallContext`): Exact visible prompts, canonical inputs,
+                and authored consumer path.
+            invocation (`ConversationInvocation | None`): Accepted node-start
+                identity; `None` permits text-only context without a transcript.
+            compatibility (`JsonObject`): Exact finite JSON descriptor used by
+                a selected transcript source. Nested values are detached.
+
+        Raises:
+            `TypeError`: A carrier or JSON value has the wrong exact type.
+            `ValueError`: An identity, path, string, or JSON value is invalid.
+
+        Example:
+            `MemoryContextRequest(recall, None, {})` supports direct evaluation
+            of text-only policies. A transcript contribution requires an identity.
+        """
+        if type(recall) is not RecallContext:
+            raise TypeError("recall must be a RecallContext")
+        object.__setattr__(self, "recall", RecallContext(
+            recall.base_system_prompt, recall.prompt, recall.inputs,
+            recall.consumer_static_path,
+        ))
+        object.__setattr__(self, "invocation", (
+            None if invocation is None else _copy_invocation(invocation)
+        ))
+        object.__setattr__(self, "_compatibility", _freeze_json_object(
+            compatibility, "compatibility",
+        ))
+
+    @property
+    def compatibility(self) -> JsonObject:
+        """Return a fresh JSON copy of the opaque compatibility descriptor."""
+        return _thaw_json_object(self._compatibility)
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryContext:
+    """Ordered visible notes and an optional admitted live transcript.
+
+    Args:
+        sections (`tuple[MemorySection, ...]`, defaults to `()`): Exact sections
+            in outer-to-local ownership order. Admission validates scope order.
+        transcript (`ConversationTurn | None`, defaults to `None`): Live leased
+            transcript whose lifetime is owned by the enclosing context manager.
+
+    Raises:
+        `TypeError`: Sections are not an exact tuple of exact section carriers.
+        `ValueError`: A section's identity or text is invalid.
+
+    Example:
+        `MemoryContext()` is the empty context for an invocation without memory.
+    """
+
+    sections: tuple[MemorySection, ...] = ()
+    transcript: ConversationTurn | None = None
+
+    def __post_init__(self) -> None:
+        """Require exact immutable text sections; retain only a transient lease."""
+        if type(self.sections) is not tuple:
+            raise TypeError("sections must be an exact tuple")
+        for section in self.sections:
+            if type(section) is not MemorySection:
+                raise TypeError("sections must contain MemorySection values")
+            MemorySection(section.frame_ref, section.text)

@@ -301,7 +301,7 @@ def test_agent_backward_failure_is_attributed_without_forward_changes(monkeypatc
 
 def test_agent_backward_reads_no_live_render_model_or_variable_state(monkeypatch):
     import agent_composer.nodes.agent.node as agent_module
-    import agent_composer.nodes.agent.modes.utils as mode_utils
+    import agent_composer.nodes.agent.context as context_adapter
     from agent_composer.runtime.backward import compute_backward
     from agent_composer.runtime.learning import validate_attributed_backward
 
@@ -318,7 +318,7 @@ def test_agent_backward_reads_no_live_render_model_or_variable_state(monkeypatch
     monkeypatch.setattr(AgentNode, "declared_variables", forbidden)
     monkeypatch.setattr(agent_module, "render_template_record", forbidden)
     monkeypatch.setattr(agent_module, "canonical_type_label", forbidden)
-    monkeypatch.setattr(mode_utils, "system_prompt_with_memory", forbidden)
+    monkeypatch.setattr(context_adapter, "system_prompt_with_memory", forbidden)
     configs = []
     chat = _BackwardChat([_reply(input_feedback={"topic": ["Use a specific reef."]}, variable_feedback={"tone": ["Be precise."]})])
     monkeypatch.setattr(llm_clients, "model_from_config", lambda config: configs.append(deepcopy(config)) or chat)

@@ -3,7 +3,7 @@
 ``modes/`` holds the prompting methods. Explicitly granted Composer tools,
 including the host-installed blocking ``ask_user``, execute through the public
 invocation path inside the live loop. The package owns no durable run state.
-``conversation`` adapts provider messages to optional memory-owned turns; it
+``context`` adapts the shared memory context to provider messages and effects; it
 owns neither retained history nor turn admission. Modes persist actual exchanges
 through this adapter, independently of evaluation evidence.
 The adapter also projects safe historical context and injects the current

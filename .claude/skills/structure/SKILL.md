@@ -124,9 +124,10 @@ validates them through the shared growth boundary before `runtime.trace` joins
 them to accepted binding routes. Runtime never dispatches on spawner kind.
 
 Memory conversation ownership follows the same lower-layer boundary.
-`memory/contracts.py` owns immutable conversation carriers and optional
-`ConversationFrame`/`ConversationTurn` protocols alongside the
-unchanged mandatory memory protocols. `memory/conversation.py` owns the pure fold,
+`memory/contracts.py` owns immutable conversation carriers, `MemoryContent`,
+`MemoryContextRequest`, `MemoryContext`, and `TranscriptSource`/`ConversationTurn`.
+Frame recall returns text or a rich content contribution; session transcripts and
+notes share this interface. Only the admitted context holds a live turn. `memory/conversation.py` owns the pure fold,
 strict codecs, and digests. `memory/session.py` owns the concrete
 `SessionMemory` backend: views, FIFO leases, atomic history/note publication, and
 derived summary state. `memory/summary.py` owns pure whole-turn selection and
@@ -142,10 +143,10 @@ There is no runtime conversation projection or recovery channel. `runtime.state`
 privately validates the four legacy wrappers owned by `runtime.log` and advances
 record/trace sequencing only. Those inert wrappers neither reconstruct history nor
 grant effects. Keep mutable backend coordination and stored conversation state out
-of the scheduler. Runtime selects the innermost optional conversation frame and
+of the scheduler. Runtime selects the innermost recalled transcript source and
 binds authored scope and accepted invocation identity; `eval_node` owns the lazy
 turn lifetime through execution/cleanup, never provider message encoding.
-`nodes/agent/conversation.py` owns stateless API message encoding and effect
+`nodes/agent/context.py` owns stateless API message encoding and effect
 publication through the turn. It may import memory contracts and provider message
 types, but owns no history or queue. It injects safe projection and the current
 unbound model into optional memory-owned context preparation; summary callbacks

@@ -164,7 +164,8 @@ result = run_flow(flow, inputs, memory={"episodic": history}, learnable=True)
 result.backward()
 ```
 
-[`SessionMemory`](docs/api.md#sessionmemory-foundation) keeps API-backed agents'
+[`SessionMemory`](docs/api.md#sessionmemory-foundation) supplies a structured session
+transcript through the same memory context as notes from other policies. It keeps
 conversation history across runs in the same process. Declare
 `long_term_memory: session` and reuse the backend:
 

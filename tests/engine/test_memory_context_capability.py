@@ -9,7 +9,7 @@ from contextlib import contextmanager
 import pytest
 
 from agent_composer.events import StreamChunk
-from agent_composer.memory import ConversationInvocation, MemoryFrameRef, MemoryOwner, MemoryScope
+from agent_composer.memory import ConversationInvocation, MemoryContext, MemoryFrameRef, MemoryOwner, MemoryScope
 from agent_composer.nodes.base import Grow, Node, NodeKind, Output, _HostStop
 from agent_composer.nodes.contracts import Assertion
 from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
@@ -19,7 +19,7 @@ from tests.engine._fakes import FuncNode
 
 class _Consumer(Node):
     kind = NodeKind.CODE
-    needs_conversation = True
+    needs_memory_context = True
 
     def __init__(self, body):
         super().__init__("work")
@@ -27,24 +27,24 @@ class _Consumer(Node):
         self.memory_scope = MemoryScope("flow", ("flow", "work"), (ref,))
         self.body = body
 
-    def forward(self, inputs, *, begin_conversation):
-        return self.body(begin_conversation)
+    def forward(self, inputs, *, open_memory_context):
+        return self.body(open_memory_context)
 
 
 def _evaluate(node, opener, **kwargs):
     return eval_node(
-        node, None, VariablePool(), conversation_opener=opener,
-        conversation_invocation=ConversationInvocation("run", 3), **kwargs,
+        node, None, VariablePool(), memory_context_opener=opener,
+        memory_invocation=ConversationInvocation("run", 3), **kwargs,
     ).outcome
 
 
 def _opener(events, turn=None, *, stop=None, cleanup=None):
     @contextmanager
-    def open_conversation(scope, request, *, check_stopped):
+    def open_context(scope, request, *, check_stopped):
         events.append(("enter", scope, request))
         check_stopped()
         try:
-            yield turn
+            yield MemoryContext(transcript=turn)
         except BaseException as exc:
             events.append(("failed", exc, None if stop is None else stop.is_set()))
             raise
@@ -53,7 +53,7 @@ def _opener(events, turn=None, *, stop=None, cleanup=None):
         finally:
             if cleanup is not None:
                 raise cleanup
-    return open_conversation
+    return open_context
 
 
 def test_lazy_single_entry_binds_detached_identity_and_closes_after_execution():
@@ -64,7 +64,7 @@ def test_lazy_single_entry_binds_detached_identity_and_closes_after_execution():
     def body(begin):
         assert events == []
         retained.append(begin)
-        assert begin(descriptor) is turn
+        assert begin("system", "prompt", descriptor).transcript is turn
         descriptor["format"]["version"] = 2
         events.append(("body",))
         return Output("done")
@@ -73,10 +73,10 @@ def test_lazy_single_entry_binds_detached_identity_and_closes_after_execution():
     assert _evaluate(node, _opener(events, turn)) == Output("done")
     assert [event[0] for event in events] == ["enter", "body", "completed"]
     assert events[0][2].invocation == ConversationInvocation("run", 3)
-    assert events[0][2].consumer_static_path == ("flow", "work")
+    assert events[0][2].recall.consumer_static_path == ("flow", "work")
     assert events[0][2].compatibility == {"format": {"version": 1}}
     with pytest.raises(RuntimeError, match="closed"):
-        retained[0]({})
+        retained[0]("system", "prompt", {})
 
 
 def test_no_eager_turn_and_no_memory_remains_dormant():
@@ -84,12 +84,13 @@ def test_no_eager_turn_and_no_memory_remains_dormant():
         pytest.fail("an unused capability must not open a turn")
 
     assert _evaluate(_Consumer(lambda begin: Output(7)), forbidden) == Output(7)
-    assert _evaluate(_Consumer(lambda begin: Output(begin({}))), None) == Output(None)
-    node = _Consumer(lambda begin: Output(begin({})))
+    with pytest.raises(RuntimeError, match="requires an injected memory context"):
+        _evaluate(_Consumer(lambda begin: Output(begin("system", "prompt", {}))), None)
+    node = _Consumer(lambda begin: Output(begin("system", "prompt", {})))
     node.memory_scope = None
-    assert _evaluate(node, forbidden) == Output(None)
-    assert Node.needs_conversation is False
-    assert eval_node(FuncNode("ordinary", lambda _: 7), None, VariablePool(), conversation_opener=forbidden).outcome == Output(7)
+    assert _evaluate(node, forbidden) == Output(MemoryContext())
+    assert Node.needs_memory_context is False
+    assert eval_node(FuncNode("ordinary", lambda _: 7), None, VariablePool(), memory_context_opener=forbidden).outcome == Output(7)
 
 
 @pytest.mark.parametrize("result", [None, 7, Grow({})])
@@ -97,7 +98,7 @@ def test_no_eager_turn_and_no_memory_remains_dormant():
 def test_invalid_node_result_closes_failed_before_failure_conversion(result, cleanup_fails):
     events = []
     def body(begin):
-        begin({})
+        begin("system", "prompt", {})
         return result
     cleanup = ValueError("result cleanup failed") if cleanup_fails else None
     outcome = _evaluate(_Consumer(body), _opener(events, cleanup=cleanup))
@@ -113,7 +114,7 @@ def test_invalid_node_result_closes_failed_before_failure_conversion(result, cle
 
 def test_postassertion_failure_closes_failed():
     events = []
-    node = _Consumer(lambda begin: (begin({}), Output(7))[1])
+    node = _Consumer(lambda begin: (begin("system", "prompt", {}), Output(7))[1])
     node.post_asserts = [Assertion("false", "must fail")]
     outcome = _evaluate(node, _opener(events))
     assert outcome.failure.code == "assertion.failed"
@@ -123,8 +124,8 @@ def test_postassertion_failure_closes_failed():
 def test_repeated_entry_is_host_fault_and_closes_first_turn():
     events = []
     def body(begin):
-        begin({})
-        begin({})
+        begin("system", "prompt", {})
+        begin("system", "prompt", {})
         return Output(7)
     with pytest.raises(RuntimeError, match="already"):
         _evaluate(_Consumer(body), _opener(events))
@@ -137,10 +138,10 @@ def test_opener_host_fault_keeps_identity_in_both_execution_shapes(streaming):
     def opener(*args, **kwargs):
         raise error
     def stream(begin):
-        begin({})
+        begin("system", "prompt", {})
         yield StreamChunk("work", "output", "never")
         return Output(7)
-    body = stream if streaming else lambda begin: Output(begin({}))
+    body = stream if streaming else lambda begin: Output(begin("system", "prompt", {}))
     with pytest.raises(RuntimeError) as caught:
         _evaluate(_Consumer(body), opener)
     assert caught.value is error
@@ -151,10 +152,10 @@ def test_primary_stop_is_set_before_turn_cleanup_and_keeps_identity(streaming):
     events, stop = [], threading.Event()
     error = _HostStop("requested")
     def body(begin):
-        begin({})
+        begin("system", "prompt", {})
         raise error
     def stream(begin):
-        begin({})
+        begin("system", "prompt", {})
         yield StreamChunk("work", "output", "before")
         raise error
     with pytest.raises(_HostStop) as caught:
@@ -171,7 +172,7 @@ def test_stream_lifetime_includes_drain_and_callback_failure_cleanup():
     events = []
     error = RuntimeError("stream callback")
     def stream(begin):
-        begin({})
+        begin("system", "prompt", {})
         try:
             yield StreamChunk("work", "output", "one")
             pytest.fail("callback should abort iteration")
@@ -190,7 +191,7 @@ def test_callback_primary_stop_marks_signal_before_turn_unwind():
     events, stop = [], threading.Event()
     error = _HostStop("callback stop")
     def stream(begin):
-        begin({})
+        begin("system", "prompt", {})
         yield StreamChunk("work", "output", "one")
         return Output(7)
     def emit(chunk):
@@ -211,7 +212,7 @@ def test_callback_error_retains_conversation_cleanup_notes_without_throwing_into
     cleanup = ValueError("conversation close failed")
     stop = threading.Event()
     def stream(begin):
-        begin({})
+        begin("system", "prompt", {})
         try:
             yield StreamChunk("work", "output", "one")
         except GeneratorExit:
@@ -241,7 +242,7 @@ def test_callback_error_retains_conversation_cleanup_notes_without_throwing_into
                 raise cleanup
             return publish(turn, checkpoint)
         monkeypatch.setattr(backend._Turn, "_publish", fail_close)
-        opener = runtime.open_conversation
+        opener = runtime.open_context
     try:
         with pytest.raises(type(error)) as caught:
             _evaluate(node, opener, emit_stream=emit, stop_event=stop)
@@ -266,7 +267,7 @@ def test_broken_cleanup_note_hook_does_not_replace_primary_host_error():
             raise RuntimeError("note hook failed")
     error = StopWithoutNotes("original stop")
     def body(begin):
-        begin({})
+        begin("system", "prompt", {})
         raise error
     with pytest.raises(StopWithoutNotes) as caught:
         _evaluate(_Consumer(body), _opener([], cleanup=RuntimeError("cleanup failed")))
@@ -283,7 +284,7 @@ def test_dispatch_binds_accepted_identity_before_worker_submission(num_workers, 
     from tests.engine._graph_builder import _engine, _graph
 
     events = []
-    node = _Consumer(lambda begin: (begin({}), Output(7))[1])
+    node = _Consumer(lambda begin: (begin("system", "prompt", {}), Output(7))[1])
     prepared = _engine(_graph([node], [(START_ID, "work"), ("work", END_ID)]), num_workers=num_workers)
     caller = threading.get_ident()
     reads = []
@@ -297,7 +298,7 @@ def test_dispatch_binds_accepted_identity_before_worker_submission(num_workers, 
 
     monkeypatch.setattr(RunState, "__getattribute__", guarded_get_attribute)
     engine = FlowEngine(prepared.state, prepared.log, grow_builder=build_grow,
-                        num_workers=num_workers, conversation_opener=_opener(events))
+                        num_workers=num_workers, memory_context_opener=_opener(events))
     list(engine.run())
     start = next(envelope for envelope in prepared.log
                  if isinstance(envelope.record, NodeStartedRecord) and envelope.record.node_id == "work")
@@ -313,11 +314,11 @@ def test_scope_and_invocation_are_frozen_before_node_execution():
     def body(begin):
         node.memory_scope = MemoryScope("replacement", ("replacement", "other"))
         object.__setattr__(invocation, "run_id", "mutated")
-        begin({})
+        begin("system", "prompt", {})
         return Output(7)
     node = _Consumer(body)
-    eval_node(node, None, VariablePool(), conversation_opener=_opener(events),
-              conversation_invocation=invocation)
+    eval_node(node, None, VariablePool(), memory_context_opener=_opener(events),
+              memory_invocation=invocation)
     assert events[0][1].static_path == ("flow", "work")
     assert events[0][2].invocation == ConversationInvocation("original", 7)
 
@@ -336,10 +337,10 @@ def test_malformed_scope_is_host_fault_even_for_custom_run_override():
 def test_generator_and_body_errors_close_failed_without_masking_node_failure(streaming):
     events = []
     def body(begin):
-        begin({})
+        begin("system", "prompt", {})
         raise ValueError("body rejected")
     def stream(begin):
-        begin({})
+        begin("system", "prompt", {})
         yield StreamChunk("work", "output", "one")
         raise ValueError("body rejected")
     result = _evaluate(_Consumer(stream if streaming else body), _opener(events))
@@ -356,7 +357,7 @@ def test_real_turn_rethrow_is_not_reported_as_secondary_cleanup_failure(failure_
 
     error = ValueError("body rejected")
     def body(begin):
-        begin({})
+        begin("system", "prompt", {})
         if failure_stage == "body":
             raise error
         return None if failure_stage == "result" else Output(7)
@@ -368,9 +369,9 @@ def test_real_turn_rethrow_is_not_reported_as_secondary_cleanup_failure(failure_
     runtime = MemoryRuntime.open(layout=(MemoryFrameSpec(ref, "session", {}),),
                                  origins={ref: None}, memory={"session": memory})
     try:
-        result = _evaluate(node, runtime.open_conversation)
+        result = _evaluate(node, runtime.open_context)
         assert isinstance(result, EvaluationFailure)
-        assert "Conversation cleanup" not in result.failure.traceback
+        assert "Memory context cleanup" not in result.failure.traceback
         assert not getattr(error, "__notes__", [])
         with memory.open_run() as opened:
             assert opened.snapshot["conversations"][0]["closed_invocations"][-1]["status"] == "failed"
@@ -385,7 +386,7 @@ def test_real_backend_cleanup_note_survives_node_error_unwrapping(monkeypatch):
 
     error = ValueError("body rejected")
     def body(begin):
-        begin({})
+        begin("system", "prompt", {})
         raise error
     node = _Consumer(body)
     memory = backend.SessionMemory()
@@ -399,7 +400,7 @@ def test_real_backend_cleanup_note_survives_node_error_unwrapping(monkeypatch):
         return publish(turn, checkpoint)
     monkeypatch.setattr(backend._Turn, "_publish", fail_close)
     try:
-        outcome = _evaluate(node, runtime.open_conversation)
+        outcome = _evaluate(node, runtime.open_context)
         assert outcome.failure.code == "node.execute"
         if hasattr(error, "add_note"):
             assert "close storage failed" in outcome.failure.traceback
@@ -418,12 +419,12 @@ def _fifo_scenario():
     paused, release, second_entered = threading.Event(), threading.Event(), threading.Event()
     prior = []
     def first_body(begin):
-        begin({})
+        begin("system", "prompt", {})
         yield StreamChunk("work", "output", "one")
         return None  # Shape rejection must happen before the lease is released.
     def second_body(begin):
-        turn = begin({})
-        prior.extend(turn.view.closed_invocations)
+        turn = begin("system", "prompt", {})
+        prior.extend(turn.transcript.view.closed_invocations)
         second_entered.set()
         return Output(7)
     first, second = _Consumer(first_body), _Consumer(second_body)
@@ -434,8 +435,8 @@ def _fifo_scenario():
         paused.set()
         assert release.wait(3)
     def evaluate(node, run, emit_stream=None):
-        return eval_node(node, None, VariablePool(), conversation_opener=runtime.open_conversation,
-                         conversation_invocation=ConversationInvocation(run, 1), emit_stream=emit_stream)
+        return eval_node(node, None, VariablePool(), memory_context_opener=runtime.open_context,
+                         memory_invocation=ConversationInvocation(run, 1), emit_stream=emit_stream)
     try:
         with ThreadPoolExecutor(max_workers=2) as executor:
             a = executor.submit(evaluate, first, "a", emit)
@@ -459,7 +460,16 @@ def _fifo_scenario():
 
 def test_fifo_turn_covers_stream_drain_and_shape_check_in_bounded_child():
     child = subprocess.run(
-        [sys.executable, "-c", "from tests.engine.test_conversation_capability import _fifo_scenario; _fifo_scenario()"],
+        [sys.executable, "-c", "from tests.engine.test_memory_context_capability import _fifo_scenario; _fifo_scenario()"],
         capture_output=True, text=True, timeout=15,
     )
     assert child.returncode == 0, child.stdout + child.stderr
+
+
+def test_missing_scoped_opener_remains_setup_fault_for_custom_run():
+    class CustomRun(_Consumer):
+        def run(self, inputs, **caps):
+            pytest.fail("missing memory injection must be rejected before execution")
+
+    with pytest.raises(RuntimeError, match="requires an injected memory context"):
+        _evaluate(CustomRun(None), None)

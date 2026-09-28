@@ -10,7 +10,7 @@ from __future__ import annotations
 from langchain_core.messages import HumanMessage, SystemMessage
 
 import agent_composer.llm_clients as llm_clients
-from agent_composer.nodes.agent.conversation import prepare_history, invoke_model
+from agent_composer.nodes.agent.context import prepare_history, invoke_model, system_prompt_with_memory
 from agent_composer.nodes.agent.modes.common import (
     DEFAULT_SYSTEM,
     AgentRunContext,
@@ -18,7 +18,6 @@ from agent_composer.nodes.agent.modes.common import (
 )
 from agent_composer.nodes.agent.modes.utils import (
     record_model_text,
-    system_prompt_with_memory,
     text_of,
 )
 from agent_composer.nodes.agent.structured import generate_structured, type_to_schema
@@ -30,36 +29,29 @@ def plain(ctx: AgentRunContext) -> Output:
     ctx.check_stopped()
     model = llm_clients.model_from_config(ctx.llm_config or {})
     ctx.check_stopped()
-    system_prompt = system_prompt_with_memory(DEFAULT_SYSTEM, ctx.memory_sections)
+    system_prompt = system_prompt_with_memory(DEFAULT_SYSTEM, ctx.memory_context.sections)
     msgs = [SystemMessage(content=system_prompt), HumanMessage(content=ctx.prompt)]
     new_messages = list(msgs)
-    if ctx.conversation_turn is not None:
-        msgs = [
-            msgs[0],
-            *prepare_history(
-                ctx.conversation_turn, model, check_stopped=ctx.check_stopped
-            ),
-            *msgs[1:],
-        ]
+    msgs = [
+        msgs[0],
+        *prepare_history(ctx.memory_context.transcript, model, check_stopped=ctx.check_stopped),
+        *msgs[1:],
+    ]
     if ctx.evaluation_trace is not None:
         ctx.evaluation_trace.record_prompt(
             DEFAULT_SYSTEM,
             ctx.prompt,
-            ctx.memory_sections,
+            ctx.memory_context.sections,
         )
     # A constrained type -> structured generation; only a bare str keeps the text path.
     schema = type_to_schema(ctx.output_type) if ctx.output_type is not None else None
     if schema is None:
-        if ctx.conversation_turn is None:
-            reply = model.invoke(msgs)
-            ctx.check_stopped()
-        else:
-            reply = invoke_model(
-                ctx.conversation_turn,
-                lambda: model.invoke(msgs),
-                new_messages=new_messages,
-                check_stopped=ctx.check_stopped,
-            )
+        reply = invoke_model(
+            ctx.memory_context.transcript,
+            lambda: model.invoke(msgs),
+            new_messages=new_messages,
+            check_stopped=ctx.check_stopped,
+        )
         text = text_of(reply)
         record_model_text(ctx.evaluation_trace, text)
         return Output(value=text)
@@ -72,7 +64,7 @@ def plain(ctx: AgentRunContext) -> Output:
             llm_config=ctx.llm_config,
             check_stopped=ctx.check_stopped,
             evaluation_trace=ctx.evaluation_trace,
-            conversation_turn=ctx.conversation_turn,
+            memory_context=ctx.memory_context,
             new_messages=new_messages,
         )
     )

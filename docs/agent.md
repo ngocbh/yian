@@ -209,7 +209,7 @@ tool loop and uses the accumulated message history.
 | Node `input:` | Binds the local values available to prompt rendering and memory recall. It is not independently dumped into a message. |
 | AGENT `variables:` | Supplies typed local defaults to prompt rendering. Each invocation receives a fresh copy; see [agent-owned variables](syntax.md#agent-owned-variables). |
 | `prompt:` | Renders local `${name}` values into the initial `HumanMessage`. |
-| `long_term_memory:` plus host `memory={...}` | Recalls frame text and appends it to the system message as labelled canonical sections. |
+| `long_term_memory:` plus host `memory={...}` | Supplies one memory context: recalled notes become labelled system sections; a session transcript contributes structured prior messages. |
 | `tools: [name, ...]` | Resolves registered tool schemas and binds them beside the messages in `tool_calling` mode. |
 | Structured `output:` | Selects a provider-supported structured-output binding or a fallback schema instruction, then validates the returned value. A bare `str` remains free text. |
 | `mode:`, `llm_config:`, `retries:`, `env:` | Controls execution; these values are not additional prompt messages. |
@@ -225,8 +225,11 @@ An AGENT node may see zero or more memory frames:
 2. one frame for each entered child flow that declares long-term memory;
 3. the AGENT node's local frame, if it has its own declaration.
 
-Only frames that return recalled text contribute a section. Each frame owns and
-writes only its own state. MAP items and LOOP iterations reuse the statically
+Nonempty recalled notes contribute labelled sections. SessionMemory contributes
+a structured transcript through the same interface, preserving message roles and
+tool-result links. The innermost contributed transcript supplies prior history;
+all visible note sections remain available. Each frame owns and writes only its
+own state. MAP items and LOOP iterations reuse the statically
 authored frames rather than creating a new frame per occurrence.
 
 ```yaml

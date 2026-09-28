@@ -94,7 +94,7 @@ def test_session_backend_implements_original_protocol():
         assert isinstance(session, c.MemorySession)
         frame = session.open_frame(c.MemoryFrameSpec(REF, "custom", {}))
         assert isinstance(frame, c.MemoryFrame)
-        assert isinstance(frame, c.ConversationFrame)
+        assert isinstance(frame, c.TranscriptSource)
         assert session.open_frame(c.MemoryFrameSpec(REF, "custom", {})) is frame
 
 
@@ -232,12 +232,12 @@ def test_old_same_lineage_snapshot_stays_pinned_without_rewind():
             assert snapshot(h.memory) == latest
 
 
-def test_session_recall_is_empty():
+def test_session_recall_contributes_transcript_without_notes():
     with harness() as h:
-        assert h.frame.recall() == ""
+        assert h.frame.recall() == c.MemoryContent(transcript=h.frame)
         assert (
             h.frame.recall(c.RecallContext("system", "prompt", {}, ("root", "agent")))
-            == ""
+            == c.MemoryContent(transcript=h.frame)
         )
         with pytest.raises(TypeError):
             h.frame.recall({})

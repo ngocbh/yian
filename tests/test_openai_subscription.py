@@ -17,7 +17,7 @@ from agent_composer.llm_clients.openai_subscription import (
     SubscriptionAccess,
     create_subscription_model,
 )
-from agent_composer.nodes.agent.conversation import decode_message, encode_message
+from agent_composer.nodes.agent.context import decode_message, encode_message
 from agent_composer.nodes.agent.modes.utils import text_of
 from tests.fixtures.openai_responses import ResponsesServer
 

@@ -270,13 +270,14 @@ policies. They are process-local unless the host flag
 `--memory-storage POLICY=PATH` selects a durable store; storage never belongs in
 YAML. Custom policies require Python host injection. For Python calls, declarations
 remain dormant unless the host passes a `memory={...}` registry to `run_flow`,
-keyed by the selected policy names. Supplying the registry enables recall and any
-optional conversation capability.
+keyed by the selected policy names. All memories contribute through one context:
+ordinary memories supply notes or instructions, and SessionMemory supplies a
+structured session transcript alongside any learned notes.
 For conversation continuity, declare `long_term_memory: session`; Python hosts
 inject `SessionMemory()` under `"session"`. It accepts no frame config. The host can set
 `SessionMemory(history_budget_chars=32_000, recent_turns=4)` for API context
 summaries; these settings do not belong in YAML and do not truncate raw history.
-The innermost conversation-capable frame owns a separate conversation for each
+The innermost frame contributing a transcript owns a separate conversation for each
 authored AGENT leaf; other frames still provide recall. Repeated calls queue in
 admission order, including LOOP iterations and MAP items. MAP does not fork
 history or guarantee input-index admission order; use non-session memory when

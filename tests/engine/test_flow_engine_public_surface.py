@@ -33,12 +33,11 @@ from agent_composer.events import (
     RunSucceeded,
     StreamChunk,
 )
-from agent_composer.memory import MemoryScope, MemorySection, RecallContext
 from agent_composer.nodes.base import Node, NodeKind, Output
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
 from agent_composer.runtime import FlowEngine
-from agent_composer.runtime.eval_node import ConversationOpener
+from agent_composer.runtime.eval_node import MemoryContextOpener
 from agent_composer.runtime.log import MemoryRunLog, NodeStartedRecord, RunLog
 from agent_composer.runtime.state import (
     GrowBuilder,
@@ -319,14 +318,12 @@ def test_constructor_is_exactly_the_recorded_state_log_surface():
         "on_event",
         "on_stream",
         "stop_event",
-        "memory_recall",
-        "conversation_opener",
+        "memory_context_opener",
     ]
     assert [parameter.kind for parameter in parameters] == [
         inspect.Parameter.POSITIONAL_OR_KEYWORD,
         inspect.Parameter.POSITIONAL_OR_KEYWORD,
         inspect.Parameter.POSITIONAL_OR_KEYWORD,
-        inspect.Parameter.KEYWORD_ONLY,
         inspect.Parameter.KEYWORD_ONLY,
         inspect.Parameter.KEYWORD_ONLY,
         inspect.Parameter.KEYWORD_ONLY,
@@ -344,7 +341,6 @@ def test_constructor_is_exactly_the_recorded_state_log_surface():
         None,
         None,
         None,
-        None,
     ]
     hints = get_type_hints(FlowEngine.__init__)
     assert set(hints) == {
@@ -355,8 +351,7 @@ def test_constructor_is_exactly_the_recorded_state_log_surface():
         "on_event",
         "on_stream",
         "stop_event",
-        "memory_recall",
-        "conversation_opener",
+        "memory_context_opener",
         "return",
     }
     assert hints["state"] is RunState
@@ -379,12 +374,7 @@ def test_constructor_is_exactly_the_recorded_state_log_surface():
         types.NoneType,
     )
     assert _optional_inner(hints["stop_event"]) is threading.Event
-    recall_hint = _optional_inner(hints["memory_recall"])
-    assert get_origin(recall_hint) is Callable
-    recall_parameters, recall_result = get_args(recall_hint)
-    assert tuple(recall_parameters) == (MemoryScope, RecallContext)
-    assert recall_result == tuple[MemorySection, ...]
-    assert _optional_inner(hints["conversation_opener"]) is ConversationOpener
+    assert _optional_inner(hints["memory_context_opener"]) is MemoryContextOpener
     assert hints["return"] is types.NoneType
 
 

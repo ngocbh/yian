@@ -101,7 +101,7 @@ def test_no_session_backend_keeps_plain_calls_fresh(monkeypatch, backend, policy
     ToolMessage(content="result", tool_call_id="provider-call", artifact={"value": [1, 2]}, status="success"),
 ])
 def test_message_codec_round_trip_preserves_exact_provider_fields(message):
-    from agent_composer.nodes.agent.conversation import decode_message, encode_message
+    from agent_composer.nodes.agent.context import decode_message, encode_message
     item = encode_message(message, "exchange")
     assert item.payload["exchange_id"] == "exchange"
     assert message_to_dict(decode_message(item)) == message_to_dict(message)
@@ -113,7 +113,7 @@ def test_message_codec_round_trip_preserves_exact_provider_fields(message):
 
 @pytest.mark.parametrize("bad", [float("nan"), float("inf"), object(), {1: "not a JSON key"}])
 def test_message_codec_rejects_non_json_provider_payloads(bad):
-    from agent_composer.nodes.agent.conversation import encode_message
+    from agent_composer.nodes.agent.context import encode_message
     message = AIMessage(content="reply", response_metadata={"bad": bad})
     with pytest.raises((TypeError, ValueError)):
         encode_message(message, "exchange")
@@ -122,7 +122,7 @@ def test_message_codec_rejects_non_json_provider_payloads(bad):
 @pytest.mark.parametrize("change", ["format", "exchange", "missing", "role", "coercion"])
 def test_message_codec_rejects_unknown_or_corrupt_stored_format(change):
     from agent_composer.memory import ConversationItem
-    from agent_composer.nodes.agent.conversation import decode_message, encode_message
+    from agent_composer.nodes.agent.context import decode_message, encode_message
     original = encode_message(HumanMessage(content="input"), "exchange")
     payload = original.payload
     format = original.format
@@ -147,7 +147,7 @@ def test_message_codec_rejects_unknown_or_corrupt_stored_format(change):
 ])
 def test_message_codec_accepts_older_payloads_without_optional_defaults(wire):
     from agent_composer.memory import ConversationItem
-    from agent_composer.nodes.agent.conversation import MESSAGE_FORMAT, decode_message
+    from agent_composer.nodes.agent.context import MESSAGE_FORMAT, decode_message
     item = ConversationItem("older-item", MESSAGE_FORMAT, {"exchange_id": "older-exchange", "message": wire})
     decoded = message_to_dict(decode_message(item))
     assert decoded["type"] == wire["type"]
@@ -161,7 +161,7 @@ def test_message_codec_accepts_older_payloads_without_optional_defaults(wire):
 ])
 def test_message_codec_accepts_nested_tool_call_discriminator_defaults(role, field, call, discriminator):
     from agent_composer.memory import ConversationItem
-    from agent_composer.nodes.agent.conversation import MESSAGE_FORMAT, decode_message
+    from agent_composer.nodes.agent.context import MESSAGE_FORMAT, decode_message
     wire = {"type": role, "data": {"content": "", field: [call]}}
     item = ConversationItem("older-item", MESSAGE_FORMAT, {"exchange_id": "exchange", "message": wire})
     restored = message_to_dict(decode_message(item))["data"][field][0]
@@ -175,7 +175,7 @@ def test_message_codec_accepts_nested_tool_call_discriminator_defaults(role, fie
 ])
 def test_message_codec_rejects_nested_data_loss_and_opaque_payload_changes(monkeypatch, change):
     from agent_composer.memory import ConversationItem
-    from agent_composer.nodes.agent import conversation
+    from agent_composer.nodes.agent import context as conversation
     wire = {"type": "ai", "data": {
         "content": [{"type": "text", "text": "reply"}],
         "additional_kwargs": {"reasoning_content": "reasoning"},
@@ -216,7 +216,7 @@ def test_message_codec_rejects_nested_data_loss_and_opaque_payload_changes(monke
 
 def test_message_codec_rejects_replaced_supplied_tool_call_discriminator():
     from agent_composer.memory import ConversationItem
-    from agent_composer.nodes.agent.conversation import MESSAGE_FORMAT, decode_message
+    from agent_composer.nodes.agent.context import MESSAGE_FORMAT, decode_message
     wire = {"type": "ai", "data": {"content": "", "tool_calls": [
         {"name": "lookup", "args": {"id": 1}, "id": "call-1", "type": "different"},
     ]}}
@@ -228,7 +228,7 @@ def test_message_codec_rejects_replaced_supplied_tool_call_discriminator():
 @pytest.mark.parametrize("stage", ["request", "observe", "encode_input", "encode_reply", "history", "view"])
 def test_adapter_memory_faults_are_distinct_from_provider_failures(stage):
     from agent_composer.memory import ConversationItem
-    from agent_composer.nodes.agent.conversation import history_messages, invoke_model
+    from agent_composer.nodes.agent.context import history_messages, invoke_model
     from agent_composer.nodes.base import _CapabilityFault
     calls = []
     expected = ValueError("memory refused write")
@@ -279,7 +279,7 @@ def test_compatible_model_and_prompt_changes_retain_history_with_current_system(
 
 
 def test_admission_follows_render_and_recall_and_only_current_recall_is_reused(monkeypatch):
-    from agent_composer.memory import MemorySection
+    from agent_composer.memory import MemoryContext, MemorySection
     from agent_composer.nodes.agent import AgentNode
     from tests.engine._session_fakes import REF, harness, request
     memory = SessionMemory()
@@ -289,16 +289,16 @@ def test_admission_follows_render_and_recall_and_only_current_recall_is_reused(m
     node = AgentNode("agent", prompt="question ${value}")
     for index, note in enumerate(("old recall", "current recall")):
         with harness(memory) as opened, ExitStack() as stack:
-            def recall(system, prompt):
+            def open_context(system, prompt, compatibility):
                 assert prompt == f"question {index}"
                 events.append("recall")
-                return (MemorySection(REF, note),)
-            def begin(compatibility):
+                sections = (MemorySection(REF, note),)
                 events.append("admit")
-                return stack.enter_context(opened.frame.open_turn(
+                turn = stack.enter_context(opened.frame.open_turn(
                     request(run_id=str(index), compatibility=compatibility), check_stopped=lambda: None,
                 ))
-            node.forward({"value": index}, recall_memory=recall, begin_conversation=begin,
+                return MemoryContext(sections=sections, transcript=turn)
+            node.forward({"value": index}, open_memory_context=open_context,
                          capture_render=lambda _: events.append("render"))
     assert events == ["render", "recall", "admit", "model"] * 2
     assert "current recall" in model.calls[-1][0].content
@@ -323,7 +323,7 @@ def test_provider_change_requires_reset_then_starts_fresh(monkeypatch):
 
 
 def test_compatibility_matches_factory_defaults_and_config_carriers(monkeypatch):
-    from agent_composer.nodes.agent import conversation
+    from agent_composer.nodes.agent import context as conversation
     from agent_composer.llm_clients import LLMConfig
     monkeypatch.setattr(conversation, "default_llm_provider", lambda: "OpenAI")
     expected = {"provider": "openai", "message_format": conversation.MESSAGE_FORMAT}
@@ -359,7 +359,7 @@ def test_request_is_stored_before_provider_and_failed_effect_remains_truthful(mo
 
 @pytest.mark.parametrize("host_stop", [False, True])
 def test_failed_observation_does_not_replace_provider_or_host_error(host_stop):
-    from agent_composer.nodes.agent.conversation import invoke_model
+    from agent_composer.nodes.agent.context import invoke_model
     from agent_composer.nodes.base import _CapabilityFault, _HostStop
     primary = _HostStop("provider cancelled") if host_stop else ValueError("provider failed")
     seen = []

@@ -87,7 +87,7 @@ def _records(path: Path):
 @pytest.mark.parametrize("resume", [False, True])
 @pytest.mark.parametrize("num_workers", [0, 2])
 @pytest.mark.parametrize("learnable", [False, True])
-def test_conversation_opener_uses_same_runtime_on_fresh_and_resume(
+def test_memory_context_opener_uses_same_runtime_on_fresh_and_resume(
     tmp_path, monkeypatch, resume, num_workers, learnable,
 ):
     path = tmp_path / "conversation.jsonl"
@@ -98,19 +98,20 @@ def test_conversation_opener_uses_same_runtime_on_fresh_and_resume(
     original_engine = boundary.FlowEngine
 
     def engine(*args, **kwargs):
-        assert kwargs["conversation_opener"].__self__ is kwargs["memory_recall"].__self__
-        engines.append(kwargs["conversation_opener"].__self__)
+        assert "memory_recall" not in kwargs
+        assert kwargs["memory_context_opener"].__name__ == "open_context"
+        engines.append(kwargs["memory_context_opener"].__self__)
         return original_engine(*args, **kwargs)
 
-    def forward(node, inputs, *, begin_conversation):
-        turn = begin_conversation({"format": "test-v1"})
+    def forward(node, inputs, *, open_memory_context):
+        turn = open_memory_context("system", "prompt", {"format": "test-v1"}).transcript
         entered.append(turn.view.key.consumer_static_path)
         ordinal = turn.request("model", {"input": "test"})
         turn.observe(ordinal, "completed", items=(ConversationItem("reply", "test-v1", {"value": 7}),))
         return Output(7)
 
     # Keep the real canonical CODE manifest, replacing only this test's execution.
-    monkeypatch.setattr(CodeNode, "needs_conversation", True)
+    monkeypatch.setattr(CodeNode, "needs_memory_context", True)
     monkeypatch.setattr(CodeNode, "forward", forward)
     monkeypatch.setattr(boundary, "FlowEngine", engine)
     flow = load_flow(_FLOW)
@@ -145,10 +146,10 @@ def test_conversation_completes_before_dispatcher_output_contract_acceptance(
     tmp_path, monkeypatch, num_workers,
 ):
     memory = SessionMemory()
-    def forward(node, inputs, *, begin_conversation):
-        begin_conversation({})
+    def forward(node, inputs, *, open_memory_context):
+        open_memory_context("system", "prompt", {}).transcript
         return Output("not an integer")
-    monkeypatch.setattr(CodeNode, "needs_conversation", True)
+    monkeypatch.setattr(CodeNode, "needs_memory_context", True)
     monkeypatch.setattr(CodeNode, "forward", forward)
     result = run_flow(load_flow(_FLOW), {}, log=tmp_path / "rejected.jsonl",
                       memory={"test": memory}, num_workers=num_workers)

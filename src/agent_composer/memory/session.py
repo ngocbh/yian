@@ -948,8 +948,8 @@ class _Frame:
         self._session = session
         self._spec = spec
 
-    def recall(self, context: c.RecallContext | None = None) -> str:
-        """Recall this frame's pinned notes for exactly one authored consumer.
+    def recall(self, context: c.RecallContext | None = None) -> c.MemoryContent:
+        """Contribute pinned notes and the live transcript source for one consumer.
 
         Args:
             context (`RecallContext | None`): Optional exact visible-context carrier;
@@ -957,7 +957,7 @@ class _Frame:
                 history is not rendered as recall text.
 
         Returns:
-            `str`: Notes from the run-opening snapshot, in retained order.
+            `MemoryContent`: Pinned notes in retained order and this transcript source.
 
         Raises:
             `TypeError`: A supplied context is not an exact recall-context carrier.
@@ -968,19 +968,20 @@ class _Frame:
         with self._session._memory._locked():
             self._session._ensure_live()
             if context is None:
-                return ""
+                return c.MemoryContent(transcript=self)
             context = c.RecallContext(
                 context.base_system_prompt,
                 context.prompt,
                 context.inputs,
                 context.consumer_static_path,
             )
-            return "\n".join(
+            notes = "\n".join(
                 note["text"]
                 for note in self._session._pinned.get("notes", [])
                 if note["frame_ref"] == _frame_json(self._spec.ref)
                 and note["consumer_static_path"] == list(context.consumer_static_path)
             )
+            return c.MemoryContent(notes, self)
 
     def learn(self, context: c.LearnContext) -> list[c.MemoryMutation]:
         """Propose notes from self-feedback for this frame's admitted invocations.

@@ -40,10 +40,10 @@ from agent_composer.expr.lineage import ResolvedValue, ValueRoute
 from agent_composer.memory import (
     CheckStopped,
     ConversationInvocation,
-    ConversationRequest,
-    ConversationTurn,
     EvaluationEvidence,
     EvaluationTrace,
+    MemoryContext,
+    MemoryContextRequest,
     MemoryRecallError,
     MemoryScope,
     MemorySection,
@@ -119,18 +119,6 @@ def _format_exception(exception: Exception) -> str:
 
 WorkerOutcome: TypeAlias = Output | Route | Grow | EvaluationFailure
 """Closed raw worker result consumed by the append-only dispatcher."""
-
-MemoryRecall: TypeAlias = Callable[
-    [MemoryScope, RecallContext],
-    tuple[MemorySection, ...],
-]
-"""Injected source-neutral recall boundary for one compiled node scope."""
-
-NodeMemoryRecall: TypeAlias = Callable[
-    [str, str],
-    tuple[MemorySection, ...],
-]
-"""Narrow node capability after the evaluator captures scope and bound inputs."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -287,91 +275,24 @@ def _validated_memory_sections(
     return sections
 
 
-def _memory_recall_capability(
-    node: Node,
-    record: dict[str, Any],
-    memory_recall: MemoryRecall | None,
-) -> NodeMemoryRecall | None:
-    """Bind one injected recall seam to a node's immutable invocation context."""
-    if node.needs_memory_recall is not True:
-        return None
-    scope = node.memory_scope
-    if scope is None:
-        return None
-    if type(scope) is not MemoryScope:
-        raise TypeError("node memory_scope must be an exact MemoryScope or None")
-    MemoryScope(
-        scope.root_flow_id,
-        scope.static_path,
-        scope.frame_stack,
-        scope.occurrence_path,
-        scope.boundary,
-    )
-    if not scope.frame_stack:
-        return None
-    if memory_recall is None:
-        raise RuntimeError(
-            f"scoped node {node.id!r} requires an injected memory recall callback"
-        )
-
-    invalid_inputs = False
-    try:
-        canonical_inputs = canonical_seed(record)[0]
-        if type(canonical_inputs) is not dict:
-            raise TypeError("bound node inputs did not canonicalize to an exact dict")
-    except (TypeError, ValueError, RecursionError):
-        canonical_inputs = {}
-        invalid_inputs = True
-
-    def recall_memory(
-        base_system_prompt: str,
-        rendered_prompt: str,
-    ) -> tuple[MemorySection, ...]:
-        """Construct one complete policy context and validate its ordered result."""
-        if invalid_inputs:
-            raise MemoryRecallError("memory recall context is invalid")
-        try:
-            context = RecallContext(
-                base_system_prompt,
-                rendered_prompt,
-                canonical_inputs,
-                scope.static_path,
-            )
-        except (TypeError, ValueError, RecursionError) as exc:
-            raise MemoryRecallError("memory recall context is invalid") from exc
-
-        try:
-            sections = memory_recall(scope, context)
-        except MemoryRecallError:
-            raise
-        except Exception as exc:
-            raise _CapabilityFault(exc) from exc
-        try:
-            return _validated_memory_sections(scope, sections)
-        except (TypeError, ValueError, RecursionError) as exc:
-            raise MemoryRecallError("memory recall returned invalid sections") from exc
-
-    return recall_memory
-
-
-class ConversationOpener(Protocol):
-    """Host-injected selection of an optional memory-owned conversation turn."""
+class MemoryContextOpener(Protocol):
+    """Host-injected admission of notes and an optional structured transcript."""
 
     def __call__(
-        self, scope: MemoryScope, request: ConversationRequest, *, check_stopped: CheckStopped,
-    ) -> AbstractContextManager[ConversationTurn | None]:
-        """Select a turn context for a bound request without entering it."""
+        self, scope: MemoryScope, request: MemoryContextRequest, *, check_stopped: CheckStopped,
+    ) -> AbstractContextManager[MemoryContext]:
+        """Select one memory context without entering it."""
         ...
 
 
-def _note_conversation_cleanup(primary: BaseException, cleanup: BaseException) -> None:
+def _note_memory_cleanup(primary: BaseException, cleanup: BaseException) -> None:
     """Retain secondary cleanup evidence without replacing the initiating error."""
     if cleanup is primary:
         return
     try:
         add_note = getattr(primary, "add_note", None)
         if callable(add_note):
-            add_note(f"Conversation cleanup failed: {type(cleanup).__name__}: {cleanup}")
+            add_note(f"Memory context cleanup failed: {type(cleanup).__name__}: {cleanup}")
     except BaseException:
         pass
 
@@ -390,34 +311,50 @@ def _copy_cleanup_notes(source: BaseException, target: BaseException) -> None:
 
 
 @contextmanager
-def _conversation_capability(scope, opener, invocation, stop_event, close_error):
+def _memory_context_capability(
+    scope, opener, invocation, stop_event, close_error, canonical_inputs, invalid_inputs,
+):
     """Bind a lazy single-entry capability to this execution's resource lifetime."""
     stack = ExitStack()
     closed = used = False
-
     def check_stopped():
         if stop_event.is_set():
             raise _HostStop(primary=False)
 
-    def begin_conversation(compatibility):
+    def open_memory_context(base_system_prompt, rendered_prompt, compatibility):
         nonlocal used
         if closed:
-            raise RuntimeError("conversation capability is closed")
+            raise RuntimeError("memory context capability is closed")
         try:
             if used:
-                raise RuntimeError("conversation capability was already entered")
+                raise RuntimeError("memory context capability was already entered")
             used = True
-            if opener is None or scope is None or not scope.frame_stack:
-                return None
-            request = ConversationRequest(scope.static_path, invocation, compatibility)
-            return stack.enter_context(opener(scope, request, check_stopped=check_stopped))
-        except (_HostStop, _CapabilityFault):
+            if scope is None or not scope.frame_stack:
+                return MemoryContext()
+            if invalid_inputs:
+                raise MemoryRecallError("memory recall context is invalid")
+            try:
+                recall = RecallContext(
+                    base_system_prompt, rendered_prompt, canonical_inputs, scope.static_path,
+                )
+                request = MemoryContextRequest(recall, invocation, compatibility)
+            except (TypeError, ValueError, RecursionError) as exc:
+                raise MemoryRecallError("memory recall context is invalid") from exc
+            context = stack.enter_context(opener(scope, request, check_stopped=check_stopped))
+            try:
+                if type(context) is not MemoryContext:
+                    raise TypeError("memory context must be an exact MemoryContext")
+                _validated_memory_sections(scope, context.sections)
+            except (TypeError, ValueError, RecursionError) as exc:
+                raise MemoryRecallError("memory recall returned invalid context") from exc
+            return context
+        except (_HostStop, _CapabilityFault, MemoryRecallError):
             raise
         except Exception as exc:
             raise _CapabilityFault(exc) from exc
 
     try:
-        yield begin_conversation
+        yield open_memory_context
     except BaseException as primary:
         closed = True
         if isinstance(primary, _HostStop) and primary.primary:
@@ -433,7 +370,7 @@ def _conversation_capability(scope, opener, invocation, stop_event, close_error)
         try:
             stack.__exit__(type(original), original, original.__traceback__)
         except BaseException as cleanup:
-            _note_conversation_cleanup(original, cleanup)
+            _note_memory_cleanup(original, cleanup)
         finally:
             if close_error:
                 _copy_cleanup_notes(original, close_error[0])
@@ -451,7 +388,7 @@ def _conversation_capability(scope, opener, invocation, stop_event, close_error)
 
 
 class _ResultContractError(Exception):
-    """Carry the result-validation stage across conversation cleanup."""
+    """Carry the result-validation stage across memory context cleanup."""
 
     def __init__(self, message):
         try:
@@ -469,10 +406,9 @@ def _evaluate_node_stream(
     wiring_override=None,
     stop_event=None,
     evaluation_trace: _EvaluationTraceCollector | None = None,
-    memory_recall: MemoryRecall | None = None,
-    conversation_opener: ConversationOpener | None = None,
-    conversation_invocation: ConversationInvocation | None = None,
-    conversation_scope: MemoryScope | None = None,
+    memory_context_opener: MemoryContextOpener | None = None,
+    memory_invocation: ConversationInvocation | None = None,
+    memory_scope: MemoryScope | None = None,
     close_error: list[BaseException] | None = None,
     binding_collector: BindingCollector | None = None,
     capture_inputs: Callable[[dict[str, Any]], None] | None = None,
@@ -490,9 +426,9 @@ def _evaluate_node_stream(
     running, but only a node declaring `needs_stop_event` receives it as a capability. A direct
     opted-in evaluation that omits it receives a fresh unset private event.
 
-    `memory_recall` is a host-injected, source-neutral recall boundary. A scoped node declaring
-    `needs_memory_recall` receives only a closure over its canonical bound inputs and memory
-    scope; every other node remains unaware of the capability.
+    `memory_context_opener` is a source-neutral context boundary. A node declaring
+    `needs_memory_context` receives only a closure over its canonical bound inputs
+    and memory scope; other nodes remain unaware of the capability.
 
     Returns:
         `WorkerOutcome`:
@@ -557,7 +493,19 @@ def _evaluate_node_stream(
     if capture_inputs is not None and not uses_base_template:
         capture_inputs(record)
 
-    recall_memory = _memory_recall_capability(node, record, memory_recall)
+    canonical_inputs = {}
+    invalid_inputs = False
+    if memory_scope is not None and memory_scope.frame_stack:
+        if memory_context_opener is None:
+            raise RuntimeError(
+                f"scoped node {node.id!r} requires an injected memory context callback"
+            )
+        try:
+            canonical_inputs = canonical_seed(record)[0]
+            if type(canonical_inputs) is not dict:
+                raise TypeError("bound node inputs did not canonicalize to an exact dict")
+        except (TypeError, ValueError, RecursionError):
+            invalid_inputs = True
 
     if evaluation_trace is not None:
         try:
@@ -567,7 +515,7 @@ def _evaluate_node_stream(
                     "bound node inputs did not canonicalize to an exact dict"
                 )
         except (TypeError, ValueError, RecursionError):
-            if recall_memory is None:
+            if memory_scope is None or not memory_scope.frame_stack:
                 raise
             # The recall capability owns the semantic rejection for its complete
             # query context. Evidence remains observational and simply omits the
@@ -611,17 +559,16 @@ def _evaluate_node_stream(
         caps["stop_event"] = stop_event
     if evaluation_trace is not None:
         caps["evaluation_trace"] = evaluation_trace
-    if recall_memory is not None:
-        caps["recall_memory"] = recall_memory
     if capture_render is not None:
         caps["capture_render"] = capture_render
 
     try:
-        with _conversation_capability(
-            conversation_scope, conversation_opener, conversation_invocation, stop_event, close_error,
-        ) as begin:
-            if node.needs_conversation is True:
-                caps["begin_conversation"] = begin
+        with _memory_context_capability(
+            memory_scope, memory_context_opener, memory_invocation, stop_event, close_error,
+            canonical_inputs, invalid_inputs,
+        ) as open_context:
+            if node.needs_memory_context is True:
+                caps["open_memory_context"] = open_context
             outcome = (
                 node._run_for_evaluator(
                     record,
@@ -726,9 +673,8 @@ def eval_node(
     stop_event=None,
     emit_stream: Callable[[StreamChunk], None] | None = None,
     capture_evidence: bool = False,
-    memory_recall: MemoryRecall | None = None,
-    conversation_opener: ConversationOpener | None = None,
-    conversation_invocation: ConversationInvocation | None = None,
+    memory_context_opener: MemoryContextOpener | None = None,
+    memory_invocation: ConversationInvocation | None = None,
     capture_bindings: bool = False,
     source_resolver: SourceResolver | None = None,
     effective_llm_by_static_path: dict[str, dict[str, Any]] | None = None,
@@ -739,19 +685,16 @@ def eval_node(
     deliberately invoked outside the node-failure funnel.  If it raises, that exact host
     exception escapes; it must never become a durable node failure.  When omitted, chunks
     are discarded. ``capture_evidence`` must be an exact bool; its default leaves tracing
-    dormant. ``memory_recall`` reaches only a scoped, opted-in node through a narrower
-    capability. ``_HostStop`` likewise propagates unchanged.
-    ``conversation_opener`` is an optional callable selecting a context manager
-    from a compiled memory scope, ``ConversationRequest``, and keyword-only
-    cooperative-stop check. ``conversation_invocation`` is the exact immutable
-    ``ConversationInvocation`` captured from the accepted node start. Both default
-    to ``None``. A node declaring ``needs_conversation`` receives only
-    ``begin_conversation(compatibility)``; opening is lazy and single-use. With no
-    opener or no memory frames, it returns ``None``. Otherwise the invocation is
-    required. The evaluator closes the turn after execution/result-shape checks,
-    before failure conversion, never after dispatcher acceptance. Invalid callback
-    or identity types raise ``TypeError``; invalid identities raise ``ValueError``.
-    Opener and cleanup host faults propagate without becoming node failures.
+    dormant. ``memory_context_opener`` reaches only an opted-in node through a
+    narrow ``open_memory_context(base_system_prompt, rendered_prompt, compatibility)``
+    capability over canonical bound inputs and the captured memory scope.
+    Opening is lazy and single-use. An unscoped node receives an empty context;
+    a scoped node requires an injected opener. ``memory_invocation`` is the
+    accepted node-start identity, required only for transcript admission.
+    The evaluator owns context cleanup through execution, generator draining,
+    postassertions, and result validation. Typed recall failures remain node
+    failures; unexpected opening and cleanup faults remain host errors.
+    ``_HostStop`` propagates unchanged.
     ``capture_bindings`` independently retains input values and expression routes,
     with ``source_resolver`` supplying paired reads when available. It snapshots
     common input/variable inventories and scope before binding. The base run
@@ -771,27 +714,25 @@ def eval_node(
         raise TypeError("capture_bindings must be a bool")
     if source_resolver is not None and not callable(source_resolver):
         raise TypeError("source_resolver must be callable or None")
-    if memory_recall is not None and not callable(memory_recall):
-        raise TypeError("memory_recall must be callable or None")
-    if conversation_opener is not None and not callable(conversation_opener):
-        raise TypeError("conversation_opener must be callable or None")
-    if conversation_invocation is not None:
-        if type(conversation_invocation) is not ConversationInvocation:
-            raise TypeError("conversation_invocation must be a ConversationInvocation or None")
-        conversation_invocation = ConversationInvocation(
-            conversation_invocation.run_id, conversation_invocation.start_sequence,
+    if memory_context_opener is not None and not callable(memory_context_opener):
+        raise TypeError("memory_context_opener must be callable or None")
+    if memory_invocation is not None:
+        if type(memory_invocation) is not ConversationInvocation:
+            raise TypeError("memory_invocation must be a ConversationInvocation or None")
+        memory_invocation = ConversationInvocation(
+            memory_invocation.run_id, memory_invocation.start_sequence,
         )
     if stop_event is None:
         stop_event = threading.Event()
-    conversation_scope = None
-    if node.needs_conversation is True and node.memory_scope is not None:
+    memory_scope = None
+    if node.needs_memory_context is True and node.memory_scope is not None:
         if type(node.memory_scope) is not MemoryScope:
             raise TypeError("node memory_scope must be an exact MemoryScope or None")
-        conversation_scope = deepcopy(node.memory_scope)
+        memory_scope = deepcopy(node.memory_scope)
         MemoryScope(
-            conversation_scope.root_flow_id, conversation_scope.static_path,
-            conversation_scope.frame_stack, conversation_scope.occurrence_path,
-            conversation_scope.boundary,
+            memory_scope.root_flow_id, memory_scope.static_path,
+            memory_scope.frame_stack, memory_scope.occurrence_path,
+            memory_scope.boundary,
         )
     if effective_llm_by_static_path is not None and type(effective_llm_by_static_path) is not dict:
         raise TypeError("effective_llm_by_static_path must be a dict or None")
@@ -871,10 +812,9 @@ def eval_node(
         wiring_override=wiring_override,
         stop_event=stop_event,
         evaluation_trace=evaluation_trace,
-        memory_recall=memory_recall,
-        conversation_opener=conversation_opener,
-        conversation_invocation=conversation_invocation,
-        conversation_scope=conversation_scope,
+        memory_context_opener=memory_context_opener,
+        memory_invocation=memory_invocation,
+        memory_scope=memory_scope,
         close_error=close_error,
         binding_collector=binding_collector,
         capture_inputs=capture_inputs if capture_bindings else None,

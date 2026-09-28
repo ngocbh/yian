@@ -1,7 +1,7 @@
-"""Provider-message encoding and effects over memory-owned conversation turns.
+"""Model context and effects over recalled notes and structured transcripts.
 
-The adapter retains no history or lease. Every call reads or writes the supplied
-turn; only the memory backend owns conversation state. Full provider input and
+The adapter frames recalled notes and projects structured transcript messages.
+It retains no history or lease; only the memory backend owns conversation state. Full provider input and
 newly retained messages stay separate so retries need not repeat stored history.
 """
 
@@ -35,12 +35,46 @@ from agent_composer.memory import (
     ConversationView,
     JsonObject,
     MemoryOperationFailure,
+    MemorySection,
 )
 from agent_composer.memory.summary import admissions
 from agent_composer.nodes.base import _CapabilityFault, _HostStop
 
 MESSAGE_FORMAT = "agent-composer.langchain-message.v1"
 HISTORY_PROJECTION = "agent-composer.api-history.v2"
+
+
+def system_prompt_with_memory(
+    base_system_prompt: str,
+    memory_sections: tuple[MemorySection, ...],
+) -> str:
+    """Frame opaque policy text as labelled outer-to-local system sections."""
+    if not memory_sections:
+        return base_system_prompt
+    payload = {
+        "order": "outer-to-local",
+        "sections": [
+            {
+                "index": index,
+                "owner": section.frame_ref.owner.value.upper(),
+                "static_path": section.frame_ref.static_path,
+                "text": section.text,
+            }
+            for index, section in enumerate(memory_sections, start=1)
+        ],
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return (
+        base_system_prompt
+        + "\n\nMemory context (canonical JSON; sections are ordered from outer "
+        + "workflow to local agent):\n"
+        + encoded
+    )
 
 
 def compatibility(config) -> JsonObject:
@@ -311,7 +345,7 @@ def _history_messages(
 
 
 def prepare_history(
-    turn: ConversationTurn, model, *, check_stopped: Callable[[], None]
+    turn: ConversationTurn | None, model, *, check_stopped: Callable[[], None]
 ) -> list[BaseMessage]:
     """Prepare prior context once with the current unbound model if supported.
 
@@ -320,7 +354,8 @@ def prepare_history(
     backend/projection faults cross the memory capability boundary.
 
     Args:
-        turn (`ConversationTurn`): Active memory-owned conversation lease.
+        turn (`ConversationTurn | None`): Optional active transcript lease;
+            absence contributes no prior messages.
         model (`Any`): Current agent model before binding tools or output schemas.
         check_stopped (`Callable`): Cooperative check before and after preparation.
 
@@ -333,6 +368,8 @@ def prepare_history(
         `_HostStop`: Cooperative cancellation occurs. Summary-provider and reply
             validation exceptions propagate with their original identities.
     """
+    if turn is None:
+        return []
     with _memory_boundary():
         prepare = getattr(turn, "prepare_history", None)
     if prepare is None:
@@ -434,8 +471,12 @@ def prepare_history(
     return messages
 
 
-def current_history_messages(turn: ConversationTurn) -> list[BaseMessage]:
-    """Safely project the active turn when rebuilding a final structured request."""
+def current_history_messages(
+    turn: ConversationTurn | None, *, fallback: list[BaseMessage] | None = None,
+) -> list[BaseMessage]:
+    """Project the active transcript, or retain the current in-memory exchange."""
+    if turn is None:
+        return [] if fallback is None else fallback
     with _memory_boundary():
         view = turn.view
         current = admissions(view)[-1]
@@ -514,7 +555,7 @@ def _pairable_calls(message: AIMessage) -> bool:
 
 
 def invoke_model(
-    turn: ConversationTurn,
+    turn: ConversationTurn | None,
     invoke: Callable[[], Any],
     *,
     new_messages: Sequence[BaseMessage],
@@ -530,7 +571,8 @@ def invoke_model(
     and successful observation failures remain outside the provider-error catch.
 
     Args:
-        turn (`ConversationTurn`): Admitted backend-owned turn to update.
+        turn (`ConversationTurn | None`): Optional transcript to update. Without
+            a transcript, invoke directly and check for cancellation.
         invoke (`Callable`): One model call, invoked outside the memory boundary.
         new_messages (`Sequence[BaseMessage]`): Only newly submitted input messages.
         check_stopped (`Callable`): Cooperative stop check after reply publication.
@@ -548,6 +590,10 @@ def invoke_model(
         `_HostStop`: Cooperative cancellation was requested. Provider exceptions
             also propagate unchanged, including when failure publication fails.
     """
+    if turn is None:
+        reply = invoke()
+        check_stopped()
+        return reply
     exchange_id = exchange_id or uuid4().hex
     with _memory_boundary():
         items = tuple(encode_message(message, exchange_id) for message in new_messages)
@@ -610,7 +656,7 @@ def _observe_failure(turn, ordinal, operation, primary):
 
 
 def invoke_tool_effect(
-    turn: ConversationTurn,
+    turn: ConversationTurn | None,
     invoke: Callable[[], Any],
     *,
     name: str,
@@ -623,7 +669,8 @@ def invoke_tool_effect(
     """Persist one public tool invocation separately from result representation.
 
     Args:
-        turn (`ConversationTurn`): Admitted backend-owned turn to update.
+        turn (`ConversationTurn | None`): Optional transcript to update. Without
+            a transcript, invoke directly and check for cancellation.
         invoke (`Callable`): Existing public tool validation and invocation boundary.
         name (`str`): Currently granted tool name.
         arguments (`JsonObject`): Actual requested public tool arguments.
@@ -640,6 +687,10 @@ def invoke_tool_effect(
         `_HostStop`: Cooperative cancellation occurs. Tool and representation errors
             propagate unchanged; a representation error does not mark execution failed.
     """
+    if turn is None:
+        result = invoke()
+        check_stopped()
+        return ToolMessage(content=str(result), tool_call_id=tool_call_id)
     with _memory_boundary():
         ordinal = turn.request(
             "tool",

@@ -17,16 +17,15 @@ from agent_composer.diagnostics import OriginRef
 from agent_composer.expr.template import render_template_record
 from agent_composer.expr.lineage import FeedbackValue
 from agent_composer.memory.contracts import (
-    ConversationTurn,
+    MemoryContext,
     EvaluationTrace,
     MemoryPolicySpec,
     MemoryRecallError,
-    MemorySection,
     _iter_memory_policy_origin,
     _rewrite_memory_policy_origin,
 )
 from agent_composer.nodes.agent.modes import DEFAULT_SYSTEM, MODES, AgentRunContext
-from agent_composer.nodes.agent.conversation import compatibility
+from agent_composer.nodes.agent.context import compatibility
 from agent_composer.nodes.agent.backward import backward_agent
 from agent_composer.nodes.agent.modes.tool_calling import MAX_TOOL_ITERATIONS
 from agent_composer.nodes.agent.structured import _structured_validation_path
@@ -57,8 +56,7 @@ class AgentNode(Node):
     kind = NodeKind.AGENT
     needs_stop_event = True
     needs_evaluation_trace = True
-    needs_memory_recall = True
-    needs_conversation = True
+    needs_memory_context = True
     needs_render_capture = True
 
     def __init__(
@@ -165,8 +163,7 @@ class AgentNode(Node):
         *,
         stop_event=None,
         evaluation_trace: EvaluationTrace | None = None,
-        memory_sections: tuple[MemorySection, ...] = (),
-        conversation_turn: ConversationTurn | None = None,
+        memory_context: MemoryContext | None = None,
     ) -> AgentRunContext:
         """Build the complete process-local context for one mode invocation."""
         output_type = (
@@ -184,8 +181,7 @@ class AgentNode(Node):
             max_tool_iterations=self._max_tool_iterations(),
             stop_event=stop_event,
             evaluation_trace=evaluation_trace,
-            memory_sections=memory_sections,
-            conversation_turn=conversation_turn,
+            memory_context=memory_context if memory_context is not None else MemoryContext(),
         )
 
     def exception_origin(self, exception: Exception) -> OriginRef | None:
@@ -217,9 +213,8 @@ class AgentNode(Node):
         *,
         stop_event=None,
         evaluation_trace: EvaluationTrace | None = None,
-        recall_memory: Callable[[str, str], tuple[MemorySection, ...]] | None = None,
+        open_memory_context: Callable[[str, str, dict[str, Any]], MemoryContext] | None = None,
         capture_render: Callable[[dict[str, Any]], None] | None = None,
-        begin_conversation: Callable[[dict[str, Any]], ConversationTurn | None] | None = None,
     ) -> Output:
         """Render fresh locals once, publish established capture, and run the mode.
 
@@ -235,14 +230,12 @@ class AgentNode(Node):
                 signal checked before recall and mode execution.
             evaluation_trace (`EvaluationTrace | None`, *optional*, defaults to `None`):
                 Write-only visible prompt and interaction collector.
-            recall_memory (`Callable | None`, *optional*, defaults to `None`):
-                Recall ordered sections from the base and actual rendered prompt.
+            open_memory_context (`Callable | None`, *optional*, defaults to `None`):
+                Recall notes and admit an optional transcript after rendering.
+                The evaluator binds identity and owns the context lifetime.
             capture_render (`Callable | None`, *optional*, defaults to `None`):
                 Publish one dictionary of actual or explicitly unavailable locals.
                 Omission leaves render capture dormant.
-            begin_conversation (`Callable | None`, *optional*, defaults to `None`):
-                Lazily admit one memory-owned turn after prompt preparation and
-                recall. The evaluator binds identity and owns its lifetime.
 
         Returns:
             `Output`: The selected mode's result.
@@ -289,25 +282,19 @@ class AgentNode(Node):
                 capture_render(captured)
         if stop_event is not None and stop_event.is_set():
             raise _HostStop(primary=False)
-        memory_sections = (
-            ()
-            if recall_memory is None
-            else recall_memory(DEFAULT_SYSTEM, prompt)
+        memory_context = (
+            MemoryContext()
+            if open_memory_context is None
+            else open_memory_context(DEFAULT_SYSTEM, prompt, compatibility(self.llm_config))
         )
         if stop_event is not None and stop_event.is_set():
             raise _HostStop(primary=False)
-        descriptor = compatibility(self.llm_config)
-        conversation_turn = (
-            None if begin_conversation is None
-            else begin_conversation(descriptor)
-        )
         return MODES[self.mode](
             self._ctx(
                 prompt,
                 stop_event=stop_event,
                 evaluation_trace=evaluation_trace,
-                memory_sections=memory_sections,
-                conversation_turn=conversation_turn,
+                memory_context=memory_context,
             )
         )
 

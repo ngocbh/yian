@@ -1,5 +1,7 @@
 """Structured session calls retain surfaced raw replies independently of parsing."""
 
+from agent_composer.memory import MemoryContext
+
 from copy import deepcopy
 from asyncio import CancelledError as AsyncCancelledError
 from concurrent.futures import CancelledError as FutureCancelledError
@@ -108,7 +110,7 @@ def test_structured_exhaustion_retains_schema_error_identity_and_origin(native):
         with harness(memory) as opened:
             with opened.frame.open_turn(request(), check_stopped=lambda: None) as turn:
                 generate_structured(model, [HumanMessage(content="question")], typ,
-                                    max_retries=0, llm_config=_config(native), conversation_turn=turn)
+                                    max_retries=0, llm_config=_config(native), memory_context=MemoryContext(transcript=turn))
     if native:
         assert caught.value is model.errors[-1]
     assert _structured_validation_path(caught.value, typ) == ()
@@ -120,7 +122,7 @@ def test_structured_exhaustion_retains_schema_error_identity_and_origin(native):
 @pytest.mark.parametrize("native", [False, True])
 @pytest.mark.parametrize("stage", ["request", "observe", "encode"])
 def test_structured_memory_faults_do_not_retry_model(monkeypatch, native, stage):
-    from agent_composer.nodes.agent import conversation
+    from agent_composer.nodes.agent import context as conversation
     from agent_composer.nodes.agent.structured import generate_structured
     from agent_composer.nodes.base import _CapabilityFault
     from agent_composer.typesys.values import Type, ValueKind
@@ -142,7 +144,7 @@ def test_structured_memory_faults_do_not_retry_model(monkeypatch, native, stage)
         monkeypatch.setattr(conversation, "encode_message", encode)
     with pytest.raises(_CapabilityFault) as caught:
         generate_structured(model, [], Type.scalar(ValueKind.INTEGER), llm_config=_config(native),
-                            conversation_turn=SimpleNamespace(request=request, observe=observe))
+                            memory_context=MemoryContext(transcript=SimpleNamespace(request=request, observe=observe)))
     assert caught.value.original is error
     assert len(model.calls) == (0 if stage == "request" else 1)
 
@@ -179,7 +181,7 @@ def test_native_malformed_carriers_fail_without_retry_and_keep_available_raw(sha
         with harness(memory) as opened:
             with opened.frame.open_turn(request(), check_stopped=lambda: None) as turn:
                 generate_structured(Model(), [], Type.scalar(ValueKind.INTEGER),
-                                    llm_config=_config(True), conversation_turn=turn)
+                                    llm_config=_config(True), memory_context=MemoryContext(transcript=turn))
     assert len(calls) == 1
     available = shape in {"missing_parsed", "invalid_error", "invalid_parsed"}
     assert _view(memory).effects[-1].status == ("completed" if available else "pending")
@@ -235,7 +237,7 @@ def test_structured_stop_boundaries_preserve_surfaced_raw(monkeypatch, native, s
                 if stage == "before":
                     stopped.set()
                 structured.generate_structured(model, [HumanMessage(content="question")], Type.scalar(ValueKind.INTEGER),
-                                               llm_config=_config(native), check_stopped=check, conversation_turn=turn)
+                                               llm_config=_config(native), check_stopped=check, memory_context=MemoryContext(transcript=turn))
     assert caught.value is primary
     surfaced = stage not in {"before", "after_bind"}
     assert len(model.calls) == int(surfaced)
@@ -321,7 +323,7 @@ def test_provider_cancellation_with_failed_publication_is_not_a_structured_retry
         raise RuntimeError("cannot save interruption")
     turn = SimpleNamespace(request=lambda *args, **kwargs: 1, observe=observe)
     with pytest.raises(_CapabilityFault if error_type is FutureCancelledError else error_type) as caught:
-        generate_structured(model, [], Type.scalar(ValueKind.INTEGER), llm_config=_config(native), conversation_turn=turn)
+        generate_structured(model, [], Type.scalar(ValueKind.INTEGER), llm_config=_config(native), memory_context=MemoryContext(transcript=turn))
     original = caught.value.original if error_type is FutureCancelledError else caught.value
     assert original is primary and len(model.calls) == 1 and statuses == ["interrupted"]
 
@@ -396,7 +398,7 @@ def test_session_future_cancellation_with_published_interruption_does_not_retry(
         with harness(memory) as opened:
             with opened.frame.open_turn(request(), check_stopped=lambda: None) as turn:
                 generate_structured(model, [HumanMessage(content="question")], Type.scalar(ValueKind.INTEGER),
-                                    llm_config=_config(native), conversation_turn=turn)
+                                    llm_config=_config(native), memory_context=MemoryContext(transcript=turn))
     assert caught.value is primary and len(model.calls) == 1
     view = _view(memory)
     assert [effect.status for effect in view.effects] == ["interrupted"]
@@ -415,7 +417,7 @@ def test_sanitized_provider_retry_exhaustion_preserves_original_error(native, er
         with harness(memory) as opened:
             with opened.frame.open_turn(request(), check_stopped=lambda: None) as turn:
                 generate_structured(model, [], Type.scalar(ValueKind.INTEGER), max_retries=1,
-                                    llm_config=_config(native), conversation_turn=turn)
+                                    llm_config=_config(native), memory_context=MemoryContext(transcript=turn))
     assert caught.value is primary and len(model.calls) == 2
     assert "secret-marker" not in model.calls[-1][-1].content
     with memory.open_run() as opened:

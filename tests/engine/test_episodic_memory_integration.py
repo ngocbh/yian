@@ -33,7 +33,7 @@ def test_backward_commits_episode_recalled_by_a_fresh_run(monkeypatch) -> None:
 
     def answer(context: AgentRunContext) -> Output:
         observed_sections.append(
-            tuple(section.text for section in context.memory_sections)
+            tuple(section.text for section in context.memory_context.sections)
         )
         return Output("Use a queue to preserve arrival order.")
 

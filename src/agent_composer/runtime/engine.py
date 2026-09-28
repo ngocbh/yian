@@ -24,10 +24,9 @@ from agent_composer.events import RunFailed, StreamChunk
 from agent_composer.memory import ConversationInvocation, EvaluationEvidence
 from agent_composer.nodes.base import Grow, Output, Route, _HostStop
 from agent_composer.runtime.eval_node import (
-    ConversationOpener,
+    MemoryContextOpener,
     EvaluatedOutcome,
     EvaluationFailure,
-    MemoryRecall,
     eval_node,
 )
 from agent_composer.runtime.contracts import ForwardCapture
@@ -74,7 +73,7 @@ class FlowEngine:
 
     ``run`` yields only observers returned after a record has been appended and its
     reducer plan applied.  The optional event callback sees the same observers first;
-    stream chunks are callback-only and never durable or yielded. Optional memory recall is
+    stream chunks are callback-only and never durable or yielded. Optional memory context is
     one source-neutral callback; evidence capture follows only recorded ``RunState.learnable``.
     """
 
@@ -88,14 +87,13 @@ class FlowEngine:
         on_event: Callable[[Any], None] | None = None,
         on_stream: Callable[[StreamChunk], None] | None = None,
         stop_event: threading.Event | None = None,
-        memory_recall: MemoryRecall | None = None,
-        conversation_opener: ConversationOpener | None = None,
+        memory_context_opener: MemoryContextOpener | None = None,
     ) -> None:
         """Borrow a prepared state/log pair and configure one bounded drive.
 
-        ``conversation_opener`` optionally selects a memory-owned turn from a
+        ``memory_context_opener`` optionally admits notes and a memory-owned transcript from a
         compiled scope and accepted invocation. Only trait-enabled nodes receive
-        lazy access to it. It defaults to ``None`` (no conversation capability);
+        lazy access to it. It defaults to ``None`` (no injected memory context);
         a non-callable value raises ``TypeError``. The dispatcher captures each
         accepted start before evaluating or submitting its worker.
         """
@@ -113,10 +111,8 @@ class FlowEngine:
             raise TypeError("on_event must be callable or None")
         if on_stream is not None and not callable(on_stream):
             raise TypeError("on_stream must be callable or None")
-        if memory_recall is not None and not callable(memory_recall):
-            raise TypeError("memory_recall must be callable or None")
-        if conversation_opener is not None and not callable(conversation_opener):
-            raise TypeError("conversation_opener must be callable or None")
+        if memory_context_opener is not None and not callable(memory_context_opener):
+            raise TypeError("memory_context_opener must be callable or None")
         self.state = state
         self.log = log
         self.grow_builder = grow_builder
@@ -124,8 +120,7 @@ class FlowEngine:
         self.on_event = on_event
         self.on_stream = on_stream
         self.stop_event = stop_event if stop_event is not None else threading.Event()
-        self.memory_recall = memory_recall
-        self.conversation_opener = conversation_opener
+        self.memory_context_opener = memory_context_opener
 
     def run(self) -> Iterator[Any]:
         """Drive newly ready work and yield only post-durable observer notifications."""
@@ -439,9 +434,8 @@ class FlowEngine:
             capture_bindings=self.state.learnable,
             effective_llm_by_static_path=self.state.effective_llm_by_static_path,
             source_resolver=None if self.state.trace is None else self.state.trace.resolve,
-            memory_recall=self.memory_recall,
-            conversation_opener=self.conversation_opener,
-            conversation_invocation=invocation,
+            memory_context_opener=self.memory_context_opener,
+            memory_invocation=invocation,
         )
 
     def _evaluate_worker(

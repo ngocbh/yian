@@ -2,8 +2,8 @@
 
 This package owns stable memory-frame identity, occurrence identity, learning
 payloads, detached conversation checkpoints, and the narrow protocols implemented
-by host-provided memory objects. Conversation capabilities are optional and leave
-the mandatory memory protocols unchanged.
+by host-provided memory objects. Structured transcript contributions extend
+recall while retaining existing text-only memory implementations.
 ``contracts.py`` owns that vocabulary; ``conversation.py`` owns its pure fold,
 strict codecs, and digests; ``session.py`` owns conversation views,
 FIFO leases, atomic turn updates, and learned self-feedback notes.
@@ -33,7 +33,6 @@ from agent_composer.memory.contracts import (
     ConversationEffectRequested,
     ConversationEffectState,
     ConversationEffectStatus,
-    ConversationFrame,
     ConversationInvocation,
     ConversationItem,
     ConversationKey,
@@ -52,6 +51,9 @@ from agent_composer.memory.contracts import (
     LearningResult,
     PolicyCommitOutcome,
     Memory,
+    MemoryContent,
+    MemoryContext,
+    MemoryContextRequest,
     MemoryBoundary,
     MemoryBoundaryKind,
     MemoryEpisode,
@@ -78,6 +80,7 @@ from agent_composer.memory.contracts import (
     ModelValueInteraction,
     ToolCallInteraction,
     ToolResultInteraction,
+    TranscriptSource,
     VisibleInteraction,
 )
 
@@ -93,7 +96,6 @@ __all__ = [
     "ConversationEffectRequested",
     "ConversationEffectState",
     "ConversationEffectStatus",
-    "ConversationFrame",
     "ConversationInvocation",
     "ConversationItem",
     "ConversationKey",
@@ -112,6 +114,9 @@ __all__ = [
     "LearningResult",
     "PolicyCommitOutcome",
     "Memory",
+    "MemoryContent",
+    "MemoryContext",
+    "MemoryContextRequest",
     "MemoryBoundary",
     "MemoryBoundaryKind",
     "MemoryEpisode",
@@ -138,5 +143,6 @@ __all__ = [
     "ModelValueInteraction",
     "ToolCallInteraction",
     "ToolResultInteraction",
+    "TranscriptSource",
     "VisibleInteraction",
 ]

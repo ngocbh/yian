@@ -115,7 +115,7 @@ def test_notes_and_commit_tombstones_survive_restart_and_reset(tmp_path):
         with harness(memory) as h:
             h.session.commit("learn", (mutation,))
             assert (
-                h.frame.recall(c.RecallContext("", "", {}, ("root", "agent")))
+                h.frame.recall(c.RecallContext("", "", {}, ("root", "agent"))).text
                 == "Check units."
             )
         memory.reset()

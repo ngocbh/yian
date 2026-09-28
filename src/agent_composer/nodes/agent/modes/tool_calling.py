@@ -12,15 +12,15 @@ from langchain_core.messages import (
     BaseMessage,
     HumanMessage,
     SystemMessage,
-    ToolMessage,
 )
 
 import agent_composer.llm_clients as llm_clients
 from agent_composer.memory.contracts import (
     ToolCallInteraction,
 )
-from agent_composer.nodes.agent.conversation import (
+from agent_composer.nodes.agent.context import (
     current_history_messages,
+    system_prompt_with_memory,
     prepare_history,
     invoke_model,
     invoke_tool_effect,
@@ -34,7 +34,6 @@ from agent_composer.nodes.agent.modes.common import (
 from agent_composer.nodes.agent.modes.utils import (
     record_model_text,
     record_tool_result,
-    system_prompt_with_memory,
     text_of,
 )
 from agent_composer.nodes.agent.structured import generate_structured, type_to_schema
@@ -48,7 +47,7 @@ MAX_TOOL_ITERATIONS = -1
 @register_mode("tool_calling")
 def tool_calling(ctx: AgentRunContext) -> Output:
     """Execute model-returned tool calls in order until the model answers."""
-    system_prompt = system_prompt_with_memory(DEFAULT_SYSTEM, ctx.memory_sections)
+    system_prompt = system_prompt_with_memory(DEFAULT_SYSTEM, ctx.memory_context.sections)
     messages: list[BaseMessage] = [
         SystemMessage(content=system_prompt),
         HumanMessage(content=ctx.prompt),
@@ -57,17 +56,15 @@ def tool_calling(ctx: AgentRunContext) -> Output:
     ctx.check_stopped()
     model = llm_clients.model_from_config(ctx.llm_config or {})
     ctx.check_stopped()
-    prior = []
-    if ctx.conversation_turn is not None:
-        prior = prepare_history(
-            ctx.conversation_turn, model, check_stopped=ctx.check_stopped
-        )
-        messages = [messages[0], *prior, *messages[1:]]
+    prior = prepare_history(
+        ctx.memory_context.transcript, model, check_stopped=ctx.check_stopped
+    )
+    messages = [messages[0], *prior, *messages[1:]]
     if ctx.evaluation_trace is not None:
         ctx.evaluation_trace.record_prompt(
             DEFAULT_SYSTEM,
             ctx.prompt,
-            ctx.memory_sections,
+            ctx.memory_context.sections,
         )
     schema = type_to_schema(ctx.output_type) if ctx.output_type is not None else None
     if not ctx.tools and schema is not None:
@@ -80,7 +77,7 @@ def tool_calling(ctx: AgentRunContext) -> Output:
                 llm_config=ctx.llm_config,
                 check_stopped=ctx.check_stopped,
                 evaluation_trace=ctx.evaluation_trace,
-                conversation_turn=ctx.conversation_turn,
+                memory_context=ctx.memory_context,
                 new_messages=new_messages,
             )
         )
@@ -93,18 +90,14 @@ def tool_calling(ctx: AgentRunContext) -> Output:
     while ctx.max_tool_iterations < 0 or iterations < ctx.max_tool_iterations:
         ctx.check_stopped()
         exchange_id = uuid4().hex
-        if ctx.conversation_turn is None:
-            reply = chat.invoke(messages)
-            ctx.check_stopped()
-        else:
-            reply = invoke_model(
-                ctx.conversation_turn,
-                lambda: chat.invoke(messages),
-                new_messages=new_messages,
-                check_stopped=ctx.check_stopped,
-                exchange_id=exchange_id,
-            )
-            new_messages = []
+        reply = invoke_model(
+            ctx.memory_context.transcript,
+            lambda: chat.invoke(messages),
+            new_messages=new_messages,
+            check_stopped=ctx.check_stopped,
+            exchange_id=exchange_id,
+        )
+        new_messages = []
         iterations += 1
         messages.append(reply)
         calls = getattr(reply, "tool_calls", None) or []
@@ -112,12 +105,13 @@ def tool_calling(ctx: AgentRunContext) -> Output:
             text = text_of(reply)
             record_model_text(ctx.evaluation_trace, text)
             if ctx.output_type is not None and schema is not None:
-                if ctx.conversation_turn is not None:
-                    messages = [
-                        messages[0],
-                        *prior,
-                        *current_history_messages(ctx.conversation_turn),
-                    ]
+                messages = [
+                    messages[0],
+                    *prior,
+                    *current_history_messages(
+                        ctx.memory_context.transcript, fallback=messages[1:]
+                    ),
+                ]
                 return Output(
                     value=generate_structured(
                         model,
@@ -127,7 +121,7 @@ def tool_calling(ctx: AgentRunContext) -> Output:
                         llm_config=ctx.llm_config,
                         check_stopped=ctx.check_stopped,
                         evaluation_trace=ctx.evaluation_trace,
-                        conversation_turn=ctx.conversation_turn,
+                        memory_context=ctx.memory_context,
                         new_messages=[],
                     )
                 )
@@ -153,27 +147,17 @@ def tool_calling(ctx: AgentRunContext) -> Output:
                     f"agent node {ctx.node_id!r} requested tool {name!r}, but it is not "
                     f"granted; granted tools: {ctx.tools}"
                 )
-            if ctx.conversation_turn is None:
-                result = invoke_tool(name, arguments)
-                ctx.check_stopped()
-                result_text = str(result)
-                record_tool_result(ctx.evaluation_trace, name, result_text)
-                result_message = ToolMessage(
-                    content=result_text, tool_call_id=call.get("id") or ""
-                )
-            else:
-                result_message = invoke_tool_effect(
-                    ctx.conversation_turn,
-                    lambda: invoke_tool(name, arguments),
-                    name=name,
-                    arguments=arguments,
-                    model_exchange_id=exchange_id,
-                    call_index=call_index,
-                    tool_call_id=call.get("id") or "",
-                    check_stopped=ctx.check_stopped,
-                )
-                result_text = result_message.content
-                record_tool_result(ctx.evaluation_trace, name, result_text)
+            result_message = invoke_tool_effect(
+                ctx.memory_context.transcript,
+                lambda: invoke_tool(name, arguments),
+                name=name,
+                arguments=arguments,
+                model_exchange_id=exchange_id,
+                call_index=call_index,
+                tool_call_id=call.get("id") or "",
+                check_stopped=ctx.check_stopped,
+            )
+            record_tool_result(ctx.evaluation_trace, name, result_message.content)
             messages.append(result_message)
 
     raise AgentLoopError(

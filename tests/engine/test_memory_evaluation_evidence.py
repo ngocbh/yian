@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import replace
 from types import SimpleNamespace
 import threading
@@ -17,6 +18,7 @@ from agent_composer.compile.model import END_ID, START_ID, GrowthRejected
 from agent_composer.memory import (
     EvaluationEvidence,
     EvaluationTrace,
+    MemoryContext,
     MemoryFrameRef,
     MemoryFrameSpec,
     MemoryOccurrenceKind,
@@ -118,9 +120,10 @@ def _learning_configuration(
     return layout, (MemorySnapshotEnvelope("evidence-test", {}),)
 
 
-def _empty_recall(_scope, _context):
+@contextmanager
+def _empty_context(_scope, _request, *, check_stopped):
     """Represent enabled memory whose policies recalled no visible sections."""
-    return ()
+    yield MemoryContext()
 
 
 class _PlainChat:
@@ -357,7 +360,7 @@ def _captured_agent(
         None,
         VariablePool(),
         capture_evidence=True,
-        memory_recall=_empty_recall,
+        memory_context_opener=_empty_context,
     )
     return node, evaluated
 
@@ -404,11 +407,12 @@ def test_actual_render_capture_survives_later_failures_without_fabricating_evide
     section = MemorySection(node.memory_scope.frame_stack[0], "Relevant memory.")
     factory_calls, model_calls, recall_calls = [], [], []
 
-    def recall(scope, context):
-        recall_calls.append((scope, context))
+    @contextmanager
+    def recall(scope, request, *, check_stopped):
+        recall_calls.append((scope, request.recall))
         if stage == "recall":
             raise MemoryRecallError("recall failed")
-        return (section,)
+        yield MemoryContext((section,))
 
     class Chat:
         def invoke(self, messages):
@@ -427,7 +431,7 @@ def test_actual_render_capture_survives_later_failures_without_fabricating_evide
     layout, snapshots = _learning_configuration(node)
     engine = _engine(_graph([node], [(START_ID, "work"), ("work", END_ID)],
                             wiring={"work": {"topic": "reefs"}}), learnable=True,
-                     memory_layout=layout, memory_snapshots=snapshots, memory_recall=recall)
+                     memory_layout=layout, memory_snapshots=snapshots, memory_context_opener=recall)
     list(engine.run())
     record = next(item.record for item in engine.state.trace.occurrences if item.node_id == "work")
     assert type(record) is (NodeSucceededRecord if stage == "success" else NodeFailedRecord)
@@ -463,7 +467,7 @@ def test_capture_gate_requires_exact_flag_and_trait(
         scoped,
         None,
         VariablePool(),
-        memory_recall=_empty_recall,
+        memory_context_opener=_empty_context,
     )
     assert disabled.evidence is None
 
@@ -473,7 +477,7 @@ def test_capture_gate_requires_exact_flag_and_trait(
         None,
         VariablePool(),
         capture_evidence=True,
-        memory_recall=_empty_recall,
+        memory_context_opener=_empty_context,
     ).evidence
     assert unscoped_evidence.scope is None
     assert unscoped_evidence.interactions == (ModelTextInteraction("done"),)
@@ -485,7 +489,7 @@ def test_capture_gate_requires_exact_flag_and_trait(
         None,
         VariablePool(),
         capture_evidence=True,
-        memory_recall=_empty_recall,
+        memory_context_opener=_empty_context,
     ).evidence is None
 
     with pytest.raises(TypeError, match="capture_evidence must be a bool"):
@@ -501,7 +505,7 @@ def test_capture_snapshots_canonical_inputs_before_node_mutation() -> None:
         None,
         VariablePool(),
         capture_evidence=True,
-        memory_recall=_empty_recall,
+        memory_context_opener=_empty_context,
     )
 
     assert evaluated.outcome == Output({"payload": {"items": [1, 2]}})
@@ -523,7 +527,7 @@ def test_input_snapshot_canonicalization_fault_propagates_before_node_run() -> N
             None,
             VariablePool(),
             capture_evidence=True,
-            memory_recall=_empty_recall,
+            memory_context_opener=_empty_context,
         )
 
     assert node.ran is False
@@ -547,7 +551,7 @@ def test_binding_failure_captures_scope_with_absent_inputs_and_no_prompt(
         flow,
         VariablePool(),
         capture_evidence=True,
-        memory_recall=_empty_recall,
+        memory_context_opener=_empty_context,
     )
 
     assert isinstance(evaluated.outcome, EvaluationFailure)
@@ -576,13 +580,13 @@ def test_oversized_recall_inputs_fail_identically_with_or_without_capture(
     pool.set("source", nested)
     flow = SimpleNamespace(wiring={node.id: {"payload": "${source.output}"}})
 
-    capture_off = eval_node(node, flow, pool, memory_recall=_empty_recall)
+    capture_off = eval_node(node, flow, pool, memory_context_opener=_empty_context)
     capture_on = eval_node(
         node,
         flow,
         pool,
         capture_evidence=True,
-        memory_recall=_empty_recall,
+        memory_context_opener=_empty_context,
     )
 
     assert isinstance(capture_off.outcome, EvaluationFailure)
@@ -627,14 +631,14 @@ def test_visible_string_subclass_has_capture_off_on_behavioral_parity(
         node,
         None,
         VariablePool(),
-        memory_recall=_empty_recall,
+        memory_context_opener=_empty_context,
     )
     capture_on = eval_node(
         node,
         None,
         VariablePool(),
         capture_evidence=True,
-        memory_recall=_empty_recall,
+        memory_context_opener=_empty_context,
     )
 
     assert capture_off.outcome == capture_on.outcome == Output("subclass answer")
@@ -662,14 +666,14 @@ def test_invalid_unicode_text_is_ignored_by_observational_capture(
         node,
         None,
         VariablePool(),
-        memory_recall=_empty_recall,
+        memory_context_opener=_empty_context,
     )
     capture_on = eval_node(
         node,
         None,
         VariablePool(),
         capture_evidence=True,
-        memory_recall=_empty_recall,
+        memory_context_opener=_empty_context,
     )
 
     expected = Output(chr(0xD800))
@@ -694,14 +698,14 @@ def test_invalid_unicode_recall_prompt_fails_identically_with_or_without_capture
         node,
         None,
         VariablePool(),
-        memory_recall=_empty_recall,
+        memory_context_opener=_empty_context,
     )
     capture_on = eval_node(
         node,
         None,
         VariablePool(),
         capture_evidence=True,
-        memory_recall=_empty_recall,
+        memory_context_opener=_empty_context,
     )
 
     assert isinstance(capture_off.outcome, EvaluationFailure)
@@ -733,7 +737,7 @@ def test_native_structured_agent_records_only_parsed_value(
         None,
         VariablePool(),
         capture_evidence=True,
-        memory_recall=_empty_recall,
+        memory_context_opener=_empty_context,
     )
 
     assert evaluated.outcome == Output(7)
@@ -760,7 +764,7 @@ def test_fallback_structured_records_every_raw_retry_without_parsed_duplicate(
         None,
         VariablePool(),
         capture_evidence=True,
-        memory_recall=_empty_recall,
+        memory_context_opener=_empty_context,
     )
 
     assert evaluated.outcome == Output(7)
@@ -793,7 +797,7 @@ def test_fallback_structured_parses_only_visible_text_blocks(
         None,
         VariablePool(),
         capture_evidence=True,
-        memory_recall=_empty_recall,
+        memory_context_opener=_empty_context,
     )
 
     assert evaluated.outcome == Output(13)
@@ -843,7 +847,7 @@ def test_invalid_unicode_fallback_trace_does_not_consume_a_retry(
         None,
         VariablePool(),
         capture_evidence=True,
-        memory_recall=_empty_recall,
+        memory_context_opener=_empty_context,
     )
 
     assert evaluated.outcome == Output({"value": chr(0xD800)})
@@ -881,7 +885,7 @@ def test_tool_mode_records_calls_results_and_final_text_in_visible_order(
         None,
         VariablePool(),
         capture_evidence=True,
-        memory_recall=_empty_recall,
+        memory_context_opener=_empty_context,
     )
 
     assert evaluated.outcome == Output("finished")
@@ -911,7 +915,7 @@ def test_tool_mode_records_valid_ungranted_call_before_failure(
         None,
         VariablePool(),
         capture_evidence=True,
-        memory_recall=_empty_recall,
+        memory_context_opener=_empty_context,
     )
 
     assert isinstance(evaluated.outcome, EvaluationFailure)
@@ -948,14 +952,14 @@ def test_recursive_ungranted_tool_arguments_do_not_change_failure_with_capture(
         node,
         None,
         VariablePool(),
-        memory_recall=_empty_recall,
+        memory_context_opener=_empty_context,
     )
     capture_on = eval_node(
         node,
         None,
         VariablePool(),
         capture_evidence=True,
-        memory_recall=_empty_recall,
+        memory_context_opener=_empty_context,
     )
 
     assert isinstance(capture_off.outcome, EvaluationFailure)
@@ -998,14 +1002,14 @@ def test_tool_name_subclass_has_capture_off_on_behavioral_parity(
         node,
         None,
         VariablePool(),
-        memory_recall=_empty_recall,
+        memory_context_opener=_empty_context,
     )
     capture_on = eval_node(
         node,
         None,
         VariablePool(),
         capture_evidence=True,
-        memory_recall=_empty_recall,
+        memory_context_opener=_empty_context,
     )
 
     assert capture_off.outcome == capture_on.outcome == Output("finished")
@@ -1067,7 +1071,7 @@ def test_tool_trace_uses_the_same_effective_arguments_as_invocation(
         None,
         VariablePool(),
         capture_evidence=True,
-        memory_recall=_empty_recall,
+        memory_context_opener=_empty_context,
     )
 
     assert evaluated.outcome == Output("finished")
@@ -1108,7 +1112,7 @@ def test_invalid_unicode_tool_result_is_ignored_by_observational_capture(
         None,
         VariablePool(),
         capture_evidence=True,
-        memory_recall=_empty_recall,
+        memory_context_opener=_empty_context,
     )
 
     assert evaluated.outcome == Output("finished")
@@ -1155,7 +1159,7 @@ def test_tool_structured_output_retains_discovery_and_generation_order(
         None,
         VariablePool(),
         capture_evidence=True,
-        memory_recall=_empty_recall,
+        memory_context_opener=_empty_context,
     )
 
     assert evaluated.outcome == Output(9)

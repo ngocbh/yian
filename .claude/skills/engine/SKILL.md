@@ -462,8 +462,7 @@ Most are just the functional model (above) made enforceable:
   `long_term_memory:` declarations select policies that resolve to static frames
   owned by flows or AGENT nodes; MAP items and LOOP iterations reuse those frames.
   `memory=None` is dormant, while a host-injected registry opens run-scoped
-  sessions with pinned opening snapshots and supplies kind-blind recall and
-  optional conversation capabilities, independently of `learnable`. SessionMemory
+  sessions with pinned opening snapshots and supplies one kind-blind memory-context capability, independently of `learnable`. SessionMemory
   reads latest live history after admission, not a frozen opening transcript.
   `learnable=True` retains execution only; forward runs no learners or
   learned-mutation commits. Automatic conversation updates are separate.
@@ -504,17 +503,19 @@ Most are just the functional model (above) made enforceable:
   exceptions. No runtime storage branch or new log field is needed.
 - **SessionMemory owns conversation state and FIFO admission** — import
   `SessionMemory` from `agent_composer.memory.session`, not the contracts-only
-  facade. Optional `ConversationFrame`/`ConversationTurn` capabilities leave
-  mandatory memory protocols unchanged. API-backed AGENT execution through
+  facade. `MemoryFrame.recall()` accepts text or `MemoryContent(text, transcript)`;
+  SessionMemory supplies its notes and `TranscriptSource` through this same path. API-backed AGENT execution through
   `run_flow` retains conversations when the host injects the backend.
   The CLI hosts declared built-in policies automatically.
   `memory.conversation` owns the pure fold, strict codecs, and digests;
   `memory.session` owns live views, FIFO leases, and atomic publication;
   `memory.summary` owns pure whole-turn selection and cache-prefix proofs. These stay
   below nodes/runtime/providers. Runtime keeps no conversation projection, effect
-  ledger, checkpoint callback, or reconciliation channel. It selects the
-  innermost capable frame and binds authored scope plus accepted run/start
-  identity into one lazy evaluator-owned turn. Capture that identity before
+  ledger, checkpoint callback, or reconciliation channel. It recalls all frames once and selects the innermost contributed transcript,
+  then binds authored scope plus accepted run/start identity into one lazy
+  evaluator-owned `MemoryContext`. Notes stay ordered outer-to-local. Use
+  `needs_memory_context` and `open_memory_context(system, prompt, compatibility)`;
+  do not reintroduce separate recall/conversation injection or backend detection. Capture that identity before
   observers/submission; never recover it from mutable state in a worker. Keep the
   lease through stream cleanup, post-assertions, and result-shape validation;
   later dispatcher acceptance is not part of turn completion. No lease travels
@@ -557,8 +558,8 @@ Most are just the functional model (above) made enforceable:
   root-prefixed owner path, never guess from a dynamic node name. No extra model
   call or runtime note projection. Commit validates the entire batch before
   atomic publication and retains idempotency bookkeeping across reset. Contextual
-  recall uses pinned opening notes for the requested leaf; context-free recall
-  is empty. Notes never rewrite raw conversations. New public snapshots use
+  recall contributes pinned opening notes and the transcript source for the leaf;
+  context-free recall contributes empty text with the source. Notes never rewrite raw conversations. New public snapshots use
   version 2; accept version 1 as no notes and preserve its exact pinned envelope.
   API compatibility uses provider plus versioned message format; compatible
   model changes retain history. Apply current instructions/recall/tool grants

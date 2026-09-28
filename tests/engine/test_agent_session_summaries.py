@@ -1,5 +1,7 @@
 """API history summaries use the current unbound model and safe context only."""
 
+from agent_composer.memory import MemoryContext
+
 from asyncio import CancelledError as AsyncCancelledError
 from concurrent.futures import CancelledError as FutureCancelledError
 import json
@@ -18,7 +20,7 @@ from langchain_core.messages import (
 import agent_composer.llm_clients as llm_clients
 from agent_composer.memory.session import SessionMemory
 from agent_composer.memory import MemoryFrameSpec, MemorySection
-from agent_composer.nodes.agent import conversation
+from agent_composer.nodes.agent import context as conversation
 from agent_composer.nodes.agent.modes.common import AgentRunContext
 from agent_composer.nodes.agent.modes.plain import plain
 from agent_composer.nodes.agent.modes.tool_calling import tool_calling
@@ -146,7 +148,7 @@ def test_summary_failure_never_enters_answer_structured_retry(
                     AgentRunContext(
                         node_id="agent",
                         prompt="current question",
-                        conversation_turn=turn,
+                        memory_context=MemoryContext(transcript=turn),
                         output_type=Type.scalar(ValueKind.INTEGER),
                         retries=7,
                         llm_config=_config(native),
@@ -192,7 +194,7 @@ def test_tool_then_structured_uses_summary_once_and_safe_current_projection(
                     node_id="agent",
                     prompt="current question",
                     tools=["lookup"],
-                    conversation_turn=turn,
+                    memory_context=MemoryContext(transcript=turn),
                     output_type=Type.scalar(ValueKind.INTEGER),
                     llm_config=_config(native),
                 )
@@ -277,8 +279,7 @@ def test_summary_uses_unbound_model_and_current_instructions_and_grants(monkeypa
                     node_id="agent",
                     prompt="new question",
                     tools=["current"],
-                    memory_sections=(MemorySection(REF, "CURRENT NOTE"),),
-                    conversation_turn=turn,
+                    memory_context=MemoryContext(sections=(MemorySection(REF, "CURRENT NOTE"),), transcript=turn),
                 )
             )
     assert result.value == "answer" and events == ["summarize", "bind"]
@@ -469,7 +470,7 @@ def test_stop_after_summary_preserves_actual_cache_without_answer(monkeypatch):
                     AgentRunContext(
                         node_id="agent",
                         prompt="current",
-                        conversation_turn=turn,
+                        memory_context=MemoryContext(transcript=turn),
                         stop_event=stop,
                     )
                 )
@@ -530,7 +531,7 @@ def test_structured_correction_attempts_are_one_whole_recent_turn(monkeypatch, n
                     AgentRunContext(
                         node_id="agent",
                         prompt="structured question",
-                        conversation_turn=turn,
+                        memory_context=MemoryContext(transcript=turn),
                         output_type=Type.scalar(ValueKind.INTEGER),
                         llm_config=_config(native),
                     )

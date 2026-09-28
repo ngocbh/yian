@@ -79,6 +79,61 @@ def test_two_runs_restore_tool_exchanges_without_executing_old_calls(monkeypatch
     assert tool.calls == [{"value": 1}, {"value": 2}]
 
 
+def test_recalled_transcript_and_current_notes_share_one_context(monkeypatch):
+    """A custom frame can contribute a transcript without exposing open_turn."""
+    from tests.engine._memory_fakes import _Memory
+
+    session = SessionMemory()
+    recall_count = []
+
+    class DelegatingMemory:
+        def open_run(self, *, snapshot=None):
+            opened = session.open_run(snapshot=snapshot)
+
+            def open_frame(spec):
+                frame = opened.open_frame(spec)
+
+                def recall(context):
+                    recall_count.append(context)
+                    return frame.recall(context)
+
+                # Only the recall result exposes a transcript source. Runtime
+                # cannot discover it by probing methods on this frame.
+                return SimpleNamespace(recall=recall, learn=frame.learn)
+
+            return SimpleNamespace(
+                snapshot=opened.snapshot, open_frame=open_frame,
+                commit=opened.commit, close=opened.close,
+            )
+
+        def reset(self):
+            session.reset()
+
+    notes = _Memory(recall_text="old project instructions")
+    tool = _Tool()
+    chat = _Chat([_call(7), AIMessage(content="first answer"), AIMessage(content="second answer")])
+    monkeypatch.setitem(tools.TOOL_REGISTRY, "lookup", tool)
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _: chat)
+    flow = load_flow(_TOOL_FLOW.replace(
+        "    kind: agent", "    kind: agent\n    long_term_memory: notes"
+    ))
+    memory = {"session": DelegatingMemory(), "notes": notes}
+    assert run_flow(flow, {"question": "first"}, memory=memory).output == "first answer"
+    notes.recall_text = "current project instructions"
+    assert run_flow(flow, {"question": "second"}, memory=memory).output == "second answer"
+
+    assert len(recall_count) == len(notes.recall_contexts) == 2
+    restored = chat.calls[-1]
+    assert "current project instructions" in restored[0].content
+    assert "old project instructions" not in str(restored)
+    assert [message.type for message in restored] == ["system", "human", "ai", "tool", "ai", "human"]
+    assert message_to_dict(restored[2]) == message_to_dict(_call(7))
+    assert restored[3].content == "result:7"
+    assert restored[3].tool_call_id == "reused-provider-id"
+    assert restored[-1].content == "second"
+    assert tool.calls == [{"value": 7}]
+
+
 def test_changed_grants_keep_history_but_reject_new_ungranted_call(monkeypatch):
     old, current = _Tool(), _Tool()
     chat = _Chat([_call(), AIMessage(content="one"), _call()])
@@ -230,7 +285,7 @@ def test_stop_boundaries_retain_surfaced_tool_truth_before_unwind(monkeypatch, s
 
 @pytest.mark.parametrize("stage", ["request", "observe", "encode"])
 def test_tool_memory_fault_cannot_repeat_external_action(monkeypatch, stage):
-    from agent_composer.nodes.agent import conversation
+    from agent_composer.nodes.agent import context as conversation
     from agent_composer.nodes.base import _CapabilityFault
     error, calls, observations = ValueError("memory refused"), [], []
     def request(*args, **kwargs):
@@ -258,7 +313,7 @@ def test_tool_memory_fault_cannot_repeat_external_action(monkeypatch, stage):
 
 @pytest.mark.parametrize("host_stop", [False, True])
 def test_tool_error_identity_survives_failed_observation(host_stop):
-    from agent_composer.nodes.agent.conversation import invoke_tool_effect
+    from agent_composer.nodes.agent.context import invoke_tool_effect
     from agent_composer.nodes.base import _CapabilityFault, _HostStop
     primary = _HostStop("stopped") if host_stop else ValueError("tool failed")
     seen = []
@@ -290,7 +345,7 @@ def test_session_tool_calls_keep_public_argument_validation(monkeypatch):
 
 def test_restored_unclosed_invocation_reports_unknown_completion_without_changing_history():
     from agent_composer.memory import MemoryFrameSpec
-    from agent_composer.nodes.agent.conversation import history_messages, invoke_model, invoke_tool_effect
+    from agent_composer.nodes.agent.context import history_messages, invoke_model, invoke_tool_effect
     from tests.engine._session_fakes import REF, harness, request, snapshot
     memory, actions = SessionMemory(), []
     with harness(memory) as opened:

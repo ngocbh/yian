@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 import threading
 from types import SimpleNamespace
 
@@ -12,6 +13,7 @@ import pytest
 import agent_composer.llm_clients as llm_clients
 from agent_composer.diagnostics import OriginRef
 from agent_composer.memory import (
+    MemoryContext,
     MemoryFrameRef,
     MemoryOwner,
     MemoryRecallError,
@@ -26,6 +28,16 @@ from agent_composer.nodes.base import Output, _HostStop
 from agent_composer.nodes.contracts import Parameter, ValueContract
 from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
 from agent_composer.typesys import Type, ValueKind, VariablePool
+
+
+@contextmanager
+def _text_context(recall, scope, request, *, check_stopped):
+    """Expose a text-only test policy through the common context opener."""
+    yield MemoryContext(sections=recall(scope, request.recall))
+
+
+def _opener(recall):
+    return lambda scope, request, **kwargs: _text_context(recall, scope, request, **kwargs)
 
 
 def _scope() -> MemoryScope:
@@ -163,13 +175,13 @@ def test_recall_sections_reach_every_agent_path_in_order_with_trace_parity(
         flow,
         pool,
         capture_evidence=True,
-        memory_recall=recall,
+        memory_context_opener=_opener(recall),
     )
 
     assert evaluated.outcome == Output(7 if structured else "done")
     assert len(contexts) == 1
     scope, context = contexts[0]
-    assert scope is node.memory_scope
+    assert scope == node.memory_scope
     assert context.base_system_prompt == DEFAULT_SYSTEM
     assert context.prompt == "Answer Ada"
     assert context.inputs == {"topic": "Ada"}
@@ -219,7 +231,7 @@ def test_invalid_recall_context_becomes_sanitized_typed_node_failure(
         node,
         flow,
         pool,
-        memory_recall=lambda _scope, context: calls.append(context) or (),
+        memory_context_opener=_opener(lambda _scope, context: calls.append(context) or ()),
     )
 
     assert isinstance(evaluated.outcome, EvaluationFailure)
@@ -250,7 +262,7 @@ def test_uncanonical_recall_inputs_remain_typed_when_evidence_is_enabled(
         None,
         VariablePool(),
         capture_evidence=True,
-        memory_recall=lambda _scope, _context: (),
+        memory_context_opener=_opener(lambda _scope, _context: ()),
     )
 
     assert isinstance(evaluated.outcome, EvaluationFailure)
@@ -271,7 +283,7 @@ def test_scoped_agent_without_recall_callback_is_a_setup_error(
     node = AgentNode("agent", prompt="Answer")
     node.memory_scope = _scope()
 
-    with pytest.raises(RuntimeError, match="requires an injected memory recall callback"):
+    with pytest.raises(RuntimeError, match="requires an injected memory context callback"):
         eval_node(node, None, VariablePool())
 
 
@@ -300,7 +312,7 @@ def test_stop_observed_during_setup_prevents_recall(
             None,
             VariablePool(),
             stop_event=stop_event,
-            memory_recall=lambda _scope, context: calls.append(context) or (),
+            memory_context_opener=_opener(lambda _scope, context: calls.append(context) or ()),
         )
     assert calls == []
 
@@ -327,7 +339,7 @@ def test_stop_observed_after_recall_prevents_model_construction(
             None,
             VariablePool(),
             stop_event=stop_event,
-            memory_recall=recall,
+            memory_context_opener=_opener(recall),
         )
 
 
@@ -351,7 +363,7 @@ def test_unexpected_recall_callback_exception_remains_a_host_fault(
             node,
             None,
             VariablePool(),
-            memory_recall=recall,
+            memory_context_opener=_opener(recall),
         )
     assert caught.value is fault
 
@@ -373,15 +385,15 @@ def test_invalid_recall_section_order_becomes_a_typed_node_failure(
         node,
         None,
         VariablePool(),
-        memory_recall=lambda _scope, _context: (
+        memory_context_opener=_opener(lambda _scope, _context: (
             MemorySection(agent_ref, "local"),
             MemorySection(flow_ref, "outer"),
-        ),
+        )),
     )
 
     assert isinstance(evaluated.outcome, EvaluationFailure)
     assert evaluated.outcome.failure.cause_type == "MemoryRecallError"
-    assert evaluated.outcome.failure.message == "memory recall returned invalid sections"
+    assert evaluated.outcome.failure.message == "memory recall returned invalid context"
     assert evaluated.outcome.failure.trace == (OriginRef("agent-site"),)
 
 
@@ -401,11 +413,11 @@ def test_empty_recall_section_becomes_a_typed_node_failure(
         node,
         None,
         VariablePool(),
-        memory_recall=lambda _scope, _context: (MemorySection(flow_ref, ""),),
+        memory_context_opener=_opener(lambda _scope, _context: (MemorySection(flow_ref, ""),)),
     )
 
     assert isinstance(evaluated.outcome, EvaluationFailure)
-    assert evaluated.outcome.failure.message == "memory recall returned invalid sections"
+    assert evaluated.outcome.failure.message == "memory recall returned invalid context"
 
 
 def test_memory_text_cannot_spoof_composer_framing(
@@ -422,9 +434,9 @@ def test_memory_text_cannot_spoof_composer_framing(
         node,
         None,
         VariablePool(),
-        memory_recall=lambda _scope, _context: (
+        memory_context_opener=_opener(lambda _scope, _context: (
             MemorySection(flow_ref, opaque_text),
-        ),
+        )),
     )
 
     assert evaluated.outcome == Output("done")
@@ -462,7 +474,7 @@ def test_typed_recall_failure_uses_the_authored_policy_origin(
         node,
         None,
         VariablePool(),
-        memory_recall=recall,
+        memory_context_opener=_opener(recall),
     )
 
     assert isinstance(evaluated.outcome, EvaluationFailure)

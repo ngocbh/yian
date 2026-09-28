@@ -391,7 +391,7 @@ Use the same stores on unfinished resume. Paths never belong in YAML or run logs
 terminal inspection and old dormant logs open no backend. Custom policies require
 Python host injection, and Python's `memory=None` remains dormant.
 For API session history, use `long_term_memory: session` with a host-injected
-`SessionMemory()` (no frame config). The innermost conversation-capable frame
+`SessionMemory()` (no frame config). The innermost frame contributing a transcript
 owns each authored AGENT leaf's conversation; all frames still provide recall.
 Repeated MAP/LOOP executions share it and queue in admission order, not guaranteed
 MAP input order. Use non-session memory for independent MAP items. History advances

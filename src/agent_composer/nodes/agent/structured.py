@@ -31,11 +31,11 @@ from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field, ValidationError, create_model
 
 from agent_composer.memory.contracts import (
-    ConversationTurn,
+    MemoryContext,
     EvaluationTrace,
     ModelValueInteraction,
 )
-from agent_composer.nodes.agent.conversation import invoke_model
+from agent_composer.nodes.agent.context import invoke_model
 from agent_composer.nodes.agent.modes.utils import record_model_text, text_of
 from agent_composer.nodes.base import _CapabilityFault, _HostStop
 from agent_composer.typesys.values import Type, ValueKind
@@ -178,7 +178,7 @@ def generate_structured(
     llm_config: dict | None = None,
     check_stopped: Callable[[], None] | None = None,
     evaluation_trace: EvaluationTrace | None = None,
-    conversation_turn: ConversationTurn | None = None,
+    memory_context: MemoryContext | None = None,
     new_messages: list | None = None,
 ) -> Any:
     """Generate a value conforming to `typ`, retrying on provider deviation up to a cap.
@@ -205,8 +205,8 @@ def generate_structured(
             environment settings when omitted. Existing config objects also work.
         check_stopped (`Callable | None`): Optional cooperative cancellation check.
         evaluation_trace (`EvaluationTrace | None`): Optional visible evidence sink.
-        conversation_turn (`ConversationTurn | None`): Optional admitted turn retaining
-            raw replies before parsing; omission preserves the ordinary call shape.
+        memory_context (`MemoryContext | None`): Recalled notes and optional transcript.
+            An admitted transcript retains raw replies before parsing.
         new_messages (`list | None`): Not-yet-retained input delta, defaulting to all
             `messages`. Corrections are new deltas; prior invalid replies stay stored
             without being appended to the existing retry input shape.
@@ -220,6 +220,7 @@ def generate_structured(
             propagate as their original exception, preserving schema ownership.
     """
     check = check_stopped or (lambda: None)
+    memory_context = memory_context if memory_context is not None else MemoryContext()
     schema = type_to_schema(typ)
     if _supports_native_structured(llm_config or {}):
         return _generate_native(
@@ -230,7 +231,7 @@ def generate_structured(
             max_retries,
             check,
             evaluation_trace,
-            conversation_turn,
+            memory_context,
             new_messages,
         )
     return _generate_fallback(
@@ -241,7 +242,7 @@ def generate_structured(
         max_retries,
         check,
         evaluation_trace,
-        conversation_turn,
+        memory_context,
         new_messages,
     )
 
@@ -254,7 +255,7 @@ def _generate_native(
     max_retries: int,
     check_stopped: Callable[[], None],
     evaluation_trace: EvaluationTrace | None,
-    conversation_turn: ConversationTurn | None = None,
+    memory_context: MemoryContext,
     new_messages: list | None = None,
 ) -> Any:
     """Native path: `with_structured_output(schema)` + capped self-correction retry."""
@@ -265,34 +266,30 @@ def _generate_native(
         check_stopped()
         reply_surfaced = False
         try:
-            bound = (model.with_structured_output(schema) if conversation_turn is None
+            bound = (model.with_structured_output(schema) if memory_context.transcript is None
                      else model.with_structured_output(schema, include_raw=True))
             check_stopped()
-            if conversation_turn is None:
-                obj = bound.invoke(msgs)
-                check_stopped()
-            else:
-                delta, pending_messages = pending_messages, []
-                response = invoke_model(
-                    conversation_turn, lambda: bound.invoke(msgs), new_messages=delta,
-                    check_stopped=check_stopped, purpose="structured_native", raw_reply=_native_raw,
-                )
-                reply_surfaced = True
-                obj = _native_parsed(response)
+            delta, pending_messages = pending_messages, []
+            response = invoke_model(
+                memory_context.transcript, lambda: bound.invoke(msgs), new_messages=delta,
+                check_stopped=check_stopped, purpose="structured_native", raw_reply=_native_raw,
+            )
+            reply_surfaced = True
+            obj = response if memory_context.transcript is None else _native_parsed(response)
             value = _unwrap(obj, typ)
-            if conversation_turn is not None:
+            if memory_context.transcript is not None:
                 check_stopped()
         except (_CapabilityFault, _HostStop):
             raise
         except Exception as err:  # provider deviated from the schema; correct and retry
-            if conversation_turn is not None and isinstance(err, FutureCancelledError):
+            if memory_context.transcript is not None and isinstance(err, FutureCancelledError):
                 raise
             check_stopped()
             last_err = err
             # Provider/binding errors can include credentials. Only local parsing
             # diagnostics from an already retained raw reply belong in corrections.
             detail = (f"provider error ({type(err).__name__})"
-                      if conversation_turn is not None and not reply_surfaced else err)
+                      if memory_context.transcript is not None and not reply_surfaced else err)
             correction = HumanMessage(
                 content=(
                     f"Your previous output was invalid: {detail}. "
@@ -344,7 +341,7 @@ def _generate_fallback(
     max_retries: int,
     check_stopped: Callable[[], None],
     evaluation_trace: EvaluationTrace | None,
-    conversation_turn: ConversationTurn | None = None,
+    memory_context: MemoryContext,
     new_messages: list | None = None,
 ) -> Any:
     """Prompt-injection path for a provider with no native structured output: ask for JSON
@@ -364,31 +361,28 @@ def _generate_fallback(
         check_stopped()
         reply_surfaced = False
         try:
-            if conversation_turn is None:
-                reply = model.invoke(msgs)
-            else:
-                delta, pending_messages = pending_messages, []
-                reply = invoke_model(
-                    conversation_turn, lambda: model.invoke(msgs), new_messages=delta,
-                    check_stopped=check_stopped, purpose="structured_fallback",
-                )
+            delta, pending_messages = pending_messages, []
+            reply = invoke_model(
+                memory_context.transcript, lambda: model.invoke(msgs), new_messages=delta,
+                check_stopped=check_stopped, purpose="structured_fallback",
+            )
             reply_surfaced = True
             text = text_of(reply)
             check_stopped()
             record_model_text(evaluation_trace, text)
             obj = schema.model_validate(json.loads(_strip_code_fence(text)))
             value = _unwrap(obj, typ)
-            if conversation_turn is not None:
+            if memory_context.transcript is not None:
                 check_stopped()
         except (_CapabilityFault, _HostStop):
             raise
         except Exception as err:  # unparseable / non-conforming/provider-shape deviation
-            if conversation_turn is not None and isinstance(err, FutureCancelledError):
+            if memory_context.transcript is not None and isinstance(err, FutureCancelledError):
                 raise
             check_stopped()
             last_err = err
             detail = (f"provider error ({type(err).__name__})"
-                      if conversation_turn is not None and not reply_surfaced else err)
+                      if memory_context.transcript is not None and not reply_surfaced else err)
             correction = HumanMessage(
                 content=(
                     f"Your previous output was invalid: {detail}. Respond with ONLY a JSON "

@@ -357,6 +357,20 @@ Application-specific implementations use the source-neutral `Memory`,
 `agent_composer.memory`. The host implements session snapshots, frame recall and
 learning, and idempotent policy commits behind those interfaces.
 
+`frame.recall(context)` may return a string or `MemoryContent(text=..., transcript=...)`.
+A string contributes notes/instructions. A transcript source implements
+`TranscriptSource.open_turn(...)` and contributes structured message history.
+SessionMemory returns this richer carrier; it never flattens history into a note.
+All visible frames are recalled once, their notes remain ordered outer-to-local,
+and the innermost contributed transcript is admitted. An ordinary notes frame
+inside a session frame adds context without hiding the session.
+
+The evaluator gives agents one `MemoryContext`, containing labelled text sections
+and an optional transcript turn. This is analogous to using a session transcript
+together with project instructions or saved memories. Both influence the model;
+only the transcript preserves who said what and which result belongs to each tool
+call. Context handles are transient and do not change public snapshot formats.
+
 Recall works whether or not `learnable=True`. During an explicit backward attempt,
 each enabled static frame receives its owned history and descendant evidence in
 recorded layout order. An inherited frame is read-only to the descendant's own
@@ -439,15 +453,14 @@ second = run_flow(flow, {"question": "What is my project's name?"},
 ```
 
 The second invocation receives the first invocation's messages. Neither
-`learnable=True` nor `backward()` is needed. Without a SessionMemory-capable
-frame, API calls keep their existing fresh-conversation behavior.
+`learnable=True` nor `backward()` is needed. Without a recalled transcript source,
+API calls start with the current prompt and any recalled notes.
 
 `SessionMemory` is the concrete backend; the existing `MemorySession` name still
-means the run-scoped protocol returned by a memory backend. The mandatory `Memory`,
-`MemorySession`, and `MemoryFrame` protocols are unchanged. The contracts-only
-`agent_composer.memory` facade exports immutable conversation carriers and the
-optional `ConversationFrame` and `ConversationTurn`
-protocols. Import the concrete backend from its own module:
+means the run-scoped protocol returned by a memory backend. The contracts-only
+`agent_composer.memory` facade exports `MemoryContent`, `MemoryContextRequest`,
+`MemoryContext`, immutable conversation carriers, and the `TranscriptSource` and
+`ConversationTurn` protocols. Existing text-only recall implementations remain valid. Import the concrete backend from its own module:
 
 ```python
 from agent_composer.memory.session import SessionMemory
@@ -488,7 +501,7 @@ independent, including under a flow-owned frame: there is no flow-wide conversat
 or queue. MAP items and LOOP iterations do not create new conversation identities;
 there is no fork option. Queue order is admission order, not a promise of MAP
 input-index order. Use non-session memory for independent MAP items.
-The innermost frame supporting conversations owns the turn; all applicable
+The innermost frame contributing a transcript owns the turn; all applicable
 frames still provide ordinary recall. A local non-session frame does not hide
 an enclosing SessionMemory frame. Runtime supplies authored identity and the
 accepted invocation's run ID/start sequence; the backend never inspects a graph.
@@ -507,9 +520,11 @@ to the dispatcher. A completed turn records completion of that execution, not
 acceptance of a later typed-output validation or run-log append.
 
 These updates advance automatically through the turn capability, independently of
-`learnable` or backward. Session history is not rendered again as recall text;
-contextual recall supplies committed learned notes for that authored leaf instead.
-Context-free `recall()` returns `""`.
+`learnable` or backward. `SessionMemory` recall returns
+`MemoryContent`: `.text` supplies committed learned notes for the requested leaf,
+and `.transcript` supplies the source for structured history. Context-free recall
+returns empty `.text` with the same transcript source. Code calling frame recall
+directly should read `.text` when it only needs notes.
 The API adapter's compatibility descriptor contains the resolved provider and
 versioned message format. Compatible model, prompt, and tool-grant changes keep
 history; changing provider or message format requires explicit reset. Every call

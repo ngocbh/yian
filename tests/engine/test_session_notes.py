@@ -295,7 +295,7 @@ def _mutation(note=None, *, ref=REF):
 
 
 def _recall(frame, consumer=("root", "agent")):
-    return frame.recall(c.RecallContext("system", "prompt", {}, consumer))
+    return frame.recall(c.RecallContext("system", "prompt", {}, consumer)).text
 
 
 def test_commit_publishes_notes_only_to_future_run_recall():
@@ -310,7 +310,7 @@ def test_commit_publishes_notes_only_to_future_run_recall():
         assert _recall(h.frame) == ""
         with harness(h.memory) as later:
             assert _recall(later.frame) == "Check units."
-            assert later.frame.recall() == ""
+            assert later.frame.recall() == c.MemoryContent(transcript=later.frame)
             assert _recall(later.frame, ("root", "sibling")) == ""
             other = later.session.open_frame(
                 c.MemoryFrameSpec(

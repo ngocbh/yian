@@ -3,8 +3,7 @@
 The compile layer supplies one canonical tuple of source-neutral frame specs and
 their optional authored origins.  This module validates the host registry, opens
 exactly one session per referenced policy, opens every static frame, captures the
-public recovery snapshots, and exposes ordered recall and optional conversation
-selection to the evaluator. It does
+public recovery snapshots, and admits ordered memory context for the evaluator. It does
 not resolve YAML, inspect node kinds, or construct a concrete memory backend.
 The explicit backward path stages complete frame proposals and performs accepted
 commit requests separately; the attempt driver owns their records and ordering.
@@ -13,8 +12,9 @@ commit requests separately; the attempt driver owns their records and ordering.
 from __future__ import annotations
 
 from asyncio import CancelledError as AsyncCancelledError
+from collections.abc import Iterator
 from concurrent.futures import CancelledError as FutureCancelledError
-from contextlib import AbstractContextManager, nullcontext
+from contextlib import contextmanager, nullcontext
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
@@ -22,11 +22,12 @@ from typing import Any
 from agent_composer.diagnostics import OriginRef
 from agent_composer.memory import (
     CheckStopped,
-    ConversationFrame,
     ConversationRequest,
-    ConversationTurn,
     LearnContext,
     Memory,
+    MemoryContent,
+    MemoryContext,
+    MemoryContextRequest,
     MemoryFrame,
     MemoryFrameRef,
     MemoryFrameSpec,
@@ -38,7 +39,6 @@ from agent_composer.memory import (
     MemorySession,
     MemorySetupError,
     MemorySnapshotEnvelope,
-    RecallContext,
 )
 from agent_composer.memory.contracts import _validate_mutations
 from agent_composer.nodes.base import _CapabilityFault, _HostStop
@@ -394,95 +394,68 @@ class MemoryRuntime:
             snapshots=tuple(captured),
         )
 
-    def open_conversation(
+    @contextmanager
+    def open_context(
         self,
         scope: MemoryScope,
-        request: ConversationRequest,
+        request: MemoryContextRequest,
         *,
         check_stopped: CheckStopped,
-    ) -> AbstractContextManager[ConversationTurn | None]:
-        """Select the innermost optional conversation frame without entering it.
+    ) -> Iterator[MemoryContext]:
+        """Recall each frame and admit the innermost contributed transcript.
+
+        Notes retain outer-to-local ownership. Transcript selection uses only
+        explicit recall contributions; losing sources are never opened. A live
+        transcript requires the accepted invocation, while text-only contexts do
+        not. The admitted backend resource lasts until this context exits.
 
         Args:
             scope (`MemoryScope`): Exact compiled consumer scope over opened frames.
-            request (`ConversationRequest`): Matching consumer path, accepted start,
-                and detached compatibility descriptor.
-            check_stopped (`CheckStopped`): Cooperative-stop callable passed to the
-                selected backend; the runtime does not invoke it here.
+            request (`MemoryContextRequest`): Matching recall context, optional
+                accepted invocation, and detached compatibility descriptor.
+            check_stopped (`CheckStopped`): Checked after recall, before any
+                transcript acquisition; also passed to the selected source.
 
         Returns:
-            `AbstractContextManager[ConversationTurn | None]`: The backend turn
-            context, or a null context when no opened frame offers conversations.
+            `AbstractContextManager[MemoryContext]`: Notes and the optional live
+                transcript, valid until the context exits.
 
         Raises:
-            TypeError: A carrier or callback has the wrong type.
-            ValueError: A carrier is invalid or the consumer paths disagree.
-            RuntimeError: The runtime is closed or the scope names unopened frames.
-            Exception: A selected backend's opening failure propagates unchanged.
+            `TypeError`: A carrier or callback has the wrong type.
+            `ValueError`: Paths disagree or a transcript lacks an invocation.
+            `RuntimeError`: The runtime is closed or a frame is not opened.
+            `MemoryRecallError`: A policy rejects recall or returns invalid content.
+            `Exception`: An unexpected recall or transcript backend error.
+
+        Example:
+            `with runtime.open_context(scope, request, check_stopped=check) as context:`
+            admits all visible memory for one invocation.
         """
         if self._closed:
             raise RuntimeError("memory runtime is closed")
         if type(scope) is not MemoryScope:
-            raise TypeError("conversation scope must be a MemoryScope")
+            raise TypeError("memory context scope must be a MemoryScope")
         scope = MemoryScope(
             scope.root_flow_id, scope.static_path, scope.frame_stack,
             scope.occurrence_path, scope.boundary,
         )
-        if type(request) is not ConversationRequest:
-            raise TypeError("conversation request must be a ConversationRequest")
-        request = ConversationRequest(
-            request.consumer_static_path, request.invocation, request.compatibility,
+        if type(request) is not MemoryContextRequest:
+            raise TypeError("memory request must be a MemoryContextRequest")
+        request = MemoryContextRequest(
+            request.recall, request.invocation, request.compatibility,
         )
         if not callable(check_stopped):
             raise TypeError("check_stopped must be callable")
-        if request.consumer_static_path != scope.static_path:
-            raise ValueError("conversation request does not match the consumer scope")
+        if request.recall.consumer_static_path != scope.static_path:
+            raise ValueError("memory context request does not match the consumer scope")
+        sections: list[MemorySection] = []
         selected = None
         for ref in scope.frame_stack:
             opened = self._frames.get(ref)
             if opened is None:
                 raise RuntimeError("memory scope names a frame outside the opened layout")
-            if isinstance(opened.frame, ConversationFrame):
-                selected = opened.frame
-        if selected is None:
-            return nullcontext(None)
-        return selected.open_turn(request, check_stopped=check_stopped)
-
-    def recall(
-        self,
-        scope: MemoryScope,
-        context: RecallContext,
-    ) -> tuple[MemorySection, ...]:
-        """Recall non-empty sections in exact outer-flow to local-agent order."""
-        if self._closed:
-            raise RuntimeError("memory runtime is closed")
-        if type(scope) is not MemoryScope:
-            raise TypeError("memory recall scope must be a MemoryScope")
-        MemoryScope(
-            scope.root_flow_id,
-            scope.static_path,
-            scope.frame_stack,
-            scope.occurrence_path,
-            scope.boundary,
-        )
-        if type(context) is not RecallContext:
-            raise TypeError("memory recall context must be a RecallContext")
-        RecallContext(
-            context.base_system_prompt,
-            context.prompt,
-            context.inputs,
-            context.consumer_static_path,
-        )
-        if context.consumer_static_path != scope.static_path:
-            raise ValueError("memory recall context does not match the consumer scope")
-
-        sections: list[MemorySection] = []
-        for ref in scope.frame_stack:
-            opened = self._frames.get(ref)
-            if opened is None:
-                raise RuntimeError("memory scope names a frame outside the opened layout")
             try:
-                text = opened.frame.recall(context)
+                content = opened.frame.recall(request.recall)
             except MemoryOperationError as exc:
                 raise MemoryRecallError(
                     f"memory policy {opened.spec.policy_name!r} recall failed: "
@@ -490,16 +463,33 @@ class MemoryRuntime:
                     origin=opened.origin,
                 ) from exc
             try:
-                section = MemorySection(ref, text)
+                if type(content) is MemoryContent:
+                    content = MemoryContent(content.text, content.transcript)
+                else:
+                    content = MemoryContent(content)
+                section = MemorySection(ref, content.text)
             except (TypeError, ValueError, RecursionError) as exc:
                 raise MemoryRecallError(
                     f"memory policy {opened.spec.policy_name!r} returned invalid "
-                    "recall text",
+                    "recall content",
                     origin=opened.origin,
                 ) from exc
             if section.text:
                 sections.append(section)
-        return tuple(sections)
+            if content.transcript is not None:
+                selected = content.transcript
+        check_stopped()
+        if selected is None:
+            manager = nullcontext(None)
+        else:
+            if request.invocation is None:
+                raise ValueError("transcript context requires an accepted invocation")
+            transcript_request = ConversationRequest(
+                scope.static_path, request.invocation, request.compatibility,
+            )
+            manager = selected.open_turn(transcript_request, check_stopped=check_stopped)
+        with manager as transcript:
+            yield MemoryContext(tuple(sections), transcript)
 
     def propose_learning(self, contexts: tuple[LearnContext, ...]) -> tuple[FrameProposal, ...]:
         """Stage every owned frame's proposal without writing records or memory.

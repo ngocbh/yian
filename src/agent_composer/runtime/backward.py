@@ -192,7 +192,10 @@ def drive_backward(
     state: RunState, log: RunLog, root_feedback: FeedbackValue,
     *, open_memory: Callable[[], MemoryRuntime] | None = None,
 ) -> BackwardOutcome:
-    """Drive one explicit whole backward attempt against an accepted terminal run.
+    """Drive one new explicit whole backward attempt against an accepted terminal run.
+
+    Every call starts a new attempt, including after a successful, failed, or
+    committing earlier attempt.
 
     Args:
         state (`RunState`): Verified retained forward and backward record authority.
@@ -203,12 +206,12 @@ def drive_backward(
             policies. This driver closes the returned runtime on every exit.
 
     Returns:
-        `BackwardOutcome`: The exact accepted Finished disposition. An eligible
-            unfinished precommit attempt is explicitly interrupted before a fresh
-            Started; all callbacks and proposals are recomputed.
+        `BackwardOutcome`: The exact accepted Finished disposition. An unfinished
+            earlier attempt, including one with unconfirmed commit requests, is
+            first closed as interrupted; all callbacks and proposals are recomputed.
 
     Raises:
-        `TypeError`, `ValueError`: For invalid feedback, eligibility, or resources.
+        `TypeError`, `ValueError`: For invalid feedback, terminal state, or resources.
         `RuntimeError`: For mismatched log/state authority. Host, setup, cancellation,
             unexpected backend, and append/reducer faults escape with their accepted
             prefix intact. Cleanup never manufactures a completion record.
@@ -218,9 +221,6 @@ def drive_backward(
     started = BackwardStartedRecord(len(state.backward_state.attempts) + 1, root_feedback)
     _seed_backward(state.trace, started.feedback)
     backward = state.backward_state
-    if backward.ever_requested or any(attempt.finished is not None and
-            attempt.finished.outcome.status == "succeeded" for attempt in backward.attempts):
-        raise ValueError("backward attempt cannot start from the accepted prefix")
     interrupted = backward.started is not None and backward.finished is None
     first_record = (BackwardFinishedRecord(backward.started.attempt_id, backward.outcome)
                     if interrupted else started)

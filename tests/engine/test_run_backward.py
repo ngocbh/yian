@@ -2,8 +2,12 @@
 
 from asyncio import CancelledError as AsyncCancelledError
 from concurrent.futures import CancelledError as FutureCancelledError, ThreadPoolExecutor
+import os
 from pathlib import Path
+import subprocess
+import sys
 import threading
+import time
 
 import pytest
 
@@ -34,7 +38,7 @@ def _records(path):
 
 
 @pytest.mark.parametrize("durable", [False, True])
-def test_backward_without_memory_is_explicit_and_single_success(tmp_path, durable):
+def test_backward_without_memory_is_explicit_and_repeatable(tmp_path, durable):
     result = run_flow(load_flow(_IDENTITY), {"text": "hello"}, learnable=True,
                       log=tmp_path / "run.jsonl" if durable else None)
     assert result.backward_outcome is None
@@ -45,9 +49,13 @@ def test_backward_without_memory_is_explicit_and_single_success(tmp_path, durabl
     assert outcome.feedback.input_feedback == {"text": ("Too long.",)}
     assert result.backward_outcome == outcome and result.learning is None
     assert before == (result.input, result.status, result.output, result.failure, result.events)
-    with pytest.raises(ValueError):
-        result.backward(feedback="Again.")
-    assert result.backward_outcome == outcome
+    again = result.backward(feedback="Again.")
+    assert again.status == "succeeded"
+    assert again.feedback.input_feedback == {"text": ("Again.",)}
+    assert result.backward_outcome == again and result.learning is None
+    if durable:
+        starts = [r.attempt_id for r in _records(tmp_path / "run.jsonl") if type(r) is BackwardStartedRecord]
+        assert starts == [1, 2]
 
 
 def test_forward_returns_before_any_learning_or_commit(tmp_path):
@@ -91,8 +99,8 @@ def test_same_handle_rejects_nested_backward_before_a_second_commit():
     assert len(backend.learn_contexts) == 1
     assert len(rejected) == 1 and "in progress" in str(rejected[0])
     assert backend.close_count == 2
-    with pytest.raises(ValueError, match="accepted prefix"):
-        result.backward("Later review.")
+    assert result.backward("Later review.").status == "succeeded"
+    assert len(backend.commit_calls) == 2 and backend.close_count == 3
 
 
 @pytest.mark.parametrize("durable", [False, True])
@@ -283,9 +291,8 @@ def test_accepted_append_error_refreshes_the_actual_prefix(tmp_path, monkeypatch
         assert len(backend.learn_contexts) == len(backend.commit_calls) == 1
     else:
         learned, committed = len(backend.learn_contexts), len(backend.commit_calls)
-        with pytest.raises(ValueError, match="accepted prefix"):
-            result.backward("Forbidden retry.")
-        assert (len(backend.learn_contexts), len(backend.commit_calls)) == (learned, committed)
+        assert result.backward("Later whole pass.").status == "succeeded"
+        assert (len(backend.learn_contexts), len(backend.commit_calls)) == (learned + 1, committed + 1)
 
 
 def test_each_explicit_attempt_restores_fresh_sessions_from_recorded_snapshots():
@@ -447,14 +454,9 @@ def test_cleanup_error_preserves_finished_authority_and_releases_guard(monkeypat
     assert all(session.closed for session in backend.sessions)
     monkeypatch.setattr(owner, "close", original_close)
 
-    if learner_fails:
-        assert result.backward("Fresh review.").status == "succeeded"
-        assert len(backend.learn_contexts) == 2
-    else:
-        with pytest.raises(ValueError, match="accepted prefix"):
-            result.backward("Forbidden retry.")
-        assert len(backend.learn_contexts) == 1
-    assert len(backend.commit_calls) == 1
+    assert result.backward("Fresh review.").status == "succeeded"
+    assert len(backend.learn_contexts) == 2
+    assert len(backend.commit_calls) == (1 if learner_fails else 2)
 
 
 @pytest.mark.parametrize("failure", [AsyncCancelledError("cancelled"), FutureCancelledError("cancelled")])
@@ -648,3 +650,60 @@ def test_terminal_resume_inspects_every_unfinished_backward_prefix(tmp_path, pre
     }[prefix]
     assert inspected.events == [] and path.read_bytes() == before
     assert memory.open_snapshots == [None] and memory.learn_contexts == memory.commit_calls == []
+
+
+_KILLED_ATTEMPT = """
+import sys, time
+from pathlib import Path
+from agent_composer.compose import load_flow
+from agent_composer.run import resume_flow
+from tests.engine._memory_fakes import _Memory, _Session
+
+log, source, marker, phase = sys.argv[1:]
+
+def block(*args):
+    Path(marker).write_text(phase)
+    time.sleep(120)
+
+backend = _Memory(learn_outcomes=[lambda context: block()] if phase == "learn" else [])
+if phase == "commit":
+    _Session.commit = block
+resume_flow(load_flow(Path(source).read_text()), log=Path(log), memory={"test": backend}).backward("Second review.")
+"""
+
+
+@pytest.mark.parametrize("phase", ["learn", "commit"])
+def test_killed_attempt_does_not_block_a_later_attempt(tmp_path, phase):
+    root = Path(__file__).resolve().parents[2]
+    path, source, marker = tmp_path / "run.jsonl", tmp_path / "flow.yaml", tmp_path / "blocked"
+    source.write_text(_WITH_MEMORY)
+    flow = load_flow(_WITH_MEMORY)
+    first = _Memory()
+    assert run_flow(flow, {"text": "hello"}, learnable=True, log=path,
+                    memory={"test": first}).backward("First review.").status == "succeeded"
+
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join((str(root / "src"), str(root)))}
+    child = subprocess.Popen([sys.executable, "-c", _KILLED_ATTEMPT, str(path), str(source), str(marker), phase],
+                             cwd=root, env=env)
+    try:
+        deadline = time.monotonic() + 60
+        while not marker.exists():
+            assert child.poll() is None, "child exited before blocking"
+            assert time.monotonic() < deadline, "child never reached the blocking call"
+            time.sleep(0.05)
+    finally:
+        child.kill()
+        child.wait()
+
+    third = _Memory()
+    resumed = resume_flow(flow, log=path, memory={"test": third})
+    projected = resumed.backward_outcome
+    assert projected.status == "failed" and projected.failure.code == "backward.interrupted"
+    outcome = resumed.backward("Third review.")
+    assert outcome.status == "succeeded" and resumed.backward_outcome == outcome
+    records = _records(path)
+    assert [r.attempt_id for r in records if type(r) is BackwardStartedRecord] == [1, 2, 3]
+    finished = {r.attempt_id: r.outcome for r in records if type(r) is BackwardFinishedRecord}
+    assert finished[1].status == finished[3].status == "succeeded"
+    assert finished[2] == projected
+    assert finished[2].learning.policies[0].status == ("unknown" if phase == "commit" else "unrequested")

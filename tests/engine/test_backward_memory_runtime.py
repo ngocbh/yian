@@ -235,9 +235,9 @@ def test_no_policy_backward_still_records_ready_and_finished_without_opening_res
     assert [type(record) for record in _records(engine)[before:]] == [
         BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord,
     ]
-    with pytest.raises(ValueError, match="cannot start"):
-        backward_module.drive_backward(engine.state, engine.log, "again")
-    assert len(node.calls) == 1
+    again = backward_module.drive_backward(engine.state, engine.log, "again")
+    assert again.status == "succeeded" and again.feedback.input_feedback == {"topic": ("again",)}
+    assert len(node.calls) == 2
 
 
 def test_context_depth_failure_keeps_completed_backward_without_calling_learners():
@@ -425,10 +425,12 @@ def test_backend_host_or_unexpected_error_escapes_with_exact_prefix(operation, e
     assert not memory["B"].commit_calls
     assert all(backend.close_count == 1 for backend in memory.values())
     if operation == "commit":
-        before = len(_records(engine))
-        with pytest.raises(ValueError, match="cannot start"):
-            _drive(engine, memory)
-        assert len(_records(engine)) == before and all(backend.open_snapshots == [{}] for backend in memory.values())
+        assert _drive(engine, memory, feedback="after host stop").status == "succeeded"
+        finished = [record for record in _records(engine) if type(record) is BackwardFinishedRecord]
+        assert [record.attempt_id for record in finished] == [1, 2]
+        assert finished[0].outcome.failure.code == "backward.interrupted"
+        assert [policy.status for policy in finished[0].outcome.learning.policies] == ["unknown", "unrequested"]
+        assert all(backend.open_snapshots == [{}, {}] for backend in memory.values())
 
 
 @pytest.mark.parametrize("operation", ["learn", "commit"])
@@ -463,6 +465,40 @@ def test_host_capability_identity_and_cleanup_error_preserve_primary_exception(m
         _drive(engine, memory)
     assert caught.value is original and all(backend.close_count == 1 for backend in memory.values())
     assert engine.state.backward_state.finished is None and not engine.state.backward_state.ever_requested
+
+
+@pytest.mark.parametrize("prior", ["succeeded", "commit_failed", "requested_unfinished"])
+def test_later_attempt_follows_or_closes_any_prior_attempt_and_recomputes_everything(prior):
+    from agent_composer.runtime.backward import compute_backward
+    from agent_composer.runtime.learning import memory_commit_id
+
+    engine, node = _terminal(("A",))
+    if prior == "requested_unfinished":
+        state = engine.state
+        root, attributed = compute_backward(state.trace, "review")
+        proposals = tuple(FrameProposal(spec.ref, ()) for spec in state.memory_layout)
+        identity = memory_commit_id(state.run_id, "A", ())
+        for record in (BackwardStartedRecord(1, "review"), BackwardReadyRecord(1, root, attributed, proposals),
+                       MemoryCommitRequestedRecord("A", identity, (), attempt_id=1)):
+            commit_prepared(engine.log, state, prepare_record(state, record))
+    else:
+        first = _Memory(commit_outcomes=[MemoryOperationError("storage", "store.moved", "Moved.", True)]
+                        if prior == "commit_failed" else [])
+        assert _drive(engine, {"A": first}).status == ("succeeded" if prior == "succeeded" else "failed")
+    calls = len(node.calls)
+    later = _Memory()
+    outcome = _drive(engine, {"A": later}, feedback="later review")
+    assert outcome.status == "succeeded" and outcome.learning.status == "succeeded"
+    records = _records(engine)
+    assert [record.attempt_id for record in records if type(record) is BackwardStartedRecord] == [1, 2]
+    finished = [record for record in records if type(record) is BackwardFinishedRecord]
+    assert [record.attempt_id for record in finished] == [1, 2]
+    if prior == "requested_unfinished":
+        assert finished[0].outcome.failure.code == "backward.interrupted"
+        assert [policy.status for policy in finished[0].outcome.learning.policies] == ["unknown"]
+    assert len(node.calls) == calls + 1
+    assert len(later.learn_contexts) == len(later.commit_calls) == later.close_count == 1
+    assert engine.state.backward_state.can_start
 
 
 def test_cleanup_error_after_finished_preserves_success_and_admits_a_later_attempt(monkeypatch):

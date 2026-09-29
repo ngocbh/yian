@@ -60,6 +60,7 @@ class AgentNode(Node):
     needs_memory_context = True
     needs_render_capture = True
     needs_tools = True
+    needs_live_events = True
 
     def __init__(
         self,
@@ -167,6 +168,8 @@ class AgentNode(Node):
         evaluation_trace: EvaluationTrace | None = None,
         memory_context: MemoryContext | None = None,
         toolset: ToolSet | None = None,
+        emit_stream: Callable[[Any], None] | None = None,
+        emit_event: Callable[[Any], None] | None = None,
     ) -> AgentRunContext:
         """Build the complete process-local context for one mode invocation."""
         output_type = (
@@ -186,6 +189,8 @@ class AgentNode(Node):
             evaluation_trace=evaluation_trace,
             memory_context=memory_context if memory_context is not None else MemoryContext(),
             toolset=toolset if toolset is not None else ToolSet(),
+            emit_stream=emit_stream,
+            emit_event=emit_event,
         )
 
     def exception_origin(self, exception: Exception) -> OriginRef | None:
@@ -220,6 +225,8 @@ class AgentNode(Node):
         open_memory_context: Callable[[str, str, dict[str, Any]], MemoryContext] | None = None,
         capture_render: Callable[[dict[str, Any]], None] | None = None,
         tools: ToolSet | None = None,
+        emit_stream: Callable[[Any], None] | None = None,
+        emit_event: Callable[[Any], None] | None = None,
     ) -> Output:
         """Render fresh locals once, publish established capture, and run the mode.
 
@@ -244,6 +251,11 @@ class AgentNode(Node):
             tools (`ToolSet | None`, *optional*, defaults to `None`):
                 The run's tools. The node's `tools` list grants ids from it.
                 `None` uses the global registry.
+            emit_stream (`Callable | None`, *optional*, defaults to `None`):
+                Transient `StreamChunk` sink, kept on the mode context. No mode
+                streams yet, so replies are still invoked whole.
+            emit_event (`Callable | None`, *optional*, defaults to `None`):
+                Transient sink for model/tool call observers with token usage.
 
         Returns:
             `Output`: The selected mode's result.
@@ -304,6 +316,8 @@ class AgentNode(Node):
                 evaluation_trace=evaluation_trace,
                 memory_context=memory_context,
                 toolset=tools,
+                emit_stream=emit_stream,
+                emit_event=emit_event,
             )
         )
 

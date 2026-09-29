@@ -41,6 +41,8 @@ class AgentRunContext:
     evaluation_trace: EvaluationTrace | None = None  # write-only visible evidence sink
     memory_context: MemoryContext = field(default_factory=MemoryContext)
     toolset: ToolSet = field(default_factory=ToolSet)  # the run's tools; `tools` grants ids from it
+    emit_stream: Callable[[Any], None] | None = None  # transient text sink; absent = no streaming
+    emit_event: Callable[[Any], None] | None = None  # transient in-loop observer sink
 
     def check_stopped(self) -> None:
         """Unwind before starting another external effect after host cancellation."""

@@ -933,10 +933,15 @@ failed regardless of backend retry hints. All successful confirmations without
 Finished still project an interrupted backward outcome and incomplete learning.
 An accepted failed confirmation instead projects failed learning.
 
-A successful Finished or any accepted request permanently closes retry
-eligibility. A permitted precommit retry is explicit and recomputes the whole
-attempt from original snapshots with fresh sessions; Ready proposals are never
-resumed. No rollback, rebase, or automatic recovery of backward work occurs.
+Only an unfinished attempt blocks a new Started, and the driver closes it first
+with an interrupted Finished that projects its prefix. Every explicit call is a
+new attempt that recomputes everything from original snapshots with fresh
+sessions; Ready proposals are never resumed. The first attempt that requests
+commits keeps `ac-memory-v1` IDs; each later requesting attempt uses
+`memory_commit_id(..., attempt_id)` (`ac-memory-v2`), so identical batches in
+different attempts never share an ID. `LearnContext` carries no attempt
+identity; backends tell attempts apart only by commit ID. No rollback, rebase,
+or automatic recovery of backward work occurs.
 
 Memory learning belongs to each frame's policy. Each frame owned by a flow or
 AGENT node writes only its own policy state. Node feedback propagation remains a
@@ -1165,7 +1170,7 @@ latest saved history, and the run log is not a replacement memory store.
 When an unfinished recorded run enabled memory, recovery requires the named host
 implementations and verifies that opening each session reproduces the exact
 recorded snapshot. Terminal inspection opens no memory; supplied mapping references
-remain available to the returned handle for a later eligible explicit attempt.
+remain available to the returned handle for later explicit attempts.
 
 A delayed handle owns private program/data snapshots and policy references, not
 open forward resources. The run boundary anchors durable paths at acquisition,

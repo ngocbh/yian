@@ -278,7 +278,7 @@ runs every enabled frame learner, while unreached AGENT backward model calls are
 skipped. The separate outcome never changes forward values or updates local
 variables. Terminal `resume_flow` inspects without learning; it does not retry a
 backward attempt. See the [Python API](../../../docs/api.md#explicit-backward-feedback)
-for feedback shapes and the request-based retry boundary.
+for feedback shapes and repeated backward attempts.
 
 ### `code` — deterministic Python
 `code:` is either a **`module:function`** reference (import + call) or **inline source** —

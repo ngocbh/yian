@@ -1593,7 +1593,12 @@ class MemorySession(Protocol):
         commit_id: str,
         mutations: tuple[MemoryMutation, ...],
     ) -> None:
-        """Atomically commit one immutable policy mutation batch."""
+        """Atomically commit one immutable policy mutation batch.
+
+        ``commit_id`` is stable within one backward attempt, so a repeated
+        commit of that attempt may be a no-op. Every later attempt that
+        requests commits gets a distinct ID, even for an identical batch.
+        """
         ...
 
 

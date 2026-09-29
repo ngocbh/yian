@@ -411,9 +411,8 @@ class RuntimeBackwardState:
             _BackwardAttempt.__post_init__(attempt)
             if attempt.started.attempt_id != index + 1:
                 raise ValueError("backward attempt IDs must follow accepted start order")
-            if index < len(self.attempts) - 1 and (attempt.finished is None or attempt.requests
-                    or attempt.finished.outcome.status == "succeeded"):
-                raise ValueError("a closed or unfinished attempt cannot precede another start")
+            if index < len(self.attempts) - 1 and attempt.finished is None:
+                raise ValueError("an unfinished attempt cannot precede another start")
             if tuple(record.policy_name for record in attempt.requests) != self.policy_order[:len(attempt.requests)]:
                 raise ValueError("backward requests must follow recorded policy order")
             if len(attempt.observations) > len(attempt.requests) or len(attempt.requests) > len(attempt.observations) + 1:
@@ -453,6 +452,19 @@ class RuntimeBackwardState:
         return any(attempt.requests for attempt in self.attempts)
 
     @property
+    def commit_attempt_key(self) -> int | None:
+        """Return the attempt ID folded into the current attempt's commit IDs.
+
+        The first attempt that requests commits keeps attempt-free
+        ``ac-memory-v1`` IDs, so logs written before repeated attempts replay
+        unchanged. Every later requesting attempt gets its own ``ac-memory-v2``
+        IDs, even when its batch equals an earlier one.
+        """
+        if self.current is None or not any(attempt.requests for attempt in self.attempts[:-1]):
+            return None
+        return self.current.started.attempt_id
+
+    @property
     def policy_outcomes(self) -> tuple[PolicyCommitOutcome, ...]:
         """Project each configured policy from accepted requests and observations."""
         if self.current is None:
@@ -461,10 +473,12 @@ class RuntimeBackwardState:
 
     @property
     def can_start(self) -> bool:
-        """Report history eligibility; terminal/learn gates remain state-owned."""
-        return (not self.ever_requested and (self.current is None or self.finished is not None)
-                and not any(attempt.finished is not None and attempt.finished.outcome.status == "succeeded"
-                            for attempt in self.attempts))
+        """Report whether a new attempt may start; terminal/learn gates remain state-owned.
+
+        Any finished attempt, whatever its outcome or commit requests, admits a
+        later start. Only an unfinished attempt blocks one.
+        """
+        return self.current is None or self.finished is not None
 
     @property
     def outcome(self) -> BackwardOutcome | None:
@@ -602,7 +616,8 @@ def reduce_backward_record(
         if index >= len(backward.policy_order) or record.policy_name != backward.policy_order[index]:
             raise ValueError("backward request must name the next enabled policy")
         batch = _proposal_batches(backward, current.ready)[index]
-        if record.mutations != batch or record.commit_id != memory_commit_id(trace.run_id, record.policy_name, batch):
+        expected_id = memory_commit_id(trace.run_id, record.policy_name, batch, backward.commit_attempt_key)
+        if record.mutations != batch or record.commit_id != expected_id:
             raise ValueError("backward commit batch and identity must match the ordered Ready proposals")
         next_attempt = replace(current, requests=(*current.requests, record))
     elif type(record) in (MemoryCommitSucceededRecord, MemoryCommitFailedRecord):
@@ -1306,13 +1321,18 @@ def memory_commit_id(
     run_id: str,
     policy_name: str,
     mutations: tuple[MemoryMutation, ...],
+    attempt_id: int | None = None,
 ) -> str:
     """Return the sole deterministic ID for a policy's canonical mutation batch.
 
     The SHA-256 input is UTF-8 compact JSON with sorted object keys and no NaN:
-    ``[run_id, policy_name, canonical_batch]``.  Batch order is semantic and each
-    item contains ``mutation_id``, exact frame-ref fields, and the JSON payload.
+    ``[run_id, policy_name, canonical_batch]`` for ``ac-memory-v1:``, or
+    ``[run_id, attempt_id, policy_name, canonical_batch]`` for ``ac-memory-v2:``
+    when ``attempt_id`` is given.  Batch order is semantic and each item contains
+    ``mutation_id``, exact frame-ref fields, and the JSON payload.
     """
+    if attempt_id is not None and (type(attempt_id) is not int or attempt_id < 1):
+        raise ValueError("attempt_id must be a positive integer or None")
     if type(run_id) is not str or not run_id:
         raise ValueError("run_id must be a non-empty string")
     if type(policy_name) is not str or not policy_name:
@@ -1339,14 +1359,16 @@ def memory_commit_id(
                 "payload": mutation.payload,
             }
         )
+    fields = [run_id, policy_name, batch] if attempt_id is None else [run_id, attempt_id, policy_name, batch]
     encoded = json.dumps(
-        [run_id, policy_name, batch],
+        fields,
         ensure_ascii=False,
         allow_nan=False,
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
-    return f"ac-memory-v1:{sha256(encoded).hexdigest()}"
+    version = "v1" if attempt_id is None else "v2"
+    return f"ac-memory-{version}:{sha256(encoded).hexdigest()}"
 
 
 __all__ = [

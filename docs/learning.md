@@ -193,11 +193,25 @@ rollback. The learning result records each policy as `unrequested`, `unknown`,
 `succeeded`, or `failed`. `unknown` means the runtime recorded a request but did
 not durably observe the backend result.
 
-A successful attempt, or any accepted commit request, closes retry eligibility.
-Before that boundary, the application may call `backward()` again to retry the
-whole attempt with fresh sessions from the original snapshots. It never resumes a
-half-computed attempt, retries automatically, rebases a policy, or rolls back a
-different policy's confirmed commit.
+Every `backward()` call is a new attempt on the same run, whatever the earlier
+attempts did: succeeded, failed, committed, or crashed. Each attempt opens fresh
+sessions from the run's original snapshots and recomputes all callbacks and
+proposals. An unfinished earlier attempt, such as one killed during a commit, is
+first closed as interrupted; its unconfirmed requests stay `unknown`. The runtime
+never resumes a half-computed attempt, retries automatically, rebases a policy, or
+rolls back a different policy's confirmed commit.
+
+Attempts are distinct for memory. After the first attempt that sends commits,
+each later attempt uses commit IDs that include its attempt number, so a backend
+that deduplicates by commit ID still applies an identical later batch. This
+also means a new attempt after an `unknown` request may write twice: the backend
+may have applied the first request, and it cannot match the new ID to it. The
+host reconciles, for example by checking the store before it calls `backward()`
+again. A learner sees only the current attempt's feedback, never an earlier
+attempt's. A policy
+may still reject a later attempt: the built-in `EpisodicMemory` and
+`ReflectiveMemory` fail `learn` with a `stale_generation` code once their memory
+has moved past the run's snapshot.
 
 ## Durable feedback and recovery
 
@@ -219,8 +233,9 @@ outcome = recovered.backward("Make the explanation shorter.")
 Recovery folds the same append-only records used live and reconstructs the
 retained reverse tape. It never starts backward work or memory learning by itself.
 For a memory-enabled backward attempt, pass the original policy mapping to
-`resume_flow(..., memory=...)` so it can reopen the recorded snapshots. The run
-handle and durable log reject overlapping backward attempts.
+`resume_flow(..., memory=...)` so it can reopen the recorded snapshots. You may
+call `backward()` on the same log again later, from any process; each call appends
+a new attempt. The run handle and durable log reject overlapping backward attempts.
 
 Run logs retain prompts, typed values, feedback, snapshots, proposals, and often
 model/tool evidence. Treat them as sensitive data and store them on an

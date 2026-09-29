@@ -369,17 +369,17 @@ def test_schema_seven_terminal_inspection_is_inert(tmp_path, monkeypatch, failed
     assert path.read_bytes() == original
 
 
-@pytest.mark.parametrize("failed_commit,boundary,disposition,eligible", [
-    (False, 7, "unrequested", True),
-    (False, 8, "unrequested", True),
-    (False, 9, "unknown", False),
-    (False, 10, "succeeded", False),
-    (False, 11, "succeeded", False),
-    (True, 10, "failed", False),
-    (True, 11, "failed", False),
+@pytest.mark.parametrize("failed_commit,boundary,disposition", [
+    (False, 7, "unrequested"),
+    (False, 8, "unrequested"),
+    (False, 9, "unknown"),
+    (False, 10, "succeeded"),
+    (False, 11, "succeeded"),
+    (True, 10, "failed"),
+    (True, 11, "failed"),
 ])
-def test_schema_seven_backward_history_preserves_retry_and_commit_guards(
-    tmp_path, monkeypatch, failed_commit, boundary, disposition, eligible,
+def test_schema_seven_backward_history_admits_a_later_attempt_at_every_boundary(
+    tmp_path, monkeypatch, failed_commit, boundary, disposition,
 ):
     from agent_composer.nodes.code import CodeNode
     from agent_composer.runtime.log import SCHEMA_VERSION, decode_record
@@ -406,27 +406,19 @@ def test_schema_seven_backward_history_preserves_retry_and_commit_guards(
     assert appended == [] and path.read_bytes() == original
     assert backend.open_snapshots == backend.learn_contexts == backend.commit_calls == []
 
-    if eligible:
-        outcome = result.backward()
-        assert outcome.status == "succeeded"
-        assert backend.open_snapshots == [{"namespace": "test"}]
-        assert len(backend.learn_contexts) == len(backend.commit_calls) == 1
-        assert [record.attempt_id for record in appended if isinstance(record, BackwardStartedRecord)] == [2]
-        current = path.read_bytes()
-        assert current.startswith(original)
-        added = current.splitlines()[len(wires):]
-        assert added and all(decode_record(line).schema == SCHEMA_VERSION for line in added)
-        before_reopen = len(appended)
-        inspected = resume_flow(flow, log=path, memory={"test": object()})
-        assert inspected.backward_outcome == outcome and inspected.events == []
-        assert len(appended) == before_reopen and path.read_bytes() == current
-    else:
-        previous = result.backward_outcome
-        with pytest.raises(ValueError):
-            result.backward()
-        assert result.backward_outcome is previous
-        assert appended == [] and path.read_bytes() == original
-        assert backend.open_snapshots == []
+    outcome = result.backward()
+    assert outcome.status == "succeeded"
+    assert backend.open_snapshots == [{"namespace": "test"}]
+    assert len(backend.learn_contexts) == len(backend.commit_calls) == 1
+    assert [record.attempt_id for record in appended if isinstance(record, BackwardStartedRecord)] == [2]
+    current = path.read_bytes()
+    assert current.startswith(original)
+    added = current.splitlines()[len(wires):]
+    assert added and all(decode_record(line).schema == SCHEMA_VERSION for line in added)
+    before_reopen = len(appended)
+    inspected = resume_flow(flow, log=path, memory={"test": object()})
+    assert inspected.backward_outcome == outcome and inspected.events == []
+    assert len(appended) == before_reopen and path.read_bytes() == current
 
 
 @pytest.mark.parametrize("failed,value,output_type,feedback", [
@@ -744,7 +736,7 @@ def test_reverse_cancellation_retains_started_only_and_resume_recomputes_the_ent
     ("finished", BackwardFinishedRecord),
     ("failed_finished", BackwardFinishedRecord),
 ])
-def test_public_append_rejection_keeps_exact_authority_and_only_pre_request_retries(tmp_path, monkeypatch, phase, rejected_type):
+def test_public_append_rejection_keeps_exact_authority_and_retries_after_every_phase(tmp_path, monkeypatch, phase, rejected_type):
     backend = _Memory(commit_outcomes=[MemoryOperationError("store", "declined", "Store declined.", False)]
                       if phase in ("failure_observation", "failed_finished") else [])
     flow, path, backend, result, forward_chat = _chain(tmp_path, monkeypatch, backend=backend)
@@ -832,16 +824,6 @@ def test_public_append_rejection_keeps_exact_authority_and_only_pre_request_retr
     assert inspected.events == [] and inspected.backward_outcome == outcome
     assert (inspected.input, inspected.status, inspected.output, inspected.failure) == forward[:4]
     assert path.read_bytes() == before and reverse.calls == expected_callbacks and len(backend.open_snapshots) == 2
-    if expected_commits:
-        previous = inspected.backward_outcome
-        with pytest.raises(ValueError, match="accepted prefix"):
-            inspected.backward("Forbidden retry.")
-        assert inspected.backward_outcome is previous
-        assert path.read_bytes() == before and reverse.calls == expected_callbacks
-        assert len(backend.open_snapshots) == backend.close_count == 2
-        assert len(backend.commit_calls) == 1 and len(backend.learn_contexts) == 2
-        assert (inspected.input, inspected.status, inspected.output, inspected.failure, inspected.events) == (*forward[:4], [])
-        return
 
     generation = 2
     retry = _BackwardChat([_reply(input_feedback={"draft": ["fresh draft"]}),
@@ -850,13 +832,16 @@ def test_public_append_rejection_keeps_exact_authority_and_only_pre_request_retr
     completed = inspected.backward("Second review.")
     assert completed.status == "succeeded" and completed.feedback == BackwardResult({"topic": ("fresh topic",)})
     assert retry.calls == 2 and reverse.calls == expected_callbacks and forward_chat.calls == 2
-    assert len(backend.learn_contexts) == expected_callbacks + 2 and len(backend.commit_calls) == 1
+    assert len(backend.learn_contexts) == expected_callbacks + 2
+    assert len(backend.commit_calls) == expected_commits + 1
     records = _records(path)
-    request, = [record for record in records if type(record) is MemoryCommitRequestedRecord]
+    requests = [record for record in records if type(record) is MemoryCommitRequestedRecord]
+    assert len(requests) == expected_commits + 1
+    request = requests[-1]
     assert len(request.mutations) == 2
-    assert backend.commit_calls == [(request.commit_id, request.mutations)]
+    assert backend.commit_calls[-1] == (request.commit_id, request.mutations)
     assert all(mutation.mutation_id.startswith("pass-2/") and mutation.payload == {"generation": 2}
-               for mutation in backend.commit_calls[0][1])
+               for mutation in backend.commit_calls[-1][1])
     assert [record.attempt_id for record in records if type(record) is BackwardStartedRecord] == ([1] if phase == "started" else [1, 2])
     if phase != "started":
         prior, = [record for record in records if type(record) is BackwardFinishedRecord and record.attempt_id == 1]
@@ -868,7 +853,7 @@ def test_public_append_rejection_keeps_exact_authority_and_only_pre_request_retr
     assert (inspected.input, inspected.status, inspected.output, inspected.failure, inspected.events) == (*forward[:4], [])
 
 
-def test_three_policy_failure_preserves_ordered_dispositions_and_closes_public_retry(tmp_path, monkeypatch):
+def test_three_policy_failure_preserves_ordered_dispositions_and_admits_a_public_retry(tmp_path, monkeypatch):
     source = _CHAIN.replace("long_term_memory: test", "long_term_memory: A", 1)
     source = source.replace("  first:\n    kind: agent", "  first:\n    kind: agent\n    long_term_memory: B")
     flow = load_flow(source.replace("    long_term_memory: test", "    long_term_memory: C"))
@@ -930,20 +915,19 @@ def test_three_policy_failure_preserves_ordered_dispositions_and_closes_public_r
     assert all(session.closed for backend in backends.values() for session in backend.sessions)
     assert (result.input, result.status, result.output, result.failure, result.events) == forward
     before = path.read_bytes()
-    counters = [(len(backend.open_snapshots), backend.close_count, len(backend.learn_contexts), len(backend.commit_calls))
-                for backend in backends.values()]
-    monkeypatch.setattr(llm_clients, "model_from_config", lambda config: pytest.fail("closed retry invoked model"))
+    retry = _BackwardChat([_reply(input_feedback={"draft": ["draft again"]}),
+                           _reply(input_feedback={"topic": ["topic again"]})])
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda config: retry)
 
     inspected = resume_flow(flow, log=path, memory=backends)
     assert inspected.events == [] and inspected.backward_outcome == outcome
     assert (inspected.input, inspected.status, inspected.output, inspected.failure) == forward[:4]
-    previous = (inspected.backward_outcome, inspected.learning)
-    with pytest.raises(ValueError, match="accepted prefix"):
-        inspected.backward("Forbidden retry.")
-    assert inspected.backward_outcome is previous[0] and inspected.learning is previous[1]
-    assert path.read_bytes() == before and reverse.calls == forward_chat.calls == 2
-    assert [(len(backend.open_snapshots), backend.close_count, len(backend.learn_contexts), len(backend.commit_calls))
-            for backend in backends.values()] == counters
+    completed = inspected.backward("Second review.")
+    assert completed.status == "succeeded" and completed.learning.status == "succeeded"
+    assert [policy.status for policy in completed.learning.policies] == ["succeeded"] * 3
+    assert path.read_bytes().startswith(before) and retry.calls == 2
+    assert [len(backend.commit_calls) for backend in backends.values()] == [2, 2, 1]
+    assert [record.attempt_id for record in _records(path) if type(record) is BackwardStartedRecord] == [1, 2]
     assert (result.input, result.status, result.output, result.failure, result.events) == forward
     assert (inspected.input, inspected.status, inspected.output, inspected.failure, inspected.events) == (*forward[:4], [])
 

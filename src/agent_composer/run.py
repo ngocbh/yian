@@ -316,8 +316,9 @@ def run_flow(
             its key as its name. The `ask_user` entry is the host handler for
             HUMAN_INPUT nodes and granted AGENT `ask_user` calls. It must be a
             plain callable that accepts `question`, `questions`, `answer_schema`,
-            `title`, and `node_id` as keywords (define it as
-            `def handler(**request)`); the model sees only `question`. Runs use
+            `title`, `node_id`, and `options` as keywords (define it as
+            `def handler(**request)`); the model sees only `question` and
+            `options`. Runs use
             up to eight workers by default, so several nodes can call it at once;
             it must be thread-safe. An AGENT can call a tool only if its `tools:`
             list grants the id.

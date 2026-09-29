@@ -240,6 +240,15 @@ def test_descriptor_chat_prompt_does_not_prefetch_the_next_line(monkeypatch):
     assert answers == ["one", "two"]
 
 
+def test_chat_prompt_with_options_uses_the_choice_renderer(monkeypatch):
+    """A model question with options gets the choice list, not a bare line."""
+    monkeypatch.setattr(chat_command, "_prompt_request", lambda request: request.options[0])
+
+    request = PromptRequest(question="Which?", options=["A", "B"])
+
+    assert chat_command._prompt_chat_request(request) == "A"
+
+
 def test_descriptor_chat_prompt_preserves_a_blank_submitted_line(monkeypatch):
     """A newline is an empty answer, distinct from descriptor EOF."""
     read_fd, write_fd = os.pipe()

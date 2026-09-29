@@ -41,6 +41,7 @@ class PromptRequest:
     answer_schema: list[dict[str, Any]] | None = None
     title: str | None = None
     node_id: str | None = None
+    options: list[str] | None = None
     _future: Future[Any] = field(default_factory=Future, init=False, repr=False)
     _completed: Event = field(default_factory=Event, init=False, repr=False)
     _cancelled: Event = field(default_factory=Event, init=False, repr=False)
@@ -171,6 +172,7 @@ class TerminalBroker:
         answer_schema: list[dict[str, Any]] | None = None,
         title: str | None = None,
         node_id: str | None = None,
+        options: list[str] | None = None,
     ) -> Any:
         """Enqueue one prompt and block the calling worker for its terminal result."""
         if self._stop_event is not None and self._stop_event.is_set():
@@ -183,6 +185,7 @@ class TerminalBroker:
             answer_schema=answer_schema,
             title=title,
             node_id=node_id,
+            options=options,
         )
         with self._lock:
             if self._cancelled or self._completion_published:

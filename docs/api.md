@@ -989,11 +989,13 @@ result = run_flow(
 )
 ```
 
-The handler receives `question`, `questions`, `answer_schema`, `title`, and
-`node_id` as keyword arguments, so define it as `def handler(**request)`. A
-handler that cannot take all five is rejected before the run starts.
-`human_input` uses the trusted metadata path; model-requested `ask_user` calls
-can supply only the public `question` argument. Each run has its own handler, so
+The handler receives `question`, `questions`, `answer_schema`, `title`,
+`node_id`, and `options` as keyword arguments, so define it as
+`def handler(**request)`. A handler that cannot take all six is rejected before
+the run starts. `human_input` uses the trusted metadata path; model-requested
+`ask_user` calls can supply only the public `question` and `options` arguments.
+`options` is `None` or a cleaned list of up to six short answer labels the model
+suggested. Show them as choices, but still let the human type another answer. Each run has its own handler, so
 concurrent runs in one process never share one. Within one run, the default
 `num_workers=8` lets several nodes (for example two MAP items) call the handler at
 the same time, so the handler must be thread-safe.

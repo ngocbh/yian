@@ -17,6 +17,7 @@ from agent_composer.nodes.human_input import HumanInputNode
 from agent_composer.nodes.tool.node import ToolNode
 from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
 from agent_composer.tools import TOOL_REGISTRY, ToolSet, register_tool, registered_tools
+from agent_composer.tools import registry
 from agent_composer.typesys.pool import VariablePool
 from tests.engine._graph_builder import _engine, _graph
 
@@ -148,13 +149,13 @@ _TRUSTED = {
 }
 
 
-def test_ask_user_entry_is_wrapped_so_the_model_sees_only_question():
+def test_ask_user_entry_is_wrapped_so_the_model_sees_question_and_options():
     seen: list[dict[str, Any]] = []
     tools = ToolSet({"ask_user": _recording_handler(seen)})
 
     (tool,) = tools.resolve(["ask_user"])
 
-    assert set(tool.tool_call_schema.model_fields) == {"question"}
+    assert set(tool.tool_call_schema.model_fields) == {"question", "options"}
     assert tools.invoke("ask_user", {"question": "Approve?"}) == "answer"
     assert seen == [
         {
@@ -163,8 +164,18 @@ def test_ask_user_entry_is_wrapped_so_the_model_sees_only_question():
             "answer_schema": None,
             "title": None,
             "node_id": None,
+            "options": None,
         }
     ]
+
+
+def test_model_options_reach_the_handler_normalized():
+    seen: list[dict[str, Any]] = []
+    tools = ToolSet({"ask_user": _recording_handler(seen)})
+
+    tools.invoke("ask_user", {"question": "Which?", "options": ["A", "a", " B "]})
+
+    assert seen[0]["options"] == ["A", "B"]
 
 
 @pytest.mark.parametrize("key", ["questions", "answer_schema", "title", "node_id"])
@@ -182,7 +193,7 @@ def test_trusted_ask_user_call_passes_all_fields_to_the_handler():
     tools = ToolSet({"ask_user": _recording_handler(seen, answer={"decision": True})})
 
     assert tools.invoke_trusted("ask_user", _TRUSTED) == {"decision": True}
-    assert seen == [_TRUSTED]
+    assert seen == [{**_TRUSTED, "options": None}]
 
 
 @pytest.mark.parametrize(
@@ -198,8 +209,29 @@ def test_ask_user_entry_must_be_a_plain_callable(entry: Any):
 
 
 def test_ask_user_handler_must_accept_every_field():
-    with pytest.raises(TypeError, match=r"def handler\(\*\*request\)"):
+    with pytest.raises(TypeError, match=r"options.*def handler\(\*\*request\)"):
         ToolSet({"ask_user": lambda question: "yes"})
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (None, None),
+        ("A, B", ["A, B"]),
+        ('["A","B"]', ["A", "B"]),
+        ('["A", 2]', ["A"]),
+        ("[broken", ["[broken"]),
+        ([1, "", " a ", "A"], ["a"]),
+        ({"x": 1}, None),
+        (5, None),
+        ([str(i) for i in range(10)], ["0", "1", "2", "3", "4", "5"]),
+        (["x" * 200], ["x" * 79 + "…"]),
+        (["two\n  lines"], ["two lines"]),
+        (["", "  "], None),
+    ],
+)
+def test_ask_user_options_are_normalized_leniently(raw: Any, expected: Any):
+    assert registry._normalize_options(raw) == expected
 
 
 def _ping() -> str:
@@ -274,6 +306,7 @@ def test_human_input_asks_the_run_ask_user_handler():
             "answer_schema": None,
             "title": "Gate",
             "node_id": "approval",
+            "options": None,
         }
     ]
 
@@ -324,7 +357,7 @@ def test_agent_binds_and_calls_granted_per_run_tools(monkeypatch):
 
     assert evaluated.outcome == Output("done")
     assert [tool.name for tool in chat.bound_tools] == ["shout", "ask_user"]
-    assert set(chat.bound_tools[1].tool_call_schema.model_fields) == {"question"}
+    assert set(chat.bound_tools[1].tool_call_schema.model_fields) == {"question", "options"}
     result = chat.calls[1][-1]
     assert isinstance(result, ToolMessage) and result.content == "HI"
     assert seen == []

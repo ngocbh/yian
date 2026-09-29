@@ -255,6 +255,7 @@ flowchart TB
     compile --> run
     memory --> run
     runtime --> run
+    tools --> run
     run --> cli
 ```
 

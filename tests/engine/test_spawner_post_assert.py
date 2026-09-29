@@ -30,7 +30,6 @@ from agent_composer.events import RunFailed
 from agent_composer.nodes.base import _HostStop
 from agent_composer.nodes.contracts import Assertion
 from agent_composer.run import resume_flow, run_flow
-from agent_composer.tools import install_ask_user
 
 
 # A child that doubles its int input and re-exports it as `${output}` (an int).
@@ -215,12 +214,11 @@ def test_spawner_post_assert_fires_after_log_recovery(tmp_path: Path):
     def interrupt(**request):
         raise interruption
 
-    with install_ask_user(interrupt), pytest.raises(_HostStop) as caught:
-        run_flow(_load_blocking(), {"v": 1}, log=path)
+    with pytest.raises(_HostStop) as caught:
+        run_flow(_load_blocking(), {"v": 1}, log=path, tools={"ask_user": interrupt})
     assert caught.value is interruption
 
-    with install_ask_user(lambda **request: 120):
-        res = resume_flow(_load_blocking(), log=path)
+    res = resume_flow(_load_blocking(), log=path, tools={"ask_user": lambda **request: 120})
 
     assert res.status == "failed"
     failed = [e for e in res.events if isinstance(e, RunFailed)]

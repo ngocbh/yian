@@ -61,7 +61,6 @@ from agent_composer.runtime.state import (
     prepare_node_succeeded,
     prepare_run_started,
 )
-from agent_composer.tools import install_ask_user
 from agent_composer.typesys import VariablePool
 from agent_composer.typesys.seeding import seed_system_clock
 
@@ -1101,7 +1100,7 @@ def test_callback_exception_drains_real_blocked_human_interaction_and_unlocks(
             raise expected
 
     try:
-        with install_ask_user(answer), pytest.raises(RuntimeError) as caught:
+        with pytest.raises(RuntimeError) as caught:
             run_module._run_flow_controlled(
                 load_flow(_HUMAN_DRAIN_FLOW),
                 {},
@@ -1110,6 +1109,7 @@ def test_callback_exception_drains_real_blocked_human_interaction_and_unlocks(
                 num_workers=2,
                 on_event=reject,
                 stop_event=stop,
+                tools={"ask_user": answer},
             )
     finally:
         _ACTIVE_STOP = None

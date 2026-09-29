@@ -35,7 +35,6 @@ from agent_composer.run import run_flow
 from agent_composer.nodes.base import NodeKind
 from agent_composer.typesys.pool import VariablePool
 from agent_composer.events import RunSucceeded
-from agent_composer.tools import install_ask_user
 from tests.engine._graph_builder import _engine
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
@@ -200,8 +199,11 @@ def test_nested_human_input_reaches_terminal():
     # its live namespaced id and completes in one run.
     loaded = load_flow((_SEEDS / "25-nested-suspension.yaml").read_text(), search_paths=[_SEEDS])
     requests = []
-    with install_ask_user(lambda **request: requests.append(request) or "approve"):
-        result = run_flow(loaded, {"action": "order 10 units"})
+    result = run_flow(
+        loaded,
+        {"action": "order 10 units"},
+        tools={"ask_user": lambda **request: requests.append(request) or "approve"},
+    )
 
     assert requests[0]["node_id"] == "gate/approve"
     assert result.status == "succeeded"

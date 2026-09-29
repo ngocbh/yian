@@ -122,7 +122,11 @@ class RunResult:
     _backward_handle: _BackwardHandle | None = field(default=None, init=False, repr=False, compare=False)
 
     def backward(self, feedback: FeedbackValue = None) -> BackwardOutcome:
-        """Run one explicit backward attempt over retained accepted execution.
+        """Run one new explicit backward attempt over retained accepted execution.
+
+        Each call appends a new attempt, whatever earlier attempts did. An
+        unfinished earlier attempt, for example from a killed process, is first
+        recorded as interrupted.
 
         Args:
             feedback (`FeedbackValue`, *optional*, defaults to `None`): Ordinary
@@ -134,9 +138,7 @@ class RunResult:
 
         Raises:
             `TypeError`: Feedback has an invalid ordinary-message carrier.
-            `ValueError`: Retention is disabled, feedback is invalid, or accepted
-                history
-                forbids another attempt.
+            `ValueError`: Retention is disabled or feedback is invalid.
             `MemorySetupError`: Enabled policies cannot restore their recorded
                 snapshots. Host and log faults also propagate while preserving
                 the accepted prefix.
@@ -487,7 +489,7 @@ def resume_flow(
             Host-injected policy implementations required when the recorded run
             enabled memory and still has unfinished forward execution. Terminal
             inspection opens no policies; supplied references remain available
-            for a later eligible explicit backward call.
+            for later explicit backward calls.
 
     Returns:
         `RunResult`:

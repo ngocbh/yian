@@ -1,9 +1,9 @@
 """Provider-free streaming chat model for AGENT live-event tests.
 
 `ScriptedStreamChat` is a real LangChain `BaseChatModel`: `invoke` returns each
-scripted `AIMessage` whole, while `stream` yields its text word by word and then
-one text-free chunk carrying the reply's usage and tool-call chunks. No network,
-no API keys.
+scripted `AIMessage` whole, while `stream` yields its text word by word, each
+tool call as two chunks sharing its index, and then one text-free chunk carrying
+the reply's usage. No network, no API keys.
 """
 
 import json
@@ -69,18 +69,17 @@ class ScriptedStreamChat(BaseChatModel):
             yield ChatGenerationChunk(
                 message=AIMessageChunk(content=word if index == 0 else " " + word)
             )
+        # Each tool call arrives in two chunks sharing its index, as providers send them.
+        for position, call in enumerate(message.tool_calls):
+            args = json.dumps(call["args"])
+            half = len(args) // 2
+            for part in ({"name": call["name"], "id": call["id"], "args": args[:half]},
+                         {"name": None, "id": None, "args": args[half:]}):
+                yield ChatGenerationChunk(
+                    message=AIMessageChunk(
+                        content="", tool_call_chunks=[{**part, "index": position}]
+                    )
+                )
         yield ChatGenerationChunk(
-            message=AIMessageChunk(
-                content="",
-                usage_metadata=message.usage_metadata,
-                tool_call_chunks=[
-                    {
-                        "name": call["name"],
-                        "args": json.dumps(call["args"]),
-                        "id": call["id"],
-                        "index": position,
-                    }
-                    for position, call in enumerate(message.tool_calls)
-                ],
-            )
+            message=AIMessageChunk(content="", usage_metadata=message.usage_metadata)
         )

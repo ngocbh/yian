@@ -1,14 +1,15 @@
-"""Transient AGENT observers — model/tool call brackets and provider token usage.
+"""Transient AGENT observers — streamed reply text, model/tool call brackets, usage.
 
-Everything here is callback-only: events go to the evaluator-supplied sink and
-nowhere else. Nothing is recorded, retained in memory, or replayed on resume,
-and the node value is identical with or without a sink.
+Everything here is callback-only: chunks and events go to evaluator-supplied sinks
+and nowhere else. Nothing is recorded, retained in memory, or replayed on resume,
+and the node value is identical with or without sinks. A chat reply streams only
+when a stream sink exists; otherwise the model is invoked exactly as before.
 
 Sink exceptions arrive already wrapped as `_CapabilityFault` by the evaluator and
 propagate unchanged; provider and tool exceptions are reported by type name only,
 because their text can contain credentials, then re-raised.
 
-Layer: nodes — imports events, nodes.base, and LangChain.
+Layer: nodes — imports events, nodes.base, peer AGENT modules, and LangChain.
 """
 
 from __future__ import annotations
@@ -18,32 +19,39 @@ from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
 from langchain_core.callbacks import BaseCallbackHandler
+from langchain_core.messages import message_chunk_to_message
 from langchain_core.runnables import Runnable
 
 from agent_composer.events import (
     ModelCallFinished,
     ModelCallStarted,
+    StreamChunk,
     TokenUsage,
     ToolCallFinished,
     ToolCallStarted,
 )
+from agent_composer.nodes.agent.modes.utils import text_of
 from agent_composer.nodes.base import _CapabilityFault, _HostStop
+
+STREAM_KEY = "text"
 
 
 @dataclass(frozen=True)
 class LiveSinks:
-    """The transient sink of one AGENT invocation plus its effective model identity."""
+    """The transient sinks of one AGENT invocation plus its effective model identity."""
 
     node_id: str
     provider: Optional[str]
     model: Optional[str]
-    emit_event: Callable[[Any], None]
+    emit_event: Optional[Callable[[Any], None]]
+    emit_stream: Optional[Callable[[Any], None]] = None
 
 
 def live_sinks(ctx: Any) -> Optional[LiveSinks]:
-    """Select the event sink of one mode context; `None` when there is none."""
+    """Select the sinks of one mode context; `None` when neither sink exists."""
     emit_event = getattr(ctx, "emit_event", None)
-    if emit_event is None:
+    emit_stream = getattr(ctx, "emit_stream", None)
+    if emit_event is None and emit_stream is None:
         return None
     config = ctx.llm_config or {}
     read = config.get if isinstance(config, dict) else (lambda key: getattr(config, key, None))
@@ -53,6 +61,7 @@ def live_sinks(ctx: Any) -> Optional[LiveSinks]:
         provider if isinstance(provider, str) else None,
         model if isinstance(model, str) else None,
         emit_event,
+        emit_stream,
     )
 
 
@@ -80,6 +89,43 @@ def usage_of(message: Any) -> Optional[TokenUsage]:
     )
 
 
+def _normalized(chat: Any, message: Any) -> Any:
+    """Apply the client's own reply normalization, which `invoke` applies but `stream` skips."""
+    normalize = getattr(getattr(chat, "bound", chat), "normalize_reply", None)
+    return message if normalize is None else normalize(message)
+
+
+def stream_reply(live: LiveSinks, chat: Any, messages: list, *, exchange_id: str) -> Any:
+    """Stream one chat reply, forwarding visible text, and return the aggregated message.
+
+    The aggregate is the same message `invoke` returns: chunks are summed and
+    converted like LangChain's own `generate_from_stream`, then normalized by the
+    client. A model without native streaming, or a duck-typed client without
+    `stream`, yields one complete message. The empty `final=True` chunk is sent
+    only after the reply is complete and normalized, so a call that fails
+    mid-stream ends without one; the host discards that exchange's partial text.
+    """
+    stream = getattr(chat, "stream", None)
+    chunks = iter(stream(messages) if callable(stream) else (chat.invoke(messages),))
+    aggregate = None
+    try:
+        # One chunk at a time: the point where a cooperative stop check can go.
+        for chunk in chunks:
+            aggregate = chunk if aggregate is None else aggregate + chunk
+            text = text_of(chunk)
+            if text:
+                live.emit_stream(StreamChunk(live.node_id, STREAM_KEY, text, exchange_id=exchange_id))
+    finally:
+        close = getattr(chunks, "close", None)
+        if close is not None:
+            close()  # release the provider connection when a sink or the stream fails
+    if aggregate is None:
+        raise ValueError("model stream produced no reply")
+    message = _normalized(chat, message_chunk_to_message(aggregate))
+    live.emit_stream(StreamChunk(live.node_id, STREAM_KEY, "", final=True, exchange_id=exchange_id))
+    return message
+
+
 def observe_model_call(
     live: Optional[LiveSinks],
     invoke: Callable[[], Any],
@@ -93,7 +139,7 @@ def observe_model_call(
     `usage` maps the call's return value to its usage. After an exception it is
     given `None`, so the default reports no usage for a failed call.
     """
-    if live is None:
+    if live is None or live.emit_event is None:
         return invoke()
     identity = (live.node_id, exchange_id, purpose, live.provider, live.model)
     live.emit_event(ModelCallStarted(*identity))
@@ -111,8 +157,11 @@ def observe_model_call(
 def invoke_chat(
     live: Optional[LiveSinks], chat: Any, messages: list, *, exchange_id: str, purpose: str = "chat"
 ) -> Any:
-    """Call a chat model once, bracketed by observers when an event sink exists."""
-    call = lambda: chat.invoke(messages)  # noqa: E731
+    """Call a chat model once: streamed when a stream sink exists, observed when an event sink does."""
+    if live is not None and live.emit_stream is not None and purpose == "chat":
+        call = lambda: stream_reply(live, chat, messages, exchange_id=exchange_id)  # noqa: E731
+    else:
+        call = lambda: chat.invoke(messages)  # noqa: E731
     return observe_model_call(live, call, purpose=purpose, exchange_id=exchange_id)
 
 
@@ -139,7 +188,7 @@ def invoke_structured(
     parse. A binding that is not a LangChain `Runnable` reports no usage.
     """
     capture = _UsageCapture()
-    if live is not None and isinstance(bound, Runnable):
+    if live is not None and live.emit_event is not None and isinstance(bound, Runnable):
         call = lambda: bound.invoke(messages, config={"callbacks": [capture]})  # noqa: E731
     else:
         call = lambda: bound.invoke(messages)  # noqa: E731
@@ -167,7 +216,7 @@ def observe_tool_call(
     arguments: Any,
 ) -> Any:
     """Bracket one granted tool call with started/finished observers."""
-    if live is None:
+    if live is None or live.emit_event is None:
         return invoke()
     try:
         shown = deepcopy(arguments)

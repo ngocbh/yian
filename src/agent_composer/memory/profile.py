@@ -321,6 +321,64 @@ class _ProfileSession:
         """Return whether no other opened frame encloses ``ref``."""
         return not any(_is_strict_prefix(other.static_path, ref.static_path) for other in self._frames)
 
+    def commit(self, commit_id: str, mutations: tuple[MemoryMutation, ...]) -> None:
+        """Write the proposed document with compare-and-set; never call a model.
+
+        Args:
+            commit_id (`str`): Runtime commit id, unique per backward attempt and
+                policy. A repeat within this session is a no-op.
+            mutations (`tuple[MemoryMutation, ...]`): Empty, or the one mutation
+                the outermost frame proposed.
+
+        Raises:
+            `MemoryOperationError`: ``profile.version_mismatch`` (retryable; nothing
+                was written) when the document changed after the learner read it,
+                ``profile.store_unavailable`` when the store failed during the
+                write (it may have landed), ``profile.store_invalid`` when the
+                store rejected it, or ``profile.invalid_batch`` for a malformed or
+                reused batch.
+        """
+        with self._lock:
+            self._ensure_open("commit")
+            if type(commit_id) is not str or not commit_id or type(mutations) is not tuple:
+                raise _error("commit", "profile.invalid_batch", "commit needs an id and a mutation tuple")
+            if commit_id in self._applied:
+                if self._applied[commit_id] != mutations:
+                    raise _error("commit", "profile.invalid_batch", "commit id was reused for another batch")
+                return
+            if not mutations:
+                self._applied[commit_id] = mutations
+                return
+            mutation = mutations[0] if len(mutations) == 1 else None
+            frame = None if mutation is None else self._frames.get(mutation.frame_ref)
+            payload = None if mutation is None else mutation.payload
+            if (frame is None or not self._is_outermost(frame.spec.ref) or type(payload) is not dict
+                    or type(payload.get("text")) is not str or type(payload.get("base_version")) is not str):
+                raise _error("commit", "profile.invalid_batch",
+                             "profile commits take one document mutation from the outermost frame")
+            provenance: JsonObject = {
+                "commit_id": commit_id,
+                "run_id": payload.get("run_id"),
+                "frame": list(frame.spec.ref.static_path),
+                "seen_version": payload.get("seen_version"),
+                "feedback": payload.get("feedback"),
+            }
+            try:
+                self._memory._store.write(payload["text"], base_version=payload["base_version"],
+                                          provenance=provenance)
+            except ProfileVersionMismatch as exc:
+                raise _error("commit", "profile.version_mismatch",
+                             "profile changed after the learner read it; nothing was written",
+                             retryable=True) from exc
+            except OSError as exc:
+                raise _error("commit", "profile.store_unavailable",
+                             "profile store write failed and may have landed; check the store "
+                             "before retrying") from exc
+            except ValueError as exc:
+                raise _error("commit", "profile.store_invalid",
+                             "profile store rejected the document") from exc
+            self._applied[commit_id] = mutations
+
 
 class _ProfileFrame:
     """One opened frame; only the outermost frame recalls and learns."""

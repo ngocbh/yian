@@ -311,3 +311,74 @@ def test_unchanged_document_proposes_nothing(tmp_path, monkeypatch) -> None:
     memory = _memory(tmp_path)
     with memory.open_run() as session:
         assert session.open_frame(_spec(ROOT)).learn(LearnContext("run-1", ROOT, (), _feedback("x"))) == []
+
+
+def test_backend_satisfies_the_memory_protocols(tmp_path) -> None:
+    memory = _memory(tmp_path)
+    with memory.open_run() as session:
+        frame = session.open_frame(_spec(ROOT))
+        assert isinstance(memory, Memory) and isinstance(session, MemorySession)
+        assert isinstance(frame, MemoryFrame)
+
+
+def test_commit_writes_with_compare_and_set_and_is_idempotent(tmp_path, monkeypatch) -> None:
+    _install(monkeypatch, "<profile># Ada\nBrief.</profile>")
+    memory = _memory(tmp_path)
+    with memory.open_run() as session:
+        root = session.open_frame(_spec(ROOT))
+        batch = tuple(root.learn(LearnContext("run-1", ROOT, (), _feedback("Be brief."))))
+        monkeypatch.setattr(profile, "model_from_config", lambda config: pytest.fail("commit built a model"))
+        session.commit("commit-1", batch)
+        session.commit("commit-1", batch)
+        session.commit("commit-empty", ())
+        with pytest.raises(MemoryOperationError) as caught:
+            session.commit("commit-1", ())
+        assert caught.value.code == "profile.invalid_batch"
+    assert memory.read()[0] == "# Ada\nBrief.\n"
+    writes = (tmp_path / ".ada.md.writes.jsonl").read_text().splitlines()
+    assert len(writes) == 2
+    provenance = json.loads(writes[-1])["provenance"]
+    assert provenance["commit_id"] == "commit-1" and provenance["run_id"] == "run-1"
+    assert provenance["frame"] == ["chat"] and provenance["feedback"] == ["Be brief."]
+
+
+def test_concurrent_write_after_learning_is_a_retryable_mismatch_without_a_model(tmp_path, monkeypatch) -> None:
+    _install(monkeypatch, "<profile># Ada\nFrom model.</profile>")
+    memory = _memory(tmp_path)
+    with memory.open_run() as session:
+        root = session.open_frame(_spec(ROOT))
+        batch = tuple(root.learn(LearnContext("run-1", ROOT, (), _feedback("x"))))
+        memory.write("# Ada\nFrom human.\n", base_version=memory.read()[1])
+        monkeypatch.setattr(profile, "model_from_config", lambda config: pytest.fail("commit built a model"))
+        with pytest.raises(MemoryOperationError) as caught:
+            session.commit("commit-1", batch)
+    assert (caught.value.stage, caught.value.code, caught.value.retryable) == (
+        "commit", "profile.version_mismatch", True)
+    assert memory.read()[0] == "# Ada\nFrom human.\n"
+
+
+def test_store_failure_during_commit_is_not_retryable(tmp_path, monkeypatch) -> None:
+    _install(monkeypatch, "<profile># Ada\nNew.</profile>")
+    memory = _memory(tmp_path)
+    with memory.open_run() as session:
+        root = session.open_frame(_spec(ROOT))
+        batch = tuple(root.learn(LearnContext("run-1", ROOT, (), _feedback("x"))))
+        for error, code in ((OSError("disk"), "profile.store_unavailable"),
+                            (UnicodeDecodeError("utf-8", b"\xff", 0, 1, "bad"), "profile.store_invalid")):
+            def fail(text, *, base_version, provenance=None, error=error):
+                raise error
+            monkeypatch.setattr(memory._store, "write", fail)
+            with pytest.raises(MemoryOperationError) as caught:
+                session.commit(f"commit-{code}", batch)
+            assert (caught.value.code, caught.value.retryable) == (code, False)
+
+
+def test_commit_rejects_batches_from_inner_frames(tmp_path) -> None:
+    memory = _memory(tmp_path)
+    with memory.open_run() as session:
+        session.open_frame(_spec(ROOT))
+        session.open_frame(_spec(CHILD))
+        mutation = MemoryMutation("m", CHILD, {"base_version": memory.read()[1], "text": "x"})
+        with pytest.raises(MemoryOperationError) as caught:
+            session.commit("commit-1", (mutation,))
+    assert caught.value.code == "profile.invalid_batch"

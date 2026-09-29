@@ -1,4 +1,4 @@
-"""`ac run --provider/--model` build the outermost cascade layer (`llm_config`)."""
+"""`composer run --provider/--model` build the outermost cascade layer (`llm_config`)."""
 
 from pathlib import Path
 

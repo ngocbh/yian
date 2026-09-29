@@ -55,7 +55,7 @@ rebuild history. Explicit API backward self-feedback can be committed as notes
 for future recall. API context summaries preserve raw history and recent whole
 turns. Host-only `storage=path` optionally preserves complete backend state across
 restarts; `storage=None` remains process-local. See
-[durable memory](api.md#optional-durable-memory). `ac run` activates declared built-in
+[durable memory](api.md#optional-durable-memory). `composer run` activates declared built-in
 policies; optional `--memory-storage POLICY=PATH` preserves selected policies across
 CLI processes. It does not run backward learning. See
 [SessionMemory foundation](api.md#sessionmemory-foundation) for ownership,
@@ -151,6 +151,19 @@ source alongside notes; the evaluator admits it into one transient context.
 ::: agent_composer.memory.conversation.conversation_checkpoint_to_json
 
 ::: agent_composer.memory.conversation.conversation_checkpoint_from_json
+
+## Profile memory
+
+Import the concrete backend from `agent_composer.memory.profile` and stores from
+`agent_composer.memory.storage`. See [profile memory](learning.md#profile-memory).
+
+::: agent_composer.memory.profile.ProfileMemory
+
+::: agent_composer.memory.storage.markdown.MarkdownStore
+
+::: agent_composer.memory.storage.markdown.FileMarkdownStore
+
+::: agent_composer.memory.storage.markdown.MarkdownVersionMismatch
 
 ## Compose source provenance
 
@@ -350,13 +363,16 @@ untyped or its contract accepts null (a nullable or `None`-kind type).
 
 ## Tools
 
-The core ships no domain tools; a host registers its own into the shared registry.
+The core ships no domain tools; a host registers its own into the shared registry
+or passes the whole set for one run with `run_flow(..., tools=...)`.
 
 ::: agent_composer.tools.register_tool
 
-::: agent_composer.tools.resolve_tools
+::: agent_composer.tools.registered_tools
 
-::: agent_composer.tools.install_ask_user
+::: agent_composer.tools.ToolSet
+
+::: agent_composer.tools.resolve_tools
 
 ::: agent_composer.tools.invoke_tool
 
@@ -398,7 +414,8 @@ from the environment.
 Transition observers are published only after their corresponding record has been
 appended and reduced; they are not the durable authority. `StreamChunk` is the
 callback-only exception: it is delivered during evaluation and never appended to
-the run log.
+the run log. The in-loop AGENT observers below are likewise callback-only;
+`IN_LOOP_EVENTS` names them.
 
 ::: agent_composer.events.NodeStarted
 
@@ -413,6 +430,18 @@ the run log.
 ::: agent_composer.events.NodeFailed
 
 ::: agent_composer.events.NodeExpanded
+
+::: agent_composer.events.TokenUsage
+
+::: agent_composer.events.ModelCallStarted
+
+::: agent_composer.events.ModelCallFinished
+
+::: agent_composer.events.ToolCallStarted
+
+::: agent_composer.events.ToolCallFinished
+
+::: agent_composer.events.IN_LOOP_EVENTS
 
 ::: agent_composer.events.RunStarted
 

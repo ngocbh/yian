@@ -1178,3 +1178,24 @@ def test_commit_id_has_one_documented_canonical_encoding() -> None:
         "ac-memory-v1:"
         "6c8c1507c9c8c0d6ca4a6239ec397ca950fae2f206146db324ce22098e22f5d6"
     )
+
+
+def test_commit_id_with_an_attempt_uses_a_separate_versioned_encoding() -> None:
+    ref = MemoryFrameRef("root", ("root", "agent"), MemoryOwner.AGENT)
+    mutations = (
+        MemoryMutation("m", ref, {"z": 1, "a": ["é", None]}),
+    )
+
+    assert memory_commit_id("run", "policy", mutations, attempt_id=None) == (
+        memory_commit_id("run", "policy", mutations)
+    )
+    assert memory_commit_id("run", "policy", mutations, attempt_id=2) == (
+        "ac-memory-v2:"
+        "8d3dd7eb8bc36b1eacff069eea6374b5955dba8ff1787291f4a3e71e3271433a"
+    )
+    assert memory_commit_id("run", "policy", (), attempt_id=2) != (
+        memory_commit_id("run", "policy", (), attempt_id=3)
+    )
+    for invalid in (0, -1, True, "2", 2.0):
+        with pytest.raises(ValueError, match="attempt_id"):
+            memory_commit_id("run", "policy", mutations, attempt_id=invalid)

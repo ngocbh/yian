@@ -15,12 +15,15 @@ It also owns the compile/runtime inversion seam by injecting
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import copy
 from dataclasses import dataclass, field
 import os
 from pathlib import Path
 import threading
 from typing import Any, Callable, Mapping
+
+from langchain_core.tools import BaseTool
 
 from agent_composer.llm_clients.connection import connection_snapshot, legacy_connection_map
 from agent_composer.compile.execution_layout import apply_execution_layout, resolve_execution_layout
@@ -73,6 +76,7 @@ from agent_composer.runtime.state import (
 )
 from agent_composer.runtime.memory_runtime import MemoryRuntime
 from agent_composer.skills import Skill
+from agent_composer.tools import ToolSet
 from agent_composer.typesys.pool import VariablePool
 from agent_composer.typesys.seeding import default_run_id, seed_system_clock
 
@@ -123,7 +127,11 @@ class RunResult:
     _backward_handle: _BackwardHandle | None = field(default=None, init=False, repr=False, compare=False)
 
     def backward(self, feedback: FeedbackValue = None) -> BackwardOutcome:
-        """Run one explicit backward attempt over retained accepted execution.
+        """Run one new explicit backward attempt over retained accepted execution.
+
+        Each call appends a new attempt, whatever earlier attempts did. An
+        unfinished earlier attempt, for example from a killed process, is first
+        recorded as interrupted.
 
         Args:
             feedback (`FeedbackValue`, *optional*, defaults to `None`): Ordinary
@@ -135,9 +143,7 @@ class RunResult:
 
         Raises:
             `TypeError`: Feedback has an invalid ordinary-message carrier.
-            `ValueError`: Retention is disabled, feedback is invalid, or accepted
-                history
-                forbids another attempt.
+            `ValueError`: Retention is disabled or feedback is invalid.
             `MemorySetupError`: Enabled policies cannot restore their recorded
                 snapshots. Host and log faults also propagate while preserving
                 the accepted prefix.
@@ -254,6 +260,7 @@ def run_flow(
     llm_config: dict[str, Any] | None = None,
     memory: dict[str, Memory] | None = None,
     learnable: bool = False,
+    tools: Mapping[str, BaseTool | Callable[..., Any]] | None = None,
     skills: Mapping[str, Skill] | None = None,
 ) -> RunResult:
     """Start and drive one flow through an in-memory or durable run log.
@@ -280,9 +287,11 @@ def run_flow(
             serial evaluation.
         on_event (`Callable[[Any], None] | None`, *optional*, defaults to `None`):
             Callback for observers after their records have been appended and
-            reduced.
+            reduced, plus transient in-loop AGENT observers (`IN_LOOP_EVENTS`)
+            delivered during the node; the latter are never recorded or replayed.
         on_stream (`Callable[[StreamChunk], None] | None`, *optional*, defaults to `None`):
             Callback for transient stream chunks, which are never durable records.
+            When set, AGENT chat replies stream their visible text.
         llm_config (`dict[str, Any] | None`, *optional*, defaults to `None`):
             Per-run outer model configuration layer. The fully resolved static map
             is captured in the initialization record.
@@ -296,6 +305,24 @@ def run_flow(
             call. Forward execution runs no frame learners or learned-mutation
             commits. Memory is optional; an enabled mapping supplies owned learners
             for that call. Automatic session history is independent of retention.
+        tools (`Mapping[str, BaseTool | Callable[..., Any]] | None`, *optional*, defaults to `None`):
+            The tools this run sees, keyed by tool id. `None` uses the tools
+            registered with `register_tool`. A mapping, even an empty one, is the
+            whole set: registered tools are hidden. To keep them, pass
+            `{**registered_tools(), ...}`. That copy is taken when you call it, so
+            register every tool before the run starts. A function or method
+            becomes a tool named by its key and described by its docstring; bind
+            values with a closure, not `functools.partial`. A `BaseTool` must use
+            its key as its name. The `ask_user` entry is the host handler for
+            HUMAN_INPUT nodes and granted AGENT `ask_user` calls. It must be a
+            plain callable that accepts `question`, `questions`, `answer_schema`,
+            `title`, and `node_id` as keywords (define it as
+            `def handler(**request)`); the model sees only `question`. Runs use
+            up to eight workers by default, so several nodes can call it at once;
+            it must be thread-safe. An AGENT can call a tool only if its `tools:`
+            list grants the id.
+            Granting skills also binds the built-in ``load_skill`` tool,
+            which is not part of this mapping.
         skills (`Mapping[str, Skill] | None`, *optional*, defaults to `None`):
             Skills available to this run, keyed by `Skill.name`; build one with
             `load_skills`. An AGENT lists its granted skills' names and
@@ -311,10 +338,12 @@ def run_flow(
 
     Raises:
         `TypeError`:
-            A public argument has the wrong type.
+            A public argument has the wrong type, including a malformed `tools`
+            entry.
         `ValueError`:
             Inputs, identity, worker count, model configuration, or prepared run
-            state violates its contract, or an AGENT grants skills while
+            state violates its contract, a `BaseTool` in `tools` is named
+            differently from its key, or an AGENT grants skills while
             `skills` is `None` or lacks a listed skill.
         `MemorySetupError`:
             Memory is enabled without a required policy implementation, cannot
@@ -335,6 +364,7 @@ def run_flow(
         llm_config=llm_config,
         memory=memory,
         learnable=learnable,
+        tools=tools,
         skills=skills,
         stop_event=threading.Event(),
     )
@@ -352,6 +382,7 @@ def _run_flow_controlled(
     llm_config: dict[str, Any] | None = None,
     memory: dict[str, Memory] | None = None,
     learnable: bool = False,
+    tools: Mapping[str, BaseTool | Callable[..., Any]] | None = None,
     skills: Mapping[str, Skill] | None = None,
     stop_event: threading.Event,
 ) -> RunResult:
@@ -360,6 +391,7 @@ def _run_flow_controlled(
         raise TypeError("run_flow expects a ComposedFlow")
     if type(learnable) is not bool:
         raise TypeError("learnable must be a bool")
+    run_tools = ToolSet(tools)
     skills = _check_skills(flow.compiled, skills)
 
     # Identity belongs to the authored program, before cascade resolution or any
@@ -455,6 +487,7 @@ def _run_flow_controlled(
             memory_context_opener=(
                 None if memory_runtime is None else memory_runtime.open_context
             ),
+            tools=run_tools,
             skills=skills,
         )
         events.extend(engine.run())
@@ -476,6 +509,7 @@ def resume_flow(
     on_event: EventHook | None = None,
     on_stream: StreamHook | None = None,
     memory: dict[str, Memory] | None = None,
+    tools: Mapping[str, BaseTool | Callable[..., Any]] | None = None,
     skills: Mapping[str, Skill] | None = None,
 ) -> RunResult:
     """Recover primary execution or inspect a terminal run without backward work.
@@ -495,14 +529,19 @@ def resume_flow(
             the most recently recorded value.
         on_event (`Callable[[Any], None] | None`, *optional*, defaults to `None`):
             Callback for observers committed during this invocation only; historical
-            replay and terminal recovery are silent.
+            replay and terminal recovery are silent. Re-executed AGENT nodes publish
+            fresh in-loop observers.
         on_stream (`Callable[[StreamChunk], None] | None`, *optional*, defaults to `None`):
             Callback for new transient stream chunks, which are never replayed.
         memory (`dict[str, Memory] | None`, *optional*, defaults to `None`):
             Host-injected policy implementations required when the recorded run
             enabled memory and still has unfinished forward execution. Terminal
             inspection opens no policies; supplied references remain available
-            for a later eligible explicit backward call.
+            for later explicit backward calls.
+        tools (`Mapping[str, BaseTool | Callable[..., Any]] | None`, *optional*, defaults to `None`):
+            The tools the resumed segment sees, with the same rules as
+            `run_flow`. Tools are not recorded in the log, so pass the same
+            mapping (including `ask_user`) that the original run used.
         skills (`Mapping[str, Skill] | None`, *optional*, defaults to `None`):
             The skills passed to the original `run_flow`. Nodes that restart see
             this mapping. An unfinished run of a flow that grants skills needs
@@ -515,7 +554,8 @@ def resume_flow(
 
     Raises:
         `TypeError`:
-            A public argument or decoded carrier has the wrong type.
+            A public argument or decoded carrier has the wrong type, including a
+            malformed `tools` entry.
         `ValueError`:
             The prefix is invalid, the flow fingerprint differs, the selected
             worker count violates its contract, or an unfinished run's AGENT
@@ -535,6 +575,7 @@ def resume_flow(
         on_event=on_event,
         on_stream=on_stream,
         memory=memory,
+        tools=tools,
         skills=skills,
         stop_event=threading.Event(),
     )
@@ -548,10 +589,12 @@ def _resume_flow_controlled(
     on_event: EventHook | None = None,
     on_stream: StreamHook | None = None,
     memory: dict[str, Memory] | None = None,
+    tools: Mapping[str, BaseTool | Callable[..., Any]] | None = None,
     skills: Mapping[str, Skill] | None = None,
     stop_event: threading.Event,
 ) -> RunResult:
     """Recover and drive a durable run with a host-owned stop event."""
+    run_tools = ToolSet(tools)
     log_path = Path(log)
     retained_locator = log_path.absolute()
     authority = JsonlRunLog.resume(retained_locator)
@@ -613,6 +656,7 @@ def _resume_flow_controlled(
                 memory_context_opener=(
                     None if memory_runtime is None else memory_runtime.open_context
                 ),
+                tools=run_tools,
                 skills=skills,
             )
             events.extend(engine.run())

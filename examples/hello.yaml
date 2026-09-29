@@ -4,7 +4,7 @@
 # node's output type, re-exported as the flow output. (See examples/summarize.yaml
 # for the full `nodes:` form.)
 #
-# Run it with:  ac run examples/hello.yaml --input name=Ada
+# Run it with:  composer run examples/hello.yaml --input name=Ada
 
 id: hello
 name: hello

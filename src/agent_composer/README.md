@@ -55,8 +55,8 @@ runtime/      run records/logs, scheduler-state vocabulary, reducer-owned state,
               explicit backward driver and pure learning/context projections
 run.py        public run/recovery boundary and retained RunResult.backward handle
 llm_clients/  provider clients, authentication, LLMConfig and model_from_config
-tools/        tool registry + process-owned ask_user interaction seam
-cli/          `ac` commands + main-thread terminal broker
+tools/        tool registry + per-run ToolSet (run tools and the ask_user handler)
+cli/          `composer` commands + main-thread terminal broker
 _settings.py  environment-based default provider/model
 ```
 
@@ -171,7 +171,7 @@ selects this transport for saved subscription authentication;
 API-key authentication uses the same Composer model/tool/memory pipeline.
 
 `llm_clients/auth/` owns staged login, private atomic credential storage, token
-refresh, and authenticated model discovery. `ac auth openai` activates credentials
+refresh, and authenticated model discovery. `composer auth openai` activates credentials
 and the provider/model default together. `llm_clients/connection.py` snapshots
 nonsecret method, credential identity, endpoint, and store location into the
 effective model map. Request-time callbacks resolve credentials and refresh
@@ -624,6 +624,10 @@ result; the durable outcome may also retain optional source-neutral evaluation
 evidence. Host control, stream callbacks, unexpected binder faults, malformed
 setup, and arbitrary host/compiler faults escape. A streaming kind may yield
 transient `StreamChunk` values and then return one of the same three results.
+A node declaring `needs_live_events` instead receives in-body `emit_stream` and
+`emit_event` capabilities, each only when the host supplied the matching
+callback. They publish transient chunks and in-loop observers without changing
+the node result; a sink exception escapes as the host's own exception.
 
 `eval_node(..., capture_bindings=True)` can also return a detached
 `BindingCapture` independently of model/tool evidence. It retains the actual
@@ -702,8 +706,9 @@ connections and execution topology; authored fingerprints exclude them.
 The runtime core is **kind-blind**. It dispatches on this result sum and consults
 node-owned execution-semantic traits/hooks (`is_spawner`, `binds_per_item`, `item_source_key`,
 `bind_reserved`, `validate_execution_setup`, `grow_depth_delta`, `is_loop`,
-`needs_stop_event`, `needs_memory_context`, `needs_skills`, `needs_evaluation_trace`,
-`memory_scope`, and `skipped_output_target`) plus the diagnostic-only projections
+`needs_stop_event`, `needs_tools`, `needs_memory_context`, `needs_skills`,
+`needs_evaluation_trace`, `needs_live_events`, `memory_scope`, and
+`skipped_output_target`) plus the diagnostic-only projections
 `exception_origin` and `failure_trace`; it never branches behavior on `NodeKind`.
 A kind label may appear in diagnostic text. The diagnostic projections do not
 affect program identity. The closed kind-aware
@@ -899,7 +904,7 @@ outcome, including visible model retries within that invocation. Reducer-rejecte
 node proposals are represented by their accepted canonical failure. Discarded
 late siblings and transient stream chunks do not become learning evidence.
 
-The `ac run` host discovers policy names through the same pure static layout and
+The `composer run` host discovers policy names through the same pure static layout and
 injects lazy built-in wrappers from `cli.memory`. Concrete backends open only when
 the run boundary requests `open_run`; terminal inspection and old dormant logs
 acquire no memory resources. Repeated `--memory-storage POLICY=PATH` selects
@@ -957,10 +962,15 @@ failed regardless of backend retry hints. All successful confirmations without
 Finished still project an interrupted backward outcome and incomplete learning.
 An accepted failed confirmation instead projects failed learning.
 
-A successful Finished or any accepted request permanently closes retry
-eligibility. A permitted precommit retry is explicit and recomputes the whole
-attempt from original snapshots with fresh sessions; Ready proposals are never
-resumed. No rollback, rebase, or automatic recovery of backward work occurs.
+Only an unfinished attempt blocks a new Started, and the driver closes it first
+with an interrupted Finished that projects its prefix. Every explicit call is a
+new attempt that recomputes everything from original snapshots with fresh
+sessions; Ready proposals are never resumed. The first attempt that requests
+commits keeps `ac-memory-v1` IDs; each later requesting attempt uses
+`memory_commit_id(..., attempt_id)` (`ac-memory-v2`), so identical batches in
+different attempts never share an ID. `LearnContext` carries no attempt
+identity; backends tell attempts apart only by commit ID. No rollback, rebase,
+or automatic recovery of backward work occurs.
 
 Memory learning belongs to each frame's policy. Each frame owned by a flow or
 AGENT node writes only its own policy state. Node feedback propagation remains a
@@ -979,11 +989,24 @@ after newer commits, while stale sessions cannot learn or commit. Public JSON
 snapshots support the existing recovery boundary or restoration into a pristine
 instance. Both default to process-local state and support host-only `storage=path`.
 
+The provided `agent_composer.memory.profile.ProfileMemory` keeps one markdown
+document in a host `MarkdownStore` (`FileMarkdownStore` by default). Its session
+snapshot records only the pinned `profile_version` and `text_sha256`, so resume
+and backward reopen that exact version. Only the outermost frame of the policy
+recalls the full document or learns; nested frames of the same policy recall
+nothing, and unrelated top-level frames are a setup error. Learning makes one
+tool-free model call over the feedback, the current document, and budgeted
+episodes with their visible interactions, and returns the whole rewritten
+document. Commit is a compare-and-set store write that never calls a model. Only
+`profile.version_mismatch` is retryable, because only it guarantees nothing was
+written. An attempt killed during commit stays `unknown`; the store's write
+provenance holds its `commit_id`, so hosts check there before retrying.
+
 ### Optional backend durability
 
-`memory/storage.py` is a private lower-level SQLite value adapter shared by all
-three concrete backends. One instance owns a local file for its lifetime; a
-second owner fails immediately. Backends validate complete semantic candidates,
+`memory/storage/sqlite.py` holds `SQLiteStorage`, a lower-level SQLite value adapter shared by the
+episodic, reflective, and session backends. One instance owns a local file for
+its lifetime; a second owner fails immediately. Backends validate complete semantic candidates,
 commit detached finite JSON in a transaction, then publish RAM. Private inventory
 includes commit tombstones and adoption flags; SessionMemory also preserves its
 derived summary cache. Public snapshots retain their existing formats and exact
@@ -1189,7 +1212,7 @@ latest saved history, and the run log is not a replacement memory store.
 When an unfinished recorded run enabled memory, recovery requires the named host
 implementations and verifies that opening each session reproduces the exact
 recorded snapshot. Terminal inspection opens no memory; supplied mapping references
-remain available to the returned handle for a later eligible explicit attempt.
+remain available to the returned handle for later explicit attempts.
 
 A delayed handle owns private program/data snapshots and policy references, not
 open forward resources. The run boundary anchors durable paths at acquisition,
@@ -1216,10 +1239,22 @@ Each pooled node inherits a fresh copy of the host's context variables, preservi
 host cancellation for nested flows while isolating node-local context changes.
 
 Authorable blocking effects stay inside their node calls. An AGENT node may invoke the
-explicitly granted `ask_user` tool, HUMAN_INPUT always invokes the same host-owned
-interaction seam, and WAIT blocks on its absolute UTC deadline. The AGENT node checks the
+explicitly granted `ask_user` tool, HUMAN_INPUT always invokes the same run-owned
+handler, and WAIT blocks on its absolute UTC deadline. The AGENT node checks the
 run-owned stop signal between model/tool effects; WAIT blocks on that signal. Each
 returns `Output` from the same invocation.
+
+Tools reach nodes the same kind-blind way. `run_flow` and `resume_flow` build one
+immutable `ToolSet` from `tools=` before any log work. `FlowEngine` passes it to
+`eval_node`, which adds `caps["tools"]` only for nodes whose `needs_tools` trait
+is set (TOOL, HUMAN_INPUT, and AGENT). `tools=None` reads the global registry. A
+mapping is the run's whole tool set. Hosts that want both pass
+`{**registered_tools(), ...}`; that copy is taken at call time, so tools must be
+registered before the run starts. `ask_user` is always per run and never falls
+back to the registry, so concurrent runs in one process keep separate handlers.
+Pooled nodes of one run can call the same handler at once, so it must be
+thread-safe. Tools are host callables: the log does not record them, and a host
+passes them again on resume.
 
 CODE's soft-budget watchdog is package-local under `nodes/code/` and times CODE
 only. Pooled drives own their executors through a full join: an abnormal dispatch

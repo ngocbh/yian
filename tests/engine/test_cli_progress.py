@@ -1,4 +1,4 @@
-"""`ac run` per-node progress: ✓ on success, ✗ + error on failure, output when verbose.
+"""`composer run` per-node progress: ✓ on success, ✗ + error on failure, output when verbose.
 
 The reporter is exercised through a non-terminal `Console` (a StringIO sink), which is the
 same path the CLI takes off a TTY: no live spinner, just the final line per node. A thin

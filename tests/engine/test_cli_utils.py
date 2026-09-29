@@ -1,4 +1,4 @@
-"""`cli/utils.py` credential/endpoint helpers + `ac run`'s pre-flight key check.
+"""`cli/utils.py` credential/endpoint helpers + `composer run`'s pre-flight key check.
 
 `ensure_api_key` / `confirm_ollama_endpoint` are exercised with a fake `questionary`
 and a monkeypatched `sys.stdin.isatty` so both the interactive-prompt and the
@@ -147,10 +147,11 @@ def test_ensure_api_key_strips_surrounding_whitespace(monkeypatch):
     assert os.environ["ANTHROPIC_API_KEY"] == "sk-abc"
 
 
-def test_ensure_api_key_interactive_false_forces_non_interactive(monkeypatch):
+def test_ensure_api_key_interactive_false_forces_non_interactive(monkeypatch, tmp_path):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("AGENT_COMPOSER_AUTH_FILE", str(tmp_path / "auth.json"))
     _tty(monkeypatch, True)  # a TTY is present, but interactive=False overrides
-    with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
+    with pytest.raises(RuntimeError, match=r"OPENAI_API_KEY.*run 'composer auth openai'"):
         utils.ensure_api_key("openai", interactive=False)
 
 

@@ -379,6 +379,7 @@ def test_watchdog_wraps_both_code_modes_but_not_other_blocking_kinds(monkeypatch
     from agent_composer.nodes.wait import WaitNode
     from agent_composer.nodes.code import watchdog
     from agent_composer.runtime.eval_node import eval_node
+    from agent_composer.tools import ToolSet
     from agent_composer.typesys.pool import VariablePool
 
     timers = []
@@ -404,10 +405,6 @@ def test_watchdog_wraps_both_code_modes_but_not_other_blocking_kinds(monkeypatch
         lambda: datetime(2026, 1, 2, tzinfo=timezone.utc),
     )
     monkeypatch.setitem(MODES, "plain", lambda ctx: Output("agent answer"))
-    monkeypatch.setattr(
-        "agent_composer.nodes.human_input.node.invoke_tool_trusted",
-        lambda tool_id, metadata: "human answer",
-    )
 
     empty_flow = SimpleNamespace(wiring={"agent": {}, "human": {}})
     assert eval_node(AgentNode("agent"), empty_flow, VariablePool()).outcome == Output(
@@ -417,6 +414,7 @@ def test_watchdog_wraps_both_code_modes_but_not_other_blocking_kinds(monkeypatch
         HumanInputNode("human", prompt="?"),
         empty_flow,
         VariablePool(),
+        tools=ToolSet({"ask_user": lambda **request: "human answer"}),
     ).outcome == Output("human answer")
     wait_result = eval_node(
         WaitNode("wait"),

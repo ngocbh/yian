@@ -279,10 +279,10 @@ accepted outcome kinds and empty/unexecuted frames. Their feedback keeps origina
 root-relative execution coordinates; memory scopes select receiver frames.
 
 No effective feedback means no AGENT backward model work, but all enabled frame
-learners still run. A manual retry before the first accepted request recomputes
-the entire attempt with fresh sessions from the original snapshots; Ready
-proposals are never resumed. Any accepted request or successful Finished closes
-retry eligibility. An unconfirmed request remains `unknown`, including when the
+learners still run. Every explicit call starts a new attempt and recomputes it
+with fresh sessions from the original snapshots; Ready proposals are never
+resumed. An unfinished earlier attempt is first closed as interrupted. An
+unconfirmed request remains `unknown`, including when the
 backend returned but its observation could not append. Host/cancellation/log
 faults escape with the accepted prefix and never create a completion record.
 
@@ -326,7 +326,7 @@ do not leak into the dispatcher or later worker calls.
 | `node.run(inputs, **caps) → NodeResult` | the shared template the engine drives |
 | `node.forward(inputs, **caps) → NodeResult` | the one kind-specific body step |
 | `node.is_spawner` | may it return `Grow`? |
-| read-boundary traits | `binds_per_item`, `bind_reserved`, `reserved_wiring_keys`, `needs_stop_event` |
+| read-boundary traits | `binds_per_item`, `bind_reserved`, `reserved_wiring_keys`, `needs_stop_event`, `needs_tools`, `needs_live_events` |
 | memory/evidence traits | `needs_memory_context` opts into recalled notes and an optional transcript; `needs_skills` receives the run's host `skills=` mapping; `needs_evaluation_trace` opts into model/tool evidence when `learnable=True`; `memory_scope` supplies optional memory context and validates recalled frames |
 | forward capture | recorded `learnable=True` retains general binding data independently of memory scope |
 | output metadata | `output_contract` validates committed values; `commit_as` selects a logical success target |

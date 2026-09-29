@@ -3,7 +3,7 @@
 Modes drive their local model/tool loop through the shared provider interface.
 An optional memory backend owns
 conversation admission and retained history; the evaluator owns the turn's
-lifetime. Tools, including the host-installed ``ask_user``, are ordinary
+lifetime. Tools, including the run's ``ask_user``, are ordinary
 explicitly authored tool grants. A crash or host interruption unwinds the node;
 no conversation or continuation state is stored in the graph or variable pool.
 """
@@ -39,6 +39,7 @@ from agent_composer.nodes.contracts import (
 )
 from agent_composer.skills.catalog import Skill, SkillError, check_skill_name
 from agent_composer.skills.tool import LOAD_SKILL, system_prompt_with_skills
+from agent_composer.tools import ToolSet
 from agent_composer.typesys.types import canonical_type_label
 from agent_composer.typesys.values import build_value_as
 
@@ -60,6 +61,8 @@ class AgentNode(Node):
     needs_evaluation_trace = True
     needs_memory_context = True
     needs_render_capture = True
+    needs_tools = True
+    needs_live_events = True
     needs_skills = True
 
     def __init__(
@@ -204,6 +207,9 @@ class AgentNode(Node):
         stop_event=None,
         evaluation_trace: EvaluationTrace | None = None,
         memory_context: MemoryContext | None = None,
+        toolset: ToolSet | None = None,
+        emit_stream: Callable[[Any], None] | None = None,
+        emit_event: Callable[[Any], None] | None = None,
         base_system_prompt: str = DEFAULT_SYSTEM,
         skills: tuple[Skill, ...] = (),
     ) -> AgentRunContext:
@@ -224,6 +230,9 @@ class AgentNode(Node):
             stop_event=stop_event,
             evaluation_trace=evaluation_trace,
             memory_context=memory_context if memory_context is not None else MemoryContext(),
+            toolset=toolset if toolset is not None else ToolSet(),
+            emit_stream=emit_stream,
+            emit_event=emit_event,
             base_system_prompt=base_system_prompt,
             skills=skills,
         )
@@ -259,6 +268,9 @@ class AgentNode(Node):
         evaluation_trace: EvaluationTrace | None = None,
         open_memory_context: Callable[[str, str, dict[str, Any]], MemoryContext] | None = None,
         capture_render: Callable[[dict[str, Any]], None] | None = None,
+        tools: ToolSet | None = None,
+        emit_stream: Callable[[Any], None] | None = None,
+        emit_event: Callable[[Any], None] | None = None,
         skills: Mapping[str, Skill] | None = None,
     ) -> Output:
         """Render fresh locals once, publish established capture, and run the mode.
@@ -281,6 +293,13 @@ class AgentNode(Node):
             capture_render (`Callable | None`, *optional*, defaults to `None`):
                 Publish one dictionary of actual or explicitly unavailable locals.
                 Omission leaves render capture dormant.
+            tools (`ToolSet | None`, *optional*, defaults to `None`):
+                The run's tools. The node's `tools` list grants ids from it.
+                `None` uses the global registry.
+            emit_stream (`Callable | None`, *optional*, defaults to `None`):
+                Transient `StreamChunk` sink; when present, chat replies stream.
+            emit_event (`Callable | None`, *optional*, defaults to `None`):
+                Transient sink for model/tool call observers with token usage.
             skills (`Mapping[str, Skill] | None`, *optional*, defaults to `None`):
                 The run's host-supplied skills. Granted ones are listed in the
                 system message and served by the built-in ``load_skill`` tool.
@@ -346,6 +365,9 @@ class AgentNode(Node):
                 stop_event=stop_event,
                 evaluation_trace=evaluation_trace,
                 memory_context=memory_context,
+                toolset=tools,
+                emit_stream=emit_stream,
+                emit_event=emit_event,
                 base_system_prompt=base_system_prompt,
                 skills=granted,
             )

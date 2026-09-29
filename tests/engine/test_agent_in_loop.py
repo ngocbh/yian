@@ -15,6 +15,7 @@ from pydantic import BaseModel
 import agent_composer.llm_clients as llm_clients_mod
 import agent_composer.tools as tools_mod
 from agent_composer.compose.loader import load_flow
+from agent_composer.events import IN_LOOP_EVENTS
 from agent_composer.run import resume_flow, run_flow
 from agent_composer.runtime.log import (
     JsonlRunLog,
@@ -206,7 +207,10 @@ def test_tool_calling_agent_in_loop_retries_whole_node_after_process_loss(
     assert recovered.status == "succeeded", recovered.failure
     assert recovered.output == "s|turn1|turn2"
     assert recovered.run_id == "agent-loop-recovery"
-    assert recovered.events == recovered_events
+    # Only the re-executed AGENT publishes fresh in-loop observers; none are replayed.
+    assert recovered.events == [
+        event for event in recovered_events if not isinstance(event, IN_LOOP_EVENTS)
+    ]
     assert tool.seen == [{}, {}, {}]
     records = _durable_records(path)
     assert [

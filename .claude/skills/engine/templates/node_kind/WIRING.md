@@ -30,7 +30,7 @@ spawner additionally owns its growth traits/hooks (`is_spawner`,
 `grow_depth_delta`, `is_loop`) and the compile interpretation described in §2a.
 The other node-owned hooks split into execution-semantic capabilities
 (`binds_per_item`, `bind_reserved`, `reserved_wiring_keys`, `needs_stop_event`,
-`skipped_output_target`) and the identity-neutral diagnostic projections
+`needs_tools`, `skipped_output_target`) and the identity-neutral diagnostic projections
 `exception_origin` and `failure_trace`. They remain available to either shape.
 The base `Node.run` is a concrete template method that fires the node's asserts
 around `forward`; do not override it.

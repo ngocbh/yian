@@ -153,8 +153,8 @@ returns before any learner or commit. Backward uses the same record authority an
 returns a separate `BackwardOutcome`, observed through `backward_outcome` and its
 `learning` projection. It never changes the primary output, `Failure`, or events.
 All backward results and owned frame proposals precede Ready and any policy
-commit. A manual whole-attempt retry is possible only before an accepted request
-or successful backward completion; terminal recovery never performs that retry.
+commit. Every explicit `backward()` call starts a new whole attempt, whatever
+earlier attempts did; terminal recovery never starts one by itself.
 
 Host setup errors, observer/stream callback failures, log I/O errors, control interruption, and
 internal invariant violations propagate as exceptions after owned resources are
@@ -252,11 +252,13 @@ flowchart TB
     memory --> runtime
     nodes --> runtime
     compile --> runtime
+    tools --> runtime
 
     compose --> run
     compile --> run
     memory --> run
     runtime --> run
+    tools --> run
     skills --> run
     run --> cli
 ```

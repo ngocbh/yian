@@ -1,8 +1,8 @@
-"""Flow-op tools for the `ac chat` composer assistant.
+"""Flow-op tools for the `composer chat` composer assistant.
 
 A CLI-HOST concern, not engine core (the core ships no domain tools). Each tool is a
 `@register_tool`-decorated function; importing this module self-registers them. All
-paths resolve against a workspace root set by `set_workspace` at `ac chat` startup and
+paths resolve against a workspace root set by `set_workspace` at `composer chat` startup and
 escapes (absolute paths, `..`) are rejected.
 """
 from __future__ import annotations
@@ -20,9 +20,9 @@ from typing import Annotated, Any, Iterator, Optional
 from agent_composer.compose.loader import load_flow
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.run import _run_flow_controlled, run_flow as _run_flow
-from agent_composer.tools import invoke_tool_trusted, register_tool, resolve_tools
+from agent_composer.tools import ToolSet, register_tool, registered_tools
 
-# The workspace root every tool path is confined to. Set at `ac chat` startup.
+# The workspace root every tool path is confined to. Set at `composer chat` startup.
 _WORKSPACE: Path = Path.cwd()
 _CONTROLLER_STOP: ContextVar[Any | None] = ContextVar(
     "agent_composer_chat_controller_stop",
@@ -38,6 +38,25 @@ def _bind_controller_stop(stop_event: Any) -> Iterator[None]:
         yield
     finally:
         _CONTROLLER_STOP.reset(token)
+
+
+_CONTROLLER_ASK_USER: ContextVar[Any | None] = ContextVar(
+    "agent_composer_chat_controller_ask_user",
+    default=None,
+)
+
+
+@contextmanager
+def _bind_ask_user(handler: Any) -> Iterator[None]:
+    """Make the chat host's ``ask_user`` handler visible to flow-op tools.
+
+    The engine runs pooled nodes in a copy of this context, so workers see it too.
+    """
+    token = _CONTROLLER_ASK_USER.set(handler)
+    try:
+        yield
+    finally:
+        _CONTROLLER_ASK_USER.reset(token)
 
 
 def set_workspace(root: Path) -> None:
@@ -396,12 +415,11 @@ def _approve_flow_write(
     snapshot: _TargetSnapshot | None,
 ) -> bool | None:
     """Return exact host approval, or ``None`` when no host owns interaction."""
-    try:
-        resolve_tools(["ask_user"])
-    except ValueError:
+    handler = _CONTROLLER_ASK_USER.get()
+    if handler is None:
         return None
 
-    answer = invoke_tool_trusted(
+    answer = ToolSet({"ask_user": handler}).invoke_trusted(
         "ask_user",
         {
             "question": _write_flow_preview(dest, content, snapshot),
@@ -502,9 +520,13 @@ def run_flow(
         )
     except LoadError as err:
         return f"ERROR: {err}"
+    handler = _CONTROLLER_ASK_USER.get()
+    # A tools mapping hides the registry, so keep the registered tools next to the handler.
+    tools = None if handler is None else {**registered_tools(), "ask_user": handler}
     parent_stop = _CONTROLLER_STOP.get()
     if parent_stop is None:
-        result = _run_flow(loaded, inputs or {})  # direct Python use: private lifecycle
+        # Direct Python use: private lifecycle.
+        result = _run_flow(loaded, inputs or {}, tools=tools)
     else:
         # Outer host cancellation flows down; a nested NodeFailed sets only this
         # child, preserving the failure as a model-visible tool result.
@@ -513,6 +535,7 @@ def run_flow(
                 loaded,
                 inputs or {},
                 stop_event=child_stop,
+                tools=tools,
             )
     if result.status == "succeeded":
         return f"OUTPUT: {result.output}"

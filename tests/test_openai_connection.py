@@ -114,7 +114,7 @@ def test_missing_identity_does_not_adopt_later_environment_key(monkeypatch):
     config = resolve_model_config({})
     monkeypatch.setenv("OPENAI_API_KEY", "new-secret")
     model = model_from_config(config)
-    with pytest.raises(RuntimeError, match="ac auth openai"):
+    with pytest.raises(RuntimeError, match="composer auth openai"):
         model.invoke([HumanMessage(content="hi")])
 
 

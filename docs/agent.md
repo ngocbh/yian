@@ -202,6 +202,19 @@ token stream.
 With both tools and structured output, structured generation starts after the
 tool loop and uses the accumulated message history.
 
+A host can watch these requests live. With `on_event`, every request —
+including structured attempts and memory summary preparation — is bracketed by
+`ModelCallStarted`/`ModelCallFinished` (the latter with provider `TokenUsage`),
+and every granted tool by `ToolCallStarted`/`ToolCallFinished`. These are live
+callbacks only; the node value, the run log, and retained memory are unchanged.
+
+With `on_stream`, each chat request's visible text arrives as `StreamChunk`s
+sharing that request's `exchange_id`. A completed request ends with one empty
+`final=True` chunk. A failed request ends without one; its `ModelCallFinished.error`
+is set, and a host should discard that request's partial text. The node value is
+authoritative: streamed text can differ from it in the whitespace between content
+blocks.
+
 ### How YAML becomes the request
 
 | YAML or host value | Role in execution |
@@ -210,7 +223,7 @@ tool loop and uses the accumulated message history.
 | AGENT `variables:` | Supplies typed local defaults to prompt rendering. Each invocation receives a fresh copy; see [agent-owned variables](syntax.md#agent-owned-variables). |
 | `prompt:` | Renders local `${name}` values into the initial `HumanMessage`. |
 | `long_term_memory:` plus host `memory={...}` | Supplies one memory context: recalled notes become labelled system sections; a session transcript contributes structured prior messages. |
-| `tools: [name, ...]` | Resolves registered tool schemas and binds them beside the messages in `tool_calling` mode. |
+| `tools: [name, ...]` | Resolves the granted ids from the run's tools (registered tools, or the host's `tools=` mapping) and binds their schemas beside the messages in `tool_calling` mode. |
 | `skills: [name, ...]` or `skills: all` plus host `skills=` | Lists each granted skill's name and description in the system message and binds the built-in `load_skill` tool, which returns a skill's instructions or a bundled file on demand. See [agent skills](syntax.md#agent-skills-skills). |
 | Structured `output:` | Selects a provider-supported structured-output binding or a fallback schema instruction, then validates the returned value. A bare `str` remains free text. |
 | `mode:`, `llm_config:`, `retries:`, `env:` | Controls execution; these values are not additional prompt messages. |
@@ -236,6 +249,8 @@ tool-result links. The innermost contributed transcript supplies prior history;
 all visible note sections remain available. Each frame owns and writes only its
 own state. MAP items and LOOP iterations reuse the statically
 authored frames rather than creating a new frame per occurrence.
+A `ProfileMemory` policy returns notes only from its outermost frame, so its
+document appears once however deeply it is declared.
 
 ```yaml
 id: layered_memory
@@ -413,10 +428,11 @@ threading a carried record.
 
 ## Planned extensions
 
-An AGENT grants registered tools with `tools:` and host-supplied `SKILL.md`
-packages with `skills:`. Host-controlled discovery of project-local tools is
-tracked separately. Authored `system_prompt:` is not valid Agent Composer YAML
-until [#259](https://github.com/ngocbh/agent-composer/issues/259) lands.
+An AGENT grants tools by id (registered, or passed per run with `tools=`) with
+`tools:` and host-supplied `SKILL.md` packages with `skills:`. Host-controlled
+discovery of project-local tools is tracked separately. Authored
+`system_prompt:` is not valid Agent Composer YAML until
+[#259](https://github.com/ngocbh/agent-composer/issues/259) lands.
 
 ## The authored structure stays fixed
 

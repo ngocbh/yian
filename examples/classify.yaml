@@ -1,7 +1,7 @@
 # classify — one AGENT that labels text with a constrained (Literal) output.
 #
 # The output type is an enum, so the model must answer with exactly one tag.
-# Run it with:  ac run examples/classify.yaml --input text="I love this!"
+# Run it with:  composer run examples/classify.yaml --input text="I love this!"
 
 id: classify
 name: classify

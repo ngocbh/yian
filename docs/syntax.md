@@ -265,10 +265,11 @@ node. `long_term_memory:` is invalid on other node kinds and on anonymous inline
 CALL/MAP/LOOP bodies; use a named `defs:` flow when the child itself needs a flow
 frame.
 
-`ac run` automatically supplies declared `episodic`, `reflective`, and `session`
+`composer run` automatically supplies declared `episodic`, `reflective`, and `session`
 policies. They are process-local unless the host flag
 `--memory-storage POLICY=PATH` selects a durable store; storage never belongs in
-YAML. Custom policies require Python host injection. For Python calls, declarations
+YAML. Custom policies, including `ProfileMemory` (which needs a document store),
+require Python host injection. For Python calls, declarations
 remain dormant unless the host passes a `memory={...}` registry to `run_flow`,
 keyed by the selected policy names. All memories contribute through one context:
 ordinary memories supply notes or instructions, and SessionMemory supplies a
@@ -292,7 +293,7 @@ returns. Forward does not run frame learners or commit learned mutations; sessio
 history updates are separate. A call with no external feedback still
 presents history to every enabled memory frame; backward outcomes stay separate
 from the forward result. See [the Python API](api.md#explicit-backward-feedback).
-The `ac run` CLI activates memory but does not expose backward or learning
+The `composer run` CLI activates memory but does not expose backward or learning
 commands. See [CLI memory](cli.md#memory-policies-and-storage).
 
 ## Node kinds
@@ -357,7 +358,7 @@ it leaves unset from the layer outside it. Precedence, most specific first:
 
 1. the AGENT node's own `llm_config:`
 2. the enclosing flow's `llm_config:`, then each parent flow outward
-3. the CLI `--provider` / `--model` flags (`ac run … --provider anthropic`)
+3. the CLI `--provider` / `--model` flags (`composer run … --provider anthropic`)
 4. process provider/model defaults, read exactly once when the run initializes
 
 Process defaults use environment overrides, then saved authentication choices,
@@ -399,7 +400,7 @@ provider/model defaults; it ignores enclosing flow, parent-flow, and CLI layers:
 
 #### OpenAI authentication
 
-Run `ac auth openai` to select ChatGPT subscription sign-in or an OpenAI API key,
+Run `composer auth openai` to select ChatGPT subscription sign-in or an OpenAI API key,
 then choose the default model. Both use `provider: openai` and the ordinary
 `plain` or `tool_calling` modes, explicit Composer tool grants, typed output,
 SessionMemory, and backward learning.
@@ -493,6 +494,11 @@ typed `output:`. TOOL instead accepts an untyped `input:` map defined by the
 registered tool and rejects `output:`; its return value is still bound as the
 node's `output` for downstream references.
 
+A TOOL node's `tool_id:` and an AGENT node's `tools:` grant name either a tool
+registered with `register_tool` or one the host passes to that run with
+`run_flow(..., tools={...})`. When a host passes `tools=`, the run sees only
+those tools. The flow text is the same either way.
+
 A `code` node's `code:` field is one of two shapes:
 
 **Reference** — a `module:function` token: import and call it in-process.
@@ -583,7 +589,7 @@ output: ${bullish.output | cautious.output}
 
 ### `human_input` — a deterministic human gate
 
-A `human_input` node **always** invokes the host-owned `ask_user` interaction at a
+A `human_input` node **always** invokes the run's `ask_user` handler at a
 fixed point and blocks its worker until the human answers. The answer is
 validated against the declared `output:` before the flow continues. This is one
 live node call; the invocation stays active until the answer arrives.

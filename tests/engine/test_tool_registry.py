@@ -1,4 +1,4 @@
-"""Strict public tool invocation and trusted ``ask_user`` host metadata."""
+"""Strict public tool invocation and trusted per-run ``ask_user`` host metadata."""
 
 from __future__ import annotations
 
@@ -9,13 +9,13 @@ from langchain_core.tools import BaseTool, StructuredTool
 from pydantic.v1 import BaseModel as BaseModelV1
 
 from agent_composer.nodes.tool import ToolNode
+import agent_composer.tools as tools_package
 from agent_composer.tools import (
     TOOL_REGISTRY,
-    install_ask_user,
+    ToolSet,
     invoke_tool,
     invoke_tool_trusted,
     register_tool,
-    resolve_tools,
 )
 
 
@@ -79,11 +79,11 @@ def _recording_handler(
 
 def test_ask_user_public_schema_contains_only_question():
     seen: list[dict[str, Any]] = []
+    tools = ToolSet({"ask_user": _recording_handler(seen)})
 
-    with install_ask_user(_recording_handler(seen)):
-        tool = resolve_tools(["ask_user"])[0]
-        assert set(tool.tool_call_schema.model_fields) == {"question"}
-        assert invoke_tool("ask_user", {"question": "Approve?"}) == "answer"
+    tool = tools.resolve(["ask_user"])[0]
+    assert set(tool.tool_call_schema.model_fields) == {"question"}
+    assert tools.invoke("ask_user", {"question": "Approve?"}) == "answer"
 
     assert seen == [
         {
@@ -109,10 +109,10 @@ def test_ask_user_public_schema_contains_only_question():
 )
 def test_public_invocation_rejects_injected_and_unknown_keys(key, value):
     seen: list[dict[str, Any]] = []
+    tools = ToolSet({"ask_user": _recording_handler(seen)})
 
-    with install_ask_user(_recording_handler(seen)):
-        with pytest.raises(ValueError, match="unsupported argument"):
-            invoke_tool("ask_user", {"question": "Approve?", key: value})
+    with pytest.raises(ValueError, match="unsupported argument"):
+        tools.invoke("ask_user", {"question": "Approve?", key: value})
 
     assert seen == []
 
@@ -133,19 +133,21 @@ def test_trusted_invocation_passes_structured_metadata():
         "node_id": "approval",
     }
 
-    with install_ask_user(_recording_handler(seen, answer={"decision": True})):
-        assert invoke_tool_trusted("ask_user", metadata) == {"decision": True}
+    tools = ToolSet({"ask_user": _recording_handler(seen, answer={"decision": True})})
+
+    assert tools.invoke_trusted("ask_user", metadata) == {"decision": True}
 
     assert seen == [metadata]
 
 
 def test_trusted_invocation_rejects_unknown_metadata():
-    with install_ask_user(_recording_handler([])):
-        with pytest.raises(ValueError, match="unsupported argument"):
-            invoke_tool_trusted(
-                "ask_user",
-                {"question": "Approve?", "not_metadata": "model supplied"},
-            )
+    tools = ToolSet({"ask_user": _recording_handler([])})
+
+    with pytest.raises(ValueError, match="unsupported argument"):
+        tools.invoke_trusted(
+            "ask_user",
+            {"question": "Approve?", "not_metadata": "model supplied"},
+        )
 
 
 def test_invocation_supports_pydantic_v1_schema():
@@ -181,54 +183,26 @@ def test_tool_node_uses_public_invocation_path():
 
 
 def test_generic_registration_rejects_reserved_ask_user_id():
-    with pytest.raises(ValueError, match="reserved"):
+    with pytest.raises(ValueError, match="reserved; pass tools="):
 
         @register_tool("ask_user")
         def replacement(question: str) -> str:
-            """A host must install this reserved tool through its ownership API."""
+            """A host must pass this reserved tool per run."""
             return question
 
 
-def test_install_ask_user_rejects_duplicate_active_owner():
-    first_seen: list[dict[str, Any]] = []
-    second_seen: list[dict[str, Any]] = []
+@pytest.mark.parametrize("tools", [None, {}])
+def test_ask_user_never_falls_back_to_the_global_registry(tools):
+    def global_answer(question: str) -> str:
+        """A stray global entry that no run may use as its handler."""
+        return "global answer"
 
-    with install_ask_user(_recording_handler(first_seen)):
-        installed = TOOL_REGISTRY["ask_user"]
-        with pytest.raises(ValueError, match="already has an active owner"):
-            with install_ask_user(_recording_handler(second_seen)):
-                pass
-        assert TOOL_REGISTRY["ask_user"] is installed
-        assert invoke_tool("ask_user", {"question": "First?"}) == "answer"
+    TOOL_REGISTRY["ask_user"] = StructuredTool.from_function(global_answer, name="ask_user")
 
-    assert [call["question"] for call in first_seen] == ["First?"]
-    assert second_seen == []
+    with pytest.raises(ValueError, match="no ask_user handler for this run"):
+        ToolSet(tools).invoke("ask_user", {"question": "Approve?"})
 
 
-def test_install_ask_user_allows_sequential_owners():
-    first_seen: list[dict[str, Any]] = []
-    second_seen: list[dict[str, Any]] = []
-
-    with install_ask_user(_recording_handler(first_seen, answer="first")):
-        assert invoke_tool("ask_user", {"question": "One?"}) == "first"
-    with install_ask_user(_recording_handler(second_seen, answer="second")):
-        assert invoke_tool("ask_user", {"question": "Two?"}) == "second"
-
-    assert [call["question"] for call in first_seen] == ["One?"]
-    assert [call["question"] for call in second_seen] == ["Two?"]
-
-
-def test_install_cleanup_does_not_remove_replacement_registration():
-    def replacement(question: str) -> str:
-        """Replacement used to prove cleanup checks the installed tool identity."""
-        return question
-
-    replacement_tool = StructuredTool.from_function(
-        replacement,
-        name="replacement_ask_user",
-    )
-
-    with install_ask_user(_recording_handler([])):
-        TOOL_REGISTRY["ask_user"] = replacement_tool
-
-    assert TOOL_REGISTRY["ask_user"] is replacement_tool
+def test_install_ask_user_is_removed():
+    assert not hasattr(tools_package, "install_ask_user")
+    assert "install_ask_user" not in tools_package.__all__

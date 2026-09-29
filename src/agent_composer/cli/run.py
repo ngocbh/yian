@@ -1,4 +1,4 @@
-"""`ac run` — load a flow, gather inputs, drive it to a terminal, render the output.
+"""`composer run` — load a flow, gather inputs, drive it to a terminal, render the output.
 
 Fresh inputs come from flags (`--input k=v`, repeatable; `--inputs file.json`). On
 an interactive stdin, every declaration still missing is prompted for (required ones
@@ -70,7 +70,7 @@ from agent_composer.run import (
 from agent_composer.events import NodeFailed
 from agent_composer.nodes.base import _HostStop
 from agent_composer.nodes.contracts import Parameter
-from agent_composer.tools import install_ask_user
+from agent_composer.tools import registered_tools
 from agent_composer.typesys import (
     Type,
     TypeCheckError,
@@ -264,7 +264,7 @@ def _render_run_error(result: RunResult, loaded, engine_trace: bool = False) -> 
 
 
 class _ProgressReporter:
-    """Render per-node progress for `ac run` as the engine streams node events.
+    """Render per-node progress for `composer run` as the engine streams node events.
 
     A node shows a live spinner while running, then is rewritten in place as a green
     `✓ <node>` on success or a red `✗ <node>` (with the error on the next line) on
@@ -425,9 +425,9 @@ def _run_with_terminal_controller(
     """Run one complete CLI lifecycle behind a main-thread terminal broker.
 
     ``controller`` owns one run attempt. It receives the shared stop event, a
-    brokered observer, the installed
-    ``ask_user`` handler, and the broker's render enqueue operation. The main
-    thread alone serves the FIFO and joins the controller before registry cleanup.
+    brokered observer, the brokered ``ask_user`` handler to pass as that run's
+    ``tools`` entry, and the broker's render enqueue operation. The main
+    thread alone serves the FIFO and joins the controller before returning.
     ``eof_value`` optionally normalizes prompt EOF to a caller-owned value; omitted
     EOF keeps the broker's exception policy.
     """
@@ -505,7 +505,7 @@ def _run_with_terminal_controller(
 
         CPython's ``Thread.start`` can be interrupted after creating the OS thread but before
         publishing ``ident``. Blocking SIGINT across that short POSIX launch handshake closes
-        the otherwise unobservable join-before-registry-cleanup race.
+        the otherwise unobservable join-before-return race.
         """
         nonlocal controller_signal_mask, started
         pthread_sigmask = getattr(signal, "pthread_sigmask", None)
@@ -522,35 +522,34 @@ def _run_with_terminal_controller(
         controller_thread.start()
         started = True
 
-    with install_ask_user(ask_user):
-        if reporter is not None:
-            reporter.start()
-        try:
-            start_controller()
-            completion = broker.serve()
-        except BaseException as exc:
-            remember_host_error(exc)
-        finally:
-            if started:
-                # Keep registry ownership until the controller target has finished. Repeated
-                # Ctrl-C during a slow cooperative drain is deferred; it must not interrupt
-                # cleanup or replace the first host cause.
-                while not controller_finished.is_set():
-                    try:
-                        controller_finished.wait()
-                    except BaseException as exc:
-                        remember_host_error(exc)
-                while True:
-                    try:
-                        controller_thread.join()
-                        break
-                    except BaseException as exc:
-                        remember_host_error(exc)
-            if reporter is not None:
+    if reporter is not None:
+        reporter.start()
+    try:
+        start_controller()
+        completion = broker.serve()
+    except BaseException as exc:
+        remember_host_error(exc)
+    finally:
+        if started:
+            # Keep the broker serving until the controller target has finished. Repeated
+            # Ctrl-C during a slow cooperative drain is deferred; it must not interrupt
+            # cleanup or replace the first host cause.
+            while not controller_finished.is_set():
                 try:
-                    reporter.stop()
+                    controller_finished.wait()
                 except BaseException as exc:
                     remember_host_error(exc)
+            while True:
+                try:
+                    controller_thread.join()
+                    break
+                except BaseException as exc:
+                    remember_host_error(exc)
+        if reporter is not None:
+            try:
+                reporter.stop()
+            except BaseException as exc:
+                remember_host_error(exc)
 
     if host_error is not None:
         error, tb = host_error
@@ -1448,7 +1447,7 @@ def run(
         def controller(
             stop_event: threading.Event,
             on_event: Optional[Callable[[Any], None]],
-            _ask_user: Callable[..., Any],
+            ask_user: Callable[..., Any],
             _render: Callable[[Callable[[], None]], None],
         ) -> RunResult:
             """Recover one run while the helper owns its terminal broker."""
@@ -1459,6 +1458,7 @@ def run(
                     num_workers=num_workers,
                     on_event=on_event,
                     stop_event=stop_event,
+                    tools={**registered_tools(), "ask_user": ask_user},
                     **memory_options,
                     **skill_options,
                 )
@@ -1509,7 +1509,7 @@ def run(
         def controller(
             stop_event: threading.Event,
             on_event: Optional[Callable[[Any], None]],
-            _ask_user: Callable[..., Any],
+            ask_user: Callable[..., Any],
             _render: Callable[[Callable[[], None]], None],
         ) -> RunResult:
             """Drive one fresh run while the helper owns its terminal broker."""
@@ -1523,6 +1523,7 @@ def run(
                     llm_config=cli_cfg or None,
                     num_workers=selected_workers,
                     stop_event=stop_event,
+                    tools={**registered_tools(), "ask_user": ask_user},
                     **memory_options,
                     **skill_options,
                 )

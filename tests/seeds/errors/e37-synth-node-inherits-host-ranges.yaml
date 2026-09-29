@@ -1,7 +1,7 @@
 # e37 — a SYNTHESIZED node's caret must resolve to its OWN source, not the host's. COMPILE:
 # "unresolved references". The synthesized call binding retains directive-owned provenance.
 # Fails at load; no inputs needed.
-# Run: `ac run tests/seeds/errors/e37-synth-node-inherits-host-ranges.yaml`.
+# Run: `composer run tests/seeds/errors/e37-synth-node-inherits-host-ranges.yaml`.
 #
 # The inline `call(...)` on line 30 desugars to synth node `__call_0`.
 # The host `summary` node also has a `topic` input on line 29.

@@ -15,7 +15,7 @@
 # loop binds ask_user and blocks on the call until the answer arrives.
 #
 # Run it with a deliberately ambiguous request (the CLI will prompt if the agent asks):
-#   ac run examples/ask-user.yaml --input request="Book me a table for dinner"
+#   composer run examples/ask-user.yaml --input request="Book me a table for dinner"
 
 id: ask-user
 name: ask_user_clarify

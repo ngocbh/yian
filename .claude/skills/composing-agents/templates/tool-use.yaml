@@ -8,6 +8,8 @@
 #   def get_facts(query: str, limit: int = 5) -> list[dict]:
 #       "Fetch recent facts for a subject."   # docstring = what the model sees
 #       ...
+#
+# or passed to one run only: run_flow(flow, inputs, tools={"get_facts": get_facts}).
 
 id: tool-use
 name: tool_use
@@ -19,7 +21,7 @@ input:
 nodes:
   facts:
     kind: tool
-    tool_id: get_facts             # a TOOL_REGISTRY key
+    tool_id: get_facts             # a registered or per-run tool id
     input:                         # untyped — each value is a ${...} ref or a literal
       query: ${input.subject}
       limit: 5

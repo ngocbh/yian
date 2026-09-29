@@ -3,7 +3,7 @@
 The [`examples/`](https://github.com/ngocbh/agent-composer/tree/main/examples)
 directory in the repository contains a set of generic flows, smallest first.
 After cloning the repository, run them from its root with
-`ac run examples/<file> --input ...` (set a provider/model first — see
+`composer run examples/<file> --input ...` (set a provider/model first — see
 [Installation](installation.md)). The directory is not bundled in the current
 Python package.
 
@@ -26,7 +26,7 @@ prompt: |-
 ```
 
 ```console
-ac run examples/hello.yaml --input name=Ada
+composer run examples/hello.yaml --input name=Ada
 ```
 
 Shows compact mode: the flow and its single AGENT node share the typed `input:`
@@ -38,7 +38,7 @@ A single AGENT node that condenses a block of text into one sentence. Unlike com
 `hello`, it shows the equivalent full `nodes:` form with explicit input and output wiring.
 
 ```console
-ac run examples/summarize.yaml --input text="...long text..."
+composer run examples/summarize.yaml --input text="...long text..."
 ```
 
 ## `classify.yaml` — a constrained output
@@ -64,7 +64,7 @@ output:
 ```
 
 ```console
-ac run examples/classify.yaml --input text="I love this!"
+composer run examples/classify.yaml --input text="I love this!"
 ```
 
 ## `human-approval.yaml` — a deterministic human gate
@@ -76,7 +76,7 @@ ran. The gate returns the answer as an ordinary node output from the same live
 invocation.
 
 ```console
-ac run examples/human-approval.yaml --input task="Plan a team offsite"
+composer run examples/human-approval.yaml --input task="Plan a team offsite"
 #   → prompts you to approve or revise while the flow remains live
 ```
 
@@ -89,7 +89,7 @@ blocking tool **only if** it judges the request ambiguous — otherwise it answe
 outright. Whether the call happens depends on the prompt and the model.
 
 ```console
-ac run examples/ask-user.yaml --input request="Book me a table for dinner"
+composer run examples/ask-user.yaml --input request="Book me a table for dinner"
 ```
 
 Contrast with `human-approval.yaml`: `human_input` always asks; `ask_user` asks
@@ -109,7 +109,7 @@ The fullest example. Given a decision question it:
 5. returns a **multi-field object**, guarded by an `assert`.
 
 ```console
-ac run examples/decision-brief.yaml --input question="Should a small team adopt a monorepo?" --num-workers 4
+composer run examples/decision-brief.yaml --input question="Should a small team adopt a monorepo?" --num-workers 4
 ```
 
 It uses a `Literal` typedef, an `Optional` input with an expression fallback, fan-out +

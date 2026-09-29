@@ -1,4 +1,4 @@
-# Conversational REPL — the same turn-by-turn LOOP shape used by `ac chat`.
+# Conversational REPL — the same turn-by-turn LOOP shape used by `composer chat`.
 # The turn boundary is STRUCTURAL: HUMAN_INPUT feeds a CASE; exact exit text builds the
 # exit record, otherwise an AGENT node + a second CODE node build the normal transcript. The LLM
 # only fills the reply; output bindings rejoin the branches into the carried record.
@@ -13,7 +13,7 @@ name: chat
 description: A turn-by-turn assistant (plain-mode AGENT node, deterministic transcript).
 
 input:
-  opening: str            # seed transcript; `ac chat` passes "" (empty)
+  opening: str            # seed transcript; `composer chat` passes "" (empty)
 
 defs:
   turn:                   # body: 'a -> 'a over {transcript, exited}

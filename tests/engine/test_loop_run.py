@@ -19,7 +19,6 @@ from agent_composer.compile.expand import build_grow
 from agent_composer.compose.loader import load_flow
 from agent_composer.run import run_flow
 from agent_composer.nodes.contracts import PartialRecordContract
-from agent_composer.tools import install_ask_user
 from agent_composer.typesys import ValueKind
 from tests.engine._graph_builder import _engine
 
@@ -189,8 +188,7 @@ output: ${loop.output}
 def test_loop_body_blocks_for_each_human_turn():
     loaded = load_flow(LOOP_CHAT)
     answers = iter(["hi", "bye"])
-    with install_ask_user(lambda **request: next(answers)):
-        result = run_flow(loaded, {})
+    result = run_flow(loaded, {}, tools={"ask_user": lambda **request: next(answers)})
 
     assert result.status == "succeeded", result.failure
     assert result.output == {"messages": ["hi", "bye"], "exited": True}
@@ -237,8 +235,7 @@ def test_loop_body_can_compute_carried_boolean_in_its_output_binding():
         prompts.append(request["question"])
         return "/exit"
 
-    with install_ask_user(answer):
-        result = run_flow(loaded, {"initial_exited": False})
+    result = run_flow(loaded, {"initial_exited": False}, tools={"ask_user": answer})
 
     body_type = loaded.compiled.nodes["loop"].output_contract.type
     assert body_type.fields["exited"].kind is ValueKind.BOOLEAN

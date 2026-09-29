@@ -330,17 +330,18 @@ Most are just the functional model (above) made enforceable:
 - **Append-only durable authority** — a fresh run records complete initialization,
   then every node start and accepted outcome. A transition is validated and prepared,
   appended to its `RunLog`, and only then applied to `RunState`; observers become
-  visible after append + apply. Recovery validates a contiguous prefix and folds
+  visible after append + apply (transient `StreamChunk`s and in-loop AGENT
+  observers are the only exceptions and are never recorded). Recovery validates a contiguous prefix and folds
   it through the same reducer path before recording an eligible ordered retry
   frontier. New writes use schema 8; readers accept exactly 7 and 8, preserving
   historical envelope schemas and canonical bytes through preparation, replay,
   trace, and append checks. Do not rewrite accepted prefixes. The thirteen older
   kinds retain identical payload validation; four conversation kinds require 8.
 - **Blocking authorable effects return ordinary outputs** — an AGENT node's
-  explicitly
-  granted `ask_user` tool and HUMAN_INPUT call the process-owned handler inside
-  their live invocation; the AGENT node checks the run-owned stop event between external
-  model/tool effects, and WAIT blocks on that event until its absolute UTC deadline.
+  explicitly granted `ask_user` tool and HUMAN_INPUT call the run's own handler
+  (passed as `tools={"ask_user": ...}`) inside their live invocation; the AGENT
+  node checks the run-owned stop event between external model/tool effects, and
+  WAIT blocks on that event until its absolute UTC deadline.
   All three return `Output`; none creates continuation topology.
 - **Dependency-light core (with a deliberate exception)** — keep the engine free
   of a DB and heavy frameworks; external capabilities enter through **injected
@@ -365,7 +366,8 @@ Most are just the functional model (above) made enforceable:
   execution-semantic traits/hooks
   (`is_spawner`, `binds_per_item`, `item_source_key`,
   `bind_reserved`, `reserved_wiring_keys`, `validate_execution_setup`,
-  `grow_depth_delta`, `is_loop`, `needs_stop_event`, `skipped_output_target`)
+  `grow_depth_delta`, `is_loop`, `needs_stop_event`, `needs_tools`,
+  `skipped_output_target`)
   plus the diagnostic-only projections `exception_origin` and `failure_trace`.
   Those projections are identity-neutral. `skipped_output_target()` is pure, deterministic
   topology authority derived only from manifest-backed node state. Its base
@@ -493,10 +495,22 @@ Most are just the functional model (above) made enforceable:
   overlap and then recency within its limit. Sessions retain immutable JSON
   snapshots; stale sessions may recall their pinned view but cannot learn or
   commit. Optional host-only `storage=path` preserves complete private state.
-- **Durable memory belongs to the backend, not runtime** — all three built-in
-  backends default to `storage=None` with no I/O. `memory.storage` supplies one
-  lifetime SQLite owner and finite-JSON transactions. Persist validated candidates
-  before RAM publication, including reset/adoption and private commit tombstones;
+- **Profile memory rewrites one document** — import `ProfileMemory` from
+  `agent_composer.memory.profile` and a store from
+  `agent_composer.memory.storage`. The snapshot pins `profile_version` and
+  `text_sha256`, never the text. Only the outermost frame of the policy recalls
+  and learns; frame config is empty. Learning is one tool-free model call over
+  feedback, the current document, and budgeted episodes with their visible
+  interactions; it returns `<profile>...</profile>` within `max_chars`. Commit
+  is a store compare-and-set with no model call. Only `profile.version_mismatch`
+  is retryable (nothing was written), and it is retried as a new backward
+  attempt, never inside the backend. The store has no commit-id replay: a killed
+  attempt stays `unknown`, and hosts find its `commit_id` in store provenance.
+- **Durable memory belongs to the backend, not runtime** — the episodic,
+  reflective, and session backends default to `storage=None` with no I/O.
+  `memory.storage.SQLiteStorage` supplies one lifetime SQLite owner and finite-JSON
+  transactions. Persist validated candidates before RAM publication, including
+  reset/adoption and private commit tombstones;
   preserve public snapshot formats and exact run-opening pins. Do not store host
   constructor defaults, callbacks, live handles, queues, or clients. Current host
   settings govern future work after reopening; saved frame limits and recorded
@@ -598,10 +612,10 @@ Most are just the functional model (above) made enforceable:
   stops later policies; Finished records the separate outcome. No per-frame
   learning records, nullable legacy attempt IDs, or per-frame retry frontier.
   Keep `unrequested`/`unknown`/`succeeded`/`failed` policy observations distinct.
-  An accepted request or successful Finished permanently forbids another attempt;
-  a permitted manual precommit retry recomputes everything using fresh sessions
-  and original snapshots. Never resume Ready proposals or infer retry policy from
-  backend hints.
+  Any finished attempt admits another; an unfinished one is closed as interrupted
+  first. Each attempt recomputes everything using fresh sessions and original
+  snapshots, and later requesting attempts use attempt-scoped commit IDs. Never
+  resume Ready proposals or infer retry policy from backend hints.
 - **Delayed backward owns no idle resources** — `run.py` keeps private program
   and accepted data plus policy references. Each call reopens/replays authority,
   uses a nonblocking handle guard and durable locks, restores recorded snapshots,

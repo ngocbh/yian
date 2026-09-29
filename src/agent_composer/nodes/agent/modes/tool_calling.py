@@ -26,6 +26,12 @@ from agent_composer.nodes.agent.context import (
     invoke_model,
     invoke_tool_effect,
 )
+from agent_composer.nodes.agent.live import (
+    invoke_chat,
+    live_sinks,
+    observe_model_call,
+    observe_tool_call,
+)
 from agent_composer.nodes.agent.modes.common import (
     AgentLoopError,
     AgentRunContext,
@@ -39,7 +45,6 @@ from agent_composer.nodes.agent.modes.utils import (
 from agent_composer.nodes.agent.structured import generate_structured, type_to_schema
 from agent_composer.nodes.base import Output
 from agent_composer.skills.tool import LOAD_SKILL, invoke_load_skill, load_skill_tool
-from agent_composer.tools import invoke_tool, resolve_tools
 
 # -1 means no bound; a positive per-node env value bounds model turns.
 MAX_TOOL_ITERATIONS = -1
@@ -54,11 +59,17 @@ def tool_calling(ctx: AgentRunContext) -> Output:
         HumanMessage(content=ctx.prompt),
     ]
     new_messages = list(messages)
+    live = live_sinks(ctx)
     ctx.check_stopped()
     model = llm_clients.model_from_config(ctx.llm_config or {})
     ctx.check_stopped()
     prior = prepare_history(
-        ctx.memory_context.transcript, model, check_stopped=ctx.check_stopped
+        ctx.memory_context.transcript,
+        model,
+        check_stopped=ctx.check_stopped,
+        observe_summary=lambda invoke: observe_model_call(
+            live, invoke, purpose="history_summary", exchange_id=uuid4().hex
+        ),
     )
     messages = [messages[0], *prior, *messages[1:]]
     if ctx.evaluation_trace is not None:
@@ -80,10 +91,11 @@ def tool_calling(ctx: AgentRunContext) -> Output:
                 evaluation_trace=ctx.evaluation_trace,
                 memory_context=ctx.memory_context,
                 new_messages=new_messages,
+                live=live,
             )
         )
 
-    bound = resolve_tools(list(ctx.tools))
+    bound = ctx.toolset.resolve(list(ctx.tools))
     skills = {skill.name: skill for skill in ctx.skills}
     if skills:
         bound.append(load_skill_tool())
@@ -96,7 +108,7 @@ def tool_calling(ctx: AgentRunContext) -> Output:
         exchange_id = uuid4().hex
         reply = invoke_model(
             ctx.memory_context.transcript,
-            lambda: chat.invoke(messages),
+            lambda: invoke_chat(live, chat, messages, exchange_id=exchange_id),
             new_messages=new_messages,
             check_stopped=ctx.check_stopped,
             exchange_id=exchange_id,
@@ -127,6 +139,7 @@ def tool_calling(ctx: AgentRunContext) -> Output:
                         evaluation_trace=ctx.evaluation_trace,
                         memory_context=ctx.memory_context,
                         new_messages=[],
+                        live=live,
                     )
                 )
             return Output(value=text)
@@ -149,20 +162,25 @@ def tool_calling(ctx: AgentRunContext) -> Output:
             if skills and name == LOAD_SKILL:
                 invoke = partial(invoke_load_skill, skills, arguments)
             elif name in ctx.tools:
-                invoke = partial(invoke_tool, name, arguments)
+                invoke = partial(ctx.toolset.invoke, name, arguments)
             else:
                 raise AgentLoopError(
                     f"agent node {ctx.node_id!r} requested tool {name!r}, but it is not "
                     f"granted; granted tools: {ctx.tools}"
                 )
+            tool_call_id = call.get("id") or ""
             result_message = invoke_tool_effect(
                 ctx.memory_context.transcript,
-                invoke,
+                lambda: observe_tool_call(
+                    live, invoke,
+                    exchange_id=exchange_id, call_index=call_index,
+                    tool_call_id=tool_call_id, name=name, arguments=arguments,
+                ),
                 name=name,
                 arguments=arguments,
                 model_exchange_id=exchange_id,
                 call_index=call_index,
-                tool_call_id=call.get("id") or "",
+                tool_call_id=tool_call_id,
                 check_stopped=ctx.check_stopped,
             )
             record_tool_result(ctx.evaluation_trace, name, result_message.content)

@@ -1,6 +1,6 @@
 # summarize — one AGENT that condenses a block of text into a single sentence.
 #
-# Run it with:  ac run examples/summarize.yaml --input text="...long text..."
+# Run it with:  composer run examples/summarize.yaml --input text="...long text..."
 
 id: summarize
 name: summarize

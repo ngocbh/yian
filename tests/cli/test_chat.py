@@ -1,4 +1,4 @@
-"""Tests for the broker-driven ``ac chat`` CLI through Typer's ``CliRunner``.
+"""Tests for the broker-driven ``composer chat`` CLI through Typer's ``CliRunner``.
 
 Covers flow-owned exits, broker EOF normalization, multi-turn ordering, a user flow
 that treats exit text as ordinary input, cwd-local imports, and failed-turn recovery.
@@ -557,8 +557,8 @@ def test_chat_host_does_not_intercept_exit_text_for_user_flow(tmp_path, monkeypa
 
 
 def test_chat_resolves_cwd_local_fold_module(tmp_path, monkeypatch):
-    """`ac chat` must put the cwd on `sys.path` so a chat flow's `code: module:fn` fold
-    ref resolves without the caller exporting PYTHONPATH — mirroring `ac run`.
+    """`composer chat` must put the cwd on `sys.path` so a chat flow's `code: module:fn` fold
+    ref resolves without the caller exporting PYTHONPATH — mirroring `composer run`.
 
     The bundled/example chat flows no longer use a CODE fold (they grow the transcript in
     `output:` template bindings), so this test uses a self-contained legacy-style chat flow
@@ -683,8 +683,7 @@ def test_chat_survives_a_failed_turn(tmp_path, monkeypatch):
     assert len(logs) == 2
     assert len({path.stem for path in logs}) == 2
     assert all(f"Run log: {path}" in r.stderr for path in logs)
-    # Recovery installed a fresh process-owned handler, which proves the failed
-    # lifecycle released its owner; the final lifecycle releases its owner too.
+    # Each lifecycle passes its handler as a per-run tool; none touches the registry.
     assert "ask_user" not in tools_module.TOOL_REGISTRY
 
 

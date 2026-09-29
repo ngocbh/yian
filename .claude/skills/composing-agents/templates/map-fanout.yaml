@@ -3,7 +3,7 @@
 # element. The node's value is a list[U] in `over` order; run-level `num_workers`
 # controls concurrency (`parallel:` is currently inert).
 # Run from this directory (the child resolves on the search path):
-#   ac run map-fanout.yaml --inputs texts.json     (texts.json = {"texts": ["a","b"]})
+#   composer run map-fanout.yaml --inputs texts.json     (texts.json = {"texts": ["a","b"]})
 
 id: map-fanout
 name: map_fanout

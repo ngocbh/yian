@@ -44,6 +44,7 @@ from agent_composer.runtime.state import (
     prepare_node_started,
     prepare_node_succeeded,
 )
+from agent_composer.tools import ToolSet
 
 _POLL = 0.02
 
@@ -54,6 +55,14 @@ class _RecordedStream:
 
     node_id: str
     chunk: StreamChunk
+
+
+@dataclass(frozen=True, slots=True)
+class _RecordedEvent:
+    """One transient in-loop observer transported from a worker to the dispatcher."""
+
+    node_id: str
+    event: Any
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,6 +97,7 @@ class FlowEngine:
         on_stream: Callable[[StreamChunk], None] | None = None,
         stop_event: threading.Event | None = None,
         memory_context_opener: MemoryContextOpener | None = None,
+        tools: ToolSet | None = None,
         skills: Mapping[str, Any] | None = None,
     ) -> None:
         """Borrow a prepared state/log pair and configure one bounded drive.
@@ -97,6 +107,10 @@ class FlowEngine:
         lazy access to it. It defaults to ``None`` (no injected memory context);
         a non-callable value raises ``TypeError``. The dispatcher captures each
         accepted start before evaluating or submitting its worker.
+
+        ``tools`` is this run's ``ToolSet``; every node declaring ``needs_tools``
+        receives it. ``None`` uses the global registry; any other type
+        raises ``TypeError``.
 
         ``skills`` is the run's host-supplied skill mapping, passed unchanged to
         nodes declaring ``needs_skills``; a non-mapping raises ``TypeError``.
@@ -117,6 +131,8 @@ class FlowEngine:
             raise TypeError("on_stream must be callable or None")
         if memory_context_opener is not None and not callable(memory_context_opener):
             raise TypeError("memory_context_opener must be callable or None")
+        if tools is not None and type(tools) is not ToolSet:
+            raise TypeError("tools must be a ToolSet or None")
         if skills is not None and not isinstance(skills, Mapping):
             raise TypeError("skills must be a mapping or None")
         self.state = state
@@ -127,6 +143,7 @@ class FlowEngine:
         self.on_stream = on_stream
         self.stop_event = stop_event if stop_event is not None else threading.Event()
         self.memory_context_opener = memory_context_opener
+        self.tools = tools if tools is not None else ToolSet()
         self.skills = skills
 
     def run(self) -> Iterator[Any]:
@@ -180,7 +197,8 @@ class FlowEngine:
                 outcome = self._evaluate(
                     node_id,
                     invocation,
-                    emit_stream=self._emit_serial_stream,
+                    emit_stream=None if self.on_stream is None else self._emit_serial_stream,
+                    emit_event=None if self.on_event is None else self._emit_serial_event,
                 )
                 self._raise_if_stopped()
                 observers = self._commit_outcome(node_id, outcome)
@@ -193,7 +211,7 @@ class FlowEngine:
 
     def _run_pooled(self) -> Iterator[Any]:
         """Execute at most ``num_workers`` starts with one state-writing dispatcher."""
-        messages: queue.Queue[_RecordedStream | _RecordedCompletion] = queue.Queue()
+        messages: queue.Queue[_RecordedStream | _RecordedEvent | _RecordedCompletion] = queue.Queue()
         try:
             executor = ThreadPoolExecutor(
                 max_workers=self.num_workers,
@@ -241,6 +259,10 @@ class FlowEngine:
                 if isinstance(message, _RecordedStream):
                     if not self.stop_event.is_set() and self.on_stream is not None:
                         self.on_stream(message.chunk)
+                    continue
+                if isinstance(message, _RecordedEvent):
+                    if not self.stop_event.is_set() and self.on_event is not None:
+                        self.on_event(message.event)
                     continue
 
                 future = message.future
@@ -427,6 +449,7 @@ class FlowEngine:
         invocation: ConversationInvocation,
         *,
         emit_stream: Callable[[StreamChunk], None] | None,
+        emit_event: Callable[[Any], None] | None = None,
     ) -> EvaluatedOutcome:
         """Read and execute one already-started node without mutating run state."""
         node = self.state.flow.nodes[node_id]
@@ -437,12 +460,14 @@ class FlowEngine:
             wiring_override=self.state.wiring_overrides.get(node_id),
             stop_event=self.stop_event,
             emit_stream=emit_stream,
+            emit_event=emit_event,
             capture_evidence=self.state.learnable,
             capture_bindings=self.state.learnable,
             effective_llm_by_static_path=self.state.effective_llm_by_static_path,
             source_resolver=None if self.state.trace is None else self.state.trace.resolve,
             memory_context_opener=self.memory_context_opener,
             memory_invocation=invocation,
+            tools=self.tools,
             skills=self.skills,
         )
 
@@ -452,17 +477,29 @@ class FlowEngine:
         invocation: ConversationInvocation,
         messages: queue.Queue,
     ) -> EvaluatedOutcome:
-        """Evaluate one claimed node and enqueue only its transient stream chunks."""
+        """Evaluate one claimed node and enqueue only its transient chunks and observers."""
         return self._evaluate(
             node_id,
             invocation,
-            emit_stream=lambda chunk: messages.put(_RecordedStream(node_id, chunk)),
+            emit_stream=(
+                None if self.on_stream is None
+                else lambda chunk: messages.put(_RecordedStream(node_id, chunk))
+            ),
+            emit_event=(
+                None if self.on_event is None
+                else lambda event: messages.put(_RecordedEvent(node_id, event))
+            ),
         )
 
     def _emit_serial_stream(self, chunk: StreamChunk) -> None:
         """Invoke the transient serial stream callback unless stop has begun."""
         if not self.stop_event.is_set() and self.on_stream is not None:
             self.on_stream(chunk)
+
+    def _emit_serial_event(self, event: Any) -> None:
+        """Invoke the event callback for one transient in-loop observer unless stop has begun."""
+        if not self.stop_event.is_set() and self.on_event is not None:
+            self.on_event(event)
 
     def _publish(self, observers: tuple[Any, ...]) -> Iterator[Any]:
         """Invoke the event callback and then yield each post-durable observer."""

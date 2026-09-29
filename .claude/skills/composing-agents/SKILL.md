@@ -1,6 +1,6 @@
 ---
 name: composing-agents
-description: Use when authoring an Agent Composer flow — writing or editing a flow YAML, building an agent workflow, wiring nodes (agent / code / tool / case / human_input / wait / call / map), or answering "how do I write a flow that …". Trigger on "create an agent", "write a flow", "compose a workflow", "add a node to my flow", "how do I branch / loop / call another flow", or any `ac run` flow-authoring request.
+description: Use when authoring an Agent Composer flow — writing or editing a flow YAML, building an agent workflow, wiring nodes (agent / code / tool / case / human_input / wait / call / map), or answering "how do I write a flow that …". Trigger on "create an agent", "write a flow", "compose a workflow", "add a node to my flow", "how do I branch / loop / call another flow", or any `composer run` flow-authoring request.
 ---
 
 # Composing an agent flow
@@ -208,7 +208,7 @@ A node may pin its model via `llm_config:`; otherwise the process defaults captu
 once when the run initializes apply. `inherit: false` skips authored flow/parent/CLI
 layers but still receives those provider/model defaults.
 OpenAI subscription and API-key connections both use `provider: openai`;
-select the method and default model with `ac auth openai`.
+select the method and default model with `composer auth openai`.
 OpenAI is the default provider. Environment defaults override saved defaults;
 model defaults apply only to their matching provider. Grant ordinary Composer
 tools explicitly; retired `provider: codex`, `sandbox`, `cwd`, and `builtin_tools`
@@ -253,8 +253,9 @@ may add its own local frame. Each frame writes only itself. MAP/LOOP executions
 reuse the frames authored on their flows and AGENT nodes rather than creating
 per-item/per-iteration frames.
 Other node kinds and anonymous inline child flows cannot carry this declaration.
-`ac run` automatically hosts declared `episodic`, `reflective`, and `session`
-policies; custom policies require Python injection. Library hosts enable recall
+`composer run` automatically hosts declared `episodic`, `reflective`, and `session`
+policies; custom policies, including `ProfileMemory`, require Python injection.
+Library hosts enable recall
 with `run_flow(..., memory={NAME: implementation})`; `memory=None` stays dormant.
 For API conversation continuity, declare `long_term_memory: session`; Python hosts
 inject `SessionMemory()` as `"session"`;
@@ -272,10 +273,10 @@ Notes stay scoped to the owning frame and authored leaf; recall is pinned when
 the run opens. Host-only `SessionMemory(history_budget_chars=32_000, recent_turns=4)`
 controls API summaries of older context; do not put these settings in YAML.
 Raw history and recent whole turns stay intact, even above the soft budget.
-All three built-in backend constructors accept optional `storage=path` for local
+Episodic, reflective, and session backends accept optional `storage=path` for local
 SQLite durability; the default `None` remains process-local. Never put a storage
 path in YAML. A file has one owner until backend close; active work or queued
-turns block close, idle run handles do not. In `ac run`, repeat
+turns block close, idle run handles do not. In `composer run`, repeat
 `--memory-storage POLICY=PATH` to persist selected declared policies; others stay
 process-local and lose state on exit. Supply the same stores on unfinished
 resume; terminal inspection opens none. CLI activation does not run backward
@@ -287,7 +288,7 @@ runs every enabled frame learner, while unreached AGENT backward model calls are
 skipped. The separate outcome never changes forward values or updates local
 variables. Terminal `resume_flow` inspects without learning; it does not retry a
 backward attempt. See the [Python API](../../../docs/api.md#explicit-backward-feedback)
-for feedback shapes and the request-based retry boundary.
+for feedback shapes and repeated backward attempts.
 
 ### `code` — deterministic Python
 `code:` is either a **`module:function`** reference (import + call) or **inline source** —
@@ -307,7 +308,7 @@ verdict:
 ```yaml
 news:
   kind: tool
-  tool_id: get_facts           # a TOOL_REGISTRY key
+  tool_id: get_facts           # a registered or per-run tool id
   input:                       # untyped — each value is a ${...} ref or a literal
     symbol: ${input.topic}
     limit: 10
@@ -321,6 +322,9 @@ def get_facts(symbol: str, limit: int = 10) -> list[dict]:
     "Fetch recent facts for a symbol."   # docstring = the description the model sees
     ...
 ```
+Or give it to one run only: `run_flow(flow, inputs, tools={"get_facts": get_facts})`.
+That mapping is the run's whole tool set: registered tools are hidden. To keep
+them, pass `tools={**registered_tools(), "get_facts": get_facts}`.
 Note `tool` uses `tool_id:` + `input:` (a tool declares no `output:`). (`model` —
 `kind: model`, `model_id:` — is a parseable kind but the serving seam isn't wired
 yet; running one raises.)
@@ -344,7 +348,7 @@ Routing on a `Literal` is **exhaustiveness-checked** — omitting a tag with no
 `else:` is a compile error.
 
 ### `human_input` — a guaranteed human gate
-**Always** calls the host-owned `ask_user` tool and blocks its worker until the
+**Always** calls the run's `ask_user` handler and blocks its worker until the
 host returns a typed answer (validated against `output:`). It stays inside the
 live node call and returns the answer as an ordinary node output.
 ```yaml
@@ -485,7 +489,7 @@ driver: `while:` (pre-check, 0+ runs), `until:` (post-check / do-while, 1+ runs,
 stop when the predicate becomes true), or `times: N` (fixed count). `max:` is
 required for `while:`/`until:` but **redundant and rejected** with `times:`.
 
-#### Conversational REPL — the `loop` shape used by `ac chat`
+#### Conversational REPL — the `loop` shape used by `composer chat`
 A chat is a `loop` whose body blocks each turn at `ask` (`human_input`), then a
 `case` routes exact `/exit` and `/quit` values to an exit record before the
 `reply` AGENT node. The normal branch builds the next transcript; the body's output
@@ -548,13 +552,15 @@ A `tool_calling` AGENT node granted `tools: [ask_user]` can synchronously ask th
 model/tool loop and its returned answer becomes the ordinary tool result. For a
 *guaranteed* gate use `human_input`; for "ask only if needed" use `ask_user`.
 `ask_user` on an AGENT node returns its answer to the same live tool loop; HUMAN_INPUT and
-WAIT return ordinary node outputs from their live calls. There is no authored
+WAIT return ordinary node outputs from their live calls. The host passes the handler
+per run: `run_flow(..., tools={"ask_user": handler})`. `composer run` and `composer chat` do
+this for you; a run without a handler fails any node that asks. There is no authored
 `entry:`/`controls:` field on an AGENT node or event-mode WAIT.
 
 ## Validate & run
-- **Quick validate** (loads + compiles, no model): `ac run <flow>.yaml` will load
+- **Quick validate** (loads + compiles, no model): `composer run <flow>.yaml` will load
   first; or from Python `load_flow(text, search_paths=[flow_dir])`.
-- **Run:** `ac run <flow>.yaml [--inputs file.json] [--input k=v]...`. JSON inputs
+- **Run:** `composer run <flow>.yaml [--inputs file.json] [--input k=v]...`. JSON inputs
   load first; repeatable `--input` flags override individual keys but remain a
   string/scalar surface. With an interactive stdin (TTY), every declaration still
   missing is prompted. Keep four outcomes distinct: a value, `Set null`,
@@ -588,7 +594,7 @@ WAIT return ordinary node outputs from their live calls. There is no authored
 - [ ] Every variable has a typed default and a name distinct from local inputs.
 - [ ] Every `long_term_memory:` declaration is on a flow or `agent`, selects a host-registered memory policy by name, and contains only public behavior config.
 - [ ] Each `case` has an `else:` (or its `Literal` cases are exhaustive); branches are joined with `|`.
-- [ ] `tool` ids are registered; a `code` `module:function` is importable (or an inline `code: |` body `return`s a value); `call`/`uses:` targets resolve on the search path.
+- [ ] `tool` ids are registered or passed per run with `tools=`; a `code` `module:function` is importable (or an inline `code: |` body `return`s a value); `call`/`uses:` targets resolve on the search path.
 - [ ] Every CALL/MAP/LOOP has exactly one child form: named `call:`, or non-empty inline `nodes:` plus an `output:` key; inline parent/item dependencies cross through outer `input:`.
 - [ ] A child-flow call is written `call(f, ...)` as a whole value, never `${flow(args)}`; string `:-` defaults and `:?` messages are quoted.
-- [ ] It loads cleanly (`ac run` / `load_flow`) before you wire a model.
+- [ ] It loads cleanly (`composer run` / `load_flow`) before you wire a model.

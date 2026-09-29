@@ -87,6 +87,11 @@ the nested value through the reducer to `NodeFailed`/`RunFailed` observers and
 `RunResult.failure`.
 `Node.on_failure` is a dormant future seam, not currently driven by `eval_node`.
 
+A node declaring `needs_live_events` does not yield; it receives in-body
+`emit_stream` and `emit_event` capabilities, each only when the host supplied
+the matching callback. They publish transient chunks and in-loop observers without changing
+the node result; a sink exception escapes as the host's own exception.
+
 The dependency-free `diagnostics` leaf defines the canonical semantic value for
 that pipeline:
 
@@ -192,10 +197,13 @@ prune-policy rejection as `contract.growth`.
 (per-element bind, gated on `binds_per_item`). The AGENT and WAIT nodes get the exact
 run-owned `caps['stop_event']` (gated on `needs_stop_event`): the AGENT node checks it
 between external model/tool effects, while WAIT blocks on it so host shutdown or
-sibling failure wakes the deadline wait. The AGENT node is the deliberate
-model-access exception: its mode imports
-`llm_clients` and calls `model_from_config` directly, while its granted tools use the
-ordinary tool registry.
+sibling failure wakes the deadline wait. TOOL, HUMAN_INPUT, and the AGENT node get
+the run's `caps['tools']` (gated on `needs_tools`): one immutable `ToolSet` that
+`run_flow` / `resume_flow` build from `tools=`: the global registry when `None`,
+otherwise only the mapping's entries, and `ask_user` only from the run. The AGENT node is the
+deliberate model-access exception: its mode imports
+`llm_clients` and calls `model_from_config` directly, while its granted tools resolve
+through the run's `ToolSet`.
 
 ## Node-owned traits/hooks (how the core stays kind-blind)
 
@@ -215,6 +223,8 @@ Runtime and compile validation read these node members instead of branching on
 | `grow_depth_delta: int\|None` | growth core: nested-call depth increment stamped on the spliced spawners + terminal (positive bounded by `MAX_REF_DEPTH`) | `None` non-spawner → `0` loop (inherit) → `1` call/map |
 | `is_loop: bool` | growth reducer: gate the origin-keyed single-live-expansion invariant (the driver self-respawns, so each iteration's grow is attributed to `origin_id` and supersedes the prior expansion) | `False` → `True` on `loop` |
 | `needs_stop_event: bool` | read boundary (`eval_node`): pass the exact cooperative run-stop event | `False` → `True` on agent/wait |
+| `needs_tools: bool` | read boundary (`eval_node`): pass the run's `ToolSet` as `caps['tools']` | `False` → `True` on tool/human_input/agent |
+| `needs_live_events: bool` | read boundary (`eval_node`): pass `emit_stream`/`emit_event` for the host sinks that exist; faults escape as host faults | `False` → `True` on agent |
 
 The table spans execution-semantic traits/hooks and diagnostic-only projections.
 Any node field whose value can affect execution through an execution-semantic
@@ -293,7 +303,10 @@ WAIT are never timed by that watchdog.
 `FlowEngine` borrows one initialized `RunState` plus a matching open `RunLog`.
 Workers only evaluate; the dispatcher prepares a total transition, appends its
 record, applies it, then publishes transient observers. `StreamChunk` callbacks are
-explicitly non-durable. The engine never closes its log: package-root `run.py` owns
+explicitly non-durable. In-loop observers (`IN_LOOP_EVENTS`) share the dispatcher
+queue in pooled mode (`_RecordedEvent`), reach `on_event` between a node's start
+and outcome, and are never yielded, recorded, or replayed; neither sink is
+supplied when its callback is absent. The engine never closes its log: package-root `run.py` owns
 `MemoryRunLog`/`JsonlRunLog` creation, locking, recovery, tail repair, and closure.
 The explicit backward driver uses the same prepare/append/reduce path after the
 forward result returns, with no observer publication. New writes use schema 8;
@@ -318,9 +331,11 @@ batches commit once. Known failures stop the attempt, preserving completed
 feedback when computation already finished. Host faults escape with the prefix.
 
 Policy observations are `unrequested`, `unknown`, `succeeded`, and `failed`.
-An accepted request or successful Finished closes retry eligibility. Only a manual
-precommit retry can recompute the whole attempt with fresh sessions/original
-snapshots; Ready is inspectable but never resumed. An unconfirmed request stays
+Only an unfinished attempt blocks a new Started; the driver closes it as
+interrupted first. Every explicit call recomputes a whole new attempt with fresh
+sessions/original snapshots; Ready is inspectable but never resumed. The first
+requesting attempt keeps v1 commit IDs and later requesting attempts use
+attempt-scoped v2 IDs (`RuntimeBackwardState.commit_attempt_key`). An unconfirmed request stays
 unknown, and all confirmations without Finished still describe an interruption.
 
 `resume_flow(flow, *, log=..., num_workers=None, memory=None)` validates the
@@ -407,8 +422,10 @@ learned notes, never coordination state, derived summary cache, or commit ledger
 version-1 history as no notes and preserve its exact envelope when pinned.
 Optional host-only `storage=path` persists the complete private inventory, including
 commit deduplication and derived summaries, without changing those public formats.
-All built-in backends share the lower `memory.storage` SQLite adapter. It owns one
-file for the backend lifetime and commits finite-JSON candidates before RAM
+The episodic, reflective, and session backends share the lower `memory.storage`
+`SQLiteStorage` adapter (`ProfileMemory` writes through a `MarkdownStore` from the
+same package). It owns one file
+for the backend lifetime and commits finite-JSON candidates before RAM
 publication. Defaults remain process-local. Current host settings govern future
 work; saved limits and recorded snapshots remain pinned. A cached summary must
 not cover turns newly protected by a larger current `recent_turns` setting.

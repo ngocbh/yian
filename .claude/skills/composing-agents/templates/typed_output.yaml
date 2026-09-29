@@ -10,7 +10,7 @@
 # `retries:` (default 2) caps the self-correction loop when the model deviates from the
 # schema — the engine feeds the validation error back and re-asks.
 #
-#   ac run typed_output.yaml --input text="Ada scored a 9 out of 10."
+#   composer run typed_output.yaml --input text="Ada scored a 9 out of 10."
 
 id: typed-output
 name: typed_output

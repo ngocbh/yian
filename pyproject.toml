@@ -52,7 +52,7 @@ dev = [
 docs = ["mkdocs-material>=9.5", "mkdocstrings[python]>=0.26", "black>=24.0"]
 
 [project.scripts]
-ac = "agent_composer.cli:main"
+composer = "agent_composer.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/ngocbh/agent-composer"

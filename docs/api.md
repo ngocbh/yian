@@ -106,6 +106,7 @@ run_flow(
     llm_config: dict[str, Any] | None = None,
     memory: dict[str, Memory] | None = None,
     learnable: bool = False,
+    tools: Mapping[str, BaseTool | Callable[..., Any]] | None = None,
     skills: Mapping[str, Skill] | None = None,
 ) -> RunResult
 ```
@@ -121,9 +122,25 @@ terminal. Stored defaults are not coerced.
   when omitted and retained by every record.
 - `num_workers` — defaults to `8`; `0` runs serially, and a positive value bounds
   the worker pool.
-- `on_event` — receives post-durable observer events as they occur.
+- `on_event` — receives post-durable observer events as they occur. While an
+  AGENT node runs it also receives transient in-loop observers
+  (`ModelCallStarted`, `ModelCallFinished` with `TokenUsage`, `ToolCallStarted`,
+  `ToolCallFinished`), strictly between that node's `NodeStarted` and its outcome.
+  In-loop observers are never durable, never members of `RunResult.events`, and
+  never replayed on resume; filter them with
+  `isinstance(event, agent_composer.events.IN_LOOP_EVENTS)`. Observers from
+  concurrently running nodes interleave (runs are pooled by default); correlate
+  them by `node_id` and `exchange_id`. `usage` is the provider's own count
+  (`None` when unreported) and `error` is an exception type name only.
 - `on_stream` — receives transient `StreamChunk` values. Chunks are neither
-  durable records nor members of `RunResult.events`.
+  durable records nor members of `RunResult.events`. With `on_stream` set, AGENT
+  chat replies stream visible text as `StreamChunk(node_id, "text", chunk,
+  exchange_id=...)`; structured replies do not stream. A completed streamed call
+  ends with one empty `final=True` chunk. A failed call ends without one and its
+  `ModelCallFinished.error` is set; a host discards that exchange's partial text.
+  The node value is authoritative: streamed text can differ from it in the
+  whitespace between content blocks. Without `on_stream`, AGENT calls `invoke`
+  exactly as before.
 - `llm_config` — the outer authored layer of the configuration cascade for AGENT nodes.
   The resolved map and process defaults are captured at initialization.
 - `memory` — host-created implementations keyed by the policy name selected by
@@ -136,6 +153,20 @@ terminal. Stored defaults are not coerced.
   a later explicit `result.backward(feedback)` call. It defaults to `False` and
   needs no memory policy. Forward execution never calls backward hooks, frame
   learners, or policy commits.
+- `tools` — the tools this run sees, keyed by tool id. TOOL nodes, AGENT
+  `tools:` grants, and HUMAN_INPUT look ids up here. `None` uses the tools
+  registered with `register_tool`. A mapping, even an empty one, is the whole
+  set: registered tools are hidden from the run. To keep them, pass
+  `{**registered_tools(), "my_tool": fn}`. `registered_tools()` returns a copy
+  taken when you call it, so register every tool before the run starts. A
+  function or method becomes a tool named by its key and described by its
+  docstring. To bind values such as a session id, use a closure or a bound
+  method; `functools.partial` and other callable objects are rejected. A
+  LangChain `BaseTool` must already use its key as its name. The `ask_user`
+  entry is the run's human handler (see
+  [Blocking human interaction](#blocking-human-interaction)). Tools are host
+  callables, so the run log does not record them. An AGENT that grants skills
+  also gets the built-in `load_skill` tool, which is not part of this mapping.
 - `skills` — the skills this run may use, keyed by name (see [Skills](#skills)).
   An AGENT's `skills:` grant selects from this mapping. A listed skill that is
   missing raises `ValueError` before the run starts.
@@ -285,7 +316,7 @@ output: ${answer.output}
 
 The Python host owns the backend, model configuration, credentials, tenant
 identity, and lifetime. `run_flow(..., memory=None)` still leaves declarations
-dormant. The `ac run` host supplies declared built-in policies automatically;
+dormant. The `composer run` host supplies declared built-in policies automatically;
 see [CLI memory](cli.md#memory-policies-and-storage). Python injection supports
 custom policies and constructor settings:
 
@@ -348,6 +379,30 @@ new generation. A session snapshot is detached JSON suitable for the engine's
 recorded recovery boundary or for restoring a pristine `EpisodicMemory`.
 Use `storage=path` to retain complete backend state across restarts.
 
+### Profile memory
+
+`ProfileMemory` recalls one markdown document into every AGENT under its outermost
+frame and rewrites it on backward with a compare-and-set write:
+
+```python
+from agent_composer.memory.profile import ProfileMemory
+from agent_composer.memory.storage import FileMarkdownStore
+
+profile = ProfileMemory(FileMarkdownStore("people/ada.md"), max_chars=32_000)
+result = run_flow(loaded, inputs, memory={"profile": profile}, learnable=True)
+outcome = result.backward("Ada prefers short replies.")
+if outcome.failure is not None and outcome.failure.code == "profile.version_mismatch":
+    ...  # someone edited the profile; nothing was written; start a new attempt
+```
+
+Only `profile.version_mismatch` guarantees that nothing was written. After any
+other commit failure, or an attempt killed mid-commit (policy status `unknown`),
+look for the attempt's `commit_id` in the store's write provenance before
+retrying. If it is missing, compare the current document with the proposed
+`text` in the run log. The snapshot records the pinned version and text hash, never the text.
+See [profile memory](learning.md#profile-memory) for recall, learning, and store
+rules.
+
 ### Optional durable memory
 
 `EpisodicMemory`, `ReflectiveMemory`, and `SessionMemory` accept the host-only
@@ -401,7 +456,7 @@ defaults, and future reflective learning uses the current host `llm_config`.
 SessionMemory uses the current history budget and recent-turn count. Increasing
 the recent-turn count restores raw context for newly protected turns instead of
 hiding them behind an older summary. These settings and storage ownership belong
-to the host. `ac run` exposes storage selection through
+to the host. `composer run` exposes storage selection through
 `--memory-storage POLICY=PATH` and otherwise uses constructor defaults.
 
 Application-specific implementations use the source-neutral `Memory`,
@@ -455,15 +510,19 @@ before an append failed. Ready retains completed feedback and proposals for
 inspection. Requests and observations add the policy dispositions above; only
 Finished settles the attempt.
 
-A successful backward attempt or any accepted commit request permanently closes
-retry eligibility. Before that boundary, a caller may explicitly retry the whole
-attempt with `result.backward(...)`: it opens fresh sessions from the original
-snapshots and recomputes all callbacks and proposals. Accepted proposals are
-inspectable but are never resumed. There is no automatic retry, rebase, or
-rollback. An older `ReflectiveMemory` revision in the same namespace and reset
+Each `result.backward(...)` call is a new attempt, including after a successful,
+failed, or committing attempt, and on a result from `resume_flow`. It opens fresh
+sessions from the original snapshots and recomputes all callbacks and proposals.
+An unfinished earlier attempt is first recorded as interrupted. Accepted proposals
+are inspectable but are never resumed. There is no automatic retry, rebase, or
+rollback. After the first attempt that sends commits, later attempts use
+attempt-scoped commit IDs (`ac-memory-v2:`), so a backend that deduplicates by
+commit ID still applies a later attempt's identical batch. A new attempt after an
+`unknown` request may therefore apply a second write; the host reconciles. An older
+`EpisodicMemory` or `ReflectiveMemory` revision in the same namespace and reset
 epoch restores successfully. Its later frame `learn` fails with
-`reflective.stale_generation` without rebasing; the backward outcome retains
-the completed feedback.
+`episodic.stale_generation` or `reflective.stale_generation` without rebasing;
+the backward outcome retains the completed feedback.
 
 ## SessionMemory foundation
 
@@ -473,7 +532,7 @@ The backend owns history updates and
 FIFO admission directly; runtime owns only the optional turn's lifetime and
 authored scope. Explicit backward learning retains self-feedback as notes through
 the same memory lifecycle. Older API context can be summarized without deleting
-raw history. `ac run` activates declared built-in policies automatically.
+raw history. `composer run` activates declared built-in policies automatically.
 
 Declare `long_term_memory: session` on a flow or AGENT node and reuse the same
 backend under that policy name. For example:
@@ -817,6 +876,7 @@ resume_flow(
     on_event: Callable[[Any], None] | None = None,
     on_stream: Callable[[StreamChunk], None] | None = None,
     memory: dict[str, Memory] | None = None,
+    tools: Mapping[str, BaseTool | Callable[..., Any]] | None = None,
 ) -> RunResult
 ```
 
@@ -831,11 +891,15 @@ recovery requires implementations under the same names. Each session
 must reproduce the exact snapshot stored by `RunStarted`; this prevents a resumed
 run from reading a different memory generation. Every terminal run is inspected
 silently without opening or validating memory, even after an interrupted backward
-attempt. A supplied mapping retains policy references for a later eligible
-explicit backward call.
+attempt. A supplied mapping retains policy references for a later explicit
+backward call.
 
 For later backward on a memory-enabled log, pass the original policy mapping to
 `resume_flow(..., memory=...)`; terminal inspection retains it without opening it.
+
+The log does not record `tools`. To continue an unfinished run whose nodes use
+per-run tools or ask the human, pass the same `tools` (including `ask_user`) to
+`resume_flow` again.
 
 If primary execution is unfinished and eligible for retry, recovery appends one
 `RunResumedRecord`, retries the exact ordered set of nodes that have a durable start but no durable
@@ -855,7 +919,8 @@ After incomplete-tail repair, terminal inspection appends no records and invokes
 no graph nodes, backward hooks, or memory learners/commits. It projects the last
 accepted attempt, including an interrupted Started/Ready/request prefix.
 `RunResult.events` contains only forward observers published in the current call;
-backward records emit no observers.
+backward records emit no observers. A resumed AGENT that re-executes publishes
+fresh in-loop observers to `on_event`, and nothing is replayed.
 
 A retained result keeps private program/data copies and policy references, not
 open forward sessions, workers, or a log lock. An explicit backward call reopens
@@ -877,21 +942,21 @@ retry. Log/cleanup faults preserve the primary exception and accepted records.
 ## CLI path policy
 
 The Python API remains path-neutral: `run_flow(..., log=None)` uses memory and a
-caller chooses any durable path explicitly. The `ac` host adds a user-facing
+caller chooses any durable path explicitly. The `composer` host adds a user-facing
 policy on top:
 
-- fresh `ac run FLOW` selects and reports
+- fresh `composer run FLOW` selects and reports
   `~/.agent_composer/runs/<run_id>.jsonl` unless `--log PATH` selects another
   path; once runtime commits `RunStarted`, that file is authoritative;
-- `ac run FLOW --resume PATH` calls the same recovery boundary without accepting
+- `composer run FLOW --resume PATH` calls the same recovery boundary without accepting
   fresh inputs, a second log path, or provider/model configuration;
 - omitting `-w` on resume preserves the recorded worker count, while an explicit
   value affects the new segment only;
-- `ac run` supplies declared built-in memory policies and closes their backends
+- `composer run` supplies declared built-in memory policies and closes their backends
   after execution drains. Repeated `--memory-storage POLICY=PATH` selects optional
   durable files on fresh runs or resume; omitted policies remain process-local.
   Terminal inspection and old dormant logs open no memory backend;
-- each `ac chat` attempt, including a failed-turn restart, receives a separate
+- each `composer chat` attempt, including a failed-turn restart, receives a separate
   reported default path.
 
 The default CLI directories are mode `0700`; `JsonlRunLog` creates files with
@@ -901,12 +966,12 @@ and the log-sensitivity warning.
 ## Blocking human interaction
 
 An authored `human_input` node and an AGENT node granted `tools: [ask_user]` call the
-same process-owned tool synchronously. A library host installs one handler for the
-whole live run; the calling node remains active until the handler returns or
-raises:
+run's `ask_user` handler synchronously. A library host passes the handler with each
+run as `tools={"ask_user": handler}`; the calling node remains active until the
+handler returns or raises:
 
 ```python
-from agent_composer.tools import install_ask_user
+from agent_composer import load_flow, run_flow
 
 approval = load_flow(
     open("examples/human-approval.yaml").read(),
@@ -916,18 +981,33 @@ approval = load_flow(
 def ask(**request):
     return input(request["question"] + " ")
 
-with install_ask_user(ask):
-    result = run_flow(
-        approval,
-        {"task": "Plan a team offsite"},
-        llm_config={"provider": "ollama", "model": "llama3.2:3b"},
-    )
+result = run_flow(
+    approval,
+    {"task": "Plan a team offsite"},
+    llm_config={"provider": "ollama", "model": "llama3.2:3b"},
+    tools={"ask_user": ask},
+)
 ```
 
 The handler receives `question`, `questions`, `answer_schema`, `title`, and
-`node_id`. `human_input` uses the trusted metadata path; model-requested
-`ask_user` calls can supply only the public `question` argument. Only one handler
-may own the reserved tool in a process at a time.
+`node_id` as keyword arguments, so define it as `def handler(**request)`. A
+handler that cannot take all five is rejected before the run starts.
+`human_input` uses the trusted metadata path; model-requested `ask_user` calls
+can supply only the public `question` argument. Each run has its own handler, so
+concurrent runs in one process never share one. Within one run, the default
+`num_workers=8` lets several nodes (for example two MAP items) call the handler at
+the same time, so the handler must be thread-safe.
+`node_id` is the expanded node id (for example `loop#1/ask` for a LOOP's second
+iteration), so a run id plus `node_id` identifies one question; bind the run id in
+the handler's closure when the host needs it. The mapping is the whole tool set,
+so a flow that also uses registered tools passes
+`tools={**registered_tools(), "ask_user": ask}`. `ask_user` never comes from the
+global registry: a run without its own handler fails any node that asks, and
+`register_tool("ask_user")` is rejected.
+
+CODE nodes cannot ask. A CODE function does not see the run's tools, so
+`invoke_tool("ask_user", ...)` inside it fails. Ask through a `human_input` node,
+or pass a per-run tool and call it from a TOOL node.
 
 An authored WAIT needs no host handler. It blocks one worker until its absolute
 UTC `until:` deadline, returns `None`, and can be woken cooperatively when the host
@@ -945,7 +1025,7 @@ The terminal outcome of a fresh or recovered run exposes these public fields:
 | `log` | durable JSONL `Path`, or `None` for a process-local fresh run |
 | `output` | terminal flow value on success; otherwise `None` |
 | `failure` | canonical `Failure` on failure; otherwise `None` |
-| `events` | post-durable observer events published during this call only |
+| `events` | post-durable observer events published during this call only; in-loop AGENT observers are excluded |
 | `learning` | learning projection of the last observed backward outcome; `None` before an attempt is observed or when no policies were enabled |
 | `backward_outcome` | last observed accepted `BackwardOutcome`, or `None` before an attempt is observed |
 
@@ -956,4 +1036,4 @@ keep their original meaning.
 ## Next
 
 - [Flow syntax](syntax.md) — the YAML these functions load.
-- [The `ac` CLI](cli.md) — run flows from the terminal.
+- [The `composer` CLI](cli.md) — run flows from the terminal.

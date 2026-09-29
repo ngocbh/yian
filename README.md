@@ -28,7 +28,7 @@ prompt: Write a warm one-sentence greeting to ${name}.
 ```
 
 ```console
-ac run hello.yaml --input name=Ada --provider ollama --model llama3.2:3b
+composer run hello.yaml --input name=Ada --provider ollama --model llama3.2:3b
 ```
 
 See [Agent](docs/agent.md) for the conceptual model and
@@ -71,7 +71,7 @@ Provider extras can be installed separately: `anthropic`, `openai`, `google`,
 or `ollama`. The core engine and CLI do not require a provider SDK; a flow needs
 one only when it contains an AGENT node.
 
-Connect OpenAI with `ac auth openai`, choose ChatGPT subscription sign-in or an
+Connect OpenAI with `composer auth openai`, choose ChatGPT subscription sign-in or an
 API key, and select a default model. Both methods use `provider: openai` with
 Composer's ordinary tools and memory. OpenAI is the default provider; successful
 setup saves your chosen model for subsequent runs. See
@@ -80,7 +80,7 @@ setup saves your chosen model for subsequent runs. See
 ## Run a flow
 
 ```console
-ac run FLOW.yaml [--inputs inputs.json] [--input k=v]... \
+composer run FLOW.yaml [--inputs inputs.json] [--input k=v]... \
   [--provider P] [--model M] [-w N] [--log PATH]
 ```
 
@@ -99,17 +99,17 @@ default is `~/.agent_composer/runs/<run_id>.jsonl`; choose another new path with
 Resume an interrupted run against the same flow:
 
 ```console
-ac run FLOW.yaml --resume PATH
+composer run FLOW.yaml --resume PATH
 ```
 
 Run logs can contain inputs, model/tool/human data, outputs, memory snapshots,
-configuration, and tracebacks. Treat them as sensitive. See [The `ac`
+configuration, and tracebacks. Treat them as sensitive. See [The `composer`
 CLI](docs/cli.md) for input behavior, diagnostics, concurrency, and recovery.
 
 For an interactive flow-backed chat:
 
 ```console
-ac chat [FLOW] [--workspace DIR] [--provider P] [--model M]
+composer chat [FLOW] [--workspace DIR] [--provider P] [--model M]
 ```
 
 The default composer chat can inspect, validate, run, and—after explicit
@@ -142,14 +142,21 @@ print(result.status, result.output)
 `RunResult` with either the flow output or an expected `Failure`. Host, control,
 log, and invariant faults propagate as exceptions.
 
-A library host can inject tool handlers, provider configuration, and named
-memory implementations. Passing `learnable=True` retains accepted execution for a
-later explicit `result.backward(feedback)` call, with or without memory. Forward
+A library host can inject per-run tools (including its `ask_user` handler) with
+`tools=`, provider configuration, and named memory implementations. Passing
+`learnable=True` retains accepted execution for a later explicit
+`result.backward(feedback)` call, with or without memory. Each call is a new
+attempt, so feedback can arrive several times, days later. Forward
 execution returns before any learning or commit; memory recall is independent.
 The returned `BackwardOutcome` and `result.backward_outcome` keep feedback and
 learning separate from the forward output and failure. See the
 [Python API](docs/api.md#explicit-backward-feedback) for feedback shapes, memory,
 and silent terminal recovery.
+
+Pass `on_stream=` to receive an AGENT's reply text as it is generated. Pass
+`on_event=` to receive node transitions plus, while an AGENT runs, per-call
+`ModelCallFinished` token usage and tool call observers. Both are live callbacks
+only; see [Python API](docs/api.md#run_flow) for payloads.
 
 The built-in [`EpisodicMemory`](docs/learning.md#episodic-memory) keeps bounded,
 model-free execution history for later runs. A flow declares
@@ -162,6 +169,20 @@ from agent_composer.memory.episodic import EpisodicMemory
 history = EpisodicMemory()
 result = run_flow(flow, inputs, memory={"episodic": history}, learnable=True)
 result.backward()
+```
+
+[`ProfileMemory`](docs/learning.md#profile-memory) keeps one markdown document,
+such as a person's profile, in a versioned file. Every AGENT under the declaring
+flow sees the whole document; backward rewrites it with one model call and a
+compare-and-set write:
+
+```python
+from agent_composer.memory.profile import ProfileMemory
+from agent_composer.memory.storage import FileMarkdownStore
+
+profile = ProfileMemory(FileMarkdownStore("people/ada.md"))
+result = run_flow(flow, inputs, memory={"profile": profile}, learnable=True)
+result.backward("Ada prefers short replies.")
 ```
 
 [`SessionMemory`](docs/api.md#sessionmemory-foundation) supplies a structured session
@@ -185,8 +206,9 @@ as committed notes for future runs, without another model call. API history uses
 soft 32,000-character context budget and preserves the latest four whole turns;
 older context can be summarized without deleting raw history. Configure these
 defaults on `SessionMemory(history_budget_chars=32_000, recent_turns=4)`.
-Run logs do not reconstruct history. All three built-in memory backends optionally
-retain their state across restarts with `storage="./memory.sqlite"`:
+Run logs do not reconstruct history. The episodic, reflective, and session
+backends optionally retain their state across restarts with
+`storage="./memory.sqlite"`:
 
 ```python
 with SessionMemory(storage="./session.sqlite") as session:
@@ -206,12 +228,12 @@ Idle run handles do not block closing; active work or queued turns do. Omit
 `storage` to keep memory process-local. See [durable memory](docs/api.md#optional-durable-memory)
 for ownership and recovery.
 
-`ac run` automatically activates declared `episodic`, `reflective`, and `session`
+`composer run` automatically activates declared `episodic`, `reflective`, and `session`
 policies. They stay process-local unless a repeatable CLI option selects storage:
 
 ```bash
-ac run flow.yaml --memory-storage session=./session.sqlite
-ac run flow.yaml --resume ./run.jsonl --memory-storage session=./session.sqlite
+composer run flow.yaml --memory-storage session=./session.sqlite
+composer run flow.yaml --resume ./run.jsonl --memory-storage session=./session.sqlite
 ```
 
 The flow must declare the selected policy. Use the same store on resume; a run

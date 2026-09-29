@@ -37,7 +37,7 @@ host supplies its implementation under that name. Recall and optional session
 history can be enabled without `learnable=True`, and a learnable run can operate
 without any memory policy.
 
-`ac run` acts as a host for declared built-in policies automatically. Its
+`composer run` acts as a host for declared built-in policies automatically. Its
 `--memory-storage POLICY=PATH` option enables persistence for selected policies;
 others remain process-local. It does not enable learning or call `backward()`.
 Session history still advances during forward, while saving episodic or reflective
@@ -168,15 +168,81 @@ committed episodes with later fresh runs; `reset()` clears them. Run sessions pi
 an immutable snapshot, so recall remains stable while another session commits.
 Recorded JSON snapshots can restore a pristine instance for recovery.
 
-All three built-in backends support optional `storage="./memory.sqlite"` on their
-constructors. Episodic episodes, reflective lessons, and session history/notes
-then survive restarts, along with private commit deduplication. A file has one
-owning backend until explicit close or context exit. Idle run handles allow close;
+The episodic, reflective, and session backends support optional
+`storage="./memory.sqlite"` on their constructors. Episodic episodes, reflective
+lessons, and session history/notes then survive restarts, along with private
+commit deduplication. A file has one owning backend until explicit close or
+context exit. Idle run handles allow close;
 active operations and queued turns do not. Storage does not trigger learning:
 episodes and lessons still require explicit backward, while session conversations
 advance automatically during forward execution. See
 [durable memory](api.md#optional-durable-memory) for the complete lifetime and
 recovery contract.
+
+## Profile memory
+
+`ProfileMemory` keeps one markdown document per instance, for example one per
+person. Import it from `agent_composer.memory.profile`, give it a store, and
+inject it under the policy name your flows declare:
+
+```python
+from agent_composer.memory.profile import ProfileMemory
+from agent_composer.memory.storage import FileMarkdownStore
+
+profile = ProfileMemory(FileMarkdownStore("people/ada.md"))
+result = run_flow(flow, inputs, memory={"profile": profile}, learnable=True)
+```
+
+- **Recall.** A run pins the version that is current when it starts. Every AGENT
+  under the outermost frame that declares the policy sees the whole document,
+  even while someone edits it. Nested frames of the same policy add nothing, and
+  two unrelated top-level frames are a setup error. Frame config is empty.
+- **Learning.** `backward(feedback)` makes one tool-free model call. It sends the
+  current document, the version the run saw when it differs, the feedback, and
+  recent AGENT episodes within `input_budget_chars` (default 24,000). The newest
+  episode is always sent; if it alone is over the budget, it is cut to a prefix
+  and a suffix. Older episodes are added whole while they fit. Each episode
+  includes its visible model replies, tool calls, and tool results. The
+  reply must be the whole document inside `<profile>` tags and at most
+  `max_chars` (default 32,000, about 8k tokens). No feedback, or an unchanged
+  document, proposes nothing. `llm_config=None` uses the ambient model defaults.
+- **Commit.** A compare-and-set write against the version the learner read. It
+  never calls a model. If someone edited the document in between, the attempt
+  fails with the retryable code `profile.version_mismatch` and nothing is
+  written; start a new backward attempt to learn from the edited text. Other
+  commit failures (`profile.store_unavailable`, `profile.store_invalid`) are not
+  retryable, because the write may have landed.
+- **Interrupted attempts.** If the process dies during commit, the resumed run
+  reports the policy as `unknown`, with its `commit_id`, in
+  `result.backward_outcome.learning.policies`. The write may have landed. Before
+  you retry, look for that `commit_id` in the store's write provenance. If it is
+  there, the feedback is already applied. A missing entry is not proof that
+  nothing landed: a crash between the file write and the log append leaves no
+  entry. Compare the current document with the `text` in the attempt's
+  `memory_commit_requested` run-log record. A new attempt also tells the learner
+  not to repeat what the document already says.
+- **Recovery.** The session snapshot records only the version and a hash of the
+  text. `resume_flow(..., memory=...)` and later backward reopen that exact
+  version; an unknown version is a `MemorySetupError`. The run log still holds
+  profile text: AGENT evidence has the recalled document, and learning records
+  have the proposed one. Keep run logs as private as the profile.
+- **Host edits.** `profile.read()` returns `(text, version)`, and
+  `profile.write(text, base_version=version)` is the same compare-and-set without
+  a size limit. `reset()` is refused; delete or rewrite the file through the store.
+
+`FileMarkdownStore(path)` keeps the current document as a plain editable file. Next
+to it are content-addressed copies of every version it has handed out
+(`.<name>.versions/`), a lock file, and a write log (`.<name>.writes.jsonl`).
+Each write-log line is JSON with `base_version`, `version`, and `provenance`.
+From `ProfileMemory`, provenance holds `run_id`, `commit_id`, `frame`,
+`seen_version`, and the distinct `feedback` values. A crash while appending can
+leave a partial last line; readers should skip lines that are not valid JSON.
+Locking is single-host. Other storage implements the `MarkdownStore` protocol:
+`read(version=None) -> (text, version)` and
+`write(text, *, base_version, provenance=None) -> version`. It raises
+`MarkdownVersionMismatch` when `base_version` is stale (nothing was written),
+`LookupError` for an unknown version, `ValueError` for text it cannot decode, and
+`OSError` when storage cannot be reached.
 
 ## Compute first, then commit
 
@@ -193,11 +259,25 @@ rollback. The learning result records each policy as `unrequested`, `unknown`,
 `succeeded`, or `failed`. `unknown` means the runtime recorded a request but did
 not durably observe the backend result.
 
-A successful attempt, or any accepted commit request, closes retry eligibility.
-Before that boundary, the application may call `backward()` again to retry the
-whole attempt with fresh sessions from the original snapshots. It never resumes a
-half-computed attempt, retries automatically, rebases a policy, or rolls back a
-different policy's confirmed commit.
+Every `backward()` call is a new attempt on the same run, whatever the earlier
+attempts did: succeeded, failed, committed, or crashed. Each attempt opens fresh
+sessions from the run's original snapshots and recomputes all callbacks and
+proposals. An unfinished earlier attempt, such as one killed during a commit, is
+first closed as interrupted; its unconfirmed requests stay `unknown`. The runtime
+never resumes a half-computed attempt, retries automatically, rebases a policy, or
+rolls back a different policy's confirmed commit.
+
+Attempts are distinct for memory. After the first attempt that sends commits,
+each later attempt uses commit IDs that include its attempt number, so a backend
+that deduplicates by commit ID still applies an identical later batch. This
+also means a new attempt after an `unknown` request may write twice: the backend
+may have applied the first request, and it cannot match the new ID to it. The
+host reconciles, for example by checking the store before it calls `backward()`
+again. A learner sees only the current attempt's feedback, never an earlier
+attempt's. A policy
+may still reject a later attempt: the built-in `EpisodicMemory` and
+`ReflectiveMemory` fail `learn` with a `stale_generation` code once their memory
+has moved past the run's snapshot.
 
 ## Durable feedback and recovery
 
@@ -219,8 +299,9 @@ outcome = recovered.backward("Make the explanation shorter.")
 Recovery folds the same append-only records used live and reconstructs the
 retained reverse tape. It never starts backward work or memory learning by itself.
 For a memory-enabled backward attempt, pass the original policy mapping to
-`resume_flow(..., memory=...)` so it can reopen the recorded snapshots. The run
-handle and durable log reject overlapping backward attempts.
+`resume_flow(..., memory=...)` so it can reopen the recorded snapshots. You may
+call `backward()` on the same log again later, from any process; each call appends
+a new attempt. The run handle and durable log reject overlapping backward attempts.
 
 Run logs retain prompts, typed values, feedback, snapshots, proposals, and often
 model/tool evidence. Treat them as sensitive data and store them on an

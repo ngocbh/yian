@@ -30,7 +30,7 @@ _STOP_POLL_SECONDS = 0.05
 class PromptRequest:
     """One worker's prompt payload and its single-assignment answer channel.
 
-    The public metadata mirrors the host-installed ``ask_user`` handler. A prompt
+    The public metadata mirrors the run's ``ask_user`` handler. A prompt
     implementation may register a non-blocking cancellation callback while its
     terminal widget is active; cancellation invokes that callback from the cancelling
     thread so it can schedule a thread-safe widget exit.
@@ -140,10 +140,10 @@ _TerminalMessage = PromptRequest | RenderRequest | ControllerComplete
 class TerminalBroker:
     """Serialize terminal work onto the process main thread.
 
-    ``ask_user`` is the synchronous worker-facing handler installed for the trusted
-    tool. ``render`` defers arbitrary terminal output. ``controller_complete`` closes
-    message production with one exact sentinel, and ``serve`` owns invocation of both
-    the prompt handler and render actions.
+    ``ask_user`` is the synchronous worker-facing handler each run gets as its
+    ``ask_user`` tool. ``render`` defers arbitrary terminal output.
+    ``controller_complete`` closes message production with one exact sentinel, and
+    ``serve`` owns invocation of both the prompt handler and render actions.
     """
 
     def __init__(

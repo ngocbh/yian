@@ -1,4 +1,4 @@
-"""HUMAN_INPUT invokes the host-owned ask_user tool and returns its answer."""
+"""HUMAN_INPUT invokes the run's ask_user tool and returns its answer."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import pytest
 
 from agent_composer.nodes.base import Output
 from agent_composer.nodes.human_input import HumanInputNode
-from agent_composer.tools import install_ask_user
+from agent_composer.tools import ToolSet
 
 
 class _PromptFailed(RuntimeError):
@@ -34,8 +34,7 @@ def test_prompt_only_returns_host_answer_with_trusted_metadata():
         title="Plan approval",
     )
 
-    with install_ask_user(answer):
-        result = node.run({"plan": "release"})
+    result = node.run({"plan": "release"}, tools=ToolSet({"ask_user": answer}))
 
     assert result == Output("approve")
     assert requests == [
@@ -58,8 +57,9 @@ def test_prompt_only_returns_host_answer_with_trusted_metadata():
 
 def test_none_answer_is_an_ordinary_output():
     """A host ``None`` is data, not cancellation or a request to pause again."""
-    with install_ask_user(lambda **request: None):
-        result = HumanInputNode("optional", prompt="Anything to add?").run({})
+    result = HumanInputNode("optional", prompt="Anything to add?").run(
+        {}, tools=ToolSet({"ask_user": lambda **request: None})
+    )
 
     assert result == Output(None)
 
@@ -83,8 +83,9 @@ def test_literal_questions_are_rendered_validated_and_injected():
         ],
     )
 
-    with install_ask_user(answer):
-        result = node.run({"project": "Atlas", "candidate": "Vue"})
+    result = node.run(
+        {"project": "Atlas", "candidate": "Vue"}, tools=ToolSet({"ask_user": answer})
+    )
 
     assert result == Output({"Framework": "Vue"})
     assert requests == [
@@ -115,8 +116,7 @@ def test_questions_input_is_validated_before_trusted_invocation():
     node = HumanInputNode("choose", questions_input="questions")
     questions = [{"question": "Pick", "header": "Choice", "options": [{"label": "A"}]}]
 
-    with install_ask_user(answer):
-        result = node.run({"questions": questions})
+    result = node.run({"questions": questions}, tools=ToolSet({"ask_user": answer}))
 
     assert result == Output({"Choice": "A"})
     assert seen[0]["questions"] == [
@@ -135,7 +135,7 @@ def test_host_exception_propagates_unchanged():
     def fail(**request):
         raise failure
 
-    with install_ask_user(fail), pytest.raises(_PromptFailed) as caught:
-        HumanInputNode("ask", prompt="Question?").run({})
+    with pytest.raises(_PromptFailed) as caught:
+        HumanInputNode("ask", prompt="Question?").run({}, tools=ToolSet({"ask_user": fail}))
 
     assert caught.value is failure

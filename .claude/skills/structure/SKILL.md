@@ -133,9 +133,10 @@ strict codecs, and digests. `memory/session.py` owns the concrete
 derived summary state. `memory/summary.py` owns pure whole-turn selection and
 summary-cache prefix proofs. The backend depends on those lower modules and
 injected stop/projection/summary callables, never on nodes, runtime, compile,
-compose, or provider SDKs. The private `memory/storage.py` adapter sits below all
-three concrete backends and owns single-host SQLite lifetime locking and atomic
-finite-JSON replacement. Backends validate semantic candidates and save before
+compose, or provider SDKs. The `memory/storage/` package sits below the
+memory backends: `sqlite.py` owns single-host SQLite lifetime locking and atomic
+finite-JSON replacement for session, episodic, and reflection, and `markdown.py`
+owns the versioned `MarkdownStore` document interface and `FileMarkdownStore`. Backends validate semantic candidates and save before
 publishing RAM. Storage never imports concrete backends or serializes their live
 handles, queues, or callbacks. Optional host-only paths do not reach runtime,
 public snapshots, or YAML; the contracts-only facade does not export the adapter.
@@ -151,14 +152,18 @@ publication through the turn. It may import memory contracts and provider messag
 types, but owns no history or queue. It injects safe projection and the current
 unbound model into optional memory-owned context preparation; summary callbacks
 run outside the backend lock under its existing lease.
+`nodes/agent/live.py` owns transient AGENT observation: streaming a chat reply,
+bracketing model/tool calls, and projecting provider usage. It imports `events`
+and publishes only through evaluator-supplied sinks; it never records, retains,
+or prices anything.
 `cli/memory.py` owns lazy CLI policy selection and backend lifetime. It reads the
 pure static memory layout and lower memory contracts, importing only selected
 built-in implementations when `open_run` is requested. `cli/run.py` injects that
 registry and owns its context until engine work drains. Storage flags remain
 host-only; runtime never imports this module or constructs memory policies.
 
-The `memory` facade exports contracts only: concrete session, episodic, and
-reflection backends must be imported from their own modules, not eagerly from
+The `memory` facade exports contracts only: concrete session, episodic,
+reflection, and profile backends must be imported from their own modules, not eagerly from
 `memory/__init__.py`. Keep mutable queue/lease state private to the backend;
 public snapshots contain conversation values, not coordination objects. The
 memory import ratchet in `tests/engine/test_layer_direction.py` enforces this

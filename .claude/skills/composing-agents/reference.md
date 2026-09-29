@@ -31,7 +31,7 @@ Copy, rename, and edit.
 | [`map-fanout.yaml`](templates/map-fanout.yaml) | `map` a child over a list and collect in source order |
 | [`inline-composites.yaml`](templates/inline-composites.yaml) | provider-free inline CALL, MAP, and LOOP child bodies (no `defs:`) |
 | [`loop.yaml`](templates/loop.yaml) | `loop` a body until a predicate goes false — chat-shaped blocking turn |
-| [`chat.yaml`](templates/chat.yaml) | a conversational REPL — HUMAN_INPUT → exit CASE → AGENT/CODE nodes, with flow-owned exit, the shape `ac chat` runs |
+| [`chat.yaml`](templates/chat.yaml) | a conversational REPL — HUMAN_INPUT → exit CASE → AGENT/CODE nodes, with flow-owned exit, the shape `composer chat` runs |
 | [`llm-config-cascade.yaml`](templates/llm-config-cascade.yaml) | flow-level `llm_config:`, per-node override, `inherit: false` |
 | [`node-env-config.yaml`](templates/node-env-config.yaml) | flow-level `env:` default + per-node override (node wins), e.g. `max_tool_iterations` |
 
@@ -281,7 +281,7 @@ transcript. Output bindings rejoin those branches into the carried 2-field recor
 EOF is normalized by the bundled host. The loop body's `output:` must EQUAL the carried
 record. A lone multi-ref coalesce has no inferable type, so the template uses adjacent
 defaulted spans for the `str` field and compares the optional exit field with `true` to
-prove `bool`. This is the shape `ac chat` runs; see `chat.yaml` (and
+prove `bool`. This is the shape `composer chat` runs; see `chat.yaml` (and
 `examples/chat.yaml` for a runnable copy).
 
 ## Gotchas
@@ -330,7 +330,7 @@ prove `bool`. This is the shape `ac chat` runs; see `chat.yaml` (and
 
 ## Model selection — the `llm_config` cascade
 
-Use `ac auth openai` to select subscription or API-key authentication. Both use
+Use `composer auth openai` to select subscription or API-key authentication. Both use
 `provider: openai` and the same Composer execution and memory paths.
 
 Model fields resolve **per field, most-specific wins**. An AGENT node fills only the fields
@@ -384,7 +384,7 @@ Other node kinds and anonymous inline children cannot carry the declaration. The
 YAML contains no credentials, tenant/backend paths, persistence locations, or
 Python imports. A library host injects implementations under the selected policy
 name with `run_flow(..., memory={NAME: implementation})` to enable recall.
-`ac run` automatically hosts declared built-in `episodic`, `reflective`, and
+`composer run` automatically hosts declared built-in `episodic`, `reflective`, and
 `session` policies. Repeat `--memory-storage POLICY=PATH` to persist selected
 policies in separate local files; unspecified policies remain process-local.
 Use the same stores on unfinished resume. Paths never belong in YAML or run logs;
@@ -405,26 +405,26 @@ backward adds no session notes. API summary settings are host constructor option
 `history_budget_chars=32_000` and `recent_turns=4`, never frame YAML. The current
 model summarizes older context without deleting raw history or truncating recent
 whole turns. Budget is soft; oversized valid summaries are not retried or cut.
-All three built-in backends optionally persist through host-only `storage=path`;
-`None` remains process-local. SQLite ownership lasts until backend close. Closing
-rejects active/queued work, but idle run handles do not block it. Storage paths
-never belong in YAML.
+Episodic, reflective, and session backends optionally persist through host-only
+`storage=path`; `None` remains process-local. SQLite ownership lasts until
+backend close. Closing rejects active/queued work, but idle run handles do not
+block it. Storage paths never belong in YAML.
 `learnable=True` independently retains execution; forward does not run frame
 learners or commit learned mutations.
 Call `result.backward(feedback)` explicitly after forward returns, and inspect
 its separate outcome. With `None` feedback, enabled memory frames still learn
 from accepted history without AGENT backward model work. Terminal resume is silent
-inspection; manual whole-attempt retry is allowed only before an accepted commit
-request or successful backward completion. The CLI activates declared built-in
+inspection; each explicit `backward()` call is a new whole attempt, even after an
+earlier attempt succeeded or committed. The CLI activates declared built-in
 memory but has no backward command and never enables learning implicitly.
 
 ## Validate
 
 ```bash
-ac run <flow>.yaml --inputs base.json --input k=v
+composer run <flow>.yaml --inputs base.json --input k=v
 ```
 Explicit JSON inputs load first; repeatable `--input` flags override individual
-keys but remain a string/scalar surface. With an interactive stdin (TTY), `ac`
+keys but remain a string/scalar surface. With an interactive stdin (TTY), `composer`
 prompts for declarations still missing and keeps four outcomes distinct: an explicit
 value, `Set null`, omit/use-default when allowed, and cancellation. Nullable
 boolean/`Literal[...]` widgets put `Set null` in their value select. A null-capable

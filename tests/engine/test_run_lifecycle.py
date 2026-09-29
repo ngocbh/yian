@@ -61,7 +61,6 @@ from agent_composer.runtime.state import (
     prepare_node_succeeded,
     prepare_run_started,
 )
-from agent_composer.tools import install_ask_user
 from agent_composer.typesys import VariablePool
 from agent_composer.typesys.seeding import seed_system_clock
 
@@ -445,6 +444,7 @@ def test_final_run_boundary_signatures_and_result_fields_are_exact() -> None:
         "llm_config",
         "memory",
         "learnable",
+        "tools",
         "skills",
     ]
     _assert_keyword_only(
@@ -458,6 +458,7 @@ def test_final_run_boundary_signatures_and_result_fields_are_exact() -> None:
             "llm_config",
             "memory",
             "learnable",
+            "tools",
             "skills",
         ),
     )
@@ -466,6 +467,7 @@ def test_final_run_boundary_signatures_and_result_fields_are_exact() -> None:
     assert fresh.parameters["num_workers"].default == 8
     assert fresh.parameters["memory"].default is None
     assert fresh.parameters["learnable"].default is False
+    assert fresh.parameters["tools"].default is None
     assert fresh.parameters["skills"].default is None
     assert "stop_event" not in fresh.parameters
 
@@ -476,15 +478,17 @@ def test_final_run_boundary_signatures_and_result_fields_are_exact() -> None:
         "on_event",
         "on_stream",
         "memory",
+        "tools",
         "skills",
     ]
     _assert_keyword_only(
         recovered,
-        ("log", "num_workers", "on_event", "on_stream", "memory", "skills"),
+        ("log", "num_workers", "on_event", "on_stream", "memory", "tools", "skills"),
     )
     assert recovered.parameters["log"].default is inspect.Parameter.empty
     assert recovered.parameters["num_workers"].default is None
     assert recovered.parameters["memory"].default is None
+    assert recovered.parameters["tools"].default is None
     assert recovered.parameters["skills"].default is None
     assert "stop_event" not in recovered.parameters
 
@@ -1101,7 +1105,7 @@ def test_callback_exception_drains_real_blocked_human_interaction_and_unlocks(
             raise expected
 
     try:
-        with install_ask_user(answer), pytest.raises(RuntimeError) as caught:
+        with pytest.raises(RuntimeError) as caught:
             run_module._run_flow_controlled(
                 load_flow(_HUMAN_DRAIN_FLOW),
                 {},
@@ -1110,6 +1114,7 @@ def test_callback_exception_drains_real_blocked_human_interaction_and_unlocks(
                 num_workers=2,
                 on_event=reject,
                 stop_event=stop,
+                tools={"ask_user": answer},
             )
     finally:
         _ACTIVE_STOP = None

@@ -3,7 +3,7 @@
 These are the integration points the `llm_clients` modules point at by name:
 
 - `ensure_api_key` — the interactive key prompt referenced by
-  `llm_clients/api_key_env.py`. Called pre-flight by `ac run` (see
+  `llm_clients/api_key_env.py`. Called pre-flight by `composer run` (see
   `cli/run.py`) so a missing key surfaces as an upfront prompt instead of a
   cryptic failure on the first API call.
 - `confirm_ollama_endpoint` — referenced by `llm_clients/model_catalog.py`
@@ -87,7 +87,7 @@ def ensure_api_key(provider: str, *, interactive: bool = True) -> Optional[str]:
         raise RuntimeError(
             f"provider {provider!r} needs an API key but ${env_var} is not set "
             f"(set it in the environment, or run interactively to be prompted)"
-            + (". Or run 'ac auth openai' to choose a connection" if provider.lower() == "openai" else "")
+            + (". Or run 'composer auth openai' to choose a connection" if provider.lower() == "openai" else "")
         )
     import questionary
 

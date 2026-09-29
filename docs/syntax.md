@@ -265,7 +265,7 @@ node. `long_term_memory:` is invalid on other node kinds and on anonymous inline
 CALL/MAP/LOOP bodies; use a named `defs:` flow when the child itself needs a flow
 frame.
 
-`ac run` automatically supplies declared `episodic`, `reflective`, and `session`
+`composer run` automatically supplies declared `episodic`, `reflective`, and `session`
 policies. They are process-local unless the host flag
 `--memory-storage POLICY=PATH` selects a durable store; storage never belongs in
 YAML. Custom policies require Python host injection. For Python calls, declarations
@@ -292,7 +292,7 @@ returns. Forward does not run frame learners or commit learned mutations; sessio
 history updates are separate. A call with no external feedback still
 presents history to every enabled memory frame; backward outcomes stay separate
 from the forward result. See [the Python API](api.md#explicit-backward-feedback).
-The `ac run` CLI activates memory but does not expose backward or learning
+The `composer run` CLI activates memory but does not expose backward or learning
 commands. See [CLI memory](cli.md#memory-policies-and-storage).
 
 ## Node kinds
@@ -357,7 +357,7 @@ it leaves unset from the layer outside it. Precedence, most specific first:
 
 1. the AGENT node's own `llm_config:`
 2. the enclosing flow's `llm_config:`, then each parent flow outward
-3. the CLI `--provider` / `--model` flags (`ac run … --provider anthropic`)
+3. the CLI `--provider` / `--model` flags (`composer run … --provider anthropic`)
 4. process provider/model defaults, read exactly once when the run initializes
 
 Process defaults use environment overrides, then saved authentication choices,
@@ -399,7 +399,7 @@ provider/model defaults; it ignores enclosing flow, parent-flow, and CLI layers:
 
 #### OpenAI authentication
 
-Run `ac auth openai` to select ChatGPT subscription sign-in or an OpenAI API key,
+Run `composer auth openai` to select ChatGPT subscription sign-in or an OpenAI API key,
 then choose the default model. Both use `provider: openai` and the ordinary
 `plain` or `tool_calling` modes, explicit Composer tool grants, typed output,
 SessionMemory, and backward learning.

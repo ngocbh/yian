@@ -1,25 +1,25 @@
-# The `ac` CLI
+# The `composer` CLI
 
-`ac` runs a flow file: it loads the YAML, gathers inputs for a fresh run or
+`composer` runs a flow file: it loads the YAML, gathers inputs for a fresh run or
 recovers them from a durable log, drives the flow to a terminal state, and
 prints the output.
 
 ```console
-ac run FLOW.yaml [--inputs inputs.json] [--input k=v]... [--log PATH] [--memory-storage POLICY=PATH]... [-w N] [--provider NAME] [--model NAME] [--quiet] [--verbose] [--engine-trace]
-ac run FLOW.yaml --resume PATH [--memory-storage POLICY=PATH]... [-w N] [--quiet] [--verbose] [--engine-trace]
+composer run FLOW.yaml [--inputs inputs.json] [--input k=v]... [--log PATH] [--memory-storage POLICY=PATH]... [-w N] [--provider NAME] [--model NAME] [--quiet] [--verbose] [--engine-trace]
+composer run FLOW.yaml --resume PATH [--memory-storage POLICY=PATH]... [-w N] [--quiet] [--verbose] [--engine-trace]
 ```
 
 Commands below that use `examples/...` assume a repository clone and run from
 its root; those files are not installed with the Python package.
 
-Run `ac auth openai` to select subscription sign-in or API-key access and save a
+Run `composer auth openai` to select subscription sign-in or API-key access and save a
 default model. Both methods use the same flow commands and `provider: openai`.
 See [authentication setup](installation.md#openai-authentication).
 
 ## Authentication
 
 ```console
-ac auth openai [--method subscription|api-key] [--login browser|device] [--model MODEL] [--api-key-env NAME]
+composer auth openai [--method subscription|api-key] [--login browser|device] [--model MODEL] [--api-key-env NAME]
 ```
 
 Interactive setup defaults to ChatGPT subscription access and lists models
@@ -41,13 +41,13 @@ initialization durably commits `RunStarted`:
 
 ```console
 # fresh log: ~/.agent_composer/runs/<run_id>.jsonl
-ac run flow.yaml --input topic=climate
+composer run flow.yaml --input topic=climate
 
 # choose another new path (it must not already exist)
-ac run flow.yaml --input topic=climate --log ./climate.jsonl
+composer run flow.yaml --input topic=climate --log ./climate.jsonl
 
 # recover a terminal or unfinished prefix with the same authored flow
-ac run flow.yaml --resume ./climate.jsonl
+composer run flow.yaml --resume ./climate.jsonl
 ```
 
 The CLI creates `~/.agent_composer` and its `runs/` directory with mode `0700`;
@@ -72,34 +72,34 @@ Expected host-side failures while creating or recovering a log (for example a
 corrupt, mismatched, or locked log) are reported as concise errors. Pass
 `--engine-trace` when debugging the engine to include the Python traceback.
 
-`ac chat` uses the same default directory and reports one new path for its initial
+`composer chat` uses the same default directory and reports one new path for its initial
 run. If a failed turn restarts the immutable chat flow from the last completed
 transcript, that restart gets a separate log rather than reusing the failed run.
 
 ## Memory policies and storage
 
-`ac run` automatically supplies the built-in policies named by the flow's
+`composer run` automatically supplies the built-in policies named by the flow's
 `long_term_memory` declarations: `episodic`, `reflective`, and `session`. It
 discovers declarations in nested flows too and shares one backend per policy
 for that CLI invocation. A flow without declarations opens no memory backend.
 Custom policies require the Python API's `memory={...}` registry; the CLI reports
 an error if execution needs one.
 
-By default, backends are process-local and their state is lost when `ac run`
+By default, backends are process-local and their state is lost when `composer run`
 exits. Opt selected policies into local SQLite storage with repeatable
 `--memory-storage POLICY=PATH` flags. Each policy must be declared in the flow,
 appear at most once in the flags, and use its own file in an existing directory:
 
 ```console
 # A flow declaring session memory
-ac run flow.yaml --input question="First question" --log ./first.jsonl --memory-storage session=./session.sqlite
-ac run flow.yaml --input question="Follow-up" --log ./second.jsonl --memory-storage session=./session.sqlite
+composer run flow.yaml --input question="First question" --log ./first.jsonl --memory-storage session=./session.sqlite
+composer run flow.yaml --input question="Follow-up" --log ./second.jsonl --memory-storage session=./session.sqlite
 
 # A flow declaring both policies
-ac run layered.yaml --memory-storage session=./session.sqlite --memory-storage episodic=./episodes.sqlite
+composer run layered.yaml --memory-storage session=./session.sqlite --memory-storage episodic=./episodes.sqlite
 
 # Recover an unfinished run using the same memory store
-ac run flow.yaml --resume ./first.jsonl --memory-storage session=./session.sqlite
+composer run flow.yaml --resume ./first.jsonl --memory-storage session=./session.sqlite
 ```
 
 Policies without a storage flag remain process-local. Storage paths belong to
@@ -109,7 +109,7 @@ use a shared network filesystem. Backends close after execution drains. See
 [durable memory](api.md#optional-durable-memory) for the full ownership contract.
 
 Session history advances automatically during execution. This does not enable
-learning: `ac run` neither sets `learnable=True` nor calls `backward()`. Episodic
+learning: `composer run` neither sets `learnable=True` nor calls `backward()`. Episodic
 and reflective policies can recall saved state, but adding learned episodes or
 lessons still requires explicit Python API backward learning.
 
@@ -132,23 +132,23 @@ A fresh flow declares typed `input:` fields. Explicit inputs layer in this order
    A default applied by START was already validated at load and is not
    string-coerced.
 
-When stdin is an interactive TTY, `ac` then prompts for each declaration still
+When stdin is an interactive TTY, `composer` then prompts for each declaration still
 missing.
 
 ```console
 # all from flags
-ac run examples/decision-brief.yaml --input question="Adopt a monorepo?" --input audience="execs"
+composer run examples/decision-brief.yaml --input question="Adopt a monorepo?" --input audience="execs"
 
 # from a JSON file, with one override
-ac run flow.yaml --inputs base.json --input audience="execs"
+composer run flow.yaml --inputs base.json --input audience="execs"
 
 # in an interactive terminal, supply nothing and get prompted for each missing input
-ac run examples/hello.yaml
+composer run examples/hello.yaml
 ```
 
 ### The "Running flow" banner
 
-At the start of every run (unless `--quiet`), `ac` prints a boxed banner to
+At the start of every run (unless `--quiet`), `composer` prints a boxed banner to
 **stderr** identifying what it is about to run — the flow's `name:`, its
 `version:` (if set), and its `description:` — so you can confirm you picked the
 right file:
@@ -164,7 +164,7 @@ A flow with no `name`/`description`/`version` prints no banner.
 
 ### The interactive prompt
 
-When stdin is an interactive TTY, `ac` prompts for each declared input still
+When stdin is an interactive TTY, `composer` prompts for each declared input still
 missing. The widget follows its resolved type:
 
 - a required non-nullable `bool` → a yes/no confirm,
@@ -221,7 +221,7 @@ source rather than the prompt's blank path.
     Initial input prompts need a real terminal (TTY). In a non-interactive context
     (a CI job, a piped command, `srun` without a pty), missing optional/defaulted
     declarations stay absent so START applies defaults or retains optional absence.
-    If required declarations are missing, `ac` reports all of them and exits with
+    If required declarations are missing, `composer` reports all of them and exits with
     code `2` before provider or run-log setup. Native list/object values and explicit
     null must be supplied through `--inputs`; ordinary required scalars may use
     `--input` or `--inputs`.
@@ -230,14 +230,14 @@ source rather than the prompt's blank path.
 
 `human_input` and an AGENT node's authored `ask_user` tool are blocking interactions
 inside live node calls. They are separate from initial input gathering and are
-unchanged by its non-TTY omission policy. `ac` runs the flow behind a main-thread
+unchanged by its non-TTY omission policy. `composer` runs the flow behind a main-thread
 terminal broker: the node's worker waits, the broker reads the answer from the
 host input stream, and the answer returns into that same live node call. A
 `human_input` always asks; an AGENT node calls `ask_user` only when its model chooses
 to.
 
 ```console
-ac run examples/human-approval.yaml --input task="Plan a team offsite"
+composer run examples/human-approval.yaml --input task="Plan a team offsite"
 #   → draft is written
 #   → CLI asks: "Approve it as-is, or send it back to be revised? (approve / revise)"
 #   → you type: approve
@@ -278,7 +278,7 @@ size, or `-w 0` to execute ready nodes serially in a deterministic order:
 
 ```console
 # limit the debate flow to four concurrent workers
-ac run examples/debate.yaml \
+composer run examples/debate.yaml \
   --input question="Adopt a monorepo?" --num-workers 4
 ```
 
@@ -311,13 +311,13 @@ log before publishing the progress event that the CLI renders.
 ## Compile errors
 
 When a flow fails to **load/compile** (an unknown reference, a cycle, a bad field,
-a malformed `uses:`), `ac` does not dump an engine Python traceback — it shows
+a malformed `uses:`), `composer` does not dump an engine Python traceback — it shows
 **where in your `.yaml` it broke** as a boxed source frame: the `.yaml` around the
 fault with line numbers, the offending line highlighted (`❱`), the panel titled
 `file:line`, and the message below. (Same shape as a Python traceback's code box.)
 
 ```console
-$ ac run tests/seeds/errors/e01-undeclared-ref.yaml
+$ composer run tests/seeds/errors/e01-undeclared-ref.yaml
 ╭─ e01-undeclared-ref.yaml:19 ─────────────────────────────────────────────────────────────────────╮
 │   14     input:                                                                                  │
 │   15       topic: ${input.topic}                                                                 │
@@ -339,7 +339,7 @@ in the loop) highlights *all* of them, widens the frame to cover both ends, and 
 *which* nodes form the cycle but *which references* create it:
 
 ```console
-$ ac run tests/seeds/errors/e02-cycle.yaml
+$ composer run tests/seeds/errors/e02-cycle.yaml
 ╭─ e02-cycle.yaml:12,18 ───────────────────────────────────────────────────────────────────────────╮
 │    7                                                                                             │
 │    8 input:                                                                                      │
@@ -376,7 +376,7 @@ declaration — not just the node header. So a runtime error reads like a compil
 the flow it broke, not an engine traceback:
 
 ```console
-$ ac run tests/seeds/errors/e07-required-missing.yaml --input topic=climate   # as_of omitted
+$ composer run tests/seeds/errors/e07-required-missing.yaml --input topic=climate   # as_of omitted
 ╭─ e07-required-missing.yaml:23 ───────────────────────────────╮
 │   18 nodes:                                                  │
 │   19   report:                                               │

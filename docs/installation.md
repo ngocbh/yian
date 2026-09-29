@@ -13,15 +13,20 @@ python -m pip install .
 ```
 
 The current source uses distribution name `agent-composer`, import name
-`agent_composer`, and CLI command `ac`.
+`agent_composer`, and CLI command `composer`.
 
 ```console
-ac --help
+composer --help
 ```
+
+Earlier builds installed this command as ac, and no alias is kept. On macOS, a
+bare ac now runs the unrelated system tool /usr/sbin/ac. If PHP Composer is also
+installed, activate your virtual environment first so the venv's `composer`
+comes first on `PATH`.
 
 ## Provider extras
 
-The core (engine + `ac` CLI) installs with **no LLM SDK**. Each provider is an
+The core (engine + `composer` CLI) installs with **no LLM SDK**. Each provider is an
 optional extra — install the one(s) you actually use:
 
 ```console
@@ -40,7 +45,7 @@ against that provider. Importing a provider you haven't installed raises a clear
 
 ## Choosing a provider and model
 
-OpenAI is the default provider. Run `ac auth openai` to choose authentication
+OpenAI is the default provider. Run `composer auth openai` to choose authentication
 and a model. Environment variables can override the saved provider/model
 defaults; other providers use their own credential variables:
 
@@ -56,7 +61,7 @@ provider: selecting another provider never borrows the OpenAI model. Without
 a matching saved or environment model, OpenAI uses `gpt-5.5` and Anthropic uses
 `claude-sonnet-4-5`; other providers require an explicit model.
 
-When you `ac run` a flow whose AGENT nodes need a provider key that isn't set, the CLI
+When you `composer run` a flow whose AGENT nodes need a provider key that isn't set, the CLI
 prompts for it up front (in an interactive terminal) and continues once entered —
 so a missing key surfaces as a prompt rather than a failure on the first model
 call. Off a terminal (CI, a pipe) a missing required key is a clean error before
@@ -66,7 +71,7 @@ the selected connection method.
 ### OpenAI authentication
 
 ```console
-ac auth openai
+composer auth openai
 ```
 
 Choose ChatGPT subscription sign-in (browser or device login for SSH) or an
@@ -80,8 +85,8 @@ For SSH, select device login. Flags can supply choices without interactive
 menus; subscription login still requires completing sign-in in a browser:
 
 ```console
-ac auth openai --method subscription --login device --model gpt-5.5
-ac auth openai --method api-key --model gpt-5.5
+composer auth openai --method subscription --login device --model gpt-5.5
+composer auth openai --method api-key --model gpt-5.5
 ```
 
 API-key setup reads `OPENAI_API_KEY`, or prompts without echoing the key in a
@@ -113,7 +118,7 @@ No API key is needed — point at a running Ollama endpoint:
 export AGENT_COMPOSER_DEFAULT_PROVIDER=ollama
 export AGENT_COMPOSER_DEFAULT_MODEL=llama3.2:3b
 export OLLAMA_BASE_URL=http://localhost:11434
-ac run examples/hello.yaml --input name=Ada
+composer run examples/hello.yaml --input name=Ada
 ```
 
 The example path exists in the clone; run this command from its repository root.
@@ -132,7 +137,7 @@ pytest
 ## Local development environment
 
 The provider/model/key variables above are read from the **shell environment**.
-`ac` does **not** auto-load a `.env` file — it only reads variables already
+`composer` does **not** auto-load a `.env` file — it only reads variables already
 present in the environment. A `.env` is therefore just a convenient place to
 keep them; you make it take effect by *sourcing* it (or having direnv do that
 for you).
@@ -148,7 +153,7 @@ them into your current shell:
 
 ```console
 source .env               # once per shell, in the project directory
-ac run examples/hello.yaml --input name=Ada
+composer run examples/hello.yaml --input name=Ada
 ```
 
 ### Optional: auto-load with direnv
@@ -172,11 +177,11 @@ Then authorize it once (direnv never runs an unreviewed `.envrc`):
 direnv allow
 ```
 
-Now `cd`-ing into the directory activates `.venv` (so `ac`, `pytest`, `python`
+Now `cd`-ing into the directory activates `.venv` (so `composer`, `pytest`, `python`
 resolve from it) and loads `.env`; leaving unloads them again. `.env` and
 `.envrc` are gitignored — keep secrets out of version control.
 
 ## Next
 
-- [The `ac` CLI](cli.md) — run flows from the terminal.
+- [The `composer` CLI](cli.md) — run flows from the terminal.
 - [Flow syntax](syntax.md) — the Compose-YAML reference.

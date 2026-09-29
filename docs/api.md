@@ -233,7 +233,7 @@ output: ${answer.output}
 
 The Python host owns the backend, model configuration, credentials, tenant
 identity, and lifetime. `run_flow(..., memory=None)` still leaves declarations
-dormant. The `ac run` host supplies declared built-in policies automatically;
+dormant. The `composer run` host supplies declared built-in policies automatically;
 see [CLI memory](cli.md#memory-policies-and-storage). Python injection supports
 custom policies and constructor settings:
 
@@ -349,7 +349,7 @@ defaults, and future reflective learning uses the current host `llm_config`.
 SessionMemory uses the current history budget and recent-turn count. Increasing
 the recent-turn count restores raw context for newly protected turns instead of
 hiding them behind an older summary. These settings and storage ownership belong
-to the host. `ac run` exposes storage selection through
+to the host. `composer run` exposes storage selection through
 `--memory-storage POLICY=PATH` and otherwise uses constructor defaults.
 
 Application-specific implementations use the source-neutral `Memory`,
@@ -421,7 +421,7 @@ The backend owns history updates and
 FIFO admission directly; runtime owns only the optional turn's lifetime and
 authored scope. Explicit backward learning retains self-feedback as notes through
 the same memory lifecycle. Older API context can be summarized without deleting
-raw history. `ac run` activates declared built-in policies automatically.
+raw history. `composer run` activates declared built-in policies automatically.
 
 Declare `long_term_memory: session` on a flow or AGENT node and reuse the same
 backend under that policy name. For example:
@@ -825,21 +825,21 @@ retry. Log/cleanup faults preserve the primary exception and accepted records.
 ## CLI path policy
 
 The Python API remains path-neutral: `run_flow(..., log=None)` uses memory and a
-caller chooses any durable path explicitly. The `ac` host adds a user-facing
+caller chooses any durable path explicitly. The `composer` host adds a user-facing
 policy on top:
 
-- fresh `ac run FLOW` selects and reports
+- fresh `composer run FLOW` selects and reports
   `~/.agent_composer/runs/<run_id>.jsonl` unless `--log PATH` selects another
   path; once runtime commits `RunStarted`, that file is authoritative;
-- `ac run FLOW --resume PATH` calls the same recovery boundary without accepting
+- `composer run FLOW --resume PATH` calls the same recovery boundary without accepting
   fresh inputs, a second log path, or provider/model configuration;
 - omitting `-w` on resume preserves the recorded worker count, while an explicit
   value affects the new segment only;
-- `ac run` supplies declared built-in memory policies and closes their backends
+- `composer run` supplies declared built-in memory policies and closes their backends
   after execution drains. Repeated `--memory-storage POLICY=PATH` selects optional
   durable files on fresh runs or resume; omitted policies remain process-local.
   Terminal inspection and old dormant logs open no memory backend;
-- each `ac chat` attempt, including a failed-turn restart, receives a separate
+- each `composer chat` attempt, including a failed-turn restart, receives a separate
   reported default path.
 
 The default CLI directories are mode `0700`; `JsonlRunLog` creates files with
@@ -904,4 +904,4 @@ keep their original meaning.
 ## Next
 
 - [Flow syntax](syntax.md) — the YAML these functions load.
-- [The `ac` CLI](cli.md) — run flows from the terminal.
+- [The `composer` CLI](cli.md) — run flows from the terminal.

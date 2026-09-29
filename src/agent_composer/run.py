@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 import os
 from pathlib import Path
 import threading
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from agent_composer.llm_clients.connection import connection_snapshot, legacy_connection_map
 from agent_composer.compile.execution_layout import apply_execution_layout, resolve_execution_layout
@@ -72,6 +72,7 @@ from agent_composer.runtime.state import (
     prepare_run_started,
 )
 from agent_composer.runtime.memory_runtime import MemoryRuntime
+from agent_composer.skills import Skill
 from agent_composer.typesys.pool import VariablePool
 from agent_composer.typesys.seeding import default_run_id, seed_system_clock
 
@@ -253,6 +254,7 @@ def run_flow(
     llm_config: dict[str, Any] | None = None,
     memory: dict[str, Memory] | None = None,
     learnable: bool = False,
+    skills: Mapping[str, Skill] | None = None,
 ) -> RunResult:
     """Start and drive one flow through an in-memory or durable run log.
 
@@ -294,6 +296,12 @@ def run_flow(
             call. Forward execution runs no frame learners or learned-mutation
             commits. Memory is optional; an enabled mapping supplies owned learners
             for that call. Automatic session history is independent of retention.
+        skills (`Mapping[str, Skill] | None`, *optional*, defaults to `None`):
+            Skills available to this run, keyed by `Skill.name`; build one with
+            `load_skills`. An AGENT lists its granted skills' names and
+            descriptions in its system message and reads them on demand with the
+            built-in ``load_skill`` tool. ``skills: all`` grants every supplied
+            skill. Pass the same mapping to `resume_flow`.
 
     Returns:
         `RunResult`:
@@ -325,6 +333,7 @@ def run_flow(
         llm_config=llm_config,
         memory=memory,
         learnable=learnable,
+        skills=skills,
         stop_event=threading.Event(),
     )
 
@@ -341,6 +350,7 @@ def _run_flow_controlled(
     llm_config: dict[str, Any] | None = None,
     memory: dict[str, Memory] | None = None,
     learnable: bool = False,
+    skills: Mapping[str, Skill] | None = None,
     stop_event: threading.Event,
 ) -> RunResult:
     """Drive a fresh run with one host-owned cooperative stop event."""
@@ -442,6 +452,7 @@ def _run_flow_controlled(
             memory_context_opener=(
                 None if memory_runtime is None else memory_runtime.open_context
             ),
+            skills=skills,
         )
         events.extend(engine.run())
         return _result_from_state(state, log_path, events,
@@ -462,6 +473,7 @@ def resume_flow(
     on_event: EventHook | None = None,
     on_stream: StreamHook | None = None,
     memory: dict[str, Memory] | None = None,
+    skills: Mapping[str, Skill] | None = None,
 ) -> RunResult:
     """Recover primary execution or inspect a terminal run without backward work.
 
@@ -488,6 +500,9 @@ def resume_flow(
             enabled memory and still has unfinished forward execution. Terminal
             inspection opens no policies; supplied references remain available
             for a later eligible explicit backward call.
+        skills (`Mapping[str, Skill] | None`, *optional*, defaults to `None`):
+            The skills passed to the original `run_flow`. Nodes that restart see
+            this mapping.
 
     Returns:
         `RunResult`:
@@ -515,6 +530,7 @@ def resume_flow(
         on_event=on_event,
         on_stream=on_stream,
         memory=memory,
+        skills=skills,
         stop_event=threading.Event(),
     )
 
@@ -527,6 +543,7 @@ def _resume_flow_controlled(
     on_event: EventHook | None = None,
     on_stream: StreamHook | None = None,
     memory: dict[str, Memory] | None = None,
+    skills: Mapping[str, Skill] | None = None,
     stop_event: threading.Event,
 ) -> RunResult:
     """Recover and drive a durable run with a host-owned stop event."""
@@ -590,6 +607,7 @@ def _resume_flow_controlled(
                 memory_context_opener=(
                     None if memory_runtime is None else memory_runtime.open_context
                 ),
+                skills=skills,
             )
             events.extend(engine.run())
 

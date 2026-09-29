@@ -84,7 +84,12 @@ class DeepSeekChatOpenAI(NormalizedChatOpenAI):
     Tool-choice handling for V4 and reasoner — those models reject the
     ``tool_choice`` parameter — is handled by the capability dispatch in
     ``NormalizedChatOpenAI.with_structured_output``, not here.
+
+    Streaming is disabled because only the non-streaming result path captures
+    ``reasoning_content``; ``stream()`` falls back to one complete reply.
     """
+
+    disable_streaming: bool = True
 
     def _get_request_payload(self, input_, *, stop=None, **kwargs):
         payload = super()._get_request_payload(input_, stop=stop, **kwargs)
@@ -251,6 +256,10 @@ class OpenAIClient(BaseLLMClient):
         # all model families. Third-party providers use Chat Completions.
         if self.provider == "openai":
             llm_kwargs["use_responses_api"] = True
+        elif "base_url" in llm_kwargs:
+            # LangChain requests streamed usage only for the default endpoint;
+            # OpenAI-compatible servers need it asked for explicitly.
+            llm_kwargs["stream_usage"] = True
 
         # Provider-specific quirks live in their own subclasses so the
         # base NormalizedChatOpenAI stays free of provider branches.

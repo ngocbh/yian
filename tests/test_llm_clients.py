@@ -241,3 +241,60 @@ def test_openai_responses_normalize_reply_keeps_blocks():
     chat = create_llm_client("openai", "gpt-5.5", api_key="x").get_llm()
     blocks = [{"type": "reasoning", "id": "r"}, {"type": "text", "text": "visible"}]
     assert chat.normalize_reply(AIMessage(content=list(blocks))).content == blocks
+
+
+def _sse_server(bodies):
+    """Serve one chat-completions SSE stream whose final chunk carries usage."""
+    import httpx
+    import json as _json
+
+    def handler(request):
+        body = _json.loads(request.content)
+        bodies.append(body)
+        chunks = [
+            {"choices": [{"index": 0, "delta": {"role": "assistant", "content": "hel"}}]},
+            {"choices": [{"index": 0, "delta": {"content": "lo"}, "finish_reason": "stop"}]},
+            {"choices": [], "usage": {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6}},
+        ]
+        lines = "".join(
+            "data: " + _json.dumps({"id": "c", "object": "chat.completion.chunk", "created": 0,
+                                    "model": "m", **chunk}) + "\n\n"
+            for chunk in chunks
+        ) + "data: [DONE]\n\n"
+        return httpx.Response(200, text=lines, headers={"content-type": "text/event-stream"})
+
+    return httpx.MockTransport(handler)
+
+
+def test_openai_compatible_stream_requests_and_reports_usage(monkeypatch):
+    import httpx
+    from langchain_core.messages import HumanMessage
+
+    monkeypatch.setenv("VLLM_API_KEY", "synthetic-key")
+    bodies = []
+    with httpx.Client(transport=_sse_server(bodies)) as client:
+        model = create_llm_client("vllm", "some-local-model", http_client=client).get_llm()
+        chunks = list(model.stream([HumanMessage("hi")]))
+    assert model.stream_usage is True
+    assert bodies[0]["stream_options"] == {"include_usage": True}
+    total = chunks[0]
+    for chunk in chunks[1:]:
+        total = total + chunk
+    assert total.content == "hello"
+    assert total.usage_metadata["input_tokens"] == 4
+    assert total.usage_metadata["output_tokens"] == 2
+
+
+@pytest.mark.parametrize("base_url", [None, "https://gateway.example/v1"])
+def test_native_openai_uses_responses_api_with_or_without_a_base_url(base_url):
+    # Responses API streams report usage in `response.completed`, whatever
+    # `stream_usage` says; a saved OpenAI connection sets `base_url`.
+    m = create_llm_client("openai", "gpt-5.5", base_url=base_url, api_key="x").get_llm()
+    assert m.use_responses_api is True
+
+
+def test_deepseek_streams_through_its_non_streaming_path(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "synthetic-key")
+    m = create_llm_client("deepseek", "deepseek-reasoner").get_llm()
+    assert m.disable_streaming is True
+    assert m._should_stream(async_api=False, stream=True) is False

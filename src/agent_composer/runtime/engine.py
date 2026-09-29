@@ -58,6 +58,14 @@ class _RecordedStream:
 
 
 @dataclass(frozen=True, slots=True)
+class _RecordedEvent:
+    """One transient in-loop observer transported from a worker to the dispatcher."""
+
+    node_id: str
+    event: Any
+
+
+@dataclass(frozen=True, slots=True)
 class _RecordedCompletion:
     """One completed raw evaluation accepted through the dispatcher message queue."""
 
@@ -181,7 +189,8 @@ class FlowEngine:
                 outcome = self._evaluate(
                     node_id,
                     invocation,
-                    emit_stream=self._emit_serial_stream,
+                    emit_stream=None if self.on_stream is None else self._emit_serial_stream,
+                    emit_event=None if self.on_event is None else self._emit_serial_event,
                 )
                 self._raise_if_stopped()
                 observers = self._commit_outcome(node_id, outcome)
@@ -194,7 +203,7 @@ class FlowEngine:
 
     def _run_pooled(self) -> Iterator[Any]:
         """Execute at most ``num_workers`` starts with one state-writing dispatcher."""
-        messages: queue.Queue[_RecordedStream | _RecordedCompletion] = queue.Queue()
+        messages: queue.Queue[_RecordedStream | _RecordedEvent | _RecordedCompletion] = queue.Queue()
         try:
             executor = ThreadPoolExecutor(
                 max_workers=self.num_workers,
@@ -242,6 +251,10 @@ class FlowEngine:
                 if isinstance(message, _RecordedStream):
                     if not self.stop_event.is_set() and self.on_stream is not None:
                         self.on_stream(message.chunk)
+                    continue
+                if isinstance(message, _RecordedEvent):
+                    if not self.stop_event.is_set() and self.on_event is not None:
+                        self.on_event(message.event)
                     continue
 
                 future = message.future
@@ -428,6 +441,7 @@ class FlowEngine:
         invocation: ConversationInvocation,
         *,
         emit_stream: Callable[[StreamChunk], None] | None,
+        emit_event: Callable[[Any], None] | None = None,
     ) -> EvaluatedOutcome:
         """Read and execute one already-started node without mutating run state."""
         node = self.state.flow.nodes[node_id]
@@ -438,6 +452,7 @@ class FlowEngine:
             wiring_override=self.state.wiring_overrides.get(node_id),
             stop_event=self.stop_event,
             emit_stream=emit_stream,
+            emit_event=emit_event,
             capture_evidence=self.state.learnable,
             capture_bindings=self.state.learnable,
             effective_llm_by_static_path=self.state.effective_llm_by_static_path,
@@ -453,17 +468,29 @@ class FlowEngine:
         invocation: ConversationInvocation,
         messages: queue.Queue,
     ) -> EvaluatedOutcome:
-        """Evaluate one claimed node and enqueue only its transient stream chunks."""
+        """Evaluate one claimed node and enqueue only its transient chunks and observers."""
         return self._evaluate(
             node_id,
             invocation,
-            emit_stream=lambda chunk: messages.put(_RecordedStream(node_id, chunk)),
+            emit_stream=(
+                None if self.on_stream is None
+                else lambda chunk: messages.put(_RecordedStream(node_id, chunk))
+            ),
+            emit_event=(
+                None if self.on_event is None
+                else lambda event: messages.put(_RecordedEvent(node_id, event))
+            ),
         )
 
     def _emit_serial_stream(self, chunk: StreamChunk) -> None:
         """Invoke the transient serial stream callback unless stop has begun."""
         if not self.stop_event.is_set() and self.on_stream is not None:
             self.on_stream(chunk)
+
+    def _emit_serial_event(self, event: Any) -> None:
+        """Invoke the event callback for one transient in-loop observer unless stop has begun."""
+        if not self.stop_event.is_set() and self.on_event is not None:
+            self.on_event(event)
 
     def _publish(self, observers: tuple[Any, ...]) -> Iterator[Any]:
         """Invoke the event callback and then yield each post-durable observer."""

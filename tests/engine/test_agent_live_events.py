@@ -123,3 +123,51 @@ def test_event_sink_failure_escapes_as_a_host_fault(monkeypatch):
     node, _ = _agent(monkeypatch, [reply("text")], mode="plain")
     with pytest.raises(HostBroken):
         eval_node(node, None, VariablePool(), emit_event=broken)
+
+
+def test_history_summary_call_is_observed_through_the_wrapper():
+    from agent_composer.memory.session import SessionMemory
+    from agent_composer.nodes.agent import context
+    from tests.engine._session_fakes import harness, request
+    from tests.engine.test_agent_session import _Model
+    from tests.engine.test_agent_session_summaries import _seed
+
+    memory = SessionMemory(history_budget_chars=1, recent_turns=0)
+    _seed(memory)
+    model = _Model([AIMessage(content="summary text", usage_metadata=usage(3, 1))])
+    wrapped = []
+
+    def observe(invoke):
+        reply_message = invoke()
+        wrapped.append(reply_message.usage_metadata["total_tokens"])
+        return reply_message
+
+    with harness(memory) as opened:
+        with opened.frame.open_turn(request("current"), check_stopped=lambda: None) as turn:
+            messages = context.prepare_history(
+                turn, model, check_stopped=lambda: None, observe_summary=observe
+            )
+    assert wrapped == [4]
+    assert "summary text" in str(messages)
+
+
+def test_history_summary_calls_publish_their_own_observers(monkeypatch):
+    from agent_composer.compose import load_flow
+    from agent_composer.memory.session import SessionMemory
+    from agent_composer.run import run_flow
+    from tests.engine.test_agent_session import _FLOW
+
+    chat = ScriptedStreamChat(
+        script=[reply("first"), reply("old facts", tokens=usage(8, 2)), reply("second")], mode=[]
+    )
+    monkeypatch.setattr(llm_clients_mod, "model_from_config", lambda _config: chat)
+    memory = SessionMemory(history_budget_chars=1, recent_turns=0)
+    flow = load_flow(_FLOW)
+    run_flow(flow, {"question": "q1"}, memory={"session": memory})
+    events = []
+    assert run_flow(flow, {"question": "q2"}, memory={"session": memory},
+                    on_event=events.append).output == "second"
+    finished = [event for event in events if isinstance(event, ModelCallFinished)]
+    assert [(event.purpose, event.usage) for event in finished] == [
+        ("history_summary", TokenUsage(8, 2, 10)), ("chat", None),
+    ]

@@ -1240,7 +1240,10 @@ host cancellation for nested flows while isolating node-local context changes.
 
 Authorable blocking effects stay inside their node calls. An AGENT node may invoke the
 explicitly granted `ask_user` tool, HUMAN_INPUT always invokes the same run-owned
-handler, and WAIT blocks on its absolute UTC deadline. The AGENT node checks the
+handler, and WAIT blocks on its absolute UTC deadline. The model sees only
+`ask_user`'s `question` and optional `options`; the tool cleans `options` leniently
+and never fails a call over them. `questions`, `answer_schema`, `title`, and
+`node_id` are injected, so only HUMAN_INPUT's trusted call can set them. The AGENT node checks the
 run-owned stop signal between model/tool effects; WAIT blocks on that signal. Each
 returns `Output` from the same invocation.
 

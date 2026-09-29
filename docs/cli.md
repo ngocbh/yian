@@ -255,7 +255,8 @@ unchanged by its non-TTY omission policy. `composer` runs the flow behind a main
 terminal broker: the node's worker waits, the broker reads the answer from the
 host input stream, and the answer returns into that same live node call. A
 `human_input` always asks; an AGENT node calls `ask_user` only when its model chooses
-to.
+to. When the model passes `options`, the prompt is a choice list with an "Other"
+entry for a typed answer.
 
 ```console
 composer run examples/human-approval.yaml --input task="Plan a team offsite"

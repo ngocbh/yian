@@ -549,7 +549,8 @@ in the prompt.
 ## Effects from inside an AGENT node — `ask_user`
 A `tool_calling` AGENT node granted `tools: [ask_user]` can synchronously ask the human
 **only if the model decides it needs to**. The tool blocks inside the same live
-model/tool loop and its returned answer becomes the ordinary tool result. For a
+model/tool loop and its returned answer becomes the ordinary tool result. The model
+may pass 2-4 short `options`, shown as choices; the human can still type an answer. For a
 *guaranteed* gate use `human_input`; for "ask only if needed" use `ask_user`.
 `ask_user` on an AGENT node returns its answer to the same live tool loop; HUMAN_INPUT and
 WAIT return ordinary node outputs from their live calls. The host passes the handler

@@ -963,6 +963,11 @@ assistant:
     Otherwise answer directly.
 ```
 
+The model may pass up to four short `options` with its question. `composer run`
+and `composer chat` show them as a choice list with an "Other" answer; the human
+can always type their own answer. Prompt for options when the choices are clear,
+for example "call ask_user with the two approaches as options".
+
 For a *guaranteed* gate use `human_input`; for "ask only if needed" use
 `ask_user`.
 

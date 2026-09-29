@@ -36,7 +36,7 @@ from agent_composer.cli.auth import auth as _auth
 from agent_composer.cli.run import run as _run
 
 app = typer.Typer(
-    name="ac",
+    name="composer",
     help="Agent Composer — run agent flows from the command line.",
     add_completion=False,
     no_args_is_help=True,
@@ -55,5 +55,5 @@ app.command("auth")(_auth)
 
 
 def main() -> None:
-    """Console-script entry point (`ac = agent_composer.cli:main`)."""
+    """Console-script entry point (`composer = agent_composer.cli:main`)."""
     app()

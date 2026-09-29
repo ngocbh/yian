@@ -68,6 +68,14 @@ def _error(stage: str, code: str, message: str, *, retryable: bool = False) -> M
     return MemoryOperationError(stage, code, message, retryable)
 
 
+def _read_error(stage: str, exc: Exception) -> MemoryOperationError:
+    """Map a store read failure: I/O is retryable, an unreadable document is not."""
+    if isinstance(exc, OSError):
+        return _error(stage, "profile.store_unavailable", "profile store could not be read",
+                      retryable=True)
+    return _error(stage, "profile.store_invalid", "profile store returned an unreadable document")
+
+
 class ProfileMemory:
     """Policy backend that keeps one markdown profile in a versioned store.
 
@@ -155,3 +163,84 @@ class ProfileMemory:
         """
         raise _error("reset", "profile.reset_unsupported",
                      "profile memory is reset through its store, not the engine")
+
+    def open_run(self, *, snapshot: JsonObject | None = None) -> _ProfileSession:
+        """Pin the current document, or the recorded version when restoring.
+
+        Args:
+            snapshot (`JsonObject | None`, *optional*, defaults to `None`): A
+                snapshot recorded by an earlier session of this backend.
+
+        Returns:
+            `_ProfileSession`: Session whose recall uses the pinned document.
+
+        Raises:
+            `MemoryOperationError`: ``profile.store_unavailable`` (retryable) when
+                the store cannot be reached, ``profile.store_invalid`` when its
+                document cannot be decoded, or ``profile.snapshot_unavailable``
+                when the recorded version is malformed, unknown, or changed.
+        """
+        if snapshot is None:
+            try:
+                text, version = self._store.read(None)
+            except (LookupError, OSError, ValueError) as exc:
+                raise _read_error("open_run", exc) from exc
+            return _ProfileSession(self, text, version)
+        try:
+            if type(snapshot) is not dict or set(snapshot) != _SNAPSHOT_KEYS:
+                raise ValueError("snapshot fields differ")
+            if snapshot["format"] != _SNAPSHOT_FORMAT or snapshot["version"] != _SNAPSHOT_VERSION:
+                raise ValueError("snapshot format differs")
+            recorded = snapshot["profile_version"]
+            if type(recorded) is not str:
+                raise ValueError("profile_version must be a string")
+            text, version = self._store.read(recorded)
+            if version != recorded or _sha256(text) != snapshot["text_sha256"]:
+                raise ValueError("stored text differs from the recorded version")
+        except (LookupError, OSError, TypeError, ValueError) as exc:
+            raise _error("open_run", "profile.snapshot_unavailable",
+                         "recorded profile version cannot be restored") from exc
+        return _ProfileSession(self, text, version)
+
+
+class _ProfileSession:
+    """One run's pinned view of the profile and its commit authority."""
+
+    def __init__(self, memory: ProfileMemory, text: str, version: str) -> None:
+        self._memory = memory
+        self._text = text
+        self._version = version
+        self._frames: dict[MemoryFrameRef, _ProfileFrame] = {}
+        self._applied: dict[str, tuple[MemoryMutation, ...]] = {}
+        self._lock = Lock()
+        self._closed = False
+
+    @property
+    def snapshot(self) -> JsonObject:
+        """Return the pinned version and text hash, never the text itself."""
+        return {
+            "format": _SNAPSHOT_FORMAT,
+            "version": _SNAPSHOT_VERSION,
+            "profile_version": self._version,
+            "text_sha256": _sha256(self._text),
+        }
+
+    def __enter__(self) -> _ProfileSession:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self.close()
+
+    def close(self) -> None:
+        """Mark the session closed; the store holds no per-session resources."""
+        self._closed = True
+
+    def _ensure_open(self, stage: str) -> None:
+        """Reject use after close."""
+        if self._closed:
+            raise _error(stage, "profile.closed", "profile session is closed")

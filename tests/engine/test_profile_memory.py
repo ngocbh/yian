@@ -110,3 +110,45 @@ def test_reset_is_refused(tmp_path) -> None:
     with pytest.raises(MemoryOperationError) as caught:
         _memory(tmp_path).reset()
     assert caught.value.code == "profile.reset_unsupported"
+
+
+def test_snapshot_pins_version_and_hash_without_text(tmp_path) -> None:
+    memory = _memory(tmp_path)
+    text, version = memory.read()
+    with memory.open_run() as session:
+        assert session.snapshot == {
+            "format": "agent_composer.profile_memory", "version": 1,
+            "profile_version": version, "text_sha256": profile._sha256(text),
+        }
+
+
+def test_restore_accepts_the_recorded_snapshot_after_later_edits(tmp_path) -> None:
+    memory = _memory(tmp_path)
+    with memory.open_run() as session:
+        recorded = session.snapshot
+    memory.write("# Ada\nLater.\n", base_version=memory.read()[1])
+    with memory.open_run(snapshot=recorded) as restored:
+        assert restored.snapshot == recorded
+
+
+@pytest.mark.parametrize("change", [
+    {"profile_version": "sha256:" + "0" * 64},
+    {"text_sha256": "0" * 64},
+    {"format": "other"},
+    {"extra": 1},
+])
+def test_restore_rejects_unknown_or_altered_snapshots(tmp_path, change) -> None:
+    memory = _memory(tmp_path)
+    with memory.open_run() as session:
+        recorded = {**session.snapshot, **change}
+    with pytest.raises(MemoryOperationError) as caught:
+        memory.open_run(snapshot=recorded)
+    assert caught.value.code == "profile.snapshot_unavailable"
+
+
+def test_undecodable_document_is_a_permanent_open_failure(tmp_path) -> None:
+    memory = _memory(tmp_path)
+    (tmp_path / "ada.md").write_bytes(b"# Ada \xff\n")
+    with pytest.raises(MemoryOperationError) as caught:
+        memory.open_run()
+    assert (caught.value.code, caught.value.retryable) == ("profile.store_invalid", False)

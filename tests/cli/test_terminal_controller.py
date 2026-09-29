@@ -518,7 +518,8 @@ def test_chat_write_flow_approval_crosses_the_main_thread_broker(
     def controller(stop_event, on_event, ask_user, render):
         controller_threads.append(current_thread())
         chat_tools.set_workspace(tmp_path)
-        return _success(chat_tools.write_flow("new.yaml", content))
+        with chat_tools._bind_ask_user(ask_user):
+            return _success(chat_tools.write_flow("new.yaml", content))
 
     observed = run_cli._run_with_terminal_controller(
         controller,

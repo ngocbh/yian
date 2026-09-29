@@ -7,7 +7,7 @@ import stat
 import pytest
 
 from agent_composer.cli.chat import tools as T
-from agent_composer.tools import install_ask_user
+from agent_composer.tools import TOOL_REGISTRY
 
 
 @pytest.fixture
@@ -67,7 +67,7 @@ def test_write_flow_approved_create_shows_target_and_content(tmp_path, approval_
         return {"Decision": "Approve"}
 
     T.set_workspace(tmp_path)
-    with install_ask_user(approve):
+    with T._bind_ask_user(approve):
         result = T.write_flow("new.yaml", GOOD)
 
     assert result == "WROTE: new.yaml"
@@ -96,7 +96,7 @@ def test_write_flow_approved_overwrite_shows_unified_diff(tmp_path, approval_tty
         return {"Decision": "Approve"}
 
     T.set_workspace(tmp_path)
-    with install_ask_user(approve):
+    with T._bind_ask_user(approve):
         result = T.write_flow("existing.yaml", GOOD)
 
     assert result == "WROTE: existing.yaml"
@@ -128,7 +128,7 @@ def test_write_flow_requires_exact_approval_without_mutating_existing_bytes(
     dest.write_bytes(original)
     T.set_workspace(tmp_path)
 
-    with install_ask_user(lambda **_request: answer):
+    with T._bind_ask_user(lambda **_request: answer):
         result = T.write_flow("existing.yaml", GOOD)
 
     assert result == "NOT WRITTEN: existing.yaml (approval was not granted)"
@@ -138,7 +138,7 @@ def test_write_flow_requires_exact_approval_without_mutating_existing_bytes(
 def test_write_flow_rejected_create_has_no_filesystem_effect(tmp_path, approval_tty):
     T.set_workspace(tmp_path)
 
-    with install_ask_user(lambda **_request: {"Decision": "Reject"}):
+    with T._bind_ask_user(lambda **_request: {"Decision": "Reject"}):
         result = T.write_flow("new/subdir/flow.yaml", GOOD)
 
     assert result == "NOT WRITTEN: new/subdir/flow.yaml (approval was not granted)"
@@ -157,7 +157,7 @@ def test_write_flow_prompt_failure_leaves_existing_bytes_unchanged(
     def fail(**_request):
         raise failure
 
-    with install_ask_user(fail), pytest.raises(type(failure)):
+    with T._bind_ask_user(fail), pytest.raises(type(failure)):
         T.write_flow("existing.yaml", GOOD)
 
     assert dest.read_bytes() == original
@@ -186,7 +186,7 @@ def test_write_flow_noninteractive_input_fails_closed_without_prompting(
     def unexpected_prompt(**_request):
         raise AssertionError("non-interactive write must not prompt")
 
-    with install_ask_user(unexpected_prompt):
+    with T._bind_ask_user(unexpected_prompt):
         result = T.write_flow("new/subdir/flow.yaml", GOOD)
 
     assert result == "NOT WRITTEN: new/subdir/flow.yaml (interactive approval requires a TTY)"
@@ -207,7 +207,7 @@ def test_write_flow_without_secure_dirfd_support_fails_closed_before_prompt(
     def unexpected_prompt(**_request):
         raise AssertionError("unsupported host must not prompt")
 
-    with install_ask_user(unexpected_prompt):
+    with T._bind_ask_user(unexpected_prompt):
         result = T.write_flow("new/subdir/flow.yaml", GOOD)
 
     assert result == (
@@ -231,7 +231,7 @@ def test_write_flow_refuses_target_changed_while_approval_is_open(
         dest.write_bytes(changed)
         return {"Decision": "Approve"}
 
-    with install_ask_user(approve_after_change):
+    with T._bind_ask_user(approve_after_change):
         result = T.write_flow("flow.yaml", GOOD)
 
     assert result == "NOT WRITTEN: flow.yaml (target changed during approval)"
@@ -251,7 +251,7 @@ def test_write_flow_does_not_follow_dangling_symlink_created_during_approval(
         link.symlink_to(outside)
         return {"Decision": "Approve"}
 
-    with install_ask_user(approve_after_link):
+    with T._bind_ask_user(approve_after_link):
         result = T.write_flow("new.yaml", GOOD)
 
     assert result == "NOT WRITTEN: new.yaml (target changed during approval)"
@@ -276,7 +276,7 @@ def test_write_flow_rejects_same_byte_hardlink_swap_during_approval(
         os.link(outside, target)
         return {"Decision": "Approve"}
 
-    with install_ask_user(approve_after_hardlink_swap):
+    with T._bind_ask_user(approve_after_hardlink_swap):
         result = T.write_flow("flow.yaml", GOOD)
 
     assert result == "NOT WRITTEN: flow.yaml (target changed during approval)"
@@ -297,7 +297,7 @@ def test_write_flow_rejects_preexisting_multi_link_target_before_prompt(
     def unexpected_prompt(**_request):
         raise AssertionError("multi-link target must not prompt")
 
-    with install_ask_user(unexpected_prompt):
+    with T._bind_ask_user(unexpected_prompt):
         result = T.write_flow("flow.yaml", GOOD)
 
     assert result == "NOT WRITTEN: flow.yaml (target has multiple hard links)"
@@ -334,7 +334,7 @@ def test_write_flow_commit_does_not_follow_symlink_substituted_after_recheck(
         return unchanged
 
     monkeypatch.setattr(T, "_target_is_unchanged", substitute_after_recheck)
-    with install_ask_user(lambda **_request: {"Decision": "Approve"}):
+    with T._bind_ask_user(lambda **_request: {"Decision": "Approve"}):
         result = T.write_flow("new.yaml", GOOD)
 
     assert result == "NOT WRITTEN: new.yaml (target changed during approval)"
@@ -376,7 +376,7 @@ def test_write_flow_commit_is_anchored_across_parent_symlink_swap(
             return original_open(path, flags)
 
     monkeypatch.setattr(T, "_open_no_follow", swap_parent_before_leaf_open)
-    with install_ask_user(lambda **_request: {"Decision": "Approve"}):
+    with T._bind_ask_user(lambda **_request: {"Decision": "Approve"}):
         result = T.write_flow("safe/flow.yaml", GOOD)
 
     assert result == "NOT WRITTEN: safe/flow.yaml (target changed during approval)"
@@ -408,7 +408,7 @@ def test_write_flow_rolls_back_hardlink_added_during_commit(
         replace_contents(descriptor, content)
 
     monkeypatch.setattr(T, "_replace_fd_contents", link_before_write)
-    with install_ask_user(lambda **_request: {"Decision": "Approve"}):
+    with T._bind_ask_user(lambda **_request: {"Decision": "Approve"}):
         result = T.write_flow("flow.yaml", GOOD)
 
     assert result == "NOT WRITTEN: flow.yaml (target changed during approval)"
@@ -424,7 +424,7 @@ def test_write_flow_create_uses_normal_file_permissions(tmp_path, approval_tty):
     T.set_workspace(tmp_path)
     previous_umask = os.umask(0o022)
     try:
-        with install_ask_user(lambda **_request: {"Decision": "Approve"}):
+        with T._bind_ask_user(lambda **_request: {"Decision": "Approve"}):
             result = T.write_flow("new.yaml", GOOD)
     finally:
         os.umask(previous_umask)
@@ -444,3 +444,68 @@ def test_write_flow_validates_before_prompt_and_confines_path(tmp_path):
     # escape refused
     with pytest.raises(ValueError):
         T.write_flow("../evil.yaml", GOOD)
+
+
+_ASKING_FLOW = """
+id: asking
+name: asking
+nodes:
+  ask:
+    kind: human_input
+    prompt: "Your name?"
+output: ${ask.output}
+"""
+
+_LISTING_FLOW = """
+id: listing
+name: listing
+nodes:
+  ls:
+    kind: tool
+    tool_id: list_flows
+  ask:
+    kind: human_input
+    input: {found: "${ls.output}"}
+    prompt: "Saw ${found}?"
+output: ${ask.output}
+"""
+
+
+def test_write_flow_approval_uses_the_bound_handler_not_the_registry(
+    tmp_path, approval_tty
+):
+    requests = []
+
+    def approve(**request):
+        requests.append(request)
+        assert "ask_user" not in TOOL_REGISTRY
+        return {"Decision": "Approve"}
+
+    T.set_workspace(tmp_path)
+    with T._bind_ask_user(approve):
+        result = T.write_flow("new.yaml", GOOD)
+
+    assert result == "WROTE: new.yaml"
+    assert len(requests) == 1
+    assert "ask_user" not in TOOL_REGISTRY
+
+
+def test_run_flow_tool_serves_nested_human_input_from_the_bound_handler(tmp_path):
+    (tmp_path / "asking.yaml").write_text(_ASKING_FLOW)
+    T.set_workspace(tmp_path)
+
+    with T._bind_ask_user(lambda **request: f"answer to {request['question']}"):
+        result = T.run_flow("asking.yaml")
+
+    assert result == "OUTPUT: answer to Your name?"
+    assert "ask_user" not in TOOL_REGISTRY
+
+
+def test_run_flow_tool_keeps_registered_tools_next_to_the_bound_handler(tmp_path):
+    (tmp_path / "listing.yaml").write_text(_LISTING_FLOW)
+    T.set_workspace(tmp_path)
+
+    with T._bind_ask_user(lambda **request: request["question"]):
+        result = T.run_flow("listing.yaml")
+
+    assert result == "OUTPUT: Saw listing.yaml?"

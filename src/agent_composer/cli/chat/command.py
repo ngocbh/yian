@@ -44,6 +44,7 @@ from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.loader import load_flow
 from agent_composer.run import _run_flow_controlled
 from agent_composer.events import NodeSucceeded
+from agent_composer.tools import registered_tools
 from agent_composer.typesys.seeding import default_run_id
 
 console = Console()
@@ -217,7 +218,9 @@ def chat(
                             "transcript", state["transcript"]
                         )
 
-                with chat_tools._bind_controller_stop(stop_event):
+                with chat_tools._bind_controller_stop(stop_event), chat_tools._bind_ask_user(
+                    ask_user
+                ):
                     return _run_flow_controlled(
                         current_flow,
                         {"opening": state["transcript"]},
@@ -226,6 +229,9 @@ def chat(
                         on_event=observe,
                         llm_config=cli_cfg or None,
                         stop_event=stop_event,
+                        # A tools mapping hides the registry; keep the chat agent's
+                        # registered flow-op tools next to this host's handler.
+                        tools={**registered_tools(), "ask_user": ask_user},
                     )
 
             result = _run_with_terminal_controller(

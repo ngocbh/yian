@@ -11,7 +11,7 @@ no conversation or continuation state is stored in the graph or variable pool.
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any, Callable, Iterator, Optional
+from typing import Any, Callable, Iterator, Literal, Optional
 
 from agent_composer.diagnostics import OriginRef
 from agent_composer.expr.template import render_template_record
@@ -37,6 +37,8 @@ from agent_composer.nodes.contracts import (
     _iter_origin_carrier,
     _rewrite_origin_carrier,
 )
+from agent_composer.skills.catalog import SkillError, check_skill_name
+from agent_composer.skills.tool import LOAD_SKILL
 from agent_composer.typesys.types import canonical_type_label
 from agent_composer.typesys.values import build_value_as
 
@@ -72,6 +74,7 @@ class AgentNode(Node):
         title: Optional[str] = None,
         memory_policy: MemoryPolicySpec | None = None,
         variables: list[Parameter] | None = None,
+        skills: list[str] | Literal["all"] | None = None,
     ) -> None:
         super().__init__(node_id, title=title)
         self.prompt = prompt or ""
@@ -98,7 +101,24 @@ class AgentNode(Node):
             raise ValueError(
                 f"AGENT node {node_id!r}: unknown mode {self.mode!r}; known: {sorted(MODES)}"
             )
+        self.skills: list[str] | Literal["all"] = [] if skills is None else skills
+        self._validate_skills()
         self._validate_variables()
+
+    def _validate_skills(self) -> None:
+        """Require `all` or unique valid names, in tool-calling mode."""
+        where = f"AGENT node {self.id!r}"
+        if LOAD_SKILL in self.tools:
+            raise SkillError(f"{where}: {LOAD_SKILL!r} is a reserved tool name; remove it from tools")
+        if self.skills != "all":
+            if type(self.skills) is not list:
+                raise SkillError(f"{where}: skills must be a list of names or 'all'")
+            for name in self.skills:
+                check_skill_name(name)
+            if len(set(self.skills)) != len(self.skills):
+                raise SkillError(f"{where}: duplicate skill grant in {self.skills}")
+        if self.skills and self.mode != "tool_calling":
+            raise SkillError(f"{where}: skills need mode 'tool_calling', not {self.mode!r}")
 
     def _validate_variables(self) -> None:
         """Require canonical, uniquely named declarations with valid typed defaults."""

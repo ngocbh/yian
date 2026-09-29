@@ -195,6 +195,15 @@ retried up to `retries:` times (default 2) on deviation. A root `Literal[...]`
 returns its bare tag to the flow.
 Use a downstream `code`/`model` node only for deterministic post-processing. To give
 an AGENT node ordinary tools: `tools: [tool_id, ...]` (requires `mode: tool_calling`).
+To give it host-supplied Claude/Codex skills: `skills: [skill-name, ...]` or
+`skills: all` (requires `mode: tool_calling`). The system message lists each
+granted skill's name and description; the model calls the built-in
+`load_skill(name, path=None)` to read `SKILL.md` or a bundled file. `load_skill` is
+reserved: never list it in `tools:`. When a flow grants skills, `composer run` supplies
+`~/.claude/skills`, `~/.agents/skills`, and the project's `.claude/skills`/`.agents/skills`
+(personal wins). A library host
+passes `skills=` (`{}` for none); without it, or with a listed skill missing, the run
+fails before it starts.
 A node may pin its model via `llm_config:`; otherwise the process defaults captured
 once when the run initializes apply. `inherit: false` skips authored flow/parent/CLI
 layers but still receives those provider/model defaults.

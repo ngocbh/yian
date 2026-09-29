@@ -348,7 +348,12 @@ Most are just the functional model (above) made enforceable:
   SDK-free — it decomposes into a `mode` (the loop, in `nodes/agent/modes/`) +
   skills (tools), and a mode imports langchain + `agent_composer.llm_clients` and
   builds its own model via `model_from_config`. Prefer seams for *new* external
-  deps, but model access in agent modes is a direct call.
+  deps, but model access in agent modes is a direct call. Host-supplied
+  `SKILL.md` skills enter the same way as memory: `run_flow(skills=...)` ->
+  `FlowEngine(skills=...)` -> the evaluator caps only nodes with
+  `needs_skills = True`; the AGENT serves `load_skill` like a registered tool
+  and records each result as evidence. The memory context still opens with
+  `DEFAULT_SYSTEM`.
 - **Domain-agnostic** — no domain-specific field names or types in the engine;
   domain lives at the contract/boundary (the loader/builder). The `system`
   namespace is generic.

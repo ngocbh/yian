@@ -164,6 +164,13 @@ public snapshots contain conversation values, not coordination objects. The
 memory import ratchet in `tests/engine/test_layer_direction.py` enforces this
 direction, including direct-facade and relative-import spellings.
 
+`skills/` is a leaf beside `memory/`: the frozen `Skill` value, the `load_skill`
+tool schema and listing, and confined bundled-file reads. It imports only
+langchain-core and the standard library, never nodes, compile, compose, runtime,
+`run.py`, or CLI (`test_skills_leaf_imports_no_engine_or_front_end_layer`).
+Reading skill folders parses YAML frontmatter, so it lives in `compose/skills.py`
+and uses `compose.source.literals.parse_yaml_literal`.
+
 `llm_clients/auth/` is a private authentication leaf below model construction and
 host settings. It owns immutable credential/selection carriers, provider login
 and refresh protocols, and private atomic storage. It imports no model SDK,

@@ -156,6 +156,7 @@ branching on kind.
 | `grow_depth_delta` / `is_loop` | spawners | recursion-depth stamp; loop bookkeeping |
 | `needs_stop_event` | agent, wait | receive the run-owned cooperative stop event |
 | `needs_tools` | tool, human_input, agent | receive the run's `ToolSet` (its tools and `ask_user` handler) |
+| `needs_live_events` | agent | receive transient `emit_stream`/`emit_event` sinks for the host callbacks that exist |
 | `skipped_output_target()` | base; loop overrides | logical target whose out-edges receive this physical node's absence |
 
 A redirected target is an exclusive, inert logical anchor: it has exactly one

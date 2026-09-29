@@ -202,6 +202,12 @@ token stream.
 With both tools and structured output, structured generation starts after the
 tool loop and uses the accumulated message history.
 
+A host can watch these requests live. With `on_event`, every request —
+including structured attempts and memory summary preparation — is bracketed by
+`ModelCallStarted`/`ModelCallFinished` (the latter with provider `TokenUsage`),
+and every granted tool by `ToolCallStarted`/`ToolCallFinished`. These are live
+callbacks only; the node value, the run log, and retained memory are unchanged.
+
 ### How YAML becomes the request
 
 | YAML or host value | Role in execution |

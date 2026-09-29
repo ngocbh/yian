@@ -118,6 +118,24 @@ def _format_exception(exception: Exception) -> str:
     )
 
 
+def _observer_sink(sink: Callable[[Any], None]) -> Callable[[Any], None]:
+    """Carry a host observer fault out of a node body as a capability fault.
+
+    The evaluator unwraps the carrier and re-raises the original exception, so a
+    failing ``on_stream``/``on_event`` stays a host fault, never a node failure.
+    """
+
+    def emit(item: Any) -> None:
+        try:
+            sink(item)
+        except (_CapabilityFault, _HostStop):
+            raise
+        except Exception as exc:
+            raise _CapabilityFault(exc) from exc
+
+    return emit
+
+
 WorkerOutcome: TypeAlias = Output | Route | Grow | EvaluationFailure
 """Closed raw worker result consumed by the append-only dispatcher."""
 
@@ -416,6 +434,8 @@ def _evaluate_node_stream(
     capture_render: Callable[[dict[str, Any]], None] | None = None,
     source_resolver: SourceResolver | None = None,
     tools: ToolSet | None = None,
+    live_stream: Callable[[StreamChunk], None] | None = None,
+    live_event: Callable[[Any], None] | None = None,
 ) -> Generator[StreamChunk, None, WorkerOutcome]:
     """Bind and run one node, yielding chunks and returning one normalized result.
 
@@ -565,6 +585,10 @@ def _evaluate_node_stream(
         caps["capture_render"] = capture_render
     if node.needs_tools:
         caps["tools"] = tools if tools is not None else ToolSet()
+    if live_stream is not None:
+        caps["emit_stream"] = live_stream
+    if live_event is not None:
+        caps["emit_event"] = live_event
 
     try:
         with _memory_context_capability(
@@ -676,6 +700,7 @@ def eval_node(
     wiring_override=None,
     stop_event=None,
     emit_stream: Callable[[StreamChunk], None] | None = None,
+    emit_event: Callable[[Any], None] | None = None,
     capture_evidence: bool = False,
     memory_context_opener: MemoryContextOpener | None = None,
     memory_invocation: ConversationInvocation | None = None,
@@ -689,7 +714,11 @@ def eval_node(
     ``emit_stream`` is called synchronously for each chunk yielded by the node and is
     deliberately invoked outside the node-failure funnel.  If it raises, that exact host
     exception escapes; it must never become a durable node failure.  When omitted, chunks
-    are discarded. ``capture_evidence`` must be an exact bool; its default leaves tracing
+    are discarded. A node declaring ``needs_live_events`` also receives in-body
+    ``emit_stream``/``emit_event`` capabilities for whichever of these host sinks
+    were supplied; their exceptions likewise escape as host faults, never node
+    failures. ``emit_event`` receives only transient in-loop observers.
+    ``capture_evidence`` must be an exact bool; its default leaves tracing
     dormant. ``memory_context_opener`` reaches only an opted-in node through a
     narrow ``open_memory_context(base_system_prompt, rendered_prompt, compatibility)``
     capability over canonical bound inputs and the captured memory scope.
@@ -719,6 +748,10 @@ def eval_node(
         raise TypeError("capture_evidence must be a bool")
     if type(capture_bindings) is not bool:
         raise TypeError("capture_bindings must be a bool")
+    if emit_stream is not None and not callable(emit_stream):
+        raise TypeError("emit_stream must be callable or None")
+    if emit_event is not None and not callable(emit_event):
+        raise TypeError("emit_event must be callable or None")
     if source_resolver is not None and not callable(source_resolver):
         raise TypeError("source_resolver must be callable or None")
     if memory_context_opener is not None and not callable(memory_context_opener):
@@ -811,6 +844,11 @@ def eval_node(
         except Exception as exc:
             raise _CapabilityFault(exc) from exc
 
+    live_stream = live_event = None
+    if node.needs_live_events is True:
+        live_stream = None if emit_stream is None else _observer_sink(emit_stream)
+        live_event = None if emit_event is None else _observer_sink(emit_event)
+
     # A callback failure remains outside the user generator. This transient reference
     # routes cleanup notes back to it while close() still delivers GeneratorExit.
     close_error: list[BaseException] = []
@@ -830,6 +868,8 @@ def eval_node(
         capture_inputs=capture_inputs if capture_bindings else None,
         capture_render=capture_render if render_enabled else None,
         source_resolver=source_resolver,
+        live_stream=live_stream,
+        live_event=live_event,
     )
     try:
         while True:

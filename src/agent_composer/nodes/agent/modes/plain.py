@@ -7,10 +7,13 @@ Any authored tools are ignored because there is no tool loop.
 
 from __future__ import annotations
 
+from uuid import uuid4
+
 from langchain_core.messages import HumanMessage, SystemMessage
 
 import agent_composer.llm_clients as llm_clients
 from agent_composer.nodes.agent.context import prepare_history, invoke_model, system_prompt_with_memory
+from agent_composer.nodes.agent.live import invoke_chat, live_sinks, observe_model_call
 from agent_composer.nodes.agent.modes.common import (
     DEFAULT_SYSTEM,
     AgentRunContext,
@@ -32,9 +35,17 @@ def plain(ctx: AgentRunContext) -> Output:
     system_prompt = system_prompt_with_memory(DEFAULT_SYSTEM, ctx.memory_context.sections)
     msgs = [SystemMessage(content=system_prompt), HumanMessage(content=ctx.prompt)]
     new_messages = list(msgs)
+    live = live_sinks(ctx)
     msgs = [
         msgs[0],
-        *prepare_history(ctx.memory_context.transcript, model, check_stopped=ctx.check_stopped),
+        *prepare_history(
+            ctx.memory_context.transcript,
+            model,
+            check_stopped=ctx.check_stopped,
+            observe_summary=lambda invoke: observe_model_call(
+                live, invoke, purpose="history_summary", exchange_id=uuid4().hex
+            ),
+        ),
         *msgs[1:],
     ]
     if ctx.evaluation_trace is not None:
@@ -46,11 +57,13 @@ def plain(ctx: AgentRunContext) -> Output:
     # A constrained type -> structured generation; only a bare str keeps the text path.
     schema = type_to_schema(ctx.output_type) if ctx.output_type is not None else None
     if schema is None:
+        exchange_id = uuid4().hex
         reply = invoke_model(
             ctx.memory_context.transcript,
-            lambda: model.invoke(msgs),
+            lambda: invoke_chat(live, model, msgs, exchange_id=exchange_id),
             new_messages=new_messages,
             check_stopped=ctx.check_stopped,
+            exchange_id=exchange_id,
         )
         text = text_of(reply)
         record_model_text(ctx.evaluation_trace, text)
@@ -66,5 +79,6 @@ def plain(ctx: AgentRunContext) -> Output:
             evaluation_trace=ctx.evaluation_trace,
             memory_context=ctx.memory_context,
             new_messages=new_messages,
+            live=live,
         )
     )

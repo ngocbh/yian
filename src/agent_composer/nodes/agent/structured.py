@@ -26,6 +26,7 @@ from __future__ import annotations
 from concurrent.futures import CancelledError as FutureCancelledError
 import json
 from typing import Annotated, Any, Callable, List, Literal, Optional
+from uuid import uuid4
 
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field, ValidationError, create_model
@@ -36,6 +37,7 @@ from agent_composer.memory.contracts import (
     ModelValueInteraction,
 )
 from agent_composer.nodes.agent.context import invoke_model
+from agent_composer.nodes.agent.live import LiveSinks, invoke_chat, invoke_structured
 from agent_composer.nodes.agent.modes.utils import record_model_text, text_of
 from agent_composer.nodes.base import _CapabilityFault, _HostStop
 from agent_composer.typesys.values import Type, ValueKind
@@ -180,6 +182,7 @@ def generate_structured(
     evaluation_trace: EvaluationTrace | None = None,
     memory_context: MemoryContext | None = None,
     new_messages: list | None = None,
+    live: LiveSinks | None = None,
 ) -> Any:
     """Generate a value conforming to `typ`, retrying on provider deviation up to a cap.
 
@@ -210,6 +213,8 @@ def generate_structured(
         new_messages (`list | None`): Not-yet-retained input delta, defaulting to all
             `messages`. Corrections are new deltas; prior invalid replies stay stored
             without being appended to the existing retry input shape.
+        live (`LiveSinks | None`): Optional event sink; each attempt publishes
+            model-call observers with usage. Parsing and retries are unchanged.
 
     Returns:
         `Any`: Parsed, unwrapped value matching the declared type.
@@ -233,6 +238,7 @@ def generate_structured(
             evaluation_trace,
             memory_context,
             new_messages,
+            live,
         )
     return _generate_fallback(
         model,
@@ -244,6 +250,7 @@ def generate_structured(
         evaluation_trace,
         memory_context,
         new_messages,
+        live,
     )
 
 
@@ -257,6 +264,7 @@ def _generate_native(
     evaluation_trace: EvaluationTrace | None,
     memory_context: MemoryContext,
     new_messages: list | None = None,
+    live: LiveSinks | None = None,
 ) -> Any:
     """Native path: `with_structured_output(schema)` + capped self-correction retry."""
     msgs = list(messages)
@@ -269,10 +277,13 @@ def _generate_native(
             bound = (model.with_structured_output(schema) if memory_context.transcript is None
                      else model.with_structured_output(schema, include_raw=True))
             check_stopped()
+            exchange_id = uuid4().hex
             delta, pending_messages = pending_messages, []
             response = invoke_model(
-                memory_context.transcript, lambda: bound.invoke(msgs), new_messages=delta,
-                check_stopped=check_stopped, purpose="structured_native", raw_reply=_native_raw,
+                memory_context.transcript,
+                lambda: invoke_structured(live, bound, msgs, exchange_id=exchange_id),
+                new_messages=delta, check_stopped=check_stopped, purpose="structured_native",
+                raw_reply=_native_raw, exchange_id=exchange_id,
             )
             reply_surfaced = True
             obj = response if memory_context.transcript is None else _native_parsed(response)
@@ -343,6 +354,7 @@ def _generate_fallback(
     evaluation_trace: EvaluationTrace | None,
     memory_context: MemoryContext,
     new_messages: list | None = None,
+    live: LiveSinks | None = None,
 ) -> Any:
     """Prompt-injection path for a provider with no native structured output: ask for JSON
     matching the schema, parse + validate the free-text reply, capped self-correction retry.
@@ -361,10 +373,15 @@ def _generate_fallback(
         check_stopped()
         reply_surfaced = False
         try:
+            exchange_id = uuid4().hex
             delta, pending_messages = pending_messages, []
             reply = invoke_model(
-                memory_context.transcript, lambda: model.invoke(msgs), new_messages=delta,
-                check_stopped=check_stopped, purpose="structured_fallback",
+                memory_context.transcript,
+                lambda: invoke_chat(
+                    live, model, msgs, exchange_id=exchange_id, purpose="structured_fallback"
+                ),
+                new_messages=delta, check_stopped=check_stopped, purpose="structured_fallback",
+                exchange_id=exchange_id,
             )
             reply_surfaced = True
             text = text_of(reply)

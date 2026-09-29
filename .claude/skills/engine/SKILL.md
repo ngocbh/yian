@@ -330,7 +330,8 @@ Most are just the functional model (above) made enforceable:
 - **Append-only durable authority** — a fresh run records complete initialization,
   then every node start and accepted outcome. A transition is validated and prepared,
   appended to its `RunLog`, and only then applied to `RunState`; observers become
-  visible after append + apply. Recovery validates a contiguous prefix and folds
+  visible after append + apply (transient `StreamChunk`s and in-loop AGENT
+  observers are the only exceptions and are never recorded). Recovery validates a contiguous prefix and folds
   it through the same reducer path before recording an eligible ordered retry
   frontier. New writes use schema 8; readers accept exactly 7 and 8, preserving
   historical envelope schemas and canonical bytes through preparation, replay,

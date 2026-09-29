@@ -285,7 +285,8 @@ def run_flow(
             serial evaluation.
         on_event (`Callable[[Any], None] | None`, *optional*, defaults to `None`):
             Callback for observers after their records have been appended and
-            reduced.
+            reduced, plus transient in-loop AGENT observers (`IN_LOOP_EVENTS`)
+            delivered during the node; the latter are never recorded or replayed.
         on_stream (`Callable[[StreamChunk], None] | None`, *optional*, defaults to `None`):
             Callback for transient stream chunks, which are never durable records.
         llm_config (`dict[str, Any] | None`, *optional*, defaults to `None`):
@@ -510,7 +511,8 @@ def resume_flow(
             the most recently recorded value.
         on_event (`Callable[[Any], None] | None`, *optional*, defaults to `None`):
             Callback for observers committed during this invocation only; historical
-            replay and terminal recovery are silent.
+            replay and terminal recovery are silent. Re-executed AGENT nodes publish
+            fresh in-loop observers.
         on_stream (`Callable[[StreamChunk], None] | None`, *optional*, defaults to `None`):
             Callback for new transient stream chunks, which are never replayed.
         memory (`dict[str, Memory] | None`, *optional*, defaults to `None`):

@@ -87,6 +87,11 @@ the nested value through the reducer to `NodeFailed`/`RunFailed` observers and
 `RunResult.failure`.
 `Node.on_failure` is a dormant future seam, not currently driven by `eval_node`.
 
+A node declaring `needs_live_events` does not yield; it receives in-body
+`emit_stream` and `emit_event` capabilities, each only when the host supplied
+the matching callback. They publish transient chunks and in-loop observers without changing
+the node result; a sink exception escapes as the host's own exception.
+
 The dependency-free `diagnostics` leaf defines the canonical semantic value for
 that pipeline:
 
@@ -219,6 +224,7 @@ Runtime and compile validation read these node members instead of branching on
 | `is_loop: bool` | growth reducer: gate the origin-keyed single-live-expansion invariant (the driver self-respawns, so each iteration's grow is attributed to `origin_id` and supersedes the prior expansion) | `False` → `True` on `loop` |
 | `needs_stop_event: bool` | read boundary (`eval_node`): pass the exact cooperative run-stop event | `False` → `True` on agent/wait |
 | `needs_tools: bool` | read boundary (`eval_node`): pass the run's `ToolSet` as `caps['tools']` | `False` → `True` on tool/human_input/agent |
+| `needs_live_events: bool` | read boundary (`eval_node`): pass `emit_stream`/`emit_event` for the host sinks that exist; faults escape as host faults | `False` → `True` on agent |
 
 The table spans execution-semantic traits/hooks and diagnostic-only projections.
 Any node field whose value can affect execution through an execution-semantic
@@ -297,7 +303,10 @@ WAIT are never timed by that watchdog.
 `FlowEngine` borrows one initialized `RunState` plus a matching open `RunLog`.
 Workers only evaluate; the dispatcher prepares a total transition, appends its
 record, applies it, then publishes transient observers. `StreamChunk` callbacks are
-explicitly non-durable. The engine never closes its log: package-root `run.py` owns
+explicitly non-durable. In-loop observers (`IN_LOOP_EVENTS`) share the dispatcher
+queue in pooled mode (`_RecordedEvent`), reach `on_event` between a node's start
+and outcome, and are never yielded, recorded, or replayed; neither sink is
+supplied when its callback is absent. The engine never closes its log: package-root `run.py` owns
 `MemoryRunLog`/`JsonlRunLog` creation, locking, recovery, tail repair, and closure.
 The explicit backward driver uses the same prepare/append/reduce path after the
 forward result returns, with no observer publication. New writes use schema 8;

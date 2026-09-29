@@ -152,6 +152,9 @@ publication through the turn. It may import memory contracts and provider messag
 types, but owns no history or queue. It injects safe projection and the current
 unbound model into optional memory-owned context preparation; summary callbacks
 run outside the backend lock under its existing lease.
+`nodes/agent/live.py` owns transient AGENT observation: bracketing model/tool
+calls and projecting provider usage. It imports `events` and publishes only
+through evaluator-supplied sinks; it never records, retains, or prices anything.
 `cli/memory.py` owns lazy CLI policy selection and backend lifetime. It reads the
 pure static memory layout and lower memory contracts, importing only selected
 built-in implementations when `open_run` is requested. `cli/run.py` injects that

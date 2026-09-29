@@ -1,25 +1,26 @@
 """Tool registry + the ``@register_tool`` decorator.
 
 A tool self-registers by decorating its implementation; importing the module
-that defines it populates ``TOOL_REGISTRY`` as a side effect. The engine's TOOL
-node and the AGENT tool-calling loop look tools up here by id.
+that defines it populates ``TOOL_REGISTRY`` as a side effect. A run's ``ToolSet``
+reads this registry when the host passes no ``tools=`` mapping; the TOOL,
+HUMAN_INPUT, and AGENT nodes look tools up by id through that ``ToolSet``.
 
 This is the package's tool *seam*: the core ships no domain tools — a host
 application registers its own (e.g. ``@register_tool("add")``). Tool ids must be
 unique across everything registered into the process. Model calls are validated
 against their public schema; host-owned interactions may use the trusted schema
-for injected metadata. The reserved ``ask_user`` entry has one process-wide host
-owner per interaction lifecycle.
+for injected metadata. ``ToolSet`` holds one run's tools: this registry, or a
+host mapping that replaces it. The reserved ``ask_user`` id never lives here: each
+run gets its handler through ``ToolSet({"ask_user": handler, ...})``.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from contextlib import contextmanager
 import inspect
 from threading import RLock
 from types import MappingProxyType
-from typing import Annotated, Any, Callable, Iterator
+from typing import Annotated, Any, Callable
 
 from langchain_core.tools import BaseTool, InjectedToolArg, StructuredTool
 
@@ -28,7 +29,6 @@ from langchain_core.tools import BaseTool, InjectedToolArg, StructuredTool
 TOOL_REGISTRY: dict[str, BaseTool] = {}
 _REGISTRY_LOCK = RLock()
 _ASK_USER_ID = "ask_user"
-_ASK_USER_OWNER: object | None = None
 
 
 def register_tool(tool_id: str) -> Callable:
@@ -47,7 +47,8 @@ def register_tool(tool_id: str) -> Callable:
         `Callable`: A decorator that registers its target and returns it unchanged.
 
     Raises:
-        ValueError: If `tool_id` is already registered.
+        `ValueError`:
+            `tool_id` is already registered, or is the reserved `ask_user` id.
 
     Example:
         ```python
@@ -61,7 +62,8 @@ def register_tool(tool_id: str) -> Callable:
     def decorator(fn: Callable) -> Callable:
         if tool_id == _ASK_USER_ID:
             raise ValueError(
-                f"tool id {_ASK_USER_ID!r} is reserved; use install_ask_user()"
+                f"tool id {_ASK_USER_ID!r} is reserved; pass "
+                "tools={**registered_tools(), 'ask_user': handler} to run_flow or resume_flow"
             )
         with _REGISTRY_LOCK:
             if tool_id in TOOL_REGISTRY:
@@ -224,7 +226,16 @@ class ToolSet:
         self._tools = MappingProxyType(built)
 
     def _get(self, tool_id: str) -> BaseTool:
-        """Return this run's entry, or the global entry when the run has no mapping."""
+        """Return this run's entry, or the global entry when the run has no mapping.
+
+        `ask_user` never comes from the registry: a run without its own handler
+        cannot ask.
+        """
+        if tool_id == _ASK_USER_ID and (self._tools is None or tool_id not in self._tools):
+            raise ValueError(
+                "no ask_user handler for this run; pass "
+                "tools={**registered_tools(), 'ask_user': handler} to run_flow or resume_flow"
+            )
         if self._tools is not None:
             tool = self._tools.get(tool_id)
             if tool is None:
@@ -396,32 +407,3 @@ def invoke_tool_trusted(tool_id: str, inputs: dict[str, Any]) -> Any:
     payload = dict(inputs)
     _validate_invocation(tool_id, tool, payload, trusted=True)
     return tool.invoke(payload)
-
-
-@contextmanager
-def install_ask_user(handler: Callable[..., Any]) -> Iterator[BaseTool]:
-    """Install the process-wide ``ask_user`` owner for one host lifecycle.
-
-    The model-visible schema contains only ``question``. Structured question and
-    display metadata are injected solely through ``invoke_tool_trusted``. A second
-    active owner is rejected, and cleanup removes only this installation's exact
-    registry entry.
-    """
-    global _ASK_USER_OWNER
-
-    tool = _ask_user_tool(handler)
-    owner = object()
-    with _REGISTRY_LOCK:
-        if _ASK_USER_OWNER is not None or _ASK_USER_ID in TOOL_REGISTRY:
-            raise ValueError("tool 'ask_user' already has an active owner")
-        _ASK_USER_OWNER = owner
-        TOOL_REGISTRY[_ASK_USER_ID] = tool
-
-    try:
-        yield tool
-    finally:
-        with _REGISTRY_LOCK:
-            if _ASK_USER_OWNER is owner:
-                if TOOL_REGISTRY.get(_ASK_USER_ID) is tool:
-                    del TOOL_REGISTRY[_ASK_USER_ID]
-                _ASK_USER_OWNER = None

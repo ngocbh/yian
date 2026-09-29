@@ -245,3 +245,10 @@ def test_bad_tools_fail_before_the_log_is_created(tmp_path: Path, tools: Any):
     with pytest.raises(TypeError):
         run_flow(load_flow(_GREETING_FLOW), {}, log=path, tools=tools)
     assert not path.exists()
+
+
+def test_human_input_without_a_run_handler_fails_the_node():
+    result = run_flow(load_flow(_LOOP_ASK_FLOW), {})
+
+    assert result.status == "failed"
+    assert "no ask_user handler for this run" in result.failure.message

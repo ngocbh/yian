@@ -25,7 +25,7 @@ from agent_composer.memory.contracts import (
     _rewrite_memory_policy_origin,
 )
 from agent_composer.nodes.agent.modes import DEFAULT_SYSTEM, MODES, AgentRunContext
-from agent_composer.nodes.agent.context import compatibility
+from agent_composer.nodes.agent.memory import compatibility
 from agent_composer.nodes.agent.backward import backward_agent
 from agent_composer.nodes.agent.modes.tool_calling import MAX_TOOL_ITERATIONS
 from agent_composer.nodes.agent.structured import _structured_validation_path

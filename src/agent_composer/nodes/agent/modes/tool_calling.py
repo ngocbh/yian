@@ -19,7 +19,7 @@ import agent_composer.llm_clients as llm_clients
 from agent_composer.memory.contracts import (
     ToolCallInteraction,
 )
-from agent_composer.nodes.agent.context import (
+from agent_composer.nodes.agent.memory import (
     current_history_messages,
     system_prompt_with_memory,
     prepare_history,

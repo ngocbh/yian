@@ -39,6 +39,16 @@ def reply(text="", *, calls=(), tokens=None):
     )
 
 
+class Cut:
+    """A scripted reply that streams `text` and then fails with `error`.
+
+    Through `invoke` it fails at once, like a request that never completed.
+    """
+
+    def __init__(self, text, error):
+        self.text, self.error = text, error
+
+
 class ScriptedStreamChat(BaseChatModel):
     """Serve scripted replies in order through `invoke` or `stream`."""
 
@@ -57,6 +67,8 @@ class ScriptedStreamChat(BaseChatModel):
         message = self.script.pop(0)
         if isinstance(message, Exception):
             raise message
+        if isinstance(message, Cut) and how == "invoke":
+            raise message.error
         return message
 
     def _generate(self, messages, stop=None, run_manager=None, **kwargs):
@@ -64,11 +76,14 @@ class ScriptedStreamChat(BaseChatModel):
 
     def _stream(self, messages, stop=None, run_manager=None, **kwargs):
         message = self._next("stream")
-        words = message.content.split(" ") if message.content else []
+        text = message.text if isinstance(message, Cut) else message.content
+        words = text.split(" ") if text else []
         for index, word in enumerate(words):
             yield ChatGenerationChunk(
                 message=AIMessageChunk(content=word if index == 0 else " " + word)
             )
+        if isinstance(message, Cut):
+            raise message.error
         # Each tool call arrives in two chunks sharing its index, as providers send them.
         for position, call in enumerate(message.tool_calls):
             args = json.dumps(call["args"])

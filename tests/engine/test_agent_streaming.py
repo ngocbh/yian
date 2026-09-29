@@ -22,9 +22,9 @@ from agent_composer.events import (
 from agent_composer.memory.session import SessionMemory
 from agent_composer.nodes.agent import AgentNode
 from agent_composer.run import run_flow
-from agent_composer.runtime.eval_node import eval_node
+from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
 from agent_composer.typesys.pool import VariablePool
-from tests.engine._stream_fakes import ScriptedStreamChat, reply, usage
+from tests.engine._stream_fakes import Cut, ScriptedStreamChat, reply, usage
 from tests.engine.test_agent_live_events import CONFIG, _agent, _evaluate, _Tool
 from tests.engine.test_agent_session import _FLOW, _view
 
@@ -149,3 +149,53 @@ def test_streamed_tool_exchange_is_retained_and_restored_like_an_invoked_one(mon
     replies = [item.payload["message"] for item in view.items if item.payload["message"]["type"] == "ai"]
     assert replies[0]["data"]["tool_calls"][0]["name"] == "lookup"
     assert [message["data"]["content"] for message in replies] == ["", "one", "two"]
+
+
+# --- a request that fails mid-stream --------------------------------------- #
+
+
+def test_mid_stream_failure_sends_no_final_chunk_and_fails_the_node(monkeypatch):
+    node, chat = _agent(
+        monkeypatch, [Cut("partial answer", ConnectionError("reset by sk-hidden"))], mode="plain"
+    )
+    outcome, chunks, observed = _evaluate(node)
+    assert isinstance(outcome, EvaluationFailure) and chat.mode == ["stream"]
+    exchange = observed[0].exchange_id
+    assert [(c.exchange_id, c.chunk, c.final) for c in chunks] == [
+        (exchange, "partial", False), (exchange, " answer", False),
+    ]
+    assert observed[-1] == ModelCallFinished(
+        "writer", exchange, "chat", "anthropic", "claude-test", error="ConnectionError"
+    )
+    assert "sk-hidden" not in repr(observed)
+
+
+def test_reply_that_fails_normalization_sends_no_final_chunk(monkeypatch):
+    class _Unnormalizable(ScriptedStreamChat):
+        def normalize_reply(self, _message):
+            raise ValueError("malformed reply")
+
+    chat = _Unnormalizable(script=[reply("hello world")], mode=[])
+    monkeypatch.setattr(llm_clients_mod, "model_from_config", lambda _config: chat)
+    node = AgentNode("writer", prompt="hi", llm_config=dict(CONFIG), mode="plain")
+    outcome, chunks, observed = _evaluate(node)
+    assert isinstance(outcome, EvaluationFailure)
+    assert [(c.chunk, c.final) for c in chunks] == [("hello", False), (" world", False)]
+    assert observed[-1].error == "ValueError"
+
+
+def test_mid_stream_failure_in_a_session_turn_retains_a_failed_model_effect(monkeypatch):
+    chat = ScriptedStreamChat(script=[Cut("partial", ConnectionError("reset"))], mode=[])
+    monkeypatch.setattr(llm_clients_mod, "model_from_config", lambda _config: chat)
+    memory = SessionMemory()
+    chunks, events = [], []
+    result = run_flow(
+        load_flow(_FLOW), {"question": "q1"}, memory={"session": memory},
+        on_stream=chunks.append, on_event=events.append,
+    )
+    assert result.status == "failed" and chat.mode == ["stream"]
+    assert [(c.chunk, c.final) for c in chunks] == [("partial", False)]
+    assert [e.error for e in events if isinstance(e, ModelCallFinished)] == ["ConnectionError"]
+    view = _view(memory)
+    assert [(effect.kind, effect.status) for effect in view.effects] == [("model", "failed")]
+    assert not [item for item in view.items if item.payload["message"]["type"] == "ai"]

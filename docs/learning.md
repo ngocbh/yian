@@ -187,9 +187,9 @@ inject it under the policy name your flows declare:
 
 ```python
 from agent_composer.memory.profile import ProfileMemory
-from agent_composer.memory.storage import FileProfileStore
+from agent_composer.memory.storage import FileMarkdownStore
 
-profile = ProfileMemory(FileProfileStore("people/ada.md"))
+profile = ProfileMemory(FileMarkdownStore("people/ada.md"))
 result = run_flow(flow, inputs, memory={"profile": profile}, learnable=True)
 ```
 
@@ -230,17 +230,17 @@ result = run_flow(flow, inputs, memory={"profile": profile}, learnable=True)
   `profile.write(text, base_version=version)` is the same compare-and-set without
   a size limit. `reset()` is refused; delete or rewrite the file through the store.
 
-`FileProfileStore(path)` keeps the current document as a plain editable file. Next
+`FileMarkdownStore(path)` keeps the current document as a plain editable file. Next
 to it are content-addressed copies of every version it has handed out
 (`.<name>.versions/`), a lock file, and a write log (`.<name>.writes.jsonl`).
 Each write-log line is JSON with `base_version`, `version`, and `provenance`.
 From `ProfileMemory`, provenance holds `run_id`, `commit_id`, `frame`,
 `seen_version`, and the distinct `feedback` values. A crash while appending can
 leave a partial last line; readers should skip lines that are not valid JSON.
-Locking is single-host. Other storage implements the `ProfileStore` protocol:
+Locking is single-host. Other storage implements the `MarkdownStore` protocol:
 `read(version=None) -> (text, version)` and
 `write(text, *, base_version, provenance=None) -> version`. It raises
-`ProfileVersionMismatch` when `base_version` is stale (nothing was written),
+`MarkdownVersionMismatch` when `base_version` is stale (nothing was written),
 `LookupError` for an unknown version, `ValueError` for text it cannot decode, and
 `OSError` when storage cannot be reached.
 

@@ -303,9 +303,9 @@ frame and rewrites it on backward with a compare-and-set write:
 
 ```python
 from agent_composer.memory.profile import ProfileMemory
-from agent_composer.memory.storage import FileProfileStore
+from agent_composer.memory.storage import FileMarkdownStore
 
-profile = ProfileMemory(FileProfileStore("people/ada.md"), max_chars=32_000)
+profile = ProfileMemory(FileMarkdownStore("people/ada.md"), max_chars=32_000)
 result = run_flow(loaded, inputs, memory={"profile": profile}, learnable=True)
 outcome = result.backward("Ada prefers short replies.")
 if outcome.failure is not None and outcome.failure.code == "profile.version_mismatch":

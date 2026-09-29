@@ -12,7 +12,7 @@ import agent_composer.memory.profile as profile
 from agent_composer.compose import load_flow
 from agent_composer.memory import MemorySetupError
 from agent_composer.memory.profile import ProfileMemory
-from agent_composer.memory.storage import FileProfileStore
+from agent_composer.memory.storage import FileMarkdownStore
 from agent_composer.memory.session import SessionMemory
 from agent_composer.run import resume_flow, run_flow
 from agent_composer.runtime.log import JsonlRunLog, MemoryCommitFailedRecord
@@ -121,7 +121,7 @@ class _Learner:
 
 
 def _profile(tmp_path) -> ProfileMemory:
-    store = FileProfileStore(tmp_path / "ada.md")
+    store = FileMarkdownStore(tmp_path / "ada.md")
     store.write("# Ada\n- Works on reefs.\n", base_version=store.read()[1])
     return ProfileMemory(store, llm_config={"provider": "ollama", "model": "local-profiler"})
 
@@ -241,7 +241,7 @@ def test_resume_reopens_the_recorded_version_for_backward(tmp_path, monkeypatch)
     memory.write("# Ada\n- Edited later.\n", base_version=recorded_version)
 
     resumed = resume_flow(flow, log=path, memory={"profile": ProfileMemory(
-        FileProfileStore(tmp_path / "ada.md"), llm_config={"provider": "ollama", "model": "local-profiler"})})
+        FileMarkdownStore(tmp_path / "ada.md"), llm_config={"provider": "ollama", "model": "local-profiler"})})
     learner = _Learner("# Ada\n- Edited later.\n- Brief.")
     _learner(monkeypatch, learner)
     outcome = resumed.backward("Be brief.")
@@ -269,7 +269,7 @@ def test_a_new_attempt_after_a_mismatch_learns_from_the_edited_document(tmp_path
     assert memory.read()[0] == "# Ada\n- Edited by Ada.\n- Prefers brief replies.\n"
 
 
-class _KilledAfterWrite(FileProfileStore):
+class _KilledAfterWrite(FileMarkdownStore):
     """Store that writes, then dies like a process killed before the runtime records success."""
 
     kill = True

@@ -27,7 +27,7 @@ from agent_composer.memory import (
     ToolResultInteraction,
 )
 from agent_composer.memory.profile import ProfileMemory
-from agent_composer.memory.storage import FileProfileStore
+from agent_composer.memory.storage import FileMarkdownStore
 
 ROOT = MemoryFrameRef("chat", ("chat",), MemoryOwner.FLOW)
 CHILD = MemoryFrameRef("chat", ("chat", "reply"), MemoryOwner.AGENT)
@@ -59,7 +59,7 @@ def _install(monkeypatch, *replies) -> tuple[_Learner, list]:
 
 
 def _memory(tmp_path, text: str = "# Ada\n", **kwargs) -> ProfileMemory:
-    store = FileProfileStore(tmp_path / "ada.md")
+    store = FileMarkdownStore(tmp_path / "ada.md")
     store.write(text, base_version=store.read()[1])
     return ProfileMemory(store, llm_config=CONFIG, **kwargs)
 
@@ -85,7 +85,7 @@ def _request_material(learner: _Learner, index: int = -1) -> dict:
 
 
 def test_constructor_validates_store_config_and_budgets(tmp_path) -> None:
-    store = FileProfileStore(tmp_path / "ada.md")
+    store = FileMarkdownStore(tmp_path / "ada.md")
     with pytest.raises(TypeError):
         ProfileMemory(object())
     with pytest.raises(TypeError):

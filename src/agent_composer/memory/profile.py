@@ -3,7 +3,7 @@
 ``ProfileMemory`` recalls one markdown document into every AGENT under its
 outermost frame and, on backward, asks one model call to rewrite the whole
 document from that run's feedback. Commits are compare-and-set writes to a
-``ProfileStore`` and never call a model.
+``MarkdownStore`` and never call a model.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from agent_composer.memory.contracts import (
     MemoryOperationError,
     RecallContext,
 )
-from agent_composer.memory.storage import ProfileStore, ProfileVersionMismatch
+from agent_composer.memory.storage import MarkdownStore, MarkdownVersionMismatch
 from agent_composer.memory.reflective import (
     _bounded_json_material,
     _canonical_json,
@@ -124,7 +124,7 @@ class ProfileMemory:
 
     def __init__(
         self,
-        store: ProfileStore,
+        store: MarkdownStore,
         *,
         llm_config: JsonObject | None = None,
         max_chars: int = 32_000,
@@ -133,8 +133,8 @@ class ProfileMemory:
         """Bind the backend to one store and learner model.
 
         Args:
-            store (`ProfileStore`): Versioned document store, such as
-                `FileProfileStore`.
+            store (`MarkdownStore`): Versioned document store, such as
+                `FileMarkdownStore`.
             llm_config (`JsonObject | None`, *optional*, defaults to `None`):
                 Learner model config. `None` uses the ambient defaults when a
                 backward attempt learns.
@@ -148,7 +148,7 @@ class ProfileMemory:
                 a dict.
             `ValueError`: A budget is not a positive integer.
         """
-        if not isinstance(store, ProfileStore):
+        if not isinstance(store, MarkdownStore):
             raise TypeError("store must provide read() and write()")
         if llm_config is not None and type(llm_config) is not dict:
             raise TypeError("llm_config must be a dict or None")
@@ -188,7 +188,7 @@ class ProfileMemory:
             `str`: The new version.
 
         Raises:
-            `ProfileVersionMismatch`: ``base_version`` is not current.
+            `MarkdownVersionMismatch`: ``base_version`` is not current.
         """
         return self._store.write(text, base_version=base_version, provenance=provenance)
 
@@ -366,7 +366,7 @@ class _ProfileSession:
             try:
                 self._memory._store.write(payload["text"], base_version=payload["base_version"],
                                           provenance=provenance)
-            except ProfileVersionMismatch as exc:
+            except MarkdownVersionMismatch as exc:
                 raise _error("commit", "profile.version_mismatch",
                              "profile changed after the learner read it; nothing was written",
                              retryable=True) from exc

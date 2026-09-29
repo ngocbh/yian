@@ -136,7 +136,7 @@ injected stop/projection/summary callables, never on nodes, runtime, compile,
 compose, or provider SDKs. The `memory/storage/` package sits below the
 memory backends: `sqlite.py` owns single-host SQLite lifetime locking and atomic
 finite-JSON replacement for session, episodic, and reflection, and `markdown.py`
-owns the versioned `ProfileStore` document interface and `FileProfileStore`. Backends validate semantic candidates and save before
+owns the versioned `MarkdownStore` document interface and `FileMarkdownStore`. Backends validate semantic candidates and save before
 publishing RAM. Storage never imports concrete backends or serializes their live
 handles, queues, or callbacks. Optional host-only paths do not reach runtime,
 public snapshots, or YAML; the contracts-only facade does not export the adapter.

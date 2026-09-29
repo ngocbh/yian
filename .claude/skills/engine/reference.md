@@ -410,7 +410,7 @@ version-1 history as no notes and preserve its exact envelope when pinned.
 Optional host-only `storage=path` persists the complete private inventory, including
 commit deduplication and derived summaries, without changing those public formats.
 The episodic, reflective, and session backends share the lower `memory.storage`
-`SQLiteStorage` adapter (`ProfileMemory` writes through a `ProfileStore` from the
+`SQLiteStorage` adapter (`ProfileMemory` writes through a `MarkdownStore` from the
 same package). It owns one file
 for the backend lifetime and commits finite-JSON candidates before RAM
 publication. Defaults remain process-local. Current host settings govern future

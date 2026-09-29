@@ -961,7 +961,7 @@ snapshots support the existing recovery boundary or restoration into a pristine
 instance. Both default to process-local state and support host-only `storage=path`.
 
 The provided `agent_composer.memory.profile.ProfileMemory` keeps one markdown
-document in a host `ProfileStore` (`FileProfileStore` by default). Its session
+document in a host `MarkdownStore` (`FileMarkdownStore` by default). Its session
 snapshot records only the pinned `profile_version` and `text_sha256`, so resume
 and backward reopen that exact version. Only the outermost frame of the policy
 recalls the full document or learns; nested frames of the same policy recall

@@ -1,6 +1,6 @@
-"""Versioned markdown document stores used by ``ProfileMemory``.
+"""Versioned markdown document stores.
 
-A profile store holds one current markdown document and can return any version it
+A markdown store holds one current markdown document and can return any version it
 has handed out. Writes are compare-and-set against a base version so that a
 concurrent human edit is never silently overwritten.
 """
@@ -19,7 +19,7 @@ from typing import Iterator, Protocol, runtime_checkable
 from agent_composer.memory.contracts import JsonObject
 
 
-class ProfileVersionMismatch(Exception):
+class MarkdownVersionMismatch(Exception):
     """A compare-and-set write named a base version that is no longer current."""
 
     def __init__(self, expected: str, current: str) -> None:
@@ -31,18 +31,18 @@ class ProfileVersionMismatch(Exception):
         """
         self.expected = expected
         self.current = current
-        super().__init__(f"profile base version {expected!r} is not current ({current!r})")
+        super().__init__(f"base version {expected!r} is not current ({current!r})")
 
 
 @runtime_checkable
-class ProfileStore(Protocol):
+class MarkdownStore(Protocol):
     """Versioned storage for one markdown document.
 
     Implementations raise `LookupError` for an unknown version,
-    `ProfileVersionMismatch` for a stale base version, `ValueError` for stored
+    `MarkdownVersionMismatch` for a stale base version, `ValueError` for stored
     text they cannot decode, and `OSError` when storage cannot be reached.
-    `ProfileMemory` turns these into typed memory failures. Any other exception
-    escapes the backward attempt.
+    Memory backends such as `ProfileMemory` turn these into typed memory
+    failures. Any other exception escapes the backward attempt.
     """
 
     def read(self, version: str | None = None) -> tuple[str, str]:
@@ -69,7 +69,7 @@ class ProfileStore(Protocol):
     ) -> str:
         """Replace the current document if ``base_version`` is still current.
 
-        From `ProfileMemory`, ``provenance`` holds ``run_id``, ``commit_id``,
+        ``provenance`` is caller-defined; from `ProfileMemory` it holds ``run_id``, ``commit_id``,
         ``frame``, ``seen_version``, and ``feedback``. ``commit_id`` is unique per
         backward attempt and policy, so a store that retries its own transport
         may use it to avoid writing twice.
@@ -85,7 +85,7 @@ class ProfileStore(Protocol):
             `str`: The version of the stored document.
 
         Raises:
-            `ProfileVersionMismatch`: ``base_version`` is not current. Nothing
+            `MarkdownVersionMismatch`: ``base_version`` is not current. Nothing
                 was written.
             `OSError`: Storage could not be reached. The write may or may not
                 have landed.
@@ -93,7 +93,7 @@ class ProfileStore(Protocol):
         ...
 
 
-def profile_version(text: str) -> str:
+def markdown_version(text: str) -> str:
     """Return the content-addressed version of one document.
 
     Args:
@@ -105,8 +105,8 @@ def profile_version(text: str) -> str:
     return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-class FileProfileStore:
-    """Profile store backed by one editable markdown file.
+class FileMarkdownStore:
+    """Markdown store backed by one editable file.
 
     The current document is ``path``; a missing file reads as an empty document.
     Every version this store returns or writes is kept under
@@ -128,7 +128,7 @@ class FileProfileStore:
         """
         self.path = Path(path)
         if not self.path.parent.is_dir():
-            raise FileNotFoundError(f"profile directory does not exist: {self.path.parent}")
+            raise FileNotFoundError(f"document directory does not exist: {self.path.parent}")
         self._versions = self.path.parent / f".{self.path.name}.versions"
         self._lock_path = self.path.parent / f".{self.path.name}.lock"
         self._writes = self.path.parent / f".{self.path.name}.writes.jsonl"
@@ -150,16 +150,16 @@ class FileProfileStore:
         with self._locked():
             if version is None:
                 text = self._current()
-                current = profile_version(text)
+                current = markdown_version(text)
                 self._keep(current, text)
                 return text, current
             text = self._current()
-            if profile_version(text) == version:
+            if markdown_version(text) == version:
                 self._keep(version, text)
                 return text, version
             kept = self._version_path(version)
             if kept is None or not kept.is_file():
-                raise LookupError(f"unknown profile version {version!r}")
+                raise LookupError(f"unknown document version {version!r}")
             return kept.read_text(encoding="utf-8"), version
 
     def write(
@@ -183,15 +183,15 @@ class FileProfileStore:
         Raises:
             `TypeError`: ``text`` or ``base_version`` is not a string.
             `ValueError`: The current file is not valid UTF-8.
-            `ProfileVersionMismatch`: ``base_version`` is not current.
+            `MarkdownVersionMismatch`: ``base_version`` is not current.
         """
         if type(text) is not str or type(base_version) is not str:
-            raise TypeError("profile text and base_version must be strings")
-        new_version = profile_version(text)
+            raise TypeError("text and base_version must be strings")
+        new_version = markdown_version(text)
         with self._locked():
-            current = profile_version(self._current())
+            current = markdown_version(self._current())
             if current != base_version:
-                raise ProfileVersionMismatch(base_version, current)
+                raise MarkdownVersionMismatch(base_version, current)
             self._keep(new_version, text)
             self._replace(self.path, text)
             with self._writes.open("a", encoding="utf-8") as handle:

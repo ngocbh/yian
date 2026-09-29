@@ -14,9 +14,11 @@ owner per interaction lifecycle.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from contextlib import contextmanager
 import inspect
 from threading import RLock
+from types import MappingProxyType
 from typing import Annotated, Any, Callable, Iterator
 
 from langchain_core.tools import BaseTool, InjectedToolArg, StructuredTool
@@ -64,13 +66,182 @@ def register_tool(tool_id: str) -> Callable:
         with _REGISTRY_LOCK:
             if tool_id in TOOL_REGISTRY:
                 raise ValueError(f"Duplicate tool id '{tool_id}'")
-            description = inspect.cleandoc(fn.__doc__ or "").strip() or tool_id
-            TOOL_REGISTRY[tool_id] = StructuredTool.from_function(
-                fn, name=tool_id, description=description
-            )
+            TOOL_REGISTRY[tool_id] = _tool_from_function(tool_id, fn)
         return fn
 
     return decorator
+
+
+def _tool_from_function(tool_id: str, fn: Callable[..., Any]) -> BaseTool:
+    """Build a tool named `tool_id` whose description is the dedented docstring."""
+    description = inspect.cleandoc(fn.__doc__ or "").strip() or tool_id
+    return StructuredTool.from_function(fn, name=tool_id, description=description)
+
+
+def registered_tools() -> dict[str, BaseTool]:
+    """Return a copy of the tools registered with `register_tool`.
+
+    A run given `tools=` sees only those tools. A host that wants the registered
+    tools as well builds the mapping itself, for example
+    `tools={**registered_tools(), "ask_user": handler}`. Changing the copy does not
+    change the registry. The copy is taken when you call this, so register every
+    tool the run needs before the run starts.
+
+    Returns:
+        `dict[str, BaseTool]`:
+            A new dict of tool id to tool, taken under the registry lock.
+    """
+    with _REGISTRY_LOCK:
+        return dict(TOOL_REGISTRY)
+
+
+class ToolSet:
+    """The tools one run can use.
+
+    With no mapping, the run uses the global registry. With a mapping, even an
+    empty one, the run sees only that mapping's entries; there is no fallback to
+    the registry. Two runs with different `ToolSet`s never see each other's entries.
+
+    Args:
+        tools (`Mapping[str, BaseTool | Callable[..., Any]] | None`, *optional*, defaults to `None`):
+            The run's tools keyed by tool id. A function or method becomes a tool
+            named by its key and described by its docstring. To bind values such
+            as a session, use a closure or a bound method, not `functools.partial`.
+            A `BaseTool` must already use its key as its name. `None` means the
+            global registry. To keep the registered tools and add more, pass
+            `{**registered_tools(), ...}`.
+
+    Raises:
+        `TypeError`:
+            `tools` is not a mapping or `None`, a key is not a non-empty string,
+            or an entry is not a `BaseTool`, function, or method.
+        `ValueError`:
+            A `BaseTool` entry's name differs from its key.
+
+    Example:
+        ```python
+        def lookup(city: str) -> str:
+            "Return the weather for one city."
+            return "sunny"
+
+        tools = ToolSet({"weather": lookup})
+        tools.invoke("weather", {"city": "Paris"})
+        ```
+    """
+
+    __slots__ = ("_tools",)
+
+    def __init__(
+        self, tools: Mapping[str, BaseTool | Callable[..., Any]] | None = None
+    ) -> None:
+        self._tools: MappingProxyType[str, BaseTool] | None = None
+        if tools is None:
+            return
+        if not isinstance(tools, Mapping):
+            raise TypeError("tools must be a mapping of tool id to tool, or None")
+        built: dict[str, BaseTool] = {}
+        for tool_id, entry in tools.items():
+            if type(tool_id) is not str or not tool_id:
+                raise TypeError("tool ids in tools must be non-empty strings")
+            if isinstance(entry, BaseTool):
+                if entry.name != tool_id:
+                    raise ValueError(
+                        f"tool {tool_id!r} is a BaseTool named {entry.name!r}; "
+                        "its name must match its key"
+                    )
+                built[tool_id] = entry
+            elif inspect.isroutine(entry):
+                built[tool_id] = _tool_from_function(tool_id, entry)
+            else:
+                raise TypeError(
+                    f"tools[{tool_id!r}] must be a BaseTool, a function, or a method, "
+                    f"got {type(entry).__name__}; bind values in a def or lambda, "
+                    "not functools.partial"
+                )
+        self._tools = MappingProxyType(built)
+
+    def _get(self, tool_id: str) -> BaseTool:
+        """Return this run's entry, or the global entry when the run has no mapping."""
+        if self._tools is not None:
+            tool = self._tools.get(tool_id)
+            if tool is None:
+                raise ValueError(
+                    f"unknown tool id {tool_id!r}; known tools: {sorted(self._tools)}"
+                )
+            return tool
+        with _REGISTRY_LOCK:
+            tool = TOOL_REGISTRY.get(tool_id)
+            if tool is None:
+                raise ValueError(
+                    f"unknown tool id {tool_id!r}; known tools: {sorted(TOOL_REGISTRY)}"
+                )
+            return tool
+
+    def resolve(self, tool_ids: list[str]) -> list[BaseTool]:
+        """Look up tools by id.
+
+        Args:
+            tool_ids (`list[str]`):
+                The ids to resolve, in order.
+
+        Returns:
+            `list[BaseTool]`:
+                The matching tools, in the same order as `tool_ids`.
+
+        Raises:
+            `ValueError`:
+                An id is not visible to this run.
+        """
+        return [self._get(tool_id) for tool_id in tool_ids]
+
+    def invoke(self, tool_id: str, inputs: dict[str, Any]) -> Any:
+        """Validate and invoke one tool through its model-visible public schema.
+
+        Unknown keys are rejected before Pydantic validation because tool schemas
+        may otherwise ignore them. Exceptions from validation and the tool
+        propagate unchanged.
+
+        Args:
+            tool_id (`str`):
+                The id of the tool to invoke.
+            inputs (`dict[str, Any]`):
+                Public arguments keyed by parameter name.
+
+        Returns:
+            `Any`:
+                The tool's result.
+
+        Raises:
+            `ValueError`:
+                The id is not visible to this run, or an argument is not public.
+        """
+        tool = self._get(tool_id)
+        payload = dict(inputs)
+        _validate_invocation(tool_id, tool, payload, trusted=False)
+        return tool.invoke(payload)
+
+    def invoke_trusted(self, tool_id: str, inputs: dict[str, Any]) -> Any:
+        """Invoke one tool through its full schema, including host-injected fields.
+
+        Args:
+            tool_id (`str`):
+                The id of the tool to invoke.
+            inputs (`dict[str, Any]`):
+                Public and injected arguments keyed by parameter name.
+
+        Returns:
+            `Any`:
+                The tool's result.
+
+        Raises:
+            `ValueError`:
+                The id is not visible to this run, or an argument is not in the
+                full schema.
+        """
+        tool = self._get(tool_id)
+        payload = dict(inputs)
+        _validate_invocation(tool_id, tool, payload, trusted=True)
+        return tool.invoke(payload)
 
 
 def resolve_tools(tool_ids: list[str]) -> list[BaseTool]:

@@ -13,18 +13,22 @@ from __future__ import annotations
 
 from agent_composer.tools.registry import (
     TOOL_REGISTRY,
+    ToolSet,
     install_ask_user,
     invoke_tool,
     invoke_tool_trusted,
     register_tool,
+    registered_tools,
     resolve_tools,
 )
 
 __all__ = [
     "TOOL_REGISTRY",
+    "ToolSet",
     "install_ask_user",
     "invoke_tool",
     "invoke_tool_trusted",
     "register_tool",
+    "registered_tools",
     "resolve_tools",
 ]

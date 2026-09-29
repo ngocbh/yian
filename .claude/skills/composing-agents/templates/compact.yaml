@@ -1,5 +1,5 @@
 # Compact (single-node) flow — the flow IS one node.
-# Run:  ac run compact.yaml --input name=Ada   (needs a model provider configured)
+# Run:  composer run compact.yaml --input name=Ada   (needs a model provider configured)
 #
 # When a flow has exactly one node, skip the `nodes:` map and the redundant
 # `output: ${node.output}` line — put the node `kind:` and its fields at the top

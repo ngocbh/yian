@@ -403,15 +403,19 @@ before an append failed. Ready retains completed feedback and proposals for
 inspection. Requests and observations add the policy dispositions above; only
 Finished settles the attempt.
 
-A successful backward attempt or any accepted commit request permanently closes
-retry eligibility. Before that boundary, a caller may explicitly retry the whole
-attempt with `result.backward(...)`: it opens fresh sessions from the original
-snapshots and recomputes all callbacks and proposals. Accepted proposals are
-inspectable but are never resumed. There is no automatic retry, rebase, or
-rollback. An older `ReflectiveMemory` revision in the same namespace and reset
+Each `result.backward(...)` call is a new attempt, including after a successful,
+failed, or committing attempt, and on a result from `resume_flow`. It opens fresh
+sessions from the original snapshots and recomputes all callbacks and proposals.
+An unfinished earlier attempt is first recorded as interrupted. Accepted proposals
+are inspectable but are never resumed. There is no automatic retry, rebase, or
+rollback. After the first attempt that sends commits, later attempts use
+attempt-scoped commit IDs (`ac-memory-v2:`), so a backend that deduplicates by
+commit ID still applies a later attempt's identical batch. A new attempt after an
+`unknown` request may therefore apply a second write; the host reconciles. An older
+`EpisodicMemory` or `ReflectiveMemory` revision in the same namespace and reset
 epoch restores successfully. Its later frame `learn` fails with
-`reflective.stale_generation` without rebasing; the backward outcome retains
-the completed feedback.
+`episodic.stale_generation` or `reflective.stale_generation` without rebasing;
+the backward outcome retains the completed feedback.
 
 ## SessionMemory foundation
 
@@ -779,8 +783,8 @@ recovery requires implementations under the same names. Each session
 must reproduce the exact snapshot stored by `RunStarted`; this prevents a resumed
 run from reading a different memory generation. Every terminal run is inspected
 silently without opening or validating memory, even after an interrupted backward
-attempt. A supplied mapping retains policy references for a later eligible
-explicit backward call.
+attempt. A supplied mapping retains policy references for a later explicit
+backward call.
 
 For later backward on a memory-enabled log, pass the original policy mapping to
 `resume_flow(..., memory=...)`; terminal inspection retains it without opening it.

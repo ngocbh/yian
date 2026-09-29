@@ -144,7 +144,8 @@ log, and invariant faults propagate as exceptions.
 
 A library host can inject tool handlers, provider configuration, and named
 memory implementations. Passing `learnable=True` retains accepted execution for a
-later explicit `result.backward(feedback)` call, with or without memory. Forward
+later explicit `result.backward(feedback)` call, with or without memory. Each call
+is a new attempt, so feedback can arrive several times, days later. Forward
 execution returns before any learning or commit; memory recall is independent.
 The returned `BackwardOutcome` and `result.backward_outcome` keep feedback and
 learning separate from the forward output and failure. See the

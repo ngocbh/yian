@@ -22,7 +22,6 @@ from agent_composer.compose import load_flow
 from agent_composer.events import RunFailed
 from agent_composer.nodes.base import _HostStop
 from agent_composer.run import resume_flow, run_flow
-from agent_composer.tools import install_ask_user
 
 
 # A child that re-exports a {report, n} record (the Ollama-free CODE child pattern). The
@@ -200,12 +199,18 @@ def _drive_durable(
     def interrupt(**request):
         raise interruption
 
-    with install_ask_user(interrupt), pytest.raises(_HostStop) as caught:
-        run_flow(_load_blocking(asserts), {"action": "deploy"}, log=path)
+    with pytest.raises(_HostStop) as caught:
+        run_flow(
+            _load_blocking(asserts),
+            {"action": "deploy"},
+            log=path,
+            tools={"ask_user": interrupt},
+        )
     assert caught.value is interruption
 
-    with install_ask_user(lambda **request: answer):
-        return resume_flow(_load_blocking(asserts), log=path)
+    return resume_flow(
+        _load_blocking(asserts), log=path, tools={"ask_user": lambda **request: answer}
+    )
 
 
 def test_call_post_assert_survives_recovery_true(tmp_path: Path):

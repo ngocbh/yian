@@ -363,13 +363,16 @@ untyped or its contract accepts null (a nullable or `None`-kind type).
 
 ## Tools
 
-The core ships no domain tools; a host registers its own into the shared registry.
+The core ships no domain tools; a host registers its own into the shared registry
+or passes the whole set for one run with `run_flow(..., tools=...)`.
 
 ::: agent_composer.tools.register_tool
 
-::: agent_composer.tools.resolve_tools
+::: agent_composer.tools.registered_tools
 
-::: agent_composer.tools.install_ask_user
+::: agent_composer.tools.ToolSet
+
+::: agent_composer.tools.resolve_tools
 
 ::: agent_composer.tools.invoke_tool
 

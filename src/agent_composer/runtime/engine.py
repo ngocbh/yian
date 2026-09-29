@@ -44,6 +44,7 @@ from agent_composer.runtime.state import (
     prepare_node_started,
     prepare_node_succeeded,
 )
+from agent_composer.tools import ToolSet
 
 _POLL = 0.02
 
@@ -88,6 +89,7 @@ class FlowEngine:
         on_stream: Callable[[StreamChunk], None] | None = None,
         stop_event: threading.Event | None = None,
         memory_context_opener: MemoryContextOpener | None = None,
+        tools: ToolSet | None = None,
     ) -> None:
         """Borrow a prepared state/log pair and configure one bounded drive.
 
@@ -96,6 +98,9 @@ class FlowEngine:
         lazy access to it. It defaults to ``None`` (no injected memory context);
         a non-callable value raises ``TypeError``. The dispatcher captures each
         accepted start before evaluating or submitting its worker.
+        ``tools`` is this run's ``ToolSet``; every node declaring ``needs_tools``
+        receives it. ``None`` uses the global registry; any other type
+        raises ``TypeError``.
         """
         if type(state) is not RunState:
             raise TypeError("FlowEngine expects a RunState")
@@ -113,6 +118,8 @@ class FlowEngine:
             raise TypeError("on_stream must be callable or None")
         if memory_context_opener is not None and not callable(memory_context_opener):
             raise TypeError("memory_context_opener must be callable or None")
+        if tools is not None and type(tools) is not ToolSet:
+            raise TypeError("tools must be a ToolSet or None")
         self.state = state
         self.log = log
         self.grow_builder = grow_builder
@@ -121,6 +128,7 @@ class FlowEngine:
         self.on_stream = on_stream
         self.stop_event = stop_event if stop_event is not None else threading.Event()
         self.memory_context_opener = memory_context_opener
+        self.tools = tools if tools is not None else ToolSet()
 
     def run(self) -> Iterator[Any]:
         """Drive newly ready work and yield only post-durable observer notifications."""
@@ -436,6 +444,7 @@ class FlowEngine:
             source_resolver=None if self.state.trace is None else self.state.trace.resolve,
             memory_context_opener=self.memory_context_opener,
             memory_invocation=invocation,
+            tools=self.tools,
         )
 
     def _evaluate_worker(

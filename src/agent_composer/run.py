@@ -15,12 +15,15 @@ It also owns the compile/runtime inversion seam by injecting
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import copy
 from dataclasses import dataclass, field
 import os
 from pathlib import Path
 import threading
 from typing import Any, Callable
+
+from langchain_core.tools import BaseTool
 
 from agent_composer.llm_clients.connection import connection_snapshot, legacy_connection_map
 from agent_composer.compile.execution_layout import apply_execution_layout, resolve_execution_layout
@@ -72,6 +75,7 @@ from agent_composer.runtime.state import (
     prepare_run_started,
 )
 from agent_composer.runtime.memory_runtime import MemoryRuntime
+from agent_composer.tools import ToolSet
 from agent_composer.typesys.pool import VariablePool
 from agent_composer.typesys.seeding import default_run_id, seed_system_clock
 
@@ -255,6 +259,7 @@ def run_flow(
     llm_config: dict[str, Any] | None = None,
     memory: dict[str, Memory] | None = None,
     learnable: bool = False,
+    tools: Mapping[str, BaseTool | Callable[..., Any]] | None = None,
 ) -> RunResult:
     """Start and drive one flow through an in-memory or durable run log.
 
@@ -296,6 +301,22 @@ def run_flow(
             call. Forward execution runs no frame learners or learned-mutation
             commits. Memory is optional; an enabled mapping supplies owned learners
             for that call. Automatic session history is independent of retention.
+        tools (`Mapping[str, BaseTool | Callable[..., Any]] | None`, *optional*, defaults to `None`):
+            The tools this run sees, keyed by tool id. `None` uses the tools
+            registered with `register_tool`. A mapping, even an empty one, is the
+            whole set: registered tools are hidden. To keep them, pass
+            `{**registered_tools(), ...}`. That copy is taken when you call it, so
+            register every tool before the run starts. A function or method
+            becomes a tool named by its key and described by its docstring; bind
+            values with a closure, not `functools.partial`. A `BaseTool` must use
+            its key as its name. The `ask_user` entry is the host handler for
+            HUMAN_INPUT nodes and granted AGENT `ask_user` calls. It must be a
+            plain callable that accepts `question`, `questions`, `answer_schema`,
+            `title`, and `node_id` as keywords (define it as
+            `def handler(**request)`); the model sees only `question`. Runs use
+            up to eight workers by default, so several nodes can call it at once;
+            it must be thread-safe. An AGENT can call a tool only if its `tools:`
+            list grants the id.
 
     Returns:
         `RunResult`:
@@ -304,10 +325,12 @@ def run_flow(
 
     Raises:
         `TypeError`:
-            A public argument has the wrong type.
+            A public argument has the wrong type, including a malformed `tools`
+            entry.
         `ValueError`:
             Inputs, identity, worker count, model configuration, or prepared run
-            state violates its contract.
+            state violates its contract, or a `BaseTool` in `tools` is named
+            differently from its key.
         `MemorySetupError`:
             Memory is enabled without a required policy implementation, cannot
             open an exact run snapshot, or has an invalid configuration.
@@ -327,6 +350,7 @@ def run_flow(
         llm_config=llm_config,
         memory=memory,
         learnable=learnable,
+        tools=tools,
         stop_event=threading.Event(),
     )
 
@@ -343,6 +367,7 @@ def _run_flow_controlled(
     llm_config: dict[str, Any] | None = None,
     memory: dict[str, Memory] | None = None,
     learnable: bool = False,
+    tools: Mapping[str, BaseTool | Callable[..., Any]] | None = None,
     stop_event: threading.Event,
 ) -> RunResult:
     """Drive a fresh run with one host-owned cooperative stop event."""
@@ -350,6 +375,7 @@ def _run_flow_controlled(
         raise TypeError("run_flow expects a ComposedFlow")
     if type(learnable) is not bool:
         raise TypeError("learnable must be a bool")
+    run_tools = ToolSet(tools)
 
     # Identity belongs to the authored program, before cascade resolution or any
     # per-run copy can change object topology.
@@ -444,6 +470,7 @@ def _run_flow_controlled(
             memory_context_opener=(
                 None if memory_runtime is None else memory_runtime.open_context
             ),
+            tools=run_tools,
         )
         events.extend(engine.run())
         return _result_from_state(state, log_path, events,
@@ -464,6 +491,7 @@ def resume_flow(
     on_event: EventHook | None = None,
     on_stream: StreamHook | None = None,
     memory: dict[str, Memory] | None = None,
+    tools: Mapping[str, BaseTool | Callable[..., Any]] | None = None,
 ) -> RunResult:
     """Recover primary execution or inspect a terminal run without backward work.
 
@@ -490,6 +518,10 @@ def resume_flow(
             enabled memory and still has unfinished forward execution. Terminal
             inspection opens no policies; supplied references remain available
             for later explicit backward calls.
+        tools (`Mapping[str, BaseTool | Callable[..., Any]] | None`, *optional*, defaults to `None`):
+            The tools the resumed segment sees, with the same rules as
+            `run_flow`. Tools are not recorded in the log, so pass the same
+            mapping (including `ask_user`) that the original run used.
 
     Returns:
         `RunResult`:
@@ -498,7 +530,8 @@ def resume_flow(
 
     Raises:
         `TypeError`:
-            A public argument or decoded carrier has the wrong type.
+            A public argument or decoded carrier has the wrong type, including a
+            malformed `tools` entry.
         `ValueError`:
             The prefix is invalid, the flow fingerprint differs, or the selected
             worker count violates its contract.
@@ -517,6 +550,7 @@ def resume_flow(
         on_event=on_event,
         on_stream=on_stream,
         memory=memory,
+        tools=tools,
         stop_event=threading.Event(),
     )
 
@@ -529,9 +563,11 @@ def _resume_flow_controlled(
     on_event: EventHook | None = None,
     on_stream: StreamHook | None = None,
     memory: dict[str, Memory] | None = None,
+    tools: Mapping[str, BaseTool | Callable[..., Any]] | None = None,
     stop_event: threading.Event,
 ) -> RunResult:
     """Recover and drive a durable run with a host-owned stop event."""
+    run_tools = ToolSet(tools)
     log_path = Path(log)
     retained_locator = log_path.absolute()
     authority = JsonlRunLog.resume(retained_locator)
@@ -592,6 +628,7 @@ def _resume_flow_controlled(
                 memory_context_opener=(
                     None if memory_runtime is None else memory_runtime.open_context
                 ),
+                tools=run_tools,
             )
             events.extend(engine.run())
 

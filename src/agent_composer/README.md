@@ -54,7 +54,7 @@ runtime/      run records/logs, scheduler-state vocabulary, reducer-owned state,
               explicit backward driver and pure learning/context projections
 run.py        public run/recovery boundary and retained RunResult.backward handle
 llm_clients/  provider clients, authentication, LLMConfig and model_from_config
-tools/        tool registry + process-owned ask_user interaction seam
+tools/        tool registry + per-run ToolSet (run tools and the ask_user handler)
 cli/          `composer` commands + main-thread terminal broker
 _settings.py  environment-based default provider/model
 ```
@@ -701,7 +701,7 @@ connections and execution topology; authored fingerprints exclude them.
 The runtime core is **kind-blind**. It dispatches on this result sum and consults
 node-owned execution-semantic traits/hooks (`is_spawner`, `binds_per_item`, `item_source_key`,
 `bind_reserved`, `validate_execution_setup`, `grow_depth_delta`, `is_loop`,
-`needs_stop_event`, `needs_memory_context`, `needs_evaluation_trace`,
+`needs_stop_event`, `needs_tools`, `needs_memory_context`, `needs_evaluation_trace`,
 `memory_scope`, and `skipped_output_target`) plus the diagnostic-only projections
 `exception_origin` and `failure_trace`; it never branches behavior on `NodeKind`.
 A kind label may appear in diagnostic text. The diagnostic projections do not
@@ -1210,10 +1210,22 @@ Each pooled node inherits a fresh copy of the host's context variables, preservi
 host cancellation for nested flows while isolating node-local context changes.
 
 Authorable blocking effects stay inside their node calls. An AGENT node may invoke the
-explicitly granted `ask_user` tool, HUMAN_INPUT always invokes the same host-owned
-interaction seam, and WAIT blocks on its absolute UTC deadline. The AGENT node checks the
+explicitly granted `ask_user` tool, HUMAN_INPUT always invokes the same run-owned
+handler, and WAIT blocks on its absolute UTC deadline. The AGENT node checks the
 run-owned stop signal between model/tool effects; WAIT blocks on that signal. Each
 returns `Output` from the same invocation.
+
+Tools reach nodes the same kind-blind way. `run_flow` and `resume_flow` build one
+immutable `ToolSet` from `tools=` before any log work. `FlowEngine` passes it to
+`eval_node`, which adds `caps["tools"]` only for nodes whose `needs_tools` trait
+is set (TOOL, HUMAN_INPUT, and AGENT). `tools=None` reads the global registry. A
+mapping is the run's whole tool set. Hosts that want both pass
+`{**registered_tools(), ...}`; that copy is taken at call time, so tools must be
+registered before the run starts. `ask_user` is always per run and never falls
+back to the registry, so concurrent runs in one process keep separate handlers.
+Pooled nodes of one run can call the same handler at once, so it must be
+thread-safe. Tools are host callables: the log does not record them, and a host
+passes them again on resume.
 
 CODE's soft-budget watchdog is package-local under `nodes/code/` and times CODE
 only. Pooled drives own their executors through a full join: an abnormal dispatch

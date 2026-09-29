@@ -210,7 +210,7 @@ tool loop and uses the accumulated message history.
 | AGENT `variables:` | Supplies typed local defaults to prompt rendering. Each invocation receives a fresh copy; see [agent-owned variables](syntax.md#agent-owned-variables). |
 | `prompt:` | Renders local `${name}` values into the initial `HumanMessage`. |
 | `long_term_memory:` plus host `memory={...}` | Supplies one memory context: recalled notes become labelled system sections; a session transcript contributes structured prior messages. |
-| `tools: [name, ...]` | Resolves registered tool schemas and binds them beside the messages in `tool_calling` mode. |
+| `tools: [name, ...]` | Resolves the granted ids from the run's tools (registered tools, or the host's `tools=` mapping) and binds their schemas beside the messages in `tool_calling` mode. |
 | Structured `output:` | Selects a provider-supported structured-output binding or a fallback schema instruction, then validates the returned value. A bare `str` remains free text. |
 | `mode:`, `llm_config:`, `retries:`, `env:` | Controls execution; these values are not additional prompt messages. |
 
@@ -410,7 +410,8 @@ threading a carried record.
 
 ## Planned extensions
 
-The current AGENT surface grants registered tools but has no `skills:` field.
+The current AGENT surface grants tools by id (registered, or passed per run with
+`tools=`) but has no `skills:` field.
 [#260](https://github.com/ngocbh/agent-composer/issues/260) tracks reuse of
 Codex/Claude `SKILL.md` packages and host-controlled discovery of project-local
 tools. Until those issues are implemented, `system_prompt:` and `skills:` are

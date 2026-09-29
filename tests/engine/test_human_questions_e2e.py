@@ -19,7 +19,6 @@ from pathlib import Path
 import agent_composer.llm_clients as llm_clients_mod
 from agent_composer.compose import load_flow
 from agent_composer.run import run_flow
-from agent_composer.tools import install_ask_user
 
 
 # --- static: a literal questions list in the seed ------------------------------------- #
@@ -30,8 +29,11 @@ def test_static_questions_block_and_return_answer():
     loaded = load_flow(Path("tests/seeds/26-human-questions.yaml").read_text())
     requests = []
     answer = {"Framework": "React", "Notes": "ship it"}
-    with install_ask_user(lambda **request: requests.append(request) or answer):
-        result = run_flow(loaded, {"proj": "Atlas"})
+    result = run_flow(
+        loaded,
+        {"proj": "Atlas"},
+        tools={"ask_user": lambda **request: requests.append(request) or answer},
+    )
 
     assert result.status == "succeeded", result.failure
     questions = requests[0]["questions"]
@@ -69,10 +71,11 @@ def test_manual_ref_questions_block_and_return_answer():
     passes the code-produced question to the host, and returns its record."""
     loaded = load_flow(_MANUAL_REF)
     requests = []
-    with install_ask_user(
-        lambda **request: requests.append(request) or {"H": "A"}
-    ):
-        result = run_flow(loaded, {"seed": "Which option?"})
+    result = run_flow(
+        loaded,
+        {"seed": "Which option?"},
+        tools={"ask_user": lambda **request: requests.append(request) or {"H": "A"}},
+    )
 
     assert result.status == "succeeded", result.failure
     assert len(requests[0]["questions"]) == 1
@@ -144,10 +147,11 @@ def test_adaptive_questions_block_and_return_answer(monkeypatch):
 
     loaded = load_flow(_ADAPTIVE)
     requests = []
-    with install_ask_user(
-        lambda **request: requests.append(request) or {"DB": "Postgres"}
-    ):
-        result = run_flow(loaded, {"ctx": "storage"})
+    result = run_flow(
+        loaded,
+        {"ctx": "storage"},
+        tools={"ask_user": lambda **request: requests.append(request) or {"DB": "Postgres"}},
+    )
 
     assert result.status == "succeeded", result.failure
     questions = requests[0]["questions"]

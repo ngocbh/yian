@@ -36,7 +36,6 @@ from agent_composer.compose.loader import load_flow
 from agent_composer.diagnostics import Diagnostic, Failure, OriginRef
 from agent_composer.nodes.contracts import Parameter, ValueContract
 from agent_composer.run import RunResult, run_flow
-from agent_composer.tools import install_ask_user
 from agent_composer.typesys import Type, ValueKind
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
@@ -1776,8 +1775,7 @@ def test_run_error_multi_frame_on_nested_human_input_failure(monkeypatch):
     flow = _SEEDS / "25-nested-suspension.yaml"
     text = flow.read_text()
     loaded = load_flow(text, search_paths=[flow.parent], source_label=flow.name)
-    with install_ask_user(lambda **request: "maybe"):
-        result = run_flow(loaded, {"action": "ship it"})
+    result = run_flow(loaded, {"action": "ship it"}, tools={"ask_user": lambda **request: "maybe"})
     assert result.status == "failed"
     buf = _sink(monkeypatch)
     _render_run_error(result, loaded)

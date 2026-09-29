@@ -72,6 +72,7 @@ from agent_composer.nodes.binding import (
 )
 from agent_composer.runtime.contracts import BackwardCapture
 from agent_composer.runtime.log import canonical_seed
+from agent_composer.tools import ToolSet
 from agent_composer.typesys.pool import VariablePool
 
 
@@ -414,6 +415,7 @@ def _evaluate_node_stream(
     capture_inputs: Callable[[dict[str, Any]], None] | None = None,
     capture_render: Callable[[dict[str, Any]], None] | None = None,
     source_resolver: SourceResolver | None = None,
+    tools: ToolSet | None = None,
 ) -> Generator[StreamChunk, None, WorkerOutcome]:
     """Bind and run one node, yielding chunks and returning one normalized result.
 
@@ -561,6 +563,8 @@ def _evaluate_node_stream(
         caps["evaluation_trace"] = evaluation_trace
     if capture_render is not None:
         caps["capture_render"] = capture_render
+    if node.needs_tools:
+        caps["tools"] = tools if tools is not None else ToolSet()
 
     try:
         with _memory_context_capability(
@@ -678,6 +682,7 @@ def eval_node(
     capture_bindings: bool = False,
     source_resolver: SourceResolver | None = None,
     effective_llm_by_static_path: dict[str, dict[str, Any]] | None = None,
+    tools: ToolSet | None = None,
 ) -> EvaluatedOutcome:
     """Evaluate one node into a wrapped worker result and transient stream callback.
 
@@ -707,6 +712,8 @@ def eval_node(
     selected only by the captured root-relative static scope, never node IDs.
     Capture and serialization errors propagate as host faults. Its default
     leaves these hooks dormant and does not require a memory frame.
+    ``tools`` is the run's exact ``ToolSet``; only a node declaring ``needs_tools``
+    receives it. ``None`` gives such a node the global registry.
     """
     if type(capture_evidence) is not bool:
         raise TypeError("capture_evidence must be a bool")
@@ -716,6 +723,8 @@ def eval_node(
         raise TypeError("source_resolver must be callable or None")
     if memory_context_opener is not None and not callable(memory_context_opener):
         raise TypeError("memory_context_opener must be callable or None")
+    if tools is not None and type(tools) is not ToolSet:
+        raise TypeError("tools must be a ToolSet or None")
     if memory_invocation is not None:
         if type(memory_invocation) is not ConversationInvocation:
             raise TypeError("memory_invocation must be a ConversationInvocation or None")
@@ -816,6 +825,7 @@ def eval_node(
         memory_invocation=memory_invocation,
         memory_scope=memory_scope,
         close_error=close_error,
+        tools=tools,
         binding_collector=binding_collector,
         capture_inputs=capture_inputs if capture_bindings else None,
         capture_render=capture_render if render_enabled else None,

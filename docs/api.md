@@ -106,6 +106,7 @@ run_flow(
     llm_config: dict[str, Any] | None = None,
     memory: dict[str, Memory] | None = None,
     learnable: bool = False,
+    tools: Mapping[str, BaseTool | Callable[..., Any]] | None = None,
 ) -> RunResult
 ```
 
@@ -135,6 +136,19 @@ terminal. Stored defaults are not coerced.
   a later explicit `result.backward(feedback)` call. It defaults to `False` and
   needs no memory policy. Forward execution never calls backward hooks, frame
   learners, or policy commits.
+- `tools` — the tools this run sees, keyed by tool id. TOOL nodes, AGENT
+  `tools:` grants, and HUMAN_INPUT look ids up here. `None` uses the tools
+  registered with `register_tool`. A mapping, even an empty one, is the whole
+  set: registered tools are hidden from the run. To keep them, pass
+  `{**registered_tools(), "my_tool": fn}`. `registered_tools()` returns a copy
+  taken when you call it, so register every tool before the run starts. A
+  function or method becomes a tool named by its key and described by its
+  docstring. To bind values such as a session id, use a closure or a bound
+  method; `functools.partial` and other callable objects are rejected. A
+  LangChain `BaseTool` must already use its key as its name. The `ask_user`
+  entry is the run's human handler (see
+  [Blocking human interaction](#blocking-human-interaction)). Tools are host
+  callables, so the run log does not record them.
 
 A node or flow-assert failure returns `RunResult(status="failed")` with one
 immutable `result.failure`; a successful flow returns `status="succeeded"` with
@@ -793,6 +807,7 @@ resume_flow(
     on_event: Callable[[Any], None] | None = None,
     on_stream: Callable[[StreamChunk], None] | None = None,
     memory: dict[str, Memory] | None = None,
+    tools: Mapping[str, BaseTool | Callable[..., Any]] | None = None,
 ) -> RunResult
 ```
 
@@ -812,6 +827,10 @@ backward call.
 
 For later backward on a memory-enabled log, pass the original policy mapping to
 `resume_flow(..., memory=...)`; terminal inspection retains it without opening it.
+
+The log does not record `tools`. To continue an unfinished run whose nodes use
+per-run tools or ask the human, pass the same `tools` (including `ask_user`) to
+`resume_flow` again.
 
 If primary execution is unfinished and eligible for retry, recovery appends one
 `RunResumedRecord`, retries the exact ordered set of nodes that have a durable start but no durable
@@ -877,12 +896,12 @@ and the log-sensitivity warning.
 ## Blocking human interaction
 
 An authored `human_input` node and an AGENT node granted `tools: [ask_user]` call the
-same process-owned tool synchronously. A library host installs one handler for the
-whole live run; the calling node remains active until the handler returns or
-raises:
+run's `ask_user` handler synchronously. A library host passes the handler with each
+run as `tools={"ask_user": handler}`; the calling node remains active until the
+handler returns or raises:
 
 ```python
-from agent_composer.tools import install_ask_user
+from agent_composer import load_flow, run_flow
 
 approval = load_flow(
     open("examples/human-approval.yaml").read(),
@@ -892,18 +911,33 @@ approval = load_flow(
 def ask(**request):
     return input(request["question"] + " ")
 
-with install_ask_user(ask):
-    result = run_flow(
-        approval,
-        {"task": "Plan a team offsite"},
-        llm_config={"provider": "ollama", "model": "llama3.2:3b"},
-    )
+result = run_flow(
+    approval,
+    {"task": "Plan a team offsite"},
+    llm_config={"provider": "ollama", "model": "llama3.2:3b"},
+    tools={"ask_user": ask},
+)
 ```
 
 The handler receives `question`, `questions`, `answer_schema`, `title`, and
-`node_id`. `human_input` uses the trusted metadata path; model-requested
-`ask_user` calls can supply only the public `question` argument. Only one handler
-may own the reserved tool in a process at a time.
+`node_id` as keyword arguments, so define it as `def handler(**request)`. A
+handler that cannot take all five is rejected before the run starts.
+`human_input` uses the trusted metadata path; model-requested `ask_user` calls
+can supply only the public `question` argument. Each run has its own handler, so
+concurrent runs in one process never share one. Within one run, the default
+`num_workers=8` lets several nodes (for example two MAP items) call the handler at
+the same time, so the handler must be thread-safe.
+`node_id` is the expanded node id (for example `loop#1/ask` for a LOOP's second
+iteration), so a run id plus `node_id` identifies one question; bind the run id in
+the handler's closure when the host needs it. The mapping is the whole tool set,
+so a flow that also uses registered tools passes
+`tools={**registered_tools(), "ask_user": ask}`. `ask_user` never comes from the
+global registry: a run without its own handler fails any node that asks, and
+`register_tool("ask_user")` is rejected.
+
+CODE nodes cannot ask. A CODE function does not see the run's tools, so
+`invoke_tool("ask_user", ...)` inside it fails. Ask through a `human_input` node,
+or pass a per-run tool and call it from a TOOL node.
 
 An authored WAIT needs no host handler. It blocks one worker until its absolute
 UTC `until:` deadline, returns `None`, and can be woken cooperatively when the host

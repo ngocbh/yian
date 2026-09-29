@@ -28,17 +28,11 @@ from agent_composer.diagnostics import Failure
 from agent_composer.events import NodeStarted
 from agent_composer.nodes.base import _HostStop
 from agent_composer.run import RunResult
-from agent_composer.tools import TOOL_REGISTRY, invoke_tool
+from agent_composer.tools import TOOL_REGISTRY
 
 
 _TIMEOUT = 2.0
 _CONCURRENT_ASK_BARRIER = Barrier(2)
-
-
-def _pooled_ask(inputs: dict[str, Any]) -> str:
-    """Block one real CODE invocation in the host-installed terminal tool."""
-    question = inputs.get("question", "Blocked sibling")
-    return invoke_tool("ask_user", {"question": question})
 
 
 def _pooled_fail_after_prompt(inputs: dict[str, Any]) -> str:
@@ -48,10 +42,15 @@ def _pooled_fail_after_prompt(inputs: dict[str, Any]) -> str:
     raise RuntimeError("pooled primary failure")
 
 
-def _pooled_concurrent_ask(inputs: dict[str, Any]) -> str:
-    """Enter two broker calls together so active EOF outranks cancellation."""
-    _CONCURRENT_ASK_BARRIER.wait(timeout=_TIMEOUT)
-    return _pooled_ask(inputs)
+def _concurrent_ask_tool(ask_user: Any) -> Any:
+    """Return a per-run tool that enters two broker calls together."""
+
+    def concurrent_ask(question: str) -> str:
+        """Wait for the sibling, then ask so active EOF outranks cancellation."""
+        _CONCURRENT_ASK_BARRIER.wait(timeout=_TIMEOUT)
+        return ask_user(question=question)
+
+    return concurrent_ask
 
 
 _POOLED_ASK_FLOW = """
@@ -59,8 +58,8 @@ id: terminal-controller-ask
 name: terminal_controller_ask
 nodes:
   ask:
-    kind: code
-    code: tests.cli.test_terminal_controller:_pooled_ask
+    kind: human_input
+    prompt: Blocked sibling
     output: str
 output: ${ask.output}
 """
@@ -71,17 +70,15 @@ id: terminal-controller-concurrent-ask
 name: terminal_controller_concurrent_ask
 nodes:
   ask_a:
-    kind: code
-    code: tests.cli.test_terminal_controller:_pooled_concurrent_ask
+    kind: tool
+    tool_id: concurrent_ask
     input:
       question: ask-a
-    output: str
   ask_b:
-    kind: code
-    code: tests.cli.test_terminal_controller:_pooled_concurrent_ask
+    kind: tool
+    tool_id: concurrent_ask
     input:
       question: ask-b
-    output: str
 output:
   a: ${ask_a.output}
   b: ${ask_b.output}
@@ -93,8 +90,8 @@ id: terminal-controller-failure
 name: terminal_controller_failure
 nodes:
   ask:
-    kind: code
-    code: tests.cli.test_terminal_controller:_pooled_ask
+    kind: human_input
+    prompt: Blocked sibling
     output: str
   fail:
     kind: code
@@ -137,8 +134,8 @@ def _success(output: Any = "done") -> RunResult:
     )
 
 
-def test_prompt_free_result_transfers_after_controller_join_and_registry_cleanup() -> None:
-    """A successful controller returns its exact result and leaves no live owner."""
+def test_prompt_free_result_transfers_after_controller_join() -> None:
+    """A successful controller returns its exact result and never touches the registry."""
 
     controller_threads: list[Thread] = []
     expected = _success()
@@ -209,7 +206,7 @@ def test_sigint_deferred_at_thread_launch_still_joins_before_cleanup(
     main_calls = [call for call in calls if call[0] is main_thread()]
     assert [call[1] for call in main_calls] == [signal.SIG_BLOCK, signal.SIG_SETMASK]
     assert any(call[0] is not main_thread() and call[1] == signal.SIG_SETMASK for call in calls)
-    assert registry_seen == [True]
+    assert registry_seen == [False]
     assert not any(thread.name == "ac-controller" for thread in enumerate_threads())
     assert "ask_user" not in TOOL_REGISTRY
 
@@ -317,6 +314,7 @@ def test_pooled_prompt_eof_preserves_exact_initiating_cause() -> None:
             {},
             num_workers=1,
             stop_event=stop_event,
+            tools={"ask_user": ask_user},
         )
 
     def prompt(request):
@@ -366,6 +364,7 @@ def test_pooled_prompt_eof_outranks_cancelled_sibling(
             {},
             num_workers=2,
             stop_event=stop_event,
+            tools={"ask_user": ask_user, "concurrent_ask": _concurrent_ask_tool(ask_user)},
         )
 
     def prompt(request):
@@ -479,7 +478,7 @@ def test_prompt_and_progress_render_only_on_main_thread() -> None:
         controller_threads.append(current_thread())
         assert on_event is not None
         on_event(NodeStarted("work"))
-        answer = invoke_tool("ask_user", {"question": "Continue?"})
+        answer = ask_user(question="Continue?")
         return _success(answer)
 
     observed = run_cli._run_with_terminal_controller(
@@ -518,7 +517,8 @@ def test_chat_write_flow_approval_crosses_the_main_thread_broker(
     def controller(stop_event, on_event, ask_user, render):
         controller_threads.append(current_thread())
         chat_tools.set_workspace(tmp_path)
-        return _success(chat_tools.write_flow("new.yaml", content))
+        with chat_tools._bind_ask_user(ask_user):
+            return _success(chat_tools.write_flow("new.yaml", content))
 
     observed = run_cli._run_with_terminal_controller(
         controller,
@@ -547,7 +547,7 @@ def test_ctrl_c_during_active_prompt_preserves_keyboard_interrupt_and_joins() ->
 
     def controller(stop_event, on_event, ask_user, render):
         controller_threads.append(current_thread())
-        invoke_tool("ask_user", {"question": "Blocking prompt"})
+        ask_user(question="Blocking prompt")
         return _success("unreachable")
 
     with pytest.raises(KeyboardInterrupt):
@@ -562,7 +562,7 @@ def test_ctrl_c_during_active_prompt_preserves_keyboard_interrupt_and_joins() ->
     assert "ask_user" not in TOOL_REGISTRY
 
 
-def test_second_sigint_during_drain_waits_for_controller_before_registry_cleanup() -> None:
+def test_second_sigint_during_drain_waits_for_controller_before_returning() -> None:
     """Repeated Ctrl-C is deferred until the stopped controller has really finished."""
 
     controller_entered = Event()
@@ -587,8 +587,8 @@ def test_second_sigint_during_drain_waits_for_controller_before_registry_cleanup
         assert cleanup_entered.wait(_TIMEOUT)
         time.sleep(0.05)
         os.kill(os.getpid(), signal.SIGINT)
-        # Give the second SIGINT time to propagate; registry ownership must remain with
-        # the controller until its cleanup finishes.
+        # Give the second SIGINT time to propagate; the helper must still wait for
+        # the controller's cleanup to finish.
         time.sleep(0.05)
         release_controller.set()
 
@@ -606,7 +606,7 @@ def test_second_sigint_during_drain_waits_for_controller_before_registry_cleanup
         interrupter.join(timeout=_TIMEOUT)
         assert controller_done.wait(_TIMEOUT)
 
-    assert registry_seen == [True]
+    assert registry_seen == [False]
     assert not interrupter.is_alive()
     assert not any(
         thread.name.startswith(("ac-worker-", "ac-controller"))
@@ -718,6 +718,7 @@ def test_real_pooled_failure_wakes_prompt_and_joins_every_engine_worker(
             on_event=on_event,
             num_workers=2,
             stop_event=stop_event,
+            tools={"ask_user": ask_user},
         )
 
     observed = run_cli._run_with_terminal_controller(

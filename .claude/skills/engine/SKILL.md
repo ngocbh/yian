@@ -337,10 +337,10 @@ Most are just the functional model (above) made enforceable:
   trace, and append checks. Do not rewrite accepted prefixes. The thirteen older
   kinds retain identical payload validation; four conversation kinds require 8.
 - **Blocking authorable effects return ordinary outputs** — an AGENT node's
-  explicitly
-  granted `ask_user` tool and HUMAN_INPUT call the process-owned handler inside
-  their live invocation; the AGENT node checks the run-owned stop event between external
-  model/tool effects, and WAIT blocks on that event until its absolute UTC deadline.
+  explicitly granted `ask_user` tool and HUMAN_INPUT call the run's own handler
+  (passed as `tools={"ask_user": ...}`) inside their live invocation; the AGENT
+  node checks the run-owned stop event between external model/tool effects, and
+  WAIT blocks on that event until its absolute UTC deadline.
   All three return `Output`; none creates continuation topology.
 - **Dependency-light core (with a deliberate exception)** — keep the engine free
   of a DB and heavy frameworks; external capabilities enter through **injected
@@ -360,7 +360,8 @@ Most are just the functional model (above) made enforceable:
   execution-semantic traits/hooks
   (`is_spawner`, `binds_per_item`, `item_source_key`,
   `bind_reserved`, `reserved_wiring_keys`, `validate_execution_setup`,
-  `grow_depth_delta`, `is_loop`, `needs_stop_event`, `skipped_output_target`)
+  `grow_depth_delta`, `is_loop`, `needs_stop_event`, `needs_tools`,
+  `skipped_output_target`)
   plus the diagnostic-only projections `exception_origin` and `failure_trace`.
   Those projections are identity-neutral. `skipped_output_target()` is pure, deterministic
   topology authority derived only from manifest-backed node state. Its base

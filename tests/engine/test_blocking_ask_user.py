@@ -11,13 +11,12 @@ import pytest
 
 import agent_composer.llm_clients as llm_clients
 import agent_composer.tools as tools_module
-import agent_composer.nodes.agent.modes.tool_calling as tool_calling_mode
 from agent_composer.nodes.agent import AgentNode
 from agent_composer.nodes.base import Output, _HostStop
 from agent_composer.nodes.contracts import Assertion, ValueContract
 from agent_composer.runtime.engine import FlowEngine
 from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
-from agent_composer.tools import install_ask_user
+from agent_composer.tools import ToolSet
 from agent_composer.typesys.pool import VariablePool
 from agent_composer.typesys.values import Type, ValueKind
 
@@ -49,9 +48,10 @@ def _tool_reply(name: str, args: dict, call_id: str) -> AIMessage:
     )
 
 
-def _drive(node: AgentNode):
-    """Return one raw direct-evaluation outcome."""
-    return eval_node(node, None, VariablePool()).outcome
+def _drive(node: AgentNode, ask_user=None):
+    """Return one raw direct-evaluation outcome, with an optional ``ask_user`` handler."""
+    tools = None if ask_user is None else ToolSet({"ask_user": ask_user})
+    return eval_node(node, None, VariablePool(), tools=tools).outcome
 
 
 def test_mode_resolves_model_factory_at_call_time(monkeypatch):
@@ -84,8 +84,7 @@ def test_ask_user_answer_is_a_tool_message_in_the_same_loop(monkeypatch):
         mode="tool_calling",
     )
     monkeypatch.setattr(llm_clients, "model_from_config", lambda config: chat)
-    with install_ask_user(answer):
-        event = _drive(node)
+    event = _drive(node, answer)
 
     assert event == Output("approved result")
     assert [tool.name for tool in chat.bound_tools] == ["ask_user"]
@@ -127,8 +126,7 @@ def test_two_blocking_questions_keep_one_conversation(monkeypatch):
         questions.append(request["question"])
         return next(answers)
 
-    with install_ask_user(answer):
-        event = _drive(node)
+    event = _drive(node, answer)
 
     assert event == Output("complete")
     assert questions == ["First?", "Second?"]
@@ -154,16 +152,6 @@ def test_model_tool_calls_run_in_exact_returned_order(monkeypatch):
         seen.append(("second", value))
         return "two"
 
-    monkeypatch.setitem(
-        tools_module.TOOL_REGISTRY,
-        "first",
-        StructuredTool.from_function(first, name="first"),
-    )
-    monkeypatch.setitem(
-        tools_module.TOOL_REGISTRY,
-        "second",
-        StructuredTool.from_function(second, name="second"),
-    )
     chat = _ScriptedChat(
         [
             AIMessage(
@@ -198,15 +186,17 @@ def test_model_tool_calls_run_in_exact_returned_order(monkeypatch):
         seen.append(("ask_user", request["question"]))
         return "human answer"
 
-    with install_ask_user(answer):
-        event = _drive(
-            AgentNode(
-                "agent",
-                prompt="go",
-                tools=["first", "ask_user", "second"],
-                mode="tool_calling",
-            )
-        )
+    event = eval_node(
+        AgentNode(
+            "agent",
+            prompt="go",
+            tools=["first", "ask_user", "second"],
+            mode="tool_calling",
+        ),
+        None,
+        VariablePool(),
+        tools=ToolSet({"first": first, "second": second, "ask_user": answer}),
+    ).outcome
 
     assert event == Output("done")
     assert seen == [
@@ -277,11 +267,11 @@ def test_stop_during_tool_resolution_prevents_model_binding(monkeypatch):
 
     monkeypatch.setattr(llm_clients, "model_from_config", lambda config: _Model())
 
-    def resolve_and_stop(tool_ids):
+    def resolve_and_stop(self, tool_ids):
         stop_event.set()
         return [object()]
 
-    monkeypatch.setattr(tool_calling_mode, "resolve_tools", resolve_and_stop)
+    monkeypatch.setattr(ToolSet, "resolve", resolve_and_stop)
     node = AgentNode(
         "agent",
         prompt="go",
@@ -352,8 +342,10 @@ def test_ask_user_requires_an_explicit_authored_grant(monkeypatch):
     monkeypatch.setattr(llm_clients, "model_from_config", lambda config: chat)
     handled = []
 
-    with install_ask_user(lambda **request: handled.append(request) or "no"):
-        event = _drive(AgentNode("agent", prompt="go", tools=[], mode="tool_calling"))
+    event = _drive(
+        AgentNode("agent", prompt="go", tools=[], mode="tool_calling"),
+        lambda **request: handled.append(request) or "no",
+    )
 
     assert isinstance(event, EvaluationFailure)
     assert "not granted" in event.failure.message
@@ -376,8 +368,8 @@ def test_ask_user_exception_propagates_from_the_live_node(monkeypatch):
         tools=["ask_user"],
         mode="tool_calling",
     )
-    with install_ask_user(fail), pytest.raises(RuntimeError) as caught:
-        node.run({})
+    with pytest.raises(RuntimeError) as caught:
+        node.run({}, tools=ToolSet({"ask_user": fail}))
 
     assert caught.value is failure
 
@@ -416,8 +408,7 @@ def test_structured_output_succeeds_after_blocking_ask(monkeypatch):
         )
     )
 
-    with install_ask_user(lambda **request: "yes"):
-        event = _drive(node)
+    event = _drive(node, lambda **request: "yes")
 
     assert event == Output({"name": "Ada", "score": 9})
 
@@ -438,8 +429,7 @@ def test_post_assert_fires_after_blocking_ask(monkeypatch):
     )
     node.post_asserts = [Assertion("output == 'GOOD'", "output == 'GOOD'")]
 
-    with install_ask_user(lambda **request: "yes"):
-        event = _drive(node)
+    event = _drive(node, lambda **request: "yes")
 
     assert isinstance(event, EvaluationFailure)
     assert event.failure.cause_type == "NodeAssertFailed"

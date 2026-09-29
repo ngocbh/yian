@@ -18,7 +18,7 @@ from agent_composer.nodes.tool import ToolNode
 
 @dataclass(frozen=True, kw_only=True)
 class ToolDescriptor(NodeDescriptor):
-    """kind=tool — a direct, deterministic call into TOOL_REGISTRY (untyped inputs).
+    """kind=tool — a direct, deterministic call to one tool in the run's `ToolSet` (untyped inputs).
 
     Inherits the common descriptor fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` +
     the Compose-only `range`/`field_ranges` parse metadata), the normalized `inputs` binding carrier, and the

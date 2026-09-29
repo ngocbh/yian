@@ -662,6 +662,10 @@ class Node(ABC):
     # Declares "I can publish actual render locals for retained backward context".
     # The evaluator supplies a single-write capture callable only during retention.
     needs_render_capture: ClassVar[bool] = False
+    # Declares "I look up or invoke tools". The evaluator supplies the run's exact
+    # ``caps['tools']`` ToolSet, so per-run tools and the per-run ``ask_user`` handler
+    # never leak between runs. TOOL, HUMAN_INPUT, and AGENT opt in.
+    needs_tools: ClassVar[bool] = False
 
     def __init__(
         self,
@@ -934,7 +938,7 @@ class Node(ABC):
         Returns a `NodeResult` (`Output | Route | Grow`), or — for a streaming kind —
         a generator that yields `StreamChunk` and *returns* a `NodeResult`. Narrow effect caps
         are passed only to nodes whose traits request them (``bind_item``,
-        ``stop_event``, ``open_memory_context``, and ``evaluation_trace``).
+        ``stop_event``, ``open_memory_context``, ``evaluation_trace``, and ``tools``).
         Expected rejection is a `raise`, not a result variant; the evaluator classifies
         its structural stage before the dispatcher records the canonical `Failure`."""
         params = self.params if self.params is not None else []
@@ -1036,7 +1040,7 @@ class Node(ABC):
         Returns a `NodeResult` (`Output | Route | Grow`), or — for a streaming kind —
         a generator that yields `StreamChunk` and *returns* a `NodeResult`. Narrow effect caps
         are passed only to nodes whose traits request them (``bind_item``,
-        ``stop_event``, ``open_memory_context``, and ``evaluation_trace``).
+        ``stop_event``, ``open_memory_context``, ``evaluation_trace``, and ``tools``).
         A body exception is classified as ``node.execute`` by the evaluator."""
         raise NotImplementedError(
             f"node {self.id!r} ({type(self).__name__}) defines no forward"

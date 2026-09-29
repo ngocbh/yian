@@ -456,6 +456,11 @@ typed `output:`. TOOL instead accepts an untyped `input:` map defined by the
 registered tool and rejects `output:`; its return value is still bound as the
 node's `output` for downstream references.
 
+A TOOL node's `tool_id:` and an AGENT node's `tools:` grant name either a tool
+registered with `register_tool` or one the host passes to that run with
+`run_flow(..., tools={...})`. When a host passes `tools=`, the run sees only
+those tools. The flow text is the same either way.
+
 A `code` node's `code:` field is one of two shapes:
 
 **Reference** — a `module:function` token: import and call it in-process.
@@ -546,7 +551,7 @@ output: ${bullish.output | cautious.output}
 
 ### `human_input` — a deterministic human gate
 
-A `human_input` node **always** invokes the host-owned `ask_user` interaction at a
+A `human_input` node **always** invokes the run's `ask_user` handler at a
 fixed point and blocks its worker until the human answers. The answer is
 validated against the declared `output:` before the flow continues. This is one
 live node call; the invocation stays active until the answer arrives.

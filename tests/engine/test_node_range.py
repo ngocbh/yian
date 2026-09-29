@@ -6,7 +6,6 @@ from agent_composer.compile.manifest import flow_manifest
 from agent_composer.compose.loader import load_flow
 from agent_composer.nodes.start.node import StartNode
 from agent_composer.run import resume_flow, run_flow
-from agent_composer.tools import install_ask_user
 
 _REMOVED_FIELDS = {
     "range",
@@ -64,12 +63,12 @@ def test_render_only_node_metadata_does_not_ride_run_log(tmp_path: Path):
     assert _REMOVED_FIELDS.isdisjoint(vars(node))
     node.wiring_labels = {"__r0": "cases[0].when"}  # a synth-param label — also render-only
 
-    with install_ask_user(lambda **request: None):
-        res = run_flow(
-            loaded,
-            {"settle_at": "2026-07-01"},
-            log=path,
-        )
+    res = run_flow(
+        loaded,
+        {"settle_at": "2026-07-01"},
+        log=path,
+        tools={"ask_user": lambda **request: None},
+    )
     assert res.status == "succeeded"
     assert res.output == "cancel"
 

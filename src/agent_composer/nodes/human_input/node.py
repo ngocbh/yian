@@ -1,4 +1,4 @@
-"""HUMAN_INPUT — a blocking call to the host-owned ``ask_user`` tool.
+"""HUMAN_INPUT — a blocking call to the run's ``ask_user`` tool.
 
 The node renders and validates its authored question surface, invokes the reserved
 tool through the trusted metadata path, and returns the handler's answer as its one
@@ -10,15 +10,15 @@ from typing import Any, Optional
 from agent_composer.expr.template import render_template_record
 from agent_composer.nodes.base import Node, NodeKind, Output
 from agent_composer.nodes.human_input.questions import parse_questions
-from agent_composer.tools import invoke_tool_trusted
+from agent_composer.tools import ToolSet
 
 
 class HumanInputNode(Node):
     """
     A structural gate that blocks its worker until a person answers.
 
-    On its single run the node invokes the process-owned ``ask_user`` tool through
-    the trusted path and returns the answer as this node's ``Output``. Tool
+    On its single run the node invokes the run's ``ask_user`` tool through the
+    trusted path and returns the answer as this node's ``Output``. Tool
     validation and handler exceptions propagate to the ordinary node-failure boundary.
 
     The node carries questions in one of three ways: a literal list baked in
@@ -46,6 +46,7 @@ class HumanInputNode(Node):
     """
 
     kind = NodeKind.HUMAN_INPUT
+    needs_tools = True
 
     def __init__(
         self,
@@ -63,7 +64,7 @@ class HumanInputNode(Node):
         self.questions = questions
         self.questions_input = questions_input
 
-    def forward(self, inputs: dict) -> Output:
+    def forward(self, inputs: dict, *, tools: ToolSet | None = None) -> Output:
         prompt = render_template_record(self.prompt, inputs) if self.prompt is not None else None
 
         if self.questions is not None:
@@ -80,7 +81,8 @@ class HumanInputNode(Node):
             parsed = parse_questions(raw)  # raises QuestionSpecError on a bad shape
             parsed_questions = [question.model_dump() for question in parsed]
 
-        answer = invoke_tool_trusted(
+        tools = tools if tools is not None else ToolSet()
+        answer = tools.invoke_trusted(
             "ask_user",
             {
                 "question": prompt or "",

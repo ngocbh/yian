@@ -12,7 +12,6 @@ from agent_composer.compose.loader import load_flow
 from agent_composer.nodes.agent import AgentNode
 from agent_composer.nodes.base import _HostStop
 from agent_composer.run import resume_flow, run_flow
-from agent_composer.tools import install_ask_user
 
 
 _RECURSIVE_FLOW = """
@@ -204,15 +203,14 @@ def test_log_resume_restores_into_a_private_graph(tmp_path: Path):
     def interrupt(**request):
         raise interruption
 
-    with install_ask_user(interrupt), pytest.raises(_HostStop) as caught:
-        run_flow(source, {}, log=path)
+    with pytest.raises(_HostStop) as caught:
+        run_flow(source, {}, log=path, tools={"ask_user": interrupt})
     assert caught.value is interruption
     assert _graph_snapshot(source.compiled) == source_static
 
     fresh = _load_blocking_call()
     static = _graph_snapshot(fresh.compiled)
-    with install_ask_user(lambda **request: "yes"):
-        resumed = resume_flow(fresh, log=path)
+    resumed = resume_flow(fresh, log=path, tools={"ask_user": lambda **request: "yes"})
 
     assert resumed.status == "succeeded", resumed.failure
     assert resumed.output == "yes"

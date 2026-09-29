@@ -6,7 +6,6 @@ from agent_composer.compose import (
 )
 from agent_composer.compose.helpers.errors import LoadDiagnostics
 from agent_composer.run import run_flow
-from agent_composer.tools import install_ask_user
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 
@@ -146,8 +145,9 @@ output: ${confirm.output | abort.output}
 def test_golden_human_input_then_past_wait_completes_in_one_run():
     # HUMAN_INPUT completes through its trusted host; the past WAIT returns in the same run.
     loaded = load_flow(_EFFECTS)
-    with install_ask_user(lambda **request: "approve"):
-        result = run_flow(loaded, {"settle_at": "2000-01-01"})
+    result = run_flow(
+        loaded, {"settle_at": "2000-01-01"}, tools={"ask_user": lambda **request: "approve"}
+    )
     assert result.status == "succeeded"
     assert result.output == "approve"
 

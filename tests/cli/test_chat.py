@@ -683,8 +683,7 @@ def test_chat_survives_a_failed_turn(tmp_path, monkeypatch):
     assert len(logs) == 2
     assert len({path.stem for path in logs}) == 2
     assert all(f"Run log: {path}" in r.stderr for path in logs)
-    # Recovery installed a fresh process-owned handler, which proves the failed
-    # lifecycle released its owner; the final lifecycle releases its owner too.
+    # Each lifecycle passes its handler as a per-run tool; none touches the registry.
     assert "ask_user" not in tools_module.TOOL_REGISTRY
 
 

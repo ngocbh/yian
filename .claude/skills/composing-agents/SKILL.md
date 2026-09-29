@@ -299,7 +299,7 @@ verdict:
 ```yaml
 news:
   kind: tool
-  tool_id: get_facts           # a TOOL_REGISTRY key
+  tool_id: get_facts           # a registered or per-run tool id
   input:                       # untyped — each value is a ${...} ref or a literal
     symbol: ${input.topic}
     limit: 10
@@ -313,6 +313,9 @@ def get_facts(symbol: str, limit: int = 10) -> list[dict]:
     "Fetch recent facts for a symbol."   # docstring = the description the model sees
     ...
 ```
+Or give it to one run only: `run_flow(flow, inputs, tools={"get_facts": get_facts})`.
+That mapping is the run's whole tool set: registered tools are hidden. To keep
+them, pass `tools={**registered_tools(), "get_facts": get_facts}`.
 Note `tool` uses `tool_id:` + `input:` (a tool declares no `output:`). (`model` —
 `kind: model`, `model_id:` — is a parseable kind but the serving seam isn't wired
 yet; running one raises.)
@@ -336,7 +339,7 @@ Routing on a `Literal` is **exhaustiveness-checked** — omitting a tag with no
 `else:` is a compile error.
 
 ### `human_input` — a guaranteed human gate
-**Always** calls the host-owned `ask_user` tool and blocks its worker until the
+**Always** calls the run's `ask_user` handler and blocks its worker until the
 host returns a typed answer (validated against `output:`). It stays inside the
 live node call and returns the answer as an ordinary node output.
 ```yaml
@@ -540,7 +543,9 @@ A `tool_calling` AGENT node granted `tools: [ask_user]` can synchronously ask th
 model/tool loop and its returned answer becomes the ordinary tool result. For a
 *guaranteed* gate use `human_input`; for "ask only if needed" use `ask_user`.
 `ask_user` on an AGENT node returns its answer to the same live tool loop; HUMAN_INPUT and
-WAIT return ordinary node outputs from their live calls. There is no authored
+WAIT return ordinary node outputs from their live calls. The host passes the handler
+per run: `run_flow(..., tools={"ask_user": handler})`. `composer run` and `composer chat` do
+this for you; a run without a handler fails any node that asks. There is no authored
 `entry:`/`controls:` field on an AGENT node or event-mode WAIT.
 
 ## Validate & run
@@ -580,7 +585,7 @@ WAIT return ordinary node outputs from their live calls. There is no authored
 - [ ] Every variable has a typed default and a name distinct from local inputs.
 - [ ] Every `long_term_memory:` declaration is on a flow or `agent`, selects a host-registered memory policy by name, and contains only public behavior config.
 - [ ] Each `case` has an `else:` (or its `Literal` cases are exhaustive); branches are joined with `|`.
-- [ ] `tool` ids are registered; a `code` `module:function` is importable (or an inline `code: |` body `return`s a value); `call`/`uses:` targets resolve on the search path.
+- [ ] `tool` ids are registered or passed per run with `tools=`; a `code` `module:function` is importable (or an inline `code: |` body `return`s a value); `call`/`uses:` targets resolve on the search path.
 - [ ] Every CALL/MAP/LOOP has exactly one child form: named `call:`, or non-empty inline `nodes:` plus an `output:` key; inline parent/item dependencies cross through outer `input:`.
 - [ ] A child-flow call is written `call(f, ...)` as a whole value, never `${flow(args)}`; string `:-` defaults and `:?` messages are quoted.
 - [ ] It loads cleanly (`composer run` / `load_flow`) before you wire a model.

@@ -74,7 +74,7 @@ Rules:
   node by name (`name` → `${input.name}`), so you refer to it bare in the prompt.
 - The flow `output:` is the node's output **type**; the flow returns that node's
   output (no explicit `output: ${...}` line).
-- Any other field (`prompt:`, `tools:`, `llm_config:`, node-local `asserts:`, …)
+- Any other field (`prompt:`, `tools:`, `skills:`, `llm_config:`, node-local `asserts:`, …)
   is the node body.
 - Allowed only for the **value-producing leaf kinds** — `agent`, `code`, `model`,
   `tool`, `human_input`. `case`/`call`/`map` reference other nodes a one-node flow
@@ -446,6 +446,44 @@ path and name: MAP items and LOOP iterations of that node share its declaration,
 while distinct authored callsites have distinct owners. Variables introduce no
 data dependencies or flow outputs. A variable named `temperature` is prompt data;
 configure model temperature through `llm_config:`.
+
+#### Agent skills — `skills:`
+
+A skill is a folder with a `SKILL.md` file, in the format Claude Code and Codex
+share: YAML frontmatter with `name` and `description`, then Markdown instructions.
+Other files in the folder (`references/`, `scripts/`, ...) come with the skill.
+Grant skills to a `tool_calling` AGENT by name:
+
+```yaml
+reviewer:
+  kind: agent
+  mode: tool_calling            # the default; skills need this mode
+  skills: [code-review, release-notes]
+  input:
+    diff: ${input.diff}
+  prompt: Review this change. ${diff}
+  output: str
+```
+
+The model sees only each granted skill's name and description, in its system
+message. It reads a skill when it needs it by calling the built-in tool
+`load_skill(name)`, which returns the `SKILL.md` instructions, or
+`load_skill(name, path)`, which returns a file inside the skill folder, such as
+`references/checklist.md`. Paths outside the folder and hidden files (such as
+`.env`) are rejected, and files must be UTF-8 text of at most 256 KiB.
+
+- `skills: [name, ...]` grants exactly those skills. Names use lowercase letters,
+  digits, and single hyphens, up to 64 characters.
+- `skills: all` grants every skill the host supplies for the run. Use it in a
+  shared flow when each run should see a different set.
+- Omitting `skills:` grants none; the system message is unchanged.
+
+YAML only names skills. The host decides which skills exist for a run: `composer run`
+reads your Claude Code and Codex skill folders (see [CLI](cli.md#skills)), and
+Python hosts pass `run_flow(..., skills=load_skills([...]))` (see
+[API](api.md#skills)). A flow that grants skills needs a host `skills=` mapping, and
+each listed name must be in it; otherwise the run fails before it starts. Skills need
+`mode: tool_calling`. `load_skill` is a reserved name: never list it in `tools:`.
 
 ### `code` / `model` / `tool` — the other leaves
 

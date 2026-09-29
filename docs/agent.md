@@ -211,11 +211,16 @@ tool loop and uses the accumulated message history.
 | `prompt:` | Renders local `${name}` values into the initial `HumanMessage`. |
 | `long_term_memory:` plus host `memory={...}` | Supplies one memory context: recalled notes become labelled system sections; a session transcript contributes structured prior messages. |
 | `tools: [name, ...]` | Resolves registered tool schemas and binds them beside the messages in `tool_calling` mode. |
+| `skills: [name, ...]` or `skills: all` plus host `skills=` | Lists each granted skill's name and description in the system message and binds the built-in `load_skill` tool, which returns a skill's instructions or a bundled file on demand. See [agent skills](syntax.md#agent-skills-skills). |
 | Structured `output:` | Selects a provider-supported structured-output binding or a fallback schema instruction, then validates the returned value. A bare `str` remains free text. |
 | `mode:`, `llm_config:`, `retries:`, `env:` | Controls execution; these values are not additional prompt messages. |
 
-The framework system instruction is fixed today. Authored `system_prompt:` is
-tracked in [#259](https://github.com/ngocbh/agent-composer/issues/259).
+The framework system instruction is fixed today, apart from the skill listing
+that granted `skills:` add to it. The memory context is opened with the
+instruction without the listing, so recall does not change. A session transcript
+keeps past `load_skill` calls and results, like any tool call, even if a later run
+grants no skills. Authored `system_prompt:` is tracked in
+[#259](https://github.com/ngocbh/agent-composer/issues/259).
 
 ### Memory is an outer-to-local stack
 
@@ -408,11 +413,10 @@ threading a carried record.
 
 ## Planned extensions
 
-The current AGENT surface grants registered tools but has no `skills:` field.
-[#260](https://github.com/ngocbh/agent-composer/issues/260) tracks reuse of
-Codex/Claude `SKILL.md` packages and host-controlled discovery of project-local
-tools. Until those issues are implemented, `system_prompt:` and `skills:` are
-not valid Agent Composer YAML.
+An AGENT grants registered tools with `tools:` and host-supplied `SKILL.md`
+packages with `skills:`. Host-controlled discovery of project-local tools is
+tracked separately. Authored `system_prompt:` is not valid Agent Composer YAML
+until [#259](https://github.com/ngocbh/agent-composer/issues/259) lands.
 
 ## The authored structure stays fixed
 

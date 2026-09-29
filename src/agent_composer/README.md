@@ -975,7 +975,7 @@ provenance holds its `commit_id`, so hosts check there before retrying.
 
 ### Optional backend durability
 
-`memory/storage.py` is a private lower-level SQLite value adapter shared by the
+`memory/storage/sqlite.py` holds `SQLiteStorage`, a lower-level SQLite value adapter shared by the
 episodic, reflective, and session backends. One instance owns a local file for
 its lifetime; a second owner fails immediately. Backends validate complete semantic candidates,
 commit detached finite JSON in a transaction, then publish RAM. Private inventory

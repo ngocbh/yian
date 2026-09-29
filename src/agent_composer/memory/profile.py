@@ -27,7 +27,7 @@ from agent_composer.memory.contracts import (
     MemoryOperationError,
     RecallContext,
 )
-from agent_composer.memory.profile_store import ProfileStore, ProfileVersionMismatch
+from agent_composer.memory.storage import ProfileStore, ProfileVersionMismatch
 from agent_composer.memory.reflective import (
     _bounded_json_material,
     _canonical_json,

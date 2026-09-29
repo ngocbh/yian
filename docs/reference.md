@@ -155,15 +155,15 @@ source alongside notes; the evaluator admits it into one transient context.
 ## Profile memory
 
 Import the concrete backend from `agent_composer.memory.profile` and stores from
-`agent_composer.memory.profile_store`. See [profile memory](learning.md#profile-memory).
+`agent_composer.memory.storage`. See [profile memory](learning.md#profile-memory).
 
 ::: agent_composer.memory.profile.ProfileMemory
 
-::: agent_composer.memory.profile_store.ProfileStore
+::: agent_composer.memory.storage.profile.ProfileStore
 
-::: agent_composer.memory.profile_store.FileProfileStore
+::: agent_composer.memory.storage.profile.FileProfileStore
 
-::: agent_composer.memory.profile_store.ProfileVersionMismatch
+::: agent_composer.memory.storage.profile.ProfileVersionMismatch
 
 ## Compose source provenance
 

@@ -490,7 +490,7 @@ Most are just the functional model (above) made enforceable:
   commit. Optional host-only `storage=path` preserves complete private state.
 - **Profile memory rewrites one document** — import `ProfileMemory` from
   `agent_composer.memory.profile` and a store from
-  `agent_composer.memory.profile_store`. The snapshot pins `profile_version` and
+  `agent_composer.memory.storage`. The snapshot pins `profile_version` and
   `text_sha256`, never the text. Only the outermost frame of the policy recalls
   and learns; frame config is empty. Learning is one tool-free model call over
   feedback, the current document, and budgeted episodes with their visible
@@ -501,7 +501,7 @@ Most are just the functional model (above) made enforceable:
   attempt stays `unknown`, and hosts find its `commit_id` in store provenance.
 - **Durable memory belongs to the backend, not runtime** — the episodic,
   reflective, and session backends default to `storage=None` with no I/O.
-  `memory.storage` supplies one lifetime SQLite owner and finite-JSON
+  `memory.storage.SQLiteStorage` supplies one lifetime SQLite owner and finite-JSON
   transactions. Persist validated candidates before RAM publication, including
   reset/adoption and private commit tombstones;
   preserve public snapshot formats and exact run-opening pins. Do not store host

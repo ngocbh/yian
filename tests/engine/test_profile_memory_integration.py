@@ -12,7 +12,7 @@ import agent_composer.memory.profile as profile
 from agent_composer.compose import load_flow
 from agent_composer.memory import MemorySetupError
 from agent_composer.memory.profile import ProfileMemory
-from agent_composer.memory.profile_store import FileProfileStore
+from agent_composer.memory.storage import FileProfileStore
 from agent_composer.memory.session import SessionMemory
 from agent_composer.run import resume_flow, run_flow
 from agent_composer.runtime.log import JsonlRunLog, MemoryCommitFailedRecord

@@ -7,7 +7,7 @@ import threading
 
 import pytest
 
-from agent_composer.memory.profile_store import (
+from agent_composer.memory.storage import (
     FileProfileStore,
     ProfileStore,
     ProfileVersionMismatch,

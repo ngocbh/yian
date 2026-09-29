@@ -27,7 +27,7 @@ from agent_composer.memory import (
     ToolResultInteraction,
 )
 from agent_composer.memory.profile import ProfileMemory
-from agent_composer.memory.profile_store import FileProfileStore
+from agent_composer.memory.storage import FileProfileStore
 
 ROOT = MemoryFrameRef("chat", ("chat",), MemoryOwner.FLOW)
 CHILD = MemoryFrameRef("chat", ("chat", "reply"), MemoryOwner.AGENT)

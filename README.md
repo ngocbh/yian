@@ -172,7 +172,7 @@ compare-and-set write:
 
 ```python
 from agent_composer.memory.profile import ProfileMemory
-from agent_composer.memory.profile_store import FileProfileStore
+from agent_composer.memory.storage import FileProfileStore
 
 profile = ProfileMemory(FileProfileStore("people/ada.md"))
 result = run_flow(flow, inputs, memory={"profile": profile}, learnable=True)

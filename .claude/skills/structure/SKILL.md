@@ -147,7 +147,7 @@ grant effects. Keep mutable backend coordination and stored conversation state o
 of the scheduler. Runtime selects the innermost recalled transcript source and
 binds authored scope and accepted invocation identity; `eval_node` owns the lazy
 turn lifetime through execution/cleanup, never provider message encoding.
-`nodes/agent/context.py` owns stateless API message encoding and effect
+`nodes/agent/memory.py` owns stateless API message encoding and effect
 publication through the turn. It may import memory contracts and provider message
 types, but owns no history or queue. It injects safe projection and the current
 unbound model into optional memory-owned context preparation; summary callbacks

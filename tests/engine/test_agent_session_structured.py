@@ -122,7 +122,7 @@ def test_structured_exhaustion_retains_schema_error_identity_and_origin(native):
 @pytest.mark.parametrize("native", [False, True])
 @pytest.mark.parametrize("stage", ["request", "observe", "encode"])
 def test_structured_memory_faults_do_not_retry_model(monkeypatch, native, stage):
-    from agent_composer.nodes.agent import context as conversation
+    from agent_composer.nodes.agent import memory as conversation
     from agent_composer.nodes.agent.structured import generate_structured
     from agent_composer.nodes.base import _CapabilityFault
     from agent_composer.typesys.values import Type, ValueKind

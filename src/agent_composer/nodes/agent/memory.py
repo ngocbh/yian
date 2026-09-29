@@ -1,4 +1,5 @@
-"""Model context and effects over recalled notes and structured transcripts.
+"""How an AGENT uses memory: model input from recalled notes and transcripts,
+and model and tool effects recorded back into the memory turn.
 
 The adapter frames recalled notes and projects structured transcript messages.
 It retains no history or lease; only the memory backend owns conversation state. Full provider input and

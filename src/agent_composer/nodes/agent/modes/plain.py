@@ -12,7 +12,7 @@ from uuid import uuid4
 from langchain_core.messages import HumanMessage, SystemMessage
 
 import agent_composer.llm_clients as llm_clients
-from agent_composer.nodes.agent.context import prepare_history, invoke_model, system_prompt_with_memory
+from agent_composer.nodes.agent.memory import prepare_history, invoke_model, system_prompt_with_memory
 from agent_composer.nodes.agent.live import invoke_chat, live_sinks, observe_model_call
 from agent_composer.nodes.agent.modes.common import (
     DEFAULT_SYSTEM,

@@ -285,7 +285,7 @@ def test_stop_boundaries_retain_surfaced_tool_truth_before_unwind(monkeypatch, s
 
 @pytest.mark.parametrize("stage", ["request", "observe", "encode"])
 def test_tool_memory_fault_cannot_repeat_external_action(monkeypatch, stage):
-    from agent_composer.nodes.agent import context as conversation
+    from agent_composer.nodes.agent import memory as conversation
     from agent_composer.nodes.base import _CapabilityFault
     error, calls, observations = ValueError("memory refused"), [], []
     def request(*args, **kwargs):
@@ -313,7 +313,7 @@ def test_tool_memory_fault_cannot_repeat_external_action(monkeypatch, stage):
 
 @pytest.mark.parametrize("host_stop", [False, True])
 def test_tool_error_identity_survives_failed_observation(host_stop):
-    from agent_composer.nodes.agent.context import invoke_tool_effect
+    from agent_composer.nodes.agent.memory import invoke_tool_effect
     from agent_composer.nodes.base import _CapabilityFault, _HostStop
     primary = _HostStop("stopped") if host_stop else ValueError("tool failed")
     seen = []
@@ -345,7 +345,7 @@ def test_session_tool_calls_keep_public_argument_validation(monkeypatch):
 
 def test_restored_unclosed_invocation_reports_unknown_completion_without_changing_history():
     from agent_composer.memory import MemoryFrameSpec
-    from agent_composer.nodes.agent.context import history_messages, invoke_model, invoke_tool_effect
+    from agent_composer.nodes.agent.memory import history_messages, invoke_model, invoke_tool_effect
     from tests.engine._session_fakes import REF, harness, request, snapshot
     memory, actions = SessionMemory(), []
     with harness(memory) as opened:

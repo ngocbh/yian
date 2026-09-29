@@ -36,7 +36,7 @@ from agent_composer.memory.contracts import (
     EvaluationTrace,
     ModelValueInteraction,
 )
-from agent_composer.nodes.agent.context import invoke_model
+from agent_composer.nodes.agent.memory import invoke_model
 from agent_composer.nodes.agent.live import LiveSinks, invoke_chat, invoke_structured
 from agent_composer.nodes.agent.modes.utils import record_model_text, text_of
 from agent_composer.nodes.base import _CapabilityFault, _HostStop

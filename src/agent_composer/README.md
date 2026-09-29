@@ -1069,7 +1069,7 @@ finished, not that the dispatcher subsequently accepted typed output. Cleanup
 preserves primary errors; no live lease travels in worker results. Nodes without
 the trait and calls without a capable frame remain dormant.
 
-`nodes/agent/context.py` is a stateless provider adapter, not a second store.
+`nodes/agent/memory.py` is a stateless provider adapter, not a second store.
 It encodes detached finite-JSON LangChain messages and actual effect observations
 through the admitted turn. Provider plus message format define compatibility;
 compatible model changes retain history. Current instructions, recall, and tool

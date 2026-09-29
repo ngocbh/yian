@@ -127,7 +127,7 @@ def test_event_sink_failure_escapes_as_a_host_fault(monkeypatch):
 
 def test_history_summary_call_is_observed_through_the_wrapper():
     from agent_composer.memory.session import SessionMemory
-    from agent_composer.nodes.agent import context
+    from agent_composer.nodes.agent import memory as conversation
     from tests.engine._session_fakes import harness, request
     from tests.engine.test_agent_session import _Model
     from tests.engine.test_agent_session_summaries import _seed
@@ -144,7 +144,7 @@ def test_history_summary_call_is_observed_through_the_wrapper():
 
     with harness(memory) as opened:
         with opened.frame.open_turn(request("current"), check_stopped=lambda: None) as turn:
-            messages = context.prepare_history(
+            messages = conversation.prepare_history(
                 turn, model, check_stopped=lambda: None, observe_summary=observe
             )
     assert wrapped == [4]

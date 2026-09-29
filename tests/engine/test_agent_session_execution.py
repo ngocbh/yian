@@ -14,7 +14,7 @@ from agent_composer import load_flow, run_flow
 from agent_composer.memory import MemoryOperationError
 from agent_composer.memory.conversation import conversation_view_from_json
 from agent_composer.memory.session import SessionMemory
-from agent_composer.nodes.agent.context import decode_message
+from agent_composer.nodes.agent.memory import decode_message
 from agent_composer.nodes.base import _HostStop
 from agent_composer.run import _run_flow_controlled
 from tests.engine._memory_fakes import _Memory

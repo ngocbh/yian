@@ -381,7 +381,7 @@ body execution, generator drain, post-assertions, and result-shape checks. Later
 dispatcher typed validation is outside this lifetime. No live lease enters a
 worker result, record, or reducer; primary failures survive cleanup.
 
-`nodes/agent/context.py` adapts actual LangChain messages and effect
+`nodes/agent/memory.py` adapts actual LangChain messages and effect
 observations without storing history itself. Compatibility includes provider and
 versioned message format; current instructions/recall/grants apply on every call,
 and compatible model changes keep history. Historical instructions do not become

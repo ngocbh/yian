@@ -20,7 +20,7 @@ from langchain_core.messages import (
 import agent_composer.llm_clients as llm_clients
 from agent_composer.memory.session import SessionMemory
 from agent_composer.memory import MemoryFrameSpec, MemorySection
-from agent_composer.nodes.agent import context as conversation
+from agent_composer.nodes.agent import memory as conversation
 from agent_composer.nodes.agent.modes.common import AgentRunContext
 from agent_composer.nodes.agent.modes.plain import plain
 from agent_composer.nodes.agent.modes.tool_calling import tool_calling

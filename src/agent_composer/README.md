@@ -623,6 +623,10 @@ result; the durable outcome may also retain optional source-neutral evaluation
 evidence. Host control, stream callbacks, unexpected binder faults, malformed
 setup, and arbitrary host/compiler faults escape. A streaming kind may yield
 transient `StreamChunk` values and then return one of the same three results.
+A node declaring `needs_live_events` instead receives in-body `emit_stream` and
+`emit_event` capabilities, each only when the host supplied the matching
+callback. They publish transient chunks and in-loop observers without changing
+the node result; a sink exception escapes as the host's own exception.
 
 `eval_node(..., capture_bindings=True)` can also return a detached
 `BindingCapture` independently of model/tool evidence. It retains the actual
@@ -702,7 +706,7 @@ The runtime core is **kind-blind**. It dispatches on this result sum and consult
 node-owned execution-semantic traits/hooks (`is_spawner`, `binds_per_item`, `item_source_key`,
 `bind_reserved`, `validate_execution_setup`, `grow_depth_delta`, `is_loop`,
 `needs_stop_event`, `needs_tools`, `needs_memory_context`, `needs_evaluation_trace`,
-`memory_scope`, and `skipped_output_target`) plus the diagnostic-only projections
+`needs_live_events`, `memory_scope`, and `skipped_output_target`) plus the diagnostic-only projections
 `exception_origin` and `failure_trace`; it never branches behavior on `NodeKind`.
 A kind label may appear in diagnostic text. The diagnostic projections do not
 affect program identity. The closed kind-aware

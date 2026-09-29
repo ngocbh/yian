@@ -10,7 +10,7 @@ import pytest
 from agent_composer.nodes.base import Output
 from agent_composer.nodes.human_input.node import HumanInputNode
 from agent_composer.nodes.human_input.questions import QuestionSpecError
-from agent_composer.tools import install_ask_user
+from agent_composer.tools import ToolSet
 
 
 def test_literal_questions_render_and_invoke_host():
@@ -21,8 +21,10 @@ def test_literal_questions_render_and_invoke_host():
         ],
     )
     requests = []
-    with install_ask_user(lambda **request: requests.append(request) or {"H": "A"}):
-        result = node.run({"x": "framework"})
+    result = node.run(
+        {"x": "framework"},
+        tools=ToolSet({"ask_user": lambda **request: requests.append(request) or {"H": "A"}}),
+    )
 
     assert result == Output({"H": "A"})
     assert len(requests[0]["questions"]) == 1
@@ -34,10 +36,10 @@ def test_literal_questions_render_and_invoke_host():
 def test_questions_input_ref_resolves():
     node = HumanInputNode("ask", questions_input="qs")
     requests = []
-    with install_ask_user(lambda **request: requests.append(request) or {"H": "A"}):
-        result = node.run(
-            {"qs": [{"question": "Q", "header": "H", "options": [{"label": "A"}]}]}
-        )
+    result = node.run(
+        {"qs": [{"question": "Q", "header": "H", "options": [{"label": "A"}]}]},
+        tools=ToolSet({"ask_user": lambda **request: requests.append(request) or {"H": "A"}}),
+    )
 
     assert result == Output({"H": "A"})
     assert len(requests[0]["questions"]) == 1
@@ -46,15 +48,18 @@ def test_questions_input_ref_resolves():
 
 def test_bad_fed_type_raises():
     node = HumanInputNode("ask", questions_input="qs")
-    with install_ask_user(lambda **request: None), pytest.raises(QuestionSpecError):
-        node.run({"qs": []})  # empty list -> parse_questions rejects before host invocation
+    with pytest.raises(QuestionSpecError):
+        # An empty list: parse_questions rejects it before invoking the host.
+        node.run({"qs": []}, tools=ToolSet({"ask_user": lambda **request: None}))
 
 
 def test_prompt_only_invokes_host():
     node = HumanInputNode("ask", prompt="Approve ${x}?")
     requests = []
-    with install_ask_user(lambda **request: requests.append(request) or "yes"):
-        result = node.run({"x": "deploy"})
+    result = node.run(
+        {"x": "deploy"},
+        tools=ToolSet({"ask_user": lambda **request: requests.append(request) or "yes"}),
+    )
 
     assert result == Output("yes")
     assert requests[0]["question"] == "Approve deploy?"

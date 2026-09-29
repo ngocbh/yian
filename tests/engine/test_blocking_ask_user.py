@@ -375,8 +375,8 @@ def test_ask_user_exception_propagates_from_the_live_node(monkeypatch):
         tools=["ask_user"],
         mode="tool_calling",
     )
-    with install_ask_user(fail), pytest.raises(RuntimeError) as caught:
-        node.run({})
+    with pytest.raises(RuntimeError) as caught:
+        node.run({}, tools=ToolSet({"ask_user": fail}))
 
     assert caught.value is failure
 

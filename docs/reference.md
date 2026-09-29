@@ -159,11 +159,11 @@ Import the concrete backend from `agent_composer.memory.profile` and stores from
 
 ::: agent_composer.memory.profile.ProfileMemory
 
-::: agent_composer.memory.storage.profile.ProfileStore
+::: agent_composer.memory.storage.markdown.ProfileStore
 
-::: agent_composer.memory.storage.profile.FileProfileStore
+::: agent_composer.memory.storage.markdown.FileProfileStore
 
-::: agent_composer.memory.storage.profile.ProfileVersionMismatch
+::: agent_composer.memory.storage.markdown.ProfileVersionMismatch
 
 ## Compose source provenance
 

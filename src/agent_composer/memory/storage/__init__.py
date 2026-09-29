@@ -6,7 +6,7 @@ writes through, and ``FileProfileStore`` keeps that document in one editable fil
 Hosts may supply their own ``ProfileStore``.
 """
 
-from agent_composer.memory.storage.profile import (
+from agent_composer.memory.storage.markdown import (
     FileProfileStore,
     ProfileStore,
     ProfileVersionMismatch,

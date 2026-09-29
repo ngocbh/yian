@@ -249,6 +249,7 @@ flowchart TB
     memory --> runtime
     nodes --> runtime
     compile --> runtime
+    tools --> runtime
 
     compose --> run
     compile --> run

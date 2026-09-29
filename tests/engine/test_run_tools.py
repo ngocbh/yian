@@ -8,7 +8,11 @@ from typing import Any
 import pytest
 from langchain_core.tools import StructuredTool
 
+from agent_composer.nodes.base import Node, NodeKind, Output
+from agent_composer.nodes.tool.node import ToolNode
+from agent_composer.runtime.eval_node import eval_node
 from agent_composer.tools import TOOL_REGISTRY, ToolSet, register_tool, registered_tools
+from agent_composer.typesys.pool import VariablePool
 
 
 @pytest.fixture(autouse=True)
@@ -190,3 +194,41 @@ def test_ask_user_entry_must_be_a_plain_callable(entry: Any):
 def test_ask_user_handler_must_accept_every_field():
     with pytest.raises(TypeError, match=r"def handler\(\*\*request\)"):
         ToolSet({"ask_user": lambda question: "yes"})
+
+
+def _ping() -> str:
+    """Return a fixed reply."""
+    return "run-pong"
+
+
+def test_eval_node_passes_the_run_toolset_to_a_tool_node():
+    node = ToolNode("ping", tool_id="ping")
+
+    evaluated = eval_node(node, None, VariablePool(), tools=ToolSet({"ping": _ping}))
+
+    assert evaluated.outcome == Output("run-pong")
+
+
+def test_only_nodes_that_declare_needs_tools_receive_the_toolset():
+    seen: list[list[str]] = []
+
+    class _CapsProbe(Node):
+        kind = NodeKind.CODE
+
+        def forward(self, inputs, **caps):
+            seen.append(sorted(caps))
+            return Output(None)
+
+    class _ToolsProbe(_CapsProbe):
+        needs_tools = True
+
+    tools = ToolSet({"ping": _ping})
+    eval_node(_CapsProbe("plain"), None, VariablePool(), tools=tools)
+    eval_node(_ToolsProbe("opted_in"), None, VariablePool(), tools=tools)
+
+    assert seen == [[], ["tools"]]
+
+
+def test_eval_node_rejects_a_raw_tools_mapping():
+    with pytest.raises(TypeError, match="tools must be a ToolSet or None"):
+        eval_node(ToolNode("ping", tool_id="ping"), None, VariablePool(), tools={"ping": _ping})

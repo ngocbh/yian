@@ -593,10 +593,10 @@ Most are just the functional model (above) made enforceable:
   stops later policies; Finished records the separate outcome. No per-frame
   learning records, nullable legacy attempt IDs, or per-frame retry frontier.
   Keep `unrequested`/`unknown`/`succeeded`/`failed` policy observations distinct.
-  An accepted request or successful Finished permanently forbids another attempt;
-  a permitted manual precommit retry recomputes everything using fresh sessions
-  and original snapshots. Never resume Ready proposals or infer retry policy from
-  backend hints.
+  Any finished attempt admits another; an unfinished one is closed as interrupted
+  first. Each attempt recomputes everything using fresh sessions and original
+  snapshots, and later requesting attempts use attempt-scoped commit IDs. Never
+  resume Ready proposals or infer retry policy from backend hints.
 - **Delayed backward owns no idle resources** — `run.py` keeps private program
   and accepted data plus policy references. Each call reopens/replays authority,
   uses a nonblocking handle guard and durable locks, restores recorded snapshots,

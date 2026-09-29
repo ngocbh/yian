@@ -414,8 +414,8 @@ learners or commit learned mutations.
 Call `result.backward(feedback)` explicitly after forward returns, and inspect
 its separate outcome. With `None` feedback, enabled memory frames still learn
 from accepted history without AGENT backward model work. Terminal resume is silent
-inspection; manual whole-attempt retry is allowed only before an accepted commit
-request or successful backward completion. The CLI activates declared built-in
+inspection; each explicit `backward()` call is a new whole attempt, even after an
+earlier attempt succeeded or committed. The CLI activates declared built-in
 memory but has no backward command and never enables learning implicitly.
 
 ## Validate

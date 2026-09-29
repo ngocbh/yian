@@ -318,9 +318,11 @@ batches commit once. Known failures stop the attempt, preserving completed
 feedback when computation already finished. Host faults escape with the prefix.
 
 Policy observations are `unrequested`, `unknown`, `succeeded`, and `failed`.
-An accepted request or successful Finished closes retry eligibility. Only a manual
-precommit retry can recompute the whole attempt with fresh sessions/original
-snapshots; Ready is inspectable but never resumed. An unconfirmed request stays
+Only an unfinished attempt blocks a new Started; the driver closes it as
+interrupted first. Every explicit call recomputes a whole new attempt with fresh
+sessions/original snapshots; Ready is inspectable but never resumed. The first
+requesting attempt keeps v1 commit IDs and later requesting attempts use
+attempt-scoped v2 IDs (`RuntimeBackwardState.commit_attempt_key`). An unconfirmed request stays
 unknown, and all confirmations without Finished still describe an interruption.
 
 `resume_flow(flow, *, log=..., num_workers=None, memory=None)` validates the

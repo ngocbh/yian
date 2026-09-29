@@ -167,7 +167,7 @@ def _drive_opened_backward(state: RunState, log: RunLog, memory: MemoryRuntime |
     _accept_backward(state, log, BackwardReadyRecord(started.attempt_id, root, attributed, proposals))
     backward = state.backward_state
     for policy_name, batch in zip(backward.policy_order, _proposal_batches(backward, backward.ready)):
-        commit_id = memory_commit_id(state.run_id, policy_name, batch)
+        commit_id = memory_commit_id(state.run_id, policy_name, batch, backward.commit_attempt_key)
         _accept_backward(state, log, MemoryCommitRequestedRecord(
             policy_name, commit_id, batch, attempt_id=started.attempt_id,
         ))

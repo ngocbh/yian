@@ -707,3 +707,7 @@ def test_killed_attempt_does_not_block_a_later_attempt(tmp_path, phase):
     assert finished[1].status == finished[3].status == "succeeded"
     assert finished[2] == projected
     assert finished[2].learning.policies[0].status == ("unknown" if phase == "commit" else "unrequested")
+    requests = [r for r in records if type(r) is MemoryCommitRequestedRecord]
+    assert [r.attempt_id for r in requests] == ([1, 2, 3] if phase == "commit" else [1, 3])
+    assert len({r.commit_id for r in requests}) == len(requests)
+    assert [commit_id for commit_id, _ in third.commit_calls] == [requests[-1].commit_id]

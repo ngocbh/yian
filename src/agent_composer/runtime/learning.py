@@ -452,6 +452,19 @@ class RuntimeBackwardState:
         return any(attempt.requests for attempt in self.attempts)
 
     @property
+    def commit_attempt_key(self) -> int | None:
+        """Return the attempt ID folded into the current attempt's commit IDs.
+
+        The first attempt that requests commits keeps attempt-free
+        ``ac-memory-v1`` IDs, so logs written before repeated attempts replay
+        unchanged. Every later requesting attempt gets its own ``ac-memory-v2``
+        IDs, even when its batch equals an earlier one.
+        """
+        if self.current is None or not any(attempt.requests for attempt in self.attempts[:-1]):
+            return None
+        return self.current.started.attempt_id
+
+    @property
     def policy_outcomes(self) -> tuple[PolicyCommitOutcome, ...]:
         """Project each configured policy from accepted requests and observations."""
         if self.current is None:
@@ -603,7 +616,8 @@ def reduce_backward_record(
         if index >= len(backward.policy_order) or record.policy_name != backward.policy_order[index]:
             raise ValueError("backward request must name the next enabled policy")
         batch = _proposal_batches(backward, current.ready)[index]
-        if record.mutations != batch or record.commit_id != memory_commit_id(trace.run_id, record.policy_name, batch):
+        expected_id = memory_commit_id(trace.run_id, record.policy_name, batch, backward.commit_attempt_key)
+        if record.mutations != batch or record.commit_id != expected_id:
             raise ValueError("backward commit batch and identity must match the ordered Ready proposals")
         next_attempt = replace(current, requests=(*current.requests, record))
     elif type(record) in (MemoryCommitSucceededRecord, MemoryCommitFailedRecord):

@@ -501,6 +501,19 @@ def test_later_attempt_follows_or_closes_any_prior_attempt_and_recomputes_everyt
     assert engine.state.backward_state.can_start
 
 
+def test_repeated_driven_attempts_request_distinct_commit_ids_for_identical_batches():
+    engine, _ = _terminal(("A",))
+    memory = _Memory()
+    for feedback in ("first", "second", "third"):
+        assert _drive(engine, {"A": memory}, feedback=feedback).status == "succeeded"
+    requests = [record for record in _records(engine) if type(record) is MemoryCommitRequestedRecord]
+    assert [record.attempt_id for record in requests] == [1, 2, 3]
+    assert all(record.mutations == () for record in requests)
+    assert [commit_id for commit_id, _ in memory.commit_calls] == [record.commit_id for record in requests]
+    assert len({record.commit_id for record in requests}) == 3
+    assert requests[0].commit_id.startswith("ac-memory-v1:")
+
+
 def test_cleanup_error_after_finished_preserves_success_and_admits_a_later_attempt(monkeypatch):
     engine, _ = _terminal()
     memory = _Memory()

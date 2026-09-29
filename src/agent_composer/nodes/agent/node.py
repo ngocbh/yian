@@ -11,7 +11,7 @@ no conversation or continuation state is stored in the graph or variable pool.
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any, Callable, Iterator, Literal, Optional
+from typing import Any, Callable, Iterator, Literal, Mapping, Optional
 
 from agent_composer.diagnostics import OriginRef
 from agent_composer.expr.template import render_template_record
@@ -37,7 +37,7 @@ from agent_composer.nodes.contracts import (
     _iter_origin_carrier,
     _rewrite_origin_carrier,
 )
-from agent_composer.skills.catalog import SkillError, check_skill_name
+from agent_composer.skills.catalog import Skill, SkillError, check_skill_name
 from agent_composer.skills.tool import LOAD_SKILL
 from agent_composer.typesys.types import canonical_type_label
 from agent_composer.typesys.values import build_value_as
@@ -60,6 +60,7 @@ class AgentNode(Node):
     needs_evaluation_trace = True
     needs_memory_context = True
     needs_render_capture = True
+    needs_skills = True
 
     def __init__(
         self,
@@ -119,6 +120,25 @@ class AgentNode(Node):
                 raise SkillError(f"{where}: duplicate skill grant in {self.skills}")
         if self.skills and self.mode != "tool_calling":
             raise SkillError(f"{where}: skills need mode 'tool_calling', not {self.mode!r}")
+
+    def _granted_skills(self, supplied: Mapping[str, Skill] | None) -> tuple[Skill, ...]:
+        """Select this node's grants from the run's host-supplied skills, by name."""
+        if not self.skills:
+            return ()
+        if supplied is None:
+            raise SkillError(
+                f"AGENT node {self.id!r} grants skills, but the host supplied no skills= mapping"
+            )
+        if self.skills == "all":
+            names = sorted(supplied)
+        else:
+            missing = [name for name in self.skills if name not in supplied]
+            if missing:
+                raise SkillError(
+                    f"AGENT node {self.id!r}: granted skills not supplied by the host: {missing}"
+                )
+            names = sorted(self.skills)
+        return tuple(supplied[name] for name in names)
 
     def _validate_variables(self) -> None:
         """Require canonical, uniquely named declarations with valid typed defaults."""
@@ -235,6 +255,7 @@ class AgentNode(Node):
         evaluation_trace: EvaluationTrace | None = None,
         open_memory_context: Callable[[str, str, dict[str, Any]], MemoryContext] | None = None,
         capture_render: Callable[[dict[str, Any]], None] | None = None,
+        skills: Mapping[str, Skill] | None = None,
     ) -> Output:
         """Render fresh locals once, publish established capture, and run the mode.
 
@@ -256,12 +277,16 @@ class AgentNode(Node):
             capture_render (`Callable | None`, *optional*, defaults to `None`):
                 Publish one dictionary of actual or explicitly unavailable locals.
                 Omission leaves render capture dormant.
+            skills (`Mapping[str, Skill] | None`, *optional*, defaults to `None`):
+                The run's host-supplied skills. Granted ones are listed in the
+                system message and served by the built-in ``load_skill`` tool.
 
         Returns:
             `Output`: The selected mode's result.
 
         Raises:
             `ValueError`: A variable collides with a declared or delivered input.
+            `SkillError`: The node grants skills the host did not supply.
             `_CapabilityFault`: Capture or conversation access fails; the
                 evaluator re-raises its original host exception.
             `_HostStop`: The host has requested cooperative cancellation.
@@ -302,6 +327,7 @@ class AgentNode(Node):
                 capture_render(captured)
         if stop_event is not None and stop_event.is_set():
             raise _HostStop(primary=False)
+        granted = self._granted_skills(skills)
         memory_context = (
             MemoryContext()
             if open_memory_context is None

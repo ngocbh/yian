@@ -655,6 +655,10 @@ class Node(ABC):
     # lazy ``open_memory_context(system, prompt, compatibility)`` capability.
     # AgentNode is the sole built-in opt-in; the runtime remains kind-blind.
     needs_memory_context: ClassVar[bool] = False
+    # Declares "I can use host-supplied skills". The evaluator supplies the run's
+    # ``skills`` mapping (name -> Skill) only when the run boundary injected one and this
+    # trait is True. AgentNode is the sole built-in opt-in; the runtime remains kind-blind.
+    needs_skills: ClassVar[bool] = False
     # Declares "I can emit visible prompt/model/tool evidence". The evaluator supplies a
     # write-only invocation-local trace only when evidence capture is enabled and this exact
     # trait is True. AgentNode is the sole built-in opt-in; the runtime remains kind-blind.
@@ -934,7 +938,7 @@ class Node(ABC):
         Returns a `NodeResult` (`Output | Route | Grow`), or — for a streaming kind —
         a generator that yields `StreamChunk` and *returns* a `NodeResult`. Narrow effect caps
         are passed only to nodes whose traits request them (``bind_item``,
-        ``stop_event``, ``open_memory_context``, and ``evaluation_trace``).
+        ``stop_event``, ``open_memory_context``, ``skills``, and ``evaluation_trace``).
         Expected rejection is a `raise`, not a result variant; the evaluator classifies
         its structural stage before the dispatcher records the canonical `Failure`."""
         params = self.params if self.params is not None else []
@@ -1036,7 +1040,7 @@ class Node(ABC):
         Returns a `NodeResult` (`Output | Route | Grow`), or — for a streaming kind —
         a generator that yields `StreamChunk` and *returns* a `NodeResult`. Narrow effect caps
         are passed only to nodes whose traits request them (``bind_item``,
-        ``stop_event``, ``open_memory_context``, and ``evaluation_trace``).
+        ``stop_event``, ``open_memory_context``, ``skills``, and ``evaluation_trace``).
         A body exception is classified as ``node.execute`` by the evaluator."""
         raise NotImplementedError(
             f"node {self.id!r} ({type(self).__name__}) defines no forward"

@@ -28,7 +28,7 @@ from __future__ import annotations
 import inspect
 import threading
 import traceback as _tb
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Mapping
 from contextlib import AbstractContextManager, ExitStack, contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
@@ -409,6 +409,7 @@ def _evaluate_node_stream(
     memory_context_opener: MemoryContextOpener | None = None,
     memory_invocation: ConversationInvocation | None = None,
     memory_scope: MemoryScope | None = None,
+    skills: Mapping[str, Any] | None = None,
     close_error: list[BaseException] | None = None,
     binding_collector: BindingCollector | None = None,
     capture_inputs: Callable[[dict[str, Any]], None] | None = None,
@@ -429,6 +430,9 @@ def _evaluate_node_stream(
     `memory_context_opener` is a source-neutral context boundary. A node declaring
     `needs_memory_context` receives only a closure over its canonical bound inputs
     and memory scope; other nodes remain unaware of the capability.
+
+    `skills` is the run's host-supplied skill mapping, passed as ``caps['skills']`` only to
+    a node declaring `needs_skills`.
 
     Returns:
         `WorkerOutcome`:
@@ -561,6 +565,8 @@ def _evaluate_node_stream(
         caps["evaluation_trace"] = evaluation_trace
     if capture_render is not None:
         caps["capture_render"] = capture_render
+    if skills is not None and node.needs_skills is True:
+        caps["skills"] = skills
 
     try:
         with _memory_context_capability(
@@ -675,6 +681,7 @@ def eval_node(
     capture_evidence: bool = False,
     memory_context_opener: MemoryContextOpener | None = None,
     memory_invocation: ConversationInvocation | None = None,
+    skills: Mapping[str, Any] | None = None,
     capture_bindings: bool = False,
     source_resolver: SourceResolver | None = None,
     effective_llm_by_static_path: dict[str, dict[str, Any]] | None = None,
@@ -691,6 +698,8 @@ def eval_node(
     Opening is lazy and single-use. An unscoped node receives an empty context;
     a scoped node requires an injected opener. ``memory_invocation`` is the
     accepted node-start identity, required only for transcript admission.
+    ``skills`` is the run's host-supplied skill mapping, delivered only to nodes
+    declaring ``needs_skills``; a non-mapping raises ``TypeError``.
     The evaluator owns context cleanup through execution, generator draining,
     postassertions, and result validation. Typed recall failures remain node
     failures; unexpected opening and cleanup faults remain host errors.
@@ -716,6 +725,8 @@ def eval_node(
         raise TypeError("source_resolver must be callable or None")
     if memory_context_opener is not None and not callable(memory_context_opener):
         raise TypeError("memory_context_opener must be callable or None")
+    if skills is not None and not isinstance(skills, Mapping):
+        raise TypeError("skills must be a mapping or None")
     if memory_invocation is not None:
         if type(memory_invocation) is not ConversationInvocation:
             raise TypeError("memory_invocation must be a ConversationInvocation or None")
@@ -815,6 +826,7 @@ def eval_node(
         memory_context_opener=memory_context_opener,
         memory_invocation=memory_invocation,
         memory_scope=memory_scope,
+        skills=skills,
         close_error=close_error,
         binding_collector=binding_collector,
         capture_inputs=capture_inputs if capture_bindings else None,

@@ -86,3 +86,21 @@ def test_agent_rejects_skills_in_any_other_registered_mode(monkeypatch) -> None:
 def test_agent_skill_grants_default_to_none() -> None:
     assert AgentNode("agent").skills == []
     assert AgentNode("agent", mode="tool_calling", skills="all").skills == "all"
+
+
+def test_missing_grant_fails_the_node(monkeypatch, skills) -> None:
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _config: _ScriptedModel([]))
+    missing = _eval(AgentNode("agent", prompt="p", mode="tool_calling", skills=["absent"]), skills=skills)
+    assert type(missing.outcome) is EvaluationFailure
+    assert "not supplied by the host: ['absent']" in missing.outcome.failure.message
+
+
+def test_grant_without_a_skills_mapping_fails_the_node(monkeypatch) -> None:
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _config: _ScriptedModel([]))
+    unsupplied = _eval(AgentNode("agent", prompt="p", mode="tool_calling", skills="all"))
+    assert type(unsupplied.outcome) is EvaluationFailure
+    assert "the host supplied no skills= mapping" in unsupplied.outcome.failure.message
+
+
+def test_only_nodes_with_the_skills_trait_receive_skills(skills) -> None:
+    assert _eval(FuncNode("code", lambda _inputs: "ok"), skills=skills).outcome == Output("ok")

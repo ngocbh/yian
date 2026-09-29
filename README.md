@@ -28,7 +28,7 @@ prompt: Write a warm one-sentence greeting to ${name}.
 ```
 
 ```console
-ac run hello.yaml --input name=Ada --provider ollama --model llama3.2:3b
+composer run hello.yaml --input name=Ada --provider ollama --model llama3.2:3b
 ```
 
 See [Agent](docs/agent.md) for the conceptual model and
@@ -71,7 +71,7 @@ Provider extras can be installed separately: `anthropic`, `openai`, `google`,
 or `ollama`. The core engine and CLI do not require a provider SDK; a flow needs
 one only when it contains an AGENT node.
 
-Connect OpenAI with `ac auth openai`, choose ChatGPT subscription sign-in or an
+Connect OpenAI with `composer auth openai`, choose ChatGPT subscription sign-in or an
 API key, and select a default model. Both methods use `provider: openai` with
 Composer's ordinary tools and memory. OpenAI is the default provider; successful
 setup saves your chosen model for subsequent runs. See
@@ -80,7 +80,7 @@ setup saves your chosen model for subsequent runs. See
 ## Run a flow
 
 ```console
-ac run FLOW.yaml [--inputs inputs.json] [--input k=v]... \
+composer run FLOW.yaml [--inputs inputs.json] [--input k=v]... \
   [--provider P] [--model M] [-w N] [--log PATH]
 ```
 
@@ -99,17 +99,17 @@ default is `~/.agent_composer/runs/<run_id>.jsonl`; choose another new path with
 Resume an interrupted run against the same flow:
 
 ```console
-ac run FLOW.yaml --resume PATH
+composer run FLOW.yaml --resume PATH
 ```
 
 Run logs can contain inputs, model/tool/human data, outputs, memory snapshots,
-configuration, and tracebacks. Treat them as sensitive. See [The `ac`
+configuration, and tracebacks. Treat them as sensitive. See [The `composer`
 CLI](docs/cli.md) for input behavior, diagnostics, concurrency, and recovery.
 
 For an interactive flow-backed chat:
 
 ```console
-ac chat [FLOW] [--workspace DIR] [--provider P] [--model M]
+composer chat [FLOW] [--workspace DIR] [--provider P] [--model M]
 ```
 
 The default composer chat can inspect, validate, run, and—after explicit
@@ -198,12 +198,12 @@ Idle run handles do not block closing; active work or queued turns do. Omit
 `storage` to keep memory process-local. See [durable memory](docs/api.md#optional-durable-memory)
 for ownership and recovery.
 
-`ac run` automatically activates declared `episodic`, `reflective`, and `session`
+`composer run` automatically activates declared `episodic`, `reflective`, and `session`
 policies. They stay process-local unless a repeatable CLI option selects storage:
 
 ```bash
-ac run flow.yaml --memory-storage session=./session.sqlite
-ac run flow.yaml --resume ./run.jsonl --memory-storage session=./session.sqlite
+composer run flow.yaml --memory-storage session=./session.sqlite
+composer run flow.yaml --resume ./run.jsonl --memory-storage session=./session.sqlite
 ```
 
 The flow must declare the selected policy. Use the same store on resume; a run

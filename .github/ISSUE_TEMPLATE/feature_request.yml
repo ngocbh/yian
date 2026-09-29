@@ -46,7 +46,7 @@ body:
       options:
         - New node kind
         - Engine primitive / combinator
-        - CLI improvement (`ac ...`)
+        - CLI improvement (`composer ...`)
         - Compose syntax (`${...}` / YAML surface / typedefs)
         - Typesys (types / variable pool)
         - LLM client / provider

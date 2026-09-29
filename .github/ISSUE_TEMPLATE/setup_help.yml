@@ -20,7 +20,7 @@ body:
       label: What's Going Wrong?
       description: Describe what you're trying to do and where it fails.
       placeholder: |
-        I ran `pip install -e ".[all]"` and then `ac run flow.yaml`, but I get...
+        I ran `pip install -e ".[all]"` and then `composer run flow.yaml`, but I get...
     validations:
       required: true
 
@@ -32,7 +32,7 @@ body:
       placeholder: |
         1. git clone https://github.com/ngocbh/agent-composer
         2. pip install -e ".[all,dev]"
-        3. ac run examples/....yaml
+        3. composer run examples/....yaml
         4. Error appears: ...
     validations:
       required: true

@@ -6,6 +6,7 @@ never drives tool dispatch, and its synthetic missing-result repairs are not sav
 
 from __future__ import annotations
 
+from functools import partial
 from uuid import uuid4
 
 from langchain_core.messages import (
@@ -37,6 +38,7 @@ from agent_composer.nodes.agent.modes.utils import (
 )
 from agent_composer.nodes.agent.structured import generate_structured, type_to_schema
 from agent_composer.nodes.base import Output
+from agent_composer.skills.tool import LOAD_SKILL, invoke_load_skill, load_skill_tool
 from agent_composer.tools import invoke_tool, resolve_tools
 
 # -1 means no bound; a positive per-node env value bounds model turns.
@@ -66,7 +68,7 @@ def tool_calling(ctx: AgentRunContext) -> Output:
             ctx.memory_context.sections,
         )
     schema = type_to_schema(ctx.output_type) if ctx.output_type is not None else None
-    if not ctx.tools and schema is not None:
+    if not ctx.tools and not ctx.skills and schema is not None:
         return Output(
             value=generate_structured(
                 model,
@@ -82,6 +84,9 @@ def tool_calling(ctx: AgentRunContext) -> Output:
         )
 
     bound = resolve_tools(list(ctx.tools))
+    skills = {skill.name: skill for skill in ctx.skills}
+    if skills:
+        bound.append(load_skill_tool())
     ctx.check_stopped()
     chat = model.bind_tools(bound) if bound else model
     iterations = 0
@@ -141,14 +146,18 @@ def tool_calling(ctx: AgentRunContext) -> Output:
                     pass
                 else:
                     ctx.evaluation_trace.record_interaction(call_interaction)
-            if name not in ctx.tools:
+            if skills and name == LOAD_SKILL:
+                invoke = partial(invoke_load_skill, skills, arguments)
+            elif name in ctx.tools:
+                invoke = partial(invoke_tool, name, arguments)
+            else:
                 raise AgentLoopError(
                     f"agent node {ctx.node_id!r} requested tool {name!r}, but it is not "
                     f"granted; granted tools: {ctx.tools}"
                 )
             result_message = invoke_tool_effect(
                 ctx.memory_context.transcript,
-                lambda: invoke_tool(name, arguments),
+                invoke,
                 name=name,
                 arguments=arguments,
                 model_exchange_id=exchange_id,

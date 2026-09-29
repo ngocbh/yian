@@ -135,3 +135,65 @@ def test_memory_context_gets_the_system_prompt_without_the_listing(monkeypatch, 
     assert node.forward({}, open_memory_context=open_context, skills=skills) == Output("ok")
     assert seen == [DEFAULT_SYSTEM]
     assert model.calls[0][0].content == system_prompt_with_skills(DEFAULT_SYSTEM, [skills["review"]])
+
+
+def test_granted_skills_are_listed_and_loaded_on_demand(monkeypatch, skills) -> None:
+    model = _ScriptedModel(
+        [
+            _call(LOAD_SKILL, {"name": "review"}, "a"),
+            _call(LOAD_SKILL, {"name": "review", "path": "references/style.md"}, "b"),
+            AIMessage(content="reviewed"),
+        ]
+    )
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _config: model)
+    node = AgentNode("agent", prompt="Review it", mode="tool_calling", skills=["review", "deploy"])
+
+    evaluated = _eval(node, skills=skills, capture_evidence=True)
+
+    assert evaluated.outcome == Output("reviewed")
+    expected_system = system_prompt_with_skills(DEFAULT_SYSTEM, [skills["deploy"], skills["review"]])
+    assert model.calls[0][0].content == expected_system
+    assert "- deploy: Ship a release.\n- review: Review code changes." in expected_system
+    assert "other" not in expected_system
+    assert model.bound == [LOAD_SKILL]
+    assert model.calls[1][-1].content == "Read references/style.md first."
+    assert model.calls[2][-1].content == "Prefer small diffs.\n"
+    evidence = evaluated.evidence
+    assert evidence.base_system_prompt == expected_system
+    assert ToolCallInteraction(LOAD_SKILL, {"name": "review"}) in evidence.interactions
+    assert ToolResultInteraction(LOAD_SKILL, "Prefer small diffs.\n") in evidence.interactions
+
+
+def test_skills_with_structured_output_still_run_the_tool_loop(monkeypatch, skills) -> None:
+    model = _ScriptedModel([_call(LOAD_SKILL, {"name": "review"}), AIMessage(content="seven")])
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _config: model)
+    structured: list[list] = []
+
+    def fake_structured(_model, messages, _output_type, **_kwargs):
+        structured.append([message.content for message in messages])
+        return 7
+
+    monkeypatch.setattr(tool_calling_module, "generate_structured", fake_structured)
+    node = AgentNode("agent", prompt="p", mode="tool_calling", skills=["review"])
+    node.output_contract = ValueContract(Type.scalar(ValueKind.INTEGER))
+
+    assert _eval(node, skills=skills).outcome == Output(7)
+    assert model.bound == [LOAD_SKILL]
+    assert len(model.calls) == 2
+    assert "Read references/style.md first." in structured[0]
+
+
+def test_escape_attempt_fails_the_node(monkeypatch, skills) -> None:
+    model = _ScriptedModel([_call(LOAD_SKILL, {"name": "review", "path": "../review/../../secret"})])
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _config: model)
+    escaped = _eval(AgentNode("agent", prompt="p", mode="tool_calling", skills=["review"]), skills=skills)
+    assert type(escaped.outcome) is EvaluationFailure
+    assert "relative path inside the skill directory" in escaped.outcome.failure.message
+
+
+def test_load_skill_is_not_callable_without_a_grant(monkeypatch) -> None:
+    model = _ScriptedModel([_call(LOAD_SKILL, {"name": "review"})])
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _config: model)
+    evaluated = _eval(AgentNode("agent", prompt="p", mode="tool_calling"))
+    assert type(evaluated.outcome) is EvaluationFailure
+    assert "requested tool 'load_skill', but it is not granted" in evaluated.outcome.failure.message

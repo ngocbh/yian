@@ -117,3 +117,17 @@ def test_run_flow_delivers_skills_to_the_agent(monkeypatch, skill_root: Path) ->
     assert result.status == "succeeded", result.failure
     granted = [skills["code-review"], skills["release-notes"]]
     assert model.calls[0][0].content == system_prompt_with_skills(DEFAULT_SYSTEM, granted)
+
+
+def test_load_skill_runs_through_a_session_conversation(monkeypatch, skill_root: Path) -> None:
+    model = _ScriptedModel([_call({"name": "code-review"}, "a"), AIMessage(content="done")])
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _config: model)
+    memory = SessionMemory()
+    result = run_flow(
+        load_flow(SESSION_FLOW), {"change": "x"}, memory={"session": memory}, skills=load_skills([skill_root])
+    )
+    assert result.status == "succeeded", result.failure
+    assert model.calls[1][-1].content == "Read references/checklist.md.\n"
+    view = _view(memory)
+    assert [effect.kind for effect in view.effects] == ["model", "tool", "model"]
+    assert all(effect.status == "completed" for effect in view.effects)

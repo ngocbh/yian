@@ -60,6 +60,8 @@ it adapts provider messages to lower memory contracts without storing history.
 `memory/session.py` owns history, FIFO admission, and derived summary publication;
 `memory/summary.py` owns pure whole-turn selection and cache-prefix proofs. The
 API adapter injects projection and current-model callbacks, never stores summaries.
+Likewise `nodes/agent/live.py`, not `runtime/`, owns AGENT in-loop observers;
+runtime only forwards opaque sinks by trait.
 Runtime only binds authored scope and accepted invocation identity and manages
 the lazy capability lifetime; it neither encodes provider messages nor
 reconstructs history from the run log.

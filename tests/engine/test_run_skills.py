@@ -175,3 +175,56 @@ def test_resume_of_a_skills_all_flow_needs_the_mapping(monkeypatch, tmp_path: Pa
 def test_skills_mapping_must_be_keyed_by_skill_name() -> None:
     with pytest.raises(TypeError, match=r"skills\['alias'\] must be a Skill named 'alias'"):
         run_flow(load_flow(FLOW), {"change": "x"}, skills={"alias": Skill("code-review", "d", "")})
+
+
+def test_end_to_end_listing_load_escape_and_resume(monkeypatch, tmp_path: Path, skill_root: Path) -> None:
+    skills = load_skills([skill_root])
+    log = tmp_path / "run.jsonl"
+    first = _ScriptedModel(
+        [
+            _call({"name": "code-review"}, "a"),
+            _call({"name": "code-review", "path": "references/checklist.md"}, "b"),
+            _SimulatedCrash("process lost"),
+        ]
+    )
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _config: first)
+    with pytest.raises(_SimulatedCrash):
+        run_flow(load_flow(FLOW), {"change": "diff-1"}, log=log, run_id="skills-e2e", skills=skills)
+
+    system = first.calls[0][0].content
+    assert "- code-review: Review a diff for bugs.\n- release-notes: Write release notes." in system
+    assert "unused" not in system
+    assert first.calls[1][-1].content == "Read references/checklist.md.\n"
+    assert first.calls[2][-1].content == "1. Tests pass.\n"
+
+    before = log.read_bytes()
+    with pytest.raises(ValueError, match="no skills= mapping was passed"):
+        resume_flow(load_flow(FLOW), log=log)
+    assert log.read_bytes() == before
+
+    second = _ScriptedModel(
+        [
+            _call({"name": "code-review"}, "a"),
+            _call({"name": "code-review", "path": "references/checklist.md"}, "b"),
+            AIMessage(content="looks good"),
+        ]
+    )
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _config: second)
+    resumed = resume_flow(load_flow(FLOW), log=log, skills=load_skills([skill_root]))
+
+    assert resumed.status == "succeeded", resumed.failure
+    assert resumed.output == "looks good"
+    assert [message.content for message in second.calls[2]] == [
+        message.content for message in first.calls[2]
+    ]
+    with JsonlRunLog.resume(log) as reopened:
+        records = [envelope.record for envelope in reopened]
+    assert sum(isinstance(r, NodeStartedRecord) and r.node_id == "review" for r in records) == 2
+    assert sum(isinstance(r, NodeSucceededRecord) and r.node_id == "review" for r in records) == 1
+
+    escape = _ScriptedModel([_call({"name": "code-review", "path": "../../secret.txt"}, "c")])
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _config: escape)
+    failed = run_flow(load_flow(FLOW), {"change": "diff-2"}, skills=skills)
+    assert failed.status == "failed"
+    assert "relative path inside the skill directory" in failed.failure.message
+    assert "do not leak" not in failed.failure.message

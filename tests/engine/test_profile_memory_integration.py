@@ -202,3 +202,51 @@ def test_profile_notes_and_a_session_transcript_share_one_agent_context(tmp_path
     outcome = result.backward("Be brief.")
     assert outcome.status == "succeeded", outcome.failure
     assert profile_memory.read()[0] == "# Ada\n- Works on reefs.\n- Brief.\n"
+
+
+def test_human_edit_during_learning_fails_the_commit_without_a_model(tmp_path, monkeypatch) -> None:
+    memory = _profile(tmp_path)
+    path = tmp_path / "run.jsonl"
+    _forward(monkeypatch, "Hello.")
+    result = run_flow(load_flow(_CHAT), {"message": "hi"}, log=path, learnable=True,
+                      memory={"profile": memory})
+
+    def human_edit():
+        memory.write("# Ada\n- Edited by Ada.\n", base_version=memory.read()[1])
+
+    learner = _Learner("# Ada\n- From the model.", before_reply=human_edit)
+    built = _learner(monkeypatch, learner)
+    outcome = result.backward("Keep replies brief.")
+    assert outcome.status == "failed"
+    assert (outcome.failure.stage, outcome.failure.code) == ("commit", "profile.version_mismatch")
+    assert outcome.failure.cause.retryable is True
+    assert len(built) == len(learner.requests) == 1
+    assert memory.read()[0] == "# Ada\n- Edited by Ada.\n"
+    with JsonlRunLog.resume(path) as log:
+        failed = [item.record for item in log if type(item.record) is MemoryCommitFailedRecord]
+    assert [record.failure.code for record in failed] == ["profile.version_mismatch"]
+
+
+def test_resume_reopens_the_recorded_version_for_backward(tmp_path, monkeypatch) -> None:
+    memory = _profile(tmp_path)
+    flow = load_flow(_CHAT)
+    path = tmp_path / "run.jsonl"
+    recorded_text, recorded_version = memory.read()
+    _forward(monkeypatch, "Hello.")
+    run_flow(flow, {"message": "hi"}, log=path, learnable=True, memory={"profile": memory})
+    with JsonlRunLog.resume(path) as log:
+        started = next(iter(log)).record
+    snapshot, = started.memory_snapshots
+    assert snapshot.snapshot["profile_version"] == recorded_version
+    memory.write("# Ada\n- Edited later.\n", base_version=recorded_version)
+
+    resumed = resume_flow(flow, log=path, memory={"profile": ProfileMemory(
+        FileProfileStore(tmp_path / "ada.md"), llm_config={"provider": "ollama", "model": "local-profiler"})})
+    learner = _Learner("# Ada\n- Edited later.\n- Brief.")
+    _learner(monkeypatch, learner)
+    outcome = resumed.backward("Be brief.")
+    assert outcome.status == "succeeded", outcome.failure
+    material = _material(learner)
+    assert material["seen_profile"] == recorded_text
+    assert material["current_profile"] == "# Ada\n- Edited later.\n"
+    assert memory.read()[0] == "# Ada\n- Edited later.\n- Brief.\n"

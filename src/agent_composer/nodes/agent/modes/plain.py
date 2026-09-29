@@ -79,5 +79,6 @@ def plain(ctx: AgentRunContext) -> Output:
             evaluation_trace=ctx.evaluation_trace,
             memory_context=ctx.memory_context,
             new_messages=new_messages,
+            live=live,
         )
     )

@@ -171,3 +171,77 @@ def test_history_summary_calls_publish_their_own_observers(monkeypatch):
     assert [(event.purpose, event.usage) for event in finished] == [
         ("history_summary", TokenUsage(8, 2, 10)), ("chat", None),
     ]
+
+
+def test_structured_fallback_reports_usage_and_streams_nothing(monkeypatch):
+    monkeypatch.setattr(
+        "agent_composer.nodes.agent.structured._supports_native_structured", lambda _c: False
+    )
+    node, chat = _agent(
+        monkeypatch, [reply('{"value": 3}', tokens=usage(9, 1))], mode="plain",
+        output=Type.scalar(ValueKind.INTEGER),
+    )
+    outcome, chunks, observed = _evaluate(node)
+    assert outcome.value == 3 and chat.mode == ["invoke"] and chunks == []
+    assert [type(event) for event in observed] == [ModelCallStarted, ModelCallFinished]
+    assert {event.purpose for event in observed} == {"structured_fallback"}
+    assert observed[-1].usage == TokenUsage(9, 1, 10)
+
+
+def _native_script():
+    """A text reply without the schema tool call, then bad arguments, then a valid call."""
+    return [
+        reply("no tool call", tokens=usage(5, 1)),
+        reply(calls=[("ScalarWrapper", {"value": "four"}, "c1")], tokens=usage(6, 1)),
+        reply(calls=[("ScalarWrapper", {"value": 4}, "c2")], tokens=usage(7, 2)),
+    ]
+
+
+@pytest.mark.parametrize("events", [False, True])
+def test_structured_native_retries_the_same_with_or_without_an_event_sink(monkeypatch, events):
+    monkeypatch.setattr(
+        "agent_composer.nodes.agent.structured._supports_native_structured", lambda _c: True
+    )
+    node, chat = _agent(
+        monkeypatch, _native_script(), mode="plain", output=Type.scalar(ValueKind.INTEGER)
+    )
+    outcome, chunks, observed = _evaluate(node, stream=False, events=events)
+    assert outcome.value == 4
+    assert chat.mode == ["invoke", "invoke", "invoke"] and chunks == []
+    finished = [event for event in observed if isinstance(event, ModelCallFinished)]
+    assert [(event.purpose, event.usage, event.error) for event in finished] == (
+        [
+            ("structured_native", TokenUsage(5, 1, 6), None),
+            ("structured_native", TokenUsage(6, 1, 7), "ValidationError"),
+            ("structured_native", TokenUsage(7, 2, 9), None),
+        ]
+        if events else []
+    )
+
+
+def test_structured_native_turn_reports_usage_and_retains_the_raw_reply(monkeypatch):
+    from agent_composer.compose import load_flow
+    from agent_composer.memory.session import SessionMemory
+    from agent_composer.run import run_flow
+    from tests.engine.test_agent_session import _FLOW, _view
+
+    monkeypatch.setattr(
+        "agent_composer.nodes.agent.structured._supports_native_structured", lambda _c: True
+    )
+    chat = ScriptedStreamChat(script=_native_script()[2:], mode=[])
+    monkeypatch.setattr(llm_clients_mod, "model_from_config", lambda _config: chat)
+    memory = SessionMemory()
+    events = []
+    result = run_flow(
+        load_flow(_FLOW.replace("output: str", "output: int")), {"question": "q"},
+        memory={"session": memory}, on_event=events.append,
+    )
+    assert result.output == 4 and chat.mode == ["invoke"]
+    finished = [event for event in events if isinstance(event, ModelCallFinished)]
+    assert [(event.purpose, event.usage) for event in finished] == [
+        ("structured_native", TokenUsage(7, 2, 9)),
+    ]
+    view = _view(memory)
+    assert [(effect.kind, effect.status) for effect in view.effects] == [("model", "completed")]
+    replies = [item.payload["message"] for item in view.items if item.payload["message"]["type"] == "ai"]
+    assert replies[0]["data"]["tool_calls"][0]["args"] == {"value": 4}

@@ -8,7 +8,7 @@ Sink exceptions arrive already wrapped as `_CapabilityFault` by the evaluator an
 propagate unchanged; provider and tool exceptions are reported by type name only,
 because their text can contain credentials, then re-raised.
 
-Layer: nodes — imports events and nodes.base.
+Layer: nodes — imports events, nodes.base, and LangChain.
 """
 
 from __future__ import annotations
@@ -16,6 +16,9 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
+
+from langchain_core.callbacks import BaseCallbackHandler
+from langchain_core.runnables import Runnable
 
 from agent_composer.events import (
     ModelCallFinished,
@@ -111,6 +114,39 @@ def invoke_chat(
     """Call a chat model once, bracketed by observers when an event sink exists."""
     call = lambda: chat.invoke(messages)  # noqa: E731
     return observe_model_call(live, call, purpose=purpose, exchange_id=exchange_id)
+
+
+class _UsageCapture(BaseCallbackHandler):
+    """Keep the usage of the chat model reply inside one structured-output call."""
+
+    def __init__(self) -> None:
+        self.usage: Optional[TokenUsage] = None
+
+    def on_llm_end(self, response: Any, **kwargs: Any) -> None:
+        generations = getattr(response, "generations", None) or [[]]
+        for generation in generations[0]:
+            self.usage = usage_of(getattr(generation, "message", None))
+
+
+def invoke_structured(
+    live: Optional[LiveSinks], bound: Any, messages: list, *, exchange_id: str
+) -> Any:
+    """Invoke a native structured-output binding, bracketed when an event sink exists.
+
+    The result is returned exactly as `bound.invoke` produced it, so parsing and
+    retries behave the same with or without a sink. Usage comes from a LangChain
+    callback on the inner model call, which also sees a reply that later fails to
+    parse. A binding that is not a LangChain `Runnable` reports no usage.
+    """
+    capture = _UsageCapture()
+    if live is not None and isinstance(bound, Runnable):
+        call = lambda: bound.invoke(messages, config={"callbacks": [capture]})  # noqa: E731
+    else:
+        call = lambda: bound.invoke(messages)  # noqa: E731
+    return observe_model_call(
+        live, call, purpose="structured_native", exchange_id=exchange_id,
+        usage=lambda _reply: capture.usage,
+    )
 
 
 def _text(result: Any) -> Optional[str]:

@@ -72,7 +72,7 @@ other, so a worker pool can run them **in parallel**; `verdict` reads both, so i
 argues both sides before deciding — you can read that guarantee straight off the file.
 
 ```console
-$ ac run debate.yaml --input question="Should a small team adopt a monorepo?" --num-workers 4
+$ composer run debate.yaml --input question="Should a small team adopt a monorepo?" --num-workers 4
 Adopt the monorepo. For a small team the simpler cross-project refactors and single ...
 ```
 
@@ -103,7 +103,7 @@ Adopt the monorepo. For a small team the simpler cross-project refactors and sin
 <div class="grid cards" markdown>
 
 - :material-download: **[Installation](installation.md)** — install the current source, choose provider extras, and pick a model.
-- :material-console: **[The `ac` CLI](cli.md)** — run a flow from the terminal, supply inputs, and serve blocking human requests.
+- :material-console: **[The `composer` CLI](cli.md)** — run a flow from the terminal, supply inputs, and serve blocking human requests.
 - :material-file-code: **[Flow syntax](syntax.md)** — the full Compose-YAML reference: types, `${...}` refs, node kinds, `case`, coalesce, asserts.
 - :material-robot: **[Agent](agent.md)** — the framework's agent model, vocabulary, and YAML representations.
 - :material-lightbulb: **[Examples](examples.md)** — walk through the flows that ship in `examples/`.

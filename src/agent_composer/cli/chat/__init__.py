@@ -1,4 +1,4 @@
-"""`ac chat` — the interactive REPL, dogfooded as an ordinary Agent Composer flow.
+"""`composer chat` — the interactive REPL, dogfooded as an ordinary Agent Composer flow.
 
 A CLI-host concern, not engine core. This package bundles the pieces of the chat
 surface: the turn-taking flow (`chat.yaml`) — which rejoins a flow-owned exit record or

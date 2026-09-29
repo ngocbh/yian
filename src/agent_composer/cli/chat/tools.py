@@ -1,8 +1,8 @@
-"""Flow-op tools for the `ac chat` composer assistant.
+"""Flow-op tools for the `composer chat` composer assistant.
 
 A CLI-HOST concern, not engine core (the core ships no domain tools). Each tool is a
 `@register_tool`-decorated function; importing this module self-registers them. All
-paths resolve against a workspace root set by `set_workspace` at `ac chat` startup and
+paths resolve against a workspace root set by `set_workspace` at `composer chat` startup and
 escapes (absolute paths, `..`) are rejected.
 """
 from __future__ import annotations
@@ -22,7 +22,7 @@ from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.run import _run_flow_controlled, run_flow as _run_flow
 from agent_composer.tools import invoke_tool_trusted, register_tool, resolve_tools
 
-# The workspace root every tool path is confined to. Set at `ac chat` startup.
+# The workspace root every tool path is confined to. Set at `composer chat` startup.
 _WORKSPACE: Path = Path.cwd()
 _CONTROLLER_STOP: ContextVar[Any | None] = ContextVar(
     "agent_composer_chat_controller_stop",

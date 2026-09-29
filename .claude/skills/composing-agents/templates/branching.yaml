@@ -1,7 +1,7 @@
 # Branching — classify, route to one of two branches, then JOIN them back.
 # Exactly one branch runs; the other skips (its ref resolves to null). The `|`
 # coalesce in the output picks whichever branch actually produced a value.
-# Run:  ac run branching.yaml --input review="loved it"
+# Run:  composer run branching.yaml --input review="loved it"
 
 id: branching
 name: branching

@@ -1,4 +1,4 @@
-"""Flow-op tools for `ac chat` — workspace-confined discover/read/validate/run/write."""
+"""Flow-op tools for `composer chat` — workspace-confined discover/read/validate/run/write."""
 from concurrent.futures import CancelledError
 import os
 from pathlib import Path

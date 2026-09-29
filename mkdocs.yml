@@ -83,7 +83,7 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Installation: installation.md
-  - The ac CLI: cli.md
+  - The composer CLI: cli.md
   - Flow syntax: syntax.md
   - Examples: examples.md
   - Internals:

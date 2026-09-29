@@ -1,4 +1,4 @@
-"""`ac run` — load a flow, gather inputs, drive it to a terminal, render the output.
+"""`composer run` — load a flow, gather inputs, drive it to a terminal, render the output.
 
 Fresh inputs come from flags (`--input k=v`, repeatable; `--inputs file.json`). On
 an interactive stdin, every declaration still missing is prompted for (required ones
@@ -261,7 +261,7 @@ def _render_run_error(result: RunResult, loaded, engine_trace: bool = False) -> 
 
 
 class _ProgressReporter:
-    """Render per-node progress for `ac run` as the engine streams node events.
+    """Render per-node progress for `composer run` as the engine streams node events.
 
     A node shows a live spinner while running, then is rewritten in place as a green
     `✓ <node>` on success or a red `✗ <node>` (with the error on the next line) on

@@ -28,14 +28,14 @@ body:
     attributes:
       label: Minimal Flow / Reproduction
       description: |
-        The smallest flow YAML (or `ac` command) that triggers the bug. The more minimal, the faster we can fix it.
+        The smallest flow YAML (or `composer` command) that triggers the bug. The more minimal, the faster we can fix it.
       placeholder: |
         # flow.yaml
         nodes:
           ask:
             kind: human_input
             ...
-        # then: ac run flow.yaml
+        # then: composer run flow.yaml
       render: yaml
     validations:
       required: true
@@ -64,7 +64,7 @@ body:
       description: Which part of Agent Composer is affected?
       multiple: true
       options:
-        - CLI (`ac run` / `ac chat`)
+        - CLI (`composer run` / `composer chat`)
         - Engine / runtime (scheduler, run logs, recovery)
         - Compose (YAML parse / typecheck / build / validate)
         - Nodes (agent, code, model, tool, case, call, map, loop, human_input, wait)

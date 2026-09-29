@@ -1,4 +1,4 @@
-"""Tests for the `ac run` CLI — exercised through typer's `CliRunner`.
+"""Tests for the `composer run` CLI — exercised through typer's `CliRunner`.
 
 These use CODE-only flows (no AGENT) so the suite never hits a network or needs a
 provider key. They cover: successful runs, flag-supplied inputs, `--inputs` JSON,
@@ -211,7 +211,7 @@ def test_run_succeeds_with_input_flag(tmp_path: Path):
 
 
 def test_run_inline_code_in_process(tmp_path: Path):
-    # an inline `code:` node (bare body, run in-process) works end-to-end through `ac run`.
+    # an inline `code:` node (bare body, run in-process) works end-to-end through `composer run`.
     flow = _write_flow(tmp_path, INLINE_FLOW)
     result = runner.invoke(app, ["run", str(flow), "--input", "topic=clouds"])
     assert result.exit_code == 0, result.output

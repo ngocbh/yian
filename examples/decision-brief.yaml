@@ -18,7 +18,7 @@
 # single tag, so a one-tag answer is exactly what this flow needs.
 #
 # Run it with:
-#   ac run examples/decision-brief.yaml --input question="Should a small team adopt a monorepo?"
+#   composer run examples/decision-brief.yaml --input question="Should a small team adopt a monorepo?"
 
 id: decision-brief
 name: decision_brief

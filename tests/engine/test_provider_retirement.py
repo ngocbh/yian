@@ -18,7 +18,7 @@ from agent_composer.nodes.agent import AgentNode
     ],
 )
 def test_retired_native_config_points_to_unified_auth(selection):
-    with pytest.raises(ValueError, match="ac auth openai"):
+    with pytest.raises(ValueError, match="composer auth openai"):
         LLMConfig(**selection)
 
 
@@ -34,7 +34,7 @@ def test_retired_tool_marker_is_not_an_implicit_tool_grant():
 
 
 def test_old_native_yaml_fails_during_loading():
-    with pytest.raises(LoadError, match="ac auth openai"):
+    with pytest.raises(LoadError, match="composer auth openai"):
         load_flow("""id: old
 name: old
 nodes:

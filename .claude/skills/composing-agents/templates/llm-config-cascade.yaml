@@ -7,7 +7,7 @@
 # flow/parent/CLI layers but still receives those process defaults.
 #
 # Try the CLI layer (fills the gaps nothing else set):
-#   ac run llm-config-cascade.yaml --provider anthropic --model claude-opus-4-8
+#   composer run llm-config-cascade.yaml --provider anthropic --model claude-opus-4-8
 
 id: llm-config-cascade
 name: llm_config_cascade

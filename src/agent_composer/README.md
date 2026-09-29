@@ -55,7 +55,7 @@ runtime/      run records/logs, scheduler-state vocabulary, reducer-owned state,
 run.py        public run/recovery boundary and retained RunResult.backward handle
 llm_clients/  provider clients, authentication, LLMConfig and model_from_config
 tools/        tool registry + process-owned ask_user interaction seam
-cli/          `ac` commands + main-thread terminal broker
+cli/          `composer` commands + main-thread terminal broker
 _settings.py  environment-based default provider/model
 ```
 
@@ -170,7 +170,7 @@ selects this transport for saved subscription authentication;
 API-key authentication uses the same Composer model/tool/memory pipeline.
 
 `llm_clients/auth/` owns staged login, private atomic credential storage, token
-refresh, and authenticated model discovery. `ac auth openai` activates credentials
+refresh, and authenticated model discovery. `composer auth openai` activates credentials
 and the provider/model default together. `llm_clients/connection.py` snapshots
 nonsecret method, credential identity, endpoint, and store location into the
 effective model map. Request-time callbacks resolve credentials and refresh
@@ -875,7 +875,7 @@ outcome, including visible model retries within that invocation. Reducer-rejecte
 node proposals are represented by their accepted canonical failure. Discarded
 late siblings and transient stream chunks do not become learning evidence.
 
-The `ac run` host discovers policy names through the same pure static layout and
+The `composer run` host discovers policy names through the same pure static layout and
 injects lazy built-in wrappers from `cli.memory`. Concrete backends open only when
 the run boundary requests `open_run`; terminal inspection and old dormant logs
 acquire no memory resources. Repeated `--memory-storage POLICY=PATH` selects

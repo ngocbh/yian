@@ -3,7 +3,7 @@
 # The turn boundary is STRUCTURAL: HUMAN_INPUT feeds a CASE; exact exit text builds the
 # exit record, otherwise AGENT + a second CODE node build the normal transcript. The LLM
 # only fills the reply; output bindings rejoin the branches into the carried record.
-# Run it with:  ac chat examples/chat.yaml
+# Run it with:  composer chat examples/chat.yaml
 id: chat
 name: chat
 description: A turn-by-turn conversational assistant (plain agent, no tools).

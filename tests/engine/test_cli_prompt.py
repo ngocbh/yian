@@ -1,4 +1,4 @@
-"""`ac run` interactive input prompts and their type-directed value adapters.
+"""`composer run` interactive input prompts and their type-directed value adapters.
 
 At run start the CLI prints a `_flow_banner` (name/description/version); each prompt's
 label carries the input's declared `type`, a required (`*`) / `optional` mark, and any

@@ -101,6 +101,7 @@ _KIND_FIELDS: dict[NodeKind, frozenset[str]] = {
             "retries",
             "memory_policy",
             "variables",
+            "skills",
         }
     ),
     NodeKind.CODE: frozenset({"code"}),
@@ -1773,6 +1774,10 @@ def _node_manifest(
                 _parameter_manifest(variable, ctx, f"{path}.variables[{index}]")
                 for index, variable in enumerate(node.variables)
             ]
+        # Omitted when empty so flows without skills keep their identity. Grant order
+        # never changes behavior (the listing is sorted), so it is not identity either.
+        if node.skills:
+            manifest["skills"] = "all" if node.skills == "all" else sorted(node.skills)
         memory_policy = (
             None
             if node.memory_policy is None

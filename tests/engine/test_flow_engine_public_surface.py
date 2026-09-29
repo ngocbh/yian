@@ -321,11 +321,13 @@ def test_constructor_is_exactly_the_recorded_state_log_surface():
         "stop_event",
         "memory_context_opener",
         "tools",
+        "skills",
     ]
     assert [parameter.kind for parameter in parameters] == [
         inspect.Parameter.POSITIONAL_OR_KEYWORD,
         inspect.Parameter.POSITIONAL_OR_KEYWORD,
         inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        inspect.Parameter.KEYWORD_ONLY,
         inspect.Parameter.KEYWORD_ONLY,
         inspect.Parameter.KEYWORD_ONLY,
         inspect.Parameter.KEYWORD_ONLY,
@@ -345,6 +347,7 @@ def test_constructor_is_exactly_the_recorded_state_log_surface():
         None,
         None,
         None,
+        None,
     ]
     hints = get_type_hints(FlowEngine.__init__)
     assert set(hints) == {
@@ -357,6 +360,7 @@ def test_constructor_is_exactly_the_recorded_state_log_surface():
         "stop_event",
         "memory_context_opener",
         "tools",
+        "skills",
         "return",
     }
     assert hints["state"] is RunState

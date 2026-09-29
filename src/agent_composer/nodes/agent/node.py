@@ -11,7 +11,7 @@ no conversation or continuation state is stored in the graph or variable pool.
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any, Callable, Iterator, Optional
+from typing import Any, Callable, Iterator, Literal, Mapping, Optional
 
 from agent_composer.diagnostics import OriginRef
 from agent_composer.expr.template import render_template_record
@@ -37,6 +37,8 @@ from agent_composer.nodes.contracts import (
     _iter_origin_carrier,
     _rewrite_origin_carrier,
 )
+from agent_composer.skills.catalog import Skill, SkillError, check_skill_name
+from agent_composer.skills.tool import LOAD_SKILL, system_prompt_with_skills
 from agent_composer.tools import ToolSet
 from agent_composer.typesys.types import canonical_type_label
 from agent_composer.typesys.values import build_value_as
@@ -61,6 +63,7 @@ class AgentNode(Node):
     needs_render_capture = True
     needs_tools = True
     needs_live_events = True
+    needs_skills = True
 
     def __init__(
         self,
@@ -75,6 +78,7 @@ class AgentNode(Node):
         title: Optional[str] = None,
         memory_policy: MemoryPolicySpec | None = None,
         variables: list[Parameter] | None = None,
+        skills: list[str] | Literal["all"] | None = None,
     ) -> None:
         super().__init__(node_id, title=title)
         self.prompt = prompt or ""
@@ -101,7 +105,43 @@ class AgentNode(Node):
             raise ValueError(
                 f"AGENT node {node_id!r}: unknown mode {self.mode!r}; known: {sorted(MODES)}"
             )
+        self.skills: list[str] | Literal["all"] = [] if skills is None else skills
+        self._validate_skills()
         self._validate_variables()
+
+    def _validate_skills(self) -> None:
+        """Require `all` or unique valid names, in tool-calling mode."""
+        where = f"AGENT node {self.id!r}"
+        if LOAD_SKILL in self.tools:
+            raise SkillError(f"{where}: {LOAD_SKILL!r} is a reserved tool name; remove it from tools")
+        if self.skills != "all":
+            if type(self.skills) is not list:
+                raise SkillError(f"{where}: skills must be a list of names or 'all'")
+            for name in self.skills:
+                check_skill_name(name)
+            if len(set(self.skills)) != len(self.skills):
+                raise SkillError(f"{where}: duplicate skill grant in {self.skills}")
+        if self.skills and self.mode != "tool_calling":
+            raise SkillError(f"{where}: skills need mode 'tool_calling', not {self.mode!r}")
+
+    def _granted_skills(self, supplied: Mapping[str, Skill] | None) -> tuple[Skill, ...]:
+        """Select this node's grants from the run's host-supplied skills, by name."""
+        if not self.skills:
+            return ()
+        if supplied is None:
+            raise SkillError(
+                f"AGENT node {self.id!r} grants skills, but the host supplied no skills= mapping"
+            )
+        if self.skills == "all":
+            names = sorted(supplied)
+        else:
+            missing = [name for name in self.skills if name not in supplied]
+            if missing:
+                raise SkillError(
+                    f"AGENT node {self.id!r}: granted skills not supplied by the host: {missing}"
+                )
+            names = sorted(self.skills)
+        return tuple(supplied[name] for name in names)
 
     def _validate_variables(self) -> None:
         """Require canonical, uniquely named declarations with valid typed defaults."""
@@ -170,6 +210,8 @@ class AgentNode(Node):
         toolset: ToolSet | None = None,
         emit_stream: Callable[[Any], None] | None = None,
         emit_event: Callable[[Any], None] | None = None,
+        base_system_prompt: str = DEFAULT_SYSTEM,
+        skills: tuple[Skill, ...] = (),
     ) -> AgentRunContext:
         """Build the complete process-local context for one mode invocation."""
         output_type = (
@@ -191,6 +233,8 @@ class AgentNode(Node):
             toolset=toolset if toolset is not None else ToolSet(),
             emit_stream=emit_stream,
             emit_event=emit_event,
+            base_system_prompt=base_system_prompt,
+            skills=skills,
         )
 
     def exception_origin(self, exception: Exception) -> OriginRef | None:
@@ -227,6 +271,7 @@ class AgentNode(Node):
         tools: ToolSet | None = None,
         emit_stream: Callable[[Any], None] | None = None,
         emit_event: Callable[[Any], None] | None = None,
+        skills: Mapping[str, Skill] | None = None,
     ) -> Output:
         """Render fresh locals once, publish established capture, and run the mode.
 
@@ -255,12 +300,16 @@ class AgentNode(Node):
                 Transient `StreamChunk` sink; when present, chat replies stream.
             emit_event (`Callable | None`, *optional*, defaults to `None`):
                 Transient sink for model/tool call observers with token usage.
+            skills (`Mapping[str, Skill] | None`, *optional*, defaults to `None`):
+                The run's host-supplied skills. Granted ones are listed in the
+                system message and served by the built-in ``load_skill`` tool.
 
         Returns:
             `Output`: The selected mode's result.
 
         Raises:
             `ValueError`: A variable collides with a declared or delivered input.
+            `SkillError`: The node grants skills the host did not supply.
             `_CapabilityFault`: Capture or conversation access fails; the
                 evaluator re-raises its original host exception.
             `_HostStop`: The host has requested cooperative cancellation.
@@ -301,6 +350,8 @@ class AgentNode(Node):
                 capture_render(captured)
         if stop_event is not None and stop_event.is_set():
             raise _HostStop(primary=False)
+        granted = self._granted_skills(skills)
+        base_system_prompt = system_prompt_with_skills(DEFAULT_SYSTEM, granted)
         memory_context = (
             MemoryContext()
             if open_memory_context is None
@@ -317,6 +368,8 @@ class AgentNode(Node):
                 toolset=tools,
                 emit_stream=emit_stream,
                 emit_event=emit_event,
+                base_system_prompt=base_system_prompt,
+                skills=granted,
             )
         )
 

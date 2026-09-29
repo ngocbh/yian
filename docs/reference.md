@@ -378,6 +378,18 @@ or passes the whole set for one run with `run_flow(..., tools=...)`.
 
 ::: agent_composer.tools.invoke_tool_trusted
 
+## Skills
+
+Host-supplied `SKILL.md` skills. The host builds the mapping passed as `skills=`.
+
+::: agent_composer.skills.Skill
+
+::: agent_composer.skills.SkillError
+
+::: agent_composer.compose.load_skills
+
+::: agent_composer.compose.default_skill_roots
+
 ## LLM configuration
 
 How an AGENT node selects and builds its chat model.

@@ -27,6 +27,7 @@ from agent_composer.llm_clients import LLMConfig
 from agent_composer.memory.contracts import MemoryPolicySpec
 from agent_composer.nodes.agent import AgentNode
 from agent_composer.nodes.contracts import Parameter, ValueContract
+from agent_composer.skills import SkillError
 
 if TYPE_CHECKING:
     from agent_composer.compose.source.catalog import _SourceCatalogBuilder
@@ -105,6 +106,7 @@ class AgentDescriptor(NodeDescriptor):
         "prompt",
         "variables",
         "tools",
+        "skills",
         "mode",
         "llm_config",
         "long_term_memory",
@@ -118,6 +120,7 @@ class AgentDescriptor(NodeDescriptor):
     prompt: Optional[str] = None
     variables: dict[str, Any] = field(default_factory=dict)
     tools: list[str] = field(default_factory=list)
+    skills: list[str] | str = field(default_factory=list)
     mode: str = "tool_calling"
     llm_config: dict[str, Any] = field(default_factory=dict)
     retries: int = 2
@@ -157,7 +160,16 @@ class AgentDescriptor(NodeDescriptor):
         own_range: SourceRange | None,
         diagnostics: LoadDiagnostics,
     ) -> None:
-        """Parse a present named policy before ordinary AGENT validation."""
+        """Check the `skills:` shape and parse a present named policy."""
+        skills = kwargs.get("skills")
+        if skills is not None and skills != "all" and not (
+            isinstance(skills, list) and all(isinstance(name, str) for name in skills)
+        ):
+            raise diagnostics.error(
+                f"node {node_id!r} (kind={cls.kind}): `skills:` must be a list of "
+                "skill names or `all`",
+                range=ranges.get(("field", "skills")) or own_range,
+            )
         if "memory_policy" in kwargs:
             kwargs["memory_policy"] = parse_memory_policy(
                 kwargs["memory_policy"],
@@ -227,13 +239,15 @@ class AgentDescriptor(NodeDescriptor):
                 title=self.node_name,
                 memory_policy=self.memory_policy,
                 variables=variables,
+                skills=self.skills,
             )
         except ValueError as exc:
-            # AgentNode validates the mode registry; surface a rejection as
-            # the loader's one error type (loud), not a bare ValueError.
+            # AgentNode validates the mode registry and skill grants; surface a
+            # rejection as the loader's one error type (loud), not a bare ValueError.
+            skills_range = self.field_ranges.get(("field", "skills")) or self.range
             raise ctx.diagnostics.error(
                 f"node {self.id!r}: {exc}",
-                range=mode_range,
+                range=skills_range if isinstance(exc, SkillError) else mode_range,
             ) from exc
 
         override = self.output_contract_override

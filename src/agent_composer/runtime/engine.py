@@ -12,7 +12,7 @@ from __future__ import annotations
 import queue
 import threading
 import traceback as _tb
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextvars import copy_context
 from dataclasses import dataclass
@@ -98,6 +98,7 @@ class FlowEngine:
         stop_event: threading.Event | None = None,
         memory_context_opener: MemoryContextOpener | None = None,
         tools: ToolSet | None = None,
+        skills: Mapping[str, Any] | None = None,
     ) -> None:
         """Borrow a prepared state/log pair and configure one bounded drive.
 
@@ -106,9 +107,13 @@ class FlowEngine:
         lazy access to it. It defaults to ``None`` (no injected memory context);
         a non-callable value raises ``TypeError``. The dispatcher captures each
         accepted start before evaluating or submitting its worker.
+
         ``tools`` is this run's ``ToolSet``; every node declaring ``needs_tools``
         receives it. ``None`` uses the global registry; any other type
         raises ``TypeError``.
+
+        ``skills`` is the run's host-supplied skill mapping, passed unchanged to
+        nodes declaring ``needs_skills``; a non-mapping raises ``TypeError``.
         """
         if type(state) is not RunState:
             raise TypeError("FlowEngine expects a RunState")
@@ -128,6 +133,8 @@ class FlowEngine:
             raise TypeError("memory_context_opener must be callable or None")
         if tools is not None and type(tools) is not ToolSet:
             raise TypeError("tools must be a ToolSet or None")
+        if skills is not None and not isinstance(skills, Mapping):
+            raise TypeError("skills must be a mapping or None")
         self.state = state
         self.log = log
         self.grow_builder = grow_builder
@@ -137,6 +144,7 @@ class FlowEngine:
         self.stop_event = stop_event if stop_event is not None else threading.Event()
         self.memory_context_opener = memory_context_opener
         self.tools = tools if tools is not None else ToolSet()
+        self.skills = skills
 
     def run(self) -> Iterator[Any]:
         """Drive newly ready work and yield only post-durable observer notifications."""
@@ -460,6 +468,7 @@ class FlowEngine:
             memory_context_opener=self.memory_context_opener,
             memory_invocation=invocation,
             tools=self.tools,
+            skills=self.skills,
         )
 
     def _evaluate_worker(

@@ -13,6 +13,7 @@ from typing import Any, Callable
 
 from agent_composer.memory.contracts import EvaluationTrace, MemoryContext
 from agent_composer.nodes.base import Output, _HostStop
+from agent_composer.skills.catalog import Skill
 from agent_composer.tools import ToolSet
 
 DEFAULT_SYSTEM = (
@@ -43,6 +44,8 @@ class AgentRunContext:
     toolset: ToolSet = field(default_factory=ToolSet)  # the run's tools; `tools` grants ids from it
     emit_stream: Callable[[Any], None] | None = None  # transient text sink; absent = no streaming
     emit_event: Callable[[Any], None] | None = None  # transient in-loop observer sink
+    base_system_prompt: str = DEFAULT_SYSTEM  # tool_calling system text before memory; lists skills
+    skills: tuple[Skill, ...] = ()  # granted skills served by `load_skill`, sorted by name
 
     def check_stopped(self) -> None:
         """Unwind before starting another external effect after host cancellation."""

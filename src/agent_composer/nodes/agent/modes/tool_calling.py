@@ -6,6 +6,7 @@ never drives tool dispatch, and its synthetic missing-result repairs are not sav
 
 from __future__ import annotations
 
+from functools import partial
 from uuid import uuid4
 
 from langchain_core.messages import (
@@ -32,7 +33,6 @@ from agent_composer.nodes.agent.live import (
     observe_tool_call,
 )
 from agent_composer.nodes.agent.modes.common import (
-    DEFAULT_SYSTEM,
     AgentLoopError,
     AgentRunContext,
     register_mode,
@@ -44,6 +44,7 @@ from agent_composer.nodes.agent.modes.utils import (
 )
 from agent_composer.nodes.agent.structured import generate_structured, type_to_schema
 from agent_composer.nodes.base import Output
+from agent_composer.skills.tool import LOAD_SKILL, invoke_load_skill, load_skill_tool
 
 # -1 means no bound; a positive per-node env value bounds model turns.
 MAX_TOOL_ITERATIONS = -1
@@ -52,7 +53,7 @@ MAX_TOOL_ITERATIONS = -1
 @register_mode("tool_calling")
 def tool_calling(ctx: AgentRunContext) -> Output:
     """Execute model-returned tool calls in order until the model answers."""
-    system_prompt = system_prompt_with_memory(DEFAULT_SYSTEM, ctx.memory_context.sections)
+    system_prompt = system_prompt_with_memory(ctx.base_system_prompt, ctx.memory_context.sections)
     messages: list[BaseMessage] = [
         SystemMessage(content=system_prompt),
         HumanMessage(content=ctx.prompt),
@@ -73,12 +74,12 @@ def tool_calling(ctx: AgentRunContext) -> Output:
     messages = [messages[0], *prior, *messages[1:]]
     if ctx.evaluation_trace is not None:
         ctx.evaluation_trace.record_prompt(
-            DEFAULT_SYSTEM,
+            ctx.base_system_prompt,
             ctx.prompt,
             ctx.memory_context.sections,
         )
     schema = type_to_schema(ctx.output_type) if ctx.output_type is not None else None
-    if not ctx.tools and schema is not None:
+    if not ctx.tools and not ctx.skills and schema is not None:
         return Output(
             value=generate_structured(
                 model,
@@ -95,6 +96,9 @@ def tool_calling(ctx: AgentRunContext) -> Output:
         )
 
     bound = ctx.toolset.resolve(list(ctx.tools))
+    skills = {skill.name: skill for skill in ctx.skills}
+    if skills:
+        bound.append(load_skill_tool())
     ctx.check_stopped()
     chat = model.bind_tools(bound) if bound else model
     iterations = 0
@@ -155,7 +159,11 @@ def tool_calling(ctx: AgentRunContext) -> Output:
                     pass
                 else:
                     ctx.evaluation_trace.record_interaction(call_interaction)
-            if name not in ctx.tools:
+            if skills and name == LOAD_SKILL:
+                invoke = partial(invoke_load_skill, skills, arguments)
+            elif name in ctx.tools:
+                invoke = partial(ctx.toolset.invoke, name, arguments)
+            else:
                 raise AgentLoopError(
                     f"agent node {ctx.node_id!r} requested tool {name!r}, but it is not "
                     f"granted; granted tools: {ctx.tools}"
@@ -164,7 +172,7 @@ def tool_calling(ctx: AgentRunContext) -> Output:
             result_message = invoke_tool_effect(
                 ctx.memory_context.transcript,
                 lambda: observe_tool_call(
-                    live, lambda: ctx.toolset.invoke(name, arguments),
+                    live, invoke,
                     exchange_id=exchange_id, call_index=call_index,
                     tool_call_id=tool_call_id, name=name, arguments=arguments,
                 ),

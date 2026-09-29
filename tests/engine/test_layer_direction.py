@@ -338,3 +338,18 @@ def test_memory_conversation_leaves_import_only_declared_leaves() -> None:
     assert (
         not violations
     ), "lower memory imports undeclared dependencies:\n" + "\n".join(violations)
+
+
+def test_skills_leaf_imports_no_engine_or_front_end_layer() -> None:
+    """Nodes import the skills leaf, so it must never import back up the stack."""
+    violations: list[str] = []
+    for forbidden in (
+        "agent_composer.nodes",
+        "agent_composer.compile",
+        "agent_composer.compose",
+        "agent_composer.runtime",
+        "agent_composer.run",
+        "agent_composer.cli",
+    ):
+        violations.extend(_forbidden_imports(PACKAGE_ROOT / "skills", forbidden))
+    assert not violations, "skills must stay a leaf:\n" + "\n".join(violations)

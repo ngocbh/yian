@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 import os
 from pathlib import Path
 import threading
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from langchain_core.tools import BaseTool
 
@@ -75,6 +75,7 @@ from agent_composer.runtime.state import (
     prepare_run_started,
 )
 from agent_composer.runtime.memory_runtime import MemoryRuntime
+from agent_composer.skills import Skill
 from agent_composer.tools import ToolSet
 from agent_composer.typesys.pool import VariablePool
 from agent_composer.typesys.seeding import default_run_id, seed_system_clock
@@ -260,6 +261,7 @@ def run_flow(
     memory: dict[str, Memory] | None = None,
     learnable: bool = False,
     tools: Mapping[str, BaseTool | Callable[..., Any]] | None = None,
+    skills: Mapping[str, Skill] | None = None,
 ) -> RunResult:
     """Start and drive one flow through an in-memory or durable run log.
 
@@ -319,6 +321,15 @@ def run_flow(
             up to eight workers by default, so several nodes can call it at once;
             it must be thread-safe. An AGENT can call a tool only if its `tools:`
             list grants the id.
+            Granting skills also binds the built-in ``load_skill`` tool,
+            which is not part of this mapping.
+        skills (`Mapping[str, Skill] | None`, *optional*, defaults to `None`):
+            Skills available to this run, keyed by `Skill.name`; build one with
+            `load_skills`. An AGENT lists its granted skills' names and
+            descriptions in its system message and reads them on demand with the
+            built-in ``load_skill`` tool. ``skills: all`` grants every supplied
+            skill. A flow that grants skills needs this mapping (``{}`` grants
+            none). Pass the same mapping to `resume_flow`.
 
     Returns:
         `RunResult`:
@@ -331,8 +342,9 @@ def run_flow(
             entry.
         `ValueError`:
             Inputs, identity, worker count, model configuration, or prepared run
-            state violates its contract, or a `BaseTool` in `tools` is named
-            differently from its key.
+            state violates its contract, a `BaseTool` in `tools` is named
+            differently from its key, or an AGENT grants skills while
+            `skills` is `None` or lacks a listed skill.
         `MemorySetupError`:
             Memory is enabled without a required policy implementation, cannot
             open an exact run snapshot, or has an invalid configuration.
@@ -353,6 +365,7 @@ def run_flow(
         memory=memory,
         learnable=learnable,
         tools=tools,
+        skills=skills,
         stop_event=threading.Event(),
     )
 
@@ -370,6 +383,7 @@ def _run_flow_controlled(
     memory: dict[str, Memory] | None = None,
     learnable: bool = False,
     tools: Mapping[str, BaseTool | Callable[..., Any]] | None = None,
+    skills: Mapping[str, Skill] | None = None,
     stop_event: threading.Event,
 ) -> RunResult:
     """Drive a fresh run with one host-owned cooperative stop event."""
@@ -378,6 +392,7 @@ def _run_flow_controlled(
     if type(learnable) is not bool:
         raise TypeError("learnable must be a bool")
     run_tools = ToolSet(tools)
+    skills = _check_skills(flow.compiled, skills)
 
     # Identity belongs to the authored program, before cascade resolution or any
     # per-run copy can change object topology.
@@ -473,6 +488,7 @@ def _run_flow_controlled(
                 None if memory_runtime is None else memory_runtime.open_context
             ),
             tools=run_tools,
+            skills=skills,
         )
         events.extend(engine.run())
         return _result_from_state(state, log_path, events,
@@ -494,6 +510,7 @@ def resume_flow(
     on_stream: StreamHook | None = None,
     memory: dict[str, Memory] | None = None,
     tools: Mapping[str, BaseTool | Callable[..., Any]] | None = None,
+    skills: Mapping[str, Skill] | None = None,
 ) -> RunResult:
     """Recover primary execution or inspect a terminal run without backward work.
 
@@ -525,6 +542,10 @@ def resume_flow(
             The tools the resumed segment sees, with the same rules as
             `run_flow`. Tools are not recorded in the log, so pass the same
             mapping (including `ask_user`) that the original run used.
+        skills (`Mapping[str, Skill] | None`, *optional*, defaults to `None`):
+            The skills passed to the original `run_flow`. Nodes that restart see
+            this mapping. An unfinished run of a flow that grants skills needs
+            it; terminal inspection does not check it.
 
     Returns:
         `RunResult`:
@@ -536,8 +557,9 @@ def resume_flow(
             A public argument or decoded carrier has the wrong type, including a
             malformed `tools` entry.
         `ValueError`:
-            The prefix is invalid, the flow fingerprint differs, or the selected
-            worker count violates its contract.
+            The prefix is invalid, the flow fingerprint differs, the selected
+            worker count violates its contract, or an unfinished run's AGENT
+            grants skills while `skills` is `None` or lacks a listed skill.
         `MemorySetupError`:
             The recorded run needs memory but its mapping is absent, incomplete,
             or cannot reproduce the exact recorded snapshots.
@@ -554,6 +576,7 @@ def resume_flow(
         on_stream=on_stream,
         memory=memory,
         tools=tools,
+        skills=skills,
         stop_event=threading.Event(),
     )
 
@@ -567,6 +590,7 @@ def _resume_flow_controlled(
     on_stream: StreamHook | None = None,
     memory: dict[str, Memory] | None = None,
     tools: Mapping[str, BaseTool | Callable[..., Any]] | None = None,
+    skills: Mapping[str, Skill] | None = None,
     stop_event: threading.Event,
 ) -> RunResult:
     """Recover and drive a durable run with a host-owned stop event."""
@@ -583,6 +607,7 @@ def _resume_flow_controlled(
             return _result_from_state(state, log_path, [],
                                       handle=_retained_handle(retained_program, state, authority, memory,
                                                               locator=retained_locator))
+        skills = _check_skills(flow.compiled, skills)
 
         if state.memory_layout is not None:
             if memory is None:
@@ -632,6 +657,7 @@ def _resume_flow_controlled(
                     None if memory_runtime is None else memory_runtime.open_context
                 ),
                 tools=run_tools,
+                skills=skills,
             )
             events.extend(engine.run())
 
@@ -643,6 +669,53 @@ def _resume_flow_controlled(
         raise
     finally:
         _close_run_resources(memory_runtime, authority, primary_error)
+
+
+def _check_skills(
+    flow: CompiledFlow,
+    skills: Mapping[str, Skill] | None,
+) -> dict[str, Skill] | None:
+    """Copy the host's skills and prove every AGENT grant can be served.
+
+    Walks top-level and static child-flow agents before any record is written. A
+    flow that grants skills needs a ``skills=`` mapping (``{}`` grants none), so a
+    run or resume never silently drops them. A listed skill must be in the mapping.
+    """
+    if skills is not None:
+        if not isinstance(skills, Mapping):
+            raise TypeError("skills must be a mapping of name to Skill, or None")
+        for name, skill in skills.items():
+            if type(skill) is not Skill or skill.name != name:
+                raise TypeError(f"skills[{name!r}] must be a Skill named {name!r}")
+        skills = dict(skills)
+    for node_id, grants in _skill_grants(flow):
+        if skills is None:
+            raise ValueError(
+                f"AGENT node {node_id!r} grants skills, but no skills= mapping was "
+                "passed; pass the run's skills (or {} for none)"
+            )
+        missing = [] if grants == "all" else [name for name in grants if name not in skills]
+        if missing:
+            raise ValueError(
+                f"AGENT node {node_id!r} grants skills not supplied to this run: {missing}"
+            )
+    return skills
+
+
+def _skill_grants(flow: Any, path: tuple[str, ...] = ()) -> list[tuple[str, Any]]:
+    """Return each static node's non-empty skill grant, keyed by its node path.
+
+    Kind-blind: grants are found by the ``needs_skills`` trait and child flows by
+    ``Node.origin_children()``, so the run boundary imports no node class.
+    """
+    found: list[tuple[str, Any]] = []
+    for node_id, node in flow.nodes.items():
+        node_path = (*path, node_id)
+        if node.needs_skills and node.skills:
+            found.append(("/".join(node_path), node.skills))
+        for child in node.origin_children():
+            found.extend(_skill_grants(child, node_path))
+    return found
 
 
 def _replay_run_log(flow: ComposedFlow, log: RunLog) -> RunState:

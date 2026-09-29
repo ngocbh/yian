@@ -1307,13 +1307,18 @@ def memory_commit_id(
     run_id: str,
     policy_name: str,
     mutations: tuple[MemoryMutation, ...],
+    attempt_id: int | None = None,
 ) -> str:
     """Return the sole deterministic ID for a policy's canonical mutation batch.
 
     The SHA-256 input is UTF-8 compact JSON with sorted object keys and no NaN:
-    ``[run_id, policy_name, canonical_batch]``.  Batch order is semantic and each
-    item contains ``mutation_id``, exact frame-ref fields, and the JSON payload.
+    ``[run_id, policy_name, canonical_batch]`` for ``ac-memory-v1:``, or
+    ``[run_id, attempt_id, policy_name, canonical_batch]`` for ``ac-memory-v2:``
+    when ``attempt_id`` is given.  Batch order is semantic and each item contains
+    ``mutation_id``, exact frame-ref fields, and the JSON payload.
     """
+    if attempt_id is not None and (type(attempt_id) is not int or attempt_id < 1):
+        raise ValueError("attempt_id must be a positive integer or None")
     if type(run_id) is not str or not run_id:
         raise ValueError("run_id must be a non-empty string")
     if type(policy_name) is not str or not policy_name:
@@ -1340,14 +1345,16 @@ def memory_commit_id(
                 "payload": mutation.payload,
             }
         )
+    fields = [run_id, policy_name, batch] if attempt_id is None else [run_id, attempt_id, policy_name, batch]
     encoded = json.dumps(
-        [run_id, policy_name, batch],
+        fields,
         ensure_ascii=False,
         allow_nan=False,
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
-    return f"ac-memory-v1:{sha256(encoded).hexdigest()}"
+    version = "v1" if attempt_id is None else "v2"
+    return f"ac-memory-{version}:{sha256(encoded).hexdigest()}"
 
 
 __all__ = [

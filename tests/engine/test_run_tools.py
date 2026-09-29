@@ -10,6 +10,7 @@ from langchain_core.tools import StructuredTool
 
 from agent_composer.compile.model import END_ID, START_ID
 from agent_composer.nodes.base import Node, NodeKind, Output
+from agent_composer.nodes.human_input import HumanInputNode
 from agent_composer.nodes.tool.node import ToolNode
 from agent_composer.runtime.eval_node import eval_node
 from agent_composer.tools import TOOL_REGISTRY, ToolSet, register_tool, registered_tools
@@ -255,3 +256,30 @@ def test_flow_engine_rejects_a_raw_tools_mapping():
     )
     with pytest.raises(TypeError, match="tools must be a ToolSet or None"):
         _engine(graph, tools={"ping": _ping})
+
+
+def test_human_input_asks_the_run_ask_user_handler():
+    seen: list[dict[str, Any]] = []
+    tools = ToolSet({"ask_user": _recording_handler(seen, answer="yes")})
+    node = HumanInputNode("approval", prompt="Ship ${plan}?", title="Gate")
+
+    assert node.run({"plan": "v2"}, tools=tools) == Output("yes")
+    assert seen == [
+        {
+            "question": "Ship v2?",
+            "questions": None,
+            "answer_schema": None,
+            "title": "Gate",
+            "node_id": "approval",
+        }
+    ]
+
+
+def test_eval_node_gives_human_input_the_run_toolset():
+    seen: list[dict[str, Any]] = []
+    tools = ToolSet({"ask_user": _recording_handler(seen, answer="yes")})
+
+    evaluated = eval_node(HumanInputNode("ask", prompt="Ready?"), None, VariablePool(), tools=tools)
+
+    assert evaluated.outcome == Output("yes")
+    assert [request["node_id"] for request in seen] == ["ask"]

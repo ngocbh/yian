@@ -23,6 +23,7 @@ from typer.testing import CliRunner
 
 import agent_composer.cli.run as run_cli
 from agent_composer.cli import app
+from agent_composer.tools import TOOL_REGISTRY, register_tool
 
 runner = CliRunner()
 
@@ -203,11 +204,34 @@ output: ${inspect.output}
 """
 
 
+REGISTERED_TOOL_FLOW = """\
+id: cli_registered_tool
+name: cli_registered_tool
+nodes:
+  call:
+    kind: tool
+    tool_id: cli_run_probe
+output: ${call.output}
+"""
+
+
 def test_run_succeeds_with_input_flag(tmp_path: Path):
     flow = _write_flow(tmp_path, ECHO_FLOW)
     result = runner.invoke(app, ["run", str(flow), "--input", "topic=clouds"])
     assert result.exit_code == 0, result.output
     assert "clouds" in result.stdout
+
+
+def test_run_keeps_registered_tools(tmp_path: Path):
+    """The CLI passes its ask_user handler per run without hiding registered tools."""
+    flow = _write_flow(tmp_path, REGISTERED_TOOL_FLOW)
+    register_tool("cli_run_probe")(lambda: "from the registry")
+    try:
+        result = runner.invoke(app, ["run", str(flow)])
+    finally:
+        TOOL_REGISTRY.pop("cli_run_probe", None)
+    assert result.exit_code == 0, result.output
+    assert "from the registry" in result.stdout
 
 
 def test_run_inline_code_in_process(tmp_path: Path):

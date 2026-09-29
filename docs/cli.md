@@ -119,6 +119,27 @@ request can be repeated against the latest stored history. A terminal resume
 only prints the recorded result and does not open memory stores. Older logs
 that recorded no enabled memory remain dormant when resumed.
 
+## Skills
+
+`composer run` supplies the Claude Code and Codex skills installed on your machine. An
+AGENT uses those its `skills:` field grants (see
+[Agent skills](syntax.md#agent-skills-skills)). When any AGENT in the flow grants
+skills, the CLI reads these folders, and the first folder that has a skill name wins:
+
+1. `~/.claude/skills`
+2. `~/.agents/skills`
+3. `.claude/skills` and then `.agents/skills` in the current directory, then in
+   each parent directory up to the git repository root. These start at the
+   directory you run `composer` in, not at the flow file's directory.
+
+Your personal skills win over project skills of the same name, as in Claude Code.
+A skill with a broken or unreadable `SKILL.md` is skipped with a `warning:` line on
+stderr. So is a name with `_` or uppercase letters: skill names use lowercase
+letters, digits, and hyphens. A flow that grants a skill none of these folders has
+fails before the run starts. A flow without `skills:` reads no skill folders.
+Resuming with `--resume` reads the folders again, so keep the skills unchanged
+until the run finishes.
+
 ## Supplying inputs
 
 A fresh flow declares typed `input:` fields. Explicit inputs layer in this order

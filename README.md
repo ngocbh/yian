@@ -193,6 +193,14 @@ with SessionMemory(storage="./session.sqlite") as session:
     result = run_flow(flow, inputs, memory={"session": session})
 ```
 
+An AGENT can also use Claude Code and Codex skills. `skills: [release-notes]` (or
+`skills: all`) lists each granted skill's name and description in the system
+message, and the model reads a skill's `SKILL.md` or bundled files through the
+built-in `load_skill` tool when it needs them. `composer run` supplies the skills in
+`~/.claude/skills`, `~/.agents/skills`, and the project's `.claude/skills` and
+`.agents/skills`; a library host passes `skills=load_skills([...])` from
+`agent_composer.compose` (`{}` when a granting flow should get none). See [Skills](docs/api.md#skills).
+
 Each local SQLite file has one owning backend until `close()` or context exit.
 Idle run handles do not block closing; active work or queued turns do. Omit
 `storage` to keep memory process-local. See [durable memory](docs/api.md#optional-durable-memory)

@@ -106,6 +106,7 @@ run_flow(
     llm_config: dict[str, Any] | None = None,
     memory: dict[str, Memory] | None = None,
     learnable: bool = False,
+    skills: Mapping[str, Skill] | None = None,
 ) -> RunResult
 ```
 
@@ -135,6 +136,9 @@ terminal. Stored defaults are not coerced.
   a later explicit `result.backward(feedback)` call. It defaults to `False` and
   needs no memory policy. Forward execution never calls backward hooks, frame
   learners, or policy commits.
+- `skills` — the skills this run may use, keyed by name (see [Skills](#skills)).
+  An AGENT's `skills:` grant selects from this mapping. A listed skill that is
+  missing raises `ValueError` before the run starts.
 
 A node or flow-assert failure returns `RunResult(status="failed")` with one
 immutable `result.failure`; a successful flow returns `status="succeeded"` with
@@ -209,6 +213,54 @@ feedback. A later learner or commit failure retains already completed feedback.
 Host errors, cancellation, setup errors, and log faults propagate while leaving
 the accepted prefix inspectable. They do not manufacture a successful or failed
 completion record.
+
+## Skills
+
+An AGENT granted `skills:` in YAML lists each skill's name and description in its
+system message and reads the full instructions on demand through the built-in
+`load_skill` tool (see [Agent skills](syntax.md#agent-skills-skills)). The host
+chooses which skills exist for a run:
+
+```python
+from agent_composer.compose import load_flow, load_skills
+from agent_composer.run import resume_flow, run_flow
+
+flow = load_flow(open("review.yaml").read())   # the AGENT says `skills: all`
+shared = load_skills(["shared/skills"])
+personal = load_skills(["people/ada/skills"])
+grant = ["code-review"]                          # the host's own per-person grant
+skills = {n: s for n, s in shared.items() if n in grant} | personal   # personal wins
+result = run_flow(flow, {"diff": diff}, log="run.jsonl", skills=skills)
+
+# After a crash, pass the same skills again.
+resume_flow(flow, log="run.jsonl", skills=skills)
+```
+
+A flow that grants skills (a list or `all`) needs a `skills=` mapping on `run_flow`
+and on `resume_flow` of an unfinished run. Pass `{}` to grant none. Without it, or
+when a listed name is missing, the call raises `ValueError` before any record is
+written.
+
+- `load_skills(roots, *, skip_invalid=False)` reads every `<root>/<name>/SKILL.md`.
+  Missing roots, hidden folders, and folders without `SKILL.md` are skipped. When
+  two roots have a skill with the same name, the earlier root wins. Invalid
+  frontmatter, a missing `description`, a bad name, an unreadable file, a file over
+  256 KiB, or two skills with one name in the same root raise one `SkillError` that
+  lists every problem; `skip_invalid=True` warns and skips them instead.
+- `default_skill_roots(cwd=None, home=None)` returns the folders `composer run`
+  uses: `~/.claude/skills`, `~/.agents/skills`, then `.claude/skills` and
+  `.agents/skills` in each directory from `cwd` up to the git root.
+- `agent_composer.skills.Skill(name, description, instructions, directory=None)`
+  builds a skill in code. `directory=None` means it has no bundled files.
+
+A skill's text is read once, when `load_skills` runs, so every node in the run sees
+the same instructions. The listing becomes part of the node's recorded
+`base_system_prompt` evidence and each `load_skill` result is a recorded tool
+result, so backward learning sees what the model saw. The run log does not store
+skills: pass the same mapping to `resume_flow`, as with `memory=`.
+
+Each `load_skill` result is capped at 256 KiB. There is no cumulative cap: every
+result stays in the loop's message history, the evidence, and any logs.
 
 ## Injecting agent memory
 

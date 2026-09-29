@@ -250,3 +250,63 @@ def test_resume_reopens_the_recorded_version_for_backward(tmp_path, monkeypatch)
     assert material["seen_profile"] == recorded_text
     assert material["current_profile"] == "# Ada\n- Edited later.\n"
     assert memory.read()[0] == "# Ada\n- Edited later.\n- Brief.\n"
+
+
+def test_a_new_attempt_after_a_mismatch_learns_from_the_edited_document(tmp_path, monkeypatch) -> None:
+    memory = _profile(tmp_path)
+    _forward(monkeypatch, "Hello.")
+    result = run_flow(load_flow(_CHAT), {"message": "hi"}, learnable=True, memory={"profile": memory})
+    learner = _Learner("# Ada\n- From the model.", before_reply=lambda: memory.write(
+        "# Ada\n- Edited by Ada.\n", base_version=memory.read()[1]))
+    _learner(monkeypatch, learner)
+    assert result.backward("Keep replies brief.").status == "failed"
+
+    retry = _Learner("# Ada\n- Edited by Ada.\n- Prefers brief replies.")
+    _learner(monkeypatch, retry)
+    outcome = result.backward("Keep replies brief.")
+    assert outcome.status == "succeeded", outcome.failure
+    assert _material(retry)["current_profile"] == "# Ada\n- Edited by Ada.\n"
+    assert memory.read()[0] == "# Ada\n- Edited by Ada.\n- Prefers brief replies.\n"
+
+
+class _KilledAfterWrite(FileProfileStore):
+    """Store that writes, then dies like a process killed before the runtime records success."""
+
+    kill = True
+
+    def write(self, text, *, base_version, provenance=None):
+        version = super().write(text, base_version=base_version, provenance=provenance)
+        if self.kill and provenance is not None:
+            raise SystemExit("killed after the store write")
+        return version
+
+
+def test_an_attempt_killed_after_its_write_is_unknown_and_findable_in_provenance(tmp_path, monkeypatch) -> None:
+    store = _KilledAfterWrite(tmp_path / "ada.md")
+    store.write("# Ada\n", base_version=store.read()[1])
+    memory = ProfileMemory(store, llm_config={"provider": "ollama", "model": "local-profiler"})
+    flow, path = load_flow(_CHAT), tmp_path / "run.jsonl"
+    _forward(monkeypatch, "Hello.")
+    run_flow(flow, {"message": "hi"}, log=path, learnable=True, memory={"profile": memory})
+    _learner(monkeypatch, _Learner("# Ada\n- Brief."))
+    with pytest.raises(SystemExit):
+        resume_flow(flow, log=path, memory={"profile": memory}).backward("Be brief.")
+    assert store.read()[0] == "# Ada\n- Brief.\n"
+
+    store.kill = False
+    resumed = resume_flow(flow, log=path, memory={"profile": memory})
+    unknown, = resumed.backward_outcome.learning.policies
+    assert unknown.status == "unknown" and unknown.commit_id.startswith("ac-memory-v1:")
+    log = tmp_path / ".ada.md.writes.jsonl"
+    written = [json.loads(line)["provenance"] for line in log.read_text().splitlines()][1:]
+    assert [entry["commit_id"] for entry in written] == [unknown.commit_id]
+
+    learner = _Learner("# Ada\n- Brief.")
+    _learner(monkeypatch, learner)
+    outcome = resumed.backward("Be brief.")
+    assert outcome.status == "succeeded", outcome.failure
+    assert "may already reflect this feedback" in learner.requests[-1][0].content
+    material = _material(learner)
+    assert (material["seen_profile"], material["current_profile"]) == ("# Ada\n", "# Ada\n- Brief.\n")
+    assert store.read()[0] == "# Ada\n- Brief.\n"
+    assert len(log.read_text().splitlines()) == 2

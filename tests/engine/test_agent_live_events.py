@@ -245,3 +245,70 @@ def test_structured_native_turn_reports_usage_and_retains_the_raw_reply(monkeypa
     assert [(effect.kind, effect.status) for effect in view.effects] == [("model", "completed")]
     replies = [item.payload["message"] for item in view.items if item.payload["message"]["type"] == "ai"]
     assert replies[0]["data"]["tool_calls"][0]["args"] == {"value": 4}
+
+
+def test_tool_calling_agent_orders_model_and_tool_observers(monkeypatch):
+    tool = _Tool()
+    monkeypatch.setitem(tools_mod.TOOL_REGISTRY, "lookup", tool)
+    node, chat = _agent(
+        monkeypatch,
+        [
+            reply("let me check", calls=[("lookup", {"topic": "acme"}, "call-1")],
+                  tokens=usage(10, 4)),
+            reply("acme is fine", tokens=usage(20, 3)),
+        ],
+        tools=["lookup"],
+    )
+    outcome, chunks, observed = _evaluate(node, stream=False)
+    assert outcome.value == "acme is fine"
+    assert chat.mode == ["invoke", "invoke"] and chunks == []
+    assert tool.seen == [{"topic": "acme"}]
+    first, second = observed[0].exchange_id, observed[4].exchange_id
+    assert first != second
+    assert observed == [
+        ModelCallStarted("writer", first, "chat", "anthropic", "claude-test"),
+        ModelCallFinished("writer", first, "chat", "anthropic", "claude-test",
+                          usage=TokenUsage(10, 4, 14)),
+        ToolCallStarted("writer", first, 0, "call-1", "lookup", {"topic": "acme"}),
+        ToolCallFinished("writer", first, 0, "call-1", "lookup", result="found:acme"),
+        ModelCallStarted("writer", second, "chat", "anthropic", "claude-test"),
+        ModelCallFinished("writer", second, "chat", "anthropic", "claude-test",
+                          usage=TokenUsage(20, 3, 23)),
+    ]
+
+
+def test_tool_error_is_reported_by_type_then_fails_the_node(monkeypatch):
+    def explode(_args):
+        raise ValueError("secret detail")
+
+    monkeypatch.setitem(tools_mod.TOOL_REGISTRY, "lookup", _Tool(explode))
+    node, _ = _agent(
+        monkeypatch, [reply(calls=[("lookup", {"topic": "x"}, "call-1")])], tools=["lookup"]
+    )
+    outcome, _, observed = _evaluate(node)
+    assert isinstance(outcome, EvaluationFailure)
+    assert observed[-1] == ToolCallFinished(
+        "writer", observed[0].exchange_id, 0, "call-1", "lookup", error="ValueError"
+    )
+
+
+def test_two_tool_calls_in_one_reply_get_their_own_indexed_brackets(monkeypatch):
+    tool = _Tool()
+    monkeypatch.setitem(tools_mod.TOOL_REGISTRY, "lookup", tool)
+    node, _ = _agent(
+        monkeypatch,
+        [
+            reply(calls=[("lookup", {"topic": "a"}, "call-a"), ("lookup", {"topic": "b"}, "call-b")]),
+            reply("both fine"),
+        ],
+        tools=["lookup"],
+    )
+    outcome, _, observed = _evaluate(node, stream=False)
+    assert outcome.value == "both fine"
+    assert tool.seen == [{"topic": "a"}, {"topic": "b"}]
+    brackets = [event for event in observed if isinstance(event, (ToolCallStarted, ToolCallFinished))]
+    assert [(type(event), event.call_index, event.tool_call_id) for event in brackets] == [
+        (ToolCallStarted, 0, "call-a"), (ToolCallFinished, 0, "call-a"),
+        (ToolCallStarted, 1, "call-b"), (ToolCallFinished, 1, "call-b"),
+    ]
+    assert {event.exchange_id for event in brackets} == {observed[0].exchange_id}

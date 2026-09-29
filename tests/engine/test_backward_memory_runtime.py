@@ -208,7 +208,7 @@ def test_policy_failure_preserves_prior_success_and_stops_later_policies(invalid
     assert [policy.status for policy in outcome.learning.policies] == ["succeeded", "failed", "unrequested"]
     assert [len(memory[name].commit_calls) for name in ("A", "B", "C")] == [1, 1, 0]
     assert all(len(backend.learn_contexts) == 1 and backend.close_count == 1 for backend in memory.values())
-    assert len(node.calls) == 1 and not engine.state.backward_state.can_start
+    assert len(node.calls) == 1 and engine.state.backward_state.can_start
     assert engine.state.backward_state.finished.attributed_results == ()
     assert len(engine.state.backward_state.ready.attributed_results) == 3
 
@@ -465,7 +465,7 @@ def test_host_capability_identity_and_cleanup_error_preserve_primary_exception(m
     assert engine.state.backward_state.finished is None and not engine.state.backward_state.ever_requested
 
 
-def test_cleanup_error_after_finished_preserves_success_and_permanent_closure(monkeypatch):
+def test_cleanup_error_after_finished_preserves_success_and_admits_a_later_attempt(monkeypatch):
     engine, _ = _terminal()
     memory = _Memory()
     close = _Session.close
@@ -478,7 +478,7 @@ def test_cleanup_error_after_finished_preserves_success_and_permanent_closure(mo
     with pytest.raises(OSError, match="close failed"):
         _drive(engine, {"A": memory})
     assert engine.state.backward_state.finished.outcome.status == "succeeded"
-    assert not engine.state.backward_state.can_start and memory.close_count == 1
+    assert engine.state.backward_state.can_start and memory.close_count == 1
 
 
 def test_backward_and_memory_replay_calls_no_callbacks_or_materialization(monkeypatch):
@@ -616,7 +616,7 @@ def test_cleanup_unwraps_host_failure_after_closing_all_sessions(with_primary, e
         assert not engine.state.backward_state.ever_requested
     else:
         assert engine.state.backward_state.finished.outcome.status == "succeeded"
-        assert not engine.state.backward_state.can_start
+        assert engine.state.backward_state.can_start
 
 
 @pytest.mark.parametrize("operation", ["learn", "commit"])

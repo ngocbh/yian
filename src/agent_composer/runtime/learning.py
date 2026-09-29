@@ -411,9 +411,8 @@ class RuntimeBackwardState:
             _BackwardAttempt.__post_init__(attempt)
             if attempt.started.attempt_id != index + 1:
                 raise ValueError("backward attempt IDs must follow accepted start order")
-            if index < len(self.attempts) - 1 and (attempt.finished is None or attempt.requests
-                    or attempt.finished.outcome.status == "succeeded"):
-                raise ValueError("a closed or unfinished attempt cannot precede another start")
+            if index < len(self.attempts) - 1 and attempt.finished is None:
+                raise ValueError("an unfinished attempt cannot precede another start")
             if tuple(record.policy_name for record in attempt.requests) != self.policy_order[:len(attempt.requests)]:
                 raise ValueError("backward requests must follow recorded policy order")
             if len(attempt.observations) > len(attempt.requests) or len(attempt.requests) > len(attempt.observations) + 1:
@@ -461,10 +460,12 @@ class RuntimeBackwardState:
 
     @property
     def can_start(self) -> bool:
-        """Report history eligibility; terminal/learn gates remain state-owned."""
-        return (not self.ever_requested and (self.current is None or self.finished is not None)
-                and not any(attempt.finished is not None and attempt.finished.outcome.status == "succeeded"
-                            for attempt in self.attempts))
+        """Report whether a new attempt may start; terminal/learn gates remain state-owned.
+
+        Any finished attempt, whatever its outcome or commit requests, admits a
+        later start. Only an unfinished attempt blocks one.
+        """
+        return self.current is None or self.finished is not None
 
     @property
     def outcome(self) -> BackwardOutcome | None:

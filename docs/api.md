@@ -132,7 +132,14 @@ terminal. Stored defaults are not coerced.
   them by `node_id` and `exchange_id`. `usage` is the provider's own count
   (`None` when unreported) and `error` is an exception type name only.
 - `on_stream` — receives transient `StreamChunk` values. Chunks are neither
-  durable records nor members of `RunResult.events`.
+  durable records nor members of `RunResult.events`. With `on_stream` set, AGENT
+  chat replies stream visible text as `StreamChunk(node_id, "text", chunk,
+  exchange_id=...)`; structured replies do not stream. A completed streamed call
+  ends with one empty `final=True` chunk. A failed call ends without one and its
+  `ModelCallFinished.error` is set; a host discards that exchange's partial text.
+  The node value is authoritative: streamed text can differ from it in the
+  whitespace between content blocks. Without `on_stream`, AGENT calls `invoke`
+  exactly as before.
 - `llm_config` — the outer authored layer of the configuration cascade for AGENT nodes.
   The resolved map and process defaults are captured at initialization.
 - `memory` — host-created implementations keyed by the policy name selected by

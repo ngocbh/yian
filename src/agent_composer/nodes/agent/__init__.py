@@ -10,8 +10,8 @@ The adapter also projects safe historical context and injects the current
 unbound model for memory-owned summary preparation; summary state stays in memory.
 ``backward`` builds one tool-free model request from accepted invocation material;
 it neither rerenders the forward prompt nor updates local variables.
-``live`` publishes transient model/tool call observers and provider token usage
-to the evaluator-supplied event sink; it records and retains nothing.
+``live`` publishes transient streamed reply text, model/tool call observers, and
+provider token usage to evaluator-supplied sinks; it records and retains nothing.
 
 Knows about: nodes.base, events, expr, typesys, tools, llm_clients, memory contracts, peer AGENT modules,
              LangChain, and Pydantic.

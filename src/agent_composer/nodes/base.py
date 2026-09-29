@@ -666,6 +666,10 @@ class Node(ABC):
     # ``caps['tools']`` ToolSet, so per-run tools and the per-run ``ask_user`` handler
     # never leak between runs. TOOL, HUMAN_INPUT, and AGENT opt in.
     needs_tools: ClassVar[bool] = False
+    # Declares "I can publish transient in-loop observers". The evaluator supplies
+    # ``caps['emit_stream']`` / ``caps['emit_event']`` only for the host sinks that exist.
+    # AgentNode is the sole built-in opt-in; the runtime remains kind-blind.
+    needs_live_events: ClassVar[bool] = False
 
     def __init__(
         self,
@@ -938,7 +942,8 @@ class Node(ABC):
         Returns a `NodeResult` (`Output | Route | Grow`), or — for a streaming kind —
         a generator that yields `StreamChunk` and *returns* a `NodeResult`. Narrow effect caps
         are passed only to nodes whose traits request them (``bind_item``,
-        ``stop_event``, ``open_memory_context``, ``evaluation_trace``, and ``tools``).
+        ``stop_event``, ``open_memory_context``, ``evaluation_trace``, ``tools``,
+        ``emit_stream``, and ``emit_event``).
         Expected rejection is a `raise`, not a result variant; the evaluator classifies
         its structural stage before the dispatcher records the canonical `Failure`."""
         params = self.params if self.params is not None else []

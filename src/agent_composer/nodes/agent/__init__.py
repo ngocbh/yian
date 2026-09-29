@@ -1,7 +1,7 @@
 """AGENT package — one authored leaf with shared model/tool execution.
 
 ``modes/`` holds the prompting methods. Explicitly granted Composer tools,
-including the host-installed blocking ``ask_user``, execute through the public
+including the run's blocking ``ask_user``, execute through the public
 invocation path inside the live loop. The package owns no durable run state.
 ``context`` adapts the shared memory context to provider messages and effects; it
 owns neither retained history nor turn admission. Modes persist actual exchanges

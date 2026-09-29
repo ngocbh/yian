@@ -11,13 +11,12 @@ import pytest
 
 import agent_composer.llm_clients as llm_clients
 import agent_composer.tools as tools_module
-import agent_composer.nodes.agent.modes.tool_calling as tool_calling_mode
 from agent_composer.nodes.agent import AgentNode
 from agent_composer.nodes.base import Output, _HostStop
 from agent_composer.nodes.contracts import Assertion, ValueContract
 from agent_composer.runtime.engine import FlowEngine
 from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
-from agent_composer.tools import install_ask_user
+from agent_composer.tools import ToolSet, install_ask_user
 from agent_composer.typesys.pool import VariablePool
 from agent_composer.typesys.values import Type, ValueKind
 
@@ -277,11 +276,11 @@ def test_stop_during_tool_resolution_prevents_model_binding(monkeypatch):
 
     monkeypatch.setattr(llm_clients, "model_from_config", lambda config: _Model())
 
-    def resolve_and_stop(tool_ids):
+    def resolve_and_stop(self, tool_ids):
         stop_event.set()
         return [object()]
 
-    monkeypatch.setattr(tool_calling_mode, "resolve_tools", resolve_and_stop)
+    monkeypatch.setattr(ToolSet, "resolve", resolve_and_stop)
     node = AgentNode(
         "agent",
         prompt="go",

@@ -6,13 +6,16 @@ import functools
 from typing import Any
 
 import pytest
+from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 
+import agent_composer.llm_clients as llm_clients
 from agent_composer.compile.model import END_ID, START_ID
+from agent_composer.nodes.agent import AgentNode
 from agent_composer.nodes.base import Node, NodeKind, Output
 from agent_composer.nodes.human_input import HumanInputNode
 from agent_composer.nodes.tool.node import ToolNode
-from agent_composer.runtime.eval_node import eval_node
+from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
 from agent_composer.tools import TOOL_REGISTRY, ToolSet, register_tool, registered_tools
 from agent_composer.typesys.pool import VariablePool
 from tests.engine._graph_builder import _engine, _graph
@@ -283,3 +286,57 @@ def test_eval_node_gives_human_input_the_run_toolset():
 
     assert evaluated.outcome == Output("yes")
     assert [request["node_id"] for request in seen] == ["ask"]
+
+
+class _ScriptedChat:
+    """Return scripted replies and keep the tools bound for the model."""
+
+    def __init__(self, replies: list[AIMessage]):
+        self.replies = list(replies)
+        self.calls: list[list[Any]] = []
+        self.bound_tools: list[Any] = []
+
+    def bind_tools(self, tools):
+        self.bound_tools = list(tools)
+        return self
+
+    def invoke(self, messages):
+        self.calls.append(list(messages))
+        return self.replies.pop(0)
+
+
+def _tool_call(name: str, args: dict[str, Any]) -> AIMessage:
+    """Build one model reply that calls one tool."""
+    return AIMessage(
+        content="",
+        tool_calls=[{"name": name, "args": args, "id": "call-1", "type": "tool_call"}],
+    )
+
+
+def test_agent_binds_and_calls_granted_per_run_tools(monkeypatch):
+    chat = _ScriptedChat([_tool_call("shout", {"text": "hi"}), AIMessage(content="done")])
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda config: chat)
+    seen: list[dict[str, Any]] = []
+    tools = ToolSet({"shout": _upper, "ask_user": _recording_handler(seen)})
+    node = AgentNode("agent", prompt="go", tools=["shout", "ask_user"], mode="tool_calling")
+
+    evaluated = eval_node(node, None, VariablePool(), tools=tools)
+
+    assert evaluated.outcome == Output("done")
+    assert [tool.name for tool in chat.bound_tools] == ["shout", "ask_user"]
+    assert set(chat.bound_tools[1].tool_call_schema.model_fields) == {"question"}
+    result = chat.calls[1][-1]
+    assert isinstance(result, ToolMessage) and result.content == "HI"
+    assert seen == []
+
+
+def test_agent_cannot_call_a_per_run_tool_the_flow_did_not_grant(monkeypatch):
+    chat = _ScriptedChat([_tool_call("shout", {"text": "hi"})])
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda config: chat)
+    node = AgentNode("agent", prompt="go", tools=["ask_user"], mode="tool_calling")
+    tools = ToolSet({"shout": _upper, "ask_user": lambda **request: "yes"})
+
+    evaluated = eval_node(node, None, VariablePool(), tools=tools)
+
+    assert isinstance(evaluated.outcome, EvaluationFailure)
+    assert "not granted" in evaluated.outcome.failure.message

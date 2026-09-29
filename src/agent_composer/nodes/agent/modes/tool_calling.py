@@ -38,7 +38,6 @@ from agent_composer.nodes.agent.modes.utils import (
 )
 from agent_composer.nodes.agent.structured import generate_structured, type_to_schema
 from agent_composer.nodes.base import Output
-from agent_composer.tools import invoke_tool, resolve_tools
 
 # -1 means no bound; a positive per-node env value bounds model turns.
 MAX_TOOL_ITERATIONS = -1
@@ -82,7 +81,7 @@ def tool_calling(ctx: AgentRunContext) -> Output:
             )
         )
 
-    bound = resolve_tools(list(ctx.tools))
+    bound = ctx.toolset.resolve(list(ctx.tools))
     ctx.check_stopped()
     chat = model.bind_tools(bound) if bound else model
     iterations = 0
@@ -149,7 +148,7 @@ def tool_calling(ctx: AgentRunContext) -> Output:
                 )
             result_message = invoke_tool_effect(
                 ctx.memory_context.transcript,
-                lambda: invoke_tool(name, arguments),
+                lambda: ctx.toolset.invoke(name, arguments),
                 name=name,
                 arguments=arguments,
                 model_exchange_id=exchange_id,

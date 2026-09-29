@@ -3,7 +3,7 @@
 Modes drive their local model/tool loop through the shared provider interface.
 An optional memory backend owns
 conversation admission and retained history; the evaluator owns the turn's
-lifetime. Tools, including the host-installed ``ask_user``, are ordinary
+lifetime. Tools, including the run's ``ask_user``, are ordinary
 explicitly authored tool grants. A crash or host interruption unwinds the node;
 no conversation or continuation state is stored in the graph or variable pool.
 """
@@ -37,6 +37,7 @@ from agent_composer.nodes.contracts import (
     _iter_origin_carrier,
     _rewrite_origin_carrier,
 )
+from agent_composer.tools import ToolSet
 from agent_composer.typesys.types import canonical_type_label
 from agent_composer.typesys.values import build_value_as
 
@@ -58,6 +59,7 @@ class AgentNode(Node):
     needs_evaluation_trace = True
     needs_memory_context = True
     needs_render_capture = True
+    needs_tools = True
 
     def __init__(
         self,
@@ -164,6 +166,7 @@ class AgentNode(Node):
         stop_event=None,
         evaluation_trace: EvaluationTrace | None = None,
         memory_context: MemoryContext | None = None,
+        toolset: ToolSet | None = None,
     ) -> AgentRunContext:
         """Build the complete process-local context for one mode invocation."""
         output_type = (
@@ -182,6 +185,7 @@ class AgentNode(Node):
             stop_event=stop_event,
             evaluation_trace=evaluation_trace,
             memory_context=memory_context if memory_context is not None else MemoryContext(),
+            toolset=toolset if toolset is not None else ToolSet(),
         )
 
     def exception_origin(self, exception: Exception) -> OriginRef | None:
@@ -215,6 +219,7 @@ class AgentNode(Node):
         evaluation_trace: EvaluationTrace | None = None,
         open_memory_context: Callable[[str, str, dict[str, Any]], MemoryContext] | None = None,
         capture_render: Callable[[dict[str, Any]], None] | None = None,
+        tools: ToolSet | None = None,
     ) -> Output:
         """Render fresh locals once, publish established capture, and run the mode.
 
@@ -236,6 +241,9 @@ class AgentNode(Node):
             capture_render (`Callable | None`, *optional*, defaults to `None`):
                 Publish one dictionary of actual or explicitly unavailable locals.
                 Omission leaves render capture dormant.
+            tools (`ToolSet | None`, *optional*, defaults to `None`):
+                The run's tools. The node's `tools` list grants ids from it.
+                `None` uses the global registry.
 
         Returns:
             `Output`: The selected mode's result.
@@ -295,6 +303,7 @@ class AgentNode(Node):
                 stop_event=stop_event,
                 evaluation_trace=evaluation_trace,
                 memory_context=memory_context,
+                toolset=tools,
             )
         )
 

@@ -23,10 +23,10 @@ from agent_composer.memory import (
 )
 from agent_composer.nodes.agent import AgentNode
 from agent_composer.nodes.agent.modes.common import DEFAULT_SYSTEM
-from agent_composer.nodes.agent.modes import tool_calling as tool_calling_module
 from agent_composer.nodes.base import Output, _HostStop
 from agent_composer.nodes.contracts import Parameter, ValueContract
 from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
+from agent_composer.tools import ToolSet
 from agent_composer.typesys import Type, ValueKind, VariablePool
 
 
@@ -115,7 +115,7 @@ def test_no_memory_preserves_the_existing_system_prompt_byte_for_byte(
     model = _CaptureModel()
     monkeypatch.setattr(llm_clients, "model_from_config", lambda _config: model)
     if mode == "tool_calling":
-        monkeypatch.setattr(tool_calling_module, "resolve_tools", lambda _names: [object()])
+        monkeypatch.setattr(ToolSet, "resolve", lambda _self, _names: [object()])
 
     node = _node(mode=mode, structured=False)
     node.tools = ["noop"] if mode == "tool_calling" else []
@@ -152,7 +152,7 @@ def test_recall_sections_reach_every_agent_path_in_order_with_trace_parity(
 
     monkeypatch.setattr(llm_clients, "model_from_config", model_factory)
     if mode == "tool_calling" and not structured:
-        monkeypatch.setattr(tool_calling_module, "resolve_tools", lambda _names: [object()])
+        monkeypatch.setattr(ToolSet, "resolve", lambda _self, _names: [object()])
 
     node = _node(mode=mode, structured=structured)
     node.memory_scope = _scope()

@@ -7,7 +7,7 @@ populates `MODES` (before compile). Add a mode: drop a module here that
 then import it below.
 
 Tools are the node's explicitly authored grants. ``plain`` ignores them;
-``tool_calling`` binds and executes them in returned order. The host-installed
+``tool_calling`` binds and executes them in returned order. The run's
 ``ask_user`` follows the same path and blocks inside the live node call.
 """
 

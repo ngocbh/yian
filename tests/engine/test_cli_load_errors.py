@@ -1,4 +1,4 @@
-"""`ac run` compile-error rendering: a failed `load_flow` points at the `.yaml`, not the engine.
+"""`composer run` compile-error rendering: a failed `load_flow` points at the `.yaml`, not the engine.
 
 By default a `LoadError` is shown as a boxed source frame — a Rich panel titled `file:line`
 with the `.yaml` source (line numbers, the offending line highlighted) and the message below,

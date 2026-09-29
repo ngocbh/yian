@@ -1,4 +1,4 @@
-"""`cli/utils.py` credential/endpoint helpers + `ac run`'s pre-flight key check.
+"""`cli/utils.py` credential/endpoint helpers + `composer run`'s pre-flight key check.
 
 `ensure_api_key` / `confirm_ollama_endpoint` are exercised with a fake `questionary`
 and a monkeypatched `sys.stdin.isatty` so both the interactive-prompt and the

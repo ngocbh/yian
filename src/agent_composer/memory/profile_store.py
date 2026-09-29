@@ -10,6 +10,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 import fcntl
 import hashlib
+import json
 import os
 from pathlib import Path
 import tempfile
@@ -160,6 +161,48 @@ class FileProfileStore:
             if kept is None or not kept.is_file():
                 raise LookupError(f"unknown profile version {version!r}")
             return kept.read_text(encoding="utf-8"), version
+
+    def write(
+        self,
+        text: str,
+        *,
+        base_version: str,
+        provenance: JsonObject | None = None,
+    ) -> str:
+        """Replace the current document if ``base_version`` is still current.
+
+        Args:
+            text (`str`): Complete new document.
+            base_version (`str`): Version the writer read before editing.
+            provenance (`JsonObject | None`, *optional*, defaults to `None`):
+                JSON appended with the versions to ``.<name>.writes.jsonl``.
+
+        Returns:
+            `str`: The version of the stored document.
+
+        Raises:
+            `TypeError`: ``text`` or ``base_version`` is not a string.
+            `ValueError`: The current file is not valid UTF-8.
+            `ProfileVersionMismatch`: ``base_version`` is not current.
+        """
+        if type(text) is not str or type(base_version) is not str:
+            raise TypeError("profile text and base_version must be strings")
+        new_version = profile_version(text)
+        with self._locked():
+            current = profile_version(self._current())
+            if current != base_version:
+                raise ProfileVersionMismatch(base_version, current)
+            self._keep(new_version, text)
+            self._replace(self.path, text)
+            with self._writes.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(
+                    {"base_version": base_version, "version": new_version,
+                     "provenance": provenance},
+                    sort_keys=True,
+                ) + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            return new_version
 
     @contextmanager
     def _locked(self) -> Iterator[None]:

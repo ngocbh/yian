@@ -960,11 +960,24 @@ after newer commits, while stale sessions cannot learn or commit. Public JSON
 snapshots support the existing recovery boundary or restoration into a pristine
 instance. Both default to process-local state and support host-only `storage=path`.
 
+The provided `agent_composer.memory.profile.ProfileMemory` keeps one markdown
+document in a host `ProfileStore` (`FileProfileStore` by default). Its session
+snapshot records only the pinned `profile_version` and `text_sha256`, so resume
+and backward reopen that exact version. Only the outermost frame of the policy
+recalls the full document or learns; nested frames of the same policy recall
+nothing, and unrelated top-level frames are a setup error. Learning makes one
+tool-free model call over the feedback, the current document, and budgeted
+episodes with their visible interactions, and returns the whole rewritten
+document. Commit is a compare-and-set store write that never calls a model. Only
+`profile.version_mismatch` is retryable, because only it guarantees nothing was
+written. An attempt killed during commit stays `unknown`; the store's write
+provenance holds its `commit_id`, so hosts check there before retrying.
+
 ### Optional backend durability
 
-`memory/storage.py` is a private lower-level SQLite value adapter shared by all
-three concrete backends. One instance owns a local file for its lifetime; a
-second owner fails immediately. Backends validate complete semantic candidates,
+`memory/storage.py` is a private lower-level SQLite value adapter shared by the
+episodic, reflective, and session backends. One instance owns a local file for
+its lifetime; a second owner fails immediately. Backends validate complete semantic candidates,
 commit detached finite JSON in a transaction, then publish RAM. Private inventory
 includes commit tombstones and adoption flags; SessionMemory also preserves its
 derived summary cache. Public snapshots retain their existing formats and exact

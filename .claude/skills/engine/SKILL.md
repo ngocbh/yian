@@ -488,10 +488,22 @@ Most are just the functional model (above) made enforceable:
   overlap and then recency within its limit. Sessions retain immutable JSON
   snapshots; stale sessions may recall their pinned view but cannot learn or
   commit. Optional host-only `storage=path` preserves complete private state.
-- **Durable memory belongs to the backend, not runtime** — all three built-in
-  backends default to `storage=None` with no I/O. `memory.storage` supplies one
-  lifetime SQLite owner and finite-JSON transactions. Persist validated candidates
-  before RAM publication, including reset/adoption and private commit tombstones;
+- **Profile memory rewrites one document** — import `ProfileMemory` from
+  `agent_composer.memory.profile` and a store from
+  `agent_composer.memory.profile_store`. The snapshot pins `profile_version` and
+  `text_sha256`, never the text. Only the outermost frame of the policy recalls
+  and learns; frame config is empty. Learning is one tool-free model call over
+  feedback, the current document, and budgeted episodes with their visible
+  interactions; it returns `<profile>...</profile>` within `max_chars`. Commit
+  is a store compare-and-set with no model call. Only `profile.version_mismatch`
+  is retryable (nothing was written), and it is retried as a new backward
+  attempt, never inside the backend. The store has no commit-id replay: a killed
+  attempt stays `unknown`, and hosts find its `commit_id` in store provenance.
+- **Durable memory belongs to the backend, not runtime** — the episodic,
+  reflective, and session backends default to `storage=None` with no I/O.
+  `memory.storage` supplies one lifetime SQLite owner and finite-JSON
+  transactions. Persist validated candidates before RAM publication, including
+  reset/adoption and private commit tombstones;
   preserve public snapshot formats and exact run-opening pins. Do not store host
   constructor defaults, callbacks, live handles, queues, or clients. Current host
   settings govern future work after reopening; saved frame limits and recorded

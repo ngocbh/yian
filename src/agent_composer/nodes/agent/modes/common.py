@@ -13,6 +13,7 @@ from typing import Any, Callable
 
 from agent_composer.memory.contracts import EvaluationTrace, MemoryContext
 from agent_composer.nodes.base import Output, _HostStop
+from agent_composer.skills.catalog import Skill
 
 DEFAULT_SYSTEM = (
     "You are an analysis agent inside a larger workflow. Follow the instructions "
@@ -39,6 +40,8 @@ class AgentRunContext:
     stop_event: Event | None = None  # transient host lifecycle; absent for direct mode tests
     evaluation_trace: EvaluationTrace | None = None  # write-only visible evidence sink
     memory_context: MemoryContext = field(default_factory=MemoryContext)
+    base_system_prompt: str = DEFAULT_SYSTEM  # tool_calling system text before memory; lists skills
+    skills: tuple[Skill, ...] = ()  # granted skills served by `load_skill`, sorted by name
 
     def check_stopped(self) -> None:
         """Unwind before starting another external effect after host cancellation."""

@@ -38,7 +38,7 @@ from agent_composer.nodes.contracts import (
     _rewrite_origin_carrier,
 )
 from agent_composer.skills.catalog import Skill, SkillError, check_skill_name
-from agent_composer.skills.tool import LOAD_SKILL
+from agent_composer.skills.tool import LOAD_SKILL, system_prompt_with_skills
 from agent_composer.typesys.types import canonical_type_label
 from agent_composer.typesys.values import build_value_as
 
@@ -204,6 +204,8 @@ class AgentNode(Node):
         stop_event=None,
         evaluation_trace: EvaluationTrace | None = None,
         memory_context: MemoryContext | None = None,
+        base_system_prompt: str = DEFAULT_SYSTEM,
+        skills: tuple[Skill, ...] = (),
     ) -> AgentRunContext:
         """Build the complete process-local context for one mode invocation."""
         output_type = (
@@ -222,6 +224,8 @@ class AgentNode(Node):
             stop_event=stop_event,
             evaluation_trace=evaluation_trace,
             memory_context=memory_context if memory_context is not None else MemoryContext(),
+            base_system_prompt=base_system_prompt,
+            skills=skills,
         )
 
     def exception_origin(self, exception: Exception) -> OriginRef | None:
@@ -328,6 +332,7 @@ class AgentNode(Node):
         if stop_event is not None and stop_event.is_set():
             raise _HostStop(primary=False)
         granted = self._granted_skills(skills)
+        base_system_prompt = system_prompt_with_skills(DEFAULT_SYSTEM, granted)
         memory_context = (
             MemoryContext()
             if open_memory_context is None
@@ -341,6 +346,8 @@ class AgentNode(Node):
                 stop_event=stop_event,
                 evaluation_trace=evaluation_trace,
                 memory_context=memory_context,
+                base_system_prompt=base_system_prompt,
+                skills=granted,
             )
         )
 

@@ -26,7 +26,6 @@ from agent_composer.nodes.agent.context import (
     invoke_tool_effect,
 )
 from agent_composer.nodes.agent.modes.common import (
-    DEFAULT_SYSTEM,
     AgentLoopError,
     AgentRunContext,
     register_mode,
@@ -47,7 +46,7 @@ MAX_TOOL_ITERATIONS = -1
 @register_mode("tool_calling")
 def tool_calling(ctx: AgentRunContext) -> Output:
     """Execute model-returned tool calls in order until the model answers."""
-    system_prompt = system_prompt_with_memory(DEFAULT_SYSTEM, ctx.memory_context.sections)
+    system_prompt = system_prompt_with_memory(ctx.base_system_prompt, ctx.memory_context.sections)
     messages: list[BaseMessage] = [
         SystemMessage(content=system_prompt),
         HumanMessage(content=ctx.prompt),
@@ -62,7 +61,7 @@ def tool_calling(ctx: AgentRunContext) -> Output:
     messages = [messages[0], *prior, *messages[1:]]
     if ctx.evaluation_trace is not None:
         ctx.evaluation_trace.record_prompt(
-            DEFAULT_SYSTEM,
+            ctx.base_system_prompt,
             ctx.prompt,
             ctx.memory_context.sections,
         )

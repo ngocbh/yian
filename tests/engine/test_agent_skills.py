@@ -10,7 +10,7 @@ import pytest
 
 import agent_composer.llm_clients as llm_clients
 import agent_composer.nodes.agent.modes.tool_calling as tool_calling_module
-from agent_composer.memory.contracts import ToolCallInteraction, ToolResultInteraction
+from agent_composer.memory.contracts import MemoryContext, ToolCallInteraction, ToolResultInteraction
 from agent_composer.nodes.agent import AgentNode
 from agent_composer.nodes.agent.modes.common import DEFAULT_SYSTEM, MODES
 from agent_composer.nodes.base import Output
@@ -104,3 +104,34 @@ def test_grant_without_a_skills_mapping_fails_the_node(monkeypatch) -> None:
 
 def test_only_nodes_with_the_skills_trait_receive_skills(skills) -> None:
     assert _eval(FuncNode("code", lambda _inputs: "ok"), skills=skills).outcome == Output("ok")
+
+
+def test_all_grants_every_supplied_skill(monkeypatch, skills) -> None:
+    model = _ScriptedModel([AIMessage(content="ok")])
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _config: model)
+    node = AgentNode("agent", prompt="p", mode="tool_calling", skills="all")
+    assert _eval(node, skills=skills).outcome == Output("ok")
+    assert model.calls[0][0].content == system_prompt_with_skills(DEFAULT_SYSTEM, list(skills.values()))
+
+
+def test_no_grant_or_no_supply_keeps_the_system_prompt_byte_for_byte(monkeypatch, skills) -> None:
+    model = _ScriptedModel([AIMessage(content="a"), AIMessage(content="b")])
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _config: model)
+    _eval(AgentNode("plain-grant", prompt="p", mode="tool_calling"), skills=skills)
+    _eval(AgentNode("all-grant", prompt="p", mode="tool_calling", skills="all"), skills={})
+    assert [call[0].content for call in model.calls] == [DEFAULT_SYSTEM, DEFAULT_SYSTEM]
+
+
+def test_memory_context_gets_the_system_prompt_without_the_listing(monkeypatch, skills) -> None:
+    model = _ScriptedModel([AIMessage(content="ok")])
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _config: model)
+    seen: list[str] = []
+
+    def open_context(system: str, prompt: str, compatibility: dict) -> MemoryContext:
+        seen.append(system)
+        return MemoryContext()
+
+    node = AgentNode("agent", prompt="p", mode="tool_calling", skills=["review"])
+    assert node.forward({}, open_memory_context=open_context, skills=skills) == Output("ok")
+    assert seen == [DEFAULT_SYSTEM]
+    assert model.calls[0][0].content == system_prompt_with_skills(DEFAULT_SYSTEM, [skills["review"]])

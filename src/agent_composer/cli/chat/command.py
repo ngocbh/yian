@@ -1,4 +1,4 @@
-"""``ac chat`` — a broker-driven interactive flow.
+"""``composer chat`` — a broker-driven interactive flow.
 
 Loads the bundled composer chat flow (or a user-supplied one) and runs it behind the
 main-thread terminal broker. HUMAN_INPUT blocks inside the live run; assistant replies
@@ -47,7 +47,7 @@ from agent_composer.events import NodeSucceeded
 from agent_composer.typesys.seeding import default_run_id
 
 console = Console()
-err_console = Console(stderr=True)  # errors go to stderr, mirroring `ac run` (run.py:45-46)
+err_console = Console(stderr=True)  # errors go to stderr, mirroring `composer run` (run.py:45-46)
 
 # The composer chat flow shipped with the package — the default when no flow is given.
 _BUNDLED = Path(__file__).parent / "chat.yaml"
@@ -160,14 +160,14 @@ def chat(
     ),
 ) -> None:
     """Start an interactive chat session over a chat flow."""
-    _ensure_cwd_importable()  # so a chat flow's `code: pkg.mod:fn` ref resolves (mirrors `ac run`)
+    _ensure_cwd_importable()  # so a chat flow's `code: pkg.mod:fn` ref resolves (mirrors `composer run`)
     chat_tools.set_workspace(workspace)
     path = flow or _BUNDLED
     text = path.read_text()
     search = [path.parent, workspace]
     # The CLI flags supply the OUTERMOST cascade layer (fill-the-gap), not a hard override.
     cli_cfg = {k: v for k, v in {"provider": provider, "model": model}.items() if v}
-    # Load and preflight once, mirroring `ac run` — both failure modes surface as a clean
+    # Load and preflight once, mirroring `composer run` — both failure modes surface as a clean
     # stderr error + exit 1, never a raw traceback:
     #   - a malformed flow raises LoadError (a ValueError) -> a located `.yaml` source frame;
     #   - a missing key with no TTY raises RuntimeError    -> a red key message.

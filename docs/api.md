@@ -121,7 +121,16 @@ terminal. Stored defaults are not coerced.
   when omitted and retained by every record.
 - `num_workers` — defaults to `8`; `0` runs serially, and a positive value bounds
   the worker pool.
-- `on_event` — receives post-durable observer events as they occur.
+- `on_event` — receives post-durable observer events as they occur. While an
+  AGENT node runs it also receives transient in-loop observers
+  (`ModelCallStarted`, `ModelCallFinished` with `TokenUsage`, `ToolCallStarted`,
+  `ToolCallFinished`), strictly between that node's `NodeStarted` and its outcome.
+  In-loop observers are never durable, never members of `RunResult.events`, and
+  never replayed on resume; filter them with
+  `isinstance(event, agent_composer.events.IN_LOOP_EVENTS)`. Observers from
+  concurrently running nodes interleave (runs are pooled by default); correlate
+  them by `node_id` and `exchange_id`. `usage` is the provider's own count
+  (`None` when unreported) and `error` is an exception type name only.
 - `on_stream` — receives transient `StreamChunk` values. Chunks are neither
   durable records nor members of `RunResult.events`.
 - `llm_config` — the outer authored layer of the configuration cascade for AGENT nodes.
@@ -850,7 +859,8 @@ After incomplete-tail repair, terminal inspection appends no records and invokes
 no graph nodes, backward hooks, or memory learners/commits. It projects the last
 accepted attempt, including an interrupted Started/Ready/request prefix.
 `RunResult.events` contains only forward observers published in the current call;
-backward records emit no observers.
+backward records emit no observers. A resumed AGENT that re-executes publishes
+fresh in-loop observers to `on_event`, and nothing is replayed.
 
 A retained result keeps private program/data copies and policy references, not
 open forward sessions, workers, or a log lock. An explicit backward call reopens
@@ -955,7 +965,7 @@ The terminal outcome of a fresh or recovered run exposes these public fields:
 | `log` | durable JSONL `Path`, or `None` for a process-local fresh run |
 | `output` | terminal flow value on success; otherwise `None` |
 | `failure` | canonical `Failure` on failure; otherwise `None` |
-| `events` | post-durable observer events published during this call only |
+| `events` | post-durable observer events published during this call only; in-loop AGENT observers are excluded |
 | `learning` | learning projection of the last observed backward outcome; `None` before an attempt is observed or when no policies were enabled |
 | `backward_outcome` | last observed accepted `BackwardOutcome`, or `None` before an attempt is observed |
 

@@ -402,7 +402,8 @@ from the environment.
 Transition observers are published only after their corresponding record has been
 appended and reduced; they are not the durable authority. `StreamChunk` is the
 callback-only exception: it is delivered during evaluation and never appended to
-the run log.
+the run log. The in-loop AGENT observers below are likewise callback-only;
+`IN_LOOP_EVENTS` names them.
 
 ::: agent_composer.events.NodeStarted
 
@@ -417,6 +418,18 @@ the run log.
 ::: agent_composer.events.NodeFailed
 
 ::: agent_composer.events.NodeExpanded
+
+::: agent_composer.events.TokenUsage
+
+::: agent_composer.events.ModelCallStarted
+
+::: agent_composer.events.ModelCallFinished
+
+::: agent_composer.events.ToolCallStarted
+
+::: agent_composer.events.ToolCallFinished
+
+::: agent_composer.events.IN_LOOP_EVENTS
 
 ::: agent_composer.events.RunStarted
 

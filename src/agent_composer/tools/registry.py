@@ -95,6 +95,57 @@ def registered_tools() -> dict[str, BaseTool]:
         return dict(TOOL_REGISTRY)
 
 
+def _ask_user_tool(handler: Callable[..., Any]) -> BaseTool:
+    """Wrap a host handler in the fixed `ask_user` tool.
+
+    The model-visible schema contains only `question`. Structured question and
+    display metadata are injected fields, so only a trusted invocation can set them.
+    The handler always receives all five fields as keyword arguments.
+    """
+
+    def ask_user(
+        question: str,
+        questions: Annotated[list[dict[str, Any]] | None, InjectedToolArg] = None,
+        answer_schema: Annotated[list[dict[str, Any]] | None, InjectedToolArg] = None,
+        title: Annotated[str | None, InjectedToolArg] = None,
+        node_id: Annotated[str | None, InjectedToolArg] = None,
+    ) -> Any:
+        """Ask the human a question and wait for the host-provided answer."""
+        return handler(
+            question=question,
+            questions=questions,
+            answer_schema=answer_schema,
+            title=title,
+            node_id=node_id,
+        )
+
+    return StructuredTool.from_function(
+        ask_user,
+        name=_ASK_USER_ID,
+        description=(
+            "Ask the human a question and wait for their answer. Use only when you "
+            "need information that only the user can provide."
+        ),
+    )
+
+
+def _check_ask_user_handler(handler: Callable[..., Any]) -> None:
+    """Reject an `ask_user` handler that cannot take the five keyword fields."""
+    try:
+        signature = inspect.signature(handler)
+    except (TypeError, ValueError):
+        return  # No readable signature; the handler is called as is.
+    try:
+        signature.bind(
+            question="", questions=None, answer_schema=None, title=None, node_id=None
+        )
+    except TypeError as exc:
+        raise TypeError(
+            "tools['ask_user'] must accept question, questions, answer_schema, title, "
+            "and node_id as keywords; define it as def handler(**request)"
+        ) from exc
+
+
 class ToolSet:
     """The tools one run can use.
 
@@ -107,14 +158,18 @@ class ToolSet:
             The run's tools keyed by tool id. A function or method becomes a tool
             named by its key and described by its docstring. To bind values such
             as a session, use a closure or a bound method, not `functools.partial`.
-            A `BaseTool` must already use its key as its name. `None` means the
-            global registry. To keep the registered tools and add more, pass
-            `{**registered_tools(), ...}`.
+            A `BaseTool` must already use its key as its name. The `ask_user`
+            entry must be a plain callable; it is wrapped so the model sees only
+            `question`, and it receives `question`, `questions`, `answer_schema`,
+            `title`, and `node_id` as keywords (define it as
+            `def handler(**request)`). `None` means the global registry. To keep
+            the registered tools and add more, pass `{**registered_tools(), ...}`.
 
     Raises:
         `TypeError`:
             `tools` is not a mapping or `None`, a key is not a non-empty string,
-            or an entry is not a `BaseTool`, function, or method.
+            an entry is not a `BaseTool`, function, or method, or the `ask_user`
+            handler cannot take its five keyword fields.
         `ValueError`:
             A `BaseTool` entry's name differs from its key.
 
@@ -143,7 +198,15 @@ class ToolSet:
         for tool_id, entry in tools.items():
             if type(tool_id) is not str or not tool_id:
                 raise TypeError("tool ids in tools must be non-empty strings")
-            if isinstance(entry, BaseTool):
+            if tool_id == _ASK_USER_ID:
+                if isinstance(entry, BaseTool) or not callable(entry):
+                    raise TypeError(
+                        "tools['ask_user'] must be a plain callable handler; "
+                        "the engine supplies its schema"
+                    )
+                _check_ask_user_handler(entry)
+                built[tool_id] = _ask_user_tool(entry)
+            elif isinstance(entry, BaseTool):
                 if entry.name != tool_id:
                     raise ValueError(
                         f"tool {tool_id!r} is a BaseTool named {entry.name!r}; "
@@ -346,30 +409,7 @@ def install_ask_user(handler: Callable[..., Any]) -> Iterator[BaseTool]:
     """
     global _ASK_USER_OWNER
 
-    def ask_user(
-        question: str,
-        questions: Annotated[list[dict[str, Any]] | None, InjectedToolArg] = None,
-        answer_schema: Annotated[list[dict[str, Any]] | None, InjectedToolArg] = None,
-        title: Annotated[str | None, InjectedToolArg] = None,
-        node_id: Annotated[str | None, InjectedToolArg] = None,
-    ) -> Any:
-        """Ask the human a question and wait for the host-provided answer."""
-        return handler(
-            question=question,
-            questions=questions,
-            answer_schema=answer_schema,
-            title=title,
-            node_id=node_id,
-        )
-
-    tool = StructuredTool.from_function(
-        ask_user,
-        name=_ASK_USER_ID,
-        description=(
-            "Ask the human a question and wait for their answer. Use only when you "
-            "need information that only the user can provide."
-        ),
-    )
+    tool = _ask_user_tool(handler)
     owner = object()
     with _REGISTRY_LOCK:
         if _ASK_USER_OWNER is not None or _ASK_USER_ID in TOOL_REGISTRY:

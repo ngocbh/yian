@@ -117,3 +117,76 @@ def test_bound_method_entry_becomes_a_tool():
 def test_invalid_tools_are_rejected(tools: Any, error: str):
     with pytest.raises(TypeError, match=error):
         ToolSet(tools)
+
+
+def _recording_handler(seen: list[dict[str, Any]], answer: Any = "answer"):
+    """Build one host handler that records the complete trusted call record."""
+
+    def handler(**request: Any) -> Any:
+        seen.append(request)
+        return answer
+
+    return handler
+
+
+_TRUSTED = {
+    "question": "Review the proposal",
+    "questions": [{"id": "decision", "prompt": "Approve?"}],
+    "answer_schema": [{"name": "decision", "type": "bool"}],
+    "title": "Human review",
+    "node_id": "approval",
+}
+
+
+def test_ask_user_entry_is_wrapped_so_the_model_sees_only_question():
+    seen: list[dict[str, Any]] = []
+    tools = ToolSet({"ask_user": _recording_handler(seen)})
+
+    (tool,) = tools.resolve(["ask_user"])
+
+    assert set(tool.tool_call_schema.model_fields) == {"question"}
+    assert tools.invoke("ask_user", {"question": "Approve?"}) == "answer"
+    assert seen == [
+        {
+            "question": "Approve?",
+            "questions": None,
+            "answer_schema": None,
+            "title": None,
+            "node_id": None,
+        }
+    ]
+
+
+@pytest.mark.parametrize("key", ["questions", "answer_schema", "title", "node_id"])
+def test_model_cannot_supply_trusted_ask_user_fields(key: str):
+    seen: list[dict[str, Any]] = []
+    tools = ToolSet({"ask_user": _recording_handler(seen)})
+
+    with pytest.raises(ValueError, match="unsupported argument"):
+        tools.invoke("ask_user", {"question": "Approve?", key: _TRUSTED[key]})
+    assert seen == []
+
+
+def test_trusted_ask_user_call_passes_all_fields_to_the_handler():
+    seen: list[dict[str, Any]] = []
+    tools = ToolSet({"ask_user": _recording_handler(seen, answer={"decision": True})})
+
+    assert tools.invoke_trusted("ask_user", _TRUSTED) == {"decision": True}
+    assert seen == [_TRUSTED]
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        StructuredTool.from_function(_upper, name="ask_user", description="Ask."),
+        "not callable",
+    ],
+)
+def test_ask_user_entry_must_be_a_plain_callable(entry: Any):
+    with pytest.raises(TypeError, match="ask_user"):
+        ToolSet({"ask_user": entry})
+
+
+def test_ask_user_handler_must_accept_every_field():
+    with pytest.raises(TypeError, match=r"def handler\(\*\*request\)"):
+        ToolSet({"ask_user": lambda question: "yes"})

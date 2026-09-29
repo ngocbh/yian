@@ -76,6 +76,43 @@ def _read_error(stage: str, exc: Exception) -> MemoryOperationError:
     return _error(stage, "profile.store_invalid", "profile store returned an unreadable document")
 
 
+def _parse_reply(reply: object, current_text: str, max_chars: int) -> str:
+    """Extract and bound the document the learner wrote between the profile tags.
+
+    Args:
+        reply (`object`): Model reply; its ``content`` is text or text blocks.
+        current_text (`str`): Current document; a blank reply may not erase it.
+        max_chars (`int`): Largest allowed document.
+
+    Returns:
+        `str`: The new document with one trailing newline, or ``""``.
+
+    Raises:
+        `MemoryOperationError`: ``profile.contract`` for a reply without tags or a
+            blank reply over a non-empty document, ``profile.over_budget`` for a
+            document longer than ``max_chars``.
+    """
+    content = getattr(reply, "content", reply)
+    if isinstance(content, list):
+        content = "".join(
+            block if isinstance(block, str) else str(block.get("text", ""))
+            for block in content if isinstance(block, (str, dict))
+        )
+    if type(content) is not str:
+        raise _error("learn", "profile.contract", "profile learner returned no text")
+    start, end = content.find(_OPEN_TAG), content.rfind(_CLOSE_TAG)
+    if start < 0 or end < start:
+        raise _error("learn", "profile.contract",
+                     f"profile learner reply must wrap the document in {_OPEN_TAG} tags")
+    text = content[start + len(_OPEN_TAG):end].strip()
+    if not text and current_text.strip():
+        raise _error("learn", "profile.contract", "profile learner returned an empty document")
+    if len(text) > max_chars:
+        raise _error("learn", "profile.over_budget",
+                     f"profile learner returned {len(text)} characters; the limit is {max_chars}")
+    return text + "\n" if text else ""
+
+
 class ProfileMemory:
     """Policy backend that keeps one markdown profile in a versioned store.
 

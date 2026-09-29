@@ -192,3 +192,21 @@ def test_restore_recalls_the_recorded_version_after_later_edits(tmp_path) -> Non
     memory.write("# Ada\nLater.\n", base_version=memory.read()[1])
     with memory.open_run(snapshot=recorded) as restored:
         assert restored.open_frame(_spec(ROOT)).recall(RECALL) == "# Ada\n"
+
+
+@pytest.mark.parametrize(("reply", "code"), [
+    (AIMessage(content="# Ada without tags"), "profile.contract"),
+    (AIMessage(content="<profile>   </profile>"), "profile.contract"),
+    (AIMessage(content="<profile>" + "y" * 101 + "</profile>"), "profile.over_budget"),
+    (object(), "profile.contract"),
+])
+def test_parse_reply_enforces_tags_content_and_budget(reply, code) -> None:
+    with pytest.raises(MemoryOperationError) as caught:
+        profile._parse_reply(reply, "# Ada\n", 100)
+    assert (caught.value.stage, caught.value.code, caught.value.retryable) == ("learn", code, False)
+
+
+def test_parse_reply_joins_text_blocks_and_ends_with_one_newline() -> None:
+    reply = AIMessage(content=["Here:\n<profile>\n# Ada\n", {"type": "text", "text": "- Brief.\n</profile>"}])
+    assert profile._parse_reply(reply, "# Ada\n", 100) == "# Ada\n- Brief.\n"
+    assert profile._parse_reply(AIMessage(content="<profile></profile>"), "", 100) == ""

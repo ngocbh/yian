@@ -289,6 +289,7 @@ def run_flow(
             delivered during the node; the latter are never recorded or replayed.
         on_stream (`Callable[[StreamChunk], None] | None`, *optional*, defaults to `None`):
             Callback for transient stream chunks, which are never durable records.
+            When set, AGENT chat replies stream their visible text.
         llm_config (`dict[str, Any] | None`, *optional*, defaults to `None`):
             Per-run outer model configuration layer. The fully resolved static map
             is captured in the initialization record.

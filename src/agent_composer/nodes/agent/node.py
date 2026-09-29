@@ -252,8 +252,7 @@ class AgentNode(Node):
                 The run's tools. The node's `tools` list grants ids from it.
                 `None` uses the global registry.
             emit_stream (`Callable | None`, *optional*, defaults to `None`):
-                Transient `StreamChunk` sink, kept on the mode context. No mode
-                streams yet, so replies are still invoked whole.
+                Transient `StreamChunk` sink; when present, chat replies stream.
             emit_event (`Callable | None`, *optional*, defaults to `None`):
                 Transient sink for model/tool call observers with token usage.
 

@@ -153,9 +153,10 @@ learning separate from the forward output and failure. See the
 [Python API](docs/api.md#explicit-backward-feedback) for feedback shapes, memory,
 and silent terminal recovery.
 
-Pass `on_event=` to receive node transitions plus, while an AGENT runs, per-call
-`ModelCallFinished` token usage and tool call observers. These in-loop events
-are live callbacks only; see [Python API](docs/api.md#run_flow) for payloads.
+Pass `on_stream=` to receive an AGENT's reply text as it is generated. Pass
+`on_event=` to receive node transitions plus, while an AGENT runs, per-call
+`ModelCallFinished` token usage and tool call observers. Both are live callbacks
+only; see [Python API](docs/api.md#run_flow) for payloads.
 
 The built-in [`EpisodicMemory`](docs/learning.md#episodic-memory) keeps bounded,
 model-free execution history for later runs. A flow declares

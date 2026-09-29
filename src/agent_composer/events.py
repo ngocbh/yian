@@ -43,6 +43,8 @@ class StreamChunk:
     key: str
     chunk: str
     final: bool = False
+    # AGENT text chunks name the model exchange they belong to; None for other streams.
+    exchange_id: Optional[str] = None
 
 
 @dataclass

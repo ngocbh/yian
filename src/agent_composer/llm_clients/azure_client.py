@@ -32,7 +32,11 @@ class NormalizedAzureChatOpenAI(AzureChatOpenAI):
     """AzureChatOpenAI with normalized content output."""
 
     def invoke(self, input, config=None, **kwargs):
-        return normalize_content(super().invoke(input, config, **kwargs))
+        return self.normalize_reply(super().invoke(input, config, **kwargs))
+
+    def normalize_reply(self, response):
+        """Apply the reply normalization `invoke` uses; streamed replies reuse it."""
+        return normalize_content(response)
 
 
 class AzureOpenAIClient(BaseLLMClient):

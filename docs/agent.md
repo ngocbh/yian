@@ -208,6 +208,13 @@ including structured attempts and memory summary preparation — is bracketed by
 and every granted tool by `ToolCallStarted`/`ToolCallFinished`. These are live
 callbacks only; the node value, the run log, and retained memory are unchanged.
 
+With `on_stream`, each chat request's visible text arrives as `StreamChunk`s
+sharing that request's `exchange_id`. A completed request ends with one empty
+`final=True` chunk. A failed request ends without one; its `ModelCallFinished.error`
+is set, and a host should discard that request's partial text. The node value is
+authoritative: streamed text can differ from it in the whitespace between content
+blocks.
+
 ### How YAML becomes the request
 
 | YAML or host value | Role in execution |

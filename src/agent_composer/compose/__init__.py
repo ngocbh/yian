@@ -65,8 +65,12 @@ and definition/import context becomes ordered outer frames. The CLI receives no
 separate YAML text or coordinates for load failures. Runtime diagnosis reads only
 the source-neutral origin trace and the installed resolver.
 
-Imports flow DOWN only: this package imports `typesys` / `expr` / `nodes`; nothing
-in the engine imports `compose`.
+`skills.py` reads Codex/Claude `SKILL.md` folders into `agent_composer.skills.Skill`
+values for a run's host-supplied ``skills=`` mapping (`load_skills`,
+`default_skill_roots`); frontmatter goes through the safe `parse_yaml_literal`.
+
+Imports flow DOWN only: this package imports `typesys` / `expr` / `nodes` / `skills`;
+nothing in the engine imports `compose`.
 """
 
 from agent_composer.compose.build.boundary import synthesize_boundary_graph
@@ -80,6 +84,7 @@ from agent_composer.compose.desugar.inline_calls import desugar_inline_calls
 from agent_composer.compose.desugar.case_outputs import expand_case_outputs
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.loader import ComposedFlow, load_flow
+from agent_composer.compose.skills import default_skill_roots, load_skills
 from agent_composer.compose.parse.file import (
     AgentDescriptor,
     CallDescriptor,
@@ -125,4 +130,6 @@ __all__ = [
     "desugar_inline_calls",
     "ComposedFlow",
     "load_flow",
+    "load_skills",
+    "default_skill_roots",
 ]

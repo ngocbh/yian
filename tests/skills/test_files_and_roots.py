@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from agent_composer.compose.skills import default_skill_roots
 from agent_composer.skills import Skill, SkillError
 from agent_composer.skills.catalog import MAX_SKILL_FILE_BYTES, read_skill_file
 
@@ -70,3 +71,33 @@ def test_read_skill_file_rejects_missing_directories_binary_and_large(skill: Ski
         read_skill_file(skill, "big.txt")
     with pytest.raises(SkillError, match="no bundled files"):
         read_skill_file(Skill("inline", "d", "body"), "x.md")
+
+
+def test_default_roots_put_user_before_project_and_stop_at_git_root(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    repo = tmp_path / "outer" / "repo"
+    work = repo / "pkg" / "sub"
+    work.mkdir(parents=True)
+    (repo / ".git").mkdir()
+    roots = default_skill_roots(cwd=work, home=home)
+    base = [Path(".claude/skills"), Path(".agents/skills")]
+    assert roots == [
+        *(home / part for part in base),
+        *(work.resolve() / part for part in base),
+        *(work.resolve().parent / part for part in base),
+        *(repo.resolve() / part for part in base),
+    ]
+
+
+def test_default_roots_outside_git_use_only_cwd(tmp_path: Path) -> None:
+    roots = default_skill_roots(cwd=tmp_path, home=tmp_path / "home")
+    assert roots[2:] == [tmp_path.resolve() / ".claude/skills", tmp_path.resolve() / ".agents/skills"]
+
+
+def test_compose_facade_exports_the_skill_loaders() -> None:
+    from agent_composer import compose
+    from agent_composer.compose import skills as compose_skills
+
+    assert {"load_skills", "default_skill_roots"} <= set(compose.__all__)
+    assert compose.default_skill_roots is compose_skills.default_skill_roots
+    assert compose.load_skills is compose_skills.load_skills

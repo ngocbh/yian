@@ -130,6 +130,40 @@ def load_skills(
     return dict(sorted(found.items()))
 
 
+def default_skill_roots(
+    cwd: str | os.PathLike[str] | None = None,
+    home: str | os.PathLike[str] | None = None,
+) -> list[Path]:
+    """Return the Claude Code and Codex skill roots, highest precedence first.
+
+    User roots come first (Claude Code ranks personal over project), then project
+    roots from `cwd` up to the enclosing git root, nearest first. At each level the
+    Claude root precedes the Codex root.
+
+    Args:
+        cwd (`str | os.PathLike[str] | None`, *optional*, defaults to `None`):
+            Project directory. `None` uses the process working directory.
+        home (`str | os.PathLike[str] | None`, *optional*, defaults to `None`):
+            User home. `None` uses `Path.home()`.
+
+    Returns:
+        `list[Path]`: ``~/.claude/skills``, ``~/.agents/skills``, then
+        ``<dir>/.claude/skills`` and ``<dir>/.agents/skills`` for each project level.
+    """
+    home_dir = Path.home() if home is None else Path(home)
+    start = (Path.cwd() if cwd is None else Path(cwd)).resolve()
+    chain = [start, *start.parents]
+    levels = [start]
+    for depth, level in enumerate(chain):
+        if (level / ".git").exists():
+            levels = chain[: depth + 1]
+            break
+    roots = [home_dir / ".claude" / "skills", home_dir / ".agents" / "skills"]
+    for level in levels:
+        roots += [level / ".claude" / "skills", level / ".agents" / "skills"]
+    return roots
+
+
 def _split_frontmatter(text: str, path: Path) -> tuple[dict, str]:
     """Split ``---`` YAML frontmatter from the Markdown body."""
     lines = text.splitlines(keepends=True)

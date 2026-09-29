@@ -96,12 +96,38 @@ def test_ask_user_answer_is_a_tool_message_in_the_same_loop(monkeypatch):
             "answer_schema": None,
             "title": None,
             "node_id": None,
+            "options": None,
         }
     ]
     answer_message = chat.calls[1][-1]
     assert isinstance(answer_message, ToolMessage)
     assert answer_message.content == "yes"
     assert answer_message.tool_call_id == "question-1"
+
+
+def test_model_options_reach_the_handler_and_the_answer_returns(monkeypatch):
+    chat = _ScriptedChat(
+        [
+            _tool_reply(
+                "ask_user",
+                {"question": "Which?", "options": '["Retry", "Give up"]'},
+                "question-1",
+            ),
+            AIMessage(content="done"),
+        ]
+    )
+    prompts = []
+
+    def answer(**request):
+        prompts.append(request["options"])
+        return "Retry"
+
+    node = AgentNode("agent", prompt="go", tools=["ask_user"], mode="tool_calling")
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda config: chat)
+
+    assert _drive(node, answer) == Output("done")
+    assert prompts == [["Retry", "Give up"]]
+    assert chat.calls[1][-1].content == "Retry"
 
 
 def test_two_blocking_questions_keep_one_conversation(monkeypatch):

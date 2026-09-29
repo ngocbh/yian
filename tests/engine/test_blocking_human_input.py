@@ -51,6 +51,7 @@ def test_prompt_only_returns_host_answer_with_trusted_metadata():
             ],
             "title": "Plan approval",
             "node_id": "approval",
+            "options": None,
         }
     ]
 
@@ -102,6 +103,7 @@ def test_literal_questions_are_rendered_validated_and_injected():
             "answer_schema": None,
             "title": None,
             "node_id": "choose",
+            "options": None,
         }
     ]
 

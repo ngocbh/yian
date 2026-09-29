@@ -18,17 +18,21 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 import inspect
+import json
 from threading import RLock
 from types import MappingProxyType
 from typing import Annotated, Any, Callable
 
 from langchain_core.tools import BaseTool, InjectedToolArg, StructuredTool
+from pydantic import BeforeValidator, Field
 
 # Maps tool id -> a LangChain tool with a Pydantic argument schema. The supported
 # ``register_tool`` path guarantees that schema, which the strict invocation boundary needs.
 TOOL_REGISTRY: dict[str, BaseTool] = {}
 _REGISTRY_LOCK = RLock()
 _ASK_USER_ID = "ask_user"
+_MAX_OPTIONS = 6
+_MAX_OPTION_CHARS = 80
 
 
 def register_tool(tool_id: str) -> Callable:
@@ -97,16 +101,60 @@ def registered_tools() -> dict[str, BaseTool]:
         return dict(TOOL_REGISTRY)
 
 
+def _normalize_options(value: Any) -> list[str] | None:
+    """Clean model-sent `ask_user` options; any shape is accepted, none raises.
+
+    A JSON list string is parsed; any other string is one label. Non-string items
+    are dropped. Labels are stripped to one line, empty and case-insensitive
+    duplicate labels are dropped, long labels are truncated, and at most six are
+    kept. Returns `None` when no label is left.
+    """
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except ValueError:
+            parsed = None
+        value = parsed if isinstance(parsed, list) else [value]
+    if not isinstance(value, list):
+        return None
+    labels: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        label = " ".join(item.split())
+        if len(label) > _MAX_OPTION_CHARS:
+            label = label[: _MAX_OPTION_CHARS - 1] + "…"
+        if not label or label.casefold() in seen:
+            continue
+        seen.add(label.casefold())
+        labels.append(label)
+        if len(labels) == _MAX_OPTIONS:
+            break
+    return labels or None
+
+
 def _ask_user_tool(handler: Callable[..., Any]) -> BaseTool:
     """Wrap a host handler in the fixed `ask_user` tool.
 
-    The model-visible schema contains only `question`. Structured question and
-    display metadata are injected fields, so only a trusted invocation can set them.
-    The handler always receives all five fields as keyword arguments.
+    The model-visible schema contains `question` and optional `options`, which are
+    cleaned by `_normalize_options`. Structured question and display metadata are
+    injected fields, so only a trusted invocation can set them. The handler always
+    receives all six fields as keyword arguments.
     """
 
     def ask_user(
         question: str,
+        options: Annotated[
+            list[str] | None,
+            BeforeValidator(_normalize_options),
+            Field(
+                description=(
+                    "Optional 2-4 short answer choices. The user can always type a "
+                    "different answer."
+                )
+            ),
+        ] = None,
         questions: Annotated[list[dict[str, Any]] | None, InjectedToolArg] = None,
         answer_schema: Annotated[list[dict[str, Any]] | None, InjectedToolArg] = None,
         title: Annotated[str | None, InjectedToolArg] = None,
@@ -119,32 +167,41 @@ def _ask_user_tool(handler: Callable[..., Any]) -> BaseTool:
             answer_schema=answer_schema,
             title=title,
             node_id=node_id,
+            options=options,
         )
 
     return StructuredTool.from_function(
         ask_user,
         name=_ASK_USER_ID,
         description=(
-            "Ask the human a question and wait for their answer. Use only when you "
-            "need information that only the user can provide."
+            "Ask the user one short question and wait for the answer. Use only when "
+            "you need a decision or information that only the user can provide. Put "
+            "the context they need in one or two sentences. When there are clear "
+            "choices, pass 2-4 short `options`; the user can always type their own "
+            "answer."
         ),
     )
 
 
 def _check_ask_user_handler(handler: Callable[..., Any]) -> None:
-    """Reject an `ask_user` handler that cannot take the five keyword fields."""
+    """Reject an `ask_user` handler that cannot take the six keyword fields."""
     try:
         signature = inspect.signature(handler)
     except (TypeError, ValueError):
         return  # No readable signature; the handler is called as is.
     try:
         signature.bind(
-            question="", questions=None, answer_schema=None, title=None, node_id=None
+            question="",
+            questions=None,
+            answer_schema=None,
+            title=None,
+            node_id=None,
+            options=None,
         )
     except TypeError as exc:
         raise TypeError(
             "tools['ask_user'] must accept question, questions, answer_schema, title, "
-            "and node_id as keywords; define it as def handler(**request)"
+            "node_id, and options as keywords; define it as def handler(**request)"
         ) from exc
 
 
@@ -161,17 +218,17 @@ class ToolSet:
             named by its key and described by its docstring. To bind values such
             as a session, use a closure or a bound method, not `functools.partial`.
             A `BaseTool` must already use its key as its name. The `ask_user`
-            entry must be a plain callable; it is wrapped so the model sees only
-            `question`, and it receives `question`, `questions`, `answer_schema`,
-            `title`, and `node_id` as keywords (define it as
-            `def handler(**request)`). `None` means the global registry. To keep
+            entry must be a plain callable; it is wrapped so the model sees
+            `question` and `options`, and it receives `question`, `questions`,
+            `answer_schema`, `title`, `node_id`, and `options` as keywords (define
+            it as `def handler(**request)`). `None` means the global registry. To keep
             the registered tools and add more, pass `{**registered_tools(), ...}`.
 
     Raises:
         `TypeError`:
             `tools` is not a mapping or `None`, a key is not a non-empty string,
             an entry is not a `BaseTool`, function, or method, or the `ask_user`
-            handler cannot take its five keyword fields.
+            handler cannot take its six keyword fields.
         `ValueError`:
             A `BaseTool` entry's name differs from its key.
 

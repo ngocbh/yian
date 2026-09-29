@@ -6,6 +6,7 @@ from typing import Any, Callable
 
 import pytest
 from langchain_core.tools import BaseTool, StructuredTool
+from langchain_core.utils.function_calling import convert_to_openai_tool
 from pydantic.v1 import BaseModel as BaseModelV1
 
 from agent_composer.nodes.tool import ToolNode
@@ -62,6 +63,7 @@ def _recording_handler(
         answer_schema: list[dict] | None = None,
         title: str | None = None,
         node_id: str | None = None,
+        options: list[str] | None = None,
     ) -> Any:
         seen.append(
             {
@@ -70,6 +72,7 @@ def _recording_handler(
                 "answer_schema": answer_schema,
                 "title": title,
                 "node_id": node_id,
+                "options": options,
             }
         )
         return answer
@@ -77,12 +80,12 @@ def _recording_handler(
     return handler
 
 
-def test_ask_user_public_schema_contains_only_question():
+def test_ask_user_public_schema_contains_question_and_options():
     seen: list[dict[str, Any]] = []
     tools = ToolSet({"ask_user": _recording_handler(seen)})
 
     tool = tools.resolve(["ask_user"])[0]
-    assert set(tool.tool_call_schema.model_fields) == {"question"}
+    assert set(tool.tool_call_schema.model_fields) == {"question", "options"}
     assert tools.invoke("ask_user", {"question": "Approve?"}) == "answer"
 
     assert seen == [
@@ -92,9 +95,21 @@ def test_ask_user_public_schema_contains_only_question():
             "answer_schema": None,
             "title": None,
             "node_id": None,
+            "options": None,
         }
     ]
     assert "ask_user" not in TOOL_REGISTRY
+
+
+def test_ask_user_openai_schema_offers_optional_string_options():
+    tool = ToolSet({"ask_user": _recording_handler([])}).resolve(["ask_user"])[0]
+
+    schema = convert_to_openai_tool(tool)["function"]["parameters"]
+
+    assert schema["required"] == ["question"]
+    options = schema["properties"]["options"]
+    assert options["anyOf"] == [{"type": "array", "items": {"type": "string"}}, {"type": "null"}]
+    assert "user can always type a different answer" in options["description"]
 
 
 @pytest.mark.parametrize(
@@ -137,7 +152,7 @@ def test_trusted_invocation_passes_structured_metadata():
 
     assert tools.invoke_trusted("ask_user", metadata) == {"decision": True}
 
-    assert seen == [metadata]
+    assert seen == [{**metadata, "options": None}]
 
 
 def test_trusted_invocation_rejects_unknown_metadata():

@@ -87,7 +87,7 @@ def ensure_api_key(provider: str, *, interactive: bool = True) -> Optional[str]:
         raise RuntimeError(
             f"provider {provider!r} needs an API key but ${env_var} is not set "
             f"(set it in the environment, or run interactively to be prompted)"
-            + (". Or run 'ac auth openai' to choose a connection" if provider.lower() == "openai" else "")
+            + (". Or run 'composer auth openai' to choose a connection" if provider.lower() == "openai" else "")
         )
     import questionary
 

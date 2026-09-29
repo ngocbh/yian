@@ -82,7 +82,7 @@ class LLMConfig(BaseModel):
             or "sandbox" in value or "cwd" in value
         ):
             raise ValueError(
-                "Native Codex configuration has been removed. Run 'ac auth openai', "
+                "Native Codex configuration has been removed. Run 'composer auth openai', "
                 "use provider: openai, and remove sandbox/cwd. Composer tools are "
                 "granted explicitly and run on the host."
             )

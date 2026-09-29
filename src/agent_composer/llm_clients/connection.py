@@ -230,20 +230,20 @@ def connection_credentials(
                 refresh=OpenAIAuth().refresh,
             )
         except AuthError as exc:
-            raise AuthError(f"{exc}. Run 'ac auth openai' and start a new run") from exc
+            raise AuthError(f"{exc}. Run 'composer auth openai' and start a new run") from exc
         if credentials.method != connection["method"]:
             raise AuthError(
-                "The saved connection method changed; run 'ac auth openai' and start a new run"
+                "The saved connection method changed; run 'composer auth openai' and start a new run"
             )
         return credentials
     if source == "missing":
         raise AuthError(
-            "No OpenAI connection was selected; run 'ac auth openai' or set OPENAI_API_KEY before starting a new run"
+            "No OpenAI connection was selected; run 'composer auth openai' or set OPENAI_API_KEY before starting a new run"
         )
     key = os.environ.get("OPENAI_API_KEY")
     if not key:
         raise AuthError(
-            "This run needs its OpenAI API key in OPENAI_API_KEY; use 'ac auth openai' for a new run"
+            "This run needs its OpenAI API key in OPENAI_API_KEY; use 'composer auth openai' for a new run"
         )
     if source == "environment" and _key_identity(key) != connection["credential_id"]:
         raise AuthError(

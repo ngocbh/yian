@@ -192,10 +192,13 @@ prune-policy rejection as `contract.growth`.
 (per-element bind, gated on `binds_per_item`). The AGENT and WAIT nodes get the exact
 run-owned `caps['stop_event']` (gated on `needs_stop_event`): the AGENT node checks it
 between external model/tool effects, while WAIT blocks on it so host shutdown or
-sibling failure wakes the deadline wait. The AGENT node is the deliberate
-model-access exception: its mode imports
-`llm_clients` and calls `model_from_config` directly, while its granted tools use the
-ordinary tool registry.
+sibling failure wakes the deadline wait. TOOL, HUMAN_INPUT, and the AGENT node get
+the run's `caps['tools']` (gated on `needs_tools`): one immutable `ToolSet` that
+`run_flow` / `resume_flow` build from `tools=`: the global registry when `None`,
+otherwise only the mapping's entries, and `ask_user` only from the run. The AGENT node is the
+deliberate model-access exception: its mode imports
+`llm_clients` and calls `model_from_config` directly, while its granted tools resolve
+through the run's `ToolSet`.
 
 ## Node-owned traits/hooks (how the core stays kind-blind)
 
@@ -215,6 +218,7 @@ Runtime and compile validation read these node members instead of branching on
 | `grow_depth_delta: int\|None` | growth core: nested-call depth increment stamped on the spliced spawners + terminal (positive bounded by `MAX_REF_DEPTH`) | `None` non-spawner → `0` loop (inherit) → `1` call/map |
 | `is_loop: bool` | growth reducer: gate the origin-keyed single-live-expansion invariant (the driver self-respawns, so each iteration's grow is attributed to `origin_id` and supersedes the prior expansion) | `False` → `True` on `loop` |
 | `needs_stop_event: bool` | read boundary (`eval_node`): pass the exact cooperative run-stop event | `False` → `True` on agent/wait |
+| `needs_tools: bool` | read boundary (`eval_node`): pass the run's `ToolSet` as `caps['tools']` | `False` → `True` on tool/human_input/agent |
 
 The table spans execution-semantic traits/hooks and diagnostic-only projections.
 Any node field whose value can affect execution through an execution-semantic

@@ -155,6 +155,7 @@ branching on kind.
 | `bind_reserved` / `reserved_wiring_keys` | wait, map | reserved keys resolved before `run` (`until`, `over`); the names for load-time checks |
 | `grow_depth_delta` / `is_loop` | spawners | recursion-depth stamp; loop bookkeeping |
 | `needs_stop_event` | agent, wait | receive the run-owned cooperative stop event |
+| `needs_tools` | tool, human_input, agent | receive the run's `ToolSet` (its tools and `ask_user` handler) |
 | `skipped_output_target()` | base; loop overrides | logical target whose out-edges receive this physical node's absence |
 
 A redirected target is an exclusive, inert logical anchor: it has exactly one

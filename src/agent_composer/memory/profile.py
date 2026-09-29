@@ -344,3 +344,107 @@ class _ProfileFrame:
         if context is not None and type(context) is not RecallContext:
             raise _error("recall", "profile.invalid_context", "context must be a RecallContext")
         return session._text if session._is_outermost(self.spec.ref) else ""
+
+    def learn(self, context: LearnContext) -> list[MemoryMutation]:
+        """Propose one full-document rewrite from the run's feedback.
+
+        Args:
+            context (`LearnContext`): Episodes and feedback for this frame.
+
+        Returns:
+            `list[MemoryMutation]`: One document mutation, or an empty list for
+                inner frames, runs without feedback, and unchanged documents.
+
+        Raises:
+            `MemoryOperationError`: ``profile.invalid_context``,
+                ``profile.store_unavailable`` (retryable), ``profile.store_invalid``,
+                ``profile.model_construction``, ``profile.provider`` (retryable),
+                ``profile.contract``, or ``profile.over_budget``.
+        """
+        session = self._session
+        session._ensure_open("learn")
+        if type(context) is not LearnContext or context.frame_ref != self.spec.ref:
+            raise _error("learn", "profile.invalid_context", "learning context belongs to another frame")
+        if not session._is_outermost(self.spec.ref) or not context.feedback:
+            return []
+        memory = session._memory
+        try:
+            current_text, current_version = memory._store.read(None)
+        except (LookupError, OSError, ValueError) as exc:
+            raise _read_error("learn", exc) from exc
+        messages = [SystemMessage(content=_SYSTEM),
+                    HumanMessage(content=self._material(context, current_text, current_version))]
+        try:
+            model = model_from_config(resolve_model_config(dict(memory._llm_config)))
+        except Exception as exc:
+            raise _error("learn", "profile.model_construction",
+                         "profile learner model construction failed") from exc
+        try:
+            reply = model.invoke(messages)
+        except Exception as exc:
+            raise _error("learn", "profile.provider", "profile learner invocation failed",
+                         retryable=True) from exc
+        text = _parse_reply(reply, current_text, memory.max_chars)
+        if text.strip() == current_text.strip():
+            return []
+        feedback: list[JsonValue] = []
+        for entry in context.feedback:
+            value = entry.get("value") if isinstance(entry, dict) else entry
+            if value not in feedback:
+                feedback.append(value)
+        payload: JsonObject = {
+            "base_version": current_version,
+            "text": text,
+            "seen_version": session._version,
+            "run_id": context.run_id,
+            "feedback": feedback,
+        }
+        return [MemoryMutation("profile:" + _sha256(text), self.spec.ref, payload)]
+
+    def _material(self, context: LearnContext, current_text: str, current_version: str) -> str:
+        """Return the learner's JSON input with the newest episodes that fit the budget.
+
+        The newest episode is always sent; if it alone is over the budget, it is
+        cut to a prefix and a suffix the way ReflectiveMemory trims its material.
+        Older episodes are added whole, newest first, until one does not fit.
+        """
+        session = self._session
+        feedback: list[JsonValue] = []
+        for entry in context.feedback:
+            if isinstance(entry, dict):
+                feedback.append({key: entry.get(key) for key in
+                                 ("channel", "target_name", "value", "owner_static_path")})
+            else:
+                feedback.append({"value": entry})
+        budget = session._memory.input_budget_chars
+        agent_episodes = [episode for episode in context.episodes if episode.base_system_prompt is not None]
+        kept: list[JsonValue] = []
+        used = 0
+        for episode in reversed(agent_episodes):
+            item: JsonObject = {
+                "owner_static_path": list(episode.owner_static_path),
+                "status": episode.status.value,
+                "prompt": episode.prompt,
+                "inputs": episode.inputs,
+                "interactions": [_visible_interaction_json(interaction) for interaction in episode.interactions],
+                "output": episode.output,
+                "failure": episode.failure,
+            }
+            encoded = _canonical_json(item)
+            if not kept:
+                encoded = _bounded_json_material(item, budget)
+            elif used + len(encoded) > budget:
+                break
+            used += len(encoded)
+            kept.append(json.loads(encoded))
+        kept.reverse()
+        material: JsonObject = {
+            "max_chars": session._memory.max_chars,
+            "current_profile": current_text,
+            "feedback": feedback,
+            "episodes": kept,
+            "omitted_episodes": len(agent_episodes) - len(kept),
+        }
+        if current_version != session._version:
+            material["seen_profile"] = session._text
+        return json.dumps(material, ensure_ascii=False, indent=2, sort_keys=True)

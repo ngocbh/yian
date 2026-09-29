@@ -210,3 +210,104 @@ def test_parse_reply_joins_text_blocks_and_ends_with_one_newline() -> None:
     reply = AIMessage(content=["Here:\n<profile>\n# Ada\n", {"type": "text", "text": "- Brief.\n</profile>"}])
     assert profile._parse_reply(reply, "# Ada\n", 100) == "# Ada\n- Brief.\n"
     assert profile._parse_reply(AIMessage(content="<profile></profile>"), "", 100) == ""
+
+
+def test_learn_without_feedback_or_on_inner_frame_calls_no_model(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(profile, "model_from_config", lambda config: pytest.fail("model constructed"))
+    memory = _memory(tmp_path)
+    with memory.open_run() as session:
+        root, child = session.open_frame(_spec(ROOT)), session.open_frame(_spec(CHILD))
+        assert root.learn(LearnContext("run-1", ROOT, (_episode("hi", "hello"),))) == []
+        assert child.learn(LearnContext("run-1", CHILD, (), _feedback("Be brief."))) == []
+
+
+def test_learn_rewrites_the_current_document_from_feedback_and_episodes(tmp_path, monkeypatch) -> None:
+    learner, configs = _install(monkeypatch, "<profile>\n# Ada\n- Prefers brief replies.\n</profile>")
+    memory = _memory(tmp_path)
+    with memory.open_run() as session:
+        root = session.open_frame(_spec(ROOT))
+        seen_version = memory.read()[1]
+        memory.write("# Ada\nHuman note.\n", base_version=seen_version)
+        current_version = memory.read()[1]
+        call = ToolCallInteraction("calendar", {"day": "today"})
+        episodes = (_episode("first", "long answer", (call,)), _episode("second", "longer answer"))
+        context = LearnContext("run-1", ROOT, episodes, _feedback("Be brief.", "Be brief."))
+        mutation, = root.learn(context)
+    assert configs == [CONFIG]
+    material = _request_material(learner)
+    assert material["current_profile"] == "# Ada\nHuman note.\n"
+    assert material["seen_profile"] == "# Ada\n"
+    assert [entry["value"] for entry in material["feedback"]] == ["Be brief.", "Be brief."]
+    assert [episode["prompt"] for episode in material["episodes"]] == ["first", "second"]
+    assert material["episodes"][0]["interactions"] == [
+        {"kind": "tool_call", "name": "calendar", "arguments": {"day": "today"}}]
+    assert material["omitted_episodes"] == 0
+    assert mutation.frame_ref == ROOT
+    assert mutation.payload == {
+        "base_version": current_version, "text": "# Ada\n- Prefers brief replies.\n",
+        "seen_version": seen_version, "run_id": "run-1", "feedback": ["Be brief."],
+    }
+
+
+def test_learner_sees_the_tool_calls_of_each_episode(tmp_path, monkeypatch) -> None:
+    learner, _ = _install(monkeypatch, "<profile># Ada\n- Check the calendar first.</profile>")
+    interactions = (
+        ModelTextInteraction("Let me look."),
+        ToolCallInteraction("calendar", {"day": "friday"}),
+        ToolResultInteraction("calendar", "busy 9-17"),
+    )
+    memory = _memory(tmp_path)
+    with memory.open_run() as session:
+        root = session.open_frame(_spec(ROOT))
+        root.learn(LearnContext("run-1", ROOT, (_episode("free friday?", "Yes.", interactions),),
+                                _feedback("Check the calendar before answering.")))
+    episode, = _request_material(learner)["episodes"]
+    assert episode["interactions"] == [
+        {"kind": "model_text", "text": "Let me look."},
+        {"kind": "tool_call", "name": "calendar", "arguments": {"day": "friday"}},
+        {"kind": "tool_result", "name": "calendar", "text": "busy 9-17"},
+    ]
+
+
+def test_learn_keeps_only_the_newest_episodes_within_the_input_budget(tmp_path, monkeypatch) -> None:
+    learner, _ = _install(monkeypatch, "<profile># Ada\nNew.</profile>")
+    memory = _memory(tmp_path, input_budget_chars=700)
+    episodes = tuple(_episode(f"prompt {index}", "o" * 100) for index in range(5))
+    with memory.open_run() as session:
+        session.open_frame(_spec(ROOT)).learn(LearnContext("run-1", ROOT, episodes, _feedback("x")))
+    material = _request_material(learner)
+    assert [episode["prompt"] for episode in material["episodes"]] == ["prompt 3", "prompt 4"]
+    assert material["omitted_episodes"] == 3
+
+
+def test_an_oversized_newest_episode_is_trimmed_not_dropped(tmp_path, monkeypatch) -> None:
+    learner, _ = _install(monkeypatch, "<profile># Ada\nRead less.</profile>")
+    memory = _memory(tmp_path)
+    big = (ToolCallInteraction("read_file", {"path": "notes.md"}), ToolResultInteraction("read_file", "x" * 30_000))
+    episodes = (_episode("older", "short"), _episode("newest", "done", big))
+    with memory.open_run() as session:
+        session.open_frame(_spec(ROOT)).learn(LearnContext("run-1", ROOT, episodes, _feedback("x")))
+    material = _request_material(learner)
+    newest, = material["episodes"]
+    assert material["omitted_episodes"] == 1
+    assert newest["truncated"] is True and newest["original_chars"] > memory.input_budget_chars
+    assert '"name":"read_file"' in newest["prefix"] and '"prompt":"newest"' in newest["suffix"]
+    assert len(profile._canonical_json(newest)) <= memory.input_budget_chars
+
+
+def test_provider_failure_is_retryable_and_bad_replies_are_not(tmp_path, monkeypatch) -> None:
+    _install(monkeypatch, RuntimeError("provider down"), "no tags")
+    memory = _memory(tmp_path)
+    with memory.open_run() as session:
+        root = session.open_frame(_spec(ROOT))
+        for code, retryable in (("profile.provider", True), ("profile.contract", False)):
+            with pytest.raises(MemoryOperationError) as caught:
+                root.learn(LearnContext("run-1", ROOT, (), _feedback("x")))
+            assert (caught.value.code, caught.value.retryable) == (code, retryable)
+
+
+def test_unchanged_document_proposes_nothing(tmp_path, monkeypatch) -> None:
+    _install(monkeypatch, "<profile># Ada</profile>")
+    memory = _memory(tmp_path)
+    with memory.open_run() as session:
+        assert session.open_frame(_spec(ROOT)).learn(LearnContext("run-1", ROOT, (), _feedback("x"))) == []

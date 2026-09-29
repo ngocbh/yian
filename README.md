@@ -165,6 +165,20 @@ result = run_flow(flow, inputs, memory={"episodic": history}, learnable=True)
 result.backward()
 ```
 
+[`ProfileMemory`](docs/learning.md#profile-memory) keeps one markdown document,
+such as a person's profile, in a versioned file. Every AGENT under the declaring
+flow sees the whole document; backward rewrites it with one model call and a
+compare-and-set write:
+
+```python
+from agent_composer.memory.profile import ProfileMemory
+from agent_composer.memory.profile_store import FileProfileStore
+
+profile = ProfileMemory(FileProfileStore("people/ada.md"))
+result = run_flow(flow, inputs, memory={"profile": profile}, learnable=True)
+result.backward("Ada prefers short replies.")
+```
+
 [`SessionMemory`](docs/api.md#sessionmemory-foundation) supplies a structured session
 transcript through the same memory context as notes from other policies. It keeps
 conversation history across runs in the same process. Declare
@@ -186,8 +200,9 @@ as committed notes for future runs, without another model call. API history uses
 soft 32,000-character context budget and preserves the latest four whole turns;
 older context can be summarized without deleting raw history. Configure these
 defaults on `SessionMemory(history_budget_chars=32_000, recent_turns=4)`.
-Run logs do not reconstruct history. All three built-in memory backends optionally
-retain their state across restarts with `storage="./memory.sqlite"`:
+Run logs do not reconstruct history. The episodic, reflective, and session
+backends optionally retain their state across restarts with
+`storage="./memory.sqlite"`:
 
 ```python
 with SessionMemory(storage="./session.sqlite") as session:

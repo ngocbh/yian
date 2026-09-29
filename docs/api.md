@@ -296,6 +296,30 @@ new generation. A session snapshot is detached JSON suitable for the engine's
 recorded recovery boundary or for restoring a pristine `EpisodicMemory`.
 Use `storage=path` to retain complete backend state across restarts.
 
+### Profile memory
+
+`ProfileMemory` recalls one markdown document into every AGENT under its outermost
+frame and rewrites it on backward with a compare-and-set write:
+
+```python
+from agent_composer.memory.profile import ProfileMemory
+from agent_composer.memory.profile_store import FileProfileStore
+
+profile = ProfileMemory(FileProfileStore("people/ada.md"), max_chars=32_000)
+result = run_flow(loaded, inputs, memory={"profile": profile}, learnable=True)
+outcome = result.backward("Ada prefers short replies.")
+if outcome.failure is not None and outcome.failure.code == "profile.version_mismatch":
+    ...  # someone edited the profile; nothing was written; start a new attempt
+```
+
+Only `profile.version_mismatch` guarantees that nothing was written. After any
+other commit failure, or an attempt killed mid-commit (policy status `unknown`),
+look for the attempt's `commit_id` in the store's write provenance before
+retrying. If it is missing, compare the current document with the proposed
+`text` in the run log. The snapshot records the pinned version and text hash, never the text.
+See [profile memory](learning.md#profile-memory) for recall, learning, and store
+rules.
+
 ### Optional durable memory
 
 `EpisodicMemory`, `ReflectiveMemory`, and `SessionMemory` accept the host-only

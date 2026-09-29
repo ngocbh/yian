@@ -152,6 +152,19 @@ source alongside notes; the evaluator admits it into one transient context.
 
 ::: agent_composer.memory.conversation.conversation_checkpoint_from_json
 
+## Profile memory
+
+Import the concrete backend from `agent_composer.memory.profile` and stores from
+`agent_composer.memory.profile_store`. See [profile memory](learning.md#profile-memory).
+
+::: agent_composer.memory.profile.ProfileMemory
+
+::: agent_composer.memory.profile_store.ProfileStore
+
+::: agent_composer.memory.profile_store.FileProfileStore
+
+::: agent_composer.memory.profile_store.ProfileVersionMismatch
+
 ## Compose source provenance
 
 Compose owns immutable source views separately from the source-neutral engine.

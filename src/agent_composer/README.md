@@ -40,6 +40,7 @@ typesys/      typed value system (values) + variable pool                 [leaf]
 events.py     transient run/node observer vocabulary; imports diagnostics
 expr/         one ${...} grammar: parse -> AST -> evaluate / infer type / ref-walk
 memory/       memory contracts, pure conversation fold/codecs, optionally durable backends
+skills/       host-supplied SKILL.md values, confined file reads, load_skill [leaf]
 nodes/        pure Node contract + per-kind implementations; spawners return seeds
               (start, end, agent, code, model, tool, case, call, map,
                loop, human_input, wait)
@@ -47,7 +48,7 @@ compile/      compiled IR + validation; identity-safe origin traversal/rebasing;
               growth builder; stable identity; static-path LLM config maps
 compose/      Compose-YAML front end: text -> CompiledFlow; source/ owns YAML
               construction/navigation and opaque-origin resolution; later phases
-              lower file-private children
+              lower file-private children; skills.py reads skill folders
               (source/helpers/nodes/parse/desugar/edges/validate/build/loader)
 runtime/      run records/logs, scheduler-state vocabulary, reducer-owned state,
               forward dispatcher/worker pool,
@@ -701,7 +702,7 @@ connections and execution topology; authored fingerprints exclude them.
 The runtime core is **kind-blind**. It dispatches on this result sum and consults
 node-owned execution-semantic traits/hooks (`is_spawner`, `binds_per_item`, `item_source_key`,
 `bind_reserved`, `validate_execution_setup`, `grow_depth_delta`, `is_loop`,
-`needs_stop_event`, `needs_memory_context`, `needs_evaluation_trace`,
+`needs_stop_event`, `needs_memory_context`, `needs_skills`, `needs_evaluation_trace`,
 `memory_scope`, and `skipped_output_target`) plus the diagnostic-only projections
 `exception_origin` and `failure_trace`; it never branches behavior on `NodeKind`.
 A kind label may appear in diagnostic text. The diagnostic projections do not
@@ -850,6 +851,29 @@ before lending its state/log pair to `FlowEngine`. A direct runtime caller has t
 same obligation: apply `RunStartedRecord` to a matching `RunState` and `RunLog`
 before driving the engine. The engine borrows this authority and never closes it;
 the boundary or direct caller owns its lifetime.
+
+## Host-supplied skills
+
+`skills/` is a leaf. It exports the frozen `Skill` value and `SkillError`;
+`skills/catalog.py` holds confined bundled-file reads, and `skills/tool.py` holds
+the `load_skill` tool schema and the system-message listing. It imports only
+langchain-core and the standard library. `compose/skills.py` reads skill folders
+from disk, because only `compose/source/` may parse YAML and `parse_yaml_literal`
+is its safe entry point.
+
+Before it opens the log, for fresh runs and for resume, the run boundary
+(`run.py`) walks static nodes and their `origin_children()` for the `needs_skills`
+trait. A non-empty grant needs a `skills=` mapping, and every listed name must be
+in it. `FlowEngine(skills=...)` treats the mapping as opaque. The evaluator passes
+it only to nodes whose `needs_skills` trait is `True` (`AgentNode`), so runtime
+stays kind-blind.
+
+The AGENT renders the sorted listing into `base_system_prompt`. The memory context
+still opens with `DEFAULT_SYSTEM`, so recall queries do not change. The AGENT
+serves `load_skill` calls through the same `invoke_tool_effect` path as registered
+tools and records each result as evidence. A non-empty grant is AGENT execution
+identity (`sorted(names)` or `"all"`); an empty grant is omitted so older
+fingerprints hold.
 
 ## Host-injected agent memory
 

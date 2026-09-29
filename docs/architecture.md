@@ -224,6 +224,7 @@ flowchart TB
     events["events"]
     llm["llm_clients"]
     tools["tools"]
+    skills["skills"]
     nodes["nodes"]
     compile["compile"]
     compose["compose"]
@@ -238,11 +239,13 @@ flowchart TB
     memory --> nodes
     llm --> nodes
     tools --> nodes
+    skills --> nodes
 
     nodes --> compile
     memory --> compile
     compile --> compose
     diagnostics --> compose
+    skills --> compose
 
     events --> runtime
     typesys --> runtime
@@ -254,6 +257,7 @@ flowchart TB
     compile --> run
     memory --> run
     runtime --> run
+    skills --> run
     run --> cli
 ```
 

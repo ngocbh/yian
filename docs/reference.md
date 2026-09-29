@@ -362,6 +362,18 @@ The core ships no domain tools; a host registers its own into the shared registr
 
 ::: agent_composer.tools.invoke_tool_trusted
 
+## Skills
+
+Host-supplied `SKILL.md` skills. The host builds the mapping passed as `skills=`.
+
+::: agent_composer.skills.Skill
+
+::: agent_composer.skills.SkillError
+
+::: agent_composer.compose.load_skills
+
+::: agent_composer.compose.default_skill_roots
+
 ## LLM configuration
 
 How an AGENT node selects and builds its chat model.

@@ -40,6 +40,7 @@ import os
 import signal
 import sys
 import threading
+import warnings
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -57,12 +58,14 @@ from agent_composer.cli.memory import MemoryHost
 from agent_composer.cli.terminal import PromptRequest, TerminalBroker
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.loader import load_flow
+from agent_composer.compose.skills import default_skill_roots, load_skills
 from agent_composer.diagnostics import Diagnostic
 from agent_composer.memory.contracts import MemoryOperationError
 from agent_composer.run import (
     RunResult,
     _resume_flow_controlled,
     _run_flow_controlled,
+    _skill_grants,
 )
 from agent_composer.events import NodeFailed
 from agent_composer.nodes.base import _HostStop
@@ -1416,6 +1419,16 @@ def run(
     except (TypeError, ValueError) as exc:
         raise typer.BadParameter(str(exc), param_hint="--memory-storage") from exc
     memory_options = {"memory": memory_host.registry} if memory_host.registry else {}
+    # Claude Code and Codex skill folders (user, then project up to the git root),
+    # read only when an AGENT grants skills. An invalid skill is warned about and
+    # skipped rather than blocking the run.
+    skill_options: Dict[str, Any] = {}
+    if _skill_grants(loaded.compiled):
+        with warnings.catch_warnings(record=True) as skipped:
+            warnings.simplefilter("always")
+            skill_options["skills"] = load_skills(default_skill_roots(Path.cwd()), skip_invalid=True)
+        for warning in skipped:
+            err_console.print(Text(f"warning: {warning.message}", style="yellow"), soft_wrap=True)
 
     # The "what am I running" banner (flow name/description/version) — stderr, like
     # progress; suppressed under --quiet.
@@ -1447,6 +1460,7 @@ def run(
                     on_event=on_event,
                     stop_event=stop_event,
                     **memory_options,
+                    **skill_options,
                 )
 
     else:
@@ -1510,6 +1524,7 @@ def run(
                     num_workers=selected_workers,
                     stop_event=stop_event,
                     **memory_options,
+                    **skill_options,
                 )
 
     try:

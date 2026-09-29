@@ -12,7 +12,7 @@ from __future__ import annotations
 import queue
 import threading
 import traceback as _tb
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextvars import copy_context
 from dataclasses import dataclass
@@ -88,6 +88,7 @@ class FlowEngine:
         on_stream: Callable[[StreamChunk], None] | None = None,
         stop_event: threading.Event | None = None,
         memory_context_opener: MemoryContextOpener | None = None,
+        skills: Mapping[str, Any] | None = None,
     ) -> None:
         """Borrow a prepared state/log pair and configure one bounded drive.
 
@@ -96,6 +97,9 @@ class FlowEngine:
         lazy access to it. It defaults to ``None`` (no injected memory context);
         a non-callable value raises ``TypeError``. The dispatcher captures each
         accepted start before evaluating or submitting its worker.
+
+        ``skills`` is the run's host-supplied skill mapping, passed unchanged to
+        nodes declaring ``needs_skills``; a non-mapping raises ``TypeError``.
         """
         if type(state) is not RunState:
             raise TypeError("FlowEngine expects a RunState")
@@ -113,6 +117,8 @@ class FlowEngine:
             raise TypeError("on_stream must be callable or None")
         if memory_context_opener is not None and not callable(memory_context_opener):
             raise TypeError("memory_context_opener must be callable or None")
+        if skills is not None and not isinstance(skills, Mapping):
+            raise TypeError("skills must be a mapping or None")
         self.state = state
         self.log = log
         self.grow_builder = grow_builder
@@ -121,6 +127,7 @@ class FlowEngine:
         self.on_stream = on_stream
         self.stop_event = stop_event if stop_event is not None else threading.Event()
         self.memory_context_opener = memory_context_opener
+        self.skills = skills
 
     def run(self) -> Iterator[Any]:
         """Drive newly ready work and yield only post-durable observer notifications."""
@@ -436,6 +443,7 @@ class FlowEngine:
             source_resolver=None if self.state.trace is None else self.state.trace.resolve,
             memory_context_opener=self.memory_context_opener,
             memory_invocation=invocation,
+            skills=self.skills,
         )
 
     def _evaluate_worker(

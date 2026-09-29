@@ -57,12 +57,12 @@ _BUNDLED = Path(__file__).parent / "chat.yaml"
 def _prompt_chat_request(request) -> Any:
     """Read one chat line on the broker-owned main thread.
 
-    Structured question sets retain the general CLI renderer. The ordinary chat
-    surface is deliberately line-oriented: it preserves typed text exactly (apart
-    from the line ending), raises EOF for the broker to normalize, and applies no
-    textual command policy.
+    Structured question sets and questions with options use the general CLI
+    renderer. The ordinary chat surface is deliberately line-oriented: it preserves
+    typed text exactly (apart from the line ending), raises EOF for the broker to
+    normalize, and applies no textual command policy.
     """
-    if request.questions:
+    if request.questions or request.options:
         return _prompt_request(request)
     label = request.question or f"input for {request.node_id}"
     console.print(Text(f"{label} ", style="bold cyan"), end="")

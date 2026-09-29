@@ -556,3 +556,20 @@ def test_ctrl_c_mid_run_says_cancelled(tmp_path: Path, monkeypatch):
     result = runner.invoke(app, ["run", str(flow), "--input", "topic=clouds"])
     assert result.exit_code == 130
     assert "cancelled by user" in result.output
+
+
+def test_prompt_request_offers_model_options_as_a_choice(monkeypatch):
+    """Options sent with a model ``ask_user`` render as one choice list."""
+    from agent_composer.cli.terminal import PromptRequest
+
+    seen = []
+
+    def ask_question(question, index=None, total=None, request=None):
+        seen.append(question)
+        return "B"
+
+    monkeypatch.setattr(run_cli, "_ask_question", ask_question)
+    request = PromptRequest(question="Which?", options=["A", "B"])
+
+    assert run_cli._prompt_request(request) == "B"
+    assert seen == [{"question": "Which?", "options": [{"label": "A"}, {"label": "B"}]}]

@@ -1208,6 +1208,15 @@ def _prompt_request(request: PromptRequest) -> Any:
             ),
         )
 
+    if request.options:
+        return _ask_question(
+            {
+                "question": request.question,
+                "options": [{"label": option} for option in request.options],
+            },
+            request=request,
+        )
+
     label = request.question or f"input for {request.node_id}"
     return _ask_widget(
         questionary.text(label, qmark="?", style=_q_style()),

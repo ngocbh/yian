@@ -229,6 +229,25 @@ def test_structured_prompt_metadata_reaches_handler_unchanged() -> None:
     assert request.node_id == "review/approval"
 
 
+def test_ask_user_options_reach_the_prompt_request() -> None:
+    """Model-sent options travel to the main-thread prompt with the question."""
+    seen: list[PromptRequest] = []
+
+    def prompt(request: PromptRequest) -> str:
+        seen.append(request)
+        return "A"
+
+    broker = TerminalBroker(prompt)
+    worker, outcome = _ask_async(broker, question="Pick one", options=["A", "B"])
+    _wait_for_messages(broker, 1)
+    broker.controller_complete()
+    broker.serve()
+    _join(worker)
+
+    assert _result(outcome) == "A"
+    assert [request.options for request in seen] == [["A", "B"]]
+
+
 def test_generic_eof_fails_current_prompt_and_cancels_queued_prompts() -> None:
     """EOF ends a non-chat interaction without leaving sibling callers blocked."""
     prompted: list[str] = []

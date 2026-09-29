@@ -131,3 +131,47 @@ def test_load_skill_runs_through_a_session_conversation(monkeypatch, skill_root:
     view = _view(memory)
     assert [effect.kind for effect in view.effects] == ["model", "tool", "model"]
     assert all(effect.status == "completed" for effect in view.effects)
+
+
+def test_missing_skill_is_rejected_before_any_record(tmp_path: Path) -> None:
+    log = tmp_path / "run.jsonl"
+    with pytest.raises(ValueError, match=r"AGENT node 'review' grants skills not supplied to this run: \['release-notes'\]"):
+        run_flow(load_flow(FLOW), {"change": "x"}, log=log, skills={"code-review": Skill("code-review", "d", "")})
+    assert not log.exists()
+    with pytest.raises(ValueError, match=r"'outer/inner' grants skills not supplied"):
+        run_flow(load_flow(NESTED), {}, skills={})
+
+
+@pytest.mark.parametrize("text", [FLOW, ALL_FLOW, NESTED], ids=["listed", "all", "nested"])
+def test_a_granting_flow_needs_a_skills_mapping(tmp_path: Path, text: str) -> None:
+    log = tmp_path / "run.jsonl"
+    with pytest.raises(ValueError, match=r"grants skills, but no skills= mapping was passed"):
+        run_flow(load_flow(text), {"change": "x"} if text != NESTED else {}, log=log)
+    assert not log.exists()
+
+
+def test_skills_all_with_an_empty_mapping_grants_none(monkeypatch) -> None:
+    model = _ScriptedModel([AIMessage(content="ok")])
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _config: model)
+    assert run_flow(load_flow(ALL_FLOW), {"change": "x"}, skills={}).status == "succeeded"
+    assert model.calls[0][0].content == DEFAULT_SYSTEM
+
+
+def test_resume_of_a_skills_all_flow_needs_the_mapping(monkeypatch, tmp_path: Path, skill_root: Path) -> None:
+    log = tmp_path / "run.jsonl"
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _config: _ScriptedModel([_SimulatedCrash()]))
+    with pytest.raises(_SimulatedCrash):
+        run_flow(load_flow(ALL_FLOW), {"change": "x"}, log=log, skills=load_skills([skill_root]))
+    before = log.read_bytes()
+    with pytest.raises(ValueError, match="no skills= mapping was passed"):
+        resume_flow(load_flow(ALL_FLOW), log=log)
+    assert log.read_bytes() == before
+    model = _ScriptedModel([AIMessage(content="ok")])
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _config: model)
+    assert resume_flow(load_flow(ALL_FLOW), log=log, skills=load_skills([skill_root])).status == "succeeded"
+    assert "- unused: Not granted." in model.calls[0][0].content
+
+
+def test_skills_mapping_must_be_keyed_by_skill_name() -> None:
+    with pytest.raises(TypeError, match=r"skills\['alias'\] must be a Skill named 'alias'"):
+        run_flow(load_flow(FLOW), {"change": "x"}, skills={"alias": Skill("code-review", "d", "")})

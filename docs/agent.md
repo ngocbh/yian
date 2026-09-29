@@ -231,6 +231,8 @@ tool-result links. The innermost contributed transcript supplies prior history;
 all visible note sections remain available. Each frame owns and writes only its
 own state. MAP items and LOOP iterations reuse the statically
 authored frames rather than creating a new frame per occurrence.
+A `ProfileMemory` policy returns notes only from its outermost frame, so its
+document appears once however deeply it is declared.
 
 ```yaml
 id: layered_memory

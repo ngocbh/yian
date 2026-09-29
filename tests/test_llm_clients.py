@@ -202,3 +202,42 @@ def test_openai_responses_preserve_reasoning_for_next_tool_turn():
         assert text_of(final) == "6"
     assert any(item.get("encrypted_content") == "synthetic-continuation" for item in server.bodies[1]["input"])
     assert server.requests[0].headers["Authorization"] == "Bearer synthetic-api-key"
+
+
+# --- streaming: normalization, usage, DeepSeek fallback --------------------- #
+
+_AZURE_ENV = {
+    "AZURE_OPENAI_API_KEY": "x",
+    "OPENAI_API_VERSION": "2024-02-01",
+    "AZURE_OPENAI_ENDPOINT": "https://res.openai.azure.com",
+}
+
+
+@pytest.mark.parametrize(
+    ("provider", "model", "kwargs", "env"),
+    [
+        ("anthropic", "claude-sonnet-4-6", {"api_key": "x"}, {}),
+        ("google", "gemini-2.5-flash", {"api_key": "x"}, {}),
+        ("azure", "gpt-4o", {}, _AZURE_ENV),
+        ("vllm", "some-local-model", {}, {}),
+    ],
+)
+def test_normalize_reply_matches_invoke_normalization(monkeypatch, provider, model, kwargs, env):
+    from langchain_core.messages import AIMessage
+
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    chat = create_llm_client(provider, model, **kwargs).get_llm()
+    message = AIMessage(content=[
+        {"type": "thinking", "thinking": "hidden"},
+        {"type": "text", "text": "visible"},
+    ])
+    assert chat.normalize_reply(message).content == "visible"
+
+
+def test_openai_responses_normalize_reply_keeps_blocks():
+    from langchain_core.messages import AIMessage
+
+    chat = create_llm_client("openai", "gpt-5.5", api_key="x").get_llm()
+    blocks = [{"type": "reasoning", "id": "r"}, {"type": "text", "text": "visible"}]
+    assert chat.normalize_reply(AIMessage(content=list(blocks))).content == blocks

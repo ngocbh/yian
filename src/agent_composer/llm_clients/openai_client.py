@@ -30,7 +30,10 @@ class NormalizedChatOpenAI(ChatOpenAI):
     """
 
     def invoke(self, input, config=None, **kwargs):
-        response = super().invoke(input, config, **kwargs)
+        return self.normalize_reply(super().invoke(input, config, **kwargs))
+
+    def normalize_reply(self, response):
+        """Apply the reply normalization `invoke` uses; streamed replies reuse it."""
         if self.use_responses_api or response.response_metadata.get("object") == "response":
             return response
         return normalize_content(response)

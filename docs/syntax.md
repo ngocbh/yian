@@ -268,7 +268,8 @@ frame.
 `composer run` automatically supplies declared `episodic`, `reflective`, and `session`
 policies. They are process-local unless the host flag
 `--memory-storage POLICY=PATH` selects a durable store; storage never belongs in
-YAML. Custom policies require Python host injection. For Python calls, declarations
+YAML. Custom policies, including `ProfileMemory` (which needs a document store),
+require Python host injection. For Python calls, declarations
 remain dormant unless the host passes a `memory={...}` registry to `run_flow`,
 keyed by the selected policy names. All memories contribute through one context:
 ordinary memories supply notes or instructions, and SessionMemory supplies a

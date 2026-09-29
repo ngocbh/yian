@@ -12,7 +12,7 @@ backend invokes injected projection/model callbacks without importing providers.
 The private ``storage.py`` adapter owns
 single-host SQLite file locking and atomic finite-JSON state transactions below
 the concrete backends; it owns no run sessions or provider behavior.
-Concrete session, episodic, and reflection
+Concrete session, episodic, reflection, and profile
 backends are imported from their own modules, never eagerly by this contracts-only
 facade.
 

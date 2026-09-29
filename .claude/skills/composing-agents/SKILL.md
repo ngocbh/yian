@@ -245,7 +245,8 @@ reuse the frames authored on their flows and AGENT nodes rather than creating
 per-item/per-iteration frames.
 Other node kinds and anonymous inline child flows cannot carry this declaration.
 `composer run` automatically hosts declared `episodic`, `reflective`, and `session`
-policies; custom policies require Python injection. Library hosts enable recall
+policies; custom policies, including `ProfileMemory`, require Python injection.
+Library hosts enable recall
 with `run_flow(..., memory={NAME: implementation})`; `memory=None` stays dormant.
 For API conversation continuity, declare `long_term_memory: session`; Python hosts
 inject `SessionMemory()` as `"session"`;
@@ -263,7 +264,7 @@ Notes stay scoped to the owning frame and authored leaf; recall is pinned when
 the run opens. Host-only `SessionMemory(history_budget_chars=32_000, recent_turns=4)`
 controls API summaries of older context; do not put these settings in YAML.
 Raw history and recent whole turns stay intact, even above the soft budget.
-All three built-in backend constructors accept optional `storage=path` for local
+Episodic, reflective, and session backends accept optional `storage=path` for local
 SQLite durability; the default `None` remains process-local. Never put a storage
 path in YAML. A file has one owner until backend close; active work or queued
 turns block close, idle run handles do not. In `composer run`, repeat

@@ -65,7 +65,7 @@ the lazy capability lifetime; it neither encodes provider messages nor
 reconstructs history from the run log.
 
 Optional persistence belongs below concrete memory policies in
-`memory/storage.py`: it owns one local SQLite file and finite-JSON transactions,
+`memory/storage/`: `SQLiteStorage` owns one local SQLite file and finite-JSON transactions,
 not semantic snapshots, run handles, clients, or queues. Backends validate and
 save candidates before publishing live state. Host-only storage paths never enter
 YAML or runtime records, and the memory facade remains contracts-only.

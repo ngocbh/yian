@@ -8,11 +8,13 @@ from typing import Any
 import pytest
 from langchain_core.tools import StructuredTool
 
+from agent_composer.compile.model import END_ID, START_ID
 from agent_composer.nodes.base import Node, NodeKind, Output
 from agent_composer.nodes.tool.node import ToolNode
 from agent_composer.runtime.eval_node import eval_node
 from agent_composer.tools import TOOL_REGISTRY, ToolSet, register_tool, registered_tools
 from agent_composer.typesys.pool import VariablePool
+from tests.engine._graph_builder import _engine, _graph
 
 
 @pytest.fixture(autouse=True)
@@ -232,3 +234,24 @@ def test_only_nodes_that_declare_needs_tools_receive_the_toolset():
 def test_eval_node_rejects_a_raw_tools_mapping():
     with pytest.raises(TypeError, match="tools must be a ToolSet or None"):
         eval_node(ToolNode("ping", tool_id="ping"), None, VariablePool(), tools={"ping": _ping})
+
+
+def test_flow_engine_passes_its_toolset_to_every_tool_node():
+    graph = _graph(
+        [ToolNode("ping", tool_id="ping")],
+        [(START_ID, "ping"), ("ping", END_ID)],
+    )
+    engine = _engine(graph, tools=ToolSet({"ping": _ping}))
+
+    list(engine.run())
+
+    assert engine.state.pool.get("ping") == "run-pong"
+
+
+def test_flow_engine_rejects_a_raw_tools_mapping():
+    graph = _graph(
+        [ToolNode("ping", tool_id="ping")],
+        [(START_ID, "ping"), ("ping", END_ID)],
+    )
+    with pytest.raises(TypeError, match="tools must be a ToolSet or None"):
+        _engine(graph, tools={"ping": _ping})

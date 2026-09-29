@@ -46,6 +46,7 @@ from agent_composer.runtime.state import (
     commit_prepared,
     prepare_run_started,
 )
+from agent_composer.tools import ToolSet
 from agent_composer.typesys import VariablePool
 
 
@@ -319,11 +320,13 @@ def test_constructor_is_exactly_the_recorded_state_log_surface():
         "on_stream",
         "stop_event",
         "memory_context_opener",
+        "tools",
     ]
     assert [parameter.kind for parameter in parameters] == [
         inspect.Parameter.POSITIONAL_OR_KEYWORD,
         inspect.Parameter.POSITIONAL_OR_KEYWORD,
         inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        inspect.Parameter.KEYWORD_ONLY,
         inspect.Parameter.KEYWORD_ONLY,
         inspect.Parameter.KEYWORD_ONLY,
         inspect.Parameter.KEYWORD_ONLY,
@@ -341,6 +344,7 @@ def test_constructor_is_exactly_the_recorded_state_log_surface():
         None,
         None,
         None,
+        None,
     ]
     hints = get_type_hints(FlowEngine.__init__)
     assert set(hints) == {
@@ -352,6 +356,7 @@ def test_constructor_is_exactly_the_recorded_state_log_surface():
         "on_stream",
         "stop_event",
         "memory_context_opener",
+        "tools",
         "return",
     }
     assert hints["state"] is RunState
@@ -375,6 +380,7 @@ def test_constructor_is_exactly_the_recorded_state_log_surface():
     )
     assert _optional_inner(hints["stop_event"]) is threading.Event
     assert _optional_inner(hints["memory_context_opener"]) is MemoryContextOpener
+    assert _optional_inner(hints["tools"]) is ToolSet
     assert hints["return"] is types.NoneType
 
 

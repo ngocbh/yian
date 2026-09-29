@@ -1,0 +1,208 @@
+"""Versioned markdown document stores used by ``ProfileMemory``.
+
+A profile store holds one current markdown document and can return any version it
+has handed out. Writes are compare-and-set against a base version so that a
+concurrent human edit is never silently overwritten.
+"""
+
+from __future__ import annotations
+
+from contextlib import contextmanager
+import fcntl
+import hashlib
+import os
+from pathlib import Path
+import tempfile
+from typing import Iterator, Protocol, runtime_checkable
+
+from agent_composer.memory.contracts import JsonObject
+
+
+class ProfileVersionMismatch(Exception):
+    """A compare-and-set write named a base version that is no longer current."""
+
+    def __init__(self, expected: str, current: str) -> None:
+        """Record the stale base version and the version that is current.
+
+        Args:
+            expected (`str`): Base version supplied by the writer.
+            current (`str`): Version found in the store.
+        """
+        self.expected = expected
+        self.current = current
+        super().__init__(f"profile base version {expected!r} is not current ({current!r})")
+
+
+@runtime_checkable
+class ProfileStore(Protocol):
+    """Versioned storage for one markdown document.
+
+    Implementations raise `LookupError` for an unknown version,
+    `ProfileVersionMismatch` for a stale base version, `ValueError` for stored
+    text they cannot decode, and `OSError` when storage cannot be reached.
+    `ProfileMemory` turns these into typed memory failures. Any other exception
+    escapes the backward attempt.
+    """
+
+    def read(self, version: str | None = None) -> tuple[str, str]:
+        """Return ``(text, version)`` for the current or a named version.
+
+        Args:
+            version (`str | None`, *optional*, defaults to `None`): A version this
+                store returned earlier, or `None` for the current document.
+
+        Returns:
+            `tuple[str, str]`: The document text and its version.
+
+        Raises:
+            `LookupError`: The named version is unknown.
+        """
+        ...
+
+    def write(
+        self,
+        text: str,
+        *,
+        base_version: str,
+        provenance: JsonObject | None = None,
+    ) -> str:
+        """Replace the current document if ``base_version`` is still current.
+
+        From `ProfileMemory`, ``provenance`` holds ``run_id``, ``commit_id``,
+        ``frame``, ``seen_version``, and ``feedback``. ``commit_id`` is unique per
+        backward attempt and policy, so a store that retries its own transport
+        may use it to avoid writing twice.
+
+        Args:
+            text (`str`): Complete new document.
+            base_version (`str`): Version the writer read before editing.
+            provenance (`JsonObject | None`, *optional*, defaults to `None`):
+                JSON describing who wrote and why, for example for a commit
+                message.
+
+        Returns:
+            `str`: The version of the stored document.
+
+        Raises:
+            `ProfileVersionMismatch`: ``base_version`` is not current. Nothing
+                was written.
+            `OSError`: Storage could not be reached. The write may or may not
+                have landed.
+        """
+        ...
+
+
+def profile_version(text: str) -> str:
+    """Return the content-addressed version of one document.
+
+    Args:
+        text (`str`): Document text.
+
+    Returns:
+        `str`: ``"sha256:<hex>"`` of the UTF-8 bytes.
+    """
+    return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+class FileProfileStore:
+    """Profile store backed by one editable markdown file.
+
+    The current document is ``path``; a missing file reads as an empty document.
+    Every version this store returns or writes is kept under
+    ``.<name>.versions/`` next to it, so recorded runs can reopen it later.
+    Each write appends its versions and provenance to ``.<name>.writes.jsonl``.
+    Writers on one host serialize through ``.<name>.lock``. A person may edit
+    ``path`` directly; the next compare-and-set write then reports a mismatch.
+    """
+
+    def __init__(self, path: str | os.PathLike[str]) -> None:
+        """Bind the store to one document path.
+
+        Args:
+            path (`str | os.PathLike[str]`): Markdown file. Its parent directory
+                must exist.
+
+        Raises:
+            `FileNotFoundError`: The parent directory does not exist.
+        """
+        self.path = Path(path)
+        if not self.path.parent.is_dir():
+            raise FileNotFoundError(f"profile directory does not exist: {self.path.parent}")
+        self._versions = self.path.parent / f".{self.path.name}.versions"
+        self._lock_path = self.path.parent / f".{self.path.name}.lock"
+        self._writes = self.path.parent / f".{self.path.name}.writes.jsonl"
+
+    def read(self, version: str | None = None) -> tuple[str, str]:
+        """Return ``(text, version)`` for the current or a named version.
+
+        Args:
+            version (`str | None`, *optional*, defaults to `None`): A version this
+                store returned earlier, or `None` for the current document.
+
+        Returns:
+            `tuple[str, str]`: The document text and its version.
+
+        Raises:
+            `LookupError`: The named version is unknown.
+            `ValueError`: The file is not valid UTF-8.
+        """
+        with self._locked():
+            if version is None:
+                text = self._current()
+                current = profile_version(text)
+                self._keep(current, text)
+                return text, current
+            text = self._current()
+            if profile_version(text) == version:
+                self._keep(version, text)
+                return text, version
+            kept = self._version_path(version)
+            if kept is None or not kept.is_file():
+                raise LookupError(f"unknown profile version {version!r}")
+            return kept.read_text(encoding="utf-8"), version
+
+    @contextmanager
+    def _locked(self) -> Iterator[None]:
+        """Hold the host-wide exclusive lock for this document."""
+        fd = os.open(self._lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            os.close(fd)
+
+    def _current(self) -> str:
+        """Return the current file text, or an empty document when missing."""
+        try:
+            return self.path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return ""
+
+    def _version_path(self, version: str) -> Path | None:
+        """Return the kept-copy path for a well-formed version, else `None`."""
+        prefix, _, digest = version.partition(":")
+        if prefix != "sha256" or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+            return None
+        return self._versions / f"{digest}.md"
+
+    def _keep(self, version: str, text: str) -> None:
+        """Store one content-addressed copy unless it already exists."""
+        kept = self._version_path(version)
+        if kept is not None and not kept.exists():
+            self._versions.mkdir(exist_ok=True)
+            self._replace(kept, text)
+
+    @staticmethod
+    def _replace(target: Path, text: str) -> None:
+        """Write ``text`` to ``target`` through a synced temporary file."""
+        fd, temporary = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(text)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, target)
+        except BaseException:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+            raise

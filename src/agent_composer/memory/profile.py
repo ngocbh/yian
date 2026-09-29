@@ -244,3 +244,66 @@ class _ProfileSession:
         """Reject use after close."""
         if self._closed:
             raise _error(stage, "profile.closed", "profile session is closed")
+
+    def open_frame(self, spec: MemoryFrameSpec) -> _ProfileFrame:
+        """Open one frame; all frames of one policy must share one outermost frame.
+
+        Args:
+            spec (`MemoryFrameSpec`): Frame declared by the compiled layout.
+
+        Returns:
+            `_ProfileFrame`: The opened frame, or the same frame for a repeated spec.
+
+        Raises:
+            `MemoryOperationError`: ``profile.invalid_config`` for non-empty frame
+                config, ``profile.multiple_roots`` for a second unrelated top frame.
+        """
+        with self._lock:
+            self._ensure_open("open_frame")
+            if type(spec) is not MemoryFrameSpec:
+                raise _error("open_frame", "profile.invalid_config", "spec must be a MemoryFrameSpec")
+            existing = self._frames.get(spec.ref)
+            if existing is not None:
+                if existing.spec != spec:
+                    raise _error("open_frame", "profile.invalid_config",
+                                 "frame was already opened with a different spec")
+                return existing
+            if spec.config:
+                raise _error("open_frame", "profile.invalid_config",
+                             "profile frames take no config")
+            path = spec.ref.static_path
+            nested = any(_is_strict_prefix(ref.static_path, path) for ref in self._frames)
+            if self._frames and not nested:
+                raise _error("open_frame", "profile.multiple_roots",
+                             "every frame of one profile policy must sit under one outermost frame")
+            frame = _ProfileFrame(self, spec)
+            self._frames[spec.ref] = frame
+            return frame
+
+    def _is_outermost(self, ref: MemoryFrameRef) -> bool:
+        """Return whether no other opened frame encloses ``ref``."""
+        return not any(_is_strict_prefix(other.static_path, ref.static_path) for other in self._frames)
+
+
+class _ProfileFrame:
+    """One opened frame; only the outermost frame recalls and learns."""
+
+    def __init__(self, session: _ProfileSession, spec: MemoryFrameSpec) -> None:
+        self._session = session
+        self.spec = spec
+
+    def recall(self, context: RecallContext | None = None) -> str:
+        """Return the pinned document for the outermost frame, else ``""``.
+
+        Args:
+            context (`RecallContext | None`, *optional*, defaults to `None`): The
+                AGENT call being prepared. The document does not depend on it.
+
+        Returns:
+            `str`: The full pinned document, never truncated, or ``""``.
+        """
+        session = self._session
+        session._ensure_open("recall")
+        if context is not None and type(context) is not RecallContext:
+            raise _error("recall", "profile.invalid_context", "context must be a RecallContext")
+        return session._text if session._is_outermost(self.spec.ref) else ""

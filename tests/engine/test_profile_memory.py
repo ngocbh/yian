@@ -152,3 +152,43 @@ def test_undecodable_document_is_a_permanent_open_failure(tmp_path) -> None:
     with pytest.raises(MemoryOperationError) as caught:
         memory.open_run()
     assert (caught.value.code, caught.value.retryable) == ("profile.store_invalid", False)
+
+
+def test_outermost_frame_recalls_full_document_and_inner_frames_recall_nothing(tmp_path) -> None:
+    memory = _memory(tmp_path, "# Ada\n" + "x" * 40_000, max_chars=100)
+    with memory.open_run() as session:
+        root, child = session.open_frame(_spec(ROOT)), session.open_frame(_spec(CHILD))
+        assert root.recall(RECALL) == memory.read()[0]
+        assert root.recall() == memory.read()[0]
+        assert child.recall(RECALL) == ""
+        assert session.open_frame(_spec(ROOT)) is root
+
+
+def test_recall_stays_pinned_after_a_later_write(tmp_path) -> None:
+    memory = _memory(tmp_path)
+    with memory.open_run() as session:
+        root = session.open_frame(_spec(ROOT))
+        memory.write("# Ada\nChanged.\n", base_version=memory.read()[1])
+        assert root.recall(RECALL) == "# Ada\n"
+
+
+def test_unrelated_top_frames_and_frame_config_are_rejected(tmp_path) -> None:
+    memory = _memory(tmp_path)
+    with memory.open_run() as session:
+        session.open_frame(_spec(CHILD))
+        with pytest.raises(MemoryOperationError) as caught:
+            session.open_frame(_spec(OTHER))
+        assert caught.value.code == "profile.multiple_roots"
+    with memory.open_run() as session:
+        with pytest.raises(MemoryOperationError) as caught:
+            session.open_frame(_spec(ROOT, {"budget": 1}))
+        assert caught.value.code == "profile.invalid_config"
+
+
+def test_restore_recalls_the_recorded_version_after_later_edits(tmp_path) -> None:
+    memory = _memory(tmp_path)
+    with memory.open_run() as session:
+        recorded = session.snapshot
+    memory.write("# Ada\nLater.\n", base_version=memory.read()[1])
+    with memory.open_run(snapshot=recorded) as restored:
+        assert restored.open_frame(_spec(ROOT)).recall(RECALL) == "# Ada\n"

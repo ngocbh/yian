@@ -664,6 +664,80 @@ def _observe_failure(turn, ordinal, operation, primary):
     _observe_preserving_error(turn, ordinal, status, primary, failure=failure)
 
 
+SKIPPED_TOOL_RESULT = "Not run: interrupted by the user."
+
+
+def _tool_payload(name, arguments, model_exchange_id, call_index, tool_call_id):
+    """Build the request payload shared by run and skipped tool effects."""
+    return {
+        "name": name,
+        "arguments": arguments,
+        "model_exchange_id": model_exchange_id,
+        "call_index": call_index,
+        "tool_call_id": tool_call_id,
+    }
+
+
+def record_skipped_tool(
+    turn: ConversationTurn | None,
+    *,
+    name: str,
+    arguments: JsonObject,
+    model_exchange_id: str,
+    call_index: int,
+    tool_call_id: str,
+) -> ToolMessage:
+    """Record a requested tool call that an interrupt skipped, paired with an error result.
+
+    The error result keeps the retained conversation valid: every recorded call
+    still has exactly one result.
+
+    Args:
+        turn (`ConversationTurn | None`): Optional transcript to update.
+        name (`str`): Requested tool name.
+        arguments (`JsonObject`): Requested tool arguments.
+        model_exchange_id (`str`): Model exchange that requested this call.
+        call_index (`int`): Zero-based call position within that model reply.
+        tool_call_id (`str`): Provider correlation ID.
+
+    Returns:
+        `ToolMessage`: The error result standing in for the skipped call.
+
+    Raises:
+        `_CapabilityFault`: Encoding or memory access fails.
+    """
+    message = ToolMessage(
+        content=SKIPPED_TOOL_RESULT, tool_call_id=tool_call_id, status="error"
+    )
+    if turn is None:
+        return message
+    with _memory_boundary():
+        ordinal = turn.request(
+            "tool",
+            _tool_payload(name, arguments, model_exchange_id, call_index, tool_call_id),
+        )
+        turn.observe(
+            ordinal, "interrupted", items=(encode_message(message, model_exchange_id),)
+        )
+    return message
+
+
+def interrupt_turn(turn: ConversationTurn | None) -> None:
+    """Ask a turn that supports it to close as interrupted when the body returns.
+
+    `interrupt()` is an optional turn capability; a turn without it closes as usual.
+
+    Raises:
+        `_CapabilityFault`: The turn's interrupt call fails.
+    """
+    if turn is None:
+        return
+    with _memory_boundary():
+        interrupt = getattr(turn, "interrupt", None)
+        if interrupt is not None:
+            interrupt()
+
+
 def invoke_tool_effect(
     turn: ConversationTurn | None,
     invoke: Callable[[], Any],
@@ -703,13 +777,7 @@ def invoke_tool_effect(
     with _memory_boundary():
         ordinal = turn.request(
             "tool",
-            {
-                "name": name,
-                "arguments": arguments,
-                "model_exchange_id": model_exchange_id,
-                "call_index": call_index,
-                "tool_call_id": tool_call_id,
-            },
+            _tool_payload(name, arguments, model_exchange_id, call_index, tool_call_id),
         )
     try:
         result = invoke()

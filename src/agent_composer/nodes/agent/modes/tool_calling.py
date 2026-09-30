@@ -23,8 +23,10 @@ from agent_composer.nodes.agent.memory import (
     current_history_messages,
     system_prompt_with_memory,
     prepare_history,
+    interrupt_turn,
     invoke_model,
     invoke_tool_effect,
+    record_skipped_tool,
 )
 from agent_composer.nodes.agent.live import (
     invoke_chat,
@@ -104,9 +106,12 @@ def tool_calling(ctx: AgentRunContext) -> Output:
     ctx.check_stopped()
     chat = model.bind_tools(bound) if bound else model
     iterations = 0
+    reply = None
 
     while ctx.max_tool_iterations < 0 or iterations < ctx.max_tool_iterations:
         ctx.check_stopped()
+        if ctx.interrupted():
+            return _interrupted(ctx, reply)
         # Steers join only here, never between a reply's tool results, and ride in
         # new_messages so the next model request records them.
         steers = [HumanMessage(content=steer) for steer in ctx.drain_steers()]
@@ -153,6 +158,17 @@ def tool_calling(ctx: AgentRunContext) -> Output:
 
         for call_index, call in enumerate(calls):
             ctx.check_stopped()
+            if ctx.interrupted():
+                for skipped_index, skipped in enumerate(calls[call_index:], call_index):
+                    record_skipped_tool(
+                        ctx.memory_context.transcript,
+                        name=str(skipped.get("name") or ""),
+                        arguments=skipped.get("args") or {},
+                        model_exchange_id=exchange_id,
+                        call_index=skipped_index,
+                        tool_call_id=skipped.get("id") or "",
+                    )
+                return _interrupted(ctx, reply)
             raw_name = call.get("name") or ""
             name = str(raw_name) if isinstance(raw_name, str) else raw_name
             raw_arguments = call.get("args")
@@ -197,3 +213,9 @@ def tool_calling(ctx: AgentRunContext) -> Output:
         f"agent node {ctx.node_id!r} hit the tool-iteration cap "
         f"({ctx.max_tool_iterations}) without a final answer"
     )
+
+
+def _interrupted(ctx: AgentRunContext, reply: BaseMessage | None) -> Output:
+    """End an interrupted loop successfully with the latest reply's visible text."""
+    interrupt_turn(ctx.memory_context.transcript)
+    return Output(value="" if reply is None else text_of(reply))

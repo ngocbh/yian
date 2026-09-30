@@ -195,3 +195,122 @@ def test_malformed_inbox_answers_escape_as_host_type_errors(monkeypatch, method,
     node = AgentNode("chat", prompt="hi", llm_config=dict(CONFIG), mode="tool_calling", steerable=True)
     with pytest.raises(TypeError, match=message):
         eval_node(node, None, VariablePool(), steering=inbox)
+
+
+# --- interrupts at loop safe points ------------------------------------------ #
+
+
+def _two_calls():
+    return reply("Checking both.", calls=[
+        ("lookup", {"topic": "a"}, "call-1"), ("lookup", {"topic": "b"}, "call-2"),
+    ])
+
+
+def _history_pairs(messages):
+    """Return (tool_call_id, result status) for every requested call in a model request."""
+    results = {m.tool_call_id: m for m in messages if isinstance(m, ToolMessage)}
+    return [
+        (call["id"], results[call["id"]].status if call["id"] in results else None)
+        for m in messages for call in getattr(m, "tool_calls", None) or []
+    ]
+
+
+def test_interrupt_before_the_first_model_call_returns_empty_text(monkeypatch):
+    model = _recorder(monkeypatch, [])
+    inbox = Inbox({"chat": ["never read"]}, interrupt={"chat"})
+    result = run_flow(load_flow(_flow()), {}, steering=inbox)
+    assert result.output == "" and model.calls == []
+    assert inbox.queued == {"chat": ["never read"]}
+
+
+def test_interrupt_after_a_reply_keeps_it_and_records_skipped_calls(monkeypatch):
+    inbox = Inbox()
+    ran = []
+
+    def lookup(topic: str) -> str:
+        """Look up a topic."""
+        ran.append(topic)
+        return "found"
+
+    def interrupt_on_reply(messages):
+        inbox.interrupt.add("chat")
+        return _two_calls()
+
+    model = _recorder(monkeypatch, [interrupt_on_reply, reply("next run")])
+    memory = SessionMemory()
+    flow = load_flow(_flow(tools=["lookup"], memory=True))
+    result = run_flow(flow, {}, steering=inbox, tools={"lookup": lookup}, memory={"session": memory})
+    assert result.output == "Checking both." and ran == []
+    view = _view(memory)
+    assert [(e.kind, e.status) for e in view.effects] == [
+        ("model", "completed"), ("tool", "interrupted"), ("tool", "interrupted"),
+    ]
+    assert view.closed_invocations[-1].status == "interrupted"
+    # Every recorded call is paired with an error result, so the history stays valid.
+    inbox.interrupt.clear()
+    run_flow(flow, {}, steering=inbox, tools={"lookup": lookup}, memory={"session": memory})
+    assert _history_pairs(model.calls[-1]) == [("call-1", "error"), ("call-2", "error")]
+
+
+def test_interrupt_before_a_tool_call_skips_only_the_remaining_calls(monkeypatch):
+    inbox = Inbox()
+    ran = []
+
+    def lookup(topic: str) -> str:
+        """Look up a topic."""
+        ran.append(topic)
+        inbox.interrupt.add("chat")
+        return "found"
+
+    model = _recorder(monkeypatch, [_two_calls()])
+    memory = SessionMemory()
+    flow = load_flow(_flow(tools=["lookup"], memory=True))
+    result = run_flow(flow, {}, steering=inbox, tools={"lookup": lookup}, memory={"session": memory})
+    assert result.output == "Checking both." and ran == ["a"] and len(model.calls) == 1
+    view = _view(memory)
+    assert [(e.kind, e.status) for e in view.effects] == [
+        ("model", "completed"), ("tool", "completed"), ("tool", "interrupted"),
+    ]
+    assert view.closed_invocations[-1].status == "interrupted"
+
+
+def test_interrupt_at_the_top_of_a_later_iteration_returns_the_latest_reply(monkeypatch):
+    inbox = Inbox()
+
+    def lookup(topic: str) -> str:
+        """Look up a topic."""
+        inbox.queued["chat"] = ["too late"]
+        inbox.interrupt.add("chat")
+        return "found"
+
+    # The interrupt lands after the only call, so the next top-of-loop check ends it.
+    model = _recorder(monkeypatch, [reply("Looking.", calls=[("lookup", {"topic": "a"}, "call-1")])])
+    result = run_flow(load_flow(_flow(tools=["lookup"])), {}, steering=inbox, tools={"lookup": lookup})
+    assert result.output == "Looking." and len(model.calls) == 1
+    assert inbox.queued == {"chat": ["too late"]}
+
+
+def test_interrupted_node_succeeds_and_the_flow_continues(monkeypatch):
+    after = """\
+  after:
+    kind: agent
+    input: {draft: "${chat.output}"}
+    prompt: "summarize: ${draft}"
+    output: str
+"""
+    inbox = Inbox(interrupt={"chat"})
+    model = _recorder(monkeypatch, [reply("summary")])
+    result = run_flow(load_flow(_flow(after=after)), {}, steering=inbox)
+    assert result.output == "summary"
+    assert model.calls[0][-1] == HumanMessage("summarize: ")
+    # The downstream agent is not steerable, so the inbox only ever saw `chat`.
+    assert {node_id for _, node_id in inbox.calls} == {"chat"}
+
+
+def test_malformed_interrupted_answer_escapes_as_a_host_type_error(monkeypatch):
+    inbox = Inbox()
+    inbox.interrupted = lambda node_id: "yes"
+    _chat(monkeypatch, [reply("done")])
+    node = AgentNode("chat", prompt="hi", llm_config=dict(CONFIG), mode="tool_calling", steerable=True)
+    with pytest.raises(TypeError, match="interrupted must return a bool"):
+        eval_node(node, None, VariablePool(), steering=inbox)

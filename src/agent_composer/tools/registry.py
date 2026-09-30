@@ -10,7 +10,7 @@ application registers its own (e.g. ``@register_tool("add")``). Tool ids must be
 unique across everything registered into the process. Model calls are validated
 against their public schema; host-owned interactions may use the trusted schema
 for injected metadata. ``ToolSet`` holds one run's tools: this registry, or a
-host mapping that replaces it. The reserved ``ask_user`` id never lives here: each
+host mapping that replaces it and may hold named tool groups. The reserved ``ask_user`` id never lives here: each
 run gets its handler through ``ToolSet({"ask_user": handler, ...})``.
 """
 
@@ -183,6 +183,23 @@ def _ask_user_tool(handler: Callable[..., Any]) -> BaseTool:
     )
 
 
+def _group_tool(group: str, index: int, item: Any) -> BaseTool:
+    """Return one group item as a tool named by its `name` or `__name__`."""
+    where = f"tools[{group!r}][{index}]"
+    if isinstance(item, BaseTool):
+        return item
+    if inspect.isroutine(item):
+        if item.__name__ == "<lambda>":
+            raise TypeError(
+                f"{where} is a lambda, so it has no tool name; define it with def "
+                "or wrap it in a BaseTool"
+            )
+        return _tool_from_function(item.__name__, item)
+    raise TypeError(
+        f"{where} must be a BaseTool, a function, or a method, got {type(item).__name__}"
+    )
+
+
 def _check_ask_user_handler(handler: Callable[..., Any]) -> None:
     """Reject an `ask_user` handler that cannot take the six keyword fields."""
     try:
@@ -212,25 +229,36 @@ class ToolSet:
     empty one, the run sees only that mapping's entries; there is no fallback to
     the registry. Two runs with different `ToolSet`s never see each other's entries.
 
+    An entry whose value is a list or tuple is a tool group. An AGENT node grants a
+    group by its key, and `expand` replaces that key with the group's tool names.
+    Every tool name in the run is unique: a group tool may not share its name with
+    another group's tool, a top-level key, or `ask_user`.
+
     Args:
-        tools (`Mapping[str, BaseTool | Callable[..., Any]] | None`, *optional*, defaults to `None`):
+        tools (`Mapping[str, BaseTool | Callable[..., Any] | list | tuple] | None`, *optional*, defaults to `None`):
             The run's tools keyed by tool id. A function or method becomes a tool
             named by its key and described by its docstring. To bind values such
             as a session, use a closure or a bound method, not `functools.partial`.
-            A `BaseTool` must already use its key as its name. The `ask_user`
-            entry must be a plain callable; it is wrapped so the model sees
-            `question` and `options`, and it receives `question`, `questions`,
-            `answer_schema`, `title`, `node_id`, and `options` as keywords (define
-            it as `def handler(**request)`). `None` means the global registry. To keep
-            the registered tools and add more, pass `{**registered_tools(), ...}`.
+            A `BaseTool` must already use its key as its name. A list or tuple is a
+            group keyed by its group name; each item is a `BaseTool` named by its
+            `name`, or a function or method named by its `__name__` (not a
+            lambda). The `ask_user` entry must be a plain callable; it is wrapped
+            so the model sees `question` and `options`, and it receives
+            `question`, `questions`, `answer_schema`, `title`, `node_id`, and
+            `options` as keywords (define it as `def handler(**request)`). `None`
+            means the global registry. To keep the registered tools and add more,
+            pass `{**registered_tools(), ...}`.
 
     Raises:
         `TypeError`:
             `tools` is not a mapping or `None`, a key is not a non-empty string,
-            an entry is not a `BaseTool`, function, or method, or the `ask_user`
-            handler cannot take its six keyword fields.
+            an entry is not a `BaseTool`, function, method, or group of them, a
+            group item is a lambda, or the `ask_user` handler cannot take its six
+            keyword fields.
         `ValueError`:
-            A `BaseTool` entry's name differs from its key.
+            A `BaseTool` entry's name differs from its key, or a group tool's name
+            is `ask_user`, repeats within its group, is in another group, or is a
+            top-level key.
 
     Example:
         ```python
@@ -240,20 +268,30 @@ class ToolSet:
 
         tools = ToolSet({"weather": lookup})
         tools.invoke("weather", {"city": "Paris"})
+
+        def forecast(city: str) -> str:
+            "Return tomorrow's weather for one city."
+            return "rain"
+
+        grouped = ToolSet({"toolbox": [lookup, forecast]})
+        grouped.expand(["toolbox"])  # ["lookup", "forecast"]
         ```
     """
 
-    __slots__ = ("_tools",)
+    __slots__ = ("_tools", "_groups")
 
     def __init__(
-        self, tools: Mapping[str, BaseTool | Callable[..., Any]] | None = None
+        self,
+        tools: Mapping[str, BaseTool | Callable[..., Any] | list | tuple] | None = None,
     ) -> None:
         self._tools: MappingProxyType[str, BaseTool] | None = None
+        self._groups: MappingProxyType[str, tuple[str, ...]] = MappingProxyType({})
         if tools is None:
             return
         if not isinstance(tools, Mapping):
             raise TypeError("tools must be a mapping of tool id to tool, or None")
         built: dict[str, BaseTool] = {}
+        group_items: dict[str, list[BaseTool]] = {}
         for tool_id, entry in tools.items():
             if type(tool_id) is not str or not tool_id:
                 raise TypeError("tool ids in tools must be non-empty strings")
@@ -274,13 +312,42 @@ class ToolSet:
                 built[tool_id] = entry
             elif inspect.isroutine(entry):
                 built[tool_id] = _tool_from_function(tool_id, entry)
+            elif isinstance(entry, (list, tuple)):
+                group_items[tool_id] = [
+                    _group_tool(tool_id, index, item) for index, item in enumerate(entry)
+                ]
             else:
                 raise TypeError(
-                    f"tools[{tool_id!r}] must be a BaseTool, a function, or a method, "
-                    f"got {type(entry).__name__}; bind values in a def or lambda, "
-                    "not functools.partial"
+                    f"tools[{tool_id!r}] must be a BaseTool, a function, a method, or a "
+                    f"list of them, got {type(entry).__name__}; bind values in a def or "
+                    "lambda, not functools.partial"
                 )
+        groups: dict[str, tuple[str, ...]] = {}
+        owners: dict[str, str] = {}
+        for group, items in group_items.items():
+            for tool in items:
+                name = tool.name
+                if name == _ASK_USER_ID:
+                    raise ValueError(
+                        f"group {group!r} has a tool named 'ask_user'; pass the handler "
+                        "as the top-level tools['ask_user'] entry"
+                    )
+                if name in owners:
+                    where = (
+                        f"appears twice in group {group!r}"
+                        if owners[name] == group
+                        else f"is in both groups {owners[name]!r} and {group!r}"
+                    )
+                    raise ValueError(f"tool {name!r} {where}")
+                if name in tools:
+                    raise ValueError(
+                        f"tool {name!r} in group {group!r} clashes with tools[{name!r}]"
+                    )
+                owners[name] = group
+                built[name] = tool
+            groups[group] = tuple(tool.name for tool in items)
         self._tools = MappingProxyType(built)
+        self._groups = MappingProxyType(groups)
 
     def _get(self, tool_id: str) -> BaseTool:
         """Return this run's entry, or the global entry when the run has no mapping.
@@ -292,6 +359,11 @@ class ToolSet:
             raise ValueError(
                 "no ask_user handler for this run; pass "
                 "tools={**registered_tools(), 'ask_user': handler} to run_flow or resume_flow"
+            )
+        if tool_id in self._groups:
+            raise ValueError(
+                f"{tool_id!r} is a tool group, not a tool; grant it in an AGENT "
+                "node's tools: list"
             )
         if self._tools is not None:
             tool = self._tools.get(tool_id)
@@ -307,6 +379,22 @@ class ToolSet:
                     f"unknown tool id {tool_id!r}; known tools: {sorted(TOOL_REGISTRY)}"
                 )
             return tool
+
+    def expand(self, tool_ids: list[str]) -> list[str]:
+        """Replace each group id with the names of the tools in that group.
+
+        Args:
+            tool_ids (`list[str]`):
+                Granted ids, in order. An id that is not a group is kept as is.
+
+        Returns:
+            `list[str]`:
+                The ids with every group replaced by its tool names, in group order.
+        """
+        expanded: list[str] = []
+        for tool_id in tool_ids:
+            expanded.extend(self._groups.get(tool_id, (tool_id,)))
+        return expanded
 
     def resolve(self, tool_ids: list[str]) -> list[BaseTool]:
         """Look up tools by id.

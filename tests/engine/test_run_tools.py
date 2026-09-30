@@ -120,13 +120,67 @@ def test_bound_method_entry_becomes_a_tool():
         ([("shout", _upper)], "must be a mapping"),
         ({1: _upper}, "non-empty strings"),
         ({"": _upper}, "non-empty strings"),
-        ({"group": [_upper]}, "got list"),
+        ({"group": {"shout": _upper}}, r"tools\['group'\].*got dict"),
+        ({"group": [lambda text: text]}, r"tools\['group'\]\[0\].*lambda"),
+        ({"group": ["shout"]}, r"tools\['group'\]\[0\].*got str"),
         ({"shout": functools.partial(_upper, text="hi")}, r"tools\['shout'\].*got partial"),
         ({"shout": _Shouter()}, r"tools\['shout'\].*got _Shouter"),
     ],
 )
 def test_invalid_tools_are_rejected(tools: Any, error: str):
     with pytest.raises(TypeError, match=error):
+        ToolSet(tools)
+
+
+def _lower(text: str) -> str:
+    """Return the text in lower case."""
+    return text.lower()
+
+
+def _named(name: str) -> StructuredTool:
+    """Build one BaseTool that echoes its text under `name`."""
+    return StructuredTool.from_function(lambda text: f"{name}:{text}", name=name, description=name)
+
+
+def test_group_entry_holds_tools_named_by_function_or_tool_name():
+    tools = ToolSet({"toolbox": [_upper, _named("echo")], "shout": _upper})
+
+    assert tools.expand(["toolbox"]) == ["_upper", "echo"]
+    assert [tool.name for tool in tools.resolve(["_upper", "echo"])] == ["_upper", "echo"]
+    assert tools.invoke("echo", {"text": "a"}) == "echo:a"
+    assert tools.invoke("_upper", {"text": "a"}) == "A"
+
+
+def test_expand_replaces_each_group_with_its_tools_in_order():
+    tools = ToolSet(
+        {"search": _upper, "toolbox": [_named("a"), _named("b")], "empty": [], "work": (_lower,)}
+    )
+
+    assert tools.expand(["search", "toolbox", "empty", "work"]) == ["search", "a", "b", "_lower"]
+    assert ToolSet().expand(["search"]) == ["search"]
+
+
+def test_a_group_is_not_itself_a_tool():
+    tools = ToolSet({"toolbox": [_named("a")]})
+
+    with pytest.raises(ValueError, match="'toolbox' is a tool group"):
+        tools.resolve(["toolbox"])
+    with pytest.raises(ValueError, match="'toolbox' is a tool group"):
+        tools.invoke("toolbox", {})
+
+
+@pytest.mark.parametrize(
+    ("tools", "error"),
+    [
+        ({"one": [_named("x")], "two": [_named("x")]}, "'x' is in both groups 'one' and 'two'"),
+        ({"one": [_named("x"), _named("x")]}, "'x' appears twice in group 'one'"),
+        ({"x": _upper, "one": [_named("x")]}, "'x' in group 'one' clashes with tools\['x'\]"),
+        ({"x": [], "one": [_named("x")]}, "'x' in group 'one' clashes with tools\['x'\]"),
+        ({"one": [_named("ask_user")]}, "group 'one' has a tool named 'ask_user'"),
+    ],
+)
+def test_group_tool_names_must_be_unique_in_the_run(tools: dict[str, Any], error: str):
+    with pytest.raises(ValueError, match=error):
         ToolSet(tools)
 
 

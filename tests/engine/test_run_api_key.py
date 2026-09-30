@@ -10,7 +10,9 @@ from agent_composer.compose import load_flow
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.events import NodeStarted
 from agent_composer.llm_clients.openai_client import OpenAIClient
+from agent_composer.memory.profile import ProfileMemory
 from agent_composer.memory.reflective import ReflectiveMemory
+from agent_composer.memory.storage import FileMarkdownStore
 from agent_composer.run import resume_flow, run_flow
 from tests.fixtures.openai_responses import ResponsesServer
 
@@ -313,3 +315,32 @@ def test_reflective_memory_refuses_a_key_it_would_record():
         ReflectiveMemory({"provider": "vllm", "model": "m", "api_key": SENTINEL})
     assert SENTINEL not in str(caught.value)
 
+
+def test_profile_memory_learns_with_its_key_and_records_none_of_it(tmp_path, monkeypatch):
+    flow = load_flow(_FLOW.replace("nodes:", "long_term_memory: profile\nnodes:"))
+    (tmp_path / "profile").mkdir()
+    store = FileMarkdownStore(tmp_path / "profile" / "ada.md")
+    store.write("# Ada\n", base_version=store.read()[1])
+    memory = ProfileMemory(
+        store, llm_config={"provider": "vllm", "model": "profiler", "api_key": SENTINEL}
+    )
+    requests, events = [], []
+    path = tmp_path / "run.jsonl"
+    replies = ("ok", _NO_FEEDBACK, "<profile>\n# Ada\n- Prefers brief replies.\n</profile>")
+    monkeypatch.setenv("VLLM_API_KEY", "sk-environment-key")
+    with httpx.Client(transport=_chat_completions(requests, *replies)) as transport:
+        _route_openai_client(monkeypatch, transport)
+        result = run_flow(
+            flow, {}, log=path, on_event=events.append, learnable=True,
+            memory={"profile": memory},
+            llm_config={"provider": "vllm", "model": "served-model"},
+        )
+        outcome = result.backward("Be brief.")
+    assert outcome.status == "succeeded", outcome.failure
+    learner = [r for r in requests if json.loads(r.content)["model"] == "profiler"]
+    assert [r.headers["Authorization"] for r in learner] == [f"Bearer {SENTINEL}"]
+    assert memory.read()[0] == "# Ada\n- Prefers brief replies.\n"
+    _assert_hidden(path, events, result, outcome)
+    for written in (tmp_path / "profile").rglob("*"):
+        if written.is_file():
+            assert SENTINEL not in written.read_text(errors="replace")

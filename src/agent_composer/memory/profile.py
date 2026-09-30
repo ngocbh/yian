@@ -137,7 +137,8 @@ class ProfileMemory:
                 `FileMarkdownStore`.
             llm_config (`JsonObject | None`, *optional*, defaults to `None`):
                 Learner model config. `None` uses the ambient defaults when a
-                backward attempt learns.
+                backward attempt learns. An ``api_key`` entry authenticates the
+                learner and is never recorded.
             max_chars (`int`, *optional*, defaults to `32_000`): Largest document
                 the learner may write (about 8k tokens). Host writes are not bounded.
             input_budget_chars (`int`, *optional*, defaults to `24_000`): Character

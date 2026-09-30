@@ -230,7 +230,10 @@ class OpenAIClient(BaseLLMClient):
         if self.provider in _PROVIDER_BASE_URL:
             llm_kwargs["base_url"] = self.base_url or _resolve_provider_base_url(self.provider)
             api_key_env = get_api_key_env(self.provider)
-            if api_key_env:
+            if "api_key" in self.kwargs:
+                # Forwarded below: a caller-supplied key wins over the env var.
+                pass
+            elif api_key_env:
                 api_key = os.environ.get(api_key_env)
                 if api_key:
                     llm_kwargs["api_key"] = api_key

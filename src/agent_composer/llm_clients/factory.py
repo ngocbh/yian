@@ -133,6 +133,9 @@ def model_from_config(config) -> BaseChatModel:
     snapshot. Recorded connections use their pinned method and identity, resolving
     fresh credentials per request without changing accounts after a reconnect.
 
+    A config `api_key` authenticates the request in place of the provider's key
+    environment variable and any saved OpenAI connection.
+
     Provider-specific reasoning knobs apply only to the selected provider. The
     returned model supports ordinary tool binding, structured output, and invocation.
 
@@ -153,7 +156,11 @@ def model_from_config(config) -> BaseChatModel:
     resolved = resolve_model_config(config)
     config, connection = split_model_config(resolved)
     provider, model = config.provider, config.model
-    if connection is not None and connection["method"] == "subscription":
+    if (
+        config.api_key is None
+        and connection is not None
+        and connection["method"] == "subscription"
+    ):
         if config.temperature is not None:
             raise ValueError("OpenAI subscription connections do not accept temperature; remove that setting")
         try:
@@ -184,7 +191,12 @@ def model_from_config(config) -> BaseChatModel:
     # so lean on the provider SDK's exponential backoff (notably on HTTP 429).
     kwargs.setdefault("max_retries", 6)
 
-    if connection is not None:
+    if config.api_key is not None:
+        # A host-supplied key wins over the environment and any saved connection.
+        kwargs["api_key"] = config.api_key
+        if connection is not None and connection["method"] == "api_key":
+            kwargs["base_url"] = connection["endpoint"]
+    elif connection is not None:
         # The SDK calls this per request, so re-login cannot redirect an existing
         # model instance to a different account between tool iterations.
         kwargs["api_key"] = lambda: connection_credentials(connection).api_key

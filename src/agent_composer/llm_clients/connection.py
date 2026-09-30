@@ -31,15 +31,39 @@ class ConnectionSnapshot:
     defaults: dict[str, Any]
     provider_models: dict[str, str]
     connections: dict[str, dict[str, Any]]
+    api_endpoint: str = _API_ENDPOINT
 
-    def bind(self, effective: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
-        """Attach selected connection identity without changing any input maps."""
+    def bind(
+        self,
+        effective: dict[str, dict[str, Any]],
+        *,
+        host_key_provider: str | None = None,
+    ) -> dict[str, dict[str, Any]]:
+        """Attach selected connection identity without changing any input maps.
+
+        Agents of ``host_key_provider`` authenticate with a key the host supplies
+        outside the map, so an OpenAI agent records a ``host`` connection instead
+        of the saved or environment one.
+        """
         result = copy.deepcopy(effective)
         for config in result.values():
+            if config["provider"] == "openai" and host_key_provider == "openai":
+                config["_connection"] = self.host_connection()
+                continue
             connection = self.connections.get(config["provider"])
             if connection is not None:
                 config["_connection"] = copy.deepcopy(connection)
         return result
+
+    def host_connection(self) -> dict[str, Any]:
+        """Return the nonsecret identity of an OpenAI key supplied by the host."""
+        return validate_connection({
+            "method": "api_key",
+            "source": "host",
+            "credential_id": None,
+            "endpoint": self.api_endpoint,
+            "store_path": None,
+        })
 
 
 def _key_identity(key: str) -> str:
@@ -89,7 +113,12 @@ def connection_snapshot() -> ConnectionSnapshot:
     connections = {
         provider: validate_connection(value) for provider, value in connections.items()
     }
-    return ConnectionSnapshot(defaults, models, connections)
+    return ConnectionSnapshot(
+        defaults,
+        models,
+        connections,
+        environment.get("OPENAI_BASE_URL") or _API_ENDPOINT,
+    )
 
 
 def validate_connection(value: Any) -> dict[str, Any]:
@@ -102,6 +131,7 @@ def validate_connection(value: Any) -> dict[str, Any]:
         "environment",
         "missing",
         "legacy_environment",
+        "host",
     ):
         raise ValueError("Invalid internal connection method or source")
     if type(value["endpoint"]) is not str:
@@ -186,6 +216,8 @@ def resolve_model_config(
     raw.update(provider=provider, model=model)
     if metadata is not None:
         raw["_connection"] = metadata
+    elif provider == "openai" and validated.api_key is not None:
+        raw["_connection"] = snapshot.host_connection()
     elif provider in snapshot.connections:
         raw["_connection"] = copy.deepcopy(snapshot.connections[provider])
     return raw
@@ -240,6 +272,11 @@ def connection_credentials(
                 "The saved connection method changed; run 'composer auth openai' and start a new run"
             )
         return credentials
+    if source == "host":
+        raise AuthError(
+            "This run's OpenAI API key came from the host's llm_config.api_key and is not "
+            "recorded; start a new run with the key"
+        )
     if source == "missing":
         raise AuthError(
             "No OpenAI connection was selected; run 'composer auth openai' or set OPENAI_API_KEY before starting a new run"

@@ -1,10 +1,22 @@
 """`LLMConfig.api_key`: a host-supplied provider key that no dump, repr, or error shows."""
 
+import json
+
+import httpx
 import pytest
+from langchain_core.messages import HumanMessage
 from pydantic import SecretStr, ValidationError
 
+from agent_composer.llm_clients.auth import AuthError, AuthStore, OAuthCredentials
 from agent_composer.llm_clients.config import LLMConfig
-from agent_composer.llm_clients.connection import resolve_model_config, split_model_config
+from agent_composer.llm_clients.connection import (
+    connection_credentials,
+    resolve_model_config,
+    split_model_config,
+    validate_connection,
+)
+from agent_composer.llm_clients.factory import model_from_config
+from tests.fixtures.openai_responses import ResponsesServer
 
 SENTINEL = "sk-sentinel-3f9c1a7e"
 
@@ -56,3 +68,115 @@ def test_split_and_resolve_keep_the_key_as_a_secret():
     assert isinstance(resolved["api_key"], SecretStr)
     assert resolved["api_key"].get_secret_value() == SENTINEL
     assert SENTINEL not in repr(resolved)
+
+
+# --- clients prefer the config key ------------------------------------------ #
+
+_ENV_KEYS = (
+    "OPENAI_API_KEY", "OPENAI_BASE_URL", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY",
+    "AZURE_OPENAI_API_KEY", "VLLM_API_KEY", "VLLM_BASE_URL", "DEEPSEEK_API_KEY",
+    "OPENROUTER_API_KEY", "AGENT_COMPOSER_DEFAULT_PROVIDER", "AGENT_COMPOSER_DEFAULT_MODEL",
+)
+
+
+@pytest.fixture
+def clean_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENT_COMPOSER_AUTH_FILE", str(tmp_path / "auth.json"))
+    for name in _ENV_KEYS:
+        monkeypatch.delenv(name, raising=False)
+    return monkeypatch
+
+
+def _chat_completions(requests):
+    """Answer every chat-completions request with one fixed reply."""
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(200, json={
+            "id": "c", "object": "chat.completion", "created": 0, "model": "m",
+            "choices": [{"index": 0, "finish_reason": "stop",
+                         "message": {"role": "assistant", "content": "ok"}}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        })
+
+    return httpx.MockTransport(handler)
+
+
+def _inject_http_client(monkeypatch, client_cls, http_client):
+    original = client_cls.get_llm
+
+    def construct(wrapper):
+        wrapper.kwargs.update(http_client=http_client, max_retries=0)
+        return original(wrapper)
+
+    monkeypatch.setattr(client_cls, "get_llm", construct)
+
+
+@pytest.mark.parametrize(
+    "provider, model, env, attribute",
+    [
+        ("openai", "gpt-5.5", "OPENAI_API_KEY", "openai_api_key"),
+        ("vllm", "served-model", "VLLM_API_KEY", "openai_api_key"),
+        ("deepseek", "deepseek-chat", "DEEPSEEK_API_KEY", "openai_api_key"),
+        ("openrouter", "some/model", "OPENROUTER_API_KEY", "openai_api_key"),
+        ("anthropic", "claude-sonnet-4-5", "ANTHROPIC_API_KEY", "anthropic_api_key"),
+        ("google", "gemini-2.5-flash", "GOOGLE_API_KEY", "google_api_key"),
+        ("azure", "gpt-4o", "AZURE_OPENAI_API_KEY", "openai_api_key"),
+    ],
+)
+@pytest.mark.parametrize("env_value", [None, "sk-environment-key"])
+def test_every_keyed_client_prefers_the_config_key(clean_env, provider, model, env, attribute, env_value):
+    if provider == "azure":
+        clean_env.setenv("OPENAI_API_VERSION", "2024-02-01")
+        clean_env.setenv("AZURE_OPENAI_ENDPOINT", "https://res.openai.azure.com")
+    if env_value is not None:
+        clean_env.setenv(env, env_value)
+    chat = model_from_config({"provider": provider, "model": model, "api_key": SENTINEL})
+    assert getattr(chat, attribute).get_secret_value() == SENTINEL
+
+
+def test_openai_compatible_endpoint_receives_the_config_key(clean_env):
+    from agent_composer.llm_clients.openai_client import OpenAIClient
+
+    clean_env.setenv("VLLM_BASE_URL", "http://127.0.0.1:9/v1")
+    requests = []
+    with httpx.Client(transport=_chat_completions(requests)) as http_client:
+        _inject_http_client(clean_env, OpenAIClient, http_client)
+        reply = model_from_config(
+            {"provider": "vllm", "model": "served-model", "api_key": SENTINEL}
+        ).invoke([HumanMessage("hi")])
+    assert reply.content == "ok"
+    assert requests[0].headers["Authorization"] == f"Bearer {SENTINEL}"
+
+
+def test_openai_config_key_wins_a_saved_subscription(clean_env):
+    from agent_composer.llm_clients.openai_client import OpenAIClient
+
+    AuthStore().save(
+        "openai",
+        OAuthCredentials("access-secret", "refresh-secret", 4102444800, "account"),
+        "gpt-5.5",
+    )
+    resolved = resolve_model_config({"provider": "openai", "api_key": SENTINEL})
+    assert resolved["_connection"]["source"] == "host"
+    assert resolved["_connection"]["credential_id"] is None
+    assert SENTINEL not in json.dumps(resolved["_connection"])
+    server = ResponsesServer(tool_first=False)
+    with httpx.Client(transport=httpx.MockTransport(server)) as http_client:
+        _inject_http_client(clean_env, OpenAIClient, http_client)
+        model_from_config(resolved).invoke("hi")
+    assert server.requests[0].url.host == "api.openai.com"
+    assert server.requests[0].headers["Authorization"] == f"Bearer {SENTINEL}"
+
+
+def test_host_connection_needs_the_config_key(clean_env):
+    connection = validate_connection({
+        "method": "api_key", "source": "host", "credential_id": None,
+        "endpoint": "https://api.openai.com/v1", "store_path": None,
+    })
+    with pytest.raises(AuthError, match="api_key"):
+        connection_credentials(connection)
+    with pytest.raises(ValueError):
+        validate_connection({**connection, "credential_id": "a" * 64})
+    with pytest.raises(ValueError):
+        validate_connection({**connection, "method": "subscription"})

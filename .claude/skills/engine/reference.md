@@ -229,6 +229,7 @@ Runtime and compile validation read these node members instead of branching on
 | `needs_stop_event: bool` | read boundary (`eval_node`): pass the exact cooperative run-stop event | `False` → `True` on agent/wait |
 | `needs_tools: bool` | read boundary (`eval_node`): pass the run's `ToolSet` as `caps['tools']` | `False` → `True` on tool/human_input/agent |
 | `needs_live_events: bool` | read boundary (`eval_node`): pass `emit_stream`/`emit_event` for the host sinks that exist; faults escape as host faults | `False` → `True` on agent |
+| `needs_steering: bool` | read boundary (`eval_node`): pass the run's `Steering` inbox as `caps['steering']` when the host supplied one; faults and wrong return types escape as host faults | `False` → the AGENT's authored `steerable:` |
 
 The table spans execution-semantic traits/hooks and diagnostic-only projections.
 Any node field whose value can affect execution through an execution-semantic

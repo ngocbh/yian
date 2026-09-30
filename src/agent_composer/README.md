@@ -707,7 +707,7 @@ The runtime core is **kind-blind**. It dispatches on this result sum and consult
 node-owned execution-semantic traits/hooks (`is_spawner`, `binds_per_item`, `item_source_key`,
 `bind_reserved`, `validate_execution_setup`, `grow_depth_delta`, `is_loop`,
 `needs_stop_event`, `needs_tools`, `needs_memory_context`, `needs_skills`,
-`needs_evaluation_trace`, `needs_live_events`, `memory_scope`, and
+`needs_evaluation_trace`, `needs_live_events`, `needs_steering`, `memory_scope`, and
 `skipped_output_target`) plus the diagnostic-only projections
 `exception_origin` and `failure_trace`; it never branches behavior on `NodeKind`.
 A kind label may appear in diagnostic text. The diagnostic projections do not
@@ -879,6 +879,34 @@ serves `load_skill` calls through the same `invoke_tool_effect` path as register
 tools and records each result as evidence. A non-empty grant is AGENT execution
 identity (`sorted(names)` or `"all"`); an empty grant is omitted so older
 fingerprints hold.
+
+## Host steering inbox
+
+`nodes/base.py` defines the runtime-checkable `Steering` protocol:
+`drain(node_id) -> list[str]` and `interrupted(node_id) -> bool`. `run_flow` and
+`resume_flow` accept `steering=`, check it with `require_steering` before opening
+the log, and pass it through `FlowEngine(steering=...)` to `eval_node`. The
+evaluator supplies `caps['steering']` only to nodes whose `needs_steering` trait
+is `True`. `AgentNode` reports its authored `steerable:` flag, so runtime stays
+kind-blind. The capability wrapper turns inbox exceptions and wrong return types
+into `_CapabilityFault`, so they escape as host errors, not node failures.
+
+Only the `tool_calling` mode reads the inbox (`steerable:` is rejected elsewhere,
+and on non-`str` output). At the top of each iteration it checks `interrupted`,
+then drains steers into `messages` and `new_messages` as `HumanMessage`s, so
+`invoke_model` records them with the next model request. It checks `interrupted`
+again before each tool call, and `stream_reply` checks it after each chunk. A
+mid-stream interrupt sends the `final=True` chunk and raises `ReplyInterrupted`
+(defined in `nodes/agent/memory.py` to avoid an import cycle) with the visible text
+so far; `invoke_model` observes that model effect as `interrupted` with the partial
+reply. `record_skipped_tool` records each call not run as an `interrupted` tool
+effect paired with an error `ToolMessage`. The mode then calls the turn's optional
+`interrupt()` (the session `_Turn` closes as `interrupted`) and returns the latest
+reply's visible text as a normal `Output`.
+
+No run-log record kind is added. A finished node replays its recorded output
+without calling the inbox. A node retried after a crash sees earlier steers only
+through session-memory history.
 
 ## Host-injected agent memory
 

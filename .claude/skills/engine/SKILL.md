@@ -359,6 +359,12 @@ Most are just the functional model (above) made enforceable:
   `needs_skills = True`; the AGENT serves `load_skill` like a registered tool
   and records each result as evidence. The memory context still opens with
   `DEFAULT_SYSTEM`.
+  A host steering inbox follows the same path: `run_flow(steering=...)` ->
+  `FlowEngine(steering=...)` -> the evaluator caps only nodes with
+  `needs_steering is True` (an AGENT authored `steerable: true`). The
+  `tool_calling` loop drains steers into `new_messages` at the top of each
+  iteration and checks `interrupted` at safe points; an interrupt ends the node
+  with a normal `Output`, so no run-log record kind changes.
 - **Domain-agnostic** — no domain-specific field names or types in the engine;
   domain lives at the contract/boundary (the loader/builder). The `system`
   namespace is generic.
@@ -371,7 +377,7 @@ Most are just the functional model (above) made enforceable:
   (`is_spawner`, `binds_per_item`, `item_source_key`,
   `bind_reserved`, `reserved_wiring_keys`, `validate_execution_setup`,
   `grow_depth_delta`, `is_loop`, `needs_stop_event`, `needs_tools`,
-  `skipped_output_target`)
+  `needs_steering`, `skipped_output_target`)
   plus the diagnostic-only projections `exception_origin` and `failure_trace`.
   Those projections are identity-neutral. `skipped_output_target()` is pure, deterministic
   topology authority derived only from manifest-backed node state. Its base

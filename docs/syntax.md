@@ -486,6 +486,43 @@ Python hosts pass `run_flow(..., skills=load_skills([...]))` (see
 each listed name must be in it; otherwise the run fails before it starts. Skills need
 `mode: tool_calling`. `load_skill` is a reserved name: never list it in `tools:`.
 
+#### Steering a running agent — `steerable:`
+
+`steerable: true` lets the host steer or interrupt a `tool_calling` AGENT while
+its loop runs, like pressing Esc or typing a follow-up in a coding-agent chat:
+
+```yaml
+worker:
+  kind: agent
+  mode: tool_calling            # required
+  steerable: true               # default false
+  tools: [search]
+  prompt: Research the question and answer it.
+  output: str                   # required: `str` or no `output:`
+```
+
+- **Steer.** At the top of each loop iteration the node reads the messages the
+  host queued for it and sends each one to the model as a user message with the
+  next request. Steers never land between the results of one reply's tool calls.
+  A steer that arrives during the final model call is not read; it stays with the
+  host for the next input.
+- **Interrupt.** The node checks for an interrupt at the top of each iteration,
+  after each streamed chunk, after a reply that asks for tools, and before each
+  tool call. It then stops and **succeeds** with the text so far, so the flow or
+  loop continues. A reply that already arrived is kept. A streamed reply is cut
+  at the last chunk shown. Tool calls it did not run get an error result
+  ("Not run: interrupted by the user."). Without streaming, an interrupt during a
+  model call takes effect when that call returns. An interrupt for a node that
+  has already finished is ignored.
+- Session memory records steers with the model request that carried them, and
+  closes an interrupted turn as `interrupted`.
+
+`steerable: true` is a load error on a `plain` AGENT or one with a non-`str`
+output, because a structured value cannot be partial. A model question from
+`ask_user` is still answered through `ask_user`, not by a steer. Python hosts pass
+the inbox as `run_flow(..., steering=inbox)` (see [API](api.md#steering)); a
+node without `steerable: true` never reads it.
+
 ### `code` / `model` / `tool` — the other leaves
 
 These are the non-LLM computational leaves — a Python callable, an ML model, or

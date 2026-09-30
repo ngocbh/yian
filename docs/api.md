@@ -42,10 +42,10 @@ These names are exported from the top-level `agent_composer` package:
 | `FlowValidationError` | raised on a failed validation check |
 | `ExpressionError` | raised on a bad `${...}` expression |
 
-Recovery and the result type live in `agent_composer.run`:
+Recovery, the result type, and the steering protocol live in `agent_composer.run`:
 
 ```python
-from agent_composer.run import RunResult, resume_flow
+from agent_composer.run import RunResult, Steering, resume_flow
 ```
 
 The lower-level `FlowEngine`, `RunState`, `RunLog`, `MemoryRunLog`, and
@@ -108,6 +108,7 @@ run_flow(
     learnable: bool = False,
     tools: Mapping[str, BaseTool | Callable[..., Any] | Sequence[BaseTool | Callable[..., Any]]] | None = None,
     skills: Mapping[str, Skill] | None = None,
+    steering: Steering | None = None,
 ) -> RunResult
 ```
 
@@ -359,6 +360,62 @@ skills: pass the same mapping to `resume_flow`, as with `memory=`.
 
 Each `load_skill` result is capped at 256 KiB. There is no cumulative cap: every
 result stays in the loop's message history, the evidence, and any logs.
+
+## Steering
+
+An AGENT authored `steerable: true` (see
+[Steering a running agent](syntax.md#steering-a-running-agent-steerable)) reads a
+host inbox while its tool loop runs. The inbox is any object with two methods:
+
+```python
+import threading
+from agent_composer.run import run_flow
+
+class Inbox:
+    """Steers queued per node id, plus interrupt flags, shared with the UI thread."""
+
+    def __init__(self):
+        self.lock, self.steers, self.stops = threading.Lock(), {}, set()
+
+    def steer(self, node_id: str, text: str) -> None:      # called by the UI
+        with self.lock:
+            self.steers.setdefault(node_id, []).append(text)
+
+    def interrupt(self, node_id: str) -> None:              # called by the UI
+        with self.lock:
+            self.stops.add(node_id)
+
+    def drain(self, node_id: str) -> list[str]:             # called by the engine
+        with self.lock:
+            return self.steers.pop(node_id, [])
+
+    def interrupted(self, node_id: str) -> bool:            # called by the engine
+        with self.lock:
+            return node_id in self.stops
+
+inbox = Inbox()
+result = run_flow(flow, inputs, log="run.jsonl", steering=inbox)
+```
+
+- `drain(node_id)` returns the queued steer messages for that node and removes
+  them. `interrupted(node_id)` says whether to stop that node now.
+- Both are called from the worker thread running the node, so make them
+  thread-safe. `node_id` is the expanded id, which is unique per LOOP iteration
+  and MAP item (`loop#1/worker`); take ids from `NodeStarted` events.
+- Only nodes with `steerable: true` call the inbox. A finished node never calls it
+  again, so an interrupt for it is ignored.
+- An object without both methods raises `TypeError` before any record is
+  written. An exception from the inbox, or a wrong return type (`drain` must
+  return a `list` of `str`, `interrupted` a `bool`), stops the run as a host
+  error, not a node failure.
+- An interrupted node succeeds with its text so far. The run log records its
+  output like any other; it has no separate interrupted flag.
+- Steers ride in the node's conversation. With session memory they are recorded
+  with the model request that carried them, so a node retried after a crash sees
+  them in its history. Without session memory a steer read by a node that did not
+  finish before a crash is lost. Pass the same inbox to
+  `resume_flow(..., steering=inbox)`; finished nodes replay without reading it.
+- `agent_composer.run.Steering` is the matching `typing.Protocol`.
 
 ## Injecting agent memory
 
@@ -944,6 +1001,8 @@ resume_flow(
     on_stream: Callable[[StreamChunk], None] | None = None,
     memory: dict[str, Memory] | None = None,
     tools: Mapping[str, BaseTool | Callable[..., Any] | Sequence[BaseTool | Callable[..., Any]]] | None = None,
+    skills: Mapping[str, Skill] | None = None,
+    steering: Steering | None = None,
 ) -> RunResult
 ```
 

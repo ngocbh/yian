@@ -524,19 +524,24 @@ def run_flow(
     # A tools mapping hides the registry, so keep the registered tools next to the handler.
     tools = None if handler is None else {**registered_tools(), "ask_user": handler}
     parent_stop = _CONTROLLER_STOP.get()
-    if parent_stop is None:
-        # Direct Python use: private lifecycle.
-        result = _run_flow(loaded, inputs or {}, tools=tools)
-    else:
-        # Outer host cancellation flows down; a nested NodeFailed sets only this
-        # child, preserving the failure as a model-visible tool result.
-        with parent_stop.linked_child() as child_stop:
-            result = _run_flow_controlled(
-                loaded,
-                inputs or {},
-                stop_event=child_stop,
-                tools=tools,
-            )
+    try:
+        if parent_stop is None:
+            # Direct Python use: private lifecycle.
+            result = _run_flow(loaded, inputs or {}, tools=tools)
+        else:
+            # Outer host cancellation flows down; a nested NodeFailed sets only this
+            # child, preserving the failure as a model-visible tool result.
+            with parent_stop.linked_child() as child_stop:
+                result = _run_flow_controlled(
+                    loaded,
+                    inputs or {},
+                    stop_event=child_stop,
+                    tools=tools,
+                )
+    except (TypeError, ValueError) as exc:
+        # Bad inputs or an unresolvable tool grant fail at run start, before any
+        # record exists; report them to the model like a failed run.
+        return f"FAILED: {exc}"
     if result.status == "succeeded":
         return f"OUTPUT: {result.output}"
     detail = result.failure.message if result.failure is not None else "(no detail)"

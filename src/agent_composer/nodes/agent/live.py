@@ -30,7 +30,7 @@ from agent_composer.events import (
     ToolCallFinished,
     ToolCallStarted,
 )
-from agent_composer.nodes.agent.memory import ReplyInterrupted
+from agent_composer.nodes.agent.interrupts import ReplyInterrupted
 from agent_composer.nodes.agent.modes.utils import text_of
 from agent_composer.nodes.base import _CapabilityFault, _HostStop
 

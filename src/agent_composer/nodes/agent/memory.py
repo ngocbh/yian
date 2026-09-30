@@ -39,6 +39,7 @@ from agent_composer.memory import (
     MemorySection,
 )
 from agent_composer.memory.summary import admissions
+from agent_composer.nodes.agent.interrupts import ReplyInterrupted
 from agent_composer.nodes.base import _CapabilityFault, _HostStop
 
 MESSAGE_FORMAT = "agent-composer.langchain-message.v1"
@@ -561,18 +562,6 @@ def _pairable_calls(message: AIMessage) -> bool:
         except (KeyError, TypeError, ValueError):
             return False
     return True
-
-
-class ReplyInterrupted(Exception):
-    """A streamed model reply cut off at a chunk boundary by a host interrupt.
-
-    `reply` is an `AIMessage` holding only the visible text streamed so far; a
-    partial tool call is never kept because it cannot run.
-    """
-
-    def __init__(self, reply: BaseMessage) -> None:
-        super().__init__("model reply interrupted by the host")
-        self.reply = reply
 
 
 def invoke_model(

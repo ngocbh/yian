@@ -27,8 +27,8 @@ from agent_composer.nodes.agent.memory import (
     invoke_model,
     invoke_tool_effect,
     record_skipped_tool,
-    ReplyInterrupted,
 )
+from agent_composer.nodes.agent.interrupts import ReplyInterrupted
 from agent_composer.nodes.agent.live import (
     invoke_chat,
     live_sinks,

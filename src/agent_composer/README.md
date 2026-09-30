@@ -897,7 +897,7 @@ then drains steers into `messages` and `new_messages` as `HumanMessage`s, so
 `invoke_model` records them with the next model request. It checks `interrupted`
 again before each tool call, and `stream_reply` checks it after each chunk. A
 mid-stream interrupt sends the `final=True` chunk and raises `ReplyInterrupted`
-(defined in `nodes/agent/memory.py` to avoid an import cycle) with the visible text
+(a leaf in `nodes/agent/interrupts.py`, shared by `live.py` and `memory.py`) with the visible text
 so far; `invoke_model` observes that model effect as `interrupted` with the partial
 reply. `record_skipped_tool` records each call not run as an `interrupted` tool
 effect paired with an error `ToolMessage`. The mode then calls the turn's optional

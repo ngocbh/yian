@@ -11,14 +11,14 @@ import agent_composer.llm_clients as llm_clients_mod
 from langchain_core.messages import HumanMessage, ToolMessage
 
 from agent_composer.compose import load_flow
-from agent_composer.events import ModelCallFinished, StreamChunk
+from agent_composer.events import ModelCallFinished, StreamChunk, TokenUsage
 from agent_composer.memory.session import SessionMemory
 from agent_composer.nodes.agent import MODES, AgentNode
 from agent_composer.nodes.base import Output
 from agent_composer.run import Steering, resume_flow, run_flow
 from agent_composer.runtime.eval_node import eval_node
 from agent_composer.typesys.pool import VariablePool
-from tests.engine._stream_fakes import ScriptedStreamChat, reply
+from tests.engine._stream_fakes import ScriptedStreamChat, reply, usage
 from tests.engine.test_agent_in_loop import FLOW as LOOP_FLOW
 from tests.engine.test_agent_live_events import CONFIG
 from tests.engine.test_agent_session import _view
@@ -359,6 +359,81 @@ def test_interrupt_mid_stream_keeps_the_partial_text_and_ends_the_stream(monkeyp
     replies = [item.payload["message"]["data"] for item in view.items
                if item.payload["message"]["type"] == "ai"]
     assert [(r["content"], r.get("tool_calls")) for r in replies] == [("hello big", [])]
+
+
+class _TextLast:
+    """Stream a scripted chat's reply with its tool-call and usage chunks before its text."""
+
+    def __init__(self, chat):
+        self.chat = chat
+
+    def bind_tools(self, tools, **kwargs):
+        return self
+
+    def stream(self, messages):
+        chunks = list(self.chat.stream(messages))
+        return iter(sorted(chunks, key=lambda chunk: bool(chunk.content)))
+
+
+def _lookup_never_runs(ran):
+    def lookup(topic: str) -> str:
+        """Look up a topic."""
+        ran.append(topic)
+        return "found"
+
+    return lookup
+
+
+def test_interrupt_on_the_last_chunk_keeps_the_complete_reply(monkeypatch):
+    inbox, ran, events = Inbox(), [], []
+    chat = ScriptedStreamChat(script=[
+        reply("ok go", calls=[("lookup", {"topic": "a"}, "call-1")], tokens=usage(500, 20)),
+    ], mode=[])
+    monkeypatch.setattr(llm_clients_mod, "model_from_config", lambda _config: _TextLast(chat))
+
+    def on_stream(chunk):
+        if chunk.chunk == " go":  # the last chunk of the reply
+            inbox.interrupt.add("chat")
+
+    memory = SessionMemory()
+    result = run_flow(
+        load_flow(_flow(tools=["lookup"], memory=True)), {}, steering=inbox,
+        tools={"lookup": _lookup_never_runs(ran)}, memory={"session": memory},
+        on_stream=on_stream, on_event=events.append, num_workers=0,
+    )
+    assert result.output == "ok go" and ran == []
+    view = _view(memory)
+    # The stream ran out, so the reply is whole and its call is recorded as skipped.
+    assert [(e.kind, e.status) for e in view.effects] == [
+        ("model", "completed"), ("tool", "interrupted"),
+    ]
+    replies = [item.payload["message"]["data"] for item in view.items
+               if item.payload["message"]["type"] == "ai"]
+    assert [len(r["tool_calls"]) for r in replies] == [1]
+    assert [e.usage for e in events if isinstance(e, ModelCallFinished)] == [
+        TokenUsage(500, 20, 520),
+    ]
+
+
+def test_interrupt_during_a_single_chunk_reply_keeps_the_complete_reply(monkeypatch):
+    inbox, ran = Inbox(), []
+
+    def interrupt_on_reply(messages):
+        inbox.interrupt.add("chat")
+        return _two_calls()
+
+    # A duck-typed client without `stream` yields its whole reply as one chunk.
+    model = _recorder(monkeypatch, [interrupt_on_reply])
+    memory = SessionMemory()
+    result = run_flow(
+        load_flow(_flow(tools=["lookup"], memory=True)), {}, steering=inbox,
+        tools={"lookup": _lookup_never_runs(ran)}, memory={"session": memory},
+        on_stream=lambda chunk: None, num_workers=0,
+    )
+    assert result.output == "Checking both." and ran == [] and len(model.calls) == 1
+    assert [(e.kind, e.status) for e in _view(memory).effects] == [
+        ("model", "completed"), ("tool", "interrupted"), ("tool", "interrupted"),
+    ]
 
 
 # --- finished nodes, loops, and resume ----------------------------------------- #

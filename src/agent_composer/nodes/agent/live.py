@@ -113,9 +113,12 @@ def stream_reply(
     only after the reply is complete and normalized, so a call that fails
     mid-stream ends without one; the host discards that exchange's partial text.
 
-    `interrupted` is checked after each chunk. When it answers true the stream is
-    closed, the `final=True` chunk is sent so the host keeps the text it showed,
-    and `ReplyInterrupted` carries that text as the partial reply.
+    `interrupted` is checked when each chunk after the first arrives, before it is
+    shown. When it answers true the stream is closed, the `final=True` chunk is
+    sent so the host keeps the text it showed, and `ReplyInterrupted` carries that
+    text as the partial reply. A single-chunk reply, or an interrupt that lands on
+    the last chunk, returns the complete reply; the caller's tool loop then skips
+    its calls.
 
     Raises:
         `ReplyInterrupted`: The host interrupted the reply mid-stream.
@@ -126,16 +129,18 @@ def stream_reply(
     shown: list[str] = []
     try:
         for chunk in chunks:
+            # Checked before taking a later chunk, never after the last one, so a
+            # stream that runs out always returns its complete reply.
+            if aggregate is not None and interrupted():
+                live.emit_stream(
+                    StreamChunk(live.node_id, STREAM_KEY, "", final=True, exchange_id=exchange_id)
+                )
+                raise ReplyInterrupted(AIMessage(content="".join(shown)))
             aggregate = chunk if aggregate is None else aggregate + chunk
             text = text_of(chunk)
             if text:
                 shown.append(text)
                 live.emit_stream(StreamChunk(live.node_id, STREAM_KEY, text, exchange_id=exchange_id))
-            if interrupted():
-                live.emit_stream(
-                    StreamChunk(live.node_id, STREAM_KEY, "", final=True, exchange_id=exchange_id)
-                )
-                raise ReplyInterrupted(AIMessage(content="".join(shown)))
     finally:
         close = getattr(chunks, "close", None)
         if close is not None:

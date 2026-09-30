@@ -79,7 +79,9 @@ def tool_calling(ctx: AgentRunContext) -> Output:
             ctx.memory_context.sections,
         )
     schema = type_to_schema(ctx.output_type) if ctx.output_type is not None else None
-    if not ctx.tools and not ctx.skills and schema is not None:
+    # A granted id may name a host-filled group; grants are checked by tool name.
+    granted = ctx.toolset.expand(list(ctx.tools))
+    if not granted and not ctx.skills and schema is not None:
         return Output(
             value=generate_structured(
                 model,
@@ -95,7 +97,7 @@ def tool_calling(ctx: AgentRunContext) -> Output:
             )
         )
 
-    bound = ctx.toolset.resolve(list(ctx.tools))
+    bound = ctx.toolset.resolve(granted)
     skills = {skill.name: skill for skill in ctx.skills}
     if skills:
         bound.append(load_skill_tool())
@@ -161,12 +163,12 @@ def tool_calling(ctx: AgentRunContext) -> Output:
                     ctx.evaluation_trace.record_interaction(call_interaction)
             if skills and name == LOAD_SKILL:
                 invoke = partial(invoke_load_skill, skills, arguments)
-            elif name in ctx.tools:
+            elif name in granted:
                 invoke = partial(ctx.toolset.invoke, name, arguments)
             else:
                 raise AgentLoopError(
                     f"agent node {ctx.node_id!r} requested tool {name!r}, but it is not "
-                    f"granted; granted tools: {ctx.tools}"
+                    f"granted; granted tools: {granted}"
                 )
             tool_call_id = call.get("id") or ""
             result_message = invoke_tool_effect(

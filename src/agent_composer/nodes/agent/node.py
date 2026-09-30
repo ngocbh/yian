@@ -124,6 +124,10 @@ class AgentNode(Node):
         if self.skills and self.mode != "tool_calling":
             raise SkillError(f"{where}: skills need mode 'tool_calling', not {self.mode!r}")
 
+    def granted_tools(self) -> tuple[str, ...]:
+        """Return the authored `tools:` grants, which may name host-filled groups."""
+        return tuple(self.tools)
+
     def _granted_skills(self, supplied: Mapping[str, Skill] | None) -> tuple[Skill, ...]:
         """Select this node's grants from the run's host-supplied skills, by name."""
         if not self.skills:

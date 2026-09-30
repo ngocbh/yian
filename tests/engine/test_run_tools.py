@@ -120,7 +120,9 @@ def test_bound_method_entry_becomes_a_tool():
         ([("shout", _upper)], "must be a mapping"),
         ({1: _upper}, "non-empty strings"),
         ({"": _upper}, "non-empty strings"),
-        ({"group": [_upper]}, "got list"),
+        ({"group": {"shout": _upper}}, r"tools\['group'\].*got dict"),
+        ({"group": [lambda text: text]}, r"tools\['group'\]\[0\].*lambda"),
+        ({"group": ["shout"]}, r"tools\['group'\]\[0\].*got str"),
         ({"shout": functools.partial(_upper, text="hi")}, r"tools\['shout'\].*got partial"),
         ({"shout": _Shouter()}, r"tools\['shout'\].*got _Shouter"),
     ],
@@ -128,6 +130,89 @@ def test_bound_method_entry_becomes_a_tool():
 def test_invalid_tools_are_rejected(tools: Any, error: str):
     with pytest.raises(TypeError, match=error):
         ToolSet(tools)
+
+
+def _lower(text: str) -> str:
+    """Return the text in lower case."""
+    return text.lower()
+
+
+def _named(name: str) -> StructuredTool:
+    """Build one BaseTool that echoes its text under `name`."""
+    return StructuredTool.from_function(lambda text: f"{name}:{text}", name=name, description=name)
+
+
+def test_group_entry_holds_tools_named_by_function_or_tool_name():
+    tools = ToolSet({"toolbox": [_upper, _named("echo")], "shout": _upper})
+
+    assert tools.expand(["toolbox"]) == ["_upper", "echo"]
+    assert [tool.name for tool in tools.resolve(["_upper", "echo"])] == ["_upper", "echo"]
+    assert tools.invoke("echo", {"text": "a"}) == "echo:a"
+    assert tools.invoke("_upper", {"text": "a"}) == "A"
+
+
+def test_expand_replaces_each_group_with_its_tools_in_order():
+    tools = ToolSet(
+        {"search": _upper, "toolbox": [_named("a"), _named("b")], "empty": [], "work": (_lower,)}
+    )
+
+    assert tools.expand(["search", "toolbox", "empty", "work"]) == ["search", "a", "b", "_lower"]
+    assert tools.groups == ("toolbox", "empty", "work")
+    assert ToolSet().expand(["search"]) == ["search"]
+
+
+def test_a_group_is_not_itself_a_tool():
+    tools = ToolSet({"toolbox": [_named("a")]})
+
+    with pytest.raises(ValueError, match="'toolbox' is a tool group"):
+        tools.resolve(["toolbox"])
+    with pytest.raises(ValueError, match="'toolbox' is a tool group"):
+        tools.invoke("toolbox", {})
+
+
+_SHARED = _named("x")
+
+
+@pytest.mark.parametrize(
+    ("tools", "error"),
+    [
+        ({"one": [_named("x")], "two": [_named("x")]}, "'x' is in both groups 'one' and 'two'"),
+        ({"one": [_named("x"), _named("x")]}, "'x' appears twice in group 'one'"),
+        ({"one": [_SHARED], "two": [_SHARED], "x": []}, "'x' in group 'one' clashes"),
+        ({"x": _upper, "one": [_named("x")]}, "'x' in group 'one' clashes with tools\['x'\]"),
+        ({"x": [], "one": [_named("x")]}, "'x' in group 'one' clashes with tools\['x'\]"),
+        ({"one": [_named("ask_user")]}, "group 'one' has a tool named 'ask_user'"),
+        ({"one": [_named("load_skill")]}, "group 'one' has a tool named 'load_skill'"),
+    ],
+)
+def test_group_tool_names_must_be_unique_in_the_run(tools: dict[str, Any], error: str):
+    with pytest.raises(ValueError, match=error):
+        ToolSet(tools)
+
+
+def test_the_same_tool_object_may_sit_in_overlapping_groups():
+    web = _named("web")
+    tools = ToolSet(
+        {"toolbox": [web, _named("a"), web], "company": [_upper, web], "more": [_upper]}
+    )
+
+    assert tools.expand(["toolbox"]) == ["web", "a"]
+    assert tools.expand(["company", "toolbox", "more"]) == ["_upper", "web", "a"]
+    assert tools.resolve(["web"]) == [web]
+    assert tools.invoke("_upper", {"text": "a"}) == "A"
+
+
+def test_the_same_bound_method_may_sit_in_two_groups():
+    shouter = _Shouter()
+    tools = ToolSet({"one": [shouter.shout], "two": [shouter.shout]})
+
+    assert tools.expand(["one", "two"]) == ["shout"]
+
+
+def test_expand_keeps_the_first_of_each_repeated_name():
+    tools = ToolSet({"box": [_named("a"), _named("b")], "search": _upper})
+
+    assert tools.expand(["box", "search", "box", "a", "search"]) == ["a", "b", "search"]
 
 
 def _recording_handler(seen: list[dict[str, Any]], answer: Any = "answer"):
@@ -373,3 +458,79 @@ def test_agent_cannot_call_a_per_run_tool_the_flow_did_not_grant(monkeypatch):
 
     assert isinstance(evaluated.outcome, EvaluationFailure)
     assert "not granted" in evaluated.outcome.failure.message
+
+
+def _replies(*calls: tuple[str, dict[str, Any]]) -> list[AIMessage]:
+    """Build one tool-call reply per call, then a final answer."""
+    return [_tool_call(name, args) for name, args in calls] + [AIMessage(content="done")]
+
+
+def test_agent_granted_three_groups_sees_the_union_of_their_tools(monkeypatch):
+    chat = _ScriptedChat(_replies(("a", {"text": "1"}), ("c", {"text": "3"})))
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda config: chat)
+    tools = ToolSet(
+        {
+            "toolbox": [_named("a")],
+            "workspace": [_named("b"), _named("c")],
+            "company": [_named("d")],
+            "hidden": [_named("e")],
+        }
+    )
+    node = AgentNode(
+        "agent", prompt="go", tools=["toolbox", "workspace", "company"], mode="tool_calling"
+    )
+
+    evaluated = eval_node(node, None, VariablePool(), tools=tools)
+
+    assert evaluated.outcome == Output("done")
+    assert [tool.name for tool in chat.bound_tools] == ["a", "b", "c", "d"]
+    assert [message.content for message in chat.calls[-1] if isinstance(message, ToolMessage)] == [
+        "a:1",
+        "c:3",
+    ]
+
+
+@pytest.mark.parametrize("name", ["e", "toolbox"])
+def test_agent_grant_check_sees_expanded_group_names(monkeypatch, name: str):
+    chat = _ScriptedChat([_tool_call(name, {"text": "x"})])
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda config: chat)
+    tools = ToolSet({"toolbox": [_named("a")], "hidden": [_named("e")]})
+    node = AgentNode("agent", prompt="go", tools=["toolbox"], mode="tool_calling")
+
+    evaluated = eval_node(node, None, VariablePool(), tools=tools)
+
+    assert isinstance(evaluated.outcome, EvaluationFailure)
+    assert f"requested tool {name!r}, but it is not granted; granted tools: ['a']" in (
+        evaluated.outcome.failure.message
+    )
+
+
+def test_agent_binds_a_tool_shared_by_overlapping_groups_once(monkeypatch):
+    chat = _ScriptedChat(_replies(("web", {"text": "q"})))
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda config: chat)
+    web = _named("web")
+    tools = ToolSet({"toolbox": [web, _named("a")], "company": [web, _named("b")]})
+    node = AgentNode(
+        "agent", prompt="go", tools=["toolbox", "company", "toolbox"], mode="tool_calling"
+    )
+
+    evaluated = eval_node(node, None, VariablePool(), tools=tools)
+
+    assert evaluated.outcome == Output("done")
+    assert [tool.name for tool in chat.bound_tools] == ["web", "a", "b"]
+
+
+def test_agent_with_groups_and_ask_user_asks_the_top_level_handler(monkeypatch):
+    chat = _ScriptedChat(_replies(("ask_user", {"question": "Which?"}), ("a", {"text": "go"})))
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda config: chat)
+    seen: list[dict[str, Any]] = []
+    tools = ToolSet({"toolbox": [_named("a")], "ask_user": _recording_handler(seen, "B")})
+    node = AgentNode("agent", prompt="go", tools=["toolbox", "ask_user"], mode="tool_calling")
+
+    evaluated = eval_node(node, None, VariablePool(), tools=tools)
+
+    assert evaluated.outcome == Output("done")
+    assert [tool.name for tool in chat.bound_tools] == ["a", "ask_user"]
+    assert [request["question"] for request in seen] == ["Which?"]
+    results = [m.content for m in chat.calls[-1] if isinstance(m, ToolMessage)]
+    assert results == ["B", "a:go"]

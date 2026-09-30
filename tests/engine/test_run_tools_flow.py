@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import re
 import threading
 from pathlib import Path
 from typing import Any
 
 import pytest
+from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.tools import StructuredTool
 
+import agent_composer.llm_clients as llm_clients
 from agent_composer.compose import load_flow
 from agent_composer.nodes.base import _HostStop
 from agent_composer.run import resume_flow, run_flow
@@ -252,3 +256,269 @@ def test_human_input_without_a_run_handler_fails_the_node():
 
     assert result.status == "failed"
     assert "no ask_user handler for this run" in result.failure.message
+
+
+_GROUPS_FLOW = """
+id: groups
+name: groups
+llm_config: {provider: openai, model: test-model}
+nodes:
+  agent:
+    kind: agent
+    mode: tool_calling
+    prompt: go
+    tools: [toolbox, workspace, company]
+output: ${agent.output}
+"""
+
+
+class _FirstToolChat:
+    """Call the first bound tool once, then answer with its result and the bound names."""
+
+    def __init__(self) -> None:
+        self.names: list[str] = []
+
+    def bind_tools(self, tools):
+        self.names = [tool.name for tool in tools]
+        return self
+
+    def invoke(self, messages):
+        last = messages[-1]
+        if isinstance(last, ToolMessage):
+            return AIMessage(content=f"{last.content} via {self.names}")
+        call = {"name": self.names[0], "args": {"text": "x"}, "id": "c1", "type": "tool_call"}
+        return AIMessage(content="", tool_calls=[call])
+
+
+@pytest.fixture
+def first_tool_chat(monkeypatch):
+    """Stand in for the provider with a fresh `_FirstToolChat` per AGENT call."""
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda config: _FirstToolChat())
+
+
+def _tool(name: str, action=None) -> StructuredTool:
+    """Build one tool named `name`; by default it returns `name:text`."""
+
+    def run(text: str) -> str:
+        return action(text) if action is not None else f"{name}:{text}"
+
+    return StructuredTool.from_function(run, name=name, description=name)
+
+
+def _groups(toolbox: list[Any]) -> dict[str, Any]:
+    """Fill the three groups the flow grants, with `toolbox` first."""
+    return {"toolbox": toolbox, "workspace": [_tool("ws")], "company": [_tool("co")]}
+
+
+def test_agent_sees_the_union_of_three_host_filled_groups(first_tool_chat):
+    result = run_flow(load_flow(_GROUPS_FLOW), {}, tools=_groups([_tool("box")]))
+
+    assert result.status == "succeeded", result.failure
+    assert result.output == "box:x via ['box', 'ws', 'co']"
+
+
+def test_concurrent_runs_with_different_toolboxes_never_cross(first_tool_chat):
+    both_calling = threading.Barrier(2, timeout=5)
+    results: dict[str, Any] = {}
+    errors: list[BaseException] = []
+
+    def run_as(name: str) -> None:
+        def lookup(text: str) -> str:
+            both_calling.wait()
+            return f"{name} looked up {text}"
+
+        try:
+            results[name] = run_flow(
+                load_flow(_GROUPS_FLOW), {}, tools=_groups([_tool("lookup", lookup)])
+            )
+        except BaseException as exc:  # re-raised on the test thread below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=run_as, args=(name,)) for name in ("ann", "bob")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(10)
+        assert not thread.is_alive()
+    for error in errors:
+        raise error
+
+    assert results["ann"].output == "ann looked up x via ['lookup', 'ws', 'co']"
+    assert results["bob"].output == "bob looked up x via ['lookup', 'ws', 'co']"
+
+
+@pytest.mark.parametrize(
+    ("tools", "error"),
+    [
+        (
+            {"toolbox": [], "workspace": []},
+            "AGENT node 'agent' grants unknown tool or group 'company'; "
+            "tool groups in this run: ['toolbox', 'workspace']",
+        ),
+        (_groups([_tool("ws")]), "tool 'ws' is in both groups 'toolbox' and 'workspace'"),
+        (_groups([_tool("ask_user")]), "group 'toolbox' has a tool named 'ask_user'"),
+    ],
+    ids=["missing-group", "name-clash", "group-ask-user"],
+)
+def test_bad_groups_fail_at_run_start(tmp_path: Path, tools: dict[str, Any], error: str):
+    path = tmp_path / "never.jsonl"
+
+    with pytest.raises(ValueError, match=re.escape(error)):
+        run_flow(load_flow(_GROUPS_FLOW), {}, log=path, tools=tools)
+    assert not path.exists()
+
+
+def test_resume_uses_the_group_contents_passed_to_resume(tmp_path: Path, first_tool_chat):
+    path = tmp_path / "resume-groups.jsonl"
+    flow = load_flow(_GROUPS_FLOW)
+
+    def interrupt(text: str) -> str:
+        raise _HostStop()
+
+    with pytest.raises(_HostStop):
+        run_flow(flow, {}, log=path, tools=_groups([_tool("old", interrupt)]))
+
+    with pytest.raises(ValueError, match="unknown tool or group 'toolbox'"):
+        resume_flow(flow, log=path, tools={"workspace": [], "company": []})
+    resumed = resume_flow(flow, log=path, tools=_groups([_tool("new")]))
+
+    assert resumed.status == "succeeded", resumed.failure
+    assert resumed.output == "new:x via ['new', 'ws', 'co']"
+
+
+_NESTED_GROUPS_FLOW = """
+id: nested_groups
+name: nested_groups
+llm_config: {provider: openai, model: test-model}
+defs:
+  inner:
+    nodes:
+      agent:
+        kind: agent
+        mode: tool_calling
+        prompt: go
+        tools: [toolbox]
+    output: ${agent.output}
+nodes:
+  outer:
+    kind: call
+    call: inner
+output: ${outer.output}
+"""
+
+
+_MAP_GROUPS_FLOW = """
+id: map_groups
+name: map_groups
+llm_config: {provider: openai, model: test-model}
+defs:
+  inner:
+    input:
+      item: str
+    nodes:
+      agent:
+        kind: agent
+        mode: tool_calling
+        prompt: go
+        tools: [toolbox]
+    output: ${agent.output}
+input:
+  items: list[str]
+nodes:
+  each:
+    kind: map
+    over: ${input.items}
+    call: inner
+    input:
+      item: ${item}
+output: ${each.output}
+"""
+
+_LOOP_GROUPS_FLOW = """
+id: loop_groups
+name: loop_groups
+llm_config: {provider: openai, model: test-model}
+defs:
+  turn:
+    input:
+      count: int
+      last: str
+    nodes:
+      agent:
+        kind: agent
+        mode: tool_calling
+        prompt: go
+        tools: [toolbox]
+    output:
+      count: ${input.count + 1}
+      last: ${agent.output}
+nodes:
+  again:
+    kind: loop
+    call: turn
+    input:
+      count: 0
+      last: ""
+    while: ${count} < 1
+    max: 3
+output: ${again.output}
+"""
+
+
+@pytest.mark.parametrize(
+    ("source", "inputs", "node_path"),
+    [
+        (_NESTED_GROUPS_FLOW, {}, "outer/agent"),
+        (_MAP_GROUPS_FLOW, {"items": []}, "each/agent"),
+        (_LOOP_GROUPS_FLOW, {}, "again/agent"),
+    ],
+    ids=["call", "map", "loop"],
+)
+def test_a_missing_group_in_a_child_flow_fails_at_run_start(
+    tmp_path: Path, source: str, inputs: dict[str, Any], node_path: str
+):
+    path = tmp_path / "never.jsonl"
+
+    with pytest.raises(
+        ValueError, match=f"AGENT node '{node_path}' grants unknown tool or group 'toolbox'"
+    ):
+        run_flow(load_flow(source), inputs, log=path, tools={})
+    assert not path.exists()
+
+
+_PLAIN_GRANT_FLOW = """
+id: plain_grant
+name: plain_grant
+llm_config: {provider: openai, model: test-model}
+nodes:
+  agent:
+    kind: agent
+    mode: tool_calling
+    prompt: go
+    tools: [lookup, ask_user]
+output: ${agent.output}
+"""
+
+
+@pytest.mark.parametrize(
+    ("tools", "error"),
+    [
+        (
+            {"ask_user": _answer_with_question},
+            "AGENT node 'agent' grants unknown tool or group 'lookup'",
+        ),
+        (
+            {"lookup": _tool("lookup")},
+            "AGENT node 'agent' grants 'ask_user': no ask_user handler for this run",
+        ),
+    ],
+    ids=["unknown-plain-tool", "ask-user-without-handler"],
+)
+def test_an_unresolvable_plain_grant_fails_at_run_start(
+    tmp_path: Path, tools: dict[str, Any], error: str
+):
+    path = tmp_path / "never.jsonl"
+
+    with pytest.raises(ValueError, match=re.escape(error)):
+        run_flow(load_flow(_PLAIN_GRANT_FLOW), {}, log=path, tools=tools)
+    assert not path.exists()

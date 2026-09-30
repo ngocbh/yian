@@ -845,3 +845,25 @@ def test_nested_chat_failure_does_not_set_outer_controller_stop(tmp_path, monkey
 
     assert result == "FAILED: nested boom"
     assert parent_states == [False]
+
+
+def test_run_flow_tool_reports_an_unknown_tool_grant_as_failed(tmp_path, monkeypatch):
+    """A run-start ValueError stays a model-visible tool result instead of raising."""
+    (tmp_path / "grant.yaml").write_text(
+        "id: bad-grant\n"
+        "name: bad_grant\n"
+        "llm_config: {provider: openai, model: test-model}\n"
+        "nodes:\n"
+        "  agent:\n"
+        "    kind: agent\n"
+        "    mode: tool_calling\n"
+        "    prompt: go\n"
+        "    tools: [chat_missing_tool]\n"
+        "output: ${agent.output}\n"
+    )
+    monkeypatch.setattr(chat_tools, "_WORKSPACE", tmp_path.resolve())
+
+    result = chat_tools.run_flow("grant.yaml")
+
+    assert result.startswith("FAILED: AGENT node 'agent'")
+    assert "chat_missing_tool" in result

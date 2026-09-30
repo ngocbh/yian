@@ -1259,6 +1259,22 @@ Pooled nodes of one run can call the same handler at once, so it must be
 thread-safe. Tools are host callables: the log does not record them, and a host
 passes them again on resume.
 
+A `tools=` value that is a list or tuple is a named tool group. The `ToolSet`
+flattens every group into its tool map, keeps each group's ordered names, and
+rejects a group tool whose name is reserved (`ask_user`, `load_skill`), is a
+top-level key, or names a different tool in another group, so each name calls one
+tool. The same tool object may sit in several groups, since host permission groups
+overlap. An AGENT's `tools:` grant may name a group; the tool-calling mode calls
+`ToolSet.expand`, which drops repeated names, before binding tools and before its
+grant check, so the model and the check see each tool name once.
+Before any log work, fresh runs and unfinished resumes walk static nodes and their
+`origin_children()` through the kind-blind `Node.granted_tools()` hook (AGENT
+returns its `tools:`) and raise `ValueError` when a grant does not resolve in the
+run's `ToolSet`. The walk covers nodes that may never run, such as an unreached
+branch, a LOOP body, or a plain-mode AGENT. Only the authored names enter the
+fingerprint; group contents are host capabilities, so a resume may pass different
+contents and restarted nodes use them.
+
 CODE's soft-budget watchdog is package-local under `nodes/code/` and times CODE
 only. Pooled drives own their executors through a full join: an abnormal dispatch
 exit signals cooperative stop before joining, so the boundary never releases its

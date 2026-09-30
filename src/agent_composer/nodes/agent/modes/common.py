@@ -33,7 +33,7 @@ class AgentRunContext:
 
     node_id: str
     prompt: str  # already rendered (${...} substituted)
-    tools: list[str] = field(default_factory=list)  # ordinary tools
+    tools: list[str] = field(default_factory=list)  # granted tool and group ids
     llm_config: dict | None = None  # effective plain-dict model config
     output_type: Any = None  # the node's declared output Type; None = text passthrough
     retries: int = 2  # structured-generation self-correction cap (extra attempts)
@@ -41,7 +41,7 @@ class AgentRunContext:
     stop_event: Event | None = None  # transient host lifecycle; absent for direct mode tests
     evaluation_trace: EvaluationTrace | None = None  # write-only visible evidence sink
     memory_context: MemoryContext = field(default_factory=MemoryContext)
-    toolset: ToolSet = field(default_factory=ToolSet)  # the run's tools; `tools` grants ids from it
+    toolset: ToolSet = field(default_factory=ToolSet)  # the run's tools and groups; `tools` grants from it
     emit_stream: Callable[[Any], None] | None = None  # transient text sink; absent = no streaming
     emit_event: Callable[[Any], None] | None = None  # transient in-loop observer sink
     base_system_prompt: str = DEFAULT_SYSTEM  # tool_calling system text before memory; lists skills

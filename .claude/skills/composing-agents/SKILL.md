@@ -195,6 +195,7 @@ retried up to `retries:` times (default 2) on deviation. A root `Literal[...]`
 returns its bare tag to the flow.
 Use a downstream `code`/`model` node only for deterministic post-processing. To give
 an AGENT node ordinary tools: `tools: [tool_id, ...]` (requires `mode: tool_calling`).
+A `tools:` name may also be a host-filled tool group (see "Tool groups" below).
 To give it host-supplied Claude/Codex skills: `skills: [skill-name, ...]` or
 `skills: all` (requires `mode: tool_calling`). The system message lists each
 granted skill's name and description; the model calls the built-in
@@ -325,6 +326,19 @@ def get_facts(symbol: str, limit: int = 10) -> list[dict]:
 Or give it to one run only: `run_flow(flow, inputs, tools={"get_facts": get_facts})`.
 That mapping is the run's whole tool set: registered tools are hidden. To keep
 them, pass `tools={**registered_tools(), "get_facts": get_facts}`.
+
+**Tool groups.** When the tools an AGENT may use change between runs (for example,
+tools a permission system grants), grant a group name and let the host fill it:
+`tools: [toolbox, workspace, ask_user]` in YAML, and
+`run_flow(..., tools={"toolbox": [t1, t2], "workspace": [], "ask_user": ask})` in Python.
+A list value is a group; each item is a `BaseTool` (named by `.name`) or a def-defined
+function (named by `__name__`). The model sees and calls the group's tools by their
+own names. Groups may share the same tool object; the model sees it once. The run
+fails before it starts if a granted group is missing, two different tools share a
+name (or a group tool's name is a top-level key), or a group has a tool named
+`ask_user` or `load_skill`; the handler stays the top-level `ask_user` entry. `composer run`
+fills no groups, so such flows need a Python host. Pass groups again to `resume_flow`;
+restarted nodes use the contents passed there.
 Note `tool` uses `tool_id:` + `input:` (a tool declares no `output:`). (`model` —
 `kind: model`, `model_id:` — is a parseable kind but the serving seam isn't wired
 yet; running one raises.)
@@ -555,7 +569,8 @@ may pass 2-4 short `options`, shown as choices; the human can still type an answ
 `ask_user` on an AGENT node returns its answer to the same live tool loop; HUMAN_INPUT and
 WAIT return ordinary node outputs from their live calls. The host passes the handler
 per run: `run_flow(..., tools={"ask_user": handler})`. `composer run` and `composer chat` do
-this for you; a run without a handler fails any node that asks. There is no authored
+this for you. Without a handler, a flow whose AGENT grants `ask_user` fails before the run
+starts, and a `human_input` node fails when it asks. There is no authored
 `entry:`/`controls:` field on an AGENT node or event-mode WAIT.
 
 ## Validate & run
@@ -595,7 +610,7 @@ this for you; a run without a handler fails any node that asks. There is no auth
 - [ ] Every variable has a typed default and a name distinct from local inputs.
 - [ ] Every `long_term_memory:` declaration is on a flow or `agent`, selects a host-registered memory policy by name, and contains only public behavior config.
 - [ ] Each `case` has an `else:` (or its `Literal` cases are exhaustive); branches are joined with `|`.
-- [ ] `tool` ids are registered or passed per run with `tools=`; a `code` `module:function` is importable (or an inline `code: |` body `return`s a value); `call`/`uses:` targets resolve on the search path.
+- [ ] `tool` ids are registered or passed per run with `tools=` (AGENT `tools:` may name a host-filled group); a `code` `module:function` is importable (or an inline `code: |` body `return`s a value); `call`/`uses:` targets resolve on the search path.
 - [ ] Every CALL/MAP/LOOP has exactly one child form: named `call:`, or non-empty inline `nodes:` plus an `output:` key; inline parent/item dependencies cross through outer `input:`.
 - [ ] A child-flow call is written `call(f, ...)` as a whole value, never `${flow(args)}`; string `:-` defaults and `:?` messages are quoted.
 - [ ] It loads cleanly (`composer run` / `load_flow`) before you wire a model.

@@ -200,7 +200,11 @@ between external model/tool effects, while WAIT blocks on it so host shutdown or
 sibling failure wakes the deadline wait. TOOL, HUMAN_INPUT, and the AGENT node get
 the run's `caps['tools']` (gated on `needs_tools`): one immutable `ToolSet` that
 `run_flow` / `resume_flow` build from `tools=`: the global registry when `None`,
-otherwise only the mapping's entries, and `ask_user` only from the run. The AGENT node is the
+otherwise only the mapping's entries, and `ask_user` only from the run. A list value
+is a named tool group; the AGENT's tool loop expands granted groups through
+`ToolSet.expand` before binding and the grant check, and the run boundary checks
+every static `Node.granted_tools()` grant against the `ToolSet` before any record.
+The AGENT node is the
 deliberate model-access exception: its mode imports
 `llm_clients` and calls `model_from_config` directly, while its granted tools resolve
 through the run's `ToolSet`.

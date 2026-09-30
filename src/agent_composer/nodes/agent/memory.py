@@ -563,6 +563,18 @@ def _pairable_calls(message: AIMessage) -> bool:
     return True
 
 
+class ReplyInterrupted(Exception):
+    """A streamed model reply cut off at a chunk boundary by a host interrupt.
+
+    `reply` is an `AIMessage` holding only the visible text streamed so far; a
+    partial tool call is never kept because it cannot run.
+    """
+
+    def __init__(self, reply: BaseMessage) -> None:
+        super().__init__("model reply interrupted by the host")
+        self.reply = reply
+
+
 def invoke_model(
     turn: ConversationTurn | None,
     invoke: Callable[[], Any],
@@ -598,6 +610,8 @@ def invoke_model(
         `_CapabilityFault`: Encoding or publishing messages fails.
         `_HostStop`: Cooperative cancellation was requested. Provider exceptions
             also propagate unchanged, including when failure publication fails.
+        `ReplyInterrupted`: A host interrupt cut the streamed reply; the effect is
+            recorded `interrupted` with the partial reply first.
     """
     if turn is None:
         reply = invoke()
@@ -611,6 +625,12 @@ def invoke_model(
         )
     try:
         reply = invoke()
+    except ReplyInterrupted as cut:
+        with _memory_boundary():
+            turn.observe(
+                ordinal, "interrupted", items=(encode_message(cut.reply, exchange_id),)
+            )
+        raise
     except BaseException as primary:
         _observe_failure(turn, ordinal, "model", primary)
         raise

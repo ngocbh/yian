@@ -11,6 +11,7 @@ import agent_composer.llm_clients as llm_clients_mod
 from langchain_core.messages import HumanMessage, ToolMessage
 
 from agent_composer.compose import load_flow
+from agent_composer.events import ModelCallFinished, StreamChunk
 from agent_composer.memory.session import SessionMemory
 from agent_composer.nodes.agent import MODES, AgentNode
 from agent_composer.nodes.base import Output
@@ -314,3 +315,46 @@ def test_malformed_interrupted_answer_escapes_as_a_host_type_error(monkeypatch):
     node = AgentNode("chat", prompt="hi", llm_config=dict(CONFIG), mode="tool_calling", steerable=True)
     with pytest.raises(TypeError, match="interrupted must return a bool"):
         eval_node(node, None, VariablePool(), steering=inbox)
+
+
+# --- the stream loop is a safe point ------------------------------------------ #
+
+
+def test_interrupt_mid_stream_keeps_the_partial_text_and_ends_the_stream(monkeypatch):
+    chat = _chat(monkeypatch, [
+        reply("hello big world", calls=[("lookup", {"topic": "a"}, "call-1")]),
+    ])
+    inbox = Inbox()
+    chunks, events, ran = [], [], []
+
+    def on_stream(chunk):
+        chunks.append(chunk)
+        if chunk.chunk == " big":
+            inbox.interrupt.add("chat")
+
+    def lookup(topic: str) -> str:
+        """Look up a topic."""
+        ran.append(topic)
+        return "found"
+
+    memory = SessionMemory()
+    result = run_flow(
+        load_flow(_flow(tools=["lookup"], memory=True)), {}, steering=inbox,
+        tools={"lookup": lookup}, memory={"session": memory},
+        on_stream=on_stream, on_event=events.append,
+        num_workers=0,  # serial delivery, so the flag is set before the next chunk
+    )
+    assert result.status == "succeeded"
+    assert result.output == "hello big" and ran == []
+    assert chat.mode == ["stream"]
+    assert [(c.chunk, c.final) for c in chunks if isinstance(c, StreamChunk)] == [
+        ("hello", False), (" big", False), ("", True),
+    ]
+    finished = [e for e in events if isinstance(e, ModelCallFinished)]
+    assert len(finished) == 1 and finished[0].error is None
+    view = _view(memory)
+    assert [(e.kind, e.status) for e in view.effects] == [("model", "interrupted")]
+    assert view.closed_invocations[-1].status == "interrupted"
+    replies = [item.payload["message"]["data"] for item in view.items
+               if item.payload["message"]["type"] == "ai"]
+    assert [(r["content"], r.get("tool_calls")) for r in replies] == [("hello big", [])]

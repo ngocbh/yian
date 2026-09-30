@@ -27,6 +27,7 @@ from agent_composer.nodes.agent.memory import (
     invoke_model,
     invoke_tool_effect,
     record_skipped_tool,
+    ReplyInterrupted,
 )
 from agent_composer.nodes.agent.live import (
     invoke_chat,
@@ -118,13 +119,19 @@ def tool_calling(ctx: AgentRunContext) -> Output:
         messages.extend(steers)
         new_messages.extend(steers)
         exchange_id = uuid4().hex
-        reply = invoke_model(
-            ctx.memory_context.transcript,
-            lambda: invoke_chat(live, chat, messages, exchange_id=exchange_id),
-            new_messages=new_messages,
-            check_stopped=ctx.check_stopped,
-            exchange_id=exchange_id,
-        )
+        try:
+            reply = invoke_model(
+                ctx.memory_context.transcript,
+                lambda: invoke_chat(
+                    live, chat, messages, exchange_id=exchange_id,
+                    interrupted=ctx.interrupted,
+                ),
+                new_messages=new_messages,
+                check_stopped=ctx.check_stopped,
+                exchange_id=exchange_id,
+            )
+        except ReplyInterrupted as cut:
+            return _interrupted(ctx, cut.reply)
         new_messages = []
         iterations += 1
         messages.append(reply)

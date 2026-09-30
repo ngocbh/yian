@@ -260,7 +260,7 @@ def run_flow(
     llm_config: dict[str, Any] | None = None,
     memory: dict[str, Memory] | None = None,
     learnable: bool = False,
-    tools: Mapping[str, BaseTool | Callable[..., Any]] | None = None,
+    tools: Mapping[str, BaseTool | Callable[..., Any] | list | tuple] | None = None,
     skills: Mapping[str, Skill] | None = None,
 ) -> RunResult:
     """Start and drive one flow through an in-memory or durable run log.
@@ -305,7 +305,7 @@ def run_flow(
             call. Forward execution runs no frame learners or learned-mutation
             commits. Memory is optional; an enabled mapping supplies owned learners
             for that call. Automatic session history is independent of retention.
-        tools (`Mapping[str, BaseTool | Callable[..., Any]] | None`, *optional*, defaults to `None`):
+        tools (`Mapping[str, BaseTool | Callable[..., Any] | list | tuple] | None`, *optional*, defaults to `None`):
             The tools this run sees, keyed by tool id. `None` uses the tools
             registered with `register_tool`. A mapping, even an empty one, is the
             whole set: registered tools are hidden. To keep them, pass
@@ -321,7 +321,12 @@ def run_flow(
             `options`. Runs use
             up to eight workers by default, so several nodes can call it at once;
             it must be thread-safe. An AGENT can call a tool only if its `tools:`
-            list grants the id.
+            list grants the id. A list or tuple value is a tool group: an AGENT
+            that grants the group's key can call every tool in it. Each item is a
+            `BaseTool` named by its `name`, or a function or method named by its
+            `__name__`. Tool names are unique across the run, and no group tool
+            may be named `ask_user`. Every static AGENT grant must name a tool or
+            group in this set; this is checked before the log is created.
             Granting skills also binds the built-in ``load_skill`` tool,
             which is not part of this mapping.
         skills (`Mapping[str, Skill] | None`, *optional*, defaults to `None`):
@@ -340,12 +345,14 @@ def run_flow(
     Raises:
         `TypeError`:
             A public argument has the wrong type, including a malformed `tools`
-            entry.
+            entry or group item.
         `ValueError`:
             Inputs, identity, worker count, model configuration, or prepared run
             state violates its contract, a `BaseTool` in `tools` is named
-            differently from its key, or an AGENT grants skills while
-            `skills` is `None` or lacks a listed skill.
+            differently from its key, a group tool's name clashes or is
+            `ask_user`, an AGENT grants a tool or group not in the run's tools,
+            or an AGENT grants skills while `skills` is `None` or lacks a
+            listed skill.
         `MemorySetupError`:
             Memory is enabled without a required policy implementation, cannot
             open an exact run snapshot, or has an invalid configuration.
@@ -383,7 +390,7 @@ def _run_flow_controlled(
     llm_config: dict[str, Any] | None = None,
     memory: dict[str, Memory] | None = None,
     learnable: bool = False,
-    tools: Mapping[str, BaseTool | Callable[..., Any]] | None = None,
+    tools: Mapping[str, BaseTool | Callable[..., Any] | list | tuple] | None = None,
     skills: Mapping[str, Skill] | None = None,
     stop_event: threading.Event,
 ) -> RunResult:
@@ -393,6 +400,7 @@ def _run_flow_controlled(
     if type(learnable) is not bool:
         raise TypeError("learnable must be a bool")
     run_tools = ToolSet(tools)
+    _check_tool_grants(flow.compiled, run_tools)
     skills = _check_skills(flow.compiled, skills)
 
     # Identity belongs to the authored program, before cascade resolution or any
@@ -510,7 +518,7 @@ def resume_flow(
     on_event: EventHook | None = None,
     on_stream: StreamHook | None = None,
     memory: dict[str, Memory] | None = None,
-    tools: Mapping[str, BaseTool | Callable[..., Any]] | None = None,
+    tools: Mapping[str, BaseTool | Callable[..., Any] | list | tuple] | None = None,
     skills: Mapping[str, Skill] | None = None,
 ) -> RunResult:
     """Recover primary execution or inspect a terminal run without backward work.
@@ -539,10 +547,11 @@ def resume_flow(
             enabled memory and still has unfinished forward execution. Terminal
             inspection opens no policies; supplied references remain available
             for later explicit backward calls.
-        tools (`Mapping[str, BaseTool | Callable[..., Any]] | None`, *optional*, defaults to `None`):
+        tools (`Mapping[str, BaseTool | Callable[..., Any] | list | tuple] | None`, *optional*, defaults to `None`):
             The tools the resumed segment sees, with the same rules as
             `run_flow`. Tools are not recorded in the log, so pass the same
-            mapping (including `ask_user`) that the original run used.
+            mapping (including `ask_user`) that the original run used. Group
+            contents may differ: nodes that restart see the groups passed here.
         skills (`Mapping[str, Skill] | None`, *optional*, defaults to `None`):
             The skills passed to the original `run_flow`. Nodes that restart see
             this mapping. An unfinished run of a flow that grants skills needs
@@ -556,11 +565,13 @@ def resume_flow(
     Raises:
         `TypeError`:
             A public argument or decoded carrier has the wrong type, including a
-            malformed `tools` entry.
+            malformed `tools` entry or group item.
         `ValueError`:
             The prefix is invalid, the flow fingerprint differs, the selected
-            worker count violates its contract, or an unfinished run's AGENT
-            grants skills while `skills` is `None` or lacks a listed skill.
+            worker count violates its contract, a group tool's name clashes or
+            is `ask_user`, or an unfinished run's AGENT grants a tool or group
+            not in `tools`, or grants skills while `skills` is `None` or lacks
+            a listed skill.
         `MemorySetupError`:
             The recorded run needs memory but its mapping is absent, incomplete,
             or cannot reproduce the exact recorded snapshots.
@@ -590,7 +601,7 @@ def _resume_flow_controlled(
     on_event: EventHook | None = None,
     on_stream: StreamHook | None = None,
     memory: dict[str, Memory] | None = None,
-    tools: Mapping[str, BaseTool | Callable[..., Any]] | None = None,
+    tools: Mapping[str, BaseTool | Callable[..., Any] | list | tuple] | None = None,
     skills: Mapping[str, Skill] | None = None,
     stop_event: threading.Event,
 ) -> RunResult:
@@ -608,6 +619,7 @@ def _resume_flow_controlled(
             return _result_from_state(state, log_path, [],
                                       handle=_retained_handle(retained_program, state, authority, memory,
                                                               locator=retained_locator))
+        _check_tool_grants(flow.compiled, run_tools)
         skills = _check_skills(flow.compiled, skills)
 
         if state.memory_layout is not None:
@@ -670,6 +682,38 @@ def _resume_flow_controlled(
         raise
     finally:
         _close_run_resources(memory_runtime, authority, primary_error)
+
+
+def _check_tool_grants(flow: CompiledFlow, tools: ToolSet) -> None:
+    """Prove every static AGENT grant names a tool or tool group this run supplies.
+
+    Runs before any record is written, so a group the host forgot to fill fails
+    the run at start rather than when the model first calls a tool.
+    """
+    for node_id, grants in _tool_grants(flow):
+        try:
+            tools.resolve(tools.expand(list(grants)))
+        except ValueError as exc:
+            raise ValueError(
+                f"AGENT node {node_id!r} grants a tool this run does not supply: {exc}"
+            ) from None
+
+
+def _tool_grants(flow: Any, path: tuple[str, ...] = ()) -> list[tuple[str, tuple[str, ...]]]:
+    """Return each static node's non-empty tool grant, keyed by its node path.
+
+    Kind-blind: grants come from ``Node.granted_tools()`` and child flows from
+    ``Node.origin_children()``, so the run boundary imports no node class.
+    """
+    found: list[tuple[str, tuple[str, ...]]] = []
+    for node_id, node in flow.nodes.items():
+        node_path = (*path, node_id)
+        grants = node.granted_tools()
+        if grants:
+            found.append(("/".join(node_path), grants))
+        for child in node.origin_children():
+            found.extend(_tool_grants(child, node_path))
+    return found
 
 
 def _check_skills(

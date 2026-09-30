@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import re
 import threading
 from pathlib import Path
 from typing import Any
 
 import pytest
+from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.tools import StructuredTool
 
+import agent_composer.llm_clients as llm_clients
 from agent_composer.compose import load_flow
 from agent_composer.nodes.base import _HostStop
 from agent_composer.run import resume_flow, run_flow
@@ -252,3 +256,152 @@ def test_human_input_without_a_run_handler_fails_the_node():
 
     assert result.status == "failed"
     assert "no ask_user handler for this run" in result.failure.message
+
+
+_GROUPS_FLOW = """
+id: groups
+name: groups
+llm_config: {provider: openai, model: test-model}
+nodes:
+  agent:
+    kind: agent
+    mode: tool_calling
+    prompt: go
+    tools: [toolbox, workspace, company]
+output: ${agent.output}
+"""
+
+
+class _FirstToolChat:
+    """Call the first bound tool once, then answer with its result and the bound names."""
+
+    def __init__(self) -> None:
+        self.names: list[str] = []
+
+    def bind_tools(self, tools):
+        self.names = [tool.name for tool in tools]
+        return self
+
+    def invoke(self, messages):
+        last = messages[-1]
+        if isinstance(last, ToolMessage):
+            return AIMessage(content=f"{last.content} via {self.names}")
+        call = {"name": self.names[0], "args": {"text": "x"}, "id": "c1", "type": "tool_call"}
+        return AIMessage(content="", tool_calls=[call])
+
+
+@pytest.fixture
+def first_tool_chat(monkeypatch):
+    """Stand in for the provider with a fresh `_FirstToolChat` per AGENT call."""
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda config: _FirstToolChat())
+
+
+def _tool(name: str, action=None) -> StructuredTool:
+    """Build one tool named `name`; by default it returns `name:text`."""
+
+    def run(text: str) -> str:
+        return action(text) if action is not None else f"{name}:{text}"
+
+    return StructuredTool.from_function(run, name=name, description=name)
+
+
+def _groups(toolbox: list[Any]) -> dict[str, Any]:
+    """Fill the three groups the flow grants, with `toolbox` first."""
+    return {"toolbox": toolbox, "workspace": [_tool("ws")], "company": [_tool("co")]}
+
+
+def test_agent_sees_the_union_of_three_host_filled_groups(first_tool_chat):
+    result = run_flow(load_flow(_GROUPS_FLOW), {}, tools=_groups([_tool("box")]))
+
+    assert result.status == "succeeded", result.failure
+    assert result.output == "box:x via ['box', 'ws', 'co']"
+
+
+def test_concurrent_runs_with_different_toolboxes_never_cross(first_tool_chat):
+    both_calling = threading.Barrier(2, timeout=5)
+    results: dict[str, Any] = {}
+
+    def run_as(name: str) -> None:
+        def lookup(text: str) -> str:
+            both_calling.wait()
+            return f"{name} looked up {text}"
+
+        results[name] = run_flow(
+            load_flow(_GROUPS_FLOW), {}, tools=_groups([_tool("lookup", lookup)])
+        )
+
+    threads = [threading.Thread(target=run_as, args=(name,)) for name in ("ann", "bob")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(10)
+
+    assert results["ann"].output == "ann looked up x via ['lookup', 'ws', 'co']"
+    assert results["bob"].output == "bob looked up x via ['lookup', 'ws', 'co']"
+
+
+@pytest.mark.parametrize(
+    ("tools", "error"),
+    [
+        (
+            {"toolbox": [], "workspace": []},
+            "AGENT node 'agent' grants a tool this run does not supply: unknown tool id 'company'",
+        ),
+        (_groups([_tool("ws")]), "tool 'ws' is in both groups 'toolbox' and 'workspace'"),
+        (_groups([_tool("ask_user")]), "group 'toolbox' has a tool named 'ask_user'"),
+    ],
+    ids=["missing-group", "name-clash", "group-ask-user"],
+)
+def test_bad_groups_fail_at_run_start(tmp_path: Path, tools: dict[str, Any], error: str):
+    path = tmp_path / "never.jsonl"
+
+    with pytest.raises(ValueError, match=re.escape(error)):
+        run_flow(load_flow(_GROUPS_FLOW), {}, log=path, tools=tools)
+    assert not path.exists()
+
+
+def test_resume_uses_the_group_contents_passed_to_resume(tmp_path: Path, first_tool_chat):
+    path = tmp_path / "resume-groups.jsonl"
+    flow = load_flow(_GROUPS_FLOW)
+
+    def interrupt(text: str) -> str:
+        raise _HostStop()
+
+    with pytest.raises(_HostStop):
+        run_flow(flow, {}, log=path, tools=_groups([_tool("old", interrupt)]))
+
+    with pytest.raises(ValueError, match="unknown tool id 'toolbox'"):
+        resume_flow(flow, log=path, tools={"workspace": [], "company": []})
+    resumed = resume_flow(flow, log=path, tools=_groups([_tool("new")]))
+
+    assert resumed.status == "succeeded", resumed.failure
+    assert resumed.output == "new:x via ['new', 'ws', 'co']"
+
+
+_NESTED_GROUPS_FLOW = """
+id: nested_groups
+name: nested_groups
+llm_config: {provider: openai, model: test-model}
+defs:
+  inner:
+    nodes:
+      agent:
+        kind: agent
+        mode: tool_calling
+        prompt: go
+        tools: [toolbox]
+    output: ${agent.output}
+nodes:
+  outer:
+    kind: call
+    call: inner
+output: ${outer.output}
+"""
+
+
+def test_a_missing_group_in_a_child_flow_fails_at_run_start(tmp_path: Path):
+    path = tmp_path / "never.jsonl"
+
+    with pytest.raises(ValueError, match="AGENT node 'outer/agent' grants a tool"):
+        run_flow(load_flow(_NESTED_GROUPS_FLOW), {}, log=path, tools={})
+    assert not path.exists()

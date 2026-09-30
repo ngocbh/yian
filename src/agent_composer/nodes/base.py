@@ -1060,6 +1060,14 @@ class Node(ABC):
         """Return this node's canonical local declarations as an immutable inventory."""
         return ()
 
+    def granted_tools(self) -> tuple[str, ...]:
+        """Return the tool and tool-group ids a model inside this node may call.
+
+        The run boundary checks these against the run's tools before any record is
+        written. The base node grants none.
+        """
+        return ()
+
     def backward_input_names(self) -> tuple[str, ...]:
         """Return declared inputs eligible for feedback in this node's contract.
 

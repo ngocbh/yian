@@ -24,12 +24,16 @@ import threading
 from typing import Any, Callable, Mapping
 
 from langchain_core.tools import BaseTool
+from pydantic import SecretStr
 
+from agent_composer.llm_clients.config import LLMConfig, pop_api_key
 from agent_composer.llm_clients.connection import connection_snapshot, legacy_connection_map
 from agent_composer.compile.execution_layout import apply_execution_layout, resolve_execution_layout
 from agent_composer.compile.expand import build_grow
 from agent_composer.compile.llm_cascade import (
     apply_effective_llm_map,
+    bind_api_key,
+    host_key_providers,
     resolve_llm_cascade,
 )
 from agent_composer.compile.manifest import flow_fingerprint
@@ -128,7 +132,9 @@ class RunResult:
     backward_outcome: BackwardOutcome | None = None
     _backward_handle: _BackwardHandle | None = field(default=None, init=False, repr=False, compare=False)
 
-    def backward(self, feedback: FeedbackValue = None) -> BackwardOutcome:
+    def backward(
+        self, feedback: FeedbackValue = None, *, api_key: str | SecretStr | None = None,
+    ) -> BackwardOutcome:
         """Run one new explicit backward attempt over retained accepted execution.
 
         Each call appends a new attempt, whatever earlier attempts did. An
@@ -138,6 +144,13 @@ class RunResult:
         Args:
             feedback (`FeedbackValue`, *optional*, defaults to `None`): Ordinary
                 text or structured feedback selecting the accepted flow output.
+            api_key (`str | SecretStr | None`, *optional*, defaults to `None`):
+                The provider key of a run started with ``llm_config.api_key``,
+                bound to the same agents as in `run_flow` and never recorded.
+                ``None`` uses the key this result was created with, if any.
+                A run that marked no agent ignores it. Without a key, marked
+                agents fail their backward call instead of reading the
+                provider's key environment variable.
 
         Returns:
             `BackwardOutcome`: The accepted attempt result, separate from forward
@@ -163,7 +176,9 @@ class RunResult:
             raise RuntimeError("a backward call on this result is already in progress")
         try:
             try:
-                return handle.backward(feedback)
+                return handle.backward(
+                    feedback, api_key=None if api_key is None else _secret_key(api_key)
+                )
             finally:
                 self.backward_outcome = handle.outcome
                 self.learning = None if self.backward_outcome is None else self.backward_outcome.learning
@@ -181,10 +196,12 @@ class _BackwardHandle:
     records: tuple[RecordEnvelope, ...]
     memory: dict[str, Memory] | None
     outcome: BackwardOutcome | None
+    # Held in memory for this result's own backward calls; never recorded.
+    api_key: SecretStr | None = field(default=None, repr=False)
     _guard: Any = field(default_factory=threading.Lock, init=False, repr=False, compare=False)
     _unusable: bool = field(default=False, init=False, repr=False, compare=False)
 
-    def backward(self, feedback: FeedbackValue) -> BackwardOutcome:
+    def backward(self, feedback: FeedbackValue, *, api_key: SecretStr | None = None) -> BackwardOutcome:
         """Reconstruct accepted facts and delegate the complete attempt driver."""
         if self._unusable:
             raise RuntimeError("backward handle is unavailable after an accepted-prefix refresh failure")
@@ -193,7 +210,9 @@ class _BackwardHandle:
         replay_sequence = None
         primary_error = None
         try:
-            state = _replay_compiled_run_log(self.program, authority)
+            state = _replay_compiled_run_log(
+                self.program, authority, api_key=self.api_key if api_key is None else api_key
+            )
             if state.run_id != self.run_id:
                 raise ValueError("backward log identity differs from the retained run")
             replay_sequence = state.next_sequence
@@ -297,7 +316,15 @@ def run_flow(
             When set, AGENT chat replies stream their visible text.
         llm_config (`dict[str, Any] | None`, *optional*, defaults to `None`):
             Per-run outer model configuration layer. The fully resolved static map
-            is captured in the initialization record.
+            is captured in the initialization record. An ``api_key`` entry (a
+            `str` or `SecretStr`) is the provider key for this run and needs
+            ``provider``. Every static AGENT whose effective provider matches
+            uses it in place of the provider's key environment variable or
+            saved OpenAI connection; agents of other providers are unaffected.
+            An ``inherit: false`` agent of that provider uses it too. The key is
+            never recorded; the log marks which agents use it, so pass it again
+            to `resume_flow` or `RunResult.backward`, where those agents
+            otherwise fail rather than read the environment.
         memory (`dict[str, Memory] | None`, *optional*, defaults to `None`):
             Host-injected policy implementations keyed by authored policy name.
             ``None`` leaves every authored policy dormant. A mapping enables
@@ -362,7 +389,8 @@ def run_flow(
             `drain`/`interrupted`.
         `ValueError`:
             Inputs, identity, worker count, model configuration, or prepared run
-            state violates its contract, a `BaseTool` in `tools` is named
+            state violates its contract, ``llm_config.api_key`` lacks
+            ``llm_config.provider``, a `BaseTool` in `tools` is named
             differently from its key, a group tool's name clashes or is
             reserved, an AGENT grants a tool or group not in the run's tools,
             or an AGENT grants skills while `skills` is `None` or lacks a
@@ -391,6 +419,11 @@ def run_flow(
         steering=steering,
         stop_event=threading.Event(),
     )
+
+
+def _secret_key(raw: str | SecretStr) -> SecretStr:
+    """Validate a host key into a `SecretStr` without echoing it in errors."""
+    return LLMConfig(api_key=raw).api_key
 
 
 def _run_flow_controlled(
@@ -426,15 +459,27 @@ def _run_flow_controlled(
     private_flow = copy.deepcopy(flow.compiled)
     retained_program = copy.deepcopy(private_flow) if learnable else None
 
+    # The key stays out of the cascade so RunStarted never records it.
+    run_llm_config = dict(llm_config or {})
+    api_key = pop_api_key(run_llm_config)
+
     # One selection snapshot determines every static agent before RunStarted.
     snapshot = connection_snapshot()
-    effective_llm = snapshot.bind(resolve_llm_cascade(
-        private_flow,
-        llm_config or {},
-        defaults=snapshot.defaults,
-        provider_models=snapshot.provider_models,
-    ))
+    effective_llm = snapshot.bind(
+        resolve_llm_cascade(
+            private_flow,
+            run_llm_config,
+            defaults=snapshot.defaults,
+            provider_models=snapshot.provider_models,
+        ),
+        host_key_provider=None if api_key is None else run_llm_config["provider"],
+    )
     apply_effective_llm_map(private_flow, effective_llm)
+    # A key that marks no agent has nothing to authenticate, so the result keeps none.
+    if api_key is not None and not host_key_providers(effective_llm):
+        api_key = None
+    if api_key is not None:
+        bind_api_key(private_flow, api_key)
 
     if learnable:
         apply_execution_layout(private_flow, resolve_execution_layout(private_flow))
@@ -520,7 +565,7 @@ def _run_flow_controlled(
         events.extend(engine.run())
         return _result_from_state(state, log_path, events,
                                   handle=_retained_handle(retained_program, state, authority, memory,
-                                                          locator=retained_locator))
+                                                          locator=retained_locator, api_key=api_key))
     except BaseException as exc:
         primary_error = exc
         raise
@@ -539,6 +584,7 @@ def resume_flow(
     tools: Mapping[str, BaseTool | Callable[..., Any] | Sequence[BaseTool | Callable[..., Any]]] | None = None,
     skills: Mapping[str, Skill] | None = None,
     steering: Steering | None = None,
+    api_key: str | SecretStr | None = None,
 ) -> RunResult:
     """Recover primary execution or inspect a terminal run without backward work.
 
@@ -578,6 +624,13 @@ def resume_flow(
         steering (`Steering | None`, *optional*, defaults to `None`):
             The host inbox for steerable AGENT nodes, as in `run_flow`. Finished
             nodes are replayed from the log and never call it.
+        api_key (`str | SecretStr | None`, *optional*, defaults to `None`):
+            The provider key of a run started with ``llm_config.api_key``. It
+            goes to the agents the log marks for it, as in `run_flow`, is never
+            recorded, and stays with the result for `RunResult.backward`. A
+            log that marks no agent ignores it. Without it, marked agents fail
+            when they call their model instead of reading the provider's key
+            environment variable.
 
     Returns:
         `RunResult`:
@@ -591,8 +644,8 @@ def resume_flow(
         `ValueError`:
             The prefix is invalid, the flow fingerprint differs, the selected
             worker count violates its contract, a group tool's name clashes or
-            is reserved, or an unfinished run's AGENT grants a tool or group
-            not in `tools`, or grants skills while `skills` is `None` or lacks
+            is reserved, an unfinished run's AGENT grants a tool or group
+            not in `tools` or grants skills while `skills` is `None` or lacks
             a listed skill.
         `MemorySetupError`:
             The recorded run needs memory but its mapping is absent, incomplete,
@@ -612,6 +665,7 @@ def resume_flow(
         tools=tools,
         skills=skills,
         steering=steering,
+        api_key=api_key,
         stop_event=threading.Event(),
     )
 
@@ -627,10 +681,12 @@ def _resume_flow_controlled(
     tools: Mapping[str, BaseTool | Callable[..., Any] | Sequence[BaseTool | Callable[..., Any]]] | None = None,
     skills: Mapping[str, Skill] | None = None,
     steering: Steering | None = None,
+    api_key: str | SecretStr | None = None,
     stop_event: threading.Event,
 ) -> RunResult:
     """Recover and drive a durable run with a host-owned stop event."""
     run_tools = ToolSet(tools)
+    api_key = None if api_key is None else _secret_key(api_key)
     require_steering(steering)
     log_path = Path(log)
     retained_locator = log_path.absolute()
@@ -638,12 +694,14 @@ def _resume_flow_controlled(
     memory_runtime: MemoryRuntime | None = None
     primary_error: BaseException | None = None
     try:
-        state = _replay_run_log(flow, authority)
+        state = _replay_run_log(flow, authority, api_key=api_key)
+        if api_key is not None and not host_key_providers(state.effective_llm_by_static_path):
+            api_key = None
         retained_program = copy.deepcopy(flow.compiled) if state.learnable else None
         if state.result is not None:
             return _result_from_state(state, log_path, [],
                                       handle=_retained_handle(retained_program, state, authority, memory,
-                                                              locator=retained_locator))
+                                                              locator=retained_locator, api_key=api_key))
         _check_tool_grants(flow.compiled, run_tools)
         skills = _check_skills(flow.compiled, skills)
 
@@ -702,7 +760,7 @@ def _resume_flow_controlled(
 
         return _result_from_state(state, log_path, events,
                                   handle=_retained_handle(retained_program, state, authority, memory,
-                                                          locator=retained_locator))
+                                                          locator=retained_locator, api_key=api_key))
     except BaseException as exc:
         primary_error = exc
         raise
@@ -787,20 +845,25 @@ def _static_nodes(flow: Any, path: tuple[str, ...] = ()) -> list[tuple[str, Any]
     return found
 
 
-def _replay_run_log(flow: ComposedFlow, log: RunLog) -> RunState:
+def _replay_run_log(
+    flow: ComposedFlow, log: RunLog, *, api_key: SecretStr | None = None,
+) -> RunState:
     """Silently reconstruct one borrowed, locked authoritative log prefix.
 
     The authored fingerprint is checked before copying.  The private graph gets
     only the complete effective LLM map recorded by ``RunStarted``; recovery
     never consults current process defaults.  Historical transitions use the
-    same reducer and growth constructor as live execution.
+    same reducer and growth constructor as live execution.  A host ``api_key``
+    goes to the agents the map marks for it.
     """
     if not isinstance(flow, ComposedFlow):
         raise TypeError("_replay_run_log expects a ComposedFlow")
-    return _replay_compiled_run_log(flow.compiled, log)
+    return _replay_compiled_run_log(flow.compiled, log, api_key=api_key)
 
 
-def _replay_compiled_run_log(flow: CompiledFlow, log: RunLog) -> RunState:
+def _replay_compiled_run_log(
+    flow: CompiledFlow, log: RunLog, *, api_key: SecretStr | None = None,
+) -> RunState:
     """Reuse canonical replay for a private original compiled program."""
     source_run_id = log.run_id
     source_sequence = log.next_sequence
@@ -855,6 +918,9 @@ def _replay_compiled_run_log(flow: CompiledFlow, log: RunLog) -> RunState:
         private_flow,
         legacy_connection_map(first.record.effective_llm_by_static_path),
     )
+    if api_key is not None:
+        # A run that marked no agent ignores the key; bind_api_key finds no target.
+        bind_api_key(private_flow, api_key)
     if first.record.learnable:
         apply_execution_layout(private_flow, resolve_execution_layout(private_flow))
     if first.record.memory_layout is not None:
@@ -968,13 +1034,14 @@ def _result_from_state(
 
 def _retained_handle(
     program: CompiledFlow | None, state: RunState, log: RunLog, memory: dict[str, Memory] | None,
-    *, locator: Path | None,
+    *, locator: Path | None, api_key: SecretStr | None = None,
 ) -> _BackwardHandle | None:
     """Detach delayed authority without keeping an opened session or public wrapper."""
     if program is None:
         return None
     return _BackwardHandle(program, state.run_id, locator, tuple(log) if log.path is None else (),
-                           memory.copy() if type(memory) is dict else memory, state.backward_state.outcome)
+                           memory.copy() if type(memory) is dict else memory, state.backward_state.outcome,
+                           api_key=api_key)
 
 
 def _required_state_run_id(state: RunState) -> str:

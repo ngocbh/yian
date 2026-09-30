@@ -16,6 +16,7 @@ from typing import Any, Callable, Iterator, Literal, Mapping, Optional
 from agent_composer.diagnostics import OriginRef
 from agent_composer.expr.template import render_template_record
 from agent_composer.expr.lineage import FeedbackValue
+from agent_composer.llm_clients.redact import scrub_key
 from agent_composer.memory.contracts import (
     MemoryContext,
     EvaluationTrace,
@@ -402,8 +403,8 @@ class AgentNode(Node):
         )
         if stop_event is not None and stop_event.is_set():
             raise _HostStop(primary=False)
-        return MODES[self.mode](
-            self._ctx(
+        try:
+            return MODES[self.mode](self._ctx(
                 prompt,
                 stop_event=stop_event,
                 evaluation_trace=evaluation_trace,
@@ -414,8 +415,15 @@ class AgentNode(Node):
                 base_system_prompt=base_system_prompt,
                 skills=granted,
                 steering=steering,
-            )
-        )
+            ))
+        except BaseException as exc:
+            # Providers may echo a rejected key; the failure record must not carry it.
+            scrub_key(exc, self._host_api_key())
+            raise
+
+    def _host_api_key(self) -> Any:
+        """Return the host key bound to this node for the run, if any."""
+        return self.llm_config.get("api_key") if isinstance(self.llm_config, dict) else None
 
     def _resolve_variables(self) -> dict[str, Any]:
         """Resolve validated literal defaults into one detached invocation record."""
@@ -426,7 +434,9 @@ class AgentNode(Node):
 
         Args:
             context (`BackwardContext`): Accepted context, including recorded model
-                configuration and render/evidence components; live node fields are unused.
+                configuration and render/evidence components. Live node fields are
+                unused, except a host ``api_key`` bound by `resume_flow` or
+                `RunResult.backward`.
             feedback (`tuple[FeedbackValue, ...]`): Ordered ordinary output messages.
                 Empty effective feedback skips model construction.
 
@@ -443,7 +453,13 @@ class AgentNode(Node):
             `node.backward(recorded_context, ())` returns empty channels without
             constructing a model. Effective messages use only that recorded context.
         """
-        return backward_agent(context, feedback)
+        # The one live field: a host key, which is never recorded, bound for this call.
+        api_key = self._host_api_key()
+        try:
+            return backward_agent(context, feedback, api_key=api_key)
+        except BaseException as exc:
+            scrub_key(exc, api_key)
+            raise
 
     def declared_variables(self) -> tuple[Parameter, ...]:
         """Return the canonical local declarations in their authored order."""

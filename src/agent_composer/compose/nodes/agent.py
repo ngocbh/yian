@@ -59,7 +59,7 @@ def _validate_llm_config(
         `tuple[dict[str, Any], bool]`: Config without `inherit`, then its boolean value.
 
     Raises:
-        `LoadError`: The config is not a mapping or violates `LLMConfig`.
+        `LoadError`: The config is not a mapping, sets `api_key`, or violates `LLMConfig`.
     """
     diagnostics = diagnostics or LoadDiagnostics()
     if cfg is None:
@@ -73,6 +73,12 @@ def _validate_llm_config(
     if not cfg:
         return {}, True
     inherit = bool(cfg.pop("inherit", True))
+    if "api_key" in cfg:
+        raise diagnostics.error(
+            f"node {node_id!r}: llm_config.api_key is a host credential; pass it in "
+            "the run's llm_config, not in a flow file",
+            range=source_range,
+        )
     try:
         LLMConfig(**cfg)
     except Exception as exc:

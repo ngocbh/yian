@@ -16,7 +16,9 @@ from types import TracebackType
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from agent_composer.llm_clients import model_from_config
+from agent_composer.llm_clients.config import pop_api_key
 from agent_composer.llm_clients.connection import resolve_model_config
+from agent_composer.llm_clients.redact import scrub_key
 from agent_composer.memory.contracts import (
     JsonObject,
     JsonValue,
@@ -137,7 +139,9 @@ class ProfileMemory:
                 `FileMarkdownStore`.
             llm_config (`JsonObject | None`, *optional*, defaults to `None`):
                 Learner model config. `None` uses the ambient defaults when a
-                backward attempt learns.
+                backward attempt learns. An ``api_key`` entry needs ``provider``;
+                it authenticates the learner, is kept as a `SecretStr`, and is
+                never recorded.
             max_chars (`int`, *optional*, defaults to `32_000`): Largest document
                 the learner may write (about 8k tokens). Host writes are not bounded.
             input_budget_chars (`int`, *optional*, defaults to `24_000`): Character
@@ -146,7 +150,8 @@ class ProfileMemory:
         Raises:
             `TypeError`: ``store`` lacks ``read``/``write`` or ``llm_config`` is not
                 a dict.
-            `ValueError`: A budget is not a positive integer.
+            `ValueError`: A budget is not a positive integer, or ``api_key`` is
+                empty or lacks ``provider``.
         """
         if not isinstance(store, MarkdownStore):
             raise TypeError("store must provide read() and write()")
@@ -157,6 +162,7 @@ class ProfileMemory:
                 raise ValueError(f"{name} must be a positive integer")
         self._store = store
         self._llm_config = dict(llm_config or {})
+        self._api_key = pop_api_key(self._llm_config)
         self.max_chars = max_chars
         self.input_budget_chars = input_budget_chars
 
@@ -433,13 +439,19 @@ class _ProfileFrame:
         messages = [SystemMessage(content=_SYSTEM),
                     HumanMessage(content=self._material(context, current_text, current_version))]
         try:
-            model = model_from_config(resolve_model_config(dict(memory._llm_config)))
+            config = dict(memory._llm_config)
+            if memory._api_key is not None:
+                config["api_key"] = memory._api_key
+            model = model_from_config(resolve_model_config(config))
         except Exception as exc:
+            scrub_key(exc, memory._api_key)
             raise _error("learn", "profile.model_construction",
                          "profile learner model construction failed") from exc
         try:
             reply = model.invoke(messages)
         except Exception as exc:
+            # Providers may echo a rejected key; the chained cause must not carry it.
+            scrub_key(exc, memory._api_key)
             raise _error("learn", "profile.provider", "profile learner invocation failed",
                          retryable=True) from exc
         text = _parse_reply(reply, current_text, memory.max_chars)

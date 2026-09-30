@@ -441,3 +441,87 @@ def test_profile_memory_learns_with_its_key_and_records_none_of_it(tmp_path, mon
     for written in (tmp_path / "profile").rglob("*"):
         if written.is_file():
             assert SENTINEL not in written.read_text(errors="replace")
+
+
+_REJECTED_KEY = "sk-sentinel-401-zqxw"
+
+
+def _rejecting(requests, *, accept=0, replies=("ok",)):
+    """Answer the first ``accept`` requests, then echo the key masked, as OpenAI's 401 does."""
+    ok = _chat_completions([], *replies)
+
+    def handler(request):
+        requests.append(request)
+        if len(requests) <= accept:
+            return ok.handle_request(request)
+        masked = f"{_REJECTED_KEY[:8]}****{_REJECTED_KEY[-4:]}"
+        return httpx.Response(401, json={"error": {
+            "message": f"Incorrect API key provided: {masked}.",
+            "type": "invalid_request_error", "code": "invalid_api_key",
+        }})
+
+    return httpx.MockTransport(handler)
+
+
+def _assert_rejected_key_hidden(path, *values):
+    fragments = (_REJECTED_KEY, _REJECTED_KEY[:8], "*" + _REJECTED_KEY[-4:])
+    texts = [path.read_text()] + [repr(value) for value in values]
+    for text in texts:
+        for fragment in fragments:
+            assert fragment not in text
+
+
+def test_a_provider_401_records_no_part_of_the_key(tmp_path, monkeypatch):
+    requests, events = [], []
+    path = tmp_path / "run.jsonl"
+    with httpx.Client(transport=_rejecting(requests)) as transport:
+        _route_openai_client(monkeypatch, transport)
+        result = run_flow(
+            load_flow(_FLOW), {}, log=path, on_event=events.append,
+            llm_config={**_VLLM, "api_key": _REJECTED_KEY},
+        )
+    assert result.status == "failed"
+    assert requests[0].headers["Authorization"] == f"Bearer {_REJECTED_KEY}"
+    assert "Incorrect API key provided: [REDACTED]" in path.read_text()
+    _assert_rejected_key_hidden(path, events, result)
+
+
+def test_a_provider_401_in_backward_records_no_part_of_the_key(tmp_path, monkeypatch):
+    requests = []
+    path = tmp_path / "run.jsonl"
+    with httpx.Client(transport=_rejecting(requests, accept=1)) as transport:
+        _route_openai_client(monkeypatch, transport)
+        result = run_flow(
+            load_flow(_FLOW), {}, log=path, learnable=True,
+            llm_config={**_VLLM, "api_key": _REJECTED_KEY},
+        )
+        assert result.status == "succeeded", result.failure
+        outcome = result.backward("Be brief.")
+    assert outcome.status == "failed"
+    assert len(requests) == 2
+    assert "[REDACTED]" in path.read_text()
+    _assert_rejected_key_hidden(path, result, outcome)
+
+
+def test_a_profile_learner_401_records_no_part_of_the_key(tmp_path, monkeypatch):
+    flow = load_flow(_FLOW.replace("nodes:", "long_term_memory: profile\nnodes:"))
+    (tmp_path / "profile").mkdir()
+    store = FileMarkdownStore(tmp_path / "profile" / "ada.md")
+    store.write("# Ada\n", base_version=store.read()[1])
+    memory = ProfileMemory(
+        store, llm_config={"provider": "vllm", "model": "profiler", "api_key": _REJECTED_KEY}
+    )
+    requests, events = [], []
+    path = tmp_path / "run.jsonl"
+    monkeypatch.setenv("VLLM_API_KEY", "sk-environment-key")
+    with httpx.Client(transport=_rejecting(requests, accept=2, replies=("ok", _NO_FEEDBACK))) as transport:
+        _route_openai_client(monkeypatch, transport)
+        result = run_flow(
+            flow, {}, log=path, on_event=events.append, learnable=True,
+            memory={"profile": memory},
+            llm_config={"provider": "vllm", "model": "served-model"},
+        )
+        outcome = result.backward("Be brief.")
+    assert outcome.status == "failed"
+    assert json.loads(requests[-1].content)["model"] == "profiler"
+    _assert_rejected_key_hidden(path, events, result, outcome)

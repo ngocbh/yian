@@ -18,6 +18,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from agent_composer.llm_clients import model_from_config
 from agent_composer.llm_clients.config import pop_api_key
 from agent_composer.llm_clients.connection import resolve_model_config
+from agent_composer.llm_clients.redact import scrub_key
 from agent_composer.memory.contracts import (
     JsonObject,
     JsonValue,
@@ -443,11 +444,14 @@ class _ProfileFrame:
                 config["api_key"] = memory._api_key
             model = model_from_config(resolve_model_config(config))
         except Exception as exc:
+            scrub_key(exc, memory._api_key)
             raise _error("learn", "profile.model_construction",
                          "profile learner model construction failed") from exc
         try:
             reply = model.invoke(messages)
         except Exception as exc:
+            # Providers may echo a rejected key; the chained cause must not carry it.
+            scrub_key(exc, memory._api_key)
             raise _error("learn", "profile.provider", "profile learner invocation failed",
                          retryable=True) from exc
         text = _parse_reply(reply, current_text, memory.max_chars)

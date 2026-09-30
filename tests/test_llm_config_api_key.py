@@ -1,6 +1,7 @@
 """`LLMConfig.api_key`: a host-supplied provider key that no dump, repr, or error shows."""
 
 import json
+import sys
 
 import httpx
 import pytest
@@ -202,3 +203,54 @@ def test_a_host_key_marker_without_the_key_fails_before_the_environment(clean_en
     assert validated.api_key.get_secret_value() == SENTINEL
     with pytest.raises(ValueError, match="marker"):
         split_model_config({**marked, "_host_key": "yes", "api_key": SENTINEL})
+
+
+def _raise_chained(key):
+    try:
+        raise RuntimeError(f"Incorrect API key provided: {key[:8]}****{key[-4:]}.")
+    except RuntimeError as inner:
+        raise ValueError(f"wrapped: {key}") from inner
+
+
+def test_scrub_key_removes_the_key_and_its_masked_fragments_from_a_chain():
+    import traceback
+
+    from agent_composer.llm_clients.redact import scrub_key
+
+    key = "sk-sentinel-scrub-zqxw"
+    with pytest.raises(KeyError) as caught:
+        try:
+            _raise_chained(key)
+        finally:
+            raise KeyError(key)
+    scrub_key(caught.value, SecretStr(key))
+    text = "".join(traceback.format_exception(caught.value))
+    for fragment in (key, key[:8], "*" + key[-4:]):
+        assert fragment not in text
+    assert "Incorrect API key provided: [REDACTED]." in text
+    assert "wrapped: [REDACTED]" in text
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="exception groups and notes need 3.11")
+def test_scrub_key_reaches_exception_group_members_and_notes():
+    import traceback
+
+    from agent_composer.llm_clients.redact import scrub_key
+
+    key = "sk-sentinel-scrub-zqxw"
+    member = RuntimeError(f"member {key}")
+    member.add_note(f"note {key[:8]}***")
+    group = ExceptionGroup("group", [member])  # noqa: F821 - builtin on 3.11+
+    scrub_key(group, key)
+    text = "".join(traceback.format_exception(group))
+    assert key not in text and key[:8] not in text
+    assert "note [REDACTED]" in text
+
+
+def test_scrub_key_leaves_unrelated_masks_alone():
+    from agent_composer.llm_clients.redact import redact_key
+
+    assert redact_key("token ab****yz and **bold**", "sk-sentinel-zqxw") == (
+        "token ab****yz and **bold**"
+    )
+    assert redact_key("anything", None) == "anything"

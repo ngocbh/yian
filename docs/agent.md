@@ -215,6 +215,11 @@ is set, and a host should discard that request's partial text. The node value is
 authoritative: streamed text can differ from it in the whitespace between content
 blocks.
 
+A [steering](api.md#steering) interrupt that cuts a streamed request still ends it
+with the `final=True` chunk; its `ModelCallFinished` has no `error` and carries
+the usage received so far. Each tool call the interrupt skipped is reported as a
+`ToolCallStarted` followed by `ToolCallFinished(error="interrupted")`.
+
 ### How YAML becomes the request
 
 | YAML or host value | Role in execution |
@@ -226,6 +231,7 @@ blocks.
 | `tools: [name, ...]` | Resolves the granted ids from the run's tools (registered tools, or the host's `tools=` mapping) and binds their schemas beside the messages in `tool_calling` mode. A name may be a host-filled tool group, which expands to its tools. |
 | `skills: [name, ...]` or `skills: all` plus host `skills=` | Lists each granted skill's name and description in the system message and binds the built-in `load_skill` tool, which returns a skill's instructions or a bundled file on demand. See [agent skills](syntax.md#agent-skills-skills). |
 | Structured `output:` | Selects a provider-supported structured-output binding or a fallback schema instruction, then validates the returned value. A bare `str` remains free text. |
+| `steerable: true` plus host `steering=` | In `tool_calling` mode, sends the host's queued steer messages as `HumanMessage`s with the next model request, and stops the loop on a host interrupt; the node succeeds with its text so far. See [steering a running agent](syntax.md#steering-a-running-agent-steerable). |
 | `mode:`, `llm_config:`, `retries:`, `env:` | Controls execution; these values are not additional prompt messages. |
 
 The framework system instruction is fixed today, apart from the skill listing

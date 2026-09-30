@@ -364,7 +364,9 @@ Most are just the functional model (above) made enforceable:
   `needs_steering is True` (an AGENT authored `steerable: true`). The
   `tool_calling` loop drains steers into `new_messages` at the top of each
   iteration and checks `interrupted` at safe points; an interrupt ends the node
-  with a normal `Output`, so no run-log record kind changes.
+  with a normal `Output`, so no run-log record kind changes. The host sees it
+  only through live observers: a cut stream's `ModelCallFinished` has no error,
+  and each skipped call emits `ToolCallFinished(error="interrupted")`.
 - **Domain-agnostic** — no domain-specific field names or types in the engine;
   domain lives at the contract/boundary (the loader/builder). The `system`
   namespace is generic.

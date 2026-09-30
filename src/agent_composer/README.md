@@ -896,18 +896,29 @@ and on non-`str` output, both at YAML load and in `AgentNode`: the mode in its
 constructor, the output contract in `validate_execution_setup`). At the top of each iteration it checks `interrupted`,
 then drains steers into `messages` and `new_messages` as `HumanMessage`s, so
 `invoke_model` records them with the next model request. It checks `interrupted`
-again before each tool call, and `stream_reply` checks it after each chunk. A
-mid-stream interrupt sends the `final=True` chunk and raises `ReplyInterrupted`
-(a leaf in `nodes/agent/interrupts.py`, shared by `live.py` and `memory.py`) with the visible text
-so far; `invoke_model` observes that model effect as `interrupted` with the partial
-reply. `record_skipped_tool` records each call not run as an `interrupted` tool
-effect paired with an error `ToolMessage`. The mode then calls the turn's optional
-`interrupt()` (the session `_Turn` closes as `interrupted`) and returns the latest
-reply's visible text as a normal `Output`.
+again before each tool call, and `stream_reply` checks it as each chunk after the
+first arrives, before showing it. A stream that runs out is never cut, so a
+single-chunk reply, or an interrupt that lands on the last chunk, returns the
+complete reply and the tool loop skips its calls. A mid-stream interrupt sends
+the `final=True` chunk and raises `ReplyInterrupted` (a leaf in
+`nodes/agent/interrupts.py`, shared by `live.py` and `memory.py`) with the visible
+text so far and `usage_of` the chunks received; `observe_model_call` reports that
+usage on `ModelCallFinished` with no `error`, and `invoke_model` observes the model
+effect as `interrupted` with the partial reply. `record_skipped_tool` records each
+call not run as an `interrupted` tool effect paired with an error `ToolMessage`,
+and `observe_skipped_tool_call` emits `ToolCallStarted` then
+`ToolCallFinished(error="interrupted")` for it. The mode then calls the turn's
+optional `interrupt()` (the session `_Turn` closes as `interrupted`) and returns
+the latest reply's visible text as a normal `Output`.
 
-No run-log record kind is added. A finished node replays its recorded output
-without calling the inbox. A node retried after a crash sees earlier steers only
-through session-memory history.
+Closing the stream generator must release the provider connection.
+`NormalizedChatAnthropic._stream` closes the SDK's HTTP response itself, because
+langchain_anthropic iterates the SDK stream without closing it.
+
+No run-log record kind is added, and `NodeSucceeded` carries no interrupted
+flag. A finished node replays its recorded output without calling the inbox. A
+node retried after a crash or failure sees earlier steers only through
+session-memory history.
 
 ## Host-injected agent memory
 
@@ -1134,7 +1145,10 @@ retained before honoring a stop during an effect. Conversation progress is
 independent of `learnable`.
 
 API context preparation uses an optional concrete-turn `prepare_history`
-capability without changing mandatory protocols. `memory/summary.py` owns pure
+capability without changing mandatory protocols. A second optional capability,
+`interrupt()`, asks the turn to close as `interrupted` when its body returns
+normally; a steerable AGENT calls it after a host interrupt, and a turn without
+it closes as usual. `memory/summary.py` owns pure
 admission-led selection and cache-prefix proofs; SessionMemory owns cache
 publication. Project and summarize callbacks run outside the Condition under the
 existing FIFO lease. They receive detached values, never runtime state.

@@ -12,6 +12,7 @@ unbound model for memory-owned summary preparation; summary state stays in memor
 it neither rerenders the forward prompt nor updates local variables.
 ``live`` publishes transient streamed reply text, model/tool call observers, and
 provider token usage to evaluator-supplied sinks; it records and retains nothing.
+``interrupts`` holds the signal a host interrupt raises out of a streamed reply.
 
 Knows about: nodes.base, events, expr, typesys, tools, llm_clients, memory contracts, peer AGENT modules,
              LangChain, and Pydantic.

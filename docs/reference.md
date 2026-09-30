@@ -35,6 +35,8 @@ The run-loop primitives live in `agent_composer.run`.
 
 ::: agent_composer.run.resume_flow
 
+::: agent_composer.run.Steering
+
 ::: agent_composer.runtime.BackwardOutcome
 
 ::: agent_composer.runtime.BackwardFailure

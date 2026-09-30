@@ -132,7 +132,8 @@ terminal. Stored defaults are not coerced.
   `isinstance(event, agent_composer.events.IN_LOOP_EVENTS)`. Observers from
   concurrently running nodes interleave (runs are pooled by default); correlate
   them by `node_id` and `exchange_id`. `usage` is the provider's own count
-  (`None` when unreported) and `error` is an exception type name only.
+  (`None` when unreported) and `error` is an exception type name only, or
+  `"interrupted"` for a tool call a [steering](#steering) interrupt skipped.
 - `on_stream` — receives transient `StreamChunk` values. Chunks are neither
   durable records nor members of `RunResult.events`. With `on_stream` set, AGENT
   chat replies stream visible text as `StreamChunk(node_id, "text", chunk,
@@ -410,11 +411,20 @@ result = run_flow(flow, inputs, log="run.jsonl", steering=inbox)
   error, not a node failure.
 - An interrupted node succeeds with its text so far. The run log records its
   output like any other; it has no separate interrupted flag.
+- `on_event` shows the interrupt taking effect. A cut stream ends with its
+  `final=True` chunk, and its `ModelCallFinished` has no `error` and the usage of
+  the chunks already received. Each tool call the node skipped gets a
+  `ToolCallStarted` then a `ToolCallFinished` with `error="interrupted"`, so a
+  UI can mark that call interrupted.
+- An interrupt never stops a tool that is already running. A tool that raises
+  fails the node, so a host that unblocks a waiting tool (for example an
+  `ask_user` prompt) on interrupt must make the tool return a result, not raise.
 - Steers ride in the node's conversation. With session memory they are recorded
-  with the model request that carried them, so a node retried after a crash sees
-  them in its history. Without session memory a steer read by a node that did not
-  finish before a crash is lost. Pass the same inbox to
-  `resume_flow(..., steering=inbox)`; finished nodes replay without reading it.
+  with the model request that carried them, so a node retried after a crash or
+  failure sees them in its history. Without session memory a steer read by a node
+  that fails or crashes before it finishes is not delivered again when the node
+  is retried. Pass the same inbox to `resume_flow(..., steering=inbox)`; finished
+  nodes replay without reading it.
 - `agent_composer.run.Steering` is the matching `typing.Protocol`.
 
 ## Injecting agent memory

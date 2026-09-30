@@ -507,13 +507,14 @@ worker:
   A steer that arrives during the final model call is not read; it stays with the
   host for the next input.
 - **Interrupt.** The node checks for an interrupt at the top of each iteration,
-  after each streamed chunk, after a reply that asks for tools, and before each
-  tool call. It then stops and **succeeds** with the text so far, so the flow or
-  loop continues. A reply that already arrived is kept. A streamed reply is cut
-  at the last chunk shown. Tool calls it did not run get an error result
-  ("Not run: interrupted by the user."). Without streaming, an interrupt during a
-  model call takes effect when that call returns. An interrupt for a node that
-  has already finished is ignored.
+  as each streamed chunk after the first arrives, and before each tool call. It
+  then stops and **succeeds** with the text so far, so the flow or loop
+  continues. A reply that already arrived is kept whole, including a streamed
+  reply whose last chunk had arrived. Otherwise a streamed reply is cut at the
+  last chunk shown. Tool calls it did not run get an error result ("Not run:
+  interrupted by the user."). Without streaming, an interrupt during a model
+  call takes effect when that call returns. An interrupt for a node that has
+  already finished is ignored.
 - Session memory records steers with the model request that carried them, and
   closes an interrupted turn as `interrupted`.
 

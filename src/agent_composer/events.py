@@ -138,8 +138,9 @@ class ModelCallFinished:
 
     ``usage`` is the provider's own count, or ``None`` when it reported none. A
     call that raised has no ``usage`` unless the provider replied first (a native
-    structured reply that failed to parse). ``error`` is the exception type name
-    only, never provider text.
+    structured reply that failed to parse). A streamed reply cut by a host
+    interrupt has no ``error`` and the usage of the chunks already received.
+    ``error`` is the exception type name only, never provider text.
     """
 
     node_id: str

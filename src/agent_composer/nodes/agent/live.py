@@ -116,9 +116,9 @@ def stream_reply(
     `interrupted` is checked when each chunk after the first arrives, before it is
     shown. When it answers true the stream is closed, the `final=True` chunk is
     sent so the host keeps the text it showed, and `ReplyInterrupted` carries that
-    text as the partial reply. A single-chunk reply, or an interrupt that lands on
-    the last chunk, returns the complete reply; the caller's tool loop then skips
-    its calls.
+    text as the partial reply, with the usage reported so far. A single-chunk
+    reply, or an interrupt that lands on the last chunk, returns the complete
+    reply; the caller's tool loop then skips its calls.
 
     Raises:
         `ReplyInterrupted`: The host interrupted the reply mid-stream.
@@ -135,7 +135,7 @@ def stream_reply(
                 live.emit_stream(
                     StreamChunk(live.node_id, STREAM_KEY, "", final=True, exchange_id=exchange_id)
                 )
-                raise ReplyInterrupted(AIMessage(content="".join(shown)))
+                raise ReplyInterrupted(AIMessage(content="".join(shown)), usage_of(aggregate))
             aggregate = chunk if aggregate is None else aggregate + chunk
             text = text_of(chunk)
             if text:
@@ -163,7 +163,8 @@ def observe_model_call(
     """Bracket one provider call with started/finished observers carrying its usage.
 
     `usage` maps the call's return value to its usage. After an exception it is
-    given `None`, so the default reports no usage for a failed call.
+    given `None`, so the default reports no usage for a failed call. A reply cut
+    by a host interrupt reports the usage carried by `ReplyInterrupted`.
     """
     if live is None or live.emit_event is None:
         return invoke()
@@ -173,9 +174,10 @@ def observe_model_call(
         reply = invoke()
     except (_CapabilityFault, _HostStop):
         raise
-    except ReplyInterrupted:
-        # A host interrupt ends the call without a provider error.
-        live.emit_event(ModelCallFinished(*identity, usage=usage(None)))
+    except ReplyInterrupted as cut:
+        # A host interrupt ends the call without a provider error; the provider
+        # still billed the chunks already received.
+        live.emit_event(ModelCallFinished(*identity, usage=cut.usage))
         raise
     except Exception as exc:
         live.emit_event(ModelCallFinished(*identity, usage=usage(None), error=type(exc).__name__))

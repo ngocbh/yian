@@ -8,7 +8,7 @@ only nodes authored `steerable: true` ever receive it.
 import pytest
 
 import agent_composer.llm_clients as llm_clients_mod
-from langchain_core.messages import HumanMessage, ToolMessage
+from langchain_core.messages import AIMessageChunk, HumanMessage, ToolMessage
 
 from agent_composer.compose import load_flow
 from agent_composer.events import ModelCallFinished, StreamChunk, TokenUsage
@@ -359,6 +359,34 @@ def test_interrupt_mid_stream_keeps_the_partial_text_and_ends_the_stream(monkeyp
     replies = [item.payload["message"]["data"] for item in view.items
                if item.payload["message"]["type"] == "ai"]
     assert [(r["content"], r.get("tool_calls")) for r in replies] == [("hello big", [])]
+
+
+def test_interrupted_stream_reports_the_usage_received_so_far(monkeypatch):
+    class UsageFirst:
+        """Stream like Anthropic: the first, text-free chunk carries the input usage."""
+
+        def bind_tools(self, tools, **kwargs):
+            return self
+
+        def stream(self, messages):
+            yield AIMessageChunk(content="", usage_metadata=usage(1000, 1))
+            for word in ("hello", " big", " world"):
+                yield AIMessageChunk(content=word)
+
+    monkeypatch.setattr(llm_clients_mod, "model_from_config", lambda _config: UsageFirst())
+    inbox, events = Inbox(), []
+
+    def on_stream(chunk):
+        if chunk.chunk == " big":
+            inbox.interrupt.add("chat")
+
+    result = run_flow(
+        load_flow(_flow()), {}, steering=inbox,
+        on_stream=on_stream, on_event=events.append, num_workers=0,
+    )
+    assert result.output == "hello big"
+    finished = [e for e in events if isinstance(e, ModelCallFinished)]
+    assert [(e.usage, e.error) for e in finished] == [(TokenUsage(1000, 1, 1001), None)]
 
 
 class _TextLast:

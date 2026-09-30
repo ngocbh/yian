@@ -617,6 +617,12 @@ Most are just the functional model (above) made enforceable:
   while re-authentication cannot silently redirect recovery or backward calls.
   Old OpenAI records without connection metadata retain environment API-key
   semantics. Runtime and SessionMemory stay unaware of authentication methods.
+  A run-layer `llm_config.api_key` (needs `provider`) never enters the effective
+  map: `run_flow` pops it before the cascade and binds it only to run-local
+  `llm_config` of that provider's static agents; OpenAI agents record a nonsecret
+  `host` connection that recovery and backward cannot satisfy. `LLMConfig` keeps
+  the key a `SecretStr` excluded from dumps and hides inputs in validation errors.
+  Authored layers and `ReflectiveMemory` reject `api_key`.
 - **One attempt barrier precedes commits** — accept Started, complete backward
   results and all frame proposals, then accept Ready. Commit each enabled policy
   once in recorded order, even with an empty batch, accepting its positive-attempt

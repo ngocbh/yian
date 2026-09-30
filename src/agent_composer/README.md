@@ -185,6 +185,15 @@ backward calls retain the recorded connection. OpenAI records predating this
 metadata retain their environment API-key semantics, never today's subscription
 selection. Connection metadata is internal and is not an authored YAML field.
 
+`LLMConfig.api_key` is a `SecretStr` excluded from every dump, and `LLMConfig`
+validation errors hide input values. Clients use it before the provider's key
+environment variable. `run_flow` pops the run layer's `api_key` before the cascade
+and puts it only on the run-local `llm_config` of static agents of the run layer's
+provider, so `RunStarted`, events, results, and manifests never hold it. OpenAI
+agents record a `host` connection with no credential identity; recovery and
+backward calls, which lack the key, fail on it. Authored layers cannot set
+`api_key`, because they reach the recorded effective map.
+
 The transport requires a completed Responses event before returning a model
 reply. Early EOF and incomplete replies raise rather than exposing tool calls
 for execution. Cooperative cancellation closes the stream; network operations

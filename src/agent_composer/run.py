@@ -300,7 +300,14 @@ def run_flow(
             When set, AGENT chat replies stream their visible text.
         llm_config (`dict[str, Any] | None`, *optional*, defaults to `None`):
             Per-run outer model configuration layer. The fully resolved static map
-            is captured in the initialization record.
+            is captured in the initialization record. An ``api_key`` entry (a
+            `str` or `SecretStr`) is the provider key for this run and needs
+            ``provider``. Every static AGENT whose effective provider matches
+            uses it in place of the provider's key environment variable or
+            saved OpenAI connection; agents of other providers are unaffected.
+            The key is never recorded, so `resume_flow` and `RunResult.backward`
+            do not have it: there an OpenAI agent fails for want of the key and
+            other providers read their key environment variable.
         memory (`dict[str, Memory] | None`, *optional*, defaults to `None`):
             Host-injected policy implementations keyed by authored policy name.
             ``None`` leaves every authored policy dormant. A mapping enables
@@ -365,7 +372,8 @@ def run_flow(
             `drain`/`interrupted`.
         `ValueError`:
             Inputs, identity, worker count, model configuration, or prepared run
-            state violates its contract, a `BaseTool` in `tools` is named
+            state violates its contract, ``llm_config.api_key`` lacks
+            ``llm_config.provider``, a `BaseTool` in `tools` is named
             differently from its key, a group tool's name clashes or is
             reserved, an AGENT grants a tool or group not in the run's tools,
             or an AGENT grants skills while `skills` is `None` or lacks a

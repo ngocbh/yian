@@ -55,6 +55,9 @@ export AGENT_COMPOSER_DEFAULT_MODEL=claude-sonnet-4-5
 export ANTHROPIC_API_KEY=...                            # the provider's own key var
 ```
 
+A Python host can instead pass the key in `run_flow(..., llm_config={"provider": ...,
+"api_key": key})`, which takes precedence over the variable and is never recorded.
+
 A flow can also pin its own provider and model per AGENT node. Defaults fill
 only fields left unset by the flow or CLI. A default model belongs to its
 provider: selecting another provider never borrows the OpenAI model. Without

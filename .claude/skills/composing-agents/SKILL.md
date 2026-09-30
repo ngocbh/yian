@@ -216,6 +216,8 @@ once when the run initializes apply. `inherit: false` skips authored flow/parent
 layers but still receives those provider/model defaults.
 OpenAI subscription and API-key connections both use `provider: openai`;
 select the method and default model with `composer auth openai`.
+Never put `api_key` in a flow's `llm_config:`; loading or running fails. A Python
+host passes it in `run_flow(..., llm_config={"provider": ..., "api_key": key})`.
 OpenAI is the default provider. Environment defaults override saved defaults;
 model defaults apply only to their matching provider. Grant ordinary Composer
 tools explicitly; retired `provider: codex`, `sandbox`, `cwd`, and `builtin_tools`

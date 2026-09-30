@@ -144,7 +144,15 @@ terminal. Stored defaults are not coerced.
   whitespace between content blocks. Without `on_stream`, AGENT calls `invoke`
   exactly as before.
 - `llm_config` — the outer authored layer of the configuration cascade for AGENT nodes.
-  The resolved map and process defaults are captured at initialization.
+  The resolved map and process defaults are captured at initialization. An
+  `api_key` entry, which needs `provider`, is the provider key for this run: every
+  AGENT whose effective provider matches uses it instead of the provider's key
+  environment variable or saved OpenAI connection. It never enters the run log,
+  events, results, or manifests, and validation errors do not echo it. Because it
+  is not recorded, `resume_flow` and `result.backward` do not have it: an OpenAI
+  agent then fails for want of the key, and other providers read their environment
+  variable. Flow files cannot set `api_key`; `ReflectiveMemory` rejects it too,
+  because its snapshots record the model configuration.
 - `memory` — host-created implementations keyed by the policy name selected by
   each authored `long_term_memory` declaration. `None` leaves all declarations
   dormant. A mapping opens one run-scoped session per referenced policy, enables

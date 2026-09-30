@@ -5,6 +5,9 @@ key for each supported LLM provider. Used by the CLI's interactive key
 prompt (cli/utils.ensure_api_key) and by anything else that needs to
 ask "does this provider require a key, and which env var is it?".
 
+A config `api_key` (`LLMConfig.api_key`) takes precedence over these
+variables when the client is built.
+
 When adding a new provider, register its env var here so the CLI flow
 prompts for it automatically instead of failing on first API call.
 """

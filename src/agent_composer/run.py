@@ -628,8 +628,9 @@ def resume_flow(
             The provider key of a run started with ``llm_config.api_key``. It
             goes to the agents the log marks for it, as in `run_flow`, is never
             recorded, and stays with the result for `RunResult.backward`. A
-            log that marks no agent ignores it. Without it, marked agents fail when they call their model instead of
-            reading the provider's key environment variable.
+            log that marks no agent ignores it. Without it, marked agents fail
+            when they call their model instead of reading the provider's key
+            environment variable.
 
     Returns:
         `RunResult`:

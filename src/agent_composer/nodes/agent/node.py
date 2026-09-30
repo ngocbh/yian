@@ -16,6 +16,7 @@ from typing import Any, Callable, Iterator, Literal, Mapping, Optional
 from agent_composer.diagnostics import OriginRef
 from agent_composer.expr.template import render_template_record
 from agent_composer.expr.lineage import FeedbackValue
+from agent_composer.llm_clients.redact import scrub_key
 from agent_composer.memory.contracts import (
     MemoryContext,
     EvaluationTrace,
@@ -26,7 +27,6 @@ from agent_composer.memory.contracts import (
 )
 from agent_composer.nodes.agent.modes import DEFAULT_SYSTEM, MODES, AgentRunContext
 from agent_composer.nodes.agent.memory import compatibility
-from agent_composer.llm_clients.redact import scrub_key
 from agent_composer.nodes.agent.backward import backward_agent
 from agent_composer.nodes.agent.modes.tool_calling import MAX_TOOL_ITERATIONS
 from agent_composer.nodes.agent.structured import _structured_validation_path

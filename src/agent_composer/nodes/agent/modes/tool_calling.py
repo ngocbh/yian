@@ -107,6 +107,11 @@ def tool_calling(ctx: AgentRunContext) -> Output:
 
     while ctx.max_tool_iterations < 0 or iterations < ctx.max_tool_iterations:
         ctx.check_stopped()
+        # Steers join only here, never between a reply's tool results, and ride in
+        # new_messages so the next model request records them.
+        steers = [HumanMessage(content=steer) for steer in ctx.drain_steers()]
+        messages.extend(steers)
+        new_messages.extend(steers)
         exchange_id = uuid4().hex
         reply = invoke_model(
             ctx.memory_context.transcript,

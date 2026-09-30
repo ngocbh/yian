@@ -33,6 +33,7 @@ from agent_composer.nodes.agent.live import (
     invoke_chat,
     live_sinks,
     observe_model_call,
+    observe_skipped_tool_call,
     observe_tool_call,
 )
 from agent_composer.nodes.agent.modes.common import (
@@ -167,13 +168,24 @@ def tool_calling(ctx: AgentRunContext) -> Output:
             ctx.check_stopped()
             if ctx.interrupted():
                 for skipped_index, skipped in enumerate(calls[call_index:], call_index):
+                    skipped_name = str(skipped.get("name") or "")
+                    skipped_arguments = skipped.get("args") or {}
+                    skipped_id = skipped.get("id") or ""
                     record_skipped_tool(
                         ctx.memory_context.transcript,
-                        name=str(skipped.get("name") or ""),
-                        arguments=skipped.get("args") or {},
+                        name=skipped_name,
+                        arguments=skipped_arguments,
                         model_exchange_id=exchange_id,
                         call_index=skipped_index,
-                        tool_call_id=skipped.get("id") or "",
+                        tool_call_id=skipped_id,
+                    )
+                    observe_skipped_tool_call(
+                        live,
+                        exchange_id=exchange_id,
+                        call_index=skipped_index,
+                        tool_call_id=skipped_id,
+                        name=skipped_name,
+                        arguments=skipped_arguments,
                     )
                 return _interrupted(ctx, reply)
             raw_name = call.get("name") or ""

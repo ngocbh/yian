@@ -249,6 +249,13 @@ def _text(result: Any) -> Optional[str]:
         return None  # the caller's own representation boundary owns this error
 
 
+def _shown(arguments: Any) -> Any:
+    try:
+        return deepcopy(arguments)
+    except Exception:
+        return None
+
+
 def observe_tool_call(
     live: Optional[LiveSinks],
     invoke: Callable[[], Any],
@@ -262,12 +269,8 @@ def observe_tool_call(
     """Bracket one granted tool call with started/finished observers."""
     if live is None or live.emit_event is None:
         return invoke()
-    try:
-        shown = deepcopy(arguments)
-    except Exception:
-        shown = None
     identity = (live.node_id, exchange_id, call_index, tool_call_id, name)
-    live.emit_event(ToolCallStarted(*identity, arguments=shown))
+    live.emit_event(ToolCallStarted(*identity, arguments=_shown(arguments)))
     try:
         result = invoke()
     except (_CapabilityFault, _HostStop):
@@ -277,3 +280,27 @@ def observe_tool_call(
         raise
     live.emit_event(ToolCallFinished(*identity, result=_text(result)))
     return result
+
+
+SKIPPED_TOOL_ERROR = "interrupted"
+
+
+def observe_skipped_tool_call(
+    live: Optional[LiveSinks],
+    *,
+    exchange_id: str,
+    call_index: int,
+    tool_call_id: str,
+    name: str,
+    arguments: Any,
+) -> None:
+    """Report a tool call that a host interrupt skipped as started, then finished `interrupted`.
+
+    The same pair a run call emits, so a host can mark that call's part as
+    interrupted; the tool itself never runs.
+    """
+    if live is None or live.emit_event is None:
+        return
+    identity = (live.node_id, exchange_id, call_index, tool_call_id, name)
+    live.emit_event(ToolCallStarted(*identity, arguments=_shown(arguments)))
+    live.emit_event(ToolCallFinished(*identity, error=SKIPPED_TOOL_ERROR))

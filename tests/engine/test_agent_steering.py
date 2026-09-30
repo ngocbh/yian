@@ -11,7 +11,13 @@ import agent_composer.llm_clients as llm_clients_mod
 from langchain_core.messages import AIMessageChunk, HumanMessage, ToolMessage
 
 from agent_composer.compose import load_flow
-from agent_composer.events import ModelCallFinished, StreamChunk, TokenUsage
+from agent_composer.events import (
+    ModelCallFinished,
+    StreamChunk,
+    TokenUsage,
+    ToolCallFinished,
+    ToolCallStarted,
+)
 from agent_composer.memory.session import SessionMemory
 from agent_composer.nodes.agent import MODES, AgentNode
 from agent_composer.nodes.base import Output
@@ -274,6 +280,27 @@ def test_interrupt_before_a_tool_call_skips_only_the_remaining_calls(monkeypatch
         ("model", "completed"), ("tool", "completed"), ("tool", "interrupted"),
     ]
     assert view.closed_invocations[-1].status == "interrupted"
+
+
+def test_skipped_tool_calls_reach_the_host_as_interrupted_tool_events(monkeypatch):
+    inbox, events = Inbox(), []
+
+    def lookup(topic: str) -> str:
+        """Look up a topic."""
+        inbox.interrupt.add("chat")
+        return f"found {topic}"
+
+    _recorder(monkeypatch, [_two_calls()])
+    run_flow(load_flow(_flow(tools=["lookup"])), {}, steering=inbox,
+             tools={"lookup": lookup}, on_event=events.append)
+    tool_events = [e for e in events if isinstance(e, (ToolCallStarted, ToolCallFinished))]
+    exchange = tool_events[0].exchange_id
+    assert tool_events == [
+        ToolCallStarted("chat", exchange, 0, "call-1", "lookup", {"topic": "a"}),
+        ToolCallFinished("chat", exchange, 0, "call-1", "lookup", result="found a"),
+        ToolCallStarted("chat", exchange, 1, "call-2", "lookup", {"topic": "b"}),
+        ToolCallFinished("chat", exchange, 1, "call-2", "lookup", error="interrupted"),
+    ]
 
 
 def test_interrupt_at_the_top_of_a_later_iteration_returns_the_latest_reply(monkeypatch):

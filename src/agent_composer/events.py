@@ -166,7 +166,11 @@ class ToolCallStarted:
 
 @dataclass(frozen=True)
 class ToolCallFinished:
-    """One tool call returned (``result`` text) or raised (``error`` type name)."""
+    """One tool call returned (``result`` text) or raised (``error`` type name).
+
+    A call that a host interrupt skipped is reported as started and then finished
+    with ``error="interrupted"``; the tool did not run.
+    """
 
     node_id: str
     exchange_id: str

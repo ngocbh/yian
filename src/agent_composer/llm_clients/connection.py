@@ -147,11 +147,13 @@ def split_model_config(
     config: dict[str, Any] | LLMConfig,
 ) -> tuple[LLMConfig, dict[str, Any] | None]:
     """Validate public fields separately from host-owned connection metadata."""
-    raw = (
-        config.model_dump(exclude_none=True)
-        if isinstance(config, LLMConfig)
-        else dict(config)
-    )
+    if isinstance(config, LLMConfig):
+        raw = config.model_dump(exclude_none=True)
+        # Dumps leave the key out; carry it across explicitly.
+        if config.api_key is not None:
+            raw["api_key"] = config.api_key
+    else:
+        raw = dict(config)
     metadata = raw.pop("_connection", None)
     validated = LLMConfig(**raw)
     if metadata is not None:
@@ -167,6 +169,8 @@ def resolve_model_config(
     """Resolve a fresh config, preserving any existing pinned connection."""
     validated, metadata = split_model_config(config)
     raw = validated.model_dump(exclude_none=True)
+    if validated.api_key is not None:
+        raw["api_key"] = validated.api_key
     if validated.provider and validated.model and validated.provider != "openai":
         return raw
     if metadata is not None and validated.model:

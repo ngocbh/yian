@@ -106,7 +106,7 @@ run_flow(
     llm_config: dict[str, Any] | None = None,
     memory: dict[str, Memory] | None = None,
     learnable: bool = False,
-    tools: Mapping[str, BaseTool | Callable[..., Any] | list | tuple] | None = None,
+    tools: Mapping[str, BaseTool | Callable[..., Any] | Sequence[BaseTool | Callable[..., Any]]] | None = None,
     skills: Mapping[str, Skill] | None = None,
 ) -> RunResult
 ```
@@ -943,7 +943,7 @@ resume_flow(
     on_event: Callable[[Any], None] | None = None,
     on_stream: Callable[[StreamChunk], None] | None = None,
     memory: dict[str, Memory] | None = None,
-    tools: Mapping[str, BaseTool | Callable[..., Any] | list | tuple] | None = None,
+    tools: Mapping[str, BaseTool | Callable[..., Any] | Sequence[BaseTool | Callable[..., Any]]] | None = None,
 ) -> RunResult
 ```
 

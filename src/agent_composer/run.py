@@ -15,7 +15,7 @@ It also owns the compile/runtime inversion seam by injecting
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 import copy
 from dataclasses import dataclass, field
 import os
@@ -260,7 +260,7 @@ def run_flow(
     llm_config: dict[str, Any] | None = None,
     memory: dict[str, Memory] | None = None,
     learnable: bool = False,
-    tools: Mapping[str, BaseTool | Callable[..., Any] | list | tuple] | None = None,
+    tools: Mapping[str, BaseTool | Callable[..., Any] | Sequence[BaseTool | Callable[..., Any]]] | None = None,
     skills: Mapping[str, Skill] | None = None,
 ) -> RunResult:
     """Start and drive one flow through an in-memory or durable run log.
@@ -305,7 +305,7 @@ def run_flow(
             call. Forward execution runs no frame learners or learned-mutation
             commits. Memory is optional; an enabled mapping supplies owned learners
             for that call. Automatic session history is independent of retention.
-        tools (`Mapping[str, BaseTool | Callable[..., Any] | list | tuple] | None`, *optional*, defaults to `None`):
+        tools (`Mapping[str, BaseTool | Callable[..., Any] | Sequence[BaseTool | Callable[..., Any]]] | None`, *optional*, defaults to `None`):
             The tools this run sees, keyed by tool id. `None` uses the tools
             registered with `register_tool`. A mapping, even an empty one, is the
             whole set: registered tools are hidden. To keep them, pass
@@ -391,7 +391,7 @@ def _run_flow_controlled(
     llm_config: dict[str, Any] | None = None,
     memory: dict[str, Memory] | None = None,
     learnable: bool = False,
-    tools: Mapping[str, BaseTool | Callable[..., Any] | list | tuple] | None = None,
+    tools: Mapping[str, BaseTool | Callable[..., Any] | Sequence[BaseTool | Callable[..., Any]]] | None = None,
     skills: Mapping[str, Skill] | None = None,
     stop_event: threading.Event,
 ) -> RunResult:
@@ -519,7 +519,7 @@ def resume_flow(
     on_event: EventHook | None = None,
     on_stream: StreamHook | None = None,
     memory: dict[str, Memory] | None = None,
-    tools: Mapping[str, BaseTool | Callable[..., Any] | list | tuple] | None = None,
+    tools: Mapping[str, BaseTool | Callable[..., Any] | Sequence[BaseTool | Callable[..., Any]]] | None = None,
     skills: Mapping[str, Skill] | None = None,
 ) -> RunResult:
     """Recover primary execution or inspect a terminal run without backward work.
@@ -548,7 +548,7 @@ def resume_flow(
             enabled memory and still has unfinished forward execution. Terminal
             inspection opens no policies; supplied references remain available
             for later explicit backward calls.
-        tools (`Mapping[str, BaseTool | Callable[..., Any] | list | tuple] | None`, *optional*, defaults to `None`):
+        tools (`Mapping[str, BaseTool | Callable[..., Any] | Sequence[BaseTool | Callable[..., Any]]] | None`, *optional*, defaults to `None`):
             The tools the resumed segment sees, with the same rules as
             `run_flow`. Tools are not recorded in the log, so pass the same
             mapping (including `ask_user`) that the original run used. Group
@@ -602,7 +602,7 @@ def _resume_flow_controlled(
     on_event: EventHook | None = None,
     on_stream: StreamHook | None = None,
     memory: dict[str, Memory] | None = None,
-    tools: Mapping[str, BaseTool | Callable[..., Any] | list | tuple] | None = None,
+    tools: Mapping[str, BaseTool | Callable[..., Any] | Sequence[BaseTool | Callable[..., Any]]] | None = None,
     skills: Mapping[str, Skill] | None = None,
     stop_event: threading.Event,
 ) -> RunResult:

@@ -17,7 +17,7 @@ host mapping that replaces it and may hold named tool groups. The reserved
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 import inspect
 import json
 from threading import RLock
@@ -248,7 +248,7 @@ class ToolSet:
     or with a top-level key, or take a reserved name (`ask_user`, `load_skill`).
 
     Args:
-        tools (`Mapping[str, BaseTool | Callable[..., Any] | list | tuple] | None`, *optional*, defaults to `None`):
+        tools (`Mapping[str, BaseTool | Callable[..., Any] | Sequence[BaseTool | Callable[..., Any]]] | None`, *optional*, defaults to `None`):
             The run's tools keyed by tool id. A function or method becomes a tool
             named by its key and described by its docstring. To bind values such
             as a session, use a closure or a bound method, not `functools.partial`.
@@ -295,7 +295,7 @@ class ToolSet:
 
     def __init__(
         self,
-        tools: Mapping[str, BaseTool | Callable[..., Any] | list | tuple] | None = None,
+        tools: Mapping[str, BaseTool | Callable[..., Any] | Sequence[BaseTool | Callable[..., Any]]] | None = None,
     ) -> None:
         self._tools: MappingProxyType[str, BaseTool] | None = None
         self._groups: MappingProxyType[str, tuple[str, ...]] = MappingProxyType({})

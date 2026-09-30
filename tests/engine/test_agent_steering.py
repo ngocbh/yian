@@ -124,6 +124,21 @@ def test_mode_context_receives_steering_only_when_steerable(monkeypatch):
     assert seen == [True, False, False, False]
 
 
+def test_python_built_steerable_agent_with_structured_output_fails_before_the_model(monkeypatch):
+    model = _recorder(monkeypatch, [])
+    contract = load_flow(_flow().replace("output: str", "output: {answer: int}", 1).replace(
+        "steerable: true", "steerable: false")).compiled.nodes["chat"].output_contract
+    node = AgentNode("chat", prompt="hi", llm_config=dict(CONFIG), mode="tool_calling",
+                     steerable=True)
+    node.output_contract = contract
+    with pytest.raises(ValueError, match="steerable needs `str` output"):
+        node.run({})
+    # Malformed node setup escapes the evaluator, as for any other kind.
+    with pytest.raises(ValueError, match="steerable needs `str` output"):
+        eval_node(node, None, VariablePool(), steering=Inbox(interrupt={"chat"}))
+    assert model.calls == []
+
+
 @pytest.mark.parametrize("bad", [object(), type("OnlyDrain", (), {"drain": lambda self, n: []})()])
 def test_run_boundary_rejects_an_object_without_the_inbox_methods(bad, tmp_path):
     path = tmp_path / "run.jsonl"

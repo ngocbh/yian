@@ -26,9 +26,9 @@ from agent_composer.diagnostics import SourceRange
 from agent_composer.llm_clients import LLMConfig
 from agent_composer.memory.contracts import MemoryPolicySpec
 from agent_composer.nodes.agent import AgentNode
+from agent_composer.nodes.agent.node import is_text_output
 from agent_composer.nodes.contracts import Parameter, ValueContract
 from agent_composer.skills import SkillError
-from agent_composer.typesys.values import ValueKind
 
 if TYPE_CHECKING:
     from agent_composer.compose.source.catalog import _SourceCatalogBuilder
@@ -81,13 +81,6 @@ def _validate_llm_config(
             range=source_range,
         ) from exc
     return cfg, inherit
-
-
-def _is_text(contract: ValueContract | None) -> bool:
-    """Whether an agent's output is plain text: no `output:` or an untagged `str`."""
-    return contract is None or (
-        contract.type.kind is ValueKind.STRING and not contract.type.tags
-    )
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -278,8 +271,8 @@ class AgentDescriptor(NodeDescriptor):
             if override is not None
             else self.output_contract(ctx)
         )
-        if self.steerable and not _is_text(node.output_contract):
-            # An interrupted node returns its text so far; a structured value can't be partial.
+        if self.steerable and not is_text_output(node.output_contract):
+            # Checked here too so the error points at the `steerable:` line.
             raise ctx.diagnostics.error(
                 f"node {self.id!r}: steerable needs `str` output",
                 range=steerable_range,

@@ -892,7 +892,8 @@ kind-blind. The capability wrapper turns inbox exceptions and wrong return types
 into `_CapabilityFault`, so they escape as host errors, not node failures.
 
 Only the `tool_calling` mode reads the inbox (`steerable:` is rejected elsewhere,
-and on non-`str` output). At the top of each iteration it checks `interrupted`,
+and on non-`str` output, both at YAML load and in `AgentNode`: the mode in its
+constructor, the output contract in `validate_execution_setup`). At the top of each iteration it checks `interrupted`,
 then drains steers into `messages` and `new_messages` as `HumanMessage`s, so
 `invoke_model` records them with the next model request. It checks `interrupted`
 again before each tool call, and `stream_reply` checks it after each chunk. A

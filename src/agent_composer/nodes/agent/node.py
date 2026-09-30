@@ -41,9 +41,18 @@ from agent_composer.skills.catalog import Skill, SkillError, check_skill_name
 from agent_composer.skills.tool import LOAD_SKILL, system_prompt_with_skills
 from agent_composer.tools import ToolSet
 from agent_composer.typesys.types import canonical_type_label
-from agent_composer.typesys.values import build_value_as
+from agent_composer.typesys.values import ValueKind, build_value_as
 
 DEFAULT_MODE = "plain"
+
+
+def is_text_output(contract: Any) -> bool:
+    """Whether an AGENT output contract is plain text: none, or an untagged `str`."""
+    return contract is None or (
+        type(contract) is ValueContract
+        and contract.type.kind is ValueKind.STRING
+        and not contract.type.tags
+    )
 
 
 class AgentNode(Node):
@@ -121,6 +130,17 @@ class AgentNode(Node):
     def needs_steering(self) -> bool:
         """Receive the host's steering inbox only when authored ``steerable: true``."""
         return self.steerable
+
+    def validate_execution_setup(self) -> None:
+        """Reject a steerable agent whose output contract is not plain text.
+
+        The contract is assigned after construction, so this is checked here as
+        well as at YAML load.
+        """
+        super().validate_execution_setup()
+        if self.steerable and not is_text_output(self.output_contract):
+            # An interrupted node returns its text so far; a structured value can't be partial.
+            raise ValueError(f"AGENT node {self.id!r}: steerable needs `str` output")
 
     def _validate_skills(self) -> None:
         """Require `all` or unique valid names, in tool-calling mode."""

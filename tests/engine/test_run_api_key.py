@@ -1,6 +1,9 @@
 """A run-level `llm_config.api_key` authenticates agents and stays out of every record."""
 
+import dataclasses
+import enum
 import json
+from collections.abc import Mapping
 
 import httpx
 import pytest
@@ -61,6 +64,30 @@ def _chat_completions(requests, *replies):
     return httpx.MockTransport(handler)
 
 
+def _record_calls(requests, *replies):
+    """Answer record-schema requests with a tool call and others with ``replies`` in order."""
+    texts = _chat_completions([], *replies)
+
+    def handler(request):
+        requests.append(request)
+        body = json.loads(request.content)
+        if "tools" not in body:
+            return texts.handle_request(request)
+        name = body["tools"][0]["function"]["name"]
+        return httpx.Response(200, json={
+            "id": "c", "object": "chat.completion", "created": 0, "model": "m",
+            "choices": [{"index": 0, "finish_reason": "tool_calls", "message": {
+                "role": "assistant", "content": None,
+                "tool_calls": [{"id": "t", "type": "function", "function": {
+                    "name": name, "arguments": json.dumps({"text": "ok"}),
+                }}],
+            }}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        })
+
+    return httpx.MockTransport(handler)
+
+
 def _route_openai_client(monkeypatch, transport):
     original = OpenAIClient.get_llm
 
@@ -71,10 +98,36 @@ def _route_openai_client(monkeypatch, transport):
     monkeypatch.setattr(OpenAIClient, "get_llm", construct)
 
 
-def _assert_hidden(path, *values):
-    assert SENTINEL not in path.read_text()
+def _plain(value, seen=None):
+    """Serialize events and results field by field, so a JSON scan sees every value."""
+    seen = set() if seen is None else seen
+    if id(value) in seen:
+        return None
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        seen = seen | {id(value)}
+        return {
+            field.name: _plain(getattr(value, field.name), seen)
+            for field in dataclasses.fields(value)
+            if not field.name.startswith("_")
+        }
+    if isinstance(value, Mapping):
+        return {str(key): _plain(item, seen | {id(value)}) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_plain(item, seen | {id(value)}) for item in value]
+    if isinstance(value, enum.Enum):
+        return value.value
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
+
+
+def _assert_hidden(path, *values, fragments=(SENTINEL,)):
+    texts = [] if path is None else [path.read_text()]
     for value in values:
-        assert SENTINEL not in repr(value)
+        texts += [repr(value), json.dumps(_plain(value))]
+    for text in texts:
+        for fragment in fragments:
+            assert fragment not in text
 
 
 def _stop_before_model(event):
@@ -239,40 +292,44 @@ def test_a_key_that_marks_no_agent_does_not_block_replay(tmp_path, monkeypatch, 
 
 
 def test_backward_sends_the_key_and_records_none_of_it(tmp_path, monkeypatch):
-    requests = []
+    requests, events = [], []
     path = tmp_path / "run.jsonl"
     with httpx.Client(transport=_chat_completions(requests, "ok", _NO_FEEDBACK)) as transport:
         _route_openai_client(monkeypatch, transport)
-        result = run_flow(load_flow(_FLOW), {}, log=path, learnable=True, llm_config=_VLLM)
+        result = run_flow(
+            load_flow(_FLOW), {}, log=path, on_event=events.append, learnable=True, llm_config=_VLLM
+        )
         assert result.status == "succeeded", result.failure
         # The result keeps the run's key in memory for its own backward calls.
         retained = result.backward("Be brief.")
         assert retained.status == "succeeded", retained.failure
         # After a restart, the key comes back through resume_flow or backward.
         for recovered, key in (
-            (resume_flow(load_flow(_FLOW), log=path, api_key=SENTINEL), None),
-            (resume_flow(load_flow(_FLOW), log=path), SENTINEL),
+            (resume_flow(load_flow(_FLOW), log=path, on_event=events.append, api_key=SENTINEL), None),
+            (resume_flow(load_flow(_FLOW), log=path, on_event=events.append), SENTINEL),
         ):
             outcome = recovered.backward("Be brief.", api_key=key)
             assert outcome.status == "succeeded", outcome.failure
             _assert_hidden(path, recovered, outcome)
     assert len(requests) == 4
     assert {request.headers["Authorization"] for request in requests} == {f"Bearer {SENTINEL}"}
-    _assert_hidden(path, result, retained)
+    assert events
+    _assert_hidden(path, events, result, retained)
 
 
 def test_backward_without_the_key_fails_clearly(tmp_path, monkeypatch):
-    requests = []
+    requests, events = [], []
     path = tmp_path / "run.jsonl"
     with httpx.Client(transport=_chat_completions(requests, "ok", _NO_FEEDBACK)) as transport:
         _route_openai_client(monkeypatch, transport)
-        run_flow(load_flow(_FLOW), {}, log=path, learnable=True, llm_config=_VLLM)
+        run_flow(load_flow(_FLOW), {}, log=path, on_event=events.append, learnable=True, llm_config=_VLLM)
         monkeypatch.setenv("VLLM_API_KEY", "sk-environment-key")
-        outcome = resume_flow(load_flow(_FLOW), log=path).backward("Be brief.")
+        recovered = resume_flow(load_flow(_FLOW), log=path, on_event=events.append)
+        outcome = recovered.backward("Be brief.")
     assert outcome.status == "failed"
     assert "api_key" in repr(outcome.failure)
     assert len(requests) == 1
-    assert SENTINEL not in path.read_text()
+    _assert_hidden(path, events, recovered, outcome)
 
 
 def test_invalid_config_with_a_key_fails_without_echoing_it(tmp_path):
@@ -295,7 +352,7 @@ def test_invalid_config_with_a_key_fails_without_echoing_it(tmp_path):
     _assert_hidden(path, events, result)
 
 
-def test_key_goes_only_to_agents_of_its_provider(monkeypatch):
+def test_key_goes_only_to_agents_of_its_provider(tmp_path, monkeypatch):
     flow = load_flow("""id: two
 name: two
 defs:
@@ -334,10 +391,14 @@ output: ${optout.output}
         return Model()
 
     monkeypatch.setattr(clients, "model_from_config", factory)
+    events = []
+    path = tmp_path / "run.jsonl"
     result = run_flow(
-        flow, {}, llm_config={"provider": "vllm", "model": "served-model", "api_key": SENTINEL}
+        flow, {}, log=path, on_event=events.append,
+        llm_config={"provider": "vllm", "model": "served-model", "api_key": SENTINEL},
     )
     assert result.status == "succeeded", result.failure
+    _assert_hidden(path, events, result)
     assert keys == {
         "served-model": SENTINEL,
         "nested-model": SENTINEL,
@@ -464,11 +525,9 @@ def _rejecting(requests, *, accept=0, replies=("ok",)):
 
 
 def _assert_rejected_key_hidden(path, *values):
-    fragments = (_REJECTED_KEY, _REJECTED_KEY[:8], "*" + _REJECTED_KEY[-4:])
-    texts = [path.read_text()] + [repr(value) for value in values]
-    for text in texts:
-        for fragment in fragments:
-            assert fragment not in text
+    _assert_hidden(
+        path, *values, fragments=(_REJECTED_KEY, _REJECTED_KEY[:8], "*" + _REJECTED_KEY[-4:])
+    )
 
 
 def test_a_provider_401_records_no_part_of_the_key(tmp_path, monkeypatch):
@@ -525,3 +584,106 @@ def test_a_profile_learner_401_records_no_part_of_the_key(tmp_path, monkeypatch)
     assert outcome.status == "failed"
     assert json.loads(requests[-1].content)["model"] == "profiler"
     _assert_rejected_key_hidden(path, events, result, outcome)
+
+
+_MAP_FLOW = """id: fan
+name: fan
+input:
+  values: list[str]
+defs:
+  body:
+    input:
+      value: str
+    nodes:
+      inner:
+        kind: agent
+        mode: plain
+        input:
+          value: ${input.value}
+        prompt: ${value}
+    output: ${inner.output}
+nodes:
+  fan:
+    kind: map
+    call: body
+    over: ${input.values}
+    input:
+      value: ${item}
+output: ${fan.output}
+"""
+
+_LOOP_FLOW = """id: turns
+name: turns
+defs:
+  body:
+    input:
+      text: str
+    nodes:
+      inner:
+        kind: agent
+        mode: plain
+        input:
+          text: ${input.text}
+        output:
+          text: str
+        prompt: ${text}
+    output: ${inner.output}
+nodes:
+  turns:
+    kind: loop
+    call: body
+    input:
+      text: start
+    times: 2
+output: ${turns.output.text}
+"""
+
+_GROWN = {"map": (_MAP_FLOW, {"values": ["a", "b"]}), "loop": (_LOOP_FLOW, {})}
+
+
+def _stop_in_grown_body(event):
+    if isinstance(event, NodeStarted) and "inner" in event.node_id:
+        raise RuntimeError("host stopped inside a grown body")
+
+
+@pytest.mark.parametrize("kind", _GROWN)
+def test_grown_agents_resume_with_the_key_and_record_none_of_it(tmp_path, monkeypatch, kind):
+    source, inputs = _GROWN[kind]
+    requests, events = [], []
+    path = tmp_path / "run.jsonl"
+    with pytest.raises(RuntimeError, match="grown body"):
+        run_flow(load_flow(source), inputs, log=path, on_event=_stop_in_grown_body, llm_config=_VLLM)
+    monkeypatch.setenv("VLLM_API_KEY", "sk-environment-key")
+    with httpx.Client(transport=_record_calls(requests)) as transport:
+        _route_openai_client(monkeypatch, transport)
+        result = resume_flow(load_flow(source), log=path, on_event=events.append, api_key=SENTINEL)
+    assert result.status == "succeeded", result.failure
+    assert len(requests) == 2
+    assert {request.headers["Authorization"] for request in requests} == {f"Bearer {SENTINEL}"}
+    _assert_hidden(path, events, result)
+
+
+@pytest.mark.parametrize("kind", _GROWN)
+def test_grown_agents_backward_with_the_key_and_record_none_of_it(tmp_path, monkeypatch, kind):
+    source, inputs = _GROWN[kind]
+    requests, events = [], []
+    path = tmp_path / "run.jsonl"
+    with httpx.Client(transport=_record_calls(requests, _NO_FEEDBACK)) as transport:
+        _route_openai_client(monkeypatch, transport)
+        result = run_flow(
+            load_flow(source), inputs, log=path, on_event=events.append, learnable=True,
+            llm_config=_VLLM,
+        )
+        assert result.status == "succeeded", result.failure
+        recovered = resume_flow(load_flow(source), log=path, on_event=events.append, api_key=SENTINEL)
+        outcome = recovered.backward("Review.")
+        assert outcome.status == "succeeded", outcome.failure
+        # Without the key, the grown agents fail instead of reading the environment.
+        monkeypatch.setenv("VLLM_API_KEY", "sk-environment-key")
+        sent = len(requests)
+        keyless = resume_flow(load_flow(source), log=path).backward("Review.")
+        assert keyless.status == "failed"
+        assert len(requests) == sent
+    assert len(requests) > 2
+    assert {request.headers["Authorization"] for request in requests} == {f"Bearer {SENTINEL}"}
+    _assert_hidden(path, events, result, recovered, outcome, keyless)

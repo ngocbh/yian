@@ -623,9 +623,16 @@ Most are just the functional model (above) made enforceable:
   and `bind_api_key` puts the key only on marked agents' run-local `llm_config`.
   `resume_flow(api_key=)` and `RunResult.backward(api_key=)` rebind it on the
   replayed program; a marked config without the key fails in
-  `split_model_config` rather than read the environment. `LLMConfig` keeps the
-  key a `SecretStr` excluded from dumps and hides inputs in validation errors.
-  Authored layers reject `api_key` and `_host_key`; `ReflectiveMemory` rejects `api_key`.
+  `split_model_config`, so agents marked for the key never fall back to the
+  environment. A key that marks no agent is dropped from the result and ignored
+  by replay. `LLMConfig` keeps the key a `SecretStr` excluded from dumps, rejects
+  an empty key, and hides inputs in validation errors. `AgentNode` (forward and
+  backward) and `ProfileMemory.learn` pass provider errors through
+  `llm_clients.redact.scrub_key`, which removes the key and masked echoes of it
+  before the runtime records a failure. Authored layers reject `api_key` and
+  `_host_key` (flow and def levels at load); `ProfileMemory` needs `provider`
+  with its key; `ReflectiveMemory` rejects `api_key` and always uses environment
+  credentials.
 - **One attempt barrier precedes commits** — accept Started, complete backward
   results and all frame proposals, then accept Ready. Commit each enabled policy
   once in recorded order, even with an empty batch, accepting its positive-attempt

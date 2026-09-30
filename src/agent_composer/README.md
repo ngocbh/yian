@@ -196,8 +196,13 @@ events, results, and manifests never hold it. `resume_flow(api_key=...)` and
 `RunResult.backward(api_key=...)` bind a re-supplied key the same way on the
 replayed program; AGENT backward takes it from its live node config, the one live
 field it reads. `split_model_config` fails a marked config that has no key, so
-recovery and backward never fall back to the environment. Authored layers cannot
-set `api_key` or `_host_key`, because they reach the recorded effective map.
+agents marked for the key never fall back to the environment. A key that marks no
+agent is dropped from the result and ignored by replay. Providers can echo a
+rejected key, so `AgentNode` and `ProfileMemory.learn` scrub the key and its
+masked fragments from their errors (`llm_clients.redact`) before the kind-blind
+runtime records the failure. Authored layers cannot set `api_key` or `_host_key`,
+because they reach the recorded effective map; the loader rejects a flow- or
+def-level `api_key`.
 
 The transport requires a completed Responses event before returning a model
 reply. Early EOF and incomplete replies raise rather than exposing tool calls

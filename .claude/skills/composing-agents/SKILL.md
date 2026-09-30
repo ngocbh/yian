@@ -216,7 +216,7 @@ once when the run initializes apply. `inherit: false` skips authored flow/parent
 layers but still receives those provider/model defaults.
 OpenAI subscription and API-key connections both use `provider: openai`;
 select the method and default model with `composer auth openai`.
-Never put `api_key` in a flow's `llm_config:`; loading or running fails. A Python
+Never put `api_key` in a flow's `llm_config:`; loading fails. A Python
 host passes it in `run_flow(..., llm_config={"provider": ..., "api_key": key})`,
 and again to `resume_flow`/`result.backward` as `api_key=key`. It reaches every
 AGENT of that provider, `inherit: false` ones included.

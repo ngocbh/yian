@@ -673,6 +673,8 @@ class ReflectiveMemory:
             llm_config (`JsonObject | None`, defaults to `None`): Public model
                 settings for new sessions, filled from ambient defaults when absent.
                 Recorded sessions retain their exact pinned model configuration.
+                ``api_key`` is rejected, so the learner always authenticates with
+                environment or saved-connection credentials.
             max_items (`int`, defaults to `100`): Positive lesson limit for new frames.
             recall_limit (`int`, defaults to `20`): Positive contextual recall limit
                 for new frames. Saved frames retain their own limits.

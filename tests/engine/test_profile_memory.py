@@ -382,3 +382,27 @@ def test_commit_rejects_batches_from_inner_frames(tmp_path) -> None:
         with pytest.raises(MemoryOperationError) as caught:
             session.commit("commit-1", (mutation,))
     assert caught.value.code == "profile.invalid_batch"
+
+
+def test_learner_errors_chain_a_cause_without_the_key(tmp_path, monkeypatch) -> None:
+    key = "sk-sentinel-profile-zqxw"
+    echo = f"Incorrect API key provided: {key[:8]}****{key[-4:]} ({key})"
+    store = FileMarkdownStore(tmp_path / "ada.md")
+    store.write("# Ada\n", base_version=store.read()[1])
+    memory = ProfileMemory(store, llm_config={**CONFIG, "api_key": key})
+
+    def refuse(config):
+        raise ValueError(echo)
+
+    for code, install in (
+        ("profile.provider", lambda: _install(monkeypatch, RuntimeError(echo))),
+        ("profile.model_construction", lambda: monkeypatch.setattr(profile, "model_from_config", refuse)),
+    ):
+        install()
+        with memory.open_run() as session:
+            with pytest.raises(MemoryOperationError) as caught:
+                session.open_frame(_spec(ROOT)).learn(LearnContext("run-1", ROOT, (), _feedback("x")))
+        cause = caught.value.__cause__
+        assert caught.value.code == code
+        assert str(cause) == "Incorrect API key provided: [REDACTED] ([REDACTED])"
+        assert key[:8] not in str(cause) and key[-4:] not in str(cause)

@@ -324,3 +324,18 @@ def test_masked_echoes_of_a_key_with_other_characters_are_redacted_whole():
     key = "sk.sentinel+scrub/zq.w"
     for echo in (f"{key[:8]}****{key[-4:]}", f"{key[:9]}...", f"***{key[-5:]}"):
         assert redact_key(f"provided: {echo}.", key) == "provided: [REDACTED]."
+
+
+def test_scrub_key_rewrites_a_message_attribute():
+    from agent_composer.llm_clients.redact import scrub_key
+
+    key = "sk-sentinel-scrub-zqxw"
+
+    class ProviderError(Exception):
+        def __init__(self, message):
+            super().__init__(message)
+            self.message = message
+
+    exc = ProviderError(f"Incorrect API key provided: {key[:8]}****{key[-4:]}.")
+    scrub_key(exc, key)
+    assert exc.message == "Incorrect API key provided: [REDACTED]."

@@ -402,7 +402,9 @@ Most are just the functional model (above) made enforceable:
   forward execution never invokes this hook. A reached AGENT uses at most one
   tool-free model call from accepted context and the exact retained effective
   model config; visible tool interactions are inert evidence, never executable
-  grants. No ambient/node config fallback, recall, render, or default replay.
+  grants. No ambient/node config fallback, recall, render, or default replay; the
+  one live field it reads is a marked agent's host `api_key`, which is never
+  recorded, from the replayed node's `llm_config`.
 - **Reverse traversal follows accepted outcome order** — gather all incoming
   feedback before invoking an occurrence once, and validate every returned
   channel before routing any message. Use trace-owned terminal identity and

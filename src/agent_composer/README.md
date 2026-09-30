@@ -27,6 +27,8 @@ know the shape of it:
   the same ordinary node path. `Node.backward` accepts recorded context and an
   ordered feedback tuple, returning input, self, and variable channels. Its base
   implementation returns empty channels; structural nodes own their routing rules.
+  AGENT backward reads one live field, the unrecorded host `api_key` in its node's
+  `llm_config`, because the record never holds the key.
 - The **program structure is fixed by the author**, as a function's call graph is
   fixed by its source. The LLM fills leaf boxes; it does not rewrite the graph at
   runtime. The authoritative record prefix makes engine state recoverable; it

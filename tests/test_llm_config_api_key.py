@@ -307,3 +307,20 @@ def test_scrub_key_survives_exceptions_it_cannot_rewrite():
         assert key not in str(exc)
         assert "[REDACTED]" in str(exc)
 
+
+
+def test_masked_echoes_need_three_visible_characters():
+    from agent_composer.llm_clients.redact import redact_key
+
+    key = "sk-sentinel-scrub-zqxz"
+    assert redact_key("s**t, **z, and sk**", key) == "s**t, **z, and sk**"
+    assert redact_key("sk***, ***xz, and ****qxz", key) == "sk***, ***xz, and [REDACTED]"
+    assert redact_key("sk-***", key) == "[REDACTED]"
+
+
+def test_masked_echoes_of_a_key_with_other_characters_are_redacted_whole():
+    from agent_composer.llm_clients.redact import redact_key
+
+    key = "sk.sentinel+scrub/zq.w"
+    for echo in (f"{key[:8]}****{key[-4:]}", f"{key[:9]}...", f"***{key[-5:]}"):
+        assert redact_key(f"provided: {echo}.", key) == "provided: [REDACTED]."

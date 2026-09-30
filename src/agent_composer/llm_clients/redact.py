@@ -8,6 +8,7 @@ calls raise, so failure messages and tracebacks never carry any part of it.
 
 from __future__ import annotations
 
+import functools
 import re
 from typing import Optional, Union
 
@@ -15,9 +16,22 @@ from pydantic import SecretStr
 
 REDACTED = "[REDACTED]"
 
-# A masked echo: optional visible head, a run of mask characters, optional visible tail.
-# The lookbehind starts a head only at the start of a run, which keeps matching linear.
-_MASKED = re.compile(r"(?<![A-Za-z0-9_\-])([A-Za-z0-9_\-]*)(?:\*{2,}|\.{3}|…)([A-Za-z0-9_\-]*)")
+# A masked echo counts only when it shows at least this many key characters on one side.
+_MIN_VISIBLE = 3
+_WORD = "A-Za-z0-9_\\-"
+_MARK = re.compile(r"\*{2,}|\.{3}|…")
+
+
+@functools.lru_cache(maxsize=32)
+def _masked_pattern(extra: str) -> re.Pattern[str]:
+    """Match a masked echo: visible head, mask marks, visible tail.
+
+    Visible characters are word characters plus ``extra``, the key's other
+    characters. The lookbehind starts a head only at the start of a run, which
+    keeps matching linear.
+    """
+    visible = f"[{_WORD}{re.escape(extra)}]"
+    return re.compile(f"(?<!{visible}){visible}*(?:{_MARK.pattern}){visible}*")
 
 
 def _plain(key: Union[str, SecretStr, None]) -> Optional[str]:
@@ -25,11 +39,31 @@ def _plain(key: Union[str, SecretStr, None]) -> Optional[str]:
     return key.get_secret_value() if isinstance(key, SecretStr) else key
 
 
+def _prefix_start(head: str, key: str) -> Optional[int]:
+    """Return where the longest suffix of ``head`` that begins ``key`` starts, if long enough."""
+    for size in range(min(len(head), len(key)), _MIN_VISIBLE - 1, -1):
+        if key.startswith(head[-size:]):
+            return len(head) - size
+    return None
+
+
+def _suffix_stop(tail: str, key: str) -> Optional[int]:
+    """Return where the longest prefix of ``tail`` that ends ``key`` stops, if long enough."""
+    for size in range(min(len(tail), len(key)), _MIN_VISIBLE - 1, -1):
+        if key.endswith(tail[:size]):
+            return size
+    return None
+
+
 def redact_key(text: str, key: Union[str, SecretStr, None]) -> str:
     """Replace ``key`` and masked echoes of it in ``text`` with ``[REDACTED]``.
 
-    A masked echo counts when its visible head is a prefix of the key or its
-    visible tail is a suffix of it; other masked text is left alone.
+    A masked echo is visible text around ``**``, ``...``, or ``…``. It counts
+    when at least three visible characters before the mask begin the key or at
+    least three after it end the key; the matching text and the mask are
+    replaced, and other masked text is left alone. Visible characters are
+    letters, digits, ``_``, ``-``, and any other character in the key, except a
+    mask character. A key that contains ``..`` or ``**`` can leave fragments.
 
     Args:
         text (`str`): Text that may contain the key.
@@ -42,23 +76,35 @@ def redact_key(text: str, key: Union[str, SecretStr, None]) -> str:
     if not plain or not text:
         return text
     text = text.replace(plain, REDACTED)
+    extra = "".join(sorted({
+        char for char in plain
+        if not (char.isascii() and (char.isalnum() or char in "_-")) and char not in "*…"
+    }))
 
     def masked(match: re.Match[str]) -> str:
-        head, tail = match.group(1), match.group(2)
-        if (head and plain.startswith(head)) or (tail and plain.endswith(tail)):
-            return REDACTED
-        return match.group(0)
+        token = match.group(0)
+        marks = list(_MARK.finditer(token))
+        head, tail = token[:marks[0].start()], token[marks[-1].end():]
+        start, stop = _prefix_start(head, plain), _suffix_stop(tail, plain)
+        if start is None and stop is None:
+            return token
+        # Text on a side that does not match the key is kept only when the other side matched.
+        left = "" if start is None else head[:start]
+        right = tail if stop is None else tail[stop:]
+        return left + REDACTED + right
 
-    return _MASKED.sub(masked, text)
+    return _masked_pattern(extra).sub(masked, text)
 
 
 def scrub_key(exc: BaseException, key: Union[str, SecretStr, None]) -> None:
     """Redact ``key`` in place from ``exc``, its chained causes, and group members.
 
-    String ``args``, a writable string ``message`` attribute, and ``__notes__``
-    are rewritten, which covers what ``str`` and tracebacks show for ordinary
-    exceptions, including provider SDK errors. An exception group's own message
-    is read-only and stays as raised; its members are scrubbed.
+    On ``exc``, every ``__cause__`` and ``__context__``, and every exception
+    group member, this rewrites string ``args``, a writable string ``message``
+    attribute, and ``__notes__``. Other attributes, such as an SDK error's
+    response body, are not rewritten. An exception group's own message is
+    read-only and stays as raised. An exception that cannot be rewritten is
+    skipped.
 
     Args:
         exc (`BaseException`): The raised exception.

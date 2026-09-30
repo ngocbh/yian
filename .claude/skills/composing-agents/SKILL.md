@@ -569,7 +569,8 @@ may pass 2-4 short `options`, shown as choices; the human can still type an answ
 `ask_user` on an AGENT node returns its answer to the same live tool loop; HUMAN_INPUT and
 WAIT return ordinary node outputs from their live calls. The host passes the handler
 per run: `run_flow(..., tools={"ask_user": handler})`. `composer run` and `composer chat` do
-this for you; a run without a handler fails any node that asks. There is no authored
+this for you. Without a handler, a flow whose AGENT grants `ask_user` fails before the run
+starts, and a `human_input` node fails when it asks. There is no authored
 `entry:`/`controls:` field on an AGENT node or event-mode WAIT.
 
 ## Validate & run

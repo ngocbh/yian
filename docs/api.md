@@ -205,8 +205,9 @@ result = run_flow(
 Each group item is a LangChain `BaseTool` named by its `name`, or a function or
 bound method named by its `__name__` (a lambda has no usable name and is
 rejected). Groups expand before the grant check, so the model calls the tools by
-their own names, never by the group name. A group is not a tool: a TOOL node
-cannot call it. Before the log is created, `run_flow` raises:
+their own names, never by the group name. A group is not a tool: a TOOL node's
+`tool_id:` may name a tool inside a group, but not the group itself. Before the
+log is created, `run_flow` raises:
 
 - `ValueError` when an AGENT grants a group (or tool) the mapping lacks;
 - `ValueError` when two different tools share a name, in one group or across
@@ -228,8 +229,8 @@ not mark which names are groups, every grant must resolve, not only group names:
 an unknown plain tool id, or `ask_user` granted with no handler, fails the same
 way. `run_flow` raises the `ValueError` before the log exists, and `resume_flow`
 raises it for an unfinished run before appending any record; neither returns a
-failed `RunResult`. (Before tool groups, an unresolvable grant failed only when a `tool_calling` node started, as a
-recorded node failure.)
+failed `RunResult`. (Before tool groups, an unresolvable grant failed only when a
+`tool_calling` node started, as a recorded node failure.)
 
 Groups are host capabilities, like every other entry in `tools`: the log records
 neither their contents nor their tools. Only the group names in the flow are part

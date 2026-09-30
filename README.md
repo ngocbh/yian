@@ -143,9 +143,10 @@ print(result.status, result.output)
 log, and invariant faults propagate as exceptions.
 
 A library host can inject per-run tools (including its `ask_user` handler and
-named tool groups that an AGENT grants by name) with `tools=`, provider configuration, and named memory implementations. Passing
-`learnable=True` retains accepted execution for a later explicit
-`result.backward(feedback)` call, with or without memory. Each call is a new
+named tool groups that an AGENT grants by name) with `tools=`, provider
+configuration, and named memory implementations. Passing `learnable=True`
+retains accepted execution for a later explicit `result.backward(feedback)` call,
+with or without memory. Each call is a new
 attempt, so feedback can arrive several times, days later. Forward
 execution returns before any learning or commit; memory recall is independent.
 The returned `BackwardOutcome` and `result.backward_outcome` keep feedback and

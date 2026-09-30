@@ -84,14 +84,14 @@ just what can.
 
 ## Unsupported checks (`_future/errors/`)
 
-These **load and run clean today** — the engine has no check to fire, so they assert nothing. They
+These **load clean today** — the loader has no check to fire, so they assert nothing. They
 exist because a per-entry source range alone cannot create a diagnostic. Each also needs a
 validation contract and a semantic origin carrier.
 
 | File | Does today | Missing contract |
 |---|---|---|
 | `f01-env-ref-not-interpolated.yaml` | `env: {API_KEY: ${nope.output}}` loads AND runs — the ref is passed through as a literal string; `env: {API_KEY: 123}` also passes (only env KEYS are checked) | Validation/interpolation semantics for `env:` values |
-| `f02-agent-tools-no-load-check.yaml` | an unknown id in an AGENT `tools:` list survives compile; at run time it becomes a canonical `node.execute` failure at the AGENT node | Load-time AGENT tool-id validation and a per-entry semantic origin |
+| `f02-agent-tools-no-load-check.yaml` | an unknown id in an AGENT `tools:` list survives compile; at run start, before any log exists, `run_flow` raises `ValueError` naming the node and the id | Load-time AGENT tool-id validation and a per-entry semantic origin |
 
 (`e08` covers the typed input boundary; `e04`/`e05` were dropped with the
 `kind: match` + payload-union design — tagged data is a discriminant record routed by

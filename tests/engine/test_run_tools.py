@@ -427,3 +427,64 @@ def test_agent_cannot_call_a_per_run_tool_the_flow_did_not_grant(monkeypatch):
 
     assert isinstance(evaluated.outcome, EvaluationFailure)
     assert "not granted" in evaluated.outcome.failure.message
+
+
+def _replies(*calls: tuple[str, dict[str, Any]]) -> list[AIMessage]:
+    """Build one tool-call reply per call, then a final answer."""
+    return [_tool_call(name, args) for name, args in calls] + [AIMessage(content="done")]
+
+
+def test_agent_granted_three_groups_sees_the_union_of_their_tools(monkeypatch):
+    chat = _ScriptedChat(_replies(("a", {"text": "1"}), ("c", {"text": "3"})))
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda config: chat)
+    tools = ToolSet(
+        {
+            "toolbox": [_named("a")],
+            "workspace": [_named("b"), _named("c")],
+            "company": [_named("d")],
+            "hidden": [_named("e")],
+        }
+    )
+    node = AgentNode(
+        "agent", prompt="go", tools=["toolbox", "workspace", "company"], mode="tool_calling"
+    )
+
+    evaluated = eval_node(node, None, VariablePool(), tools=tools)
+
+    assert evaluated.outcome == Output("done")
+    assert [tool.name for tool in chat.bound_tools] == ["a", "b", "c", "d"]
+    assert [message.content for message in chat.calls[-1] if isinstance(message, ToolMessage)] == [
+        "a:1",
+        "c:3",
+    ]
+
+
+@pytest.mark.parametrize("name", ["e", "toolbox"])
+def test_agent_grant_check_sees_expanded_group_names(monkeypatch, name: str):
+    chat = _ScriptedChat([_tool_call(name, {"text": "x"})])
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda config: chat)
+    tools = ToolSet({"toolbox": [_named("a")], "hidden": [_named("e")]})
+    node = AgentNode("agent", prompt="go", tools=["toolbox"], mode="tool_calling")
+
+    evaluated = eval_node(node, None, VariablePool(), tools=tools)
+
+    assert isinstance(evaluated.outcome, EvaluationFailure)
+    assert f"requested tool {name!r}, but it is not granted; granted tools: ['a']" in (
+        evaluated.outcome.failure.message
+    )
+
+
+def test_agent_with_groups_and_ask_user_asks_the_top_level_handler(monkeypatch):
+    chat = _ScriptedChat(_replies(("ask_user", {"question": "Which?"}), ("a", {"text": "go"})))
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda config: chat)
+    seen: list[dict[str, Any]] = []
+    tools = ToolSet({"toolbox": [_named("a")], "ask_user": _recording_handler(seen, "B")})
+    node = AgentNode("agent", prompt="go", tools=["toolbox", "ask_user"], mode="tool_calling")
+
+    evaluated = eval_node(node, None, VariablePool(), tools=tools)
+
+    assert evaluated.outcome == Output("done")
+    assert [tool.name for tool in chat.bound_tools] == ["a", "ask_user"]
+    assert [request["question"] for request in seen] == ["Which?"]
+    results = [m.content for m in chat.calls[-1] if isinstance(m, ToolMessage)]
+    assert results == ["B", "a:go"]

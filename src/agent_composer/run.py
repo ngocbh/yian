@@ -692,8 +692,8 @@ def _check_tool_grants(flow: CompiledFlow, tools: ToolSet) -> None:
     nodes that may never run, so an unresolvable grant raises `ValueError` from
     `run_flow` or `resume_flow` instead of failing its node when the node starts.
     """
-    for node_id, grants in _tool_grants(flow):
-        for tool_id in tools.expand(list(grants)):
+    for node_id, node in _static_nodes(flow):
+        for tool_id in tools.expand(list(node.granted_tools())):
             try:
                 tools.resolve([tool_id])
             except ValueError as exc:
@@ -705,23 +705,6 @@ def _check_tool_grants(flow: CompiledFlow, tools: ToolSet) -> None:
                         f"{list(tools.groups)}"
                     )
                 raise ValueError(f"AGENT node {node_id!r} grants {reason}") from None
-
-
-def _tool_grants(flow: Any, path: tuple[str, ...] = ()) -> list[tuple[str, tuple[str, ...]]]:
-    """Return each static node's non-empty tool grant, keyed by its node path.
-
-    Kind-blind: grants come from ``Node.granted_tools()`` and child flows from
-    ``Node.origin_children()``, so the run boundary imports no node class.
-    """
-    found: list[tuple[str, tuple[str, ...]]] = []
-    for node_id, node in flow.nodes.items():
-        node_path = (*path, node_id)
-        grants = node.granted_tools()
-        if grants:
-            found.append(("/".join(node_path), grants))
-        for child in node.origin_children():
-            found.extend(_tool_grants(child, node_path))
-    return found
 
 
 def _check_skills(
@@ -755,19 +738,27 @@ def _check_skills(
     return skills
 
 
-def _skill_grants(flow: Any, path: tuple[str, ...] = ()) -> list[tuple[str, Any]]:
-    """Return each static node's non-empty skill grant, keyed by its node path.
+def _skill_grants(flow: Any) -> list[tuple[str, Any]]:
+    """Return each static node's non-empty skill grant, keyed by its node path."""
+    return [
+        (node_id, node.skills)
+        for node_id, node in _static_nodes(flow)
+        if node.needs_skills and node.skills
+    ]
 
-    Kind-blind: grants are found by the ``needs_skills`` trait and child flows by
-    ``Node.origin_children()``, so the run boundary imports no node class.
+
+def _static_nodes(flow: Any, path: tuple[str, ...] = ()) -> list[tuple[str, Any]]:
+    """Return every static node of `flow` and its child flows, keyed by node path.
+
+    Kind-blind: child flows come from ``Node.origin_children()``, so the run
+    boundary imports no node class.
     """
     found: list[tuple[str, Any]] = []
     for node_id, node in flow.nodes.items():
         node_path = (*path, node_id)
-        if node.needs_skills and node.skills:
-            found.append(("/".join(node_path), node.skills))
+        found.append(("/".join(node_path), node))
         for child in node.origin_children():
-            found.extend(_skill_grants(child, node_path))
+            found.extend(_static_nodes(child, node_path))
     return found
 
 

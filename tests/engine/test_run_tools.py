@@ -157,6 +157,7 @@ def test_expand_replaces_each_group_with_its_tools_in_order():
     )
 
     assert tools.expand(["search", "toolbox", "empty", "work"]) == ["search", "a", "b", "_lower"]
+    assert tools.groups == ("toolbox", "empty", "work")
     assert ToolSet().expand(["search"]) == ["search"]
 
 

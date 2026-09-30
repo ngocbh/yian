@@ -345,7 +345,8 @@ def test_concurrent_runs_with_different_toolboxes_never_cross(first_tool_chat):
     [
         (
             {"toolbox": [], "workspace": []},
-            "AGENT node 'agent' grants a tool this run does not supply: unknown tool id 'company'",
+            "AGENT node 'agent' grants unknown tool or group 'company'; "
+            "tool groups in this run: ['toolbox', 'workspace']",
         ),
         (_groups([_tool("ws")]), "tool 'ws' is in both groups 'toolbox' and 'workspace'"),
         (_groups([_tool("ask_user")]), "group 'toolbox' has a tool named 'ask_user'"),
@@ -370,7 +371,7 @@ def test_resume_uses_the_group_contents_passed_to_resume(tmp_path: Path, first_t
     with pytest.raises(_HostStop):
         run_flow(flow, {}, log=path, tools=_groups([_tool("old", interrupt)]))
 
-    with pytest.raises(ValueError, match="unknown tool id 'toolbox'"):
+    with pytest.raises(ValueError, match="unknown tool or group 'toolbox'"):
         resume_flow(flow, log=path, tools={"workspace": [], "company": []})
     resumed = resume_flow(flow, log=path, tools=_groups([_tool("new")]))
 
@@ -402,6 +403,6 @@ output: ${outer.output}
 def test_a_missing_group_in_a_child_flow_fails_at_run_start(tmp_path: Path):
     path = tmp_path / "never.jsonl"
 
-    with pytest.raises(ValueError, match="AGENT node 'outer/agent' grants a tool"):
+    with pytest.raises(ValueError, match="AGENT node 'outer/agent' grants unknown tool or group 'toolbox'"):
         run_flow(load_flow(_NESTED_GROUPS_FLOW), {}, log=path, tools={})
     assert not path.exists()

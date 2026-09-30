@@ -692,12 +692,18 @@ def _check_tool_grants(flow: CompiledFlow, tools: ToolSet) -> None:
     the run at start rather than when the model first calls a tool.
     """
     for node_id, grants in _tool_grants(flow):
-        try:
-            tools.resolve(tools.expand(list(grants)))
-        except ValueError as exc:
-            raise ValueError(
-                f"AGENT node {node_id!r} grants a tool this run does not supply: {exc}"
-            ) from None
+        for tool_id in tools.expand(list(grants)):
+            try:
+                tools.resolve([tool_id])
+            except ValueError as exc:
+                if tool_id == "ask_user":
+                    reason = f"'ask_user': {exc}"
+                else:
+                    reason = (
+                        f"unknown tool or group {tool_id!r}; tool groups in this run: "
+                        f"{list(tools.groups)}"
+                    )
+                raise ValueError(f"AGENT node {node_id!r} grants {reason}") from None
 
 
 def _tool_grants(flow: Any, path: tuple[str, ...] = ()) -> list[tuple[str, tuple[str, ...]]]:

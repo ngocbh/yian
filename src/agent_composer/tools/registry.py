@@ -404,6 +404,11 @@ class ToolSet:
                 )
             return tool
 
+    @property
+    def groups(self) -> tuple[str, ...]:
+        """The names of this run's tool groups, in mapping order."""
+        return tuple(self._groups)
+
     def expand(self, tool_ids: list[str]) -> list[str]:
         """Replace each group id with the names of the tools in that group.
 

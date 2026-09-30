@@ -298,3 +298,63 @@ def test_deepseek_streams_through_its_non_streaming_path(monkeypatch):
     m = create_llm_client("deepseek", "deepseek-reasoner").get_llm()
     assert m.disable_streaming is True
     assert m._should_stream(async_api=False, stream=True) is False
+
+
+# --- anthropic: early close releases the HTTP response --------------------- #
+
+
+def _anthropic_httpx():
+    """Return the httpx package this Anthropic SDK is built on (newer SDKs use `httpx2`)."""
+    import importlib
+
+    import anthropic
+
+    client = next(c for c in anthropic.DefaultHttpxClient.__mro__ if c.__name__ == "Client")
+    return importlib.import_module(client.__module__.split(".")[0])
+
+
+def test_anthropic_stream_closed_early_closes_its_http_response():
+    import json as _json
+
+    import anthropic
+    from langchain_core.messages import HumanMessage
+
+    httpx = _anthropic_httpx()
+    state = {"sent": 0, "closed": False}
+
+    def event(name, data):
+        return f"event: {name}\ndata: {_json.dumps({'type': name, **data})}\n\n".encode()
+
+    class Body(httpx.SyncByteStream):
+        def __iter__(self):
+            yield event("message_start", {"message": {
+                "id": "m", "type": "message", "role": "assistant", "model": "claude-x",
+                "content": [], "stop_reason": None, "stop_sequence": None,
+                "usage": {"input_tokens": 10, "output_tokens": 1},
+            }})
+            yield event("content_block_start",
+                        {"index": 0, "content_block": {"type": "text", "text": ""}})
+            for index in range(50):
+                state["sent"] += 1
+                yield event("content_block_delta",
+                            {"index": 0, "delta": {"type": "text_delta", "text": f"w{index} "}})
+            yield event("content_block_stop", {"index": 0})
+            yield event("message_stop", {})
+
+        def close(self):
+            state["closed"] = True
+
+    def handler(request):
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=Body())
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        chat = create_llm_client("anthropic", "claude-sonnet-4-6", api_key="x").get_llm()
+        # ChatAnthropic builds its SDK client lazily in a cached property.
+        chat.__dict__["_client"] = anthropic.Anthropic(api_key="x", http_client=client)
+        chunks = chat.stream([HumanMessage("hi")])
+        texts = [next(chunks).content for _ in range(4)]
+        chunks.close()
+        assert state["closed"] is True
+        assert "w0 " in texts and state["sent"] < 50
+        whole = "".join(chunk.content for chunk in chat.stream([HumanMessage("hi")]))
+    assert whole == "".join(f"w{index} " for index in range(50))

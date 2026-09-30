@@ -5,7 +5,7 @@ Model-requested calls use the strict public schema. Host-owned interactions use
 the trusted path for injected metadata. ``ToolSet`` holds one run's tools: the
 global registry, or a host mapping (with its ``ask_user`` handler) that replaces it.
 
-Knows about: langchain-core and the Python standard library.
+Knows about: langchain-core, the skills leaf, and the Python standard library.
 Never imports: nodes, compile, compose, runtime, the run boundary, or CLI.
 """
 

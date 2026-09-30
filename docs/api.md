@@ -211,9 +211,10 @@ cannot call it. Before the log is created, `run_flow` raises:
 - `ValueError` when an AGENT grants a group (or tool) the mapping lacks;
 - `ValueError` when a tool name appears in two groups, twice in one group, or
   both in a group and as a top-level key, since tools are called by name;
-- `ValueError` when a group tool is named `ask_user`. The handler stays the
-  top-level `tools["ask_user"]` entry, and an AGENT that grants `ask_user` next to
-  groups gets that handler.
+- `ValueError` when a group tool is named `ask_user` or `load_skill`. The
+  `ask_user` handler stays the top-level `tools["ask_user"]` entry, and an AGENT
+  that grants `ask_user` next to groups gets that handler. `load_skill` is bound
+  by granting skills.
 
 Groups are host capabilities, like every other entry in `tools`: the log records
 neither their contents nor their tools. Only the group names in the flow are part

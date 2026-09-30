@@ -26,11 +26,15 @@ from typing import Annotated, Any, Callable
 from langchain_core.tools import BaseTool, InjectedToolArg, StructuredTool
 from pydantic import BeforeValidator, Field
 
+from agent_composer.skills.tool import LOAD_SKILL
+
 # Maps tool id -> a LangChain tool with a Pydantic argument schema. The supported
 # ``register_tool`` path guarantees that schema, which the strict invocation boundary needs.
 TOOL_REGISTRY: dict[str, BaseTool] = {}
 _REGISTRY_LOCK = RLock()
 _ASK_USER_ID = "ask_user"
+# Names a group tool may not take: the run's ask_user handler and the skills tool.
+_RESERVED_TOOL_NAMES = frozenset({_ASK_USER_ID, LOAD_SKILL})
 _MAX_OPTIONS = 6
 _MAX_OPTION_CHARS = 80
 
@@ -232,7 +236,8 @@ class ToolSet:
     An entry whose value is a list or tuple is a tool group. An AGENT node grants a
     group by its key, and `expand` replaces that key with the group's tool names.
     Every tool name in the run is unique: a group tool may not share its name with
-    another group's tool, a top-level key, or `ask_user`.
+    another group's tool or a top-level key, or take a reserved name (`ask_user`,
+    `load_skill`).
 
     Args:
         tools (`Mapping[str, BaseTool | Callable[..., Any] | list | tuple] | None`, *optional*, defaults to `None`):
@@ -257,8 +262,8 @@ class ToolSet:
             keyword fields.
         `ValueError`:
             A `BaseTool` entry's name differs from its key, or a group tool's name
-            is `ask_user`, repeats within its group, is in another group, or is a
-            top-level key.
+            is `ask_user` or `load_skill`, repeats within its group, is in another
+            group, or is a top-level key.
 
     Example:
         ```python
@@ -327,10 +332,14 @@ class ToolSet:
         for group, items in group_items.items():
             for tool in items:
                 name = tool.name
-                if name == _ASK_USER_ID:
+                if name in _RESERVED_TOOL_NAMES:
+                    hint = (
+                        "pass the handler as the top-level tools['ask_user'] entry"
+                        if name == _ASK_USER_ID
+                        else "granting skills binds it"
+                    )
                     raise ValueError(
-                        f"group {group!r} has a tool named 'ask_user'; pass the handler "
-                        "as the top-level tools['ask_user'] entry"
+                        f"group {group!r} has a tool named {name!r}, a reserved name; {hint}"
                     )
                 if name in owners:
                     where = (

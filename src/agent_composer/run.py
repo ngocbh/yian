@@ -325,7 +325,7 @@ def run_flow(
             that grants the group's key can call every tool in it. Each item is a
             `BaseTool` named by its `name`, or a function or method named by its
             `__name__`. Tool names are unique across the run, and no group tool
-            may be named `ask_user`. Every static AGENT grant must name a tool or
+            may be named `ask_user` or `load_skill`. Every static AGENT grant must name a tool or
             group in this set; this is checked before the log is created.
             Granting skills also binds the built-in ``load_skill`` tool,
             which is not part of this mapping.
@@ -350,7 +350,7 @@ def run_flow(
             Inputs, identity, worker count, model configuration, or prepared run
             state violates its contract, a `BaseTool` in `tools` is named
             differently from its key, a group tool's name clashes or is
-            `ask_user`, an AGENT grants a tool or group not in the run's tools,
+            reserved, an AGENT grants a tool or group not in the run's tools,
             or an AGENT grants skills while `skills` is `None` or lacks a
             listed skill.
         `MemorySetupError`:
@@ -569,7 +569,7 @@ def resume_flow(
         `ValueError`:
             The prefix is invalid, the flow fingerprint differs, the selected
             worker count violates its contract, a group tool's name clashes or
-            is `ask_user`, or an unfinished run's AGENT grants a tool or group
+            is reserved, or an unfinished run's AGENT grants a tool or group
             not in `tools`, or grants skills while `skills` is `None` or lacks
             a listed skill.
         `MemorySetupError`:

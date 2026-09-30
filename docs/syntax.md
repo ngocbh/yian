@@ -517,7 +517,8 @@ The host passes each group as a list of tools:
 them by their own names. The graph stays fixed; only the groups' contents change
 between runs, and the YAML does not show them. The run fails before it starts when
 an AGENT grants a name the host did not supply (a missing group or tool), when a
-tool name appears in two groups, or when a group contains a tool named `ask_user`.
+tool name appears in two groups, or when a group contains a tool named `ask_user`
+or `load_skill`.
 `ask_user` stays a separate top-level entry. `composer run` fills no groups, so a
 flow that grants one needs a Python host. See [Tool groups](api.md#tool-groups).
 

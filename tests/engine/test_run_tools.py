@@ -177,6 +177,7 @@ def test_a_group_is_not_itself_a_tool():
         ({"x": _upper, "one": [_named("x")]}, "'x' in group 'one' clashes with tools\['x'\]"),
         ({"x": [], "one": [_named("x")]}, "'x' in group 'one' clashes with tools\['x'\]"),
         ({"one": [_named("ask_user")]}, "group 'one' has a tool named 'ask_user'"),
+        ({"one": [_named("load_skill")]}, "group 'one' has a tool named 'load_skill'"),
     ],
 )
 def test_group_tool_names_must_be_unique_in_the_run(tools: dict[str, Any], error: str):

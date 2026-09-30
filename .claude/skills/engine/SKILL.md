@@ -340,7 +340,7 @@ Most are just the functional model (above) made enforceable:
 - **Blocking authorable effects return ordinary outputs** — an AGENT node's
   explicitly granted `ask_user` tool and HUMAN_INPUT call the run's own handler
   (passed as `tools={"ask_user": ...}`) inside their live invocation. A group
-  tool may never be named `ask_user`; host-filled tool groups (`tools={"box": [...]}`)
+  tool may never be named `ask_user` or `load_skill`; host-filled tool groups (`tools={"box": [...]}`)
   expand before the AGENT grant check, and unresolved grants fail at run start. The
   handler takes six keywords; the model can set only `question` and `options`
   (cleaned leniently), and the rest stay `InjectedToolArg`. The AGENT

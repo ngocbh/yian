@@ -24,7 +24,7 @@ from collections.abc import Generator
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from math import isfinite
-from typing import Any, Callable, ClassVar, Iterator, Optional, Union
+from typing import Any, Callable, ClassVar, Iterator, Optional, Protocol, Union, runtime_checkable
 
 from agent_composer.diagnostics import Failure, OriginRef
 from agent_composer.expr import ExpressionError
@@ -542,6 +542,23 @@ class _CapabilityFault(Exception):
         self.original = original
 
 
+@runtime_checkable
+class Steering(Protocol):
+    """A host inbox read by a running steerable node, keyed by its node id.
+
+    Calls come from worker threads, so an implementation must be thread-safe.
+    An expanded LOOP or MAP node has its own id per occurrence.
+    """
+
+    def drain(self, node_id: str) -> list[str]:
+        """Remove and return the steer messages queued for `node_id`, oldest first."""
+        ...
+
+    def interrupted(self, node_id: str) -> bool:
+        """Whether the host asked `node_id` to stop its loop and return now."""
+        ...
+
+
 class _AssertionStageError(Exception):
     """Private marker for an assertion failure produced by the base run wrapper."""
 
@@ -674,6 +691,10 @@ class Node(ABC):
     # ``caps['emit_stream']`` / ``caps['emit_event']`` only for the host sinks that exist.
     # AgentNode is the sole built-in opt-in; the runtime remains kind-blind.
     needs_live_events: ClassVar[bool] = False
+    # Declares "I read the host's steering inbox". The evaluator supplies
+    # ``caps['steering']`` only when the run boundary injected one and this is True.
+    # AgentNode reports its authored ``steerable:`` flag; the runtime remains kind-blind.
+    needs_steering: bool = False
 
     def __init__(
         self,

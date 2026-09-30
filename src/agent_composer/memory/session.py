@@ -1138,6 +1138,7 @@ class _Turn:
         self._ordinal = 0
         self._entered = False
         self._stop_error: BaseException | None = None
+        self._interrupted = False
 
     def _check(self) -> None:
         self._session._memory._check_pid()
@@ -1417,6 +1418,10 @@ class _Turn:
         self._publish(checkpoint)
         self._check()
 
+    def interrupt(self) -> None:
+        """Close this turn as `interrupted` when its body later returns normally."""
+        self._interrupted = True
+
     def _finish(self, primary: BaseException | None) -> None:
         lease = self._lease
         if lease is None or lease.released:
@@ -1436,6 +1441,7 @@ class _Turn:
                         if self._stop_error is not None
                         or self._session._closed
                         or (primary is not None and not isinstance(primary, Exception))
+                        or (primary is None and self._interrupted)
                         else "failed" if primary is not None else "completed"
                     )
                     self._publish(c.ConversationClosed(self._stamp(), status))

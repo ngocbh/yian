@@ -168,6 +168,7 @@ def test_final_log_only_runtime_and_public_surface():
         "learnable",
         "tools",
         "skills",
+        "steering",
     ]
     assert list(inspect.signature(run.resume_flow).parameters) == [
         "flow",
@@ -178,6 +179,7 @@ def test_final_log_only_runtime_and_public_surface():
         "memory",
         "tools",
         "skills",
+        "steering",
     ]
     assert [field.name for field in fields(run.RunResult)] == [
         "input",

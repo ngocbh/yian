@@ -26,6 +26,7 @@ from agent_composer.diagnostics import SourceRange
 from agent_composer.llm_clients import LLMConfig
 from agent_composer.memory.contracts import MemoryPolicySpec
 from agent_composer.nodes.agent import AgentNode
+from agent_composer.nodes.agent.node import is_text_output
 from agent_composer.nodes.contracts import Parameter, ValueContract
 from agent_composer.skills import SkillError
 
@@ -93,7 +94,7 @@ class AgentDescriptor(NodeDescriptor):
     fields are declared here, while `inputs`/`outputs` come from the base.
 
     Class attrs: `kind="agent"`; `allowed` adds normalized `inputs`/`outputs` plus `prompt`/`tools`/
-    `variables`/`mode`/`llm_config`/`long_term_memory`/`retries`/`asserts` to the commons;
+    `variables`/`mode`/`llm_config`/`long_term_memory`/`retries`/`asserts`/`steerable` to the commons;
     `required` is empty (no mandatory flat field); `binding_fields=("inputs",)` — a
     `prompt:`'s `${...}` refs are handled by
     template scanning, not the inline-call desugar, so only `inputs` is walked.
@@ -112,6 +113,7 @@ class AgentDescriptor(NodeDescriptor):
         "long_term_memory",
         "retries",
         "asserts",
+        "steerable",
     )
     required = NodeDescriptor.require()
     binding_fields = ("inputs",)
@@ -125,6 +127,7 @@ class AgentDescriptor(NodeDescriptor):
     llm_config: dict[str, Any] = field(default_factory=dict)
     retries: int = 2
     asserts: list[str] = field(default_factory=list)
+    steerable: bool = False
     memory_policy: MemoryPolicySpec | None = None
     # INTERNAL — never parsed from YAML; set only by the adaptive_questions desugar pass.
     # When present it overrides the surface-derived contract for a synthesized structured
@@ -160,7 +163,7 @@ class AgentDescriptor(NodeDescriptor):
         own_range: SourceRange | None,
         diagnostics: LoadDiagnostics,
     ) -> None:
-        """Check the `skills:` shape and parse a present named policy."""
+        """Check the `skills:` and `steerable:` shapes and parse a present named policy."""
         skills = kwargs.get("skills")
         if skills is not None and skills != "all" and not (
             isinstance(skills, list) and all(isinstance(name, str) for name in skills)
@@ -169,6 +172,11 @@ class AgentDescriptor(NodeDescriptor):
                 f"node {node_id!r} (kind={cls.kind}): `skills:` must be a list of "
                 "skill names or `all`",
                 range=ranges.get(("field", "skills")) or own_range,
+            )
+        if type(kwargs.get("steerable", False)) is not bool:
+            raise diagnostics.error(
+                f"node {node_id!r} (kind={cls.kind}): `steerable:` must be true or false",
+                range=ranges.get(("field", "steerable")) or own_range,
             )
         if "memory_policy" in kwargs:
             kwargs["memory_policy"] = parse_memory_policy(
@@ -226,6 +234,12 @@ class AgentDescriptor(NodeDescriptor):
                 f"node {self.id!r}: mode must be a string",
                 range=mode_range,
             )
+        steerable_range = self.field_ranges.get(("field", "steerable")) or self.range
+        if self.steerable and self.mode != "tool_calling":
+            raise ctx.diagnostics.error(
+                f"node {self.id!r}: steerable needs mode 'tool_calling', not {self.mode!r}",
+                range=steerable_range,
+            )
         variables = self._read_variables(ctx)
         try:
             node = AgentNode(
@@ -240,6 +254,7 @@ class AgentDescriptor(NodeDescriptor):
                 memory_policy=self.memory_policy,
                 variables=variables,
                 skills=self.skills,
+                steerable=self.steerable,
             )
         except ValueError as exc:
             # AgentNode validates the mode registry and skill grants; surface a
@@ -256,6 +271,12 @@ class AgentDescriptor(NodeDescriptor):
             if override is not None
             else self.output_contract(ctx)
         )
+        if self.steerable and not is_text_output(node.output_contract):
+            # Checked here too so the error points at the `steerable:` line.
+            raise ctx.diagnostics.error(
+                f"node {self.id!r}: steerable needs `str` output",
+                range=steerable_range,
+            )
         node.params = self.sink_params()
         input_names = {parameter.name for parameter in node.params}
         for variable in variables:

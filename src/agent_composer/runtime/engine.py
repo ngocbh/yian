@@ -22,12 +22,13 @@ from agent_composer.compile.model import GrowthRejected
 from agent_composer.diagnostics import Failure, FailureCode, OriginRef
 from agent_composer.events import RunFailed, StreamChunk
 from agent_composer.memory import ConversationInvocation, EvaluationEvidence
-from agent_composer.nodes.base import Grow, Output, Route, _HostStop
+from agent_composer.nodes.base import Grow, Output, Route, Steering, _HostStop
 from agent_composer.runtime.eval_node import (
     MemoryContextOpener,
     EvaluatedOutcome,
     EvaluationFailure,
     eval_node,
+    require_steering,
 )
 from agent_composer.runtime.contracts import ForwardCapture
 from agent_composer.runtime.trace import capture_bindings
@@ -99,6 +100,7 @@ class FlowEngine:
         memory_context_opener: MemoryContextOpener | None = None,
         tools: ToolSet | None = None,
         skills: Mapping[str, Any] | None = None,
+        steering: Steering | None = None,
     ) -> None:
         """Borrow a prepared state/log pair and configure one bounded drive.
 
@@ -114,6 +116,9 @@ class FlowEngine:
 
         ``skills`` is the run's host-supplied skill mapping, passed unchanged to
         nodes declaring ``needs_skills``; a non-mapping raises ``TypeError``.
+
+        ``steering`` is the run's host inbox, passed to nodes declaring
+        ``needs_steering``; an object without ``drain``/``interrupted`` raises ``TypeError``.
         """
         if type(state) is not RunState:
             raise TypeError("FlowEngine expects a RunState")
@@ -145,6 +150,7 @@ class FlowEngine:
         self.memory_context_opener = memory_context_opener
         self.tools = tools if tools is not None else ToolSet()
         self.skills = skills
+        self.steering = require_steering(steering)
 
     def run(self) -> Iterator[Any]:
         """Drive newly ready work and yield only post-durable observer notifications."""
@@ -469,6 +475,7 @@ class FlowEngine:
             memory_invocation=invocation,
             tools=self.tools,
             skills=self.skills,
+            steering=self.steering,
         )
 
     def _evaluate_worker(

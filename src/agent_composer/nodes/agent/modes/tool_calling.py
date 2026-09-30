@@ -23,13 +23,17 @@ from agent_composer.nodes.agent.memory import (
     current_history_messages,
     system_prompt_with_memory,
     prepare_history,
+    interrupt_turn,
     invoke_model,
     invoke_tool_effect,
+    record_skipped_tool,
 )
+from agent_composer.nodes.agent.interrupts import ReplyInterrupted
 from agent_composer.nodes.agent.live import (
     invoke_chat,
     live_sinks,
     observe_model_call,
+    observe_skipped_tool_call,
     observe_tool_call,
 )
 from agent_composer.nodes.agent.modes.common import (
@@ -104,17 +108,31 @@ def tool_calling(ctx: AgentRunContext) -> Output:
     ctx.check_stopped()
     chat = model.bind_tools(bound) if bound else model
     iterations = 0
+    reply = None
 
     while ctx.max_tool_iterations < 0 or iterations < ctx.max_tool_iterations:
         ctx.check_stopped()
+        if ctx.interrupted():
+            return _interrupted(ctx, reply)
+        # Steers join only here, never between a reply's tool results, and ride in
+        # new_messages so the next model request records them.
+        steers = [HumanMessage(content=steer) for steer in ctx.drain_steers()]
+        messages.extend(steers)
+        new_messages.extend(steers)
         exchange_id = uuid4().hex
-        reply = invoke_model(
-            ctx.memory_context.transcript,
-            lambda: invoke_chat(live, chat, messages, exchange_id=exchange_id),
-            new_messages=new_messages,
-            check_stopped=ctx.check_stopped,
-            exchange_id=exchange_id,
-        )
+        try:
+            reply = invoke_model(
+                ctx.memory_context.transcript,
+                lambda: invoke_chat(
+                    live, chat, messages, exchange_id=exchange_id,
+                    interrupted=ctx.interrupted,
+                ),
+                new_messages=new_messages,
+                check_stopped=ctx.check_stopped,
+                exchange_id=exchange_id,
+            )
+        except ReplyInterrupted as cut:
+            return _interrupted(ctx, cut.reply)
         new_messages = []
         iterations += 1
         messages.append(reply)
@@ -148,6 +166,28 @@ def tool_calling(ctx: AgentRunContext) -> Output:
 
         for call_index, call in enumerate(calls):
             ctx.check_stopped()
+            if ctx.interrupted():
+                for skipped_index, skipped in enumerate(calls[call_index:], call_index):
+                    skipped_name = str(skipped.get("name") or "")
+                    skipped_arguments = skipped.get("args") or {}
+                    skipped_id = skipped.get("id") or ""
+                    record_skipped_tool(
+                        ctx.memory_context.transcript,
+                        name=skipped_name,
+                        arguments=skipped_arguments,
+                        model_exchange_id=exchange_id,
+                        call_index=skipped_index,
+                        tool_call_id=skipped_id,
+                    )
+                    observe_skipped_tool_call(
+                        live,
+                        exchange_id=exchange_id,
+                        call_index=skipped_index,
+                        tool_call_id=skipped_id,
+                        name=skipped_name,
+                        arguments=skipped_arguments,
+                    )
+                return _interrupted(ctx, reply)
             raw_name = call.get("name") or ""
             name = str(raw_name) if isinstance(raw_name, str) else raw_name
             raw_arguments = call.get("args")
@@ -192,3 +232,9 @@ def tool_calling(ctx: AgentRunContext) -> Output:
         f"agent node {ctx.node_id!r} hit the tool-iteration cap "
         f"({ctx.max_tool_iterations}) without a final answer"
     )
+
+
+def _interrupted(ctx: AgentRunContext, reply: BaseMessage | None) -> Output:
+    """End an interrupted loop successfully with the latest reply's visible text."""
+    interrupt_turn(ctx.memory_context.transcript)
+    return Output(value="" if reply is None else text_of(reply))

@@ -12,7 +12,7 @@ from threading import Event
 from typing import Any, Callable
 
 from agent_composer.memory.contracts import EvaluationTrace, MemoryContext
-from agent_composer.nodes.base import Output, _HostStop
+from agent_composer.nodes.base import Output, Steering, _HostStop
 from agent_composer.skills.catalog import Skill
 from agent_composer.tools import ToolSet
 
@@ -46,11 +46,20 @@ class AgentRunContext:
     emit_event: Callable[[Any], None] | None = None  # transient in-loop observer sink
     base_system_prompt: str = DEFAULT_SYSTEM  # tool_calling system text before memory; lists skills
     skills: tuple[Skill, ...] = ()  # granted skills served by `load_skill`, sorted by name
+    steering: Steering | None = None  # host inbox; present only for a steerable node
 
     def check_stopped(self) -> None:
         """Unwind before starting another external effect after host cancellation."""
         if self.stop_event is not None and self.stop_event.is_set():
             raise _HostStop(primary=False)
+
+    def drain_steers(self) -> list[str]:
+        """Take the host's queued steer messages for this node; none without an inbox."""
+        return [] if self.steering is None else self.steering.drain(self.node_id)
+
+    def interrupted(self) -> bool:
+        """Whether the host asked this node to stop its loop and return its text so far."""
+        return self.steering is not None and self.steering.interrupted(self.node_id)
 
 
 # A mode is a pure node-body function of its process-local context.

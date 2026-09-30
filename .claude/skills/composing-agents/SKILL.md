@@ -205,6 +205,12 @@ reserved: never list it in `tools:`. When a flow grants skills, `composer run` s
 (personal wins). A library host
 passes `skills=` (`{}` for none); without it, or with a listed skill missing, the run
 fails before it starts.
+To let a watching human steer or interrupt the loop, add `steerable: true` (requires
+`mode: tool_calling` and `str` output or no `output:`; anything else is a load error).
+The host passes `run_flow(..., steering=inbox)`. Queued steers join as user messages at
+the top of the next iteration; an interrupt ends the loop at the next safe point and the
+node **succeeds** with its text so far, so downstream nodes and loops continue. Leave it
+off for checks and graders that must not be talked out of their job.
 A node may pin its model via `llm_config:`; otherwise the process defaults captured
 once when the run initializes apply. `inherit: false` skips authored flow/parent/CLI
 layers but still receives those provider/model defaults.

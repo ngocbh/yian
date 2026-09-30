@@ -2217,7 +2217,14 @@ CheckStopped: TypeAlias = Callable[[], None]
 
 
 class ConversationTurn(Protocol):
-    """A leased invocation that directly retains requests and actual observations."""
+    """A leased invocation that directly retains requests and actual observations.
+
+    Callers probe two optional capabilities with `getattr`; neither is part of
+    this protocol. `prepare_history(...)` projects and summarizes retained history
+    for an API request. `interrupt()` asks the turn to close as `interrupted`
+    when its body later returns normally, as a steerable AGENT does after a host
+    interrupt; a turn without it closes as usual. SessionMemory turns have both.
+    """
 
     @property
     def view(self) -> ConversationView:

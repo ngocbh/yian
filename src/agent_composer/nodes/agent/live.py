@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
 from langchain_core.callbacks import BaseCallbackHandler
-from langchain_core.messages import message_chunk_to_message
+from langchain_core.messages import AIMessage, message_chunk_to_message
 from langchain_core.runnables import Runnable
 
 from agent_composer.events import (
@@ -30,6 +30,7 @@ from agent_composer.events import (
     ToolCallFinished,
     ToolCallStarted,
 )
+from agent_composer.nodes.agent.interrupts import ReplyInterrupted
 from agent_composer.nodes.agent.modes.utils import text_of
 from agent_composer.nodes.base import _CapabilityFault, _HostStop
 
@@ -95,7 +96,14 @@ def _normalized(chat: Any, message: Any) -> Any:
     return message if normalize is None else normalize(message)
 
 
-def stream_reply(live: LiveSinks, chat: Any, messages: list, *, exchange_id: str) -> Any:
+def stream_reply(
+    live: LiveSinks,
+    chat: Any,
+    messages: list,
+    *,
+    exchange_id: str,
+    interrupted: Callable[[], bool] = lambda: False,
+) -> Any:
     """Stream one chat reply, forwarding visible text, and return the aggregated message.
 
     The aggregate is the same message `invoke` returns: chunks are summed and
@@ -104,16 +112,34 @@ def stream_reply(live: LiveSinks, chat: Any, messages: list, *, exchange_id: str
     `stream`, yields one complete message. The empty `final=True` chunk is sent
     only after the reply is complete and normalized, so a call that fails
     mid-stream ends without one; the host discards that exchange's partial text.
+
+    `interrupted` is checked when each chunk after the first arrives, before it is
+    shown. When it answers true the stream is closed, the `final=True` chunk is
+    sent so the host keeps the text it showed, and `ReplyInterrupted` carries that
+    text as the partial reply, with the usage reported so far. A single-chunk
+    reply, or an interrupt that lands on the last chunk, returns the complete
+    reply; the caller's tool loop then skips its calls.
+
+    Raises:
+        `ReplyInterrupted`: The host interrupted the reply mid-stream.
     """
     stream = getattr(chat, "stream", None)
     chunks = iter(stream(messages) if callable(stream) else (chat.invoke(messages),))
     aggregate = None
+    shown: list[str] = []
     try:
-        # One chunk at a time: the point where a cooperative stop check can go.
         for chunk in chunks:
+            # Checked before taking a later chunk, never after the last one, so a
+            # stream that runs out always returns its complete reply.
+            if aggregate is not None and interrupted():
+                live.emit_stream(
+                    StreamChunk(live.node_id, STREAM_KEY, "", final=True, exchange_id=exchange_id)
+                )
+                raise ReplyInterrupted(AIMessage(content="".join(shown)), usage_of(aggregate))
             aggregate = chunk if aggregate is None else aggregate + chunk
             text = text_of(chunk)
             if text:
+                shown.append(text)
                 live.emit_stream(StreamChunk(live.node_id, STREAM_KEY, text, exchange_id=exchange_id))
     finally:
         close = getattr(chunks, "close", None)
@@ -137,7 +163,8 @@ def observe_model_call(
     """Bracket one provider call with started/finished observers carrying its usage.
 
     `usage` maps the call's return value to its usage. After an exception it is
-    given `None`, so the default reports no usage for a failed call.
+    given `None`, so the default reports no usage for a failed call. A reply cut
+    by a host interrupt reports the usage carried by `ReplyInterrupted`.
     """
     if live is None or live.emit_event is None:
         return invoke()
@@ -147,6 +174,11 @@ def observe_model_call(
         reply = invoke()
     except (_CapabilityFault, _HostStop):
         raise
+    except ReplyInterrupted as cut:
+        # A host interrupt ends the call without a provider error; the provider
+        # still billed the chunks already received.
+        live.emit_event(ModelCallFinished(*identity, usage=cut.usage))
+        raise
     except Exception as exc:
         live.emit_event(ModelCallFinished(*identity, usage=usage(None), error=type(exc).__name__))
         raise
@@ -155,11 +187,23 @@ def observe_model_call(
 
 
 def invoke_chat(
-    live: Optional[LiveSinks], chat: Any, messages: list, *, exchange_id: str, purpose: str = "chat"
+    live: Optional[LiveSinks],
+    chat: Any,
+    messages: list,
+    *,
+    exchange_id: str,
+    purpose: str = "chat",
+    interrupted: Callable[[], bool] = lambda: False,
 ) -> Any:
-    """Call a chat model once: streamed when a stream sink exists, observed when an event sink does."""
+    """Call a chat model once: streamed when a stream sink exists, observed when an event sink does.
+
+    `interrupted` is checked between streamed chunks; an unstreamed call always
+    runs to completion.
+    """
     if live is not None and live.emit_stream is not None and purpose == "chat":
-        call = lambda: stream_reply(live, chat, messages, exchange_id=exchange_id)  # noqa: E731
+        call = lambda: stream_reply(  # noqa: E731
+            live, chat, messages, exchange_id=exchange_id, interrupted=interrupted
+        )
     else:
         call = lambda: chat.invoke(messages)  # noqa: E731
     return observe_model_call(live, call, purpose=purpose, exchange_id=exchange_id)
@@ -205,6 +249,13 @@ def _text(result: Any) -> Optional[str]:
         return None  # the caller's own representation boundary owns this error
 
 
+def _shown(arguments: Any) -> Any:
+    try:
+        return deepcopy(arguments)
+    except Exception:
+        return None
+
+
 def observe_tool_call(
     live: Optional[LiveSinks],
     invoke: Callable[[], Any],
@@ -218,12 +269,8 @@ def observe_tool_call(
     """Bracket one granted tool call with started/finished observers."""
     if live is None or live.emit_event is None:
         return invoke()
-    try:
-        shown = deepcopy(arguments)
-    except Exception:
-        shown = None
     identity = (live.node_id, exchange_id, call_index, tool_call_id, name)
-    live.emit_event(ToolCallStarted(*identity, arguments=shown))
+    live.emit_event(ToolCallStarted(*identity, arguments=_shown(arguments)))
     try:
         result = invoke()
     except (_CapabilityFault, _HostStop):
@@ -233,3 +280,27 @@ def observe_tool_call(
         raise
     live.emit_event(ToolCallFinished(*identity, result=_text(result)))
     return result
+
+
+SKIPPED_TOOL_ERROR = "interrupted"
+
+
+def observe_skipped_tool_call(
+    live: Optional[LiveSinks],
+    *,
+    exchange_id: str,
+    call_index: int,
+    tool_call_id: str,
+    name: str,
+    arguments: Any,
+) -> None:
+    """Report a tool call that a host interrupt skipped as started, then finished `interrupted`.
+
+    The same pair a run call emits, so a host can mark that call's part as
+    interrupted; the tool itself never runs.
+    """
+    if live is None or live.emit_event is None:
+        return
+    identity = (live.node_id, exchange_id, call_index, tool_call_id, name)
+    live.emit_event(ToolCallStarted(*identity, arguments=_shown(arguments)))
+    live.emit_event(ToolCallFinished(*identity, error=SKIPPED_TOOL_ERROR))

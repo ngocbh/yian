@@ -53,8 +53,10 @@ from agent_composer.memory import (
     MemoryFrameSpec,
     MemorySetupError,
 )
+from agent_composer.nodes.base import Steering
 from agent_composer.nodes.binding import coerce_inputs
 from agent_composer.runtime.engine import FlowEngine
+from agent_composer.runtime.eval_node import require_steering
 from agent_composer.runtime.backward import drive_backward
 from agent_composer.runtime.contracts import BackwardOutcome
 from agent_composer.runtime.log import (
@@ -262,6 +264,7 @@ def run_flow(
     learnable: bool = False,
     tools: Mapping[str, BaseTool | Callable[..., Any] | Sequence[BaseTool | Callable[..., Any]]] | None = None,
     skills: Mapping[str, Skill] | None = None,
+    steering: Steering | None = None,
 ) -> RunResult:
     """Start and drive one flow through an in-memory or durable run log.
 
@@ -337,6 +340,15 @@ def run_flow(
             built-in ``load_skill`` tool. ``skills: all`` grants every supplied
             skill. A flow that grants skills needs this mapping (``{}`` grants
             none). Pass the same mapping to `resume_flow`.
+        steering (`Steering | None`, *optional*, defaults to `None`):
+            The host inbox for AGENT nodes authored ``steerable: true``; other
+            nodes never call it. At the top of each tool-loop iteration the
+            node calls ``drain(node_id)`` and sends the returned messages to
+            the model as user messages, recorded with that model request in
+            session memory. When ``interrupted(node_id)`` turns true, the node
+            stops its loop at the next safe point and succeeds with the text
+            it has so far. Calls come from worker threads. Pass the same inbox
+            to `resume_flow`.
 
     Returns:
         `RunResult`:
@@ -346,7 +358,8 @@ def run_flow(
     Raises:
         `TypeError`:
             A public argument has the wrong type, including a malformed `tools`
-            entry or group item.
+            entry or group item, or a `steering` object without
+            `drain`/`interrupted`.
         `ValueError`:
             Inputs, identity, worker count, model configuration, or prepared run
             state violates its contract, a `BaseTool` in `tools` is named
@@ -375,6 +388,7 @@ def run_flow(
         learnable=learnable,
         tools=tools,
         skills=skills,
+        steering=steering,
         stop_event=threading.Event(),
     )
 
@@ -393,6 +407,7 @@ def _run_flow_controlled(
     learnable: bool = False,
     tools: Mapping[str, BaseTool | Callable[..., Any] | Sequence[BaseTool | Callable[..., Any]]] | None = None,
     skills: Mapping[str, Skill] | None = None,
+    steering: Steering | None = None,
     stop_event: threading.Event,
 ) -> RunResult:
     """Drive a fresh run with one host-owned cooperative stop event."""
@@ -403,6 +418,7 @@ def _run_flow_controlled(
     run_tools = ToolSet(tools)
     _check_tool_grants(flow.compiled, run_tools)
     skills = _check_skills(flow.compiled, skills)
+    require_steering(steering)
 
     # Identity belongs to the authored program, before cascade resolution or any
     # per-run copy can change object topology.
@@ -499,6 +515,7 @@ def _run_flow_controlled(
             ),
             tools=run_tools,
             skills=skills,
+            steering=steering,
         )
         events.extend(engine.run())
         return _result_from_state(state, log_path, events,
@@ -521,6 +538,7 @@ def resume_flow(
     memory: dict[str, Memory] | None = None,
     tools: Mapping[str, BaseTool | Callable[..., Any] | Sequence[BaseTool | Callable[..., Any]]] | None = None,
     skills: Mapping[str, Skill] | None = None,
+    steering: Steering | None = None,
 ) -> RunResult:
     """Recover primary execution or inspect a terminal run without backward work.
 
@@ -557,6 +575,9 @@ def resume_flow(
             The skills passed to the original `run_flow`. Nodes that restart see
             this mapping. An unfinished run of a flow that grants skills needs
             it; terminal inspection does not check it.
+        steering (`Steering | None`, *optional*, defaults to `None`):
+            The host inbox for steerable AGENT nodes, as in `run_flow`. Finished
+            nodes are replayed from the log and never call it.
 
     Returns:
         `RunResult`:
@@ -590,6 +611,7 @@ def resume_flow(
         memory=memory,
         tools=tools,
         skills=skills,
+        steering=steering,
         stop_event=threading.Event(),
     )
 
@@ -604,10 +626,12 @@ def _resume_flow_controlled(
     memory: dict[str, Memory] | None = None,
     tools: Mapping[str, BaseTool | Callable[..., Any] | Sequence[BaseTool | Callable[..., Any]]] | None = None,
     skills: Mapping[str, Skill] | None = None,
+    steering: Steering | None = None,
     stop_event: threading.Event,
 ) -> RunResult:
     """Recover and drive a durable run with a host-owned stop event."""
     run_tools = ToolSet(tools)
+    require_steering(steering)
     log_path = Path(log)
     retained_locator = log_path.absolute()
     authority = JsonlRunLog.resume(retained_locator)
@@ -672,6 +696,7 @@ def _resume_flow_controlled(
                 ),
                 tools=run_tools,
                 skills=skills,
+                steering=steering,
             )
             events.extend(engine.run())
 
@@ -1029,4 +1054,4 @@ def _note_cleanup_error(
         pass
 
 
-__all__ = ["RunResult", "resume_flow", "run_flow"]
+__all__ = ["RunResult", "Steering", "resume_flow", "run_flow"]

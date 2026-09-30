@@ -29,7 +29,7 @@ from agent_composer.nodes.agent.memory import compatibility
 from agent_composer.nodes.agent.backward import backward_agent
 from agent_composer.nodes.agent.modes.tool_calling import MAX_TOOL_ITERATIONS
 from agent_composer.nodes.agent.structured import _structured_validation_path
-from agent_composer.nodes.base import BackwardContext, BackwardResult, Node, NodeKind, Output, _CapabilityFault, _HostStop
+from agent_composer.nodes.base import BackwardContext, BackwardResult, Node, NodeKind, Output, Steering, _CapabilityFault, _HostStop
 from agent_composer.nodes.binding import apply_defaults
 from agent_composer.nodes.contracts import (
     Parameter,
@@ -41,9 +41,18 @@ from agent_composer.skills.catalog import Skill, SkillError, check_skill_name
 from agent_composer.skills.tool import LOAD_SKILL, system_prompt_with_skills
 from agent_composer.tools import ToolSet
 from agent_composer.typesys.types import canonical_type_label
-from agent_composer.typesys.values import build_value_as
+from agent_composer.typesys.values import ValueKind, build_value_as
 
 DEFAULT_MODE = "plain"
+
+
+def is_text_output(contract: Any) -> bool:
+    """Whether an AGENT output contract is plain text: none, or an untagged `str`."""
+    return contract is None or (
+        type(contract) is ValueContract
+        and contract.type.kind is ValueKind.STRING
+        and not contract.type.tags
+    )
 
 
 class AgentNode(Node):
@@ -79,6 +88,7 @@ class AgentNode(Node):
         memory_policy: MemoryPolicySpec | None = None,
         variables: list[Parameter] | None = None,
         skills: list[str] | Literal["all"] | None = None,
+        steerable: bool = False,
     ) -> None:
         super().__init__(node_id, title=title)
         self.prompt = prompt or ""
@@ -108,6 +118,29 @@ class AgentNode(Node):
         self.skills: list[str] | Literal["all"] = [] if skills is None else skills
         self._validate_skills()
         self._validate_variables()
+        if type(steerable) is not bool:
+            raise TypeError(f"AGENT node {node_id!r}: steerable must be a bool")
+        if steerable and self.mode != "tool_calling":
+            raise ValueError(
+                f"AGENT node {node_id!r}: steerable needs mode 'tool_calling', not {self.mode!r}"
+            )
+        self.steerable = steerable
+
+    @property
+    def needs_steering(self) -> bool:
+        """Receive the host's steering inbox only when authored ``steerable: true``."""
+        return self.steerable
+
+    def validate_execution_setup(self) -> None:
+        """Reject a steerable agent whose output contract is not plain text.
+
+        The contract is assigned after construction, so this is checked here as
+        well as at YAML load.
+        """
+        super().validate_execution_setup()
+        if self.steerable and not is_text_output(self.output_contract):
+            # An interrupted node returns its text so far; a structured value can't be partial.
+            raise ValueError(f"AGENT node {self.id!r}: steerable needs `str` output")
 
     def _validate_skills(self) -> None:
         """Require `all` or unique valid names, in tool-calling mode."""
@@ -216,6 +249,7 @@ class AgentNode(Node):
         emit_event: Callable[[Any], None] | None = None,
         base_system_prompt: str = DEFAULT_SYSTEM,
         skills: tuple[Skill, ...] = (),
+        steering: Steering | None = None,
     ) -> AgentRunContext:
         """Build the complete process-local context for one mode invocation."""
         output_type = (
@@ -239,6 +273,7 @@ class AgentNode(Node):
             emit_event=emit_event,
             base_system_prompt=base_system_prompt,
             skills=skills,
+            steering=steering,
         )
 
     def exception_origin(self, exception: Exception) -> OriginRef | None:
@@ -276,6 +311,7 @@ class AgentNode(Node):
         emit_stream: Callable[[Any], None] | None = None,
         emit_event: Callable[[Any], None] | None = None,
         skills: Mapping[str, Skill] | None = None,
+        steering: Steering | None = None,
     ) -> Output:
         """Render fresh locals once, publish established capture, and run the mode.
 
@@ -307,6 +343,9 @@ class AgentNode(Node):
             skills (`Mapping[str, Skill] | None`, *optional*, defaults to `None`):
                 The run's host-supplied skills. Granted ones are listed in the
                 system message and served by the built-in ``load_skill`` tool.
+            steering (`Steering | None`, *optional*, defaults to `None`):
+                The host inbox, supplied only when this node is steerable. The
+                tool loop drains steer messages and honors interrupts.
 
         Returns:
             `Output`: The selected mode's result.
@@ -374,6 +413,7 @@ class AgentNode(Node):
                 emit_event=emit_event,
                 base_system_prompt=base_system_prompt,
                 skills=granted,
+                steering=steering,
             )
         )
 

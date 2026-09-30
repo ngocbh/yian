@@ -159,6 +159,13 @@ Pass `on_stream=` to receive an AGENT's reply text as it is generated. Pass
 `ModelCallFinished` token usage and tool call observers. Both are live callbacks
 only; see [Python API](docs/api.md#run_flow) for payloads.
 
+A host can steer or interrupt a running `tool_calling` AGENT that declares
+`steerable: true`. Pass `steering=inbox`, any object with `drain(node_id) ->
+list[str]` and `interrupted(node_id) -> bool`. Queued steers reach the model as
+user messages at the top of the next loop iteration. An interrupt ends the loop
+at the next safe point, including mid-stream, and the node succeeds with its text
+so far. See [Steering](docs/api.md#steering).
+
 The built-in [`EpisodicMemory`](docs/learning.md#episodic-memory) keeps bounded,
 model-free execution history for later runs. A flow declares
 `long_term_memory: episodic`; its host injects the process-local backend and

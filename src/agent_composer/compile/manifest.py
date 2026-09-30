@@ -102,6 +102,7 @@ _KIND_FIELDS: dict[NodeKind, frozenset[str]] = {
             "memory_policy",
             "variables",
             "skills",
+            "steerable",
         }
     ),
     NodeKind.CODE: frozenset({"code"}),
@@ -1778,6 +1779,9 @@ def _node_manifest(
         # never changes behavior (the listing is sorted), so it is not identity either.
         if node.skills:
             manifest["skills"] = "all" if node.skills == "all" else sorted(node.skills)
+        # Omitted when false so flows that never opt in keep their identity.
+        if node.steerable:
+            manifest["steerable"] = True
         memory_policy = (
             None
             if node.memory_policy is None

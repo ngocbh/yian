@@ -79,6 +79,7 @@ class AgentNode(Node):
         memory_policy: MemoryPolicySpec | None = None,
         variables: list[Parameter] | None = None,
         skills: list[str] | Literal["all"] | None = None,
+        steerable: bool = False,
     ) -> None:
         super().__init__(node_id, title=title)
         self.prompt = prompt or ""
@@ -108,6 +109,18 @@ class AgentNode(Node):
         self.skills: list[str] | Literal["all"] = [] if skills is None else skills
         self._validate_skills()
         self._validate_variables()
+        if type(steerable) is not bool:
+            raise TypeError(f"AGENT node {node_id!r}: steerable must be a bool")
+        if steerable and self.mode != "tool_calling":
+            raise ValueError(
+                f"AGENT node {node_id!r}: steerable needs mode 'tool_calling', not {self.mode!r}"
+            )
+        self.steerable = steerable
+
+    @property
+    def needs_steering(self) -> bool:
+        """Receive the host's steering inbox only when authored ``steerable: true``."""
+        return self.steerable
 
     def _validate_skills(self) -> None:
         """Require `all` or unique valid names, in tool-calling mode."""

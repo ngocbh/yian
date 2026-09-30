@@ -674,6 +674,10 @@ class Node(ABC):
     # ``caps['emit_stream']`` / ``caps['emit_event']`` only for the host sinks that exist.
     # AgentNode is the sole built-in opt-in; the runtime remains kind-blind.
     needs_live_events: ClassVar[bool] = False
+    # Declares "I read the host's steering inbox". The evaluator supplies
+    # ``caps['steering']`` only when the run boundary injected one and this is True.
+    # AgentNode reports its authored ``steerable:`` flag; the runtime remains kind-blind.
+    needs_steering: bool = False
 
     def __init__(
         self,

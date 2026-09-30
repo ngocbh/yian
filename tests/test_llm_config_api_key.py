@@ -254,3 +254,18 @@ def test_scrub_key_leaves_unrelated_masks_alone():
         "token ab****yz and **bold**"
     )
     assert redact_key("anything", None) == "anything"
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["f" * 100_000, "ab*" * 33_000, ("0123456789abcdef" * 6_250) + "!", "a." * 50_000],
+    ids=["run", "single-stars", "hex-blob", "dots"],
+)
+def test_scrub_key_is_linear_on_long_text(text):
+    import time
+
+    from agent_composer.llm_clients.redact import redact_key
+
+    started = time.perf_counter()
+    redact_key(text, "sk-sentinel-scrub-zqxw")
+    assert time.perf_counter() - started < 0.5

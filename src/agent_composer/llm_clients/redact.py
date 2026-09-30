@@ -16,7 +16,8 @@ from pydantic import SecretStr
 REDACTED = "[REDACTED]"
 
 # A masked echo: optional visible head, a run of mask characters, optional visible tail.
-_MASKED = re.compile(r"([A-Za-z0-9_\-]*)(?:\*{2,}|\.{3}|…)([A-Za-z0-9_\-]*)")
+# The lookbehind starts a head only at the start of a run, which keeps matching linear.
+_MASKED = re.compile(r"(?<![A-Za-z0-9_\-])([A-Za-z0-9_\-]*)(?:\*{2,}|\.{3}|…)([A-Za-z0-9_\-]*)")
 
 
 def _plain(key: Union[str, SecretStr, None]) -> Optional[str]:

@@ -22,7 +22,7 @@ from typing import Any
 from pydantic import SecretStr
 
 from agent_composer.llm_clients.config import LLMConfig, merge_llm_config
-from agent_composer.llm_clients.connection import validate_connection
+from agent_composer.llm_clients.connection import HOST_KEY_MARKER, validate_connection
 from agent_composer.nodes.agent import AgentNode
 
 _REQUIRED_SELECTION_FIELDS = ("provider", "model")
@@ -210,27 +210,33 @@ def _apply_flow(
             _apply_flow(node.child, effective, path=node_path)
 
 
-def bind_api_key(flow: Any, provider: str, api_key: SecretStr) -> None:
-    """Give every static AGENT of ``provider`` the host's API key.
+def bind_api_key(flow: Any, api_key: SecretStr) -> None:
+    """Give every static AGENT marked for a host key that key.
 
-    The key goes on each node's run-local ``llm_config`` only, never into the
-    effective map that ``RunStarted`` records. Call it after
+    `ConnectionSnapshot.bind` marks the agents of the key's provider in the
+    effective map. The key goes on each marked node's run-local ``llm_config``
+    only, never into the map that ``RunStarted`` records. Call it after
     `apply_effective_llm_map`, which has already de-aliased every child callsite.
 
     Args:
         flow (`CompiledFlow`):
             A flow whose static agents already carry their effective configs.
-        provider (`str`):
-            The provider the key belongs to. Agents of other providers are untouched.
         api_key (`SecretStr`):
             The host-supplied key.
     """
     for node in flow.nodes.values():
-        if isinstance(node, AgentNode) and node.llm_config.get("provider") == provider:
+        if isinstance(node, AgentNode) and node.llm_config.get(HOST_KEY_MARKER) is True:
             node.llm_config["api_key"] = api_key
         child = getattr(node, "child", None)
         if child is not None:
-            bind_api_key(child, provider, api_key)
+            bind_api_key(child, api_key)
+
+
+def host_key_providers(effective: dict[str, dict[str, Any]]) -> set[str]:
+    """Return the providers whose agents a recorded effective map marks for a host key."""
+    return {
+        config["provider"] for config in effective.values() if config.get(HOST_KEY_MARKER) is True
+    }
 
 
 def _path_key(path: tuple[str, ...]) -> str:
@@ -240,7 +246,10 @@ def _path_key(path: tuple[str, ...]) -> str:
 
 def _require_concrete_selection(config: dict[str, Any], *, path: str) -> None:
     """Reject a config that could fall through to ambient provider/model settings."""
-    _validate_layer(config)
+    if config.get(HOST_KEY_MARKER, True) is not True:
+        raise ValueError(f"effective LLM config for {path!r} has an invalid host key marker")
+    # Only a resolved map carries the marker; authored layers may not.
+    _validate_layer({key: value for key, value in config.items() if key != HOST_KEY_MARKER})
     missing = [
         field
         for field in _REQUIRED_SELECTION_FIELDS
@@ -260,6 +269,8 @@ def _validate_layer(config: dict[str, Any]) -> None:
             "llm_config.api_key is a host credential; pass it in the run's llm_config, "
             "not in a flow file"
         )
+    if HOST_KEY_MARKER in config:
+        raise ValueError(f"llm_config.{HOST_KEY_MARKER} is internal to recorded runs")
     if str(config.get("provider", "")).lower() == "codex" or any(key in config for key in ("sandbox", "cwd")):
         LLMConfig(**config)
     if "_connection" in config:

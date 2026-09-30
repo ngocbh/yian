@@ -180,6 +180,7 @@ def test_final_log_only_runtime_and_public_surface():
         "tools",
         "skills",
         "steering",
+        "api_key",
     ]
     assert [field.name for field in fields(run.RunResult)] == [
         "input",

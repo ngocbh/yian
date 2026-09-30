@@ -39,15 +39,20 @@ def clean_env(tmp_path, monkeypatch):
         monkeypatch.delenv(name, raising=False)
 
 
-def _chat_completions(requests):
-    """Answer every chat-completions request with one fixed reply."""
+_NO_FEEDBACK = json.dumps({"input_feedback": {}, "self_feedback": [], "variable_feedback": {}})
+
+
+def _chat_completions(requests, *replies):
+    """Answer chat-completions requests with ``replies`` in order, repeating the last."""
+    replies = replies or ("ok",)
 
     def handler(request):
         requests.append(request)
+        content = replies[min(len(requests), len(replies)) - 1]
         return httpx.Response(200, json={
             "id": "c", "object": "chat.completion", "created": 0, "model": "m",
             "choices": [{"index": 0, "finish_reason": "stop",
-                         "message": {"role": "assistant", "content": "ok"}}],
+                         "message": {"role": "assistant", "content": content}}],
             "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
         })
 
@@ -64,10 +69,23 @@ def _route_openai_client(monkeypatch, transport):
     monkeypatch.setattr(OpenAIClient, "get_llm", construct)
 
 
-def _assert_hidden(path, events, result):
+def _assert_hidden(path, *values):
     assert SENTINEL not in path.read_text()
-    assert SENTINEL not in repr(events)
-    assert SENTINEL not in repr(result)
+    for value in values:
+        assert SENTINEL not in repr(value)
+
+
+def _stop_before_model(event):
+    if isinstance(event, NodeStarted) and event.node_id == "agent":
+        raise RuntimeError("host stopped before model")
+
+
+def _interrupted_run(path, llm_config):
+    with pytest.raises(RuntimeError, match="host stopped"):
+        run_flow(load_flow(_FLOW), {}, log=path, on_event=_stop_before_model, llm_config=llm_config)
+
+
+_VLLM = {"provider": "vllm", "model": "served-model", "api_key": SENTINEL}
 
 
 def test_openai_compatible_run_sends_the_key_and_records_none_of_it(tmp_path, monkeypatch):
@@ -87,11 +105,12 @@ def test_openai_compatible_run_sends_the_key_and_records_none_of_it(tmp_path, mo
     effective = json.loads(path.read_text().splitlines()[0])["payload"][
         "effective_llm_by_static_path"
     ]
-    assert effective == {"agent": {"provider": "vllm", "model": "served-model"}}
+    # A nonsecret marker records that the agent authenticates with a host key.
+    assert effective == {"agent": {"provider": "vllm", "model": "served-model", "_host_key": True}}
     _assert_hidden(path, events, result)
 
 
-def test_openai_run_records_a_host_connection_and_resume_needs_the_key(tmp_path, monkeypatch):
+def test_openai_run_records_a_host_connection(tmp_path, monkeypatch):
     server, events = ResponsesServer(tool_first=False), []
     path = tmp_path / "run.jsonl"
     llm_config = {"provider": "openai", "model": "gpt-5.5", "api_key": SENTINEL}
@@ -106,19 +125,91 @@ def test_openai_run_records_a_host_connection_and_resume_needs_the_key(tmp_path,
         "effective_llm_by_static_path"
     ]
     assert effective["agent"]["_connection"]["source"] == "host"
+    assert effective["agent"]["_host_key"] is True
     _assert_hidden(path, events, result)
 
-    def stop(event):
-        if isinstance(event, NodeStarted) and event.node_id == "agent":
-            raise RuntimeError("host stopped before model")
 
-    interrupted = tmp_path / "interrupted.jsonl"
-    with pytest.raises(RuntimeError, match="host stopped"):
-        run_flow(load_flow(_FLOW), {}, log=interrupted, on_event=stop, llm_config=llm_config)
-    resumed = resume_flow(load_flow(_FLOW), log=interrupted)
-    assert resumed.status == "failed"
-    assert "llm_config.api_key" in resumed.failure.message
-    assert SENTINEL not in interrupted.read_text()
+def test_resume_sends_the_key_passed_again_and_records_none_of_it(tmp_path, monkeypatch):
+    requests, events = [], []
+    path = tmp_path / "run.jsonl"
+    _interrupted_run(path, _VLLM)
+    with httpx.Client(transport=_chat_completions(requests)) as transport:
+        _route_openai_client(monkeypatch, transport)
+        result = resume_flow(load_flow(_FLOW), log=path, on_event=events.append, api_key=SENTINEL)
+    assert result.status == "succeeded", result.failure
+    assert requests[0].headers["Authorization"] == f"Bearer {SENTINEL}"
+    _assert_hidden(path, events, result)
+
+
+@pytest.mark.parametrize(
+    "llm_config, env",
+    [
+        (_VLLM, "VLLM_API_KEY"),
+        ({"provider": "anthropic", "model": "claude-sonnet-4-5", "api_key": SENTINEL},
+         "ANTHROPIC_API_KEY"),
+        ({"provider": "openai", "model": "gpt-5.5", "api_key": SENTINEL}, "OPENAI_API_KEY"),
+    ],
+)
+def test_resume_without_the_key_fails_instead_of_reading_the_environment(
+    tmp_path, monkeypatch, llm_config, env
+):
+    requests = []
+    path = tmp_path / "run.jsonl"
+    _interrupted_run(path, llm_config)
+    monkeypatch.setenv(env, "sk-environment-key")
+    with httpx.Client(transport=_chat_completions(requests)) as transport:
+        _route_openai_client(monkeypatch, transport)
+        result = resume_flow(load_flow(_FLOW), log=path)
+    assert result.status == "failed"
+    assert "api_key" in result.failure.message
+    assert requests == []
+    assert SENTINEL not in path.read_text()
+
+
+def test_resume_rejects_a_key_for_a_run_started_without_one(tmp_path, monkeypatch):
+    path = tmp_path / "run.jsonl"
+    monkeypatch.setenv("VLLM_API_KEY", "sk-environment-key")
+    _interrupted_run(path, {"provider": "vllm", "model": "served-model"})
+    with pytest.raises(ValueError, match="api_key") as caught:
+        resume_flow(load_flow(_FLOW), log=path, api_key=SENTINEL)
+    assert SENTINEL not in str(caught.value)
+
+
+def test_backward_sends_the_key_and_records_none_of_it(tmp_path, monkeypatch):
+    requests = []
+    path = tmp_path / "run.jsonl"
+    with httpx.Client(transport=_chat_completions(requests, "ok", _NO_FEEDBACK)) as transport:
+        _route_openai_client(monkeypatch, transport)
+        result = run_flow(load_flow(_FLOW), {}, log=path, learnable=True, llm_config=_VLLM)
+        assert result.status == "succeeded", result.failure
+        # The result keeps the run's key in memory for its own backward calls.
+        retained = result.backward("Be brief.")
+        assert retained.status == "succeeded", retained.failure
+        # After a restart, the key comes back through resume_flow or backward.
+        for recovered, key in (
+            (resume_flow(load_flow(_FLOW), log=path, api_key=SENTINEL), None),
+            (resume_flow(load_flow(_FLOW), log=path), SENTINEL),
+        ):
+            outcome = recovered.backward("Be brief.", api_key=key)
+            assert outcome.status == "succeeded", outcome.failure
+            _assert_hidden(path, recovered, outcome)
+    assert len(requests) == 4
+    assert {request.headers["Authorization"] for request in requests} == {f"Bearer {SENTINEL}"}
+    _assert_hidden(path, result, retained)
+
+
+def test_backward_without_the_key_fails_clearly(tmp_path, monkeypatch):
+    requests = []
+    path = tmp_path / "run.jsonl"
+    with httpx.Client(transport=_chat_completions(requests, "ok", _NO_FEEDBACK)) as transport:
+        _route_openai_client(monkeypatch, transport)
+        run_flow(load_flow(_FLOW), {}, log=path, learnable=True, llm_config=_VLLM)
+        monkeypatch.setenv("VLLM_API_KEY", "sk-environment-key")
+        outcome = resume_flow(load_flow(_FLOW), log=path).backward("Be brief.")
+    assert outcome.status == "failed"
+    assert "api_key" in repr(outcome.failure)
+    assert len(requests) == 1
+    assert SENTINEL not in path.read_text()
 
 
 def test_invalid_config_with_a_key_fails_without_echoing_it(tmp_path):
@@ -209,7 +300,16 @@ def test_authored_key_is_rejected_without_echoing_it():
     assert SENTINEL not in str(caught.value)
 
 
+def test_host_key_marker_is_not_an_authored_option():
+    with pytest.raises(ValueError, match="_host_key"):
+        run_flow(load_flow(_FLOW), {}, llm_config={"provider": "vllm", "model": "m", "_host_key": True})
+    flow = load_flow(_FLOW.replace("nodes:", "llm_config: {_host_key: true}\nnodes:"))
+    with pytest.raises(ValueError, match="_host_key"):
+        run_flow(flow, {}, llm_config={"provider": "vllm", "model": "m"})
+
+
 def test_reflective_memory_refuses_a_key_it_would_record():
     with pytest.raises(ValueError, match="api_key") as caught:
         ReflectiveMemory({"provider": "vllm", "model": "m", "api_key": SENTINEL})
     assert SENTINEL not in str(caught.value)
+

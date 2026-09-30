@@ -426,7 +426,9 @@ class AgentNode(Node):
 
         Args:
             context (`BackwardContext`): Accepted context, including recorded model
-                configuration and render/evidence components; live node fields are unused.
+                configuration and render/evidence components. Live node fields are
+                unused, except a host ``api_key`` bound by `resume_flow` or
+                `RunResult.backward`.
             feedback (`tuple[FeedbackValue, ...]`): Ordered ordinary output messages.
                 Empty effective feedback skips model construction.
 
@@ -443,7 +445,9 @@ class AgentNode(Node):
             `node.backward(recorded_context, ())` returns empty channels without
             constructing a model. Effective messages use only that recorded context.
         """
-        return backward_agent(context, feedback)
+        # The one live field: a host key, which is never recorded, bound for this call.
+        api_key = self.llm_config.get("api_key") if isinstance(self.llm_config, dict) else None
+        return backward_agent(context, feedback, api_key=api_key)
 
     def declared_variables(self) -> tuple[Parameter, ...]:
         """Return the canonical local declarations in their authored order."""

@@ -12,6 +12,7 @@ import json
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
+from pydantic import SecretStr
 
 import agent_composer.llm_clients as llm_clients
 from agent_composer.llm_clients.connection import legacy_connection_config
@@ -106,7 +107,9 @@ def _parse_result(text: str) -> BackwardResult:
     )
 
 
-def backward_agent(context: BackwardContext, feedback: tuple[FeedbackValue, ...]) -> BackwardResult:
+def backward_agent(
+    context: BackwardContext, feedback: tuple[FeedbackValue, ...], *, api_key: SecretStr | None = None,
+) -> BackwardResult:
     """Request ordinary feedback channels with one invocation of the recorded model.
 
     Args:
@@ -114,6 +117,8 @@ def backward_agent(context: BackwardContext, feedback: tuple[FeedbackValue, ...]
             render locals, model configuration, and inert visible evidence.
         feedback (`tuple[FeedbackValue, ...]`): Ordered messages selecting the
             recorded output. Valid empty selections skip model construction.
+        api_key (`SecretStr | None`, *optional*, defaults to `None`): The host key
+            for a recorded config marked for one; it is never recorded.
 
     Returns:
         `BackwardResult`: Parsed independent channels. The caller validates targets
@@ -150,6 +155,9 @@ def backward_agent(context: BackwardContext, feedback: tuple[FeedbackValue, ...]
     }
     prompt = json.dumps(material, ensure_ascii=False, allow_nan=False)
     prompt.encode("utf-8")
-    model = llm_clients.model_from_config(legacy_connection_config(data["effective_llm_config"]))
+    config = legacy_connection_config(data["effective_llm_config"])
+    if api_key is not None:
+        config["api_key"] = api_key
+    model = llm_clients.model_from_config(config)
     response = model.invoke([SystemMessage(content=_SYSTEM), HumanMessage(content=prompt)])
     return _parse_result(text_of(response))

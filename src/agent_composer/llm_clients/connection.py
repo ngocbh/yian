@@ -22,6 +22,14 @@ from .config import LLMConfig
 _API_ENDPOINT = "https://api.openai.com/v1"
 _SUBSCRIPTION_ENDPOINT = "https://chatgpt.com/backend-api/codex"
 _FIELDS = {"method", "source", "credential_id", "endpoint", "store_path"}
+# Recorded on each agent that authenticates with a key the host supplies outside
+# the record, so a later model call without that key fails instead of falling
+# back to the environment.
+HOST_KEY_MARKER = "_host_key"
+_HOST_KEY_MISSING = (
+    "This run's {provider} API key came from the host's llm_config.api_key and is not "
+    "recorded; pass api_key to resume_flow or RunResult.backward"
+)
 
 
 @dataclass(frozen=True)
@@ -42,13 +50,16 @@ class ConnectionSnapshot:
         """Attach selected connection identity without changing any input maps.
 
         Agents of ``host_key_provider`` authenticate with a key the host supplies
-        outside the map, so an OpenAI agent records a ``host`` connection instead
-        of the saved or environment one.
+        outside the map. Each records the nonsecret ``HOST_KEY_MARKER``, and an
+        OpenAI agent records a ``host`` connection instead of the saved or
+        environment one.
         """
         result = copy.deepcopy(effective)
         for config in result.values():
-            if config["provider"] == "openai" and host_key_provider == "openai":
-                config["_connection"] = self.host_connection()
+            if config["provider"] == host_key_provider:
+                config[HOST_KEY_MARKER] = True
+                if config["provider"] == "openai":
+                    config["_connection"] = self.host_connection()
                 continue
             connection = self.connections.get(config["provider"])
             if connection is not None:
@@ -176,7 +187,12 @@ def validate_connection(value: Any) -> dict[str, Any]:
 def split_model_config(
     config: dict[str, Any] | LLMConfig,
 ) -> tuple[LLMConfig, dict[str, Any] | None]:
-    """Validate public fields separately from host-owned connection metadata."""
+    """Validate public fields separately from host-owned connection metadata.
+
+    Raises:
+        `AuthError`: The config carries ``HOST_KEY_MARKER`` but no ``api_key``.
+        `ValueError`: A public field or the metadata is invalid.
+    """
     if isinstance(config, LLMConfig):
         raw = config.model_dump(exclude_none=True)
         # Dumps leave the key out; carry it across explicitly.
@@ -184,6 +200,11 @@ def split_model_config(
             raw["api_key"] = config.api_key
     else:
         raw = dict(config)
+    if HOST_KEY_MARKER in raw:
+        if raw.pop(HOST_KEY_MARKER) is not True:
+            raise ValueError("Invalid internal host key marker")
+        if raw.get("api_key") is None:
+            raise AuthError(_HOST_KEY_MISSING.format(provider=raw.get("provider")))
     metadata = raw.pop("_connection", None)
     validated = LLMConfig(**raw)
     if metadata is not None:
@@ -273,10 +294,7 @@ def connection_credentials(
             )
         return credentials
     if source == "host":
-        raise AuthError(
-            "This run's OpenAI API key came from the host's llm_config.api_key and is not "
-            "recorded; start a new run with the key"
-        )
+        raise AuthError(_HOST_KEY_MISSING.format(provider="openai"))
     if source == "missing":
         raise AuthError(
             "No OpenAI connection was selected; run 'composer auth openai' or set OPENAI_API_KEY before starting a new run"

@@ -180,3 +180,16 @@ def test_host_connection_needs_the_config_key(clean_env):
         validate_connection({**connection, "credential_id": "a" * 64})
     with pytest.raises(ValueError):
         validate_connection({**connection, "method": "subscription"})
+
+
+@pytest.mark.parametrize("provider, model", [("vllm", "served-model"), ("anthropic", "claude-sonnet-4-5")])
+def test_a_host_key_marker_without_the_key_fails_before_the_environment(clean_env, provider, model):
+    clean_env.setenv("VLLM_API_KEY", "sk-environment-key")
+    clean_env.setenv("ANTHROPIC_API_KEY", "sk-environment-key")
+    marked = {"provider": provider, "model": model, "_host_key": True}
+    with pytest.raises(AuthError, match="llm_config.api_key"):
+        model_from_config(marked)
+    validated, _ = split_model_config({**marked, "api_key": SENTINEL})
+    assert validated.api_key.get_secret_value() == SENTINEL
+    with pytest.raises(ValueError, match="marker"):
+        split_model_config({**marked, "_host_key": "yes", "api_key": SENTINEL})

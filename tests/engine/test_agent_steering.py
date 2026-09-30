@@ -15,10 +15,11 @@ from agent_composer.events import ModelCallFinished, StreamChunk
 from agent_composer.memory.session import SessionMemory
 from agent_composer.nodes.agent import MODES, AgentNode
 from agent_composer.nodes.base import Output
-from agent_composer.run import Steering, run_flow
-from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
+from agent_composer.run import Steering, resume_flow, run_flow
+from agent_composer.runtime.eval_node import eval_node
 from agent_composer.typesys.pool import VariablePool
 from tests.engine._stream_fakes import ScriptedStreamChat, reply
+from tests.engine.test_agent_in_loop import FLOW as LOOP_FLOW
 from tests.engine.test_agent_live_events import CONFIG
 from tests.engine.test_agent_session import _view
 
@@ -358,3 +359,96 @@ def test_interrupt_mid_stream_keeps_the_partial_text_and_ends_the_stream(monkeyp
     replies = [item.payload["message"]["data"] for item in view.items
                if item.payload["message"]["type"] == "ai"]
     assert [(r["content"], r.get("tool_calls")) for r in replies] == [("hello big", [])]
+
+
+# --- finished nodes, loops, and resume ----------------------------------------- #
+
+_AFTER = """\
+  after:
+    kind: agent
+    input: {draft: "${chat.output}"}
+    prompt: "summarize: ${draft}"
+    output: str
+"""
+
+
+class _SimulatedCrash(BaseException):
+    """Process loss that bypasses ordinary node-failure conversion."""
+
+
+def _crash(messages):
+    raise _SimulatedCrash("process lost")
+
+
+def test_interrupt_for_a_finished_node_is_ignored(monkeypatch):
+    inbox = Inbox()
+
+    def interrupt_chat_late(messages):
+        inbox.interrupt.add("chat")
+        return reply("summary")
+
+    model = _recorder(monkeypatch, [reply("chat done"), interrupt_chat_late])
+    result = run_flow(load_flow(_flow(after=_AFTER)), {}, steering=inbox)
+    assert result.status == "succeeded" and result.output == "summary"
+    assert model.calls[1][-1] == HumanMessage("summarize: chat done")
+
+
+def test_interrupted_agent_in_a_loop_lets_the_loop_continue(monkeypatch):
+    inbox = Inbox()
+
+    def ping() -> str:
+        """Ping."""
+        return "pong"
+
+    def interrupt_this_occurrence(messages):
+        inbox.interrupt.add(inbox.calls[-1][1])
+        return reply("partial", calls=[("ping", {}, "p-1")])
+
+    _recorder(monkeypatch, [interrupt_this_occurrence, reply("turn2")])
+    flow = LOOP_FLOW.replace(
+        "        mode: tool_calling\n", "        mode: tool_calling\n        steerable: true\n"
+    )
+    result = run_flow(load_flow(flow), {"seed": "s"}, steering=inbox, tools={"ping": ping})
+    assert result.status == "succeeded" and result.output == "s|partial|turn2"
+    # Each LOOP occurrence has its own node id, so the interrupt stayed with the first.
+    assert len({node_id for _, node_id in inbox.calls}) == 2
+
+
+def test_resume_reuses_a_finished_steered_node_without_calling_the_inbox(monkeypatch, tmp_path):
+    path = tmp_path / "run.jsonl"
+    flow = load_flow(_flow(after=_AFTER))
+    first = _recorder(monkeypatch, [reply("chat done"), _crash])
+    with pytest.raises(_SimulatedCrash):
+        run_flow(flow, {}, steering=Inbox({"chat": ["use dataset B"]}), log=path)
+    assert first.calls[0][-1] == HumanMessage("use dataset B")
+
+    resumed_model = _recorder(monkeypatch, [reply("summary")])
+    inbox = Inbox({"chat": ["new steer"]}, interrupt={"chat"})
+    resumed = resume_flow(flow, log=path, steering=inbox)
+    assert resumed.status == "succeeded" and resumed.output == "summary"
+    assert resumed_model.calls[0][-1] == HumanMessage("summarize: chat done")
+    assert inbox.calls == []
+
+
+def test_retry_after_a_mid_node_kill_sees_the_recorded_steer(monkeypatch, tmp_path):
+    path = tmp_path / "run.jsonl"
+    memory = SessionMemory()
+    inbox = Inbox()
+
+    def lookup(topic: str) -> str:
+        """Look up a topic."""
+        inbox.queued["chat"] = ["use dataset B"]
+        return "found"
+
+    flow = load_flow(_flow(tools=["lookup"], memory=True))
+    _recorder(monkeypatch, [reply(calls=[("lookup", {"topic": "a"}, "call-1")]), _crash])
+    with pytest.raises(_SimulatedCrash):
+        run_flow(flow, {}, steering=inbox, tools={"lookup": lookup},
+                 memory={"session": memory}, log=path)
+    assert inbox.queued == {}
+
+    retry = _recorder(monkeypatch, [reply("done")])
+    resumed = resume_flow(flow, log=path, steering=Inbox(), tools={"lookup": lookup},
+                          memory={"session": memory})
+    assert resumed.status == "succeeded" and resumed.output == "done"
+    assert "use dataset B" in [message.content for message in retry.calls[0]]

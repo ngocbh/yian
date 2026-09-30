@@ -29,7 +29,7 @@ from agent_composer.nodes.agent.memory import compatibility
 from agent_composer.nodes.agent.backward import backward_agent
 from agent_composer.nodes.agent.modes.tool_calling import MAX_TOOL_ITERATIONS
 from agent_composer.nodes.agent.structured import _structured_validation_path
-from agent_composer.nodes.base import BackwardContext, BackwardResult, Node, NodeKind, Output, _CapabilityFault, _HostStop
+from agent_composer.nodes.base import BackwardContext, BackwardResult, Node, NodeKind, Output, Steering, _CapabilityFault, _HostStop
 from agent_composer.nodes.binding import apply_defaults
 from agent_composer.nodes.contracts import (
     Parameter,
@@ -229,6 +229,7 @@ class AgentNode(Node):
         emit_event: Callable[[Any], None] | None = None,
         base_system_prompt: str = DEFAULT_SYSTEM,
         skills: tuple[Skill, ...] = (),
+        steering: Steering | None = None,
     ) -> AgentRunContext:
         """Build the complete process-local context for one mode invocation."""
         output_type = (
@@ -252,6 +253,7 @@ class AgentNode(Node):
             emit_event=emit_event,
             base_system_prompt=base_system_prompt,
             skills=skills,
+            steering=steering,
         )
 
     def exception_origin(self, exception: Exception) -> OriginRef | None:
@@ -289,6 +291,7 @@ class AgentNode(Node):
         emit_stream: Callable[[Any], None] | None = None,
         emit_event: Callable[[Any], None] | None = None,
         skills: Mapping[str, Skill] | None = None,
+        steering: Steering | None = None,
     ) -> Output:
         """Render fresh locals once, publish established capture, and run the mode.
 
@@ -320,6 +323,9 @@ class AgentNode(Node):
             skills (`Mapping[str, Skill] | None`, *optional*, defaults to `None`):
                 The run's host-supplied skills. Granted ones are listed in the
                 system message and served by the built-in ``load_skill`` tool.
+            steering (`Steering | None`, *optional*, defaults to `None`):
+                The host inbox, supplied only when this node is steerable. The
+                tool loop drains steer messages and honors interrupts.
 
         Returns:
             `Output`: The selected mode's result.
@@ -387,6 +393,7 @@ class AgentNode(Node):
                 emit_event=emit_event,
                 base_system_prompt=base_system_prompt,
                 skills=granted,
+                steering=steering,
             )
         )
 

@@ -24,7 +24,7 @@ from collections.abc import Generator
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from math import isfinite
-from typing import Any, Callable, ClassVar, Iterator, Optional, Union
+from typing import Any, Callable, ClassVar, Iterator, Optional, Protocol, Union, runtime_checkable
 
 from agent_composer.diagnostics import Failure, OriginRef
 from agent_composer.expr import ExpressionError
@@ -540,6 +540,23 @@ class _CapabilityFault(Exception):
         """Retain the exact host fault so the evaluator can propagate its identity."""
         super().__init__(str(original))
         self.original = original
+
+
+@runtime_checkable
+class Steering(Protocol):
+    """A host inbox read by a running steerable node, keyed by its node id.
+
+    Calls come from worker threads, so an implementation must be thread-safe.
+    An expanded LOOP or MAP node has its own id per occurrence.
+    """
+
+    def drain(self, node_id: str) -> list[str]:
+        """Remove and return the steer messages queued for `node_id`, oldest first."""
+        ...
+
+    def interrupted(self, node_id: str) -> bool:
+        """Whether the host asked `node_id` to stop its loop and return now."""
+        ...
 
 
 class _AssertionStageError(Exception):

@@ -55,6 +55,7 @@ from agent_composer.nodes.base import (
     Node,
     Output,
     Route,
+    Steering,
     _AssertionStageError,
     _BindingStageError,
     _CapabilityFault,
@@ -134,6 +135,54 @@ def _observer_sink(sink: Callable[[Any], None]) -> Callable[[Any], None]:
             raise _CapabilityFault(exc) from exc
 
     return emit
+
+
+def require_steering(steering: Any) -> Steering | None:
+    """Return a host steering inbox after checking its shape, or `None`.
+
+    Raises:
+        `TypeError`: `steering` is not `None` and lacks callable `drain`/`interrupted`.
+    """
+    if steering is not None and not (
+        callable(getattr(steering, "drain", None))
+        and callable(getattr(steering, "interrupted", None))
+    ):
+        raise TypeError("steering must provide drain(node_id) and interrupted(node_id), or be None")
+    return steering
+
+
+class _SteeringCapability:
+    """Carry host inbox faults and malformed answers out of a node body as capability faults.
+
+    The evaluator unwraps the carrier and re-raises the original exception, so a
+    failing inbox stays a host fault, never a node failure.
+    """
+
+    def __init__(self, inbox: Steering) -> None:
+        self._inbox = inbox
+
+    def drain(self, node_id: str) -> list[str]:
+        """Return the node's queued steer messages as a fresh list of strings."""
+        messages = self._call(self._inbox.drain, node_id)
+        if type(messages) is not list or any(type(message) is not str for message in messages):
+            raise _CapabilityFault(TypeError("steering.drain must return a list of str"))
+        return list(messages)
+
+    def interrupted(self, node_id: str) -> bool:
+        """Return whether the host interrupted the node."""
+        value = self._call(self._inbox.interrupted, node_id)
+        if type(value) is not bool:
+            raise _CapabilityFault(TypeError("steering.interrupted must return a bool"))
+        return value
+
+    @staticmethod
+    def _call(method: Callable[[str], Any], node_id: str) -> Any:
+        try:
+            return method(node_id)
+        except (_CapabilityFault, _HostStop):
+            raise
+        except Exception as exc:
+            raise _CapabilityFault(exc) from exc
 
 
 WorkerOutcome: TypeAlias = Output | Route | Grow | EvaluationFailure
@@ -437,6 +486,7 @@ def _evaluate_node_stream(
     tools: ToolSet | None = None,
     live_stream: Callable[[StreamChunk], None] | None = None,
     live_event: Callable[[Any], None] | None = None,
+    steering: Steering | None = None,
 ) -> Generator[StreamChunk, None, WorkerOutcome]:
     """Bind and run one node, yielding chunks and returning one normalized result.
 
@@ -595,6 +645,8 @@ def _evaluate_node_stream(
         caps["emit_event"] = live_event
     if skills is not None and node.needs_skills is True:
         caps["skills"] = skills
+    if steering is not None and node.needs_steering is True:
+        caps["steering"] = _SteeringCapability(steering)
 
     try:
         with _memory_context_capability(
@@ -715,6 +767,7 @@ def eval_node(
     source_resolver: SourceResolver | None = None,
     effective_llm_by_static_path: dict[str, dict[str, Any]] | None = None,
     tools: ToolSet | None = None,
+    steering: Steering | None = None,
 ) -> EvaluatedOutcome:
     """Evaluate one node into a wrapped worker result and transient stream callback.
 
@@ -752,7 +805,10 @@ def eval_node(
     leaves these hooks dormant and does not require a memory frame.
     ``tools`` is the run's exact ``ToolSet``; only a node declaring ``needs_tools``
     receives it. ``None`` gives such a node the global registry.
+    ``steering`` is the run's host inbox, delivered only to nodes declaring
+    ``needs_steering``; its exceptions and malformed answers escape as host faults.
     """
+    require_steering(steering)
     if type(capture_evidence) is not bool:
         raise TypeError("capture_evidence must be a bool")
     if type(capture_bindings) is not bool:
@@ -882,6 +938,7 @@ def eval_node(
         source_resolver=source_resolver,
         live_stream=live_stream,
         live_event=live_event,
+        steering=steering,
     )
     try:
         while True:

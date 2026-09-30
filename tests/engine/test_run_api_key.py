@@ -168,13 +168,74 @@ def test_resume_without_the_key_fails_instead_of_reading_the_environment(
     assert SENTINEL not in path.read_text()
 
 
-def test_resume_rejects_a_key_for_a_run_started_without_one(tmp_path, monkeypatch):
+def test_resume_ignores_a_key_for_a_run_started_without_one(tmp_path, monkeypatch):
+    requests, events = [], []
     path = tmp_path / "run.jsonl"
     monkeypatch.setenv("VLLM_API_KEY", "sk-environment-key")
     _interrupted_run(path, {"provider": "vllm", "model": "served-model"})
-    with pytest.raises(ValueError, match="api_key") as caught:
-        resume_flow(load_flow(_FLOW), log=path, api_key=SENTINEL)
-    assert SENTINEL not in str(caught.value)
+    with httpx.Client(transport=_chat_completions(requests)) as transport:
+        _route_openai_client(monkeypatch, transport)
+        result = resume_flow(load_flow(_FLOW), log=path, on_event=events.append, api_key=SENTINEL)
+    assert result.status == "succeeded", result.failure
+    # The run recorded no marked agent, so its agents keep their own credentials.
+    assert requests[0].headers["Authorization"] == "Bearer sk-environment-key"
+    _assert_hidden(path, events, result)
+
+
+_UNMARKED_FLOWS = {
+    "other-provider": """id: other
+name: other
+nodes:
+  agent:
+    kind: agent
+    mode: plain
+    prompt: hi
+    llm_config: {provider: anthropic, model: claude-sonnet-4-5}
+output: ${agent.output}
+""",
+    "no-agents": """id: plain
+name: plain
+nodes:
+  step:
+    kind: code
+    output: str
+    code: |
+      return "ok"
+output: ${step.output}
+""",
+}
+
+
+@pytest.mark.parametrize("source", _UNMARKED_FLOWS.values(), ids=_UNMARKED_FLOWS.keys())
+def test_a_key_that_marks_no_agent_does_not_block_replay(tmp_path, monkeypatch, source):
+    from langchain_core.messages import AIMessage
+
+    keys = []
+
+    class Model:
+        def invoke(self, messages):
+            return AIMessage(content="ok" if len(keys) == 1 else _NO_FEEDBACK)
+
+    def factory(config):
+        keys.append(config.get("api_key"))
+        return Model()
+
+    monkeypatch.setattr(clients, "model_from_config", factory)
+    events = []
+    path = tmp_path / "run.jsonl"
+    result = run_flow(
+        load_flow(source), {}, log=path, on_event=events.append, learnable=True, llm_config=_VLLM
+    )
+    assert result.status == "succeeded", result.failure
+    retained = result.backward("Be brief.")
+    assert retained.status == "succeeded", retained.failure
+    recovered = resume_flow(load_flow(source), log=path, on_event=events.append, api_key=SENTINEL)
+    assert recovered.status == "succeeded", recovered.failure
+    outcome = recovered.backward("Be brief.")
+    assert outcome.status == "succeeded", outcome.failure
+    assert keys == [None] * len(keys)
+    assert "_host_key" not in path.read_text()
+    _assert_hidden(path, events, result, retained, recovered, outcome)
 
 
 def test_backward_sends_the_key_and_records_none_of_it(tmp_path, monkeypatch):

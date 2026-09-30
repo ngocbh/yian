@@ -1032,7 +1032,7 @@ resume_flow(
 
 `api_key` re-supplies the key of a run started with `llm_config.api_key`. It goes to
 the agents the log marks for it, is never recorded, and stays with the returned
-result for `backward`. Passing it for a run started without one raises `ValueError`.
+result for `backward`. A log that marks no agent ignores it.
 
 Recovery locks the existing file before reading it, durably truncates any bytes
 after its final newline, validates the complete record prefix, and checks that the

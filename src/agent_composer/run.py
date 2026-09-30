@@ -148,8 +148,9 @@ class RunResult:
                 The provider key of a run started with ``llm_config.api_key``,
                 bound to the same agents as in `run_flow` and never recorded.
                 ``None`` uses the key this result was created with, if any.
-                Without a key, those agents fail their backward call instead of
-                reading the provider's key environment variable.
+                A run that marked no agent ignores it. Without a key, marked
+                agents fail their backward call instead of reading the
+                provider's key environment variable.
 
         Returns:
             `BackwardOutcome`: The accepted attempt result, separate from forward
@@ -157,8 +158,7 @@ class RunResult:
 
         Raises:
             `TypeError`: Feedback has an invalid ordinary-message carrier.
-            `ValueError`: Retention is disabled, feedback is invalid, or
-                ``api_key`` is given for a run started without one.
+            `ValueError`: Retention is disabled or feedback is invalid.
             `MemorySetupError`: Enabled policies cannot restore their recorded
                 snapshots. Host and log faults also propagate while preserving
                 the accepted prefix.
@@ -491,6 +491,9 @@ def _run_flow_controlled(
         host_key_provider=None if api_key is None else run_llm_config["provider"],
     )
     apply_effective_llm_map(private_flow, effective_llm)
+    # A key that marks no agent has nothing to authenticate, so the result keeps none.
+    if api_key is not None and not host_key_providers(effective_llm):
+        api_key = None
     if api_key is not None:
         bind_api_key(private_flow, api_key)
 
@@ -640,8 +643,8 @@ def resume_flow(
         api_key (`str | SecretStr | None`, *optional*, defaults to `None`):
             The provider key of a run started with ``llm_config.api_key``. It
             goes to the agents the log marks for it, as in `run_flow`, is never
-            recorded, and stays with the result for `RunResult.backward`.
-            Without it, those agents fail when they call their model instead of
+            recorded, and stays with the result for `RunResult.backward`. A
+            log that marks no agent ignores it. Without it, marked agents fail when they call their model instead of
             reading the provider's key environment variable.
 
     Returns:
@@ -658,7 +661,7 @@ def resume_flow(
             worker count violates its contract, a group tool's name clashes or
             is reserved, an unfinished run's AGENT grants a tool or group
             not in `tools` or grants skills while `skills` is `None` or lacks
-            a listed skill, or ``api_key`` is given for a run started without one.
+            a listed skill.
         `MemorySetupError`:
             The recorded run needs memory but its mapping is absent, incomplete,
             or cannot reproduce the exact recorded snapshots.
@@ -707,6 +710,8 @@ def _resume_flow_controlled(
     primary_error: BaseException | None = None
     try:
         state = _replay_run_log(flow, authority, api_key=api_key)
+        if api_key is not None and not host_key_providers(state.effective_llm_by_static_path):
+            api_key = None
         retained_program = copy.deepcopy(flow.compiled) if state.learnable else None
         if state.result is not None:
             return _result_from_state(state, log_path, [],
@@ -929,8 +934,7 @@ def _replay_compiled_run_log(
         legacy_connection_map(first.record.effective_llm_by_static_path),
     )
     if api_key is not None:
-        if not host_key_providers(first.record.effective_llm_by_static_path):
-            raise ValueError("api_key was given, but this run did not start with llm_config.api_key")
+        # A run that marked no agent ignores the key; bind_api_key finds no target.
         bind_api_key(private_flow, api_key)
     if first.record.learnable:
         apply_execution_layout(private_flow, resolve_execution_layout(private_flow))

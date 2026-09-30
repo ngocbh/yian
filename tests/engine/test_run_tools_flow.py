@@ -320,21 +320,28 @@ def test_agent_sees_the_union_of_three_host_filled_groups(first_tool_chat):
 def test_concurrent_runs_with_different_toolboxes_never_cross(first_tool_chat):
     both_calling = threading.Barrier(2, timeout=5)
     results: dict[str, Any] = {}
+    errors: list[BaseException] = []
 
     def run_as(name: str) -> None:
         def lookup(text: str) -> str:
             both_calling.wait()
             return f"{name} looked up {text}"
 
-        results[name] = run_flow(
-            load_flow(_GROUPS_FLOW), {}, tools=_groups([_tool("lookup", lookup)])
-        )
+        try:
+            results[name] = run_flow(
+                load_flow(_GROUPS_FLOW), {}, tools=_groups([_tool("lookup", lookup)])
+            )
+        except BaseException as exc:  # re-raised on the test thread below
+            errors.append(exc)
 
     threads = [threading.Thread(target=run_as, args=(name,)) for name in ("ann", "bob")]
     for thread in threads:
         thread.start()
     for thread in threads:
         thread.join(10)
+        assert not thread.is_alive()
+    for error in errors:
+        raise error
 
     assert results["ann"].output == "ann looked up x via ['lookup', 'ws', 'co']"
     assert results["bob"].output == "bob looked up x via ['lookup', 'ws', 'co']"
@@ -400,9 +407,118 @@ output: ${outer.output}
 """
 
 
-def test_a_missing_group_in_a_child_flow_fails_at_run_start(tmp_path: Path):
+_MAP_GROUPS_FLOW = """
+id: map_groups
+name: map_groups
+llm_config: {provider: openai, model: test-model}
+defs:
+  inner:
+    input:
+      item: str
+    nodes:
+      agent:
+        kind: agent
+        mode: tool_calling
+        prompt: go
+        tools: [toolbox]
+    output: ${agent.output}
+input:
+  items: list[str]
+nodes:
+  each:
+    kind: map
+    over: ${input.items}
+    call: inner
+    input:
+      item: ${item}
+output: ${each.output}
+"""
+
+_LOOP_GROUPS_FLOW = """
+id: loop_groups
+name: loop_groups
+llm_config: {provider: openai, model: test-model}
+defs:
+  turn:
+    input:
+      count: int
+      last: str
+    nodes:
+      agent:
+        kind: agent
+        mode: tool_calling
+        prompt: go
+        tools: [toolbox]
+    output:
+      count: ${input.count + 1}
+      last: ${agent.output}
+nodes:
+  again:
+    kind: loop
+    call: turn
+    input:
+      count: 0
+      last: ""
+    while: ${count} < 1
+    max: 3
+output: ${again.output}
+"""
+
+
+@pytest.mark.parametrize(
+    ("source", "inputs", "node_path"),
+    [
+        (_NESTED_GROUPS_FLOW, {}, "outer/agent"),
+        (_MAP_GROUPS_FLOW, {"items": []}, "each/agent"),
+        (_LOOP_GROUPS_FLOW, {}, "again/agent"),
+    ],
+    ids=["call", "map", "loop"],
+)
+def test_a_missing_group_in_a_child_flow_fails_at_run_start(
+    tmp_path: Path, source: str, inputs: dict[str, Any], node_path: str
+):
     path = tmp_path / "never.jsonl"
 
-    with pytest.raises(ValueError, match="AGENT node 'outer/agent' grants unknown tool or group 'toolbox'"):
-        run_flow(load_flow(_NESTED_GROUPS_FLOW), {}, log=path, tools={})
+    with pytest.raises(
+        ValueError, match=f"AGENT node '{node_path}' grants unknown tool or group 'toolbox'"
+    ):
+        run_flow(load_flow(source), inputs, log=path, tools={})
+    assert not path.exists()
+
+
+_PLAIN_GRANT_FLOW = """
+id: plain_grant
+name: plain_grant
+llm_config: {provider: openai, model: test-model}
+nodes:
+  agent:
+    kind: agent
+    mode: tool_calling
+    prompt: go
+    tools: [lookup, ask_user]
+output: ${agent.output}
+"""
+
+
+@pytest.mark.parametrize(
+    ("tools", "error"),
+    [
+        (
+            {"ask_user": _answer_with_question},
+            "AGENT node 'agent' grants unknown tool or group 'lookup'",
+        ),
+        (
+            {"lookup": _tool("lookup")},
+            "AGENT node 'agent' grants 'ask_user': no ask_user handler for this run",
+        ),
+    ],
+    ids=["unknown-plain-tool", "ask-user-without-handler"],
+)
+def test_an_unresolvable_plain_grant_fails_at_run_start(
+    tmp_path: Path, tools: dict[str, Any], error: str
+):
+    path = tmp_path / "never.jsonl"
+
+    with pytest.raises(ValueError, match=re.escape(error)):
+        run_flow(load_flow(_PLAIN_GRANT_FLOW), {}, log=path, tools=tools)
     assert not path.exists()

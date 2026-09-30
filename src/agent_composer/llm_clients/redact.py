@@ -68,26 +68,42 @@ def scrub_key(exc: BaseException, key: Union[str, SecretStr, None]) -> None:
     if not plain:
         return
     seen: set[int] = set()
-    pending = [exc]
+    pending: list[BaseException] = [exc]
     while pending:
         current = pending.pop()
-        if current is None or id(current) in seen:
+        if id(current) in seen:
             continue
         seen.add(id(current))
+        # A rewrite that fails must neither stop the walk nor replace the provider error.
         try:
-            current.args = tuple(
-                redact_key(arg, plain) if isinstance(arg, str) else arg for arg in current.args
-            )
-        except (AttributeError, TypeError):
+            _rewrite(current, plain)
+        except Exception:
             pass
-        message = getattr(current, "message", None)
+        pending.extend(_linked(current))
+
+
+def _rewrite(exc: BaseException, plain: str) -> None:
+    """Redact one exception's string ``args``, ``message``, and ``__notes__``."""
+    try:
+        exc.args = tuple(redact_key(arg, plain) if isinstance(arg, str) else arg for arg in exc.args)
+    except Exception:
+        pass
+    try:
+        message = getattr(exc, "message", None)
         if isinstance(message, str):
-            try:
-                current.message = redact_key(message, plain)
-            except (AttributeError, TypeError):
-                pass
-        notes = getattr(current, "__notes__", None)
-        if isinstance(notes, list):
-            notes[:] = [redact_key(note, plain) if isinstance(note, str) else note for note in notes]
-        pending.extend((current.__cause__, current.__context__))
-        pending.extend(getattr(current, "exceptions", None) or ())
+            exc.message = redact_key(message, plain)
+    except Exception:
+        pass
+    notes = getattr(exc, "__notes__", None)
+    if isinstance(notes, list):
+        notes[:] = [redact_key(note, plain) if isinstance(note, str) else note for note in notes]
+
+
+def _linked(exc: BaseException) -> list[BaseException]:
+    """Return the exceptions chained to ``exc`` and, for a group, its members."""
+    linked = [exc.__cause__, exc.__context__]
+    try:
+        linked.extend(getattr(exc, "exceptions", None) or ())
+    except Exception:
+        pass
+    return [item for item in linked if isinstance(item, BaseException)]

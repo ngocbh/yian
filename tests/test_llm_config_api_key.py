@@ -269,3 +269,41 @@ def test_scrub_key_is_linear_on_long_text(text):
     started = time.perf_counter()
     redact_key(text, "sk-sentinel-scrub-zqxw")
     assert time.perf_counter() - started < 0.5
+
+
+def test_scrub_key_survives_exceptions_it_cannot_rewrite():
+    from agent_composer.llm_clients.redact import scrub_key
+
+    key = "sk-sentinel-scrub-zqxw"
+
+    class FrozenArgs(Exception):
+        @property
+        def args(self):
+            return ("frozen",)
+
+        @args.setter
+        def args(self, value):
+            raise RuntimeError("args are frozen")
+
+    class BrokenMessage(Exception):
+        @property
+        def message(self):
+            raise RuntimeError("no message")
+
+    deepest = RuntimeError(f"deepest {key}")
+    frozen = FrozenArgs()
+    frozen.__cause__ = deepest
+    broken = BrokenMessage(f"broken {key}")
+    broken.__cause__ = frozen
+    strings = RuntimeError(f"strings {key}")
+    strings.exceptions = {"member": f"text {key}"}
+    strings.__cause__ = broken
+    number = RuntimeError(f"number {key}")
+    number.exceptions = 5
+    number.__cause__ = strings
+
+    scrub_key(number, key)
+    for exc in (number, strings, broken, deepest):
+        assert key not in str(exc)
+        assert "[REDACTED]" in str(exc)
+

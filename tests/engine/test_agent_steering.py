@@ -5,6 +5,8 @@ host inbox is a plain object with `drain(node_id)` and `interrupted(node_id)`;
 only nodes authored `steerable: true` ever receive it.
 """
 
+import threading
+
 import pytest
 
 import agent_composer.llm_clients as llm_clients_mod
@@ -429,6 +431,40 @@ def test_interrupted_stream_reports_the_usage_received_so_far(monkeypatch):
     assert result.output == "hello big"
     finished = [e for e in events if isinstance(e, ModelCallFinished)]
     assert [(e.usage, e.error) for e in finished] == [(TokenUsage(1000, 1, 1001), None)]
+
+
+def test_interrupt_mid_stream_in_a_pooled_run_keeps_partial_text(monkeypatch):
+    words = ["hello", " big", " wide", " world"]
+    shown = threading.Event()
+    sent = []
+
+    class WaitsForTheHost:
+        """Stream a reply, pausing after its second chunk until the host has seen it."""
+
+        def bind_tools(self, tools, **kwargs):
+            return self
+
+        def stream(self, messages):
+            for index, word in enumerate(words):
+                sent.append(word)
+                yield AIMessageChunk(content=word)
+                if index == 1:
+                    shown.wait(timeout=10)
+
+    monkeypatch.setattr(llm_clients_mod, "model_from_config", lambda _config: WaitsForTheHost())
+    inbox = Inbox()
+
+    def on_stream(chunk):
+        if chunk.chunk == " big":
+            inbox.interrupt.add("chat")
+            shown.set()
+
+    # Default pooled workers: the dispatcher thread delivers chunks queued by the worker.
+    result = run_flow(load_flow(_flow()), {}, steering=inbox, on_stream=on_stream)
+    full = "".join(words)
+    assert result.status == "succeeded"
+    assert result.output and full.startswith(result.output) and result.output != full
+    assert len(sent) < len(words)
 
 
 class _TextLast:

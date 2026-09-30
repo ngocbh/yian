@@ -106,7 +106,7 @@ run_flow(
     llm_config: dict[str, Any] | None = None,
     memory: dict[str, Memory] | None = None,
     learnable: bool = False,
-    tools: Mapping[str, BaseTool | Callable[..., Any]] | None = None,
+    tools: Mapping[str, BaseTool | Callable[..., Any] | list | tuple] | None = None,
     skills: Mapping[str, Skill] | None = None,
 ) -> RunResult
 ```
@@ -167,9 +167,59 @@ terminal. Stored defaults are not coerced.
   [Blocking human interaction](#blocking-human-interaction)). Tools are host
   callables, so the run log does not record them. An AGENT that grants skills
   also gets the built-in `load_skill` tool, which is not part of this mapping.
+  A list or tuple value is a tool group (see [Tool groups](#tool-groups)).
+  Every static AGENT grant must name a tool or group in this set; otherwise
+  `run_flow` raises `ValueError` before the log is created.
 - `skills` — the skills this run may use, keyed by name (see [Skills](#skills)).
   An AGENT's `skills:` grant selects from this mapping. A listed skill that is
   missing raises `ValueError` before the run starts.
+
+### Tool groups
+
+A host can fill a named group of tools per run. The flow grants the group by
+name, next to plain tool ids:
+
+```yaml
+nodes:
+  worker:
+    kind: agent
+    mode: tool_calling
+    prompt: ${input.task}
+    tools: [toolbox, workspace, company, ask_user]
+```
+
+```python
+result = run_flow(
+    flow,
+    {"task": "Summarize the open tickets"},
+    tools={
+        "toolbox": [search_tickets, read_ticket],  # functions, named by __name__
+        "workspace": [read_file_tool],             # BaseTool, named by .name
+        "company": [],                             # an empty group grants nothing
+        "ask_user": ask,
+    },
+)
+```
+
+`worker` sees `search_tickets`, `read_ticket`, `read_file_tool`, and `ask_user`.
+Each group item is a LangChain `BaseTool` named by its `name`, or a function or
+bound method named by its `__name__` (a lambda has no usable name and is
+rejected). Groups expand before the grant check, so the model calls the tools by
+their own names, never by the group name. A group is not a tool: a TOOL node
+cannot call it. Before the log is created, `run_flow` raises:
+
+- `ValueError` when an AGENT grants a group (or tool) the mapping lacks;
+- `ValueError` when a tool name appears in two groups, twice in one group, or
+  both in a group and as a top-level key, since tools are called by name;
+- `ValueError` when a group tool is named `ask_user`. The handler stays the
+  top-level `tools["ask_user"]` entry, and an AGENT that grants `ask_user` next to
+  groups gets that handler.
+
+Groups are host capabilities, like every other entry in `tools`: the log records
+neither their contents nor their tools. Only the group names in the flow are part
+of its fingerprint. Each run gets its own groups, so concurrent runs never see each
+other's tools, and `resume_flow` uses the groups passed to it (see
+[Durable recovery](#durable-recovery-with-resume_flow)).
 
 A node or flow-assert failure returns `RunResult(status="failed")` with one
 immutable `result.failure`; a successful flow returns `status="succeeded"` with
@@ -876,7 +926,7 @@ resume_flow(
     on_event: Callable[[Any], None] | None = None,
     on_stream: Callable[[StreamChunk], None] | None = None,
     memory: dict[str, Memory] | None = None,
-    tools: Mapping[str, BaseTool | Callable[..., Any]] | None = None,
+    tools: Mapping[str, BaseTool | Callable[..., Any] | list | tuple] | None = None,
 ) -> RunResult
 ```
 
@@ -899,7 +949,9 @@ For later backward on a memory-enabled log, pass the original policy mapping to
 
 The log does not record `tools`. To continue an unfinished run whose nodes use
 per-run tools or ask the human, pass the same `tools` (including `ask_user`) to
-`resume_flow` again.
+`resume_flow` again. Tool group contents may differ from the original run's:
+completed nodes keep their recorded results, and nodes that restart see the
+groups passed to `resume_flow`. Every grant must still resolve, as in `run_flow`.
 
 If primary execution is unfinished and eligible for retry, recovery appends one
 `RunResumedRecord`, retries the exact ordered set of nodes that have a durable start but no durable
@@ -1004,7 +1056,8 @@ iteration), so a run id plus `node_id` identifies one question; bind the run id 
 the handler's closure when the host needs it. The mapping is the whole tool set,
 so a flow that also uses registered tools passes
 `tools={**registered_tools(), "ask_user": ask}`. `ask_user` never comes from the
-global registry: a run without its own handler fails any node that asks, and
+global registry: a run without its own handler fails any HUMAN_INPUT node that
+asks, a flow whose AGENT grants `ask_user` fails before the run starts, and
 `register_tool("ask_user")` is rejected.
 
 CODE nodes cannot ask. A CODE function does not see the run's tools, so

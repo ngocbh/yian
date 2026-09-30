@@ -364,7 +364,8 @@ untyped or its contract accepts null (a nullable or `None`-kind type).
 ## Tools
 
 The core ships no domain tools; a host registers its own into the shared registry
-or passes the whole set for one run with `run_flow(..., tools=...)`.
+or passes the whole set for one run with `run_flow(..., tools=...)`. A list value
+in that mapping is a tool group an AGENT can grant by name.
 
 ::: agent_composer.tools.register_tool
 

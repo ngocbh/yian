@@ -1269,8 +1269,9 @@ overlap. An AGENT's `tools:` grant may name a group; the tool-calling mode calls
 grant check, so the model and the check see each tool name once.
 Before any log work, fresh runs and unfinished resumes walk static nodes and their
 `origin_children()` through the kind-blind `Node.granted_tools()` hook (AGENT
-returns its `tools:`) and fail when a grant does not resolve in the run's
-`ToolSet`. Only the authored names enter the fingerprint; group contents are host
+returns its `tools:`) and raise `ValueError` when a grant does not resolve in the
+run's `ToolSet`. The walk covers nodes that may never run, such as an unreached
+branch, a LOOP body, or a plain-mode AGENT. Only the authored names enter the fingerprint; group contents are host
 capabilities, so a resume may pass different contents and restarted nodes use them.
 
 CODE's soft-budget watchdog is package-local under `nodes/code/` and times CODE

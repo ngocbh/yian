@@ -221,6 +221,16 @@ Groups may overlap: the same tool object (or the same bound method) can sit in
 several groups, as when one permission set shares `web_search` with another. An
 AGENT granted overlapping groups, or the same group twice, binds each tool once.
 
+These checks cover the grants of every static AGENT node, including nodes that
+may never run: an unreached `case` branch, the body of a MAP over an empty list, a
+LOOP body, and a node in `mode: plain`, which calls no tools. Because the YAML does
+not mark which names are groups, every grant must resolve, not only group names:
+an unknown plain tool id, or `ask_user` granted with no handler, fails the same
+way. `run_flow` raises the `ValueError` before the log exists, and `resume_flow`
+raises it for an unfinished run before appending any record; neither returns a
+failed `RunResult`. (Before tool groups, an unresolvable grant failed only when a `tool_calling` node started, as a
+recorded node failure.)
+
 Groups are host capabilities, like every other entry in `tools`: the log records
 neither their contents nor their tools. Only the group names in the flow are part
 of its fingerprint. Each run gets its own groups, so concurrent runs never see each

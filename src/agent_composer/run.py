@@ -688,8 +688,9 @@ def _resume_flow_controlled(
 def _check_tool_grants(flow: CompiledFlow, tools: ToolSet) -> None:
     """Prove every static AGENT grant names a tool or tool group this run supplies.
 
-    Runs before any record is written, so a group the host forgot to fill fails
-    the run at start rather than when the model first calls a tool.
+    Runs before any record is written and covers every static node, including
+    nodes that may never run, so an unresolvable grant raises `ValueError` from
+    `run_flow` or `resume_flow` instead of failing its node when the node starts.
     """
     for node_id, grants in _tool_grants(flow):
         for tool_id in tools.expand(list(grants)):

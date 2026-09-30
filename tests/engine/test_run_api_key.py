@@ -367,10 +367,24 @@ def test_authored_key_is_rejected_without_echoing_it():
         load_flow(_FLOW.replace("prompt: hi}", f"prompt: hi, llm_config: {{api_key: {SENTINEL}}}}}"))
     assert "api_key" in str(caught.value)
     assert SENTINEL not in str(caught.value)
-    flow = load_flow(_FLOW.replace("nodes:", f"llm_config: {{api_key: {SENTINEL}}}\nnodes:"))
-    with pytest.raises(ValueError, match="api_key") as caught:
-        run_flow(flow, {}, llm_config={"provider": "vllm", "model": "served-model"})
-    assert SENTINEL not in str(caught.value)
+    flow_level = _FLOW.replace("nodes:", f"llm_config: {{api_key: {SENTINEL}}}\nnodes:")
+    def_level = f"""id: d
+name: d
+defs:
+  body:
+    llm_config: {{api_key: {SENTINEL}}}
+    nodes:
+      nested: {{kind: agent, mode: plain, prompt: hi}}
+    output: ${{nested.output}}
+nodes:
+  child: {{kind: call, call: body}}
+output: ${{child.output}}
+"""
+    for source in (flow_level, def_level):
+        with pytest.raises(LoadError) as caught:
+            load_flow(source)
+        assert "api_key" in str(caught.value)
+        assert SENTINEL not in str(caught.value)
 
 
 def test_host_key_marker_is_not_an_authored_option():

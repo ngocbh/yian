@@ -381,7 +381,7 @@ nodes:
       model: claude-opus-4-8    # fills the one field the flow leaves unset
 ```
 
-A flow file cannot set `api_key`; loading or running such a flow fails. A
+A flow file cannot set `api_key` at any level; loading such a flow fails. A
 library host passes the provider key in `run_flow(..., llm_config={..., "api_key": key})`
 instead (see [the Python API](api.md)). The key goes to every AGENT of that
 provider, including one with `inherit: false`.

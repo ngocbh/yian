@@ -597,6 +597,22 @@ def load_flow(
     return _load_flow(document, child_resolver, search_paths, _LoadCtx())
 
 
+def _reject_authored_api_key(
+    llm_config: Any, where: str, *, diagnostics: LoadDiagnostics, cursor: SourceCursor | None,
+) -> None:
+    """Refuse a flow- or def-level ``llm_config.api_key``; only the host supplies keys."""
+    if isinstance(llm_config, Mapping) and "api_key" in llm_config:
+        raise diagnostics.error(
+            f"{where}: llm_config.api_key is a host credential; pass it in the run's "
+            "llm_config, not in a flow file",
+            range=(
+                cursor.range_of("llm_config")
+                if cursor is not None and cursor.has("llm_config")
+                else None
+            ),
+        )
+
+
 def _load_flow(
     document: SourceDocument,
     child_resolver,
@@ -607,6 +623,7 @@ def _load_flow(
     diagnostics = LoadDiagnostics.from_document(document)
     f = parse_file(document)
     _reject_authored_private_callable_names(root, f.defs, f.uses)
+    _reject_authored_api_key(f.llm_config, "flow", diagnostics=diagnostics, cursor=root)
     _validate_system(
         f.system,
         root.child("system") if root.has("system") else None,
@@ -1067,6 +1084,9 @@ def _load_def(
                 else None
             ),
         )
+    _reject_authored_api_key(
+        body.get("llm_config"), f"defs entry {name!r}", diagnostics=diagnostics, cursor=def_cursor
+    )
     nodes_cursor = _def_assembly_cursor(def_cursor, body["nodes"])
     try:
         memory_policy = (

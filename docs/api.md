@@ -146,13 +146,17 @@ terminal. Stored defaults are not coerced.
 - `llm_config` — the outer authored layer of the configuration cascade for AGENT nodes.
   The resolved map and process defaults are captured at initialization. An
   `api_key` entry, which needs `provider`, is the provider key for this run: every
-  AGENT whose effective provider matches uses it instead of the provider's key
-  environment variable or saved OpenAI connection. It never enters the run log,
-  events, results, or manifests, and validation errors do not echo it. Because it
-  is not recorded, `resume_flow` and `result.backward` do not have it: an OpenAI
-  agent then fails for want of the key, and other providers read their environment
-  variable. Flow files cannot set `api_key`; `ReflectiveMemory` rejects it too,
-  because its snapshots record the model configuration.
+  AGENT whose effective provider matches, including an `inherit: false` one, uses
+  it instead of the provider's key environment variable or saved OpenAI connection.
+  It never enters the run log, events, results, or manifests, and validation errors
+  do not echo it. The log records only a nonsecret marker on those agents, so pass
+  the key again as `resume_flow(..., api_key=key)` or `result.backward(...,
+  api_key=key)`; without it, those agents fail when they call their model instead
+  of reading the environment. The result of `run_flow` or `resume_flow` keeps the
+  key in memory for its own `backward` calls. Flow files cannot set `api_key`;
+  `ReflectiveMemory` rejects it too, because its snapshots record the model
+  configuration. `ProfileMemory` accepts one in its own `llm_config` and does not
+  record it.
 - `memory` — host-created implementations keyed by the policy name selected by
   each authored `long_term_memory` declaration. `None` leaves all declarations
   dormant. A mapping opens one run-scoped session per referenced policy, enables
@@ -260,8 +264,9 @@ engine has drained active workers and released the boundary-owned log.
 
 ## Explicit backward feedback
 
-`RunResult.backward(feedback=None) -> BackwardOutcome` operates on a terminal run
-created with `learnable=True`. It leaves the forward `input`, `status`, `output`,
+`RunResult.backward(feedback=None, *, api_key=None) -> BackwardOutcome` operates on
+a terminal run created with `learnable=True`. `api_key` is the provider key of a run
+started with `llm_config.api_key`; `None` uses the key the result was created with. It leaves the forward `input`, `status`, `output`,
 `failure`, and `events` unchanged. A fresh forward result starts with `backward_outcome=None`
 and `learning=None`; an accepted attempt updates the separately observed
 `backward_outcome` and its `learning` projection.
@@ -1021,8 +1026,13 @@ resume_flow(
     tools: Mapping[str, BaseTool | Callable[..., Any] | Sequence[BaseTool | Callable[..., Any]]] | None = None,
     skills: Mapping[str, Skill] | None = None,
     steering: Steering | None = None,
+    api_key: str | SecretStr | None = None,
 ) -> RunResult
 ```
+
+`api_key` re-supplies the key of a run started with `llm_config.api_key`. It goes to
+the agents the log marks for it, is never recorded, and stays with the returned
+result for `backward`. Passing it for a run started without one raises `ValueError`.
 
 Recovery locks the existing file before reading it, durably truncates any bytes
 after its final newline, validates the complete record prefix, and checks that the

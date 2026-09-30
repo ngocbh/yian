@@ -188,11 +188,16 @@ selection. Connection metadata is internal and is not an authored YAML field.
 `LLMConfig.api_key` is a `SecretStr` excluded from every dump, and `LLMConfig`
 validation errors hide input values. Clients use it before the provider's key
 environment variable. `run_flow` pops the run layer's `api_key` before the cascade
-and puts it only on the run-local `llm_config` of static agents of the run layer's
-provider, so `RunStarted`, events, results, and manifests never hold it. OpenAI
-agents record a `host` connection with no credential identity; recovery and
-backward calls, which lack the key, fail on it. Authored layers cannot set
-`api_key`, because they reach the recorded effective map.
+and `ConnectionSnapshot.bind` marks the effective config of every static agent of
+the run layer's provider with the nonsecret `_host_key: true` (OpenAI agents also
+record a `host` connection with no credential identity). `bind_api_key` then puts
+the key only on the run-local `llm_config` of marked agents, so `RunStarted`,
+events, results, and manifests never hold it. `resume_flow(api_key=...)` and
+`RunResult.backward(api_key=...)` bind a re-supplied key the same way on the
+replayed program; AGENT backward takes it from its live node config, the one live
+field it reads. `split_model_config` fails a marked config that has no key, so
+recovery and backward never fall back to the environment. Authored layers cannot
+set `api_key` or `_host_key`, because they reach the recorded effective map.
 
 The transport requires a completed Responses event before returning a model
 reply. Early EOF and incomplete replies raise rather than exposing tool calls

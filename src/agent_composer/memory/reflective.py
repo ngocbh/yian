@@ -691,6 +691,12 @@ class ReflectiveMemory:
             {} if llm_config is None else _copy_json_object(llm_config, "llm_config")
         )
         validated = LLMConfig.model_validate(raw_config, strict=True)
+        if validated.api_key is not None:
+            # Snapshots record this config; a key would be dropped or persisted.
+            raise ValueError(
+                "llm_config.api_key is not supported by reflective memory, which "
+                "records its model configuration"
+            )
         if validated.model is not None and not validated.model.strip():
             raise ValueError("llm_config.model must be non-empty")
         self._llm_config = cast(

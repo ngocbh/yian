@@ -19,6 +19,8 @@ from __future__ import annotations
 import copy
 from typing import Any
 
+from pydantic import SecretStr
+
 from agent_composer.llm_clients.config import LLMConfig, merge_llm_config
 from agent_composer.llm_clients.connection import validate_connection
 from agent_composer.nodes.agent import AgentNode
@@ -208,6 +210,29 @@ def _apply_flow(
             _apply_flow(node.child, effective, path=node_path)
 
 
+def bind_api_key(flow: Any, provider: str, api_key: SecretStr) -> None:
+    """Give every static AGENT of ``provider`` the host's API key.
+
+    The key goes on each node's run-local ``llm_config`` only, never into the
+    effective map that ``RunStarted`` records. Call it after
+    `apply_effective_llm_map`, which has already de-aliased every child callsite.
+
+    Args:
+        flow (`CompiledFlow`):
+            A flow whose static agents already carry their effective configs.
+        provider (`str`):
+            The provider the key belongs to. Agents of other providers are untouched.
+        api_key (`SecretStr`):
+            The host-supplied key.
+    """
+    for node in flow.nodes.values():
+        if isinstance(node, AgentNode) and node.llm_config.get("provider") == provider:
+            node.llm_config["api_key"] = api_key
+        child = getattr(node, "child", None)
+        if child is not None:
+            bind_api_key(child, provider, api_key)
+
+
 def _path_key(path: tuple[str, ...]) -> str:
     """Encode one non-empty static author path."""
     return "/".join(path)
@@ -228,7 +253,13 @@ def _require_concrete_selection(config: dict[str, Any], *, path: str) -> None:
 
 
 def _validate_layer(config: dict[str, Any]) -> None:
-    """Reject retired options and malformed host metadata before composition."""
+    """Reject retired options, keys, and malformed host metadata before composition."""
+    if "api_key" in config:
+        # Every layer here ends up in the recorded effective map.
+        raise ValueError(
+            "llm_config.api_key is a host credential; pass it in the run's llm_config, "
+            "not in a flow file"
+        )
     if str(config.get("provider", "")).lower() == "codex" or any(key in config for key in ("sandbox", "cwd")):
         LLMConfig(**config)
     if "_connection" in config:

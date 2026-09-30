@@ -24,12 +24,15 @@ import threading
 from typing import Any, Callable, Mapping
 
 from langchain_core.tools import BaseTool
+from pydantic import SecretStr
 
+from agent_composer.llm_clients.config import LLMConfig
 from agent_composer.llm_clients.connection import connection_snapshot, legacy_connection_map
 from agent_composer.compile.execution_layout import apply_execution_layout, resolve_execution_layout
 from agent_composer.compile.expand import build_grow
 from agent_composer.compile.llm_cascade import (
     apply_effective_llm_map,
+    bind_api_key,
     resolve_llm_cascade,
 )
 from agent_composer.compile.manifest import flow_fingerprint
@@ -393,6 +396,21 @@ def run_flow(
     )
 
 
+def _host_api_key(llm_config: dict[str, Any]) -> SecretStr | None:
+    """Pop and validate the run layer's ``api_key``, which must name its provider."""
+    if "api_key" not in llm_config:
+        return None
+    raw = llm_config.pop("api_key")
+    if raw is None:
+        return None
+    if not llm_config.get("provider"):
+        raise ValueError(
+            "llm_config.api_key needs llm_config.provider, so the key goes only to "
+            "that provider's agents"
+        )
+    return LLMConfig(provider=llm_config["provider"], api_key=raw).api_key
+
+
 def _run_flow_controlled(
     flow: ComposedFlow,
     inputs: dict[str, Any],
@@ -426,15 +444,24 @@ def _run_flow_controlled(
     private_flow = copy.deepcopy(flow.compiled)
     retained_program = copy.deepcopy(private_flow) if learnable else None
 
+    # The key stays out of the cascade so RunStarted never records it.
+    run_llm_config = dict(llm_config or {})
+    api_key = _host_api_key(run_llm_config)
+
     # One selection snapshot determines every static agent before RunStarted.
     snapshot = connection_snapshot()
-    effective_llm = snapshot.bind(resolve_llm_cascade(
-        private_flow,
-        llm_config or {},
-        defaults=snapshot.defaults,
-        provider_models=snapshot.provider_models,
-    ))
+    effective_llm = snapshot.bind(
+        resolve_llm_cascade(
+            private_flow,
+            run_llm_config,
+            defaults=snapshot.defaults,
+            provider_models=snapshot.provider_models,
+        ),
+        host_key_provider=None if api_key is None else run_llm_config["provider"],
+    )
     apply_effective_llm_map(private_flow, effective_llm)
+    if api_key is not None:
+        bind_api_key(private_flow, run_llm_config["provider"], api_key)
 
     if learnable:
         apply_execution_layout(private_flow, resolve_execution_layout(private_flow))

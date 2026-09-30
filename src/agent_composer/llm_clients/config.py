@@ -7,9 +7,9 @@ and `factory.model_from_config` turns API selections into ready chat models.
 
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
 
 # One provider vocabulary shared by the validated config carrier and the factory that
@@ -65,7 +65,8 @@ class LLMConfig(BaseModel):
             Provider API key supplied by the host. It takes precedence over the provider's
             key environment variable and saved OpenAI connection. It is masked in `repr`
             and left out of every `model_dump`; read it with `api_key.get_secret_value()`.
-            `None` keeps the environment or saved-connection key.
+            `None` keeps the environment or saved-connection key. An empty key is
+            rejected, since some clients would treat it as unset and read the environment.
 
     Example:
         ```python
@@ -106,6 +107,41 @@ class LLMConfig(BaseModel):
                 "granted explicitly and run on the host."
             )
         return value
+
+    @field_validator("api_key")
+    @classmethod
+    def _reject_empty_key(cls, value: Optional[SecretStr]) -> Optional[SecretStr]:
+        """Refuse an empty key, which some clients would replace with an env var."""
+        if value is not None and not value.get_secret_value():
+            raise ValueError("api_key must not be empty")
+        return value
+
+
+def pop_api_key(config: dict[str, Any]) -> Optional[SecretStr]:
+    """Pop a host ``api_key`` from one config layer and return it as a `SecretStr`.
+
+    The layer must name its ``provider``, so the key authenticates only that
+    provider. Errors never echo the key.
+
+    Args:
+        config (`dict[str, Any]`): A mutable ``llm_config`` layer; ``api_key`` is removed.
+
+    Returns:
+        `SecretStr | None`: The validated key, or `None` when the layer has none.
+
+    Raises:
+        `ValueError`: The key is empty or not a string, ``provider`` is missing,
+            or ``provider`` is unsupported.
+    """
+    raw = config.pop("api_key", None)
+    if raw is None:
+        return None
+    if not config.get("provider"):
+        raise ValueError(
+            "llm_config.api_key needs llm_config.provider, so the key goes only to "
+            "that provider"
+        )
+    return LLMConfig(provider=config["provider"], api_key=raw).api_key
 
 
 def merge_llm_config(specific: dict, base: dict) -> dict:

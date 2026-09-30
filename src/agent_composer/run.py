@@ -26,7 +26,7 @@ from typing import Any, Callable, Mapping
 from langchain_core.tools import BaseTool
 from pydantic import SecretStr
 
-from agent_composer.llm_clients.config import LLMConfig
+from agent_composer.llm_clients.config import LLMConfig, pop_api_key
 from agent_composer.llm_clients.connection import connection_snapshot, legacy_connection_map
 from agent_composer.compile.execution_layout import apply_execution_layout, resolve_execution_layout
 from agent_composer.compile.expand import build_grow
@@ -426,22 +426,6 @@ def _secret_key(raw: str | SecretStr) -> SecretStr:
     return LLMConfig(api_key=raw).api_key
 
 
-def _host_api_key(llm_config: dict[str, Any]) -> SecretStr | None:
-    """Pop and validate the run layer's ``api_key``, which must name its provider."""
-    if "api_key" not in llm_config:
-        return None
-    raw = llm_config.pop("api_key")
-    if raw is None:
-        return None
-    if not llm_config.get("provider"):
-        raise ValueError(
-            "llm_config.api_key needs llm_config.provider, so the key goes only to "
-            "that provider's agents"
-        )
-    LLMConfig(provider=llm_config["provider"])
-    return _secret_key(raw)
-
-
 def _run_flow_controlled(
     flow: ComposedFlow,
     inputs: dict[str, Any],
@@ -477,7 +461,7 @@ def _run_flow_controlled(
 
     # The key stays out of the cascade so RunStarted never records it.
     run_llm_config = dict(llm_config or {})
-    api_key = _host_api_key(run_llm_config)
+    api_key = pop_api_key(run_llm_config)
 
     # One selection snapshot determines every static agent before RunStarted.
     snapshot = connection_snapshot()

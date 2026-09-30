@@ -352,6 +352,16 @@ def test_key_without_a_provider_is_rejected():
     assert SENTINEL not in str(caught.value)
 
 
+def test_an_empty_key_is_rejected(tmp_path, monkeypatch):
+    monkeypatch.setenv("VLLM_API_KEY", "sk-environment-key")
+    with pytest.raises(ValueError, match="api_key"):
+        run_flow(load_flow(_FLOW), {}, llm_config={**_VLLM, "api_key": ""})
+    path = tmp_path / "run.jsonl"
+    _interrupted_run(path, _VLLM)
+    with pytest.raises(ValueError, match="api_key"):
+        resume_flow(load_flow(_FLOW), log=path, api_key="")
+
+
 def test_authored_key_is_rejected_without_echoing_it():
     with pytest.raises(LoadError) as caught:
         load_flow(_FLOW.replace("prompt: hi}", f"prompt: hi, llm_config: {{api_key: {SENTINEL}}}}}"))
@@ -375,6 +385,18 @@ def test_reflective_memory_refuses_a_key_it_would_record():
     with pytest.raises(ValueError, match="api_key") as caught:
         ReflectiveMemory({"provider": "vllm", "model": "m", "api_key": SENTINEL})
     assert SENTINEL not in str(caught.value)
+
+
+def test_profile_memory_needs_a_provider_with_its_key(tmp_path):
+    store = FileMarkdownStore(tmp_path / "ada.md")
+    for llm_config in ({"api_key": SENTINEL}, {"model": "profiler", "api_key": SENTINEL}):
+        with pytest.raises(ValueError, match="provider") as caught:
+            ProfileMemory(store, llm_config=llm_config)
+        assert SENTINEL not in str(caught.value)
+    with pytest.raises(ValueError, match="api_key"):
+        ProfileMemory(store, llm_config={"provider": "vllm", "api_key": ""})
+    memory = ProfileMemory(store, llm_config={"provider": "vllm", "api_key": SENTINEL})
+    assert SENTINEL not in repr(vars(memory))
 
 
 def test_profile_memory_learns_with_its_key_and_records_none_of_it(tmp_path, monkeypatch):

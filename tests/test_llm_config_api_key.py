@@ -60,6 +60,15 @@ def test_validation_errors_do_not_echo_config_values(fields):
         assert str(value) not in str(caught.value).replace("temparature", "")
 
 
+@pytest.mark.parametrize("empty", ["", SecretStr("")])
+def test_an_empty_key_is_rejected_instead_of_falling_back(clean_env, empty):
+    clean_env.setenv("GOOGLE_API_KEY", "sk-environment-key")
+    with pytest.raises(ValidationError, match="api_key"):
+        LLMConfig(provider="google", api_key=empty)
+    with pytest.raises(ValidationError, match="api_key"):
+        model_from_config({"provider": "google", "model": "gemini-2.5-flash", "api_key": empty})
+
+
 def test_split_and_resolve_keep_the_key_as_a_secret():
     config = LLMConfig(provider="anthropic", model="claude-sonnet-4-5", api_key=SENTINEL)
     validated, _ = split_model_config(config)

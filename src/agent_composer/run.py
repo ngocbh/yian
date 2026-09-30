@@ -324,8 +324,9 @@ def run_flow(
             list grants the id. A list or tuple value is a tool group: an AGENT
             that grants the group's key can call every tool in it. Each item is a
             `BaseTool` named by its `name`, or a function or method named by its
-            `__name__`. Tool names are unique across the run, and no group tool
-            may be named `ask_user` or `load_skill`. Every static AGENT grant must name a tool or
+            `__name__`. Each tool name calls one tool: the same tool may sit in
+            several groups, but two different tools may not share a name, and
+            no group tool may be named `ask_user` or `load_skill`. Every static AGENT grant must name a tool or
             group in this set; this is checked before the log is created.
             Granting skills also binds the built-in ``load_skill`` tool,
             which is not part of this mapping.

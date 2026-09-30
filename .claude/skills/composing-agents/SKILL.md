@@ -333,9 +333,10 @@ tools a permission system grants), grant a group name and let the host fill it:
 `run_flow(..., tools={"toolbox": [t1, t2], "workspace": [], "ask_user": ask})` in Python.
 A list value is a group; each item is a `BaseTool` (named by `.name`) or a def-defined
 function (named by `__name__`). The model sees and calls the group's tools by their
-own names. The run fails before it starts if a granted group is missing, a tool name
-appears in two groups (or in a group and at the top level), or a group has a tool
-named `ask_user`; the handler stays the top-level `ask_user` entry. `composer run`
+own names. Groups may share the same tool object; the model sees it once. The run
+fails before it starts if a granted group is missing, two different tools share a
+name (or a group tool's name is a top-level key), or a group has a tool named
+`ask_user` or `load_skill`; the handler stays the top-level `ask_user` entry. `composer run`
 fills no groups, so such flows need a Python host. Pass groups again to `resume_flow`;
 restarted nodes use the contents passed there.
 Note `tool` uses `tool_id:` + `input:` (a tool declares no `output:`). (`model` —

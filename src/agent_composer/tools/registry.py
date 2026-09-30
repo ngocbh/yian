@@ -10,8 +10,9 @@ application registers its own (e.g. ``@register_tool("add")``). Tool ids must be
 unique across everything registered into the process. Model calls are validated
 against their public schema; host-owned interactions may use the trusted schema
 for injected metadata. ``ToolSet`` holds one run's tools: this registry, or a
-host mapping that replaces it and may hold named tool groups. The reserved ``ask_user`` id never lives here: each
-run gets its handler through ``ToolSet({"ask_user": handler, ...})``.
+host mapping that replaces it and may hold named tool groups. The reserved
+``ask_user`` id never lives here: each run gets its handler through
+``ToolSet({"ask_user": handler, ...})``.
 """
 
 from __future__ import annotations
@@ -204,6 +205,13 @@ def _group_tool(group: str, index: int, item: Any) -> BaseTool:
     )
 
 
+def _same_item(first: Any, other: Any) -> bool:
+    """Return whether two group items are one tool: the same object or bound method."""
+    # Each `obj.method` access builds a new bound method, but equal ones share
+    # their function and instance.
+    return first is other or (inspect.ismethod(first) and first == other)
+
+
 def _check_ask_user_handler(handler: Callable[..., Any]) -> None:
     """Reject an `ask_user` handler that cannot take the six keyword fields."""
     try:
@@ -235,9 +243,9 @@ class ToolSet:
 
     An entry whose value is a list or tuple is a tool group. An AGENT node grants a
     group by its key, and `expand` replaces that key with the group's tool names.
-    Every tool name in the run is unique: a group tool may not share its name with
-    another group's tool or a top-level key, or take a reserved name (`ask_user`,
-    `load_skill`).
+    Every tool name in the run names one tool: the same tool object may sit in
+    several groups, but a group tool may not share its name with a different tool
+    or with a top-level key, or take a reserved name (`ask_user`, `load_skill`).
 
     Args:
         tools (`Mapping[str, BaseTool | Callable[..., Any] | list | tuple] | None`, *optional*, defaults to `None`):
@@ -262,8 +270,8 @@ class ToolSet:
             keyword fields.
         `ValueError`:
             A `BaseTool` entry's name differs from its key, or a group tool's name
-            is `ask_user` or `load_skill`, repeats within its group, is in another
-            group, or is a top-level key.
+            is `ask_user` or `load_skill`, is a top-level key, or names a
+            different tool elsewhere in the groups.
 
     Example:
         ```python
@@ -296,7 +304,7 @@ class ToolSet:
         if not isinstance(tools, Mapping):
             raise TypeError("tools must be a mapping of tool id to tool, or None")
         built: dict[str, BaseTool] = {}
-        group_items: dict[str, list[BaseTool]] = {}
+        group_items: dict[str, list[tuple[Any, BaseTool]]] = {}
         for tool_id, entry in tools.items():
             if type(tool_id) is not str or not tool_id:
                 raise TypeError("tool ids in tools must be non-empty strings")
@@ -319,7 +327,7 @@ class ToolSet:
                 built[tool_id] = _tool_from_function(tool_id, entry)
             elif isinstance(entry, (list, tuple)):
                 group_items[tool_id] = [
-                    _group_tool(tool_id, index, item) for index, item in enumerate(entry)
+                    (item, _group_tool(tool_id, index, item)) for index, item in enumerate(entry)
                 ]
             else:
                 raise TypeError(
@@ -328,9 +336,10 @@ class ToolSet:
                     "lambda, not functools.partial"
                 )
         groups: dict[str, tuple[str, ...]] = {}
-        owners: dict[str, str] = {}
+        owners: dict[str, tuple[str, Any]] = {}  # tool name -> (first group, its item)
         for group, items in group_items.items():
-            for tool in items:
+            names: list[str] = []
+            for item, tool in items:
                 name = tool.name
                 if name in _RESERVED_TOOL_NAMES:
                     hint = (
@@ -341,20 +350,26 @@ class ToolSet:
                     raise ValueError(
                         f"group {group!r} has a tool named {name!r}, a reserved name; {hint}"
                     )
-                if name in owners:
-                    where = (
-                        f"appears twice in group {group!r}"
-                        if owners[name] == group
-                        else f"is in both groups {owners[name]!r} and {group!r}"
-                    )
-                    raise ValueError(f"tool {name!r} {where}")
                 if name in tools:
                     raise ValueError(
                         f"tool {name!r} in group {group!r} clashes with tools[{name!r}]"
                     )
-                owners[name] = group
-                built[name] = tool
-            groups[group] = tuple(tool.name for tool in items)
+                names.append(name)
+                if name not in owners:
+                    owners[name] = (group, item)
+                    built[name] = tool
+                    continue
+                # Host permission groups overlap, so one tool may sit in several of
+                # them; two different tools under one name would be ambiguous.
+                first_group, first_item = owners[name]
+                if not _same_item(first_item, item):
+                    where = (
+                        f"appears twice in group {group!r}"
+                        if first_group == group
+                        else f"is in both groups {first_group!r} and {group!r}"
+                    )
+                    raise ValueError(f"tool {name!r} {where} as different tools")
+            groups[group] = tuple(dict.fromkeys(names))
         self._tools = MappingProxyType(built)
         self._groups = MappingProxyType(groups)
 
@@ -399,11 +414,14 @@ class ToolSet:
         Returns:
             `list[str]`:
                 The ids with every group replaced by its tool names, in group order.
+                A name that repeats, from overlapping groups or a repeated grant,
+                is kept only where it first appears.
         """
         expanded: list[str] = []
         for tool_id in tool_ids:
             expanded.extend(self._groups.get(tool_id, (tool_id,)))
-        return expanded
+        # Overlapping or repeated grants bind each tool once.
+        return list(dict.fromkeys(expanded))
 
     def resolve(self, tool_ids: list[str]) -> list[BaseTool]:
         """Look up tools by id.

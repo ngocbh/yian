@@ -209,12 +209,17 @@ their own names, never by the group name. A group is not a tool: a TOOL node
 cannot call it. Before the log is created, `run_flow` raises:
 
 - `ValueError` when an AGENT grants a group (or tool) the mapping lacks;
-- `ValueError` when a tool name appears in two groups, twice in one group, or
-  both in a group and as a top-level key, since tools are called by name;
+- `ValueError` when two different tools share a name, in one group or across
+  groups, or when a group tool's name is also a top-level key, since tools are
+  called by name;
 - `ValueError` when a group tool is named `ask_user` or `load_skill`. The
   `ask_user` handler stays the top-level `tools["ask_user"]` entry, and an AGENT
   that grants `ask_user` next to groups gets that handler. `load_skill` is bound
   by granting skills.
+
+Groups may overlap: the same tool object (or the same bound method) can sit in
+several groups, as when one permission set shares `web_search` with another. An
+AGENT granted overlapping groups, or the same group twice, binds each tool once.
 
 Groups are host capabilities, like every other entry in `tools`: the log records
 neither their contents nor their tools. Only the group names in the flow are part

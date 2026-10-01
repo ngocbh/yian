@@ -479,6 +479,32 @@ def _require_origin(value: object, name: str = "origin") -> OriginRef | None:
     return value
 
 
+@dataclass(frozen=True, slots=True)
+class DeclSite:
+    """The definition site of one memory declaration.
+
+    ``scope`` is the import-alias path from the root file (``()`` for the root
+    file). ``owner`` is the lexical flow path compose threads: ``("root",)``,
+    ``("def", name)``, or an inline body's path. ``node`` is the declaring AGENT
+    id, or ``None`` for a flow declaration.
+    """
+
+    scope: tuple[str, ...]
+    owner: tuple[str, ...]
+    node: str | None = None
+
+    def __post_init__(self) -> None:
+        """Require exact string paths and an optional non-empty node id."""
+        _require_path(self.scope, "scope", allow_empty=True)
+        _require_path(self.owner, "owner")
+        if self.node is not None:
+            _require_string(self.node, "node")
+
+    def sort_key(self) -> tuple[tuple[str, ...], tuple[str, ...], bool, str]:
+        """Return a total order that puts a flow site before AGENT sites."""
+        return (self.scope, self.owner, self.node is not None, self.node or "")
+
+
 class MemoryOwner(str, Enum):
     """Closed set of semantic entities that may own a memory frame."""
 

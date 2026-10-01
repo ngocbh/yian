@@ -47,7 +47,8 @@ def test_decl_site_sort_is_total_and_puts_flow_before_agent() -> None:
 
 
 def _decl(name: str = "notes", *, node: str | None = None, origin=None) -> MemoryDecl:
-    return MemoryDecl(name, "episodic", {"recall_limit": 3}, DeclSite((), ("root",), node), origin)
+    site = DeclSite((), ("root",), node)
+    return MemoryDecl(name, "episodic", {"recall_limit": 3}, site, origin)
 
 
 def test_memory_decl_snapshots_config_and_rejects_private_keys() -> None:
@@ -58,6 +59,8 @@ def test_memory_decl_snapshots_config_and_rejects_private_keys() -> None:
     decl.config["recall_limit"] = 7
     assert decl.config == {"recall_limit": 3}
     assert decl.origin is None
+    assert decl.key == "notes"
+    assert MemoryDecl("notes", "episodic", {}, DeclSite(("lib",), ("root",), None)).key == "lib.notes"
     with pytest.raises(ValueError, match="forbidden private key"):
         MemoryDecl("notes", "episodic", {"api_key": "x"}, DeclSite((), ("root",), None))
     with pytest.raises(TypeError, match="site must be a DeclSite"):
@@ -85,6 +88,7 @@ def test_memory_decl_origins_traverse_and_rewrite_shared_carriers_once() -> None
     _rewrite_memory_decl_origins((shared, other, shared), mapper, set())
     assert calls == ["a", "b"]
     assert shared.origin == OriginRef("mapped/a")
+    assert other.origin == OriginRef("mapped/b")
 
 
 def test_memory_spec_requires_sorted_owners_and_derived_eligibility() -> None:

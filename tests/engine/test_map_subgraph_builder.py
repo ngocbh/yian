@@ -192,7 +192,6 @@ def test_map_subgraph_appends_item_occurrence_and_scopes_generated_fan_nodes() -
         ("root", "outer_loop", "map"),
         frame_stack=(outer_frame,),
         occurrence_path=(outer,),
-        boundary=None,
     )
     assert fragment.nodes[ns("map", START_ID)].memory_scope == generated_scope
     assert fragment.nodes[ns("map", END_ID)].memory_scope == generated_scope

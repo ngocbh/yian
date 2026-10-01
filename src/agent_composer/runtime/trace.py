@@ -123,7 +123,7 @@ def _copy_memory_scope(scope: MemoryScope | None) -> MemoryScope | None:
     if type(scope) is not MemoryScope:
         raise TypeError("historical memory scope must be a MemoryScope or None")
     return deepcopy(MemoryScope(scope.root_flow_id, scope.static_path, scope.frame_stack,
-                                scope.occurrence_path, scope.boundary))
+                                scope.occurrence_path))
 
 
 @dataclass(frozen=True, slots=True)

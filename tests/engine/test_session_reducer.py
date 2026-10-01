@@ -20,7 +20,7 @@ from tests.engine._session_fakes import REF
 
 def _flow(*, sibling=False):
     node = FuncNode("agent", lambda _: pytest.fail("replay invoked a node"))
-    node.memory_scope = c.MemoryScope("root", ("root", "agent"), (REF,), (), None)
+    node.memory_scope = c.MemoryScope("root", ("root", "agent"), (REF,))
     flow = CompiledFlow.from_parts(
         nodes={
             START_ID: StartNode(START_ID),

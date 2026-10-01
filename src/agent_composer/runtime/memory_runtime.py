@@ -437,7 +437,7 @@ class MemoryRuntime:
             raise TypeError("memory context scope must be a MemoryScope")
         scope = MemoryScope(
             scope.root_flow_id, scope.static_path, scope.frame_stack,
-            scope.occurrence_path, scope.boundary,
+            scope.occurrence_path,
         )
         if type(request) is not MemoryContextRequest:
             raise TypeError("memory request must be a MemoryContextRequest")

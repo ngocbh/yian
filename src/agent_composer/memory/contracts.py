@@ -493,13 +493,6 @@ class MemoryOccurrenceKind(str, Enum):
     LOOP_ITERATION = "loop_iteration"
 
 
-class MemoryBoundaryKind(str, Enum):
-    """Closed set of boundaries around one memory-owning flow."""
-
-    START = "start"
-    END = "end"
-
-
 class MemoryEpisodeStatus(str, Enum):
     """Closed set of authoritative episode outcomes."""
 
@@ -644,28 +637,6 @@ class MemoryOccurrenceRef:
 
 
 @dataclass(frozen=True, slots=True)
-class MemoryBoundary:
-    """A START or END boundary belonging to one memory-owning flow frame."""
-
-    kind: MemoryBoundaryKind
-    frame_ref: MemoryFrameRef
-
-    def __post_init__(self) -> None:
-        """Require a closed boundary kind and a flow-owned frame."""
-        if type(self.kind) is not MemoryBoundaryKind:
-            raise TypeError("kind must be a MemoryBoundaryKind")
-        if type(self.frame_ref) is not MemoryFrameRef:
-            raise TypeError("frame_ref must be a MemoryFrameRef")
-        MemoryFrameRef(
-            self.frame_ref.root_flow_id,
-            self.frame_ref.static_path,
-            self.frame_ref.owner,
-        )
-        if self.frame_ref.owner is not MemoryOwner.FLOW:
-            raise ValueError("a memory boundary must belong to a flow frame")
-
-
-@dataclass(frozen=True, slots=True)
 class MemoryScope:
     """The immutable memory context carried by one compiled execution node."""
 
@@ -673,7 +644,6 @@ class MemoryScope:
     static_path: tuple[str, ...]
     frame_stack: tuple[MemoryFrameRef, ...] = ()
     occurrence_path: tuple[MemoryOccurrenceSegment, ...] = ()
-    boundary: MemoryBoundary | None = None
 
     def __post_init__(self) -> None:
         """Validate paths and keep every nested identity within one root flow."""
@@ -737,16 +707,6 @@ class MemoryScope:
             raise ValueError(
                 "the innermost occurrence segment must contain the scoped node"
             )
-        if self.boundary is not None:
-            if type(self.boundary) is not MemoryBoundary:
-                raise TypeError("boundary must be a MemoryBoundary or None")
-            MemoryBoundary(self.boundary.kind, self.boundary.frame_ref)
-            if self.boundary.frame_ref.root_flow_id != self.root_flow_id:
-                raise ValueError("boundary root_flow_id must match the scope")
-            if not self.frame_stack or self.boundary.frame_ref != self.frame_stack[-1]:
-                raise ValueError(
-                    "boundary frame must be the innermost newly owned flow frame"
-                )
 
 
 @dataclass(frozen=True, slots=True)
@@ -891,7 +851,6 @@ class EvaluationEvidence:
                 scope.static_path,
                 scope.frame_stack,
                 scope.occurrence_path,
-                scope.boundary,
             )
         object.__setattr__(self, "scope", scope)
         if bound_inputs is not None and type(bound_inputs) is not dict:

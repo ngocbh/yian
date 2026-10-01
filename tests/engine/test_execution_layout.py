@@ -294,19 +294,12 @@ def test_execution_scope_agrees_with_existing_memory_ownership_paths(child_polic
         assert target.node.memory_scope is memory_scope
         assert memory_scope.static_path == ("root", *target.scope.static_path)
         assert target.scope.occurrence_path == ()
-        if memory_scope.boundary is not None:
-            assert memory_scope.boundary.kind.value == target.scope.boundary
-            assert memory_scope.boundary.frame_ref.static_path == (
-                "root", *target.scope.flow_path,
-            )
     child_start = next(
         target for target in execution_layout.targets
         if target.locator == ("left", START_ID)
     )
     assert child_start.scope.flow_path == ("left",)
     assert child_start.scope.boundary == "start"
-    if not child_policy:
-        assert old_memory[child_start.locator].boundary is None
 
 
 def _two_node_layout():

@@ -18,8 +18,6 @@ from agent_composer.memory import (
     LearningFailure,
     LearningResult,
     Memory,
-    MemoryBoundary,
-    MemoryBoundaryKind,
     MemoryEpisode,
     MemoryEpisodeStatus,
     MemoryFrame,
@@ -63,7 +61,6 @@ def test_identity_values_are_frozen_structured_products() -> None:
         2,
     )
     occurrence = MemoryOccurrenceRef(frame, (segment,))
-    boundary = MemoryBoundary(MemoryBoundaryKind.START, _flow_ref())
     scope = MemoryScope(
         root_flow_id="root",
         static_path=("root", "child", "agent"),
@@ -77,10 +74,22 @@ def test_identity_values_are_frozen_structured_products() -> None:
     assert occurrence == MemoryOccurrenceRef(frame, (segment,))
     assert scope.frame_stack == (_flow_ref(), frame)
     assert scope.occurrence_path == (segment,)
-    assert scope.boundary is None
-    assert boundary.frame_ref == _flow_ref()
     with pytest.raises(FrozenInstanceError):
         frame.root_flow_id = "other"  # type: ignore[misc]
+
+
+def test_memory_scope_has_no_boundary() -> None:
+    """START and END are marked by ExecutionScope; memory scopes carry no boundary."""
+    import agent_composer.memory as memory
+    import agent_composer.memory.contracts as contracts
+
+    assert not hasattr(memory, "MemoryBoundary")
+    assert not hasattr(memory, "MemoryBoundaryKind")
+    assert not hasattr(contracts, "MemoryBoundary")
+    assert not hasattr(contracts, "MemoryBoundaryKind")
+    assert "boundary" not in MemoryScope.__dataclass_fields__
+    with pytest.raises(TypeError):
+        MemoryScope("root", ("root", "child"), (), (), None)  # type: ignore[call-arg]
 
 
 @pytest.mark.parametrize(
@@ -126,11 +135,6 @@ def test_identity_values_are_frozen_structured_products() -> None:
             lambda: MemoryOccurrenceRef(_agent_ref(), []),  # type: ignore[arg-type]
             TypeError,
             "occurrence_path",
-        ),
-        (
-            lambda: MemoryBoundary(MemoryBoundaryKind.END, _agent_ref()),
-            ValueError,
-            "flow",
         ),
         (
             lambda: MemoryScope(
@@ -205,13 +209,6 @@ class _ForgedOccurrenceSegment(MemoryOccurrenceSegment):
         """Deliberately skip validation for nested-carrier hardening tests."""
 
 
-class _ForgedBoundary(MemoryBoundary):
-    """A boundary subclass that bypasses base validation."""
-
-    def __post_init__(self) -> None:
-        """Deliberately skip validation for nested-carrier hardening tests."""
-
-
 class _ForgedOccurrenceRef(MemoryOccurrenceRef):
     """An occurrence-reference subclass that bypasses base validation."""
 
@@ -231,7 +228,6 @@ def test_nested_memory_carriers_reject_forged_subclass_values() -> None:
         ("root", "mapped"),
         -1,
     )
-    forged_boundary = _ForgedBoundary(MemoryBoundaryKind.START, _agent_ref())
     forged_occurrence = _ForgedOccurrenceRef(_agent_ref(), ())
     forged_episode = object.__new__(_ForgedEpisode)
     object.__setattr__(forged_episode, "run_id", "")
@@ -240,12 +236,8 @@ def test_nested_memory_carriers_reject_forged_subclass_values() -> None:
         MemoryOccurrenceRef(forged_frame)
     with pytest.raises(TypeError, match="occurrence_path"):
         MemoryOccurrenceRef(_agent_ref(), (forged_segment,))
-    with pytest.raises(TypeError, match="frame_ref"):
-        MemoryBoundary(MemoryBoundaryKind.START, forged_frame)
     with pytest.raises(TypeError, match="frame_stack"):
         MemoryScope("root", ("root",), frame_stack=(forged_frame,))
-    with pytest.raises(TypeError, match="boundary"):
-        MemoryScope("root", ("root",), boundary=forged_boundary)
     with pytest.raises(TypeError, match="ref"):
         MemoryFrameSpec(forged_frame, "reflective", {})
     with pytest.raises(TypeError, match="occurrence"):

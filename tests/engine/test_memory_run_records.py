@@ -12,8 +12,6 @@ from agent_composer.diagnostics import Failure
 from agent_composer.memory import (
     EvaluationEvidence,
     LearnContext,
-    MemoryBoundary,
-    MemoryBoundaryKind,
     MemoryEpisode,
     MemoryEpisodeStatus,
     MemoryFrameRef,
@@ -355,13 +353,6 @@ def test_memory_scope_requires_one_lexical_unique_frame_chain() -> None:
             "root",
             ("root", "flow", "agent", "child", "node"),
             (agent_ref, nested_flow),
-        )
-    with pytest.raises(ValueError, match="innermost"):
-        MemoryScope(
-            "root",
-            agent_ref.static_path,
-            (flow_ref, agent_ref),
-            boundary=MemoryBoundary(MemoryBoundaryKind.START, flow_ref),
         )
     assert EvaluationEvidence(
         MemoryScope("root", ("root", "neutral")), {}, "base", "prompt",

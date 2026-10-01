@@ -17,8 +17,6 @@ from agent_composer.compile.manifest import expansion_digest, flow_fingerprint
 from agent_composer.compile.model import END_ID, START_ID, Flow, validate_growth_metadata
 from agent_composer.diagnostics import OriginRef
 from agent_composer.memory import (
-    MemoryBoundary,
-    MemoryBoundaryKind,
     MemoryFrameRef,
     MemoryOccurrenceKind,
     MemoryOccurrenceSegment,
@@ -180,7 +178,7 @@ def test_call_subgraph_prefixes_every_cloned_node_including_boundaries():
     assert sg.nodes[sg.end_id].origin_context == context
 
 
-def test_call_subgraph_inherits_occurrence_and_preserves_child_boundary() -> None:
+def test_call_subgraph_inherits_occurrence_and_keeps_child_frames() -> None:
     child = _child_flow()
     child_frame = MemoryFrameRef(
         "root",
@@ -188,16 +186,10 @@ def test_call_subgraph_inherits_occurrence_and_preserves_child_boundary() -> Non
         MemoryOwner.FLOW,
     )
     for node_id, node in child.nodes.items():
-        boundary = None
-        if node_id == START_ID:
-            boundary = MemoryBoundary(MemoryBoundaryKind.START, child_frame)
-        elif node_id == END_ID:
-            boundary = MemoryBoundary(MemoryBoundaryKind.END, child_frame)
         node.memory_scope = MemoryScope(
             "root",
             ("root", "outer_map", "call", node_id),
             frame_stack=(child_frame,),
-            boundary=boundary,
         )
     outer = MemoryOccurrenceSegment(
         MemoryOccurrenceKind.MAP_ITEM,
@@ -220,14 +212,13 @@ def test_call_subgraph_inherits_occurrence_and_preserves_child_boundary() -> Non
     assert {
         node.memory_scope.occurrence_path for node in fragment.nodes.values()
     } == {(outer,)}
-    assert fragment.nodes[fragment.start_id].memory_scope.boundary == MemoryBoundary(
-        MemoryBoundaryKind.START,
-        child_frame,
-    )
-    assert fragment.nodes[fragment.end_id].memory_scope.boundary == MemoryBoundary(
-        MemoryBoundaryKind.END,
-        child_frame,
-    )
+    for node_id, fragment_id in ((START_ID, fragment.start_id), (END_ID, fragment.end_id)):
+        assert fragment.nodes[fragment_id].memory_scope == MemoryScope(
+            "root",
+            ("root", "outer_map", "call", node_id),
+            frame_stack=(child_frame,),
+            occurrence_path=(outer,),
+        )
 
 
 def test_call_subgraph_revalidates_supplied_memory_scope() -> None:

@@ -841,7 +841,6 @@ def eval_node(
         MemoryScope(
             memory_scope.root_flow_id, memory_scope.static_path,
             memory_scope.frame_stack, memory_scope.occurrence_path,
-            memory_scope.boundary,
         )
     if effective_llm_by_static_path is not None and type(effective_llm_by_static_path) is not dict:
         raise TypeError("effective_llm_by_static_path must be a dict or None")

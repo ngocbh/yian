@@ -3400,7 +3400,7 @@ def _validate_node_evidence(
         if type(scope) is not MemoryScope:
             raise ValueError(f"node {node_id!r} has no exact compiled memory scope")
         MemoryScope(scope.root_flow_id, scope.static_path, scope.frame_stack,
-                    scope.occurrence_path, scope.boundary)
+                    scope.occurrence_path)
         expected_stack = state.learning_state.applicable_frames(
             scope.root_flow_id, scope.static_path,
         )

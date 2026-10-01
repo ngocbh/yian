@@ -15,7 +15,6 @@ from typing import Iterator
 from agent_composer.compile.model import END_ID, START_ID, CompiledFlow, Flow
 from agent_composer.diagnostics import OriginRef
 from agent_composer.memory.contracts import (
-    MemoryBoundary,
     MemoryFrameRef,
     MemoryFrameSpec,
     MemoryOccurrenceSegment,
@@ -68,19 +67,6 @@ def _revalidate_memory_occurrence_path(
     return value
 
 
-def _revalidate_memory_boundary(
-    value: MemoryBoundary,
-    *,
-    name: str,
-) -> MemoryBoundary:
-    """Replay every exact nested invariant of one flow boundary."""
-    if type(value) is not MemoryBoundary:
-        raise TypeError(f"{name} must be an exact MemoryBoundary")
-    _revalidate_memory_frame_ref(value.frame_ref, name=f"{name}.frame_ref")
-    MemoryBoundary(kind=value.kind, frame_ref=value.frame_ref)
-    return value
-
-
 def _revalidate_memory_scope(
     value: MemoryScope,
     *,
@@ -106,14 +92,11 @@ def _revalidate_memory_scope(
         value.occurrence_path,
         name=f"{name}.occurrence_path",
     )
-    if value.boundary is not None:
-        _revalidate_memory_boundary(value.boundary, name=f"{name}.boundary")
     MemoryScope(
         root_flow_id=value.root_flow_id,
         static_path=value.static_path,
         frame_stack=value.frame_stack,
         occurrence_path=value.occurrence_path,
-        boundary=value.boundary,
     )
     return value
 

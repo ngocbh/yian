@@ -60,10 +60,10 @@ class AgentNode(Node):
     """An LLM-backed leaf configured by a prompt, mode, and authored tools.
 
     Modes normalize ``llm_config`` through the call-time ``model_from_config``
-    seam.
-    ``memories`` holds the AGENT's authored memory declarations; compile derives runtime scope.
-    ``variables`` retains typed local declarations with mandatory literal defaults,
-    resolved into a fresh prompt record for each invocation.
+    seam. ``memories`` holds the AGENT's authored memory declarations; compile
+    derives runtime scope. ``variables`` retains typed local declarations with
+    mandatory literal defaults, resolved into a fresh prompt record for each
+    invocation.
     """
 
     kind = NodeKind.AGENT

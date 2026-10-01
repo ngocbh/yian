@@ -18,7 +18,7 @@ and re-exported here so runtime consumers can import them alongside the graph ty
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from agent_composer.memory.contracts import MemoryPolicySpec
+from agent_composer.memory.contracts import MemoryDecl
 from agent_composer.nodes.base import Node
 from agent_composer.nodes.contracts import (
     Binding,
@@ -278,8 +278,8 @@ class CompiledFlow(Flow):
             captured once at run initialization. It returns the complete static-path map.
         flow_id (`str | None`):
             Stable authored semantic identity. Direct memoryless Python graphs may omit it.
-        memory_policy (`MemoryPolicySpec | None`):
-            Optional flow-owned named policy declaration. Runtime layout is derived later.
+        memories (`tuple[MemoryDecl, ...]`):
+            Flow-owned memory declarations in authored order. Runtime layout is derived later.
     """
 
     def __init__(self, nodes: dict[str, Node], edges: list[Edge],
@@ -287,7 +287,7 @@ class CompiledFlow(Flow):
                  wiring: Optional[dict[str, dict[str, Any]]] = None,
                  flow_llm_config: Optional[dict] = None,
                  flow_id: str | None = None,
-                 memory_policy: MemoryPolicySpec | None = None) -> None:
+                 memories: tuple[MemoryDecl, ...] = ()) -> None:
         # The top-level compiled flow always roots at the synthesized START and returns END.
         super().__init__(nodes=nodes, edges=edges, wiring=wiring,
                          start_id=START_ID, end_id=END_ID)
@@ -299,12 +299,14 @@ class CompiledFlow(Flow):
                 raise TypeError("flow_id must be an exact string or None")
             if not flow_id:
                 raise ValueError("flow_id must be non-empty")
-        if memory_policy is not None and type(memory_policy) is not MemoryPolicySpec:
-            raise TypeError(
-                "memory_policy must be an exact MemoryPolicySpec or None"
-            )
+        if type(memories) is not tuple or any(
+            type(decl) is not MemoryDecl for decl in memories
+        ):
+            raise TypeError("memories must be a tuple of exact MemoryDecl values")
+        if any(decl.site.node is not None for decl in memories):
+            raise ValueError("flow memories must carry flow DeclSites (node=None)")
         self.flow_id = flow_id
-        self.memory_policy = memory_policy
+        self.memories = memories
         # Adjacency indexes, built once from `edges`.
         self._incoming: dict[str, list[Edge]] = {}      # node id -> edges ending at it
         self._outgoing: dict[str, list[Edge]] = {}      # node id -> edges leaving it
@@ -332,13 +334,13 @@ class CompiledFlow(Flow):
                    wiring: Optional[dict[str, dict[str, Any]]] = None,
                    flow_llm_config: Optional[dict] = None,
                    flow_id: str | None = None,
-                   memory_policy: MemoryPolicySpec | None = None) -> "CompiledFlow":
+                   memories: tuple[MemoryDecl, ...] = ()) -> "CompiledFlow":
         """Build a CompiledFlow. The entry is always the synthesized START node (StartNode.ID),
         added implicitly by the loader / graph builder — never authored by the user; the engine
         seeds and advances it at run start."""
         return cls(nodes=nodes, edges=edges, outputs=outputs, wiring=wiring,
                    flow_llm_config=flow_llm_config, flow_id=flow_id,
-                   memory_policy=memory_policy)
+                   memories=memories)
 
     def add_subgraph(self, nodes: dict[str, Node], edges: list[Edge],
                      wiring: dict[str, dict[str, Any]]) -> None:

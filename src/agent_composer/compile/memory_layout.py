@@ -15,11 +15,11 @@ from typing import Iterator
 from agent_composer.compile.model import END_ID, START_ID, CompiledFlow, Flow
 from agent_composer.diagnostics import OriginRef
 from agent_composer.memory.contracts import (
+    MemoryDecl,
     MemoryFrameRef,
     MemoryFrameSpec,
     MemoryOccurrenceSegment,
     MemoryOwner,
-    MemoryPolicySpec,
     MemoryScope,
     MemorySetupError,
 )
@@ -232,20 +232,31 @@ def _revalidate_resolved_layout(layout: ResolvedMemoryLayout) -> None:
     )
 
 
-def _flow_policy(flow: Flow) -> MemoryPolicySpec | None:
-    """Return the optional policy owned by an exact compiled flow."""
+def _single_decl(
+    decls: object,
+    *,
+    label: str,
+    origin: OriginRef | None,
+) -> MemoryDecl | None:
+    """Return the owner's only declaration while frames still key layout."""
+    if type(decls) is not tuple or any(type(d) is not MemoryDecl for d in decls):
+        raise _setup_error(f"{label} memories must be a tuple of exact MemoryDecl values", origin=origin)
+    if len(decls) > 1:
+        raise _setup_error(f"{label} declares more than one memory", origin=decls[1].origin)
+    return decls[0] if decls else None
+
+
+def _flow_policy(flow: Flow) -> MemoryDecl | None:
+    """Return the optional declaration owned by an exact compiled flow."""
     if type(flow) is not CompiledFlow:
         return None
-    policy = flow.memory_policy
-    if policy is not None and type(policy) is not MemoryPolicySpec:
-        raise _setup_error("flow memory_policy must be an exact MemoryPolicySpec")
-    return policy
+    return _single_decl(flow.memories, label="flow", origin=None)
 
 
 def _validate_memory_flow_boundaries(
     flow: Flow,
     *,
-    policy: MemoryPolicySpec,
+    policy: MemoryDecl,
 ) -> None:
     """Require exact direct START/END targets before emitting a flow frame."""
     origin = policy.origin
@@ -303,17 +314,11 @@ def _validate_memory_flow_boundaries(
         )
 
 
-def _agent_policy(node: Node) -> MemoryPolicySpec | None:
-    """Return the optional policy owned by an exact AGENT node."""
+def _agent_policy(node: Node) -> MemoryDecl | None:
+    """Return the optional declaration owned by an exact AGENT node."""
     if type(node) is not AgentNode:
         return None
-    policy = node.memory_policy
-    if policy is not None and type(policy) is not MemoryPolicySpec:
-        raise _setup_error(
-            f"AGENT node {node.id!r} memory_policy must be an exact MemoryPolicySpec",
-            origin=node.origin,
-        )
-    return policy
+    return _single_decl(node.memories, label=f"AGENT node {node.id!r}", origin=node.origin)
 
 
 def _flow_nodes(flow: Flow, *, origin: OriginRef | None = None) -> list[tuple[str, Node]]:
@@ -416,7 +421,7 @@ def _first_policy(
     *,
     active_flows: set[int] | None = None,
     owner_origin: OriginRef | None = None,
-) -> MemoryPolicySpec | None:
+) -> MemoryDecl | None:
     """Return the first reachable policy while validating the static child tree."""
     active = set() if active_flows is None else active_flows
     flow_identity = id(flow)
@@ -449,12 +454,12 @@ def _first_policy(
 
 
 def _resolved_frame(
-    policy: MemoryPolicySpec,
+    policy: MemoryDecl,
     ref: MemoryFrameRef,
 ) -> ResolvedMemoryFrame:
     """Lower one authored policy into its effective source-neutral frame spec."""
     return ResolvedMemoryFrame(
-        spec=MemoryFrameSpec(ref, policy.name, policy.config),
+        spec=MemoryFrameSpec(ref, policy.key, policy.config),
         origin=policy.origin,
     )
 

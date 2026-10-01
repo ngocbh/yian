@@ -324,7 +324,7 @@ def test_diamond_crossing_call_uses_one_walk_and_preserves_child_default_project
     from agent_composer.nodes.call import CallNode
     from agent_composer.nodes.code import CodeNode
     from agent_composer.runtime.backward import compute_backward
-    from agent_composer.memory import MemoryPolicySpec
+    from agent_composer.memory import DeclSite, MemoryDecl
     from agent_composer.runtime.learning import project_owner_contexts
     from tests.engine.test_runtime_memory_learning import _owner_engine
 
@@ -340,7 +340,7 @@ def test_diamond_crossing_call_uses_one_walk_and_preserves_child_default_project
     work.params = [Parameter("x"), Parameter("literal")]
     child = _graph([start, work], [(START_ID, "work")], outputs=[FlowOutput("result", "${work.output}")],
                    wiring={"work": {"x": "${input.x}", "literal": "${input.literal}"}})
-    child.memory_policy = MemoryPolicySpec("reflective", {})
+    child.memories = (MemoryDecl("reflective", "reflective", {}, DeclSite((), ("def", "child"), None)),)
     call = CallNode("call", flow_id="child", child=child)
     call.params = [Parameter("x")]
     producer = RecordingBackwardNode("producer", lambda inputs: inputs["x"], lambda _c, f: BackwardResult({"x": f}),

@@ -26,9 +26,10 @@ from agent_composer.diagnostics import OriginRef
 from agent_composer.expr import ExpressionError, expr_refs, scan_template
 from agent_composer.expr.template import Literal, Span
 from agent_composer.memory.contracts import (
+    DeclSite,
+    MemoryDecl,
     MemoryFrameRef,
     MemoryOccurrenceSegment,
-    MemoryPolicySpec,
     MemoryScope,
 )
 from agent_composer.nodes.agent import AgentNode
@@ -98,7 +99,7 @@ _KIND_FIELDS: dict[NodeKind, frozenset[str]] = {
             "llm_inherit",
             "mode",
             "retries",
-            "memory_policy",
+            "memories",
             "variables",
             "skills",
             "steerable",
@@ -191,8 +192,8 @@ _CONTRACT_ORIGINS_IGNORED_FIELDS = frozenset({"default", "entries"})
 _TYPE_FIELDS = frozenset({"kind", "fields", "required", "tags", "element", "nullable", "bounds"})
 _CASE_CANONICAL_FIELDS = frozenset({"handle", "when"})
 _CASE_IGNORED_FIELDS = frozenset({"origin"})
-_MEMORY_POLICY_CANONICAL_FIELDS = frozenset({"name", "_config"})
-_MEMORY_POLICY_IGNORED_FIELDS = frozenset({"origin"})
+_MEMORY_DECL_CANONICAL_FIELDS = frozenset({"name", "type", "_config", "site"})
+_MEMORY_DECL_IGNORED_FIELDS = frozenset({"origin"})
 
 # Config secrets are intentionally absent from identity. Exact names and high-confidence
 # compound suffixes are credentials in every config spelling. Generic auth/token/signature
@@ -1540,23 +1541,29 @@ def _case_manifest(value: Any, ctx: _ManifestContext, path: str) -> dict[str, An
     }
 
 
-def _memory_policy_manifest(
-    value: MemoryPolicySpec,
+def _memory_decl_manifest(
+    value: MemoryDecl,
     ctx: _ManifestContext,
     path: str,
 ) -> dict[str, Any]:
-    """Project one authored named policy while excluding its origin."""
-    if type(value) is not MemoryPolicySpec:
+    """Project one authored memory declaration while excluding its origin."""
+    if type(value) is not MemoryDecl:
         raise TypeError(
-            f"{path}: expected exact MemoryPolicySpec, got {type(value).__name__}"
+            f"{path}: expected exact MemoryDecl, got {type(value).__name__}"
         )
     _check_fields(
         value,
-        _MEMORY_POLICY_CANONICAL_FIELDS | _MEMORY_POLICY_IGNORED_FIELDS,
+        _MEMORY_DECL_CANONICAL_FIELDS | _MEMORY_DECL_IGNORED_FIELDS,
         path,
     )
-    if type(value.name) is not str or not value.name:
-        raise ValueError(f"{path}.name: expected a non-empty exact string")
+    site = value.site
+    if type(site) is not DeclSite:
+        raise TypeError(f"{path}.site: expected exact DeclSite")
+    DeclSite(site.scope, site.owner, site.node)
+    for label in ("name", "type"):
+        item = getattr(value, label)
+        if type(item) is not str or not item:
+            raise ValueError(f"{path}.{label}: expected a non-empty exact string")
     if value.origin is not None:
         if not isinstance(value.origin, OriginRef):
             raise TypeError(f"{path}.origin: expected OriginRef or None")
@@ -1569,7 +1576,27 @@ def _memory_policy_manifest(
             redact_credentials=True,
         ),
         "name": value.name,
+        "site": {
+            "node": site.node,
+            "owner": list(site.owner),
+            "scope": list(site.scope),
+        },
+        "type": value.type,
     }
+
+
+def _memories_manifest(
+    values: tuple[MemoryDecl, ...],
+    ctx: _ManifestContext,
+    path: str,
+) -> list[dict[str, Any]]:
+    """Project authored declarations in authored order."""
+    if type(values) is not tuple:
+        raise TypeError(f"{path}: expected a tuple of MemoryDecl values")
+    return [
+        _memory_decl_manifest(value, ctx, f"{path}[{index}]")
+        for index, value in enumerate(values)
+    ]
 
 
 def _relative_memory_path(
@@ -1750,15 +1777,7 @@ def _node_manifest(
         # Omitted when false so flows that never opt in keep their identity.
         if node.steerable:
             manifest["steerable"] = True
-        memory_policy = (
-            None
-            if node.memory_policy is None
-            else _memory_policy_manifest(
-                node.memory_policy,
-                ctx,
-                f"{path}.memory_policy",
-            )
-        )
+        memories = _memories_manifest(node.memories, ctx, f"{path}.memories")
         manifest.update(
             {
                 "llm_inherit": node.llm_inherit,
@@ -1774,8 +1793,9 @@ def _node_manifest(
                 ),
             }
         )
-        if not topology_only and memory_policy is not None:
-            manifest["memory_policy"] = memory_policy
+        # Omitted when empty so memory-free flows keep their identity.
+        if not topology_only and memories:
+            manifest["memories"] = memories
     elif node.kind is NodeKind.CODE:
         manifest["code"] = node.code
     elif node.kind is NodeKind.MODEL:
@@ -1927,7 +1947,7 @@ def _flow_manifest(
                     "outputs",
                     "flow_llm_config",
                     "flow_id",
-                    "memory_policy",
+                    "memories",
                     "_incoming",
                     "_outgoing",
                 }
@@ -2011,11 +2031,9 @@ def _flow_manifest(
                         f"{path}.flow_id: expected a non-empty exact string or None"
                     )
                 manifest["flow_id"] = flow.flow_id
-            if flow.memory_policy is not None:
-                manifest["memory_policy"] = _memory_policy_manifest(
-                    flow.memory_policy,
-                    ctx,
-                    f"{path}.memory_policy",
+            if flow.memories:
+                manifest["memories"] = _memories_manifest(
+                    flow.memories, ctx, f"{path}.memories"
                 )
             manifest["flow_llm_config"] = _sorted_mapping(
                 flow.flow_llm_config,
@@ -2034,12 +2052,7 @@ def _flow_manifest(
                 raise ValueError(
                     f"{path}.flow_id: expected a non-empty exact string or None"
                 )
-            if flow.memory_policy is not None:
-                _memory_policy_manifest(
-                    flow.memory_policy,
-                    ctx,
-                    f"{path}.memory_policy",
-                )
+            _memories_manifest(flow.memories, ctx, f"{path}.memories")
         return {key: manifest[key] for key in sorted(manifest)}
     finally:
         ctx.flows.remove(object_id)

@@ -5,8 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 from agent_composer.compose.helpers.errors import LoadDiagnostics
-from agent_composer.diagnostics import OriginRef, SourceRange
-from agent_composer.memory.contracts import MemoryPolicySpec
+from agent_composer.diagnostics import SourceRange
+from agent_composer.memory.contracts import DeclSite, MemoryDecl, MemoryPolicySpec
 
 
 def parse_memory_policy(
@@ -64,19 +64,16 @@ def parse_memory_policy(
         ) from exc
 
 
-def attach_memory_policy_origin(
-    spec: MemoryPolicySpec,
-    origin: OriginRef | None,
-) -> MemoryPolicySpec:
-    """Return ``spec`` with one optional opaque authored occurrence attached."""
+def memory_policy_declarations(
+    spec: MemoryPolicySpec | None,
+    site: DeclSite,
+) -> tuple[MemoryDecl, ...]:
+    """Return the old-form policy as one declaration at ``site``, or no declaration."""
+    if spec is None:
+        return ()
     if type(spec) is not MemoryPolicySpec:
         raise TypeError("memory policy must be an exact MemoryPolicySpec")
-    if origin is None:
-        return spec
-    if not isinstance(origin, OriginRef):
-        raise TypeError("memory policy origin must be an OriginRef or None")
-    OriginRef(origin.key)
-    return MemoryPolicySpec(spec.name, spec.config, origin)
+    return (MemoryDecl(spec.name, spec.name, spec.config, site, spec.origin),)
 
 
-__all__ = ["attach_memory_policy_origin", "parse_memory_policy"]
+__all__ = ["memory_policy_declarations", "parse_memory_policy"]

@@ -15,9 +15,10 @@ from agent_composer.compile.model import END_ID, START_ID, CompiledFlow
 from agent_composer.compose import load_flow
 from agent_composer.diagnostics import OriginRef
 from agent_composer.memory import (
+    DeclSite,
+    MemoryDecl,
     MemoryFrameRef,
     MemoryOwner,
-    MemoryPolicySpec,
     MemoryScope,
     MemorySetupError,
 )
@@ -89,7 +90,9 @@ def test_reachable_policy_requires_root_id_at_the_authored_policy_site() -> None
     origin = OriginRef("nodes/agent/memory_policy")
     agent = AgentNode(
         "agent",
-        memory_policy=MemoryPolicySpec("reflective", {}, origin),
+        memories=(
+            MemoryDecl("reflective", "reflective", {}, DeclSite((), ("root",), "agent"), origin),
+        ),
     )
     flow = CompiledFlow({"agent": agent}, [], wiring={"agent": {}})
 
@@ -146,7 +149,7 @@ def test_memory_owning_python_flow_requires_exact_direct_boundaries(
         [],
         wiring={node_id: {} for node_id in nodes},
         flow_id="root",
-        memory_policy=MemoryPolicySpec("reflective", {}, origin),
+        memories=(MemoryDecl("reflective", "reflective", {}, DeclSite((), ("root",), None), origin),),
     )
     if case == "start-subclass":
         flow.start_id = StringSubclass(START_ID)
@@ -448,7 +451,7 @@ def test_flow_frame_spec_retains_config_and_origin_outside_node_scopes() -> None
     inner = layout.frames[1]
 
     assert inner.spec.config == {"limit": 3}
-    assert inner.origin == flow.nodes["invoke"].child.memory_policy.origin
+    assert inner.origin == flow.nodes["invoke"].child.memories[0].origin
     assert inner.spec.ref == MemoryFrameRef(
         "root",
         ("root", "invoke"),

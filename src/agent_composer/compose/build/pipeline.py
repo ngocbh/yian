@@ -43,7 +43,7 @@ from agent_composer.nodes.contracts import (
     ValueContract,
     as_binding,
 )
-from agent_composer.memory.contracts import MemoryPolicySpec
+from agent_composer.memory.contracts import DeclSite, MemoryDecl
 from agent_composer.typesys.values import Type
 from agent_composer.compose.validate.asserts import lower_flow_asserts
 from agent_composer.compose.build.boundary import synthesize_boundary_graph
@@ -63,7 +63,6 @@ from agent_composer.compose.desugar.inline_bodies import (
 from agent_composer.compose.desugar.inline_calls import _synth_id_gen, desugar_inline_calls
 from agent_composer.compose.desugar.case_outputs import expand_case_outputs
 from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
-from agent_composer.compose.helpers.memory import attach_memory_policy_origin
 from agent_composer.compose.desugar.adaptive_questions import desugar_adaptive_questions
 from agent_composer.compose.desugar.case_targets import desugar_case_call_targets
 from agent_composer.compose.validate.case_exhaustive import check_case_exhaustive
@@ -736,8 +735,8 @@ def _assemble(
     outputs_range: Optional[SourceRange] = None,
     outputs_cursor: SourceCursor | None = None,
     flow_id: str | None = None,
-    memory_policy: MemoryPolicySpec | None = None,
-    memory_policy_cursor: SourceCursor | None = None,
+    memories: tuple[MemoryDecl, ...] = (),
+    memories_cursor: SourceCursor | None = None,
 ) -> ComposedFlow:
     """Assemble parsed sections into a `ComposedFlow` — the post-parse pipeline shared by
     the top-level flow and every in-file def:
@@ -762,8 +761,8 @@ def _assemble(
     the common header stamp each descriptor may immutably attach kind-owned opaque origins.
     `owner` is this flow's complete lexical path and seeds stable identities for anonymous
     children. `flow_id` retains the authored or generated semantic identity;
-    `memory_policy` and its optional cursor retain one flow-owned named policy and
-    attach its opaque occurrence origin. `boundary_field_ranges` locates authored
+    `memories` and its optional cursor carry the flow-owned declarations; each is
+    restamped with this flow's `DeclSite`. `boundary_field_ranges` locates authored
     flow-input declarations during
     Compose type compilation; `asserts_cursor` is the single authority for each flow
     assertion's opaque origin and Compose-only validation range. `outputs_range` is the
@@ -800,22 +799,20 @@ def _assemble(
         raise diagnostics.error(str(exc), range=exc.range) from exc
 
     catalog_builder = scope.catalog_builder
-    if memory_policy is not None:
-        if type(memory_policy) is not MemoryPolicySpec:
-            raise TypeError(
-                "memory_policy must be an exact MemoryPolicySpec or None"
-            )
-        policy_origin = (
-            catalog_builder.register(
-                (*owner, "memory_policy"),
-                memory_policy_cursor,
-            )
-            if memory_policy_cursor is not None
+    if type(memories) is not tuple or any(type(decl) is not MemoryDecl for decl in memories):
+        raise TypeError("memories must be a tuple of exact MemoryDecl values")
+    if memories:
+        origin = (
+            catalog_builder.register((*owner, "memory_policy"), memories_cursor)
+            if memories_cursor is not None
             else None
         )
-        memory_policy = attach_memory_policy_origin(
-            memory_policy,
-            policy_origin,
+        memories = tuple(
+            MemoryDecl(
+                decl.name, decl.type, decl.config, DeclSite((), owner, None),
+                decl.origin if origin is None else origin,
+            )
+            for decl in memories
         )
     flow_assertion_cursors = _assertion_cursors(
         asserts_section,
@@ -1379,7 +1376,7 @@ def _assemble(
         wiring=flow_wiring,
         flow_llm_config=flow_llm_config or {},
         flow_id=flow_id,
-        memory_policy=memory_policy,
+        memories=memories,
     )
     return ComposedFlow(
         compiled=compiled,

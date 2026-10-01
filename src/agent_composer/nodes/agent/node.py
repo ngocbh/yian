@@ -20,10 +20,10 @@ from agent_composer.llm_clients.redact import scrub_key
 from agent_composer.memory.contracts import (
     MemoryContext,
     EvaluationTrace,
-    MemoryPolicySpec,
+    MemoryDecl,
     MemoryRecallError,
-    _iter_memory_policy_origin,
-    _rewrite_memory_policy_origin,
+    _iter_memory_decl_origins,
+    _rewrite_memory_decl_origins,
 )
 from agent_composer.nodes.agent.modes import DEFAULT_SYSTEM, MODES, AgentRunContext
 from agent_composer.nodes.agent.memory import compatibility
@@ -60,8 +60,8 @@ class AgentNode(Node):
     """An LLM-backed leaf configured by a prompt, mode, and authored tools.
 
     Modes normalize ``llm_config`` through the call-time ``model_from_config``
-    seam. An optional
-    ``memory_policy`` is authored identity only until compile derives runtime scope.
+    seam.
+    ``memories`` holds the AGENT's authored memory declarations; compile derives runtime scope.
     ``variables`` retains typed local declarations with mandatory literal defaults,
     resolved into a fresh prompt record for each invocation.
     """
@@ -86,7 +86,7 @@ class AgentNode(Node):
         mode: str = DEFAULT_MODE,
         retries: int = 2,
         title: Optional[str] = None,
-        memory_policy: MemoryPolicySpec | None = None,
+        memories: tuple[MemoryDecl, ...] = (),
         variables: list[Parameter] | None = None,
         skills: list[str] | Literal["all"] | None = None,
         steerable: bool = False,
@@ -106,11 +106,13 @@ class AgentNode(Node):
         self.llm_inherit = llm_inherit
         self.mode = mode or DEFAULT_MODE
         self.retries = retries
-        if memory_policy is not None and type(memory_policy) is not MemoryPolicySpec:
-            raise TypeError(
-                "memory_policy must be an exact MemoryPolicySpec or None"
-            )
-        self.memory_policy = memory_policy
+        if type(memories) is not tuple or any(
+            type(decl) is not MemoryDecl for decl in memories
+        ):
+            raise TypeError("memories must be a tuple of exact MemoryDecl values")
+        if any(decl.site.node is None for decl in memories):
+            raise ValueError("AGENT memories must carry AGENT DeclSites")
+        self.memories = memories
         self.variables = [] if variables is None else variables
         if self.mode not in MODES:
             raise ValueError(
@@ -206,13 +208,12 @@ class AgentNode(Node):
         *,
         _seen_carriers: Optional[set[int]] = None,
     ) -> Iterator[OriginRef]:
-        """Yield common origins, variable declarations, and the optional policy site."""
+        """Yield common origins, variable declarations, and memory declaration sites."""
         seen = _seen_carriers if _seen_carriers is not None else set()
         yield from super().iter_local_origins(_seen_carriers=seen)
         for variable in self.variables:
             yield from _iter_origin_carrier(variable, seen)
-        if self.memory_policy is not None:
-            yield from _iter_memory_policy_origin(self.memory_policy, seen)
+        yield from _iter_memory_decl_origins(self.memories, seen)
 
     def rewrite_local_origins(
         self,
@@ -220,13 +221,12 @@ class AgentNode(Node):
         *,
         _seen_carriers: Optional[set[int]] = None,
     ) -> None:
-        """Rewrite common, variable, and policy origins while retaining aliases."""
+        """Rewrite common, variable, and memory declaration origins while retaining aliases."""
         seen = _seen_carriers if _seen_carriers is not None else set()
         super().rewrite_local_origins(mapper, _seen_carriers=seen)
         for variable in self.variables:
             _rewrite_origin_carrier(variable, mapper, seen)
-        if self.memory_policy is not None:
-            _rewrite_memory_policy_origin(self.memory_policy, mapper, seen)
+        _rewrite_memory_decl_origins(self.memories, mapper, seen)
 
     def _max_tool_iterations(self) -> int:
         """Return the positive authored loop bound or ``-1`` for no bound."""

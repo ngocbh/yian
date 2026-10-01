@@ -50,13 +50,14 @@ from agent_composer.diagnostics import (
     OriginResolver,
     ResolverTable,
 )
+from agent_composer.memory.contracts import DeclSite
 from agent_composer.typesys.values import TypeCheckError
 from agent_composer.typesys.types import read_typedefs
 from agent_composer.compose.build.pipeline import _assemble, ComposedFlow
 from agent_composer.compose.desugar.inline_bodies import INLINE_FLOW_PREFIX
 from agent_composer.compose.nodes.resolver import ChildResolver
 from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
-from agent_composer.compose.helpers.memory import parse_memory_policy
+from agent_composer.compose.helpers.memory import memory_policy_declarations, parse_memory_policy
 from agent_composer.compose.helpers.uses import parse_uses_ref
 from agent_composer.compose.helpers.source import _boundary_field_ranges
 from agent_composer.compose.parse.file import (
@@ -672,14 +673,15 @@ def _load_flow(
         uses_cursor=uses_cursor,
         diagnostics=diagnostics,
     )
-    root_memory_policy = (
+    root_memories = memory_policy_declarations(
         parse_memory_policy(
             f.long_term_memory,
             diagnostics=diagnostics,
             source_range=root.range_of("long_term_memory"),
         )
         if root.has("nodes") and root.has("long_term_memory")
-        else None
+        else None,
+        DeclSite((), ("root",), None),
     )
     callable_scope.eager_load_defs()
 
@@ -710,8 +712,8 @@ def _load_flow(
             else None
         ),
         flow_id=f.id,
-        memory_policy=root_memory_policy,
-        memory_policy_cursor=(
+        memories=root_memories,
+        memories_cursor=(
             root.child("long_term_memory")
             if root.has("nodes") and root.has("long_term_memory")
             else None
@@ -1089,7 +1091,7 @@ def _load_def(
     )
     nodes_cursor = _def_assembly_cursor(def_cursor, body["nodes"])
     try:
-        memory_policy = (
+        def_memories = memory_policy_declarations(
             parse_memory_policy(
                 body["long_term_memory"],
                 diagnostics=diagnostics,
@@ -1100,7 +1102,8 @@ def _load_def(
                 ),
             )
             if "long_term_memory" in body
-            else None
+            else None,
+            DeclSite((), ("def", name), None),
         )
         return _assemble(
             inputs_section=body.get("inputs") or {},
@@ -1127,8 +1130,8 @@ def _load_def(
                 or _source_child(def_cursor, "outputs")
             ),
             flow_id=name,
-            memory_policy=memory_policy,
-            memory_policy_cursor=_source_child(def_cursor, "long_term_memory"),
+            memories=def_memories,
+            memories_cursor=_source_child(def_cursor, "long_term_memory"),
         )
     except LoadError as exc:
         raise diagnostics.prepend(

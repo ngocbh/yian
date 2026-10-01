@@ -200,11 +200,11 @@ def _owner_engine(flow, inputs=None, **kwargs):
     """Use the real static scope pass with the existing direct engine fixture."""
     from agent_composer.compile.llm_cascade import apply_effective_llm_map
     from agent_composer.compile.memory_layout import apply_memory_layout, resolve_memory_layout
-    from agent_composer.memory import MemoryPolicySpec
+    from agent_composer.memory import DeclSite, MemoryDecl
     from tests.engine._graph_builder import _engine
 
     flow.flow_id = flow.flow_id or "root"
-    flow.memory_policy = MemoryPolicySpec(_POLICY, {})
+    flow.memories = (MemoryDecl(_POLICY, _POLICY, {}, DeclSite((), ("root",), None)),)
     apply_effective_llm_map(flow, {})
     resolved = resolve_memory_layout(flow)
     apply_memory_layout(flow, resolved)
@@ -457,13 +457,13 @@ def test_owner_context_projection_from_replay_does_not_reinvoke_handlers(monkeyp
 
 def test_owner_context_empty_map_retains_growth_and_unexecuted_child_frame():
     from agent_composer.compile.model import FlowOutput
-    from agent_composer.memory import MemoryPolicySpec
+    from agent_composer.memory import DeclSite, MemoryDecl
     from agent_composer.nodes.contracts import Parameter
     from agent_composer.runtime.backward import compute_backward
 
     child = _graph([FuncNode("work", lambda inputs: inputs["x"], reads={"x": "${input.x}"})],
                    [(START_ID, "work")], outputs=[FlowOutput("answer", "${work.output}")])
-    child.memory_policy = MemoryPolicySpec(_POLICY, {})
+    child.memories = (MemoryDecl(_POLICY, _POLICY, {}, DeclSite((), ("def", "child"), None)),)
     mapper = MapNode("map", flow_id="child", child=child)
     mapper.params = [Parameter("x")]
     engine, layout = _owner_engine(_graph([mapper], [(START_ID, "map")],

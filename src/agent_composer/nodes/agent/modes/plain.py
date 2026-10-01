@@ -15,7 +15,6 @@ import agent_composer.llm_clients as llm_clients
 from agent_composer.nodes.agent.memory import prepare_history, invoke_model, system_prompt_with_memory
 from agent_composer.nodes.agent.live import invoke_chat, live_sinks, observe_model_call
 from agent_composer.nodes.agent.modes.common import (
-    DEFAULT_SYSTEM,
     AgentRunContext,
     register_mode,
 )
@@ -32,7 +31,7 @@ def plain(ctx: AgentRunContext) -> Output:
     ctx.check_stopped()
     model = llm_clients.model_from_config(ctx.llm_config or {})
     ctx.check_stopped()
-    system_prompt = system_prompt_with_memory(DEFAULT_SYSTEM, ctx.memory_context.sections)
+    system_prompt = system_prompt_with_memory(ctx.base_system_prompt, ctx.memory_context.sections)
     msgs = [SystemMessage(content=system_prompt), HumanMessage(content=ctx.prompt)]
     new_messages = list(msgs)
     live = live_sinks(ctx)
@@ -50,7 +49,7 @@ def plain(ctx: AgentRunContext) -> Output:
     ]
     if ctx.evaluation_trace is not None:
         ctx.evaluation_trace.record_prompt(
-            DEFAULT_SYSTEM,
+            ctx.base_system_prompt,
             ctx.prompt,
             ctx.memory_context.sections,
         )

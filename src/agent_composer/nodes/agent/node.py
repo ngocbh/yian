@@ -325,6 +325,8 @@ class AgentNode(Node):
     ) -> Output:
         """Render fresh locals once, publish established capture, and run the mode.
 
+        The authored ``system_prompt`` renders against the same inputs and
+        variables as ``prompt``; without one the mode receives ``DEFAULT_SYSTEM``.
         ``capture_render`` is an optional evaluator-owned sink. It receives the
         actual template, resolved variable values/domains, and rendered prompt
         once, including established partial locals if preparation fails. Unknown
@@ -362,6 +364,8 @@ class AgentNode(Node):
 
         Raises:
             `ValueError`: A variable collides with a declared or delivered input.
+            `ExpressionError`: The prompt or system prompt names a missing value or
+                renders a null.
             `SkillError`: The node grants skills the host did not supply.
             `_CapabilityFault`: Capture or conversation access fails; the
                 evaluator re-raises its original host exception.
@@ -398,17 +402,23 @@ class AgentNode(Node):
             prompt = render_template_record(template, {**inputs, **variables})
             if captured is not None:
                 captured["rendered_prompt"] = prompt
+            system_prompt = (
+                DEFAULT_SYSTEM
+                if self.system_prompt is None
+                else render_template_record(self.system_prompt, {**inputs, **variables})
+            )
         finally:
             if capture_render is not None:
                 capture_render(captured)
         if stop_event is not None and stop_event.is_set():
             raise _HostStop(primary=False)
         granted = self._granted_skills(skills)
-        base_system_prompt = system_prompt_with_skills(DEFAULT_SYSTEM, granted)
+        base_system_prompt = system_prompt_with_skills(system_prompt, granted)
+        # Recall sees the system prompt without the skill listing, so grants never change recall.
         memory_context = (
             MemoryContext()
             if open_memory_context is None
-            else open_memory_context(DEFAULT_SYSTEM, prompt, compatibility(self.llm_config))
+            else open_memory_context(system_prompt, prompt, compatibility(self.llm_config))
         )
         if stop_event is not None and stop_event.is_set():
             raise _HostStop(primary=False)

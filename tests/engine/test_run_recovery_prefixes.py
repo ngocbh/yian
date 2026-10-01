@@ -374,14 +374,14 @@ def test_replay_applies_logged_llm_map_before_rebuilding_growth(monkeypatch):
 def test_historical_cursor_matches_each_envelopes_schema():
     from agent_composer.runtime.log import decode_record, encode_record
 
-    old_prefix = _RECORDED_LINEAR[:4]
-    with MemoryRunLog._from_records(tuple(decode_record(wire) for wire in old_prefix)) as log:
-        new_suffix = tuple(
+    recorded_prefix = _RECORDED_LINEAR[:4]
+    with MemoryRunLog._from_records(tuple(decode_record(wire) for wire in recorded_prefix)) as log:
+        appended_suffix = tuple(
             encode_record(log.append(decode_record(wire).record))
             for wire in _RECORDED_LINEAR[4:]
         )
-    assert all(decode_record(wire).schema == SCHEMA_VERSION for wire in new_suffix)
-    wires = old_prefix + new_suffix
+    assert all(decode_record(wire).schema == SCHEMA_VERSION for wire in appended_suffix)
+    wires = recorded_prefix + appended_suffix
     cursor = state_module._HistoricalLogCursor(wires)
     for wire in wires:
         expected = decode_record(wire)

@@ -1361,7 +1361,6 @@ class _BackwardFinishedPayload(_StrictModel):
     attributed_results: list[_AttributedBackwardResultPayload]
 
 
-
 _KIND_TO_MODEL: dict[str, type[_StrictModel]] = {
     "run_started": _RunStartedPayload,
     "run_resumed": _RunResumedPayload,

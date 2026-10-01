@@ -52,7 +52,7 @@ def test_retired_schema_log_is_rejected_on_resume(tmp_path, schema):
 
 
 @pytest.mark.parametrize("schema", [6, 7, 8, 10, True, False, 9.0])
-def test_supported_versions_do_not_weaken_validation(schema):
+def test_schema_check_does_not_weaken_validation(schema):
     with pytest.raises(ValueError):
         RecordEnvelope(schema, "run", 0, NodeStartedRecord("work"))
     envelope = RecordEnvelope(SCHEMA_VERSION, "run", 0, NodeStartedRecord("work"))
@@ -64,7 +64,7 @@ def test_supported_versions_do_not_weaken_validation(schema):
 
 
 @pytest.mark.parametrize("corruption", ["extra", "node_id", "seq", "kind"])
-def test_supported_versions_do_not_weaken_payload_validation(corruption):
+def test_schema_check_does_not_weaken_payload_validation(corruption):
     wire = json.loads(_wire_line())
     if corruption == "extra":
         wire["payload"]["extra"] = None
@@ -80,12 +80,12 @@ def test_supported_versions_do_not_weaken_payload_validation(corruption):
 
 @pytest.mark.parametrize("storage", ["jsonl", "memory"])
 @pytest.mark.parametrize("corruption", ["run_id", "gap"])
-def test_supported_versions_do_not_weaken_prefix_identity(tmp_path, storage, corruption):
+def test_prefix_identity_rejects_corruption(tmp_path, storage, corruption):
     prefix = _wire_line()
     suffix = _wire_line(seq=2 if corruption == "gap" else 1,
                         run_id="foreign" if corruption == "run_id" else "run")
     if storage == "jsonl":
-        path = tmp_path / "invalid-mixed.jsonl"
+        path = tmp_path / "invalid-prefix.jsonl"
         path.write_bytes(prefix + suffix)
         with pytest.raises(ValueError):
             JsonlRunLog.resume(path)
@@ -97,8 +97,8 @@ def test_supported_versions_do_not_weaken_prefix_identity(tmp_path, storage, cor
             MemoryRunLog._from_records(records)
 
 
-def test_supported_versions_preserve_mixed_append_rollback(tmp_path, monkeypatch):
-    path = tmp_path / "rollback-mixed.jsonl"
+def test_append_rollback_preserves_log(tmp_path, monkeypatch):
+    path = tmp_path / "rollback.jsonl"
     prefix = _wire_line()
     path.write_bytes(prefix)
     with JsonlRunLog.resume(path) as log:

@@ -471,7 +471,7 @@ def map_subgraph(
     generated fan-out/fan-in boundaries receive that same authored context.
 
     When ``memory_scope`` is present, element ``i`` appends a structured MAP-item occurrence to
-    its cloned child nodes. The generated fan nodes retain the spawner scope with no flow boundary.
+    its cloned child nodes. The generated fan nodes reuse the spawner's memory scope.
     Execution scopes also append the explicit item index; seed recipes select that same
     index and parameter name. Only actual item START/END pairs become child boundaries.
 

@@ -1000,6 +1000,89 @@ def _rewrite_memory_policy_origin(
 
 
 @dataclass(frozen=True, slots=True, init=False)
+class MemoryDecl:
+    """One authored memory declaration: name, backend type, config, and site."""
+
+    name: str
+    type: str
+    _config: _FrozenJsonObject = field(repr=False)
+    site: DeclSite
+    origin: OriginRef | None
+
+    def __init__(
+        self,
+        name: str,
+        type: str,
+        config: JsonObject,
+        site: DeclSite,
+        origin: OriginRef | None = None,
+    ) -> None:
+        """Validate and snapshot one declaration."""
+        object.__setattr__(self, "name", _require_string(name, "name"))
+        object.__setattr__(self, "type", _require_string(type, "type"))
+        frozen = _freeze_json_object(config, "config")
+        _reject_private_memory_keys(frozen, "config")
+        object.__setattr__(self, "_config", frozen)
+        if site.__class__ is not DeclSite:
+            raise TypeError("site must be a DeclSite")
+        object.__setattr__(self, "site", DeclSite(site.scope, site.owner, site.node))
+        object.__setattr__(self, "origin", _require_origin(origin))
+
+    @property
+    def config(self) -> JsonObject:
+        """Return a fresh plain-JSON copy of the declaration configuration."""
+        return _thaw_json_object(self._config)
+
+    @property
+    def key(self) -> str:
+        """Return the rendered memory key ``".".join((*site.scope, name))``."""
+        return ".".join((*self.site.scope, self.name))
+
+
+def _iter_memory_decl_origins(
+    decls: tuple[MemoryDecl, ...],
+    seen: set[int],
+) -> Iterator[OriginRef]:
+    """Yield declaration origins while preserving shared-carrier identity."""
+    if type(decls) is not tuple:
+        raise TypeError("memories must be a tuple")
+    for decl in decls:
+        if type(decl) is not MemoryDecl:
+            raise TypeError("memories items must be exact MemoryDecl values")
+        identity = id(decl)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        origin = _require_origin(decl.origin, "memory declaration origin")
+        if origin is not None:
+            yield origin
+
+
+def _rewrite_memory_decl_origins(
+    decls: tuple[MemoryDecl, ...],
+    mapper: Callable[[OriginRef], OriginRef],
+    seen: set[int],
+) -> None:
+    """Rewrite declaration origins in a private copy without replacing aliases."""
+    if type(decls) is not tuple:
+        raise TypeError("memories must be a tuple")
+    for decl in decls:
+        if type(decl) is not MemoryDecl:
+            raise TypeError("memories items must be exact MemoryDecl values")
+        identity = id(decl)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        origin = _require_origin(decl.origin, "memory declaration origin")
+        if origin is None:
+            continue
+        mapped = mapper(origin)
+        if not isinstance(mapped, OriginRef):
+            raise TypeError("origin mapper must return an OriginRef")
+        object.__setattr__(decl, "origin", OriginRef(mapped.key))
+
+
+@dataclass(frozen=True, slots=True, init=False)
 class MemoryFrameSpec:
     """Origin-free effective policy configuration for one memory frame."""
 

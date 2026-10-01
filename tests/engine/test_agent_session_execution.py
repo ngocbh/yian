@@ -11,7 +11,7 @@ import pytest
 
 import agent_composer.llm_clients as llm_clients
 from agent_composer import load_flow, run_flow
-from agent_composer.memory import MemoryOperationError
+from agent_composer.memory import MemoryOperationError, MemorySetupError
 from agent_composer.memory.conversation import conversation_view_from_json
 from agent_composer.memory.session import SessionMemory
 from agent_composer.nodes.agent.memory import decode_message
@@ -414,3 +414,54 @@ output: ${[left.output, right.output]}
     assert {view.key.consumer_static_path for view in _views(memory)} == {
         ("session-calls", "left", "answer"), ("session-calls", "right", "answer"),
     }
+
+
+_PROVIDER_SPLIT = """id: provider-split
+name: provider_split
+defs:
+  ask:
+    kind: agent
+    mode: plain
+    long_term_memory: session
+    prompt: hi
+    output: str
+  via_one:
+    llm_config: {provider: openai, model: one}
+    nodes:
+      inner: {kind: call, call: ask}
+    output: ${inner.output}
+  via_two:
+    llm_config: {provider: PROVIDER, model: two}
+    nodes:
+      inner: {kind: call, call: ask}
+    output: ${inner.output}
+nodes:
+  a: {kind: call, call: via_one}
+  b: {kind: call, call: via_two}
+output: ${[a.output, b.output]}
+"""
+
+
+def test_one_session_under_two_providers_fails_at_run_setup(monkeypatch):
+    flow = load_flow(_PROVIDER_SPLIT.replace("PROVIDER", "anthropic"))
+    monkeypatch.setattr(
+        llm_clients, "model_from_config", lambda _: pytest.fail("model called before setup check")
+    )
+    with pytest.raises(MemorySetupError) as caught:
+        run_flow(flow, {}, memory={"session": SessionMemory()})
+    message = str(caught.value)
+    assert "session memory 'session' resolves provider" in message
+    assert "'a/inner/ask'" in message and "'b/inner/ask'" in message
+    assert "pin a provider on the AGENT" in message
+
+
+def test_one_session_under_two_models_of_one_provider_runs(monkeypatch):
+    flow = load_flow(_PROVIDER_SPLIT.replace("PROVIDER", "openai"))
+    monkeypatch.setattr(
+        llm_clients,
+        "model_from_config",
+        lambda _: _Model(lambda messages: AIMessage(content="ok")),
+    )
+    result = run_flow(flow, {}, memory={"session": SessionMemory()})
+    assert result.status == "succeeded", result.failure
+    assert result.output == ["ok", "ok"]

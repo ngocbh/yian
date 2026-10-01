@@ -9,6 +9,7 @@ import pytest
 from agent_composer.compile.manifest import flow_fingerprint, flow_manifest
 from agent_composer.compile.memory_layout import (
     apply_memory_layout,
+    check_session_compatibility,
     memory_stacks,
     resolve_memory_layout,
 )
@@ -612,3 +613,32 @@ def test_flow_level_session_in_an_uncalled_def_is_not_an_error() -> None:
     )
     layout = resolve_memory_layout(load_flow(source).compiled)
     assert [memory.key for memory in layout.memories] == ["episodic"]
+
+
+def test_session_placements_must_resolve_one_compatibility() -> None:
+    layout = resolve_memory_layout(load_flow(_SESSION_CALLS).compiled)
+    check_session_compatibility(
+        layout,
+        {"a/ask": {"provider": "openai", "model": "one"}, "b/ask": {"provider": "OpenAI", "model": "two"}},
+    )
+    with pytest.raises(
+        MemorySetupError,
+        match=(
+            r"session memory 'session' resolves provider 'openai' at 'a/ask' "
+            r"but 'anthropic' at 'b/ask'; pin a provider on the AGENT"
+        ),
+    ):
+        check_session_compatibility(
+            layout,
+            {"a/ask": {"provider": "openai", "model": "m"}, "b/ask": {"provider": "anthropic", "model": "m"}},
+        )
+
+
+def test_session_compatibility_ignores_other_types_and_disabled_layouts() -> None:
+    episodic = _SESSION_CALLS.replace("long_term_memory: session", "long_term_memory: episodic")
+    layout = resolve_memory_layout(load_flow(episodic).compiled)
+    check_session_compatibility(
+        layout, {"a/ask": {"provider": "openai"}, "b/ask": {"provider": "anthropic"}}
+    )
+    plain = CompiledFlow({"plain": CodeNode("plain", code="return 1")}, [], wiring={"plain": {}})
+    check_session_compatibility(resolve_memory_layout(plain), {})

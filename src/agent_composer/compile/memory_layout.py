@@ -10,6 +10,7 @@ private compiled graph.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Iterator
 
@@ -29,6 +30,7 @@ from agent_composer.memory.contracts import (
     MemoryStack,
 )
 from agent_composer.nodes.agent import AgentNode
+from agent_composer.nodes.agent.memory import compatibility
 from agent_composer.nodes.base import Node
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
@@ -654,6 +656,36 @@ def memory_stacks(layout: ResolvedMemoryLayout) -> tuple[MemoryStack, ...]:
     return tuple(sorted(stacks, key=lambda stack: stack.locator))
 
 
+def check_session_compatibility(
+    layout: ResolvedMemoryLayout,
+    effective_llm: Mapping[str, object],
+) -> None:
+    """Require every placement of a session key to resolve one compatibility.
+
+    ``effective_llm`` is the run's resolved LLM map keyed by ``"/".join``
+    of root-relative node ids. Compatibility is provider plus message
+    format; model differences are allowed. Every placement must have an
+    entry in ``effective_llm``; a missing entry is a ``KeyError``, because
+    the cascade and the layout then disagree about the flow.
+    """
+    _revalidate_resolved_layout(layout)
+    for memory in layout.memories:
+        if memory.type != "session" or len(memory.placements) < 2:
+            continue
+        first_path = "/".join(memory.placements[0])
+        first = compatibility(effective_llm[first_path])
+        for placement in memory.placements[1:]:
+            path = "/".join(placement)
+            other = compatibility(effective_llm[path])
+            if _canonical_json(other) != _canonical_json(first):
+                raise _setup_error(
+                    f"session memory {memory.key!r} resolves provider "
+                    f"{first['provider']!r} at {first_path!r} but "
+                    f"{other['provider']!r} at {path!r}; pin a provider on the AGENT",
+                    origin=memory.origin,
+                )
+
+
 def _resolve_enabled_flow(
     flow: Flow,
     *,
@@ -864,6 +896,7 @@ __all__ = [
     "ResolvedMemoryLayout",
     "ResolvedMemoryTarget",
     "apply_memory_layout",
+    "check_session_compatibility",
     "memory_stacks",
     "resolve_memory_layout",
 ]

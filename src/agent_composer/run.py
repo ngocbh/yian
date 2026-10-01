@@ -39,6 +39,7 @@ from agent_composer.compile.llm_cascade import (
 from agent_composer.compile.manifest import flow_fingerprint
 from agent_composer.compile.memory_layout import (
     apply_memory_layout,
+    check_session_compatibility,
     resolve_memory_layout,
 )
 from agent_composer.compile.model import CompiledFlow
@@ -499,7 +500,9 @@ def _run_flow_controlled(
 
     memory_runtime: MemoryRuntime | None = None
     if memory is not None:
-        memory_layout, memory_origins = _resolve_runtime_memory_layout(private_flow)
+        memory_layout, memory_origins = _resolve_runtime_memory_layout(
+            private_flow, effective_llm=effective_llm
+        )
         memory_runtime = MemoryRuntime.open(
             layout=memory_layout,
             origins=memory_origins,
@@ -941,12 +944,20 @@ def _replay_compiled_run_log(
 
 def _resolve_runtime_memory_layout(
     flow: CompiledFlow,
+    *,
+    effective_llm: dict[str, dict] | None = None,
 ) -> tuple[
     tuple[MemoryFrameSpec, ...],
     dict[MemoryFrameRef, OriginRef | None],
 ]:
-    """Derive, canonically order, and atomically stamp one private graph."""
+    """Derive, canonically order, and atomically stamp one private graph.
+
+    With ``effective_llm``, first check that each session key resolves one
+    conversation compatibility across its placements.
+    """
     resolved = resolve_memory_layout(flow)
+    if effective_llm is not None:
+        check_session_compatibility(resolved, effective_llm)
     apply_memory_layout(flow, resolved)
     ordered = tuple(
         sorted(

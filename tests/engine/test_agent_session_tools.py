@@ -115,7 +115,7 @@ def test_recalled_transcript_and_current_notes_share_one_context(monkeypatch):
     monkeypatch.setitem(tools.TOOL_REGISTRY, "lookup", tool)
     monkeypatch.setattr(llm_clients, "model_from_config", lambda _: chat)
     flow = load_flow(_TOOL_FLOW.replace(
-        "    kind: agent", "    kind: agent\n    long_term_memory: notes"
+        "name: plain_session\n", "name: plain_session\nlong_term_memory: notes\n"
     ))
     memory = {"session": DelegatingMemory(), "notes": notes}
     assert run_flow(flow, {"question": "first"}, memory=memory).output == "first answer"

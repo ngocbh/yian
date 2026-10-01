@@ -13,13 +13,13 @@ from agent_composer.runtime.log import decode_record
 
 _FLOW = """id: cli-session-restart
 name: cli_session_restart
-long_term_memory: session
 llm_config: {provider: openai, model: offline-model}
 input: {question: str}
 nodes:
   answer:
     kind: agent
     mode: plain
+    long_term_memory: session
     input: {question: "${input.question}"}
     prompt: ${question}
     output: str

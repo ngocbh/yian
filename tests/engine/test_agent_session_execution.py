@@ -22,13 +22,13 @@ from tests.engine._memory_fakes import _Memory
 
 _FLOW = """id: execution-session
 name: execution_session
-long_term_memory: session
 llm_config: {provider: openai, model: fake-model}
 input: {question: str}
 nodes:
   answer:
     kind: agent
     mode: plain
+    long_term_memory: session
     input: {question: "${input.question}"}
     prompt: ${question}
     output: str
@@ -179,15 +179,14 @@ def test_same_authored_agent_queues_real_runs_in_admission_order():
 
 
 @_bounded
-def test_distinct_authored_leaves_overlap_under_one_flow_session_frame():
-    memory, barrier = SessionMemory(), Barrier(2)
+def test_two_session_agents_overlap_on_separate_instances():
+    left, right, barrier = SessionMemory(), SessionMemory(), Barrier(2)
     flow = load_flow("""id: two-leaves
 name: two_leaves
-long_term_memory: session
 llm_config: {provider: openai, model: fake-model}
 nodes:
-  left: {kind: agent, mode: plain, prompt: left, output: str}
-  right: {kind: agent, mode: plain, prompt: right, output: str}
+  left: {kind: agent, mode: plain, long_term_memory: left_chat, prompt: left, output: str}
+  right: {kind: agent, mode: plain, long_term_memory: right_chat, prompt: right, output: str}
 output: ${[left.output, right.output]}
 """)
 
@@ -197,14 +196,12 @@ output: ${[left.output, right.output]}
 
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(llm_clients, "model_from_config", lambda _: _Model(invoke))
-        result = run_flow(flow, {}, memory={"session": memory}, num_workers=2)
+        result = run_flow(
+            flow, {}, memory={"left_chat": left, "right_chat": right}, num_workers=2
+        )
     assert result.status == "succeeded", result.failure
     assert result.output == ["left", "right"]
-    views = _views(memory)
-    assert {view.key.consumer_static_path for view in views} == {
-        ("two-leaves", "left"), ("two-leaves", "right"),
-    }
-    assert len({view.key.frame_ref for view in views}) == 1
+    assert len(_views(left)) == 1 and len(_views(right)) == 1
 
 
 @_bounded
@@ -260,8 +257,8 @@ def test_cancelled_waiter_exits_but_active_run_keeps_lease_until_reply_is_saved(
 def test_innermost_session_owns_history_without_hiding_other_recall(monkeypatch, outer_session, local_session):
     outer = SessionMemory() if outer_session else _Memory(recall_text="outer recall")
     local = SessionMemory() if local_session else _Memory(recall_text="local recall")
-    flow = load_flow(_FLOW.replace("long_term_memory: session", "long_term_memory: outer")
-                     .replace("    mode: plain", "    mode: plain\n    long_term_memory: local"))
+    flow = load_flow(_FLOW.replace("    long_term_memory: session\n", "    long_term_memory: local\n")
+                     .replace("name: execution_session\n", "name: execution_session\nlong_term_memory: outer\n"))
     calls = []
 
     def invoke(messages):
@@ -286,7 +283,6 @@ def test_innermost_session_owns_history_without_hiding_other_recall(monkeypatch,
 def test_loop_iterations_share_one_authored_conversation(monkeypatch):
     flow = load_flow("""id: session-loop
 name: session_loop
-long_term_memory: session
 llm_config: {provider: openai, model: fake-model}
 defs:
   body:
@@ -295,6 +291,7 @@ defs:
       answer:
         kind: agent
         mode: plain
+        long_term_memory: session
         input: {question: "${input.question}"}
         prompt: ${question}
         output: str
@@ -334,7 +331,6 @@ output: ${repeat.output.question}
 def test_parallel_map_shares_authored_history_without_changing_result_order():
     flow = load_flow("""id: session-map
 name: session_map
-long_term_memory: session
 llm_config: {provider: openai, model: fake-model}
 input: {questions: "list[str]"}
 defs:
@@ -344,6 +340,7 @@ defs:
       answer:
         kind: agent
         mode: plain
+        long_term_memory: session
         input: {question: "${input.question}"}
         prompt: ${question}
         output: str
@@ -382,7 +379,6 @@ output: ${each.output}
 def test_two_callsites_of_one_child_keep_separate_conversations(monkeypatch):
     flow = load_flow("""id: session-calls
 name: session_calls
-long_term_memory: session
 llm_config: {provider: openai, model: fake-model}
 defs:
   body:
@@ -391,6 +387,7 @@ defs:
       answer:
         kind: agent
         mode: plain
+        long_term_memory: session
         input: {question: "${input.question}"}
         prompt: ${question}
         output: str

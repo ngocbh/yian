@@ -14,13 +14,13 @@ from tests.engine.test_agent_session import _Model
 
 FLOW = """id: summarized-session
 name: summarized_session
-long_term_memory: session
 llm_config: {provider: openai, model: old-model}
 input: {question: str}
 nodes:
   answer:
     kind: agent
     mode: MODE
+    long_term_memory: session
     input: {question: "${input.question}"}
     prompt: ${question}
     output: str

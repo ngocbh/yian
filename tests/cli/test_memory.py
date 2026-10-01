@@ -31,11 +31,41 @@ nodes:
     output: int
 output: ${work.output}
 """
+_SESSION_FLOW = """id: cli-memory
+name: cli_memory
+nodes:
+  work:
+    kind: agent
+    mode: plain
+    long_term_memory: session
+    prompt: hello
+    output: str
+output: ${work.output}
+"""
+
+
+def _source(policy):
+    """Return a flow that declares ``policy`` where the session rules allow it."""
+    return _SESSION_FLOW if policy == "session" else _CODE_FLOW.replace("POLICY", policy)
+
+
+@pytest.fixture(autouse=True)
+def _offline_model(monkeypatch):
+    """Answer every AGENT call locally so session flows run without a provider."""
+    from langchain_core.messages import AIMessage
+    import agent_composer.llm_clients as llm_clients
+
+    class _Model:
+        def invoke(self, messages):
+            return AIMessage(content="7")
+
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda config: _Model())
+    monkeypatch.setattr(run_cli, "_ensure_provider_keys", lambda *args: None)
 
 
 def _host(policy="session", storage=()):
     module = importlib.import_module("agent_composer.cli.memory")
-    source = _CODE_FLOW.replace("POLICY", policy)
+    source = _source(policy)
     return module.MemoryHost(load_flow(source).compiled, storage)
 
 
@@ -93,7 +123,7 @@ name: nested_memory
 long_term_memory: episodic
 defs:
   leaf:
-    long_term_memory: session
+    long_term_memory: profile
     nodes:
       reply:
         kind: agent
@@ -108,7 +138,7 @@ output: ${second.output}
 """)
     assert flow.compiled.nodes["first"].memory_scope is None
     with module.MemoryHost(flow.compiled, ()) as host:
-        assert list(host.registry) == ["episodic", "session", "reflective"]
+        assert list(host.registry) == ["episodic", "profile", "reflective"]
     assert flow.compiled.nodes["first"].memory_scope is None
 
 
@@ -198,7 +228,7 @@ _RUNNER = CliRunner()
 
 def _flow_file(tmp_path, policy="session"):
     path = tmp_path / "flow.yaml"
-    path.write_text(_CODE_FLOW.replace("POLICY", policy))
+    path.write_text(_source(policy))
     return path
 
 
@@ -432,7 +462,7 @@ def test_discovery_includes_map_and_loop_children(kind, extra):
 name: child_memory
 defs:
   leaf:
-    long_term_memory: session
+    long_term_memory: episodic
     nodes:
       work: {kind: code, code: 'return {}', output: {}}
     output: ${work.output}
@@ -443,7 +473,7 @@ nodes:
 EXTRAoutput: ${child.output}
 """.replace("KIND", kind).replace("EXTRA", extra))
     with module.MemoryHost(loaded.compiled, ()) as host:
-        assert list(host.registry) == ["session"]
+        assert list(host.registry) == ["episodic"]
 
 
 def test_repeatable_storage_and_later_constructor_failure_close_prior_backend(
@@ -513,12 +543,6 @@ def test_real_pooled_cancellation_keeps_storage_until_model_callback_drains(
 
     module = importlib.import_module("agent_composer.cli.memory")
     flow = _flow_file(tmp_path)
-    flow.write_text(
-        flow.read_text().replace(
-            "    kind: code\n    code: return 7\n    output: int",
-            "    kind: agent\n    mode: plain\n    prompt: hello\n    output: str",
-        )
-    )
     path = tmp_path / "memory.sqlite"
     started = threading.Event()
     drained = threading.Event()

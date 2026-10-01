@@ -18,7 +18,6 @@ from agent_composer.run import resume_flow, run_flow
 
 _FLOW = """id: plain-session
 name: plain_session
-long_term_memory: session
 llm_config: {provider: openai, model: test-model}
 input:
   question: str
@@ -26,6 +25,7 @@ nodes:
   agent:
     kind: agent
     mode: plain
+    long_term_memory: session
     prompt: ${question}
     input:
       question: ${input.question}

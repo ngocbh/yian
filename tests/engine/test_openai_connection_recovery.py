@@ -163,7 +163,7 @@ def test_old_api_run_resumes_shared_message_history(tmp_path, monkeypatch):
     )
     from agent_composer.memory.session import SessionMemory
 
-    flow = load_flow(_FLOW.replace("nodes:", "long_term_memory: session\nnodes:"))
+    flow = load_flow(_FLOW.replace("mode: plain,", "mode: plain, long_term_memory: session,"))
     history = SessionMemory()
     snapshot = connection_snapshot()
     monkeypatch.setattr(
@@ -216,7 +216,7 @@ def test_fresh_connected_run_reuses_pre_cutover_api_message_history(monkeypatch)
     )
     from agent_composer.memory.session import SessionMemory
 
-    flow = load_flow(_FLOW.replace("nodes:", "long_term_memory: session\nnodes:"))
+    flow = load_flow(_FLOW.replace("mode: plain,", "mode: plain, long_term_memory: session,"))
     history = SessionMemory()
     snapshot = connection_snapshot()
 

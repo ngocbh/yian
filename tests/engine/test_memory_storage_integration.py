@@ -31,7 +31,6 @@ output: ${work.output}
 """
 _AGENT_FLOW = """id: durable-session
 name: durable_session
-long_term_memory: session
 llm_config: {provider: openai, model: storage-test-model}
 input:
   question: str
@@ -39,6 +38,7 @@ nodes:
   agent:
     kind: agent
     mode: plain
+    long_term_memory: session
     prompt: ${question}
     input:
       question: ${input.question}

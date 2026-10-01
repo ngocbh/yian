@@ -221,7 +221,8 @@ connection takes it as its endpoint, and `split_model_config` fails a `base_url`
 that does not match a host connection's endpoint. The loader, `AgentNode`, and the
 cascade reject an authored `base_url` (`host_only_field_error`), and the cascade
 fails an effective config whose `base_url` lacks the `_host_key` marker, so a
-Python-built or mutated flow cannot redirect the key. Resume and backward reuse
+Python-built or mutated flow cannot redirect the key. It also re-checks a recorded
+`base_url` with `validate_base_url`, so an edited log fails when resume starts. Resume and backward reuse
 the recorded `base_url` with the re-supplied key; `ProfileMemory` takes one beside
 its own key; `ReflectiveMemory` rejects it.
 

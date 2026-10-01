@@ -21,7 +21,12 @@ from typing import Any
 
 from pydantic import SecretStr
 
-from agent_composer.llm_clients.config import LLMConfig, host_only_field_error, merge_llm_config
+from agent_composer.llm_clients.config import (
+    LLMConfig,
+    host_only_field_error,
+    merge_llm_config,
+    validate_base_url,
+)
 from agent_composer.llm_clients.connection import HOST_KEY_MARKER, validate_connection
 from agent_composer.nodes.agent import AgentNode
 
@@ -248,8 +253,14 @@ def _require_concrete_selection(config: dict[str, Any], *, path: str) -> None:
     """Reject a config that could fall through to ambient provider/model settings."""
     if config.get(HOST_KEY_MARKER, True) is not True:
         raise ValueError(f"effective LLM config for {path!r} has an invalid host key marker")
-    if "base_url" in config and HOST_KEY_MARKER not in config:
-        raise ValueError(f"effective LLM config for {path!r} has a base_url without a host key")
+    if "base_url" in config:
+        if HOST_KEY_MARKER not in config:
+            raise ValueError(f"effective LLM config for {path!r} has a base_url without a host key")
+        # A recorded map is replayed on resume; check its URL before any node runs.
+        try:
+            validate_base_url(config["base_url"])
+        except ValueError as exc:
+            raise ValueError(f"effective LLM config for {path!r}: {exc}") from None
     # Only a resolved map carries the marker and the host key's base_url;
     # authored layers may not.
     _validate_layer({

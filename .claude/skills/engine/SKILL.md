@@ -642,7 +642,8 @@ Most are just the functional model (above) made enforceable:
   `bind(host_base_url=)` records it on the marked agents' effective configs
   (OpenAI `host` connection endpoint too); resume/backward reuse the recorded
   URL. Authored layers reject `base_url`, the cascade fails a `base_url`
-  without `_host_key`, and `split_model_config` fails one that differs from
+  without `_host_key` or one `validate_base_url` refuses (an edited log fails
+  at resume start), and `split_model_config` fails one that differs from
   its host connection endpoint. An unset `base_url` is dropped from dumps.
 - **One attempt barrier precedes commits** — accept Started, complete backward
   results and all frame proposals, then accept Ready. Commit each enabled policy

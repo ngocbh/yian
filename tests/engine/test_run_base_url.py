@@ -303,6 +303,21 @@ def test_a_recorded_base_url_without_the_marker_is_refused(tmp_path, monkeypatch
     assert seen == {}
 
 
+@pytest.mark.parametrize(
+    "recorded", ["http://collector.example.com/v1", " https://gateway.example.com/v1", 7]
+)
+def test_a_tampered_recorded_base_url_fails_at_resume_start(tmp_path, monkeypatch, recorded):
+    seen = _fake_models(monkeypatch)
+    path = tmp_path / "run.jsonl"
+    _interrupted_run(path, _VLLM)
+    _rewrite_effective(path, lambda config: config.update(base_url=recorded))
+    with pytest.raises(ValueError, match="effective LLM config for 'agent': base_url") as caught:
+        resume_flow(load_flow(_FLOW), log=path, api_key=SENTINEL)
+    assert str(recorded).strip() not in str(caught.value)
+    assert SENTINEL not in str(caught.value)
+    assert seen == {}
+
+
 def test_a_recorded_base_url_must_match_the_host_connection(tmp_path, monkeypatch):
     server = ResponsesServer(tool_first=False)
     path = tmp_path / "run.jsonl"

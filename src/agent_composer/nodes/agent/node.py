@@ -59,6 +59,9 @@ def is_text_output(contract: Any) -> bool:
 class AgentNode(Node):
     """An LLM-backed leaf configured by a prompt, mode, and authored tools.
 
+    ``system_prompt`` is an optional template that replaces ``DEFAULT_SYSTEM``;
+    it renders against the same local record as ``prompt``.
+
     Modes normalize ``llm_config`` through the call-time ``model_from_config``
     seam. An optional
     ``memory_policy`` is authored identity only until compile derives runtime scope.
@@ -80,6 +83,7 @@ class AgentNode(Node):
         node_id: str,
         *,
         prompt: str = "",
+        system_prompt: str | None = None,
         tools: Optional[list[str]] = None,
         llm_config: Optional[dict[str, Any]] = None,
         llm_inherit: bool = True,
@@ -93,6 +97,11 @@ class AgentNode(Node):
     ) -> None:
         super().__init__(node_id, title=title)
         self.prompt = prompt or ""
+        if system_prompt is not None and (type(system_prompt) is not str or not system_prompt):
+            raise TypeError(
+                f"AGENT node {node_id!r}: system_prompt must be a non-empty string or None"
+            )
+        self.system_prompt = system_prompt
         self.tools = tools or []
         if "builtin_tools" in self.tools:
             raise ValueError(

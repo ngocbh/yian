@@ -66,10 +66,6 @@ from agent_composer.runtime.log import (
     BackwardStartedRecord,
     BackwardReadyRecord,
     BackwardFinishedRecord,
-    ConversationAdmittedRecord,
-    ConversationEffectRequestedRecord,
-    ConversationEffectObservedRecord,
-    ConversationClosedRecord,
     MemoryCommitFailedRecord,
     MemoryCommitRequestedRecord,
     MemoryCommitSucceededRecord,
@@ -113,11 +109,6 @@ MAX_REF_DEPTH = 5
 
 GrowBuilder = Callable[[Node, Any], Flow]
 """Injected kind-aware interpreter from a spawner and canonical seed to a fragment."""
-
-_CONVERSATION_RECORD_TYPES = (
-    ConversationAdmittedRecord, ConversationEffectRequestedRecord,
-    ConversationEffectObservedRecord, ConversationClosedRecord,
-)
 
 
 def _node_output_type(node: Node) -> Type | None:
@@ -571,20 +562,6 @@ class _BackwardPlan:
 
 
 @dataclass(frozen=True, slots=True)
-class _LegacyConversationPlan:
-    """Frozen legacy metadata whose only reducer effect is record sequencing."""
-
-    originating_state: RunState
-    originating_flow: CompiledFlow
-    envelope_bytes: bytes
-    start_id: str
-    start_node_identity: int
-    end_id: str
-    end_node_identity: int | None
-    trace_delta: TraceDelta | None = None
-
-
-@dataclass(frozen=True, slots=True)
 class _GrowthDelta:
     """Immutable scalar authority for one flat deterministic expansion."""
 
@@ -681,7 +658,6 @@ class PreparedTransition:
         | _FailurePlan
         | _GrowthPlan
         | _BackwardPlan
-        | _LegacyConversationPlan
     )
     observers: tuple[Any, ...]
 
@@ -1180,17 +1156,15 @@ def prepare_record(
     """Validate one supported authoritative record against the current frontier.
 
     This is the shared reducer seam for live dispatch and later historical replay.
-    Graph records require an initialized nonterminal state. Legacy conversation
-    metadata belongs to unfinished accepted invocations, independently of learning;
-    it advances only record sequencing, and a failed run permits only observation
-    or close metadata. Backward and memory-commit
-    records require an initialized primary terminal with learning enabled.
+    Graph records require an initialized nonterminal state. Backward and
+    memory-commit records require an initialized primary terminal with learning
+    enabled.
 
     Args:
         state (`RunState`):
             Initialized reducer state immediately before ``record``.
         record (`RunRecord`):
-            One supported graph/frontier, legacy metadata, or backward-attempt record.
+            One supported graph/frontier or backward-attempt record.
         grow_builder (`GrowBuilder | None`, *optional*):
             Required only for ``NodeExpandedRecord`` replay; rebuilds and verifies
             the recorded fragment through the same injected path used live.
@@ -1209,9 +1183,6 @@ def prepare_record(
     """
     if type(state) is not RunState:
         raise TypeError("prepare_record expects a RunState")
-
-    if type(record) in _CONVERSATION_RECORD_TYPES:
-        return _prepare_legacy_conversation_record(state, record, schema=schema)
 
     if isinstance(record, (BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord,
                            MemoryCommitRequestedRecord, MemoryCommitSucceededRecord, MemoryCommitFailedRecord)):
@@ -1681,58 +1652,6 @@ def _prepare_growth_transition(
     )
 
 
-def _prepare_legacy_conversation_record(
-    state: RunState, record: RunRecord, *, schema: int = SCHEMA_VERSION,
-) -> PreparedTransition:
-    """Validate an inert historical wrapper without restoring conversation state."""
-    if type(state) is not RunState or type(record) not in _CONVERSATION_RECORD_TYPES:
-        raise TypeError("conversation preparation requires exact state and record carriers")
-    _require_initialized(state)
-    encoded = encode_record(RecordEnvelope(schema, state.run_id, state.next_sequence, record))
-    envelope = decode_record(encoded)
-    _validate_legacy_conversation_record(state, envelope.record)
-    start_id, end_id = state.flow.start_id, state.flow.end_id
-    plan = _LegacyConversationPlan(
-        state, state.flow, encoded, start_id, id(state.flow.nodes[start_id]),
-        end_id, id(state.flow.nodes[end_id]) if end_id in state.flow.nodes else None,
-        _prepare_record_trace(state, envelope),
-    )
-    return PreparedTransition(envelope.record, envelope.run_id, envelope.seq, plan, ())
-
-
-def _validate_legacy_conversation_record(state: RunState, record: RunRecord) -> None:
-    """Validate lifecycle and durable invocation ownership, without backend state."""
-    checkpoint = record.checkpoint
-    stamp = checkpoint.stamp
-    invocation = stamp.invocation
-    if invocation.run_id != state.run_id:
-        raise ValueError("conversation invocation belongs to another run")
-    if state.backward_state.attempts or isinstance(state.result, RunSucceeded):
-        raise ValueError("conversation checkpoint is after success or backward start")
-    if isinstance(state.result, RunFailed) and type(record) not in (
-        ConversationEffectObservedRecord, ConversationClosedRecord,
-    ):
-        raise ValueError("failed run permits only existing observations and close")
-    node_id = next((node_id for node_id, sequence in state.accepted_starts.items()
-                    if sequence == invocation.start_sequence), None)
-    if node_id is None or node_id not in state.in_flight:
-        raise ValueError("conversation invocation has no unfinished accepted start")
-    frames = tuple(spec for spec in (state.memory_layout or ())
-                   if spec.ref == stamp.key.frame_ref and spec.policy_name == stamp.policy_name)
-    if len(frames) != 1:
-        raise ValueError("conversation frame and policy must be enabled in the recorded layout")
-    node = state.flow.nodes.get(node_id)
-    scope = node.memory_scope if node is not None else None
-    if type(scope) is not MemoryScope:
-        raise ValueError("conversation metadata requires an exact compiled memory scope")
-    MemoryScope(scope.root_flow_id, scope.static_path, scope.frame_stack,
-                scope.occurrence_path, scope.boundary)
-    if (scope.static_path != stamp.key.consumer_static_path
-            or scope.frame_stack != state.learning_state.applicable_frames(scope.root_flow_id, scope.static_path)
-            or stamp.key.frame_ref not in scope.frame_stack):
-        raise ValueError("conversation metadata disagrees with its compiled consumer scope")
-
-
 def _prepare_backward_transition(
     state: RunState, record: RunRecord, *, schema: int = SCHEMA_VERSION,
 ) -> PreparedTransition:
@@ -1793,18 +1712,12 @@ def commit_prepared(
         raise TypeError("commit_prepared expects a PreparedTransition")
     if not isinstance(prepared._plan, (
         _RunStartedPlan, _FrontierPlan, _SuccessPlan, _RoutePlan,
-        _FailurePlan, _GrowthPlan, _BackwardPlan, _LegacyConversationPlan,
+        _FailurePlan, _GrowthPlan, _BackwardPlan,
     )):
         raise TypeError("unsupported prepared transition plan")
     trace_delta = prepared._plan.trace_delta
     if isinstance(prepared._plan, _BackwardPlan):
         _require_postterminal_trace_delta(state, trace_delta)
-    elif isinstance(prepared._plan, _LegacyConversationPlan):
-        if state.trace is None:
-            if trace_delta is not None:
-                raise ValueError("unretained conversation cannot carry a trace delta")
-        else:
-            _require_postterminal_trace_delta(state, trace_delta)
     elif isinstance(prepared._plan, _FrontierPlan):
         _require_frontier_trace_delta(state, prepared)
     if trace_delta is not None:
@@ -1823,8 +1736,6 @@ def commit_prepared(
         observers = _commit_growth(log, state, prepared)
     elif isinstance(prepared._plan, _BackwardPlan):
         observers = _commit_backward(log, state, prepared)
-    elif isinstance(prepared._plan, _LegacyConversationPlan):
-        observers = _commit_legacy_conversation(log, state, prepared)
     else:
         raise TypeError("unsupported prepared transition plan")
     if trace_delta is not None:
@@ -2383,22 +2294,6 @@ def _commit_backward(log: RunLog, state: RunState, prepared: PreparedTransition)
     return ()
 
 
-def _commit_legacy_conversation(log: RunLog, state: RunState, prepared: PreparedTransition) -> tuple[Any, ...]:
-    """Verify inert legacy metadata, append it, then advance record sequencing."""
-    plan = prepared._plan
-    if type(plan) is not _LegacyConversationPlan or type(prepared.record) not in _CONVERSATION_RECORD_TYPES:
-        raise TypeError("conversation commit requires its exact plan and record")
-    _require_prepared_origin(state, plan)
-    _require_initialized(state)
-    _require_authority_coordinates(log, state, prepared, initialized=True)
-    _require_unchanged_record(prepared, plan.envelope_bytes)
-    envelope = decode_record(plan.envelope_bytes)
-    _validate_legacy_conversation_record(state, envelope.record)
-    _append_and_verify(log, prepared)
-    state.next_sequence = prepared.expected_sequence + 1
-    return ()
-
-
 def _require_prepared_origin(
     state: RunState,
     plan: (
@@ -2409,7 +2304,6 @@ def _require_prepared_origin(
         | _FailurePlan
         | _GrowthPlan
         | _BackwardPlan
-        | _LegacyConversationPlan
     ),
 ) -> None:
     """Require the exact state, adopted flow, and boundary objects from preparation."""
@@ -4425,7 +4319,6 @@ def _require_originating_flow(
         | _FailurePlan
         | _GrowthPlan
         | _BackwardPlan
-        | _LegacyConversationPlan
     ),
 ) -> None:
     """Reject replacement of the adopted flow object or either boundary identity.

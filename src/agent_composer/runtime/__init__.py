@@ -21,9 +21,6 @@ The internal reverse fold walks accepted outcomes once without writing state,
 logs, or memory. Trace-owned terminal authority and context reconstruction are
 shared below that fold; durable attribution references values instead of copying
 materialized downstream histories.
-Legacy conversation wrappers remain readable as inert compatibility metadata.
-State validates their unfinished invocation and compiled memory scope, then advances
-record sequencing without retaining conversations, restoring memory, or granting effects.
 
   Knows about:   events, memory contracts and wire codecs, typesys, nodes, tools (the
                  per-run ``ToolSet``), and compile topology/identity/validation contracts.

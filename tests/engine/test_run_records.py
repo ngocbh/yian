@@ -212,19 +212,15 @@ def _records():
     """Return one representative value for every closed run-record variant."""
     from agent_composer.memory import MemoryFrameRef, MemoryMutation, MemoryOperationFailure, MemoryOwner
     from agent_composer.runtime.log import (
-        ConversationAdmittedRecord, ConversationEffectRequestedRecord,
-        ConversationEffectObservedRecord, ConversationClosedRecord,
         MemoryCommitFailedRecord, MemoryCommitRequestedRecord, MemoryCommitSucceededRecord,
     )
     from tests.engine.test_backward_records import _backward_records
-    from tests.engine.test_session_records import _conversation_checkpoints
 
     pool = VariablePool(start_id="start")
     pool.set("start", {"name": "Ada"})
     frame = MemoryFrameRef("root", ("root", "agent"), MemoryOwner.AGENT)
     mutations = (MemoryMutation("m1", frame, {"text": "Remember."}),)
     failure = MemoryOperationFailure("backend", "backend.failed", "Failed.", True)
-    admitted, requested, observed, closed = _conversation_checkpoints()
     return [
         RunStartedRecord(
             flow_fingerprint=_FINGERPRINT,
@@ -263,10 +259,6 @@ def _records():
         MemoryCommitSucceededRecord("history", "commit-1", attempt_id=1),
         MemoryCommitFailedRecord("history", "commit-1", failure, attempt_id=1),
         *_backward_records(),
-        ConversationAdmittedRecord(admitted),
-        ConversationEffectRequestedRecord(requested),
-        ConversationEffectObservedRecord(observed),
-        ConversationClosedRecord(closed),
     ]
 
 
@@ -306,6 +298,21 @@ def test_removed_frame_learning_wire_kinds_are_rejected(kind, extra):
             }, **extra}}
     with pytest.raises(ValueError, match="kind"):
         decode_record(json.dumps(wire).encode())
+
+
+@pytest.mark.parametrize("kind", [
+    "conversation_admitted", "conversation_effect_requested",
+    "conversation_effect_observed", "conversation_closed",
+])
+def test_removed_conversation_wire_kinds_are_rejected(kind):
+    import agent_composer.runtime.log as run_log
+
+    wire = {"schema": SCHEMA_VERSION, "run_id": "run", "seq": 0, "kind": kind,
+            "payload": {"checkpoint": {}}}
+    with pytest.raises(ValueError, match=f"run-record kind '{kind}' is unsupported"):
+        decode_record(json.dumps(wire).encode())
+    record_name = "".join(part.title() for part in kind.split("_")) + "Record"
+    assert not hasattr(run_log, record_name)
 
 
 @pytest.mark.parametrize("kind,payload", [

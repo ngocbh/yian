@@ -759,6 +759,18 @@ def test_schema_four_rejects_old_schema_and_nested_extra_or_unknown_fields() -> 
         decode_record(json.dumps(interaction_extra))
 
 
+def test_memory_scope_wire_has_no_boundary_field() -> None:
+    record = NodeSucceededRecord(
+        "agent", "agent", {"kind": "str", "value": "done"}, _evidence(),
+    )
+    wire = json.loads(encode_record(RecordEnvelope(SCHEMA_VERSION, "run", 0, record)))
+    scope = wire["payload"]["evidence"]["scope"]
+    assert sorted(scope) == ["frame_stack", "occurrence_path", "root_flow_id", "static_path"]
+    scope["boundary"] = None
+    with pytest.raises(ValueError):
+        decode_record(json.dumps(wire))
+
+
 def test_schema_four_rejects_origin_and_extra_memory_operation_fields() -> None:
     started = _started(
         layout=(MemoryFrameSpec(_flow_ref(), "reflective", {}),),

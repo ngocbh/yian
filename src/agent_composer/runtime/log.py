@@ -35,8 +35,6 @@ from agent_composer.memory import (
     EvaluationEvidence,
     LearningFailure,
     LearningResult,
-    MemoryBoundary,
-    MemoryBoundaryKind,
     MemoryFrameRef,
     MemoryFrameSpec,
     MemoryMutation,
@@ -1065,13 +1063,6 @@ class _MemoryOccurrenceRefPayload(_StrictModel):
     occurrence_path: list[_MemoryOccurrenceSegmentPayload]
 
 
-class _MemoryBoundaryPayload(_StrictModel):
-    """Strict wire form of one flow-owned memory boundary."""
-
-    kind: Literal["start", "end"]
-    frame_ref: _MemoryFrameRefPayload
-
-
 class _MemoryScopePayload(_StrictModel):
     """Strict wire form of one compiled node's memory scope."""
 
@@ -1079,7 +1070,6 @@ class _MemoryScopePayload(_StrictModel):
     static_path: list[str] = Field(min_length=1)
     frame_stack: list[_MemoryFrameRefPayload]
     occurrence_path: list[_MemoryOccurrenceSegmentPayload]
-    boundary: _MemoryBoundaryPayload | None
 
     @field_validator("static_path")
     @classmethod
@@ -1740,9 +1730,7 @@ def _scope_payload(scope: MemoryScope) -> dict[str, Any]:
         scope.static_path,
         scope.frame_stack,
         scope.occurrence_path,
-        scope.boundary,
     )
-    boundary = scope.boundary
     return {
         "root_flow_id": scope.root_flow_id,
         "static_path": list(scope.static_path),
@@ -1751,28 +1739,11 @@ def _scope_payload(scope: MemoryScope) -> dict[str, Any]:
             _occurrence_segment_payload(segment)
             for segment in scope.occurrence_path
         ],
-        "boundary": (
-            None
-            if boundary is None
-            else {
-                "kind": boundary.kind.value,
-                "frame_ref": _frame_ref_payload(boundary.frame_ref),
-            }
-        ),
     }
 
 
 def _scope_from_payload(payload: dict[str, Any]) -> MemoryScope:
     """Decode one already-validated compiled memory scope."""
-    boundary_payload = payload["boundary"]
-    boundary = (
-        None
-        if boundary_payload is None
-        else MemoryBoundary(
-            MemoryBoundaryKind(boundary_payload["kind"]),
-            _frame_ref_from_payload(boundary_payload["frame_ref"]),
-        )
-    )
     return MemoryScope(
         root_flow_id=payload["root_flow_id"],
         static_path=tuple(payload["static_path"]),
@@ -1783,7 +1754,6 @@ def _scope_from_payload(payload: dict[str, Any]) -> MemoryScope:
             _occurrence_segment_from_payload(segment)
             for segment in payload["occurrence_path"]
         ),
-        boundary=boundary,
     )
 
 

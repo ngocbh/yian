@@ -25,8 +25,8 @@ from tests.engine.test_run_log import _FileProxy
 from tests.engine.test_run_memory import _records
 
 
-# Original schema-7 writer output; keep these bytes independent of the current codec.
-_SCHEMA_SEVEN_BACKWARD = (
+# Fixed writer output; keep these bytes independent of the current codec.
+_RECORDED_BACKWARD = (
     (
         b'{"kind":"run_started","payload":{"effective_llm_by_static_path":{},'
         b'"flow_fingerprint":"ed4fe1caf92173a60b1390193175e7dafa56280c31d28dbd62f8f073e2254320",'
@@ -37,11 +37,11 @@ _SCHEMA_SEVEN_BACKWARD = (
         b'"ref":{"owner":"flow","root_flow_id":"historical-backward",'
         b'"static_path":["historical-backward"]}}],"memory_snapshots":[{"policy_name":"test",'
         b'"snapshot":{"namespace":"test"}}],"num_workers":0,"start_wiring_override":{}},'
-        b'"run_id":"historical-backward","schema":7,"seq":0}'
+        b'"run_id":"historical-backward","schema":9,"seq":0}'
     ),
     (
         b'{"kind":"node_started","payload":{"node_id":"__start__"},"run_id":"historical-backward",'
-        b'"schema":7,"seq":1}'
+        b'"schema":9,"seq":1}'
     ),
     (
         b'{"kind":"node_succeeded","payload":{"commit_target":"__start__","evidence":null,'
@@ -51,10 +51,10 @@ _SCHEMA_SEVEN_BACKWARD = (
         b'"snapshot":null,"source":null,"spans":[],"value_json":null},"scope":{"boundary":"start",'
         b'"flow_path":[],"occurrence_path":[],"static_path":["__start__"]},"variable_names":[]},'
         b'"node_id":"__start__","value":{"kind":"object","value":{}}},"run_id":"historical-backward",'
-        b'"schema":7,"seq":2}'
+        b'"schema":9,"seq":2}'
     ),
     (
-        b'{"kind":"node_started","payload":{"node_id":"work"},"run_id":"historical-backward","schema":7,'
+        b'{"kind":"node_started","payload":{"node_id":"work"},"run_id":"historical-backward","schema":9,'
         b'"seq":3}'
     ),
     (
@@ -64,11 +64,11 @@ _SCHEMA_SEVEN_BACKWARD = (
         b'"kind":"record","names":[],"path":[],"result_type":null,"sizes":[],"snapshot":null,'
         b'"source":null,"spans":[],"value_json":null},"scope":{"boundary":null,"flow_path":[],'
         b'"occurrence_path":[],"static_path":["work"]},"variable_names":[]},"node_id":"work",'
-        b'"value":{"kind":"int","value":3}},"run_id":"historical-backward","schema":7,"seq":4}'
+        b'"value":{"kind":"int","value":3}},"run_id":"historical-backward","schema":9,"seq":4}'
     ),
     (
         b'{"kind":"node_started","payload":{"node_id":"__end__"},"run_id":"historical-backward",'
-        b'"schema":7,"seq":5}'
+        b'"schema":9,"seq":5}'
     ),
     (
         b'{"kind":"node_succeeded","payload":{"commit_target":"__end__","evidence":null,'
@@ -81,11 +81,11 @@ _SCHEMA_SEVEN_BACKWARD = (
         b'"kind":"record","names":["result"],"path":[],"result_type":null,"sizes":[],"snapshot":null,'
         b'"source":null,"spans":[],"value_json":null},"scope":{"boundary":"end","flow_path":[],'
         b'"occurrence_path":[],"static_path":["__end__"]},"variable_names":[]},"node_id":"__end__",'
-        b'"value":{"kind":"int","value":3}},"run_id":"historical-backward","schema":7,"seq":6}'
+        b'"value":{"kind":"int","value":3}},"run_id":"historical-backward","schema":9,"seq":6}'
     ),
     (
         b'{"kind":"backward_started","payload":{"attempt_id":1,"feedback":null},'
-        b'"run_id":"historical-backward","schema":7,"seq":7}'
+        b'"run_id":"historical-backward","schema":9,"seq":7}'
     ),
     (
         b'{"kind":"backward_ready","payload":{"attempt_id":1,"attributed_results":[{"attribution":[],'
@@ -98,17 +98,17 @@ _SCHEMA_SEVEN_BACKWARD = (
         b'"source":{"execution_seq":5,"path":[],"run_id":"historical-backward"}}],'
         b'"frame_proposals":[{"frame_ref":{"owner":"flow","root_flow_id":"historical-backward",'
         b'"static_path":["historical-backward"]},"mutations":[]}],"root_result":{"input_feedback":{},'
-        b'"self_feedback":[],"variable_feedback":{}}},"run_id":"historical-backward","schema":7,"seq":8}'
+        b'"self_feedback":[],"variable_feedback":{}}},"run_id":"historical-backward","schema":9,"seq":8}'
     ),
     (
         b'{"kind":"memory_commit_requested","payload":{"attempt_id":1,'
         b'"commit_id":"ac-memory-v1:a3620f10df9d89d0432ae7ed0e27ae97b71ffa6832536fac075bc0053d749dd9",'
-        b'"mutations":[],"policy_name":"test"},"run_id":"historical-backward","schema":7,"seq":9}'
+        b'"mutations":[],"policy_name":"test"},"run_id":"historical-backward","schema":9,"seq":9}'
     ),
     (
         b'{"kind":"memory_commit_succeeded","payload":{"attempt_id":1,'
         b'"commit_id":"ac-memory-v1:a3620f10df9d89d0432ae7ed0e27ae97b71ffa6832536fac075bc0053d749dd9",'
-        b'"policy_name":"test"},"run_id":"historical-backward","schema":7,"seq":10}'
+        b'"policy_name":"test"},"run_id":"historical-backward","schema":9,"seq":10}'
     ),
     (
         b'{"kind":"backward_finished","payload":{"attempt_id":1,"attributed_results":[],'
@@ -116,13 +116,13 @@ _SCHEMA_SEVEN_BACKWARD = (
         b'"variable_feedback":{}},"learning":{"failures":[],'
         b'"policies":[{"commit_id":"ac-memory-v1:a3620f10df9d89d0432ae7ed0e27ae97b71ffa6832536fac075bc005'
         b'3d749dd9","failure":null,"policy_name":"test","status":"succeeded"}],"status":"succeeded"},'
-        b'"status":"succeeded"}},"run_id":"historical-backward","schema":7,"seq":11}'
+        b'"status":"succeeded"}},"run_id":"historical-backward","schema":9,"seq":11}'
     ),
 )
 
 
-# Original schema-7 writer output; keep these bytes independent of the current codec.
-_SCHEMA_SEVEN_BACKWARD_FAILED = (
+# Fixed writer output; keep these bytes independent of the current codec.
+_RECORDED_BACKWARD_FAILED = (
     (
         b'{"kind":"run_started","payload":{"effective_llm_by_static_path":{},'
         b'"flow_fingerprint":"ed4fe1caf92173a60b1390193175e7dafa56280c31d28dbd62f8f073e2254320",'
@@ -133,11 +133,11 @@ _SCHEMA_SEVEN_BACKWARD_FAILED = (
         b'"ref":{"owner":"flow","root_flow_id":"historical-backward",'
         b'"static_path":["historical-backward"]}}],"memory_snapshots":[{"policy_name":"test",'
         b'"snapshot":{"namespace":"test"}}],"num_workers":0,"start_wiring_override":{}},'
-        b'"run_id":"historical-backward_failed","schema":7,"seq":0}'
+        b'"run_id":"historical-backward_failed","schema":9,"seq":0}'
     ),
     (
         b'{"kind":"node_started","payload":{"node_id":"__start__"},"run_id":"historical-backward_failed",'
-        b'"schema":7,"seq":1}'
+        b'"schema":9,"seq":1}'
     ),
     (
         b'{"kind":"node_succeeded","payload":{"commit_target":"__start__","evidence":null,'
@@ -147,11 +147,11 @@ _SCHEMA_SEVEN_BACKWARD_FAILED = (
         b'"snapshot":null,"source":null,"spans":[],"value_json":null},"scope":{"boundary":"start",'
         b'"flow_path":[],"occurrence_path":[],"static_path":["__start__"]},"variable_names":[]},'
         b'"node_id":"__start__","value":{"kind":"object","value":{}}},'
-        b'"run_id":"historical-backward_failed","schema":7,"seq":2}'
+        b'"run_id":"historical-backward_failed","schema":9,"seq":2}'
     ),
     (
         b'{"kind":"node_started","payload":{"node_id":"work"},"run_id":"historical-backward_failed",'
-        b'"schema":7,"seq":3}'
+        b'"schema":9,"seq":3}'
     ),
     (
         b'{"kind":"node_succeeded","payload":{"commit_target":"work","evidence":null,'
@@ -160,11 +160,11 @@ _SCHEMA_SEVEN_BACKWARD_FAILED = (
         b'"kind":"record","names":[],"path":[],"result_type":null,"sizes":[],"snapshot":null,'
         b'"source":null,"spans":[],"value_json":null},"scope":{"boundary":null,"flow_path":[],'
         b'"occurrence_path":[],"static_path":["work"]},"variable_names":[]},"node_id":"work",'
-        b'"value":{"kind":"int","value":3}},"run_id":"historical-backward_failed","schema":7,"seq":4}'
+        b'"value":{"kind":"int","value":3}},"run_id":"historical-backward_failed","schema":9,"seq":4}'
     ),
     (
         b'{"kind":"node_started","payload":{"node_id":"__end__"},"run_id":"historical-backward_failed",'
-        b'"schema":7,"seq":5}'
+        b'"schema":9,"seq":5}'
     ),
     (
         b'{"kind":"node_succeeded","payload":{"commit_target":"__end__","evidence":null,'
@@ -177,11 +177,11 @@ _SCHEMA_SEVEN_BACKWARD_FAILED = (
         b'"kind":"record","names":["result"],"path":[],"result_type":null,"sizes":[],"snapshot":null,'
         b'"source":null,"spans":[],"value_json":null},"scope":{"boundary":"end","flow_path":[],'
         b'"occurrence_path":[],"static_path":["__end__"]},"variable_names":[]},"node_id":"__end__",'
-        b'"value":{"kind":"int","value":3}},"run_id":"historical-backward_failed","schema":7,"seq":6}'
+        b'"value":{"kind":"int","value":3}},"run_id":"historical-backward_failed","schema":9,"seq":6}'
     ),
     (
         b'{"kind":"backward_started","payload":{"attempt_id":1,"feedback":null},'
-        b'"run_id":"historical-backward_failed","schema":7,"seq":7}'
+        b'"run_id":"historical-backward_failed","schema":9,"seq":7}'
     ),
     (
         b'{"kind":"backward_ready","payload":{"attempt_id":1,"attributed_results":[{"attribution":[],'
@@ -195,18 +195,18 @@ _SCHEMA_SEVEN_BACKWARD_FAILED = (
         b'"run_id":"historical-backward_failed"}}],"frame_proposals":[{"frame_ref":{"owner":"flow",'
         b'"root_flow_id":"historical-backward","static_path":["historical-backward"]},"mutations":[]}],'
         b'"root_result":{"input_feedback":{},"self_feedback":[],"variable_feedback":{}}},'
-        b'"run_id":"historical-backward_failed","schema":7,"seq":8}'
+        b'"run_id":"historical-backward_failed","schema":9,"seq":8}'
     ),
     (
         b'{"kind":"memory_commit_requested","payload":{"attempt_id":1,'
         b'"commit_id":"ac-memory-v1:524eef5946458186de942076e92679a3e00381563591f272b64438d0e8d95a06",'
-        b'"mutations":[],"policy_name":"test"},"run_id":"historical-backward_failed","schema":7,"seq":9}'
+        b'"mutations":[],"policy_name":"test"},"run_id":"historical-backward_failed","schema":9,"seq":9}'
     ),
     (
         b'{"kind":"memory_commit_failed","payload":{"attempt_id":1,'
         b'"commit_id":"ac-memory-v1:524eef5946458186de942076e92679a3e00381563591f272b64438d0e8d95a06",'
         b'"failure":{"code":"declined","message":"Declined.","retryable":false,"stage":"commit"},'
-        b'"policy_name":"test"},"run_id":"historical-backward_failed","schema":7,"seq":10}'
+        b'"policy_name":"test"},"run_id":"historical-backward_failed","schema":9,"seq":10}'
     ),
     (
         b'{"kind":"backward_finished","payload":{"attempt_id":1,"attributed_results":[],'
@@ -220,13 +220,13 @@ _SCHEMA_SEVEN_BACKWARD_FAILED = (
         b'"policies":[{"commit_id":"ac-memory-v1:524eef5946458186de942076e92679a3e00381563591f272b64438d0'
         b'e8d95a06","failure":{"code":"declined","message":"Declined.","retryable":false,'
         b'"stage":"commit"},"policy_name":"test","status":"failed"}],"status":"failed"},'
-        b'"status":"failed"}},"run_id":"historical-backward_failed","schema":7,"seq":11}'
+        b'"status":"failed"}},"run_id":"historical-backward_failed","schema":9,"seq":11}'
     ),
 )
 
 
-# Original schema-7 writer output; keep these bytes independent of the current codec.
-_SCHEMA_SEVEN_FAILURE = (
+# Fixed writer output; keep these bytes independent of the current codec.
+_RECORDED_FAILURE = (
     (
         b'{"kind":"run_started","payload":{"effective_llm_by_static_path":{},'
         b'"flow_fingerprint":"15578df17c126020f89d79a2fd9d3f5b30a501769ab0b4e5191ccf399ebc12d6",'
@@ -237,11 +237,11 @@ _SCHEMA_SEVEN_FAILURE = (
         b'"ref":{"owner":"flow","root_flow_id":"historical-backward",'
         b'"static_path":["historical-backward"]}}],"memory_snapshots":[{"policy_name":"test",'
         b'"snapshot":{"namespace":"test"}}],"num_workers":0,"start_wiring_override":{}},'
-        b'"run_id":"historical-failure","schema":7,"seq":0}'
+        b'"run_id":"historical-failure","schema":9,"seq":0}'
     ),
     (
         b'{"kind":"node_started","payload":{"node_id":"__start__"},"run_id":"historical-failure",'
-        b'"schema":7,"seq":1}'
+        b'"schema":9,"seq":1}'
     ),
     (
         b'{"kind":"node_succeeded","payload":{"commit_target":"__start__","evidence":null,'
@@ -251,10 +251,10 @@ _SCHEMA_SEVEN_FAILURE = (
         b'"snapshot":null,"source":null,"spans":[],"value_json":null},"scope":{"boundary":"start",'
         b'"flow_path":[],"occurrence_path":[],"static_path":["__start__"]},"variable_names":[]},'
         b'"node_id":"__start__","value":{"kind":"object","value":{}}},"run_id":"historical-failure",'
-        b'"schema":7,"seq":2}'
+        b'"schema":9,"seq":2}'
     ),
     (
-        b'{"kind":"node_started","payload":{"node_id":"work"},"run_id":"historical-failure","schema":7,'
+        b'{"kind":"node_started","payload":{"node_id":"work"},"run_id":"historical-failure","schema":9,'
         b'"seq":3}'
     ),
     (
@@ -284,7 +284,7 @@ _SCHEMA_SEVEN_FAILURE = (
         b'"content_index":0,"count":0,"expression":"{}","kind":"record","names":[],"path":[],'
         b'"result_type":null,"sizes":[],"snapshot":null,"source":null,"spans":[],"value_json":null},'
         b'"scope":{"boundary":null,"flow_path":[],"occurrence_path":[],"static_path":["work"]},'
-        b'"variable_names":[]}},"run_id":"historical-failure","schema":7,"seq":4}'
+        b'"variable_names":[]}},"run_id":"historical-failure","schema":9,"seq":4}'
     ),
 )
 
@@ -313,7 +313,7 @@ output: ${second.output}
 """
 
 
-_SCHEMA_SEVEN_BACKWARD_FLOW = """id: historical-backward
+_RECORDED_BACKWARD_FLOW = """id: historical-backward
 name: historical_backward
 long_term_memory: test
 nodes:
@@ -340,12 +340,12 @@ def _chain(tmp_path, monkeypatch, *, workers=0, backend=None):
 
 
 @pytest.mark.parametrize("failed", [False, True], ids=["success", "failure"])
-def test_schema_seven_terminal_inspection_is_inert(tmp_path, monkeypatch, failed):
+def test_recorded_terminal_inspection_is_inert(tmp_path, monkeypatch, failed):
     from agent_composer.nodes.code import CodeNode
     from agent_composer.runtime.log import decode_record
 
-    flow = load_flow(_SCHEMA_SEVEN_BACKWARD_FLOW.replace("return 3", 'return "bad"') if failed else _SCHEMA_SEVEN_BACKWARD_FLOW)
-    wires = _SCHEMA_SEVEN_FAILURE if failed else _SCHEMA_SEVEN_BACKWARD[:7]
+    flow = load_flow(_RECORDED_BACKWARD_FLOW.replace("return 3", 'return "bad"') if failed else _RECORDED_BACKWARD_FLOW)
+    wires = _RECORDED_FAILURE if failed else _RECORDED_BACKWARD[:7]
     path = tmp_path / "terminal.jsonl"
     original = b"\n".join(wires) + b"\n"
     path.write_bytes(original)
@@ -378,14 +378,14 @@ def test_schema_seven_terminal_inspection_is_inert(tmp_path, monkeypatch, failed
     (True, 10, "failed"),
     (True, 11, "failed"),
 ])
-def test_schema_seven_backward_history_admits_a_later_attempt_at_every_boundary(
+def test_recorded_backward_history_admits_a_later_attempt_at_every_boundary(
     tmp_path, monkeypatch, failed_commit, boundary, disposition,
 ):
     from agent_composer.nodes.code import CodeNode
     from agent_composer.runtime.log import SCHEMA_VERSION, decode_record
 
-    flow = load_flow(_SCHEMA_SEVEN_BACKWARD_FLOW)
-    wires = (_SCHEMA_SEVEN_BACKWARD_FAILED if failed_commit else _SCHEMA_SEVEN_BACKWARD)[:boundary + 1]
+    flow = load_flow(_RECORDED_BACKWARD_FLOW)
+    wires = (_RECORDED_BACKWARD_FAILED if failed_commit else _RECORDED_BACKWARD)[:boundary + 1]
     path = tmp_path / "attempt.jsonl"
     original = b"\n".join(wires) + b"\n"
     path.write_bytes(original)

@@ -151,14 +151,14 @@ def test_historical_start_prepares_recorded_schema_bytes():
 
     state = RunState(_flow())
     before = _snapshot(state)
-    prepared = prepare_run_started(state, _start_data(state.flow), schema=7)
-    expected = RecordEnvelope(7, _RUN_ID, 0, prepared.record)
+    prepared = prepare_run_started(state, _start_data(state.flow), schema=SCHEMA_VERSION)
+    expected = RecordEnvelope(SCHEMA_VERSION, _RUN_ID, 0, prepared.record)
     assert prepared._plan.envelope_bytes == encode_record(expected)
-    assert decode_record(prepared._plan.envelope_bytes).schema == 7
+    assert decode_record(prepared._plan.envelope_bytes).schema == SCHEMA_VERSION
     assert _snapshot(state) == before
 
 
-@pytest.mark.parametrize("schema", [True, 7.0, "7", 6, 99])
+@pytest.mark.parametrize("schema", [True, 9.0, "9", 6, 7, 8, 99])
 def test_historical_start_requires_an_exact_supported_schema(schema):
     state = RunState(_flow())
     before = _snapshot(state)

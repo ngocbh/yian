@@ -22,17 +22,17 @@ def test_historical_backward_prepares_recorded_schema_bytes(failed, index):
     from agent_composer.runtime.log import decode_record
     from agent_composer.runtime.state import _HistoricalLogCursor, commit_prepared, prepare_record
     from tests.engine.test_backward_recovery import (
-        _SCHEMA_SEVEN_BACKWARD, _SCHEMA_SEVEN_BACKWARD_FAILED, _SCHEMA_SEVEN_BACKWARD_FLOW,
+        _RECORDED_BACKWARD, _RECORDED_BACKWARD_FAILED, _RECORDED_BACKWARD_FLOW,
     )
     from tests.engine.test_run_recovery_prefixes import _ReadOnlyLog
 
-    wires = (_SCHEMA_SEVEN_BACKWARD_FAILED if failed else _SCHEMA_SEVEN_BACKWARD)[:index + 1]
+    wires = (_RECORDED_BACKWARD_FAILED if failed else _RECORDED_BACKWARD)[:index + 1]
     state = run_module._replay_run_log(
-        load_flow(_SCHEMA_SEVEN_BACKWARD_FLOW),
+        load_flow(_RECORDED_BACKWARD_FLOW),
         _ReadOnlyLog(tuple(decode_record(wire) for wire in wires[:-1])),
     )
     before = state.backward_state
-    prepared = prepare_record(state, decode_record(wires[-1]).record, schema=7)
+    prepared = prepare_record(state, decode_record(wires[-1]).record)
     assert prepared._plan.envelope_bytes == wires[-1]
     assert state.backward_state is before
     cursor = _HistoricalLogCursor(wires)

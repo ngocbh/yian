@@ -80,8 +80,11 @@ from agent_composer.typesys.values import (
 )
 
 
-SCHEMA_VERSION: Final = 8
-"""The schema for new records; readers also retain schema-7 wire authority."""
+SCHEMA_VERSION: Final = 9
+"""The only run-record schema that this version writes and reads."""
+
+_RETIRED_SCHEMAS: Final = frozenset({7, 8})
+"""Earlier schemas whose logs are rejected with an explicit message."""
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _ANY_ADAPTER = TypeAdapter(Any)
@@ -872,7 +875,7 @@ class _StrictModel(BaseModel):
 class _EnvelopeWire(_StrictModel):
     """Strict top-level JSON object shared by every record kind."""
 
-    schema_version: Literal[7, 8] = Field(alias="schema")
+    schema_version: Literal[9] = Field(alias="schema")
     run_id: str = Field(min_length=1)
     seq: int = Field(ge=0)
     kind: str = Field(min_length=1)
@@ -881,9 +884,10 @@ class _EnvelopeWire(_StrictModel):
     @field_validator("schema_version", mode="before")
     @classmethod
     def _exact_integer_schema(cls, value: Any) -> Any:
-        """Reject bools and integral floats before the schema literal can coerce them."""
+        """Reject bools, integral floats, and retired schemas before the literal check."""
         if type(value) is not int:
             raise ValueError("run-record schema must be an integer")
+        _reject_retired_schema(value)
         return value
 
 
@@ -1390,20 +1394,30 @@ _TYPE_TO_KIND: dict[type[Any], str] = {
     BackwardFinishedRecord: "backward_finished",
 }
 
-_SCHEMA_SEVEN_KINDS = frozenset({
+_RECORD_KINDS = frozenset({
     "run_started", "run_resumed", "node_started", "node_succeeded", "node_routed",
     "node_expanded", "node_failed", "memory_commit_requested",
     "memory_commit_succeeded", "memory_commit_failed", "backward_started",
     "backward_ready", "backward_finished",
 })
-_SCHEMA_KINDS = {7: _SCHEMA_SEVEN_KINDS, 8: _SCHEMA_SEVEN_KINDS}
+
+
+def _reject_retired_schema(schema: int) -> None:
+    """Name a retired schema instead of reporting it as an unknown version."""
+    if schema in _RETIRED_SCHEMAS:
+        raise ValueError(
+            f"run log schema {schema} predates schema {SCHEMA_VERSION} and is not supported"
+        )
 
 
 def _require_schema_kind(schema: int, kind: str) -> None:
-    """Reject unsupported schemas and kinds outside each version's closed sum."""
-    if type(schema) is not int or schema not in _SCHEMA_KINDS:
+    """Reject retired or unsupported schemas and kinds outside the closed sum."""
+    if type(schema) is not int:
         raise ValueError(f"unsupported run-record schema: {schema!r}")
-    if kind not in _SCHEMA_KINDS[schema]:
+    _reject_retired_schema(schema)
+    if schema != SCHEMA_VERSION:
+        raise ValueError(f"unsupported run-record schema: {schema!r}")
+    if kind not in _RECORD_KINDS:
         raise ValueError(f"run-record kind {kind!r} is unsupported in schema {schema}")
 
 

@@ -46,8 +46,8 @@ from agent_composer.runtime.state import (
 from agent_composer.typesys import VariablePool
 
 
-# Original schema-7 writer output; keep these bytes independent of the current codec.
-_SCHEMA_SEVEN_GROWTH_PREFIX = (
+# Fixed writer output; keep these bytes independent of the current codec.
+_RECORDED_GROWTH_PREFIX = (
     (
         b'{"kind":"run_started","payload":{"effective_llm_by_static_path":{},'
         b'"flow_fingerprint":"f1d89a1792c63e9f6ab2bdb87eb8cabe5a4ff3ef58f732cb5d65c52c6c0e0eb0",'
@@ -71,11 +71,11 @@ _SCHEMA_SEVEN_GROWTH_PREFIX = (
         b'"google_thinking_level":null,"model":"claude-sonnet-4-5","openai_reasoning_effort":null,'
         b'"provider":"anthropic","temperature":null},"namespace":"33f37e507bcb4469bc43a6a974337f04",'
         b'"revision":0,"version":1}}],"num_workers":0,"start_wiring_override":{}},'
-        b'"run_id":"historical-growth","schema":7,"seq":0}'
+        b'"run_id":"historical-growth","schema":9,"seq":0}'
     ),
     (
         b'{"kind":"node_started","payload":{"node_id":"__start__"},"run_id":"historical-growth",'
-        b'"schema":7,"seq":1}'
+        b'"schema":9,"seq":1}'
     ),
     (
         b'{"kind":"node_succeeded","payload":{"commit_target":"__start__","evidence":null,'
@@ -85,10 +85,10 @@ _SCHEMA_SEVEN_GROWTH_PREFIX = (
         b'"snapshot":null,"source":null,"spans":[],"value_json":null},"scope":{"boundary":"start",'
         b'"flow_path":[],"occurrence_path":[],"static_path":["__start__"]},"variable_names":[]},'
         b'"node_id":"__start__","value":{"kind":"object","value":{}}},"run_id":"historical-growth",'
-        b'"schema":7,"seq":2}'
+        b'"schema":9,"seq":2}'
     ),
     (
-        b'{"kind":"node_started","payload":{"node_id":"outer"},"run_id":"historical-growth","schema":7,'
+        b'{"kind":"node_started","payload":{"node_id":"outer"},"run_id":"historical-growth","schema":9,'
         b'"seq":3}'
     ),
     (
@@ -99,11 +99,11 @@ _SCHEMA_SEVEN_GROWTH_PREFIX = (
         b'"scope":{"boundary":null,"flow_path":[],"occurrence_path":[],"static_path":["outer"]},'
         b'"variable_names":[]},"prune_ids":[],"seed":{},"spawner_id":"outer",'
         b'"topology_digest":"a99de1538df593752120f06f64a03e2338a426bae5b3192dcd024e10bdb56407"},'
-        b'"run_id":"historical-growth","schema":7,"seq":4}'
+        b'"run_id":"historical-growth","schema":9,"seq":4}'
     ),
     (
         b'{"kind":"node_started","payload":{"node_id":"outer/__start__"},"run_id":"historical-growth",'
-        b'"schema":7,"seq":5}'
+        b'"schema":9,"seq":5}'
     ),
     (
         b'{"kind":"node_succeeded","payload":{"commit_target":"outer/__start__","evidence":null,'
@@ -113,11 +113,11 @@ _SCHEMA_SEVEN_GROWTH_PREFIX = (
         b'"snapshot":null,"source":null,"spans":[],"value_json":null},"scope":{"boundary":"start",'
         b'"flow_path":["outer"],"occurrence_path":[{"index":null,"kind":"call","static_path":["outer"]}],'
         b'"static_path":["outer","__start__"]},"variable_names":[]},"node_id":"outer/__start__",'
-        b'"value":{"kind":"object","value":{}}},"run_id":"historical-growth","schema":7,"seq":6}'
+        b'"value":{"kind":"object","value":{}}},"run_id":"historical-growth","schema":9,"seq":6}'
     ),
     (
         b'{"kind":"node_started","payload":{"node_id":"outer/mapped"},"run_id":"historical-growth",'
-        b'"schema":7,"seq":7}'
+        b'"schema":9,"seq":7}'
     ),
     (
         b'{"kind":"node_expanded","payload":{"evidence":null,'
@@ -166,11 +166,11 @@ _SCHEMA_SEVEN_GROWTH_PREFIX = (
         b'"static_path":["outer"]}],"static_path":["outer","mapped"]},"variable_names":[]},'
         b'"prune_ids":[],"seed":[{"value":1},{"value":2}],"spawner_id":"outer/mapped",'
         b'"topology_digest":"8b0f3e24016bdd6cb652a3514aa79a527c17e8466940a4adae0aa1f7dc9fa0a8"},'
-        b'"run_id":"historical-growth","schema":7,"seq":8}'
+        b'"run_id":"historical-growth","schema":9,"seq":8}'
     ),
     (
         b'{"kind":"node_started","payload":{"node_id":"outer/repeated"},"run_id":"historical-growth",'
-        b'"schema":7,"seq":9}'
+        b'"schema":9,"seq":9}'
     ),
     (
         b'{"kind":"node_expanded","payload":{"evidence":null,'
@@ -188,11 +188,11 @@ _SCHEMA_SEVEN_GROWTH_PREFIX = (
         b'"static_path":["outer","repeated"]},"variable_names":[]},"prune_ids":[],'
         b'"seed":[{"exited":false,"n":0},0],"spawner_id":"outer/repeated",'
         b'"topology_digest":"0e73507a96feb5997c6eaed03da58fb9fef3bb88e22b12c52e2b41560ae2a056"},'
-        b'"run_id":"historical-growth","schema":7,"seq":10}'
+        b'"run_id":"historical-growth","schema":9,"seq":10}'
     ),
     (
         b'{"kind":"node_started","payload":{"node_id":"outer/mapped/__start__"},'
-        b'"run_id":"historical-growth","schema":7,"seq":11}'
+        b'"run_id":"historical-growth","schema":9,"seq":11}'
     ),
     (
         b'{"kind":"node_succeeded","payload":{"commit_target":"outer/mapped/__start__","evidence":null,'
@@ -202,11 +202,11 @@ _SCHEMA_SEVEN_GROWTH_PREFIX = (
         b'"snapshot":null,"source":null,"spans":[],"value_json":null},"scope":{"boundary":null,'
         b'"flow_path":["outer"],"occurrence_path":[{"index":null,"kind":"call","static_path":["outer"]}],'
         b'"static_path":["outer","mapped"]},"variable_names":[]},"node_id":"outer/mapped/__start__",'
-        b'"value":{"kind":"object","value":{}}},"run_id":"historical-growth","schema":7,"seq":12}'
+        b'"value":{"kind":"object","value":{}}},"run_id":"historical-growth","schema":9,"seq":12}'
     ),
     (
         b'{"kind":"node_started","payload":{"node_id":"outer/repeated#0/__start__"},'
-        b'"run_id":"historical-growth","schema":7,"seq":13}'
+        b'"run_id":"historical-growth","schema":9,"seq":13}'
     ),
     (
         b'{"kind":"node_succeeded","payload":{"commit_target":"outer/repeated#0/__start__",'
@@ -223,11 +223,11 @@ _SCHEMA_SEVEN_GROWTH_PREFIX = (
         b'"kind":"call","static_path":["outer"]},{"index":0,"kind":"loop_body","static_path":["outer",'
         b'"repeated"]}],"static_path":["outer","repeated","__start__"]},"variable_names":[]},'
         b'"node_id":"outer/repeated#0/__start__","value":{"kind":"object","value":{"exited":false,'
-        b'"n":0}}},"run_id":"historical-growth","schema":7,"seq":14}'
+        b'"n":0}}},"run_id":"historical-growth","schema":9,"seq":14}'
     ),
     (
         b'{"kind":"node_started","payload":{"node_id":"outer/mapped#0/__start__"},'
-        b'"run_id":"historical-growth","schema":7,"seq":15}'
+        b'"run_id":"historical-growth","schema":9,"seq":15}'
     ),
     (
         b'{"kind":"node_succeeded","payload":{"commit_target":"outer/mapped#0/__start__","evidence":null,'
@@ -242,11 +242,11 @@ _SCHEMA_SEVEN_GROWTH_PREFIX = (
         b'"kind":"call","static_path":["outer"]},{"index":0,"kind":"map_item","static_path":["outer",'
         b'"mapped"]}],"static_path":["outer","mapped","__start__"]},"variable_names":[]},'
         b'"node_id":"outer/mapped#0/__start__","value":{"kind":"object","value":{"value":1}}},'
-        b'"run_id":"historical-growth","schema":7,"seq":16}'
+        b'"run_id":"historical-growth","schema":9,"seq":16}'
     ),
     (
         b'{"kind":"node_started","payload":{"node_id":"outer/mapped#1/__start__"},'
-        b'"run_id":"historical-growth","schema":7,"seq":17}'
+        b'"run_id":"historical-growth","schema":9,"seq":17}'
     ),
     (
         b'{"kind":"node_succeeded","payload":{"commit_target":"outer/mapped#1/__start__","evidence":null,'
@@ -261,11 +261,11 @@ _SCHEMA_SEVEN_GROWTH_PREFIX = (
         b'"kind":"call","static_path":["outer"]},{"index":1,"kind":"map_item","static_path":["outer",'
         b'"mapped"]}],"static_path":["outer","mapped","__start__"]},"variable_names":[]},'
         b'"node_id":"outer/mapped#1/__start__","value":{"kind":"object","value":{"value":2}}},'
-        b'"run_id":"historical-growth","schema":7,"seq":18}'
+        b'"run_id":"historical-growth","schema":9,"seq":18}'
     ),
     (
         b'{"kind":"node_started","payload":{"node_id":"outer/repeated#0/bump"},'
-        b'"run_id":"historical-growth","schema":7,"seq":19}'
+        b'"run_id":"historical-growth","schema":9,"seq":19}'
     ),
     (
         b'{"kind":"node_succeeded","payload":{"commit_target":"outer/repeated#0/bump","evidence":null,'
@@ -285,11 +285,11 @@ _SCHEMA_SEVEN_GROWTH_PREFIX = (
         b'"occurrence_path":[{"index":null,"kind":"call","static_path":["outer"]},{"index":0,'
         b'"kind":"loop_body","static_path":["outer","repeated"]}],"static_path":["outer","repeated",'
         b'"bump"]},"variable_names":[]},"node_id":"outer/repeated#0/bump","value":{"kind":"object",'
-        b'"value":{"exited":false,"n":1}}},"run_id":"historical-growth","schema":7,"seq":20}'
+        b'"value":{"exited":false,"n":1}}},"run_id":"historical-growth","schema":9,"seq":20}'
     ),
     (
         b'{"kind":"node_started","payload":{"node_id":"outer/mapped#0/echo"},'
-        b'"run_id":"historical-growth","schema":7,"seq":21}'
+        b'"run_id":"historical-growth","schema":9,"seq":21}'
     ),
     (
         b'{"kind":"node_succeeded","payload":{"commit_target":"outer/mapped#0/echo","evidence":null,'
@@ -304,11 +304,11 @@ _SCHEMA_SEVEN_GROWTH_PREFIX = (
         b'"occurrence_path":[{"index":null,"kind":"call","static_path":["outer"]},{"index":0,'
         b'"kind":"map_item","static_path":["outer","mapped"]}],"static_path":["outer","mapped","echo"]},'
         b'"variable_names":[]},"node_id":"outer/mapped#0/echo","value":{"kind":"int","value":1}},'
-        b'"run_id":"historical-growth","schema":7,"seq":22}'
+        b'"run_id":"historical-growth","schema":9,"seq":22}'
     ),
     (
         b'{"kind":"node_started","payload":{"node_id":"outer/mapped#1/echo"},'
-        b'"run_id":"historical-growth","schema":7,"seq":23}'
+        b'"run_id":"historical-growth","schema":9,"seq":23}'
     ),
     (
         b'{"kind":"node_succeeded","payload":{"commit_target":"outer/mapped#1/echo","evidence":null,'
@@ -323,7 +323,7 @@ _SCHEMA_SEVEN_GROWTH_PREFIX = (
         b'"occurrence_path":[{"index":null,"kind":"call","static_path":["outer"]},{"index":1,'
         b'"kind":"map_item","static_path":["outer","mapped"]}],"static_path":["outer","mapped","echo"]},'
         b'"variable_names":[]},"node_id":"outer/mapped#1/echo","value":{"kind":"int","value":2}},'
-        b'"run_id":"historical-growth","schema":7,"seq":24}'
+        b'"run_id":"historical-growth","schema":9,"seq":24}'
     ),
 )
 
@@ -434,7 +434,7 @@ output: ${outer.output}
 """
 
 
-def _schema_seven_growth_flow():
+def _recorded_growth_flow():
     """Build the authored program retained by the fixed historical wire sample."""
     source = _NESTED_GROWTH.replace(
         "name: recovery_matrix_growth\n",
@@ -446,17 +446,17 @@ def _schema_seven_growth_flow():
     return load_flow(source)
 
 
-def test_schema_seven_nested_growth_resumes_with_exact_memory_and_trace(tmp_path, monkeypatch):
+def test_recorded_nested_growth_resumes_with_exact_memory_and_trace(tmp_path, monkeypatch):
     from agent_composer.memory.episodic import EpisodicMemory
     from agent_composer.memory.reflective import ReflectiveMemory
     from agent_composer.nodes.code import CodeNode
     from agent_composer.runtime.log import JsonlRunLog, SCHEMA_VERSION, decode_record, encode_record
 
-    flow = _schema_seven_growth_flow()
+    flow = _recorded_growth_flow()
     path = tmp_path / "historical-growth.jsonl"
-    prefix = b"\n".join(_SCHEMA_SEVEN_GROWTH_PREFIX) + b"\n"
+    prefix = b"\n".join(_RECORDED_GROWTH_PREFIX) + b"\n"
     path.write_bytes(prefix)
-    initial = decode_record(_SCHEMA_SEVEN_GROWTH_PREFIX[0]).record
+    initial = decode_record(_RECORDED_GROWTH_PREFIX[0]).record
     snapshots = {item.policy_name: item.snapshot for item in initial.memory_snapshots}
     assert set(snapshots) == {"episodic", "reflective"}
     for name, snapshot in snapshots.items():
@@ -491,8 +491,8 @@ def test_schema_seven_nested_growth_resumes_with_exact_memory_and_trace(tmp_path
     with JsonlRunLog.resume(path) as log:
         envelopes = tuple(log)
         replayed = run_module._replay_run_log(flow, log)
-    length = len(_SCHEMA_SEVEN_GROWTH_PREFIX)
-    assert tuple(encode_record(item) for item in envelopes[:length]) == _SCHEMA_SEVEN_GROWTH_PREFIX
+    length = len(_RECORDED_GROWTH_PREFIX)
+    assert tuple(encode_record(item) for item in envelopes[:length]) == _RECORDED_GROWTH_PREFIX
     assert all(item.schema == SCHEMA_VERSION for item in envelopes[length:])
     assert replayed.flow_fingerprint == initial.flow_fingerprint == flow_fingerprint(flow.compiled)
     assert replayed.effective_llm_by_static_path == initial.effective_llm_by_static_path
@@ -502,7 +502,7 @@ def test_schema_seven_nested_growth_resumes_with_exact_memory_and_trace(tmp_path
         "outer", "outer/mapped", "outer/repeated",
     }
     for occurrence in historical:
-        assert occurrence._record_bytes == _SCHEMA_SEVEN_GROWTH_PREFIX[occurrence.outcome_seq]
+        assert occurrence._record_bytes == _RECORDED_GROWTH_PREFIX[occurrence.outcome_seq]
     complete = path.read_bytes()
     inspected = run_module.resume_flow(flow, log=path, memory={"episodic": object(), "reflective": object()})
     assert inspected.output == result.output and inspected.events == []

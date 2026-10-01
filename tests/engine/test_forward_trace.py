@@ -14,7 +14,7 @@ from agent_composer.runtime.log import (
 )
 
 
-@pytest.mark.parametrize("schema", [7, 8])
+@pytest.mark.parametrize("schema", [SCHEMA_VERSION])
 def test_forward_capture_round_trips_invocation_names_and_structural_layout(schema):
     from agent_composer.runtime.contracts import ForwardCapture
 
@@ -353,7 +353,7 @@ def test_discarded_agent_worker_keeps_render_capture_out_of_accepted_trace(monke
     assert "slow" not in engine.state.trace.current_writers
 
 
-@pytest.mark.parametrize("schema", [7, 8])
+@pytest.mark.parametrize("schema", [SCHEMA_VERSION])
 def test_forward_capture_round_trips_without_memory_scope(schema):
     from agent_composer.runtime.contracts import ForwardCapture
 

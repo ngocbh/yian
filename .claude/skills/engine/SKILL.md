@@ -638,7 +638,8 @@ Most are just the functional model (above) made enforceable:
   accepted only beside `api_key` and `provider` (`pop_base_url`), must be
   `https` (`http` only for local hosts), is checked as the exact stored string
   (`validate_base_url`: printable ASCII, valid port, ≤2048 chars), and is
-  rejected for `azure`/`ollama`.
+  rejected for `azure`/`ollama`. The `anthropic`/`google` clients don't follow
+  redirects from it (httpx would re-send their key headers cross-origin).
   `bind(host_base_url=)` records it on the marked agents' effective configs
   (OpenAI `host` connection endpoint too); resume/backward reuse the recorded
   URL. Authored layers reject `base_url`, the cascade fails a `base_url`

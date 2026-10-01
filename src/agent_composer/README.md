@@ -213,7 +213,9 @@ credentials, query, or fragment, checks the exact string it stores
 (`validate_base_url` rejects whitespace, control and non-ASCII characters, bad
 ports, and over-long URLs rather than normalising them), never echoes it in
 errors, and rejects it for
-`azure` and `ollama`. An unset `base_url` is dropped from dumps, so existing
+`azure` and `ollama`. The `anthropic` and `google` clients, whose key headers
+httpx re-sends on a cross-origin redirect, do not follow redirects from a
+`base_url`. An unset `base_url` is dropped from dumps, so existing
 records and snapshots are unchanged. `run_flow` pops it with the key
 (`pop_base_url`) and `ConnectionSnapshot.bind(host_base_url=...)` writes it into
 the recorded effective config of each marked agent; an OpenAI agent's `host`

@@ -1,7 +1,9 @@
 import re
 from contextvars import ContextVar
+from functools import cached_property
 from typing import Any, Optional
 
+import anthropic
 from langchain_anthropic import ChatAnthropic
 
 from .base_client import BaseLLMClient, normalize_content
@@ -39,7 +41,38 @@ class NormalizedChatAnthropic(ChatAnthropic):
     Claude models with extended thinking or tool use return content as a
     list of typed blocks. This normalizes to string for consistent
     downstream handling.
+
+    Attributes:
+        follow_redirects (`bool`, *optional*, defaults to `True`):
+            Whether the HTTP client follows redirects. The SDK sends the key in
+            ``x-api-key``, which httpx re-sends on a cross-origin redirect, so
+            `AnthropicClient` turns this off for a host ``base_url``.
     """
+
+    follow_redirects: bool = True
+
+    @cached_property
+    def _client(self) -> anthropic.Client:
+        client = super()._client
+        if self.follow_redirects:
+            return client
+        return client.with_options(http_client=anthropic.DefaultHttpxClient(**self._http_options()))
+
+    @cached_property
+    def _async_client(self) -> anthropic.AsyncClient:
+        client = super()._async_client
+        if self.follow_redirects:
+            return client
+        return client.with_options(
+            http_client=anthropic.DefaultAsyncHttpxClient(**self._http_options())
+        )
+
+    def _http_options(self) -> dict[str, Any]:
+        """Keyword arguments for an HTTP client that never follows a redirect."""
+        options: dict[str, Any] = {"follow_redirects": False}
+        if self.anthropic_proxy:
+            options["proxy"] = self.anthropic_proxy
+        return options
 
     def invoke(self, input, config=None, **kwargs):
         return self.normalize_reply(super().invoke(input, config, **kwargs))
@@ -82,7 +115,11 @@ class NormalizedChatAnthropic(ChatAnthropic):
 
 
 class AnthropicClient(BaseLLMClient):
-    """Client for Anthropic Claude models."""
+    """Client for Anthropic Claude models.
+
+    With a ``base_url``, the model does not follow redirects, so the key goes only
+    to that URL.
+    """
 
     def __init__(self, model: str, base_url: Optional[str] = None, **kwargs):
         super().__init__(model, base_url, **kwargs)
@@ -94,6 +131,7 @@ class AnthropicClient(BaseLLMClient):
 
         if self.base_url:
             llm_kwargs["base_url"] = self.base_url
+            llm_kwargs["follow_redirects"] = False
 
         for key in _PASSTHROUGH_KWARGS:
             if key not in self.kwargs:

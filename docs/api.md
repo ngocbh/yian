@@ -183,7 +183,10 @@ terminal. Stored defaults are not coerced.
   whitespace, control characters, non-ASCII characters (write an international
   host in its `xn--` form), a port outside 1–65535, and URLs over 2048 characters
   are rejected, not normalised. The OpenAI-compatible providers, `anthropic`,
-  and `google` take it; `azure` and `ollama` reject it. It is not secret: the log
+  and `google` take it; `azure` and `ollama` reject it. A redirect from it does not
+  carry the key on: the `anthropic` and `google` clients do not follow redirects
+  from a `base_url`, and the OpenAI-compatible clients drop their `Authorization`
+  header on a redirect to another origin. It is not secret: the log
   records it on the agents marked for the key, and an `openai` agent's host
   connection uses it as its endpoint. `resume_flow` and `result.backward` send the
   re-supplied key to that recorded URL; neither the provider's endpoint variable

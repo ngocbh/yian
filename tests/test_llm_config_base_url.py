@@ -1,6 +1,8 @@
 """`LLMConfig.base_url`: a host endpoint bound to the key and provider beside it."""
 
 import json
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import httpx
 import pytest
@@ -269,16 +271,97 @@ def test_a_base_url_must_match_its_pinned_connection(clean_env):
             model_from_config(config)
 
 
-@pytest.mark.parametrize(
-    "provider, model, attribute",
-    [
-        ("anthropic", "claude-sonnet-4-5", "anthropic_api_url"),
-        ("google", "gemini-2.5-flash", "base_url"),
-    ],
-)
-def test_dedicated_clients_take_the_base_url(clean_env, provider, model, attribute):
-    chat = model_from_config({
-        "provider": provider, "model": model,
-        "base_url": "https://gateway.example.com", "api_key": SENTINEL,
-    })
-    assert getattr(chat, attribute) == "https://gateway.example.com"
+class _Endpoint:
+    """A local HTTP server that records each request, then answers 400 or redirects."""
+
+    def __init__(self, redirect_to: str | None = None):
+        self.requests: list[tuple[str, dict[str, str]]] = []
+        endpoint = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                endpoint.requests.append(
+                    (self.path, {name.lower(): value for name, value in self.headers.items()})
+                )
+                if redirect_to is not None:
+                    self.send_response(307)
+                    self.send_header("Location", redirect_to + self.path)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                body = json.dumps({
+                    "type": "error",
+                    "error": {"type": "invalid_request_error", "message": "refused", "code": 400,
+                              "status": "INVALID_ARGUMENT"},
+                }).encode()
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=self._server.serve_forever, daemon=True).start()
+        self.url = f"http://127.0.0.1:{self._server.server_port}"
+
+    def close(self):
+        self._server.shutdown()
+        self._server.server_close()
+
+
+@pytest.fixture
+def endpoints():
+    opened = []
+
+    def open_endpoint(redirect_to=None):
+        opened.append(_Endpoint(redirect_to))
+        return opened[-1]
+
+    yield open_endpoint
+    for endpoint in opened:
+        endpoint.close()
+
+
+_DEDICATED = [
+    ("anthropic", "claude-sonnet-4-5", "x-api-key", "/v1/messages"),
+    ("google", "gemini-2.5-flash", "x-goog-api-key", "/v1beta/models/gemini-2.5-flash:generateContent"),
+]
+
+
+@pytest.mark.parametrize("provider, model, header, path", _DEDICATED)
+def test_dedicated_clients_send_the_key_to_the_base_url(
+    clean_env, endpoints, provider, model, header, path
+):
+    configured, decoy = endpoints(), endpoints()
+    # Neither the provider's own key nor its endpoint variables may win over the config.
+    for name in ("ANTHROPIC_BASE_URL", "ANTHROPIC_API_URL", "GOOGLE_GEMINI_BASE_URL"):
+        clean_env.setenv(name, decoy.url)
+    clean_env.setenv(f"{provider.upper()}_API_KEY", "sk-environment-key")
+    model = model_from_config(
+        {"provider": provider, "model": model, "base_url": configured.url, "api_key": SENTINEL}
+    )
+    with pytest.raises(Exception):
+        model.invoke("hi")
+    assert [(p, h[header]) for p, h in configured.requests] == [(path, SENTINEL)]
+    assert decoy.requests == []
+
+
+@pytest.mark.parametrize("provider, model, header, path", _DEDICATED)
+def test_dedicated_clients_do_not_follow_a_redirect_with_the_key(
+    clean_env, endpoints, provider, model, header, path
+):
+    # These SDKs send the key in a custom header, which httpx keeps on a
+    # cross-origin redirect; only the configured URL may receive it.
+    elsewhere = endpoints()
+    configured = endpoints(redirect_to=elsewhere.url)
+    model = model_from_config(
+        {"provider": provider, "model": model, "base_url": configured.url, "api_key": SENTINEL}
+    )
+    with pytest.raises(Exception):
+        model.invoke("hi")
+    assert [(p, h[header]) for p, h in configured.requests] == [(path, SENTINEL)]
+    assert elsewhere.requests == []

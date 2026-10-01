@@ -10,7 +10,7 @@ from langchain_core.messages import HumanMessage
 from pydantic import ValidationError
 
 from agent_composer.llm_clients.auth import AuthStore, OAuthCredentials
-from agent_composer.llm_clients.config import LLMConfig, pop_api_key, pop_base_url
+from agent_composer.llm_clients.config import LLMConfig, pop_host_credentials
 from agent_composer.llm_clients.connection import resolve_model_config, split_model_config
 from agent_composer.llm_clients.factory import model_from_config
 from agent_composer.llm_clients.openai_client import OpenAIClient
@@ -148,21 +148,23 @@ def test_dedicated_clients_without_endpoint_support_reject_base_url(provider):
         LLMConfig(provider=provider, base_url=AZURE_V1, api_key=SENTINEL)
 
 
-def test_pop_base_url_takes_the_url_only_with_the_layers_key():
+def test_pop_host_credentials_takes_the_url_only_with_the_layers_key():
     layer = {"provider": "openai", "model": "gpt-5.4", "base_url": AZURE_V1, "api_key": SENTINEL}
-    key = pop_api_key(layer)
-    assert pop_base_url(layer, key) == AZURE_V1
+    key, url = pop_host_credentials(layer)
+    assert (key.get_secret_value(), url) == (SENTINEL, AZURE_V1)
     assert layer == {"provider": "openai", "model": "gpt-5.4"}
-    assert pop_base_url({"provider": "openai"}, key) is None
+    key, url = pop_host_credentials({"provider": "openai", "api_key": SENTINEL})
+    assert (key.get_secret_value(), url) == (SENTINEL, None)
+    assert pop_host_credentials({"provider": "openai"}) == (None, None)
 
-    keyless = {"provider": "openai", "base_url": AZURE_V1}
     with pytest.raises(ValueError, match="api_key"):
-        pop_base_url(keyless, pop_api_key(keyless))
+        pop_host_credentials({"provider": "openai", "base_url": AZURE_V1})
 
     unsafe = {"provider": "openai", "base_url": "http://gateway.example.com", "api_key": SENTINEL}
     with pytest.raises(ValueError, match="https") as caught:
-        pop_base_url(unsafe, pop_api_key(unsafe))
+        pop_host_credentials(unsafe)
     assert "gateway.example.com" not in str(caught.value)
+    assert SENTINEL not in str(caught.value)
 
 
 # --- clients send the key to the base_url ------------------------------------ #

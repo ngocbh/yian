@@ -635,7 +635,7 @@ Most are just the functional model (above) made enforceable:
   `_host_key` (flow and def levels at load); `ProfileMemory` needs `provider`
   with its key; `ReflectiveMemory` rejects `api_key` and always uses environment
   credentials. A run-layer `llm_config.base_url` is where the key goes: it is
-  accepted only beside `api_key` and `provider` (`pop_base_url`), must be
+  accepted only beside `api_key` and `provider` (`pop_host_credentials`), must be
   `https` (`http` only for local hosts), is checked as the exact stored string
   (`validate_base_url`: printable ASCII, valid port, ≤2048 chars), and is
   rejected for `azure`/`ollama`. The `anthropic`/`google` clients don't follow

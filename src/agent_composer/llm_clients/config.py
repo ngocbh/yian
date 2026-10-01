@@ -310,28 +310,33 @@ def pop_api_key(config: dict[str, Any]) -> Optional[SecretStr]:
     return LLMConfig(provider=config["provider"], api_key=raw).api_key
 
 
-def pop_base_url(config: dict[str, Any], api_key: Optional[SecretStr]) -> Optional[str]:
-    """Pop a host ``base_url`` from the layer whose ``api_key`` was just popped.
+def pop_host_credentials(
+    config: dict[str, Any],
+) -> tuple[Optional[SecretStr], Optional[str]]:
+    """Pop a host ``api_key`` and the ``base_url`` it goes to from one config layer.
 
-    A base_url decides where the key is sent, so it is accepted only from the layer
-    that supplied the key, after `pop_api_key` has checked the layer's ``provider``.
-    Errors never echo the URL or the key.
+    Popping both from the same layer is what binds the URL to the key: a base_url
+    decides where the key is sent, so it is accepted only beside that key and the
+    layer's ``provider``. Errors never echo the URL or the key.
 
     Args:
-        config (`dict[str, Any]`): A mutable ``llm_config`` layer; ``base_url`` is removed.
-        api_key (`SecretStr | None`): The key `pop_api_key` returned for this layer.
+        config (`dict[str, Any]`): A mutable ``llm_config`` layer; ``api_key`` and
+            ``base_url`` are removed.
 
     Returns:
-        `str | None`: The validated URL, or `None` when the layer has none.
+        `tuple[SecretStr | None, str | None]`: The validated key and URL; either is
+            `None` when the layer has none.
 
     Raises:
-        `ValueError`: The layer has no ``api_key``, the URL is not an allowed
-            ``https``/local ``http`` URL, or the provider does not take a base_url.
+        `ValueError`: The key is invalid or lacks ``provider`` (see `pop_api_key`),
+            the layer has a ``base_url`` but no ``api_key``, the URL is not allowed
+            (see `validate_base_url`), or the provider does not take a base_url.
     """
+    api_key = pop_api_key(config)
     raw = config.pop("base_url", None)
     if raw is None:
-        return None
-    return LLMConfig(provider=config.get("provider"), base_url=raw, api_key=api_key).base_url
+        return api_key, None
+    return api_key, LLMConfig(provider=config.get("provider"), base_url=raw, api_key=api_key).base_url
 
 
 def merge_llm_config(specific: dict, base: dict) -> dict:

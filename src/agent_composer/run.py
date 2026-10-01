@@ -26,7 +26,7 @@ from typing import Any, Callable, Mapping
 from langchain_core.tools import BaseTool
 from pydantic import SecretStr
 
-from agent_composer.llm_clients.config import LLMConfig, pop_api_key, pop_base_url
+from agent_composer.llm_clients.config import LLMConfig, pop_host_credentials
 from agent_composer.llm_clients.connection import connection_snapshot, legacy_connection_map
 from agent_composer.compile.execution_layout import apply_execution_layout, resolve_execution_layout
 from agent_composer.compile.expand import build_grow
@@ -467,8 +467,7 @@ def _run_flow_controlled(
     # The key stays out of the cascade so RunStarted never records it. Its
     # base_url stays out too, so no authored layer can pair the key with another.
     run_llm_config = dict(llm_config or {})
-    api_key = pop_api_key(run_llm_config)
-    base_url = pop_base_url(run_llm_config, api_key)
+    api_key, base_url = pop_host_credentials(run_llm_config)
 
     # One selection snapshot determines every static agent before RunStarted.
     snapshot = connection_snapshot()

@@ -16,7 +16,7 @@ from types import TracebackType
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from agent_composer.llm_clients import model_from_config
-from agent_composer.llm_clients.config import pop_api_key, pop_base_url
+from agent_composer.llm_clients.config import pop_host_credentials
 from agent_composer.llm_clients.connection import resolve_model_config
 from agent_composer.llm_clients.redact import scrub_key
 from agent_composer.memory.contracts import (
@@ -164,8 +164,7 @@ class ProfileMemory:
                 raise ValueError(f"{name} must be a positive integer")
         self._store = store
         self._llm_config = dict(llm_config or {})
-        self._api_key = pop_api_key(self._llm_config)
-        self._base_url = pop_base_url(self._llm_config, self._api_key)
+        self._api_key, self._base_url = pop_host_credentials(self._llm_config)
         self.max_chars = max_chars
         self.input_budget_chars = input_budget_chars
 

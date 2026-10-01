@@ -78,6 +78,10 @@ class ConnectionSnapshot:
             endpoint (`str | None`, *optional*, defaults to `None`):
                 The host's ``base_url`` for that key. `None` uses the snapshot's
                 API endpoint.
+
+        Returns:
+            `dict[str, Any]`: Validated connection metadata with source ``host``,
+                no credential identity, and that endpoint.
         """
         return validate_connection({
             "method": "api_key",

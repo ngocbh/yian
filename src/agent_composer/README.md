@@ -217,7 +217,7 @@ errors, and rejects it for
 httpx re-sends on a cross-origin redirect, do not follow redirects from a
 `base_url`. An unset `base_url` is dropped from dumps, so existing
 records and snapshots are unchanged. `run_flow` pops it with the key
-(`pop_base_url`) and `ConnectionSnapshot.bind(host_base_url=...)` writes it into
+(`pop_host_credentials`) and `ConnectionSnapshot.bind(host_base_url=...)` writes it into
 the recorded effective config of each marked agent; an OpenAI agent's `host`
 connection takes it as its endpoint, and `split_model_config` fails a `base_url`
 that does not match a host connection's endpoint. The loader, `AgentNode`, and the

@@ -98,7 +98,7 @@ _RECORDED_GROWTH_PREFIX = (
         b'"result_type":null,"sizes":[],"snapshot":null,"source":null,"spans":[],"value_json":null},'
         b'"scope":{"boundary":null,"flow_path":[],"occurrence_path":[],"static_path":["outer"]},'
         b'"variable_names":[]},"prune_ids":[],"seed":{},"spawner_id":"outer",'
-        b'"topology_digest":"a99de1538df593752120f06f64a03e2338a426bae5b3192dcd024e10bdb56407"},'
+        b'"topology_digest":"0c7b15ddd09acb5bd2b81d153a1d2f217724915e09183105d7465a1ed3d627c1"},'
         b'"run_id":"historical-growth","schema":9,"seq":4}'
     ),
     (
@@ -165,7 +165,7 @@ _RECORDED_GROWTH_PREFIX = (
         b'"scope":{"boundary":null,"flow_path":["outer"],"occurrence_path":[{"index":null,"kind":"call",'
         b'"static_path":["outer"]}],"static_path":["outer","mapped"]},"variable_names":[]},'
         b'"prune_ids":[],"seed":[{"value":1},{"value":2}],"spawner_id":"outer/mapped",'
-        b'"topology_digest":"8b0f3e24016bdd6cb652a3514aa79a527c17e8466940a4adae0aa1f7dc9fa0a8"},'
+        b'"topology_digest":"ad741626c30afa1e5b376a0bae478fd7f568bb8aac397feacc6e0940e31847f4"},'
         b'"run_id":"historical-growth","schema":9,"seq":8}'
     ),
     (
@@ -187,7 +187,7 @@ _RECORDED_GROWTH_PREFIX = (
         b'"static_path":["outer"]},{"index":0,"kind":"loop_driver","static_path":["outer","repeated"]}],'
         b'"static_path":["outer","repeated"]},"variable_names":[]},"prune_ids":[],'
         b'"seed":[{"exited":false,"n":0},0],"spawner_id":"outer/repeated",'
-        b'"topology_digest":"0e73507a96feb5997c6eaed03da58fb9fef3bb88e22b12c52e2b41560ae2a056"},'
+        b'"topology_digest":"00cea2666b73f6eb6795bbfd2b3931408855015895597eb8d2b8519f8422ba20"},'
         b'"run_id":"historical-growth","schema":9,"seq":10}'
     ),
     (

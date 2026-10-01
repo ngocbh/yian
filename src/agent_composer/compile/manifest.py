@@ -26,7 +26,6 @@ from agent_composer.diagnostics import OriginRef
 from agent_composer.expr import ExpressionError, expr_refs, scan_template
 from agent_composer.expr.template import Literal, Span
 from agent_composer.memory.contracts import (
-    MemoryBoundary,
     MemoryFrameRef,
     MemoryOccurrenceSegment,
     MemoryPolicySpec,
@@ -1640,27 +1639,6 @@ def _memory_occurrence_topology(
     }
 
 
-def _memory_boundary_topology(
-    boundary: MemoryBoundary,
-    root_flow_id: str,
-    path: str,
-) -> dict[str, Any]:
-    """Project one flow boundary without policy or authored-root identity."""
-    if type(boundary) is not MemoryBoundary:
-        raise TypeError(
-            f"{path}: expected exact MemoryBoundary, got {type(boundary).__name__}"
-        )
-    MemoryBoundary(kind=boundary.kind, frame_ref=boundary.frame_ref)
-    return {
-        "frame": _memory_frame_topology(
-            boundary.frame_ref,
-            root_flow_id,
-            f"{path}.frame_ref",
-        ),
-        "kind": boundary.kind.value,
-    }
-
-
 def _memory_scope_topology(value: MemoryScope, path: str) -> dict[str, Any]:
     """Project only memory topology needed for deterministic growth identity."""
     if type(value) is not MemoryScope:
@@ -1674,19 +1652,9 @@ def _memory_scope_topology(value: MemoryScope, path: str) -> dict[str, Any]:
         static_path=value.static_path,
         frame_stack=value.frame_stack,
         occurrence_path=value.occurrence_path,
-        boundary=value.boundary,
     )
     root_flow_id = value.root_flow_id
     return {
-        "boundary": (
-            None
-            if value.boundary is None
-            else _memory_boundary_topology(
-                value.boundary,
-                root_flow_id,
-                f"{path}.boundary",
-            )
-        ),
         "frame_stack": [
             _memory_frame_topology(
                 frame,

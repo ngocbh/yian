@@ -15,7 +15,6 @@ from agent_composer.compile.model import END_ID, START_ID, CompiledFlow
 from agent_composer.compose import load_flow
 from agent_composer.diagnostics import OriginRef
 from agent_composer.memory import (
-    MemoryBoundaryKind,
     MemoryFrameRef,
     MemoryOwner,
     MemoryPolicySpec,
@@ -198,19 +197,13 @@ def test_layout_orders_outer_flow_inner_flow_and_local_agent_frames() -> None:
     )
 
 
-def test_only_memory_owning_flow_boundaries_are_marked() -> None:
-    with_owned_child = resolve_memory_layout(load_flow(_NESTED).compiled)
-    child_frame = with_owned_child.frames[1].spec.ref
-    assert _target(with_owned_child, "invoke", "__start__").scope.boundary.kind is (
-        MemoryBoundaryKind.START
-    )
-    assert (
-        _target(with_owned_child, "invoke", "__start__").scope.boundary.frame_ref
-        == child_frame
-    )
-    assert _target(with_owned_child, "invoke", "__end__").scope.boundary.kind is (
-        MemoryBoundaryKind.END
-    )
+def test_flow_start_and_end_scopes_carry_only_the_frame_stack() -> None:
+    layout = resolve_memory_layout(load_flow(_NESTED).compiled)
+    outer, inner = (frame.spec.ref for frame in layout.frames[:2])
+    for node_id in (START_ID, END_ID):
+        assert _target(layout, "invoke", node_id).scope == MemoryScope(
+            "root", ("root", "invoke", node_id), frame_stack=(outer, inner),
+        )
 
     without_child_policy = load_flow(
         _NESTED.replace(
@@ -219,8 +212,6 @@ def test_only_memory_owning_flow_boundaries_are_marked() -> None:
         )
     ).compiled
     inherited = resolve_memory_layout(without_child_policy)
-    assert _target(inherited, "invoke", "__start__").scope.boundary is None
-    assert _target(inherited, "invoke", "__end__").scope.boundary is None
     assert _target(inherited, "invoke", "answer").scope.frame_stack == (
         inherited.frames[0].spec.ref,
         inherited.frames[1].spec.ref,

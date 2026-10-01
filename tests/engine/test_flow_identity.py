@@ -17,8 +17,6 @@ from agent_composer.compile.model import START_ID, CompiledFlow, Edge, Flow, Flo
 from agent_composer.compose import load_flow
 from agent_composer.diagnostics import OriginRef
 from agent_composer.memory import (
-    MemoryBoundary,
-    MemoryBoundaryKind,
     MemoryFrameRef,
     MemoryOccurrenceKind,
     MemoryOccurrenceSegment,
@@ -2448,7 +2446,7 @@ output: ${{body.output}}
     assert expansion_digest(first) == expansion_digest(second)
 
 
-def test_memory_expansion_projection_covers_frame_occurrence_and_boundary_topology():
+def test_memory_expansion_projection_covers_frame_and_occurrence_topology():
     root = "root"
     scope_path = (root, "nested", "body")
     frame = MemoryFrameRef(root, (root,), MemoryOwner.FLOW)
@@ -2484,13 +2482,6 @@ def test_memory_expansion_projection_covers_frame_occurrence_and_boundary_topolo
             ),
         ),
     )
-    with_boundary = copy.deepcopy(with_frame)
-    with_boundary.nodes["body"].memory_scope = MemoryScope(
-        root,
-        scope_path,
-        frame_stack=(frame,),
-        boundary=MemoryBoundary(MemoryBoundaryKind.END, frame),
-    )
 
     digests = {
         expansion_digest(flow)
@@ -2499,10 +2490,19 @@ def test_memory_expansion_projection_covers_frame_occurrence_and_boundary_topolo
             with_frame,
             with_other_frame_path,
             with_occurrence,
-            with_boundary,
         )
     }
-    assert len(digests) == 5
+    assert len(digests) == 4
+
+
+def test_memory_expansion_projection_has_no_boundary():
+    from agent_composer.compile.manifest import _memory_scope_topology
+
+    frame = MemoryFrameRef("root", ("root",), MemoryOwner.FLOW)
+    scope = MemoryScope("root", ("root", "nested", "body"), frame_stack=(frame,))
+    assert sorted(_memory_scope_topology(scope, "scope")) == [
+        "frame_stack", "occurrence_path", "static_path",
+    ]
 
 
 def test_case_predicate_origins_do_not_affect_program_or_expansion_identity():

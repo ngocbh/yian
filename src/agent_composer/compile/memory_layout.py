@@ -16,7 +16,6 @@ from agent_composer.compile.model import END_ID, START_ID, CompiledFlow, Flow
 from agent_composer.diagnostics import OriginRef
 from agent_composer.memory.contracts import (
     MemoryBoundary,
-    MemoryBoundaryKind,
     MemoryFrameRef,
     MemoryFrameSpec,
     MemoryOccurrenceSegment,
@@ -499,7 +498,6 @@ def _resolve_enabled_flow(
     active_flows.add(flow_identity)
     try:
         flow_policy = _flow_policy(flow)
-        flow_frame: MemoryFrameRef | None = None
         frame_stack = inherited_frames
         if flow_policy is not None:
             _validate_memory_flow_boundaries(flow, policy=flow_policy)
@@ -525,12 +523,6 @@ def _resolve_enabled_flow(
                 frames.append(_resolved_frame(agent_policy, agent_frame))
                 node_frames = (*node_frames, agent_frame)
 
-            boundary: MemoryBoundary | None = None
-            if flow_frame is not None and node_id == flow.start_id:
-                boundary = MemoryBoundary(MemoryBoundaryKind.START, flow_frame)
-            elif flow_frame is not None and node_id == flow.end_id:
-                boundary = MemoryBoundary(MemoryBoundaryKind.END, flow_frame)
-
             targets.append(
                 ResolvedMemoryTarget(
                     locator=node_locator,
@@ -538,7 +530,6 @@ def _resolve_enabled_flow(
                         root_flow_id=root_flow_id,
                         static_path=node_path,
                         frame_stack=node_frames,
-                        boundary=boundary,
                     ),
                     node=node,
                 )

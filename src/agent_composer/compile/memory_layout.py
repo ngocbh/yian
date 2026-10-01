@@ -556,7 +556,11 @@ def _canonical_json(value: object) -> str:
 def _memory_table(
     declared: list[tuple[MemoryDecl, tuple[str, ...] | None]],
 ) -> tuple[ResolvedMemory, ...]:
-    """Group reachable declarations by key and enforce one type and config."""
+    """Group reachable declarations by key and enforce the per-key rules.
+
+    Each key has one type and config. A session key has exactly one owner, an
+    AGENT, and an AGENT owns at most one session key.
+    """
     by_key: dict[str, list[tuple[MemoryDecl, tuple[str, ...] | None]]] = {}
     for decl, placement in declared:
         by_key.setdefault(decl.key, []).append((decl, placement))
@@ -584,6 +588,24 @@ def _memory_table(
         for decl in declarations:
             by_site.setdefault(decl.site, decl)
         ordered = list(by_site.values())
+        if first.type == "session":
+            flow_decl = next((d for d in ordered if d.site.node is None), None)
+            if flow_decl is not None:
+                raise _setup_error(
+                    f"session memory {key!r} cannot be declared on a flow "
+                    f"({_site_label(flow_decl.site)}); declare it on one AGENT",
+                    origin=flow_decl.origin,
+                )
+            if len(ordered) > 1:
+                error = _setup_error(
+                    f"session memory {key!r} has more than one owner: "
+                    + ", ".join(_site_label(d.site) for d in ordered)
+                    + "; give each AGENT its own session memory",
+                    origin=ordered[0].origin,
+                )
+                for decl in ordered[1:]:
+                    _note(error, f"also owned at {_site_label(decl.site)}")
+                raise error
         owners = tuple(decl.site for decl in ordered)
         table.append(
             ResolvedMemory(
@@ -598,6 +620,20 @@ def _memory_table(
                 origins=tuple(decl.origin for decl in ordered),
             )
         )
+    sessions_by_agent: dict[DeclSite, list[ResolvedMemory]] = {}
+    for memory in table:
+        if memory.type == "session":
+            sessions_by_agent.setdefault(memory.owners[0], []).append(memory)
+    for site, sessions in sessions_by_agent.items():
+        if len(sessions) > 1:
+            error = _setup_error(
+                f"{_site_label(site)} declares more than one session memory: "
+                + ", ".join(repr(memory.key) for memory in sessions),
+                origin=sessions[0].origin,
+            )
+            for memory in sessions[1:]:
+                _note(error, f"also declares {memory.key!r}")
+            raise error
     return tuple(table)
 
 

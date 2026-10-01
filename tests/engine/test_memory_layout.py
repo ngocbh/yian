@@ -544,3 +544,71 @@ def test_disabled_layout_has_an_empty_key_table() -> None:
     layout = resolve_memory_layout(flow)
     assert layout.memories == ()
     assert memory_stacks(layout) == ()
+
+
+_SESSION_CALLS = """id: calls
+name: calls
+defs:
+  body:
+    nodes:
+      ask:
+        kind: agent
+        long_term_memory: session
+        prompt: answer
+        output: str
+    output: ${ask.output}
+nodes:
+  a: {kind: call, call: body}
+  b: {kind: call, call: body}
+output: ${[a.output, b.output]}
+"""
+
+
+def test_session_def_called_twice_has_one_owner_and_two_placements() -> None:
+    (memory,) = resolve_memory_layout(load_flow(_SESSION_CALLS).compiled).memories
+    assert memory.owners == (DeclSite((), ("def", "body"), "ask"),)
+    assert memory.conversation_eligible is True
+    assert memory.placements == (("a", "ask"), ("b", "ask"))
+
+
+def test_flow_level_session_is_a_setup_error() -> None:
+    source = (
+        "id: flat\nname: flat\nlong_term_memory: session\nnodes:\n"
+        "  ask:\n    kind: agent\n    prompt: hi\n    output: str\n"
+        "output: ${ask.output}\n"
+    )
+    with pytest.raises(
+        MemorySetupError, match="session memory 'session' cannot be declared on a flow"
+    ):
+        resolve_memory_layout(load_flow(source).compiled)
+
+
+def test_session_key_with_two_agent_owners_is_a_setup_error() -> None:
+    source = (
+        "id: pair\nname: pair\nnodes:\n"
+        "  left:\n    kind: agent\n    long_term_memory: session\n"
+        "    prompt: hi\n    output: str\n"
+        "  right:\n    kind: agent\n    long_term_memory: session\n"
+        "    prompt: hi\n    output: str\n"
+        "output: ${[left.output, right.output]}\n"
+    )
+    with pytest.raises(
+        MemorySetupError, match="session memory 'session' has more than one owner"
+    ) as caught:
+        resolve_memory_layout(load_flow(source).compiled)
+    assert "AGENT 'left'" in str(caught.value) and "AGENT 'right'" in str(caught.value)
+    assert caught.value.__notes__ == ["also owned at root AGENT 'right'"]
+
+
+def test_flow_level_session_in_an_uncalled_def_is_not_an_error() -> None:
+    source = (
+        "id: spare\nname: spare\ndefs:\n"
+        "  unused:\n    long_term_memory: session\n    nodes:\n"
+        "      ask:\n        kind: agent\n        prompt: hi\n        output: str\n"
+        "    output: ${ask.output}\n"
+        "nodes:\n  ask:\n    kind: agent\n    long_term_memory: episodic\n"
+        "    prompt: hi\n    output: str\n"
+        "output: ${ask.output}\n"
+    )
+    layout = resolve_memory_layout(load_flow(source).compiled)
+    assert [memory.key for memory in layout.memories] == ["episodic"]

@@ -9,12 +9,15 @@ private compiled graph.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Iterator
 
 from agent_composer.compile.model import END_ID, START_ID, CompiledFlow, Flow
 from agent_composer.diagnostics import OriginRef
 from agent_composer.memory.contracts import (
+    DeclSite,
+    JsonObject,
     MemoryDecl,
     MemoryFrameRef,
     MemoryFrameSpec,
@@ -22,6 +25,8 @@ from agent_composer.memory.contracts import (
     MemoryOwner,
     MemoryScope,
     MemorySetupError,
+    MemorySpec,
+    MemoryStack,
 )
 from agent_composer.nodes.agent import AgentNode
 from agent_composer.nodes.base import Node
@@ -135,6 +140,57 @@ class ResolvedMemoryFrame:
 
 
 @dataclass(frozen=True, slots=True)
+class ResolvedMemory:
+    """One reachable memory key with its owners and AGENT placements.
+
+    ``placements`` lists the locators of AGENT targets whose own declarations
+    include the key; the run-setup session check reads it. ``origins`` aligns
+    with ``owners`` and serves diagnostics only.
+    """
+
+    key: str
+    type: str
+    config: JsonObject
+    owners: tuple[DeclSite, ...]
+    conversation_eligible: bool
+    placements: tuple[tuple[str, ...], ...]
+    origins: tuple[OriginRef | None, ...] = field(compare=False)
+
+    def __post_init__(self) -> None:
+        """Validate through ``MemorySpec`` and pin a private config copy."""
+        spec = MemorySpec(
+            self.key, self.type, self.config, self.owners, self.conversation_eligible
+        )
+        object.__setattr__(self, "config", spec.config)
+        object.__setattr__(self, "owners", spec.owners)
+        if type(self.placements) is not tuple or any(
+            type(locator) is not tuple
+            or not locator
+            or any(type(part) is not str or not part for part in locator)
+            for locator in self.placements
+        ):
+            raise ValueError("placements must be a tuple of non-empty string locators")
+        if list(self.placements) != sorted(set(self.placements)):
+            raise ValueError("placements must be sorted and unique")
+        if type(self.origins) is not tuple or len(self.origins) != len(self.owners):
+            raise ValueError("origins must align with owners")
+        if any(o is not None and not isinstance(o, OriginRef) for o in self.origins):
+            raise TypeError("origins must hold OriginRef values or None")
+
+    @property
+    def spec(self) -> MemorySpec:
+        """Return the record-facing table entry."""
+        return MemorySpec(
+            self.key, self.type, self.config, self.owners, self.conversation_eligible
+        )
+
+    @property
+    def origin(self) -> OriginRef | None:
+        """Return the first owner's origin, where key-level errors point."""
+        return self.origins[0]
+
+
+@dataclass(frozen=True, slots=True)
 class ResolvedMemoryTarget:
     """One exact static node target and the scope it must receive."""
 
@@ -163,6 +219,7 @@ class ResolvedMemoryLayout:
     root_flow_id: str | None
     frames: tuple[ResolvedMemoryFrame, ...]
     targets: tuple[ResolvedMemoryTarget, ...]
+    memories: tuple[ResolvedMemory, ...] = ()
 
     def __post_init__(self) -> None:
         """Validate exact immutable layout containers."""
@@ -205,6 +262,15 @@ class ResolvedMemoryLayout:
                     raise ValueError(
                         f"targets[{index}] scope root_flow_id must match the layout"
                     )
+        if type(self.memories) is not tuple or any(
+            type(memory) is not ResolvedMemory for memory in self.memories
+        ):
+            raise TypeError("memories must be a tuple of ResolvedMemory values")
+        keys = [memory.key for memory in self.memories]
+        if keys != sorted(set(keys)):
+            raise ValueError("memories must be sorted and unique by key")
+        if self.root_flow_id is None and self.memories:
+            raise ValueError("a disabled memory layout cannot contain memories")
 
     @property
     def enabled(self) -> bool:
@@ -229,6 +295,7 @@ def _revalidate_resolved_layout(layout: ResolvedMemoryLayout) -> None:
         root_flow_id=layout.root_flow_id,
         frames=layout.frames,
         targets=layout.targets,
+        memories=layout.memories,
     )
 
 
@@ -464,6 +531,93 @@ def _resolved_frame(
     )
 
 
+def _site_label(site: DeclSite) -> str:
+    """Render one declaration site for diagnostics."""
+    label = "/".join(site.owner)
+    return label if site.node is None else f"{label} AGENT {site.node!r}"
+
+
+def _note(error: BaseException, text: str) -> None:
+    """Attach one note; ``BaseException.add_note`` is new in Python 3.11."""
+    notes = getattr(error, "__notes__", None)
+    if notes is None:
+        notes = []
+        error.__notes__ = notes
+    notes.append(text)
+
+
+def _canonical_json(value: object) -> str:
+    """Encode one JSON value for exact comparison, so ``1``, ``1.0`` and ``true`` differ."""
+    return json.dumps(
+        value, sort_keys=True, ensure_ascii=False, allow_nan=False, separators=(",", ":")
+    )
+
+
+def _memory_table(
+    declared: list[tuple[MemoryDecl, tuple[str, ...] | None]],
+) -> tuple[ResolvedMemory, ...]:
+    """Group reachable declarations by key and enforce one type and config."""
+    by_key: dict[str, list[tuple[MemoryDecl, tuple[str, ...] | None]]] = {}
+    for decl, placement in declared:
+        by_key.setdefault(decl.key, []).append((decl, placement))
+    table: list[ResolvedMemory] = []
+    for key in sorted(by_key):
+        entries = by_key[key]
+        # Stable sort: declarations at one site keep walk order.
+        declarations = sorted((decl for decl, _ in entries), key=lambda decl: decl.site.sort_key())
+        first = declarations[0]
+        first_config = _canonical_json(first.config)
+        conflicts = [
+            decl for decl in declarations[1:]
+            if decl.type != first.type or _canonical_json(decl.config) != first_config
+        ]
+        if conflicts:
+            error = _setup_error(
+                f"memory {key!r} is declared with different type or config "
+                f"at {_site_label(first.site)} and {_site_label(conflicts[0].site)}",
+                origin=first.origin,
+            )
+            for decl in declarations[1:]:
+                _note(error, f"also declared at {_site_label(decl.site)}")
+            raise error
+        by_site: dict[DeclSite, MemoryDecl] = {}
+        for decl in declarations:
+            by_site.setdefault(decl.site, decl)
+        ordered = list(by_site.values())
+        owners = tuple(decl.site for decl in ordered)
+        table.append(
+            ResolvedMemory(
+                key=key,
+                type=first.type,
+                config=first.config,
+                owners=owners,
+                conversation_eligible=len(owners) == 1 and owners[0].node is not None,
+                placements=tuple(
+                    sorted({p for _, p in entries if p is not None})
+                ),
+                origins=tuple(decl.origin for decl in ordered),
+            )
+        )
+    return tuple(table)
+
+
+def memory_stacks(layout: ResolvedMemoryLayout) -> tuple[MemoryStack, ...]:
+    """Return every scoped target's key stack, sorted by locator."""
+    _revalidate_resolved_layout(layout)
+    if not layout.enabled:
+        return ()
+    key_by_ref = {frame.spec.ref: frame.spec.policy_name for frame in layout.frames}
+    stacks = []
+    for target in layout.targets:
+        keys: list[str] = []
+        for ref in target.scope.frame_stack:
+            key = key_by_ref[ref]
+            if key not in keys:
+                keys.append(key)
+        stacks.append(MemoryStack(target.locator, tuple(keys)))
+    return tuple(sorted(stacks, key=lambda stack: stack.locator))
+
+
 def _resolve_enabled_flow(
     flow: Flow,
     *,
@@ -473,6 +627,7 @@ def _resolve_enabled_flow(
     inherited_frames: tuple[MemoryFrameRef, ...],
     frames: list[ResolvedMemoryFrame],
     targets: list[ResolvedMemoryTarget],
+    declared: list[tuple[MemoryDecl, tuple[str, ...] | None]],
     active_flows: set[int],
     owner_origin: OriginRef | None = None,
 ) -> None:
@@ -495,6 +650,7 @@ def _resolve_enabled_flow(
                 owner=MemoryOwner.FLOW,
             )
             frames.append(_resolved_frame(flow_policy, flow_frame))
+            declared.append((flow_policy, None))
             frame_stack = (*frame_stack, flow_frame)
 
         for node_id, node in _flow_nodes(flow, origin=owner_origin):
@@ -509,6 +665,7 @@ def _resolve_enabled_flow(
                     owner=MemoryOwner.AGENT,
                 )
                 frames.append(_resolved_frame(agent_policy, agent_frame))
+                declared.append((agent_policy, node_locator))
                 node_frames = (*node_frames, agent_frame)
 
             targets.append(
@@ -533,6 +690,7 @@ def _resolve_enabled_flow(
                     inherited_frames=frame_stack,
                     frames=frames,
                     targets=targets,
+                    declared=declared,
                     active_flows=active_flows,
                     owner_origin=node.origin,
                 )
@@ -572,6 +730,7 @@ def resolve_memory_layout(flow: CompiledFlow) -> ResolvedMemoryLayout:
 
     frames: list[ResolvedMemoryFrame] = []
     targets: list[ResolvedMemoryTarget] = []
+    declared: list[tuple[MemoryDecl, tuple[str, ...] | None]] = []
     _resolve_enabled_flow(
         flow,
         root_flow_id=root_flow_id,
@@ -580,12 +739,14 @@ def resolve_memory_layout(flow: CompiledFlow) -> ResolvedMemoryLayout:
         inherited_frames=(),
         frames=frames,
         targets=targets,
+        declared=declared,
         active_flows=set(),
     )
     return ResolvedMemoryLayout(
         root_flow_id=root_flow_id,
         frames=tuple(frames),
         targets=tuple(targets),
+        memories=_memory_table(declared),
     )
 
 
@@ -662,9 +823,11 @@ def apply_memory_layout(
 
 
 __all__ = [
+    "ResolvedMemory",
     "ResolvedMemoryFrame",
     "ResolvedMemoryLayout",
     "ResolvedMemoryTarget",
     "apply_memory_layout",
+    "memory_stacks",
     "resolve_memory_layout",
 ]

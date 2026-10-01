@@ -9,6 +9,7 @@ import pytest
 from agent_composer.compile.manifest import flow_fingerprint, flow_manifest
 from agent_composer.compile.memory_layout import (
     apply_memory_layout,
+    memory_stacks,
     resolve_memory_layout,
 )
 from agent_composer.compile.model import END_ID, START_ID, CompiledFlow
@@ -458,3 +459,88 @@ def test_flow_frame_spec_retains_config_and_origin_outside_node_scopes() -> None
         MemoryOwner.FLOW,
     )
     assert not hasattr(inner.spec, "origin")
+
+
+def test_layout_records_key_table_with_sorted_owners_and_placements() -> None:
+    source = _NESTED.replace("long_term_memory: local", "long_term_memory: outer")
+    layout = resolve_memory_layout(load_flow(source).compiled)
+
+    assert [
+        (m.key, m.type, m.config, m.owners, m.conversation_eligible, m.placements)
+        for m in layout.memories
+    ] == [
+        ("inner", "inner", {"limit": 3}, (DeclSite((), ("def", "child"), None),), False, ()),
+        (
+            "outer",
+            "outer",
+            {},
+            (DeclSite((), ("def", "child"), "answer"), DeclSite((), ("root",), None)),
+            False,
+            (("invoke", "answer"),),
+        ),
+    ]
+    assert layout.memories[1].spec.owners == layout.memories[1].owners
+
+
+def test_memory_stacks_dedupe_a_repeated_key_at_its_outermost_position() -> None:
+    source = _NESTED.replace("long_term_memory: local", "long_term_memory: outer")
+    layout = resolve_memory_layout(load_flow(source).compiled)
+
+    stacks = memory_stacks(layout)
+    by_locator = {stack.locator: stack.memories for stack in stacks}
+    assert [stack.locator for stack in stacks] == sorted(by_locator)
+    assert set(by_locator) == {target.locator for target in layout.targets}
+    assert by_locator[("invoke",)] == ("outer",)
+    assert by_locator[("invoke", "normalize")] == ("outer", "inner")
+    assert by_locator[("invoke", "answer")] == ("outer", "inner")
+
+
+def test_single_agent_owner_is_conversation_eligible() -> None:
+    flow = load_flow(
+        "id: one\nname: one\nnodes:\n  ask:\n    kind: agent\n"
+        "    long_term_memory: chat\n    prompt: hi\n    output: str\n"
+        "output: ${ask.output}\n"
+    ).compiled
+    (memory,) = resolve_memory_layout(flow).memories
+    assert memory.owners == (DeclSite((), ("root",), "ask"),)
+    assert memory.conversation_eligible is True
+    assert memory.placements == (("ask",),)
+
+
+def test_one_key_with_two_configs_is_a_setup_error_at_the_first_site() -> None:
+    source = _NESTED.replace(
+        "long_term_memory: local", "long_term_memory: {name: inner, config: {limit: 4}}"
+    )
+    with pytest.raises(MemorySetupError, match="memory 'inner'.*different type or config") as caught:
+        resolve_memory_layout(load_flow(source).compiled)
+    assert caught.value.__notes__ == ["also declared at def/child AGENT 'answer'"]
+
+
+@pytest.mark.parametrize("other", [{"limit": True}, {"limit": 1.0}, {"limit": 2}])
+@pytest.mark.parametrize("same_site", [False, True])
+def test_memory_table_compares_configs_as_canonical_json(other, same_site) -> None:
+    from agent_composer.compile.memory_layout import _memory_table
+
+    root = DeclSite((), ("root",), None)
+    first = MemoryDecl("notes", "notes", {"limit": 1}, root)
+    clash = MemoryDecl("notes", "notes", other, root if same_site else DeclSite((), ("def", "x"), None))
+    with pytest.raises(MemorySetupError, match="memory 'notes' is declared with different type or config") as caught:
+        _memory_table([(first, None), (clash, None)])
+    assert len(caught.value.__notes__) == 1
+
+
+def test_memory_table_merges_identical_declarations_at_one_site() -> None:
+    from agent_composer.compile.memory_layout import _memory_table
+
+    site = DeclSite((), ("root",), None)
+    first = MemoryDecl("notes", "notes", {"limit": 1}, site)
+    again = MemoryDecl("notes", "notes", {"limit": 1}, site)
+    (memory,) = _memory_table([(first, None), (again, None), (first, None)])
+    assert memory.owners == (site,)
+
+
+def test_disabled_layout_has_an_empty_key_table() -> None:
+    flow = CompiledFlow({"plain": CodeNode("plain", code="return 1")}, [], wiring={"plain": {}})
+    layout = resolve_memory_layout(flow)
+    assert layout.memories == ()
+    assert memory_stacks(layout) == ()

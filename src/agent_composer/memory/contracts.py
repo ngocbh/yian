@@ -1083,6 +1083,73 @@ def _rewrite_memory_decl_origins(
 
 
 @dataclass(frozen=True, slots=True, init=False)
+class MemorySpec:
+    """One recorded memory: key, type, effective config, and owning sites."""
+
+    key: str
+    type: str
+    _config: _FrozenJsonObject = field(repr=False)
+    owners: tuple[DeclSite, ...]
+    conversation_eligible: bool
+
+    def __init__(
+        self,
+        key: str,
+        type: str,
+        config: JsonObject,
+        owners: tuple[DeclSite, ...],
+        conversation_eligible: bool,
+    ) -> None:
+        """Validate one table entry; eligibility must match its owners."""
+        object.__setattr__(self, "key", _require_string(key, "key"))
+        object.__setattr__(self, "type", _require_string(type, "type"))
+        frozen = _freeze_json_object(config, "config")
+        _reject_private_memory_keys(frozen, "config")
+        object.__setattr__(self, "_config", frozen)
+        if owners.__class__ is not tuple:
+            raise TypeError("owners must be a tuple")
+        if not owners:
+            raise ValueError("owners must be non-empty")
+        copied = []
+        for owner in owners:
+            if owner.__class__ is not DeclSite:
+                raise TypeError("owners items must be DeclSite values")
+            copied.append(DeclSite(owner.scope, owner.owner, owner.node))
+        keys = [owner.sort_key() for owner in copied]
+        if keys != sorted(set(keys)):
+            raise ValueError("owners must be sorted and unique by DeclSite.sort_key()")
+        object.__setattr__(self, "owners", tuple(copied))
+        if conversation_eligible.__class__ is not bool:
+            raise TypeError("conversation_eligible must be a boolean")
+        expected = len(copied) == 1 and copied[0].node is not None
+        if conversation_eligible != expected:
+            raise ValueError(
+                "conversation_eligible must be true exactly for one AGENT owner"
+            )
+        object.__setattr__(self, "conversation_eligible", conversation_eligible)
+
+    @property
+    def config(self) -> JsonObject:
+        """Return a fresh plain-JSON copy of the effective configuration."""
+        return _thaw_json_object(self._config)
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryStack:
+    """The ordered memory keys one static target recalls and learns into."""
+
+    locator: tuple[str, ...]
+    memories: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        """Require a non-empty locator and unique non-empty keys."""
+        _require_path(self.locator, "locator")
+        _require_path(self.memories, "memories", allow_empty=True)
+        if len(set(self.memories)) != len(self.memories):
+            raise ValueError("memories must be unique")
+
+
+@dataclass(frozen=True, slots=True, init=False)
 class MemoryFrameSpec:
     """Origin-free effective policy configuration for one memory frame."""
 

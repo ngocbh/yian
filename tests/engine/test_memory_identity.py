@@ -7,7 +7,7 @@ from dataclasses import FrozenInstanceError
 import pytest
 
 from agent_composer.diagnostics import OriginRef
-from agent_composer.memory import DeclSite, MemoryDecl
+from agent_composer.memory import DeclSite, MemoryDecl, MemorySpec, MemoryStack
 from agent_composer.memory.contracts import (
     _iter_memory_decl_origins,
     _rewrite_memory_decl_origins,
@@ -85,3 +85,31 @@ def test_memory_decl_origins_traverse_and_rewrite_shared_carriers_once() -> None
     _rewrite_memory_decl_origins((shared, other, shared), mapper, set())
     assert calls == ["a", "b"]
     assert shared.origin == OriginRef("mapped/a")
+
+
+def test_memory_spec_requires_sorted_owners_and_derived_eligibility() -> None:
+    agent = DeclSite((), ("root",), "ask")
+    flow = DeclSite((), ("root",), None)
+    spec = MemorySpec("chat", "session", {}, (agent,), True)
+    assert spec.conversation_eligible is True
+    assert MemorySpec("notes", "episodic", {}, (flow, agent), False).owners == (flow, agent)
+    with pytest.raises(ValueError, match="conversation_eligible"):
+        MemorySpec("chat", "session", {}, (flow,), True)
+    with pytest.raises(ValueError, match="conversation_eligible"):
+        MemorySpec("chat", "session", {}, (agent,), False)
+    with pytest.raises(ValueError, match="sorted and unique"):
+        MemorySpec("notes", "episodic", {}, (agent, flow), False)
+    with pytest.raises(ValueError, match="non-empty"):
+        MemorySpec("notes", "episodic", {}, (), False)
+    with pytest.raises(TypeError):
+        MemorySpec("notes", "episodic", {}, (agent,), 1)  # type: ignore[arg-type]
+
+
+def test_memory_stack_requires_locator_and_unique_keys() -> None:
+    stack = MemoryStack(("child", "ask"), ("notes", "chat"))
+    assert stack.memories == ("notes", "chat")
+    assert MemoryStack(("plain",), ()).memories == ()
+    with pytest.raises(ValueError):
+        MemoryStack((), ("notes",))
+    with pytest.raises(ValueError, match="unique"):
+        MemoryStack(("ask",), ("notes", "notes"))

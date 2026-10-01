@@ -81,7 +81,7 @@ has ordered messages and may have turn-dependent fields alongside them.
           <div class="ac-request-system-content">
             <div class="ac-request-content-block">
               <strong>System instruction</strong>
-              <span>Framework instruction for the AGENT node</span>
+              <span>Rendered <code>system_prompt:</code>, or the framework instruction</span>
             </div>
             <div class="ac-request-memory">
               <div class="ac-request-memory-title">
@@ -226,6 +226,7 @@ the usage received so far. Each tool call the interrupt skipped is reported as a
 | --- | --- |
 | Node `input:` | Binds the local values available to prompt rendering and memory recall. It is not independently dumped into a message. |
 | AGENT `variables:` | Supplies typed local defaults to prompt rendering. Each invocation receives a fresh copy; see [agent-owned variables](syntax.md#agent-owned-variables). |
+| `system_prompt:` | Renders local `${name}` values into the system instruction, replacing the framework instruction. See [system prompt](syntax.md#system-prompt-system_prompt). |
 | `prompt:` | Renders local `${name}` values into the initial `HumanMessage`. |
 | `long_term_memory:` plus host `memory={...}` | Supplies one memory context: recalled notes become labelled system sections; a session transcript contributes structured prior messages. |
 | `tools: [name, ...]` | Resolves the granted ids from the run's tools (registered tools, or the host's `tools=` mapping) and binds their schemas beside the messages in `tool_calling` mode. A name may be a host-filled tool group, which expands to its tools. |
@@ -234,12 +235,14 @@ the usage received so far. Each tool call the interrupt skipped is reported as a
 | `steerable: true` plus host `steering=` | In `tool_calling` mode, sends the host's queued steer messages as `HumanMessage`s with the next model request, and stops the loop on a host interrupt; the node succeeds with its text so far. See [steering a running agent](syntax.md#steering-a-running-agent-steerable). |
 | `mode:`, `llm_config:`, `retries:`, `env:` | Controls execution; these values are not additional prompt messages. |
 
-The framework system instruction is fixed today, apart from the skill listing
-that granted `skills:` add to it. The memory context is opened with the
-instruction without the listing, so recall does not change. A session transcript
-keeps past `load_skill` calls and results, like any tool call, even if a later run
-grants no skills. Authored `system_prompt:` is tracked in
-[#259](https://github.com/ngocbh/agent-composer/issues/259).
+The system instruction is the rendered `system_prompt:` when the node has one,
+and the framework instruction otherwise. An authored prompt replaces the framework
+instruction rather than extending it. The skill listing that granted `skills:` add
+follows it, then recalled memory sections. Every model request of the node, in
+either mode and for structured generation, starts with this same instruction. The
+memory context is opened with the instruction without the listing, so skill grants
+do not change recall. A session transcript keeps past `load_skill` calls and
+results, like any tool call, even if a later run grants no skills.
 
 ### Memory is an outer-to-local stack
 
@@ -436,9 +439,7 @@ threading a carried record.
 
 An AGENT grants tools by id (registered, or passed per run with `tools=`) with
 `tools:` and host-supplied `SKILL.md` packages with `skills:`. Host-controlled
-discovery of project-local tools is tracked separately. Authored
-`system_prompt:` is not valid Agent Composer YAML until
-[#259](https://github.com/ngocbh/agent-composer/issues/259) lands.
+discovery of project-local tools is tracked separately.
 
 ## The authored structure stays fixed
 

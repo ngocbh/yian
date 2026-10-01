@@ -358,8 +358,10 @@ model calls. It still presents accepted history to every enabled memory frame,
 including frames with empty or unexecuted histories. With effective feedback,
 each reached AGENT makes at most one tool-free model call using its retained
 rendered prompt, inputs, local variables/domains, accepted evidence, and recorded
-effective model configuration. Tool interactions in that evidence are inert
-data. No prompt/default/recall is evaluated again, and variable feedback does not
+effective model configuration. The evidence includes the system prompt the model
+received: the rendered [`system_prompt:`](syntax.md#system-prompt-system_prompt),
+or the framework instruction when the node has none, with any skill listing.
+Tool interactions in that evidence are inert data. No prompt/default/recall is evaluated again, and variable feedback does not
 update variables, model configuration, or the graph.
 
 Known callback/result failures return a failed outcome without partial root
@@ -827,7 +829,8 @@ directly should read `.text` when it only needs notes.
 The API adapter's compatibility descriptor contains the resolved provider and
 versioned message format. Compatible model, prompt, and tool-grant changes keep
 history; changing provider or message format requires explicit reset. Every call
-uses current instructions, recall, and tool grants. Historical system/developer
+uses current instructions (the node's rendered `system_prompt:` or the framework
+instruction), recall, and tool grants. Historical system/developer
 instructions are not reinstated as current instructions.
 
 ### API history summaries

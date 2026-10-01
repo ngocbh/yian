@@ -105,7 +105,7 @@ Allowed only for the **leaf kinds** (`agent`, `code`, `model`, `tool`,
 | `${input.X}` | field `X` of the flow input |
 | `${node.output}` | node `node`'s whole (typed) value |
 | `${node.output.field}` | dot into an object value |
-| `${name}` (bare) | a local input inside `prompt:` or `case` `when:`; AGENT prompts also see their own `variables:` |
+| `${name}` (bare) | a local input inside `prompt:`, an AGENT `system_prompt:`, or `case` `when:`; AGENT prompts also see their own `variables:` |
 
 A whole-string `${ref}` resolves to the **typed value**; embedded in surrounding
 text it is **stringified**.
@@ -196,6 +196,14 @@ returns its bare tag to the flow.
 Use a downstream `code`/`model` node only for deterministic post-processing. To give
 an AGENT node ordinary tools: `tools: [tool_id, ...]` (requires `mode: tool_calling`).
 A `tools:` name may also be a host-filled tool group (see "Tool groups" below).
+To set who the model is: `system_prompt: "You are ${name}, ${title}."`. It
+**replaces** the framework's default system instruction (omit it to keep the default)
+and renders like `prompt:` — bare local inputs and the node's own `variables:`, with
+located load errors for unknown names. Granted skills, then recalled memory, append
+after it. Every model request of the node (plain, tool rounds, structured generation)
+uses it; it is part of the flow fingerprint, and with `learnable=True` the rendered text
+is recorded for backward. Compact flows accept it at the top level; there is no
+flow-level default.
 To give it host-supplied Claude/Codex skills: `skills: [skill-name, ...]` or
 `skills: all` (requires `mode: tool_calling`). The system message lists each
 granted skill's name and description; the model calls the built-in
@@ -566,8 +574,8 @@ named child flow and synthesizes a CALL node; `kind: call` + `nodes:` defines a
 one-off child's body on that node.
 
 ## Prompt names are local
-Inside a `prompt:` use names from the node's own `input:` block, written bare
-(`${name}`). An AGENT prompt also sees its own `variables:`. Pool references (`${input.x}`,
+Inside a `prompt:` or an AGENT `system_prompt:` use names from the node's own `input:`
+block, written bare (`${name}`). An AGENT prompt also sees its own `variables:`. Pool references (`${input.x}`,
 `${other.output}`) go in the `input:` block — bind there, then use the local name
 in the prompt.
 
@@ -617,7 +625,7 @@ starts, and a `human_input` node fails when it asks. There is no authored
 - [ ] Every data dependency uses `${...}` in `input:`; ordering-only dependencies use `depends_on:` or `runs_after:`.
 - [ ] Every `agent` `output:` is typed — bare `str` for free text, or a
   `Literal[...]`/other supported shape for structured generation.
-- [ ] Every prompt references local inputs or, for an AGENT, its own declared variables.
+- [ ] Every `prompt:` and `system_prompt:` references local inputs or, for an AGENT, its own declared variables.
 - [ ] Every variable has a typed default and a name distinct from local inputs.
 - [ ] Every `long_term_memory:` declaration is on a flow or `agent`, selects a host-registered memory policy by name, and contains only public behavior config.
 - [ ] Each `case` has an `else:` (or its `Literal` cases are exhaustive); branches are joined with `|`.

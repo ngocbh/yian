@@ -392,6 +392,15 @@ The stable owner is `(execution_scope.static_path, variable.name)`, so repeated
 MAP/LOOP occurrences retain one authored owner and distinct callsites retain
 distinct owners. This declaration inventory does not itself activate backward.
 
+`AgentNode.system_prompt` is an optional template. When set, AGENT renders it
+from the same inputs-plus-variables record as the prompt, and the result replaces
+`DEFAULT_SYSTEM`; when `None`, the mode receives `DEFAULT_SYSTEM` unchanged. The
+skill listing and then memory sections append after this effective system prompt,
+and every mode (plain, tool calling, structured generation) sends it. It is recorded
+as `EvaluationEvidence.base_system_prompt`, so backward and recovery read what the
+model saw. The manifest includes the template only when set, so flows without one
+keep their fingerprints.
+
 `TypeCheckError.path` contains only contract-relative record names and actual list
 indices. A supplied-value rejection resolves that path through `ContractOrigins`
 (exact, nearest ancestor, then default) before falling back to the parameter
@@ -920,8 +929,9 @@ in it. `FlowEngine(skills=...)` treats the mapping as opaque. The evaluator pass
 it only to nodes whose `needs_skills` trait is `True` (`AgentNode`), so runtime
 stays kind-blind.
 
-The AGENT renders the sorted listing into `base_system_prompt`. The memory context
-still opens with `DEFAULT_SYSTEM`, so recall queries do not change. The AGENT
+The AGENT renders the sorted listing into `base_system_prompt`, after the effective
+system prompt. The memory context opens with the effective system prompt without
+the listing, so skill grants do not change recall queries. The AGENT
 serves `load_skill` calls through the same `invoke_tool_effect` path as registered
 tools and records each result as evidence. A non-empty grant is AGENT execution
 identity (`sorted(names)` or `"all"`); an empty grant is omitted so older

@@ -44,7 +44,7 @@ class AgentRunContext:
     toolset: ToolSet = field(default_factory=ToolSet)  # the run's tools and groups; `tools` grants from it
     emit_stream: Callable[[Any], None] | None = None  # transient text sink; absent = no streaming
     emit_event: Callable[[Any], None] | None = None  # transient in-loop observer sink
-    base_system_prompt: str = DEFAULT_SYSTEM  # tool_calling system text before memory; lists skills
+    base_system_prompt: str = DEFAULT_SYSTEM  # authored or default system text plus skills; memory follows
     skills: tuple[Skill, ...] = ()  # granted skills served by `load_skill`, sorted by name
     steering: Steering | None = None  # host inbox; present only for a steerable node
 

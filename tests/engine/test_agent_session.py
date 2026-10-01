@@ -261,15 +261,18 @@ def test_adapter_memory_faults_are_distinct_from_provider_failures(stage):
 
 
 def test_compatible_model_and_prompt_changes_retain_history_with_current_system(monkeypatch):
-    from agent_composer.nodes.agent.modes import plain as plain_module
     model = _Model([AIMessage(content="one"), AIMessage(content="two")])
     configs = []
     monkeypatch.setattr(llm_clients, "model_from_config", lambda config: configs.append(config) or model)
     memory = SessionMemory()
-    monkeypatch.setattr(plain_module, "DEFAULT_SYSTEM", "old system instructions")
-    run_flow(load_flow(_FLOW), {"question": "first"}, memory={"session": memory})
-    monkeypatch.setattr(plain_module, "DEFAULT_SYSTEM", "current system instructions")
-    changed = _FLOW.replace("test-model", "different-model").replace("prompt: ${question}", "prompt: changed ${question}")
+    system = "    mode: plain\n    system_prompt: {}\n"
+    original = _FLOW.replace("    mode: plain\n", system.format("old system instructions"))
+    run_flow(load_flow(original), {"question": "first"}, memory={"session": memory})
+    changed = (
+        _FLOW.replace("test-model", "different-model")
+        .replace("prompt: ${question}", "prompt: changed ${question}")
+        .replace("    mode: plain\n", system.format("current system instructions"))
+    )
     run_flow(load_flow(changed), {"question": "second"}, memory={"session": memory})
     assert configs[-1]["model"] == "different-model"
     assert [message.content for message in model.calls[-1]] == [

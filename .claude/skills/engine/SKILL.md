@@ -59,6 +59,9 @@ this model whenever you design anything:
   rendering requires no scope. Include nonempty declarations in manifests and
   their origins in AGENT's existing traversal hooks. This inventory does not
   activate backward or modify model configuration.
+- `AgentNode.system_prompt` is an optional template rendered from the same
+  record as the prompt; it replaces `DEFAULT_SYSTEM` on every model path, with
+  skills and then memory appended after it. Keep it out of manifests when unset.
 - Nodes own local origin enumeration/rewrite and expose static children through
   `origin_children()`. `compile.origins` combines those hooks with flow wiring
   and outputs, rewriting an isolated copy by identity and returning a finalized
@@ -357,8 +360,9 @@ Most are just the functional model (above) made enforceable:
   `SKILL.md` skills enter the same way as memory: `run_flow(skills=...)` ->
   `FlowEngine(skills=...)` -> the evaluator caps only nodes with
   `needs_skills = True`; the AGENT serves `load_skill` like a registered tool
-  and records each result as evidence. The memory context still opens with
-  `DEFAULT_SYSTEM`.
+  and records each result as evidence. The memory context opens with the
+  effective system prompt (rendered `system_prompt` or `DEFAULT_SYSTEM`) without
+  the skill listing.
   A host steering inbox follows the same path: `run_flow(steering=...)` ->
   `FlowEngine(steering=...)` -> the evaluator caps only nodes with
   `needs_steering is True` (an AGENT authored `steerable: true`). The

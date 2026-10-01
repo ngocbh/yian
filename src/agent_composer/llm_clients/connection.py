@@ -46,33 +46,48 @@ class ConnectionSnapshot:
         effective: dict[str, dict[str, Any]],
         *,
         host_key_provider: str | None = None,
+        host_base_url: str | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Attach selected connection identity without changing any input maps.
 
         Agents of ``host_key_provider`` authenticate with a key the host supplies
         outside the map. Each records the nonsecret ``HOST_KEY_MARKER``, and an
         OpenAI agent records a ``host`` connection instead of the saved or
-        environment one.
+        environment one. ``host_base_url``, the endpoint the host gave with that
+        key, is recorded on those agents only, and is the OpenAI host
+        connection's endpoint.
         """
         result = copy.deepcopy(effective)
         for config in result.values():
             if config["provider"] == host_key_provider:
                 config[HOST_KEY_MARKER] = True
+                if host_base_url is not None:
+                    config["base_url"] = host_base_url
                 if config["provider"] == "openai":
-                    config["_connection"] = self.host_connection()
+                    config["_connection"] = self.host_connection(host_base_url)
                 continue
             connection = self.connections.get(config["provider"])
             if connection is not None:
                 config["_connection"] = copy.deepcopy(connection)
         return result
 
-    def host_connection(self) -> dict[str, Any]:
-        """Return the nonsecret identity of an OpenAI key supplied by the host."""
+    def host_connection(self, endpoint: str | None = None) -> dict[str, Any]:
+        """Return the nonsecret identity of an OpenAI key supplied by the host.
+
+        Args:
+            endpoint (`str | None`, *optional*, defaults to `None`):
+                The host's ``base_url`` for that key. `None` uses the snapshot's
+                API endpoint.
+
+        Returns:
+            `dict[str, Any]`: Validated connection metadata with source ``host``,
+                no credential identity, and that endpoint.
+        """
         return validate_connection({
             "method": "api_key",
             "source": "host",
             "credential_id": None,
-            "endpoint": self.api_endpoint,
+            "endpoint": self.api_endpoint if endpoint is None else endpoint,
             "store_path": None,
         })
 
@@ -191,7 +206,8 @@ def split_model_config(
 
     Raises:
         `AuthError`: The config carries ``HOST_KEY_MARKER`` but no ``api_key``.
-        `ValueError`: A public field or the metadata is invalid.
+        `ValueError`: A public field or the metadata is invalid, or ``base_url``
+            differs from the endpoint of its pinned host connection.
     """
     if isinstance(config, LLMConfig):
         raw = config.model_dump(exclude_none=True)
@@ -211,6 +227,11 @@ def split_model_config(
         if validated.provider != "openai":
             raise ValueError("Internal connection metadata requires provider openai")
         metadata = validate_connection(metadata)
+        if validated.base_url is not None and (
+            metadata["source"] != "host" or metadata["endpoint"] != validated.base_url
+        ):
+            # A base_url serves only the host key; it must match the pinned route.
+            raise ValueError("llm_config.base_url must match its host connection endpoint")
     return validated, metadata
 
 
@@ -238,7 +259,7 @@ def resolve_model_config(
     if metadata is not None:
         raw["_connection"] = metadata
     elif provider == "openai" and validated.api_key is not None:
-        raw["_connection"] = snapshot.host_connection()
+        raw["_connection"] = snapshot.host_connection(validated.base_url)
     elif provider in snapshot.connections:
         raw["_connection"] = copy.deepcopy(snapshot.connections[provider])
     return raw

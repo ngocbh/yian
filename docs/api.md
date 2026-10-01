@@ -161,6 +161,43 @@ terminal. Stored defaults are not coerced.
   the model configuration, so it always uses environment credentials.
   `ProfileMemory` accepts one in its own `llm_config`, with `provider`, and does not
   record it.
+
+  A `base_url` entry replaces the provider's default endpoint for the agents that
+  use the key, for example an Azure OpenAI resource's v1 surface:
+
+  ```python
+  llm_config={
+      "provider": "openai",
+      "model": "gpt-5.4",  # the Azure deployment name
+      "base_url": "https://<resource>.openai.azure.com/openai/v1/",
+      "api_key": key,
+  }
+  ```
+
+  A `base_url` decides where the key is sent, so it is accepted only beside
+  `api_key` (and `provider`) in this run layer. Flow files cannot set it at any
+  level, and a flow built in Python fails at run start if any layer has one, so an
+  edited flow cannot send the host key elsewhere. That guarantee covers authored
+  layers only. When the host passes `api_key` without `base_url`, the provider's
+  default endpoint or its environment variables (such as `OPENAI_BASE_URL`,
+  `VLLM_BASE_URL`, `ANTHROPIC_BASE_URL`, or `AZURE_OPENAI_ENDPOINT`) pick where the
+  key goes, as before; some clients read them on every call, so a resume follows
+  the environment at that time. A host that wants a fixed endpoint should pass
+  `base_url` with the key. It must be a lowercase `https://`
+  URL without credentials, query, or fragment; `http://` is allowed only for exactly
+  `localhost`, `127.0.0.1`, and `[::1]`. It is checked and used exactly as written:
+  whitespace, control characters, non-ASCII characters (write an international
+  host in its `xn--` form), a port outside 1–65535, and URLs over 2048 characters
+  are rejected, not normalised. The OpenAI-compatible providers, `anthropic`,
+  and `google` take it; `azure` and `ollama` reject it. A redirect from it does not
+  carry the key on: the `anthropic` and `google` clients do not follow redirects
+  from a `base_url`, and the OpenAI-compatible clients drop their `Authorization`
+  header on a redirect to another origin. It is not secret: the log
+  records it on the agents marked for the key, and an `openai` agent's host
+  connection uses it as its endpoint. `resume_flow` and `result.backward` send the
+  re-supplied key to that recorded URL; neither the provider's endpoint variable
+  nor `OPENAI_BASE_URL` changes it. `ProfileMemory` takes one beside its own key;
+  `ReflectiveMemory` rejects it.
 - `memory` — host-created implementations keyed by the policy name selected by
   each authored `long_term_memory` declaration. `None` leaves all declarations
   dormant. A mapping opens one run-scoped session per referenced policy, enables
@@ -1035,8 +1072,9 @@ resume_flow(
 ```
 
 `api_key` re-supplies the key of a run started with `llm_config.api_key`. It goes to
-the agents the log marks for it, is never recorded, and stays with the returned
-result for `backward`. A log that marks no agent ignores it.
+the agents the log marks for it, at the `base_url` the log recorded for them if the
+run had one, is never recorded, and stays with the returned result for `backward`.
+A log that marks no agent ignores it.
 
 Recovery locks the existing file before reading it, durably truncates any bytes
 after its final newline, validates the complete record prefix, and checks that the

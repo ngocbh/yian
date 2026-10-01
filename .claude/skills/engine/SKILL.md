@@ -634,7 +634,20 @@ Most are just the functional model (above) made enforceable:
   before the runtime records a failure. Authored layers reject `api_key` and
   `_host_key` (flow and def levels at load); `ProfileMemory` needs `provider`
   with its key; `ReflectiveMemory` rejects `api_key` and always uses environment
-  credentials.
+  credentials. A run-layer `llm_config.base_url` is where the key goes: it is
+  accepted only beside `api_key` and `provider` (`pop_host_credentials`), must be
+  `https` (`http` only for local hosts), is checked as the exact stored string
+  (`validate_base_url`: printable ASCII, valid port, ≤2048 chars), and is
+  rejected for `azure`/`ollama`. The `anthropic`/`google` clients don't follow
+  redirects from it (httpx would re-send their key headers cross-origin).
+  `bind(host_base_url=)` records it on the marked agents' effective configs
+  (OpenAI `host` connection endpoint too); resume/backward reuse the recorded
+  URL. Authored layers reject `base_url`, the cascade fails a `base_url`
+  without `_host_key` or one `validate_base_url` refuses (an edited log fails
+  at resume start), and `split_model_config` fails one that differs from
+  its host connection endpoint. An unset `base_url` is dropped from dumps.
+  The guarantee is about authored layers: a host key without `base_url` still
+  goes to the provider's default or env endpoint (`OPENAI_BASE_URL`, etc.).
 - **One attempt barrier precedes commits** — accept Started, complete backward
   results and all frame proposals, then accept Ready. Commit each enabled policy
   once in recorded order, even with an empty batch, accepting its positive-attempt

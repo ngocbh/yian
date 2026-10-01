@@ -206,6 +206,32 @@ runtime records the failure. Authored layers cannot set `api_key` or `_host_key`
 because they reach the recorded effective map; the loader rejects a flow- or
 def-level `api_key`.
 
+`LLMConfig.base_url` is where a config's key is sent, so a host key is never sent
+to a `base_url` from an authored layer. This covers authored layers only: when the
+host passes a key without `base_url`, the provider's default endpoint or its
+environment variables (`OPENAI_BASE_URL`, `VLLM_BASE_URL`, `ANTHROPIC_BASE_URL`,
+`AZURE_OPENAI_ENDPOINT`, and so on) pick the endpoint, as before, and some clients
+read them on every call, including on resume. A host that wants a fixed endpoint
+passes `base_url` with the key. `LLMConfig` accepts it only beside `api_key` and
+`provider`, requires `https` (`http` only for local hosts) with no credentials,
+query, or fragment, checks the exact string it stores (`validate_base_url` rejects
+whitespace, control and non-ASCII characters, bad ports, and over-long URLs rather
+than normalising them), never echoes it in errors, and rejects it for `azure` and
+`ollama`. The `anthropic` and `google` clients, whose key headers httpx re-sends
+on a cross-origin redirect, do not follow redirects from a `base_url`. An unset
+`base_url` is dropped from dumps, so existing records and snapshots are unchanged.
+`run_flow` pops it with the key (`pop_host_credentials`) and
+`ConnectionSnapshot.bind(host_base_url=...)` writes it into the recorded effective
+config of each marked agent; an OpenAI agent's `host` connection takes it as its
+endpoint, and `split_model_config` fails a `base_url` that does not match a host
+connection's endpoint. The loader, `AgentNode`, and the cascade reject an authored
+`base_url` (`host_only_field_error`), and the cascade fails an effective config
+whose `base_url` lacks the `_host_key` marker, so a Python-built or mutated flow
+cannot redirect the key. It also re-checks a recorded `base_url` with
+`validate_base_url`, so an edited log fails when resume starts. Resume and
+backward reuse the recorded `base_url` with the re-supplied key; `ProfileMemory`
+takes one beside its own key; `ReflectiveMemory` rejects it.
+
 The transport requires a completed Responses event before returning a model
 reply. Early EOF and incomplete replies raise rather than exposing tool calls
 for execution. Cooperative cancellation closes the stream; network operations

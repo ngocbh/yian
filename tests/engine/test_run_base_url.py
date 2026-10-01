@@ -7,6 +7,7 @@ import pytest
 from langchain_core.messages import AIMessage
 
 import agent_composer.llm_clients as clients
+import agent_composer.llm_clients.factory as factory
 from agent_composer.compose import load_flow
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.events import NodeStarted
@@ -71,6 +72,32 @@ def _fake_models(monkeypatch):
 
     monkeypatch.setattr(clients, "model_from_config", factory)
     return seen
+
+
+def _fake_clients(monkeypatch, *replies):
+    """Build no real client: record each one's provider, model, endpoint, and key.
+
+    The models answer ``replies`` in call order, repeating the last. Model
+    construction still runs through `model_from_config`, so every config check
+    applies.
+    """
+    built, calls = [], []
+
+    class Model:
+        def invoke(self, messages):
+            calls.append(messages)
+            return AIMessage(content=replies[min(len(calls), len(replies)) - 1])
+
+    def create(provider, model, **kwargs):
+        key = kwargs.get("api_key")
+        built.append((
+            provider, model, kwargs.get("base_url"),
+            key.get_secret_value() if hasattr(key, "get_secret_value") else key,
+        ))
+        return type("Client", (), {"get_llm": lambda self: Model()})()
+
+    monkeypatch.setattr(factory, "create_llm_client", create)
+    return built
 
 
 def test_openai_run_sends_the_key_to_the_base_url_and_records_the_url(tmp_path, monkeypatch):
@@ -208,15 +235,25 @@ def test_a_flow_file_cannot_set_a_base_url(source):
     assert "run's llm_config" in str(caught.value)
 
 
-@pytest.mark.parametrize("layer", ["flow", "node"])
+_CHILD = _DEF_LEVEL.replace(f'    llm_config: {{base_url: "{ELSEWHERE}"}}\n', "")
+
+
+@pytest.mark.parametrize("layer", ["flow", "node", "child-flow", "child-node", "marked-child-node"])
 def test_a_lower_layer_base_url_cannot_redirect_the_host_key(monkeypatch, layer):
     # A flow built in Python skips the loader; the cascade still refuses the URL.
     seen = _fake_models(monkeypatch)
-    flow = load_flow(_FLOW)
+    flow = load_flow(_FLOW if layer in ("flow", "node") else _CHILD)
+    child = None if layer in ("flow", "node") else flow.compiled.nodes["child"].child
     if layer == "flow":
         flow.compiled.flow_llm_config = {"base_url": ELSEWHERE}
-    else:
+    elif layer == "node":
         flow.compiled.nodes["agent"].own_llm_config = {"base_url": ELSEWHERE}
+    elif layer == "child-flow":
+        child.flow_llm_config = {"base_url": ELSEWHERE}
+    elif layer == "child-node":
+        child.nodes["nested"].own_llm_config = {"base_url": ELSEWHERE}
+    else:
+        child.nodes["nested"].own_llm_config = {"_host_key": True, "base_url": ELSEWHERE}
     with pytest.raises(ValueError, match="base_url"):
         run_flow(flow, {}, llm_config=_AZURE)
     assert seen == {}
@@ -291,6 +328,22 @@ def test_backward_sends_the_key_to_the_recorded_base_url(tmp_path, monkeypatch):
     assert {str(r.url) for r in requests} == {"https://gateway.example.com/v1/chat/completions"}
     assert {r.headers["Authorization"] for r in requests} == {f"Bearer {SENTINEL}"}
     _assert_hidden(path, events, result, recovered, outcome)
+
+
+def test_openai_backward_builds_its_client_with_the_recorded_url_and_key(tmp_path, monkeypatch):
+    # The path a host on an Azure OpenAI v1 endpoint uses: the recorded config
+    # goes through legacy_connection_config and the host connection's endpoint.
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-environment-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", ELSEWHERE)
+    built = _fake_clients(monkeypatch, "ok", _NO_FEEDBACK)
+    path = tmp_path / "run.jsonl"
+    result = run_flow(load_flow(_FLOW), {}, log=path, learnable=True, llm_config=_AZURE)
+    assert result.status == "succeeded", result.failure
+    assert result.backward("Be brief.").status == "succeeded"
+    recovered = resume_flow(load_flow(_FLOW), log=path)
+    outcome = recovered.backward("Be brief.", api_key=SENTINEL)
+    assert outcome.status == "succeeded", outcome.failure
+    assert built == [("openai", "gpt-5.4", AZURE_V1, SENTINEL)] * 3
 
 
 def test_a_recorded_base_url_without_the_marker_is_refused(tmp_path, monkeypatch):
@@ -374,3 +427,25 @@ def test_profile_memory_learns_at_its_base_url(tmp_path, monkeypatch):
     assert [r.headers["Authorization"] for r in learner] == [f"Bearer {SENTINEL}"]
     others = [r for r in requests if r not in learner]
     assert {r.headers["Authorization"] for r in others} == {"Bearer sk-environment-key"}
+
+
+def test_openai_profile_memory_builds_its_learner_with_its_url_and_key(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-environment-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", ELSEWHERE)
+    flow = load_flow(_FLOW.replace("nodes:", "long_term_memory: profile\nnodes:"))
+    (tmp_path / "profile").mkdir()
+    store = FileMarkdownStore(tmp_path / "profile" / "ada.md")
+    store.write("# Ada\n", base_version=store.read()[1])
+    memory = ProfileMemory(store, llm_config={**_AZURE, "model": "profiler"})
+    built = _fake_clients(
+        monkeypatch, "ok", _NO_FEEDBACK, "<profile>\n# Ada\n- Prefers brief replies.\n</profile>"
+    )
+    result = run_flow(
+        flow, {}, learnable=True, memory={"profile": memory},
+        llm_config={"provider": "vllm", "model": "served-model"},
+    )
+    outcome = result.backward("Be brief.")
+    assert outcome.status == "succeeded", outcome.failure
+    assert ("openai", "profiler", AZURE_V1, SENTINEL) in built
+    assert all(entry[2:] == (None, None) for entry in built if entry[1] != "profiler")
+    assert "Prefers brief replies" in store.read()[0]

@@ -46,20 +46,25 @@ class ConnectionSnapshot:
         effective: dict[str, dict[str, Any]],
         *,
         host_key_provider: str | None = None,
+        host_base_url: str | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Attach selected connection identity without changing any input maps.
 
         Agents of ``host_key_provider`` authenticate with a key the host supplies
         outside the map. Each records the nonsecret ``HOST_KEY_MARKER``, and an
         OpenAI agent records a ``host`` connection instead of the saved or
-        environment one.
+        environment one. ``host_base_url``, the endpoint the host gave with that
+        key, is recorded on those agents only, and is the OpenAI host
+        connection's endpoint.
         """
         result = copy.deepcopy(effective)
         for config in result.values():
             if config["provider"] == host_key_provider:
                 config[HOST_KEY_MARKER] = True
+                if host_base_url is not None:
+                    config["base_url"] = host_base_url
                 if config["provider"] == "openai":
-                    config["_connection"] = self.host_connection()
+                    config["_connection"] = self.host_connection(host_base_url)
                 continue
             connection = self.connections.get(config["provider"])
             if connection is not None:

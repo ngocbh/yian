@@ -26,7 +26,7 @@ from typing import Any, Callable, Mapping
 from langchain_core.tools import BaseTool
 from pydantic import SecretStr
 
-from agent_composer.llm_clients.config import LLMConfig, pop_api_key
+from agent_composer.llm_clients.config import LLMConfig, pop_api_key, pop_base_url
 from agent_composer.llm_clients.connection import connection_snapshot, legacy_connection_map
 from agent_composer.compile.execution_layout import apply_execution_layout, resolve_execution_layout
 from agent_composer.compile.expand import build_grow
@@ -324,7 +324,11 @@ def run_flow(
             An ``inherit: false`` agent of that provider uses it too. The key is
             never recorded; the log marks which agents use it, so pass it again
             to `resume_flow` or `RunResult.backward`, where those agents
-            otherwise fail rather than read the environment.
+            otherwise fail rather than read the environment. A ``base_url``
+            entry, accepted only beside ``api_key`` in this layer, is the
+            endpoint those agents send the key to. The log records it on them,
+            so a resume or backward call sends the key there too. Flow files
+            cannot set ``api_key`` or ``base_url``.
         memory (`dict[str, Memory] | None`, *optional*, defaults to `None`):
             Host-injected policy implementations keyed by authored policy name.
             ``None`` leaves every authored policy dormant. A mapping enables
@@ -390,11 +394,12 @@ def run_flow(
         `ValueError`:
             Inputs, identity, worker count, model configuration, or prepared run
             state violates its contract, ``llm_config.api_key`` lacks
-            ``llm_config.provider``, a `BaseTool` in `tools` is named
-            differently from its key, a group tool's name clashes or is
-            reserved, an AGENT grants a tool or group not in the run's tools,
-            or an AGENT grants skills while `skills` is `None` or lacks a
-            listed skill.
+            ``llm_config.provider``, ``llm_config.base_url`` lacks
+            ``llm_config.api_key`` or is not an allowed URL, a `BaseTool` in
+            `tools` is named differently from its key, a group tool's name
+            clashes or is reserved, an AGENT grants a tool or group not in the
+            run's tools, or an AGENT grants skills while `skills` is `None` or
+            lacks a listed skill.
         `MemorySetupError`:
             Memory is enabled without a required policy implementation, cannot
             open an exact run snapshot, or has an invalid configuration.
@@ -459,9 +464,11 @@ def _run_flow_controlled(
     private_flow = copy.deepcopy(flow.compiled)
     retained_program = copy.deepcopy(private_flow) if learnable else None
 
-    # The key stays out of the cascade so RunStarted never records it.
+    # The key stays out of the cascade so RunStarted never records it. Its
+    # base_url stays out too, so no authored layer can pair the key with another.
     run_llm_config = dict(llm_config or {})
     api_key = pop_api_key(run_llm_config)
+    base_url = pop_base_url(run_llm_config, api_key)
 
     # One selection snapshot determines every static agent before RunStarted.
     snapshot = connection_snapshot()
@@ -473,6 +480,7 @@ def _run_flow_controlled(
             provider_models=snapshot.provider_models,
         ),
         host_key_provider=None if api_key is None else run_llm_config["provider"],
+        host_base_url=base_url,
     )
     apply_effective_llm_map(private_flow, effective_llm)
     # A key that marks no agent has nothing to authenticate, so the result keeps none.
@@ -626,8 +634,9 @@ def resume_flow(
             nodes are replayed from the log and never call it.
         api_key (`str | SecretStr | None`, *optional*, defaults to `None`):
             The provider key of a run started with ``llm_config.api_key``. It
-            goes to the agents the log marks for it, as in `run_flow`, is never
-            recorded, and stays with the result for `RunResult.backward`. A
+            goes to the agents the log marks for it, at the ``base_url`` the
+            log recorded for them if the run had one, as in `run_flow`. It is
+            never recorded, and stays with the result for `RunResult.backward`. A
             log that marks no agent ignores it. Without it, marked agents fail
             when they call their model instead of reading the provider's key
             environment variable.

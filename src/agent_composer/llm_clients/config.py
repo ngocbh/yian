@@ -7,6 +7,7 @@ and `factory.model_from_config` turns API selections into ready chat models.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any, Literal, Optional
 from urllib.parse import urlsplit
 
@@ -204,6 +205,37 @@ class LLMConfig(BaseModel):
         if self.base_url is None and isinstance(data, dict):
             data.pop("base_url", None)
         return data
+
+
+# Fields only the host's run layer may set. Authored layers reach the recorded
+# effective map, and a flow-level base_url could send the host key elsewhere.
+_HOST_ONLY_FIELDS = {
+    "api_key": (
+        "llm_config.api_key is a host credential; pass it in the run's llm_config, "
+        "not in a flow file"
+    ),
+    "base_url": (
+        "llm_config.base_url decides where the host's api_key is sent; pass it with "
+        "that key in the run's llm_config, not in a flow file"
+    ),
+}
+
+
+def host_only_field_error(config: Any) -> Optional[str]:
+    """Return why an authored ``llm_config`` layer may not be used, or `None`.
+
+    Args:
+        config (`Any`): One authored layer; a non-mapping has no host-only field.
+
+    Returns:
+        `str | None`: The message for the first host-only field the layer sets.
+    """
+    if not isinstance(config, Mapping):
+        return None
+    for field, message in _HOST_ONLY_FIELDS.items():
+        if field in config:
+            return message
+    return None
 
 
 def pop_api_key(config: dict[str, Any]) -> Optional[SecretStr]:

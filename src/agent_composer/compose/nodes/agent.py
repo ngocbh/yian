@@ -24,6 +24,7 @@ from agent_composer.compose.nodes.base import BuildContext, BuildResult, NodeDes
 from agent_composer.compose.source import SourceCursor
 from agent_composer.diagnostics import SourceRange
 from agent_composer.llm_clients import LLMConfig
+from agent_composer.llm_clients.config import host_only_field_error
 from agent_composer.memory.contracts import MemoryPolicySpec
 from agent_composer.nodes.agent import AgentNode
 from agent_composer.nodes.agent.node import is_text_output
@@ -59,7 +60,8 @@ def _validate_llm_config(
         `tuple[dict[str, Any], bool]`: Config without `inherit`, then its boolean value.
 
     Raises:
-        `LoadError`: The config is not a mapping, sets `api_key`, or violates `LLMConfig`.
+        `LoadError`: The config is not a mapping, sets `api_key` or `base_url`, or
+            violates `LLMConfig`.
     """
     diagnostics = diagnostics or LoadDiagnostics()
     if cfg is None:
@@ -73,12 +75,9 @@ def _validate_llm_config(
     if not cfg:
         return {}, True
     inherit = bool(cfg.pop("inherit", True))
-    if "api_key" in cfg:
-        raise diagnostics.error(
-            f"node {node_id!r}: llm_config.api_key is a host credential; pass it in "
-            "the run's llm_config, not in a flow file",
-            range=source_range,
-        )
+    host_only = host_only_field_error(cfg)
+    if host_only is not None:
+        raise diagnostics.error(f"node {node_id!r}: {host_only}", range=source_range)
     try:
         LLMConfig(**cfg)
     except Exception as exc:

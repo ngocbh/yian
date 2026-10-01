@@ -646,6 +646,8 @@ Most are just the functional model (above) made enforceable:
   without `_host_key` or one `validate_base_url` refuses (an edited log fails
   at resume start), and `split_model_config` fails one that differs from
   its host connection endpoint. An unset `base_url` is dropped from dumps.
+  The guarantee is about authored layers: a host key without `base_url` still
+  goes to the provider's default or env endpoint (`OPENAI_BASE_URL`, etc.).
 - **One attempt barrier precedes commits** — accept Started, complete backward
   results and all frame proposals, then accept Ready. Commit each enabled policy
   once in recorded order, even with an empty batch, accepting its positive-attempt

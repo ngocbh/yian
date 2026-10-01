@@ -61,7 +61,10 @@ Pass it again to `resume_flow` and `RunResult.backward` with `api_key=key`; agen
 marked for the key never fall back to the variable. Add `"base_url": url` beside the
 key to send it to another endpoint, such as an Azure OpenAI resource's
 `https://<resource>.openai.azure.com/openai/v1/` with `"provider": "openai"` and the
-deployment name as `model`; no Azure environment variables are needed.
+deployment name as `model`; no Azure environment variables are needed. Without
+`base_url`, the provider's default endpoint or its environment variables (such as
+`OPENAI_BASE_URL`) decide where the key goes, so pass `base_url` with the key when
+the endpoint must be fixed.
 
 A flow can also pin its own provider and model per AGENT node. Defaults fill
 only fields left unset by the flow or CLI. A default model belongs to its

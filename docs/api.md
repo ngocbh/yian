@@ -177,7 +177,13 @@ terminal. Stored defaults are not coerced.
   A `base_url` decides where the key is sent, so it is accepted only beside
   `api_key` (and `provider`) in this run layer. Flow files cannot set it at any
   level, and a flow built in Python fails at run start if any layer has one, so an
-  edited flow cannot send the host key elsewhere. It must be a lowercase `https://`
+  edited flow cannot send the host key elsewhere. That guarantee covers authored
+  layers only. When the host passes `api_key` without `base_url`, the provider's
+  default endpoint or its environment variables (such as `OPENAI_BASE_URL`,
+  `VLLM_BASE_URL`, `ANTHROPIC_BASE_URL`, or `AZURE_OPENAI_ENDPOINT`) pick where the
+  key goes, as before; some clients read them on every call, so a resume follows
+  the environment at that time. A host that wants a fixed endpoint should pass
+  `base_url` with the key. It must be a lowercase `https://`
   URL without credentials, query, or fragment; `http://` is allowed only for exactly
   `localhost`, `127.0.0.1`, and `[::1]`. It is checked and used exactly as written:
   whitespace, control characters, non-ASCII characters (write an international

@@ -66,13 +66,19 @@ class ConnectionSnapshot:
                 config["_connection"] = copy.deepcopy(connection)
         return result
 
-    def host_connection(self) -> dict[str, Any]:
-        """Return the nonsecret identity of an OpenAI key supplied by the host."""
+    def host_connection(self, endpoint: str | None = None) -> dict[str, Any]:
+        """Return the nonsecret identity of an OpenAI key supplied by the host.
+
+        Args:
+            endpoint (`str | None`, *optional*, defaults to `None`):
+                The host's ``base_url`` for that key. `None` uses the snapshot's
+                API endpoint.
+        """
         return validate_connection({
             "method": "api_key",
             "source": "host",
             "credential_id": None,
-            "endpoint": self.api_endpoint,
+            "endpoint": self.api_endpoint if endpoint is None else endpoint,
             "store_path": None,
         })
 
@@ -191,7 +197,8 @@ def split_model_config(
 
     Raises:
         `AuthError`: The config carries ``HOST_KEY_MARKER`` but no ``api_key``.
-        `ValueError`: A public field or the metadata is invalid.
+        `ValueError`: A public field or the metadata is invalid, or ``base_url``
+            differs from the endpoint of its pinned host connection.
     """
     if isinstance(config, LLMConfig):
         raw = config.model_dump(exclude_none=True)
@@ -211,6 +218,11 @@ def split_model_config(
         if validated.provider != "openai":
             raise ValueError("Internal connection metadata requires provider openai")
         metadata = validate_connection(metadata)
+        if validated.base_url is not None and (
+            metadata["source"] != "host" or metadata["endpoint"] != validated.base_url
+        ):
+            # A base_url serves only the host key; it must match the pinned route.
+            raise ValueError("llm_config.base_url must match its host connection endpoint")
     return validated, metadata
 
 
@@ -238,7 +250,7 @@ def resolve_model_config(
     if metadata is not None:
         raw["_connection"] = metadata
     elif provider == "openai" and validated.api_key is not None:
-        raw["_connection"] = snapshot.host_connection()
+        raw["_connection"] = snapshot.host_connection(validated.base_url)
     elif provider in snapshot.connections:
         raw["_connection"] = copy.deepcopy(snapshot.connections[provider])
     return raw

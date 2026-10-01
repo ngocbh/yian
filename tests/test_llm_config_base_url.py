@@ -42,10 +42,22 @@ def test_a_set_base_url_dumps_and_an_unset_one_adds_nothing():
         "http://localhost:8000/v1",
         "http://127.0.0.1:11434/v1",
         "http://[::1]:8000/v1",
+        "http://[::1]/v1",
+        "https://[::1]:8443",
+        "https://gateway.example.com:443/v1",
+        "https://gateway.example.com:65535/v1",
+        "https://xn--gtewy-hra.example.com/v1",
+        "https://gateway.example.com/openai/v1/deployments/a-b_c~d%20e",
+        pytest.param(
+            "https://gateway.example.com/" + "a" * (2048 - len("https://gateway.example.com/")),
+            id="2048-chars",
+        ),
     ],
 )
 def test_https_and_local_http_urls_are_accepted(url):
+    # The stored string is the validated one, and the client parses the same host.
     assert LLMConfig(provider="vllm", base_url=url, api_key=SENTINEL).base_url == url
+    assert httpx.URL(url).host
 
 
 @pytest.mark.parametrize(
@@ -60,6 +72,52 @@ def test_https_and_local_http_urls_are_accepted(url):
         "https://res.openai.azure.com/openai/v1/?api-version=1",
         "https://res.openai.azure.com/openai/v1/#frag",
         "https://[bad/v1",
+        "https://res.openai.azure.com/openai/v1/?",
+        "https://res.openai.azure.com/openai/v1/#",
+        "https://user@res.openai.azure.com/openai/v1/",
+        "//res.openai.azure.com/openai/v1/",
+        # Whitespace and control characters, which urlsplit strips but httpx keeps.
+        " https://res.openai.azure.com/openai/v1/",
+        "https://res.openai.azure.com/openai/v1/ ",
+        "https://res.openai.azure.com/openai/v1/\n",
+        "https://res.openai.azure.com/openai/v1/\r\n",
+        "https://res.openai.\tazure.com/openai/v1/",
+        "http://local\thost/v1",
+        "https://res.openai azure.com/openai/v1/",
+        "https://res.openai.azure.com/openai/v1/\x00",
+        "https://res.openai.azure.com/openai/v1/\x7f",
+        "https://res.openai.azure.com/openai/v1/\u00a0",
+        # Ports.
+        "https://gateway.example.com:abc/v1",
+        "https://gateway.example.com:99999/v1",
+        "https://gateway.example.com:65536/v1",
+        "https://gateway.example.com:0/v1",
+        "https://gateway.example.com:/v1",
+        "https://gateway.example.com:+443/v1",
+        "https://gateway.example.com:4_43/v1",
+        # Hosts: ASCII only, no IDNA normalisation, exact local names.
+        "https://gateway\u3002example.com/v1",
+        "https://g\u00e4teway.example.com/v1",
+        "https://\uff47ateway.example.com/v1",
+        "https://%67ateway.example.com/v1",
+        "https://gateway.example.com\\@collector.example.com/v1",
+        "http://localhost.evil.com/v1",
+        "http://127.0.0.1.nip.io/v1",
+        "http://127.0.0.1@gateway.example.com/v1",
+        "http://[0:0:0:0:0:0:0:1]:8000/v1",
+        "https://[::1%25lo0]/v1",
+        "https://[gateway.example.com]/v1",
+        "http://[::1].example.com/v1",
+        # The scheme must be lowercase, as written.
+        "HTTPS://res.openai.azure.com/openai/v1/",
+        "Https://res.openai.azure.com/openai/v1/",
+        "HTTP://localhost:8000/v1",
+        # Length.
+        pytest.param("https://" + "a" * 100_000 + ".example.com/v1", id="long-host"),
+        pytest.param(
+            "https://gateway.example.com/" + "a" * (2049 - len("https://gateway.example.com/")),
+            id="2049-chars",
+        ),
     ],
 )
 def test_other_urls_are_rejected_without_echoing_them(url):

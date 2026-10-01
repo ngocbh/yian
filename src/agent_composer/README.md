@@ -209,7 +209,10 @@ def-level `api_key`.
 `LLMConfig.base_url` is where a config's key is sent, so a key is never sent to a
 `base_url` from a different layer than the key. `LLMConfig` accepts it only beside
 `api_key` and `provider`, requires `https` (`http` only for local hosts) with no
-credentials, query, or fragment, never echoes it in errors, and rejects it for
+credentials, query, or fragment, checks the exact string it stores
+(`validate_base_url` rejects whitespace, control and non-ASCII characters, bad
+ports, and over-long URLs rather than normalising them), never echoes it in
+errors, and rejects it for
 `azure` and `ollama`. An unset `base_url` is dropped from dumps, so existing
 records and snapshots are unchanged. `run_flow` pops it with the key
 (`pop_base_url`) and `ConnectionSnapshot.bind(host_base_url=...)` writes it into

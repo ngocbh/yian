@@ -636,7 +636,9 @@ Most are just the functional model (above) made enforceable:
   with its key; `ReflectiveMemory` rejects `api_key` and always uses environment
   credentials. A run-layer `llm_config.base_url` is where the key goes: it is
   accepted only beside `api_key` and `provider` (`pop_base_url`), must be
-  `https` (`http` only for local hosts), and is rejected for `azure`/`ollama`.
+  `https` (`http` only for local hosts), is checked as the exact stored string
+  (`validate_base_url`: printable ASCII, valid port, ≤2048 chars), and is
+  rejected for `azure`/`ollama`.
   `bind(host_base_url=)` records it on the marked agents' effective configs
   (OpenAI `host` connection endpoint too); resume/backward reuse the recorded
   URL. Authored layers reject `base_url`, the cascade fails a `base_url`

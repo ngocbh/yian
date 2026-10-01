@@ -177,9 +177,12 @@ terminal. Stored defaults are not coerced.
   A `base_url` decides where the key is sent, so it is accepted only beside
   `api_key` (and `provider`) in this run layer. Flow files cannot set it at any
   level, and a flow built in Python fails at run start if any layer has one, so an
-  edited flow cannot send the host key elsewhere. It must be an `https://` URL
-  without credentials, query, or fragment; `http://` is allowed only for
-  `localhost`, `127.0.0.1`, and `::1`. The OpenAI-compatible providers, `anthropic`,
+  edited flow cannot send the host key elsewhere. It must be a lowercase `https://`
+  URL without credentials, query, or fragment; `http://` is allowed only for exactly
+  `localhost`, `127.0.0.1`, and `[::1]`. It is checked and used exactly as written:
+  whitespace, control characters, non-ASCII characters (write an international
+  host in its `xn--` form), a port outside 1–65535, and URLs over 2048 characters
+  are rejected, not normalised. The OpenAI-compatible providers, `anthropic`,
   and `google` take it; `azure` and `ollama` reject it. It is not secret: the log
   records it on the agents marked for the key, and an `openai` agent's host
   connection uses it as its endpoint. `resume_flow` and `result.backward` send the

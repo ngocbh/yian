@@ -8,8 +8,9 @@ and `factory.model_from_config` turns API selections into ready chat models.
 from __future__ import annotations
 
 from collections.abc import Mapping
+import ipaddress
+import re
 from typing import Any, Literal, Optional
-from urllib.parse import urlsplit
 
 from pydantic import (
     BaseModel,
@@ -59,6 +60,18 @@ _NO_BASE_URL_PROVIDERS = {
     ),
 }
 _LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
+_MAX_BASE_URL_LENGTH = 2048
+# RFC 3986 characters minus "?" and "#", since a query or fragment is refused anyway.
+# Everything else (whitespace, controls, non-ASCII) is something urlsplit or httpx
+# would strip, normalise, or encode, so the string sent would differ from the one
+# checked here.
+_URL_CHARACTERS = re.compile(r"[A-Za-z0-9\-._~:/\[\]@!$&'()*+,;=%]*")
+# A DNS name or bracketed IPv6 literal, an optional all-digit port, then a path. The
+# host part has no "@", so userinfo never matches.
+_URL_SHAPE = re.compile(
+    r"(?P<scheme>https?)://(?P<host>[A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])"
+    r"(?::(?P<port>[0-9]{1,5}))?(?P<path>/.*)?"
+)
 
 
 class LLMConfig(BaseModel):
@@ -95,10 +108,14 @@ class LLMConfig(BaseModel):
             API endpoint that replaces the provider's default, such as an Azure OpenAI
             resource's `https://<resource>.openai.azure.com/openai/v1/` with
             `provider="openai"`. It decides where `api_key` is sent, so it needs
-            `api_key` and `provider` in the same config. It must be an `https://` URL
-            without credentials, query, or fragment; `http://` is allowed only for
-            `localhost`, `127.0.0.1`, and `::1`. The `azure` and `ollama` providers
-            reject it. Unlike the key, it appears in `model_dump` when set.
+            `api_key` and `provider` in the same config. It must be a lowercase
+            `https://` URL without credentials, query, or fragment; `http://` is
+            allowed only for exactly `localhost`, `127.0.0.1`, and `[::1]`. It is
+            checked and stored as written, so whitespace, control characters,
+            non-ASCII characters (use a host's `xn--` form), a bad port, or more than
+            2048 characters are rejected rather than normalised (see
+            `validate_base_url`). The `azure` and `ollama` providers reject it.
+            Unlike the key, it appears in `model_dump` when set.
 
     Example:
         ```python
@@ -159,30 +176,7 @@ class LLMConfig(BaseModel):
     @classmethod
     def _require_safe_url(cls, value: Optional[str]) -> Optional[str]:
         """Accept an HTTPS endpoint, or plain HTTP only on the local machine."""
-        if value is None:
-            return value
-        try:
-            url = urlsplit(value)
-            host = url.hostname
-        except ValueError:
-            url, host = None, None
-        if (
-            url is None
-            or not host
-            or url.username is not None
-            or url.password is not None
-            or url.query
-            or url.fragment
-        ):
-            raise ValueError(
-                "base_url must be an http(s) URL without credentials, query, or fragment"
-            )
-        if url.scheme != "https" and not (url.scheme == "http" and host in _LOCAL_HOSTS):
-            raise ValueError(
-                "base_url must use https; http is allowed only for localhost, "
-                "127.0.0.1, and ::1"
-            )
-        return value
+        return value if value is None else validate_base_url(value)
 
     @model_validator(mode="after")
     def _bind_base_url_to_key(self) -> "LLMConfig":
@@ -205,6 +199,57 @@ class LLMConfig(BaseModel):
         if self.base_url is None and isinstance(data, dict):
             data.pop("base_url", None)
         return data
+
+
+def validate_base_url(value: Any) -> str:
+    """Return ``value`` unchanged if it is an allowed ``llm_config.base_url``.
+
+    The check runs on the exact string the client will use: it must be a lowercase
+    ``https://`` URL (``http://`` only for exactly ``localhost``, ``127.0.0.1``, or
+    ``[::1]``) of a host, an optional port from 1 to 65535, and a path, at most 2048
+    characters long. Credentials, a query, a fragment, whitespace, control characters,
+    and non-ASCII characters are refused rather than normalised; write an
+    internationalised host in its ``xn--`` form. Errors never echo the value.
+
+    Args:
+        value (`Any`): The candidate URL.
+
+    Returns:
+        `str`: ``value`` itself.
+
+    Raises:
+        `ValueError`: ``value`` is not an allowed URL.
+    """
+    if not isinstance(value, str):
+        raise ValueError("base_url must be a string")
+    if len(value) > _MAX_BASE_URL_LENGTH:
+        raise ValueError(f"base_url must be at most {_MAX_BASE_URL_LENGTH} characters")
+    if not _URL_CHARACTERS.fullmatch(value):
+        raise ValueError(
+            "base_url may contain only ASCII URL characters, with no whitespace or "
+            "control characters; write an internationalised host in its xn-- form"
+        )
+    shape = _URL_SHAPE.fullmatch(value)
+    host = shape and shape["host"].lower()
+    if host and host.startswith("["):
+        host = host[1:-1]
+        try:
+            ipaddress.IPv6Address(host)
+        except ValueError:
+            host = None
+    if not host:
+        raise ValueError(
+            "base_url must be a lowercase https:// or http:// URL of a host, an "
+            "optional port, and a path, without credentials, query, or fragment"
+        )
+    if shape["port"] is not None and not 1 <= int(shape["port"]) <= 65535:
+        raise ValueError("base_url port must be a number from 1 to 65535")
+    if shape["scheme"] != "https" and host not in _LOCAL_HOSTS:
+        raise ValueError(
+            "base_url must use https; http is allowed only for localhost, "
+            "127.0.0.1, and ::1"
+        )
+    return value
 
 
 # Fields only the host's run layer may set. Authored layers reach the recorded

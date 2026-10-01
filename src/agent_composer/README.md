@@ -206,6 +206,22 @@ runtime records the failure. Authored layers cannot set `api_key` or `_host_key`
 because they reach the recorded effective map; the loader rejects a flow- or
 def-level `api_key`.
 
+`LLMConfig.base_url` is where a config's key is sent, so a key is never sent to a
+`base_url` from a different layer than the key. `LLMConfig` accepts it only beside
+`api_key` and `provider`, requires `https` (`http` only for local hosts) with no
+credentials, query, or fragment, never echoes it in errors, and rejects it for
+`azure` and `ollama`. An unset `base_url` is dropped from dumps, so existing
+records and snapshots are unchanged. `run_flow` pops it with the key
+(`pop_base_url`) and `ConnectionSnapshot.bind(host_base_url=...)` writes it into
+the recorded effective config of each marked agent; an OpenAI agent's `host`
+connection takes it as its endpoint, and `split_model_config` fails a `base_url`
+that does not match a host connection's endpoint. The loader, `AgentNode`, and the
+cascade reject an authored `base_url` (`host_only_field_error`), and the cascade
+fails an effective config whose `base_url` lacks the `_host_key` marker, so a
+Python-built or mutated flow cannot redirect the key. Resume and backward reuse
+the recorded `base_url` with the re-supplied key; `ProfileMemory` takes one beside
+its own key; `ReflectiveMemory` rejects it.
+
 The transport requires a completed Responses event before returning a model
 reply. Early EOF and incomplete replies raise rather than exposing tool calls
 for execution. Cooperative cancellation closes the stream; network operations

@@ -47,6 +47,11 @@ class AzureOpenAIClient(BaseLLMClient):
         AZURE_OPENAI_ENDPOINT: Endpoint URL (e.g. https://<resource>.openai.azure.com/)
         AZURE_OPENAI_DEPLOYMENT_NAME: Deployment name
         OPENAI_API_VERSION: API version (e.g. 2025-03-01-preview)
+
+    It reads its endpoint only from the environment, so ``LLMConfig`` rejects a
+    ``base_url`` for ``provider: azure``. To reach a resource's v1 surface with a
+    host key, use ``provider: openai`` with
+    ``base_url: https://<resource>.openai.azure.com/openai/v1/`` instead.
     """
 
     def __init__(self, model: str, base_url: Optional[str] = None, **kwargs):

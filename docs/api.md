@@ -161,6 +161,31 @@ terminal. Stored defaults are not coerced.
   the model configuration, so it always uses environment credentials.
   `ProfileMemory` accepts one in its own `llm_config`, with `provider`, and does not
   record it.
+
+  A `base_url` entry replaces the provider's default endpoint for the agents that
+  use the key, for example an Azure OpenAI resource's v1 surface:
+
+  ```python
+  llm_config={
+      "provider": "openai",
+      "model": "gpt-5.4",  # the Azure deployment name
+      "base_url": "https://<resource>.openai.azure.com/openai/v1/",
+      "api_key": key,
+  }
+  ```
+
+  A `base_url` decides where the key is sent, so it is accepted only beside
+  `api_key` (and `provider`) in this run layer. Flow files cannot set it at any
+  level, and a flow built in Python fails at run start if any layer has one, so an
+  edited flow cannot send the host key elsewhere. It must be an `https://` URL
+  without credentials, query, or fragment; `http://` is allowed only for
+  `localhost`, `127.0.0.1`, and `::1`. The OpenAI-compatible providers, `anthropic`,
+  and `google` take it; `azure` and `ollama` reject it. It is not secret: the log
+  records it on the agents marked for the key, and an `openai` agent's host
+  connection uses it as its endpoint. `resume_flow` and `result.backward` send the
+  re-supplied key to that recorded URL; neither the provider's endpoint variable
+  nor `OPENAI_BASE_URL` changes it. `ProfileMemory` takes one beside its own key;
+  `ReflectiveMemory` rejects it.
 - `memory` — host-created implementations keyed by the policy name selected by
   each authored `long_term_memory` declaration. `None` leaves all declarations
   dormant. A mapping opens one run-scoped session per referenced policy, enables
@@ -1035,8 +1060,9 @@ resume_flow(
 ```
 
 `api_key` re-supplies the key of a run started with `llm_config.api_key`. It goes to
-the agents the log marks for it, is never recorded, and stays with the returned
-result for `backward`. A log that marks no agent ignores it.
+the agents the log marks for it, at the `base_url` the log recorded for them if the
+run had one, is never recorded, and stays with the returned result for `backward`.
+A log that marks no agent ignores it.
 
 Recovery locks the existing file before reading it, durably truncates any bytes
 after its final newline, validates the complete record prefix, and checks that the

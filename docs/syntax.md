@@ -381,10 +381,11 @@ nodes:
       model: claude-opus-4-8    # fills the one field the flow leaves unset
 ```
 
-A flow file cannot set `api_key` at any level; loading such a flow fails. A
-library host passes the provider key in `run_flow(..., llm_config={..., "api_key": key})`
-instead (see [the Python API](api.md)). The key goes to every AGENT of that
-provider, including one with `inherit: false`.
+A flow file cannot set `api_key` or `base_url` at any level; loading such a flow
+fails. A library host passes the provider key, and optionally the endpoint it goes
+to, in `run_flow(..., llm_config={..., "api_key": key, "base_url": url})` instead
+(see [the Python API](api.md)). The key and its `base_url` go to every AGENT of
+that provider, including one with `inherit: false`.
 
 The CLI flags are the *outermost authored* layer — they fill gaps, they do **not**
 override an AGENT node or flow that set the field. The run resolves the complete

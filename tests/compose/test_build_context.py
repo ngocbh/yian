@@ -54,3 +54,27 @@ def test_build_result_frozen():
     result = BuildResult(node=object(), wiring={})
     with pytest.raises(dataclasses.FrozenInstanceError):
         result.node = object()
+
+
+def test_build_context_owner_defaults_to_root_and_is_threaded_by_assemble(monkeypatch) -> None:
+    """Each flow's descriptors see that flow's lexical owner path."""
+    from agent_composer.compose import load_flow
+    from agent_composer.compose.nodes.agent import AgentDescriptor
+
+    assert BuildContext(registry={}).owner == ("root",)
+
+    seen: list[tuple[str, ...]] = []
+    original = AgentDescriptor.build
+
+    def spy(self, ctx):
+        seen.append(ctx.owner)
+        return original(self, ctx)
+
+    monkeypatch.setattr(AgentDescriptor, "build", spy)
+    load_flow(
+        "id: p\nname: p\ndefs:\n  child:\n    kind: agent\n    prompt: hi\n"
+        "    output: str\nnodes:\n  top:\n    kind: agent\n    prompt: hi\n"
+        "    output: str\n  invoke:\n    kind: call\n    call: child\n"
+        "output: ${top.output}\n"
+    )
+    assert sorted(seen) == [("def", "child"), ("root",)]

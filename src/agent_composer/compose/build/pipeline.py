@@ -1196,6 +1196,7 @@ def _assemble(
         diagnostics=diagnostics,
         output_contract_reader=read_authored_node_output,
         variable_declaration_reader=read_authored_node_variables,
+        owner=owner,
     )
     descriptor_cache = _DescriptorBuildCache(descriptors, ctx_base)
     build_results = descriptor_cache.build_in_source_order()

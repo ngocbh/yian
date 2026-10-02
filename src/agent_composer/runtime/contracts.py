@@ -538,7 +538,7 @@ class BackwardOutcome:
         failure (`BackwardFailure | None`): The failed attempt's diagnostic;
             absent on success.
         learning (`LearningResult | None`): Memory learning disposition, or
-            `None` when no memory policies participate.
+            `None` when no memory participates.
     """
 
     status: Literal["succeeded", "failed"]

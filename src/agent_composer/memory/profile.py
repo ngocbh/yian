@@ -109,9 +109,9 @@ def _parse_reply(reply: object, current_text: str, max_chars: int) -> str:
 
 
 class ProfileMemory:
-    """Policy backend that keeps one markdown profile in a versioned store.
+    """Memory backend that keeps one markdown profile in a versioned store.
 
-    Inject one instance per profile under a host-chosen policy name, for example
+    Inject one instance under the memory key the flow declares, for example
     ``run_flow(flow, inputs, memory={"profile": ProfileMemory(store)})``. Every
     AGENT whose stack holds this key sees the whole document once.
     """
@@ -429,7 +429,7 @@ class _ProfileSession:
 
         Args:
             commit_id (`str`): Runtime commit id, unique per backward attempt and
-                policy. A repeat within this session is a no-op.
+                memory. A repeat within this session is a no-op.
             mutations (`tuple[MemoryMutation, ...]`): Empty, or the one mutation
                 this session proposed.
 

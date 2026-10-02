@@ -1043,7 +1043,7 @@ class MemoryStack:
 
 @dataclass(frozen=True, slots=True, init=False)
 class RecallContext:
-    """Visible AGENT context from which a memory policy may derive a query."""
+    """Visible AGENT context from which a memory may derive a query."""
 
     base_system_prompt: str
     prompt: str
@@ -1330,7 +1330,7 @@ class LearningFailure:
 
 @dataclass(frozen=True, slots=True)
 class PolicyCommitOutcome:
-    """One policy's confirmed or still-unresolved commit disposition.
+    """One memory's confirmed or still-unresolved commit disposition.
 
     Attributes:
         memory (`str`): Non-empty memory key.
@@ -1374,9 +1374,9 @@ class LearningResult:
 
     Attributes:
         status (`str`): `succeeded`, `failed`, or `incomplete`. Success requires
-            no failures and only successful supplied policies. Failure requires
+            no failures and only successful supplied memory outcomes. Failure requires
             an actual attributed failure. Incomplete does not infer completion
-            from the known policy dispositions.
+            from the known memory dispositions.
         failures (`tuple[LearningFailure, ...]`): Unique failure attributions in
             supplied order; defaults to an empty tuple.
         policies (`tuple[PolicyCommitOutcome, ...]`): Unique memory keys in
@@ -1429,7 +1429,7 @@ class LearningResult:
 
 
 class MemoryOperationError(Exception):
-    """Typed ordinary failure raised by a memory policy or session operation."""
+    """Typed ordinary failure raised by a memory or session operation."""
 
     def __init__(
         self,
@@ -1438,7 +1438,7 @@ class MemoryOperationError(Exception):
         message: str,
         retryable: bool,
     ) -> None:
-        """Create one stable policy/session failure."""
+        """Create one stable memory or session failure."""
         self.stage = _require_string(stage, "stage")
         self.code = _require_string(code, "code")
         self.message = _require_string(message, "message")
@@ -1478,7 +1478,7 @@ class MemorySetupError(ValueError):
 
 
 class MemoryRecallError(Exception):
-    """Ordinary recall failure attributed to an authored memory policy site."""
+    """Ordinary recall failure attributed to a memory declaration site."""
 
     def __init__(self, message: str, *, origin: OriginRef | None = None) -> None:
         """Create one recall wrapper; callers retain causes with ``raise ... from``."""
@@ -1556,7 +1556,7 @@ class MemorySession(Protocol):
         commit_id: str,
         mutations: tuple[MemoryMutation, ...],
     ) -> None:
-        """Atomically commit one immutable policy mutation batch.
+        """Atomically commit one immutable memory mutation batch.
 
         ``commit_id`` is stable within one backward attempt, so a repeated
         commit of that attempt may be a no-op. Every later attempt that
@@ -2281,7 +2281,7 @@ class MemoryContextRequest:
 
         Example:
             `MemoryContextRequest(recall, None, {})` supports direct evaluation
-            of text-only policies. A transcript contribution requires an identity.
+            of text-only memories. A transcript contribution requires an identity.
         """
         if type(recall) is not RecallContext:
             raise TypeError("recall must be a RecallContext")

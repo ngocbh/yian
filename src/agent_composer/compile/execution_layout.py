@@ -147,7 +147,7 @@ def _walk_targets(
 
 
 def resolve_execution_layout(flow: Flow) -> ResolvedExecutionLayout:
-    """Purely derive execution scopes without reading memory policies or flow IDs.
+    """Purely derive execution scopes without reading memory declarations or flow IDs.
 
     Args:
         flow (`Flow | CompiledFlow`): The exact static graph to inspect. Missing

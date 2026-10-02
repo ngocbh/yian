@@ -2463,7 +2463,7 @@ def _require_initialized_nonterminal(state: RunState) -> None:
 
 
 def _require_initialized_terminal_backward(state: RunState) -> None:
-    """Require the accepted retained terminal, independently from memory policies."""
+    """Require the accepted retained terminal, independently from memory declarations."""
     _require_initialized(state)
     if not isinstance(state.result, (RunSucceeded, RunFailed)):
         raise ValueError("backward records require an accepted terminal result")

@@ -3,7 +3,7 @@
 This package turns pure node-owned growth seeds into deterministic ``Flow``
 fragments through ``expand.build_grow``. It also owns canonical manifests and
 fingerprints, identity-safe opaque-origin traversal and source-neutral rebasing,
-static execution scopes independent of memory policies, static memory-layout
+static execution scopes independent of memory declarations, static memory-layout
 derivation, and the complete static-path LLM configuration map used for replay.
 Execution layouts derive root-relative template locations and initial LOOP drivers,
 validating every target before stamping. Growth builders add structured occurrence

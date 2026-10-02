@@ -339,7 +339,8 @@ def test_commit_writes_with_compare_and_set_and_is_idempotent(tmp_path, monkeypa
     assert len(writes) == 2
     provenance = json.loads(writes[-1])["provenance"]
     assert provenance["commit_id"] == "commit-1" and provenance["run_id"] == "run-1"
-    assert provenance["frame"] == ["chat"] and provenance["feedback"] == ["Be brief."]
+    assert set(provenance) == {"commit_id", "run_id", "seen_version", "feedback"}
+    assert provenance["feedback"] == ["Be brief."]
 
 
 def test_concurrent_write_after_learning_is_a_retryable_mismatch_without_a_model(tmp_path, monkeypatch) -> None:

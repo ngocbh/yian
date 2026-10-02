@@ -365,7 +365,6 @@ class _ProfileSession:
             provenance: JsonObject = {
                 "commit_id": commit_id,
                 "run_id": payload.get("run_id"),
-                "frame": list(frame.spec.ref.static_path),
                 "seen_version": payload.get("seen_version"),
                 "feedback": payload.get("feedback"),
             }

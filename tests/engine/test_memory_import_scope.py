@@ -168,6 +168,14 @@ def test_scoping_leaves_the_cached_child_untouched(tmp_path: Path) -> None:
     assert _keys(alone) == ["notes"]
 
 
+def test_malformed_imported_graph_is_a_load_error() -> None:
+    lib = load_flow(_lib())
+    # A node filed under a key other than its id; the memory walk rejects it.
+    lib.compiled.nodes = {"b": lib.compiled.nodes["a"]}
+    with pytest.raises(LoadError, match="does not match node id 'a'"):
+        load_flow(_root({"n": "lib"}, {"lib": "lib"}), child_resolver=lambda flow_id, version: lib)
+
+
 def _flow_with(*decls: MemoryDecl) -> CompiledFlow:
     flow = load_flow(
         "id: f\nname: f\nnodes:\n"

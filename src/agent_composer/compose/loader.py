@@ -400,6 +400,9 @@ def _rebase_external_child(alias: str, child: object) -> ComposedFlow:
             lambda origin: _scope_origin(alias, origin),
             resolver=child.origin_resolver,
         )
+        # rebase_flow_origins returned an independent deep copy, so the scope
+        # rewrite cannot reach the cached canonical child.
+        scope_memory_declarations(compiled, alias)
     except Exception as exc:
         raise _UNLOCATED_DIAGNOSTICS.error(
             f"uses: alias {alias!r} could not rebase child origins: {exc}"
@@ -408,9 +411,6 @@ def _rebase_external_child(alias: str, child: object) -> ComposedFlow:
         raise _UNLOCATED_DIAGNOSTICS.error(
             f"uses: alias {alias!r} produced an incomplete rebased origin table"
         )
-    # rebase_flow_origins returned an independent deep copy, so the scope
-    # rewrite cannot reach the cached canonical child.
-    scope_memory_declarations(compiled, alias)
     return replace(
         child,
         compiled=compiled,

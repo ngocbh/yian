@@ -182,3 +182,29 @@ def test_agent_null_declaration_is_absent_and_empty_mapping_fails() -> None:
     assert load_flow(base.replace("VALUE", "null")).compiled.nodes["ask"].memories == ()
     with pytest.raises(LoadError, match="declares no memory"):
         load_flow(base.replace("VALUE", "{}"))
+
+
+_TWO_SITES = (
+    "id: clash\n"
+    "name: clash\n"
+    "long_term_memory: {notes: episodic}\n"
+    "llm_config: {provider: openai, model: fake-model}\n"
+    "nodes:\n"
+    "  ask:\n"
+    "    kind: agent\n"
+    "    long_term_memory: {notes: reflective}\n"
+    "    prompt: hi\n"
+    "    output: str\n"
+    "output: ${ask.output}\n"
+)
+
+
+def test_resolver_errors_become_located_load_errors() -> None:
+    with pytest.raises(LoadError) as caught:
+        load_flow(_TWO_SITES, source_label="clash.yaml")
+    diagnostic = caught.value.diagnostic
+    assert "memory 'notes' is declared with different type or config" in diagnostic.message
+    assert diagnostic.frames[-1].range.start_line == 3
+    notes = list(diagnostic.notes)
+    assert notes[0] == "also declared at root AGENT 'ask'"
+    assert len(notes) == 2 and notes[1].startswith("related declaration at clash.yaml:8:")

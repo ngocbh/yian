@@ -200,8 +200,7 @@ def test_aliases_equal_under_casefold_are_rejected() -> None:
         )
 
 
-def test_dotted_alias_is_rejected_by_the_resolver(tmp_path: Path) -> None:
+def test_dotted_alias_is_rejected_at_load(tmp_path: Path) -> None:
     (tmp_path / "lib.yaml").write_text(_lib())
-    flow = load_flow(_root({"a": "my.lib"}, {"my.lib": "lib"}), search_paths=[tmp_path])
-    with pytest.raises(MemorySetupError, match="'my.lib'"):
-        resolve_memory_layout(flow.compiled)
+    with pytest.raises(LoadError, match="'my.lib'"):
+        load_flow(_root({"a": "my.lib"}, {"my.lib": "lib"}), search_paths=[tmp_path])

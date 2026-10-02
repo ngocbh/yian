@@ -42,7 +42,10 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from agent_composer.compile.memory_layout import scope_memory_declarations
+from agent_composer.compile.memory_layout import (
+    resolve_memory_layout,
+    scope_memory_declarations,
+)
 from agent_composer.compile.model import CompiledFlow
 from agent_composer.compile.origins import iter_flow_origins, rebase_flow_origins
 from agent_composer.diagnostics import (
@@ -51,7 +54,7 @@ from agent_composer.diagnostics import (
     OriginResolver,
     ResolverTable,
 )
-from agent_composer.memory.contracts import DeclSite
+from agent_composer.memory.contracts import DeclSite, MemorySetupError
 from agent_composer.typesys.values import TypeCheckError
 from agent_composer.typesys.types import read_typedefs
 from agent_composer.compose.build.pipeline import _assemble, ComposedFlow
@@ -415,6 +418,38 @@ def _rebase_external_child(alias: str, child: object) -> ComposedFlow:
     )
 
 
+def _memory_setup_load_error(flow: ComposedFlow, exc: MemorySetupError) -> LoadError:
+    """Locate one memory layout failure at its first declaration site.
+
+    Args:
+        flow (`ComposedFlow`): Loaded root whose resolver maps origins to source.
+        exc (`MemorySetupError`): Resolver failure with its origins and notes.
+
+    Returns:
+        `LoadError`: Failure framed at ``exc.origin``. Its notes are the
+        exception's own notes, then one located note per related origin.
+    """
+    resolver = flow.origin_resolver
+
+    def frame(origin):
+        return None if origin is None or resolver is None else resolver.resolve(origin)
+
+    primary = frame(exc.origin)
+    notes = list(getattr(exc, "__notes__", ()))
+    for origin in exc.related:
+        other = frame(origin)
+        if other is not None:
+            notes.append(
+                f"related declaration at {other.label}:{other.range.start_line}:"
+                f"{other.range.start_col}"
+            )
+    return _UNLOCATED_DIAGNOSTICS.error(
+        str(exc),
+        frames=() if primary is None else (primary,),
+        notes=notes,
+    )
+
+
 def _finalize_composed_flow(
     staged: ComposedFlow,
     local_catalog: SourceCatalog,
@@ -602,7 +637,14 @@ def load_flow(
     if type(source_label) is not str:
         raise TypeError("source_label must be a string")
     document = parse_source_document(text, source_label)
-    return _load_flow(document, child_resolver, search_paths, _LoadCtx())
+    flow = _load_flow(document, child_resolver, search_paths, _LoadCtx())
+    # Only the root load sees the fully assembled graph, imports included;
+    # children loaded for uses: are checked as part of their importer.
+    try:
+        resolve_memory_layout(flow.compiled)
+    except MemorySetupError as exc:
+        raise _memory_setup_load_error(flow, exc) from exc
+    return flow
 
 
 def _reject_authored_api_key(

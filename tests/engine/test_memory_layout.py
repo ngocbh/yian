@@ -14,7 +14,7 @@ from agent_composer.compile.memory_layout import (
     resolve_memory_layout,
 )
 from agent_composer.compile.model import END_ID, START_ID, CompiledFlow
-from agent_composer.compose import load_flow
+from agent_composer.compose import LoadError, load_flow
 from agent_composer.diagnostics import OriginRef
 from agent_composer.memory import (
     DeclSite,
@@ -434,13 +434,15 @@ def test_single_agent_owner_is_conversation_eligible() -> None:
     assert memory.placements == (("ask",),)
 
 
-def test_one_key_with_two_configs_is_a_setup_error_at_the_first_site() -> None:
+def test_one_key_with_two_configs_is_a_load_error_at_the_first_site() -> None:
     source = _NESTED.replace(
         "long_term_memory: local", "long_term_memory: {inner: {type: inner, config: {limit: 4}}}"
     )
-    with pytest.raises(MemorySetupError, match="memory 'inner'.*different type or config") as caught:
-        resolve_memory_layout(load_flow(source).compiled)
-    assert caught.value.__notes__ == ["also declared at def/child AGENT 'answer'"]
+    with pytest.raises(LoadError, match="memory 'inner'.*different type or config") as caught:
+        load_flow(source)
+    notes = caught.value.diagnostic.notes
+    assert notes[0] == "also declared at def/child AGENT 'answer'"
+    assert len(notes) == 2 and notes[1].startswith("related declaration at <flow>:")
 
 
 @pytest.mark.parametrize("other", [{"limit": True}, {"limit": 1.0}, {"limit": 2}])
@@ -498,19 +500,20 @@ def test_session_def_called_twice_has_one_owner_and_two_placements() -> None:
     assert memory.placements == (("a", "ask"), ("b", "ask"))
 
 
-def test_flow_level_session_is_a_setup_error() -> None:
+def test_flow_level_session_is_a_load_error() -> None:
     source = (
         "id: flat\nname: flat\nlong_term_memory: session\nnodes:\n"
         "  ask:\n    kind: agent\n    prompt: hi\n    output: str\n"
         "output: ${ask.output}\n"
     )
     with pytest.raises(
-        MemorySetupError, match="session memory 'session' cannot be declared on a flow"
-    ):
-        resolve_memory_layout(load_flow(source).compiled)
+        LoadError, match="session memory 'session' cannot be declared on a flow"
+    ) as caught:
+        load_flow(source)
+    assert caught.value.diagnostic.frames[-1].range.start_line == 3
 
 
-def test_session_key_with_two_agent_owners_is_a_setup_error() -> None:
+def test_session_key_with_two_agent_owners_is_a_load_error() -> None:
     source = (
         "id: pair\nname: pair\nnodes:\n"
         "  left:\n    kind: agent\n    long_term_memory: session\n"
@@ -520,12 +523,15 @@ def test_session_key_with_two_agent_owners_is_a_setup_error() -> None:
         "output: ${[left.output, right.output]}\n"
     )
     with pytest.raises(
-        MemorySetupError, match="session memory 'session' has more than one owner"
+        LoadError, match="session memory 'session' has more than one owner"
     ) as caught:
-        resolve_memory_layout(load_flow(source).compiled)
-    assert "AGENT 'left'" in str(caught.value) and "AGENT 'right'" in str(caught.value)
-    assert caught.value.__notes__ == ["also owned at root AGENT 'right'"]
-    assert len(caught.value.related) == 1 and caught.value.related[0] != caught.value.origin
+        load_flow(source)
+    diagnostic = caught.value.diagnostic
+    assert "AGENT 'left'" in diagnostic.message and "AGENT 'right'" in diagnostic.message
+    assert diagnostic.frames[-1].range.start_line == 6
+    assert diagnostic.notes[0] == "also owned at root AGENT 'right'"
+    assert len(diagnostic.notes) == 2
+    assert diagnostic.notes[1].startswith("related declaration at <flow>:11:")
 
 
 def test_config_clash_carries_every_other_site_as_a_related_origin() -> None:

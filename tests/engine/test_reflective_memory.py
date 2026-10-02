@@ -300,7 +300,7 @@ def test_snapshot_is_defensive_and_foreign_restore_is_conservative() -> None:
         reset.open_run(snapshot=recorded)
 
 
-def test_pristine_restore_keeps_recorded_effective_frame_defaults() -> None:
+def test_pristine_restore_keeps_recorded_limits() -> None:
     original = ReflectiveMemory(
         {"provider": "ollama", "model": "qwen"},
         max_items=4,
@@ -310,11 +310,28 @@ def test_pristine_restore_keeps_recorded_effective_frame_defaults() -> None:
         session.open_frame(_spec())
         snapshot = session.snapshot
 
-    restored = ReflectiveMemory(max_items=99, recall_limit=88)
+    restored = ReflectiveMemory()
     with restored.open_run(snapshot=snapshot) as session:
         frame = session.open_frame(_spec())
         assert frame.recall() == ""
         assert session.snapshot == snapshot
+
+
+def test_unset_limits_adopt_recorded_ones_and_explicit_ones_must_match() -> None:
+    config = {"provider": "ollama", "model": "qwen"}
+    with ReflectiveMemory(config).open_run() as session:
+        assert session.snapshot["config"] == {"max_items": 100, "recall_limit": 20}
+    with ReflectiveMemory(config, max_items=4, recall_limit=2).open_run() as session:
+        recorded = session.snapshot
+    with ReflectiveMemory().open_run(snapshot=recorded) as session:
+        assert session.snapshot == recorded
+    with ReflectiveMemory(max_items=4).open_run(snapshot=recorded) as session:
+        assert session.snapshot == recorded
+    for kwargs in ({"max_items": 5}, {"recall_limit": 3}):
+        with pytest.raises(MemoryOperationError) as exc:
+            ReflectiveMemory(**kwargs).open_run(snapshot=recorded)
+        assert exc.value.code == "reflective.config_conflict"
+        assert exc.value.retryable is False
 
 
 def test_same_object_restore_accepts_recorded_snapshot() -> None:

@@ -97,6 +97,9 @@ class _State:
     lessons: tuple[_Lesson, ...]
 
 
+_DEFAULT_LIMITS = _Limits(100, 20)
+
+
 def _operation_error(
     stage: str,
     code: str,
@@ -115,6 +118,30 @@ def _positive_int(value: object, name: str) -> int:
     if value <= 0:
         raise ValueError(f"{name} must be positive")
     return value
+
+
+def _resolve_limits(
+    requested: tuple[int | None, int | None],
+    recorded: _Limits | None,
+    stage: str,
+) -> _Limits:
+    """Fill unset limits from recorded ones or defaults; reject explicit conflicts."""
+    max_items, recall_limit = requested
+    if recorded is not None and (
+        max_items not in (None, recorded.max_items)
+        or recall_limit not in (None, recorded.recall_limit)
+    ):
+        raise _operation_error(
+            stage,
+            "reflective.config_conflict",
+            "configured limits differ from the recorded limits",
+            retryable=False,
+        )
+    base = _DEFAULT_LIMITS if recorded is None else recorded
+    return _Limits(
+        base.max_items if max_items is None else max_items,
+        base.recall_limit if recall_limit is None else recall_limit,
+    )
 
 
 def _validated_json_string(value: object, name: str) -> str:
@@ -574,8 +601,8 @@ class ReflectiveMemory:
         self,
         llm_config: JsonObject | None = None,
         *,
-        max_items: int = 100,
-        recall_limit: int = 20,
+        max_items: int | None = None,
+        recall_limit: int | None = None,
         storage: str | os.PathLike[str] | None = None,
     ) -> None:
         """Create or reopen one reflective-memory namespace.
@@ -586,10 +613,11 @@ class ReflectiveMemory:
                 Recorded sessions retain their exact pinned model configuration.
                 ``api_key`` is rejected, so the learner always authenticates with
                 environment or saved-connection credentials.
-            max_items (`int`, defaults to `100`): Positive lesson limit of this
-                instance.
-            recall_limit (`int`, defaults to `20`): Positive contextual recall limit
-                of this instance.
+            max_items (`int | None`, defaults to `None`): Maximum retained
+                lessons. None adopts the stored or snapshot value, else 100.
+            recall_limit (`int | None`, defaults to `None`): Maximum lessons
+                returned by contextual recall. None adopts the stored or snapshot
+                value, else 20.
             storage (`str | PathLike[str] | None`, defaults to `None`): Optional
                 local SQLite file with an existing parent, owned until close or
                 context exit. None keeps state process-local.
@@ -597,12 +625,15 @@ class ReflectiveMemory:
         Raises:
             TypeError: Limits or model settings have invalid types.
             ValueError: Limits or model settings are invalid.
-            MemoryOperationError: Storage is unavailable, occupied, or invalid.
+            MemoryOperationError: Storage is unavailable, occupied, or invalid,
+                or an explicit limit differs from the stored limits
+                (`reflective.config_conflict`).
         """
-        limits = _Limits(
-            _positive_int(max_items, "max_items"),
-            _positive_int(recall_limit, "recall_limit"),
-        )
+        if max_items is not None:
+            _positive_int(max_items, "max_items")
+        if recall_limit is not None:
+            _positive_int(recall_limit, "recall_limit")
+        self._requested = (max_items, recall_limit)
         raw_config = (
             {} if llm_config is None else _copy_json_object(llm_config, "llm_config")
         )
@@ -626,7 +657,7 @@ class ReflectiveMemory:
         self._namespace = uuid4().hex
         self._epoch = 0
         self._revision = 0
-        self._state = _State(limits, ())
+        self._state = _State(_resolve_limits(self._requested, None, "storage"), ())
         self._applied_commits: dict[str, str] = {}
         self._ever_opened = False
         self._ever_reset = False
@@ -643,6 +674,7 @@ class ReflectiveMemory:
                     )
                 else:
                     state, commits, opened, reset, committed = _parse_inventory(saved)
+                    _resolve_limits(self._requested, state[3].limits, "storage")
                     self._namespace, self._epoch, self._revision, self._state = state
                     self._applied_commits = commits
                     self._ever_opened = opened
@@ -848,6 +880,7 @@ class ReflectiveMemory:
                 llm_config = self._effective_llm_config()
             else:
                 namespace, epoch, revision, state, llm_config = parsed
+                _resolve_limits(self._requested, state.limits, "open_run")
                 if namespace != self._namespace:
                     pristine = (
                         not self._ever_opened

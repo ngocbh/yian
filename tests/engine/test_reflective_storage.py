@@ -54,7 +54,7 @@ def test_learned_lessons_and_limits_survive_reopen(monkeypatch, tmp_path):
         old = _snapshot(memory)
         _learn(monkeypatch, memory)
         expected = _snapshot(memory)
-    with _memory(path, max_items=9, recall_limit=7) as memory:
+    with _memory(path) as memory:
         assert _snapshot(memory) == expected
         with memory.open_run() as opened:
             assert opened.open_frame(_spec()).recall() == "[lesson] Use evidence"
@@ -264,7 +264,7 @@ def test_recorded_limits_survive_reopen(tmp_path):
         with memory.open_run() as opened:
             opened.open_frame(_spec())
             saved = opened.snapshot
-    with _memory(path, max_items=99, recall_limit=88) as memory:
+    with _memory(path) as memory:
         with memory.open_run(snapshot=saved) as resumed:
             resumed.open_frame(_spec())
             assert resumed.snapshot == saved
@@ -274,6 +274,27 @@ def test_recorded_limits_survive_reopen(tmp_path):
             "max_items": 4,
             "recall_limit": 2,
         }
+
+
+def test_explicit_limits_must_match_stored_limits(tmp_path):
+    path = tmp_path / "memory.sqlite"
+    _memory(path, max_items=4, recall_limit=2).close()
+    with _memory(path) as memory:
+        assert memory._state.limits == reflective._Limits(4, 2)
+    with _memory(path, recall_limit=2) as memory:
+        assert memory._state.limits.max_items == 4
+    with pytest.raises(c.MemoryOperationError) as caught:
+        _memory(path, max_items=5)
+    assert caught.value.code == "reflective.config_conflict"
+    _memory(path).close()
+
+
+def test_a_fresh_store_pins_its_default_limits(tmp_path):
+    path = tmp_path / "memory.sqlite"
+    _memory(path).close()
+    with pytest.raises(c.MemoryOperationError) as caught:
+        _memory(path, max_items=5)
+    assert caught.value.code == "reflective.config_conflict"
 
 
 def _ram_state(memory):

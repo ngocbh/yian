@@ -303,10 +303,15 @@ def _build_one(
         except (TypeError, ValueError) as exc:
             raise _error(memory, f"{memory.type} rejected its config: {exc}") from exc
         if not isinstance(value, Memory):
-            raise _error(
+            error = _error(
                 memory,
                 f"factory for {memory.type!r} returned a {type(value).__name__}, not a Memory",
             )
+            # The factory built it, so this call owns it even though it is rejected.
+            cleanup = _close_all([value])
+            if cleanup is not None:
+                _note_cleanup(error, cleanup, "Memory cleanup failed")
+            raise error
         owned.append(value)
         return value
     path, create_parent = storage.get(memory.key), False

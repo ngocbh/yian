@@ -359,6 +359,22 @@ def test_partial_failure_closes_what_was_built_in_reverse(tmp_path: Path) -> Non
     assert caught.value.__notes__ == ["Memory cleanup failed: RuntimeError: b close", "b detail"]
 
 
+class _NotAMemory:
+    def __init__(self, log: list[str]):
+        self.log = log
+
+    def close(self) -> None:
+        self.log.append("closed")
+
+
+def test_factory_result_that_is_not_a_memory_is_closed() -> None:
+    log: list[str] = []
+    flow = _flow("{vec: vector}")
+    with pytest.raises(MemorySetupError, match="not a Memory"):
+        build_memories(flow, factories={"vector": lambda: _NotAMemory(log)})
+    assert log == ["closed"]
+
+
 def test_second_registry_on_one_root_is_busy_until_the_first_closes(tmp_path: Path) -> None:
     flow = _flow("{notes: episodic}")
     first = build_memories(flow, root=tmp_path)

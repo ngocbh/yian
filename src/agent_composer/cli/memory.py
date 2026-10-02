@@ -28,13 +28,16 @@ class MemoryOptionError(ValueError):
 def parse_memory_storage(options: Iterable[str]) -> dict[str, str]:
     """Parse repeated ``KEY=PATH`` options into a key -> path mapping.
 
+    Surrounding whitespace is stripped from KEY; PATH is kept as given.
+
     Raises:
         `MemoryOptionError`: An option is malformed or repeats a key.
     """
     paths: dict[str, str] = {}
     for option in options:
         key, separator, path = option.partition("=")
-        if not separator or not key.strip() or not path.strip():
+        key = key.strip()
+        if not separator or not key or not path.strip():
             raise MemoryOptionError(
                 f"expected KEY=PATH, got {option!r}",
                 param_hint="--memory-storage",

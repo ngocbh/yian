@@ -12,7 +12,11 @@ from typer.testing import CliRunner
 
 from agent_composer.cli import app
 import agent_composer.cli.run as run_cli
-from agent_composer.cli.memory import MemoryOptionError, build_cli_memories
+from agent_composer.cli.memory import (
+    MemoryOptionError,
+    build_cli_memories,
+    parse_memory_storage,
+)
 from agent_composer.compose import LoadError, load_flow
 from agent_composer.events import NodeStarted
 from agent_composer.memory.contracts import MemoryOperationError, MemorySetupError
@@ -160,6 +164,12 @@ def test_bad_memory_storage_is_a_bad_parameter_before_inputs_provider_and_log(
     # Typer prefixes the flag name; the message itself does not repeat it.
     assert _plain(result.output).count("--memory-storage") == 1
     assert not log.exists()
+
+
+def test_memory_storage_key_is_stripped_and_path_kept() -> None:
+    assert parse_memory_storage([" notes =./a b.sqlite"]) == {"notes": "./a b.sqlite"}
+    with pytest.raises(MemoryOptionError, match="duplicate key 'notes'"):
+        parse_memory_storage(["notes=a", " notes=b"])
 
 
 def test_bad_storage_path_shape_fails_before_inputs_provider_and_log(tmp_path, monkeypatch):

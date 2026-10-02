@@ -292,7 +292,9 @@ class MemoryRuntime:
 
         ``snapshots=None`` opens the implementations at their current state for a
         fresh run.  A tuple restores the exact public snapshots recorded by
-        ``RunStarted`` during recovery.
+        ``RunStarted`` during recovery.  ``memories`` is the recorded key table;
+        when given, only a conversation-eligible memory may return a transcript,
+        and at most one may.  Omitting it keeps the innermost-transcript rule.
         """
         if memories is not None:
             if type(memories) is not tuple or any(type(m) is not MemorySpec for m in memories):

@@ -1025,7 +1025,10 @@ def _check_recorded_memory_table(
     *,
     subject: str,
 ) -> None:
-    """Reject a recorded key table or stack set that the flow does not resolve."""
+    """Reject a recorded key table or stack set that the flow does not resolve.
+
+    A log that recorded neither passes unchecked.
+    """
     if recorded_memories is None and recorded_stacks is None:
         return
     if recorded_memories != memories or recorded_stacks != stacks:

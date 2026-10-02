@@ -270,6 +270,7 @@ def test_agent_session_owns_history_and_a_flow_transcript_is_rejected(monkeypatc
         result = run_flow(flow, {"question": "first"}, memory={"outer": outer, "local": local})
         assert result.status == "failed"
         assert result.failure.cause_type == "MemoryRecallError"
+        assert "not conversation-eligible" in result.failure.message
         assert calls == []
         return
     for question in ("first", "second"):

@@ -466,7 +466,10 @@ def test_run_started_records_the_resolved_memory_table_and_stacks(tmp_path: Path
     assert all(stack.memories == ("test",) for stack in start.memory_stacks)
 
 
-def test_resume_rejects_recorded_key_stacks_that_differ_from_the_flow(tmp_path: Path) -> None:
+@pytest.mark.parametrize("tampered", ["stacks", "table"])
+def test_replay_rejects_a_recorded_key_table_or_stacks_that_differ_from_the_flow(
+    tmp_path: Path, tampered: str
+) -> None:
     path = tmp_path / "tampered.jsonl"
     memory = _Memory()
 
@@ -479,8 +482,15 @@ def test_resume_rejects_recorded_key_stacks_that_differ_from_the_flow(tmp_path: 
 
     lines = path.read_bytes().splitlines()
     envelope = decode_record(lines[0])
-    emptied = tuple(MemoryStack(stack.locator, ()) for stack in envelope.record.memory_stacks)
-    lines[0] = encode_record(replace(envelope, record=replace(envelope.record, memory_stacks=emptied)))
+    record = envelope.record
+    if tampered == "stacks":
+        emptied = tuple(MemoryStack(stack.locator, ()) for stack in record.memory_stacks)
+        record = replace(record, memory_stacks=emptied)
+    else:
+        spec, = record.memories
+        changed = MemorySpec(spec.key, spec.type, {"recall_limit": 1}, spec.owners, False)
+        record = replace(record, memories=(changed,))
+    lines[0] = encode_record(replace(envelope, record=record))
     path.write_bytes(b"\n".join(lines) + b"\n")
 
     with pytest.raises(ValueError, match="memory table or stacks"):

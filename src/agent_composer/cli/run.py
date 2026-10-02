@@ -54,7 +54,7 @@ from rich.syntax import Syntax
 from rich.text import Text
 
 from agent_composer.compile.model import END_ID, START_ID
-from agent_composer.cli.memory import MemoryHost
+from agent_composer.cli.memory import MemoryOptionError, build_cli_memories
 from agent_composer.cli.terminal import PromptRequest, TerminalBroker
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.loader import load_flow
@@ -1366,12 +1366,21 @@ def run(
         "log flags are forbidden.",
     ),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress per-node progress."),
+    memory_root: Optional[Path] = typer.Option(
+        None,
+        "--memory-root",
+        file_okay=False,
+        metavar="DIR",
+        help="Keep every declared built-in memory under DIR/<flow id>/ "
+        "(created on first use). Also accepted with --resume.",
+    ),
     memory_storage: List[str] = typer.Option(
         None,
         "--memory-storage",
-        metavar="POLICY=PATH",
-        help="Persist a declared built-in memory policy at PATH (repeatable). "
-        "Omitted policies remain process-local; also accepted with --resume.",
+        metavar="KEY=PATH",
+        help="Store the built-in memory KEY (for example notes or lib.notes) at "
+        "PATH, whose directory must exist (repeatable; overrides --memory-root "
+        "for KEY). Also accepted with --resume.",
     ),
     verbose: bool = typer.Option(
         False, "--verbose", "-v", help="Also print each node's output as it finishes."
@@ -1422,11 +1431,18 @@ def run(
             err_console.print_exception()
         raise typer.Exit(code=1)
 
+    # Construction opens nothing (built-in storage opens on the first run), so
+    # the early exits below need not close the registry; each controller does.
     try:
-        memory_host = MemoryHost(loaded.compiled, memory_storage or [])
+        registry = build_cli_memories(
+            loaded, root=memory_root, storage_options=memory_storage or []
+        )
+    except MemoryOptionError as exc:
+        raise typer.BadParameter(str(exc), param_hint=exc.param_hint) from exc
     except (TypeError, ValueError) as exc:
-        raise typer.BadParameter(str(exc), param_hint="--memory-storage") from exc
-    memory_options = {"memory": memory_host.registry} if memory_host.registry else {}
+        _render_host_run_error("run", exc, engine_trace=engine_trace)
+        raise typer.Exit(code=1)
+    memory_options = {"memory": registry} if registry else {}
     # Claude Code and Codex skill folders (user, then project up to the git root),
     # read only when an AGENT grants skills. An invalid skill is warned about and
     # skipped rather than blocking the run.
@@ -1460,7 +1476,7 @@ def run(
             _render: Callable[[Callable[[], None]], None],
         ) -> RunResult:
             """Recover one run while the helper owns its terminal broker."""
-            with memory_host:
+            with registry:
                 return _resume_flow_controlled(
                     loaded,
                     log=selected_log,
@@ -1522,7 +1538,7 @@ def run(
             _render: Callable[[Callable[[], None]], None],
         ) -> RunResult:
             """Drive one fresh run while the helper owns its terminal broker."""
-            with memory_host:
+            with registry:
                 return _run_flow_controlled(
                     loaded,
                     supplied,

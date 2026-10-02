@@ -226,7 +226,7 @@ defaults on `SessionMemory(history_budget_chars=32_000, recent_turns=4)`.
 Run logs do not reconstruct history. The episodic, reflective, and session
 backends optionally retain their state across restarts in a SQLite file.
 `build_memories` places one memory with `storage={key: path}`, or every memory
-under `root=` (the flow then needs an `id:`):
+under `root=` (the flow `id:` must be usable as one directory name):
 
 ```python
 with build_memories(flow, storage={"chat": "./session.sqlite"}) as memory:
@@ -254,8 +254,9 @@ composer run flow.yaml --memory-root ./mem
 composer run flow.yaml --resume ./run.jsonl --memory-root ./mem
 ```
 
-`--memory-root DIR` keeps every memory under `DIR/<flow id>/` (the flow needs an
-`id:`), and repeatable `--memory-storage KEY=PATH` places one declared memory.
+`--memory-root DIR` keeps every memory under `DIR/<flow id>/` (the flow `id:`
+must be usable as one directory name), and repeatable `--memory-storage KEY=PATH`
+places one declared memory.
 Use the same storage on resume; a run log is not a memory backup. The CLI does
 not run backward learning. A flow that declares a custom memory type runs from
 Python with `build_memories`; `composer run` exits 1 with a setup error for it.

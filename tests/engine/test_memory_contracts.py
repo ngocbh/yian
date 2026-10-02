@@ -179,26 +179,26 @@ def test_nested_memory_carriers_reject_forged_subclass_values() -> None:
 
 
 def test_memory_decls_preserve_origin_and_isolate_canonical_json() -> None:
-    """Caller mutation cannot change a frozen policy specification."""
-    origin = OriginRef("policy")
+    """Caller mutation cannot change a frozen memory declaration."""
+    origin = OriginRef("decl")
     source: JsonObject = {
         "z": [{"enabled": True}],
         "a": {"threshold": 0.5},
     }
-    policy = _decl(source, origin)
+    decl = _decl(source, origin)
 
     source["z"][0]["enabled"] = False  # type: ignore[index]
-    first = policy.config
+    first = decl.config
     first["a"]["threshold"] = 1.0  # type: ignore[index]
 
-    assert policy.name == "notes"
-    assert policy.origin is origin
-    assert policy.config == {
+    assert decl.name == "notes"
+    assert decl.origin is origin
+    assert decl.config == {
         "a": {"threshold": 0.5},
         "z": [{"enabled": True}],
     }
-    assert list(policy.config) == ["a", "z"]
-    assert policy == _decl(
+    assert list(decl.config) == ["a", "z"]
+    assert decl == _decl(
         {"a": {"threshold": 0.5}, "z": [{"enabled": True}]},
         origin,
     )
@@ -207,7 +207,7 @@ def test_memory_decls_preserve_origin_and_isolate_canonical_json() -> None:
 def test_json_scalar_identity_preserves_exact_types_at_every_depth() -> None:
     """Boolean, integer, and float JSON values remain distinct frozen values."""
     values = (True, 1, 1.0)
-    policies = tuple(
+    decls = tuple(
         _decl({"nested": [value, {"value": value}]})
         for value in values
     )
@@ -220,20 +220,20 @@ def test_json_scalar_identity_preserves_exact_types_at_every_depth() -> None:
         for value in values
     )
 
-    assert len(set(policies)) == 3
-    assert len({hash(policy) for policy in policies}) == 3
+    assert len(set(decls)) == 3
+    assert len({hash(decl) for decl in decls}) == 3
     assert len(set(contexts)) == 3
     assert len({hash(context) for context in contexts}) == 3
     assert len(set(mutations)) == 3
     assert len({hash(mutation) for mutation in mutations}) == 3
 
-    for expected_type, policy, context, mutation in zip(
+    for expected_type, decl, context, mutation in zip(
         (bool, int, float),
-        policies,
+        decls,
         contexts,
         mutations,
     ):
-        nested = policy.config["nested"]
+        nested = decl.config["nested"]
         assert type(nested[0]) is expected_type  # type: ignore[index]
         assert type(nested[1]["value"]) is expected_type  # type: ignore[index]
         assert type(context.inputs["value"]) is expected_type

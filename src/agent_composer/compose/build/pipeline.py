@@ -762,12 +762,12 @@ def _assemble(
     `owner` is this flow's complete lexical path and seeds stable identities for anonymous
     children. `flow_id` retains the authored or generated semantic identity;
     `memories` and its optional cursor carry the flow-owned declarations; each is
-    restamped with this flow's `DeclSite` and gets one origin per entry. `boundary_field_ranges` locates authored
-    flow-input declarations during
-    Compose type compilation; `asserts_cursor` is the single authority for each flow
-    assertion's opaque origin and Compose-only validation range. `outputs_range` is the
-    retained authored codomain range when one exists,
-    while `outputs_cursor` retains each physically authored output binding occurrence.
+    restamped with this flow's `DeclSite` and gets one origin per entry.
+    `boundary_field_ranges` locates authored flow-input declarations during Compose type
+    compilation; `asserts_cursor` is the single authority for each flow assertion's
+    opaque origin and Compose-only validation range. `outputs_range` is the retained
+    authored codomain range when one exists, while `outputs_cursor` retains each
+    physically authored output binding occurrence.
     `scope.catalog_builder` is the one registry shared by every assembly originating
     from this physical document, so root, definitions, and inline bodies mint
     collision-free local origins under `owner`. After kind-owned attachment, CODE may

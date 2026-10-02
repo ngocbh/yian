@@ -1,9 +1,14 @@
-"""The long_term_memory parser: sugar, mapping, long form, and shape errors."""
+"""The long_term_memory surface: the declaration parser and its loader wiring.
+
+Parser cases cover sugar, mapping, long form, and shape errors. Loader cases cover
+how flow and AGENT declarations are parsed, stamped, and located in source.
+"""
 
 from __future__ import annotations
 
 import pytest
 
+from agent_composer.compose import load_flow
 from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
 from agent_composer.compose.helpers.memory import parse_memory_declarations
 from agent_composer.memory.contracts import DeclSite
@@ -69,9 +74,6 @@ def test_malformed_values_are_load_errors(value, message: str) -> None:
         _parse(value)
 
 
-from agent_composer.compose import load_flow
-
-
 def _flow(memory_block: str) -> str:
     return (
         "id: surface\n"
@@ -109,11 +111,14 @@ def test_null_flow_declaration_is_the_same_as_absent() -> None:
 
 
 @pytest.mark.parametrize(
-    "block",
-    ["long_term_memory: {}\n", "long_term_memory: {name: reflective, config: {}}\n"],
+    ("block", "message"),
+    [
+        ("long_term_memory: {}\n", "declares no memory"),
+        ("long_term_memory: {name: reflective, config: {}}\n", "reserved"),
+    ],
 )
-def test_flow_shape_errors_point_at_the_value(block: str) -> None:
-    with pytest.raises(LoadError) as caught:
+def test_flow_shape_errors_point_at_the_value(block: str, message: str) -> None:
+    with pytest.raises(LoadError, match=message) as caught:
         load_flow(_flow(block))
     assert caught.value.diagnostic.frames[-1].range.start_line == 3
 

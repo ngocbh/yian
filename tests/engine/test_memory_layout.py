@@ -105,7 +105,7 @@ def test_memory_owning_python_flow_requires_exact_direct_boundaries(
     class StringSubclass(str):
         """Equality-compatible but noncanonical boundary identifier."""
 
-    origin = OriginRef("flow/memory_policy")
+    origin = OriginRef("flow/memories/x")
     nodes = {
         START_ID: StartNode(START_ID, params=[]),
         END_ID: EndNode.record(END_ID, output_names=[]),

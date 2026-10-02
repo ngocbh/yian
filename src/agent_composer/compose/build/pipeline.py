@@ -762,7 +762,7 @@ def _assemble(
     `owner` is this flow's complete lexical path and seeds stable identities for anonymous
     children. `flow_id` retains the authored or generated semantic identity;
     `memories` and its optional cursor carry the flow-owned declarations; each is
-    restamped with this flow's `DeclSite`. `boundary_field_ranges` locates authored
+    restamped with this flow's `DeclSite` and gets one origin per entry. `boundary_field_ranges` locates authored
     flow-input declarations during
     Compose type compilation; `asserts_cursor` is the single authority for each flow
     assertion's opaque origin and Compose-only validation range. `outputs_range` is the
@@ -802,18 +802,23 @@ def _assemble(
     if type(memories) is not tuple or any(type(decl) is not MemoryDecl for decl in memories):
         raise TypeError("memories must be a tuple of exact MemoryDecl values")
     if memories:
-        origin = (
-            catalog_builder.register((*owner, "memory_policy"), memories_cursor)
-            if memories_cursor is not None
-            else None
-        )
-        memories = tuple(
-            MemoryDecl(
-                decl.name, decl.type, decl.config, DeclSite((), owner, None),
-                decl.origin if origin is None else origin,
+        stamped: list[MemoryDecl] = []
+        for decl in memories:
+            origin = decl.origin
+            if memories_cursor is not None:
+                path = (*owner, "memories", decl.name)
+                if memories_cursor.has(decl.name):
+                    origin = catalog_builder.register(
+                        path, memories_cursor.child(decl.name), anchor="key"
+                    )
+                else:  # sugar: the whole scalar value is the one entry
+                    origin = catalog_builder.register(path, memories_cursor)
+            stamped.append(
+                MemoryDecl(
+                    decl.name, decl.type, decl.config, DeclSite((), owner, None), origin
+                )
             )
-            for decl in memories
-        )
+        memories = tuple(stamped)
     flow_assertion_cursors = _assertion_cursors(
         asserts_section,
         asserts_cursor,

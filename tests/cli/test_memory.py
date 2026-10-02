@@ -58,7 +58,7 @@ def _configured(policy, config):
         )
     return _CODE_FLOW.replace(
         "long_term_memory: POLICY\n",
-        f"long_term_memory: {{name: {policy}, config: {config}}}\n",
+        f"long_term_memory: {{{policy}: {{type: {policy}, config: {config}}}}}\n",
     )
 
 

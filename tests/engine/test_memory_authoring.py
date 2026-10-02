@@ -91,10 +91,11 @@ def _full_flow(policy: str) -> str:
         ("long_term_memory: reflective\n", {}, 3),
         (
             "long_term_memory:\n"
-            "  name: reflective\n"
-            "  config:\n"
-            "    max_items: 20\n"
-            "    recall_limit: 5\n",
+            "  reflective:\n"
+            "    type: reflective\n"
+            "    config:\n"
+            "      max_items: 20\n"
+            "      recall_limit: 5\n",
             {"max_items": 20, "recall_limit": 5},
             4,
         ),
@@ -130,8 +131,7 @@ name: parent
 defs:
   child:
     long_term_memory:
-      name: reflective
-      config: {max_items: 8}
+      reflective: {type: reflective, config: {max_items: 8}}
     nodes:
       answer:
         kind: code
@@ -276,16 +276,15 @@ def test_non_agent_node_rejects_long_term_memory_at_the_authored_value(source: s
 @pytest.mark.parametrize(
     ("surface", "message"),
     [
-        ("long_term_memory: ''\n", "name must be non-empty"),
-        ("long_term_memory: null\n", "string or a mapping"),
-        ("long_term_memory: {name: 3}\n", "name must be a non-empty string"),
-        ("long_term_memory: {name: reflective, config: []}\n", "config must be a mapping"),
-        ("long_term_memory: {name: reflective, extra: true}\n", "unknown key"),
-        ("long_term_memory: {name: reflective, 1: true}\n", "unknown key"),
-        ("long_term_memory: {config: {}}\n", "requires 'name'"),
+        ("long_term_memory: ''\n", "memory name"),
+        ("long_term_memory: {}\n", "declares no memory"),
+        ("long_term_memory: {name: reflective}\n", "reserved"),
+        ("long_term_memory: {name: reflective, config: {max_items: 3}}\n", "reserved"),
+        ("long_term_memory: {notes: {type: reflective, config: []}}\n", "config must be a mapping"),
+        ("long_term_memory: {notes: {type: reflective, extra: true}}\n", "unknown key"),
     ],
 )
-def test_malformed_flow_policy_is_located_at_its_authored_occurrence(
+def test_malformed_flow_declaration_is_located_at_its_authored_occurrence(
     surface: str,
     message: str,
 ) -> None:
@@ -565,8 +564,9 @@ def test_policy_config_rejects_host_private_fields(config: dict) -> None:
 def test_authored_policy_config_rejects_host_private_fields(config: dict) -> None:
     source = _full_flow(
         "long_term_memory:\n"
-        "  name: reflective\n"
-        f"  config: {json.dumps(config)}\n"
+        "  notes:\n"
+        "    type: reflective\n"
+        f"    config: {json.dumps(config)}\n"
     )
 
     with pytest.raises(LoadError, match="forbidden private key"):

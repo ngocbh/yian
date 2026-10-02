@@ -36,8 +36,7 @@ long_term_memory: outer
 defs:
   child:
     long_term_memory:
-      name: inner
-      config: {limit: 3}
+      inner: {type: inner, config: {limit: 3}}
     nodes:
       answer:
         kind: agent
@@ -153,7 +152,7 @@ def test_memory_owning_python_flow_requires_exact_direct_boundaries(
 def test_flow_start_and_end_scopes_carry_the_enclosing_keys() -> None:
     without_child_policy = load_flow(
         _NESTED.replace(
-            "    long_term_memory:\n      name: inner\n      config: {limit: 3}\n",
+            "    long_term_memory:\n      inner: {type: inner, config: {limit: 3}}\n",
             "",
         )
     ).compiled

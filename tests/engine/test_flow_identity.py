@@ -2420,8 +2420,9 @@ def test_memory_expansion_projection_omits_root_id_and_config_but_hashes_keys():
         source = f"""id: {root_id}
 name: memory
 long_term_memory:
-  name: {policy}
-  config: {{limit: {limit}}}
+  {policy}:
+    type: {policy}
+    config: {{limit: {limit}}}
 nodes:
   body:
     kind: code

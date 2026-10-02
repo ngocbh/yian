@@ -57,7 +57,7 @@ from agent_composer.compose.build.pipeline import _assemble, ComposedFlow
 from agent_composer.compose.desugar.inline_bodies import INLINE_FLOW_PREFIX
 from agent_composer.compose.nodes.resolver import ChildResolver
 from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
-from agent_composer.compose.helpers.memory import memory_policy_declarations, parse_memory_policy
+from agent_composer.compose.helpers.memory import parse_memory_declarations
 from agent_composer.compose.helpers.uses import parse_uses_ref
 from agent_composer.compose.helpers.source import _boundary_field_ranges
 from agent_composer.compose.parse.file import (
@@ -673,15 +673,15 @@ def _load_flow(
         uses_cursor=uses_cursor,
         diagnostics=diagnostics,
     )
-    root_memories = memory_policy_declarations(
-        parse_memory_policy(
+    root_memories = (
+        parse_memory_declarations(
             f.long_term_memory,
             diagnostics=diagnostics,
             source_range=root.range_of("long_term_memory"),
+            site=DeclSite((), ("root",), None),
         )
-        if root.has("nodes") and root.has("long_term_memory")
-        else None,
-        DeclSite((), ("root",), None),
+        if root.has("nodes") and f.long_term_memory is not None
+        else ()
     )
     callable_scope.eager_load_defs()
 
@@ -1091,8 +1091,8 @@ def _load_def(
     )
     nodes_cursor = _def_assembly_cursor(def_cursor, body["nodes"])
     try:
-        def_memories = memory_policy_declarations(
-            parse_memory_policy(
+        def_memories = (
+            parse_memory_declarations(
                 body["long_term_memory"],
                 diagnostics=diagnostics,
                 source_range=(
@@ -1100,10 +1100,10 @@ def _load_def(
                     if def_cursor is not None
                     else None
                 ),
+                site=DeclSite((), ("def", name), None),
             )
-            if "long_term_memory" in body
-            else None,
-            DeclSite((), ("def", name), None),
+            if body.get("long_term_memory") is not None
+            else ()
         )
         return _assemble(
             inputs_section=body.get("inputs") or {},

@@ -405,7 +405,7 @@ def _rebase_external_child(alias: str, child: object) -> ComposedFlow:
         scope_memory_declarations(compiled, alias)
     except Exception as exc:
         raise _UNLOCATED_DIAGNOSTICS.error(
-            f"uses: alias {alias!r} could not rebase child origins: {exc}"
+            f"uses: alias {alias!r} could not rebase child: {exc}"
         ) from exc
     if len(table) != len(origins):
         raise _UNLOCATED_DIAGNOSTICS.error(

@@ -1220,4 +1220,3 @@ def test_replay_rejects_an_eligible_node_scope_that_differs_from_its_recorded_st
     original.nodes["agent"].memory_scope = _scope(node.id, memories=("outer",))
     with pytest.raises(ValueError, match="exact recorded memory stack"):
         _replay_records(RunState(original), tuple(log), grow_builder=build_grow)
-

@@ -42,6 +42,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from agent_composer.compile.memory_layout import scope_memory_declarations
 from agent_composer.compile.model import CompiledFlow
 from agent_composer.compile.origins import iter_flow_origins, rebase_flow_origins
 from agent_composer.diagnostics import (
@@ -374,6 +375,9 @@ def _validate_external_child(alias: str, child: object) -> tuple[OriginRef, ...]
 def _rebase_external_child(alias: str, child: object) -> ComposedFlow:
     """Return one validated child copy scoped under its lexical alias.
 
+    Every reachable memory declaration in the copy gains ``alias`` as its
+    outermost scope segment.
+
     Args:
         alias (`str`): Authored ``uses:`` alias owning the returned view.
         child (`object`): Canonical `ComposedFlow` returned by the host resolver.
@@ -401,6 +405,9 @@ def _rebase_external_child(alias: str, child: object) -> ComposedFlow:
         raise _UNLOCATED_DIAGNOSTICS.error(
             f"uses: alias {alias!r} produced an incomplete rebased origin table"
         )
+    # rebase_flow_origins returned an independent deep copy, so the scope
+    # rewrite cannot reach the cached canonical child.
+    scope_memory_declarations(compiled, alias)
     return replace(
         child,
         compiled=compiled,

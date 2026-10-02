@@ -251,7 +251,7 @@ composer run flow.yaml --resume ./run.jsonl --memory-storage session=./session.s
 The flow must declare the selected policy. Use the same store on resume; a run
 log is not a memory backup. The CLI does not run backward learning. Custom
 policies still require Python host injection. See
-[CLI memory](docs/cli.md#memory-policies-and-storage) for lifetime and examples.
+[CLI memory](docs/cli.md#memory-and-storage) for lifetime and examples.
 
 ## Documentation
 

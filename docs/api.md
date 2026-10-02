@@ -468,7 +468,7 @@ output: ${answer.output}
 The Python host owns the backend, model configuration, credentials, tenant
 identity, and lifetime. `run_flow(..., memory=None)` still leaves declarations
 dormant. The `composer run` host supplies declared built-in policies automatically;
-see [CLI memory](cli.md#memory-policies-and-storage). Python injection supports
+see [CLI memory](cli.md#memory-and-storage). Python injection supports
 custom policies and constructor settings:
 
 ```python

@@ -42,7 +42,7 @@ without any memory policy.
 others remain process-local. It does not enable learning or call `backward()`.
 Session history still advances during forward, while saving episodic or reflective
 learning requires the explicit Python API. See
-[CLI memory](cli.md#memory-policies-and-storage).
+[CLI memory](cli.md#memory-and-storage).
 
 | Setting | What it enables | What forward execution does |
 | --- | --- | --- |

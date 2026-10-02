@@ -334,8 +334,8 @@ contains it; unattributed root feedback joins only keys owned by
 `DeclSite((), ("root",), None)`. Known failures stop the attempt, preserving completed
 feedback when computation already finished. Host faults escape with the prefix.
 
-Commit observations (`PolicyCommitOutcome.memory`) are `unrequested`, `unknown`,
-`succeeded`, and `failed`.
+Commit observations are keyed by memory key (`PolicyCommitOutcome.memory`); their
+`PolicyCommitOutcome.status` is `unrequested`, `unknown`, `succeeded`, or `failed`.
 Only an unfinished attempt blocks a new Started; the driver closes it as
 interrupted first. Every explicit call recomputes a whole new attempt with fresh
 sessions/original snapshots; Ready is inspectable but never resumed. Every

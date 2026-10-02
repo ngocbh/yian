@@ -300,7 +300,9 @@ history and recent whole turns stay intact, even above the soft budget.
 `composer run` builds every built-in memory in RAM, or on disk with
 `--memory-root DIR` (key `lib.notes` lives at `DIR/<flow id>/lib/notes.sqlite`) and
 repeatable `--memory-storage KEY=PATH`. It cannot run a flow that declares a custom
-type, and it never runs backward learning. Supply the same storage on unfinished
+type, and it never runs backward learning. `composer chat` and its `run_flow` tool
+supply no long-term memory: declared memories stay off (session conversations are
+not kept). Supply the same storage on unfinished
 `--resume`; terminal inspection opens none. A storage file has one owner until its
 backend closes. From Python, pass
 `memory=build_memories(flow, root=..., storage=..., supplied=..., factories=...)` to

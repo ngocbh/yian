@@ -33,6 +33,8 @@ These names are exported from the top-level `agent_composer` package:
 |------|------------|
 | `load_flow` | parse + compile + validate Compose-YAML into a `ComposedFlow` |
 | `run_flow` | drive a `ComposedFlow` to a terminal, returning a `RunResult` |
+| `build_memories` | build one backend per memory key a `ComposedFlow` declares, returning a `MemoryRegistry` |
+| `MemoryRegistry` | read-only memory-key -> backend mapping with declared `types` and `close()`; pass it as `run_flow(..., memory=)` |
 | `Failure` | immutable semantic failure (`code`, message, node, origin trace, debug cause) |
 | `ComposedFlow` | a compiled, validated flow with an optional resolver and `diagnose(failure)` |
 | `CompiledFlow` | the compiled flow IR (`loaded.compiled`) |
@@ -682,8 +684,8 @@ model request or tool effect remains possible.
 
 Episodic and reflective limits are stored with the file. A limit left unset
 adopts the stored value; a different explicit value, from YAML `config` or the
-constructor, fails with `<type>.config_conflict` until the file is reset or
-removed. Recorded run snapshots remain unchanged, and future reflective learning
+constructor, fails with `<type>.config_conflict`. Only removing the file or
+using the stored limits clears it; `reset()` keeps the stored limits. Recorded run snapshots remain unchanged, and future reflective learning
 uses the current host `llm_config`. SessionMemory uses the current history
 budget and recent-turn count. Increasing the recent-turn count restores raw
 context for newly protected turns instead of hiding them behind an older

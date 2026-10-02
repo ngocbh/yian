@@ -420,12 +420,14 @@ pattern; a flow-level session; a session key with more than one site; an AGENT
 with two sessions. `build_memories` adds: a custom type with no supplied value or
 factory, `factories` naming a built-in type, a non-`Memory` value, config on a
 supplied key, `storage` for a supplied or custom key, an undeclared key, a rejected
-config, and `root` without a safe flow `id`.
+config, `root` without a safe flow `id`, and two built-in keys on one storage file.
 
 `composer run` builds every built-in memory in RAM, or with `--memory-root DIR` at
 `DIR/<flow id>/<scope...>/<name>.sqlite` (`.md` for profile), with repeatable
 `--memory-storage KEY=PATH` overriding one key. It refuses a flow with a
-custom type, even on `--resume`. Use the same storage on unfinished resume; paths
+custom type, even on `--resume`. `composer chat` and its `run_flow` tool supply no
+long-term memory, so declared memories stay off and session conversations are not
+kept. Use the same storage on unfinished resume; paths
 never belong in YAML or run logs, and terminal inspection opens no backend. A
 library host passes `memory=build_memories(flow, root=, storage=, supplied=,
 factories=)` to `run_flow`; Python's `memory=None` remains dormant.

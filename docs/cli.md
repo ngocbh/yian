@@ -75,6 +75,9 @@ corrupt, mismatched, or locked log) are reported as concise errors. Pass
 run. If a failed turn restarts the immutable chat flow from the last completed
 transcript, that restart gets a separate log rather than reusing the failed run.
 
+`composer chat` and its `run_flow` tool supply no long-term memory: memories a
+flow declares stay off, and session conversations are not kept.
+
 ## Memory and storage
 
 `composer run` builds every memory the flow declares, using
@@ -122,7 +125,8 @@ network one. Two flow files with the same `id:` share a directory under one
 root. On case-insensitive filesystems, ids that differ only by case do too.
 Changing a memory's type makes its old file fail with `storage.kind`. Changing
 an episodic or reflective limit against an existing file fails with
-`<type>.config_conflict` until the file is reset or removed.
+`<type>.config_conflict`. Only removing the file or using the stored limits
+clears it; a reset keeps the stored limits.
 
 Session history advances automatically during execution. This does not enable
 learning: `composer run` neither sets `learnable=True` nor calls `backward()`.

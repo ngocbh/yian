@@ -18,9 +18,11 @@ strict codecs, and digests; ``session.py`` owns conversation views,
 FIFO leases, atomic turn updates, and learned self-feedback notes.
 ``summary.py`` owns pure whole-turn selection and summary-cache proofs; the
 backend invokes injected projection/model callbacks without importing providers.
-The private ``storage.py`` adapter owns
-single-host SQLite file locking and atomic finite-JSON state transactions below
-the concrete backends; it owns no run sessions or provider behavior.
+The ``storage/`` package sits below the concrete backends: ``sqlite.py`` owns
+single-host SQLite file locking and atomic finite-JSON state transactions, and
+``markdown.py`` owns the versioned markdown stores ``ProfileMemory`` writes
+through. It owns no run sessions or provider behavior. Backends open storage on
+first use; package-root ``memory_host.py`` builds them for a host.
 Concrete session, episodic, reflection, and profile
 backends are imported from their own modules, never eagerly by this contracts-only
 facade.

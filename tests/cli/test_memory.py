@@ -556,3 +556,19 @@ def test_real_pooled_cancellation_keeps_storage_until_model_callback_drains(
     )
     with SessionMemory(storage=path):
         pass
+
+
+def test_run_help_describes_memory_flags():
+    result = _RUNNER.invoke(app, ["run", "--help"], terminal_width=200)
+    text = _plain(result.output)
+    assert "--memory-root" in text
+    assert "KEY=PATH" in text
+    assert "POLICY" not in text
+
+
+def test_cli_module_docstrings_name_the_new_flags():
+    import agent_composer.cli as cli_package
+
+    for doc in (cli_package.__doc__, run_cli.__doc__):
+        assert "--memory-root" in doc
+        assert "POLICY=PATH" not in doc

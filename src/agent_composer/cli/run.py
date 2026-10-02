@@ -14,10 +14,11 @@ structures or explicit null come from `--inputs`.
 Fresh runs use a reported durable log under ``~/.agent_composer/runs`` unless
 ``--log`` selects a new path. ``--resume`` recovers an existing path without gathering
 fresh inputs or model configuration.
-Declared memory policies use CLI-owned built-in backends. Repeated
-``--memory-storage POLICY=PATH`` opts selected policies into durable storage;
-omitted policies remain process-local. Backends open lazily inside the controller
-and close only after the run boundary drains its workers.
+Declared memories are built with `build_memories`: in RAM by default,
+under ``--memory-root DIR`` as ``DIR/<flow id>/<scope...>/<name>.sqlite``,
+or at ``--memory-storage KEY=PATH`` for one memory key. Storage opens on
+first use inside the controller and closes only after the run boundary
+drains its workers.
 
 The engine runs behind a main-thread terminal broker: blocking HUMAN_INPUT and
 agent ``ask_user`` calls wait for that broker and then continue inside the same

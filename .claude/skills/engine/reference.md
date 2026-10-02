@@ -163,8 +163,8 @@ flattening semantic fields.
 The durable boundary normalizes valid `OriginRef` subclasses to exact base
 `OriginRef(key)` values because the wire owns only that key. Live record, reducer,
 observer, and public-result carriers share the resulting immutable `Failure`;
-replay reconstructs an equal canonical value. Schemas 7 and 8 retain this same
-failure payload; unsupported versions are rejected rather than migrated.
+replay reconstructs an equal canonical value. Schema 9 retains this same failure
+payload; older schemas are rejected rather than migrated.
 
 **Invariants:** a node never receives the pool (the `eval_node` seam binds its
 inputs); a node never writes the pool (it *describes* `Output(value)`, the engine
@@ -294,16 +294,12 @@ WAIT are never timed by that watchdog.
 | `NodeRoutedRecord` | select one named outgoing handle and retain optional terminal failure and evaluation evidence |
 | `NodeExpandedRecord` | rebuild and verify one canonical seed/digest with optional evaluation evidence, then splice its fragment |
 | `NodeFailedRecord` | retain the semantic `Failure` and optional evaluation evidence that make the run terminal-failed |
-| `MemoryCommitRequestedRecord` | request one policy's exact ordered batch, including an empty batch, for a required positive `attempt_id` |
-| `MemoryCommitSucceededRecord` | confirm one policy commit completed successfully |
-| `MemoryCommitFailedRecord` | retain one known policy commit failure for the matching positive attempt/request |
+| `MemoryCommitRequestedRecord` | request one memory key's exact ordered batch, including an empty batch, for a required positive `attempt_id` |
+| `MemoryCommitSucceededRecord` | confirm one memory commit completed successfully |
+| `MemoryCommitFailedRecord` | retain one known memory commit failure for the matching positive attempt/request |
 | `BackwardStartedRecord` | retain an attempt ID and its original ordinary root feedback |
-| `BackwardReadyRecord` | retain completed root feedback, the complete occurrence attribution inventory, and ordered owned frame proposals |
+| `BackwardReadyRecord` | retain completed root feedback, the complete occurrence attribution inventory, and memory proposals in key order |
 | `BackwardFinishedRecord` | retain an attempt's outcome, including completed feedback when a later learner fails |
-| `ConversationAdmittedRecord` | inert historical admission metadata |
-| `ConversationEffectRequestedRecord` | inert historical request metadata |
-| `ConversationEffectObservedRecord` | inert historical observation metadata |
-| `ConversationClosedRecord` | inert historical turn-disposition metadata |
 
 `FlowEngine` borrows one initialized `RunState` plus a matching open `RunLog`.
 Workers only evaluate; the dispatcher prepares a total transition, appends its
@@ -314,33 +310,37 @@ and outcome, and are never yielded, recorded, or replayed; neither sink is
 supplied when its callback is absent. The engine never closes its log: package-root `run.py` owns
 `MemoryRunLog`/`JsonlRunLog` creation, locking, recovery, tail repair, and closure.
 The explicit backward driver uses the same prepare/append/reduce path after the
-forward result returns, with no observer publication. New writes use schema 8;
-readers accept exactly schemas 7 and 8. The thirteen pre-existing kinds retain
-unchanged strict payload validation in both; the four conversation kinds require
-8. Removed per-frame records and nullable legacy commit attempt IDs remain invalid.
-Preserve each historical envelope's schema and canonical bytes through preparation,
-replay, trace comparison, tamper checks, and append verification. Recovery appends
-new schema-8 records without rewriting a schema-7 accepted prefix; mixed logs reopen.
+forward result returns, with no observer publication. Logs use schema 9; readers
+reject schemas 7 and 8 with "run log schema N predates schema 9 and is not
+supported". Schema 9 holds the thirteen kinds above with memory payloads keyed by
+memory key (`RunStartedRecord.memories` and `.memory_stacks`). Preserve each
+envelope's canonical bytes through preparation, replay, trace comparison, tamper
+checks, and append verification. Recovery appends without rewriting the accepted
+prefix.
 
 `run_flow(..., log=None)` uses process-local authority; a path selects a durable
-JSONL log. `memory={name: implementation}` opens one run-scoped session per policy
-selected by an authored `long_term_memory:` declaration for recall and optional
-conversation history. Opening snapshots remain pinned; SessionMemory reads latest
+JSONL log. `memory={key: implementation}` opens one run-scoped session per memory
+key in the recorded table, for recall and optional conversation history. Hosts
+build that mapping with `build_memories`; `run_flow` constructs none.
+Opening snapshots remain pinned; SessionMemory reads latest
 live history after admission. `learnable=True` retains accepted execution for explicit
-`RunResult.backward(feedback=None)` and does not require a memory policy. Forward
-never calls frame learners or learned-mutation commits; automatic conversation
+`RunResult.backward(feedback=None)` and does not require a memory. Forward
+never calls memory learners or learned-mutation commits; automatic conversation
 updates are separate. The explicit attempt completes the reverse fold
-and all enabled frame proposals before Ready, then requests/observes one batch
-per policy in layout order. Empty/unexecuted frames still learn; even empty policy
-batches commit once. Known failures stop the attempt, preserving completed
+and one proposal per memory key before Ready, then requests/observes one batch
+per key in sorted key order. Keys with no executions still learn; even empty
+batches commit once. A key's batch holds accepted occurrences whose recorded stack
+contains it; unattributed root feedback joins only keys owned by
+`DeclSite((), ("root",), None)`. Known failures stop the attempt, preserving completed
 feedback when computation already finished. Host faults escape with the prefix.
 
-Policy observations are `unrequested`, `unknown`, `succeeded`, and `failed`.
+Commit observations (`PolicyCommitOutcome.memory`) are `unrequested`, `unknown`,
+`succeeded`, and `failed`.
 Only an unfinished attempt blocks a new Started; the driver closes it as
 interrupted first. Every explicit call recomputes a whole new attempt with fresh
-sessions/original snapshots; Ready is inspectable but never resumed. The first
-requesting attempt keeps v1 commit IDs and later requesting attempts use
-attempt-scoped v2 IDs (`RuntimeBackwardState.commit_attempt_key`). An unconfirmed request stays
+sessions/original snapshots; Ready is inspectable but never resumed. Every
+requesting attempt uses `ac-memory-v3` commit IDs over
+`[run_id, attempt_id, memory, mutations]`. An unconfirmed request stays
 unknown, and all confirmations without Finished still describe an interruption.
 
 `resume_flow(flow, *, log=..., num_workers=None, memory=None)` validates the
@@ -349,7 +349,7 @@ the same reducer. An eligible unfinished primary appends one
 `RunResumedRecord` before retrying starts in original dispatch order; a terminal
 primary returns silent inspection, even after interrupted backward. An unfinished
 memory-enabled forward run requires exact recorded snapshots; terminal inspection
-opens no policies. Supplied mapping references support a later explicit call.
+opens no memory. Supplied mapping references support a later explicit call.
 The retained handle keeps private program/data and a locator anchored at log
 acquisition, with no idle sessions/workers/lock. Each call is guarded, replays
 fresh authority, and closes resources while retaining the accepted prefix.
@@ -362,10 +362,11 @@ all forward fields unchanged.
 
 `SessionMemory` in `agent_composer.memory.session` implements
 conversation state and direct turn updates for AGENT execution.
-The host injects the backend into `run_flow` under the declared policy name.
-The CLI hosts declared built-in policies lazily through `cli.memory`; its
-repeatable `--memory-storage POLICY=PATH` option selects optional durable files.
-Terminal inspection and old dormant logs open no memory backend. The controller
+The host supplies the backend to `run_flow` under the session memory's key,
+usually through `build_memories`. The CLI builds declared built-in memories
+through `memory_host.build_memories`; `--memory-root DIR` and repeatable
+`--memory-storage KEY=PATH` select optional durable files.
+Terminal inspection opens no memory backend. The controller
 owns cleanup after execution drains; runtime constructs no backend. The
 `agent_composer.memory` facade remains contracts-only. `MemorySession` still names
 the mandatory run-handle protocol; optional `TranscriptSource` and
@@ -376,10 +377,12 @@ expanding it.
 `memory/conversation.py` owns the pure fold and strict codecs/digests;
 `memory/session.py` publishes directly through that fold with an injected stop callable.
 Neither imports runtime, nodes, compile, compose, or providers.
-`MemoryFrame.recall()` returns text or `MemoryContent(text, transcript)`.
-`MemoryRuntime.open_context` recalls every visible frame once, keeps labelled notes
-in outer-to-local order, and admits only the innermost contributed transcript.
-It never discovers transcript methods on frames or imports concrete backends. A trait-enabled node receives one lazy `open_memory_context(system, prompt, compatibility)`
+`MemorySession.recall()` returns text or `MemoryContent(text, transcript)`.
+`MemoryRuntime.open_context` recalls each key of the recorded stack once, keeps
+labelled notes in outer-to-local order, and admits a transcript only from a key
+whose recorded `MemorySpec.conversation_eligible` is true. A transcript from an
+ineligible key, or a second one, raises `MemoryRecallError` at the declaration.
+It never discovers transcript methods on sessions or imports concrete backends. A trait-enabled node receives one lazy `open_memory_context(system, prompt, compatibility)`
 callback. Runtime captures immutable accepted run/start identity before observers
 or worker submission; the evaluator binds it with the authored scope and holds the turn through
 body execution, generator drain, post-assertions, and result-shape checks. Later
@@ -398,33 +401,28 @@ Memory/codec faults must bypass provider/schema retries.
 `RunState.accepted_starts` captures the original accepted start sequence for each
 unfinished invocation independently of forward retention. Run ID plus that
 sequence identifies a conversation invocation, not its dynamic node name.
-Runtime has no conversation projection. Its private legacy path in `prepare_record`
-validates canonical payloads, accepted start, run, enabled frame/policy, compiled
-consumer scope, and outer lifecycle for every wrapper. Commit rechecks frozen
-bytes and ownership before append, then advances only record/trace sequencing.
-These wrappers bind no outputs, advance no frontier, create no execution episodes,
-publish no observers, and invoke no backend. Do not restore a runtime transcript,
-effect ledger, reconciliation channel, or close-before-success requirement.
+Runtime has no conversation projection, and the run log holds no conversation
+records; schema 9 rejects the older logs that carried them. Do not restore a
+runtime transcript, effect ledger, reconciliation channel, or close-before-success
+requirement.
 
-After primary failure, only observations and close for still-unfinished starts are
-accepted. Reject all wrappers after primary success or any backward start, even
-after that attempt finishes, or once their originating start completes or is
-replaced by retry. Ordinary recovery may retry a node after historical conversation
-requests, observations, or closure. The new start gets a new sequence. Requests
+Ordinary recovery may retry a node after conversation requests or observations
+reached the backend. The new start gets a new sequence. Requests
 and tool actions may repeat; no exactly-once or mid-request continuation is promised.
 The backend owns saved history; runtime does not reconstruct it from the run log
 or fabricate results for unknown effects.
 
-Host-only constructor settings are `history_budget_chars=32_000` (positive int)
-and `recent_turns=4` (nonnegative int); frame config stays `{}`.
-Conversation identity is `(frame_ref, consumer_static_path)`, not a MAP/LOOP
-occurrence or runtime ID. A flow-owned frame therefore has independent leaf
-conversations and FIFO queues, with no fork selector. FIFO means admission order,
+Constructor settings are `history_budget_chars=32_000` (positive int) and
+`recent_turns=4` (nonnegative int); YAML config may set either.
+A session key has exactly one declaring AGENT, and one instance holds one
+conversation and FIFO queue. Every call site of that AGENT and every MAP/LOOP
+occurrence shares it, with no fork selector; `ConversationRequest.consumer_static_path`
+is admission metadata only. FIFO means admission order,
 not MAP input-index order. Acquire the lease before
 reading current live history. Run snapshots remain detached and pinned; their
-closed version-2 envelope contains namespace, generation, complete views, and
-learned notes, never coordination state, derived summary cache, or commit ledger. Accept
-version-1 history as no notes and preserve its exact envelope when pinned.
+closed version-3 envelope contains namespace, generation, the one conversation
+view, and learned notes, never coordination state, derived summary cache, or
+commit ledger. Older snapshot versions are invalid.
 Optional host-only `storage=path` persists the complete private inventory, including
 commit deduplication and derived summaries, without changing those public formats.
 The episodic, reflective, and session backends share the lower `memory.storage`
@@ -441,7 +439,30 @@ protected after run-handle close. Check process identity before all locks,
 including cleanup, and preserve initiating exceptions. Storage never serializes
 coordination objects, host defaults, or clients, and runtime never owns file paths.
 
-`frame.open_turn(request, check_stopped=check)` returns a queued context manager.
+Storage opens lazily. Construction checks the path's shape with no I/O and starts
+PID ownership; the first `open_run` or `reset` opens the file under the backend's
+existing lock, so concurrent first opens serialize. A missing parent fails at
+that first open unless the backend was built with `create_parent=True`.
+`close()` before any open does no I/O; afterwards `open_run` and `reset` raise
+`episodic.closed`, `reflective.closed`, or `session.closed`. An unset episodic or
+reflective limit adopts the stored value, or the built-in default; an explicit
+limit that differs raises `<type>.config_conflict`.
+
+The host builder is package-root `memory_host.build_memories(flow, *, root=None,
+storage=None, supplied=None, factories=None)`. Per key, in key order: a supplied
+object wins; else a custom type is built by `factories[type](**config)`; else the
+built-in constructor gets `config` plus `storage[key]`, else
+`<root>/<flow id>/<scope...>/<name>.sqlite` (`.md` for profile, parent created
+on first use), else RAM. Undeclared keys, config on supplied keys, storage for
+supplied or custom keys, factories for built-in types, non-`Memory` values, and
+`root` without a safe flow `id` raise `MemorySetupError`, located at the key's
+declaration when one key is at fault. The returned `MemoryRegistry` maps keys to
+backends and records their types; closing it closes the backends it built in
+reverse build order, attaches later failures as notes, and leaves supplied
+objects open. A failed build closes what it already built.
+
+`transcript.open_turn(request, check_stopped=check)` returns a queued context
+manager, where `transcript` is the `TranscriptSource` that recall returned.
 Its request/observe operations validate the complete candidate snapshot before
 atomic publication under the backend condition. Provider/tool execution and stop
 callbacks happen outside that lock. Observe completed truth before honoring stop;
@@ -474,12 +495,12 @@ plus a fresh safe active-turn projection, not all history or unvalidated raw loc
 messages. Summaries/repairs never become `new_messages`, raw items, or learned notes.
 
 History updates through this optional capability do not depend on `learnable`.
-Explicit API backward self-feedback becomes deterministic notes through existing
-frame learn/session commit, without another model call. Match actual admissions
-for this frame and authored leaf; use the episode's root-prefixed owner path
-joined by execution sequence. Ancestor recall-only frames must not duplicate
-learning. Commit validates the whole batch before atomic publication and deduplicates
-replays. Contextual recall supplies this leaf's pinned run-opening notes plus the
+Explicit API backward self-feedback becomes deterministic notes through the key's
+learn/session commit, without another model call. The memory learns notes only
+from invocations it admitted; use the episode's root-relative owner path joined
+by execution sequence. Other memories in the stack learn their own batches, not
+these notes. Commit validates the whole batch before atomic publication and deduplicates
+replays. Contextual recall supplies every pinned run-opening note of the instance plus the
 transcript source. Context-free recall supplies empty text with that source. Learning changes neither raw conversation values nor their ledger.
 Exact compatibility changes require reset. Backend-wide `reset()` fails unchanged
 if any turn is active or queued; otherwise it clears history and notes, retains
@@ -1076,12 +1097,12 @@ never runtime ids, graph topology, or a text heuristic.
   structural error path through the effective target contract's exact,
   nearest-ancestor, or default origin, then falls back to the executing node;
   other canonicalization errors use the contract default. Route and growth use
-  the executing node origin. Schema-7/8 output rejection retains its cause type
+  the executing node origin. Schema-9 output rejection retains its cause type
   inside `Failure`, forward capture when retention is enabled, and optional
   model/tool evaluation evidence beside it. Execution scope in the capture is
   separate from diagnostic provenance.
 - **Runtime boundary:** evaluator and dispatcher rejection construct one
-  canonical `Failure`; schema-7/8 `NodeFailedRecord` stores that value, forward
+  canonical `Failure`; schema-9 `NodeFailedRecord` stores that value, forward
   capture when retention is enabled, and optional model/tool evaluation evidence.
   Reducer state, `NodeFailed`, `RunFailed`,
   and `RunResult.failure` carry no semantic aliases. The first route whose skip

@@ -378,48 +378,82 @@ Keys in use: `max_tool_iterations` (AGENT node) — tool-calling loop turns befo
 
 ## Agent memory — `long_term_memory:`
 
-`long_term_memory: NAME` is valid on a full flow (`nodes:` form) or an AGENT node;
-the declaration selects a named host policy, and the object form adds public
-literal behavior config as `{name: NAME, config: {...}}`. A flow frame is
-inherited by its AGENT nodes, and an AGENT node may add one local frame. Each flow
-or AGENT node writes only its own frame. MAP items and LOOP iterations reuse
-static authored frames.
-Other node kinds and anonymous inline children cannot carry the declaration. The
-YAML contains no credentials, tenant/backend paths, persistence locations, or
-Python imports. A library host injects implementations under the selected policy
-name with `run_flow(..., memory={NAME: implementation})` to enable recall.
-`composer run` automatically hosts declared built-in `episodic`, `reflective`, and
-`session` policies. Repeat `--memory-storage POLICY=PATH` to persist selected
-policies in separate local files; unspecified policies remain process-local.
-Use the same stores on unfinished resume. Paths never belong in YAML or run logs;
-terminal inspection and old dormant logs open no backend. Custom policies require
-Python host injection, and Python's `memory=None` remains dormant.
-For API session history, use `long_term_memory: session` with a host-injected
-`SessionMemory()` (no frame config). The innermost frame contributing a transcript
-owns each authored AGENT leaf's conversation; all frames still provide recall.
+`long_term_memory:` is valid on a full flow (`nodes:` form, root file or `defs:`
+entry) or an AGENT node. Each entry names one memory and its type:
+
+```yaml
+long_term_memory:                  # on a flow
+  notes: episodic                  # short form: name: type
+  lessons:                         # long form: only type and config
+    type: reflective
+    config: {max_items: 100, recall_limit: 12}
+nodes:
+  answer:
+    kind: agent
+    long_term_memory: {chat: session}
+```
+
+`long_term_memory: episodic` is sugar for `{episodic: episodic}`. `null` equals
+omission. Names and types match `[A-Za-z_][A-Za-z0-9_-]*`; `name`, `type`, and
+`config` are reserved. Built-in config keys: `episodic` `max_episodes`,
+`recall_limit`; `reflective` `max_items`, `recall_limit`; `session`
+`history_budget_chars`, `recent_turns`; `profile` `max_chars`,
+`input_budget_chars`. Other types are custom and built by a Python host. The YAML
+contains no credentials, storage locations, or Python imports.
+
+A memory's key is its name prefixed by the `uses:` aliases on its import path
+(`notes`, `lib.notes`, `b.d.notes`). One key declared at several sites of one file
+is one memory; libraries and repeated aliases stay independent. An AGENT's stack is
+each enclosing flow's keys, outermost first, through CALL, MAP, and LOOP, then its
+own; each key appears once and contributes one recall section. MAP items and LOOP
+iterations reuse that stack. A child's declaration never binds to a parent's
+memory. Other node kinds and anonymous inline children cannot carry the
+declaration.
+
+Errors are reported at the declaration (a multi-site key names its first site and
+lists the others as notes). At load: the old `{name: ..., config: ...}` form or
+`{}`; a bad name or type name; unknown long-form keys or non-mapping config;
+`storage`, `store`, or `path` as a config key; `api_key` anywhere; a built-in
+config key outside the allowlist; one key with different type or config; two keys
+equal under `casefold()`; a memory-bearing alias that does not match the name
+pattern; a flow-level session; a session key with more than one site; an AGENT
+with two sessions. `build_memories` adds: a custom type with no supplied value or
+factory, `factories` naming a built-in type, a non-`Memory` value, config on a
+supplied key, `storage` for a supplied or custom key, an undeclared key, a rejected
+config, and `root` without a safe flow `id`.
+
+`composer run` builds every built-in memory in RAM, or with `--memory-root DIR` at
+`DIR/<flow id>/<scope...>/<name>.sqlite` (`.md` for profile), with repeatable
+`--memory-storage KEY=PATH` overriding one key. It refuses a flow with a
+custom type, even on `--resume`. Use the same storage on unfinished resume; paths
+never belong in YAML or run logs, and terminal inspection opens no backend. A
+library host passes `memory=build_memories(flow, root=, storage=, supplied=,
+factories=)` to `run_flow`; Python's `memory=None` remains dormant.
+For API session history, declare one `session` memory on the AGENT. Its key has
+exactly one declaring AGENT, whose call sites all share the conversation.
 Repeated MAP/LOOP executions share it and queue in admission order, not guaranteed
 MAP input order. Use non-session memory for independent MAP items. History advances
 automatically during forward, independently of `learnable` or backward. Current
 instructions and tool permissions still apply; restoring history never executes
 old tool calls. Explicit API backward self-feedback can become committed notes
-for the owning conversation through the existing frame learn/session commit/recall
-lifecycle, without another model call or YAML selector. Notes are recalled from
+for the conversation through the key's learn/session commit/recall lifecycle,
+without another model call or YAML selector. Notes are recalled from
 the run-opening snapshot and do not rewrite raw conversation history. No-feedback
-backward adds no session notes. API summary settings are host constructor options,
-`history_budget_chars=32_000` and `recent_turns=4`, never frame YAML. The current
+backward adds no session notes. Summary settings are `history_budget_chars=32_000`
+and `recent_turns=4`, as constructor keywords or YAML config. The current
 model summarizes older context without deleting raw history or truncating recent
 whole turns. Budget is soft; oversized valid summaries are not retried or cut.
 Episodic, reflective, and session backends optionally persist through host-only
-`storage=path`; `None` remains process-local. SQLite ownership lasts until
-backend close. Closing rejects active/queued work, but idle run handles do not
-block it. Storage paths never belong in YAML.
-`learnable=True` independently retains execution; forward does not run frame
-learners or commit learned mutations.
+`storage=path`, opened on first use; `None` remains process-local. SQLite
+ownership lasts until backend close. Closing rejects active/queued work, but idle
+run handles do not block it. Storage paths never belong in YAML.
+`learnable=True` independently retains execution; forward runs no memory
+learners and commits no learned mutations.
 Call `result.backward(feedback)` explicitly after forward returns, and inspect
-its separate outcome. With `None` feedback, enabled memory frames still learn
-from accepted history without AGENT backward model work. Terminal resume is silent
+its separate outcome. Each memory key gets one learn call, even with `None`
+feedback, without AGENT backward model work. Terminal resume is silent
 inspection; each explicit `backward()` call is a new whole attempt, even after an
-earlier attempt succeeded or committed. The CLI activates declared built-in
+earlier attempt succeeded or committed. The CLI builds declared built-in
 memory but has no backward command and never enables learning implicitly.
 
 ## Validate

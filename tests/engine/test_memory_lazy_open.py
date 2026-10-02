@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import threading
-import time
 from pathlib import Path
 from typing import Callable
 
@@ -147,23 +146,27 @@ def test_concurrent_first_open_constructs_storage_once(
     module, make = backend
     real = module.SQLiteStorage
     calls: list[object] = []
+    calling = [threading.Event(), threading.Event()]
 
     def counting(*args, **kwargs):
         calls.append(args)
-        time.sleep(0.05)
+        # Hold the first construction until both threads have called open_run.
+        for event in calling:
+            assert event.wait(5)
         return real(*args, **kwargs)
 
     monkeypatch.setattr(module, "SQLiteStorage", counting)
     memory = make(tmp_path / "m.sqlite")
     errors: list[BaseException] = []
 
-    def worker() -> None:
+    def worker(index: int) -> None:
         try:
+            calling[index].set()
             memory.open_run().close()
         except BaseException as exc:  # surfaced below
             errors.append(exc)
 
-    threads = [threading.Thread(target=worker) for _ in range(2)]
+    threads = [threading.Thread(target=worker, args=(index,)) for index in range(2)]
     for thread in threads:
         thread.start()
     for thread in threads:

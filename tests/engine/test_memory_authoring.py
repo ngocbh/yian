@@ -616,7 +616,7 @@ def test_manifest_redaction_remains_defense_in_depth_for_forged_policy() -> None
     assert flow_manifest(flow) == first_manifest
 
 
-def test_expansion_digest_excludes_flow_id_and_agent_memory_policy() -> None:
+def test_expansion_digest_excludes_flow_id_and_agent_memory() -> None:
     plain_flow = CompiledFlow({}, [])
     named_flow = CompiledFlow({}, [], flow_id="named")
     plain_agent = CompiledFlow({"agent": AgentNode("agent")}, [])

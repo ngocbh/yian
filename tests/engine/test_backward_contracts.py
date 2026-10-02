@@ -435,7 +435,7 @@ def test_backward_contracts_reject_invalid_snapshots_and_outcomes(factory) -> No
 
 
 def test_backward_outcome_can_succeed_without_memory() -> None:
-    """A successful reverse computation does not require a memory policy result."""
+    """A successful reverse computation does not require a learning result from any memory key."""
     result = BackwardResult()
     outcome = BackwardOutcome("succeeded", feedback=result)
     assert outcome.feedback == result

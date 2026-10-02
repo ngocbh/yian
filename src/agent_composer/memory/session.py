@@ -27,7 +27,7 @@ from agent_composer.memory.conversation import (
     conversation_view_from_json,
     conversation_view_to_json,
 )
-from agent_composer.memory.storage import SQLiteStorage
+from agent_composer.memory.storage import SQLiteStorage, check_storage_path
 from agent_composer.memory.summary import Summary, admissions, prefix_digest
 
 
@@ -302,6 +302,7 @@ class SessionMemory:
         provider integration are separate from this backend.
         ``with SessionMemory(storage="memory.sqlite") as memory:`` retains values
         across restarts and releases the single file owner on context exit.
+        The file is opened at the first operation, not at construction.
     """
 
     def __init__(
@@ -310,6 +311,7 @@ class SessionMemory:
         history_budget_chars: int = 32_000,
         recent_turns: int = 4,
         storage: str | os.PathLike[str] | None = None,
+        create_parent: bool = False,
     ) -> None:
         """Create an empty namespace with an optional API context budget.
 
@@ -318,15 +320,19 @@ class SessionMemory:
                 defaults to 32,000. Raw history is never removed.
             recent_turns (`int`): Nonnegative number of whole prior turns kept
                 unsummarized; defaults to four. The current turn is always kept.
-            storage (`str | PathLike[str] | None`): Optional local SQLite file with
-                an existing parent; defaults to `None` for process-local values.
-                Ownership lasts until close. Current history settings control
-                future preparation without changing stored raw history or pins.
+            storage (`str | PathLike[str] | None`): Optional local SQLite file;
+                defaults to `None` for process-local values. Nothing is opened
+                until the first operation; this backend then owns the file until
+                close. Current history settings control future preparation
+                without changing stored raw history or pins.
+            create_parent (`bool`): Create the storage file's parent directory at
+                first open; defaults to `False`.
 
         Raises:
             `TypeError`: A setting is not an exact integer.
             `ValueError`: A setting is outside its supported range.
-            `MemoryOperationError`: Storage is unavailable, occupied, or invalid.
+            `MemoryOperationError`: ``storage`` is not a local file path
+                (`storage.path`).
         """
         for name, value, minimum in (
             ("history_budget_chars", history_budget_chars, 1),
@@ -352,36 +358,48 @@ class SessionMemory:
         self._queue: deque[_Lease] = deque()
         self._active: _Lease | None = None
         self._next_ticket = 0
-        if storage is not None:
-            self._storage = SQLiteStorage(storage, "session")
+        if type(create_parent) is not bool:
+            raise TypeError("create_parent must be a bool")
+        self._storage_path = None if storage is None else check_storage_path(storage)
+        self._create_parent = create_parent
+
+    def _open_storage(self) -> None:
+        """Open and load durable state once; the caller holds ``self._condition``."""
+        if self._storage is not None or self._storage_path is None:
+            return
+        self._storage = SQLiteStorage(
+            self._storage_path, "session", create_parent=self._create_parent
+        )
+        try:
+            saved = self._storage.load()
+            if saved is None:
+                self._save_state(
+                    _snapshot(
+                        self._namespace, self._generation, self._view, self._notes
+                    )
+                )
+            else:
+                pinned, view, notes, used, commits, summaries = _parse_inventory(
+                    saved
+                )
+                self._namespace, self._generation = (
+                    pinned["namespace"],
+                    pinned["generation"],
+                )
+                self._view, self._notes, self._used = view, notes, used
+                self._applied_commits, self._summaries = commits, summaries
+        except BaseException as primary:
             try:
-                saved = self._storage.load()
-                if saved is None:
-                    self._save_state(
-                        _snapshot(
-                            self._namespace, self._generation, self._view, self._notes
-                        )
-                    )
-                else:
-                    pinned, view, notes, used, commits, summaries = _parse_inventory(
-                        saved
-                    )
-                    self._namespace, self._generation = (
-                        pinned["namespace"],
-                        pinned["generation"],
-                    )
-                    self._view, self._notes, self._used = view, notes, used
-                    self._applied_commits, self._summaries = commits, summaries
-            except BaseException as primary:
-                try:
-                    self._storage.close()
-                except BaseException as cleanup:
-                    _secondary(primary, cleanup)
-                raise
+                self._storage.close()
+            except BaseException as cleanup:
+                _secondary(primary, cleanup)
+            # Forget the failed handle so a later operation may retry the open.
+            self._storage = None
+            raise
 
     def _check_pid(self) -> None:
         """Reject inherited durable handles before touching any Python lock."""
-        if self._storage is not None and os.getpid() != self._pid:
+        if self._storage_path is not None and os.getpid() != self._pid:
             raise c.MemoryOperationError(
                 "storage",
                 "storage.forked",
@@ -397,6 +415,7 @@ class SessionMemory:
             if not cleanup:
                 if self._closed:
                     raise _error("closed", "memory backend is closed", stage="session")
+                self._open_storage()
                 if self._storage is not None:
                     self._storage.ensure_open()
             yield
@@ -499,8 +518,9 @@ class SessionMemory:
             `_Session`: A run-scoped memory session.
 
         Raises:
-            `MemoryOperationError`: Snapshot shape or lineage is invalid. Only a
-                pristine backend may adopt a snapshot's namespace and history.
+            `MemoryOperationError`: Snapshot shape or lineage is invalid, or
+                durable state cannot be opened. Only a pristine backend may adopt
+                a snapshot's namespace and history.
         """
         parsed = None if snapshot is None else _parse_snapshot(snapshot)
         with self._locked():
@@ -554,7 +574,8 @@ class SessionMemory:
 
         Raises:
             `MemoryOperationError`: The conversation has an active lease or queued
-                ticket. Busy reset fails immediately without modifying state.
+                ticket, or durable state cannot be opened. Busy reset fails
+                immediately without modifying state.
         """
         self._check_pid()
         if not self._condition.acquire(blocking=False):

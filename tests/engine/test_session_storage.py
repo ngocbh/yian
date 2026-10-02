@@ -26,6 +26,13 @@ from tests.engine.test_session_notes import _note
 from tests.engine.test_session_summaries import _prepare, _project, _seed
 
 
+def _first_open(memory):
+    """Open lazy storage without starting a run, as the constructor once did."""
+    with memory._locked():
+        pass
+    return memory
+
+
 def _complete(memory, name="a"):
     with harness(memory) as h:
         with h.frame.open_turn(request(name), check_stopped=lambda: None) as turn:
@@ -177,7 +184,7 @@ def test_owner_kind_and_corrupt_store_are_rejected(tmp_path):
     path = tmp_path / "memory.sqlite"
     with SessionMemory(storage=path):
         with pytest.raises(c.MemoryOperationError) as caught:
-            SessionMemory(storage=path)
+            _first_open(SessionMemory(storage=path))
         assert caught.value.code == "storage.busy"
     with pytest.raises(c.MemoryOperationError) as caught:
         SQLiteStorage(path, "episodic")
@@ -187,7 +194,7 @@ def test_owner_kind_and_corrupt_store_are_rejected(tmp_path):
             "UPDATE memory_state SET envelope = ?", ('{"version":1,"version":1}',)
         )
     with pytest.raises(c.MemoryOperationError) as caught:
-        SessionMemory(storage=path)
+        _first_open(SessionMemory(storage=path))
     assert caught.value.code == "storage.corrupt"
 
 
@@ -277,7 +284,7 @@ def test_invalid_inventory_never_rewrites_store_and_releases_owner(tmp_path, cas
     storage.save(value)
     storage.close()
     with pytest.raises(c.MemoryOperationError) as caught:
-        SessionMemory(storage=path)
+        _first_open(SessionMemory(storage=path))
     assert caught.value.code == "session.invalid_storage"
     storage = SQLiteStorage(path, "session")
     try:
@@ -320,6 +327,7 @@ def test_failed_save_does_not_publish_candidate_or_advance_ordinal(
     memory = SessionMemory(
         storage=tmp_path / "memory.sqlite", history_budget_chars=1, recent_turns=0
     )
+    _first_open(memory)
     opened = turn = None
     if operation not in {"open", "adopt", "reset"}:
         _complete(memory)
@@ -548,7 +556,7 @@ def test_callback_drain_owns_backend_even_after_run_close(tmp_path, phase, close
                     memory.close()
                 assert busy.value.code == "session.busy"
         with pytest.raises(c.MemoryOperationError) as owner:
-            SessionMemory(storage=path)
+            _first_open(SessionMemory(storage=path))
         assert owner.value.code == "storage.busy"
     finally:
         release.set()
@@ -937,7 +945,7 @@ def test_legacy_native_storage_is_rejected_without_rewriting(tmp_path, legacy):
     with pytest.raises(
         c.MemoryOperationError, match="use fresh SessionMemory"
     ) as caught:
-        SessionMemory(storage=path)
+        _first_open(SessionMemory(storage=path))
     assert caught.value.code == "session.unsupported_history"
     assert path.read_bytes() == original_bytes
     with closing(SQLiteStorage(path, "session")) as storage:

@@ -31,6 +31,13 @@ BACKENDS.append(
     )
 )
 
+from agent_composer.memory import session as session_module
+from agent_composer.memory.session import SessionMemory
+
+BACKENDS.append(
+    (session_module, lambda path, **kw: SessionMemory(storage=path, **kw))
+)
+
 
 def _ids(case) -> str:
     return case[0].__name__.rsplit(".", 1)[-1]

@@ -11,7 +11,7 @@ from agent_composer.compile.manifest import expansion_digest, flow_fingerprint, 
 from agent_composer.compile.model import CompiledFlow
 from agent_composer.compose import LoadError, load_flow
 from agent_composer.diagnostics import OriginRef, SourceRange
-from agent_composer.memory import DeclSite, MemoryDecl, MemoryPolicySpec, MemorySnapshotEnvelope
+from agent_composer.memory import DeclSite, MemoryDecl, MemorySnapshotEnvelope
 from agent_composer.nodes.agent import AgentNode
 
 
@@ -555,9 +555,9 @@ def test_authored_identity_includes_flow_id_and_policy_but_excludes_origin() -> 
 
 
 @pytest.mark.parametrize("config", _PRIVATE_CONFIG_CASES)
-def test_policy_config_rejects_host_private_fields(config: dict) -> None:
+def test_decl_config_rejects_host_private_fields(config: dict) -> None:
     with pytest.raises(ValueError, match="forbidden private key"):
-        MemoryPolicySpec("reflective", config)
+        MemoryDecl("notes", "custom", config, DeclSite((), ("root",), None))
 
 
 @pytest.mark.parametrize("config", _PRIVATE_CONFIG_CASES)

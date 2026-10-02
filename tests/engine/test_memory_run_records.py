@@ -19,7 +19,6 @@ from agent_composer.memory import (
     MemoryOccurrenceKind,
     MemoryOccurrenceSegment,
     MemoryOperationFailure,
-    MemoryPolicySpec,
     MemoryScope,
     MemorySection,
     MemorySnapshotEnvelope,

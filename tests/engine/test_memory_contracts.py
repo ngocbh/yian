@@ -13,12 +13,14 @@ import pytest
 
 from agent_composer.diagnostics import OriginRef
 from agent_composer.memory import (
+    DeclSite,
     EvaluationEvidence,
     JsonObject,
     LearnContext,
     LearningFailure,
     LearningResult,
     Memory,
+    MemoryDecl,
     MemoryEpisode,
     MemoryEpisodeStatus,
     MemoryMutation,
@@ -26,7 +28,6 @@ from agent_composer.memory import (
     MemoryOccurrenceSegment,
     MemoryOperationError,
     MemoryOperationFailure,
-    MemoryPolicySpec,
     MemoryRecallError,
     MemoryScope,
     MemorySection,
@@ -38,6 +39,11 @@ from agent_composer.memory import (
     ToolCallInteraction,
 )
 from agent_composer.runtime.contracts import BackwardFailure, MemoryProposal
+
+
+def _decl(config: Any, origin: OriginRef | None = None) -> MemoryDecl:
+    """Build a custom-type declaration, so the built-in key allowlist does not apply."""
+    return MemoryDecl("notes", "custom", config, DeclSite((), ("root",), None), origin)
 
 
 _AGENT_PATH = ("root", "child", "agent")
@@ -172,28 +178,27 @@ def test_nested_memory_carriers_reject_forged_subclass_values() -> None:
         LearnContext("run", "notes", (forged_episode,))
 
 
-def test_policy_specs_preserve_origin_and_isolate_canonical_json() -> None:
+def test_memory_decls_preserve_origin_and_isolate_canonical_json() -> None:
     """Caller mutation cannot change a frozen policy specification."""
     origin = OriginRef("policy")
     source: JsonObject = {
         "z": [{"enabled": True}],
         "a": {"threshold": 0.5},
     }
-    policy = MemoryPolicySpec("reflective", source, origin)
+    policy = _decl(source, origin)
 
     source["z"][0]["enabled"] = False  # type: ignore[index]
     first = policy.config
     first["a"]["threshold"] = 1.0  # type: ignore[index]
 
-    assert policy.name == "reflective"
+    assert policy.name == "notes"
     assert policy.origin is origin
     assert policy.config == {
         "a": {"threshold": 0.5},
         "z": [{"enabled": True}],
     }
     assert list(policy.config) == ["a", "z"]
-    assert policy == MemoryPolicySpec(
-        "reflective",
+    assert policy == _decl(
         {"a": {"threshold": 0.5}, "z": [{"enabled": True}]},
         origin,
     )
@@ -203,10 +208,7 @@ def test_json_scalar_identity_preserves_exact_types_at_every_depth() -> None:
     """Boolean, integer, and float JSON values remain distinct frozen values."""
     values = (True, 1, 1.0)
     policies = tuple(
-        MemoryPolicySpec(
-            "reflective",
-            {"nested": [value, {"value": value}]},
-        )
+        _decl({"nested": [value, {"value": value}]})
         for value in values
     )
     contexts = tuple(
@@ -263,7 +265,7 @@ class _ListSubclass(list[object]):
 def test_json_contracts_reject_non_exact_or_non_finite_values(config: Any) -> None:
     """Only exact, finite JSON shapes may cross the memory boundary."""
     with pytest.raises((TypeError, ValueError), match="JSON|json|finite|key"):
-        MemoryPolicySpec("reflective", config)
+        _decl(config)
 
 
 def test_json_contracts_reject_cycles() -> None:
@@ -272,15 +274,15 @@ def test_json_contracts_reject_cycles() -> None:
     config["self"] = config
 
     with pytest.raises(ValueError, match="circular"):
-        MemoryPolicySpec("reflective", config)
+        _decl(config)
 
 
 @pytest.mark.parametrize(
     "factory",
     [
         lambda: ModelTextInteraction(chr(0xD800)),
-        lambda: MemoryPolicySpec("reflective", {"text": chr(0xD800)}),
-        lambda: MemoryPolicySpec("reflective", {chr(0xD800): "text"}),
+        lambda: _decl({"text": chr(0xD800)}),
+        lambda: _decl({chr(0xD800): "text"}),
     ],
 )
 def test_memory_strings_must_have_a_canonical_utf8_representation(factory: Any) -> None:
@@ -600,11 +602,11 @@ def test_memory_origins_revalidate_subclass_keys_without_losing_identity() -> No
     """Valid origin subclasses survive while forged invalid keys fail closed."""
     valid = _ForgedOrigin("valid")
 
-    assert MemoryPolicySpec("reflective", {}, valid).origin is valid
+    assert _decl({}, valid).origin is valid
     with pytest.raises(ValueError, match="origin key"):
-        MemoryPolicySpec("reflective", {}, _ForgedOrigin(""))
+        _decl({}, _ForgedOrigin(""))
     with pytest.raises(ValueError, match="origin key"):
-        MemoryPolicySpec("reflective", {}, _ForgedOrigin(1))  # type: ignore[arg-type]
+        _decl({}, _ForgedOrigin(1))  # type: ignore[arg-type]
 
 
 def test_importing_memory_contracts_does_not_load_heavy_backends() -> None:

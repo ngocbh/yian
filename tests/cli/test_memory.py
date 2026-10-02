@@ -157,7 +157,8 @@ def test_bad_memory_storage_is_a_bad_parameter_before_inputs_provider_and_log(
         args += ["--memory-storage", option]
     result, log = _run(tmp_path, *args)
     assert result.exit_code == 2, result.output
-    assert "--memory-storage" in _plain(result.output)
+    # Typer prefixes the flag name; the message itself does not repeat it.
+    assert _plain(result.output).count("--memory-storage") == 1
     assert not log.exists()
 
 

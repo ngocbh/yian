@@ -36,12 +36,12 @@ def parse_memory_storage(options: Iterable[str]) -> dict[str, str]:
         key, separator, path = option.partition("=")
         if not separator or not key.strip() or not path.strip():
             raise MemoryOptionError(
-                f"--memory-storage expects KEY=PATH, got {option!r}",
+                f"expected KEY=PATH, got {option!r}",
                 param_hint="--memory-storage",
             )
         if key in paths:
             raise MemoryOptionError(
-                f"duplicate --memory-storage key {key!r}", param_hint="--memory-storage"
+                f"duplicate key {key!r}", param_hint="--memory-storage"
             )
         paths[key] = path
     return paths
@@ -73,13 +73,13 @@ def build_cli_memories(
     for key in storage:
         if key not in types:
             raise MemoryOptionError(
-                f"--memory-storage key {key!r} is not a memory declared by this "
+                f"key {key!r} is not a memory declared by this "
                 f"flow (declared: {', '.join(sorted(types)) or 'none'})",
                 param_hint="--memory-storage",
             )
         if types[key] not in BUILTIN_MEMORY_CONFIG_KEYS:
             raise MemoryOptionError(
-                f"--memory-storage key {key!r} has custom type {types[key]!r}; "
+                f"key {key!r} has custom type {types[key]!r}; "
                 f"the CLI stores only built-in types ({builtins})",
                 param_hint="--memory-storage",
             )

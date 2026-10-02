@@ -1088,7 +1088,8 @@ written. An attempt killed during commit stays `unknown`; the store's write
 provenance holds its `commit_id`, so hosts check there before retrying.
 `FileMarkdownStore` rejects the same non-file paths as SQLite storage
 (`storage.path`). `ProfileMemory.close()` does no I/O; afterwards the backend and
-its sessions raise `profile.closed`.
+its sessions raise `profile.closed`; a session closed on its own raises
+`profile.session_closed`.
 
 ### Optional backend durability
 

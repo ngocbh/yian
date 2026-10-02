@@ -617,6 +617,8 @@ retrying. If it is missing, compare the current document with the proposed
 `FileMarkdownStore` takes the same local file path rule as SQLite storage.
 `profile.close()` does no I/O; afterwards `open_run`, `reset`, `read`, `write`,
 and its open sessions raise `MemoryOperationError` with code `profile.closed`.
+A session used after its own `close()` raises `profile.session_closed`, as
+episodic and reflective sessions raise `<type>.session_closed`.
 A registry from `build_memories` closes the profiles it built.
 See [profile memory](learning.md#profile-memory) for recall, learning, and store
 rules.

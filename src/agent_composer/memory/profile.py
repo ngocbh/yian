@@ -299,7 +299,7 @@ class _ProfileSession:
         """Reject use after this session or its backend closes."""
         self._memory._ensure_open(stage)
         if self._closed:
-            raise _error(stage, "profile.closed", "profile session is closed")
+            raise _error(stage, "profile.session_closed", "profile session is closed")
 
     def recall(self, context: RecallContext | None = None) -> str:
         """Return the full pinned document.

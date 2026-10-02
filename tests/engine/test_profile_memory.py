@@ -135,6 +135,17 @@ def test_closing_the_backend_invalidates_its_open_sessions(tmp_path, monkeypatch
     assert (tmp_path / "ada.md").read_text() == "# Ada\n"
 
 
+def test_closed_session_rejects_use_with_session_closed(tmp_path) -> None:
+    memory = _memory(tmp_path)
+    session = memory.open_run()
+    session.close()
+    with pytest.raises(MemoryOperationError) as caught:
+        session.recall(RECALL)
+    assert caught.value.code == "profile.session_closed"
+    assert not caught.value.retryable
+    memory.open_run().recall(RECALL)
+
+
 def test_snapshot_pins_version_and_hash_without_text(tmp_path) -> None:
     memory = _memory(tmp_path)
     text, version = memory.read()

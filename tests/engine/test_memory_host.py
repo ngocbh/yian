@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from pathlib import Path
 
 import pytest
 
 from agent_composer.compose import load_flow
-from agent_composer.memory.contracts import MemorySetupError
+from agent_composer.memory.contracts import MemoryOperationError, MemorySetupError
 from agent_composer.memory.episodic import EpisodicMemory
 from agent_composer.memory.profile import ProfileMemory
 from agent_composer.memory.reflective import ReflectiveMemory
@@ -74,7 +75,7 @@ def test_exit_keeps_the_primary_exception() -> None:
 
 
 def _flow(memory: str, *, flow_id: str | None = "host-flow", agent_memory: str | None = None):
-    lines = [] if flow_id is None else [f"id: {flow_id}"]
+    lines = [f"id: {'host-flow' if flow_id is None else flow_id}"]
     lines += ["name: host", f"long_term_memory: {memory}"]
     lines += ["llm_config: {provider: openai, model: fake-model}", "nodes:"]
     if agent_memory is None:
@@ -93,7 +94,11 @@ def _flow(memory: str, *, flow_id: str | None = "host-flow", agent_memory: str |
             "    output: str",
             "output: ${ask.output}",
         ]
-    return load_flow("\n".join(lines) + "\n")
+    flow = load_flow("\n".join(lines) + "\n")
+    if flow_id is None:
+        # YAML requires id:, but a flow compiled in Python may have none.
+        flow.compiled.flow_id = None
+    return flow
 
 
 class _Custom:
@@ -185,3 +190,72 @@ def test_flow_without_memory_builds_an_empty_registry() -> None:
     )
     with build_memories(flow) as registry:
         assert len(registry) == 0
+
+
+def _import_flow(tmp_path: Path):
+    (tmp_path / "lib.yaml").write_text(
+        "id: lib\nname: lib\nlong_term_memory: {notes: episodic}\n"
+        "input: {x: str}\nnodes:\n"
+        '  a: {kind: code, code: tests.engine._compose_codefns:echo_x, '
+        'input: {x: "${input.x}"}, output: str}\n'
+        'output: {y: "${a.output}"}\n'
+    )
+    return load_flow(
+        "id: app\nname: app\n"
+        "long_term_memory: {notes: episodic, about: profile}\n"
+        "input: {x: str}\nnodes:\n"
+        '  a: {kind: call, call: lib, input: {x: "${input.x}"}}\n'
+        'output: {y: "${input.x}"}\n'
+        "uses:\n  lib: lib\n",
+        search_paths=[tmp_path],
+    )
+
+
+def test_root_layout_follows_flow_id_scope_and_name(tmp_path: Path) -> None:
+    flow = _import_flow(tmp_path)
+    root = tmp_path / "mem"
+    with build_memories(flow, root=root) as registry:
+        assert sorted(registry) == ["about", "lib.notes", "notes"]
+        assert not root.exists()  # construction is effect-free
+        for key in ("notes", "lib.notes", "about"):
+            registry[key].open_run()
+        assert (root / "app" / "notes.sqlite").is_file()
+        assert (root / "app" / "lib" / "notes.sqlite").is_file()
+    assert (root / "app" / ".about.md.lock").exists()
+
+
+def test_explicit_storage_overrides_root_and_needs_an_existing_parent(tmp_path: Path) -> None:
+    flow = _import_flow(tmp_path)
+    explicit = tmp_path / "missing" / "notes.sqlite"
+    with build_memories(flow, root=tmp_path / "mem", storage={"notes": explicit}) as registry:
+        with pytest.raises(MemoryOperationError) as caught:
+            registry["notes"].open_run()
+        assert caught.value.code == "storage.io"
+        assert not explicit.parent.exists()
+        registry["lib.notes"].open_run()
+    assert (tmp_path / "mem" / "app" / "lib" / "notes.sqlite").is_file()
+
+
+def test_no_root_means_ram_and_no_flow_id_is_needed(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    flow = _flow("{notes: episodic, about: profile}", flow_id=None)
+    with build_memories(flow) as registry:
+        registry["notes"].open_run()
+        registry["about"].open_run()
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("flow_id", [None, ".", ".."])
+def test_root_requires_a_safe_flow_id(tmp_path: Path, flow_id) -> None:
+    flow = _flow("{notes: episodic}", flow_id=flow_id)
+    with pytest.raises(MemorySetupError, match="flow id"):
+        build_memories(flow, root=tmp_path)
+
+
+@pytest.mark.parametrize("flow_id", ["a/b", "a\\b", "a\x00b", ""])
+def test_unsafe_flow_ids_are_rejected_before_touching_disk(tmp_path: Path, flow_id) -> None:
+    flow = _flow("{notes: episodic}")
+    flow.compiled.flow_id = flow_id  # bypass the loader's id grammar
+    with pytest.raises(MemorySetupError, match="flow id"):
+        build_memories(flow, root=tmp_path)
+    assert list(tmp_path.iterdir()) == []

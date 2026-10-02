@@ -194,6 +194,19 @@ def build_memories(
     """
     if not isinstance(flow, ComposedFlow):
         raise TypeError("flow must be a ComposedFlow")
+    base: Path | None = None
+    if root is not None:
+        flow_id = flow.compiled.flow_id
+        if flow_id is None:
+            raise MemorySetupError(
+                "root= needs the flow to have an id: field; its memory lives "
+                "under <root>/<flow id>/"
+            )
+        if flow_id in ("", ".", "..") or any(ch in flow_id for ch in "/\\\x00"):
+            raise MemorySetupError(
+                f"flow id {flow_id!r} is not one safe path component for root="
+            )
+        base = Path(os.fspath(root), flow_id)
     storage = dict(storage or {})
     supplied = dict(supplied or {})
     factories = dict(factories or {})
@@ -215,7 +228,7 @@ def build_memories(
     memories: dict[str, Memory] = {}
     owned: list[Memory] = []
     for memory in table:
-        memories[memory.key] = _build_one(memory, storage, supplied, factories, owned)
+        memories[memory.key] = _build_one(memory, storage, supplied, factories, owned, base)
     return MemoryRegistry(
         memories, {memory.key: memory.type for memory in table}, owned=tuple(owned)
     )
@@ -227,6 +240,7 @@ def _build_one(
     supplied: dict,
     factories: dict,
     owned: list[Memory],
+    base: Path | None,
 ) -> Memory:
     """Return the backend for one key, appending it to ``owned`` if built here."""
     builtin = memory.type in BUILTIN_MEMORY_CONFIG_KEYS
@@ -263,13 +277,17 @@ def _build_one(
             )
         owned.append(value)
         return value
-    path = storage.get(memory.key)
+    path, create_parent = storage.get(memory.key), False
+    if path is None and base is not None:
+        *scope, name = memory.key.split(".")
+        suffix = ".md" if memory.type == "profile" else ".sqlite"
+        path, create_parent = base.joinpath(*scope, name + suffix), True
     try:
         value = _builtin(
             memory.type,
             memory.config,
             None if path is None else os.fspath(path),
-            create_parent=False,
+            create_parent=create_parent,
         )
     except MemoryOperationError as exc:
         raise _error(memory, f"storage {path!r} is not a local file path") from exc

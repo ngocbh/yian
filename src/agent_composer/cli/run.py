@@ -15,7 +15,8 @@ Fresh runs use a reported durable log under ``~/.agent_composer/runs`` unless
 ``--log`` selects a new path. ``--resume`` recovers an existing path without gathering
 fresh inputs or model configuration.
 Declared memories are built with `build_memories`: in RAM by default,
-under ``--memory-root DIR`` as ``DIR/<flow id>/<scope...>/<name>.sqlite``,
+under ``--memory-root DIR`` as ``DIR/<flow id>/<scope...>/<name>.sqlite``
+(``.md`` for profile),
 or at ``--memory-storage KEY=PATH`` for one memory key. Storage opens on
 first use inside the controller and closes only after the run boundary
 drains its workers.
@@ -1373,7 +1374,8 @@ def run(
         file_okay=False,
         metavar="DIR",
         help="Keep every declared built-in memory under DIR/<flow id>/ "
-        "(created on first use). Also accepted with --resume.",
+        "(created on first use). Also accepted with --resume. Without either "
+        "flag, memory lives in process RAM.",
     ),
     memory_storage: List[str] = typer.Option(
         None,

@@ -576,6 +576,9 @@ def test_run_help_describes_memory_flags():
     text = _plain(result.output)
     assert "--memory-root" in text
     assert "KEY=PATH" in text
+    # Rich wraps help inside a box; drop its borders before matching a sentence.
+    unboxed = _plain(result.output.replace("\u2502", " "))
+    assert "Without either flag, memory lives in process RAM." in unboxed
     assert "POLICY" not in text
 
 

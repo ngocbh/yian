@@ -227,8 +227,19 @@ def build_memories(
         )
     memories: dict[str, Memory] = {}
     owned: list[Memory] = []
-    for memory in table:
-        memories[memory.key] = _build_one(memory, storage, supplied, factories, owned, base)
+    try:
+        for memory in table:
+            memories[memory.key] = _build_one(
+                memory, storage, supplied, factories, owned, base
+            )
+    except BaseException as primary:
+        # Construction is effect-free, so this cleanup does no I/O.
+        cleanup = _close_all(reversed(owned))
+        if cleanup is not None and hasattr(primary, "add_note"):
+            primary.add_note(f"Memory cleanup failed: {type(cleanup).__name__}")
+            for note in getattr(cleanup, "__notes__", ()):
+                primary.add_note(note)
+        raise
     return MemoryRegistry(
         memories, {memory.key: memory.type for memory in table}, owned=tuple(owned)
     )

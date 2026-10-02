@@ -259,3 +259,44 @@ def test_unsafe_flow_ids_are_rejected_before_touching_disk(tmp_path: Path, flow_
     with pytest.raises(MemorySetupError, match="flow id"):
         build_memories(flow, root=tmp_path)
     assert list(tmp_path.iterdir()) == []
+
+
+def test_partial_failure_closes_what_was_built_in_reverse(tmp_path: Path) -> None:
+    log: list[str] = []
+    flow = _flow("{a: alpha, b: beta, c: gamma}")
+
+    def failing(**_):
+        raise ValueError("gamma refused")
+
+    factories = {
+        "alpha": lambda: _Closable(log, "a"),
+        "beta": lambda: _Closable(log, "b", RuntimeError("b close")),
+        "gamma": failing,
+    }
+    with pytest.raises(MemorySetupError, match="gamma refused") as caught:
+        build_memories(flow, factories=factories)
+    assert log == ["b", "a"]
+    assert any("RuntimeError" in note for note in caught.value.__notes__)
+
+
+def test_second_registry_on_one_root_is_busy_until_the_first_closes(tmp_path: Path) -> None:
+    flow = _flow("{notes: episodic}")
+    first = build_memories(flow, root=tmp_path)
+    first["notes"].open_run()
+    second = build_memories(flow, root=tmp_path)
+    with pytest.raises(MemoryOperationError) as caught:
+        second["notes"].open_run()
+    assert caught.value.code == "storage.busy"
+    first.close()
+    second["notes"].open_run()
+    second.close()
+
+
+def test_open_after_close_is_closed_and_opens_no_file(tmp_path: Path) -> None:
+    flow = _flow("{notes: episodic}")
+    registry = build_memories(flow, root=tmp_path)
+    registry.close()
+    with pytest.raises(MemoryOperationError) as caught:
+        registry["notes"].open_run()
+    assert caught.value.code == "episodic.closed"
+    assert list(tmp_path.iterdir()) == []

@@ -423,6 +423,58 @@ def _node_child(node: Node) -> Flow | None:
     return child
 
 
+def scope_memory_declarations(flow: Flow, alias: str) -> Flow:
+    """Prefix ``alias`` to the scope of every reachable memory declaration, in place.
+
+    Call this only on a graph the caller owns, such as the independent copy
+    that ``uses:`` rebasing returns. The walk follows the same static children
+    as layout resolution and visits each flow and node object once, so a def
+    baked into several call sites, or a node shared by two copied flows, is
+    rewritten once.
+
+    Args:
+        flow (`Flow`): Owned root of the graph to rewrite.
+        alias (`str`): ``uses:`` alias that scopes the imported graph.
+
+    Returns:
+        `Flow`: ``flow`` itself, after the rewrite.
+    """
+    seen_flows: set[int] = set()
+    seen_nodes: set[int] = set()
+    pending = [flow]
+    while pending:
+        current = pending.pop()
+        if id(current) in seen_flows:
+            continue
+        seen_flows.add(id(current))
+        if isinstance(current, CompiledFlow):
+            current.memories = _scoped(current.memories, alias)
+        for _node_id, node in _flow_nodes(current):
+            if id(node) in seen_nodes:
+                continue
+            seen_nodes.add(id(node))
+            if isinstance(node, AgentNode):
+                node.memories = _scoped(node.memories, alias)
+            child = _node_child(node)
+            if child is not None:
+                pending.append(child)
+    return flow
+
+
+def _scoped(memories: tuple[MemoryDecl, ...], alias: str) -> tuple[MemoryDecl, ...]:
+    """Return declarations whose site scope starts with ``alias``."""
+    return tuple(
+        MemoryDecl(
+            decl.name,
+            decl.type,
+            decl.config,
+            DeclSite((alias, *decl.site.scope), decl.site.owner, decl.site.node),
+            decl.origin,
+        )
+        for decl in memories
+    )
+
+
 def _site_label(site: DeclSite) -> str:
     """Render one declaration site for diagnostics."""
     label = "/".join(site.owner)
@@ -749,4 +801,5 @@ __all__ = [
     "check_session_compatibility",
     "memory_stacks",
     "resolve_memory_layout",
+    "scope_memory_declarations",
 ]

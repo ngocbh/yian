@@ -477,9 +477,11 @@ def _scoped(memories: tuple[MemoryDecl, ...], alias: str) -> tuple[MemoryDecl, .
 
 
 def _site_label(site: DeclSite) -> str:
-    """Render one declaration site for diagnostics."""
+    """Render one declaration site for diagnostics, led by its import scope if any."""
     label = "/".join(site.owner)
-    return label if site.node is None else f"{label} AGENT {site.node!r}"
+    if site.node is not None:
+        label = f"{label} AGENT {site.node!r}"
+    return f"{'.'.join(site.scope)}: {label}" if site.scope else label
 
 
 def _note(error: BaseException, text: str) -> None:

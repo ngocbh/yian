@@ -234,3 +234,25 @@ def test_imported_flow_memory_is_owned_by_a_scoped_root_site(tmp_path: Path) -> 
         "lib.notes": (DeclSite(("lib",), ("root",), None),),
         "notes": (DeclSite((), ("root",), None),),
     }
+
+
+def test_a_clash_inside_an_import_names_the_scoped_sites(tmp_path: Path) -> None:
+    (tmp_path / "lib.yaml").write_text(
+        "id: lib\nname: lib\n"
+        "long_term_memory: {notes: episodic}\n"
+        "llm_config: {provider: openai, model: fake-model}\n"
+        "input: {x: str}\n"
+        "nodes:\n"
+        "  ask:\n"
+        "    kind: agent\n"
+        "    long_term_memory: {notes: reflective}\n"
+        "    prompt: hi\n"
+        "    output: str\n"
+        "output: ${ask.output}\n"
+    )
+    with pytest.raises(LoadError) as caught:
+        load_flow(_root({"a": "lib"}, {"lib": "lib"}), search_paths=[tmp_path])
+    diagnostic = caught.value.diagnostic
+    assert diagnostic.frames[-1].label == "lib.yaml"
+    assert diagnostic.message.endswith("at lib: root and lib: root AGENT 'ask'")
+    assert diagnostic.notes[0] == "also declared at lib: root AGENT 'ask'"

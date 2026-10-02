@@ -194,3 +194,28 @@ def test_entering_the_backend_opens_storage(tmp_path: Path, backend) -> None:
         with pytest.raises(MemoryOperationError) as caught:
             make(path).open_run()
         assert caught.value.code == "storage.busy"
+
+
+def test_failed_load_can_be_retried(
+    tmp_path: Path, backend, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module, make = backend
+    real_load = module.SQLiteStorage.load
+    calls: list[int] = []
+
+    def flaky_load(self):
+        calls.append(1)
+        if len(calls) == 1:
+            raise MemoryOperationError(
+                "storage", "storage.io", "transient load failure", True
+            )
+        return real_load(self)
+
+    monkeypatch.setattr(module.SQLiteStorage, "load", flaky_load)
+    memory = make(tmp_path / "m.sqlite")
+    with pytest.raises(MemoryOperationError) as caught:
+        memory.open_run()
+    assert caught.value.code == "storage.io"
+    memory.open_run().close()
+    assert len(calls) == 2
+    memory.close()

@@ -153,13 +153,15 @@ def test_explicit_learning_remains_saved_after_reopen(policy, tmp_path, monkeypa
     with _backend(policy, path) as memory:
         result = run_flow(flow, {}, memory={policy: memory}, learnable=True, log=log)
         assert result.status == "succeeded" and result.output == 7
-        assert _snapshot(memory)["frames"] == []
+        snapshot = _snapshot(memory)
+        field = "episodes" if policy == "episodic" else "lessons"
+        assert (snapshot["frames"] if policy == "reflective" else snapshot[field]) == []
         result.backward()
         assert result.learning.status == "succeeded"
         recorded = _snapshot(memory)
-        assert recorded["frames"]
-        field = "episodes" if policy == "episodic" else "lessons"
-        assert recorded["frames"][0][field]
+        assert (
+            recorded["frames"][0][field] if policy == "reflective" else recorded[field]
+        )
     prefix = log.read_bytes()
     with _backend(policy, path) as reopened:
         assert _snapshot(reopened) == recorded

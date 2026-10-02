@@ -6,12 +6,14 @@ import math
 
 import pytest
 
+from agent_composer.diagnostics import OriginRef
 import agent_composer.memory as memory_package
 from agent_composer.memory.contracts import (
     BUILTIN_MEMORY_CONFIG_KEYS,
     MEMORY_IDENTIFIER_PATTERN,
     DeclSite,
     MemoryDecl,
+    MemorySetupError,
     check_memory_declaration,
 )
 
@@ -83,3 +85,14 @@ def test_shape_check_is_public_and_exported() -> None:
     for name in ("BUILTIN_MEMORY_CONFIG_KEYS", "MEMORY_IDENTIFIER_PATTERN", "check_memory_declaration"):
         assert name in memory_package.__all__
         assert getattr(memory_package, name) is not None
+
+
+def test_setup_error_carries_related_origins() -> None:
+    first, second = OriginRef("a"), OriginRef("b")
+    error = MemorySetupError("clash", origin=first, related=(second,))
+    assert (error.origin, error.related) == (first, (second,))
+    assert MemorySetupError("plain").related == ()
+    with pytest.raises(TypeError):
+        MemorySetupError("bad", related=[second])
+    with pytest.raises(TypeError):
+        MemorySetupError("bad", related=(None,))

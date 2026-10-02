@@ -225,9 +225,14 @@ def _setup_error(
     message: str,
     *,
     origin: OriginRef | None = None,
+    related: tuple[OriginRef | None, ...] = (),
 ) -> MemorySetupError:
-    """Build one layout failure with the best available authored origin."""
-    return MemorySetupError(message, origin=origin)
+    """Build one layout failure with its first authored site and any others."""
+    return MemorySetupError(
+        message,
+        origin=origin,
+        related=tuple(item for item in related if item is not None),
+    )
 
 
 def _revalidate_resolved_layout(layout: ResolvedMemoryLayout) -> None:
@@ -467,6 +472,7 @@ def _memory_table(
                 f"memory {key!r} is declared with different type or config "
                 f"at {_site_label(first.site)} and {_site_label(conflicts[0].site)}",
                 origin=first.origin,
+                related=tuple(decl.origin for decl in declarations[1:]),
             )
             for decl in declarations[1:]:
                 _note(error, f"also declared at {_site_label(decl.site)}")
@@ -489,6 +495,7 @@ def _memory_table(
                     + ", ".join(_site_label(d.site) for d in ordered)
                     + "; give each AGENT its own session memory",
                     origin=ordered[0].origin,
+                    related=tuple(decl.origin for decl in ordered[1:]),
                 )
                 for decl in ordered[1:]:
                     _note(error, f"also owned at {_site_label(decl.site)}")
@@ -517,6 +524,7 @@ def _memory_table(
                 f"{_site_label(site)} declares more than one session memory: "
                 + ", ".join(repr(memory.key) for memory in sessions),
                 origin=sessions[0].origin,
+                related=tuple(memory.origin for memory in sessions[1:]),
             )
             for memory in sessions[1:]:
                 _note(error, f"also declares {memory.key!r}")

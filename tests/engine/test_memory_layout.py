@@ -526,6 +526,21 @@ def test_session_key_with_two_agent_owners_is_a_setup_error() -> None:
         resolve_memory_layout(load_flow(source).compiled)
     assert "AGENT 'left'" in str(caught.value) and "AGENT 'right'" in str(caught.value)
     assert caught.value.__notes__ == ["also owned at root AGENT 'right'"]
+    assert len(caught.value.related) == 1 and caught.value.related[0] != caught.value.origin
+
+
+def test_config_clash_carries_every_other_site_as_a_related_origin() -> None:
+    from agent_composer.compile.memory_layout import _memory_table
+
+    # DeclSite.sort_key() order: ("def", "x") < ("def", "y") < ("root",).
+    first = MemoryDecl("notes", "notes", {"limit": 1}, DeclSite((), ("def", "x"), None), OriginRef("a"))
+    second = MemoryDecl("notes", "notes", {"limit": 2}, DeclSite((), ("def", "y"), None), OriginRef("b"))
+    third = MemoryDecl("notes", "notes", {"limit": 1}, DeclSite((), ("root",), None), OriginRef("c"))
+    with pytest.raises(MemorySetupError) as caught:
+        _memory_table([(third, None), (second, None), (first, None)])
+    assert caught.value.origin == OriginRef("a")
+    assert caught.value.related == (OriginRef("b"), OriginRef("c"))
+    assert len(caught.value.__notes__) == 2
 
 
 def test_flow_level_session_in_an_uncalled_def_is_not_an_error() -> None:

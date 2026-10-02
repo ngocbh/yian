@@ -1513,12 +1513,31 @@ class MemoryOperationError(Exception):
 
 
 class MemorySetupError(ValueError):
-    """Invalid host memory setup, optionally attributed to authored policy syntax."""
+    """Invalid host memory setup, attributed to authored declarations when known.
 
-    def __init__(self, message: str, *, origin: OriginRef | None = None) -> None:
-        """Create one setup failure with optional opaque source identity."""
+    Attributes:
+        origin (`OriginRef | None`): Primary declaration site.
+        related (`tuple[OriginRef, ...]`): Other sites of the same failure, in
+            declaration-site order.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        origin: OriginRef | None = None,
+        related: tuple[OriginRef, ...] = (),
+    ) -> None:
+        """Create one setup failure with optional opaque source identities."""
         message = _require_string(message, "message", nonempty=False)
         self.origin = _require_origin(origin)
+        if type(related) is not tuple:
+            raise TypeError("related must be a tuple of OriginRef values")
+        for item in related:
+            if item is None:
+                raise TypeError("related must not contain None")
+            _require_origin(item, "related origin")
+        self.related = related
         super().__init__(message)
 
 

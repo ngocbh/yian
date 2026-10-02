@@ -1750,30 +1750,6 @@ class Memory(Protocol):
         ...
 
 
-@dataclass(frozen=True, slots=True)
-class ConversationKey:
-    """One authored leaf conversation within its owning memory frame."""
-
-    frame_ref: MemoryFrameRef
-    consumer_static_path: tuple[str, ...]
-
-    def __post_init__(self) -> None:
-        """Require an exact AGENT owner or a FLOW owner's strict descendant."""
-        if type(self.frame_ref) is not MemoryFrameRef:
-            raise TypeError("frame_ref must be a MemoryFrameRef")
-        ref = replace(self.frame_ref)
-        path = _require_path(self.consumer_static_path, "consumer_static_path")
-        if ref.owner is MemoryOwner.AGENT:
-            if path != ref.static_path:
-                raise ValueError("AGENT consumer must equal the frame owner path")
-        elif (
-            len(path) <= len(ref.static_path)
-            or path[: len(ref.static_path)] != ref.static_path
-        ):
-            raise ValueError("FLOW consumer must be a strict descendant of the frame")
-        object.__setattr__(self, "frame_ref", ref)
-
-
 def _require_counter(value: object, name: str, *, positive: bool = False) -> int:
     """Require an exact integer counter without accepting booleans."""
     if type(value) is not int:
@@ -1876,10 +1852,8 @@ class ConversationItem:
 
 @dataclass(frozen=True, slots=True)
 class ConversationStamp:
-    """The owner, generation, predecessor revision, and operation identity."""
+    """The conversation generation, predecessor revision, and operation identity."""
 
-    policy_name: str
-    key: ConversationKey
     invocation: ConversationInvocation
     namespace: str
     generation: int
@@ -1888,11 +1862,7 @@ class ConversationStamp:
 
     def __post_init__(self) -> None:
         """Detach exact identity carriers and validate nonnegative counters."""
-        _require_string(self.policy_name, "policy_name")
         _require_string(self.namespace, "namespace")
-        if type(self.key) is not ConversationKey:
-            raise TypeError("key must be a ConversationKey")
-        object.__setattr__(self, "key", replace(self.key))
         object.__setattr__(self, "invocation", _copy_invocation(self.invocation))
         _require_counter(self.generation, "generation")
         _require_counter(self.expected_revision, "expected_revision")
@@ -2084,7 +2054,6 @@ class ConversationView:
     namespace: str
     generation: int
     revision: int
-    key: ConversationKey
     _compatibility: _FrozenJsonObject = field(repr=False)
     items: tuple[ConversationItem, ...]
     effects: tuple[ConversationEffectState, ...]
@@ -2096,7 +2065,6 @@ class ConversationView:
         namespace: str,
         generation: int,
         revision: int,
-        key: ConversationKey,
         compatibility: JsonObject,
         items: tuple[ConversationItem, ...],
         effects: tuple[ConversationEffectState, ...],
@@ -2109,7 +2077,6 @@ class ConversationView:
             namespace (`str`): Nonempty backend namespace identity.
             generation (`int`): Nonnegative reset generation.
             revision (`int`): Nonnegative count of accepted checkpoints.
-            key (`ConversationKey`): Exact authored conversation owner.
             compatibility (`JsonObject`): Retained opaque compatibility descriptor.
             items (`tuple[ConversationItem, ...]`): Ordered items with unique IDs.
             effects (`tuple[ConversationEffectState, ...]`): Unique invocation and
@@ -2128,9 +2095,6 @@ class ConversationView:
             self, "generation", _require_counter(generation, "generation")
         )
         object.__setattr__(self, "revision", _require_counter(revision, "revision"))
-        if type(key) is not ConversationKey:
-            raise TypeError("key must be a ConversationKey")
-        object.__setattr__(self, "key", replace(key))
         object.__setattr__(
             self, "_compatibility", _freeze_json_object(compatibility, "compatibility")
         )
@@ -2206,7 +2170,6 @@ def _copy_conversation_view(value: object) -> ConversationView:
         value.namespace,
         value.generation,
         value.revision,
-        value.key,
         value.compatibility,
         value.items,
         value.effects,
@@ -2239,8 +2202,7 @@ class ConversationAdmitted:
         stamp = _copy_conversation_stamp(self.stamp, admission=True)
         baseline = _copy_conversation_view(self.baseline)
         if (
-            stamp.key != baseline.key
-            or stamp.namespace != baseline.namespace
+            stamp.namespace != baseline.namespace
             or stamp.generation != baseline.generation
             or stamp.expected_revision != baseline.revision
         ):

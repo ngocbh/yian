@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError, replace
+from dataclasses import FrozenInstanceError, fields, replace
 import hashlib
 import inspect
 import json
@@ -36,36 +36,6 @@ def test_legacy_memory_protocol_is_unchanged():
     session.close()
 
 
-def test_flow_conversation_key_accepts_descendant():
-    ref = _frame_ref()
-    key = c.ConversationKey(ref, ("root", "child", "agent"))
-    assert key.frame_ref == ref
-    assert key.frame_ref is not ref
-    assert key.consumer_static_path == ("root", "child", "agent")
-    with pytest.raises(FrozenInstanceError):
-        key.consumer_static_path = ("changed",)
-
-
-@pytest.mark.parametrize(
-    "path", [("other", "agent"), ("root", "other"), ("root", "child")]
-)
-def test_conversation_key_rejects_foreign_root(path):
-    with pytest.raises(ValueError):
-        c.ConversationKey(_frame_ref(), path)
-    agent = _frame_ref(c.MemoryOwner.AGENT)
-    assert c.ConversationKey(agent, agent.static_path).frame_ref == agent
-    with pytest.raises(ValueError):
-        c.ConversationKey(agent, agent.static_path + ("descendant",))
-
-
-@pytest.mark.parametrize(
-    "path", [["root", "child", "agent"], (), ("root", ""), ("root", "\ud800")]
-)
-def test_conversation_key_rejects_invalid_path(path):
-    with pytest.raises((TypeError, ValueError)):
-        c.ConversationKey(_frame_ref(), path)
-
-
 @pytest.mark.parametrize("sequence", [True, False, 0, -1, 1.0, "1"])
 def test_invocation_rejects_boolean_start_sequence(sequence):
     with pytest.raises((TypeError, ValueError)):
@@ -88,18 +58,12 @@ def test_request_detaches_compatibility():
     )
 
 
-def _key():
-    return c.ConversationKey(_frame_ref(), ("root", "child", "agent"))
-
-
 def _invocation():
     return c.ConversationInvocation("run", 1)
 
 
 def _stamp(ordinal=0, revision=0):
-    return c.ConversationStamp(
-        "session", _key(), _invocation(), "namespace", 0, revision, ordinal
-    )
+    return c.ConversationStamp(_invocation(), "namespace", 0, revision, ordinal)
 
 
 def test_item_payload_is_detached():
@@ -117,8 +81,6 @@ def test_item_payload_is_detached():
 @pytest.mark.parametrize("value", [True, -1, 1.0, "1"])
 def test_stamp_requires_nonnegative_exact_counters(field, value):
     arguments = dict(
-        policy_name="session",
-        key=_key(),
         invocation=_invocation(),
         namespace="ns",
         generation=0,
@@ -235,7 +197,6 @@ def _view(**changes):
         namespace="namespace",
         generation=0,
         revision=0,
-        key=_key(),
         compatibility={"provider": "fake"},
         items=(),
         effects=(),
@@ -252,12 +213,10 @@ def _applied(ordinal=0):
 
 def test_empty_view_has_exact_detached_shape():
     descriptor = {"options": [True]}
-    key = _key()
-    view = _view(key=key, compatibility=descriptor)
+    view = _view(compatibility=descriptor)
     descriptor["options"].clear()
     view.compatibility["options"].clear()
     assert view.compatibility == {"options": [True]}
-    assert view.key == key and view.key is not key
     assert (view.namespace, view.generation, view.revision) == ("namespace", 0, 0)
     assert (
         view.items,
@@ -404,7 +363,6 @@ def test_conversation_contracts_are_exported_without_concrete_backend():
     import agent_composer.memory as memory
 
     names = (
-        "ConversationKey",
         "ConversationInvocation",
         "ConversationRequest",
         "ConversationItem",
@@ -447,7 +405,6 @@ def test_conversation_contracts_are_exported_without_concrete_backend():
         lambda value: c.ConversationInvocation(value, 1),
         lambda value: c.ConversationItem(value, "text", {}),
         lambda value: c.ConversationItem("id", value, {}),
-        lambda value: replace(_stamp(), policy_name=value),
         lambda value: replace(_stamp(), namespace=value),
         lambda value: _view(namespace=value),
     ],
@@ -515,7 +472,7 @@ def test_nested_carrier_subclasses_are_rejected():
     with pytest.raises(TypeError, match="ConversationView"):
         c.ConversationAdmitted(
             _stamp(),
-            ViewSubclass(baseline.namespace, 0, 0, baseline.key, {}, (), (), (), ()),
+            ViewSubclass(baseline.namespace, 0, 0, {}, (), (), (), ()),
         )
 
 
@@ -796,7 +753,7 @@ def test_conversation_codecs_round_trip_complete_history_and_detach():
 
 
 @pytest.mark.parametrize(
-    "damage", ["missing", "extra", "tuple", "bool", "owner", "path"]
+    "damage", ["missing", "extra", "tuple", "bool", "key"]
 )
 def test_view_codec_rejects_wrong_closed_wire_shape(damage):
     from agent_composer.memory.conversation import (
@@ -813,10 +770,8 @@ def test_view_codec_rejects_wrong_closed_wire_shape(damage):
         wire["items"] = ()
     elif damage == "bool":
         wire["revision"] = False
-    elif damage == "owner":
-        wire["key"]["frame_ref"]["owner"] = "other"
     else:
-        wire["key"]["consumer_static_path"] = ["other", "agent"]
+        wire["key"] = None
     with pytest.raises((TypeError, ValueError)):
         conversation_view_from_json(wire)
 
@@ -855,7 +810,6 @@ def _changed_view(view, **changes):
             "namespace",
             "generation",
             "revision",
-            "key",
             "compatibility",
             "items",
             "effects",
@@ -946,7 +900,6 @@ def test_view_codec_rejects_impossible_history_even_with_matching_final_digest(d
         "closed",
         "missing_request",
         "foreign_invocation",
-        "foreign_key",
         "namespace",
         "generation",
         "revision",
@@ -994,10 +947,6 @@ def test_invalid_transitions_preserve_input_evidence(scenario):
             "foreign_invocation": (
                 "invocation",
                 c.ConversationInvocation("foreign", 1),
-            ),
-            "foreign_key": (
-                "key",
-                c.ConversationKey(_frame_ref(), ("root", "child", "other")),
             ),
             "namespace": ("namespace", "foreign"),
             "generation": ("generation", 1),
@@ -1069,7 +1018,7 @@ def test_checkpoint_codec_rejects_malformed_closed_wire(index, damage):
     elif damage == "bool":
         wire["stamp"]["ordinal"] = True
     else:
-        wire["stamp"]["key"]["consumer_static_path"] = "root/child/agent"
+        wire["stamp"]["namespace"] = ["namespace"]
     with pytest.raises((TypeError, ValueError)):
         conversation_checkpoint_from_json(wire)
 
@@ -1259,7 +1208,7 @@ def test_view_codec_rejects_invalid_nested_values(damage):
             "retryable": 0,
         }
     elif damage == "key_extra":
-        wire["key"]["frame_ref"]["extra"] = None
+        wire["key"] = {}
     else:
         wire["effects"][0]["invocation"]["start_sequence"] = 1.0
     original = json.dumps(wire, sort_keys=True)
@@ -1414,3 +1363,18 @@ def test_memory_context_carriers_are_contracts_only_exports():
         assert getattr(memory, name) is getattr(c, name)
     assert "ConversationFrame" not in vars(memory)
     assert "ConversationFrame" not in vars(c)
+
+
+def test_conversation_carriers_have_no_owner_key():
+    import agent_composer.memory as memory
+
+    assert not hasattr(c, "ConversationKey")
+    assert "ConversationKey" not in memory.__all__
+    assert [field.name for field in fields(c.ConversationStamp)] == [
+        "invocation",
+        "namespace",
+        "generation",
+        "expected_revision",
+        "ordinal",
+    ]
+    assert "key" not in {field.name for field in fields(c.ConversationView)}

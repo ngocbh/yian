@@ -22,8 +22,6 @@ import agent_composer.memory.contracts as c
 from agent_composer.memory.conversation import (
     _invocation_from_json,
     _invocation_json,
-    _key_from_json,
-    _key_json,
     advance_conversation,
     conversation_content_digest,
     conversation_view_from_json,
@@ -72,19 +70,15 @@ def _note_id(source: c.JsonObject) -> str:
 
 
 def _admitted(
-    views: dict[c.ConversationKey, c.ConversationView],
-    key: c.ConversationKey,
-    run_id: str,
-    execution_seq: int,
+    view: c.ConversationView | None, run_id: str, execution_seq: int
 ) -> bool:
-    view = views.get(key)
     identity = _canonical([run_id, execution_seq, 0])
     return view is not None and any(
         entry.operation_id == identity for entry in view.applied
     )
 
 
-def _validate_note(value: object) -> tuple[c.JsonObject, c.ConversationKey]:
+def _validate_note(value: object) -> tuple[c.JsonObject, c.MemoryFrameRef]:
     """Detach a closed note and prove its source identity and lexical ownership."""
     note = _wire(value)
     if set(note) != {
@@ -115,7 +109,6 @@ def _validate_note(value: object) -> tuple[c.JsonObject, c.ConversationKey]:
         tuple(raw_ref["static_path"]),
         c.MemoryOwner(raw_ref["owner"]),
     )
-    key = c.ConversationKey(ref, tuple(note["consumer_static_path"]))
     c._require_string(note["run_id"], "run_id")
     c._require_counter(note["execution_seq"], "execution_seq")
     c._require_counter(note["message_index"], "message_index")
@@ -123,42 +116,41 @@ def _validate_note(value: object) -> tuple[c.JsonObject, c.ConversationKey]:
     c._require_string(note["note_id"], "note_id")
     if note["note_id"] != _note_id({k: v for k, v in note.items() if k != "note_id"}):
         raise ValueError("note identity does not match its source")
-    return note, key
+    return note, ref
 
 
 def _snapshot(
     namespace: str,
     generation: int,
-    views: dict[c.ConversationKey, c.ConversationView],
+    view: c.ConversationView | None,
     notes: tuple[c.JsonObject, ...],
 ) -> c.JsonObject:
     return _wire(
         {
-            "version": 2,
+            "version": 3,
             "namespace": namespace,
             "generation": generation,
-            "conversations": [
-                conversation_view_to_json(view) for view in views.values()
-            ],
+            "conversation": (
+                None if view is None else conversation_view_to_json(view)
+            ),
             "notes": list(notes),
         }
     )
 
 
 def _zero(
-    namespace: str, generation: int, key: c.ConversationKey, compatibility: c.JsonObject
+    namespace: str, generation: int, compatibility: c.JsonObject
 ) -> c.ConversationView:
     return c.ConversationView(
-        namespace, generation, 0, key, compatibility, (), (), (), ()
+        namespace, generation, 0, compatibility, (), (), (), ()
     )
 
 
 def _prefix(earlier: c.ConversationView, later: c.ConversationView) -> bool:
     """Prove a complete historical view against a newer ledger without guessing."""
-    if (earlier.namespace, earlier.generation, earlier.key) != (
+    if (earlier.namespace, earlier.generation) != (
         later.namespace,
         later.generation,
-        later.key,
     ) or _canonical(earlier.compatibility) != _canonical(later.compatibility):
         return False
     if earlier.revision > later.revision:
@@ -177,46 +169,42 @@ def _prefix(earlier: c.ConversationView, later: c.ConversationView) -> bool:
 
 def _parse_snapshot(
     value: object,
-) -> tuple[
-    c.JsonObject, dict[c.ConversationKey, c.ConversationView], tuple[c.JsonObject, ...]
-]:
-    """Decode the closed public envelope without normalizing its supplied order."""
+) -> tuple[c.JsonObject, c.ConversationView | None, tuple[c.JsonObject, ...]]:
+    """Decode the closed version 3 envelope without normalizing note order."""
     try:
         data = _wire(value)
-        version = data.get("version")
-        if type(version) is not int or version not in (1, 2):
-            raise ValueError("snapshot version must be 1 or 2")
-        fields = {"version", "namespace", "generation", "conversations"}
-        if version == 2:
-            fields.add("notes")
-        if set(data) != fields:
+        if type(data.get("version")) is not int or data["version"] != 3:
+            raise ValueError("snapshot version must be 3")
+        if set(data) != {
+            "version",
+            "namespace",
+            "generation",
+            "conversation",
+            "notes",
+        }:
             raise ValueError("snapshot fields do not match the supported version")
         c._require_string(data["namespace"], "namespace")
         c._require_counter(data["generation"], "generation")
-        if type(data["conversations"]) is not list:
-            raise TypeError("conversations must be an array")
-        views = {}
-        for raw in data["conversations"]:
-            view = conversation_view_from_json(raw)
+        view = None
+        if data["conversation"] is not None:
+            view = conversation_view_from_json(data["conversation"])
             if (view.namespace, view.generation) != (
                 data["namespace"],
                 data["generation"],
-            ) or view.key in views:
-                raise ValueError("snapshot contains foreign or duplicate conversations")
-            views[view.key] = view
-        raw_notes = data.get("notes", [])
-        if type(raw_notes) is not list:
+            ):
+                raise ValueError("snapshot contains a foreign conversation")
+        if type(data["notes"]) is not list:
             raise TypeError("notes must be an array")
         notes, ids = [], set()
-        for raw in raw_notes:
-            note, key = _validate_note(raw)
+        for raw in data["notes"]:
+            note, _ = _validate_note(raw)
             if note["note_id"] in ids or not _admitted(
-                views, key, note["run_id"], note["execution_seq"]
+                view, note["run_id"], note["execution_seq"]
             ):
                 raise ValueError("snapshot contains duplicate or unadmitted notes")
             ids.add(note["note_id"])
             notes.append(note)
-        return data, views, tuple(notes)
+        return data, view, tuple(notes)
     except (TypeError, ValueError) as exc:
         raise _error(
             "invalid_snapshot", "invalid SessionMemory snapshot", stage="snapshot"
@@ -227,7 +215,6 @@ def _summary_json(summary: Summary) -> c.JsonObject:
     return {
         "namespace": summary.namespace,
         "generation": summary.generation,
-        "key": _key_json(summary.key),
         "projection_version": summary.projection_version,
         "covered": [_invocation_json(value) for value in summary.covered],
         "digest": summary.digest,
@@ -237,11 +224,11 @@ def _summary_json(summary: Summary) -> c.JsonObject:
 
 def _parse_inventory(value: object) -> tuple[
     c.JsonObject,
-    dict[c.ConversationKey, c.ConversationView],
+    c.ConversationView | None,
     tuple[c.JsonObject, ...],
     bool,
     dict[str, str],
-    dict[tuple[c.ConversationKey, str], Summary],
+    dict[str, Summary],
 ]:
     """Prove every saved value, including private cache ownership and lineage."""
     try:
@@ -250,7 +237,7 @@ def _parse_inventory(value: object) -> tuple[
             raise ValueError("invalid inventory fields")
         if type(data["version"]) is not int or data["version"] != 1:
             raise ValueError("unsupported inventory version")
-        snapshot, views, notes = _parse_snapshot(data["snapshot"])
+        snapshot, view, notes = _parse_snapshot(data["snapshot"])
         if type(data["used"]) is not bool:
             raise ValueError("invalid inventory use flag")
         commits = _wire(data["applied_commits"])
@@ -268,7 +255,6 @@ def _parse_inventory(value: object) -> tuple[
             if type(raw) is not dict or set(raw) != {
                 "namespace",
                 "generation",
-                "key",
                 "projection_version",
                 "covered",
                 "digest",
@@ -284,14 +270,12 @@ def _parse_inventory(value: object) -> tuple[
             summary = Summary(
                 raw["namespace"],
                 raw["generation"],
-                _key_from_json(raw["key"]),
                 raw["projection_version"],
                 tuple(_invocation_from_json(v) for v in raw["covered"]),
                 raw["digest"],
                 raw["text"],
             )
-            cache_key = (summary.key, summary.projection_version)
-            view = views.get(summary.key)
+            cache_key = summary.projection_version
             if (
                 cache_key in summaries
                 or view is None
@@ -303,10 +287,14 @@ def _parse_inventory(value: object) -> tuple[
                 raise ValueError("summary has foreign or invalid raw-prefix evidence")
             summaries[cache_key] = summary
         if not data["used"] and (
-            snapshot["generation"] or views or notes or commits or summaries
+            snapshot["generation"]
+            or view is not None
+            or notes
+            or commits
+            or summaries
         ):
             raise ValueError("unused inventory contains retained work")
-        return snapshot, views, notes, data["used"], commits, summaries
+        return snapshot, view, notes, data["used"], commits, summaries
     except c.MemoryOperationError as exc:
         if exc.code == "session.unsupported_history":
             raise
@@ -324,7 +312,6 @@ class _Lease:
     session: _Session
     frame: _Frame
     request: c.ConversationRequest
-    key: c.ConversationKey
     ticket: int
     active: bool = False
     released: bool = False
@@ -332,7 +319,7 @@ class _Lease:
 
 
 class SessionMemory:
-    """Own authored-leaf conversations and notes, optionally in local SQLite.
+    """Own one conversation and its notes, optionally in local SQLite.
 
     Example:
         ``memory = SessionMemory()`` creates an isolated namespace. Injected
@@ -376,7 +363,7 @@ class SessionMemory:
                 raise ValueError(f"{name} must be at least {minimum}")
         self._history_budget_chars = history_budget_chars
         self._recent_turns = recent_turns
-        self._summaries: dict[tuple[c.ConversationKey, str], Summary] = {}
+        self._summaries: dict[str, Summary] = {}
         self._condition = Condition()
         self._pid = os.getpid()
         self._closed = False
@@ -384,11 +371,11 @@ class SessionMemory:
         self._namespace = uuid4().hex
         self._generation = 0
         self._used = False
-        self._views: dict[c.ConversationKey, c.ConversationView] = {}
+        self._view: c.ConversationView | None = None
         self._notes: tuple[c.JsonObject, ...] = ()
         self._applied_commits: dict[str, str] = {}
-        self._queues: dict[c.ConversationKey, deque[_Lease]] = {}
-        self._active: dict[c.ConversationKey, _Lease] = {}
+        self._queue: deque[_Lease] = deque()
+        self._active: _Lease | None = None
         self._next_ticket = 0
         if storage is not None:
             self._storage = SQLiteStorage(storage, "session")
@@ -397,18 +384,18 @@ class SessionMemory:
                 if saved is None:
                     self._save_state(
                         _snapshot(
-                            self._namespace, self._generation, self._views, self._notes
+                            self._namespace, self._generation, self._view, self._notes
                         )
                     )
                 else:
-                    pinned, views, notes, used, commits, summaries = _parse_inventory(
+                    pinned, view, notes, used, commits, summaries = _parse_inventory(
                         saved
                     )
                     self._namespace, self._generation = (
                         pinned["namespace"],
                         pinned["generation"],
                     )
-                    self._views, self._notes, self._used = views, notes, used
+                    self._view, self._notes, self._used = view, notes, used
                     self._applied_commits, self._summaries = commits, summaries
             except BaseException as primary:
                 try:
@@ -445,7 +432,7 @@ class SessionMemory:
         *,
         used: bool | None = None,
         commits: dict[str, str] | None = None,
-        summaries: dict[tuple[c.ConversationKey, str], Summary] | None = None,
+        summaries: dict[str, Summary] | None = None,
     ) -> None:
         """Save a complete validated candidate before publishing it in RAM."""
         if self._storage is None:
@@ -516,7 +503,7 @@ class SessionMemory:
         try:
             if self._closed:
                 return
-            if self._active or self._queues:
+            if self._active is not None or self._queue:
                 raise _error(
                     "busy", "cannot close active or queued conversations", stage="close"
                 )
@@ -542,30 +529,30 @@ class SessionMemory:
         """
         parsed = None if snapshot is None else _parse_snapshot(snapshot)
         with self._locked():
-            namespace, generation, live_views, live_notes = (
+            namespace, generation, live_view, live_notes = (
                 self._namespace,
                 self._generation,
-                self._views,
+                self._view,
                 self._notes,
             )
             if parsed is None:
                 pinned = _snapshot(
-                    self._namespace, self._generation, self._views, self._notes
+                    self._namespace, self._generation, self._view, self._notes
                 )
             else:
-                pinned, views, notes = parsed
+                pinned, view, notes = parsed
                 if not self._used:
                     namespace, generation = pinned["namespace"], pinned["generation"]
-                    live_views, live_notes = views, notes
+                    live_view, live_notes = view, notes
                 elif (
                     (pinned["namespace"], pinned["generation"])
                     != (
                         self._namespace,
                         self._generation,
                     )
-                    or any(
-                        key not in self._views or not _prefix(view, self._views[key])
-                        for key, view in views.items()
+                    or (
+                        view is not None
+                        and (self._view is None or not _prefix(view, self._view))
                     )
                     or _canonical(list(notes))
                     != _canonical(list(self._notes[: len(notes)]))
@@ -577,21 +564,21 @@ class SessionMemory:
                     )
             if not self._used:
                 self._save_state(
-                    _snapshot(namespace, generation, live_views, live_notes), used=True
+                    _snapshot(namespace, generation, live_view, live_notes), used=True
                 )
             self._namespace, self._generation = namespace, generation
-            self._views, self._notes = live_views, live_notes
+            self._view, self._notes = live_view, live_notes
             self._used = True
             return _Session(self, pinned)
 
     def reset(self) -> None:
-        """Clear conversations and notes and invalidate older generation handles.
+        """Clear the conversation and notes and invalidate older generation handles.
 
         Commit tombstones remain so exact retries cannot resurrect cleared notes.
         The operation does not delete provider resources.
 
         Raises:
-            `MemoryOperationError`: Any conversation has an active lease or queued
+            `MemoryOperationError`: The conversation has an active lease or queued
                 ticket. Busy reset fails immediately without modifying state.
         """
         self._check_pid()
@@ -599,18 +586,18 @@ class SessionMemory:
             raise _error("busy", "memory backend is active", stage="reset")
         try:
             with self._locked():
-                if self._active or self._queues:
+                if self._active is not None or self._queue:
                     raise _error(
                         "busy",
                         "cannot reset active or queued conversations",
                         stage="reset",
                     )
                 self._save_state(
-                    _snapshot(self._namespace, self._generation + 1, {}, ()),
+                    _snapshot(self._namespace, self._generation + 1, None, ()),
                     used=True,
                     summaries={},
                 )
-                self._views.clear()
+                self._view = None
                 self._notes = ()
                 self._summaries.clear()
                 self._generation += 1
@@ -695,14 +682,10 @@ class _Session:
         """Release a lease or ticket while holding the backend condition."""
         with self._memory._locked(cleanup=True):
             memory = self._memory
-            if memory._active.get(lease.key) is lease:
-                del memory._active[lease.key]
-            queue = memory._queues.get(lease.key)
-            if queue is not None:
-                if lease in queue:
-                    queue.remove(lease)
-                if not queue:
-                    del memory._queues[lease.key]
+            if memory._active is lease:
+                memory._active = None
+            if lease in memory._queue:
+                memory._queue.remove(lease)
             lease.active = False
             lease.released = True
             lease.before = None
@@ -716,15 +699,14 @@ class _Session:
     ) -> _Lease:
         """Reserve FIFO position before selecting the current live baseline."""
         memory = self._memory
-        key = c.ConversationKey(frame._spec.ref, request.consumer_static_path)
         with memory._locked():
             self._ensure_live()
             if request.invocation in self._leases:
                 raise _error("conflict", "invocation already has a session lease")
             memory._next_ticket += 1
-            lease = _Lease(self, frame, request, key, memory._next_ticket)
+            lease = _Lease(self, frame, request, memory._next_ticket)
             self._leases[request.invocation] = lease
-            memory._queues.setdefault(key, deque()).append(lease)
+            memory._queue.append(lease)
             memory._condition.notify_all()
         try:
             while True:
@@ -733,19 +715,15 @@ class _Session:
                     self._ensure_live()
                     if lease.released:
                         raise _error("stale", "conversation ticket was released")
-                    queue = memory._queues[key]
-                    if queue[0] is lease and key not in memory._active:
-                        queue.popleft()
-                        if not queue:
-                            del memory._queues[key]
+                    if memory._queue[0] is lease and memory._active is None:
+                        memory._queue.popleft()
                         lease.active = True
-                        memory._active[key] = lease
-                        before = memory._views.get(key)
+                        memory._active = lease
+                        before = memory._view
                         if before is None:
                             before = _zero(
                                 self._namespace,
                                 self._generation,
-                                key,
                                 request.compatibility,
                             )
                         elif _canonical(before.compatibility) != _canonical(
@@ -756,8 +734,6 @@ class _Session:
                                 "conversation compatibility changed; reset is required",
                             )
                         stamp = c.ConversationStamp(
-                            frame._spec.policy_name,
-                            key,
                             request.invocation,
                             self._namespace,
                             self._generation,
@@ -854,13 +830,13 @@ class _Session:
                         raise ValueError(
                             "mutation must be a closed append-note operation"
                         )
-                    note, key = _validate_note(payload["note"])
+                    note, ref = _validate_note(payload["note"])
                     if (
-                        key.frame_ref != mutation.frame_ref
+                        ref != mutation.frame_ref
                         or note["note_id"] != mutation.mutation_id
                     ):
                         raise ValueError("mutation and note identities must match")
-                    additions.append((note, key))
+                    additions.append(note)
                     batch.append(
                         {
                             "mutation_id": mutation.mutation_id,
@@ -884,9 +860,9 @@ class _Session:
                 )
             try:
                 notes = {note["note_id"]: note for note in self._memory._notes}
-                for note, key in additions:
+                for note in additions:
                     if not _admitted(
-                        self._memory._views, key, note["run_id"], note["execution_seq"]
+                        self._memory._view, note["run_id"], note["execution_seq"]
                     ):
                         raise ValueError("note has no matching conversation admission")
                     retained = notes.get(note["note_id"])
@@ -897,7 +873,7 @@ class _Session:
                     notes[note["note_id"]] = note
                 candidate = tuple(notes.values())
                 _snapshot(
-                    self._namespace, self._generation, self._memory._views, candidate
+                    self._namespace, self._generation, self._memory._view, candidate
                 )
             except (TypeError, ValueError) as exc:
                 raise _error(
@@ -906,7 +882,7 @@ class _Session:
             commits = {**self._memory._applied_commits, commit_id: digest}
             self._memory._save_state(
                 _snapshot(
-                    self._namespace, self._generation, self._memory._views, candidate
+                    self._namespace, self._generation, self._memory._view, candidate
                 ),
                 commits=commits,
             )
@@ -915,10 +891,8 @@ class _Session:
 
     def _candidate_snapshot(self, view: c.ConversationView) -> None:
         """Validate and save a complete view before publishing it in RAM."""
-        views = dict(self._memory._views)
-        views[view.key] = view
         candidate = _snapshot(
-            self._namespace, self._generation, views, self._memory._notes
+            self._namespace, self._generation, view, self._memory._notes
         )
         self._memory._save_state(candidate)
 
@@ -934,7 +908,7 @@ class _Session:
             or lease.session is not self
             or not lease.active
             or lease.released
-            or self._memory._active.get(lease.key) is not lease
+            or self._memory._active is not lease
             or self._leases.get(lease.request.invocation) is not lease
             or self._frames.get(lease.frame._spec.ref) is not lease.frame
         ):
@@ -942,7 +916,7 @@ class _Session:
 
 
 class _Frame:
-    """A policy-named frame whose descendants own independent conversations."""
+    """A frame view over the instance's single conversation."""
 
     def __init__(self, session: _Session, spec: c.MemoryFrameSpec) -> None:
         self._session = session
@@ -1046,9 +1020,8 @@ class _Frame:
                         and episode.owner_static_path == self._spec.ref.static_path
                     ):
                         continue
-                    key = c.ConversationKey(self._spec.ref, episode.owner_static_path)
                     if not _admitted(
-                        self._session._memory._views, key, context.run_id, sequence
+                        self._session._memory._view, context.run_id, sequence
                     ):
                         continue
                     source = {
@@ -1091,7 +1064,8 @@ class _Frame:
 
         Returns:
             `_Turn`: A single-entry context manager; entering waits in FIFO order
-                for this authored leaf and persists admission before returning.
+                for the instance's conversation and persists admission before
+                returning.
 
         Raises:
             `TypeError`: The request or callbacks have the wrong type.
@@ -1152,8 +1126,6 @@ class _Turn:
 
     def _stamp(self) -> c.ConversationStamp:
         return c.ConversationStamp(
-            self._frame._spec.policy_name,
-            self._view.key,
             self._request.invocation,
             self._view.namespace,
             self._view.generation,
@@ -1172,9 +1144,7 @@ class _Turn:
             lease = self._lease
             stamp = checkpoint.stamp
             if (
-                stamp.key != lease.key
-                or stamp.invocation != lease.request.invocation
-                or stamp.policy_name != lease.frame._spec.policy_name
+                stamp.invocation != lease.request.invocation
                 or (stamp.namespace, stamp.generation)
                 != (self._session._namespace, self._session._generation)
             ):
@@ -1183,14 +1153,14 @@ class _Turn:
                 lease.request.compatibility
             ):
                 raise _error("incompatible", "turn compatibility changed")
-            live = self._session._memory._views.get(lease.key, lease.before)
+            live = self._session._memory._view or lease.before
             if not _same(self._view, live):
                 raise _error(
                     "conflict", "turn predecessor is not the current live view"
                 )
             after = advance_conversation(self._view, checkpoint)
             self._session._candidate_snapshot(after)
-            self._session._memory._views[after.key] = after
+            self._session._memory._view = after
             self._view = after
             self._ordinal += 1
 
@@ -1308,7 +1278,7 @@ class _Turn:
                 for invocation in admissions(view)
                 if invocation != self._request.invocation
             )
-            cache_key = (view.key, projection_version)
+            cache_key = projection_version
             eligible = max(0, len(prior) - memory._recent_turns)
             cached = memory._summaries.get(cache_key)
             if cached is not None and (
@@ -1353,7 +1323,6 @@ class _Turn:
             candidate = Summary(
                 view.namespace,
                 view.generation,
-                view.key,
                 projection_version,
                 prior[:eligible],
                 prefix_digest(view, eligible),
@@ -1363,7 +1332,7 @@ class _Turn:
             # A surfaced summary remains useful evidence after cooperative stop
             # or session close; ownership must still hold until the callback drains.
             self._session._ensure_lease(self._lease, allow_closed=True)
-            live = memory._views.get(view.key)
+            live = memory._view
             if live is None or not _same(view, live) or not _same(view, self._view):
                 raise _error("conflict", "history changed during context preparation")
             if candidate is not None:
@@ -1374,7 +1343,7 @@ class _Turn:
                     _snapshot(
                         memory._namespace,
                         memory._generation,
-                        memory._views,
+                        memory._view,
                         memory._notes,
                     ),
                     summaries=summaries,

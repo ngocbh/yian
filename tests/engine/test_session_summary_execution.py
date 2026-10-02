@@ -56,7 +56,7 @@ def test_soft_budget_keeps_four_prior_turns_and_all_raw_messages(monkeypatch, mo
     monkeypatch.setattr(llm_clients, "model_from_config", lambda _: model)
     _seed(flow, memory)
     assert len(model.calls) == 5  # No eligible older turn yet, despite the budget.
-    before = deepcopy(_snapshot(memory)["conversations"][0]["items"])
+    before = deepcopy(_snapshot(memory)["conversation"]["items"])
 
     result = run_flow(
         flow, {"question": "current question"}, memory={"session": memory}
@@ -78,7 +78,7 @@ def test_soft_budget_keeps_four_prior_turns_and_all_raw_messages(monkeypatch, mo
         assert f"prior answer {index}" in answer_context
     assert answer_context[-1] == "current question"
     snapshot = _snapshot(memory)
-    items = snapshot["conversations"][0]["items"]
+    items = snapshot["conversation"]["items"]
     assert items[: len(before)] == before
     assert len(items) == 18
     assert SUMMARY not in json.dumps(items)
@@ -95,7 +95,7 @@ def test_summary_failure_is_a_node_failure_without_answer_or_history_deletion(
     model = _Model([*_replies(), error])
     monkeypatch.setattr(llm_clients, "model_from_config", lambda _: model)
     _seed(flow, memory)
-    before = _snapshot(memory)["conversations"][0]
+    before = _snapshot(memory)["conversation"]
 
     failed = run_flow(
         flow, {"question": "current question"}, memory={"session": memory}
@@ -103,7 +103,7 @@ def test_summary_failure_is_a_node_failure_without_answer_or_history_deletion(
 
     assert failed.failure.code == "node.execute"
     assert len(model.calls) == 6
-    after = _snapshot(memory)["conversations"][0]
+    after = _snapshot(memory)["conversation"]
     assert after["items"] == before["items"]
     assert after["effects"] == before["effects"]
     assert after["closed_invocations"][-1]["status"] == "failed"
@@ -147,17 +147,17 @@ def test_interrupted_summary_can_resume_against_existing_memory(monkeypatch, tmp
     )
     monkeypatch.setattr(llm_clients, "model_from_config", lambda _: model)
     _seed(flow, memory)
-    before = _snapshot(memory)["conversations"][0]["items"]
+    before = _snapshot(memory)["conversation"]["items"]
     log = tmp_path / "interrupted.jsonl"
     with pytest.raises(KeyboardInterrupt) as caught:
         run_flow(
             flow, {"question": "recover this"}, memory={"session": memory}, log=log
         )
     assert caught.value is stopped
-    assert _snapshot(memory)["conversations"][0]["items"] == before
+    assert _snapshot(memory)["conversation"]["items"] == before
 
     resumed = resume_flow(flow, log=log, memory={"session": memory})
 
     assert resumed.output == "recovered" and len(model.calls) == 8
-    assert _snapshot(memory)["conversations"][0]["items"][: len(before)] == before
+    assert _snapshot(memory)["conversation"]["items"][: len(before)] == before
     assert model.calls[-1][-1].content == "recover this"

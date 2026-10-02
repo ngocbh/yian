@@ -104,7 +104,7 @@ def _wait_queue(memory, count):
     # Observe actual reserved tickets, not thread-start timing or sleeps.
     with memory._condition:
         assert memory._condition.wait_for(
-            lambda: sum(len(queue) for queue in memory._queues.values()) == count,
+            lambda: len(memory._queue) == count,
             timeout=5,
         )
 
@@ -115,7 +115,8 @@ def _snapshot(memory):
 
 
 def _views(memory):
-    return [conversation_view_from_json(raw) for raw in _snapshot(memory)["conversations"]]
+    raw = _snapshot(memory)["conversation"]
+    return [] if raw is None else [conversation_view_from_json(raw)]
 
 
 def _humans(messages):
@@ -278,7 +279,6 @@ def test_agent_session_owns_history_and_a_flow_transcript_is_rejected(monkeypatc
     assert _humans(calls[1]) == ["first", "second"]
     assert "outer recall" in calls[1][0].content and len(outer.recall_contexts) == 2
     view, = _views(local)
-    assert view.key.frame_ref.static_path == ("execution-session", "answer")
 
 
 def test_loop_iterations_share_one_authored_conversation(monkeypatch):
@@ -325,7 +325,6 @@ output: ${repeat.output.question}
     ]
     view, = _views(memory)
     assert len(view.closed_invocations) == 3
-    assert view.key.consumer_static_path == ("session-loop", "repeat", "answer")
 
 
 @_bounded
@@ -374,10 +373,9 @@ output: ${each.output}
     assert [_humans(messages) for messages in calls] == [admitted[:index] for index in (1, 2, 3)]
     view, = _views(memory)
     assert len(view.closed_invocations) == 3
-    assert view.key.consumer_static_path == ("session-map", "each", "answer")
 
 
-def test_two_callsites_of_one_child_keep_separate_conversations(monkeypatch):
+def test_two_callsites_of_one_child_share_one_conversation(monkeypatch):
     flow = load_flow("""id: session-calls
 name: session_calls
 llm_config: {provider: openai, model: fake-model}
@@ -409,12 +407,10 @@ output: ${[left.output, right.output]}
         result = run_flow(flow, {}, memory={"session": memory})
         assert result.status == "succeeded", result.failure
         assert result.output == ["left", "right"]
-    assert sorted(_humans(messages) for messages in calls) == [
-        ["left"], ["left", "left"], ["right"], ["right", "right"],
-    ]
-    assert {view.key.consumer_static_path for view in _views(memory)} == {
-        ("session-calls", "left", "answer"), ("session-calls", "right", "answer"),
-    }
+    assert [len(_humans(messages)) for messages in calls] == [1, 2, 3, 4]
+    assert _humans(calls[-1]) == [messages[-1].content for messages in calls]
+    view, = _views(memory)
+    assert len(view.closed_invocations) == 4
 
 
 _PROVIDER_SPLIT = """id: provider-split

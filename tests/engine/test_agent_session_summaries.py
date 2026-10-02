@@ -138,7 +138,7 @@ def test_summary_failure_never_enters_answer_structured_retry(
         "structured binding after failed summary"
     )
     monkeypatch.setattr(llm_clients, "model_from_config", lambda _: model)
-    before = snapshot(memory)["conversations"][0]
+    before = snapshot(memory)["conversation"]
     with pytest.raises(error_type) as caught:
         with harness(memory) as opened:
             with opened.frame.open_turn(
@@ -155,7 +155,7 @@ def test_summary_failure_never_enters_answer_structured_retry(
                     )
                 )
     assert caught.value is error and len(model.calls) == 1 and model.bindings == []
-    after = snapshot(memory)["conversations"][0]
+    after = snapshot(memory)["conversation"]
     assert after["items"] == before["items"] and after["effects"] == before["effects"]
     assert after["closed_invocations"][-1]["status"] != "completed"
 
@@ -226,7 +226,7 @@ def test_tool_then_structured_uses_summary_once_and_safe_current_projection(
         assert not any(
             "completion unknown" in str(message.content) for message in messages
         )
-    raw = snapshot(memory)["conversations"][0]
+    raw = snapshot(memory)["conversation"]
     assert "old summary" not in json.dumps(raw)
     assert sum(effect["kind"] == "model" for effect in raw["effects"]) == 5
     assert (
@@ -460,7 +460,7 @@ def test_stop_after_summary_preserves_actual_cache_without_answer(monkeypatch):
         if stop.is_set():
             raise primary
 
-    before = snapshot(memory)["conversations"][0]
+    before = snapshot(memory)["conversation"]
     with pytest.raises(_HostStop) as caught:
         with harness(memory) as opened:
             with opened.frame.open_turn(
@@ -475,7 +475,7 @@ def test_stop_after_summary_preserves_actual_cache_without_answer(monkeypatch):
                     )
                 )
     assert caught.value is primary and len(model.calls) == 1
-    after = snapshot(memory)["conversations"][0]
+    after = snapshot(memory)["conversation"]
     assert after["items"] == before["items"] and after["effects"] == before["effects"]
     assert after["closed_invocations"][-1]["status"] == "interrupted"
     assert next(iter(memory._summaries.values())).text == "actual summary before stop"

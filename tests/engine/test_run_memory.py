@@ -124,7 +124,7 @@ def test_memory_context_opener_uses_same_runtime_on_fresh_and_resume(
 
     def forward(node, inputs, *, open_memory_context, **_caps):
         turn = open_memory_context("system", "prompt", {"format": "test-v1"}).transcript
-        entered.append(turn.view.key.consumer_static_path)
+        entered.append(turn._request.consumer_static_path)
         ordinal = turn.request("model", {"input": "test"})
         turn.observe(ordinal, "completed", items=(ConversationItem("reply", "test-v1", {"value": 7}),))
         return Output(7)
@@ -152,10 +152,9 @@ def test_memory_context_opener_uses_same_runtime_on_fresh_and_resume(
     assert all(runtime._closed for runtime in engines)
     assert not any(type(record).__name__.startswith("Conversation") for record in _records(path))
     with memory.open_run() as opened:
-        histories = opened.snapshot["conversations"]
-    assert len(histories) == 1
-    assert histories[0]["closed_invocations"][-1]["status"] == "completed"
-    assert histories[0]["items"][0]["payload"] == {"value": 7}
+        history = opened.snapshot["conversation"]
+    assert history["closed_invocations"][-1]["status"] == "completed"
+    assert history["items"][0]["payload"] == {"value": 7}
 
 
 @pytest.mark.parametrize("num_workers", [0, 2])
@@ -172,7 +171,7 @@ def test_conversation_completes_before_dispatcher_output_contract_acceptance(
     assert result.status == "failed"
     assert result.failure.code == "contract.output"
     with memory.open_run() as opened:
-        history = opened.snapshot["conversations"][0]
+        history = opened.snapshot["conversation"]
     assert history["closed_invocations"][-1]["status"] == "completed"
 
 

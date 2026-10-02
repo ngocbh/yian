@@ -52,7 +52,7 @@ class _Model:
 def _view(memory):
     from agent_composer.memory.conversation import conversation_view_from_json
     with memory.open_run() as opened:
-        return conversation_view_from_json(opened.snapshot["conversations"][0])
+        return conversation_view_from_json(opened.snapshot["conversation"])
 
 
 def test_two_fresh_plain_runs_retain_actual_history_without_learning(monkeypatch):

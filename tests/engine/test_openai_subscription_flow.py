@@ -120,7 +120,7 @@ def test_rich_responses_summary_keeps_shared_memory_working(monkeypatch, subscri
     seed_model = _Model(_replies())
     monkeypatch.setattr(llm_clients, "model_from_config", lambda _: seed_model)
     _seed(flow, memory)
-    before = _snapshot(memory)["conversations"][0]["items"]
+    before = _snapshot(memory)["conversation"]["items"]
     server = ResponsesServer(tool_first=False)
     with httpx.Client(transport=httpx.MockTransport(server)) as client:
         if subscription:
@@ -150,6 +150,6 @@ def test_rich_responses_summary_keeps_shared_memory_working(monkeypatch, subscri
         )
         for item in server.bodies[1]["input"]
     )
-    after = _snapshot(memory)["conversations"][0]["items"]
+    after = _snapshot(memory)["conversation"]["items"]
     assert after[: len(before)] == before
     assert len(after) == len(before) + 3  # Derived summary is not raw history.

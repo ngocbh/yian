@@ -374,7 +374,7 @@ def test_real_turn_rethrow_is_not_reported_as_secondary_cleanup_failure(failure_
         assert "Memory context cleanup" not in result.failure.traceback
         assert not getattr(error, "__notes__", [])
         with memory.open_run() as opened:
-            assert opened.snapshot["conversations"][0]["closed_invocations"][-1]["status"] == "failed"
+            assert opened.snapshot["conversation"]["closed_invocations"][-1]["status"] == "failed"
     finally:
         runtime.close()
 
@@ -444,7 +444,7 @@ def _fifo_scenario():
                 assert paused.wait(3)
                 b = executor.submit(evaluate, second, "b")
                 with memory._condition:
-                    assert memory._condition.wait_for(lambda: any(memory._queues.values()), timeout=3)
+                    assert memory._condition.wait_for(lambda: memory._queue, timeout=3)
                 assert not second_entered.is_set()
             finally:
                 release.set()

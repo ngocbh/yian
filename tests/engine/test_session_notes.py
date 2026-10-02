@@ -41,25 +41,11 @@ def _with_notes(*notes):
         with h.frame.open_turn(request(), check_stopped=lambda: None):
             pass
         value = snapshot(h.memory)
-    return {**value, "version": 2, "notes": list(notes)}
-
-
-def test_version_one_snapshot_stays_exact_and_detached_when_pinned():
-    legacy = {key: value for key, value in _with_notes().items() if key != "notes"}
-    legacy["version"] = 1
-    expected = deepcopy(legacy)
-    memory = SessionMemory()
-    with memory.open_run(snapshot=legacy) as opened:
-        legacy["conversations"].clear()
-        assert opened.snapshot == expected
-        exported = opened.snapshot
-        exported["conversations"].clear()
-        assert opened.snapshot == expected
-        assert snapshot(memory) == {**expected, "version": 2, "notes": []}
+    return {**value, "version": 3, "notes": list(notes)}
 
 
 @pytest.mark.parametrize("text", ["Check units.", ""])
-def test_version_two_snapshot_adopts_detached_notes(text):
+def test_snapshot_adopts_detached_notes(text):
     value = _with_notes(_note(text=text))
     expected = deepcopy(value)
     memory = SessionMemory()
@@ -76,8 +62,6 @@ def test_version_two_snapshot_adopts_detached_notes(text):
         "extra",
         "missing",
         "bad_id",
-        "foreign_frame",
-        "foreign_leaf",
         "foreign_run",
         "foreign_sequence",
         "bool_sequence",
@@ -100,15 +84,6 @@ def test_snapshot_rejects_invalid_or_unadmitted_notes_without_adoption(case):
         del note["text"]
     elif case == "bad_id":
         note["note_id"] = "wrong"
-    elif case == "foreign_frame":
-        value["notes"] = [
-            _note(
-                ref=c.MemoryFrameRef("elsewhere", ("elsewhere",), c.MemoryOwner.FLOW),
-                consumer=("elsewhere", "agent"),
-            )
-        ]
-    elif case == "foreign_leaf":
-        value["notes"] = [_note(consumer=("root", "sibling"))]
     elif case == "foreign_run":
         value["notes"] = [_note(run_id="elsewhere")]
     elif case == "foreign_sequence":
@@ -218,7 +193,6 @@ def test_learn_is_pure_deterministic_self_feedback_projection():
         "no_feedback",
         "other_channel",
         "root_only",
-        "unrelated_leaf",
         "other_run",
         "unadmitted_start",
         "no_admission",
@@ -236,8 +210,6 @@ def test_learn_ignores_feedback_without_owning_admitted_leaf(case):
             kwargs["texts"] = ()
         elif case == "other_channel":
             kwargs["channel"] = "input"
-        elif case == "unrelated_leaf":
-            kwargs["consumer"] = ("root", "sibling")
         elif case == "other_run":
             kwargs["run_id"] = "another-run"
         elif case == "unadmitted_start":
@@ -266,16 +238,6 @@ def test_learn_ignores_feedback_without_owning_admitted_leaf(case):
         assert h.frame.learn(context) == []
 
 
-def test_outer_recall_only_owner_cannot_duplicate_inner_learning():
-    leaf = c.MemoryFrameRef("root", ("root", "agent"), c.MemoryOwner.AGENT)
-    with harness() as h:
-        inner = h.session.open_frame(c.MemoryFrameSpec(leaf, "session", {}))
-        with inner.open_turn(request(), check_stopped=lambda: None):
-            pass
-        assert len(inner.learn(_context(ref=leaf))) == 1
-        assert h.frame.learn(_context()) == []
-
-
 def test_learn_rejects_foreign_frame_context():
     other = c.MemoryFrameRef("other", ("other",), c.MemoryOwner.FLOW)
     with harness() as h:
@@ -302,11 +264,11 @@ def test_commit_publishes_notes_only_to_future_run_recall():
     with harness() as h:
         with h.frame.open_turn(request(), check_stopped=lambda: None):
             pass
-        history = snapshot(h.memory)["conversations"]
+        history = snapshot(h.memory)["conversation"]
         mutations = tuple(h.frame.learn(_context()))
         h.session.commit("learn-a", mutations)
         assert snapshot(h.memory)["notes"] == [_note()]
-        assert snapshot(h.memory)["conversations"] == history
+        assert snapshot(h.memory)["conversation"] == history
         assert _recall(h.frame) == ""
         with harness(h.memory) as later:
             assert _recall(later.frame) == "Check units."
@@ -416,7 +378,7 @@ def test_reset_clears_notes_and_keeps_commit_replay_tombstones():
             later.session.commit("before-reset", batch)
             assert _recall(later.frame) == ""
             current = snapshot(h.memory)
-            assert current["notes"] == [] and current["conversations"] == []
+            assert current["notes"] == [] and current["conversation"] is None
             assert current["generation"] == old["generation"] + 1
             with pytest.raises(c.MemoryOperationError):
                 later.session.commit("new-identity", batch)
@@ -430,21 +392,6 @@ def test_restored_notes_recall_and_accept_idempotent_note_republication():
         assert _recall(frame) == "Check units.\n"
         opened.commit("restored", tuple(_mutation(note) for note in value["notes"]))
         assert snapshot(memory) == value
-
-
-def test_version_one_pin_cannot_observe_later_notes():
-    with harness() as h:
-        with h.frame.open_turn(request(), check_stopped=lambda: None):
-            pass
-        old = snapshot(h.memory)
-        del old["notes"]
-        old["version"] = 1
-        h.session.commit("later", (_mutation(),))
-        with h.memory.open_run(snapshot=old) as opened:
-            frame = opened.open_frame(c.MemoryFrameSpec(REF, "session", {}))
-            assert opened.snapshot == old
-            assert _recall(frame) == ""
-        assert snapshot(h.memory)["notes"] == [_note()]
 
 
 @pytest.mark.parametrize(
@@ -524,7 +471,6 @@ def test_ancestor_can_recall_old_notes_without_learning_inner_invocation():
             inner = later.session.open_frame(c.MemoryFrameSpec(leaf, "session", {}))
             with inner.open_turn(request(run_id="b"), check_stopped=lambda: None):
                 pass
-            assert later.frame.learn(_context(run_id="b")) == []
             later.session.commit(
                 "leaf-note", tuple(inner.learn(_context(ref=leaf, run_id="b")))
             )

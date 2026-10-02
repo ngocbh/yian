@@ -172,6 +172,6 @@ def test_cli_resume_after_process_death_reuses_saved_history_and_repeats_request
     assert str(storage).encode() not in log.read_bytes()
     with SessionMemory(storage=storage) as memory:
         with memory.open_run() as opened:
-            effects = opened.snapshot["conversations"][0]["effects"]
+            effects = opened.snapshot["conversation"]["effects"]
             assert [effect["status"] for effect in effects] == ["pending", "completed"]
             assert effects[0]["invocation"] != effects[1]["invocation"]

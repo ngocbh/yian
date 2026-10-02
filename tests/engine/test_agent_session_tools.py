@@ -356,7 +356,7 @@ def test_restored_unclosed_invocation_reports_unknown_completion_without_changin
                                name="lookup", arguments={"value": 1}, model_exchange_id="older-model",
                                call_index=0, tool_call_id="reused-provider-id", check_stopped=lambda: None)
             saved = snapshot(memory)
-    assert saved["conversations"][0]["closed_invocations"] == []
+    assert saved["conversation"]["closed_invocations"] == []
     restored = SessionMemory()
     with restored.open_run(snapshot=saved) as session:
         frame = session.open_frame(MemoryFrameSpec(REF, "session", {}))

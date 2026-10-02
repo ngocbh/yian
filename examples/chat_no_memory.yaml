@@ -1,0 +1,87 @@
+# chat_no_memory — a turn-by-turn conversational REPL that carries its own transcript.
+#
+# The history is a plain string threaded through the LOOP and pasted into every prompt.
+# examples/chat.yaml keeps it in a session memory instead.
+#
+# The turn boundary is STRUCTURAL: HUMAN_INPUT feeds a CASE; exact exit text builds the
+# exit record, otherwise AGENT + a second CODE node build the normal transcript. The LLM
+# only fills the reply; output bindings rejoin the branches into the carried record.
+# Run it with:  composer chat examples/chat_no_memory.yaml
+id: chat_no_memory
+name: chat_no_memory
+description: A turn-by-turn conversational assistant (plain agent, no tools).
+
+input:
+  opening: str            # seed transcript; the CLI passes "" (empty)
+
+defs:
+  turn:                   # body: 'a -> 'a over {transcript, exited}
+    input:
+      transcript: str
+      exited: bool
+    nodes:
+      ask:
+        kind: human_input       # blocks a worker until the broker returns the message
+        prompt: "You:"
+        output: str
+      route:
+        kind: case
+        on: ${ask.output}
+        cases:
+          - when: /exit
+            then: exit_turn
+          - when: /quit
+            then: exit_turn
+        else: reply
+      exit_turn:
+        kind: code
+        input:
+          transcript: ${input.transcript}
+        output:
+          transcript: str
+          exited: bool
+        code: |
+          return {"transcript": inputs["transcript"], "exited": True}
+      reply:
+        kind: agent
+        mode: plain
+        input:
+          transcript: ${input.transcript}
+          message:    ${ask.output}
+        output: str
+        prompt: |-
+          You are a helpful conversational assistant.
+
+          Conversation so far:
+          ${transcript}
+
+          User: ${message}
+      normal_turn:
+        kind: code
+        input:
+          transcript: ${input.transcript}
+          message: ${ask.output}
+          reply: ${reply.output}
+        output: str
+        code: |
+          return (
+              inputs["transcript"]
+              + "\n\nUser: " + inputs["message"]
+              + "\n\nAssistant: " + inputs["reply"]
+          )
+    # Adjacent defaulted spans concatenate as str. Comparing the optional exit
+    # record field with true always yields the carried bool, including on a miss.
+    output:
+      transcript: '${exit_turn.output.transcript:-""}${normal_turn.output:-""}'
+      exited: ${exit_turn.output.exited == true}
+
+nodes:
+  chat:
+    kind: loop
+    call: turn
+    input:
+      transcript: ${input.opening}
+      exited: false                 # CASE sets true for exact /exit or /quit input
+    while: "not ${exited}"          # a carried-field predicate (verified to parse)
+    max: 1000                       # required runaway safety cap
+output: ${chat.output.transcript}

@@ -12,6 +12,7 @@ from agent_composer.compose.loader import load_flow
     [
         "src/agent_composer/cli/chat/chat.yaml",
         "examples/chat.yaml",
+        "examples/chat_no_memory.yaml",
         ".claude/skills/composing-agents/templates/chat.yaml",
     ],
 )

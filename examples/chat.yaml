@@ -1,21 +1,25 @@
-# chat — a turn-by-turn conversational REPL (plain agent; deterministic transcript).
+# chat — a turn-by-turn conversational REPL whose history lives in a session memory.
 #
-# The turn boundary is STRUCTURAL: HUMAN_INPUT feeds a CASE; exact exit text builds the
-# exit record, otherwise AGENT + a second CODE node build the normal transcript. The LLM
-# only fills the reply; output bindings rejoin the branches into the carried record.
+# The turn boundary is STRUCTURAL: HUMAN_INPUT feeds a CASE; exact exit text ends the
+# loop, otherwise the AGENT replies. The reply agent owns one session memory, so each
+# turn's model request starts from the earlier turns' messages; the flow passes only
+# the new message. composer chat keeps the memory under
+# ~/.agent_composer/sessions/<session id>/ and prints the id; continue later with
+#   composer chat examples/chat.yaml --session <session id>
+# examples/chat_no_memory.yaml is the same chat carrying its own transcript instead.
 # Run it with:  composer chat examples/chat.yaml
 id: chat
 name: chat
-description: A turn-by-turn conversational assistant (plain agent, no tools).
+description: A turn-by-turn conversational assistant with session memory (plain agent, no tools).
 
 input:
-  opening: str            # seed transcript; the CLI passes "" (empty)
+  opening: str            # composer chat passes it; history comes from memory instead
 
 defs:
-  turn:                   # body: 'a -> 'a over {transcript, exited}
+  turn:                   # body: 'a -> 'a over {exited, reply}
     input:
-      transcript: str
       exited: bool
+      reply: str
     nodes:
       ask:
         kind: human_input       # blocks a worker until the broker returns the message
@@ -32,53 +36,31 @@ defs:
         else: reply
       exit_turn:
         kind: code
-        input:
-          transcript: ${input.transcript}
-        output:
-          transcript: str
-          exited: bool
+        output: bool
         code: |
-          return {"transcript": inputs["transcript"], "exited": True}
+          return True
       reply:
         kind: agent
         mode: plain
+        system_prompt: You are a helpful conversational assistant.
+        long_term_memory: {chat: session}   # the conversation, kept across turns
         input:
-          transcript: ${input.transcript}
-          message:    ${ask.output}
-        output: str
-        prompt: |-
-          You are a helpful conversational assistant.
-
-          Conversation so far:
-          ${transcript}
-
-          User: ${message}
-      normal_turn:
-        kind: code
-        input:
-          transcript: ${input.transcript}
           message: ${ask.output}
-          reply: ${reply.output}
         output: str
-        code: |
-          return (
-              inputs["transcript"]
-              + "\n\nUser: " + inputs["message"]
-              + "\n\nAssistant: " + inputs["reply"]
-          )
-    # Adjacent defaulted spans concatenate as str. Comparing the optional exit
-    # record field with true always yields the carried bool, including on a miss.
+        prompt: ${message}
+    # Comparing the optional exit output with true always yields the carried bool,
+    # including on a miss; the reply defaults to "" on the exit turn.
     output:
-      transcript: '${exit_turn.output.transcript:-""}${normal_turn.output:-""}'
-      exited: ${exit_turn.output.exited == true}
+      exited: ${exit_turn.output == true}
+      reply: '${reply.output:-""}'
 
 nodes:
   chat:
     kind: loop
     call: turn
     input:
-      transcript: ${input.opening}
       exited: false                 # CASE sets true for exact /exit or /quit input
-    while: "not ${exited}"          # a carried-field predicate (verified to parse)
+      reply: ""
+    while: "not ${exited}"
     max: 1000                       # required runaway safety cap
-output: ${chat.output.transcript}
+output: ${chat.output.reply}

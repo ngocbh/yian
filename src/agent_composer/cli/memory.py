@@ -1,4 +1,4 @@
-"""Turn `composer run` memory flags into one host-built memory registry.
+"""Turn CLI memory options into one host-built memory registry.
 
 The CLI builds only built-in memory types. A flow with a custom type fails
 here, before any run or resume, even a terminal ``--resume`` that would open
@@ -60,7 +60,7 @@ def build_cli_memories(
 
     Args:
         flow (`ComposedFlow`): Loaded flow.
-        root (`str | PathLike[str] | None`): ``--memory-root`` value.
+        root (`str | PathLike[str] | None`): Memory root directory, or None.
         storage_options (`Iterable[str]`): Repeated ``--memory-storage`` values.
 
     Returns:
@@ -89,7 +89,7 @@ def build_cli_memories(
     custom = sorted(k for k, t in types.items() if t not in BUILTIN_MEMORY_CONFIG_KEYS)
     if custom:
         raise MemorySetupError(
-            f"this flow declares custom memory type(s) for {custom}; composer run "
+            f"this flow declares custom memory type(s) for {custom}; the CLI "
             f"builds only built-in types ({builtins}). Use the Python API: "
             "registry = build_memories(flow, factories=... or supplied=...), then "
             "run_flow(flow, inputs, memory=registry)."

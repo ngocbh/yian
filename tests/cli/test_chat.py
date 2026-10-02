@@ -14,6 +14,7 @@ import time
 from concurrent.futures import CancelledError
 from pathlib import Path
 
+from langchain_core.messages import AIMessage
 import pytest
 from typer.testing import CliRunner
 
@@ -44,16 +45,21 @@ def _chat_logs() -> list[Path]:
 
 
 class _FakeModel:
-    """A stand-in chat model: plain agent mode calls `model.invoke(msgs).content`."""
+    """A stand-in chat model that records each request's messages and answers "hello back".
+
+    It returns a real `AIMessage` because a session memory stores the reply.
+    """
+
+    def __init__(self, requests=None):
+        self.requests = requests
 
     def bind_tools(self, tools):
         return self
 
     def invoke(self, msgs):
-        class R:
-            content = "hello back"
-
-        return R()
+        if self.requests is not None:
+            self.requests.append([m.content for m in msgs])
+        return AIMessage(content="hello back")
 
 
 class _Msg:
@@ -151,6 +157,110 @@ def test_chat_two_turns(tmp_path, monkeypatch):
     logs = _chat_logs()
     assert len(logs) == 1
     assert f"Run log: {logs[0]}" in r.stderr
+
+
+EXAMPLE_CHAT_NO_MEMORY = EXAMPLE_CHAT.with_name("chat_no_memory.yaml")
+_SESSION_LINE = re.compile(r"session (\S+) \(continue with --session \1\)")
+
+
+def _sessions() -> list[Path]:
+    """Return the chat session directories in the isolated test home."""
+    return sorted((Path.home() / ".agent_composer" / "sessions").glob("*"))
+
+
+def _drive_chat(monkeypatch, lines, *extra, flow=EXAMPLE_CHAT):
+    """Run ``composer chat`` over scripted lines; return the result and model requests."""
+    requests = []
+    monkeypatch.setattr(
+        llm_clients_mod, "model_from_config", lambda cfg: _FakeModel(requests)
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "x")
+    result = runner.invoke(
+        app,
+        ["chat", str(flow), "--provider", "openai", *extra],
+        input="".join(f"{line}\n" for line in lines),
+    )
+    return result, requests
+
+
+def test_chat_session_memory_carries_earlier_turns(monkeypatch):
+    """The example's reply agent sees earlier turns through its session memory."""
+    result, requests = _drive_chat(monkeypatch, ["hi", "again", "/exit"])
+
+    assert result.exit_code == 0, result.output
+    assert requests[0][1:] == ["hi"]
+    assert requests[1][1:] == ["hi", "hello back", "again"]
+    session = _SESSION_LINE.search(result.output).group(1)
+    assert _sessions() == [Path.home() / ".agent_composer" / "sessions" / session]
+    assert (_sessions()[0] / "chat" / "chat.sqlite").is_file()
+
+
+def test_chat_session_option_continues_a_session(monkeypatch):
+    """``--session`` reopens an earlier session's memory instead of starting fresh."""
+    first, _ = _drive_chat(monkeypatch, ["hi", "/exit"])
+    session = _SESSION_LINE.search(first.output).group(1)
+
+    fresh, fresh_requests = _drive_chat(monkeypatch, ["more", "/exit"])
+    resumed, resumed_requests = _drive_chat(
+        monkeypatch, ["more", "/exit"], "--session", session
+    )
+
+    assert fresh.exit_code == 0 and resumed.exit_code == 0
+    assert fresh_requests[0][1:] == ["more"]
+    assert resumed_requests[0][1:] == ["hi", "hello back", "more"]
+    assert f"session {session} " in resumed.output
+    assert len(_sessions()) == 2
+
+
+@pytest.mark.parametrize("session", ["missing", "..", "../runs", "a/b", ""])
+def test_chat_session_option_rejects_unknown_or_unsafe_ids(monkeypatch, session):
+    """A ``--session`` value that names no session directory is a usage error."""
+    (Path.home() / ".agent_composer" / "runs").mkdir(parents=True)
+    result, requests = _drive_chat(monkeypatch, ["/exit"], "--session", session)
+
+    assert result.exit_code == 2
+    assert "--session" in _ANSI_SGR.sub("", result.output)
+    assert requests == []
+
+
+def test_chat_flow_without_memory_opens_no_session(monkeypatch):
+    """A chat flow that declares no memory creates and prints no session."""
+    result, requests = _drive_chat(
+        monkeypatch, ["hi", "again", "/exit"], flow=EXAMPLE_CHAT_NO_MEMORY
+    )
+
+    assert result.exit_code == 0
+    assert "session " not in result.output.replace("session ended", "")
+    assert _sessions() == []
+    assert "User: hi" in requests[1][-1]
+
+
+def test_chat_session_memory_survives_a_failed_turn(monkeypatch):
+    """A restart after a failed turn reuses the same session memory."""
+    requests = []
+
+    class FailSecondTurn(_FakeModel):
+        def invoke(self, msgs):
+            if msgs[-1].content == "boom":
+                raise RuntimeError("model unavailable")
+            return super().invoke(msgs)
+
+    monkeypatch.setattr(
+        llm_clients_mod, "model_from_config", lambda cfg: FailSecondTurn(requests)
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "x")
+    result = runner.invoke(
+        app,
+        ["chat", str(EXAMPLE_CHAT), "--provider", "openai"],
+        input="hi\nboom\nagain\n/exit\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "turn failed" in result.output
+    # The memory also records the failed turn; the first turn is still there.
+    assert requests[-1][1:3] == ["hi", "hello back"]
+    assert requests[-1][-1] == "again"
+    assert len(_sessions()) == 1
 
 
 def test_chat_eof_is_normalized_to_flow_owned_exit(monkeypatch):

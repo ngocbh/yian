@@ -16,13 +16,16 @@ initial run and failed-turn restart gets its own reported durable log.
 from __future__ import annotations
 
 from concurrent.futures import CancelledError
+from datetime import datetime
 from functools import partial
 import os
 from pathlib import Path
+import re
 import select
 import sys
 from threading import Lock
 from typing import Any, Optional
+import uuid
 
 import typer
 from rich.console import Console
@@ -30,6 +33,7 @@ from rich.markdown import Markdown
 from rich.text import Text
 
 from agent_composer.cli.chat import tools as chat_tools
+from agent_composer.cli.memory import build_cli_memories
 from agent_composer.cli.run import (  # reused helpers
     _default_run_log_path,
     _ensure_cwd_importable,
@@ -40,8 +44,11 @@ from agent_composer.cli.run import (  # reused helpers
     _render_load_error,
     _run_with_terminal_controller,
 )
+from agent_composer.compile.memory_layout import resolve_memory_layout
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.loader import load_flow
+from agent_composer.memory.contracts import MemoryOperationError
+from agent_composer.memory_host import MemoryRegistry
 from agent_composer.run import _run_flow_controlled
 from agent_composer.events import NodeSucceeded
 from agent_composer.tools import registered_tools
@@ -52,6 +59,41 @@ err_console = Console(stderr=True)  # errors go to stderr, mirroring `composer r
 
 # The composer chat flow shipped with the package — the default when no flow is given.
 _BUNDLED = Path(__file__).parent / "chat.yaml"
+
+_SESSION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+
+
+def _sessions_dir() -> Path:
+    """Directory holding one memory root per chat session."""
+    return Path.home() / ".agent_composer" / "sessions"
+
+
+def _open_session_memories(loaded, session: Optional[str]) -> Optional[MemoryRegistry]:
+    """Build the flow's declared memories under a new or continued session root.
+
+    Returns None, and creates nothing, when the flow declares no memory.
+
+    Raises:
+        `typer.BadParameter`: ``--session`` is malformed or names no session.
+        `MemorySetupError`: The flow declares a custom memory type.
+        `OSError`: The session directory cannot be created.
+    """
+    if not resolve_memory_layout(loaded.compiled).memories:
+        return None
+    if session is None:
+        session = f"{datetime.now():%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:6]}"
+        root = _sessions_dir() / session
+        root.mkdir(parents=True)
+    else:
+        root = _sessions_dir() / session
+        if not _SESSION_ID.fullmatch(session) or not root.is_dir():
+            raise typer.BadParameter(
+                f"no chat session {session!r} under {_sessions_dir()}",
+                param_hint="--session",
+            )
+    registry = build_cli_memories(loaded, root=root, storage_options=[])
+    console.print(f"[dim]session {session} (continue with --session {session})[/dim]")
+    return registry
 
 
 def _prompt_chat_request(request) -> Any:
@@ -159,6 +201,10 @@ def chat(
     model: Optional[str] = typer.Option(
         None, "--model", help="Override the LLM model for agents that set none (cascade)."
     ),
+    session: Optional[str] = typer.Option(
+        None, "--session", metavar="ID",
+        help="Continue the memory of an earlier chat session (default: a new session).",
+    ),
 ) -> None:
     """Start an interactive chat session over a chat flow."""
     _ensure_cwd_importable()  # so a chat flow's `code: pkg.mod:fn` ref resolves (mirrors `composer run`)
@@ -182,6 +228,12 @@ def chat(
     except RuntimeError as exc:
         err_console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1)
+    try:
+        registry = _open_session_memories(loaded, session)
+    except (OSError, ValueError) as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+    memory_options = {"memory": registry} if registry is not None else {}
 
     # The last completed turn is the restart seed after a reply failure. A failed
     # in-progress turn never reaches its body END, so it cannot alter this mirror.
@@ -232,6 +284,7 @@ def chat(
                         # A tools mapping hides the registry; keep the chat agent's
                         # registered flow-op tools next to this host's handler.
                         tools={**registered_tools(), "ask_user": ask_user},
+                        **memory_options,
                     )
 
             result = _run_with_terminal_controller(
@@ -248,10 +301,13 @@ def chat(
     except KeyboardInterrupt:
         err_console.print("[yellow]cancelled by user[/yellow]")
         raise typer.Exit(code=130)
-    except (OSError, TypeError, ValueError) as exc:
+    except (OSError, TypeError, ValueError, MemoryOperationError) as exc:
         message = Text("chat failed: ", style="red bold")
         message.append(str(exc), style="red")
         err_console.print(message)
         raise typer.Exit(code=1)
+    finally:
+        if registry is not None:
+            registry.close()
 
     console.print("[dim]session ended[/dim]")

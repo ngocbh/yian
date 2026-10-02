@@ -671,6 +671,28 @@ def test_one_agent_stacks_several_keys_in_authored_order() -> None:
         resolve_memory_layout(flow)
 
 
+def test_agent_declaration_must_name_its_own_node() -> None:
+    # A programmatic flow could otherwise make two AGENTs share one session owner.
+    forged = DeclSite((), ("root",), "a")
+    flow = CompiledFlow(
+        {
+            "a": AgentNode("a", memories=(MemoryDecl("chat", "session", {}, forged),)),
+            "b": AgentNode("b", memories=(MemoryDecl("chat", "session", {}, forged),)),
+        },
+        [],
+        wiring={"a": {}, "b": {}},
+    )
+    with pytest.raises(MemorySetupError, match="AGENT node 'b' memory 'chat' names site node 'a'"):
+        resolve_memory_layout(flow)
+
+
+def test_flow_declaration_must_not_name_a_node() -> None:
+    flow = CompiledFlow({"a": AgentNode("a")}, [], wiring={"a": {}})
+    flow.memories = (MemoryDecl("notes", "episodic", {}, DeclSite((), ("root",), "a")),)
+    with pytest.raises(MemorySetupError, match="flow memory 'notes' names site node 'a'"):
+        resolve_memory_layout(flow)
+
+
 def test_agent_with_two_session_memories_is_a_setup_error() -> None:
     site = DeclSite((), ("root",), "agent")
     agent = AgentNode(

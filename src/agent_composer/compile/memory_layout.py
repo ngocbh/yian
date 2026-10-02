@@ -313,8 +313,13 @@ def _owner_decls(
     *,
     label: str,
     origin: OriginRef | None,
+    node: str | None,
 ) -> tuple[MemoryDecl, ...]:
-    """Return one owner's declarations in authored order, each key once."""
+    """Return one owner's declarations in authored order, each key once.
+
+    Every declaration's site must name ``node``, the owning AGENT id or
+    ``None`` for a flow, so a hand-built graph cannot forge another owner.
+    """
     if type(decls) is not tuple or any(type(decl) is not MemoryDecl for decl in decls):
         raise _setup_error(
             f"{label} memories must be a tuple of exact MemoryDecl values",
@@ -322,6 +327,11 @@ def _owner_decls(
         )
     seen: set[str] = set()
     for decl in decls:
+        if decl.site.node != node:
+            raise _setup_error(
+                f"{label} memory {decl.key!r} names site node {decl.site.node!r}",
+                origin=decl.origin,
+            )
         if decl.key in seen:
             raise _setup_error(
                 f"{label} declares memory {decl.key!r} more than once",
@@ -335,7 +345,7 @@ def _flow_decls(flow: Flow) -> tuple[MemoryDecl, ...]:
     """Return the declarations owned by an exact compiled flow."""
     if type(flow) is not CompiledFlow:
         return ()
-    return _owner_decls(flow.memories, label="flow", origin=None)
+    return _owner_decls(flow.memories, label="flow", origin=None, node=None)
 
 
 def _agent_decls(node: Node) -> tuple[MemoryDecl, ...]:
@@ -343,7 +353,7 @@ def _agent_decls(node: Node) -> tuple[MemoryDecl, ...]:
     if type(node) is not AgentNode:
         return ()
     return _owner_decls(
-        node.memories, label=f"AGENT node {node.id!r}", origin=node.origin
+        node.memories, label=f"AGENT node {node.id!r}", origin=node.origin, node=node.id
     )
 
 

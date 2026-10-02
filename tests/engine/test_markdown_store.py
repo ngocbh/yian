@@ -9,6 +9,7 @@ import pytest
 
 from agent_composer.memory.storage import (
     FileMarkdownStore,
+    InMemoryMarkdownStore,
     MarkdownStore,
     MarkdownVersionMismatch,
     markdown_version,
@@ -106,3 +107,31 @@ def test_concurrent_writers_from_one_base_have_exactly_one_winner(tmp_path) -> N
         thread.join()
     winners = [version for version in results if version is not None]
     assert len(winners) == 1 and store.read()[1] == winners[0]
+
+
+def test_in_memory_store_is_a_compare_and_set_markdown_store() -> None:
+    store = InMemoryMarkdownStore()
+    assert isinstance(store, MarkdownStore)
+    text, empty = store.read()
+    assert (text, empty) == ("", markdown_version(""))
+    first = store.write("# Ada\n", base_version=empty, provenance={"run": "r1"})
+    assert store.read() == ("# Ada\n", first)
+    with pytest.raises(MarkdownVersionMismatch) as caught:
+        store.write("lost\n", base_version=empty)
+    assert (caught.value.expected, caught.value.current) == (empty, first)
+    assert store.read(empty) == ("", empty)
+    with pytest.raises(LookupError):
+        store.read("sha256:" + "0" * 64)
+
+
+def test_in_memory_store_accepts_initial_text_and_checks_types() -> None:
+    store = InMemoryMarkdownStore("seed\n")
+    current = markdown_version("seed\n")
+    assert store.read() == ("seed\n", current)
+    with pytest.raises(TypeError):
+        store.write(b"x", base_version=current)
+    with pytest.raises(TypeError):
+        store.write("x", base_version=None)
+    with pytest.raises(TypeError):
+        InMemoryMarkdownStore(None)
+    assert store.read() == ("seed\n", current)

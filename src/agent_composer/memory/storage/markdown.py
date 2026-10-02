@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+from threading import Lock
 from typing import Iterator, Protocol, runtime_checkable
 
 from agent_composer.memory.contracts import JsonObject
@@ -260,3 +261,79 @@ class FileMarkdownStore:
             if os.path.exists(temporary):
                 os.unlink(temporary)
             raise
+
+
+class InMemoryMarkdownStore:
+    """Process-local markdown store with the same compare-and-set contract.
+
+    It keeps every version it has returned or written, so recorded runs in the
+    same process can reopen them. Provenance is accepted and discarded.
+    """
+
+    def __init__(self, text: str = "") -> None:
+        """Start with ``text`` as the current document.
+
+        Args:
+            text (`str`, *optional*, defaults to `""`): Initial document.
+
+        Raises:
+            `TypeError`: ``text`` is not a string.
+        """
+        if type(text) is not str:
+            raise TypeError("text must be a string")
+        self._lock = Lock()
+        self._current = text
+        self._versions = {markdown_version(text): text}
+
+    def read(self, version: str | None = None) -> tuple[str, str]:
+        """Return ``(text, version)`` for the current or a kept version.
+
+        Args:
+            version (`str | None`, *optional*, defaults to `None`): A version this
+                store returned earlier, or `None` for the current document.
+
+        Returns:
+            `tuple[str, str]`: The document text and its version.
+
+        Raises:
+            `LookupError`: The named version is unknown.
+        """
+        with self._lock:
+            if version is None:
+                return self._current, markdown_version(self._current)
+            if version not in self._versions:
+                raise LookupError(f"unknown document version {version!r}")
+            return self._versions[version], version
+
+    def write(
+        self,
+        text: str,
+        *,
+        base_version: str,
+        provenance: JsonObject | None = None,
+    ) -> str:
+        """Replace the document if ``base_version`` is still current.
+
+        Args:
+            text (`str`): Complete new document.
+            base_version (`str`): Version the writer read before editing.
+            provenance (`JsonObject | None`, *optional*, defaults to `None`):
+                Accepted for the protocol and discarded.
+
+        Returns:
+            `str`: The version of the stored document.
+
+        Raises:
+            `TypeError`: ``text`` or ``base_version`` is not a string.
+            `MarkdownVersionMismatch`: The current version is not ``base_version``.
+        """
+        if type(text) is not str or type(base_version) is not str:
+            raise TypeError("text and base_version must be strings")
+        with self._lock:
+            current = markdown_version(self._current)
+            if base_version != current:
+                raise MarkdownVersionMismatch(base_version, current)
+            self._current = text
+            version = markdown_version(text)
+            self._versions[version] = text
+            return version

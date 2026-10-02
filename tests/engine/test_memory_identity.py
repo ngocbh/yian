@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import FrozenInstanceError
 
 import pytest
@@ -170,3 +171,16 @@ def test_backward_failure_and_commit_records_name_their_memory_key() -> None:
         wire = encode_record(RecordEnvelope(SCHEMA_VERSION, "run", 0, record))
         assert json.loads(wire)["payload"]["memory"] == "notes"
         assert decode_record(wire).record == record
+
+
+def test_package_docstring_and_exports_describe_keyed_memories() -> None:
+    import agent_composer.memory as memory
+
+    text = memory.__doc__
+    assert re.search(r"\bframes?\b", text, re.IGNORECASE) is None
+    for phrase in ("memory key", "DeclSite", "MemoryDecl", "MemorySpec", "MemoryStack"):
+        assert phrase in text
+    for name in ("DeclSite", "MemoryDecl", "MemorySpec", "MemoryStack"):
+        assert name in memory.__all__
+    assert len(memory.__all__) == len(set(memory.__all__))
+    assert all(hasattr(memory, name) for name in memory.__all__)

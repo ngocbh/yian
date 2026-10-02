@@ -1,8 +1,17 @@
 """Source-neutral identities and injected contracts for workflow memory.
 
-This package owns stable memory-frame identity, occurrence identity, learning
-payloads, detached conversation checkpoints, and the narrow protocols implemented
-by host-provided memory objects. Structured transcript contributions extend
+A memory is one backend instance, identified by its memory key. Authors
+declare memories on flows and AGENTs. Each declaration is a ``MemoryDecl``
+stamped with the ``DeclSite`` (import scope, lexical owner, AGENT node) where
+it was written. Compile resolves the declarations into a key table of
+``MemorySpec`` entries and one ``MemoryStack`` of keys, outermost first, for
+each node placement. The run log records both, so replay and backward read
+keys instead of deriving them again. A session memory has one owning AGENT
+and holds one conversation.
+
+This package also owns occurrence paths, learning payloads, detached
+conversation checkpoints, and the narrow protocols implemented by
+host-provided memory objects. Structured transcript contributions extend
 recall while retaining existing text-only memory implementations.
 ``contracts.py`` owns that vocabulary; ``conversation.py`` owns its pure fold,
 strict codecs, and digests; ``session.py`` owns conversation views,

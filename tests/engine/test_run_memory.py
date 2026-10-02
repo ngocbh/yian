@@ -147,7 +147,7 @@ def test_memory_context_opener_uses_same_runtime_on_fresh_and_resume(
         result = run_flow(flow, {}, log=path, memory={"test": memory},
                           num_workers=num_workers, learnable=learnable)
     assert result.output == 7
-    assert entered == [("memory-run", "work")]
+    assert entered == [("work",)]
     assert len(engines) == (2 if resume else 1)
     assert all(runtime._closed for runtime in engines)
     assert not any(type(record).__name__.startswith("Conversation") for record in _records(path))
@@ -185,7 +185,7 @@ def test_authored_policy_is_dormant_when_memory_is_none(tmp_path: Path) -> None:
     assert result.learning is None
     start = _records(path)[0]
     assert isinstance(start, RunStartedRecord)
-    assert start.memory_layout is None
+    assert start.memories is None
     assert start.memory_snapshots is None
     assert start.learnable is False
 
@@ -194,7 +194,7 @@ def test_learnable_true_retains_without_enabling_an_authored_policy(tmp_path: Pa
     path = tmp_path / "retained.jsonl"
     result = run_flow(load_flow(_FLOW), {}, log=path, learnable=True)
     assert result.learning is None and result.backward_outcome is None
-    assert _records(path)[0].memory_layout is None
+    assert _records(path)[0].memories is None
     assert result.backward().learning is None
 
 
@@ -213,15 +213,15 @@ def test_recall_only_records_snapshot_without_evidence_or_learning(
 
     assert result.status == "succeeded"
     assert result.learning is None
-    assert len(memory.opened_specs) == 1
+    assert len(memory.sessions) == 1
     assert memory.learn_contexts == []
     assert memory.commit_calls == []
     assert memory.close_count == 1
     records = _records(path)
     start = records[0]
     assert isinstance(start, RunStartedRecord)
-    assert start.memory_layout is not None
-    assert len(start.memory_layout) == 1
+    assert start.memories is not None
+    assert len(start.memories) == 1
     assert start.memory_snapshots is not None
     assert start.learnable is False
     assert not any(
@@ -494,3 +494,42 @@ def test_replay_rejects_a_recorded_key_table_or_stacks_that_differ_from_the_flow
 
     with pytest.raises(ValueError, match="memory table or stacks"):
         resume_flow(load_flow(_FLOW), log=path, memory={"test": memory})
+
+
+def test_code_node_occurrences_are_episodes_of_the_flow_key(tmp_path: Path) -> None:
+    memory = _Memory()
+    result = run_flow(load_flow(_FLOW), {}, learnable=True, log=tmp_path / "code.jsonl",
+                      memory={"test": memory})
+    assert result.status == "succeeded" and result.output == 7
+
+    outcome = result.backward("Prefer eight.")
+
+    assert outcome.status == "succeeded"
+    context, = memory.learn_contexts
+    assert context.memory == "test"
+    work, = [episode for episode in context.episodes if episode.owner_static_path == ("work",)]
+    assert work.output == 7 and work.occurrence_path == ()
+    assert any(entry["owner_static_path"] == ["work"] for entry in context.feedback)
+    assert len(memory.commit_calls) == 1
+
+
+@pytest.mark.parametrize("tamper", ["emptied", "dropped"])
+def test_backward_rejects_a_tampered_recorded_stack_set_before_learning(tmp_path: Path, tamper: str) -> None:
+    path = tmp_path / "tampered-backward.jsonl"
+    memory = _Memory()
+    result = run_flow(load_flow(_FLOW), {}, learnable=True, log=path, memory={"test": memory})
+    assert result.status == "succeeded"
+
+    lines = path.read_bytes().splitlines()
+    envelope = decode_record(lines[0])
+    recorded = envelope.record.memory_stacks
+    if tamper == "emptied":
+        stacks = tuple(MemoryStack(stack.locator, ()) for stack in recorded)
+    else:
+        stacks = tuple(stack for stack in recorded if stack.locator != ("work",))
+    lines[0] = encode_record(replace(envelope, record=replace(envelope.record, memory_stacks=stacks)))
+    path.write_bytes(b"\n".join(lines) + b"\n")
+
+    with pytest.raises(ValueError, match="memory table or stacks"):
+        result.backward("Review.")
+    assert memory.learn_contexts == [] and memory.commit_calls == []

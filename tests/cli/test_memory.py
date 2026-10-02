@@ -254,7 +254,7 @@ def test_cli_activates_declared_policy_without_learning(policy, durable, tmp_pat
     records = _records(log)
     started = records[0]
     assert isinstance(started, RunStartedRecord)
-    assert started.memory_layout is not None
+    assert started.memories is not None
     assert len(started.memory_snapshots) == 1
     assert not started.learnable
     assert all(not type(record).__name__.startswith("Backward") for record in records)

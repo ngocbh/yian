@@ -1,7 +1,7 @@
 """Episodic memory with snapshot-isolated runs and optional SQLite persistence.
 
 The backend owns retained episode history behind the source-neutral memory
-protocols.  This module establishes the session, frame, snapshot, and commit
+protocols.  This module establishes the session, instance, snapshot, and commit
 boundaries without depending on the workflow engine or providers. Optional
 durability uses the private single-owner storage adapter below this backend.
 """
@@ -24,13 +24,9 @@ from agent_composer.memory.contracts import (
     LearnContext,
     MemoryEpisode,
     MemoryEpisodeStatus,
-    MemoryFrameRef,
-    MemoryFrameSpec,
     MemoryMutation,
     MemoryOperationError,
-    MemoryOwner,
     MemoryOccurrenceKind,
-    MemoryOccurrenceRef,
     MemoryOccurrenceSegment,
     MemorySection,
     ModelTextInteraction,
@@ -195,63 +191,27 @@ def _lexical_terms(value: str) -> frozenset[str]:
     return frozenset(terms)
 
 
-def _frame_ref_json(ref: MemoryFrameRef) -> JsonObject:
-    """Encode one stable frame identity as JSON."""
-    return {
-        "owner": ref.owner.value,
-        "root_flow_id": ref.root_flow_id,
-        "static_path": list(ref.static_path),
-    }
+def _occurrence_path_json(path: tuple[MemoryOccurrenceSegment, ...]) -> list[JsonValue]:
+    """Encode one root-relative occurrence path."""
+    return [
+        {
+            "index": segment.index,
+            "kind": segment.kind.value,
+            "static_path": list(segment.static_path),
+        }
+        for segment in path
+    ]
 
 
-def _frame_ref_from_json(value: object, name: str) -> MemoryFrameRef:
-    """Decode one exact frame identity."""
-    data = _copy_object(value, name)
-    if set(data) != {"owner", "root_flow_id", "static_path"}:
-        raise ValueError(f"{name} has invalid fields")
-    root = _json_string(data["root_flow_id"], f"{name}.root_flow_id", nonempty=True)
-    owner_raw = _json_string(data["owner"], f"{name}.owner", nonempty=True)
-    try:
-        owner = MemoryOwner(owner_raw)
-    except ValueError as exc:
-        raise ValueError(f"{name}.owner is invalid") from exc
-    path_raw = data["static_path"]
-    if type(path_raw) is not list or not path_raw:
-        raise ValueError(f"{name}.static_path must be a non-empty array")
-    path = tuple(
-        _json_string(part, f"{name}.static_path[{index}]", nonempty=True)
-        for index, part in enumerate(path_raw)
-    )
-    return MemoryFrameRef(root, path, owner)
-
-
-def _occurrence_json(occurrence: MemoryOccurrenceRef) -> JsonObject:
-    """Encode one dynamic occurrence without losing its authored frame."""
-    return {
-        "frame_ref": _frame_ref_json(occurrence.frame_ref),
-        "occurrence_path": [
-            {
-                "index": segment.index,
-                "kind": segment.kind.value,
-                "static_path": list(segment.static_path),
-            }
-            for segment in occurrence.occurrence_path
-        ],
-    }
-
-
-def _occurrence_from_json(value: object, name: str) -> MemoryOccurrenceRef:
-    """Decode one exact dynamic occurrence."""
-    data = _copy_object(value, name)
-    if set(data) != {"frame_ref", "occurrence_path"}:
-        raise ValueError(f"{name} has invalid fields")
-    ref = _frame_ref_from_json(data["frame_ref"], f"{name}.frame_ref")
-    path_raw = data["occurrence_path"]
-    if type(path_raw) is not list:
-        raise TypeError(f"{name}.occurrence_path must be an array")
+def _occurrence_path_from_json(
+    value: object, name: str
+) -> tuple[MemoryOccurrenceSegment, ...]:
+    """Decode one exact root-relative occurrence path."""
+    if type(value) is not list:
+        raise TypeError(f"{name} must be an array")
     path: list[MemoryOccurrenceSegment] = []
-    for index, raw in enumerate(path_raw):
-        item_name = f"{name}.occurrence_path[{index}]"
+    for index, raw in enumerate(value):
+        item_name = f"{name}[{index}]"
         item = _copy_object(raw, item_name)
         if set(item) != {"index", "kind", "static_path"}:
             raise ValueError(f"{item_name} has invalid fields")
@@ -271,7 +231,7 @@ def _occurrence_from_json(value: object, name: str) -> MemoryOccurrenceRef:
         if type(sequence) is not int or sequence < 0:
             raise ValueError(f"{item_name}.index is invalid")
         path.append(MemoryOccurrenceSegment(kind, static_path, sequence))
-    return MemoryOccurrenceRef(ref, tuple(path))
+    return tuple(path)
 
 
 def _interaction_json(interaction: object) -> JsonObject:
@@ -325,10 +285,10 @@ def _episode_json(episode: MemoryEpisode) -> JsonObject:
         "inputs": episode.inputs,
         "interactions": [_interaction_json(item) for item in episode.interactions],
         "memory_sections": [
-            {"frame_ref": _frame_ref_json(section.frame_ref), "text": section.text}
+            {"memory": section.memory, "text": section.text}
             for section in episode.memory_sections
         ],
-        "occurrence": _occurrence_json(episode.occurrence),
+        "occurrence_path": _occurrence_path_json(episode.occurrence_path),
         "output": episode.output,
         "owner_static_path": list(episode.owner_static_path),
         "prompt": episode.prompt,
@@ -347,7 +307,7 @@ def _episode_from_json(value: object, name: str) -> MemoryEpisode:
         "inputs",
         "interactions",
         "memory_sections",
-        "occurrence",
+        "occurrence_path",
         "output",
         "owner_static_path",
         "prompt",
@@ -376,11 +336,11 @@ def _episode_from_json(value: object, name: str) -> MemoryEpisode:
     for index, raw in enumerate(sections_raw):
         section_name = f"{name}.memory_sections[{index}]"
         section = _copy_object(raw, section_name)
-        if set(section) != {"frame_ref", "text"}:
+        if set(section) != {"memory", "text"}:
             raise ValueError(f"{section_name} has invalid fields")
         sections.append(
             MemorySection(
-                _frame_ref_from_json(section["frame_ref"], f"{section_name}.frame_ref"),
+                _json_string(section["memory"], f"{section_name}.memory", nonempty=True),
                 _json_string(section["text"], f"{section_name}.text"),
             )
         )
@@ -403,7 +363,7 @@ def _episode_from_json(value: object, name: str) -> MemoryEpisode:
         prompt = _json_string(prompt, f"{name}.prompt")
     return MemoryEpisode(
         _json_string(data["run_id"], f"{name}.run_id", nonempty=True),
-        _occurrence_from_json(data["occurrence"], f"{name}.occurrence"),
+        _occurrence_path_from_json(data["occurrence_path"], f"{name}.occurrence_path"),
         owner_path,
         status,
         None if inputs is None else _copy_object(inputs, f"{name}.inputs"),
@@ -425,33 +385,13 @@ def _stored_entry(entry_id: str, episode: MemoryEpisode) -> JsonObject:
     return {"entry_id": entry_id, "episode": _episode_json(episode)}
 
 
-def _validate_episode_owner(
-    episode: MemoryEpisode, expected_ref: MemoryFrameRef
-) -> None:
-    """Require one episode to belong to its containing memory frame."""
-    if episode.occurrence.frame_ref != expected_ref:
-        raise ValueError("episode occurrence belongs to a different frame")
-    frame_path = expected_ref.static_path
-    owner_path = episode.owner_static_path
-    if expected_ref.owner is MemoryOwner.AGENT:
-        valid_owner = owner_path == frame_path
-    else:
-        valid_owner = owner_path[: len(frame_path)] == frame_path
-    if not valid_owner:
-        raise ValueError("episode lies outside its owning frame")
-
-
-def _validate_entry(
-    value: object, name: str, expected_ref: MemoryFrameRef | None = None
-) -> JsonObject:
+def _validate_entry(value: object, name: str) -> JsonObject:
     """Validate one retained entry and return its canonical defensive copy."""
     data = _copy_object(value, name)
     if set(data) != {"entry_id", "episode"}:
         raise ValueError(f"{name} has invalid fields")
     entry_id = _json_string(data["entry_id"], f"{name}.entry_id", nonempty=True)
     episode = _episode_from_json(data["episode"], f"{name}.episode")
-    if expected_ref is not None:
-        _validate_episode_owner(episode, expected_ref)
     canonical = _stored_entry(entry_id, episode)
     if _canonical_json(data) != _canonical_json(canonical):
         raise ValueError(f"{name} must be canonical")
@@ -938,7 +878,6 @@ class _EpisodicSession:
         self._epoch = epoch
         self._revision = revision
         self._state = state
-        self._opened: dict[MemoryFrameRef, _EpisodicFrame] = {}
         self._closed = False
 
     def _ensure_open(self) -> None:
@@ -956,6 +895,78 @@ class _EpisodicSession:
             return _snapshot_json(
                 self._namespace, self._epoch, self._revision, self._state
             )
+
+    def recall(self, context: RecallContext | None = None) -> str:
+        """Render pinned retained history, optionally ranked by lexical relevance."""
+        with self._memory._operation():
+            self._ensure_open()
+            if context is not None and type(context) is not RecallContext:
+                raise _operation_error(
+                    "recall", "episodic.invalid_context", "context is invalid"
+                )
+            entries = self._state.episodes
+            if context is not None:
+                try:
+                    query = self._memory.rewrite_query(context)
+                except Exception as exc:
+                    raise _operation_error(
+                        "recall", "episodic.invalid_query", "query rewriting failed"
+                    ) from exc
+                self._memory._check_pid()
+                if type(query) is not str:
+                    raise _operation_error(
+                        "recall",
+                        "episodic.invalid_query",
+                        "query rewriting must return text",
+                    )
+                query_terms = _lexical_terms(query)
+                ranked = sorted(
+                    enumerate(entries),
+                    key=lambda pair: (
+                        -len(query_terms & _lexical_terms(_canonical_json(pair[1]))),
+                        -pair[0],
+                    ),
+                )
+                entries = tuple(
+                    entry for _, entry in ranked[: self._state.limits.recall_limit]
+                )
+            return "\n".join(_canonical_json(entry) for entry in entries)
+
+    def learn(self, context: LearnContext) -> list[MemoryMutation]:
+        """Propose one deterministic append for every episode in the batch."""
+        with self._memory._operation():
+            self._ensure_open()
+            if type(context) is not LearnContext:
+                raise _operation_error(
+                    "learn", "episodic.invalid_context", "learning context is invalid"
+                )
+            self._assert_current("learn")
+            try:
+                context = LearnContext(
+                    context.run_id, context.memory, context.episodes, context.feedback
+                )
+            except (TypeError, ValueError) as exc:
+                raise _operation_error(
+                    "learn", "episodic.invalid_context", "learning context is invalid"
+                ) from exc
+            mutations: list[MemoryMutation] = []
+            for ordinal, episode in enumerate(context.episodes):
+                identity: JsonObject = {
+                    "episode": _episode_json(episode),
+                    "memory": context.memory,
+                    "ordinal": ordinal,
+                    "run_id": context.run_id,
+                }
+                entry_id = hashlib.sha256(
+                    _canonical_json(identity).encode("utf-8")
+                ).hexdigest()
+                mutations.append(
+                    MemoryMutation(
+                        entry_id,
+                        {"entry": _stored_entry(entry_id, episode), "operation": "append"},
+                    )
+                )
+            return mutations
 
     def __enter__(self) -> _EpisodicSession:
         """Enter this still-open session."""
@@ -986,26 +997,6 @@ class _EpisodicSession:
         with self._memory._lock:
             self._closed = True
 
-    def open_frame(self, spec: MemoryFrameSpec) -> _EpisodicFrame:
-        """Return the view of this instance's state for one frame reference.
-
-        The frame's policy name and configuration are ignored. The instance
-        limits come from the backend.
-        """
-        with self._memory._operation():
-            self._ensure_open()
-            if type(spec) is not MemoryFrameSpec:
-                raise _operation_error(
-                    "open_frame",
-                    "episodic.invalid_frame",
-                    "spec must be a MemoryFrameSpec",
-                )
-            opened = self._opened.get(spec.ref)
-            if opened is None:
-                opened = _EpisodicFrame(self, spec.ref)
-                self._opened[spec.ref] = opened
-            return opened
-
     def _assert_current(self, stage: str) -> None:
         """Require this session to remain the current memory generation."""
         if (
@@ -1033,7 +1024,6 @@ class _EpisodicSession:
                 )
             encoded.append(
                 {
-                    "frame_ref": _frame_ref_json(mutation.frame_ref),
                     "mutation_id": mutation.mutation_id,
                     "payload": mutation.payload,
                 }
@@ -1083,10 +1073,6 @@ class _EpisodicSession:
                     if mutation.mutation_id in seen_mutations:
                         raise ValueError("mutation IDs must be unique")
                     seen_mutations.add(mutation.mutation_id)
-                    if mutation.frame_ref not in self._opened:
-                        raise ValueError(
-                            "mutation frame was not opened by this session"
-                        )
                     payload = _copy_object(
                         mutation.payload, f"mutations[{index}].payload"
                     )
@@ -1098,9 +1084,7 @@ class _EpisodicSession:
                             "mutation payload must be a closed append operation"
                         )
                     entry = _validate_entry(
-                        payload["entry"],
-                        f"mutations[{index}].payload.entry",
-                        mutation.frame_ref,
+                        payload["entry"], f"mutations[{index}].payload.entry"
                     )
                     if entry["entry_id"] != mutation.mutation_id:
                         raise ValueError("mutation and entry IDs must match")
@@ -1132,94 +1116,3 @@ class _EpisodicSession:
             self._memory._applied_commits = commits
             self._memory._revision = revision
             self._memory._ever_committed = True
-
-
-class _EpisodicFrame:
-    """One session-bound episodic memory frame."""
-
-    def __init__(
-        self,
-        session: _EpisodicSession,
-        ref: MemoryFrameRef,
-    ) -> None:
-        self._session = session
-        self._ref = ref
-
-    def recall(self, context: RecallContext | None = None) -> str:
-        """Render pinned retained history, optionally ranked by lexical relevance."""
-        with self._session._memory._operation():
-            self._session._ensure_open()
-            if context is not None and type(context) is not RecallContext:
-                raise _operation_error(
-                    "recall", "episodic.invalid_context", "context is invalid"
-                )
-            entries = self._session._state.episodes
-            if context is not None:
-                try:
-                    query = self._session._memory.rewrite_query(context)
-                except Exception as exc:
-                    raise _operation_error(
-                        "recall", "episodic.invalid_query", "query rewriting failed"
-                    ) from exc
-                self._session._memory._check_pid()
-                if type(query) is not str:
-                    raise _operation_error(
-                        "recall",
-                        "episodic.invalid_query",
-                        "query rewriting must return text",
-                    )
-                query_terms = _lexical_terms(query)
-                ranked = sorted(
-                    enumerate(entries),
-                    key=lambda pair: (
-                        -len(query_terms & _lexical_terms(_canonical_json(pair[1]))),
-                        -pair[0],
-                    ),
-                )
-                limit = self._session._state.limits.recall_limit
-                entries = tuple(entry for _, entry in ranked[:limit])
-            return "\n".join(_canonical_json(entry) for entry in entries)
-
-    def learn(self, context: LearnContext) -> list[MemoryMutation]:
-        """Propose one deterministic append for every owner-scoped episode."""
-        with self._session._memory._operation():
-            self._session._ensure_open()
-            if type(context) is not LearnContext or context.frame_ref != self._ref:
-                raise _operation_error(
-                    "learn", "episodic.invalid_context", "learning context is invalid"
-                )
-            self._session._assert_current("learn")
-            try:
-                context = LearnContext(
-                    context.run_id,
-                    context.frame_ref,
-                    context.episodes,
-                    context.feedback,
-                )
-                for episode in context.episodes:
-                    _validate_episode_owner(episode, self._ref)
-            except (TypeError, ValueError) as exc:
-                raise _operation_error(
-                    "learn", "episodic.invalid_context", "learning context is invalid"
-                ) from exc
-            mutations: list[MemoryMutation] = []
-            for ordinal, episode in enumerate(context.episodes):
-                encoded = _episode_json(episode)
-                identity: JsonObject = {
-                    "episode": encoded,
-                    "frame_ref": _frame_ref_json(self._ref),
-                    "ordinal": ordinal,
-                    "run_id": context.run_id,
-                }
-                entry_id = hashlib.sha256(
-                    _canonical_json(identity).encode("utf-8")
-                ).hexdigest()
-                entry = _stored_entry(entry_id, episode)
-                mutations.append(
-                    MemoryMutation(
-                        entry_id,
-                        self._ref,
-                        {"entry": entry, "operation": "append"},
-                    )
-                )
-            return mutations

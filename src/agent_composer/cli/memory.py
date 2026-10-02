@@ -87,7 +87,7 @@ class MemoryHost:
 
     def __init__(self, compiled: CompiledFlow, storage: Iterable[str]) -> None:
         policies = dict.fromkeys(
-            frame.spec.policy_name for frame in resolve_memory_layout(compiled).frames
+            memory.key for memory in resolve_memory_layout(compiled).memories
         )
         paths: dict[str, str] = {}
         for option in storage:

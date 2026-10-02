@@ -8,7 +8,7 @@ import pytest
 
 import agent_composer.memory.contracts as c
 from agent_composer.memory.session import SessionMemory
-from tests.engine._session_fakes import REF, harness, request, snapshot
+from tests.engine._session_fakes import harness, request, snapshot
 
 
 def _note(
@@ -124,7 +124,6 @@ def test_historical_note_prefix_is_pinned_without_rewinding_live_state():
 
 def _context(
     *,
-    ref=REF,
     consumer=("root", "agent"),
     run_id="a",
     sequence=1,
@@ -134,7 +133,7 @@ def _context(
 ):
     episode = c.MemoryEpisode(
         run_id,
-        c.MemoryOccurrenceRef(ref),
+        (),
         consumer,
         c.MemoryEpisodeStatus.SUCCEEDED,
         {},
@@ -157,7 +156,7 @@ def _context(
         }
         for index, text in enumerate(texts)
     )
-    return c.LearnContext(run_id, ref, (episode,), feedback)
+    return c.LearnContext(run_id, "session", (episode,), feedback)
 
 
 def test_learn_is_pure_deterministic_self_feedback_projection():
@@ -172,7 +171,6 @@ def test_learn_is_pure_deterministic_self_feedback_projection():
         assert snapshot(h.memory) == before
         for index, mutation in enumerate(first):
             expected = _note(index=index, text=("Check units.", "")[index])
-            assert mutation.frame_ref == REF
             assert mutation.mutation_id == expected["note_id"]
             assert mutation.payload == {"operation": "append_note", "note": expected}
         assert (
@@ -216,7 +214,7 @@ def test_learn_ignores_feedback_without_owning_admitted_leaf(case):
         if case == "root_only":
             context = c.LearnContext(
                 "a",
-                REF,
+                "session",
                 context.episodes,
                 (
                     {
@@ -232,22 +230,9 @@ def test_learn_ignores_feedback_without_owning_admitted_leaf(case):
         assert h.frame.learn(context) == []
 
 
-def test_learn_rejects_foreign_frame_context():
-    other = c.MemoryFrameRef("other", ("other",), c.MemoryOwner.FLOW)
-    with harness() as h:
-        with pytest.raises(c.MemoryOperationError) as caught:
-            h.frame.learn(c.LearnContext("a", other, ()))
-        assert (caught.value.stage, caught.value.code) == (
-            "learn",
-            "session.invalid_context",
-        )
-
-
-def _mutation(note=None, *, ref=REF):
+def _mutation(note=None):
     note = _note() if note is None else note
-    return c.MemoryMutation(
-        note["note_id"], ref, {"operation": "append_note", "note": note}
-    )
+    return c.MemoryMutation(note["note_id"], {"operation": "append_note", "note": note})
 
 
 def _recall(frame, consumer=("root", "agent")):
@@ -268,14 +253,6 @@ def test_commit_publishes_notes_only_to_future_run_recall():
             assert _recall(later.frame) == "Check units."
             assert later.frame.recall() == c.MemoryContent(transcript=later.frame)
             assert _recall(later.frame, ("root", "sibling")) == "Check units."
-            other = later.session.open_frame(
-                c.MemoryFrameSpec(
-                    c.MemoryFrameRef("root", ("root", "agent"), c.MemoryOwner.AGENT),
-                    "session",
-                    {},
-                )
-            )
-            assert _recall(other) == "Check units."
 
 
 def test_exact_commit_replay_and_stable_note_ids_are_idempotent():
@@ -302,7 +279,6 @@ def test_exact_commit_replay_and_stable_note_ids_are_idempotent():
         "extra",
         "operation",
         "wrong_id",
-        "unopened_owner",
         "unadmitted",
         "duplicate",
         "nonmutation",
@@ -317,17 +293,14 @@ def test_invalid_last_mutation_publishes_no_notes_or_commit_tombstone(case):
         second = _mutation(_note(index=1))
         if case == "extra":
             second = c.MemoryMutation(
-                second.mutation_id, REF, {**second.payload, "extra": None}
+                second.mutation_id, {**second.payload, "extra": None}
             )
         elif case == "operation":
             second = c.MemoryMutation(
-                second.mutation_id, REF, {**second.payload, "operation": "other"}
+                second.mutation_id, {**second.payload, "operation": "other"}
             )
         elif case == "wrong_id":
-            second = c.MemoryMutation("wrong", REF, second.payload)
-        elif case == "unopened_owner":
-            leaf = c.MemoryFrameRef("root", ("root", "agent"), c.MemoryOwner.AGENT)
-            second = c.MemoryMutation(second.mutation_id, leaf, second.payload)
+            second = c.MemoryMutation("wrong", second.payload)
         elif case == "unadmitted":
             second = _mutation(_note(run_id="missing", index=1))
         elif case == "duplicate":
@@ -379,7 +352,7 @@ def test_restored_notes_recall_and_accept_idempotent_note_republication():
     value = _with_notes(_note(), _note(index=1, text=""))
     memory = SessionMemory()
     with memory.open_run(snapshot=value) as opened:
-        frame = opened.open_frame(c.MemoryFrameSpec(REF, "session", {}))
+        frame = opened
         assert _recall(frame) == "Check units.\n"
         opened.commit("restored", tuple(_mutation(note) for note in value["notes"]))
         assert snapshot(memory) == value
@@ -404,7 +377,7 @@ def test_malformed_attributed_self_feedback_fails_without_publication(field, val
         context = _context()
         feedback = {**context.feedback[0], field: value}
         with pytest.raises(c.MemoryOperationError) as caught:
-            h.frame.learn(c.LearnContext("a", REF, context.episodes, (feedback,)))
+            h.frame.learn(c.LearnContext("a", "session", context.episodes, (feedback,)))
         assert caught.value.code == "session.invalid_context"
         assert snapshot(h.memory) == before
 
@@ -414,7 +387,7 @@ def test_repeat_source_feedback_in_one_context_proposes_one_note():
         with h.frame.open_turn(request(), check_stopped=lambda: None):
             pass
         context = _context()
-        duplicated = c.LearnContext("a", REF, context.episodes, context.feedback * 2)
+        duplicated = c.LearnContext("a", "session", context.episodes, context.feedback * 2)
         assert h.frame.learn(duplicated) == [_mutation()]
 
 
@@ -440,32 +413,14 @@ def test_candidate_failure_keeps_notes_and_commit_identity_unpublished(monkeypat
         assert snapshot(h.memory)["notes"] == [_note()]
 
 
-def test_commit_requires_opened_owner_even_for_exact_replay():
+def test_exact_replay_from_another_run_handle_is_inert():
     with harness() as h:
         with h.frame.open_turn(request(), check_stopped=lambda: None):
             pass
         h.session.commit("owned", (_mutation(),))
         with h.memory.open_run() as unopened:
-            with pytest.raises(c.MemoryOperationError) as caught:
-                unopened.commit("owned", (_mutation(),))
-            assert caught.value.code == "session.invalid_batch"
-
-
-def test_ancestor_can_recall_old_notes_without_learning_inner_invocation():
-    leaf = c.MemoryFrameRef("root", ("root", "agent"), c.MemoryOwner.AGENT)
-    with harness() as first:
-        with first.frame.open_turn(request(), check_stopped=lambda: None):
-            pass
-        first.session.commit("flow-note", tuple(first.frame.learn(_context())))
-        with harness(first.memory) as later:
-            assert _recall(later.frame) == "Check units."
-            inner = later.session.open_frame(c.MemoryFrameSpec(leaf, "session", {}))
-            with inner.open_turn(request(run_id="b"), check_stopped=lambda: None):
-                pass
-            later.session.commit(
-                "leaf-note", tuple(inner.learn(_context(ref=leaf, run_id="b")))
-            )
-        assert len(snapshot(first.memory)["notes"]) == 2
+            unopened.commit("owned", (_mutation(),))
+        assert snapshot(h.memory)["notes"] == [_note()]
 
 
 def test_busy_reset_preserves_notes_and_forward_turn_updates_preserve_notes():
@@ -509,7 +464,24 @@ def test_notes_belong_to_the_instance_and_reach_every_consumer():
         }
         h.session.commit("learn", mutations)
     with harness(h.memory) as later:
-        leaf = c.MemoryFrameRef("root", ("root", "agent"), c.MemoryOwner.AGENT)
-        other = later.session.open_frame(c.MemoryFrameSpec(leaf, "session", {}))
         assert _recall(later.frame, ("root", "elsewhere")) == "Check units."
-        assert _recall(other) == "Check units."
+        assert _recall(later.session) == "Check units."
+
+
+def test_session_is_the_transcript_source_and_learns_without_frames():
+    memory = SessionMemory()
+    with memory.open_run() as session:
+        assert not hasattr(session, "open_frame")
+        content = session.recall()
+        assert content == c.MemoryContent(transcript=session)
+        with session.open_turn(request(), check_stopped=lambda: None):
+            pass
+        mutations = tuple(session.learn(_context()))
+        assert len(mutations) == 1
+        assert not hasattr(mutations[0], "frame_ref")
+        session.commit("learn", mutations)
+    with memory.open_run() as replay:
+        replay.commit("learn", mutations)
+        assert replay.recall(c.RecallContext("s", "p", {}, ("root", "x"))).text == (
+            "Check units."
+        )

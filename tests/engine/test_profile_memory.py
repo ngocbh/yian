@@ -1,4 +1,4 @@
-"""ProfileMemory sessions, frames, learning, and compare-and-set commits."""
+"""ProfileMemory sessions, learning, and compare-and-set commits."""
 
 from __future__ import annotations
 
@@ -13,13 +13,7 @@ from agent_composer.memory import (
     Memory,
     MemoryEpisode,
     MemoryEpisodeStatus,
-    MemoryFrame,
-    MemoryFrameRef,
-    MemoryFrameSpec,
-    MemoryMutation,
-    MemoryOccurrenceRef,
     MemoryOperationError,
-    MemoryOwner,
     MemorySession,
     ModelTextInteraction,
     RecallContext,
@@ -29,9 +23,6 @@ from agent_composer.memory import (
 from agent_composer.memory.profile import ProfileMemory
 from agent_composer.memory.storage import FileMarkdownStore
 
-ROOT = MemoryFrameRef("chat", ("chat",), MemoryOwner.FLOW)
-CHILD = MemoryFrameRef("chat", ("chat", "reply"), MemoryOwner.AGENT)
-OTHER = MemoryFrameRef("chat", ("chat", "other"), MemoryOwner.AGENT)
 RECALL = RecallContext("system", "Say hi.", {}, ("chat", "reply"))
 CONFIG = {"provider": "ollama", "model": "local-profiler"}
 
@@ -64,10 +55,6 @@ def _memory(tmp_path, text: str = "# Ada\n", **kwargs) -> ProfileMemory:
     return ProfileMemory(store, llm_config=CONFIG, **kwargs)
 
 
-def _spec(ref: MemoryFrameRef, config=None) -> MemoryFrameSpec:
-    return MemoryFrameSpec(ref, "profile", config or {})
-
-
 def _feedback(*values) -> tuple:
     return tuple({"channel": "output", "target_name": None, "value": value,
                   "owner_static_path": None, "execution_seq": None} for value in values)
@@ -75,7 +62,7 @@ def _feedback(*values) -> tuple:
 
 def _episode(prompt: str, output: str, interactions: tuple = ()) -> MemoryEpisode:
     return MemoryEpisode(
-        "run-1", MemoryOccurrenceRef(ROOT), ("chat", "reply"), MemoryEpisodeStatus.SUCCEEDED,
+        "run-1", (), ("chat", "reply"), MemoryEpisodeStatus.SUCCEEDED,
         {"topic": prompt}, output, interactions=interactions, base_system_prompt="system", prompt=prompt,
     )
 
@@ -154,35 +141,12 @@ def test_undecodable_document_is_a_permanent_open_failure(tmp_path) -> None:
     assert (caught.value.code, caught.value.retryable) == ("profile.store_invalid", False)
 
 
-def test_outermost_frame_recalls_full_document_and_inner_frames_recall_nothing(tmp_path) -> None:
-    memory = _memory(tmp_path, "# Ada\n" + "x" * 40_000, max_chars=100)
-    with memory.open_run() as session:
-        root, child = session.open_frame(_spec(ROOT)), session.open_frame(_spec(CHILD))
-        assert root.recall(RECALL) == memory.read()[0]
-        assert root.recall() == memory.read()[0]
-        assert child.recall(RECALL) == ""
-        assert session.open_frame(_spec(ROOT)) is root
-
-
 def test_recall_stays_pinned_after_a_later_write(tmp_path) -> None:
     memory = _memory(tmp_path)
     with memory.open_run() as session:
-        root = session.open_frame(_spec(ROOT))
+        root = session
         memory.write("# Ada\nChanged.\n", base_version=memory.read()[1])
         assert root.recall(RECALL) == "# Ada\n"
-
-
-def test_unrelated_top_frames_and_frame_config_are_rejected(tmp_path) -> None:
-    memory = _memory(tmp_path)
-    with memory.open_run() as session:
-        session.open_frame(_spec(CHILD))
-        with pytest.raises(MemoryOperationError) as caught:
-            session.open_frame(_spec(OTHER))
-        assert caught.value.code == "profile.multiple_roots"
-    with memory.open_run() as session:
-        with pytest.raises(MemoryOperationError) as caught:
-            session.open_frame(_spec(ROOT, {"budget": 1}))
-        assert caught.value.code == "profile.invalid_config"
 
 
 def test_restore_recalls_the_recorded_version_after_later_edits(tmp_path) -> None:
@@ -191,7 +155,7 @@ def test_restore_recalls_the_recorded_version_after_later_edits(tmp_path) -> Non
         recorded = session.snapshot
     memory.write("# Ada\nLater.\n", base_version=memory.read()[1])
     with memory.open_run(snapshot=recorded) as restored:
-        assert restored.open_frame(_spec(ROOT)).recall(RECALL) == "# Ada\n"
+        assert restored.recall(RECALL) == "# Ada\n"
 
 
 @pytest.mark.parametrize(("reply", "code"), [
@@ -212,26 +176,25 @@ def test_parse_reply_joins_text_blocks_and_ends_with_one_newline() -> None:
     assert profile._parse_reply(AIMessage(content="<profile></profile>"), "", 100) == ""
 
 
-def test_learn_without_feedback_or_on_inner_frame_calls_no_model(tmp_path, monkeypatch) -> None:
+def test_learn_without_feedback_calls_no_model(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(profile, "model_from_config", lambda config: pytest.fail("model constructed"))
     memory = _memory(tmp_path)
     with memory.open_run() as session:
-        root, child = session.open_frame(_spec(ROOT)), session.open_frame(_spec(CHILD))
-        assert root.learn(LearnContext("run-1", ROOT, (_episode("hi", "hello"),))) == []
-        assert child.learn(LearnContext("run-1", CHILD, (), _feedback("Be brief."))) == []
+        root = session
+        assert root.learn(LearnContext("run-1", "profile", (_episode("hi", "hello"),))) == []
 
 
 def test_learn_rewrites_the_current_document_from_feedback_and_episodes(tmp_path, monkeypatch) -> None:
     learner, configs = _install(monkeypatch, "<profile>\n# Ada\n- Prefers brief replies.\n</profile>")
     memory = _memory(tmp_path)
     with memory.open_run() as session:
-        root = session.open_frame(_spec(ROOT))
+        root = session
         seen_version = memory.read()[1]
         memory.write("# Ada\nHuman note.\n", base_version=seen_version)
         current_version = memory.read()[1]
         call = ToolCallInteraction("calendar", {"day": "today"})
         episodes = (_episode("first", "long answer", (call,)), _episode("second", "longer answer"))
-        context = LearnContext("run-1", ROOT, episodes, _feedback("Be brief.", "Be brief."))
+        context = LearnContext("run-1", "profile", episodes, _feedback("Be brief.", "Be brief."))
         mutation, = root.learn(context)
     assert configs == [CONFIG]
     material = _request_material(learner)
@@ -242,7 +205,6 @@ def test_learn_rewrites_the_current_document_from_feedback_and_episodes(tmp_path
     assert material["episodes"][0]["interactions"] == [
         {"kind": "tool_call", "name": "calendar", "arguments": {"day": "today"}}]
     assert material["omitted_episodes"] == 0
-    assert mutation.frame_ref == ROOT
     assert mutation.payload == {
         "base_version": current_version, "text": "# Ada\n- Prefers brief replies.\n",
         "seen_version": seen_version, "run_id": "run-1", "feedback": ["Be brief."],
@@ -258,8 +220,8 @@ def test_learner_sees_the_tool_calls_of_each_episode(tmp_path, monkeypatch) -> N
     )
     memory = _memory(tmp_path)
     with memory.open_run() as session:
-        root = session.open_frame(_spec(ROOT))
-        root.learn(LearnContext("run-1", ROOT, (_episode("free friday?", "Yes.", interactions),),
+        root = session
+        root.learn(LearnContext("run-1", "profile", (_episode("free friday?", "Yes.", interactions),),
                                 _feedback("Check the calendar before answering.")))
     episode, = _request_material(learner)["episodes"]
     assert episode["interactions"] == [
@@ -274,7 +236,7 @@ def test_learn_keeps_only_the_newest_episodes_within_the_input_budget(tmp_path, 
     memory = _memory(tmp_path, input_budget_chars=700)
     episodes = tuple(_episode(f"prompt {index}", "o" * 100) for index in range(5))
     with memory.open_run() as session:
-        session.open_frame(_spec(ROOT)).learn(LearnContext("run-1", ROOT, episodes, _feedback("x")))
+        session.learn(LearnContext("run-1", "profile", episodes, _feedback("x")))
     material = _request_material(learner)
     assert [episode["prompt"] for episode in material["episodes"]] == ["prompt 3", "prompt 4"]
     assert material["omitted_episodes"] == 3
@@ -286,7 +248,7 @@ def test_an_oversized_newest_episode_is_trimmed_not_dropped(tmp_path, monkeypatc
     big = (ToolCallInteraction("read_file", {"path": "notes.md"}), ToolResultInteraction("read_file", "x" * 30_000))
     episodes = (_episode("older", "short"), _episode("newest", "done", big))
     with memory.open_run() as session:
-        session.open_frame(_spec(ROOT)).learn(LearnContext("run-1", ROOT, episodes, _feedback("x")))
+        session.learn(LearnContext("run-1", "profile", episodes, _feedback("x")))
     material = _request_material(learner)
     newest, = material["episodes"]
     assert material["omitted_episodes"] == 1
@@ -299,10 +261,10 @@ def test_provider_failure_is_retryable_and_bad_replies_are_not(tmp_path, monkeyp
     _install(monkeypatch, RuntimeError("provider down"), "no tags")
     memory = _memory(tmp_path)
     with memory.open_run() as session:
-        root = session.open_frame(_spec(ROOT))
+        root = session
         for code, retryable in (("profile.provider", True), ("profile.contract", False)):
             with pytest.raises(MemoryOperationError) as caught:
-                root.learn(LearnContext("run-1", ROOT, (), _feedback("x")))
+                root.learn(LearnContext("run-1", "profile", (), _feedback("x")))
             assert (caught.value.code, caught.value.retryable) == (code, retryable)
 
 
@@ -310,23 +272,21 @@ def test_unchanged_document_proposes_nothing(tmp_path, monkeypatch) -> None:
     _install(monkeypatch, "<profile># Ada</profile>")
     memory = _memory(tmp_path)
     with memory.open_run() as session:
-        assert session.open_frame(_spec(ROOT)).learn(LearnContext("run-1", ROOT, (), _feedback("x"))) == []
+        assert session.learn(LearnContext("run-1", "profile", (), _feedback("x"))) == []
 
 
 def test_backend_satisfies_the_memory_protocols(tmp_path) -> None:
     memory = _memory(tmp_path)
     with memory.open_run() as session:
-        frame = session.open_frame(_spec(ROOT))
         assert isinstance(memory, Memory) and isinstance(session, MemorySession)
-        assert isinstance(frame, MemoryFrame)
 
 
 def test_commit_writes_with_compare_and_set_and_is_idempotent(tmp_path, monkeypatch) -> None:
     _install(monkeypatch, "<profile># Ada\nBrief.</profile>")
     memory = _memory(tmp_path)
     with memory.open_run() as session:
-        root = session.open_frame(_spec(ROOT))
-        batch = tuple(root.learn(LearnContext("run-1", ROOT, (), _feedback("Be brief."))))
+        root = session
+        batch = tuple(root.learn(LearnContext("run-1", "profile", (), _feedback("Be brief."))))
         monkeypatch.setattr(profile, "model_from_config", lambda config: pytest.fail("commit built a model"))
         session.commit("commit-1", batch)
         session.commit("commit-1", batch)
@@ -347,8 +307,8 @@ def test_concurrent_write_after_learning_is_a_retryable_mismatch_without_a_model
     _install(monkeypatch, "<profile># Ada\nFrom model.</profile>")
     memory = _memory(tmp_path)
     with memory.open_run() as session:
-        root = session.open_frame(_spec(ROOT))
-        batch = tuple(root.learn(LearnContext("run-1", ROOT, (), _feedback("x"))))
+        root = session
+        batch = tuple(root.learn(LearnContext("run-1", "profile", (), _feedback("x"))))
         memory.write("# Ada\nFrom human.\n", base_version=memory.read()[1])
         monkeypatch.setattr(profile, "model_from_config", lambda config: pytest.fail("commit built a model"))
         with pytest.raises(MemoryOperationError) as caught:
@@ -362,8 +322,8 @@ def test_store_failure_during_commit_is_not_retryable(tmp_path, monkeypatch) -> 
     _install(monkeypatch, "<profile># Ada\nNew.</profile>")
     memory = _memory(tmp_path)
     with memory.open_run() as session:
-        root = session.open_frame(_spec(ROOT))
-        batch = tuple(root.learn(LearnContext("run-1", ROOT, (), _feedback("x"))))
+        root = session
+        batch = tuple(root.learn(LearnContext("run-1", "profile", (), _feedback("x"))))
         for error, code in ((OSError("disk"), "profile.store_unavailable"),
                             (UnicodeDecodeError("utf-8", b"\xff", 0, 1, "bad"), "profile.store_invalid")):
             def fail(text, *, base_version, provenance=None, error=error):
@@ -372,17 +332,6 @@ def test_store_failure_during_commit_is_not_retryable(tmp_path, monkeypatch) -> 
             with pytest.raises(MemoryOperationError) as caught:
                 session.commit(f"commit-{code}", batch)
             assert (caught.value.code, caught.value.retryable) == (code, False)
-
-
-def test_commit_rejects_batches_from_inner_frames(tmp_path) -> None:
-    memory = _memory(tmp_path)
-    with memory.open_run() as session:
-        session.open_frame(_spec(ROOT))
-        session.open_frame(_spec(CHILD))
-        mutation = MemoryMutation("m", CHILD, {"base_version": memory.read()[1], "text": "x"})
-        with pytest.raises(MemoryOperationError) as caught:
-            session.commit("commit-1", (mutation,))
-    assert caught.value.code == "profile.invalid_batch"
 
 
 def test_learner_errors_chain_a_cause_without_the_key(tmp_path, monkeypatch) -> None:
@@ -402,8 +351,30 @@ def test_learner_errors_chain_a_cause_without_the_key(tmp_path, monkeypatch) -> 
         install()
         with memory.open_run() as session:
             with pytest.raises(MemoryOperationError) as caught:
-                session.open_frame(_spec(ROOT)).learn(LearnContext("run-1", ROOT, (), _feedback("x")))
+                session.learn(LearnContext("run-1", "profile", (), _feedback("x")))
         cause = caught.value.__cause__
         assert caught.value.code == code
         assert str(cause) == "Incorrect API key provided: [REDACTED] ([REDACTED])"
         assert key[:8] not in str(cause) and key[-4:] not in str(cause)
+
+
+def test_session_recalls_and_learns_the_whole_document(tmp_path, monkeypatch) -> None:
+    _install(monkeypatch, "<profile>\n# Ada\nBrief.\n</profile>")
+    memory = _memory(tmp_path)
+    with memory.open_run() as session:
+        assert not hasattr(session, "open_frame")
+        assert session.recall() == "# Ada\n"
+        assert session.recall(RECALL) == "# Ada\n"
+        mutation, = session.learn(LearnContext("run-1", "profile", (), _feedback("Be brief.")))
+        assert not hasattr(mutation, "frame_ref")
+        session.commit("commit-1", (mutation,))
+        with pytest.raises(MemoryOperationError) as caught:
+            session.commit("commit-2", (mutation, mutation))
+        assert caught.value.code == "profile.invalid_batch"
+    assert memory.read()[0] == "# Ada\nBrief.\n"
+    (tmp_path / "large").mkdir()
+    large = _memory(tmp_path / "large", "# Ada\n" + "x" * 40_000, max_chars=100)
+    with large.open_run() as session:
+        # max_chars bounds learner replies, never recall.
+        assert session.recall(RECALL) == large.read()[0]
+        assert session.recall() == large.read()[0]

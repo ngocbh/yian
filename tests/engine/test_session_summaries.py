@@ -8,9 +8,9 @@ import traceback
 import pytest
 
 from agent_composer.memory.session import SessionMemory
-from agent_composer.memory import MemoryFrameSpec, MemoryOperationError
+from agent_composer.memory import MemoryOperationError
 from agent_composer.nodes.base import _HostStop
-from tests.engine._session_fakes import REF, append_reply, harness, request, snapshot
+from tests.engine._session_fakes import append_reply, harness, request, snapshot
 
 
 def _seed(memory, count, *, consumer=("root", "agent")):
@@ -175,7 +175,7 @@ def test_cache_is_private_versioned_and_does_not_rewind_to_old_pin():
     _seed(memory, 1)
     pinned = snapshot(memory)
     with memory.open_run(snapshot=pinned) as session:
-        frame = session.open_frame(MemoryFrameSpec(REF, "session", {}))
+        frame = session
         with frame.open_turn(request("current"), check_stopped=lambda: None) as turn:
             assert _prepare(turn, calls, result="first")[0] == "first"
             assert (
@@ -186,7 +186,7 @@ def test_cache_is_private_versioned_and_does_not_rewind_to_old_pin():
         assert session.snapshot == pinned
     with memory.open_run(snapshot=pinned) as session:
         assert session.snapshot == pinned
-        frame = session.open_frame(MemoryFrameSpec(REF, "session", {}))
+        frame = session
         with frame.open_turn(request("later"), check_stopped=lambda: None) as turn:
             assert _prepare(turn, calls, result="extended")[0] == "extended"
     assert "first" in calls[-1][0] and '"current"' in calls[-1][0]
@@ -230,7 +230,7 @@ def test_cache_is_shared_by_consumers_and_isolated_by_namespace():
     assert len(calls) == 2 and "agent summary" in calls[-1][0]
     restored = SessionMemory(history_budget_chars=1, recent_turns=0)
     with restored.open_run(snapshot=snapshot(memory)) as session:
-        frame = session.open_frame(MemoryFrameSpec(REF, "session", {}))
+        frame = session
         with frame.open_turn(request("restored"), check_stopped=lambda: None) as turn:
             _prepare(turn, calls)
     assert "Previous historical summary" not in calls[-1][0]
@@ -274,7 +274,7 @@ def test_empty_crashed_and_failed_turns_count_in_recent_selection():
         turn.__exit__(None, None, None)
     restored = SessionMemory(history_budget_chars=1, recent_turns=2)
     with restored.open_run(snapshot=crashed_pin) as session:
-        frame = session.open_frame(MemoryFrameSpec(REF, "session", {}))
+        frame = session
         with frame.open_turn(request("current"), check_stopped=lambda: None) as turn:
             assert _prepare(turn, calls)[1] == '["failed", "crashed"]'
     assert '"0"' in calls[0][0]
@@ -326,7 +326,7 @@ def test_snapshot_pins_and_learned_notes_survive_summary_and_note_commit():
     value["notes"] = [_note(run_id="0", text="Already learned")]
     memory = SessionMemory(history_budget_chars=1, recent_turns=0)
     with memory.open_run(snapshot=value) as session:
-        frame = session.open_frame(MemoryFrameSpec(REF, "session", {}))
+        frame = session
         with frame.open_turn(request("current"), check_stopped=lambda: None) as turn:
             original = turn.view
             note = _note(run_id="0", index=1, text="Learned during callback")

@@ -14,15 +14,10 @@ from agent_composer.memory.contracts import (
     Memory,
     MemoryEpisode,
     MemoryEpisodeStatus,
-    MemoryFrame,
-    MemoryFrameRef,
-    MemoryFrameSpec,
     MemoryMutation,
-    MemoryOccurrenceRef,
     MemoryOccurrenceKind,
     MemoryOccurrenceSegment,
     MemoryOperationError,
-    MemoryOwner,
     MemorySection,
     MemorySession,
     ModelTextInteraction,
@@ -35,30 +30,14 @@ from agent_composer.memory.episodic import EpisodicMemory
 import agent_composer.memory.episodic as episodic
 
 
-def _ref(name: str = "agent") -> MemoryFrameRef:
-    return MemoryFrameRef("root", ("root", name), MemoryOwner.AGENT)
-
-
-def _spec(
-    name: str = "agent", config: dict[str, object] | None = None
-) -> MemoryFrameSpec:
-    return MemoryFrameSpec(_ref(name), "episodic", config or {})
-
-
-def _context(ref: MemoryFrameRef | None = None) -> LearnContext:
-    ref = ref or _ref()
+def _context(memory: str = "episodic") -> LearnContext:
     episode = MemoryEpisode(
-        "run",
-        MemoryOccurrenceRef(ref),
-        ref.static_path,
-        MemoryEpisodeStatus.SUCCEEDED,
-        {},
-        "ok",
+        "run", (), ("agent",), MemoryEpisodeStatus.SUCCEEDED, {}, "ok"
     )
-    return LearnContext("run", ref, (episode,))
+    return LearnContext("run", memory, (episode,))
 
 
-def test_constructor_protocol_and_frame_configuration_are_exact() -> None:
+def test_constructor_and_protocol_are_exact() -> None:
     for value in (True, 0, -1, 1.0):
         error = TypeError if value in (True, 1.0) else ValueError
         with pytest.raises(error):
@@ -69,31 +48,19 @@ def test_constructor_protocol_and_frame_configuration_are_exact() -> None:
     assert isinstance(memory, Memory)
     with memory.open_run() as session:
         assert isinstance(session, MemorySession)
-        frame = session.open_frame(_spec())
-        assert isinstance(frame, MemoryFrame)
-        assert session.open_frame(_spec()) is frame
-        for spec in (
-            _spec(config={"max_episodes": 7}),
-            MemoryFrameSpec(_ref(), "other", {}),
-            _spec(config={"unknown": 1}),
-        ):
-            assert session.open_frame(spec) is frame
-        with pytest.raises(MemoryOperationError) as exc:
-            session.open_frame(object())  # type: ignore[arg-type]
-        assert exc.value.code == "episodic.invalid_frame"
+        assert not hasattr(session, "open_frame")
 
 
-def test_frame_operations_validate_context_ownership_and_generation() -> None:
+def test_session_operations_validate_context_and_generation() -> None:
     memory = EpisodicMemory()
     session = memory.open_run()
-    frame = session.open_frame(_spec())
+    frame = session
     assert frame.recall() == ""
     assert frame.recall(RecallContext("agent", "prompt", {}, ("root",))) == ""
     assert len(frame.learn(_context())) == 1
     for operation in (
         lambda: frame.recall(object()),
         lambda: frame.learn(object()),
-        lambda: frame.learn(_context(_ref("other"))),
     ):
         with pytest.raises(MemoryOperationError) as exc:
             operation()  # type: ignore[misc]
@@ -109,15 +76,12 @@ def test_frame_operations_validate_context_ownership_and_generation() -> None:
     session.close()
 
 
-def test_frames_of_one_instance_share_one_history_and_one_limit() -> None:
+def test_keys_of_one_instance_share_one_history_and_one_limit() -> None:
     memory = EpisodicMemory(max_episodes=2, recall_limit=1)
     with memory.open_run() as session:
-        first = session.open_frame(_spec("first"))
-        second = session.open_frame(_spec("second", {"max_episodes": 9}))
-        assert session.open_frame(_spec("first", {"max_episodes": 7})) is first
         batch = (
-            *first.learn(_context(_ref("first"))),
-            *second.learn(_context(_ref("second"))),
+            *session.learn(_context("first")),
+            *session.learn(_context("second")),
         )
         session.commit("both", batch)
     with memory.open_run() as session:
@@ -134,17 +98,12 @@ def test_frames_of_one_instance_share_one_history_and_one_limit() -> None:
         }
         assert snapshot["config"] == {"max_episodes": 2, "recall_limit": 1}
         assert len(snapshot["episodes"]) == 2
-        first_text = session.open_frame(_spec("first")).recall()
-        assert first_text == session.open_frame(_spec("second")).recall()
-        assert len(first_text.splitlines()) == 2
-        third = session.open_frame(_spec("third"))
-        session.commit("third", tuple(third.learn(_context(_ref("third")))))
+        assert len(session.recall().splitlines()) == 2
+        third = tuple(session.learn(_context("third")))
+        session.commit("third", third)
     with memory.open_run() as session:
-        owners = [
-            item["episode"]["owner_static_path"][-1]
-            for item in session.snapshot["episodes"]
-        ]
-        assert owners == ["second", "third"]
+        retained = [item["entry_id"] for item in session.snapshot["episodes"]]
+        assert retained == [batch[1].mutation_id, third[0].mutation_id]
 
 
 def test_unset_limits_adopt_recorded_ones_and_explicit_ones_must_match() -> None:
@@ -166,7 +125,6 @@ def test_unset_limits_adopt_recorded_ones_and_explicit_ones_must_match() -> None
 def test_snapshot_is_closed_canonical_and_defensive() -> None:
     memory = EpisodicMemory(max_episodes=4, recall_limit=2)
     with memory.open_run() as session:
-        session.open_frame(_spec())
         snapshot = session.snapshot
         assert set(snapshot) == {
             "config",
@@ -189,7 +147,6 @@ def test_snapshot_is_closed_canonical_and_defensive() -> None:
 def test_snapshot_restore_rules_and_recorded_defaults() -> None:
     original = EpisodicMemory(max_episodes=4, recall_limit=2)
     with original.open_run() as session:
-        session.open_frame(_spec())
         session.commit("declare", ())
     with original.open_run() as session:
         recorded = session.snapshot
@@ -197,7 +154,6 @@ def test_snapshot_restore_rules_and_recorded_defaults() -> None:
         assert current.snapshot == recorded
     restored = EpisodicMemory()
     with restored.open_run(snapshot=recorded) as session:
-        session.open_frame(_spec())
         assert session.snapshot == recorded
     nonpristine = EpisodicMemory()
     with nonpristine.open_run():
@@ -237,7 +193,6 @@ def test_snapshot_restore_rules_and_recorded_defaults() -> None:
 )
 def test_snapshot_format_is_strict(mutate: Any) -> None:
     with EpisodicMemory().open_run() as session:
-        session.open_frame(_spec())
         snapshot = session.snapshot
     malformed = json.loads(json.dumps(snapshot))
     mutate(malformed)
@@ -250,16 +205,15 @@ def test_snapshot_format_is_strict(mutate: Any) -> None:
 def test_empty_commit_idempotency_collision_and_staleness() -> None:
     memory = EpisodicMemory()
     session = memory.open_run()
-    session.open_frame(_spec())
     session.commit("empty", ())
     session.commit("empty", ())
     with memory.open_run() as fresh:
         assert fresh.snapshot["revision"] == 1
     with pytest.raises(MemoryOperationError) as collision:
-        session.commit("empty", (MemoryMutation("m", _ref(), {}),))
+        session.commit("empty", (MemoryMutation("m", {}),))
     assert collision.value.code == "episodic.commit_collision"
     with pytest.raises(MemoryOperationError) as nonempty:
-        memory.open_run().commit("nonempty", (MemoryMutation("m", _ref(), {}),))
+        memory.open_run().commit("nonempty", (MemoryMutation("m", {}),))
     assert nonempty.value.code == "episodic.invalid_batch"
     stale = memory.open_run()
     with memory.open_run() as current:
@@ -284,13 +238,12 @@ def test_commit_inputs_are_exact() -> None:
 
 def test_closed_session_rejects_every_operation() -> None:
     session = EpisodicMemory().open_run()
-    frame = session.open_frame(_spec())
+    frame = session
     session.close()
     session.close()
     operations = (
         lambda: session.snapshot,
         lambda: session.__enter__(),
-        lambda: session.open_frame(_spec()),
         lambda: session.commit("x", ()),
         lambda: frame.recall(),
         lambda: frame.learn(_context()),
@@ -328,18 +281,12 @@ def test_module_imports_only_stdlib_and_lower_memory_modules() -> None:
 def _episode(
     label: str,
     *,
-    ref: MemoryFrameRef | None = None,
     status: MemoryEpisodeStatus = MemoryEpisodeStatus.SUCCEEDED,
 ) -> MemoryEpisode:
-    ref = ref or _ref()
-    occurrence = MemoryOccurrenceRef(
-        ref,
-        (MemoryOccurrenceSegment(MemoryOccurrenceKind.LOOP_ITERATION, ("root",), 2),),
-    )
     return MemoryEpisode(
         f"run-{label}",
-        occurrence,
-        ref.static_path,
+        (MemoryOccurrenceSegment(MemoryOccurrenceKind.LOOP_ITERATION, ("loop",), 2),),
+        ("loop", "agent"),
         status,
         {"topic": label},
         None if status is MemoryEpisodeStatus.FAILED else {"answer": label},
@@ -356,15 +303,15 @@ def _episode(
         ),
         "system",
         f"prompt {label}",
-        (MemorySection(ref, f"memory {label}"),),
+        (MemorySection("episodic", f"memory {label}"),),
         execution_seq=7,
     )
 
 
 def _learn(memory: EpisodicMemory, episode: MemoryEpisode, commit_id: str) -> None:
     with memory.open_run() as session:
-        frame = session.open_frame(_spec())
-        mutations = tuple(frame.learn(LearnContext(episode.run_id, _ref(), (episode,))))
+        frame = session
+        mutations = tuple(frame.learn(LearnContext(episode.run_id, "episodic", (episode,))))
         session.commit(commit_id, mutations)
 
 
@@ -372,9 +319,9 @@ def test_learning_is_deterministic_complete_and_round_trips_snapshot() -> None:
     memory = EpisodicMemory()
     episode = _episode("alpha")
     with memory.open_run() as session:
-        frame = session.open_frame(_spec())
-        assert frame.learn(LearnContext("empty", _ref(), ())) == []
-        context = LearnContext(episode.run_id, _ref(), (episode,))
+        frame = session
+        assert frame.learn(LearnContext("empty", "episodic", ())) == []
+        context = LearnContext(episode.run_id, "episodic", (episode,))
         first = frame.learn(context)
         second = frame.learn(context)
         assert [item.mutation_id for item in first] == [
@@ -382,22 +329,11 @@ def test_learning_is_deterministic_complete_and_round_trips_snapshot() -> None:
         ]
         assert [item.payload for item in first] == [item.payload for item in second]
         assert first[0].payload["operation"] == "append"
-        outside = MemoryEpisode(
-            "outside",
-            MemoryOccurrenceRef(_ref()),
-            ("root", "child"),
-            MemoryEpisodeStatus.SUCCEEDED,
-            {},
-            "value",
-        )
-        with pytest.raises(MemoryOperationError) as owner_error:
-            frame.learn(LearnContext("outside", _ref(), (outside,)))
-        assert owner_error.value.code == "episodic.invalid_context"
         session.commit("learn-alpha", tuple(first))
         session.commit("learn-alpha", tuple(first))
     with memory.open_run() as session:
         snapshot = session.snapshot
-        rendered = session.open_frame(_spec()).recall()
+        rendered = session.recall()
     entry = json.loads(rendered)
     assert entry == snapshot["episodes"][0]
     assert entry["episode"]["interactions"] == [
@@ -408,7 +344,7 @@ def test_learning_is_deterministic_complete_and_round_trips_snapshot() -> None:
     ]
     restored = EpisodicMemory()
     with restored.open_run(snapshot=snapshot) as session:
-        assert session.open_frame(_spec()).recall() == rendered
+        assert session.recall() == rendered
 
     failed_memory = EpisodicMemory()
     _learn(
@@ -417,19 +353,19 @@ def test_learning_is_deterministic_complete_and_round_trips_snapshot() -> None:
         "learn-failure",
     )
     with failed_memory.open_run() as session:
-        failed = json.loads(session.open_frame(_spec()).recall())["episode"]
+        failed = json.loads(session.recall())["episode"]
     assert failed["status"] == "failed"
     assert failed["failure"] == {"code": "failed", "message": "failure"}
     assert failed["output"] is None
 
 
-def test_commit_is_atomic_validates_ownership_and_rejects_duplicate_entries() -> None:
+def test_commit_is_atomic_rejects_malformed_and_duplicate_entries() -> None:
     memory = EpisodicMemory()
     episode = _episode("alpha")
     with memory.open_run() as session:
-        frame = session.open_frame(_spec())
-        valid = frame.learn(LearnContext(episode.run_id, _ref(), (episode,)))[0]
-        malformed = MemoryMutation("wrong", _ref(), valid.payload)
+        frame = session
+        valid = frame.learn(LearnContext(episode.run_id, "episodic", (episode,)))[0]
+        malformed = MemoryMutation("wrong", valid.payload)
         with pytest.raises(MemoryOperationError) as exc:
             session.commit("bad", (valid, malformed))
         assert exc.value.code == "episodic.invalid_batch"
@@ -437,30 +373,27 @@ def test_commit_is_atomic_validates_ownership_and_rejects_duplicate_entries() ->
         session.commit("good", (valid,))
     with memory.open_run() as session:
         assert len(session.snapshot["episodes"]) == 1
-        frame = session.open_frame(_spec())
+        frame = session
         with pytest.raises(MemoryOperationError) as duplicate:
             session.commit(
                 "duplicate",
-                tuple(frame.learn(LearnContext(episode.run_id, _ref(), (episode,)))),
+                tuple(frame.learn(LearnContext(episode.run_id, "episodic", (episode,)))),
             )
         assert duplicate.value.code == "episodic.invalid_batch"
-    with memory.open_run() as session:
-        unopened = MemoryMutation(valid.mutation_id, _ref(), valid.payload)
-        with pytest.raises(MemoryOperationError):
-            session.commit("unopened", (unopened,))
 
 
-def test_handcrafted_out_of_owner_commit_is_rejected_atomically() -> None:
+def test_handcrafted_out_of_scope_commit_is_rejected_atomically() -> None:
     memory = EpisodicMemory()
     episode = _episode("alpha")
     with memory.open_run() as session:
-        frame = session.open_frame(_spec())
-        valid = frame.learn(LearnContext(episode.run_id, _ref(), (episode,)))[0]
+        frame = session
+        valid = frame.learn(LearnContext(episode.run_id, "episodic", (episode,)))[0]
         payload = json.loads(json.dumps(valid.payload))
+        # The episode's occurrence path no longer contains its scoped node.
         payload["entry"]["episode"]["owner_static_path"] = ["root", "outside"]
-        forged = MemoryMutation(valid.mutation_id, _ref(), payload)
+        forged = MemoryMutation(valid.mutation_id, payload)
         with pytest.raises(MemoryOperationError) as exc:
-            session.commit("forged-owner", (forged,))
+            session.commit("forged-scope", (forged,))
         assert exc.value.code == "episodic.invalid_batch"
         assert session.snapshot["revision"] == 0
         assert session.snapshot["episodes"] == []
@@ -472,7 +405,7 @@ def test_handcrafted_out_of_owner_commit_is_rejected_atomically() -> None:
 def test_retention_recall_order_relevance_and_pinned_history() -> None:
     memory = EpisodicMemory(max_episodes=2, recall_limit=1)
     pinned = memory.open_run()
-    pinned_frame = pinned.open_frame(_spec())
+    pinned_frame = pinned
     assert pinned_frame.recall() == ""
     _learn(memory, _episode("alpha"), "one")
     _learn(memory, _episode("beta alpha"), "two")
@@ -487,7 +420,7 @@ def test_retention_recall_order_relevance_and_pinned_history() -> None:
     _learn(restored, _episode("beta alpha"), "two")
     _learn(restored, _episode("gamma"), "three")
     with restored.open_run() as session:
-        frame = session.open_frame(_spec())
+        frame = session
         history = [json.loads(line) for line in frame.recall().splitlines()]
         assert [item["episode"]["run_id"] for item in history] == [
             "run-beta alpha",
@@ -512,7 +445,7 @@ def test_rewrite_query_is_overridable_and_must_return_text() -> None:
     _learn(memory, _episode("alpha"), "one")
     _learn(memory, _episode("newer"), "two")
     with memory.open_run() as session:
-        recalled = session.open_frame(_spec()).recall(
+        recalled = session.recall(
             RecallContext("", "ignored", {}, ("root", "agent"))
         )
         assert json.loads(recalled)["episode"]["run_id"] == "run-alpha"
@@ -523,7 +456,7 @@ def test_rewrite_query_is_overridable_and_must_return_text() -> None:
 
     with InvalidQueryMemory().open_run() as session:
         with pytest.raises(MemoryOperationError) as exc:
-            session.open_frame(_spec()).recall(
+            session.recall(
                 RecallContext("", "", {}, ("root", "agent"))
             )
         assert exc.value.code == "episodic.invalid_query"
@@ -544,13 +477,34 @@ def test_nonempty_snapshot_rejects_malformed_episode_and_duplicate_identity() ->
         EpisodicMemory().open_run(snapshot=duplicate)
 
 
-def test_snapshot_keeps_episodes_from_every_frame_of_the_instance() -> None:
-    memory = EpisodicMemory()
-    _learn(memory, _episode("alpha"), "one")
+def test_session_recalls_and_learns_under_the_memory_key() -> None:
+    memory = EpisodicMemory(max_episodes=3, recall_limit=1)
+    segment = MemoryOccurrenceSegment(MemoryOccurrenceKind.MAP_ITEM, ("fan",), 1)
+    episode = MemoryEpisode(
+        "run",
+        (segment,),
+        ("fan", "agent"),
+        MemoryEpisodeStatus.SUCCEEDED,
+        {},
+        "ok",
+        memory_sections=(MemorySection("notes", "prior"),),
+    )
     with memory.open_run() as session:
-        snapshot = session.snapshot
-    cross_frame = json.loads(json.dumps(snapshot))
-    episode_ref = cross_frame["episodes"][0]["episode"]["occurrence"]["frame_ref"]
-    episode_ref["static_path"] = ["root", "other"]
-    with EpisodicMemory().open_run(snapshot=cross_frame) as session:
-        assert session.snapshot == cross_frame
+        assert not hasattr(session, "open_frame")
+        assert session.recall() == ""
+        mutations = tuple(session.learn(LearnContext("run", "notes", (episode,))))
+        again = tuple(session.learn(LearnContext("run", "notes", (episode,))))
+        other = tuple(session.learn(LearnContext("run", "other", (episode,))))
+        assert [m.mutation_id for m in mutations] == [m.mutation_id for m in again]
+        assert mutations[0].mutation_id != other[0].mutation_id
+        stored = mutations[0].payload["entry"]["episode"]
+        assert stored["occurrence_path"] == [
+            {"index": 1, "kind": "map_item", "static_path": ["fan"]}
+        ]
+        assert stored["memory_sections"] == [{"memory": "notes", "text": "prior"}]
+        assert "occurrence" not in stored
+        session.commit("one", mutations)
+    with memory.open_run() as session:
+        assert len(session.recall().splitlines()) == 1
+        query = RecallContext("base", "prompt", {}, ("fan", "agent"))
+        assert session.recall(query) == session.recall()

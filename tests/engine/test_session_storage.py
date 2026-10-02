@@ -16,7 +16,6 @@ import agent_composer.memory.contracts as c
 from agent_composer.memory.session import SessionMemory
 from agent_composer.memory.storage import SQLiteStorage
 from tests.engine._session_fakes import (
-    REF,
     append_reply,
     harness,
     item,
@@ -35,9 +34,7 @@ def _complete(memory, name="a"):
 
 def _mutation():
     note = _note()
-    return c.MemoryMutation(
-        note["note_id"], REF, {"operation": "append_note", "note": note}
-    )
+    return c.MemoryMutation(note["note_id"], {"operation": "append_note", "note": note})
 
 
 def test_completed_history_and_identity_survive_reopen(tmp_path):
@@ -50,7 +47,7 @@ def test_completed_history_and_identity_survive_reopen(tmp_path):
         assert snapshot(memory) == saved
         with memory.open_run(snapshot=opening) as restored:
             assert restored.snapshot == opening
-            frame = restored.open_frame(c.MemoryFrameSpec(REF, "session", {}))
+            frame = restored
             with frame.open_turn(request("b"), check_stopped=lambda: None) as turn:
                 assert turn.view.items == (item("a", "a"),)
                 append_reply(turn, "b", "b")
@@ -129,7 +126,7 @@ def test_idle_handles_do_not_block_close_and_are_invalidated(tmp_path):
     path = tmp_path / "memory.sqlite"
     memory = SessionMemory(storage=path)
     opened = memory.open_run()
-    frame = opened.open_frame(c.MemoryFrameSpec(REF, "session", {}))
+    frame = opened
     memory.close()
     memory.close()
     for operation in (
@@ -327,7 +324,7 @@ def test_failed_save_does_not_publish_candidate_or_advance_ordinal(
     if operation not in {"open", "adopt", "reset"}:
         _complete(memory)
         opened = memory.open_run()
-        frame = opened.open_frame(c.MemoryFrameSpec(REF, "session", {}))
+        frame = opened
         if operation != "commit":
             turn = frame.open_turn(request("next"), check_stopped=lambda: None)
             if operation != "admit":
@@ -405,7 +402,7 @@ def test_uncertain_write_poisoning_keeps_ram_and_drains_lease(
     path = tmp_path / "memory.sqlite"
     memory = SessionMemory(storage=path)
     opened = memory.open_run()
-    frame = opened.open_frame(c.MemoryFrameSpec(REF, "session", {}))
+    frame = opened
     turn = frame.open_turn(request(), check_stopped=lambda: None).__enter__()
     before = _ram(memory)
     before_ordinal = turn._ordinal
@@ -490,7 +487,7 @@ def test_callback_drain_owns_backend_even_after_run_close(tmp_path, phase, close
     memory = SessionMemory(storage=path, history_budget_chars=1, recent_turns=0)
     _seed(memory, 1)
     opened = memory.open_run()
-    frame = opened.open_frame(c.MemoryFrameSpec(REF, "session", {}))
+    frame = opened
     entered, release = Event(), Event()
     errors = []
     once = False
@@ -575,8 +572,8 @@ def test_waiting_turn_keeps_fifo_and_cannot_be_discarded_by_close(tmp_path):
     memory = SessionMemory(storage=tmp_path / "memory.sqlite")
     first = memory.open_run()
     later = memory.open_run()
-    frame = first.open_frame(c.MemoryFrameSpec(REF, "session", {}))
-    other = later.open_frame(c.MemoryFrameSpec(REF, "session", {}))
+    frame = first
+    other = later
     turn = frame.open_turn(request(), check_stopped=lambda: None).__enter__()
     queued = Event()
     finished = []
@@ -615,7 +612,7 @@ def _bounded(function, *args):
 def _fork_while_locked(path):
     with SessionMemory(storage=path) as memory:
         with memory.open_run() as opened:
-            frame = opened.open_frame(c.MemoryFrameSpec(REF, "session", {}))
+            frame = opened
             checks = []
             with frame.open_turn(
                 request(), check_stopped=lambda: checks.append(os.getpid())
@@ -709,7 +706,7 @@ def _fork_during_callback(path, phase, interrupt):
         ) as memory:
             _seed(memory, 1)
             with memory.open_run() as opened:
-                frame = opened.open_frame(c.MemoryFrameSpec(REF, "session", {}))
+                frame = opened
 
                 def check():
                     if phase == "stop":
@@ -753,7 +750,7 @@ def test_callback_fork_does_not_deadlock_or_replace_primary(tmp_path, phase, int
 def test_first_finish_failure_survives_secondary_release_failure(tmp_path, monkeypatch):
     memory = SessionMemory(storage=tmp_path / "memory.sqlite")
     opened = memory.open_run()
-    frame = opened.open_frame(c.MemoryFrameSpec(REF, "session", {}))
+    frame = opened
     turn = frame.open_turn(request(), check_stopped=lambda: None).__enter__()
     primary = RuntimeError("close publication failed")
 
@@ -777,7 +774,7 @@ def test_first_finish_failure_survives_secondary_release_failure(tmp_path, monke
 def _crash_after_observation(path):
     memory = SessionMemory(storage=path)
     opened = memory.open_run()
-    frame = opened.open_frame(c.MemoryFrameSpec(REF, "session", {}))
+    frame = opened
     turn = frame.open_turn(request(), check_stopped=lambda: None).__enter__()
     completed = turn.request("model", {}, items=(item("u", "question"),))
     turn.observe(completed, "completed", items=(item("a", "answer"),))
@@ -840,8 +837,8 @@ def test_poisoned_storage_still_drains_queued_and_active_owners(tmp_path):
     memory = SessionMemory(storage=tmp_path / "memory.sqlite")
     opened = memory.open_run()
     other = memory.open_run()
-    frame = opened.open_frame(c.MemoryFrameSpec(REF, "session", {}))
-    waiting = other.open_frame(c.MemoryFrameSpec(REF, "session", {}))
+    frame = opened
+    waiting = other
     turn = frame.open_turn(request(), check_stopped=lambda: None).__enter__()
     queued, proceed = Event(), Event()
     errors = []

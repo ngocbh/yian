@@ -323,21 +323,21 @@ def _validated_memory_sections(
     scope: MemoryScope,
     sections: tuple[MemorySection, ...],
 ) -> tuple[MemorySection, ...]:
-    """Validate one callback result as an ordered subsequence of the scope stack."""
+    """Validate one callback result as an ordered subsequence of the scope's memory keys."""
     if type(sections) is not tuple:
         raise TypeError("memory recall must return an exact tuple")
     next_index = 0
     for section in sections:
         if type(section) is not MemorySection:
             raise TypeError("memory recall items must be MemorySection values")
-        MemorySection(section.frame_ref, section.text)
+        MemorySection(section.memory, section.text)
         if not section.text:
             raise ValueError("memory recall sections must contain non-empty text")
         try:
-            index = scope.frame_stack.index(section.frame_ref, next_index)
+            index = scope.memories.index(section.memory, next_index)
         except ValueError as exc:
             raise ValueError(
-                "memory recall sections must follow the consumer frame stack"
+                "memory recall sections must follow the consumer memory stack"
             ) from exc
         next_index = index + 1
     return sections
@@ -397,7 +397,7 @@ def _memory_context_capability(
             if used:
                 raise RuntimeError("memory context capability was already entered")
             used = True
-            if scope is None or not scope.frame_stack:
+            if scope is None or not scope.memories:
                 return MemoryContext()
             if invalid_inputs:
                 raise MemoryRecallError("memory recall context is invalid")
@@ -571,7 +571,7 @@ def _evaluate_node_stream(
 
     canonical_inputs = {}
     invalid_inputs = False
-    if memory_scope is not None and memory_scope.frame_stack:
+    if memory_scope is not None and memory_scope.memories:
         if memory_context_opener is None:
             raise RuntimeError(
                 f"scoped node {node.id!r} requires an injected memory context callback"
@@ -591,7 +591,7 @@ def _evaluate_node_stream(
                     "bound node inputs did not canonicalize to an exact dict"
                 )
         except (TypeError, ValueError, RecursionError):
-            if memory_scope is None or not memory_scope.frame_stack:
+            if memory_scope is None or not memory_scope.memories:
                 raise
             # The recall capability owns the semantic rejection for its complete
             # query context. Evidence remains observational and simply omits the
@@ -802,7 +802,7 @@ def eval_node(
     ``effective_llm_by_static_path`` supplies accepted RunStarted configuration,
     selected only by the captured root-relative static scope, never node IDs.
     Capture and serialization errors propagate as host faults. Its default
-    leaves these hooks dormant and does not require a memory frame.
+    leaves these hooks dormant and does not require a memory scope.
     ``tools`` is the run's exact ``ToolSet``; only a node declaring ``needs_tools``
     receives it. ``None`` gives such a node the global registry.
     ``steering`` is the run's host inbox, delivered only to nodes declaring
@@ -839,8 +839,7 @@ def eval_node(
             raise TypeError("node memory_scope must be an exact MemoryScope or None")
         memory_scope = deepcopy(node.memory_scope)
         MemoryScope(
-            memory_scope.root_flow_id, memory_scope.static_path,
-            memory_scope.frame_stack, memory_scope.occurrence_path,
+            memory_scope.static_path, memory_scope.memories, memory_scope.occurrence_path,
         )
     if effective_llm_by_static_path is not None and type(effective_llm_by_static_path) is not dict:
         raise TypeError("effective_llm_by_static_path must be a dict or None")

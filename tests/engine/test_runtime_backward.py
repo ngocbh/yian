@@ -14,6 +14,8 @@ from tests.engine._fakes import FuncNode
 from tests.engine._graph_builder import _engine, _graph
 from tests.engine._backward_fakes import RecordingBackwardNode
 
+_POLICY = "reflective"
+
 
 @pytest.mark.parametrize("value", [None, {"answer": ["stable"]}])
 def test_terminal_trace_keeps_actual_root_writer_until_quiescence(value):
@@ -252,7 +254,7 @@ def test_map_whole_list_context_and_item_order_survive_reversed_completion(monke
         if isinstance(event, NodeSucceeded) and event.node_id == f"map#1/{END_ID}":
             second_done.set()
 
-    engine, layout = _owner_engine(flow, {"items": [7, 7]}, num_workers=2, on_event=observe)
+    engine, memories, stacks = _owner_engine(flow, {"items": [7, 7]}, num_workers=2, on_event=observe)
     list(engine.run())
     trace = engine.state.trace
     ends = [item.node_id for item in trace.occurrences if item.node_id in (f"map#0/{END_ID}", f"map#1/{END_ID}")]
@@ -269,7 +271,7 @@ def test_map_whole_list_context_and_item_order_survive_reversed_completion(monke
         assert any(detail["role"] == "output" and detail["result"] == [7, 7]
                    and detail["positions"] == [[index]] for detail in details)
     assert len(results) == len(trace.occurrences)
-    owner_context, = project_owner_contexts(trace, layout, "review both items", root, results)
+    owner_context, = project_owner_contexts(trace, memories, stacks, "review both items", root, results)
     assert len(owner_context.episodes) == len(trace.occurrences)
     producer_received = [entry for entry in owner_context.feedback if entry["channel"] == "output"
                          and entry["owner_static_path"] == ["producer"]]
@@ -300,7 +302,7 @@ def test_structural_ancestry_requires_exact_metadata_prescribed_transfer(transfo
                                  reads={"x": "${middle.output}"})
     right = RecordingBackwardNode("right", lambda inputs: inputs["x"], lambda _c, f: BackwardResult({"x": f}),
                                   reads={"x": "${middle.output}"})
-    engine, layout = _owner_engine(_graph([producer, middle, left, right],
+    engine, memories, stacks = _owner_engine(_graph([producer, middle, left, right],
                             [(START_ID, "producer"), ("producer", "middle"), ("middle", "left"), ("middle", "right")],
                             outputs=[FlowOutput("left", "${left.output}"), FlowOutput("right", "${right.output}")]))
     list(engine.run())
@@ -310,7 +312,7 @@ def test_structural_ancestry_requires_exact_metadata_prescribed_transfer(transfo
     result = next(item for item in results if item.source == occurrence.source)
     assert result.feedback == (("same!", "same!") if transform else ("same", "same"))
     assert tuple(item.parents for item in result.attribution) == (((0, 1), (0, 1)) if transform else ((0,), (1,)))
-    context, = project_owner_contexts(engine.state.trace, layout, {"left": "same", "right": "same"}, root, results)
+    context, = project_owner_contexts(engine.state.trace, memories, stacks, {"left": "same", "right": "same"}, root, results)
     received = [entry for entry in context.feedback if entry["channel"] == "output"
                 and entry["execution_seq"] == occurrence.source.execution_seq]
     assert tuple(entry["value"] for entry in received) == result.feedback
@@ -340,7 +342,7 @@ def test_diamond_crossing_call_uses_one_walk_and_preserves_child_default_project
     work.params = [Parameter("x"), Parameter("literal")]
     child = _graph([start, work], [(START_ID, "work")], outputs=[FlowOutput("result", "${work.output}")],
                    wiring={"work": {"x": "${input.x}", "literal": "${input.literal}"}})
-    child.memories = (MemoryDecl("reflective", "reflective", {}, DeclSite((), ("def", "child"), None)),)
+    child.memories = (MemoryDecl("child_notes", "child_notes", {}, DeclSite((), ("def", "child"), None)),)
     call = CallNode("call", flow_id="child", child=child)
     call.params = [Parameter("x")]
     producer = RecordingBackwardNode("producer", lambda inputs: inputs["x"], lambda _c, f: BackwardResult({"x": f}),
@@ -350,7 +352,7 @@ def test_diamond_crossing_call_uses_one_walk_and_preserves_child_default_project
     flow = _graph([producer, call, right], [(START_ID, "producer"), ("producer", "call"), ("producer", "right")],
                   outputs=[FlowOutput("left", "${call.output}"), FlowOutput("right", "${right.output}")],
                   wiring={"producer": {"x": "${input.topic}"}, "call": {"x": "${producer.output}"}, "right": {"x": "${producer.output}"}})
-    engine, layout = _owner_engine(flow, {"topic": "reefs"})
+    engine, memories, stacks = _owner_engine(flow, {"topic": "reefs"})
     list(engine.run())
     root, results = compute_backward(engine.state.trace, {"left": "L", "right": "R"})
     validate_attributed_backward(engine.state.trace, {"left": "L", "right": "R"}, root, results)
@@ -362,7 +364,7 @@ def test_diamond_crossing_call_uses_one_walk_and_preserves_child_default_project
     assert by_source[boundary.start_source].result.input_feedback == {"x": ("L",), "literal": ("child default",)}
     assert not by_source[boundary.owner].invoked
     assert root.self_feedback == () and root.variable_feedback == {}
-    contexts = project_owner_contexts(engine.state.trace, layout, {"left": "L", "right": "R"}, root, results)
+    contexts = project_owner_contexts(engine.state.trace, memories, stacks, {"left": "L", "right": "R"}, root, results)
     assert len(contexts) == 2
     for context in contexts:
         default, = [entry for entry in context.feedback if entry["execution_seq"] == boundary.start_source.execution_seq
@@ -685,7 +687,7 @@ name: carried
 input: {n: int}
 defs:
   body:
-    long_term_memory: reflective
+    long_term_memory: body_notes
     input: {n: int}
     nodes:
       work:
@@ -702,7 +704,7 @@ nodes:
     input: {n: '${input.n}'}
 output: ${loop.output}
 """).compiled
-    engine, layout = _owner_engine(flow, {"n": 3})
+    engine, memories, stacks = _owner_engine(flow, {"n": 3})
     original = deepcopy(engine.state.flow)
     list(engine.run())
     root, results = compute_backward(engine.state.trace, "review carried value")
@@ -713,26 +715,26 @@ output: ${loop.output}
     assert len(drivers) == 3
     reached = {result.source for result in results if result.invoked}
     assert drivers[-1].source in reached and all(item.source not in reached for item in drivers[:-1])
-    contexts = project_owner_contexts(engine.state.trace, layout, "review carried value", root, results)
+    contexts = project_owner_contexts(engine.state.trace, memories, stacks, "review carried value", root, results)
     assert len(contexts) == 2
-    assert len(contexts[0].episodes) == len(engine.state.trace.occurrences)
-    assert len(contexts[1].episodes) == 6
-    assert len({episode.execution_seq for episode in contexts[0].episodes}) == len(contexts[0].episodes)
+    by_key = {context.memory: context for context in contexts}
+    assert len(by_key[_POLICY].episodes) == len(engine.state.trace.occurrences)
+    assert len(by_key["body_notes"].episodes) == 6
+    assert len({episode.execution_seq for episode in by_key[_POLICY].episodes}) == len(by_key[_POLICY].episodes)
     assert any(item.node_id not in engine.state.flow.nodes for item in engine.state.trace.occurrences)
     for owner_context in contexts:
         for episode in owner_context.episodes:
             occurrence = next(item for item in engine.state.trace.occurrences
                               if item.source.execution_seq == episode.execution_seq)
             assert episode.owner_static_path == occurrence.memory_scope.static_path
-            assert episode.occurrence.occurrence_path == occurrence.memory_scope.occurrence_path
-            assert episode.occurrence.frame_ref == owner_context.frame_ref
+            assert episode.occurrence_path == occurrence.memory_scope.occurrence_path
     for driver in drivers[:-1]:
-        episode = next(item for item in contexts[0].episodes if item.execution_seq == driver.source.execution_seq)
+        episode = next(item for item in by_key[_POLICY].episodes if item.execution_seq == driver.source.execution_seq)
         assert episode.output["kind"] == "grow"
-        assert not any(entry["execution_seq"] == driver.source.execution_seq for entry in contexts[0].feedback)
+        assert not any(entry["execution_seq"] == driver.source.execution_seq for entry in by_key[_POLICY].feedback)
     monkeypatch.setattr(CodeNode, "backward", lambda *_: pytest.fail("projection replay invoked callback"))
     replay = _replay_records(RunState(original), tuple(engine.log), grow_builder=build_grow)
-    assert project_owner_contexts(replay.trace, layout, "review carried value", root, results) == contexts
+    assert project_owner_contexts(replay.trace, memories, stacks, "review carried value", root, results) == contexts
 
 
 def test_callback_message_mutation_does_not_change_root_or_recorded_feedback():
@@ -767,7 +769,7 @@ def test_canonical_file_input_feedback_keeps_literal_and_opaque_stops(opaque, mo
     feedback = {"files": [{"uri": "Check the URI."}]}
     node = RecordingBackwardNode("work", lambda _: "done", lambda *_: BackwardResult({"file": (feedback,)}),
                                  reads={"file": "${backward_file()}" if opaque else value})
-    engine, layout = _owner_engine(_graph([node], [(START_ID, "work")], outputs=[FlowOutput("result", "${work.output}")]))
+    engine, memories, stacks = _owner_engine(_graph([node], [(START_ID, "work")], outputs=[FlowOutput("result", "${work.output}")]))
     list(engine.run())
     root, results = compute_backward(engine.state.trace, "review")
     occurrence = next(item for item in engine.state.trace.occurrences if item.node_id == "work")
@@ -778,7 +780,7 @@ def test_canonical_file_input_feedback_keeps_literal_and_opaque_stops(opaque, mo
     assert root == BackwardResult()
     assert recovered.contributions == ()
     assert [stop.feedback for stop in recovered.stopped] == ([feedback] if opaque else [])
-    context, = project_owner_contexts(engine.state.trace, layout, "review", root, results)
+    context, = project_owner_contexts(engine.state.trace, memories, stacks, "review", root, results)
     returned, = [entry for entry in context.feedback if entry["target_name"] == "file" and entry["channel"] == "input"]
     assert returned["value"] == feedback
     assert [entry["value"] for entry in context.feedback if entry["channel"] == "stopped"] == ([feedback] if opaque else [])
@@ -804,7 +806,7 @@ def test_map_canonical_item_shape_preserves_its_projected_seed_stop(opaque, monk
     mapper.params = [Parameter("file")]
     flow = _graph([mapper], [(START_ID, "map")], outputs=[FlowOutput("files", "${map.output}")],
                   wiring={"map": {"over": "${backward_files()}" if opaque else files, "file": "${item}"}})
-    engine, layout = _owner_engine(flow)
+    engine, memories, stacks = _owner_engine(flow)
     list(engine.run())
     root, results = compute_backward(engine.state.trace, [None, "Check second URI."])
     boundary = engine.state.trace.boundaries[1]
@@ -818,7 +820,7 @@ def test_map_canonical_item_shape_preserves_its_projected_seed_stop(opaque, monk
     assert [stop.feedback for stop in routed.stopped] == (
         [[None, {"uri": "Check second URI."}]] if opaque else []
     )
-    context, = project_owner_contexts(engine.state.trace, layout, [None, "Check second URI."], root, results)
+    context, = project_owner_contexts(engine.state.trace, memories, stacks, [None, "Check second URI."], root, results)
     assert [entry["value"] for entry in context.feedback if entry["channel"] == "stopped"] == (
         [[None, {"uri": "Check second URI."}]] if opaque else []
     )

@@ -292,7 +292,8 @@ def test_execution_scope_agrees_with_existing_memory_ownership_paths(child_polic
     for target in execution_layout.targets:
         memory_scope = old_memory[target.locator]
         assert target.node.memory_scope is memory_scope
-        assert memory_scope.static_path == ("root", *target.scope.static_path)
+        assert memory_scope.static_path == target.scope.static_path
+        assert memory_scope.memories[0] == "outer"
         assert target.scope.occurrence_path == ()
     child_start = next(
         target for target in execution_layout.targets

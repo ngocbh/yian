@@ -609,15 +609,37 @@ class MemoryFrameRef:
 
 
 def _require_occurrence_path(value: object) -> tuple[MemoryOccurrenceSegment, ...]:
-    """Return one exact immutable path of structured occurrence segments."""
+    """Return one exact, revalidated, lexically nested occurrence path."""
     if type(value) is not tuple:
         raise TypeError("occurrence_path must be a tuple")
+    prior: tuple[str, ...] | None = None
     for segment in value:
         if type(segment) is not MemoryOccurrenceSegment:
             raise TypeError(
                 "occurrence_path items must be MemoryOccurrenceSegment values"
             )
+        MemoryOccurrenceSegment(segment.kind, segment.static_path, segment.index)
+        if prior is not None and (
+            len(segment.static_path) <= len(prior)
+            or segment.static_path[: len(prior)] != prior
+        ):
+            raise ValueError("occurrence segments must follow lexical nesting order")
+        prior = segment.static_path
     return value
+
+
+def _require_occurrence_contains(
+    occurrence_path: tuple[MemoryOccurrenceSegment, ...],
+    static_path: tuple[str, ...],
+) -> None:
+    """Require the innermost occurrence segment to strictly contain ``static_path``."""
+    if not occurrence_path:
+        return
+    inner = occurrence_path[-1].static_path
+    if len(inner) >= len(static_path) or static_path[: len(inner)] != inner:
+        raise ValueError(
+            "the innermost occurrence segment must contain the scoped node"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -664,93 +686,36 @@ class MemoryOccurrenceRef:
 
 @dataclass(frozen=True, slots=True)
 class MemoryScope:
-    """The immutable memory context carried by one compiled execution node."""
+    """The memory keys and occurrence path carried by one compiled node.
 
-    root_flow_id: str
+    ``static_path`` is the node's root-relative locator. ``memories`` lists
+    the keys the node recalls and learns into, outermost first.
+    """
+
     static_path: tuple[str, ...]
-    frame_stack: tuple[MemoryFrameRef, ...] = ()
+    memories: tuple[str, ...] = ()
     occurrence_path: tuple[MemoryOccurrenceSegment, ...] = ()
 
     def __post_init__(self) -> None:
-        """Validate paths and keep every nested identity within one root flow."""
-        _require_string(self.root_flow_id, "root_flow_id")
+        """Validate the locator, unique keys, and the nested occurrence path."""
         _require_path(self.static_path, "static_path")
-        if self.static_path[0] != self.root_flow_id:
-            raise ValueError("static_path must begin with root_flow_id")
-        if type(self.frame_stack) is not tuple:
-            raise TypeError("frame_stack must be a tuple")
-        prior_path: tuple[str, ...] | None = None
-        seen_frames: set[MemoryFrameRef] = set()
-        for index, frame in enumerate(self.frame_stack):
-            if type(frame) is not MemoryFrameRef:
-                raise TypeError("frame_stack items must be MemoryFrameRef values")
-            MemoryFrameRef(frame.root_flow_id, frame.static_path, frame.owner)
-            if frame.root_flow_id != self.root_flow_id:
-                raise ValueError("frame_stack root_flow_id must match the scope")
-            if frame in seen_frames:
-                raise ValueError("frame_stack must contain unique frame refs")
-            if (
-                prior_path is not None
-                and frame.static_path[: len(prior_path)] != prior_path
-            ):
-                raise ValueError("frame_stack must follow lexical ownership order")
-            if prior_path is not None and len(frame.static_path) == len(prior_path):
-                raise ValueError("frame_stack ownership paths must be strictly nested")
-            if frame.owner is MemoryOwner.AGENT and index != len(self.frame_stack) - 1:
-                raise ValueError("an AGENT frame must be the final local frame")
-            seen_frames.add(frame)
-            prior_path = frame.static_path
-        if self.frame_stack:
-            inner = self.frame_stack[-1]
-            if inner.owner is MemoryOwner.AGENT:
-                if self.static_path != inner.static_path:
-                    raise ValueError("an AGENT frame must own its exact node path")
-            elif (
-                len(self.static_path) <= len(inner.static_path)
-                or self.static_path[: len(inner.static_path)] != inner.static_path
-            ):
-                raise ValueError("a FLOW frame must lexically contain the node path")
+        _require_path(self.memories, "memories", allow_empty=True)
+        if len(set(self.memories)) != len(self.memories):
+            raise ValueError("memories must be unique")
         _require_occurrence_path(self.occurrence_path)
-        prior_occurrence_path: tuple[str, ...] | None = None
-        for segment in self.occurrence_path:
-            MemoryOccurrenceSegment(segment.kind, segment.static_path, segment.index)
-            if segment.static_path[0] != self.root_flow_id:
-                raise ValueError("occurrence segment root must match the scope")
-            if prior_occurrence_path is not None and (
-                len(segment.static_path) <= len(prior_occurrence_path)
-                or segment.static_path[: len(prior_occurrence_path)]
-                != prior_occurrence_path
-            ):
-                raise ValueError(
-                    "occurrence segments must follow lexical nesting order"
-                )
-            prior_occurrence_path = segment.static_path
-        if prior_occurrence_path is not None and (
-            len(prior_occurrence_path) >= len(self.static_path)
-            or self.static_path[: len(prior_occurrence_path)]
-            != prior_occurrence_path
-        ):
-            raise ValueError(
-                "the innermost occurrence segment must contain the scoped node"
-            )
+        _require_occurrence_contains(self.occurrence_path, self.static_path)
 
 
 @dataclass(frozen=True, slots=True)
 class MemorySection:
-    """One separately framed memory text section visible to an AGENT."""
+    """One memory's recalled text, shown to an AGENT as its own section."""
 
-    frame_ref: MemoryFrameRef
+    memory: str
     text: str
 
     def __post_init__(self) -> None:
-        """Require an exact frame identity and exact text value."""
-        if type(self.frame_ref) is not MemoryFrameRef:
-            raise TypeError("frame_ref must be a MemoryFrameRef")
-        MemoryFrameRef(
-            self.frame_ref.root_flow_id,
-            self.frame_ref.static_path,
-            self.frame_ref.owner,
-        )
+        """Require a non-empty memory key and an exact text value."""
+        _require_string(self.memory, "memory")
         _require_string(self.text, "text", nonempty=False)
 
 
@@ -872,12 +837,7 @@ class EvaluationEvidence:
         if scope is not None:
             if type(scope) is not MemoryScope:
                 raise TypeError("scope must be a MemoryScope or None")
-            MemoryScope(
-                scope.root_flow_id,
-                scope.static_path,
-                scope.frame_stack,
-                scope.occurrence_path,
-            )
+            MemoryScope(scope.static_path, scope.memories, scope.occurrence_path)
         object.__setattr__(self, "scope", scope)
         if bound_inputs is not None and type(bound_inputs) is not dict:
             raise TypeError("bound_inputs must be an exact JSON object or None")
@@ -901,24 +861,25 @@ class EvaluationEvidence:
         if type(memory_sections) is not tuple:
             raise TypeError("memory_sections must be a tuple")
         stack_positions = {
-            frame: index for index, frame in enumerate(scope.frame_stack if scope is not None else ())
+            key: index
+            for index, key in enumerate(scope.memories if scope is not None else ())
         }
-        seen_frames: set[MemoryFrameRef] = set()
+        seen: set[str] = set()
         positions: list[int] = []
         for section in memory_sections:
             if type(section) is not MemorySection:
                 raise TypeError("memory_sections items must be MemorySection values")
-            MemorySection(section.frame_ref, section.text)
-            if section.frame_ref in seen_frames:
-                raise ValueError("memory_sections frame_ref values must be unique")
-            if section.frame_ref not in stack_positions:
+            MemorySection(section.memory, section.text)
+            if section.memory in seen:
+                raise ValueError("memory_sections memory values must be unique")
+            if section.memory not in stack_positions:
                 raise ValueError(
-                    "memory_sections frames must appear in scope.frame_stack"
+                    "memory_sections memories must appear in scope.memories"
                 )
-            seen_frames.add(section.frame_ref)
-            positions.append(stack_positions[section.frame_ref])
+            seen.add(section.memory)
+            positions.append(stack_positions[section.memory])
         if positions != sorted(positions):
-            raise ValueError("memory_sections must follow scope.frame_stack order")
+            raise ValueError("memory_sections must follow scope.memories order")
         object.__setattr__(self, "memory_sections", memory_sections)
 
         if type(interactions) is not tuple:
@@ -1233,7 +1194,7 @@ class MemoryEpisode:
     """
 
     run_id: str
-    occurrence: MemoryOccurrenceRef
+    occurrence_path: tuple[MemoryOccurrenceSegment, ...]
     owner_static_path: tuple[str, ...]
     status: MemoryEpisodeStatus
     _inputs: _FrozenJsonObject | None = field(repr=False)
@@ -1248,7 +1209,7 @@ class MemoryEpisode:
     def __init__(
         self,
         run_id: str,
-        occurrence: MemoryOccurrenceRef,
+        occurrence_path: tuple[MemoryOccurrenceSegment, ...],
         owner_static_path: tuple[str, ...],
         status: MemoryEpisodeStatus,
         inputs: JsonObject | None,
@@ -1274,15 +1235,15 @@ class MemoryEpisode:
             if execution_seq < 0:
                 raise ValueError("execution_seq must be non-negative")
         object.__setattr__(self, "execution_seq", execution_seq)
-        if type(occurrence) is not MemoryOccurrenceRef:
-            raise TypeError("occurrence must be a MemoryOccurrenceRef")
-        MemoryOccurrenceRef(occurrence.frame_ref, occurrence.occurrence_path)
-        object.__setattr__(self, "occurrence", occurrence)
+        object.__setattr__(
+            self, "occurrence_path", _require_occurrence_path(occurrence_path)
+        )
         object.__setattr__(
             self,
             "owner_static_path",
             _require_path(owner_static_path, "owner_static_path"),
         )
+        _require_occurrence_contains(self.occurrence_path, self.owner_static_path)
         if type(status) is not MemoryEpisodeStatus:
             raise TypeError("status must be a MemoryEpisodeStatus")
         object.__setattr__(self, "status", status)
@@ -1322,7 +1283,7 @@ class MemoryEpisode:
         for section in memory_sections:
             if type(section) is not MemorySection:
                 raise TypeError("memory_sections items must be MemorySection values")
-            MemorySection(section.frame_ref, section.text)
+            MemorySection(section.memory, section.text)
         object.__setattr__(self, "memory_sections", memory_sections)
         if type(interactions) is not tuple:
             raise TypeError("interactions must be a tuple")
@@ -1347,26 +1308,23 @@ class MemoryEpisode:
 
 @dataclass(frozen=True, slots=True, init=False)
 class LearnContext:
-    """One frame-local ordered batch presented to a memory policy."""
+    """One memory's ordered learning batch."""
 
     run_id: str
-    frame_ref: MemoryFrameRef
+    memory: str
     episodes: tuple[MemoryEpisode, ...]
     _feedback: tuple[_FrozenJson, ...] = field(repr=False)
 
     def __init__(
         self,
         run_id: str,
-        frame_ref: MemoryFrameRef,
+        memory: str,
         episodes: tuple[MemoryEpisode, ...],
         feedback: tuple[JsonValue, ...] = (),
     ) -> None:
-        """Validate and snapshot one frame-local learning context."""
+        """Validate and snapshot one memory's learning context."""
         object.__setattr__(self, "run_id", _require_string(run_id, "run_id"))
-        if type(frame_ref) is not MemoryFrameRef:
-            raise TypeError("frame_ref must be a MemoryFrameRef")
-        MemoryFrameRef(frame_ref.root_flow_id, frame_ref.static_path, frame_ref.owner)
-        object.__setattr__(self, "frame_ref", frame_ref)
+        object.__setattr__(self, "memory", _require_string(memory, "memory"))
         if type(episodes) is not tuple:
             raise TypeError("episodes must be a tuple")
         for episode in episodes:
@@ -1374,7 +1332,7 @@ class LearnContext:
                 raise TypeError("episodes items must be MemoryEpisode values")
             MemoryEpisode(
                 run_id=episode.run_id,
-                occurrence=episode.occurrence,
+                occurrence_path=episode.occurrence_path,
                 owner_static_path=episode.owner_static_path,
                 status=episode.status,
                 inputs=episode.inputs,
@@ -1388,10 +1346,6 @@ class LearnContext:
             )
             if episode.run_id != self.run_id:
                 raise ValueError("episode run_id must match the learning context")
-            if episode.occurrence.frame_ref != frame_ref:
-                raise ValueError(
-                    "episode occurrence frame_ref must match the learning context"
-                )
         object.__setattr__(self, "episodes", episodes)
         if type(feedback) is not tuple:
             raise TypeError("feedback must be a tuple")
@@ -1412,16 +1366,14 @@ class LearnContext:
 
 @dataclass(frozen=True, slots=True, init=False)
 class MemoryMutation:
-    """One policy-proposed JSON mutation for a single owning memory frame."""
+    """One JSON mutation a memory proposed."""
 
     mutation_id: str
-    frame_ref: MemoryFrameRef
     _payload: _FrozenJson = field(repr=False)
 
     def __init__(
         self,
         mutation_id: str,
-        frame_ref: MemoryFrameRef,
         payload: JsonValue,
     ) -> None:
         """Validate and snapshot one proposed mutation."""
@@ -1430,10 +1382,6 @@ class MemoryMutation:
             "mutation_id",
             _require_string(mutation_id, "mutation_id"),
         )
-        if type(frame_ref) is not MemoryFrameRef:
-            raise TypeError("frame_ref must be a MemoryFrameRef")
-        MemoryFrameRef(frame_ref.root_flow_id, frame_ref.static_path, frame_ref.owner)
-        object.__setattr__(self, "frame_ref", frame_ref)
         object.__setattr__(self, "_payload", _freeze_json(payload, name="payload"))
 
     @property
@@ -1444,8 +1392,6 @@ class MemoryMutation:
 
 def _validate_mutations(
     mutations: tuple[MemoryMutation, ...],
-    *,
-    frame_ref: MemoryFrameRef | None = None,
 ) -> tuple[MemoryMutation, ...]:
     """Revalidate and detach a mutation batch, preserving its semantic order."""
     if type(mutations) is not tuple:
@@ -1454,18 +1400,7 @@ def _validate_mutations(
     for mutation in mutations:
         if type(mutation) is not MemoryMutation:
             raise TypeError("mutations items must be MemoryMutation values")
-        ref = mutation.frame_ref
-        if type(ref) is not MemoryFrameRef:
-            raise TypeError("mutation frame_ref must be a MemoryFrameRef")
-        copied.append(
-            MemoryMutation(
-                mutation.mutation_id,
-                MemoryFrameRef(ref.root_flow_id, ref.static_path, ref.owner),
-                mutation.payload,
-            )
-        )
-        if frame_ref is not None and mutation.frame_ref != frame_ref:
-            raise ValueError("mutation frame_ref must match the learning frame")
+        copied.append(MemoryMutation(mutation.mutation_id, mutation.payload))
     ids = tuple(mutation.mutation_id for mutation in mutations)
     if len(ids) != len(set(ids)):
         raise ValueError("mutation IDs must be unique")
@@ -1474,12 +1409,11 @@ def _validate_mutations(
 
 @dataclass(frozen=True, slots=True)
 class LearningFailure:
-    """One frame-local learn or memory-local commit failure in a run result."""
+    """One memory's learn or commit failure in a run result."""
 
     memory: str
     operation: str
     failure: MemoryOperationFailure
-    frame_ref: MemoryFrameRef | None = None
 
     def __post_init__(self) -> None:
         """Require exact attribution and one revalidated durable failure."""
@@ -1495,18 +1429,6 @@ class LearningFailure:
             self.failure.message,
             self.failure.retryable,
         )
-        if self.frame_ref is not None:
-            if type(self.frame_ref) is not MemoryFrameRef:
-                raise TypeError("frame_ref must be a MemoryFrameRef or None")
-            MemoryFrameRef(
-                self.frame_ref.root_flow_id,
-                self.frame_ref.static_path,
-                self.frame_ref.owner,
-            )
-        if self.operation == "learn" and self.frame_ref is None:
-            raise ValueError("a learn failure requires frame_ref")
-        if self.operation == "commit" and self.frame_ref is not None:
-            raise ValueError("a commit failure cannot carry frame_ref")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1579,16 +1501,12 @@ class LearningResult:
         if type(self.failures) is not tuple:
             raise TypeError("learning failures must be a tuple")
         failures = []
-        identities: set[tuple[str, str, MemoryFrameRef | None]] = set()
+        identities: set[tuple[str, str]] = set()
         for failure in self.failures:
             if type(failure) is not LearningFailure:
                 raise TypeError("failures items must be LearningFailure values")
             failures.append(replace(failure))
-            identity = (
-                failure.memory,
-                failure.operation,
-                failure.frame_ref,
-            )
+            identity = (failure.memory, failure.operation)
             if identity in identities:
                 raise ValueError("learning failure attribution must be unique")
             identities.add(identity)
@@ -1719,8 +1637,15 @@ class MemorySession(Protocol):
         """Release resources held by this run session."""
         ...
 
-    def open_frame(self, spec: MemoryFrameSpec) -> MemoryFrame:
-        """Open one effective frame idempotently within this session."""
+    def recall(self, context: RecallContext | None = None) -> str | MemoryContent:
+        """Return notes and an optional transcript source for one invocation.
+
+        ``None`` asks for the whole memory, as a host inspection does.
+        """
+        ...
+
+    def learn(self, context: LearnContext) -> list[MemoryMutation]:
+        """Return this memory's exact list of proposed mutations for one batch."""
         ...
 
     def commit(
@@ -2502,4 +2427,4 @@ class MemoryContext:
         for section in self.sections:
             if type(section) is not MemorySection:
                 raise TypeError("sections must contain MemorySection values")
-            MemorySection(section.frame_ref, section.text)
+            MemorySection(section.memory, section.text)

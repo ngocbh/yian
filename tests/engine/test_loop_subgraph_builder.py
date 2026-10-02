@@ -13,10 +13,8 @@ from agent_composer.compile.expand import loop_continue_subgraph, map_callsite, 
 from agent_composer.compile.model import CompiledFlow, Edge, END_ID, Flow, START_ID
 from agent_composer.diagnostics import OriginRef
 from agent_composer.memory import (
-    MemoryFrameRef,
     MemoryOccurrenceKind,
     MemoryOccurrenceSegment,
-    MemoryOwner,
     MemoryScope,
 )
 from agent_composer.nodes.end import EndNode
@@ -164,22 +162,19 @@ def test_continue_keys_body_on_origin_when_driver_id_differs():
 
 def test_continue_appends_body_iteration_but_driver_keeps_outer_occurrence() -> None:
     child = _child_flow()
-    outer_frame = MemoryFrameRef("root", ("root",), MemoryOwner.FLOW)
     for node_id, node in child.nodes.items():
         node.memory_scope = MemoryScope(
-            "root",
-            ("root", "outer_map", "lp", node_id),
-            frame_stack=(outer_frame,),
+            ("outer_map", "lp", node_id),
+            memories=("outer",),
         )
     outer = MemoryOccurrenceSegment(
         MemoryOccurrenceKind.MAP_ITEM,
-        ("root", "outer_map"),
+        ("outer_map",),
         1,
     )
     loop_scope = MemoryScope(
-        "root",
-        ("root", "outer_map", "lp"),
-        frame_stack=(outer_frame,),
+        ("outer_map", "lp"),
+        memories=("outer",),
         occurrence_path=(outer,),
     )
     driver = _driver("lp", 3, child)
@@ -198,7 +193,7 @@ def test_continue_appends_body_iteration_but_driver_keeps_outer_occurrence() -> 
         outer,
         MemoryOccurrenceSegment(
             MemoryOccurrenceKind.LOOP_ITERATION,
-            ("root", "outer_map", "lp"),
+            ("outer_map", "lp"),
             2,
         ),
     )
@@ -213,11 +208,11 @@ def test_continue_appends_body_iteration_but_driver_keeps_outer_occurrence() -> 
 def test_continue_revalidates_supplied_driver_memory_scope() -> None:
     child = _child_flow()
     driver = _driver("lp", 1, child)
-    base_scope = MemoryScope("root", ("root", "lp"))
+    base_scope = MemoryScope(("lp",))
     forged = copy.deepcopy(base_scope)
     occurrence = MemoryOccurrenceSegment(
         MemoryOccurrenceKind.MAP_ITEM,
-        ("root", "outer"),
+        ("outer",),
         0,
     )
     object.__setattr__(forged, "occurrence_path", (occurrence,))

@@ -619,7 +619,7 @@ def test_terminal_resume_only_reconstructs_backward_outcome(tmp_path):
 def test_terminal_resume_inspects_every_unfinished_backward_prefix(tmp_path, prefix):
     from agent_composer.run import _replay_run_log
     from agent_composer.runtime.backward import compute_backward
-    from agent_composer.runtime.contracts import FrameProposal
+    from agent_composer.runtime.contracts import MemoryProposal
     from agent_composer.runtime.learning import memory_commit_id
     from agent_composer.runtime.state import commit_prepared, prepare_record
 
@@ -632,10 +632,10 @@ def test_terminal_resume_inspects_every_unfinished_backward_prefix(tmp_path, pre
         root, attributed = compute_backward(state.trace, "Review.")
         commit_prepared(log, state, prepare_record(state, BackwardStartedRecord(1, "Review.")))
         if prefix != "started":
-            proposals = tuple(FrameProposal(spec.ref, ()) for spec in state.memory_layout)
+            proposals = tuple(MemoryProposal(spec.key, ()) for spec in state.memories)
             commit_prepared(log, state, prepare_record(state, BackwardReadyRecord(1, root, attributed, proposals)))
         if prefix in ("requested", "confirmed"):
-            identity = memory_commit_id(state.run_id, "test", ())
+            identity = memory_commit_id(state.run_id, "test", (), 1)
             commit_prepared(log, state, prepare_record(state, MemoryCommitRequestedRecord("test", identity, (), attempt_id=1)))
             if prefix == "confirmed":
                 commit_prepared(log, state, prepare_record(state, MemoryCommitSucceededRecord("test", identity, attempt_id=1)))

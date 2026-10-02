@@ -281,7 +281,7 @@ def test_compatible_model_and_prompt_changes_retain_history_with_current_system(
 def test_admission_follows_render_and_recall_and_only_current_recall_is_reused(monkeypatch):
     from agent_composer.memory import MemoryContext, MemorySection
     from agent_composer.nodes.agent import AgentNode
-    from tests.engine._session_fakes import REF, harness, request
+    from tests.engine._session_fakes import harness, request
     memory = SessionMemory()
     model = _Model([AIMessage(content="one"), AIMessage(content="two")])
     events = []
@@ -292,7 +292,7 @@ def test_admission_follows_render_and_recall_and_only_current_recall_is_reused(m
             def open_context(system, prompt, compatibility):
                 assert prompt == f"question {index}"
                 events.append("recall")
-                sections = (MemorySection(REF, note),)
+                sections = (MemorySection("session", note),)
                 events.append("admit")
                 turn = stack.enter_context(opened.frame.open_turn(
                     request(run_id=str(index), compatibility=compatibility), check_stopped=lambda: None,

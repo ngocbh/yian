@@ -11,9 +11,7 @@ from agent_composer.expr.lineage import has_feedback, validate_feedback
 from agent_composer.memory.contracts import (
     LearningFailure,
     LearningResult,
-    MemoryFrameRef,
     MemoryOperationFailure,
-    MemoryOwner,
 )
 from agent_composer.nodes.base import (
     BackwardContext,
@@ -309,7 +307,6 @@ def test_backward_context_and_outcome_do_not_expose_mutable_authority() -> None:
     assert context.scope == scope
     assert context.failure == forward_failure
 
-    frame = MemoryFrameRef("flow", ("flow", "writer"), MemoryOwner.AGENT)
     cause = MemoryOperationFailure("learn", "model.failed", "Model failed.", True)
     failure = BackwardFailure(
         stage="learn",
@@ -317,13 +314,12 @@ def test_backward_context_and_outcome_do_not_expose_mutable_authority() -> None:
         message="Could not compute a learning proposal.",
         scope=scope,
         memory="history",
-        frame_ref=frame,
         cause=cause,
         cause_type="MemoryOperationError",
         traceback="debugging detail",
     )
     learning = LearningResult(
-        "failed", (LearningFailure("history", "learn", cause, frame),)
+        "failed", (LearningFailure("history", "learn", cause),)
     )
     feedback = BackwardResult(input_feedback={"tags": ([None, "Irrelevant."],)})
     outcome = BackwardOutcome("failed", feedback, failure, learning)
@@ -333,7 +329,6 @@ def test_backward_context_and_outcome_do_not_expose_mutable_authority() -> None:
     assert outcome.status == "failed"
     assert outcome.failure.cause == cause
     assert outcome.failure.cause.retryable is True
-    assert outcome.failure.frame_ref == frame
     assert outcome.failure.traceback == "debugging detail"
     assert outcome.learning == learning
     assert context.failure == forward_failure

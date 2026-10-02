@@ -19,14 +19,14 @@ from langchain_core.messages import (
 
 import agent_composer.llm_clients as llm_clients
 from agent_composer.memory.session import SessionMemory
-from agent_composer.memory import MemoryFrameSpec, MemorySection
+from agent_composer.memory import MemorySection
 from agent_composer.nodes.agent import memory as conversation
 from agent_composer.nodes.agent.modes.common import AgentRunContext
 from agent_composer.nodes.agent.modes.plain import plain
 from agent_composer.nodes.agent.modes.tool_calling import tool_calling
 from agent_composer.nodes.base import _CapabilityFault, _HostStop
 from agent_composer.typesys.values import Type, ValueKind
-from tests.engine._session_fakes import REF, harness, request, snapshot
+from tests.engine._session_fakes import harness, request, snapshot
 from tests.engine.test_agent_session import _Model
 from tests.engine.test_agent_session_structured import _Native, _config
 from tests.engine.test_agent_session_tools import _Chat, _Tool, _call
@@ -279,7 +279,7 @@ def test_summary_uses_unbound_model_and_current_instructions_and_grants(monkeypa
                     node_id="agent",
                     prompt="new question",
                     tools=["current"],
-                    memory_context=MemoryContext(sections=(MemorySection(REF, "CURRENT NOTE"),), transcript=turn),
+                    memory_context=MemoryContext(sections=(MemorySection("session", "CURRENT NOTE"),), transcript=turn),
                 )
             )
     assert result.value == "answer" and events == ["summarize", "bind"]
@@ -366,7 +366,7 @@ def test_empty_crash_status_selected_and_active_current_not_unknown():
             saved = snapshot(memory)
     restored = SessionMemory(history_budget_chars=1, recent_turns=1)
     with restored.open_run(snapshot=saved) as session:
-        frame = session.open_frame(MemoryFrameSpec(REF, "session", {}))
+        frame = session
         with frame.open_turn(request("current"), check_stopped=lambda: None) as turn:
             messages = conversation.prepare_history(
                 turn, _Model([AIMessage(content="facts")]), check_stopped=lambda: None

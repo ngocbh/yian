@@ -8,12 +8,12 @@ import pytest
 
 from agent_composer.compile.model import START_ID, FlowOutput
 from agent_composer.memory import (
-    LearnContext, MemoryFrameRef, MemoryFrameSpec, MemoryMutation, MemoryOwner,
-    MemoryOperationError, MemoryScope, MemorySnapshotEnvelope,
+    DeclSite, LearnContext, MemoryMutation, MemoryOperationError, MemoryScope,
+    MemorySnapshotEnvelope, MemorySpec, MemoryStack,
 )
 from agent_composer.nodes.base import BackwardResult, _CapabilityFault
 import agent_composer.runtime.backward as backward_module
-from agent_composer.runtime.contracts import FrameProposal
+from agent_composer.runtime.contracts import MemoryProposal
 from agent_composer.runtime.log import (
     BackwardFinishedRecord, BackwardReadyRecord, BackwardStartedRecord,
     MemoryCommitFailedRecord, MemoryCommitRequestedRecord, MemoryCommitSucceededRecord,
@@ -25,49 +25,56 @@ from tests.engine._graph_builder import _engine, _graph
 from tests.engine._memory_fakes import _Memory, _Session
 
 
-def _layout(*policies):
-    return tuple(MemoryFrameSpec(
-        MemoryFrameRef("root", ("root", f"frame{index}"), MemoryOwner.AGENT), policy, {},
-    ) for index, policy in enumerate(policies))
+_ROOT = DeclSite((), ("root",), None)
 
 
-def _open(layout, memory):
-    return MemoryRuntime.open(
-        layout=layout, origins={spec.ref: None for spec in layout}, memory=memory,
-        snapshots=tuple(MemorySnapshotEnvelope(name, {}) for name in sorted({
-            spec.policy_name for spec in layout
-        })),
+def _table(*keys):
+    """Return a sorted key table; the first key is root-owned, the rest are owned by unused defs."""
+    return tuple(
+        MemorySpec(key, key, {}, (_ROOT if index == 0 else DeclSite((), ("def", f"unused{index}"), None),), False)
+        for index, key in enumerate(sorted(set(keys)))
     )
 
 
-def test_proposal_phase_visits_every_frame_without_committing():
-    layout = _layout("A", "A", "B")
-    contexts = tuple(LearnContext("run", spec.ref, ()) for spec in layout)
+def _open(memories, memory):
+    """Open a runtime over ``memories`` with empty snapshots."""
+    return MemoryRuntime.open(
+        memories=memories, origins={spec.key: None for spec in memories}, memory=memory,
+        snapshots=tuple(MemorySnapshotEnvelope(spec.key, {}) for spec in memories),
+    )
+
+
+def test_proposal_phase_visits_every_memory_without_committing():
+    memories = _table("A", "B", "C")
+    contexts = tuple(LearnContext("run", spec.key, ()) for spec in memories)
     order = []
 
     def propose(context):
-        order.append(context.frame_ref)
-        return [MemoryMutation("same-id", context.frame_ref, {"notes": ["one"]})]
+        order.append(context.memory)
+        return [MemoryMutation("same-id", {"notes": ["one"]})]
 
-    memory = {"A": _Memory(learn_outcomes=[propose, []]), "B": _Memory(learn_outcomes=[propose])}
-    runtime = _open(layout, memory)
+    memory = {
+        "A": _Memory(learn_outcomes=[propose]),
+        "B": _Memory(learn_outcomes=[[]]),
+        "C": _Memory(learn_outcomes=[propose]),
+    }
+    runtime = _open(memories, memory)
     try:
         proposals = runtime.propose_learning(contexts)
     finally:
         runtime.close()
-    assert tuple(proposal.frame_ref for proposal in proposals) == tuple(spec.ref for spec in layout)
-    assert all(type(proposal) is FrameProposal for proposal in proposals)
+    assert tuple(proposal.memory for proposal in proposals) == ("A", "B", "C")
+    assert all(type(proposal) is MemoryProposal for proposal in proposals)
     assert [len(proposal.mutations) for proposal in proposals] == [1, 0, 1]
-    assert order == [layout[0].ref, layout[2].ref]
-    assert memory["A"].learn_contexts == list(contexts[:2])
-    assert memory["B"].learn_contexts == list(contexts[2:])
+    assert order == ["A", "C"]
+    assert [memory[key].learn_contexts for key in ("A", "B", "C")] == [[context] for context in contexts]
     assert all(not backend.commit_calls and backend.close_count == 1 for backend in memory.values())
 
 
 @pytest.mark.parametrize("invalid", ["missing", "reordered", "duplicate", "foreign", "run", "list"])
 def test_proposal_contexts_validate_completely_before_any_learner(invalid):
-    layout = _layout("A", "A")
-    contexts = tuple(LearnContext("run", spec.ref, ()) for spec in layout)
+    memories = _table("A", "B")
+    contexts = tuple(LearnContext("run", spec.key, ()) for spec in memories)
     if invalid == "missing":
         contexts = contexts[:1]
     elif invalid == "reordered":
@@ -75,13 +82,13 @@ def test_proposal_contexts_validate_completely_before_any_learner(invalid):
     elif invalid == "duplicate":
         contexts = (contexts[0], contexts[0])
     elif invalid == "foreign":
-        contexts = (contexts[0], LearnContext("run", _layout("B", "B", "B")[2].ref, ()))
+        contexts = (contexts[0], LearnContext("run", "Z", ()))
     elif invalid == "run":
-        contexts = (contexts[0], LearnContext("other", layout[1].ref, ()))
+        contexts = (contexts[0], LearnContext("other", "B", ()))
     else:
         contexts = list(contexts)
     memory = _Memory()
-    runtime = _open(layout, {"A": memory})
+    runtime = _open(memories, {"A": memory, "B": _Memory()})
     try:
         with pytest.raises((TypeError, ValueError)):
             runtime.propose_learning(contexts)
@@ -90,24 +97,28 @@ def test_proposal_contexts_validate_completely_before_any_learner(invalid):
     assert not memory.learn_contexts and not memory.commit_calls
 
 
-def _terminal(policies=("A",), *, value="reefs", callback=None, learnable=True):
-    """Build one real retained CODE occurrence plus complete enabled frame inventory."""
+def _terminal(keys=("A",), *, value="reefs", callback=None, learnable=True):
+    """Build one real retained CODE occurrence plus a complete enabled key table."""
     node = RecordingBackwardNode(
         "work", lambda inputs: inputs["topic"],
         callback or (lambda _context, feedback: BackwardResult({"topic": feedback})),
         reads={"topic": "${input.topic}"},
     )
     flow = _graph([node], [(START_ID, "work")], outputs=[FlowOutput("answer", "${work.output}")])
-    layout = tuple(MemoryFrameSpec(
-        MemoryFrameRef("root", ("root",) if index == 0 else ("root", f"unused{index}"), MemoryOwner.FLOW),
-        policy, {},
-    ) for index, policy in enumerate(policies))
-    if layout:
+    memories = _table(*keys)
+    stacks = None
+    if memories:
         for current in flow.nodes.values():
-            current.memory_scope = MemoryScope("root", ("root", current.id), (layout[0].ref,))
-    engine = _engine(flow, {"topic": value}, learnable=learnable, memory_layout=layout or None,
-                     memory_snapshots=tuple(MemorySnapshotEnvelope(name, {}) for name in sorted(set(policies)))
-                     if layout else None)
+            current.memory_scope = MemoryScope((current.id,), (memories[0].key,))
+        stacks = tuple(sorted(
+            (MemoryStack(current.memory_scope.static_path, current.memory_scope.memories)
+             for current in flow.nodes.values()),
+            key=lambda stack: stack.locator,
+        ))
+    engine = _engine(
+        flow, {"topic": value}, learnable=learnable, memories=memories or None, memory_stacks=stacks,
+        memory_snapshots=tuple(MemorySnapshotEnvelope(spec.key, {}) for spec in memories) or None,
+    )
     list(engine.run())
     return engine, node
 
@@ -119,27 +130,26 @@ def _records(engine):
 def _drive(engine, memory, feedback="review"):
     return backward_module.drive_backward(
         engine.state, engine.log, feedback,
-        open_memory=lambda: _open(engine.state.memory_layout or (), memory),
+        open_memory=lambda: _open(engine.state.memories or (), memory),
     )
 
 
 def test_backward_finishes_all_callbacks_before_ready_and_policy_requests(monkeypatch):
-    engine, node = _terminal(("A", "A", "B"))
-    layout = engine.state.memory_layout
+    engine, node = _terminal(("A", "B", "C"))
     visited = []
 
     def learn(context):
         assert len(node.calls) == 1
         assert type(_records(engine)[-1]) is BackwardStartedRecord
         assert not any(backend.commit_calls for backend in memory.values())
-        visited.append(context.frame_ref)
-        return [MemoryMutation(str(len(visited)), context.frame_ref, {"notes": ["one"]})]
+        visited.append(context.memory)
+        return [MemoryMutation(str(len(visited)), {"notes": ["one"]})]
 
-    memory = {"A": _Memory(learn_outcomes=[learn, learn]), "B": _Memory(learn_outcomes=[learn])}
+    memory = {key: _Memory(learn_outcomes=[learn]) for key in ("A", "B", "C")}
     original_commit = _Session.commit
 
     def commit(session, commit_id, mutations):
-        assert visited == [spec.ref for spec in layout]
+        assert visited == ["A", "B", "C"]
         assert type(_records(engine)[-1]) is MemoryCommitRequestedRecord
         assert _records(engine)[-1].attempt_id == 1
         assert engine.state.backward_state.ready is not None
@@ -149,47 +159,45 @@ def test_backward_finishes_all_callbacks_before_ready_and_policy_requests(monkey
     forward_pool = copy.deepcopy(engine.state.pool.store)
     result = _drive(engine, memory)
     assert result.status == "succeeded" and result.feedback.input_feedback == {"topic": ("review",)}
-    assert [policy.status for policy in result.learning.policies] == ["succeeded", "succeeded"]
-    assert [len(memory[name].commit_calls[0][1]) for name in ("A", "B")] == [2, 1]
-    assert [len(context.episodes) for context in memory["A"].learn_contexts] == [3, 0]
-    assert memory["B"].learn_contexts[0].episodes == ()
+    assert [policy.status for policy in result.learning.policies] == ["succeeded"] * 3
+    assert [len(memory[key].commit_calls[0][1]) for key in ("A", "B", "C")] == [1, 1, 1]
+    assert len(memory["A"].learn_contexts[0].episodes) == 3
+    assert memory["B"].learn_contexts[0].episodes == memory["C"].learn_contexts[0].episodes == ()
     assert all(backend.open_snapshots == [{}] and backend.close_count == 1 for backend in memory.values())
     assert engine.state.pool.store == forward_pool
     assert engine.state.trace.next_sequence == engine.state.next_sequence == engine.log.next_sequence
     assert type(_records(engine)[-1]) is BackwardFinishedRecord
 
 
-@pytest.mark.parametrize("failure_kind", ["backend", "foreign", "duplicate", "tuple", "forged"])
+@pytest.mark.parametrize("failure_kind", ["backend", "duplicate", "tuple", "forged"])
 def test_late_proposal_failure_discards_all_staged_mutations(failure_kind):
-    engine, node = _terminal(("A", "A", "B"))
-    layout = engine.state.memory_layout
-    prior = MemoryMutation("same", layout[0].ref, {"lesson": "first"})
+    engine, node = _terminal(("A", "B", "C"))
+    prior = MemoryMutation("same", {"lesson": "first"})
 
     def fail(context):
         if failure_kind == "backend":
             raise MemoryOperationError("provider", "backward.interrupted", "Backend declined.", True)
-        if failure_kind == "foreign":
-            return [MemoryMutation("foreign", layout[0].ref, {})]
         if failure_kind == "duplicate":
-            return [MemoryMutation("same", context.frame_ref, {})]
+            return [MemoryMutation("same", {}), MemoryMutation("same", {})]
         if failure_kind == "tuple":
             return ()
-        mutation = MemoryMutation("valid", context.frame_ref, {})
+        mutation = MemoryMutation("valid", {})
         object.__setattr__(mutation, "mutation_id", True)
         return [mutation]
 
-    memory = {"A": _Memory(learn_outcomes=[[prior], fail]), "B": _Memory()}
+    memory = {"A": _Memory(learn_outcomes=[[prior]]), "B": _Memory(learn_outcomes=[fail]), "C": _Memory()}
     outcome = _drive(engine, memory)
     assert outcome.status == "failed" and outcome.failure.stage == "learn"
-    assert outcome.failure.frame_ref == layout[1].ref and outcome.failure.memory == "A"
+    assert outcome.failure.memory == "B"
     assert outcome.failure.code == ("backward.interrupted" if failure_kind == "backend" else "memory.invalid_result")
     assert outcome.feedback.input_feedback == {"topic": ("review",)}
     assert outcome.learning.status == "failed"
-    assert [policy.status for policy in outcome.learning.policies] == ["unrequested", "unrequested"]
+    assert [policy.status for policy in outcome.learning.policies] == ["unrequested"] * 3
     assert len(engine.state.backward_state.finished.attributed_results) == len(engine.state.trace.occurrences)
     assert engine.state.backward_state.ready is None and engine.state.backward_state.can_start
-    assert len(node.calls) == 1 and len(memory["A"].learn_contexts) == 2
-    assert not memory["B"].learn_contexts
+    assert len(node.calls) == 1
+    assert len(memory["A"].learn_contexts) == len(memory["B"].learn_contexts) == 1
+    assert not memory["C"].learn_contexts
     assert all(not backend.commit_calls and backend.close_count == 1 for backend in memory.values())
 
 
@@ -202,7 +210,7 @@ def test_policy_failure_preserves_prior_success_and_stops_later_policies(invalid
     memory = {"A": _Memory(), "B": _Memory(commit_outcomes=[failed]), "C": _Memory()}
     outcome = _drive(engine, memory)
     assert outcome.status == "failed" and outcome.failure.stage == "commit"
-    assert outcome.failure.memory == "B" and outcome.failure.frame_ref is None
+    assert outcome.failure.memory == "B"
     assert outcome.failure.code == ("memory.invalid_result" if invalid_result else "backward.interrupted")
     assert outcome.learning.status == "failed"
     assert [policy.status for policy in outcome.learning.policies] == ["succeeded", "failed", "unrequested"]
@@ -213,13 +221,13 @@ def test_policy_failure_preserves_prior_success_and_stops_later_policies(invalid
     assert len(engine.state.backward_state.ready.attributed_results) == 3
 
 
-def test_empty_feedback_still_learns_empty_frames_and_commits_empty_batches():
-    engine, node = _terminal(("A", "A", "B"))
+def test_empty_feedback_still_learns_empty_memories_and_commits_empty_batches():
+    engine, node = _terminal(("A", "B"))
     memory = {"A": _Memory(), "B": _Memory()}
     outcome = _drive(engine, memory, None)
     assert not node.calls and outcome.status == "succeeded"
     assert outcome.feedback == BackwardResult()
-    assert [len(memory[name].learn_contexts) for name in ("A", "B")] == [2, 1]
+    assert [len(memory[name].learn_contexts) for name in ("A", "B")] == [1, 1]
     assert all(not context.feedback for backend in memory.values() for context in backend.learn_contexts)
     assert all(len(backend.commit_calls) == 1 and backend.commit_calls[0][1] == () for backend in memory.values())
 
@@ -249,7 +257,7 @@ def test_context_depth_failure_keeps_completed_backward_without_calling_learners
     outcome = _drive(engine, {"A": memory})
     assert outcome.failure.stage == "learn" and outcome.failure.code == "memory.invalid_context"
     assert outcome.failure.message == "memory learn context could not be constructed"
-    assert outcome.failure.frame_ref == engine.state.memory_layout[0].ref
+    assert outcome.failure.memory == engine.state.memories[0].key
     assert outcome.feedback.input_feedback == {"topic": ("review",)}
     assert len(engine.state.backward_state.finished.attributed_results) == 3
     assert len(node.calls) == 1 and not memory.learn_contexts and not memory.commit_calls
@@ -324,15 +332,15 @@ def test_append_fault_preserves_exact_prefix_and_closes_resources(record_type, k
 
 
 @pytest.mark.parametrize("failure_record", [BackwardReadyRecord, MemoryCommitRequestedRecord])
-def test_manual_precommit_retry_reopens_snapshots_and_recomputes_every_frame(failure_record, monkeypatch):
-    engine, node = _terminal(("A", "A"))
+def test_manual_precommit_retry_reopens_snapshots_and_recomputes_every_memory(failure_record, monkeypatch):
+    engine, node = _terminal(("A",))
     visits = []
 
     def learn(context):
-        visits.append(context.frame_ref)
-        return [MemoryMutation(str(len(visits)), context.frame_ref, {})]
+        visits.append(context.memory)
+        return [MemoryMutation(str(len(visits)), {})]
 
-    memory = _Memory(learn_outcomes=[learn] * 4)
+    memory = _Memory(learn_outcomes=[learn] * 2)
     append = engine.log.append
 
     def fail(record):
@@ -355,8 +363,8 @@ def test_manual_precommit_retry_reopens_snapshots_and_recomputes_every_frame(fai
     outcome = _drive(engine, {"A": memory}, "second")
     assert outcome.status == "succeeded" and outcome.feedback.input_feedback == {"topic": ("second",)}
     assert memory.open_snapshots == [{}, {}] and memory.close_count == 2
-    assert visits == list(engine.state.backward_state.frame_order) * 2 and len(node.calls) == 2
-    assert [mutation.mutation_id for mutation in memory.commit_calls[0][1]] == ["3", "4"]
+    assert visits == list(engine.state.backward_state.memory_order) * 2 and len(node.calls) == 2
+    assert [mutation.mutation_id for mutation in memory.commit_calls[0][1]] == ["2"]
     assert len(engine.state.backward_state.attempts) == 2
     first = engine.state.backward_state.attempts[0].finished.outcome
     assert first.failure.code == "backward.interrupted"
@@ -368,24 +376,28 @@ def test_manual_precommit_retry_reopens_snapshots_and_recomputes_every_frame(fai
 
 
 def test_known_precommit_failure_allows_fresh_complete_pass_without_prior_proposals():
-    engine, node = _terminal(("A", "A"))
+    engine, node = _terminal(("A", "B"))
 
     def proposal(name):
-        return lambda context: [MemoryMutation(name, context.frame_ref, {})]
+        return lambda context: [MemoryMutation(name, {})]
 
-    memory = _Memory(learn_outcomes=[
-        proposal("old"), MemoryOperationError("learn", "rejected", "Rejected.", False),
-        proposal("new-first"), proposal("new-second"),
-    ])
-    assert _drive(engine, {"A": memory}).status == "failed"
+    memory = {
+        "A": _Memory(learn_outcomes=[proposal("old"), proposal("new-first")]),
+        "B": _Memory(learn_outcomes=[
+            MemoryOperationError("learn", "rejected", "Rejected.", False), proposal("new-second"),
+        ]),
+    }
+    assert _drive(engine, memory).status == "failed"
     assert engine.state.backward_state.can_start
-    assert _drive(engine, {"A": memory}).status == "succeeded"
-    assert len(node.calls) == 2 and len(memory.learn_contexts) == 4
-    assert memory.open_snapshots == [{}, {}] and memory.close_count == 2
-    assert [mutation.mutation_id for mutation in memory.commit_calls[0][1]] == ["new-first", "new-second"]
+    assert _drive(engine, memory).status == "succeeded"
+    assert len(node.calls) == 2
+    assert all(len(backend.learn_contexts) == 2 for backend in memory.values())
+    assert all(backend.open_snapshots == [{}, {}] and backend.close_count == 2 for backend in memory.values())
+    assert [m.mutation_id for m in memory["A"].commit_calls[0][1]] == ["new-first"]
+    assert [m.mutation_id for m in memory["B"].commit_calls[0][1]] == ["new-second"]
 
 
-@pytest.mark.parametrize("problem", ["layout", "snapshots", "opener"])
+@pytest.mark.parametrize("problem", ["table", "snapshots", "opener"])
 def test_failed_resource_setup_does_not_close_an_interrupted_attempt(problem):
     engine, node = _terminal()
     commit_prepared(engine.log, engine.state, prepare_record(engine.state, BackwardStartedRecord(1, "first")))
@@ -395,13 +407,17 @@ def test_failed_resource_setup_does_not_close_an_interrupted_attempt(problem):
     def open_memory():
         if problem == "opener":
             raise OSError("cannot reopen")
-        layout = _layout("A") if problem == "layout" else engine.state.memory_layout
+        memories = _table("B") if problem == "table" else engine.state.memories
         return MemoryRuntime.open(
-            layout=layout, origins={spec.ref: None for spec in layout}, memory={"A": memory},
-            snapshots=(MemorySnapshotEnvelope("A", {"changed": True} if problem == "snapshots" else {}),),
+            memories=memories, origins={spec.key: None for spec in memories},
+            memory={spec.key: memory for spec in memories},
+            snapshots=(MemorySnapshotEnvelope(
+                memories[0].key, {"changed": True} if problem == "snapshots" else {},
+            ),),
         )
 
-    with pytest.raises((OSError, ValueError)):
+    match = "recorded memory table" if problem == "table" else None
+    with pytest.raises((OSError, ValueError), match=match):
         backward_module.drive_backward(engine.state, engine.log, "second", open_memory=open_memory)
     assert engine.state.backward_state is old and engine.state.next_sequence == sequence
     assert not node.calls and not memory.learn_contexts and not memory.commit_calls
@@ -476,8 +492,8 @@ def test_later_attempt_follows_or_closes_any_prior_attempt_and_recomputes_everyt
     if prior == "requested_unfinished":
         state = engine.state
         root, attributed = compute_backward(state.trace, "review")
-        proposals = tuple(FrameProposal(spec.ref, ()) for spec in state.memory_layout)
-        identity = memory_commit_id(state.run_id, "A", ())
+        proposals = tuple(MemoryProposal(spec.key, ()) for spec in state.memories)
+        identity = memory_commit_id(state.run_id, "A", (), 1)
         for record in (BackwardStartedRecord(1, "review"), BackwardReadyRecord(1, root, attributed, proposals),
                        MemoryCommitRequestedRecord("A", identity, (), attempt_id=1)):
             commit_prepared(engine.log, state, prepare_record(state, record))
@@ -511,7 +527,7 @@ def test_repeated_driven_attempts_request_distinct_commit_ids_for_identical_batc
     assert all(record.mutations == () for record in requests)
     assert [commit_id for commit_id, _ in memory.commit_calls] == [record.commit_id for record in requests]
     assert len({record.commit_id for record in requests}) == 3
-    assert requests[0].commit_id.startswith("ac-memory-v1:")
+    assert requests[0].commit_id.startswith("ac-memory-v3:")
 
 
 def test_cleanup_error_after_finished_preserves_success_and_admits_a_later_attempt(monkeypatch):
@@ -574,23 +590,24 @@ def test_prepare_failure_is_not_sanitized_as_a_learner_failure(monkeypatch):
 
 
 def test_learner_mutation_of_its_arguments_and_returned_values_cannot_change_authority():
-    engine, _ = _terminal(("A", "A"))
-    original_ref = engine.state.memory_layout[0].ref
-    returned = MemoryMutation("first", original_ref, {"items": ["saved"]})
+    engine, _ = _terminal(("A", "B"))
+    returned = MemoryMutation("first", {"items": ["saved"]})
 
     def learn_first(context):
-        object.__setattr__(context.frame_ref, "static_path", ("wrong",))
+        object.__setattr__(context, "memory", "wrong")
         return [returned]
 
     def learn_second(context):
         object.__setattr__(returned, "mutation_id", "changed-later")
         return []
 
-    memory = _Memory(learn_outcomes=[learn_first, learn_second])
-    outcome = _drive(engine, {"A": memory})
-    assert outcome.status == "succeeded" and original_ref.static_path == ("root",)
-    assert memory.commit_calls[0][1][0].mutation_id == "first"
-    assert memory.commit_calls[0][1][0].payload == {"items": ["saved"]}
+    memory = {"A": _Memory(learn_outcomes=[learn_first]), "B": _Memory(learn_outcomes=[learn_second])}
+    outcome = _drive(engine, memory)
+    assert outcome.status == "succeeded"
+    ready = next(record for record in _records(engine) if type(record) is BackwardReadyRecord)
+    assert [proposal.memory for proposal in ready.proposals] == ["A", "B"]
+    assert memory["A"].commit_calls[0][1][0].mutation_id == "first"
+    assert memory["A"].commit_calls[0][1][0].payload == {"items": ["saved"]}
 
 
 def test_opened_memory_runtime_subclass_is_closed_by_the_driver():
@@ -599,9 +616,9 @@ def test_opened_memory_runtime_subclass_is_closed_by_the_driver():
 
     engine, _ = _terminal()
     memory = _Memory()
-    layout = engine.state.memory_layout
+    memories = engine.state.memories
     runtime = SpecializedRuntime.open(
-        layout=layout, origins={spec.ref: None for spec in layout}, memory={"A": memory},
+        memories=memories, origins={spec.key: None for spec in memories}, memory={"A": memory},
         snapshots=engine.state.memory_snapshots,
     )
     outcome = backward_module.drive_backward(engine.state, engine.log, "review", open_memory=lambda: runtime)
@@ -616,7 +633,7 @@ def test_submission_gates_reject_before_opening_or_appending(problem):
     with pytest.raises(ValueError):
         backward_module.drive_backward(
             engine.state, engine.log, [] if problem == "invalid_feedback" else "review",
-            open_memory=None if problem == "missing_opener" else lambda: _open(engine.state.memory_layout, {"A": memory}),
+            open_memory=None if problem == "missing_opener" else lambda: _open(engine.state.memories, {"A": memory}),
         )
     assert _records(engine) == records and not node.calls and not memory.open_snapshots
 
@@ -714,15 +731,14 @@ def test_cyclic_capability_fault_is_a_host_error_without_exposing_private_carrie
     assert engine.state.backward_state.finished is None and memory.close_count == 1
 
 
-@pytest.mark.parametrize("target", ["mutation", "frame_ref", "inner_payload", "public_payload"])
+@pytest.mark.parametrize("target", ["mutation", "inner_payload", "public_payload"])
 @pytest.mark.parametrize("completion", ["success", "known_failure", "host_failure"])
 def test_commit_batch_is_detached_from_every_accepted_authority(target, completion, monkeypatch):
     engine, _ = _terminal()
-    original_frame = copy.deepcopy(engine.state.memory_layout[0].ref)
     known = MemoryOperationError("commit", "refused", "Commit refused.", False)
     host = MemoryError("commit interrupted")
     memory = _Memory(
-        learn_outcomes=[lambda context: [MemoryMutation("proposal", context.frame_ref, {"notes": ["saved"]})]],
+        learn_outcomes=[lambda context: [MemoryMutation("proposal", {"notes": ["saved"]})]],
         commit_outcomes=[known] if completion == "known_failure" else [host] if completion == "host_failure" else [],
     )
     commit = _Session.commit
@@ -734,8 +750,6 @@ def test_commit_batch_is_detached_from_every_accepted_authority(target, completi
         mutation = mutations[0]
         if target == "mutation":
             object.__setattr__(mutation, "mutation_id", "backend-changed")
-        elif target == "frame_ref":
-            object.__setattr__(mutation.frame_ref, "static_path", ("root", "foreign"))
         elif target == "inner_payload":
             object.__setattr__(mutation._payload.entries[0][1].values[0], "value", "backend-changed")
         else:
@@ -756,7 +770,6 @@ def test_commit_batch_is_detached_from_every_accepted_authority(target, completi
     assert request == next(record for record in _records(engine) if type(record) is MemoryCommitRequestedRecord)
     assert backward.ready == next(record for record in _records(engine) if type(record) is BackwardReadyRecord)
     assert request.mutations[0].mutation_id == "proposal"
-    assert request.mutations[0].frame_ref == original_frame == engine.state.memory_layout[0].ref
     assert request.mutations[0].payload == {"notes": ["saved"]}
     assert backward.policy_outcomes[0].status == {
         "success": "succeeded", "known_failure": "failed", "host_failure": "unknown",

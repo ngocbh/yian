@@ -16,7 +16,6 @@ import agent_composer.memory.contracts as c
 from agent_composer.memory.episodic import EpisodicMemory
 import agent_composer.memory.episodic as episodic
 from agent_composer.memory.storage import SQLiteStorage
-from tests.engine.test_episodic_memory import _ref, _spec
 
 
 def _snapshot(memory):
@@ -24,23 +23,22 @@ def _snapshot(memory):
         return opened.snapshot
 
 
-def _context(run_id="run", ref=None):
-    ref = _ref() if ref is None else ref
+def _context(run_id="run", memory="episodic"):
     episode = c.MemoryEpisode(
         run_id,
-        c.MemoryOccurrenceRef(ref),
-        ref.static_path,
+        (),
+        ("agent",),
         c.MemoryEpisodeStatus.SUCCEEDED,
         {},
         run_id,
     )
-    return c.LearnContext(run_id, ref, (episode,))
+    return c.LearnContext(run_id, memory, (episode,))
 
 
 def _append(memory, commit_id, *, name="agent"):
     with memory.open_run() as opened:
-        frame = opened.open_frame(_spec(name))
-        batch = tuple(frame.learn(_context(commit_id, _ref(name))))
+        frame = opened
+        batch = tuple(frame.learn(_context(commit_id, name)))
         opened.commit(commit_id, batch)
     return batch
 
@@ -74,13 +72,12 @@ def test_idle_handles_do_not_block_close_and_are_invalidated(tmp_path, storage):
     path = tmp_path / "memory.sqlite" if storage else None
     memory = EpisodicMemory(storage=path)
     opened = memory.open_run()
-    frame = opened.open_frame(_spec())
+    frame = opened
     memory.close()
     for operation in (
         memory.open_run,
         memory.reset,
         lambda: opened.snapshot,
-        lambda: opened.open_frame(_spec()),
         lambda: opened.commit("c", ()),
         frame.recall,
         lambda: frame.learn(_context()),
@@ -154,15 +151,14 @@ def test_history_limits_and_pinned_snapshots_survive_restart(tmp_path):
     with EpisodicMemory(storage=path) as memory:
         assert _snapshot(memory) == expected
         with memory.open_run() as opened:
-            frame = opened.open_frame(_spec())
+            frame = opened
             assert "first" in frame.recall()
-            opened.open_frame(_spec("new"))
             assert opened.snapshot["config"] == {"max_episodes": 2, "recall_limit": 1}
             assert "storage" not in json_dump(opened.snapshot)
             assert str(path) not in json_dump(opened.snapshot)
         with memory.open_run(snapshot=old) as opened:
             assert opened.snapshot == old
-            assert opened.open_frame(_spec()).recall() == ""
+            assert opened.recall() == ""
         assert _snapshot(memory) == expected
 
 
@@ -237,7 +233,7 @@ def test_failed_save_never_publishes_candidate_ram(tmp_path, monkeypatch, operat
     session = frame = None
     if operation == "commit":
         session = memory.open_run()
-        frame = session.open_frame(_spec())
+        frame = session
     before = deepcopy(
         (
             memory._namespace,
@@ -311,7 +307,7 @@ def test_uncertain_save_poisoning_blocks_ram_reads_and_keeps_primary(
     path = tmp_path / "memory.sqlite"
     memory = EpisodicMemory(storage=path)
     opened = memory.open_run()
-    frame = opened.open_frame(_spec())
+    frame = opened
     before = opened.snapshot
     memory._storage._connection.armed = True
     try:
@@ -333,7 +329,6 @@ def test_uncertain_save_poisoning_blocks_ram_reads_and_keeps_primary(
             lambda: opened.snapshot,
             frame.recall,
             lambda: frame.learn(_context()),
-            lambda: opened.open_frame(_spec()),
             lambda: opened.commit("c", ()),
         ):
             with pytest.raises(c.MemoryOperationError) as failed:
@@ -382,7 +377,7 @@ def _close_during_callback(path, reentrant):
     errors = []
     memory = EpisodicMemory(storage=path)
     opened = memory.open_run()
-    frame = opened.open_frame(_spec())
+    frame = opened
 
     def rewrite(context):
         if reentrant:
@@ -397,7 +392,7 @@ def _close_during_callback(path, reentrant):
 
     def recall():
         try:
-            frame.recall(c.RecallContext("", "query", {}, _ref().static_path))
+            frame.recall(c.RecallContext("", "query", {}, ("agent",)))
         except BaseException as error:
             errors.append(error)
 
@@ -429,7 +424,7 @@ def _close_during_callback(path, reentrant):
 def _fork_while_locked(path):
     memory = EpisodicMemory(storage=path)
     opened = memory.open_run()
-    frame = opened.open_frame(_spec())
+    frame = opened
     locked, release = Event(), Event()
 
     def hold():
@@ -544,7 +539,7 @@ def test_run_context_fork_cleanup_preserves_primary(tmp_path, interrupt):
 def _fork_inside_query_callback(path, fail, managed):
     memory = EpisodicMemory(storage=path)
     opened = memory.open_run()
-    frame = opened.open_frame(_spec())
+    frame = opened
     child_pid = None
     primary = KeyboardInterrupt("query interrupted after fork")
 
@@ -566,7 +561,7 @@ def _fork_inside_query_callback(path, fail, managed):
                     contexts.enter_context(memory)
                     contexts.enter_context(opened)
                 assert (
-                    frame.recall(c.RecallContext("", "query", {}, _ref().static_path))
+                    frame.recall(c.RecallContext("", "query", {}, ("agent",)))
                     == ""
                 )
                 if child_pid == 0:
@@ -615,11 +610,9 @@ def test_recorded_limits_survive_a_reopen(tmp_path):
     path = tmp_path / "memory.sqlite"
     with EpisodicMemory(4, 2, storage=path) as memory:
         with memory.open_run() as opened:
-            opened.open_frame(_spec())
             recorded = opened.snapshot
     with EpisodicMemory(storage=path) as memory:
         with memory.open_run(snapshot=recorded) as replay:
-            replay.open_frame(_spec())
             assert replay.snapshot == recorded
             replay.commit("declare", ())
     with EpisodicMemory(storage=path) as memory:
@@ -670,9 +663,9 @@ def test_corrupt_private_state_never_partially_adopts_ram(tmp_path):
 def test_invalid_last_mutation_never_reaches_storage(tmp_path, monkeypatch):
     with EpisodicMemory(storage=tmp_path / "memory.sqlite") as memory:
         with memory.open_run() as opened:
-            frame = opened.open_frame(_spec())
+            frame = opened
             first = frame.learn(_context())[0]
-            second = c.MemoryMutation("wrong", _ref(), first.payload)
+            second = c.MemoryMutation("wrong", first.payload)
             calls = []
             monkeypatch.setattr(
                 memory._storage, "save", lambda value: calls.append(value)

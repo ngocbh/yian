@@ -1,8 +1,8 @@
 """Reflective memory with snapshot-isolated sessions and optional SQLite storage.
 
-The backend keeps atomic lessons in memory, retrieves them deterministically,
-and asks one tool-free structured model call to propose frame-local mutations.
-It deliberately knows nothing about compiled graphs, nodes, or the scheduler.
+The backend keeps atomic lessons in memory, retrieves them deterministically, and
+asks one tool-free structured model call to propose mutations for this memory. It
+deliberately knows nothing about compiled graphs, nodes, or the scheduler.
 """
 
 from __future__ import annotations
@@ -29,8 +29,6 @@ from agent_composer.memory.contracts import (
     JsonValue,
     LearnContext,
     MemoryEpisode,
-    MemoryFrameRef,
-    MemoryFrameSpec,
     MemoryMutation,
     MemoryOperationError,
     ModelTextInteraction,
@@ -47,7 +45,6 @@ _SNAPSHOT_FORMAT = "agent_composer.reflective_memory"
 _SNAPSHOT_VERSION = 2
 _POLICY_NAME = "reflective"
 _MAX_REFLECTION_PROMPT_CHARS = 32_000
-_MAX_FRAME_MATERIAL_CHARS = 1_000
 _MAX_LIMIT_MATERIAL_CHARS = 256
 _MAX_LESSON_MATERIAL_CHARS = 8_000
 _MAX_EPISODE_MATERIAL_CHARS = 20_000
@@ -238,15 +235,6 @@ def _nonempty_string(value: object, name: str) -> str:
     return value
 
 
-def _frame_ref_json(ref: MemoryFrameRef) -> JsonObject:
-    """Encode one stable frame identity as canonical JSON."""
-    return {
-        "owner": ref.owner.value,
-        "root_flow_id": ref.root_flow_id,
-        "static_path": list(ref.static_path),
-    }
-
-
 def _source_json(run_id: str) -> JsonObject:
     """Return stable source metadata for one proposed lesson mutation."""
     return {"run_id": run_id}
@@ -422,7 +410,7 @@ def _parse_snapshot(
 def _episode_json(episode: MemoryEpisode) -> JsonObject:
     """Encode one immutable episode for the reflector prompt."""
     occurrence_path: list[JsonValue] = []
-    for segment in episode.occurrence.occurrence_path:
+    for segment in episode.occurrence_path:
         occurrence_path.append(
             {
                 "index": segment.index,
@@ -441,15 +429,12 @@ def _episode_json(episode: MemoryEpisode) -> JsonObject:
         ],
         "memory_sections": [
             {
-                "frame_ref": _frame_ref_json(section.frame_ref),
+                "memory": section.memory,
                 "text": section.text,
             }
             for section in episode.memory_sections
         ],
-        "occurrence": {
-            "frame_ref": _frame_ref_json(episode.occurrence.frame_ref),
-            "occurrence_path": occurrence_path,
-        },
+        "occurrence_path": occurrence_path,
         "output": episode.output,
         "owner_static_path": list(episode.owner_static_path),
         "prompt": episode.prompt,
@@ -519,8 +504,8 @@ def _mutation_digest_payload(
 ) -> JsonObject:
     """Return the complete deterministic mutation identity material."""
     return {
-        "frame_ref": _frame_ref_json(context.frame_ref),
         "index": index,
+        "memory": context.memory,
         "payload": payload,
         "run_id": context.run_id,
     }
@@ -976,7 +961,6 @@ class _ReflectiveSession:
         self._revision = revision
         self._state = state
         self._llm_config = _copy_json_object(llm_config, "llm_config")
-        self._opened: dict[MemoryFrameRef, _ReflectiveFrame] = {}
         self._closed = False
 
     def _ensure_open(self) -> None:
@@ -1028,26 +1012,6 @@ class _ReflectiveSession:
         with self._memory._lock:
             self._closed = True
 
-    def open_frame(self, spec: MemoryFrameSpec) -> _ReflectiveFrame:
-        """Return the view of this instance's state for one frame reference.
-
-        The frame's policy name and configuration are ignored. The instance
-        limits come from the backend.
-        """
-        with self._memory._operation():
-            self._ensure_open()
-            if type(spec) is not MemoryFrameSpec:
-                raise _operation_error(
-                    "open_frame",
-                    "reflective.invalid_frame",
-                    "spec must be a MemoryFrameSpec",
-                )
-            opened = self._opened.get(spec.ref)
-            if opened is None:
-                opened = _ReflectiveFrame(self, spec.ref)
-                self._opened[spec.ref] = opened
-            return opened
-
     def _assert_current_generation(self, stage: str) -> None:
         """Require this proposal session to remain the current generation."""
         if (
@@ -1080,7 +1044,6 @@ class _ReflectiveSession:
                 )
             encoded.append(
                 {
-                    "frame_ref": _frame_ref_json(mutation.frame_ref),
                     "mutation_id": mutation.mutation_id,
                     "payload": mutation.payload,
                 }
@@ -1095,16 +1058,10 @@ class _ReflectiveSession:
             ) from exc
         return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
-    def _validate_batch_ownership(self, mutations: tuple[MemoryMutation, ...]) -> None:
-        """Validate session ownership and per-batch mutation identity."""
+    def _validate_batch_ids(self, mutations: tuple[MemoryMutation, ...]) -> None:
+        """Validate that mutation ids are unique within one commit batch."""
         mutation_ids: set[str] = set()
         for mutation in mutations:
-            if mutation.frame_ref not in self._opened:
-                raise _operation_error(
-                    "commit",
-                    "reflective.invalid_batch",
-                    "mutation belongs to a frame not opened by this session",
-                )
             if mutation.mutation_id in mutation_ids:
                 raise _operation_error(
                     "commit",
@@ -1201,7 +1158,7 @@ class _ReflectiveSession:
                     "commit id collision with a different batch",
                 )
 
-            self._validate_batch_ownership(mutations)
+            self._validate_batch_ids(mutations)
             self._assert_current_generation("commit")
             state = _copy_state(self._memory._state)
             lessons = list(state.lessons)
@@ -1272,21 +1229,9 @@ class _ReflectiveSession:
             self._memory._revision += 1
             self._memory._ever_committed = True
 
-
-class _ReflectiveFrame:
-    """One session-bound frame for deterministic recall and proposal generation."""
-
-    def __init__(
-        self,
-        session: _ReflectiveSession,
-        ref: MemoryFrameRef,
-    ) -> None:
-        self._session = session
-        self._ref = ref
-
     def _lessons(self) -> tuple[_Lesson, ...]:
         """Return the instance's pinned immutable lessons."""
-        return self._session._state.lessons
+        return self._state.lessons
 
     @staticmethod
     def _format(lessons: list[_Lesson] | tuple[_Lesson, ...]) -> str:
@@ -1295,13 +1240,13 @@ class _ReflectiveFrame:
 
     def recall(self, context: RecallContext | None = None) -> str:
         """Return all pinned lessons or a deterministic lexical ranking."""
-        with self._session._memory._operation(unlocked=True):
+        with self._memory._operation(unlocked=True):
             return self._recall(context)
 
     def _recall(self, context: RecallContext | None) -> str:
         """Rank pinned lessons while query callbacks run outside the backend lock."""
-        with self._session._memory._operation():
-            self._session._ensure_open()
+        with self._memory._operation():
+            self._ensure_open()
             lessons = self._lessons()
         if context is None:
             return self._format(lessons)
@@ -1312,7 +1257,7 @@ class _ReflectiveFrame:
                 "context must be a RecallContext or None",
             )
         try:
-            query = self._session._memory.rewrite_query(context)
+            query = self._memory.rewrite_query(context)
         except Exception as exc:
             raise _operation_error(
                 "recall",
@@ -1334,7 +1279,7 @@ class _ReflectiveFrame:
                 item[1].lesson_id,
             ),
         )
-        limit = self._session._state.limits.recall_limit
+        limit = self._state.limits.recall_limit
         selected = [lesson for _, lesson in ranked[:limit]]
         return self._format(selected)
 
@@ -1348,19 +1293,16 @@ class _ReflectiveFrame:
             }
             for lesson in self._lessons()
         ]
-        frame_material = _bounded_json_material(
-            _frame_ref_json(self._ref), _MAX_FRAME_MATERIAL_CHARS
-        )
         lesson_material = _bounded_json_material(
             cast(JsonValue, lessons), _MAX_LESSON_MATERIAL_CHARS
         )
         episode_material = _bounded_episode_material(context)
         limit_material = _bounded_json_material(
-            {"max_items": self._session._state.limits.max_items},
+            {"max_items": self._state.limits.max_items},
             _MAX_LIMIT_MATERIAL_CHARS,
         )
         return (
-            f"Frame: {frame_material}\n"
+            f"Memory: {context.memory}\n"
             f"Limits: {limit_material}\n"
             f"Current lessons: {lesson_material}\n"
             f"Episodes: {episode_material}"
@@ -1460,9 +1402,9 @@ class _ReflectiveFrame:
                 "reflective:"
                 + hashlib.sha256(_canonical_json(identity).encode("utf-8")).hexdigest()
             )
-            proposals.append(MemoryMutation(mutation_id, context.frame_ref, payload))
+            proposals.append(MemoryMutation(mutation_id, payload))
 
-        if len(current) > self._session._state.limits.max_items:
+        if len(current) > self._state.limits.max_items:
             raise _operation_error(
                 "learn",
                 "reflective.max_items",
@@ -1472,7 +1414,7 @@ class _ReflectiveFrame:
 
     def learn(self, context: LearnContext) -> list[MemoryMutation]:
         """Propose, but do not apply, one exact list of lesson mutations."""
-        with self._session._memory._operation(unlocked=True):
+        with self._memory._operation(unlocked=True):
             return self._learn(context)
 
     def _learn(self, context: LearnContext) -> list[MemoryMutation]:
@@ -1483,16 +1425,10 @@ class _ReflectiveFrame:
                 "reflective.invalid_context",
                 "context must be a LearnContext",
             )
-        if context.frame_ref != self._ref:
-            raise _operation_error(
-                "learn",
-                "reflective.invalid_context",
-                "learning context belongs to a different frame",
-            )
-        with self._session._memory._operation():
-            self._session._ensure_open()
-            self._session._assert_current_generation("learn")
-            llm_config = _copy_json_object(self._session._llm_config, "llm_config")
+        with self._memory._operation():
+            self._ensure_open()
+            self._assert_current_generation("learn")
+            llm_config = _copy_json_object(self._llm_config, "llm_config")
             prompt = self._reflection_prompt(context)
 
         system = SystemMessage(
@@ -1512,7 +1448,7 @@ class _ReflectiveFrame:
                 "reflector model construction failed",
                 retryable=False,
             ) from exc
-        self._session._memory._check_pid()
+        self._memory._check_pid()
         try:
             structured = model.with_structured_output(_ReflectionResponse)
         except Exception as exc:
@@ -1522,7 +1458,7 @@ class _ReflectiveFrame:
                 "reflector does not support the required structured output",
                 retryable=False,
             ) from exc
-        self._session._memory._check_pid()
+        self._memory._check_pid()
         try:
             invoke = getattr(structured, "invoke", None)
             if not callable(invoke):
@@ -1534,7 +1470,7 @@ class _ReflectiveFrame:
                 "reflector does not support the required structured output",
                 retryable=False,
             ) from exc
-        self._session._memory._check_pid()
+        self._memory._check_pid()
         try:
             raw_response = invoke([system, human])
         except (OutputParserException, ValidationError) as exc:
@@ -1561,9 +1497,9 @@ class _ReflectiveFrame:
                 retryable=False,
             ) from exc
         proposals = self._validate_actions(context, response)
-        with self._session._memory._operation():
-            self._session._ensure_open()
-            self._session._assert_current_generation("learn")
+        with self._memory._operation():
+            self._ensure_open()
+            self._assert_current_generation("learn")
         return proposals
 
 

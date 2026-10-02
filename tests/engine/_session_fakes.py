@@ -6,9 +6,6 @@ from types import SimpleNamespace
 import agent_composer.memory.contracts as c
 from agent_composer.memory.session import SessionMemory
 
-REF = c.MemoryFrameRef("root", ("root",), c.MemoryOwner.FLOW)
-
-
 def request(run_id="a", sequence=1, consumer=("root", "agent"), compatibility=None):
     return c.ConversationRequest(
         consumer,
@@ -27,15 +24,10 @@ def snapshot(memory):
 
 
 @contextmanager
-def harness(memory=None, *, policy="session", ref=REF):
+def harness(memory=None):
     memory = SessionMemory() if memory is None else memory
     with memory.open_run() as opened:
-        frame = opened.open_frame(c.MemoryFrameSpec(ref, policy, {}))
-        yield SimpleNamespace(
-            memory=memory,
-            session=opened,
-            frame=frame,
-        )
+        yield SimpleNamespace(memory=memory, session=opened, frame=opened)
 
 
 def append_reply(turn, item_id, text):

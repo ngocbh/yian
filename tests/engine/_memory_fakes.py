@@ -1,21 +1,24 @@
-"""Observable injected memory resources shared by runtime tests."""
+"""Observable injected memory sessions shared by runtime tests."""
 
 from __future__ import annotations
 
 import copy
 from typing import Any
 
-from agent_composer.memory import (
-    LearnContext, MemoryFrameSpec, MemoryMutation, RecallContext,
-)
+from agent_composer.memory import LearnContext, MemoryMutation, RecallContext
 
 
-class _Frame:
-    """One fake frame backed by process-local test memory state."""
+class _Session:
+    """One immutable-snapshot fake session."""
 
-    def __init__(self, memory: "_Memory", spec: MemoryFrameSpec) -> None:
+    def __init__(self, memory: "_Memory", snapshot: dict[str, Any]) -> None:
         self.memory = memory
-        self.spec = spec
+        self._snapshot = copy.deepcopy(snapshot)
+        self.closed = False
+
+    @property
+    def snapshot(self) -> dict[str, Any]:
+        return copy.deepcopy(self._snapshot)
 
     def recall(self, context: RecallContext | None = None) -> str:
         self.memory.recall_contexts.append(context)
@@ -33,26 +36,6 @@ class _Frame:
         if callable(outcome):
             return outcome(context)
         return outcome
-
-
-class _Session:
-    """One immutable-snapshot fake session."""
-
-    def __init__(self, memory: "_Memory", snapshot: dict[str, Any]) -> None:
-        self.memory = memory
-        self._snapshot = copy.deepcopy(snapshot)
-        self.frames: dict[object, _Frame] = {}
-        self.closed = False
-
-    @property
-    def snapshot(self) -> dict[str, Any]:
-        return copy.deepcopy(self._snapshot)
-
-    def open_frame(self, spec: MemoryFrameSpec) -> _Frame:
-        frame = _Frame(self.memory, spec)
-        self.frames[spec.ref] = frame
-        self.memory.opened_specs.append(spec)
-        return frame
 
     def commit(
         self,
@@ -74,6 +57,12 @@ class _Session:
             self.closed = True
             self.memory.close_count += 1
 
+    def __enter__(self) -> "_Session":
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
+
 
 class _Memory:
     """Observable structural Memory implementation for public-boundary tests."""
@@ -90,7 +79,6 @@ class _Memory:
         self.commit_outcomes = list(commit_outcomes or [])
         self.open_snapshots: list[dict[str, Any] | None] = []
         self.sessions: list[_Session] = []
-        self.opened_specs: list[MemoryFrameSpec] = []
         self.recall_contexts: list[RecallContext | None] = []
         self.learn_contexts: list[LearnContext] = []
         self.commit_calls: list[tuple[str, tuple[MemoryMutation, ...]]] = []

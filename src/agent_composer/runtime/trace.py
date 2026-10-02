@@ -117,13 +117,12 @@ class TraceTerminal:
 
 
 def _copy_memory_scope(scope: MemoryScope | None) -> MemoryScope | None:
-    """Detach validated frame ownership without deriving execution coordinates."""
+    """Detach validated memory keys without deriving execution coordinates."""
     if scope is None:
         return None
     if type(scope) is not MemoryScope:
         raise TypeError("historical memory scope must be a MemoryScope or None")
-    return deepcopy(MemoryScope(scope.root_flow_id, scope.static_path, scope.frame_stack,
-                                scope.occurrence_path))
+    return deepcopy(MemoryScope(scope.static_path, scope.memories, scope.occurrence_path))
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,12 +142,12 @@ class TraceOccurrence:
     _memory_scope: MemoryScope | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
-        """Keep detached exact frame ownership alongside the historical record."""
+        """Keep the detached memory scope alongside the historical record."""
         object.__setattr__(self, "_memory_scope", _copy_memory_scope(self._memory_scope))
 
     @property
     def memory_scope(self) -> MemoryScope | None:
-        """Return detached receiver-frame metadata without relabeling execution."""
+        """Return detached receiver memory-scope metadata without relabeling execution."""
         return _copy_memory_scope(self._memory_scope)
 
     @property

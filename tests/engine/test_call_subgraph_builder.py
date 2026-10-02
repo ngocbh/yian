@@ -17,10 +17,8 @@ from agent_composer.compile.manifest import expansion_digest, flow_fingerprint
 from agent_composer.compile.model import END_ID, START_ID, Flow, validate_growth_metadata
 from agent_composer.diagnostics import OriginRef
 from agent_composer.memory import (
-    MemoryFrameRef,
     MemoryOccurrenceKind,
     MemoryOccurrenceSegment,
-    MemoryOwner,
     MemoryScope,
 )
 from agent_composer.nodes.contracts import ChildFlowBoundary, ExecutionScope, SeedConnection
@@ -178,29 +176,19 @@ def test_call_subgraph_prefixes_every_cloned_node_including_boundaries():
     assert sg.nodes[sg.end_id].origin_context == context
 
 
-def test_call_subgraph_inherits_occurrence_and_keeps_child_frames() -> None:
+def test_call_subgraph_inherits_occurrence_and_keeps_child_keys() -> None:
     child = _child_flow()
-    child_frame = MemoryFrameRef(
-        "root",
-        ("root", "outer_map", "call"),
-        MemoryOwner.FLOW,
-    )
     for node_id, node in child.nodes.items():
         node.memory_scope = MemoryScope(
-            "root",
-            ("root", "outer_map", "call", node_id),
-            frame_stack=(child_frame,),
+            ("outer_map", "call", node_id),
+            memories=("child",),
         )
     outer = MemoryOccurrenceSegment(
         MemoryOccurrenceKind.MAP_ITEM,
-        ("root", "outer_map"),
+        ("outer_map",),
         2,
     )
-    spawner_scope = MemoryScope(
-        "root",
-        ("root", "outer_map", "call"),
-        occurrence_path=(outer,),
-    )
+    spawner_scope = MemoryScope(("outer_map", "call"), occurrence_path=(outer,))
 
     fragment = call_subgraph(
         child,
@@ -214,9 +202,8 @@ def test_call_subgraph_inherits_occurrence_and_keeps_child_frames() -> None:
     } == {(outer,)}
     for node_id, fragment_id in ((START_ID, fragment.start_id), (END_ID, fragment.end_id)):
         assert fragment.nodes[fragment_id].memory_scope == MemoryScope(
-            "root",
-            ("root", "outer_map", "call", node_id),
-            frame_stack=(child_frame,),
+            ("outer_map", "call", node_id),
+            memories=("child",),
             occurrence_path=(outer,),
         )
 
@@ -225,14 +212,10 @@ def test_call_subgraph_revalidates_supplied_memory_scope() -> None:
     child = _child_flow()
     occurrence = MemoryOccurrenceSegment(
         MemoryOccurrenceKind.MAP_ITEM,
-        ("root", "outer"),
+        ("outer",),
         0,
     )
-    scope = MemoryScope(
-        "root",
-        ("root", "outer", "call"),
-        occurrence_path=(occurrence,),
-    )
+    scope = MemoryScope(("outer", "call"), occurrence_path=(occurrence,))
     object.__setattr__(occurrence, "index", False)
 
     with pytest.raises(TypeError, match="index must be an integer"):

@@ -36,14 +36,10 @@ from agent_composer.memory import (
     EvaluationEvidence,
     LearningFailure,
     LearningResult,
-    MemoryFrameRef,
-    MemoryFrameSpec,
     MemoryMutation,
     MemoryOccurrenceKind,
-    MemoryOccurrenceRef,
     MemoryOccurrenceSegment,
     MemoryOperationFailure,
-    MemoryOwner,
     MemoryScope,
     MemorySection,
     MemorySnapshotEnvelope,
@@ -63,7 +59,7 @@ from agent_composer.runtime.contracts import (
     BackwardFailure,
     BackwardOutcome,
     ForwardCapture,
-    FrameProposal,
+    MemoryProposal,
     _validate_route,
     _validate_source,
 )
@@ -106,6 +102,11 @@ class RunStartedRecord:
             Complete resolved agent configuration keyed by stable static node path.
         num_workers (`int`):
             Initial dispatcher worker count; zero selects serial execution.
+        memory_snapshots (`tuple[MemorySnapshotEnvelope, ...] | None`):
+            Canonical recorded snapshots, one per memory key; `None` when memory
+            is disabled.
+        learnable (`bool`):
+            Whether the run retains learning evidence.
         memories (`tuple[MemorySpec, ...] | None`):
             Sorted memory key table; `None` when memory is disabled.
         memory_stacks (`tuple[MemoryStack, ...] | None`):
@@ -117,20 +118,16 @@ class RunStartedRecord:
     start_wiring_override: dict[str, Any]
     effective_llm_by_static_path: dict[str, dict[str, Any]]
     num_workers: int
-    memory_layout: tuple[MemoryFrameSpec, ...] | None = None
     memory_snapshots: tuple[MemorySnapshotEnvelope, ...] | None = None
     learnable: bool = False
     memories: tuple[MemorySpec, ...] | None = None
     memory_stacks: tuple[MemoryStack, ...] | None = None
 
     def __post_init__(self) -> None:
-        """Validate the enabled-memory shape and its canonical policy inventory."""
+        """Validate the enabled-memory shape and its canonical key table."""
         _validate_run_memory_configuration(
-            self.memory_layout,
-            self.memory_snapshots,
-            self.learnable,
+            self.memories, self.memory_stacks, self.memory_snapshots, self.learnable,
         )
-        _validate_run_memory_table(self.memory_layout, self.memories, self.memory_stacks)
 
 
 @dataclass(frozen=True, slots=True)
@@ -281,32 +278,33 @@ class BackwardStartedRecord:
 
 @dataclass(frozen=True, slots=True)
 class BackwardReadyRecord:
-    """Retain a computed root result, occurrence inventory, and frame proposals.
+    """Retain a computed root result, occurrence inventory, and memory proposals.
 
     Attributes:
         attempt_id (`int`): Exact positive identity within this run.
         root_result (`BackwardResult`): Completed three-channel root feedback.
         attributed_results (`tuple[AttributedBackwardResult, ...]`): Ordered
             accepted occurrence results, including unreached occurrences.
-        frame_proposals (`tuple[FrameProposal, ...]`): Ordered detached proposals.
-            Recorded layout membership and attempt agreement belong to reduction.
+        proposals (`tuple[MemoryProposal, ...]`): Ordered detached proposals,
+            one per recorded memory key. Table membership and attempt agreement
+            belong to reduction.
     """
 
     attempt_id: int
     root_result: BackwardResult
     attributed_results: tuple[AttributedBackwardResult, ...]
-    frame_proposals: tuple[FrameProposal, ...]
+    proposals: tuple[MemoryProposal, ...]
 
     def __post_init__(self) -> None:
         """Detach exact carriers; ownership and attempt agreement belong to reduction."""
         _validate_attempt_id(self.attempt_id)
         object.__setattr__(self, "root_result", _copy_backward_result(self.root_result))
         object.__setattr__(self, "attributed_results", _copy_attributed_results(self.attributed_results))
-        if type(self.frame_proposals) is not tuple:
-            raise TypeError("frame_proposals must be a tuple")
-        if any(type(proposal) is not FrameProposal for proposal in self.frame_proposals):
-            raise TypeError("frame_proposals require exact FrameProposal values")
-        object.__setattr__(self, "frame_proposals", tuple(replace(p) for p in self.frame_proposals))
+        if type(self.proposals) is not tuple:
+            raise TypeError("proposals must be a tuple")
+        if any(type(proposal) is not MemoryProposal for proposal in self.proposals):
+            raise TypeError("proposals require exact MemoryProposal values")
+        object.__setattr__(self, "proposals", tuple(replace(p) for p in self.proposals))
 
 
 @dataclass(frozen=True, slots=True)
@@ -447,11 +445,6 @@ def _require_nonempty_string(value: object, name: str) -> str:
     return value
 
 
-def _frame_key(ref: MemoryFrameRef) -> tuple[str, tuple[str, ...], str]:
-    """Return the canonical sortable identity of one memory frame."""
-    return (ref.root_flow_id, ref.static_path, ref.owner.value)
-
-
 def _validate_optional_evidence(evidence: EvaluationEvidence | None) -> None:
     """Reject forged or unsupported node-evidence carriers."""
     if evidence is not None and type(evidence) is not EvaluationEvidence:
@@ -468,64 +461,24 @@ def _validate_optional_evidence(evidence: EvaluationEvidence | None) -> None:
 
 
 def _validate_run_memory_configuration(
-    layout: tuple[MemoryFrameSpec, ...] | None,
+    memories: tuple[MemorySpec, ...] | None,
+    stacks: tuple[MemoryStack, ...] | None,
     snapshots: tuple[MemorySnapshotEnvelope, ...] | None,
     learnable: bool,
 ) -> None:
-    """Validate one RunStarted memory configuration and canonical ordering."""
+    """Validate one RunStarted memory table, its stacks and its snapshots."""
     if type(learnable) is not bool:
         raise TypeError("learnable must be a boolean")
-    if (layout is None) != (snapshots is None):
+    if len({memories is None, stacks is None, snapshots is None}) != 1:
         raise ValueError(
-            "memory_layout and memory_snapshots must both be enabled or disabled"
+            "memories, memory_stacks and memory_snapshots must all be recorded or all be absent"
         )
-    if layout is None:
-        return
-    if type(layout) is not tuple or type(snapshots) is not tuple:
-        raise TypeError(
-            "memory_layout and memory_snapshots must be tuples when enabled"
-        )
-    for spec in layout:
-        if type(spec) is not MemoryFrameSpec:
-            raise TypeError("memory_layout items must be MemoryFrameSpec values")
-        MemoryFrameSpec(spec.ref, spec.policy_name, spec.config)
-    layout_keys = tuple(_frame_key(spec.ref) for spec in layout)
-    if layout_keys != tuple(sorted(set(layout_keys))):
-        raise ValueError("memory_layout frame refs must be sorted and unique")
-    layout_roots = {spec.ref.root_flow_id for spec in layout}
-    if len(layout_roots) > 1:
-        raise ValueError("memory_layout frame refs must share one root_flow_id")
-
-    for snapshot in snapshots:
-        if type(snapshot) is not MemorySnapshotEnvelope:
-            raise TypeError(
-                "memory_snapshots items must be MemorySnapshotEnvelope values"
-            )
-        MemorySnapshotEnvelope(snapshot.memory, snapshot.snapshot)
-    snapshot_names = tuple(snapshot.memory for snapshot in snapshots)
-    if snapshot_names != tuple(sorted(set(snapshot_names))):
-        raise ValueError("memory_snapshots memory keys must be sorted and unique")
-    referenced_names = {spec.policy_name for spec in layout}
-    if set(snapshot_names) != referenced_names:
-        raise ValueError(
-            "memory_snapshots memory keys must equal memory_layout policy names"
-        )
-
-
-def _validate_run_memory_table(
-    layout: tuple[MemoryFrameSpec, ...] | None,
-    memories: tuple[MemorySpec, ...] | None,
-    stacks: tuple[MemoryStack, ...] | None,
-) -> None:
-    """Validate the recorded key table and per-target key stacks."""
-    if (memories is None) != (stacks is None):
-        raise ValueError("memories and memory_stacks must both be recorded or both be absent")
     if memories is None:
         return
-    if layout is None:
-        raise ValueError("memories and memory_stacks cannot be recorded with disabled memory")
-    if type(memories) is not tuple or type(stacks) is not tuple:
-        raise TypeError("memories and memory_stacks must be tuples")
+    if type(memories) is not tuple or type(stacks) is not tuple or type(snapshots) is not tuple:
+        raise TypeError(
+            "memories, memory_stacks and memory_snapshots must be tuples when recorded"
+        )
     for spec in memories:
         if type(spec) is not MemorySpec:
             raise TypeError("memories items must be MemorySpec values")
@@ -533,8 +486,15 @@ def _validate_run_memory_table(
     keys = tuple(spec.key for spec in memories)
     if keys != tuple(sorted(set(keys))):
         raise ValueError("memories keys must be sorted and unique")
-    if set(keys) != {spec.policy_name for spec in layout}:
-        raise ValueError("memories keys must equal memory_layout policy names")
+    for snapshot in snapshots:
+        if type(snapshot) is not MemorySnapshotEnvelope:
+            raise TypeError("memory_snapshots items must be MemorySnapshotEnvelope values")
+        MemorySnapshotEnvelope(snapshot.memory, snapshot.snapshot)
+    snapshot_keys = tuple(snapshot.memory for snapshot in snapshots)
+    if snapshot_keys != tuple(sorted(set(snapshot_keys))):
+        raise ValueError("memory_snapshots memory keys must be sorted and unique")
+    if snapshot_keys != keys:
+        raise ValueError("memory_snapshots memory keys must equal memories keys")
     for stack in stacks:
         if type(stack) is not MemoryStack:
             raise TypeError("memory_stacks items must be MemoryStack values")
@@ -942,7 +902,6 @@ class _RunStartedPayload(_StrictModel):
     start_wiring_override: dict[str, Any]
     effective_llm_by_static_path: dict[str, dict[str, Any]]
     num_workers: int = Field(ge=0)
-    memory_layout: list[_MemoryFrameSpecPayload] | None
     memory_snapshots: list[_MemorySnapshotEnvelopePayload] | None
     learnable: bool
     memories: list[_MemorySpecPayload] | None
@@ -1071,22 +1030,6 @@ class _FailurePayload(_StrictModel):
     traceback: str | None
 
 
-class _MemoryFrameRefPayload(_StrictModel):
-    """Strict wire form of one stable memory-frame identity."""
-
-    root_flow_id: str = Field(min_length=1)
-    static_path: list[str] = Field(min_length=1)
-    owner: Literal["flow", "agent"]
-
-    @field_validator("static_path")
-    @classmethod
-    def _nonempty_path(cls, value: list[str]) -> list[str]:
-        """Reject empty path components."""
-        if any(not part for part in value):
-            raise ValueError("memory frame path components must be non-empty")
-        return value
-
-
 class _MemoryOccurrenceSegmentPayload(_StrictModel):
     """Strict wire form of one dynamic occurrence segment."""
 
@@ -1103,36 +1046,20 @@ class _MemoryOccurrenceSegmentPayload(_StrictModel):
         return value
 
 
-class _MemoryOccurrenceRefPayload(_StrictModel):
-    """Strict wire form of one dynamic frame occurrence."""
-
-    frame_ref: _MemoryFrameRefPayload
-    occurrence_path: list[_MemoryOccurrenceSegmentPayload]
-
-
 class _MemoryScopePayload(_StrictModel):
     """Strict wire form of one compiled node's memory scope."""
 
-    root_flow_id: str = Field(min_length=1)
     static_path: list[str] = Field(min_length=1)
-    frame_stack: list[_MemoryFrameRefPayload]
+    memories: list[str]
     occurrence_path: list[_MemoryOccurrenceSegmentPayload]
 
-    @field_validator("static_path")
+    @field_validator("static_path", "memories")
     @classmethod
-    def _nonempty_path(cls, value: list[str]) -> list[str]:
-        """Reject empty path components."""
+    def _nonempty_parts(cls, value: list[str]) -> list[str]:
+        """Reject empty path components and empty memory keys."""
         if any(not part for part in value):
-            raise ValueError("memory scope path components must be non-empty")
+            raise ValueError("memory scope components must be non-empty")
         return value
-
-
-class _MemoryFrameSpecPayload(_StrictModel):
-    """Strict origin-free wire form of one effective frame specification."""
-
-    ref: _MemoryFrameRefPayload
-    policy_name: str = Field(min_length=1)
-    config: dict[str, Any]
 
 
 class _MemorySnapshotEnvelopePayload(_StrictModel):
@@ -1168,9 +1095,9 @@ class _MemoryStackPayload(_StrictModel):
 
 
 class _MemorySectionPayload(_StrictModel):
-    """Strict wire form of one separate recalled-memory section."""
+    """Strict wire form of one memory's recalled section."""
 
-    frame_ref: _MemoryFrameRefPayload
+    memory: str = Field(min_length=1)
     text: str
 
 
@@ -1225,10 +1152,9 @@ class _EvaluationEvidencePayload(_StrictModel):
 
 
 class _MemoryMutationPayload(_StrictModel):
-    """Strict wire form of one frame-owned memory mutation."""
+    """Strict wire form of one memory mutation."""
 
     mutation_id: str = Field(min_length=1)
-    frame_ref: _MemoryFrameRefPayload
     payload: Any
 
 
@@ -1334,20 +1260,19 @@ class _AttributedBackwardResultPayload(_StrictModel):
     invoked: bool
 
 
-class _FrameProposalPayload(_StrictModel):
-    """One frame's detached ordered mutation batch."""
+class _MemoryProposalPayload(_StrictModel):
+    """One memory's detached ordered mutation batch."""
 
-    frame_ref: _MemoryFrameRefPayload
+    memory: str = Field(min_length=1)
     mutations: list[_MemoryMutationPayload]
 
 
 class _LearningFailurePayload(_StrictModel):
-    """Frame-local learn or memory-local commit failure attribution."""
+    """One memory's learn or commit failure attribution."""
 
     memory: str = Field(min_length=1)
     operation: Literal["learn", "commit"]
     failure: _MemoryOperationFailurePayload
-    frame_ref: _MemoryFrameRefPayload | None
 
 
 class _PolicyCommitOutcomePayload(_StrictModel):
@@ -1384,7 +1309,6 @@ class _BackwardFailurePayload(_StrictModel):
     node_id: str | None
     node_started_seq: int | None
     memory: str | None
-    frame_ref: _MemoryFrameRefPayload | None
     cause: _BackwardFailureCausePayload | _MemoryOperationFailurePayload | None
     cause_type: str | None
     traceback: str | None
@@ -1407,12 +1331,12 @@ class _BackwardStartedPayload(_StrictModel):
 
 
 class _BackwardReadyPayload(_StrictModel):
-    """Completed compute results and ordered frame proposals."""
+    """Completed compute results and ordered memory proposals."""
 
     attempt_id: int = Field(gt=0)
     root_result: _BackwardResultPayload
     attributed_results: list[_AttributedBackwardResultPayload]
-    frame_proposals: list[_FrameProposalPayload]
+    proposals: list[_MemoryProposalPayload]
 
 
 class _BackwardFinishedPayload(_StrictModel):
@@ -1724,27 +1648,6 @@ def _failure_from_payload(payload: dict[str, Any]) -> Failure:
     )
 
 
-def _frame_ref_payload(ref: MemoryFrameRef) -> dict[str, Any]:
-    """Encode one exact stable memory-frame identity."""
-    if type(ref) is not MemoryFrameRef:
-        raise TypeError("memory frame ref must be a MemoryFrameRef")
-    MemoryFrameRef(ref.root_flow_id, ref.static_path, ref.owner)
-    return {
-        "root_flow_id": ref.root_flow_id,
-        "static_path": list(ref.static_path),
-        "owner": ref.owner.value,
-    }
-
-
-def _frame_ref_from_payload(payload: dict[str, Any]) -> MemoryFrameRef:
-    """Decode one already-validated memory-frame identity."""
-    return MemoryFrameRef(
-        root_flow_id=payload["root_flow_id"],
-        static_path=tuple(payload["static_path"]),
-        owner=MemoryOwner(payload["owner"]),
-    )
-
-
 def _occurrence_segment_payload(segment: MemoryOccurrenceSegment) -> dict[str, Any]:
     """Encode one exact dynamic occurrence segment."""
     if type(segment) is not MemoryOccurrenceSegment:
@@ -1768,45 +1671,14 @@ def _occurrence_segment_from_payload(
     )
 
 
-def _occurrence_ref_payload(occurrence: MemoryOccurrenceRef) -> dict[str, Any]:
-    """Encode one exact dynamic frame occurrence."""
-    if type(occurrence) is not MemoryOccurrenceRef:
-        raise TypeError("occurrence must be a MemoryOccurrenceRef")
-    MemoryOccurrenceRef(occurrence.frame_ref, occurrence.occurrence_path)
-    return {
-        "frame_ref": _frame_ref_payload(occurrence.frame_ref),
-        "occurrence_path": [
-            _occurrence_segment_payload(segment)
-            for segment in occurrence.occurrence_path
-        ],
-    }
-
-
-def _occurrence_ref_from_payload(payload: dict[str, Any]) -> MemoryOccurrenceRef:
-    """Decode one already-validated dynamic frame occurrence."""
-    return MemoryOccurrenceRef(
-        frame_ref=_frame_ref_from_payload(payload["frame_ref"]),
-        occurrence_path=tuple(
-            _occurrence_segment_from_payload(segment)
-            for segment in payload["occurrence_path"]
-        ),
-    )
-
-
 def _scope_payload(scope: MemoryScope) -> dict[str, Any]:
     """Encode one exact compiled memory scope."""
     if type(scope) is not MemoryScope:
         raise TypeError("evidence scope must be a MemoryScope")
-    MemoryScope(
-        scope.root_flow_id,
-        scope.static_path,
-        scope.frame_stack,
-        scope.occurrence_path,
-    )
+    MemoryScope(scope.static_path, scope.memories, scope.occurrence_path)
     return {
-        "root_flow_id": scope.root_flow_id,
         "static_path": list(scope.static_path),
-        "frame_stack": [_frame_ref_payload(ref) for ref in scope.frame_stack],
+        "memories": list(scope.memories),
         "occurrence_path": [
             _occurrence_segment_payload(segment)
             for segment in scope.occurrence_path
@@ -1817,36 +1689,12 @@ def _scope_payload(scope: MemoryScope) -> dict[str, Any]:
 def _scope_from_payload(payload: dict[str, Any]) -> MemoryScope:
     """Decode one already-validated compiled memory scope."""
     return MemoryScope(
-        root_flow_id=payload["root_flow_id"],
         static_path=tuple(payload["static_path"]),
-        frame_stack=tuple(
-            _frame_ref_from_payload(ref) for ref in payload["frame_stack"]
-        ),
+        memories=tuple(payload["memories"]),
         occurrence_path=tuple(
             _occurrence_segment_from_payload(segment)
             for segment in payload["occurrence_path"]
         ),
-    )
-
-
-def _frame_spec_payload(spec: MemoryFrameSpec) -> dict[str, Any]:
-    """Encode one exact origin-free effective memory-frame specification."""
-    if type(spec) is not MemoryFrameSpec:
-        raise TypeError("memory layout item must be a MemoryFrameSpec")
-    MemoryFrameSpec(spec.ref, spec.policy_name, spec.config)
-    return {
-        "ref": _frame_ref_payload(spec.ref),
-        "policy_name": spec.policy_name,
-        "config": spec.config,
-    }
-
-
-def _frame_spec_from_payload(payload: dict[str, Any]) -> MemoryFrameSpec:
-    """Decode one already-validated effective memory-frame specification."""
-    return MemoryFrameSpec(
-        ref=_frame_ref_from_payload(payload["ref"]),
-        policy_name=payload["policy_name"],
-        config=_copy_json(payload["config"]),
     )
 
 
@@ -1912,22 +1760,16 @@ def _memory_stack_from_payload(payload: dict[str, Any]) -> MemoryStack:
 
 
 def _memory_section_payload(section: MemorySection) -> dict[str, Any]:
-    """Encode one exact separate recalled-memory section."""
+    """Encode one exact recalled-memory section."""
     if type(section) is not MemorySection:
         raise TypeError("memory section must be a MemorySection")
-    MemorySection(section.frame_ref, section.text)
-    return {
-        "frame_ref": _frame_ref_payload(section.frame_ref),
-        "text": section.text,
-    }
+    MemorySection(section.memory, section.text)
+    return {"memory": section.memory, "text": section.text}
 
 
 def _memory_section_from_payload(payload: dict[str, Any]) -> MemorySection:
     """Decode one already-validated recalled-memory section."""
-    return MemorySection(
-        frame_ref=_frame_ref_from_payload(payload["frame_ref"]),
-        text=payload["text"],
-    )
+    return MemorySection(memory=payload["memory"], text=payload["text"])
 
 
 def _interaction_payload(interaction: VisibleInteraction) -> dict[str, Any]:
@@ -2149,22 +1991,17 @@ def _evidence_from_payload(payload: dict[str, Any] | None) -> EvaluationEvidence
 
 
 def _mutation_payload(mutation: MemoryMutation) -> dict[str, Any]:
-    """Encode one exact frame-owned memory mutation."""
+    """Encode one exact memory mutation."""
     if type(mutation) is not MemoryMutation:
         raise TypeError("mutation must be a MemoryMutation")
-    MemoryMutation(mutation.mutation_id, mutation.frame_ref, mutation.payload)
-    return {
-        "mutation_id": mutation.mutation_id,
-        "frame_ref": _frame_ref_payload(mutation.frame_ref),
-        "payload": mutation.payload,
-    }
+    MemoryMutation(mutation.mutation_id, mutation.payload)
+    return {"mutation_id": mutation.mutation_id, "payload": mutation.payload}
 
 
 def _mutation_from_payload(payload: dict[str, Any]) -> MemoryMutation:
-    """Decode one already-validated frame-owned memory mutation."""
+    """Decode one already-validated memory mutation."""
     return MemoryMutation(
         mutation_id=payload["mutation_id"],
-        frame_ref=_frame_ref_from_payload(payload["frame_ref"]),
         payload=_copy_json(payload["payload"]),
     )
 
@@ -2255,21 +2092,21 @@ def _attributed_result_from_payload(payload: dict[str, Any]) -> AttributedBackwa
     )
 
 
-def _frame_proposal_payload(proposal: FrameProposal) -> dict[str, Any]:
-    """Encode one revalidated frame-owned proposal using the mutation codec."""
-    if type(proposal) is not FrameProposal:
-        raise TypeError("proposal must be an exact FrameProposal")
+def _memory_proposal_payload(proposal: MemoryProposal) -> dict[str, Any]:
+    """Encode one revalidated memory proposal using the mutation codec."""
+    if type(proposal) is not MemoryProposal:
+        raise TypeError("proposal must be an exact MemoryProposal")
     checked = replace(proposal)
     return {
-        "frame_ref": _frame_ref_payload(checked.frame_ref),
+        "memory": checked.memory,
         "mutations": [_mutation_payload(m) for m in checked.mutations],
     }
 
 
-def _frame_proposal_from_payload(payload: dict[str, Any]) -> FrameProposal:
-    """Decode and locally validate one frame's mutation ownership and order."""
-    return FrameProposal(
-        _frame_ref_from_payload(payload["frame_ref"]),
+def _memory_proposal_from_payload(payload: dict[str, Any]) -> MemoryProposal:
+    """Decode and locally validate one memory's mutation order."""
+    return MemoryProposal(
+        payload["memory"],
         tuple(_mutation_from_payload(m) for m in payload["mutations"]),
     )
 
@@ -2286,7 +2123,6 @@ def _learning_result_payload(result: LearningResult) -> dict[str, Any]:
                 "memory": item.memory,
                 "operation": item.operation,
                 "failure": _memory_failure_payload(item.failure),
-                "frame_ref": None if item.frame_ref is None else _frame_ref_payload(item.frame_ref),
             }
             for item in checked.failures
         ],
@@ -2310,7 +2146,6 @@ def _learning_result_from_payload(payload: dict[str, Any]) -> LearningResult:
             LearningFailure(
                 item["memory"], item["operation"],
                 _memory_failure_from_payload(item["failure"]),
-                None if item["frame_ref"] is None else _frame_ref_from_payload(item["frame_ref"]),
             )
             for item in payload["failures"]
         ),
@@ -2340,7 +2175,6 @@ def _backward_failure_payload(failure: BackwardFailure) -> dict[str, Any]:
         "scope": _execution_scope_payload(checked.scope), "run_id": checked.run_id,
         "node_id": checked.node_id, "node_started_seq": checked.node_started_seq,
         "memory": checked.memory,
-        "frame_ref": None if checked.frame_ref is None else _frame_ref_payload(checked.frame_ref),
         "cause": cause_payload,
         "cause_type": checked.cause_type, "traceback": checked.traceback,
     }
@@ -2359,7 +2193,6 @@ def _backward_failure_from_payload(payload: dict[str, Any]) -> BackwardFailure:
         scope=_execution_scope_from_payload(payload["scope"]), run_id=payload["run_id"],
         node_id=payload["node_id"], node_started_seq=payload["node_started_seq"],
         memory=payload["memory"],
-        frame_ref=None if payload["frame_ref"] is None else _frame_ref_from_payload(payload["frame_ref"]),
         cause=decoded_cause,
         cause_type=payload["cause_type"], traceback=payload["traceback"],
     )
@@ -2397,7 +2230,6 @@ def _revalidate_run_record(record: RunRecord) -> None:
             record.start_wiring_override,
             record.effective_llm_by_static_path,
             record.num_workers,
-            record.memory_layout,
             record.memory_snapshots,
             record.learnable,
             record.memories,
@@ -2467,7 +2299,7 @@ def _revalidate_run_record(record: RunRecord) -> None:
         BackwardStartedRecord(record.attempt_id, record.feedback)
         return
     if type(record) is BackwardReadyRecord:
-        BackwardReadyRecord(record.attempt_id, record.root_result, record.attributed_results, record.frame_proposals)
+        BackwardReadyRecord(record.attempt_id, record.root_result, record.attributed_results, record.proposals)
         return
     if type(record) is BackwardFinishedRecord:
         BackwardFinishedRecord(record.attempt_id, record.outcome, record.attributed_results)
@@ -2481,11 +2313,8 @@ def _payload_for_record(record: RunRecord) -> dict[str, Any]:
     kind = _kind_for_record(record)
     if isinstance(record, RunStartedRecord):
         _validate_run_memory_configuration(
-            record.memory_layout,
-            record.memory_snapshots,
-            record.learnable,
+            record.memories, record.memory_stacks, record.memory_snapshots, record.learnable,
         )
-        _validate_run_memory_table(record.memory_layout, record.memories, record.memory_stacks)
         raw = {
             "flow_fingerprint": record.flow_fingerprint,
             "initial_pool": encode_pool(decode_pool(record.initial_pool)),
@@ -2494,11 +2323,6 @@ def _payload_for_record(record: RunRecord) -> dict[str, Any]:
                 record.effective_llm_by_static_path
             )[0],
             "num_workers": record.num_workers,
-            "memory_layout": (
-                None
-                if record.memory_layout is None
-                else [_frame_spec_payload(spec) for spec in record.memory_layout]
-            ),
             "memory_snapshots": (
                 None
                 if record.memory_snapshots is None
@@ -2602,7 +2426,7 @@ def _payload_for_record(record: RunRecord) -> dict[str, Any]:
             "attempt_id": record.attempt_id,
             "root_result": _backward_result_payload(record.root_result),
             "attributed_results": [_attributed_result_payload(item) for item in record.attributed_results],
-            "frame_proposals": [_frame_proposal_payload(proposal) for proposal in record.frame_proposals],
+            "proposals": [_memory_proposal_payload(proposal) for proposal in record.proposals],
         }
     elif isinstance(record, BackwardFinishedRecord):
         raw = {
@@ -2633,14 +2457,6 @@ def _record_from_payload(kind: str, payload: _StrictModel) -> RunRecord:
             start_wiring_override=start_wiring_override,
             effective_llm_by_static_path=effective,
             num_workers=values["num_workers"],
-            memory_layout=(
-                None
-                if values["memory_layout"] is None
-                else tuple(
-                    _frame_spec_from_payload(spec)
-                    for spec in values["memory_layout"]
-                )
-            ),
             memory_snapshots=(
                 None
                 if values["memory_snapshots"] is None
@@ -2739,7 +2555,7 @@ def _record_from_payload(kind: str, payload: _StrictModel) -> RunRecord:
         return BackwardReadyRecord(
             values["attempt_id"], _backward_result_from_payload(values["root_result"]),
             tuple(_attributed_result_from_payload(item) for item in values["attributed_results"]),
-            tuple(_frame_proposal_from_payload(item) for item in values["frame_proposals"]),
+            tuple(_memory_proposal_from_payload(item) for item in values["proposals"]),
         )
     if kind == "backward_finished":
         return BackwardFinishedRecord(

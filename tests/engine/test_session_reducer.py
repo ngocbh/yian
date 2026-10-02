@@ -15,12 +15,11 @@ from agent_composer.runtime.log import MemoryRunLog
 from agent_composer.expr.lineage import ValueRoute
 from agent_composer.typesys import VariablePool
 from tests.engine._fakes import FuncNode
-from tests.engine._session_fakes import REF
 
 
 def _flow(*, sibling=False):
     node = FuncNode("agent", lambda _: pytest.fail("replay invoked a node"))
-    node.memory_scope = c.MemoryScope("root", ("root", "agent"), (REF,))
+    node.memory_scope = c.MemoryScope(("agent",), ("session",))
     flow = CompiledFlow.from_parts(
         nodes={
             START_ID: StartNode(START_ID),
@@ -58,15 +57,18 @@ def _started(*, learnable=False, sibling=False, enabled=True):
         reducer.prepare_run_started(
             state,
             reducer.RunStartData(
-                "run",
-                "a" * 64,
-                pool,
-                {},
-                {},
-                0,
-                (c.MemoryFrameSpec(REF, "session", {}),) if enabled else None,
-                (c.MemorySnapshotEnvelope("session", {}),) if enabled else None,
-                learnable,
+                run_id="run",
+                flow_fingerprint="a" * 64,
+                initial_pool=pool,
+                start_wiring_override={},
+                effective_llm_by_static_path={},
+                num_workers=0,
+                learnable=learnable,
+                memories=(
+                    c.MemorySpec("session", "session", {}, (c.DeclSite((), ("root",), "agent"),), True),
+                ) if enabled else None,
+                memory_stacks=(c.MemoryStack(("agent",), ("session",)),) if enabled else None,
+                memory_snapshots=(c.MemorySnapshotEnvelope("session", {}),) if enabled else None,
             ),
         ),
     )
@@ -98,7 +100,8 @@ def _snapshot(state):
         deepcopy(state.wiring_overrides),
         deepcopy(state.input),
         deepcopy(state.effective_llm_by_static_path),
-        state.memory_layout,
+        state.memories,
+        state.memory_stacks,
         state.memory_snapshots,
         state.learnable,
         state.terminal_unreachable_failure,

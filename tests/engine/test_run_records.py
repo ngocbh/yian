@@ -40,7 +40,7 @@ _RECORDED_ROUTE = (
         b'"flow_fingerprint":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",'
         b'"initial_pool":{"start_id":"__start__","store":{"__start__":{"kind":"object","value":{}}},'
         b'"system":{"run_id":{"kind":"str","value":"direct-engine-test"}}},"learnable":true,'
-        b'"memories":null,"memory_layout":null,"memory_snapshots":null,"memory_stacks":null,"num_workers":0,"start_wiring_override":{}},'
+        b'"memories":null,"memory_snapshots":null,"memory_stacks":null,"num_workers":0,"start_wiring_override":{}},'
         b'"run_id":"direct-engine-test","schema":9,"seq":0}'
     ),
     (
@@ -157,17 +157,7 @@ def test_append_result_wrong_schema_is_protocol_fault():
     assert encode_record(log.records()[0]) == prepared._plan.envelope_bytes
 
 
-_REGENERATED = pytest.mark.xfail(
-    strict=True, reason="fixed memory bytes are regenerated after the frame switch"
-)
-
-
-@pytest.mark.parametrize("kind", [
-    pytest.param("success", marks=_REGENERATED),
-    "route",
-    pytest.param("failure", marks=_REGENERATED),
-    pytest.param("growth", marks=_REGENERATED),
-])
+@pytest.mark.parametrize("kind", ["success", "route", "failure", "growth"])
 def test_historical_outcomes_keep_schema_in_trace_bytes(kind):
     import agent_composer.run as run_module
     from agent_composer.compile.execution_layout import apply_execution_layout, resolve_execution_layout
@@ -222,7 +212,7 @@ def test_historical_outcomes_keep_schema_in_trace_bytes(kind):
 
 def _records():
     """Return one representative value for every closed run-record variant."""
-    from agent_composer.memory import MemoryFrameRef, MemoryMutation, MemoryOperationFailure, MemoryOwner
+    from agent_composer.memory import MemoryMutation, MemoryOperationFailure
     from agent_composer.runtime.log import (
         MemoryCommitFailedRecord, MemoryCommitRequestedRecord, MemoryCommitSucceededRecord,
     )
@@ -230,8 +220,7 @@ def _records():
 
     pool = VariablePool(start_id="start")
     pool.set("start", {"name": "Ada"})
-    frame = MemoryFrameRef("root", ("root", "agent"), MemoryOwner.AGENT)
-    mutations = (MemoryMutation("m1", frame, {"text": "Remember."}),)
+    mutations = (MemoryMutation("m1", {"text": "Remember."}),)
     failure = MemoryOperationFailure("backend", "backend.failed", "Failed.", True)
     return [
         RunStartedRecord(

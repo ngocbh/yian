@@ -1,11 +1,10 @@
-"""Run-scoped setup and recall for injected memory implementations."""
+"""Run-scoped setup, recall and learning for injected memory implementations."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from contextlib import contextmanager
-from typing import Any
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -13,14 +12,11 @@ from agent_composer.diagnostics import OriginRef
 from agent_composer.memory import (
     ConversationInvocation,
     DeclSite,
+    LearnContext,
     MemoryContent,
     MemoryContextRequest,
-    LearnContext,
-    MemoryFrameRef,
-    MemoryFrameSpec,
     MemoryMutation,
     MemoryOperationError,
-    MemoryOwner,
     MemoryRecallError,
     MemoryScope,
     MemorySetupError,
@@ -28,105 +24,59 @@ from agent_composer.memory import (
     MemorySpec,
     RecallContext,
 )
-from agent_composer.compile.model import END_ID, START_ID
-from agent_composer.events import RunSucceeded
-from agent_composer.runtime.log import (
-    MemoryRunLog,
-)
-from agent_composer.runtime.memory_runtime import (
-    MemoryRuntime,
-)
-from agent_composer.runtime.state import (
-    RunStartData,
-    RunState,
-    commit_prepared,
-    prepare_node_started,
-    prepare_node_succeeded,
-    prepare_run_started,
-)
-from agent_composer.typesys import VariablePool
-from tests.engine._fakes import FuncNode
-from tests.engine._graph_builder import _forward_capture, _graph
-
-
-@dataclass
-class _Frame:
-    """Tiny policy frame whose recall behavior is supplied by the test."""
-
-    value: object
-    calls: list[RecallContext]
-    learn_value: object = None
-    learn_calls: list[LearnContext] = field(default_factory=list)
-
-    def recall(self, context: RecallContext | None = None) -> str:
-        assert context is not None
-        self.calls.append(context)
-        if isinstance(self.value, BaseException):
-            raise self.value
-        return self.value  # type: ignore[return-value]
-
-    def learn(self, context: LearnContext) -> list[MemoryMutation]:
-        self.learn_calls.append(context)
-        if isinstance(self.learn_value, BaseException):
-            raise self.learn_value
-        if callable(self.learn_value):
-            return self.learn_value(context)
-        if self.learn_value is None:
-            return []
-        return self.learn_value  # type: ignore[return-value]
+from agent_composer.runtime.contracts import MemoryProposal
+from agent_composer.runtime.log import MemoryCommitRequestedRecord
+from agent_composer.runtime.memory_runtime import MemoryRuntime, _LearningProposalError
 
 
 class _Session:
-    """One observable fake session with independently configured frames."""
+    """One observable fake session for one memory key."""
 
     def __init__(
         self,
         name: str,
         events: list[tuple[Any, ...]],
-        values: dict[MemoryFrameRef, object],
+        value: object = "",
         *,
-        learn_values: dict[MemoryFrameRef, object] | None = None,
+        learn_value: object = None,
         commit_value: object = None,
         snapshot: object | None = None,
         close_error: BaseException | None = None,
     ) -> None:
         self.name = name
         self.events = events
-        self.values = values
-        self.learn_values = learn_values or {}
+        self.value = value
+        self.learn_value = learn_value
         self.commit_value = commit_value
         self._snapshot = {"policy": name} if snapshot is None else snapshot
         self.close_error = close_error
-        self.calls: dict[MemoryFrameRef, list[RecallContext]] = {}
-        self.frames: dict[MemoryFrameRef, _Frame] = {}
+        self.calls: list[RecallContext] = []
+        self.learn_calls: list[LearnContext] = []
 
     @property
     def snapshot(self):
         self.events.append(("snapshot", self.name))
         return self._snapshot
 
-    def open_frame(self, spec: MemoryFrameSpec) -> _Frame:
-        self.events.append(("open_frame", self.name, spec.ref))
-        calls: list[RecallContext] = []
-        self.calls[spec.ref] = calls
-        frame = _Frame(
-            self.values.get(spec.ref, ""),
-            calls,
-            self.learn_values.get(spec.ref),
-        )
-        self.frames[spec.ref] = frame
-        return frame
+    def recall(self, context: RecallContext | None = None) -> object:
+        assert context is not None
+        self.calls.append(context)
+        if isinstance(self.value, BaseException):
+            raise self.value
+        return self.value
 
-    def commit(
-        self,
-        commit_id: str,
-        mutations: tuple[MemoryMutation, ...],
-    ) -> None:
+    def learn(self, context: LearnContext) -> list[MemoryMutation]:
+        self.learn_calls.append(context)
+        if isinstance(self.learn_value, BaseException):
+            raise self.learn_value
+        if self.learn_value is None:
+            return []
+        return self.learn_value  # type: ignore[return-value]
+
+    def commit(self, commit_id: str, mutations: tuple[MemoryMutation, ...]) -> None:
         self.events.append(("commit", self.name, commit_id, mutations))
         if isinstance(self.commit_value, BaseException):
             raise self.commit_value
-        if callable(self.commit_value):
-            return self.commit_value(commit_id, mutations)
         return self.commit_value  # type: ignore[return-value]
 
     def close(self) -> None:
@@ -142,9 +92,9 @@ class _Memory:
         self,
         name: str,
         events: list[tuple[Any, ...]],
-        values: dict[MemoryFrameRef, object] | None = None,
+        value: object = "",
         *,
-        learn_values: dict[MemoryFrameRef, object] | None = None,
+        learn_value: object = None,
         commit_value: object = None,
         session_snapshot: object | None = None,
         open_error: BaseException | None = None,
@@ -153,15 +103,13 @@ class _Memory:
     ) -> None:
         self.name = name
         self.events = events
-        self.values = values or {}
-        self.session_snapshot = session_snapshot
         self.open_error = open_error
         self.restore_snapshot = restore_snapshot
         self.session = _Session(
             name,
             events,
-            self.values,
-            learn_values=learn_values,
+            value,
+            learn_value=learn_value,
             commit_value=commit_value,
             snapshot=session_snapshot,
             close_error=close_error,
@@ -179,41 +127,32 @@ class _Memory:
         self.events.append(("reset", self.name))
 
 
-def _layout() -> tuple[
-    tuple[MemoryFrameSpec, MemoryFrameSpec],
-    dict[MemoryFrameRef, OriginRef | None],
-]:
-    """Return canonical outer-flow/local-agent specs under separate policies."""
-    outer = MemoryFrameRef("root", ("root",), MemoryOwner.FLOW)
-    local = MemoryFrameRef("root", ("root", "agent"), MemoryOwner.AGENT)
-    specs = (
-        MemoryFrameSpec(outer, "beta", {"limit": 2}),
-        MemoryFrameSpec(local, "alpha", {}),
+def _table() -> tuple[MemorySpec, ...]:
+    """Return the recorded table: AGENT-owned alpha and flow-owned beta."""
+    return (
+        MemorySpec("alpha", "alpha", {}, (DeclSite((), ("root",), "agent"),), True),
+        MemorySpec("beta", "beta", {"limit": 2}, (DeclSite((), ("root",), None),), False),
     )
-    origins = {
-        outer: OriginRef("outer-site"),
-        local: OriginRef("local-site"),
-    }
-    return specs, origins
 
 
-def _scope(layout: tuple[MemoryFrameSpec, ...]) -> MemoryScope:
-    """Return the AGENT consumer scope inheriting both test frames."""
-    return MemoryScope(
-        "root",
-        ("root", "agent"),
-        tuple(spec.ref for spec in layout),
-    )
+def _origins() -> dict[str, OriginRef | None]:
+    """Return one authored origin per key."""
+    return {"alpha": OriginRef("local-site"), "beta": OriginRef("outer-site")}
+
+
+def _open(memory: dict[str, Any], **kwargs: Any) -> MemoryRuntime:
+    """Open the two-key test table over ``memory``."""
+    return MemoryRuntime.open(memories=_table(), origins=_origins(), memory=memory, **kwargs)
+
+
+def _scope() -> MemoryScope:
+    """Return the AGENT consumer scope: flow key beta outside AGENT key alpha."""
+    return MemoryScope(("agent",), ("beta", "alpha"))
 
 
 def _context() -> RecallContext:
     """Return one exact visible AGENT recall context."""
-    return RecallContext(
-        "base system",
-        "rendered prompt",
-        {"question": "why"},
-        ("root", "agent"),
-    )
+    return RecallContext("base system", "rendered prompt", {"question": "why"}, ("agent",))
 
 
 def _enter_context(runtime, scope, request, *, check_stopped):
@@ -227,63 +166,52 @@ def _recall_sections(runtime, scope, context):
         return admitted.sections
 
 
-@pytest.mark.parametrize("capable", [(True, True), (True, False), (False, True), (False, False)])
-def test_context_recalls_every_frame_and_opens_only_innermost_contributed_source(capable):
-    layout, origins = _layout()
-    policies = {name: _Memory(name, [], values={spec.ref: name for spec in layout})
-                for name in ("alpha", "beta")}
-    runtime = MemoryRuntime.open(layout=layout, origins=origins, memory=policies)
+def test_context_recalls_every_key_in_stack_order_and_opens_the_eligible_transcript():
+    policies = {name: _Memory(name, [], name) for name in ("alpha", "beta")}
+    runtime = _open(policies)
     calls = []
 
-    def opener(ref):
-        @contextmanager
-        def open_turn(request, *, check_stopped):
-            calls.append((ref, request))
-            check_stopped()
-            yield ref
-        return open_turn
+    @contextmanager
+    def open_turn(request, *, check_stopped):
+        calls.append(request)
+        check_stopped()
+        yield "alpha transcript"
 
+    policies["alpha"].session.value = MemoryContent("alpha", SimpleNamespace(open_turn=open_turn))
     try:
-        for spec, enabled in zip(layout, capable):
-            if enabled:
-                frame = policies[spec.policy_name].session.frames[spec.ref]
-                source = SimpleNamespace(open_turn=opener(spec.ref))
-                frame.value = MemoryContent(frame.value, source)
-        for leaf in ("agent", "sibling"):
-            # A sibling inherits the flow frame, never the first leaf's local frame.
-            scope = _scope(layout) if leaf == "agent" else MemoryScope(
-                "root", ("root", leaf), (layout[0].ref,),
-            )
+        for scope, transcript, texts in (
+            (_scope(), "alpha transcript", ["beta", "alpha"]),
+            # A sibling sees the flow key, never the first leaf's AGENT key.
+            (MemoryScope(("sibling",), ("beta",)), None, ["beta"]),
+        ):
             request = MemoryContextRequest(
                 RecallContext("system", "prompt", {}, scope.static_path),
-                ConversationInvocation("run", 1), {},
+                ConversationInvocation("run", 1),
+                {},
             )
             with runtime.open_context(scope, request, check_stopped=lambda: None) as context:
-                expected = next((spec.ref for spec, enabled in reversed(tuple(zip(layout, capable)))
-                                 if enabled and spec.ref in scope.frame_stack), None)
-                assert context.transcript == expected
-                assert [section.text for section in context.sections] == (
-                    ["beta", "alpha"] if leaf == "agent" else ["beta"]
-                )
-        assert len(calls) == sum(bool(any(enabled and spec.ref in scope.frame_stack
-            for spec, enabled in zip(layout, capable)))
-            for scope in (_scope(layout), MemoryScope("root", ("root", "sibling"), (layout[0].ref,))))
-        assert len(policies["beta"].session.calls[layout[0].ref]) == 2
-        assert len(policies["alpha"].session.calls[layout[1].ref]) == 1
-        assert all(request.consumer_static_path[-1] in {"agent", "sibling"} for _, request in calls)
+                assert context.transcript == transcript
+                assert [section.text for section in context.sections] == texts
+                assert [section.memory for section in context.sections] == texts
+        assert len(policies["beta"].session.calls) == 2
+        assert len(policies["alpha"].session.calls) == 1
+        assert [request.consumer_static_path for request in calls] == [("agent",)]
     finally:
         runtime.close()
 
 
 def test_context_validates_scope_request_and_full_opened_coverage():
-    layout, origins = _layout()
-    runtime = MemoryRuntime.open(layout=layout[1:], origins={layout[1].ref: origins[layout[1].ref]},
-                                 memory={"alpha": _Memory("alpha", [])})
-    scope = _scope(layout)
+    runtime = MemoryRuntime.open(
+        memories=_table()[:1],
+        origins={"alpha": OriginRef("local-site")},
+        memory={"alpha": _Memory("alpha", [])},
+    )
+    scope = _scope()
     request = MemoryContextRequest(
-                RecallContext("system", "prompt", {}, scope.static_path),
-                ConversationInvocation("run", 1), {},
-            )
+        RecallContext("system", "prompt", {}, scope.static_path),
+        ConversationInvocation("run", 1),
+        {},
+    )
     try:
         with pytest.raises(TypeError, match="MemoryScope"):
             _enter_context(runtime, None, request, check_stopped=lambda: None)
@@ -292,11 +220,11 @@ def test_context_validates_scope_request_and_full_opened_coverage():
         with pytest.raises(TypeError, match="callable"):
             _enter_context(runtime, scope, request, check_stopped=None)
         wrong = MemoryContextRequest(
-            RecallContext("system", "prompt", {}, ("root", "other")), request.invocation, {},
+            RecallContext("system", "prompt", {}, ("other",)), request.invocation, {},
         )
         with pytest.raises(ValueError, match="scope"):
             _enter_context(runtime, scope, wrong, check_stopped=lambda: None)
-        with pytest.raises(RuntimeError, match="opened layout"):
+        with pytest.raises(RuntimeError, match="opened table"):
             _enter_context(runtime, scope, request, check_stopped=lambda: None)
     finally:
         runtime.close()
@@ -304,75 +232,39 @@ def test_context_validates_scope_request_and_full_opened_coverage():
         _enter_context(runtime, scope, request, check_stopped=lambda: None)
 
 
-def _terminal_learning_state(
-    runtime: MemoryRuntime,
-) -> tuple[RunState, MemoryRunLog]:
-    """Return a terminal primary run with empty eligible episode histories."""
-    node = FuncNode("work", lambda _inputs: 7)
-    flow = _graph(
-        [node],
-        [(START_ID, node.id), (node.id, END_ID)],
-    )
-    pool = VariablePool(start_id=flow.start_id)
-    pool.set(flow.start_id, {})
-    pool.add_system("run_id", "memory-runtime-run")
-    state = RunState(flow)
-    log = MemoryRunLog("memory-runtime-run")
-    commit_prepared(
-        log,
-        state,
-        prepare_run_started(
-            state,
-            RunStartData(
-                run_id="memory-runtime-run",
-                flow_fingerprint="f" * 64,
-                initial_pool=pool,
-                start_wiring_override={},
-                effective_llm_by_static_path={},
-                num_workers=0,
-                memory_layout=runtime.layout,
-                memory_snapshots=runtime.snapshots,
-                learnable=True,
-            ),
-        ),
-    )
-    for node_id, value in (
-        (START_ID, {}),
-        (node.id, 7),
-        (END_ID, None),
-    ):
-        commit_prepared(log, state, prepare_node_started(state, node_id))
-        commit_prepared(
-            log,
-            state,
-            prepare_node_succeeded(state, node_id, value,
-                                   forward_capture=_forward_capture(state.flow.nodes[node_id], {})),
-        )
-    assert isinstance(state.result, RunSucceeded)
-    return state, log
-
-
-def test_open_uses_policy_order_frame_order_and_captures_snapshots() -> None:
-    layout, origins = _layout()
+def test_open_validates_the_memory_table_and_its_origins() -> None:
     events: list[tuple[Any, ...]] = []
-    alpha = _Memory("alpha", events)
-    beta = _Memory("beta", events)
+    memory = {"alpha": _Memory("alpha", events), "beta": _Memory("beta", events)}
+    alpha, beta = _table()
+    with pytest.raises(TypeError, match="MemorySpec"):
+        MemoryRuntime.open(memories=list(_table()), origins=_origins(), memory=memory)
+    with pytest.raises(ValueError, match="sorted by key and unique"):
+        MemoryRuntime.open(memories=(beta, alpha), origins=_origins(), memory=memory)
+    with pytest.raises(ValueError, match="sorted by key and unique"):
+        MemoryRuntime.open(memories=(alpha, alpha), origins={"alpha": None}, memory=memory)
+    with pytest.raises(ValueError, match="origins must exactly match"):
+        MemoryRuntime.open(memories=_table(), origins={"alpha": None}, memory=memory)
+    with pytest.raises(TypeError, match="OriginRef"):
+        MemoryRuntime.open(
+            memories=_table(), origins={"alpha": "site", "beta": None}, memory=memory,
+        )
+    assert events == []
+    empty = MemoryRuntime.open(memories=(), origins={}, memory={})
+    assert empty.memories == () and empty.snapshots == ()
+    empty.close()
 
-    runtime = MemoryRuntime.open(
-        layout=layout,
-        origins=origins,
-        memory={"beta": beta, "alpha": alpha},
-    )
+
+def test_open_uses_key_order_and_captures_snapshots() -> None:
+    events: list[tuple[Any, ...]] = []
+    runtime = _open({"beta": _Memory("beta", events), "alpha": _Memory("alpha", events)})
 
     assert events == [
         ("open_run", "alpha", None),
         ("open_run", "beta", None),
-        ("open_frame", "beta", layout[0].ref),
-        ("open_frame", "alpha", layout[1].ref),
         ("snapshot", "alpha"),
         ("snapshot", "beta"),
     ]
-    assert runtime.layout == layout
+    assert runtime.memories == _table()
     assert runtime.snapshots == (
         MemorySnapshotEnvelope("alpha", {"policy": "alpha"}),
         MemorySnapshotEnvelope("beta", {"policy": "beta"}),
@@ -383,21 +275,15 @@ def test_open_uses_policy_order_frame_order_and_captures_snapshots() -> None:
     assert events[-2:] == [("close", "beta"), ("close", "alpha")]
 
 
-def test_open_restores_exact_recorded_snapshot_per_policy() -> None:
-    layout, origins = _layout()
+def test_open_restores_exact_recorded_snapshot_per_key() -> None:
     events: list[tuple[Any, ...]] = []
     snapshots = (
         MemorySnapshotEnvelope("alpha", {"revision": 2}),
         MemorySnapshotEnvelope("beta", {"revision": 3}),
     )
 
-    runtime = MemoryRuntime.open(
-        layout=layout,
-        origins=origins,
-        memory={
-            "alpha": _Memory("alpha", events),
-            "beta": _Memory("beta", events),
-        },
+    runtime = _open(
+        {"alpha": _Memory("alpha", events), "beta": _Memory("beta", events)},
         snapshots=snapshots,
     )
 
@@ -409,7 +295,6 @@ def test_open_restores_exact_recorded_snapshot_per_policy() -> None:
 
 
 def test_restore_rejects_noncanonical_snapshot_order_before_opening() -> None:
-    layout, origins = _layout()
     events: list[tuple[Any, ...]] = []
     snapshots = (
         MemorySnapshotEnvelope("beta", {"revision": 3}),
@@ -417,13 +302,8 @@ def test_restore_rejects_noncanonical_snapshot_order_before_opening() -> None:
     )
 
     with pytest.raises(ValueError, match="canonical order"):
-        MemoryRuntime.open(
-            layout=layout,
-            origins=origins,
-            memory={
-                "alpha": _Memory("alpha", events),
-                "beta": _Memory("beta", events),
-            },
+        _open(
+            {"alpha": _Memory("alpha", events), "beta": _Memory("beta", events)},
             snapshots=snapshots,
         )
 
@@ -431,7 +311,6 @@ def test_restore_rejects_noncanonical_snapshot_order_before_opening() -> None:
 
 
 def test_restore_rejects_a_session_that_changes_the_recorded_snapshot() -> None:
-    layout, origins = _layout()
     events: list[tuple[Any, ...]] = []
     snapshots = (
         MemorySnapshotEnvelope("alpha", {"revision": 2}),
@@ -439,65 +318,37 @@ def test_restore_rejects_a_session_that_changes_the_recorded_snapshot() -> None:
     )
 
     with pytest.raises(MemorySetupError, match="did not reproduce") as exc:
-        MemoryRuntime.open(
-            layout=layout,
-            origins=origins,
-            memory={
+        _open(
+            {
                 "alpha": _Memory("alpha", events),
-                "beta": _Memory(
-                    "beta",
-                    events,
-                    restore_snapshot=False,
-                ),
+                "beta": _Memory("beta", events, restore_snapshot=False),
             },
             snapshots=snapshots,
         )
 
-    assert exc.value.origin == origins[layout[0].ref]
+    assert exc.value.origin == _origins()["beta"]
     assert events[-2:] == [("close", "beta"), ("close", "alpha")]
 
 
-def test_registry_rejects_aliases_and_attributes_missing_policy_origin() -> None:
-    layout, origins = _layout()
+def test_registry_rejects_aliases_and_attributes_missing_key_origin() -> None:
     events: list[tuple[Any, ...]] = []
     shared = _Memory("shared", events)
     with pytest.raises(ValueError, match="multiple names"):
-        MemoryRuntime.open(
-            layout=layout,
-            origins=origins,
-            memory={"alpha": shared, "beta": shared},
-        )
+        _open({"alpha": shared, "beta": shared})
 
-    with pytest.raises(MemorySetupError, match="'beta' was not supplied") as exc:
-        MemoryRuntime.open(
-            layout=layout,
-            origins=origins,
-            memory={"alpha": _Memory("alpha", events)},
-        )
-    assert exc.value.origin == origins[layout[0].ref]
+    with pytest.raises(MemorySetupError, match="memory 'beta' was not supplied") as exc:
+        _open({"alpha": _Memory("alpha", events)})
+    assert exc.value.origin == _origins()["beta"]
 
 
 def test_later_open_failure_closes_prior_session_and_preserves_origin() -> None:
-    layout, origins = _layout()
     events: list[tuple[Any, ...]] = []
-    failure = MemoryOperationError(
-        "open_run",
-        "beta.unavailable",
-        "temporarily unavailable",
-        True,
-    )
+    failure = MemoryOperationError("open_run", "beta.unavailable", "temporarily unavailable", True)
 
     with pytest.raises(MemorySetupError, match="temporarily unavailable") as exc:
-        MemoryRuntime.open(
-            layout=layout,
-            origins=origins,
-            memory={
-                "alpha": _Memory("alpha", events),
-                "beta": _Memory("beta", events, open_error=failure),
-            },
-        )
+        _open({"alpha": _Memory("alpha", events), "beta": _Memory("beta", events, open_error=failure)})
 
-    assert exc.value.origin == origins[layout[0].ref]
+    assert exc.value.origin == _origins()["beta"]
     assert events == [
         ("open_run", "alpha", None),
         ("open_run", "beta", None),
@@ -505,35 +356,35 @@ def test_later_open_failure_closes_prior_session_and_preserves_origin() -> None:
     ]
 
 
-def test_invalid_opened_session_is_closed_before_setup_failure() -> None:
-    layout, origins = _layout()
+def test_frame_era_session_is_closed_before_setup_failure() -> None:
     events: list[tuple[Any, ...]] = []
 
-    class _InvalidSession:
-        def open_frame(self, spec: MemoryFrameSpec) -> _Frame:
+    class _FrameSession:
+        """A session with the removed frame surface and no recall or learn."""
+
+        snapshot: dict[str, Any] = {}
+
+        def open_frame(self, spec: object) -> object:
             raise AssertionError(spec)
+
+        def commit(self, commit_id: str, mutations: tuple[MemoryMutation, ...]) -> None:
+            raise AssertionError(commit_id)
 
         def close(self) -> None:
             events.append(("close", "alpha-invalid"))
 
-    class _InvalidMemory:
-        def open_run(self, *, snapshot=None) -> _InvalidSession:
+    class _FrameMemory:
+        def open_run(self, *, snapshot=None) -> _FrameSession:
             events.append(("open_run", "alpha-invalid", snapshot))
-            return _InvalidSession()
+            return _FrameSession()
 
         def reset(self) -> None:
             pass
 
-    with pytest.raises(MemorySetupError, match="invalid run session"):
-        MemoryRuntime.open(
-            layout=layout,
-            origins=origins,
-            memory={
-                "alpha": _InvalidMemory(),
-                "beta": _Memory("beta", events),
-            },
-        )
+    with pytest.raises(MemorySetupError, match="memory 'alpha' returned an invalid run session") as exc:
+        _open({"alpha": _FrameMemory(), "beta": _Memory("beta", events)})
 
+    assert exc.value.origin == _origins()["alpha"]
     assert events == [
         ("open_run", "alpha-invalid", None),
         ("close", "alpha-invalid"),
@@ -541,88 +392,66 @@ def test_invalid_opened_session_is_closed_before_setup_failure() -> None:
 
 
 def test_recall_returns_nonempty_outer_to_local_sections_with_exact_context() -> None:
-    layout, origins = _layout()
     events: list[tuple[Any, ...]] = []
-    alpha = _Memory("alpha", events, {layout[1].ref: "local lesson"})
-    beta = _Memory("beta", events, {layout[0].ref: ""})
-    runtime = MemoryRuntime.open(
-        layout=layout,
-        origins=origins,
-        memory={"alpha": alpha, "beta": beta},
-    )
+    alpha = _Memory("alpha", events, "local lesson")
+    beta = _Memory("beta", events, "")
+    runtime = _open({"alpha": alpha, "beta": beta})
     context = _context()
 
-    sections = _recall_sections(runtime, _scope(layout), context)
+    sections = _recall_sections(runtime, _scope(), context)
 
-    # Empty outer recall is omitted but local identity remains explicit.
+    # Empty outer recall is omitted but the local key stays explicit.
     assert len(sections) == 1
-    assert sections[0].frame_ref == layout[1].ref
+    assert sections[0].memory == "alpha"
     assert sections[0].text == "local lesson"
-    assert beta.session.calls[layout[0].ref] == [context]
-    assert alpha.session.calls[layout[1].ref] == [context]
+    assert beta.session.calls == [context]
+    assert alpha.session.calls == [context]
     runtime.close()
 
 
-def test_recall_wraps_typed_policy_failure_with_exact_frame_origin() -> None:
-    layout, origins = _layout()
+def test_recall_wraps_typed_failure_with_the_key_origin() -> None:
     events: list[tuple[Any, ...]] = []
-    failure = MemoryOperationError(
-        "recall",
-        "beta.search",
-        "index unavailable",
-        True,
-    )
-    runtime = MemoryRuntime.open(
-        layout=layout,
-        origins=origins,
-        memory={
-            "alpha": _Memory("alpha", events),
-            "beta": _Memory("beta", events, {layout[0].ref: failure}),
-        },
-    )
+    failure = MemoryOperationError("recall", "beta.search", "index unavailable", True)
+    runtime = _open({"alpha": _Memory("alpha", events), "beta": _Memory("beta", events, failure)})
 
-    with pytest.raises(MemoryRecallError, match="index unavailable") as exc:
-        _recall_sections(runtime, _scope(layout), _context())
+    with pytest.raises(MemoryRecallError, match="memory 'beta' recall failed: index unavailable") as exc:
+        _recall_sections(runtime, _scope(), _context())
 
-    assert exc.value.origin == origins[layout[0].ref]
+    assert exc.value.origin == _origins()["beta"]
     assert exc.value.__cause__ is failure
     runtime.close()
 
 
-def test_recall_wraps_noncanonical_policy_text_without_exposing_it() -> None:
+def test_recall_wraps_noncanonical_text_without_exposing_it() -> None:
     class _String(str):
         pass
 
-    layout, origins = _layout()
     events: list[tuple[Any, ...]] = []
-    runtime = MemoryRuntime.open(
-        layout=layout,
-        origins=origins,
-        memory={
-            "alpha": _Memory("alpha", events),
-            "beta": _Memory("beta", events, {layout[0].ref: _String("secret")}),
-        },
-    )
+    runtime = _open({
+        "alpha": _Memory("alpha", events),
+        "beta": _Memory("beta", events, _String("secret")),
+    })
 
     with pytest.raises(MemoryRecallError, match="invalid recall content") as exc:
-        _recall_sections(runtime, _scope(layout), _context())
+        _recall_sections(runtime, _scope(), _context())
 
     assert "secret" not in str(exc.value)
-    assert exc.value.origin == origins[layout[0].ref]
+    assert exc.value.origin == _origins()["beta"]
     runtime.close()
 
 
-def test_context_ignores_uncontributed_frame_capabilities():
-    layout, origins = _layout()
-    alpha = _Memory("alpha", [], values={layout[1].ref: "local notes"})
-    beta = _Memory("beta", [], values={layout[0].ref: "outer notes"})
-    runtime = MemoryRuntime.open(layout=layout, origins=origins, memory={"alpha": alpha, "beta": beta})
+def test_context_ignores_uncontributed_session_capabilities():
+    alpha = _Memory("alpha", [], "local notes")
+    beta = _Memory("beta", [], "outer notes")
+    runtime = _open({"alpha": alpha, "beta": beta})
+
     def forbidden(*args, **kwargs):
-        pytest.fail("a frame's incidental open_turn is not a recall contribution")
-    alpha.session.frames[layout[1].ref].open_turn = forbidden
+        pytest.fail("a session's incidental open_turn is not a recall contribution")
+
+    alpha.session.open_turn = forbidden
     try:
         request = MemoryContextRequest(_context(), None, {})
-        with runtime.open_context(_scope(layout), request, check_stopped=lambda: None) as context:
+        with runtime.open_context(_scope(), request, check_stopped=lambda: None) as context:
             assert context.transcript is None
             assert [section.text for section in context.sections] == ["outer notes", "local notes"]
     finally:
@@ -630,15 +459,17 @@ def test_context_ignores_uncontributed_frame_capabilities():
 
 
 def test_transcript_admission_requires_invocation_before_opening_source():
-    layout, origins = _layout()
     def forbidden(*args, **kwargs):
         pytest.fail("missing invocation must reject admission before the source opens")
+
     source = SimpleNamespace(open_turn=forbidden)
-    alpha = _Memory("alpha", [], values={layout[1].ref: MemoryContent(transcript=source)})
-    runtime = MemoryRuntime.open(layout=layout, origins=origins, memory={"alpha": alpha, "beta": _Memory("beta", [])})
+    alpha = _Memory("alpha", [], MemoryContent(transcript=source))
+    runtime = _open({"alpha": alpha, "beta": _Memory("beta", [])})
     try:
         with pytest.raises(ValueError, match="accepted invocation"):
-            with runtime.open_context(_scope(layout), MemoryContextRequest(_context(), None, {}), check_stopped=lambda: None):
+            with runtime.open_context(
+                _scope(), MemoryContextRequest(_context(), None, {}), check_stopped=lambda: None,
+            ):
                 pytest.fail("missing invocation admitted")
     finally:
         runtime.close()
@@ -646,13 +477,11 @@ def test_transcript_admission_requires_invocation_before_opening_source():
 
 def test_stop_during_recall_prevents_transcript_source_acquisition():
     from threading import Event
+
     from agent_composer.nodes.base import _HostStop
 
-    layout, origins = _layout()
     alpha, beta = _Memory("alpha", []), _Memory("beta", [])
-    runtime = MemoryRuntime.open(
-        layout=layout, origins=origins, memory={"alpha": alpha, "beta": beta},
-    )
+    runtime = _open({"alpha": alpha, "beta": beta})
     stopped = Event()
     source_calls = []
     stop = _HostStop(primary=False)
@@ -670,11 +499,11 @@ def test_stop_during_recall_prevents_transcript_source_acquisition():
         if stopped.is_set():
             raise stop
 
-    alpha.session.frames[layout[1].ref].recall = recall
+    alpha.session.recall = recall
     request = MemoryContextRequest(_context(), ConversationInvocation("run", 1), {})
     try:
         with pytest.raises(_HostStop) as caught:
-            with runtime.open_context(_scope(layout), request, check_stopped=check_stopped):
+            with runtime.open_context(_scope(), request, check_stopped=check_stopped):
                 check_stopped()
         assert caught.value is stop
         assert source_calls == []
@@ -682,20 +511,10 @@ def test_stop_during_recall_prevents_transcript_source_acquisition():
         runtime.close()
 
 
-def _table() -> tuple[MemorySpec, ...]:
-    """Return the key table matching ``_layout``: AGENT alpha, flow beta."""
-    return (
-        MemorySpec("alpha", "alpha", {}, (DeclSite((), ("root",), "agent"),), True),
-        MemorySpec("beta", "beta", {"limit": 2}, (DeclSite((), ("root",), None),), False),
-    )
-
-
 @pytest.mark.parametrize("contributor", ["alpha", "beta"])
 def test_context_admits_a_transcript_only_from_an_eligible_memory(contributor):
-    layout, origins = _layout()
-    policies = {name: _Memory(name, [], values={spec.ref: name for spec in layout})
-                for name in ("alpha", "beta")}
-    runtime = MemoryRuntime.open(layout=layout, origins=origins, memory=policies, memories=_table())
+    policies = {name: _Memory(name, [], name) for name in ("alpha", "beta")}
+    runtime = _open(policies)
     opened = []
 
     @contextmanager
@@ -704,12 +523,11 @@ def test_context_admits_a_transcript_only_from_an_eligible_memory(contributor):
         yield "transcript"
 
     try:
-        spec = next(spec for spec in layout if spec.policy_name == contributor)
-        frame = policies[contributor].session.frames[spec.ref]
-        frame.value = MemoryContent(frame.value, SimpleNamespace(open_turn=open_turn))
+        session = policies[contributor].session
+        session.value = MemoryContent(contributor, SimpleNamespace(open_turn=open_turn))
         request = MemoryContextRequest(_context(), ConversationInvocation("run", 1), {})
         if contributor == "alpha":
-            with runtime.open_context(_scope(layout), request, check_stopped=lambda: None) as context:
+            with runtime.open_context(_scope(), request, check_stopped=lambda: None) as context:
                 assert context.transcript == "transcript"
             assert len(opened) == 1
         else:
@@ -717,38 +535,80 @@ def test_context_admits_a_transcript_only_from_an_eligible_memory(contributor):
                 MemoryRecallError,
                 match="memory 'beta' returned a transcript but is not conversation-eligible",
             ) as caught:
-                _enter_context(runtime, _scope(layout), request, check_stopped=lambda: None)
-            assert caught.value.origin == origins[layout[0].ref]
+                _enter_context(runtime, _scope(), request, check_stopped=lambda: None)
+            assert caught.value.origin == _origins()["beta"]
             assert opened == []
     finally:
         runtime.close()
 
 
-def test_context_rejects_a_second_transcript() -> None:
-    layout, origins = _layout()
-    policies = {name: _Memory(name, [], values={spec.ref: name for spec in layout})
-                for name in ("alpha", "beta")}
-    # Artificial table: both keys eligible, so only the second-transcript rule can fire.
+def test_context_rejects_a_second_transcript_for_one_agent():
     table = (
         MemorySpec("alpha", "alpha", {}, (DeclSite((), ("root",), "agent"),), True),
-        MemorySpec("beta", "beta", {"limit": 2}, (DeclSite((), ("root",), "other"),), True),
+        MemorySpec("gamma", "gamma", {}, (DeclSite((), ("root",), "agent"),), True),
     )
-    runtime = MemoryRuntime.open(layout=layout, origins=origins, memory=policies, memories=table)
-
-    @contextmanager
-    def open_turn(request, *, check_stopped):
-        yield "transcript"
-
+    source = SimpleNamespace(open_turn=lambda *a, **k: pytest.fail("no transcript may open"))
+    policies = {name: _Memory(name, [], MemoryContent(name, source)) for name in ("alpha", "gamma")}
+    runtime = MemoryRuntime.open(
+        memories=table, origins={"alpha": None, "gamma": OriginRef("gamma-site")}, memory=policies,
+    )
+    request = MemoryContextRequest(_context(), ConversationInvocation("run", 1), {})
     try:
-        for spec in layout:
-            frame = policies[spec.policy_name].session.frames[spec.ref]
-            frame.value = MemoryContent(frame.value, SimpleNamespace(open_turn=open_turn))
-        request = MemoryContextRequest(_context(), ConversationInvocation("run", 1), {})
-        with pytest.raises(
-            MemoryRecallError,
-            match="memory 'alpha' returned a second transcript for 'root/agent'",
-        ) as caught:
-            _enter_context(runtime, _scope(layout), request, check_stopped=lambda: None)
-        assert caught.value.origin == origins[layout[1].ref]
+        with pytest.raises(MemoryRecallError, match="memory 'gamma' returned a second transcript") as caught:
+            _enter_context(
+                runtime, MemoryScope(("agent",), ("alpha", "gamma")), request, check_stopped=lambda: None,
+            )
+        assert caught.value.origin == OriginRef("gamma-site")
+    finally:
+        runtime.close()
+
+
+def test_propose_learning_returns_one_proposal_per_key_in_table_order() -> None:
+    mutation = MemoryMutation("m1", {"add": 1})
+    alpha = _Memory("alpha", [], learn_value=[mutation])
+    beta = _Memory("beta", [])
+    runtime = _open({"alpha": alpha, "beta": beta})
+    contexts = (LearnContext("run", "alpha", ()), LearnContext("run", "beta", (), feedback=("good",)))
+    try:
+        proposals = runtime.propose_learning(contexts)
+        assert proposals == (MemoryProposal("alpha", (mutation,)), MemoryProposal("beta", ()))
+        assert [context.memory for context in alpha.session.learn_calls] == ["alpha"]
+        assert beta.session.learn_calls[0].feedback == ("good",)
+        with pytest.raises(ValueError, match="complete recorded memory table in order"):
+            runtime.propose_learning(tuple(reversed(contexts)))
+        with pytest.raises(ValueError, match="complete recorded memory table in order"):
+            runtime.propose_learning(contexts[:1])
+        with pytest.raises(ValueError, match="one run"):
+            runtime.propose_learning((contexts[0], LearnContext("other", "beta", ())))
+    finally:
+        runtime.close()
+
+
+def test_propose_learning_attributes_a_failure_to_its_key() -> None:
+    failure = MemoryOperationError("learn", "beta.down", "store down", False)
+    runtime = _open({"alpha": _Memory("alpha", []), "beta": _Memory("beta", [], learn_value=failure)})
+    contexts = (LearnContext("run", "alpha", ()), LearnContext("run", "beta", ()))
+    try:
+        with pytest.raises(_LearningProposalError) as caught:
+            runtime.propose_learning(contexts)
+        assert caught.value.memory == "beta"
+        assert caught.value.failure.code == "beta.down"
+        assert not hasattr(caught.value, "frame_ref")
+    finally:
+        runtime.close()
+
+
+def test_commit_learning_commits_on_the_named_key_session() -> None:
+    events: list[tuple[Any, ...]] = []
+    runtime = _open({"alpha": _Memory("alpha", events), "beta": _Memory("beta", events)})
+    mutation = MemoryMutation("m1", {"add": 1})
+    try:
+        request = MemoryCommitRequestedRecord("beta", "commit-1", (mutation,), attempt_id=1)
+        assert runtime.commit_learning(request) is None
+        assert events[-1] == ("commit", "beta", "commit-1", (mutation,))
+        with pytest.raises(ValueError, match="enabled memory"):
+            runtime.commit_learning(
+                MemoryCommitRequestedRecord("gamma", "commit-2", (), attempt_id=1)
+            )
     finally:
         runtime.close()

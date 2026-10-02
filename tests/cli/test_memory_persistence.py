@@ -93,7 +93,7 @@ def test_session_history_across_cli_processes_is_explicitly_durable(tmp_path, du
         expected = index + 1 if durable else 1
         assert f"Seen user messages: {expected}" in result.stdout
         records = _records(log)
-        assert records[0].memory_layout is not None
+        assert records[0].memories is not None
         assert records[0].learnable is False
         assert not any(
             type(record).__name__.startswith("Backward") for record in records

@@ -649,17 +649,18 @@ def test_trace_memory_scope_is_detached_and_replayed_without_evidence():
     from copy import deepcopy
     from agent_composer.compile.expand import build_grow
     from agent_composer.compile.model import START_ID, FlowOutput
-    from agent_composer.memory import MemoryFrameRef, MemoryFrameSpec, MemoryOwner, MemoryScope, MemorySnapshotEnvelope
+    from agent_composer.memory import DeclSite, MemoryScope, MemorySnapshotEnvelope, MemorySpec, MemoryStack
     from agent_composer.runtime.state import RunState, _replay_records
     from tests.engine._fakes import FuncNode
     from tests.engine._graph_builder import _engine, _graph
 
-    frame = MemoryFrameRef("root", ("root",), MemoryOwner.FLOW)
-    scope = MemoryScope("root", ("root", "code"), (frame,))
+    scope = MemoryScope(("code",), ("memory",))
     node = FuncNode("code", lambda _: {"items": [1]})
     node.memory_scope = scope
     engine = _engine(_graph([node], [(START_ID, "code")], outputs=[FlowOutput("value", "${code.output}")]),
-                     learnable=True, memory_layout=(MemoryFrameSpec(frame, "memory", {}),),
+                     learnable=True,
+                     memories=(MemorySpec("memory", "memory", {}, (DeclSite((), ("root",), None),), False),),
+                     memory_stacks=(MemoryStack(("code",), ("memory",)),),
                      memory_snapshots=(MemorySnapshotEnvelope("memory", {}),))
     original = deepcopy(engine.state.flow)
     list(engine.run())
@@ -669,7 +670,7 @@ def test_trace_memory_scope_is_detached_and_replayed_without_evidence():
     assert occurrence.memory_scope == expected and occurrence.memory_scope is not scope
     assert "memory_scope" not in json.loads(occurrence._record_bytes)["payload"]
     engine.state.flow.nodes["code"].memory_scope = None
-    object.__setattr__(scope, "frame_stack", [])
+    object.__setattr__(scope, "memories", [])
     detached = occurrence.memory_scope
     object.__setattr__(detached, "static_path", ("foreign",))
     assert occurrence.memory_scope == expected
@@ -681,21 +682,20 @@ def test_trace_memory_scope_is_detached_and_replayed_without_evidence():
 def test_trace_rejects_forged_memory_scope_before_append_and_when_copied(bad):
     from copy import deepcopy
     from dataclasses import replace
-    from agent_composer.memory import MemoryFrameRef, MemoryFrameSpec, MemoryOwner, MemoryScope
+    from agent_composer.memory import MemoryScope
     from agent_composer.runtime.state import prepare_node_succeeded, commit_prepared
     from tests.engine._fakes import FuncNode
     from tests.engine._graph_builder import _forward_capture
     from tests.engine.test_runtime_memory_learning import _start_trace_node
 
-    frame = MemoryFrameRef("root", ("root",), MemoryOwner.FLOW)
     node = FuncNode("code", lambda _: "done")
-    node.memory_scope = MemoryScope("root", ("root", "code"), (frame,))
-    state, log = _start_trace_node(node, layout=(MemoryFrameSpec(frame, "memory", {}),), learnable=True)
+    node.memory_scope = MemoryScope(("code",), ("memory",))
+    state, log = _start_trace_node(node, keys=("memory",), learnable=True)
     prepared = prepare_node_succeeded(state, node.id, "done", forward_capture=_forward_capture(node, {}))
     occurrence = prepared._plan.trace_delta.occurrence
     malformed = object() if bad == "carrier" else deepcopy(node.memory_scope)
     if bad == "nested":
-        object.__setattr__(malformed, "frame_stack", [])
+        object.__setattr__(malformed, "memories", [])
     with pytest.raises(TypeError):
         replace(occurrence, _memory_scope=malformed)
     object.__setattr__(occurrence, "_memory_scope", malformed)
@@ -710,7 +710,7 @@ def _prepared_scoped_outcome(kind, *, scoped=True):
     from copy import deepcopy
     from agent_composer.compile.model import END_ID
     from agent_composer.diagnostics import Failure
-    from agent_composer.memory import MemoryFrameRef, MemoryFrameSpec, MemoryOwner, MemoryScope
+    from agent_composer.memory import MemoryScope
     from agent_composer.nodes.base import Grow
     from agent_composer.runtime.state import prepare_expanded, prepare_node_failed, prepare_node_routed, prepare_node_succeeded
     from tests.engine._fakes import FuncNode
@@ -722,9 +722,8 @@ def _prepared_scoped_outcome(kind, *, scoped=True):
         is_spawner = True
 
     node = (Spawner if kind == "growth" else FuncNode)("physical", lambda _: "done")
-    frame = MemoryFrameRef("root", ("root",), MemoryOwner.FLOW)
-    node.memory_scope = MemoryScope("root", ("root", node.id), (frame,)) if scoped else None
-    state, log = _start_trace_node(node, layout=(MemoryFrameSpec(frame, "memory", {}),), learnable=True,
+    node.memory_scope = MemoryScope((node.id,), ("memory",)) if scoped else None
+    state, log = _start_trace_node(node, keys=("memory",), learnable=True,
                                    route_handle="go" if kind == "route" else None)
     original = deepcopy(state.flow)
     kwargs = {"forward_capture": _forward_capture(node, {})}
@@ -1272,10 +1271,10 @@ def test_terminal_trace_uses_the_accepted_route_latch_until_an_explicit_failure(
 
 @pytest.mark.parametrize("kind", ["success", "route", "failure", "growth"])
 @pytest.mark.parametrize("method", ["replace", "mutate"])
-@pytest.mark.parametrize("change", ["none", "foreign_path", "foreign_frame"])
+@pytest.mark.parametrize("change", ["none", "foreign_path", "foreign_memory"])
 def test_outcome_rejects_valid_scope_substitution_before_append(kind, method, change):
     from dataclasses import replace
-    from agent_composer.memory import MemoryFrameRef, MemoryOwner, MemoryScope
+    from agent_composer.memory import MemoryScope
     from agent_composer.runtime.log import encode_pool
     from agent_composer.runtime.state import commit_prepared
 
@@ -1284,10 +1283,9 @@ def test_outcome_rejects_valid_scope_substitution_before_append(kind, method, ch
     if change == "none":
         forged = None
     elif change == "foreign_path":
-        forged = MemoryScope("root", ("root", "other"), scope.frame_stack)
+        forged = MemoryScope(("other",), scope.memories)
     else:
-        foreign_frame = MemoryFrameRef("root", scope.static_path, MemoryOwner.AGENT)
-        forged = MemoryScope("root", scope.static_path, (foreign_frame,))
+        forged = MemoryScope(scope.static_path, ("foreign",))
     delta = prepared._plan.trace_delta
     if method == "replace":
         prepared = replace(prepared, _plan=replace(prepared._plan, trace_delta=replace(
@@ -2325,8 +2323,7 @@ def test_codec_revalidates_forged_immutable_capture_fields(field):
 
 
 def test_scope_free_evidence_rejects_recalled_sections():
-    from agent_composer.memory import MemoryFrameRef, MemoryOwner, MemorySection
+    from agent_composer.memory import MemorySection
 
-    frame = MemoryFrameRef("root", ("root",), MemoryOwner.FLOW)
-    with pytest.raises(ValueError, match="scope.frame_stack"):
-        EvaluationEvidence(None, {}, None, None, (MemorySection(frame, "recalled"),))
+    with pytest.raises(ValueError, match="scope.memories"):
+        EvaluationEvidence(None, {}, None, None, (MemorySection("outer", "recalled"),))

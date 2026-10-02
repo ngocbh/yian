@@ -15,14 +15,10 @@ from agent_composer.memory import (
     LearnContext,
     MemoryEpisode,
     MemoryEpisodeStatus,
-    MemoryFrameRef,
-    MemoryFrameSpec,
     MemoryMutation,
     MemoryOccurrenceKind,
-    MemoryOccurrenceRef,
     MemoryOccurrenceSegment,
     MemoryOperationFailure,
-    MemoryOwner,
     MemoryPolicySpec,
     MemoryScope,
     MemorySection,
@@ -53,12 +49,25 @@ from agent_composer.runtime.log import (
     encode_record,
 )
 from agent_composer.nodes.base import BackwardResult
-from agent_composer.runtime.contracts import FrameProposal
+from agent_composer.runtime.contracts import MemoryProposal
 from agent_composer.typesys import VariablePool
 
 
 _FINGERPRINT = "a" * 64
 _DIGEST = "b" * 64
+_ROOT = DeclSite((), ("root",), None)
+_AGENT = DeclSite((), ("root",), "agent")
+
+
+def _spec(
+    key: str = "reflective",
+    config: dict[str, Any] | None = None,
+    owner: DeclSite = _AGENT,
+) -> MemorySpec:
+    """Return one key-table entry; an AGENT owner makes it conversation-eligible."""
+    return MemorySpec(key, key, {} if config is None else config, (owner,), owner.node is not None)
+
+
 _PLURAL_PRIVATE_CONFIG_CASES = (
     {"nested": {"secretTokens": ["private"]}},
     {"nested": {"apiKeys": ["private"]}},
@@ -113,38 +122,19 @@ _PRIVATE_CONFIG_CASES = (
 )
 
 
-def _flow_ref() -> MemoryFrameRef:
-    return MemoryFrameRef("root", ("root", "flow"), MemoryOwner.FLOW)
-
-
-def _agent_ref() -> MemoryFrameRef:
-    return MemoryFrameRef("root", ("root", "flow", "agent"), MemoryOwner.AGENT)
-
-
 def _segment(index: int = 0) -> MemoryOccurrenceSegment:
-    return MemoryOccurrenceSegment(
-        MemoryOccurrenceKind.MAP_ITEM,
-        ("root", "flow"),
-        index,
-    )
+    return MemoryOccurrenceSegment(MemoryOccurrenceKind.MAP_ITEM, ("flow",), index)
 
 
 def _evidence(*, bound_inputs: dict[str, Any] | None = None) -> EvaluationEvidence:
-    flow_ref = _flow_ref()
-    agent_ref = _agent_ref()
     return EvaluationEvidence(
-        scope=MemoryScope(
-            root_flow_id="root",
-            static_path=agent_ref.static_path,
-            frame_stack=(flow_ref, agent_ref),
-            occurrence_path=(_segment(),),
-        ),
+        scope=MemoryScope(("flow", "agent"), ("notes", "reflective"), (_segment(),)),
         bound_inputs={"question": ["hello"]} if bound_inputs is None else bound_inputs,
         base_system_prompt="base",
         prompt="answer the question",
         memory_sections=(
-            MemorySection(flow_ref, "flow memory"),
-            MemorySection(agent_ref, "agent memory"),
+            MemorySection("notes", "flow memory"),
+            MemorySection("reflective", "agent memory"),
         ),
         interactions=(
             ModelTextInteraction("draft"),
@@ -157,7 +147,6 @@ def _evidence(*, bound_inputs: dict[str, Any] | None = None) -> EvaluationEviden
 
 def _started(
     *,
-    layout: tuple[MemoryFrameSpec, ...] | None = None,
     snapshots: tuple[MemorySnapshotEnvelope, ...] | None = None,
     learnable: bool = False,
     memories: tuple[MemorySpec, ...] | None = None,
@@ -169,7 +158,6 @@ def _started(
         start_wiring_override={},
         effective_llm_by_static_path={},
         num_workers=0,
-        memory_layout=layout,
         memory_snapshots=snapshots,
         learnable=learnable,
         memories=memories,
@@ -195,11 +183,11 @@ def test_source_neutral_carriers_are_defensive_and_frozen() -> None:
     value = ModelValueInteraction(value_source)
     call = ToolCallInteraction("search", arguments_source)
     evidence = EvaluationEvidence(
-        MemoryScope("root", _agent_ref().static_path, (_agent_ref(),)),
+        MemoryScope(("flow", "agent"), ("reflective",)),
         inputs_source,
         "base",
         "prompt",
-        (MemorySection(_agent_ref(), "memory"),),
+        (MemorySection("reflective", "memory"),),
         (value, call),
     )
 
@@ -221,22 +209,22 @@ def test_source_neutral_carriers_are_defensive_and_frozen() -> None:
 
 
 @pytest.mark.parametrize("config", _PRIVATE_CONFIG_CASES)
-def test_frame_config_rejects_private_keys(config: dict[str, Any]) -> None:
+def test_memory_spec_config_rejects_private_keys(config: dict[str, Any]) -> None:
     with pytest.raises(ValueError, match="forbidden private key"):
-        MemoryFrameSpec(_agent_ref(), "reflective", config)
+        MemorySpec("reflective", "reflective", config, (_AGENT,), True)
 
 
 @pytest.mark.parametrize("config", _PRIVATE_CONFIG_CASES)
-def test_codec_revalidates_forged_private_frame_config(
+def test_codec_revalidates_forged_private_memory_config(
     config: dict[str, Any],
 ) -> None:
-    frame = MemoryFrameSpec(_agent_ref(), "reflective", {})
+    spec = _spec()
     started = _started(
-        layout=(frame,),
+        memories=(spec,),
+        stacks=(),
         snapshots=(MemorySnapshotEnvelope("reflective", {"state": []}),),
     )
-    private_snapshot = MemorySnapshotEnvelope("opaque", config)
-    object.__setattr__(frame, "_config", private_snapshot._snapshot)
+    object.__setattr__(spec, "_config", MemorySnapshotEnvelope("opaque", config)._snapshot)
 
     with pytest.raises(ValueError, match="forbidden private key"):
         encode_record(RecordEnvelope(SCHEMA_VERSION, "run", 0, started))
@@ -248,7 +236,8 @@ def test_public_token_policy_options_round_trip_durably() -> None:
         "continuationToken": "semantic-continuation-marker",
     }
     started = _started(
-        layout=(MemoryFrameSpec(_agent_ref(), "reflective", config),),
+        memories=(_spec(config=config),),
+        stacks=(),
         snapshots=(MemorySnapshotEnvelope("reflective", {"state": []}),),
     )
 
@@ -258,8 +247,8 @@ def test_public_token_policy_options_round_trip_durably() -> None:
     assert b"semantic-stop-marker" in encoded
     assert b"semantic-continuation-marker" in encoded
     assert type(decoded) is RunStartedRecord
-    assert decoded.memory_layout is not None
-    assert decoded.memory_layout[0].config == config
+    assert decoded.memories is not None
+    assert decoded.memories[0].config == config
 
 
 def test_snapshot_envelope_preserves_opaque_public_memory_state() -> None:
@@ -277,26 +266,17 @@ def test_snapshot_envelope_preserves_opaque_public_memory_state() -> None:
 
 
 def test_evidence_requires_coherent_prompts_and_ordered_scope_sections() -> None:
-    scope = MemoryScope(
-        "root",
-        _agent_ref().static_path,
-        (_flow_ref(), _agent_ref()),
-    )
+    scope = MemoryScope(("flow", "agent"), ("notes", "reflective"))
 
     with pytest.raises(ValueError, match="both"):
         EvaluationEvidence(scope, {}, "base", None)
-    with pytest.raises(ValueError, match="scope.frame_stack"):
+    with pytest.raises(ValueError, match="appear in scope.memories"):
         EvaluationEvidence(
             scope,
             {},
             "base",
             "prompt",
-            (
-                MemorySection(
-                    MemoryFrameRef("root", ("root", "other"), MemoryOwner.AGENT),
-                    "x",
-                ),
-            ),
+            (MemorySection("other", "x"),),
         )
     with pytest.raises(ValueError, match="unique"):
         EvaluationEvidence(
@@ -304,7 +284,7 @@ def test_evidence_requires_coherent_prompts_and_ordered_scope_sections() -> None
             {},
             "base",
             "prompt",
-            (MemorySection(_flow_ref(), "a"), MemorySection(_flow_ref(), "b")),
+            (MemorySection("notes", "a"), MemorySection("notes", "b")),
         )
     with pytest.raises(ValueError, match="order"):
         EvaluationEvidence(
@@ -312,7 +292,7 @@ def test_evidence_requires_coherent_prompts_and_ordered_scope_sections() -> None
             {},
             "base",
             "prompt",
-            (MemorySection(_agent_ref(), "a"), MemorySection(_flow_ref(), "b")),
+            (MemorySection("reflective", "a"), MemorySection("notes", "b")),
         )
     with pytest.raises(TypeError, match="VisibleInteraction"):
         EvaluationEvidence(
@@ -329,98 +309,76 @@ def test_evidence_requires_coherent_prompts_and_ordered_scope_sections() -> None
     assert non_agent.interactions == ()
 
 
-def test_memory_scope_requires_one_lexical_unique_frame_chain() -> None:
-    flow_ref = _flow_ref()
-    agent_ref = _agent_ref()
-
+def test_memory_scope_requires_unique_keys_and_nested_occurrences() -> None:
     with pytest.raises(ValueError, match="unique"):
-        MemoryScope(
-            "root",
-            agent_ref.static_path,
-            (flow_ref, flow_ref),
-        )
-    sibling = MemoryFrameRef(
-        "root",
-        ("root", "sibling"),
-        MemoryOwner.AGENT,
-    )
-    with pytest.raises(ValueError, match="lexical"):
-        MemoryScope(
-            "root",
-            agent_ref.static_path,
-            (flow_ref, sibling),
-        )
-    nested_flow = MemoryFrameRef(
-        "root",
-        ("root", "flow", "agent", "child"),
-        MemoryOwner.FLOW,
-    )
-    with pytest.raises(ValueError, match="final local"):
-        MemoryScope(
-            "root",
-            ("root", "flow", "agent", "child", "node"),
-            (agent_ref, nested_flow),
-        )
+        MemoryScope(("flow", "agent"), ("notes", "notes"))
     assert EvaluationEvidence(
-        MemoryScope("root", ("root", "neutral")), {}, "base", "prompt",
+        MemoryScope(("neutral",)), {}, "base", "prompt",
     ).memory_sections == ()
     with pytest.raises(ValueError, match="lexical nesting"):
         MemoryScope(
-            "root",
-            agent_ref.static_path,
-            (flow_ref, agent_ref),
+            ("flow", "agent"),
+            ("notes",),
             occurrence_path=(
-                MemoryOccurrenceSegment(
-                    MemoryOccurrenceKind.MAP_ITEM,
-                    ("root", "other"),
-                    0,
-                ),
-                MemoryOccurrenceSegment(
-                    MemoryOccurrenceKind.LOOP_ITERATION,
-                    ("root", "flow"),
-                    0,
-                ),
+                MemoryOccurrenceSegment(MemoryOccurrenceKind.MAP_ITEM, ("other",), 0),
+                MemoryOccurrenceSegment(MemoryOccurrenceKind.LOOP_ITERATION, ("flow",), 0),
             ),
         )
-    with pytest.raises(ValueError, match="begin"):
-        MemoryFrameRef("root", ("other", "agent"), MemoryOwner.AGENT)
+    with pytest.raises(ValueError, match="innermost occurrence segment"):
+        MemoryScope(
+            ("flow", "agent"),
+            ("notes",),
+            occurrence_path=(
+                MemoryOccurrenceSegment(MemoryOccurrenceKind.MAP_ITEM, ("other",), 0),
+            ),
+        )
 
 
 def test_episode_accepts_binding_failure_and_typed_visible_material() -> None:
     episode = MemoryEpisode(
         run_id="run",
-        occurrence=MemoryOccurrenceRef(_agent_ref()),
-        owner_static_path=_agent_ref().static_path,
+        occurrence_path=(),
+        owner_static_path=("flow", "agent"),
         status=MemoryEpisodeStatus.FAILED,
         inputs=None,
         failure={"code": "binding.evaluate"},
         base_system_prompt=None,
         prompt=None,
-        memory_sections=(MemorySection(_agent_ref(), "memory"),),
+        memory_sections=(MemorySection("reflective", "memory"),),
         interactions=(ModelTextInteraction("visible"),),
     )
 
     assert episode.inputs is None
-    assert episode.memory_sections == (MemorySection(_agent_ref(), "memory"),)
+    assert episode.memory_sections == (MemorySection("reflective", "memory"),)
     assert episode.interactions == (ModelTextInteraction("visible"),)
 
 
 def test_run_started_distinguishes_disabled_and_enabled_empty_memory() -> None:
     disabled = _round_trip(_started())
-    enabled = _round_trip(_started(layout=(), snapshots=()))
-    learning = _round_trip(_started(layout=(), snapshots=(), learnable=True))
+    enabled = _round_trip(_started(memories=(), stacks=(), snapshots=()))
+    learning = _round_trip(_started(memories=(), stacks=(), snapshots=(), learnable=True))
 
-    assert disabled.memory_layout is None
+    assert disabled.memories is None
+    assert disabled.memory_stacks is None
     assert disabled.memory_snapshots is None
-    assert enabled.memory_layout == ()
+    assert enabled.memories == ()
+    assert enabled.memory_stacks == ()
     assert enabled.memory_snapshots == ()
     assert learning.learnable is True
+    assert not hasattr(enabled, "memory_layout")
 
-    with pytest.raises(ValueError, match="both"):
-        _started(layout=(), snapshots=None)
+    for partial in (
+        dict(memories=(), stacks=(), snapshots=None),
+        dict(memories=(), stacks=None, snapshots=()),
+        dict(memories=None, stacks=(), snapshots=()),
+    ):
+        with pytest.raises(ValueError, match="all be recorded or all be absent"):
+            _started(**partial)
+    with pytest.raises(TypeError, match="tuples"):
+        _started(memories=[], stacks=(), snapshots=())  # type: ignore[arg-type]
     assert _round_trip(_started(learnable=True)).learnable is True
     with pytest.raises(TypeError, match="boolean"):
-        _started(layout=(), snapshots=(), learnable=1)  # type: ignore[arg-type]
+        _started(memories=(), stacks=(), snapshots=(), learnable=1)  # type: ignore[arg-type]
 
 
 def test_run_started_uses_learnable_as_its_only_wire_retention_field() -> None:
@@ -435,65 +393,59 @@ def test_run_started_uses_learnable_as_its_only_wire_retention_field() -> None:
         decode_record(json.dumps(wire).encode())
 
 
-def test_run_started_requires_canonical_layout_and_matching_snapshots() -> None:
-    flow = MemoryFrameSpec(_flow_ref(), "profile", {"mode": "flow"})
-    agent = MemoryFrameSpec(_agent_ref(), "reflective", {"mode": "agent"})
-    snapshots = (
-        MemorySnapshotEnvelope("profile", {"state": 1}),
-        MemorySnapshotEnvelope("reflective", {"state": 2}),
-    )
-    decoded = _round_trip(_started(layout=(flow, agent), snapshots=snapshots))
-    wire = json.loads(
-        encode_record(RecordEnvelope(SCHEMA_VERSION, "run", 0, decoded))
-    )
-
-    assert decoded.memory_layout == (flow, agent)
-    assert decoded.memory_snapshots == snapshots
-    assert "origin" not in json.dumps(wire["payload"]["memory_layout"])
-
-    with pytest.raises(ValueError, match="sorted and unique"):
-        _started(layout=(agent, flow), snapshots=snapshots)
-    with pytest.raises(ValueError, match="sorted and unique"):
-        _started(layout=(flow, flow), snapshots=(snapshots[0],))
-    with pytest.raises(ValueError, match="sorted and unique"):
-        _started(layout=(flow, agent), snapshots=tuple(reversed(snapshots)))
-    with pytest.raises(ValueError, match="equal"):
-        _started(layout=(flow, agent), snapshots=(snapshots[0],))
-    other_root = MemoryFrameSpec(
-        MemoryFrameRef("second", ("second",), MemoryOwner.FLOW),
-        "profile",
-        {},
-    )
-    with pytest.raises(ValueError, match="one root_flow_id"):
-        _started(
-            layout=(flow, other_root),
-            snapshots=(snapshots[0],),
-        )
-
-
-def test_run_started_records_a_key_table_and_stacks_beside_the_layout() -> None:
-    layout = (
-        MemoryFrameSpec(_flow_ref(), "profile", {"mode": "flow"}),
-        MemoryFrameSpec(_agent_ref(), "reflective", {"mode": "agent"}),
-    )
-    snapshots = (
-        MemorySnapshotEnvelope("profile", {"state": 1}),
-        MemorySnapshotEnvelope("reflective", {"state": 2}),
-    )
+def test_run_started_requires_a_canonical_table_and_matching_snapshots() -> None:
     memories = (
-        MemorySpec("profile", "profile", {"mode": "flow"}, (DeclSite((), ("root",), None),), False),
-        MemorySpec("reflective", "reflective", {"mode": "agent"}, (DeclSite((), ("root",), "agent"),), True),
+        _spec("profile", {"mode": "flow"}, _ROOT),
+        _spec("reflective", {"mode": "agent"}),
+    )
+    snapshots = (
+        MemorySnapshotEnvelope("profile", {"state": 1}),
+        MemorySnapshotEnvelope("reflective", {"state": 2}),
     )
     stacks = (
         MemoryStack(("agent",), ("profile", "reflective")),
         MemoryStack(("plain",), ("profile",)),
     )
-    enabled = dict(layout=layout, snapshots=snapshots)
+    decoded = _round_trip(_started(memories=memories, stacks=stacks, snapshots=snapshots))
 
-    decoded = _round_trip(_started(**enabled, memories=memories, stacks=stacks))
     assert decoded.memories == memories
     assert decoded.memory_stacks == stacks
-    wire = json.loads(encode_record(RecordEnvelope(SCHEMA_VERSION, "run", 0, decoded)))
+    assert decoded.memory_snapshots == snapshots
+
+    with pytest.raises(ValueError, match="memories keys must be sorted and unique"):
+        _started(memories=tuple(reversed(memories)), stacks=stacks, snapshots=snapshots)
+    with pytest.raises(ValueError, match="memories keys must be sorted and unique"):
+        _started(memories=(memories[0], memories[0]), stacks=(), snapshots=snapshots[:1])
+    with pytest.raises(ValueError, match="memory_snapshots memory keys must be sorted and unique"):
+        _started(memories=memories, stacks=stacks, snapshots=tuple(reversed(snapshots)))
+    with pytest.raises(ValueError, match="equal memories keys"):
+        _started(memories=memories, stacks=stacks, snapshots=snapshots[:1])
+    with pytest.raises(ValueError, match="locators must be sorted and unique"):
+        _started(memories=memories, stacks=tuple(reversed(stacks)), snapshots=snapshots)
+    with pytest.raises(ValueError, match="unknown memory keys"):
+        _started(
+            memories=memories,
+            stacks=(MemoryStack(("agent",), ("missing",)),),
+            snapshots=snapshots,
+        )
+
+
+def test_run_started_records_a_key_table_and_stacks() -> None:
+    memories = (
+        _spec("profile", {"mode": "flow"}, _ROOT),
+        _spec("reflective", {"mode": "agent"}),
+    )
+    started = _started(
+        memories=memories,
+        stacks=(MemoryStack(("agent",), ("profile", "reflective")),),
+        snapshots=(
+            MemorySnapshotEnvelope("profile", {"state": 1}),
+            MemorySnapshotEnvelope("reflective", {"state": 2}),
+        ),
+    )
+    wire = json.loads(encode_record(RecordEnvelope(SCHEMA_VERSION, "run", 0, started)))
+
+    assert "memory_layout" not in wire["payload"]
     assert wire["payload"]["memories"] == [
         {
             "key": "profile",
@@ -512,29 +464,21 @@ def test_run_started_records_a_key_table_and_stacks_beside_the_layout() -> None:
     ]
     assert wire["payload"]["memory_stacks"] == [
         {"locator": ["agent"], "memories": ["profile", "reflective"]},
-        {"locator": ["plain"], "memories": ["profile"]},
     ]
     disabled = json.loads(encode_record(RecordEnvelope(SCHEMA_VERSION, "run", 0, _started())))
     assert disabled["payload"]["memories"] is None
     assert disabled["payload"]["memory_stacks"] is None
-    assert _round_trip(_started(**enabled)).memories is None
+    assert disabled["payload"]["memory_snapshots"] is None
 
-    with pytest.raises(ValueError, match="both"):
-        _started(**enabled, memories=memories, stacks=None)
-    with pytest.raises(ValueError, match="disabled"):
-        _started(memories=(), stacks=())
-    with pytest.raises(ValueError, match="sorted and unique"):
-        _started(**enabled, memories=tuple(reversed(memories)), stacks=stacks)
-    with pytest.raises(ValueError, match="layout policy names"):
-        _started(**enabled, memories=memories[:1], stacks=stacks[1:])
-    with pytest.raises(ValueError, match="sorted and unique"):
-        _started(**enabled, memories=memories, stacks=tuple(reversed(stacks)))
-    with pytest.raises(ValueError, match="unknown memory keys"):
-        _started(**enabled, memories=memories, stacks=(MemoryStack(("agent",), ("missing",)),))
-
-    wire["payload"].pop("memory_stacks")
+    for field in ("memory_stacks", "memories"):
+        missing = json.loads(json.dumps(wire))
+        missing["payload"].pop(field)
+        with pytest.raises(ValueError):
+            decode_record(json.dumps(missing).encode())
+    legacy = json.loads(json.dumps(wire))
+    legacy["payload"]["memory_layout"] = None
     with pytest.raises(ValueError):
-        decode_record(json.dumps(wire).encode())
+        decode_record(json.dumps(legacy).encode())
 
 
 @pytest.mark.parametrize(
@@ -570,10 +514,9 @@ def test_existing_outcome_records_round_trip_with_no_evidence() -> None:
 
 
 def test_every_memory_commit_record_round_trips() -> None:
-    ref = _agent_ref()
     mutations = (
-        MemoryMutation("m1", ref, {"action": "add"}),
-        MemoryMutation("m2", ref, {"action": "revise"}),
+        MemoryMutation("m1", {"action": "add"}),
+        MemoryMutation("m2", {"action": "revise"}),
     )
     failure = MemoryOperationFailure("learn", "provider.error", "failed", True)
     records = (
@@ -602,22 +545,19 @@ def test_memory_commit_wire_requires_an_explicit_positive_attempt_slot(attempt_i
             decode_record(json.dumps(wire).encode())
 
 
-def test_proposals_preserve_order_and_reject_wrong_ownership_or_duplicate_ids() -> None:
-    ref = _agent_ref()
-    other = MemoryFrameRef("root", ("root", "other"), MemoryOwner.AGENT)
-    with pytest.raises(ValueError, match="frame_ref"):
-        FrameProposal(ref, (MemoryMutation("m1", other, {}),))
+def test_proposals_preserve_order_and_reject_duplicate_ids() -> None:
     ordered = (
-        MemoryMutation("m2", ref, {"sequence": 1}),
-        MemoryMutation("m1", ref, {"sequence": 2}),
+        MemoryMutation("m2", {"sequence": 1}),
+        MemoryMutation("m1", {"sequence": 2}),
     )
-    assert FrameProposal(ref, ordered).mutations == ordered
+    assert MemoryProposal("reflective", ordered).mutations == ordered
     with pytest.raises(ValueError, match="unique"):
         MemoryCommitRequestedRecord(
             "reflective",
             "commit",
-            (MemoryMutation("same", ref, {}), MemoryMutation("same", other, {})),
-         attempt_id=1)
+            (MemoryMutation("same", {}), MemoryMutation("same", {})),
+            attempt_id=1,
+        )
 
 
 class _OrderedStructuredModel:
@@ -644,25 +584,25 @@ def test_reflective_multi_action_order_survives_records_and_commit(
 ) -> None:
     monkeypatch.setattr(reflective, "model_from_config", lambda config: _OrderedModel())
     memory = ReflectiveMemory({"provider": "ollama", "model": "qwen"})
-    ref = _agent_ref()
-    spec = MemoryFrameSpec(ref, "reflective", {})
     episode = MemoryEpisode(
         "run",
-        MemoryOccurrenceRef(ref),
-        ref.static_path,
+        (),
+        ("agent",),
         MemoryEpisodeStatus.SUCCEEDED,
         {"input": "value"},
         "output",
     )
     with memory.open_run() as session:
-        proposals = tuple(
-            session.open_frame(spec).learn(LearnContext("run", ref, (episode,)))
-        )
+        proposals = tuple(session.learn(LearnContext("run", "reflective", (episode,))))
 
     assert [mutation.payload["lesson_id"] for mutation in proposals] == ["z", "a"]
-    ready = _round_trip(BackwardReadyRecord(1, BackwardResult(), (), (FrameProposal(ref, proposals),)))
+    ready = _round_trip(
+        BackwardReadyRecord(1, BackwardResult(), (), (MemoryProposal("reflective", proposals),))
+    )
     requested = _round_trip(
-        MemoryCommitRequestedRecord("reflective", "commit", ready.frame_proposals[0].mutations, attempt_id=1)
+        MemoryCommitRequestedRecord(
+            "reflective", "commit", ready.proposals[0].mutations, attempt_id=1
+        )
     )
     assert [mutation.payload["lesson_id"] for mutation in requested.mutations] == [
         "z",
@@ -670,10 +610,9 @@ def test_reflective_multi_action_order_survives_records_and_commit(
     ]
 
     with memory.open_run() as session:
-        session.open_frame(spec)
         session.commit(requested.commit_id, requested.mutations)
     with memory.open_run() as session:
-        assert session.open_frame(spec).recall() == "[z] first\n[a] second"
+        assert session.recall() == "[z] first\n[a] second"
 
 
 class _ForgedEvidence(EvaluationEvidence):
@@ -698,7 +637,7 @@ def test_records_reject_forged_nested_carrier_subclasses() -> None:
         evidence.memory_sections,
         evidence.interactions,
     )
-    forged_mutation = _ForgedMutation("m1", _agent_ref(), {})
+    forged_mutation = _ForgedMutation("m1", {})
 
     with pytest.raises(TypeError, match="evidence"):
         NodeSucceededRecord(
@@ -716,14 +655,8 @@ def test_records_reject_forged_nested_carrier_subclasses() -> None:
 
 
 def test_nested_frozen_carriers_are_revalidated_before_recording() -> None:
-    ref = _agent_ref()
     segment = _segment()
-    scope = MemoryScope(
-        "root",
-        ref.static_path,
-        (ref,),
-        (segment,),
-    )
+    scope = MemoryScope(("flow", "agent"), ("reflective",), (segment,))
     object.__setattr__(segment, "index", True)
     with pytest.raises(TypeError, match="index"):
         EvaluationEvidence(scope, {}, "base", "prompt")
@@ -732,17 +665,16 @@ def test_nested_frozen_carriers_are_revalidated_before_recording() -> None:
     object.__setattr__(interaction, "text", _StringSubclass("visible"))
     with pytest.raises(TypeError, match="text"):
         EvaluationEvidence(
-            MemoryScope("root", ref.static_path, (ref,)),
+            MemoryScope(("flow", "agent"), ("reflective",)),
             {},
             "base",
             "prompt",
             interactions=(interaction,),
         )
 
-    mutation_ref = MemoryFrameRef("root", ("root", "agent"), MemoryOwner.AGENT)
-    mutation = MemoryMutation("m1", mutation_ref, {})
-    object.__setattr__(mutation_ref, "root_flow_id", _StringSubclass("root"))
-    with pytest.raises(TypeError, match="root_flow_id"):
+    mutation = MemoryMutation("m1", {})
+    object.__setattr__(mutation, "mutation_id", _StringSubclass("m1"))
+    with pytest.raises(TypeError, match="mutation_id"):
         MemoryCommitRequestedRecord("reflective", "commit", (mutation,), attempt_id=1)
 
 
@@ -754,23 +686,25 @@ def test_codec_revalidates_carriers_mutated_after_record_construction() -> None:
         {"kind": "str", "value": "done"},
         evidence,
     )
-    object.__setattr__(evidence.scope, "root_flow_id", _StringSubclass("root"))
+    object.__setattr__(evidence.scope, "memories", (_StringSubclass("notes"), "reflective"))
 
-    with pytest.raises(TypeError, match="root_flow_id"):
+    with pytest.raises(TypeError, match="memories"):
         encode_record(RecordEnvelope(SCHEMA_VERSION, "run", 0, record))
 
 
 def test_codec_replays_outer_record_invariants_after_forging() -> None:
-    proposal = FrameProposal(_agent_ref(), (MemoryMutation("m1", _agent_ref(), {}),))
+    proposal = MemoryProposal(
+        "reflective", (MemoryMutation("m1", {}), MemoryMutation("m2", {}))
+    )
     ready = BackwardReadyRecord(1, BackwardResult(), (), (proposal,))
-    object.__setattr__(ready.frame_proposals[0].mutations[0], "frame_ref", _flow_ref())
-    with pytest.raises(ValueError, match="frame_ref"):
+    object.__setattr__(ready.proposals[0].mutations[1], "mutation_id", "m1")
+    with pytest.raises(ValueError, match="unique"):
         encode_record(RecordEnvelope(SCHEMA_VERSION, "run", 0, ready))
 
     commit = MemoryCommitRequestedRecord(
         "reflective",
         "commit",
-        (MemoryMutation("m1", _agent_ref(), {}),),
+        (MemoryMutation("m1", {}),),
      attempt_id=1)
     object.__setattr__(commit, "mutations", list(commit.mutations))
     with pytest.raises(TypeError, match="tuple"):
@@ -829,7 +763,7 @@ def test_memory_scope_wire_has_no_boundary_field() -> None:
     )
     wire = json.loads(encode_record(RecordEnvelope(SCHEMA_VERSION, "run", 0, record)))
     scope = wire["payload"]["evidence"]["scope"]
-    assert sorted(scope) == ["frame_stack", "occurrence_path", "root_flow_id", "static_path"]
+    assert sorted(scope) == ["memories", "occurrence_path", "static_path"]
     scope["boundary"] = None
     with pytest.raises(ValueError):
         decode_record(json.dumps(wire))
@@ -837,20 +771,21 @@ def test_memory_scope_wire_has_no_boundary_field() -> None:
 
 def test_schema_four_rejects_origin_and_extra_memory_operation_fields() -> None:
     started = _started(
-        layout=(MemoryFrameSpec(_flow_ref(), "reflective", {}),),
+        memories=(_spec(owner=_ROOT),),
+        stacks=(),
         snapshots=(MemorySnapshotEnvelope("reflective", {}),),
     )
     started_wire = json.loads(
         encode_record(RecordEnvelope(SCHEMA_VERSION, "run", 0, started))
     )
-    started_wire["payload"]["memory_layout"][0]["origin"] = {"key": "source"}
+    started_wire["payload"]["memories"][0]["origin"] = {"key": "source"}
     with pytest.raises(ValueError):
         decode_record(json.dumps(started_wire))
 
     private_config = json.loads(
         encode_record(RecordEnvelope(SCHEMA_VERSION, "run", 0, started))
     )
-    private_config["payload"]["memory_layout"][0]["config"] = {
+    private_config["payload"]["memories"][0]["config"] = {
         "nested": {"api_key": "private"}
     }
     with pytest.raises(ValueError, match="forbidden private key"):
@@ -870,17 +805,18 @@ def test_schema_four_rejects_origin_and_extra_memory_operation_fields() -> None:
 
 
 @pytest.mark.parametrize("config", _PLURAL_PRIVATE_CONFIG_CASES)
-def test_schema_four_rejects_plural_private_frame_config(
+def test_schema_four_rejects_plural_private_memory_config(
     config: dict[str, Any],
 ) -> None:
     started = _started(
-        layout=(MemoryFrameSpec(_flow_ref(), "reflective", {}),),
+        memories=(_spec(owner=_ROOT),),
+        stacks=(),
         snapshots=(MemorySnapshotEnvelope("reflective", {}),),
     )
     wire = json.loads(
         encode_record(RecordEnvelope(SCHEMA_VERSION, "run", 0, started))
     )
-    wire["payload"]["memory_layout"][0]["config"] = config
+    wire["payload"]["memories"][0]["config"] = config
 
     with pytest.raises(ValueError, match="forbidden private key"):
         decode_record(json.dumps(wire))
@@ -891,9 +827,45 @@ def test_run_log_copying_isolated_from_new_carrier_accessors() -> None:
         MemoryCommitRequestedRecord(
             "reflective",
             "commit",
-            (MemoryMutation("m1", _agent_ref(), {"items": [1]}),),
+            (MemoryMutation("m1", {"items": [1]}),),
          attempt_id=1)
     )
 
     record.mutations[0].payload["items"].append(2)
     assert record.mutations[0].payload == {"items": [1]}
+
+
+def test_memory_payloads_name_keys_on_the_wire() -> None:
+    record = NodeSucceededRecord(
+        "agent", "agent", {"kind": "str", "value": "done"}, _evidence()
+    )
+    evidence = json.loads(
+        encode_record(RecordEnvelope(SCHEMA_VERSION, "run", 0, record))
+    )["payload"]["evidence"]
+    assert evidence["scope"] == {
+        "static_path": ["flow", "agent"],
+        "memories": ["notes", "reflective"],
+        "occurrence_path": [{"kind": "map_item", "static_path": ["flow"], "index": 0}],
+    }
+    assert evidence["memory_sections"] == [
+        {"memory": "notes", "text": "flow memory"},
+        {"memory": "reflective", "text": "agent memory"},
+    ]
+    assert _round_trip(record) == record
+
+    proposal = MemoryProposal("reflective", (MemoryMutation("m1", {"add": 1}),))
+    ready = BackwardReadyRecord(1, BackwardResult(), (), (proposal,))
+    ready_wire = json.loads(encode_record(RecordEnvelope(SCHEMA_VERSION, "run", 0, ready)))
+    assert ready_wire["payload"]["proposals"] == [
+        {"memory": "reflective", "mutations": [{"mutation_id": "m1", "payload": {"add": 1}}]}
+    ]
+    assert "frame_proposals" not in ready_wire["payload"]
+    assert _round_trip(ready).proposals == (proposal,)
+
+    commit = MemoryCommitRequestedRecord("reflective", "c1", proposal.mutations, attempt_id=1)
+    commit_wire = json.loads(encode_record(RecordEnvelope(SCHEMA_VERSION, "run", 0, commit)))
+    assert commit_wire["payload"]["mutations"] == [{"mutation_id": "m1", "payload": {"add": 1}}]
+
+    ready_wire["payload"]["proposals"][0]["frame_ref"] = None
+    with pytest.raises(ValueError):
+        decode_record(json.dumps(ready_wire).encode())

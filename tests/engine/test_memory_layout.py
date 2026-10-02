@@ -19,10 +19,9 @@ from agent_composer.diagnostics import OriginRef
 from agent_composer.memory import (
     DeclSite,
     MemoryDecl,
-    MemoryFrameRef,
-    MemoryOwner,
     MemoryScope,
     MemorySetupError,
+    MemoryStack,
 )
 from agent_composer.nodes.agent import AgentNode
 from agent_composer.nodes.call import CallNode
@@ -70,39 +69,19 @@ def test_disabled_layout_needs_no_flow_id_and_leaves_every_scope_none() -> None:
         [],
         wiring={"plain": {}},
     )
-    flow.nodes["plain"].memory_scope = MemoryScope("old", ("old", "plain"))
+    flow.nodes["plain"].memory_scope = MemoryScope(("plain",))
 
     layout = resolve_memory_layout(flow)
 
     assert layout.enabled is False
-    assert layout.root_flow_id is None
-    assert layout.frames == ()
+    assert layout.memories == ()
     assert [(target.locator, target.scope) for target in layout.targets] == [
         (("plain",), None)
     ]
     # Resolution is pure and ignores an existing derived scope.
-    assert flow.nodes["plain"].memory_scope == MemoryScope(
-        "old", ("old", "plain")
-    )
+    assert flow.nodes["plain"].memory_scope == MemoryScope(("plain",))
     with pytest.raises(MemorySetupError, match="different memory scope"):
         apply_memory_layout(flow, layout)
-
-
-def test_reachable_policy_requires_root_id_at_the_authored_policy_site() -> None:
-    origin = OriginRef("nodes/agent/memory_policy")
-    agent = AgentNode(
-        "agent",
-        memories=(
-            MemoryDecl("reflective", "reflective", {}, DeclSite((), ("root",), "agent"), origin),
-        ),
-    )
-    flow = CompiledFlow({"agent": agent}, [], wiring={"agent": {}})
-
-    with pytest.raises(MemorySetupError, match="requires.*root flow_id") as caught:
-        resolve_memory_layout(flow)
-
-    assert caught.value.origin is origin
-    assert agent.memory_scope is None
 
 
 @pytest.mark.parametrize(
@@ -171,45 +150,7 @@ def test_memory_owning_python_flow_requires_exact_direct_boundaries(
     assert all(node.memory_scope is None for node in nodes.values())
 
 
-def test_layout_orders_outer_flow_inner_flow_and_local_agent_frames() -> None:
-    flow = load_flow(_NESTED).compiled
-
-    layout = resolve_memory_layout(flow)
-
-    assert [
-        (frame.spec.ref.static_path, frame.spec.ref.owner, frame.spec.policy_name)
-        for frame in layout.frames
-    ] == [
-        (("root",), MemoryOwner.FLOW, "outer"),
-        (("root", "invoke"), MemoryOwner.FLOW, "inner"),
-        (("root", "invoke", "answer"), MemoryOwner.AGENT, "local"),
-    ]
-    assert _target(layout, "invoke").scope.frame_stack == (
-        layout.frames[0].spec.ref,
-    )
-    assert _target(layout, "invoke", "normalize").scope.frame_stack == (
-        layout.frames[0].spec.ref,
-        layout.frames[1].spec.ref,
-    )
-    assert _target(layout, "invoke", "answer").scope.frame_stack == tuple(
-        frame.spec.ref for frame in layout.frames
-    )
-    assert _target(layout, "invoke").scope.static_path == ("root", "invoke")
-    assert _target(layout, "invoke", "answer").scope.static_path == (
-        "root",
-        "invoke",
-        "answer",
-    )
-
-
-def test_flow_start_and_end_scopes_carry_only_the_frame_stack() -> None:
-    layout = resolve_memory_layout(load_flow(_NESTED).compiled)
-    outer, inner = (frame.spec.ref for frame in layout.frames[:2])
-    for node_id in (START_ID, END_ID):
-        assert _target(layout, "invoke", node_id).scope == MemoryScope(
-            "root", ("root", "invoke", node_id), frame_stack=(outer, inner),
-        )
-
+def test_flow_start_and_end_scopes_carry_the_enclosing_keys() -> None:
     without_child_policy = load_flow(
         _NESTED.replace(
             "    long_term_memory:\n      name: inner\n      config: {limit: 3}\n",
@@ -217,35 +158,29 @@ def test_flow_start_and_end_scopes_carry_only_the_frame_stack() -> None:
         )
     ).compiled
     inherited = resolve_memory_layout(without_child_policy)
-    assert _target(inherited, "invoke", "answer").scope.frame_stack == (
-        inherited.frames[0].spec.ref,
-        inherited.frames[1].spec.ref,
-    )
-    assert [frame.spec.ref.owner for frame in inherited.frames] == [
-        MemoryOwner.FLOW,
-        MemoryOwner.AGENT,
-    ]
+
+    for node_id in (START_ID, END_ID):
+        assert _target(inherited, "invoke", node_id).scope == MemoryScope(
+            ("invoke", node_id), ("outer",)
+        )
+    assert _target(inherited, "invoke", "answer").scope.memories == ("outer", "local")
+    assert [memory.key for memory in inherited.memories] == ["local", "outer"]
 
 
-def test_composite_drivers_never_create_memory_frames() -> None:
+def test_composite_drivers_see_only_enclosing_keys() -> None:
     layout = resolve_memory_layout(load_flow(_NESTED).compiled)
 
-    assert [
-        (frame.spec.ref.static_path, frame.spec.ref.owner)
-        for frame in layout.frames
-    ] == [
-        (("root",), MemoryOwner.FLOW),
-        (("root", "invoke"), MemoryOwner.FLOW),
-        (("root", "invoke", "answer"), MemoryOwner.AGENT),
+    # The CALL sees only its enclosing flow's keys; the child flow's keys
+    # begin inside the called child.
+    assert _target(layout, "invoke").scope.memories == ("outer",)
+    assert [(memory.key, memory.placements) for memory in layout.memories] == [
+        ("inner", ()),
+        ("local", (("invoke", "answer"),)),
+        ("outer", ()),
     ]
-    # The CALL at this same static path sees only its enclosing flow frame; the
-    # child FLOW frame begins inside the called child.
-    assert _target(layout, "invoke").scope.frame_stack == (
-        layout.frames[0].spec.ref,
-    )
 
 
-def test_repeated_definition_and_inline_children_get_callsite_paths() -> None:
+def test_repeated_definition_shares_one_owner_and_inline_children_own_their_keys() -> None:
     repeated_def = load_flow(
         """id: root
 name: root
@@ -266,10 +201,12 @@ output: ${right.output}
 """
     ).compiled
     definition_layout = resolve_memory_layout(repeated_def)
-    assert [frame.spec.ref.static_path for frame in definition_layout.frames] == [
-        ("root", "left"),
-        ("root", "right"),
-    ]
+    (memory,) = definition_layout.memories
+    assert memory.owners == (DeclSite((), ("def", "child"), None),)
+    stacks = {stack.locator: stack.memories for stack in memory_stacks(definition_layout)}
+    assert stacks[("left",)] == ()
+    assert stacks[("left", "answer")] == ("reflective",)
+    assert stacks[("right", "answer")] == ("reflective",)
 
     inline = load_flow(
         """id: root
@@ -296,12 +233,13 @@ nodes:
 output: ${right.output}
 """
     ).compiled
-    inline_layout = resolve_memory_layout(inline)
-    assert [frame.spec.ref.static_path for frame in inline_layout.frames] == [
-        ("root", "left", "answer"),
-        ("root", "right", "answer"),
-    ]
-    assert all(frame.spec.ref.owner is MemoryOwner.AGENT for frame in inline_layout.frames)
+    (memory,) = resolve_memory_layout(inline).memories
+    assert memory.owners == (
+        DeclSite((), ("root", "node", "left", "inline"), "answer"),
+        DeclSite((), ("root", "node", "right", "inline"), "answer"),
+    )
+    assert memory.placements == (("left", "answer"), ("right", "answer"))
+    assert memory.conversation_eligible is False
 
 
 def test_apply_is_idempotent_and_does_not_change_authored_identity() -> None:
@@ -325,49 +263,41 @@ def test_apply_scope_mismatch_is_atomic() -> None:
     flow = load_flow(_NESTED).compiled
     layout = resolve_memory_layout(flow)
     final = layout.targets[-1]
-    final.node.memory_scope = MemoryScope(
-        root_flow_id="root",
-        static_path=("root", "different"),
-    )
+    final.node.memory_scope = MemoryScope(("different",))
 
     with pytest.raises(MemorySetupError, match="different memory scope"):
         apply_memory_layout(flow, layout)
 
     assert all(target.node.memory_scope is None for target in layout.targets[:-1])
-    assert final.node.memory_scope == MemoryScope(
-        root_flow_id="root",
-        static_path=("root", "different"),
-    )
+    assert final.node.memory_scope == MemoryScope(("different",))
 
 
 def test_apply_revalidates_forged_nested_layout_scope_before_stamping() -> None:
     class StringSubclass(str):
-        """Equality-compatible but noncanonical root identity."""
+        """Equality-compatible but noncanonical memory key."""
 
     flow = load_flow(_NESTED).compiled
     layout = resolve_memory_layout(flow)
     forged = layout.targets[-1].scope
-    object.__setattr__(forged, "root_flow_id", StringSubclass("root"))
+    object.__setattr__(
+        forged, "memories", tuple(StringSubclass(key) for key in forged.memories)
+    )
 
-    with pytest.raises(TypeError, match="root_flow_id must be a string"):
+    with pytest.raises(TypeError, match="memories components must be a string"):
         apply_memory_layout(flow, layout)
 
     assert all(target.node.memory_scope is None for target in layout.targets)
 
 
-def test_apply_revalidates_forged_nested_frame_spec_before_stamping() -> None:
+def test_apply_revalidates_a_forged_key_table_before_stamping() -> None:
     class StringSubclass(str):
-        """Equality-compatible but noncanonical policy identity."""
+        """Equality-compatible but noncanonical memory key."""
 
     flow = load_flow(_NESTED).compiled
     layout = resolve_memory_layout(flow)
-    object.__setattr__(
-        layout.frames[0].spec,
-        "policy_name",
-        StringSubclass("outer"),
-    )
+    object.__setattr__(layout.memories[0], "key", StringSubclass("inner"))
 
-    with pytest.raises(TypeError, match="policy_name must be a string"):
+    with pytest.raises(TypeError, match="key must be a string"):
         apply_memory_layout(flow, layout)
 
     assert all(target.node.memory_scope is None for target in layout.targets)
@@ -381,7 +311,7 @@ def test_apply_revalidates_forged_equal_existing_scope_atomically() -> None:
     layout = resolve_memory_layout(flow)
     final = layout.targets[-1]
     forged = copy.deepcopy(final.scope)
-    object.__setattr__(forged, "root_flow_id", StringSubclass("root"))
+    object.__setattr__(forged, "memories", tuple(StringSubclass(key) for key in forged.memories))
     final.node.memory_scope = forged
 
     with pytest.raises(MemorySetupError, match="noncanonical memory scope"):
@@ -447,19 +377,16 @@ def test_recursive_static_child_cycle_is_rejected() -> None:
     assert cycle.memory_scope is None
 
 
-def test_flow_frame_spec_retains_config_and_origin_outside_node_scopes() -> None:
+def test_key_table_retains_config_and_origin_outside_node_scopes() -> None:
     flow = load_flow(_NESTED, source_label="memory.yaml").compiled
     layout = resolve_memory_layout(flow)
-    inner = layout.frames[1]
+    inner = next(memory for memory in layout.memories if memory.key == "inner")
 
-    assert inner.spec.config == {"limit": 3}
+    assert inner.config == {"limit": 3}
+    assert inner.owners == (DeclSite((), ("def", "child"), None),)
     assert inner.origin == flow.nodes["invoke"].child.memories[0].origin
-    assert inner.spec.ref == MemoryFrameRef(
-        "root",
-        ("root", "invoke"),
-        MemoryOwner.FLOW,
-    )
-    assert not hasattr(inner.spec, "origin")
+    assert inner.origin is not None
+    assert not hasattr(_target(layout, "invoke", "answer").scope, "origin")
 
 
 def test_layout_records_key_table_with_sorted_owners_and_placements() -> None:
@@ -642,3 +569,126 @@ def test_session_compatibility_ignores_other_types_and_disabled_layouts() -> Non
     )
     plain = CompiledFlow({"plain": CodeNode("plain", code="return 1")}, [], wiring={"plain": {}})
     check_session_compatibility(resolve_memory_layout(plain), {})
+
+
+def test_scopes_are_root_relative_and_carry_outermost_first_keys() -> None:
+    layout = resolve_memory_layout(load_flow(_NESTED).compiled)
+
+    assert layout.enabled is True
+    assert not hasattr(layout, "frames")
+    assert not hasattr(layout, "root_flow_id")
+    assert _target(layout, START_ID).scope == MemoryScope((START_ID,), ("outer",))
+    assert _target(layout, "invoke").scope == MemoryScope(("invoke",), ("outer",))
+    assert _target(layout, "invoke", "normalize").scope == MemoryScope(
+        ("invoke", "normalize"), ("outer", "inner")
+    )
+    assert _target(layout, "invoke", "answer").scope == MemoryScope(
+        ("invoke", "answer"), ("outer", "inner", "local")
+    )
+    for node_id in (START_ID, END_ID):
+        assert _target(layout, "invoke", node_id).scope == MemoryScope(
+            ("invoke", node_id), ("outer", "inner")
+        )
+    assert memory_stacks(layout) == tuple(
+        MemoryStack(target.locator, target.scope.memories)
+        for target in sorted(layout.targets, key=lambda target: target.locator)
+    )
+
+
+def test_memory_flow_without_an_id_resolves() -> None:
+    site = DeclSite((), ("root",), "agent")
+    agent = AgentNode(
+        "agent", memories=(MemoryDecl("reflective", "reflective", {}, site),)
+    )
+    flow = CompiledFlow({"agent": agent}, [], wiring={"agent": {}})
+    assert flow.flow_id is None
+
+    layout = resolve_memory_layout(flow)
+
+    assert layout.enabled is True
+    assert [memory.key for memory in layout.memories] == ["reflective"]
+    assert _target(layout, "agent").scope == MemoryScope(("agent",), ("reflective",))
+
+
+def test_one_agent_stacks_several_keys_in_authored_order() -> None:
+    site = DeclSite((), ("root",), "agent")
+    agent = AgentNode(
+        "agent",
+        memories=(
+            MemoryDecl("reflective", "reflective", {}, site),
+            MemoryDecl("episodic", "episodic", {}, site),
+        ),
+    )
+    flow = CompiledFlow({"agent": agent}, [], wiring={"agent": {}})
+
+    layout = resolve_memory_layout(flow)
+
+    assert _target(layout, "agent").scope.memories == ("reflective", "episodic")
+    assert [memory.key for memory in layout.memories] == ["episodic", "reflective"]
+    agent.memories = (*agent.memories, MemoryDecl("reflective", "reflective", {}, site))
+    with pytest.raises(
+        MemorySetupError, match="declares memory 'reflective' more than once"
+    ):
+        resolve_memory_layout(flow)
+
+
+def test_agent_with_two_session_memories_is_a_setup_error() -> None:
+    site = DeclSite((), ("root",), "agent")
+    agent = AgentNode(
+        "agent",
+        memories=(
+            MemoryDecl("session", "session", {}, site),
+            MemoryDecl("chat", "session", {}, site),
+        ),
+    )
+    flow = CompiledFlow({"agent": agent}, [], wiring={"agent": {}})
+
+    with pytest.raises(
+        MemorySetupError,
+        match="AGENT 'agent' declares more than one session memory: 'chat', 'session'",
+    ):
+        resolve_memory_layout(flow)
+
+
+def test_one_def_under_two_parents_has_one_stack_per_placement_and_one_owner() -> None:
+    flow = load_flow(
+        """id: root
+name: root
+long_term_memory: outer
+defs:
+  leaf:
+    long_term_memory: leaf_notes
+    nodes:
+      work:
+        kind: code
+        code: tests.engine._compose_codefns:echo
+        input: {topic: leaf}
+        output: str
+    output: ${work.output}
+  left_parent:
+    long_term_memory: left_notes
+    nodes:
+      leaf_call: {kind: call, call: leaf}
+    output: ${leaf_call.output}
+  right_parent:
+    long_term_memory: right_notes
+    nodes:
+      leaf_call: {kind: call, call: leaf}
+    output: ${leaf_call.output}
+nodes:
+  left: {kind: call, call: left_parent}
+  right: {kind: call, call: right_parent}
+output: ${right.output}
+"""
+    ).compiled
+
+    layout = resolve_memory_layout(flow)
+    stacks = {stack.locator: stack.memories for stack in memory_stacks(layout)}
+
+    assert stacks[("left", "leaf_call", "work")] == ("outer", "left_notes", "leaf_notes")
+    assert stacks[("right", "leaf_call", "work")] == ("outer", "right_notes", "leaf_notes")
+    assert stacks[("left",)] == stacks[("right",)] == ("outer",)
+    by_key = {memory.key: memory.spec for memory in layout.memories}
+    assert list(by_key) == ["leaf_notes", "left_notes", "outer", "right_notes"]
+    assert by_key["leaf_notes"].owners == (DeclSite((), ("def", "leaf"), None),)
+    assert by_key["outer"].owners == (DeclSite((), ("root",), None),)

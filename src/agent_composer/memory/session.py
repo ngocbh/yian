@@ -286,7 +286,6 @@ def _parse_inventory(value: object) -> tuple[
 @dataclass(eq=False)
 class _Lease:
     session: _Session
-    frame: _Frame
     request: c.ConversationRequest
     ticket: int
     active: bool = False
@@ -592,7 +591,6 @@ class _Session:
         self._namespace = memory._namespace
         self._generation = memory._generation
         self._closed = False
-        self._frames: dict[c.MemoryFrameRef, _Frame] = {}
         self._leases: dict[c.ConversationInvocation, _Lease] = {}
 
     def _ensure_live(self) -> None:
@@ -610,7 +608,7 @@ class _Session:
 
         Returns:
             `JsonObject`: The exact pinned public envelope, unaffected by later
-                frame openings or conversation checkpoints.
+                conversation checkpoints.
 
         Raises:
             `MemoryOperationError`: This run handle is closed or reset-stale.
@@ -618,6 +616,146 @@ class _Session:
         with self._memory._locked():
             self._ensure_live()
             return _wire(self._pinned)
+
+    def recall(self, context: c.RecallContext | None = None) -> c.MemoryContent:
+        """Contribute pinned notes and the live transcript source for one consumer.
+
+        Args:
+            context (`RecallContext | None`): Optional exact visible-context carrier;
+                defaults to `None`, which yields no notes. Raw conversation
+                history is not rendered as recall text.
+
+        Returns:
+            `MemoryContent`: Pinned notes of the instance in retained order and the
+                transcript source.
+
+        Raises:
+            `TypeError`: A supplied context is not an exact recall-context carrier.
+            `MemoryOperationError`: This run handle is closed or reset-stale.
+        """
+        if context is not None and type(context) is not c.RecallContext:
+            raise TypeError("context must be a RecallContext or None")
+        with self._memory._locked():
+            self._ensure_live()
+            if context is None:
+                return c.MemoryContent(transcript=self)
+            context = c.RecallContext(
+                context.base_system_prompt,
+                context.prompt,
+                context.inputs,
+                context.consumer_static_path,
+            )
+            notes = "\n".join(
+                note["text"] for note in self._pinned.get("notes", [])
+            )
+            return c.MemoryContent(notes, self)
+
+    def learn(self, context: c.LearnContext) -> list[c.MemoryMutation]:
+        """Propose notes from self-feedback for the instance's admitted invocations.
+
+        Args:
+            context (`LearnContext`): Exact validated learning context.
+
+        Returns:
+            `list[MemoryMutation]`: Deterministic append-note proposals. Automatic
+                history is unchanged, and no provider or model is called.
+
+        Raises:
+            `TypeError`: The context is not an exact learning-context carrier.
+            `MemoryOperationError`: The context is invalid for this instance, or
+                its run handle is closed or reset-stale.
+        """
+        if type(context) is not c.LearnContext:
+            raise TypeError("context must be a LearnContext")
+        with self._memory._locked():
+            self._ensure_live()
+            try:
+                context = c.LearnContext(
+                    context.run_id,
+                    context.memory,
+                    context.episodes,
+                    context.feedback,
+                )
+                episodes = {}
+                for episode in context.episodes:
+                    if episode.execution_seq is not None:
+                        if episode.execution_seq in episodes:
+                            raise ValueError(
+                                "episode execution coordinates must be unique"
+                            )
+                        episodes[episode.execution_seq] = episode
+                notes = {}
+                for feedback in context.feedback:
+                    if (
+                        type(feedback) is not dict
+                        or feedback.get("channel") != "self"
+                        or feedback.get("root") is True
+                    ):
+                        continue
+                    sequence = feedback.get("execution_seq")
+                    if sequence is None:
+                        continue
+                    c._require_counter(sequence, "execution_seq")
+                    episode = episodes.get(sequence)
+                    if episode is None:
+                        continue
+                    if not _admitted(
+                        self._memory._view, context.run_id, sequence
+                    ):
+                        continue
+                    source = {
+                        "consumer_static_path": list(episode.owner_static_path),
+                        "run_id": context.run_id,
+                        "execution_seq": sequence,
+                        "message_index": feedback.get("message_index"),
+                        "text": feedback.get("value"),
+                    }
+                    note = _validate_note({"note_id": _note_id(source), **source})
+                    notes[note["note_id"]] = note
+                return [
+                    c.MemoryMutation(note_id, {"operation": "append_note", "note": note})
+                    for note_id, note in notes.items()
+                ]
+            except (TypeError, ValueError) as exc:
+                raise _error(
+                    "invalid_context", "learning context is invalid", stage="learn"
+                ) from exc
+
+    def open_turn(
+        self,
+        request: c.ConversationRequest,
+        *,
+        check_stopped: c.CheckStopped,
+    ) -> _Turn:
+        """Build a queued turn that persists directly through this backend.
+
+        Args:
+            request (`ConversationRequest`): Authored consumer, unique invocation,
+                and exact compatibility descriptor. The instance owns the single
+                conversation.
+            check_stopped (`CheckStopped`): Cooperative check that raises on stop;
+                checked during queuing and between effects, never before recording
+                an actual observation. Failures propagate unchanged.
+
+        Returns:
+            `_Turn`: A single-entry context manager; entering waits in FIFO order
+                for the instance's conversation and persists admission before
+                returning.
+
+        Raises:
+            `TypeError`: The request or callbacks have the wrong type.
+            `ValueError`: A malformed request has invalid identity or JSON.
+            `MemoryOperationError`: On entry, the handle is stale, compatibility
+                changed, or the invocation conflicts with retained history.
+        """
+        if type(request) is not c.ConversationRequest:
+            raise TypeError("request must be a ConversationRequest")
+        if not callable(check_stopped):
+            raise TypeError("check_stopped must be callable")
+        request = c.ConversationRequest(
+            request.consumer_static_path, request.invocation, request.compatibility
+        )
+        return _Turn(self, request, check_stopped)
 
     def __enter__(self) -> _Session:
         """Enter this still-open, current-generation session."""
@@ -669,7 +807,6 @@ class _Session:
 
     def _reserve(
         self,
-        frame: _Frame,
         request: c.ConversationRequest,
         check_stopped: c.CheckStopped,
     ) -> _Lease:
@@ -680,7 +817,7 @@ class _Session:
             if request.invocation in self._leases:
                 raise _error("conflict", "invocation already has a session lease")
             memory._next_ticket += 1
-            lease = _Lease(self, frame, request, memory._next_ticket)
+            lease = _Lease(self, request, memory._next_ticket)
             self._leases[request.invocation] = lease
             memory._queue.append(lease)
             memory._condition.notify_all()
@@ -729,46 +866,6 @@ class _Session:
                 _secondary(primary, cleanup)
             raise
 
-    def open_frame(self, spec: c.MemoryFrameSpec) -> _Frame:
-        """Open one empty-config frame idempotently within this run.
-
-        Args:
-            spec (`MemoryFrameSpec`): Exact authored owner and actual host policy
-                name. Configuration must be empty; reopening requires the same spec.
-
-        Returns:
-            `_Frame`: The same frame object for repeated identical openings.
-
-        Raises:
-            `TypeError`: The spec is not an exact frame carrier.
-            `ValueError`: A malformed carrier contains invalid identity or JSON.
-            `MemoryOperationError`: This handle is stale, configuration is nonempty,
-                or the owner was opened with a different spec.
-        """
-        if type(spec) is not c.MemoryFrameSpec:
-            raise TypeError("spec must be a MemoryFrameSpec")
-        detached = c.MemoryFrameSpec(spec.ref, spec.policy_name, spec.config)
-        with self._memory._locked():
-            self._ensure_live()
-            if detached.config:
-                raise _error(
-                    "invalid_config",
-                    "SessionMemory frame config must be empty",
-                    stage="frame",
-                )
-            previous = self._frames.get(detached.ref)
-            if previous is not None:
-                if previous._spec != detached:
-                    raise _error(
-                        "invalid_config",
-                        "frame was already opened with another policy",
-                        stage="frame",
-                    )
-                return previous
-            frame = _Frame(self, detached)
-            self._frames[detached.ref] = frame
-            return frame
-
     def commit(self, commit_id: str, mutations: tuple[c.MemoryMutation, ...]) -> None:
         """Atomically append one exact idempotent batch of learned notes.
 
@@ -776,7 +873,7 @@ class _Session:
             commit_id (`str`): Nonempty caller-owned batch identity. Exact replays
                 remain inert even after reset; a different batch is a collision.
             mutations (`tuple[MemoryMutation, ...]`): Exact append-note proposals
-                for frames opened by this run handle. Empty batches are allowed.
+                for this instance. Empty batches are allowed.
 
         Raises:
             `TypeError`: The identity or batch has the wrong exact type.
@@ -793,10 +890,6 @@ class _Session:
                 mutations = c._validate_mutations(mutations)
                 additions, batch = [], []
                 for mutation in mutations:
-                    if mutation.frame_ref not in self._frames:
-                        raise ValueError(
-                            "mutation frame was not opened by this session"
-                        )
                     payload = mutation.payload
                     if (
                         type(payload) is not dict
@@ -813,11 +906,6 @@ class _Session:
                     batch.append(
                         {
                             "mutation_id": mutation.mutation_id,
-                            "frame_ref": {
-                                "root_flow_id": mutation.frame_ref.root_flow_id,
-                                "static_path": list(mutation.frame_ref.static_path),
-                                "owner": mutation.frame_ref.owner.value,
-                            },
                             "payload": payload,
                         }
                     )
@@ -887,162 +975,8 @@ class _Session:
             or lease.released
             or self._memory._active is not lease
             or self._leases.get(lease.request.invocation) is not lease
-            or self._frames.get(lease.frame._spec.ref) is not lease.frame
         ):
             raise _error("stale", "conversation lease is no longer active")
-
-
-class _Frame:
-    """A frame view over the instance's single conversation."""
-
-    def __init__(self, session: _Session, spec: c.MemoryFrameSpec) -> None:
-        self._session = session
-        self._spec = spec
-
-    def recall(self, context: c.RecallContext | None = None) -> c.MemoryContent:
-        """Contribute pinned notes and the live transcript source for one consumer.
-
-        Args:
-            context (`RecallContext | None`): Optional exact visible-context carrier;
-                defaults to `None`, which yields no notes. Raw conversation
-                history is not rendered as recall text.
-
-        Returns:
-            `MemoryContent`: Pinned notes of the instance in retained order and the
-                transcript source.
-
-        Raises:
-            `TypeError`: A supplied context is not an exact recall-context carrier.
-            `MemoryOperationError`: This frame's run handle is closed or reset-stale.
-        """
-        if context is not None and type(context) is not c.RecallContext:
-            raise TypeError("context must be a RecallContext or None")
-        with self._session._memory._locked():
-            self._session._ensure_live()
-            if context is None:
-                return c.MemoryContent(transcript=self)
-            context = c.RecallContext(
-                context.base_system_prompt,
-                context.prompt,
-                context.inputs,
-                context.consumer_static_path,
-            )
-            notes = "\n".join(
-                note["text"] for note in self._session._pinned.get("notes", [])
-            )
-            return c.MemoryContent(notes, self)
-
-    def learn(self, context: c.LearnContext) -> list[c.MemoryMutation]:
-        """Propose notes from self-feedback for the instance's admitted invocations.
-
-        Args:
-            context (`LearnContext`): Exact validated frame learning context.
-
-        Returns:
-            `list[MemoryMutation]`: Deterministic append-note proposals. Automatic
-                history is unchanged, and no provider or model is called.
-
-        Raises:
-            `TypeError`: The context is not an exact learning-context carrier.
-            `MemoryOperationError`: The context is invalid for this frame, or its
-                run handle is closed or reset-stale.
-        """
-        if type(context) is not c.LearnContext:
-            raise TypeError("context must be a LearnContext")
-        with self._session._memory._locked():
-            self._session._ensure_live()
-            try:
-                if context.frame_ref != self._spec.ref:
-                    raise ValueError("learning context belongs to another frame")
-                context = c.LearnContext(
-                    context.run_id,
-                    context.frame_ref,
-                    context.episodes,
-                    context.feedback,
-                )
-                episodes = {}
-                for episode in context.episodes:
-                    if episode.execution_seq is not None:
-                        if episode.execution_seq in episodes:
-                            raise ValueError(
-                                "episode execution coordinates must be unique"
-                            )
-                        episodes[episode.execution_seq] = episode
-                notes = {}
-                for feedback in context.feedback:
-                    if (
-                        type(feedback) is not dict
-                        or feedback.get("channel") != "self"
-                        or feedback.get("root") is True
-                    ):
-                        continue
-                    sequence = feedback.get("execution_seq")
-                    if sequence is None:
-                        continue
-                    c._require_counter(sequence, "execution_seq")
-                    episode = episodes.get(sequence)
-                    if episode is None:
-                        continue
-                    if not _admitted(
-                        self._session._memory._view, context.run_id, sequence
-                    ):
-                        continue
-                    source = {
-                        "consumer_static_path": list(episode.owner_static_path),
-                        "run_id": context.run_id,
-                        "execution_seq": sequence,
-                        "message_index": feedback.get("message_index"),
-                        "text": feedback.get("value"),
-                    }
-                    note = _validate_note({"note_id": _note_id(source), **source})
-                    notes[note["note_id"]] = note
-                return [
-                    c.MemoryMutation(
-                        note_id,
-                        self._spec.ref,
-                        {"operation": "append_note", "note": note},
-                    )
-                    for note_id, note in notes.items()
-                ]
-            except (TypeError, ValueError) as exc:
-                raise _error(
-                    "invalid_context", "learning context is invalid", stage="learn"
-                ) from exc
-
-    def open_turn(
-        self,
-        request: c.ConversationRequest,
-        *,
-        check_stopped: c.CheckStopped,
-    ) -> _Turn:
-        """Build a queued turn that persists directly through this backend.
-
-        Args:
-            request (`ConversationRequest`): Authored consumer, unique invocation,
-                and exact compatibility descriptor. The frame determines ownership.
-            check_stopped (`CheckStopped`): Cooperative check that raises on stop;
-                checked during queuing and between effects, never before recording
-                an actual observation. Failures propagate unchanged.
-
-        Returns:
-            `_Turn`: A single-entry context manager; entering waits in FIFO order
-                for the instance's conversation and persists admission before
-                returning.
-
-        Raises:
-            `TypeError`: The request or callbacks have the wrong type.
-            `ValueError`: A malformed request has invalid identity or JSON.
-            `MemoryOperationError`: On entry, the handle is stale, compatibility
-                changed, or the invocation conflicts with retained history.
-        """
-        if type(request) is not c.ConversationRequest:
-            raise TypeError("request must be a ConversationRequest")
-        if not callable(check_stopped):
-            raise TypeError("check_stopped must be callable")
-        request = c.ConversationRequest(
-            request.consumer_static_path, request.invocation, request.compatibility
-        )
-        return _Turn(self, request, check_stopped)
 
 
 def _secondary(primary: BaseException, cleanup: BaseException) -> None:
@@ -1061,12 +995,11 @@ class _Turn:
 
     def __init__(
         self,
-        frame: _Frame,
+        session: _Session,
         request: c.ConversationRequest,
         check_stopped: c.CheckStopped,
     ) -> None:
-        self._frame = frame
-        self._session = frame._session
+        self._session = session
         self._request = request
         self._check_stopped = check_stopped
         self._lease: _Lease | None = None
@@ -1133,7 +1066,7 @@ class _Turn:
         if self._entered:
             raise _error("stale", "a turn context can be entered only once")
         self._entered = True
-        self._lease = self._session._reserve(self._frame, self._request, self._check)
+        self._lease = self._session._reserve(self._request, self._check)
         try:
             with self._session._memory._locked():
                 self._session._ensure_lease(self._lease)

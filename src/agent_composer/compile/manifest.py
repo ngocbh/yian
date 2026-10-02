@@ -28,7 +28,6 @@ from agent_composer.expr.template import Literal, Span
 from agent_composer.memory.contracts import (
     DeclSite,
     MemoryDecl,
-    MemoryFrameRef,
     MemoryOccurrenceSegment,
     MemoryScope,
 )
@@ -1599,52 +1598,11 @@ def _memories_manifest(
     ]
 
 
-def _relative_memory_path(
-    value: tuple[str, ...],
-    root_flow_id: str,
-    path: str,
-) -> list[str]:
-    """Project one memory path relative to its semantic root identity."""
-    if type(value) is not tuple or not value or value[0] != root_flow_id:
-        raise ValueError(f"{path}: expected a path rooted at root_flow_id")
-    if any(type(part) is not str or not part for part in value):
-        raise ValueError(f"{path}: expected non-empty exact string components")
-    return list(value[1:])
-
-
-def _memory_frame_topology(
-    frame: MemoryFrameRef,
-    root_flow_id: str,
-    path: str,
-) -> dict[str, Any]:
-    """Project one frame identity without policy or authored-root identity."""
-    if type(frame) is not MemoryFrameRef:
-        raise TypeError(
-            f"{path}: expected exact MemoryFrameRef, got {type(frame).__name__}"
-        )
-    if frame.root_flow_id != root_flow_id:
-        raise ValueError(f"{path}.root_flow_id: expected the scope root_flow_id")
-    MemoryFrameRef(
-        root_flow_id=frame.root_flow_id,
-        static_path=frame.static_path,
-        owner=frame.owner,
-    )
-    return {
-        "owner": frame.owner.value,
-        "static_path": _relative_memory_path(
-            frame.static_path,
-            root_flow_id,
-            f"{path}.static_path",
-        ),
-    }
-
-
 def _memory_occurrence_topology(
     segment: MemoryOccurrenceSegment,
-    root_flow_id: str,
     path: str,
 ) -> dict[str, Any]:
-    """Project one dynamic occurrence segment without authored-root identity."""
+    """Project one dynamic occurrence segment."""
     if type(segment) is not MemoryOccurrenceSegment:
         raise TypeError(
             f"{path}: expected exact MemoryOccurrenceSegment, "
@@ -1658,16 +1616,12 @@ def _memory_occurrence_topology(
     return {
         "index": segment.index,
         "kind": segment.kind.value,
-        "static_path": _relative_memory_path(
-            segment.static_path,
-            root_flow_id,
-            f"{path}.static_path",
-        ),
+        "static_path": list(segment.static_path),
     }
 
 
 def _memory_scope_topology(value: MemoryScope, path: str) -> dict[str, Any]:
-    """Project only memory topology needed for deterministic growth identity."""
+    """Project the memory topology needed for deterministic growth identity."""
     if type(value) is not MemoryScope:
         raise TypeError(
             f"{path}: expected exact MemoryScope, got {type(value).__name__}"
@@ -1675,34 +1629,17 @@ def _memory_scope_topology(value: MemoryScope, path: str) -> dict[str, Any]:
     # Replay the frozen carrier's public invariants in case an object was forged
     # or mutated through ``object.__setattr__``.
     MemoryScope(
-        root_flow_id=value.root_flow_id,
         static_path=value.static_path,
-        frame_stack=value.frame_stack,
+        memories=value.memories,
         occurrence_path=value.occurrence_path,
     )
-    root_flow_id = value.root_flow_id
     return {
-        "frame_stack": [
-            _memory_frame_topology(
-                frame,
-                root_flow_id,
-                f"{path}.frame_stack[{index}]",
-            )
-            for index, frame in enumerate(value.frame_stack)
-        ],
+        "memories": list(value.memories),
         "occurrence_path": [
-            _memory_occurrence_topology(
-                segment,
-                root_flow_id,
-                f"{path}.occurrence_path[{index}]",
-            )
+            _memory_occurrence_topology(segment, f"{path}.occurrence_path[{index}]")
             for index, segment in enumerate(value.occurrence_path)
         ],
-        "static_path": _relative_memory_path(
-            value.static_path,
-            root_flow_id,
-            f"{path}.static_path",
-        ),
+        "static_path": list(value.static_path),
     }
 
 
@@ -1865,9 +1802,9 @@ def _node_manifest(
         raise ValueError(f"{path}: unsupported node kind {node.kind.value!r}")
 
     # Derived memory state is never authored program identity. Dynamic fragment
-    # identity includes only its root-relative frame/occurrence topology so replay
-    # rejects a structurally different memory occurrence without persisting policy
-    # names, configs, source origins, or root flow ids.
+    # identity includes the scope's root-relative path, key stack and
+    # occurrence path, so replay rejects a structurally different memory
+    # occurrence without persisting configs or source origins.
     if topology_only and node.memory_scope is not None:
         manifest["memory_scope"] = _memory_scope_topology(
             node.memory_scope,

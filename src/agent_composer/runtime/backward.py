@@ -133,7 +133,7 @@ def _finish_backward(
 
 
 def _drive_opened_backward(state: RunState, log: RunLog, memory: MemoryRuntime | None) -> BackwardOutcome:
-    """Compute once, stage every frame, then request and observe each policy in order."""
+    """Compute once, stage every memory, then request and observe each memory key in order."""
     started = state.backward_state.started
     try:
         root, attributed = compute_backward(state.trace, started.feedback)
@@ -144,7 +144,8 @@ def _drive_opened_backward(state: RunState, log: RunLog, memory: MemoryRuntime |
         ))
     try:
         contexts = project_owner_contexts(
-            state.trace, state.memory_layout or (), started.feedback, root, attributed,
+            state.trace, state.memories or (), state.memory_stacks or (),
+            started.feedback, root, attributed,
         )
         proposals = memory.propose_learning(contexts) if memory is not None else ()
     except (OwnerContextError, _LearningProposalError) as exc:
@@ -156,32 +157,31 @@ def _drive_opened_backward(state: RunState, log: RunLog, memory: MemoryRuntime |
             )
         else:
             cause = exc.failure
-        spec = next(spec for spec in state.memory_layout if spec.ref == exc.frame_ref)
-        failure = BackwardFailure("learn", cause.code, cause.message,
-                                  memory=spec.policy_name, frame_ref=spec.ref, cause=cause)
+        key = exc.memory
+        failure = BackwardFailure("learn", cause.code, cause.message, memory=key, cause=cause)
         learning = _prefix_learning(state.backward_state, learner_failure=LearningFailure(
-            spec.policy_name, "learn", cause, spec.ref,
+            key, "learn", cause,
         ))
         return _finish_backward(state, log, BackwardOutcome("failed", root, failure, learning), attributed)
 
     _accept_backward(state, log, BackwardReadyRecord(started.attempt_id, root, attributed, proposals))
     backward = state.backward_state
-    for policy_name, batch in zip(backward.policy_order, _proposal_batches(backward, backward.ready)):
-        commit_id = memory_commit_id(state.run_id, policy_name, batch, backward.commit_attempt_key)
+    for key, batch in zip(backward.memory_order, _proposal_batches(backward, backward.ready)):
+        commit_id = memory_commit_id(state.run_id, key, batch, backward.commit_attempt_key)
         _accept_backward(state, log, MemoryCommitRequestedRecord(
-            policy_name, commit_id, batch, attempt_id=started.attempt_id,
+            key, commit_id, batch, attempt_id=started.attempt_id,
         ))
         cause = memory.commit_learning(state.backward_state.current.requests[-1])
         if cause is not None:
             _accept_backward(state, log, MemoryCommitFailedRecord(
-                policy_name, commit_id, cause, attempt_id=started.attempt_id,
+                key, commit_id, cause, attempt_id=started.attempt_id,
             ))
-            failure = BackwardFailure("commit", cause.code, cause.message, memory=policy_name, cause=cause)
+            failure = BackwardFailure("commit", cause.code, cause.message, memory=key, cause=cause)
             return _finish_backward(state, log, BackwardOutcome(
                 "failed", root, failure, _prefix_learning(state.backward_state),
             ))
         _accept_backward(state, log, MemoryCommitSucceededRecord(
-            policy_name, commit_id, attempt_id=started.attempt_id,
+            key, commit_id, attempt_id=started.attempt_id,
         ))
     return _finish_backward(state, log, BackwardOutcome(
         "succeeded", root, learning=_prefix_learning(state.backward_state, succeeded=True),
@@ -202,8 +202,8 @@ def drive_backward(
         log (`RunLog`): The open append authority for that state.
         root_feedback (`FeedbackValue`): Ordinary feedback on the recorded terminal.
         open_memory (`Callable[[], MemoryRuntime] | None`): Fresh resource opener
-            using the recorded layout and snapshots; required only for enabled
-            policies. This driver closes the returned runtime on every exit.
+            using the recorded memory table and snapshots; required only for
+            enabled memories. This driver closes the returned runtime on every exit.
 
     Returns:
         `BackwardOutcome`: The exact accepted Finished disposition. An unfinished
@@ -228,15 +228,16 @@ def drive_backward(
     memory = None
     primary_error = None
     try:
-        if backward.policy_order:
+        if backward.memory_order:
             if not callable(open_memory):
-                raise ValueError("enabled backward policies require a fresh memory runtime")
+                raise ValueError("enabled backward memories require a fresh memory runtime")
             opened = open_memory()
             if not isinstance(opened, MemoryRuntime):
                 raise TypeError("backward memory opener must return a MemoryRuntime")
             memory = opened
-            if memory._closed or memory.layout != state.memory_layout or memory.snapshots != state.memory_snapshots:
-                raise ValueError("opened memory runtime does not match recorded layout and snapshots")
+            if (memory._closed or memory.memories != state.memories
+                    or memory.snapshots != state.memory_snapshots):
+                raise ValueError("opened memory runtime does not match the recorded memory table and snapshots")
         if commit_prepared(log, state, prepared):
             raise RuntimeError("backward records cannot emit observers")
         if interrupted:

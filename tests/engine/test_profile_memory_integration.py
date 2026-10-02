@@ -10,7 +10,6 @@ import pytest
 import agent_composer.llm_clients as llm_clients
 import agent_composer.memory.profile as profile
 from agent_composer.compose import load_flow
-from agent_composer.memory import MemorySetupError
 from agent_composer.memory.profile import ProfileMemory
 from agent_composer.memory.storage import FileMarkdownStore
 from agent_composer.memory.session import SessionMemory
@@ -181,10 +180,13 @@ def test_nested_frames_show_and_rewrite_the_document_once(tmp_path, monkeypatch)
     assert len(learner.requests) == 1
 
 
-def test_unrelated_profile_frames_fail_at_run_start(tmp_path, monkeypatch) -> None:
-    _forward(monkeypatch, "a", "b")
-    with pytest.raises(MemorySetupError, match="outermost"):
-        run_flow(load_flow(_SIBLINGS), {"message": "hi"}, memory={"profile": _profile(tmp_path)})
+def test_sibling_agents_recall_one_shared_profile_document(tmp_path, monkeypatch) -> None:
+    chats = _forward(monkeypatch, "a", "b")
+    result = run_flow(load_flow(_SIBLINGS), {"message": "hi"}, memory={"profile": _profile(tmp_path)})
+    assert result.status == "succeeded", result.failure
+    systems = [messages[0].content for chat in chats for messages in chat.messages]
+    assert len(systems) == 2
+    assert all(system.count("Works on reefs.") == 1 for system in systems)
 
 
 def test_profile_notes_and_a_session_transcript_share_one_agent_context(tmp_path, monkeypatch) -> None:
@@ -296,7 +298,7 @@ def test_an_attempt_killed_after_its_write_is_unknown_and_findable_in_provenance
     store.kill = False
     resumed = resume_flow(flow, log=path, memory={"profile": memory})
     unknown, = resumed.backward_outcome.learning.policies
-    assert unknown.status == "unknown" and unknown.commit_id.startswith("ac-memory-v1:")
+    assert unknown.status == "unknown" and unknown.commit_id.startswith("ac-memory-v3:")
     log = tmp_path / ".ada.md.writes.jsonl"
     written = [json.loads(line)["provenance"] for line in log.read_text().splitlines()][1:]
     assert [entry["commit_id"] for entry in written] == [unknown.commit_id]

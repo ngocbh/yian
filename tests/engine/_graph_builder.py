@@ -19,9 +19,11 @@ from agent_composer.compile.model import END_ID, START_ID, CompiledFlow, Edge, F
 from agent_composer.compile.expand import build_grow
 from agent_composer.compile.execution_layout import apply_execution_layout, resolve_execution_layout
 from agent_composer.compile.llm_cascade import resolve_llm_cascade
+from agent_composer.compile.memory_layout import memory_stacks as _memory_stacks
+from agent_composer.compile.memory_layout import resolve_memory_layout
 from agent_composer.compose.edges.producers import _binding_producers
 from agent_composer.expr import binding_co_skips, expr_refs_of
-from agent_composer.memory import MemoryFrameSpec, MemorySnapshotEnvelope
+from agent_composer.memory import MemorySnapshotEnvelope, MemorySpec, MemoryStack
 from agent_composer.nodes.contracts import Parameter
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
@@ -51,6 +53,18 @@ def _forward_capture(node, inputs):
     ), scope=node.execution_scope)
 
 
+def memory_record(
+    flow: CompiledFlow,
+) -> tuple[tuple[MemorySpec, ...], tuple[MemoryStack, ...]]:
+    """Return the key table and stacks that ``run_flow`` would record for ``flow``.
+
+    Owners are the resolver's ``DeclSite`` values, so tests never spell
+    them by hand.
+    """
+    layout = resolve_memory_layout(flow)
+    return tuple(memory.spec for memory in layout.memories), _memory_stacks(layout)
+
+
 def _engine(
     flow: CompiledFlow,
     run_inputs: Optional[dict[str, Any]] = None,
@@ -60,8 +74,9 @@ def _engine(
     on_event=None,
     on_stream=None,
     stop_event=None,
-    memory_layout: tuple[MemoryFrameSpec, ...] | None = None,
     memory_snapshots: tuple[MemorySnapshotEnvelope, ...] | None = None,
+    memories: tuple[MemorySpec, ...] | None = None,
+    memory_stacks: tuple[MemoryStack, ...] | None = None,
     learnable: bool = False,
     memory_context_opener=None,
     tools=None,
@@ -88,8 +103,9 @@ def _engine(
             },
             effective_llm_by_static_path=effective_llm,
             num_workers=num_workers,
-            memory_layout=memory_layout,
             memory_snapshots=memory_snapshots,
+            memories=memories,
+            memory_stacks=memory_stacks,
             learnable=learnable,
         ),
     )

@@ -11,6 +11,7 @@ execution fields; chronological reducer transitions are the only topology writer
 from __future__ import annotations
 
 import copy
+from bisect import bisect_left
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -36,9 +37,6 @@ from agent_composer.expr import ExpressionError, expr_refs_of
 from agent_composer.expr.lineage import SourceRef
 from agent_composer.memory import (
     EvaluationEvidence,
-    MemoryFrameRef,
-    MemoryFrameSpec,
-    MemoryOccurrenceRef,
     MemoryScope,
     MemorySnapshotEnvelope,
     MemorySpec,
@@ -133,14 +131,11 @@ def _canonical_output_value(
 class _MemoryAuthority:
     """Immutable identity roots established by canonical RunStarted decoding."""
 
-    layout: tuple[MemoryFrameSpec, ...] | None
     snapshots: tuple[MemorySnapshotEnvelope, ...] | None
+    learnable: bool
     memories: tuple[MemorySpec, ...] | None
     memory_stacks: tuple[MemoryStack, ...] | None
-    learnable: bool
-    frame_order: tuple[MemoryFrameRef, ...]
-    policy_order: tuple[str, ...]
-    policy_frame_indices: tuple[tuple[int, ...], ...]
+    memory_order: tuple[str, ...]
 
 
 class _NodeDataError(Exception):
@@ -229,17 +224,15 @@ class RunState:
             Canonical caller-supplied START priming record retained across START's commit.
         effective_llm_by_static_path (`dict[str, dict[str, Any]]`):
             Run-resolved agent configuration keyed by stable static node path.
-        memory_layout (`tuple[MemoryFrameSpec, ...] | None`):
-            Canonical recorded frame inventory, or ``None`` when memory is disabled.
         memory_snapshots (`tuple[MemorySnapshotEnvelope, ...] | None`):
-            Canonical recorded policy snapshots, paired with ``memory_layout``.
+            Canonical recorded snapshots, one per memory key.
         learnable (`bool`):
             Whether accepted eligible outcomes must project durable learning evidence.
         trace (`RetainedTrace | None`):
             Accepted executions, immutable producer entries and private backward
             handlers, enabled by recorded learning independently of memory scopes.
         learning_state (`RuntimeLearningState`):
-            Pure immutable episode and recorded frame/policy inventory.
+            Pure immutable episode inventory in recorded memory-key order.
         backward_state (`RuntimeBackwardState`):
             Immutable accepted backward attempts and irreversible commit facts.
         initial_static_ids (`frozenset[str]`):
@@ -272,7 +265,6 @@ class RunState:
         self.num_workers = 0
         self.input: dict[str, Any] = {}
         self.effective_llm_by_static_path: dict[str, dict[str, Any]] = {}
-        self.memory_layout: tuple[MemoryFrameSpec, ...] | None = None
         self.memory_snapshots: tuple[MemorySnapshotEnvelope, ...] | None = None
         self.memories: tuple[MemorySpec, ...] | None = None
         self.memory_stacks: tuple[MemoryStack, ...] | None = None
@@ -281,14 +273,11 @@ class RunState:
         self.learning_state = RuntimeLearningState()
         self.backward_state = RuntimeBackwardState()
         self._memory_authority = _MemoryAuthority(
-            layout=None,
             snapshots=None,
+            learnable=False,
             memories=None,
             memory_stacks=None,
-            learnable=False,
-            frame_order=self.learning_state.frame_order,
-            policy_order=self.learning_state.policy_order,
-            policy_frame_indices=self.learning_state.policy_frame_indices,
+            memory_order=self.learning_state.memory_order,
         )
         self.initial_static_ids = frozenset(flow.nodes)
 
@@ -310,14 +299,12 @@ class RunStartData:
             Complete resolved LLM configuration by stable static path.
         num_workers (`int`):
             Exact non-negative dispatcher worker count.
-        memory_layout (`tuple[MemoryFrameSpec, ...] | None`, *optional*):
-            Canonical static frame inventory, or ``None`` to disable memory.
         memory_snapshots (`tuple[MemorySnapshotEnvelope, ...] | None`, *optional*):
-            Canonical policy snapshots paired with an enabled frame inventory.
+            Canonical snapshots, one per memory key, or ``None`` to disable memory.
         learnable (`bool`, *optional*, defaults to `False`):
             Whether eligible accepted outcomes must carry learning evidence.
         memories (`tuple[MemorySpec, ...] | None`, *optional*):
-            Sorted memory key table paired with an enabled layout.
+            Sorted memory key table paired with ``memory_snapshots``.
         memory_stacks (`tuple[MemoryStack, ...] | None`, *optional*):
             Each scoped target's key stack, sorted by locator.
     """
@@ -328,7 +315,6 @@ class RunStartData:
     start_wiring_override: dict[str, Any]
     effective_llm_by_static_path: dict[str, dict[str, Any]]
     num_workers: int
-    memory_layout: tuple[MemoryFrameSpec, ...] | None = None
     memory_snapshots: tuple[MemorySnapshotEnvelope, ...] | None = None
     learnable: bool = False
     memories: tuple[MemorySpec, ...] | None = None
@@ -372,7 +358,6 @@ class _RunStartedApply:
     num_workers: int
     input: dict[str, Any]
     effective_llm_by_static_path: dict[str, dict[str, Any]]
-    memory_layout: tuple[MemoryFrameSpec, ...] | None
     memory_snapshots: tuple[MemorySnapshotEnvelope, ...] | None
     memories: tuple[MemorySpec, ...] | None
     memory_stacks: tuple[MemoryStack, ...] | None
@@ -791,7 +776,6 @@ def prepare_run_started(
         start_wiring_override=data.start_wiring_override,
         effective_llm_by_static_path=data.effective_llm_by_static_path,
         num_workers=data.num_workers,
-        memory_layout=data.memory_layout,
         memory_snapshots=data.memory_snapshots,
         learnable=data.learnable,
         memories=data.memories,
@@ -1976,7 +1960,6 @@ def _replay_records(
             start_wiring_override=start.start_wiring_override,
             effective_llm_by_static_path=start.effective_llm_by_static_path,
             num_workers=start.num_workers,
-            memory_layout=start.memory_layout,
             memory_snapshots=start.memory_snapshots,
             learnable=start.learnable,
             memories=start.memories,
@@ -2494,22 +2477,13 @@ def _validate_runtime_memory_configuration(state: RunState) -> None:
     if type(authority) is not _MemoryAuthority:
         raise TypeError("run-state memory authority has the wrong type")
     if not (
-        state.memory_layout is authority.layout
-        and state.memory_snapshots is authority.snapshots
+        state.memory_snapshots is authority.snapshots
         and state.memories is authority.memories
         and state.memory_stacks is authority.memory_stacks
         and type(state.learnable) is bool
         and state.learnable is authority.learnable
-        and state.learning_state.frame_order is authority.frame_order
-        and state.learning_state.policy_order is authority.policy_order
-        and state.backward_state.layout is authority.layout
-        and state.backward_state.frame_order is authority.frame_order
-        and state.backward_state.policy_order is authority.policy_order
-        and state.backward_state.policy_frame_indices is authority.policy_frame_indices
-        and (
-            state.learning_state.policy_frame_indices
-            is authority.policy_frame_indices
-        )
+        and state.learning_state.memory_order is authority.memory_order
+        and state.backward_state.memory_order is authority.memory_order
     ):
         raise ValueError("run-state memory roots disagree with RunStarted authority")
     if state.learning_state.episode_run_id not in (None, state.run_id):
@@ -3403,6 +3377,14 @@ def _growth_adjacency(
     return incoming, outgoing
 
 
+def _recorded_stack(stacks: tuple[MemoryStack, ...], locator: tuple[str, ...]) -> MemoryStack | None:
+    """Return the recorded stack at ``locator`` by binary search, or ``None``."""
+    index = bisect_left(stacks, locator, key=lambda stack: stack.locator)
+    if index < len(stacks) and stacks[index].locator == locator:
+        return stacks[index]
+    return None
+
+
 def _validate_node_evidence(
     state: RunState,
     node_id: str,
@@ -3421,24 +3403,24 @@ def _validate_node_evidence(
     if scope is not None:
         if type(scope) is not MemoryScope:
             raise ValueError(f"node {node_id!r} has no exact compiled memory scope")
-        MemoryScope(scope.root_flow_id, scope.static_path, scope.frame_stack,
-                    scope.occurrence_path)
-        expected_stack = state.learning_state.applicable_frames(
-            scope.root_flow_id, scope.static_path,
-        )
-        if scope.frame_stack != expected_stack:
-            raise ValueError(f"node {node_id!r} memory scope must carry its exact recorded frame stack")
-    elif state.memory_layout:
+        MemoryScope(scope.static_path, scope.memories, scope.occurrence_path)
+        if state.memory_stacks is None:
+            expected: tuple[str, ...] = ()
+        else:
+            recorded = _recorded_stack(state.memory_stacks, scope.static_path)
+            if recorded is None:
+                raise ValueError(f"node {node_id!r} has no recorded memory stack")
+            expected = recorded.memories
+        if scope.memories != expected:
+            raise ValueError(f"node {node_id!r} memory scope must carry its exact recorded memory stack")
+    elif state.memories:
         raise ValueError(f"node {node_id!r} has no exact compiled memory scope")
     if evidence is None:
         raise ValueError(f"eligible node {node_id!r} requires evaluation evidence while learning")
     if type(evidence) is not EvaluationEvidence:
         raise TypeError("node evidence must be an EvaluationEvidence or None")
     if evidence.scope != scope:
-        raise ValueError(f"node {node_id!r} evidence scope does not match its layout")
-    if scope is not None:
-        for frame_ref in scope.frame_stack:
-            MemoryOccurrenceRef(frame_ref, scope.occurrence_path)
+        raise ValueError(f"node {node_id!r} evidence scope does not match its compiled scope")
 
 
 def _validate_failure_record(state: RunState, record: NodeFailedRecord) -> None:
@@ -4311,7 +4293,6 @@ def _require_pristine(state: RunState) -> None:
         and state.num_workers == 0
         and not state.input
         and not state.effective_llm_by_static_path
-        and state.memory_layout is None
         and state.memory_snapshots is None
         and state.memories is None
         and state.memory_stacks is None
@@ -4319,17 +4300,11 @@ def _require_pristine(state: RunState) -> None:
         and state.trace is None
         and state.learning_state == RuntimeLearningState()
         and state.backward_state == RuntimeBackwardState()
-        and state._memory_authority.layout is None
         and state._memory_authority.snapshots is None
         and state._memory_authority.memories is None
         and state._memory_authority.memory_stacks is None
         and state._memory_authority.learnable is False
-        and state._memory_authority.frame_order is state.learning_state.frame_order
-        and state._memory_authority.policy_order is state.learning_state.policy_order
-        and (
-            state._memory_authority.policy_frame_indices
-            is state.learning_state.policy_frame_indices
-        )
+        and state._memory_authority.memory_order is state.learning_state.memory_order
         and state.initial_static_ids == frozenset(state.flow.nodes)
     ):
         raise ValueError("RunStarted requires a pristine RunState at sequence 0")
@@ -4405,20 +4380,14 @@ def _materialize_run_started(
     if not isinstance(canonical_input, dict):
         raise TypeError("canonical START input is not a dict")
 
-    learning_state = RuntimeLearningState.for_layout(record.memory_layout)
-    backward_state = RuntimeBackwardState(
-        record.memory_layout, learning_state.frame_order, learning_state.policy_order,
-        learning_state.policy_frame_indices,
-    )
+    learning_state = RuntimeLearningState.for_memories(record.memories)
+    backward_state = RuntimeBackwardState(learning_state.memory_order)
     memory_authority = _MemoryAuthority(
-        layout=record.memory_layout,
         snapshots=record.memory_snapshots,
+        learnable=record.learnable,
         memories=record.memories,
         memory_stacks=record.memory_stacks,
-        learnable=record.learnable,
-        frame_order=learning_state.frame_order,
-        policy_order=learning_state.policy_order,
-        policy_frame_indices=learning_state.policy_frame_indices,
+        memory_order=learning_state.memory_order,
     )
     return _RunStartedApply(
         pool=pool,
@@ -4436,7 +4405,6 @@ def _materialize_run_started(
         num_workers=record.num_workers,
         input=canonical_input,
         effective_llm_by_static_path=canonical_effective,
-        memory_layout=record.memory_layout,
         memory_snapshots=record.memory_snapshots,
         memories=record.memories,
         memory_stacks=record.memory_stacks,
@@ -4465,7 +4433,6 @@ def _apply_run_started(state: RunState, apply: _RunStartedApply) -> None:
     state.num_workers = apply.num_workers
     state.input = apply.input
     state.effective_llm_by_static_path = apply.effective_llm_by_static_path
-    state.memory_layout = apply.memory_layout
     state.memory_snapshots = apply.memory_snapshots
     state.memories = apply.memories
     state.memory_stacks = apply.memory_stacks

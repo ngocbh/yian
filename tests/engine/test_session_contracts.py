@@ -14,25 +14,25 @@ from agent_composer.memory import contracts as c
 from tests.engine._memory_fakes import _Memory
 
 
-def _frame_ref(owner=c.MemoryOwner.FLOW):
-    return c.MemoryFrameRef("root", ("root", "child"), owner)
-
-
-def test_legacy_memory_protocol_is_unchanged():
-    memory = _Memory()
+def test_memory_protocol_has_no_frames():
+    memory = _Memory(recall_text="notes")
     session = memory.open_run()
-    frame = session.open_frame(c.MemoryFrameSpec(_frame_ref(), "session", {}))
     assert isinstance(memory, c.Memory)
-    assert isinstance(frame, c.MemoryFrame)
+    assert isinstance(session, c.MemorySession)
     assert {name for name in vars(c.MemorySession) if not name.startswith("_")} == {
         "snapshot",
         "close",
-        "open_frame",
+        "recall",
+        "learn",
         "commit",
     }
     assert "__enter__" in vars(c.MemorySession)
     assert "__exit__" in vars(c.MemorySession)
-    assert frame.recall() == ""
+    assert not hasattr(session, "open_frame")
+    assert session.recall() == "notes"
+    assert session.learn(c.LearnContext("run", "notes", ())) == []
+    assert memory.recall_contexts == [None]
+    assert [context.memory for context in memory.learn_contexts] == ["notes"]
     session.close()
 
 
@@ -334,8 +334,7 @@ def test_closed_accepts_only_turn_dispositions(status):
 def test_conversation_capabilities_are_optional_and_exact():
     memory = _Memory()
     session = memory.open_run()
-    frame = session.open_frame(c.MemoryFrameSpec(_frame_ref(), "session", {}))
-    assert not isinstance(frame, c.TranscriptSource)
+    assert not isinstance(session, c.TranscriptSource)
     assert set(get_args(c.ConversationCheckpoint)) == {
         c.ConversationAdmitted,
         c.ConversationEffectRequested,

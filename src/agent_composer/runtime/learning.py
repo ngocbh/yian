@@ -1,8 +1,8 @@
 """Pure backward transfers and accepted backward/memory reducer projections.
 
 This module shares exact route-transfer validation with the backward callback
-driver and owns immutable attempt state and pure episode/layout inventories.
-It projects owner-local contexts for every enabled frame from complete accepted
+driver and owns immutable attempt state and pure per-memory episode inventories.
+It projects owner-local contexts for every enabled memory key from complete accepted
 history and backward results alongside forward episode projections.
 Contracts, records, and retained traces sit below it; state and callback drivers
 consume its pure projections. It invokes no callbacks or backend operations.
@@ -19,18 +19,18 @@ from typing import Any
 from agent_composer.diagnostics import Failure
 from agent_composer.expr.lineage import FeedbackValue, RouteContext, SourceRef, has_feedback, route_feedback, validate_feedback
 from agent_composer.memory import (
+    DeclSite,
     EvaluationEvidence,
     LearnContext,
     LearningFailure,
     LearningResult,
     MemoryEpisode,
     MemoryEpisodeStatus,
-    MemoryFrameRef,
-    MemoryFrameSpec,
     MemoryMutation,
-    MemoryOccurrenceRef,
+    MemoryOccurrenceSegment,
     MemoryOperationFailure,
-    MemoryOwner,
+    MemorySpec,
+    MemoryStack,
     PolicyCommitOutcome,
 )
 from agent_composer.nodes.base import BackwardContext, BackwardResult, _copy_backward_value, validate_backward_result
@@ -54,6 +54,8 @@ from agent_composer.runtime.log import (
     canonical_seed,
 )
 from agent_composer.runtime.trace import RetainedTrace, TraceOccurrence, TraceTerminal
+
+_ROOT_FLOW_SITE = DeclSite((), ("root",), None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -322,11 +324,11 @@ def _interrupted_failure() -> BackwardFailure:
     return BackwardFailure("backward", "backward.interrupted", "backward attempt interrupted before completion")
 
 
-def _policy_outcomes(policy_order: tuple[str, ...], attempt: _BackwardAttempt) -> tuple[PolicyCommitOutcome, ...]:
+def _policy_outcomes(memory_order: tuple[str, ...], attempt: _BackwardAttempt) -> tuple[PolicyCommitOutcome, ...]:
     requests = {record.memory: record for record in attempt.requests}
     observations = {record.memory: record for record in attempt.observations}
     outcomes = []
-    for name in policy_order:
+    for name in memory_order:
         request, observation = requests.get(name), observations.get(name)
         if request is None:
             outcomes.append(PolicyCommitOutcome(name, "unrequested"))
@@ -342,7 +344,7 @@ def _policy_outcomes(policy_order: tuple[str, ...], attempt: _BackwardAttempt) -
 def _prefix_learning(
     backward: RuntimeBackwardState, *, succeeded: bool = False, learner_failure: LearningFailure | None = None,
 ) -> LearningResult | None:
-    if not backward.policy_order:
+    if not backward.memory_order:
         return None
     policies = backward.policy_outcomes
     failures = tuple(LearningFailure(item.memory, "commit", item.failure)
@@ -355,50 +357,29 @@ def _prefix_learning(
 
 @dataclass(frozen=True, slots=True)
 class RuntimeBackwardState:
-    """Immutable accepted backward attempt history and policy dispositions.
+    """Immutable accepted backward attempt history and per-memory dispositions.
 
-    Layout inventories share the RunStarted authority roots. Completed proposals
-    remain inspectable; only new records can advance an attempt. No prefix view
-    resumes work or invokes a callback.
+    ``memory_order`` shares the RunStarted authority root. Completed proposals
+    remain inspectable; only new records can advance an attempt. No prefix
+    view resumes work or invokes a callback.
 
     Attributes:
-        layout (`tuple[MemoryFrameSpec, ...] | None`): Recorded enabled frames.
-        frame_order (`tuple[MemoryFrameRef, ...]`): Exact recorded owning refs.
-        policy_order (`tuple[str, ...]`): Canonical configured policy order.
-        policy_frame_indices (`tuple[tuple[int, ...], ...]`): Frame positions for
-            each policy, preserving layout order during batch aggregation.
+        memory_order (`tuple[str, ...]`): Recorded memory keys in table order.
         attempts (`tuple[_BackwardAttempt, ...]`): Accepted immutable attempt
             history; a later start never inherits earlier proposals.
     """
 
-    layout: tuple[MemoryFrameSpec, ...] | None = None
-    frame_order: tuple[MemoryFrameRef, ...] = ()
-    policy_order: tuple[str, ...] = ()
-    policy_frame_indices: tuple[tuple[int, ...], ...] = ()
+    memory_order: tuple[str, ...] = ()
     attempts: tuple[_BackwardAttempt, ...] = ()
 
     def __post_init__(self) -> None:
-        """Reject malformed inventories and impossible accepted-history shapes."""
-        if self.layout is not None:
-            _validate_layout(self.layout)
-        if type(self.frame_order) is not tuple or any(type(ref) is not MemoryFrameRef for ref in self.frame_order):
-            raise TypeError("backward frame order must be a tuple of exact MemoryFrameRef values")
-        for ref in self.frame_order:
-            MemoryFrameRef(ref.root_flow_id, ref.static_path, ref.owner)
-        if type(self.policy_order) is not tuple or any(type(name) is not str for name in self.policy_order):
-            raise TypeError("backward policy order must be a tuple of strings")
-        if type(self.policy_frame_indices) is not tuple or any(
-            type(indices) is not tuple or any(type(index) is not int for index in indices)
-            for indices in self.policy_frame_indices
+        """Reject a malformed key order and impossible accepted-history shapes."""
+        if type(self.memory_order) is not tuple or any(
+            type(key) is not str or not key for key in self.memory_order
         ):
-            raise TypeError("backward policy frame indices must be tuples of exact integers")
-        expected_frames = tuple(spec.ref for spec in (self.layout or ()))
-        expected_policies = tuple(sorted({spec.policy_name for spec in (self.layout or ())}))
-        expected_indices = tuple(tuple(i for i, spec in enumerate(self.layout or ()) if spec.policy_name == name)
-                                 for name in expected_policies)
-        if (self.frame_order != expected_frames or self.policy_order != expected_policies
-                or self.policy_frame_indices != expected_indices):
-            raise ValueError("backward inventories must match the recorded layout")
+            raise TypeError("backward memory order must be a tuple of non-empty strings")
+        if self.memory_order != tuple(sorted(set(self.memory_order))):
+            raise ValueError("backward memory order must be sorted and unique")
         if type(self.attempts) is not tuple:
             raise TypeError("backward history must be an immutable tuple")
         for index, attempt in enumerate(self.attempts):
@@ -409,8 +390,8 @@ class RuntimeBackwardState:
                 raise ValueError("backward attempt IDs must follow accepted start order")
             if index < len(self.attempts) - 1 and attempt.finished is None:
                 raise ValueError("an unfinished attempt cannot precede another start")
-            if tuple(record.memory for record in attempt.requests) != self.policy_order[:len(attempt.requests)]:
-                raise ValueError("backward requests must follow recorded policy order")
+            if tuple(record.memory for record in attempt.requests) != self.memory_order[:len(attempt.requests)]:
+                raise ValueError("backward requests must follow recorded memory order")
             if len(attempt.observations) > len(attempt.requests) or len(attempt.requests) > len(attempt.observations) + 1:
                 raise ValueError("backward requests and observations must alternate")
             for result_index, observation in enumerate(attempt.observations):
@@ -449,23 +430,15 @@ class RuntimeBackwardState:
 
     @property
     def commit_attempt_key(self) -> int | None:
-        """Return the attempt ID folded into the current attempt's commit IDs.
-
-        The first attempt that requests commits keeps attempt-free
-        ``ac-memory-v1`` IDs, so logs written before repeated attempts replay
-        unchanged. Every later requesting attempt gets its own ``ac-memory-v2``
-        IDs, even when its batch equals an earlier one.
-        """
-        if self.current is None or not any(attempt.requests for attempt in self.attempts[:-1]):
-            return None
-        return self.current.started.attempt_id
+        """Return the attempt ID folded into the current attempt's commit IDs."""
+        return None if self.current is None else self.current.started.attempt_id
 
     @property
     def policy_outcomes(self) -> tuple[PolicyCommitOutcome, ...]:
         """Project each configured policy from accepted requests and observations."""
         if self.current is None:
-            return tuple(PolicyCommitOutcome(name, "unrequested") for name in self.policy_order)
-        return _policy_outcomes(self.policy_order, self.current)
+            return tuple(PolicyCommitOutcome(name, "unrequested") for name in self.memory_order)
+        return _policy_outcomes(self.memory_order, self.current)
 
     @property
     def can_start(self) -> bool:
@@ -487,17 +460,13 @@ class RuntimeBackwardState:
                                _interrupted_failure(), _prefix_learning(self))
 
 
-def _proposal_batches(backward: RuntimeBackwardState, ready: BackwardReadyRecord) -> tuple[tuple[MemoryMutation, ...], ...]:
-    """Aggregate every recorded frame in layout order, including empty proposals."""
-    if tuple(proposal.frame_ref for proposal in ready.frame_proposals) != backward.frame_order:
-        raise ValueError("frame proposals must cover the complete recorded layout in order")
-    batches = tuple(tuple(mutation for index in indices for mutation in ready.frame_proposals[index].mutations)
-                    for indices in backward.policy_frame_indices)
-    for batch in batches:
-        identities = tuple(mutation.mutation_id for mutation in batch)
-        if len(set(identities)) != len(identities):
-            raise ValueError("backward mutation IDs must be unique within each policy")
-    return batches
+def _proposal_batches(
+    backward: RuntimeBackwardState, ready: BackwardReadyRecord,
+) -> tuple[tuple[MemoryMutation, ...], ...]:
+    """Return each recorded memory's batch in table order, including empty ones."""
+    if tuple(proposal.memory for proposal in ready.proposals) != backward.memory_order:
+        raise ValueError("memory proposals must cover the complete recorded memory table in order")
+    return tuple(proposal.mutations for proposal in ready.proposals)
 
 
 def _validate_backward_finished(
@@ -533,15 +502,14 @@ def _validate_backward_finished(
             raise ValueError("commit Finished must match the exact accepted failure and policy states")
         return
     if failure.stage == "learn":
-        if type(failure.cause) is not MemoryOperationFailure or failure.frame_ref not in backward.frame_order:
-            raise ValueError("learner failure requires one exact enabled frame and memory-operation cause")
-        spec = backward.layout[backward.frame_order.index(failure.frame_ref)]
+        if type(failure.cause) is not MemoryOperationFailure or failure.memory not in backward.memory_order:
+            raise ValueError("learner failure requires one recorded memory key and memory-operation cause")
         expected = BackwardFailure("learn", failure.cause.code, failure.cause.message,
-                                   memory=spec.policy_name, frame_ref=spec.ref, cause=failure.cause)
+                                   memory=failure.memory, cause=failure.cause)
         if failure != expected or outcome.feedback is None:
             raise ValueError("learner Finished must retain the exact attributed failure and completed feedback")
         validate_attributed_backward(trace, current.started.feedback, outcome.feedback, record.attributed_results)
-        known = LearningFailure(spec.policy_name, "learn", failure.cause, spec.ref)
+        known = LearningFailure(failure.memory, "learn", failure.cause)
         if outcome.learning != _prefix_learning(backward, learner_failure=known):
             raise ValueError("learner Finished learning must contain its exact known failure")
         return
@@ -551,7 +519,7 @@ def _validate_backward_finished(
     if not has_feedback(current.started.feedback) or failure.code not in ("backward.execute", "backward.result"):
         raise ValueError("backward computation failure requires effective feedback and a driver failure code")
     if (failure.run_id != trace.run_id or failure.node_started_seq is None
-            or failure.memory is not None or failure.frame_ref is not None):
+            or failure.memory is not None):
         raise ValueError("backward computation failure requires accepted occurrence attribution")
     source = SourceRef(trace.run_id, failure.node_started_seq)
     try:
@@ -609,10 +577,10 @@ def reduce_backward_record(
         if current.ready is None or any(policy.status in ("unknown", "failed") for policy in backward.policy_outcomes):
             raise ValueError("backward commit request requires Ready and no pending or failed policy")
         index = len(current.requests)
-        if index >= len(backward.policy_order) or record.memory != backward.policy_order[index]:
-            raise ValueError("backward request must name the next enabled policy")
+        if index >= len(backward.memory_order) or record.memory != backward.memory_order[index]:
+            raise ValueError("backward request must name the next recorded memory")
         batch = _proposal_batches(backward, current.ready)[index]
-        expected_id = memory_commit_id(trace.run_id, record.memory, batch, backward.commit_attempt_key)
+        expected_id = memory_commit_id(trace.run_id, record.memory, batch, current.started.attempt_id)
         if record.mutations != batch or record.commit_id != expected_id:
             raise ValueError("backward commit batch and identity must match the ordered Ready proposals")
         next_attempt = replace(current, requests=(*current.requests, record))
@@ -693,214 +661,101 @@ class _EpisodeLog:
         )
 
 
-def frame_key(ref: MemoryFrameRef) -> tuple[str, tuple[str, ...], str]:
-    """Return the canonical structural ordering key for one frame."""
-    if type(ref) is not MemoryFrameRef:
-        raise TypeError("frame key requires a MemoryFrameRef")
-    return (ref.root_flow_id, ref.static_path, ref.owner.value)
-
-
 def occurrence_key(
-    occurrence: MemoryOccurrenceRef,
-) -> tuple[
-    tuple[str, tuple[str, ...], str],
-    tuple[tuple[str, tuple[str, ...], int], ...],
-]:
-    """Return the canonical structural ordering key for one occurrence."""
-    if type(occurrence) is not MemoryOccurrenceRef:
-        raise TypeError("occurrence key requires a MemoryOccurrenceRef")
-    return (
-        frame_key(occurrence.frame_ref),
-        tuple(
-            (segment.kind.value, segment.static_path, segment.index)
-            for segment in occurrence.occurrence_path
-        ),
+    occurrence_path: tuple[MemoryOccurrenceSegment, ...],
+) -> tuple[tuple[str, tuple[str, ...], int], ...]:
+    """Return the canonical structural ordering key for one occurrence path."""
+    if type(occurrence_path) is not tuple or any(
+        type(segment) is not MemoryOccurrenceSegment for segment in occurrence_path
+    ):
+        raise TypeError("occurrence key requires a tuple of MemoryOccurrenceSegment values")
+    return tuple(
+        (segment.kind.value, segment.static_path, segment.index)
+        for segment in occurrence_path
     )
 
 
 @dataclass(frozen=True, slots=True)
 class RuntimeLearningState:
-    """Pure immutable episode and layout inventory without attempt progress."""
+    """Pure immutable per-memory episode inventory without attempt progress.
 
-    frame_order: tuple[MemoryFrameRef, ...] = ()
-    policy_order: tuple[str, ...] = ()
-    policy_frame_indices: tuple[tuple[int, ...], ...] = ()
+    Attributes:
+        memory_order (`tuple[str, ...]`): Recorded memory keys in table order.
+        episodes (`tuple[_EpisodeLog, ...]`): One persistent episode log per key.
+        episode_run_id (`str | None`): Run that produced every retained episode.
+    """
+
+    memory_order: tuple[str, ...] = ()
     episodes: tuple[_EpisodeLog, ...] = ()
     episode_run_id: str | None = None
 
     def __post_init__(self) -> None:
-        """Require canonical inventories and revalidate all nested values."""
-        if type(self.frame_order) is not tuple:
-            raise TypeError("learning frame_order must be a tuple")
-        for ref in self.frame_order:
-            if type(ref) is not MemoryFrameRef:
-                raise TypeError("learning frame_order items must be MemoryFrameRef")
-            MemoryFrameRef(ref.root_flow_id, ref.static_path, ref.owner)
-        keys = tuple(frame_key(ref) for ref in self.frame_order)
-        if keys != tuple(sorted(set(keys))):
-            raise ValueError("learning frame_order must be sorted and unique")
-        if type(self.policy_order) is not tuple or any(
-            type(name) is not str or not name for name in self.policy_order
+        """Require a canonical key order and revalidate all nested values."""
+        if type(self.memory_order) is not tuple or any(
+            type(key) is not str or not key for key in self.memory_order
         ):
-            raise TypeError(
-                "learning policy_order must be a tuple of non-empty strings"
-            )
-        if self.policy_order != tuple(sorted(set(self.policy_order))):
-            raise ValueError("learning policy_order must be sorted and unique")
-        if type(self.policy_frame_indices) is not tuple:
-            raise TypeError("policy frame indices must be a tuple")
+            raise TypeError("learning memory_order must be a tuple of non-empty strings")
+        if self.memory_order != tuple(sorted(set(self.memory_order))):
+            raise ValueError("learning memory_order must be sorted and unique")
         if type(self.episodes) is not tuple:
             raise TypeError("learning episodes must be a tuple")
-        if len(self.policy_frame_indices) != len(self.policy_order):
-            raise ValueError("policy frame indices must align with policy_order")
-        if len(self.episodes) != len(self.frame_order):
-            raise ValueError("learning episodes must align with frame_order")
-        flattened_indices: list[int] = []
-        for indices in self.policy_frame_indices:
-            if type(indices) is not tuple or any(
-                type(index) is not int for index in indices
-            ):
-                raise TypeError("policy frame indices must contain integer tuples")
-            if indices != tuple(sorted(set(indices))):
-                raise ValueError("policy frame indices must be sorted and unique")
-            flattened_indices.extend(indices)
-        if sorted(flattened_indices) != list(range(len(self.frame_order))):
-            raise ValueError("policy frame indices must partition frame_order")
+        if len(self.episodes) != len(self.memory_order):
+            raise ValueError("learning episodes must align with memory_order")
         if self.episode_run_id is not None and (
             type(self.episode_run_id) is not str or not self.episode_run_id
         ):
             raise ValueError("episode_run_id must be a non-empty string or None")
         episode_run_ids: set[str] = set()
-        for index, episode_log in enumerate(self.episodes):
+        for episode_log in self.episodes:
             if type(episode_log) is not _EpisodeLog:
-                raise TypeError("frame episodes must be persistent episode logs")
+                raise TypeError("memory episodes must be persistent episode logs")
             _EpisodeLog(episode_log.levels)
-            ref = self.frame_order[index]
             for episode in episode_log.to_tuple():
                 episode_run_ids.add(episode.run_id)
-                if episode.occurrence.frame_ref != ref:
-                    raise ValueError("episode must align with its frame")
         if len(episode_run_ids) > 1:
             raise ValueError("all learning episodes must share one run_id")
-        expected_episode_run_id = next(iter(episode_run_ids), None)
-        if self.episode_run_id != expected_episode_run_id:
+        if self.episode_run_id != next(iter(episode_run_ids), None):
             raise ValueError("episode_run_id must match retained episodes")
 
     @classmethod
-    def for_layout(
+    def for_memories(
         cls,
-        layout: tuple[MemoryFrameSpec, ...] | None,
+        memories: tuple[MemorySpec, ...] | None,
     ) -> RuntimeLearningState:
-        """Return pristine learning state for one canonical recorded layout."""
-        if layout is None:
+        """Return pristine learning state for one recorded key table."""
+        if memories is None:
             return cls()
-        _validate_layout(layout)
-        frame_order = tuple(spec.ref for spec in layout)
-        policy_order = tuple(sorted({spec.policy_name for spec in layout}))
-        policy_buckets = {name: [] for name in policy_order}
-        for index, spec in enumerate(layout):
-            policy_buckets[spec.policy_name].append(index)
-        policy_frame_indices = tuple(
-            tuple(policy_buckets[name]) for name in policy_order
-        )
-        return cls(
-            frame_order=frame_order,
-            policy_order=policy_order,
-            policy_frame_indices=policy_frame_indices,
-            episodes=tuple(_EpisodeLog() for _ in frame_order),
-        )
+        memory_order = tuple(spec.key for spec in memories)
+        return cls(memory_order=memory_order, episodes=tuple(_EpisodeLog() for _ in memory_order))
 
-    def validate_layout(self, layout: tuple[MemoryFrameSpec, ...] | None) -> None:
-        """Require inventories to remain aligned with authoritative layout."""
-        if layout is None:
-            expected_frames: tuple[MemoryFrameRef, ...] = ()
-            expected_policies: tuple[str, ...] = ()
-        else:
-            if type(layout) is not tuple:
-                raise TypeError("memory_layout must be a tuple when enabled")
-            if any(type(spec) is not MemoryFrameSpec for spec in layout):
-                raise TypeError(
-                    "memory_layout items must be MemoryFrameSpec values"
-                )
-            expected_frames = tuple(spec.ref for spec in layout)
-            expected_policies = tuple(
-                sorted({spec.policy_name for spec in layout})
-            )
-        if self.frame_order != expected_frames:
-            raise ValueError("learning frame inventory disagrees with memory_layout")
-        if self.policy_order != expected_policies:
-            raise ValueError("learning policy inventory disagrees with memory_layout")
-        expected_buckets = {name: [] for name in expected_policies}
-        if layout is not None:
-            for index, spec in enumerate(layout):
-                expected_buckets[spec.policy_name].append(index)
-        expected_indices = tuple(
-            tuple(expected_buckets[name]) for name in expected_policies
-        )
-        if self.policy_frame_indices != expected_indices:
-            raise ValueError("learning policy frames disagree with memory_layout")
-
-    def episodes_for(self, ref: MemoryFrameRef) -> tuple[MemoryEpisode, ...]:
-        """Return accepted episodes for one exact recorded frame."""
-        return self.episodes[self._frame_index(ref)].to_tuple()
+    def episodes_for(self, memory: str) -> tuple[MemoryEpisode, ...]:
+        """Return accepted episodes for one recorded memory key."""
+        return self.episodes[self._memory_index(memory)].to_tuple()
 
     def occurrence_inventory(
         self,
-        ref: MemoryFrameRef,
-    ) -> tuple[MemoryOccurrenceRef, ...]:
-        """Return the sorted unique structural occurrences accepted for a frame."""
-        return self._occurrence_inventory_at(self._frame_index(ref))
+        memory: str,
+    ) -> tuple[tuple[MemoryOccurrenceSegment, ...], ...]:
+        """Return the sorted unique occurrence paths accepted for one memory."""
+        paths = {episode.occurrence_path for episode in self.episodes_for(memory)}
+        return tuple(sorted(paths, key=occurrence_key))
 
-    def applicable_frames(
-        self,
-        root_flow_id: str,
-        static_path: tuple[str, ...],
-    ) -> tuple[MemoryFrameRef, ...]:
-        """Return exact lexical FLOW ancestors followed by a local AGENT frame."""
-        if type(root_flow_id) is not str or not root_flow_id:
-            raise ValueError(
-                "applicable frame lookup requires a non-empty root_flow_id"
-            )
-        if (
-            type(static_path) is not tuple
-            or not static_path
-            or any(type(part) is not str or not part for part in static_path)
-        ):
-            raise ValueError("applicable frame lookup requires a non-empty static_path")
-        if static_path[0] != root_flow_id:
-            raise ValueError("applicable frame path must begin with root_flow_id")
-
-        applicable: list[MemoryFrameRef] = []
-        for length in range(1, len(static_path)):
-            ref = self._frame_for_key(
-                (root_flow_id, static_path[:length], MemoryOwner.FLOW.value)
-            )
-            if ref is not None:
-                applicable.append(ref)
-        local_agent = self._frame_for_key(
-            (root_flow_id, static_path, MemoryOwner.AGENT.value)
-        )
-        if local_agent is not None:
-            applicable.append(local_agent)
-        return tuple(applicable)
-
-    def learn_context(self, run_id: str, ref: MemoryFrameRef) -> LearnContext:
+    def learn_context(self, run_id: str, memory: str) -> LearnContext:
         """Return a fresh closed context with ordered episodes and no feedback."""
         if type(run_id) is not str or not run_id:
             raise ValueError("learning context requires a non-empty run_id")
         if self.episode_run_id is not None and self.episode_run_id != run_id:
             raise ValueError("learning context run_id disagrees with its episodes")
-        episodes = self.episodes_for(ref)
         return LearnContext(
             run_id=run_id,
-            frame_ref=ref,
-            episodes=episodes,
+            memory=memory,
+            episodes=self.episodes_for(memory),
             feedback=(),
         )
 
     def append_episodes(
         self,
-        additions: tuple[tuple[MemoryFrameRef, MemoryEpisode], ...],
+        additions: tuple[tuple[str, MemoryEpisode], ...],
     ) -> RuntimeLearningState:
         """Append one accepted outcome's projections in durable record order."""
         if type(additions) is not tuple:
@@ -909,98 +764,38 @@ class RuntimeLearningState:
             return self
         updated = list(self.episodes)
         addition_run_ids: set[str] = set()
-        for ref, episode in additions:
-            index = self._frame_index(ref)
-            appended = updated[index].append(episode)
-            if episode.occurrence.frame_ref != ref:
-                raise ValueError("episode addition frame does not match occurrence")
+        for memory, episode in additions:
+            index = self._memory_index(memory)
+            updated[index] = updated[index].append(episode)
             addition_run_ids.add(episode.run_id)
-            updated[index] = appended
         if len(addition_run_ids) != 1:
             raise ValueError("one accepted outcome must carry one episode run_id")
         addition_run_id = next(iter(addition_run_ids))
-        if (
-            self.episode_run_id is not None
-            and addition_run_id != self.episode_run_id
-        ):
+        if self.episode_run_id is not None and addition_run_id != self.episode_run_id:
             raise ValueError("episode addition run_id disagrees with retained history")
-        return self._from_validated(
-            episodes=tuple(updated),
-            episode_run_id=addition_run_id,
-        )
-
-    def _occurrence_inventory_at(
-        self,
-        index: int,
-    ) -> tuple[MemoryOccurrenceRef, ...]:
-        """Return one frame's structural inventory from its persistent log."""
-        occurrences = {
-            episode.occurrence for episode in self.episodes[index].to_tuple()
-        }
-        return tuple(sorted(occurrences, key=occurrence_key))
+        return self._from_validated(episodes=tuple(updated), episode_run_id=addition_run_id)
 
     def _from_validated(
         self,
         *,
-        episodes: tuple[_EpisodeLog, ...] | None = None,
-        episode_run_id: str | None = None,
+        episodes: tuple[_EpisodeLog, ...],
+        episode_run_id: str,
     ) -> RuntimeLearningState:
         """Replace validated aligned roots without rescanning frozen history."""
         value = object.__new__(type(self))
-        object.__setattr__(value, "frame_order", self.frame_order)
-        object.__setattr__(value, "policy_order", self.policy_order)
-        object.__setattr__(
-            value,
-            "policy_frame_indices",
-            self.policy_frame_indices,
-        )
-        object.__setattr__(
-            value,
-            "episodes",
-            self.episodes if episodes is None else episodes,
-        )
-        object.__setattr__(
-            value,
-            "episode_run_id",
-            self.episode_run_id if episode_run_id is None else episode_run_id,
-        )
+        object.__setattr__(value, "memory_order", self.memory_order)
+        object.__setattr__(value, "episodes", episodes)
+        object.__setattr__(value, "episode_run_id", episode_run_id)
         return value
 
-    def _frame_index(self, ref: MemoryFrameRef) -> int:
-        """Resolve one exact frame or reject an unrecorded identity."""
-        if type(ref) is not MemoryFrameRef:
-            raise TypeError("frame lookup requires a MemoryFrameRef")
-        key = frame_key(ref)
-        index = bisect_left(self.frame_order, key, key=frame_key)
-        if index >= len(self.frame_order) or self.frame_order[index] != ref:
-            raise ValueError("memory frame is absent from recorded layout")
+    def _memory_index(self, memory: str) -> int:
+        """Resolve one recorded memory key by binary search."""
+        if type(memory) is not str:
+            raise TypeError("memory lookup requires a memory key string")
+        index = bisect_left(self.memory_order, memory)
+        if index >= len(self.memory_order) or self.memory_order[index] != memory:
+            raise ValueError("memory key is absent from the recorded table")
         return index
-
-    def _frame_for_key(
-        self,
-        key: tuple[str, tuple[str, ...], str],
-    ) -> MemoryFrameRef | None:
-        """Return the exact sorted frame at ``key`` without scanning inventory."""
-        index = bisect_left(self.frame_order, key, key=frame_key)
-        if index >= len(self.frame_order):
-            return None
-        ref = self.frame_order[index]
-        return ref if frame_key(ref) == key else None
-
-
-def _validate_layout(layout: tuple[MemoryFrameSpec, ...]) -> None:
-    """Revalidate exact layout carriers and canonical structural order."""
-    if type(layout) is not tuple:
-        raise TypeError("memory_layout must be a tuple when enabled")
-    for spec in layout:
-        if type(spec) is not MemoryFrameSpec:
-            raise TypeError("memory_layout items must be MemoryFrameSpec values")
-        MemoryFrameSpec(spec.ref, spec.policy_name, spec.config)
-    keys = tuple(frame_key(spec.ref) for spec in layout)
-    if keys != tuple(sorted(set(keys))):
-        raise ValueError("memory_layout frame refs must be sorted and unique")
-    if len({spec.ref.root_flow_id for spec in layout}) > 1:
-        raise ValueError("memory_layout frame refs must share one root_flow_id")
 
 
 def _revalidate_episode(episode: MemoryEpisode) -> None:
@@ -1009,7 +804,7 @@ def _revalidate_episode(episode: MemoryEpisode) -> None:
         raise TypeError("episodes must contain MemoryEpisode values")
     MemoryEpisode(
         run_id=episode.run_id,
-        occurrence=episode.occurrence,
+        occurrence_path=episode.occurrence_path,
         owner_static_path=episode.owner_static_path,
         status=episode.status,
         inputs=episode.inputs,
@@ -1092,8 +887,8 @@ def project_outcome_episodes(
     ),
     *,
     execution_seq: int | None = None,
-) -> tuple[tuple[MemoryFrameRef, MemoryEpisode], ...]:
-    """Project one canonical accepted graph outcome into every scoped frame."""
+) -> tuple[tuple[str, MemoryEpisode], ...]:
+    """Project one canonical accepted graph outcome into every memory in its scope."""
     if type(run_id) is not str or not run_id:
         raise ValueError("episode projection requires a non-empty run_id")
     evidence = record.evidence
@@ -1105,43 +900,37 @@ def project_outcome_episodes(
         return ()
 
     status, output, failure = _episode_outcome(record)
-
-    additions: list[tuple[MemoryFrameRef, MemoryEpisode]] = []
-    for frame_ref in evidence.scope.frame_stack:
-        occurrence = MemoryOccurrenceRef(
-            frame_ref,
-            evidence.scope.occurrence_path,
+    scope = evidence.scope
+    return tuple(
+        (
+            memory,
+            MemoryEpisode(
+                run_id=run_id,
+                occurrence_path=scope.occurrence_path,
+                owner_static_path=scope.static_path,
+                status=status,
+                inputs=evidence.bound_inputs,
+                output=output,
+                failure=failure,
+                interactions=evidence.interactions,
+                base_system_prompt=evidence.base_system_prompt,
+                prompt=evidence.prompt,
+                memory_sections=evidence.memory_sections,
+                execution_seq=execution_seq,
+            ),
         )
-        additions.append(
-            (
-                frame_ref,
-                MemoryEpisode(
-                    run_id=run_id,
-                    occurrence=occurrence,
-                    owner_static_path=evidence.scope.static_path,
-                    status=status,
-                    inputs=evidence.bound_inputs,
-                    output=output,
-                    failure=failure,
-                    interactions=evidence.interactions,
-                    base_system_prompt=evidence.base_system_prompt,
-                    prompt=evidence.prompt,
-                    memory_sections=evidence.memory_sections,
-                    execution_seq=execution_seq,
-                ),
-            )
-        )
-    return tuple(additions)
+        for memory in scope.memories
+    )
 
 
 class OwnerContextError(Exception):
     """A validated owner's material cannot fit the existing memory JSON boundary."""
 
-    def __init__(self, frame_ref: MemoryFrameRef, original: Exception) -> None:
-        """Retain the exact receiving frame and original context-construction error."""
-        if type(frame_ref) is not MemoryFrameRef:
-            raise TypeError("owner context failure requires an exact MemoryFrameRef")
-        self.frame_ref = MemoryFrameRef(frame_ref.root_flow_id, frame_ref.static_path, frame_ref.owner)
+    def __init__(self, memory: str, original: Exception) -> None:
+        """Retain the receiving memory key and original context-construction error."""
+        if type(memory) is not str or not memory:
+            raise TypeError("owner context failure requires a memory key string")
+        self.memory = memory
         self.original = original
         super().__init__(str(original))
 
@@ -1215,44 +1004,64 @@ def _root_owner_feedback(result: BackwardResult) -> list[dict[str, Any]]:
 
 
 def project_owner_contexts(
-    trace: RetainedTrace, layout: tuple[MemoryFrameSpec, ...], submitted_feedback: FeedbackValue,
-    root_result: BackwardResult, attributed_results: tuple[AttributedBackwardResult, ...],
+    trace: RetainedTrace,
+    memories: tuple[MemorySpec, ...],
+    stacks: tuple[MemoryStack, ...],
+    submitted_feedback: FeedbackValue,
+    root_result: BackwardResult,
+    attributed_results: tuple[AttributedBackwardResult, ...],
 ) -> tuple[LearnContext, ...]:
-    """Build every enabled owner's context from a validated complete backward result.
+    """Build every enabled memory's context from a validated complete backward result.
+
+    A memory receives an occurrence when the occurrence's recorded scope names
+    its key. The source-free root channel goes to every memory owned by the
+    root flow.
 
     Args:
         trace (`RetainedTrace`): Accepted terminal executions and historical scopes.
-        layout (`tuple[MemoryFrameSpec, ...]`): Complete recorded enabled layout,
-            including frames without executed nodes.
+        memories (`tuple[MemorySpec, ...]`): Complete recorded key table,
+            including keys without executed nodes.
+        stacks (`tuple[MemoryStack, ...]`): Recorded per-target key stacks.
         submitted_feedback (`FeedbackValue`): Original ordinary root message.
         root_result (`BackwardResult`): Completed root projection.
         attributed_results (`tuple[AttributedBackwardResult, ...]`): Complete
             accepted occurrence inventory and validated local results.
 
     Returns:
-        `tuple[LearnContext, ...]`: Detached episode/feedback batches in layout order.
+        `tuple[LearnContext, ...]`: Detached episode/feedback batches in table order.
             Feedback preserves accepted execution coordinates. Memory scope selects
             receivers and episode ownership without relabeling that feedback.
 
     Raises:
-        `TypeError` or `ValueError`: For invalid layout, trace, or backward authority.
+        `TypeError` or `ValueError`: For an invalid table, stacks, trace, or
+            backward authority.
         `KeyError`: For missing accepted source authority during materialization.
         `OwnerContextError`: When validated material cannot satisfy a receiving
-            frame's existing memory JSON contract. No callback or backend is invoked.
+            memory's existing JSON contract. No callback or backend is invoked.
     """
-    if type(layout) is not tuple:
-        raise TypeError("owner contexts require the complete recorded layout tuple")
-    inventory = RuntimeLearningState.for_layout(layout)
+    if type(memories) is not tuple or any(type(spec) is not MemorySpec for spec in memories):
+        raise TypeError("owner contexts require the complete recorded memory table")
+    if type(stacks) is not tuple or any(type(stack) is not MemoryStack for stack in stacks):
+        raise TypeError("owner contexts require the recorded memory stacks")
+    inventory = RuntimeLearningState.for_memories(memories)
+    recorded = {stack.locator: stack.memories for stack in stacks}
+    if len(recorded) != len(stacks):
+        raise ValueError("recorded memory stacks must have unique locators")
     validate_attributed_backward(trace, submitted_feedback, root_result, attributed_results)
     occurrences = trace.occurrences
     scopes = {}
     for occurrence in occurrences:
         scope = occurrence.memory_scope
-        if scope is not None:
-            if scope.frame_stack != inventory.applicable_frames(scope.root_flow_id, scope.static_path):
-                raise ValueError("historical memory scope disagrees with the complete recorded layout")
-            if scope.frame_stack:
-                scopes[occurrence.source] = scope
+        if scope is None:
+            continue
+        if type(scope.memories) is not tuple:
+            raise TypeError("historical memory scope memories must be a tuple")
+        if recorded.get(scope.static_path) != scope.memories:
+            raise ValueError("historical memory scope disagrees with its recorded memory stack")
+        for key in scope.memories:
+            inventory._memory_index(key)
+        if scope.memories:
+            scopes[occurrence.source] = scope
 
     pending, direct_root = _seed_backward(trace, submitted_feedback)
     feedback_by_source = {}
@@ -1266,11 +1075,11 @@ def project_owner_contexts(
     fallback = _root_owner_feedback(_project_root_backward(trace, pending, {}, direct_root))
 
     contexts = []
-    for spec in layout:
+    for spec in memories:
         episodes, feedback = [], []
         for occurrence in occurrences:
             scope = scopes.get(occurrence.source)
-            if scope is None or spec.ref not in scope.frame_stack:
+            if scope is None or spec.key not in scope.memories:
                 continue
             record = occurrence.record
             capture, evidence = record.forward_capture, record.evidence
@@ -1286,7 +1095,7 @@ def project_owner_contexts(
             try:
                 episodes.append(MemoryEpisode(
                     run_id=trace.run_id,
-                    occurrence=MemoryOccurrenceRef(spec.ref, scope.occurrence_path),
+                    occurrence_path=scope.occurrence_path,
                     owner_static_path=scope.static_path,
                     status=status, inputs=capture.bound_inputs, output=output, failure=failure,
                     interactions=() if evidence is None else evidence.interactions,
@@ -1296,68 +1105,50 @@ def project_owner_contexts(
                     execution_seq=occurrence.source.execution_seq,
                 ))
             except (TypeError, ValueError) as exc:
-                raise OwnerContextError(spec.ref, exc) from exc
-        if spec.ref.owner is MemoryOwner.FLOW and spec.ref.static_path == (spec.ref.root_flow_id,):
+                raise OwnerContextError(spec.key, exc) from exc
+        if _ROOT_FLOW_SITE in spec.owners:
             feedback.extend(fallback)
         try:
-            contexts.append(LearnContext(trace.run_id, spec.ref, tuple(episodes), tuple(feedback)))
+            contexts.append(LearnContext(trace.run_id, spec.key, tuple(episodes), tuple(feedback)))
         except (TypeError, ValueError) as exc:
-            raise OwnerContextError(spec.ref, exc) from exc
+            raise OwnerContextError(spec.key, exc) from exc
     return tuple(contexts)
 
 
 def memory_commit_id(
     run_id: str,
-    policy_name: str,
+    memory: str,
     mutations: tuple[MemoryMutation, ...],
-    attempt_id: int | None = None,
+    attempt_id: int,
 ) -> str:
-    """Return the sole deterministic ID for a policy's canonical mutation batch.
+    """Return the sole deterministic ID for one memory's mutation batch in one attempt.
 
     The SHA-256 input is UTF-8 compact JSON with sorted object keys and no NaN:
-    ``[run_id, policy_name, canonical_batch]`` for ``ac-memory-v1:``, or
-    ``[run_id, attempt_id, policy_name, canonical_batch]`` for ``ac-memory-v2:``
-    when ``attempt_id`` is given.  Batch order is semantic and each item contains
-    ``mutation_id``, exact frame-ref fields, and the JSON payload.
+    ``[run_id, attempt_id, memory, [[mutation_id, payload], ...]]``. Batch
+    order is semantic. The result is ``ac-memory-v3:<hex digest>``.
     """
-    if attempt_id is not None and (type(attempt_id) is not int or attempt_id < 1):
-        raise ValueError("attempt_id must be a positive integer or None")
+    if type(attempt_id) is not int or attempt_id < 1:
+        raise ValueError("attempt_id must be a positive integer")
     if type(run_id) is not str or not run_id:
         raise ValueError("run_id must be a non-empty string")
-    if type(policy_name) is not str or not policy_name:
-        raise ValueError("policy_name must be a non-empty string")
+    if type(memory) is not str or not memory:
+        raise ValueError("memory must be a non-empty string")
     if type(mutations) is not tuple:
         raise TypeError("mutations must be a tuple")
-    batch: list[dict[str, object]] = []
+    batch: list[list[object]] = []
     for mutation in mutations:
         if type(mutation) is not MemoryMutation:
             raise TypeError("mutations items must be MemoryMutation values")
-        MemoryMutation(
-            mutation.mutation_id,
-            mutation.frame_ref,
-            mutation.payload,
-        )
-        batch.append(
-            {
-                "mutation_id": mutation.mutation_id,
-                "frame_ref": {
-                    "root_flow_id": mutation.frame_ref.root_flow_id,
-                    "static_path": list(mutation.frame_ref.static_path),
-                    "owner": mutation.frame_ref.owner.value,
-                },
-                "payload": mutation.payload,
-            }
-        )
-    fields = [run_id, policy_name, batch] if attempt_id is None else [run_id, attempt_id, policy_name, batch]
+        MemoryMutation(mutation.mutation_id, mutation.payload)
+        batch.append([mutation.mutation_id, mutation.payload])
     encoded = json.dumps(
-        fields,
+        [run_id, attempt_id, memory, batch],
         ensure_ascii=False,
         allow_nan=False,
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
-    version = "v1" if attempt_id is None else "v2"
-    return f"ac-memory-{version}:{sha256(encoded).hexdigest()}"
+    return f"ac-memory-v3:{sha256(encoded).hexdigest()}"
 
 
 __all__ = [
@@ -1365,7 +1156,6 @@ __all__ = [
     "RuntimeLearningState",
     "OwnerContextError",
     "failure_json",
-    "frame_key",
     "memory_commit_id",
     "occurrence_key",
     "project_outcome_episodes",

@@ -144,21 +144,17 @@ def test_compile_builder_propagates_each_spawner_memory_occurrence() -> None:
     spawners = (call, map_node, loop)
     outer = MemoryOccurrenceSegment(
         MemoryOccurrenceKind.MAP_ITEM,
-        ("root", "outer"),
+        ("outer",),
         3,
     )
     for spawner in spawners:
         spawner.child = copy.deepcopy(spawner.child)
         spawner.memory_scope = MemoryScope(
-            "root",
-            ("root", "outer", spawner.id),
+            ("outer", spawner.id),
             occurrence_path=(outer,),
         )
         for child_id, child_node in spawner.child.nodes.items():
-            child_node.memory_scope = MemoryScope(
-                "root",
-                ("root", "outer", spawner.id, child_id),
-            )
+            child_node.memory_scope = MemoryScope(("outer", spawner.id, child_id))
 
     call_fragment = expand_module.build_grow(call, call_grow.seed)
     assert {
@@ -174,12 +170,12 @@ def test_compile_builder_propagates_each_spawner_memory_occurrence() -> None:
     assert map_items == {
         MemoryOccurrenceSegment(
             MemoryOccurrenceKind.MAP_ITEM,
-            ("root", "outer", "map"),
+            ("outer", "map"),
             0,
         ),
         MemoryOccurrenceSegment(
             MemoryOccurrenceKind.MAP_ITEM,
-            ("root", "outer", "map"),
+            ("outer", "map"),
             1,
         ),
     }
@@ -194,7 +190,7 @@ def test_compile_builder_propagates_each_spawner_memory_occurrence() -> None:
     } == {
         MemoryOccurrenceSegment(
             MemoryOccurrenceKind.LOOP_ITERATION,
-            ("root", "outer", "loop"),
+            ("outer", "loop"),
             0,
         )
     }

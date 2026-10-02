@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field, replace
 from enum import Enum
 import json
 from math import isfinite
-from types import NoneType, TracebackType
+import re
+from types import MappingProxyType, NoneType, TracebackType
 from typing import Callable, Iterator, Literal, Protocol, TypeAlias, runtime_checkable
 
 from agent_composer.diagnostics import OriginRef
@@ -479,6 +481,65 @@ def _require_origin(value: object, name: str = "origin") -> OriginRef | None:
     return value
 
 
+MEMORY_IDENTIFIER_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
+"""Grammar shared by memory names, memory type names and ``uses:`` scope segments."""
+
+_LOCATION_CONFIG_KEYS = frozenset({"storage", "store", "path"})
+
+BUILTIN_MEMORY_CONFIG_KEYS: Mapping[str, frozenset[str]] = MappingProxyType(
+    {
+        "episodic": frozenset({"max_episodes", "recall_limit"}),
+        "reflective": frozenset({"max_items", "recall_limit"}),
+        "session": frozenset({"history_budget_chars", "recent_turns"}),
+        "profile": frozenset({"max_chars", "input_budget_chars"}),
+    }
+)
+"""Config keys each built-in memory type accepts from YAML; values are checked later."""
+
+
+def _require_memory_identifier(value: object, what: str) -> str:
+    """Return a memory name or type name that matches the shared grammar."""
+    if type(value) is not str:
+        raise TypeError(f"{what} must be a string")
+    if MEMORY_IDENTIFIER_PATTERN.fullmatch(value) is None:
+        raise ValueError(f"{what} {value!r} must match [A-Za-z_][A-Za-z0-9_-]*")
+    return value
+
+
+def check_memory_declaration(name: object, type_name: object, config: object) -> None:
+    """Check one declaration's name, type and config shape without building it.
+
+    Args:
+        name (`object`): Memory name; must match `MEMORY_IDENTIFIER_PATTERN`.
+        type_name (`object`): Memory type; same grammar.
+        config (`object`): Finite JSON object. It may not hold private keys or
+            storage locations, and a built-in type allows only the keys in
+            `BUILTIN_MEMORY_CONFIG_KEYS`.
+
+    Raises:
+        `TypeError`: A value has the wrong Python type.
+        `ValueError`: A value breaks a shape rule.
+    """
+    _require_memory_identifier(name, "memory name")
+    _require_memory_identifier(type_name, "memory type")
+    frozen = _freeze_json_object(config, "config")
+    _reject_private_memory_keys(frozen, "config")
+    for key in config:
+        if key in _LOCATION_CONFIG_KEYS:
+            raise ValueError(
+                f"config key {key!r} is not allowed: storage belongs to the host "
+                "(build_memories storage=/root= or composer run --memory-root)"
+            )
+    allowed = BUILTIN_MEMORY_CONFIG_KEYS.get(type_name)
+    if allowed is not None:
+        extra = sorted(set(config) - allowed)
+        if extra:
+            raise ValueError(
+                f"{type_name} memory config has unknown key(s) {extra} "
+                f"(allowed: {', '.join(sorted(allowed))})"
+            )
+
+
 @dataclass(frozen=True, slots=True)
 class DeclSite:
     """The definition site of one memory declaration.
@@ -912,8 +973,9 @@ class MemoryDecl:
         origin: OriginRef | None = None,
     ) -> None:
         """Validate and snapshot one declaration."""
-        object.__setattr__(self, "name", _require_string(name, "name"))
-        object.__setattr__(self, "type", _require_string(type, "type"))
+        check_memory_declaration(name, type, config)
+        object.__setattr__(self, "name", name)
+        object.__setattr__(self, "type", type)
         frozen = _freeze_json_object(config, "config")
         _reject_private_memory_keys(frozen, "config")
         object.__setattr__(self, "_config", frozen)

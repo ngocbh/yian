@@ -6,7 +6,12 @@ from typing import Any
 
 from agent_composer.compose.helpers.errors import LoadDiagnostics
 from agent_composer.diagnostics import SourceRange
-from agent_composer.memory.contracts import DeclSite, MemoryDecl, MemoryPolicySpec
+from agent_composer.memory.contracts import (
+    DeclSite,
+    MemoryDecl,
+    MemoryPolicySpec,
+    check_memory_declaration,
+)
 
 
 def parse_memory_policy(
@@ -22,6 +27,10 @@ def parse_memory_policy(
                 "long_term_memory name must be non-empty",
                 range=source_range,
             )
+        try:
+            check_memory_declaration(value, value, {})
+        except (TypeError, ValueError) as exc:
+            raise diagnostics.error(f"long_term_memory: {exc}", range=source_range) from exc
         return MemoryPolicySpec(value, {})
 
     if type(value) is not dict:
@@ -56,7 +65,9 @@ def parse_memory_policy(
             range=source_range,
         )
     try:
-        return MemoryPolicySpec(name, config)
+        spec = MemoryPolicySpec(name, config)
+        check_memory_declaration(name, name, config)
+        return spec
     except (TypeError, ValueError) as exc:
         raise diagnostics.error(
             f"long_term_memory config: {exc}",

@@ -2434,9 +2434,9 @@ output: ${{body.output}}
         apply_memory_layout(flow, resolve_memory_layout(flow))
         return flow
 
-    first = compiled("first", "reflective", 3)
-    second = compiled("second", "reflective", 99)
-    other_key = compiled("first", "profile", 3)
+    first = compiled("first", "outer", 3)
+    second = compiled("second", "outer", 99)
+    other_key = compiled("first", "inner", 3)
 
     assert flow_fingerprint(first) != flow_fingerprint(second)
     assert expansion_digest(first) == expansion_digest(second)

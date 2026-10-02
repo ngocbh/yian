@@ -31,6 +31,7 @@ Never imports: nodes, compile, compose, runtime, run, CLI, LangChain, Pydantic,
 """
 
 from agent_composer.memory.contracts import (
+    BUILTIN_MEMORY_CONFIG_KEYS,
     CheckStopped,
     ConversationAdmitted,
     ConversationApplied,
@@ -59,6 +60,7 @@ from agent_composer.memory.contracts import (
     LearningFailure,
     LearningResult,
     PolicyCommitOutcome,
+    MEMORY_IDENTIFIER_PATTERN,
     Memory,
     MemoryContent,
     MemoryContext,
@@ -87,9 +89,11 @@ from agent_composer.memory.contracts import (
     ToolResultInteraction,
     TranscriptSource,
     VisibleInteraction,
+    check_memory_declaration,
 )
 
 __all__ = [
+    "BUILTIN_MEMORY_CONFIG_KEYS",
     "CheckStopped",
     "ConversationAdmitted",
     "ConversationApplied",
@@ -118,6 +122,7 @@ __all__ = [
     "LearningFailure",
     "LearningResult",
     "PolicyCommitOutcome",
+    "MEMORY_IDENTIFIER_PATTERN",
     "Memory",
     "MemoryContent",
     "MemoryContext",
@@ -146,4 +151,5 @@ __all__ = [
     "ToolResultInteraction",
     "TranscriptSource",
     "VisibleInteraction",
+    "check_memory_declaration",
 ]

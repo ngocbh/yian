@@ -11,7 +11,7 @@ from typer.testing import CliRunner
 
 from agent_composer.cli import app
 import agent_composer.cli.run as run_cli
-from agent_composer.compose import load_flow
+from agent_composer.compose import LoadError, load_flow
 from agent_composer.events import NodeStarted
 from agent_composer.memory.contracts import (
     Memory,
@@ -639,25 +639,14 @@ def test_yaml_config_reaches_the_built_in_constructor(policy, config, expected):
 @pytest.mark.parametrize(
     "policy, config, detail",
     [
-        ("episodic", "{bogus: 1}", "['bogus']"),
-        ("reflective", "{llm_config: {model: x}}", "['llm_config']"),
-        ("session", "{storage: x.sqlite}", "['storage']"),
+        ("episodic", "{bogus: 1}", r"episodic memory config has unknown key\(s\) \['bogus'\]"),
+        ("reflective", "{llm_config: {model: x}}", r"unknown key\(s\) \['llm_config'\]"),
+        ("session", "{storage: x.sqlite}", "config key 'storage' is not allowed"),
     ],
 )
-def test_yaml_config_outside_the_allowlist_is_a_setup_error(
-    policy, config, detail, monkeypatch
-):
-    module = importlib.import_module("agent_composer.cli.memory")
-    flow = load_flow(_configured(policy, config))
-    calls = []
-    monkeypatch.setattr(module, "_create_backend", lambda *args: calls.append(args))
-    with module.MemoryHost(flow.compiled, ()) as host:
-        with pytest.raises(
-            MemorySetupError,
-            match=rf"memory {policy!r} config has unknown key\(s\) {re.escape(detail)}",
-        ):
-            host.registry[policy].open_run()
-    assert calls == []
+def test_yaml_config_outside_the_allowlist_fails_at_load(policy, config, detail):
+    with pytest.raises(LoadError, match=detail):
+        load_flow(_configured(policy, config))
 
 
 @pytest.mark.parametrize(

@@ -94,8 +94,8 @@ def _full_flow(policy: str) -> str:
             "  name: reflective\n"
             "  config:\n"
             "    max_items: 20\n"
-            "    nested: [true, null, 3.5]\n",
-            {"max_items": 20, "nested": [True, None, 3.5]},
+            "    recall_limit: 5\n",
+            {"max_items": 20, "recall_limit": 5},
             4,
         ),
     ],
@@ -492,7 +492,7 @@ def test_authored_identity_includes_flow_id_and_policy_but_excludes_origin() -> 
     flow_policy_renamed = CompiledFlow(
         {},
         [],
-        memories=(MemoryDecl("episodic", "episodic", {"max_items": 4}, root),),
+        memories=(MemoryDecl("custom", "custom", {"max_items": 4}, root),),
     )
     flow_policy_reconfigured = CompiledFlow(
         {},
@@ -585,7 +585,7 @@ def test_policy_config_keeps_public_behavior_options() -> None:
         "database_query_options": {"timeout": 3},
     }
 
-    policy = MemoryDecl("reflective", "reflective", config, DeclSite((), ("root",), None))
+    policy = MemoryDecl("custom", "custom", config, DeclSite((), ("root",), None))
 
     assert policy.config == config
     rendered = json.dumps(

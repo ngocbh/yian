@@ -12,12 +12,13 @@ from agent_composer.memory.storage.markdown import (
     MarkdownVersionMismatch,
     markdown_version,
 )
-from agent_composer.memory.storage.sqlite import SQLiteStorage
+from agent_composer.memory.storage.sqlite import SQLiteStorage, check_storage_path
 
 __all__ = [
     "FileMarkdownStore",
     "MarkdownStore",
     "MarkdownVersionMismatch",
     "SQLiteStorage",
+    "check_storage_path",
     "markdown_version",
 ]

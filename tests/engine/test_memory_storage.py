@@ -14,7 +14,7 @@ from unittest.mock import patch
 import pytest
 
 from agent_composer.memory.contracts import MemoryOperationError, _MAX_JSON_NESTING
-from agent_composer.memory.storage import SQLiteStorage
+from agent_composer.memory.storage import SQLiteStorage, check_storage_path
 
 
 def _assert_error(error: MemoryOperationError, code: str) -> None:
@@ -699,3 +699,25 @@ def test_postfork_guard_precedes_python_lock_and_sqlite(tmp_path):
         _assert_error(caught.value, "busy")
     finally:
         store.close()
+
+
+def test_check_storage_path_returns_an_absolute_path_without_io(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert check_storage_path("m.sqlite") == os.path.join(os.getcwd(), "m.sqlite")
+    assert check_storage_path(tmp_path / "x" / "m.sqlite") == str(tmp_path / "x" / "m.sqlite")
+    assert list(tmp_path.iterdir()) == []
+    for bad in ("", ":memory:", "FILE:m.sqlite", "a\x00b", b"m.sqlite", 3):
+        with pytest.raises(MemoryOperationError) as caught:
+            check_storage_path(bad)
+        _assert_error(caught.value, "path")
+
+
+def test_create_parent_makes_missing_directories(tmp_path):
+    path = tmp_path / "a" / "b" / "m.sqlite"
+    with pytest.raises(MemoryOperationError) as caught:
+        SQLiteStorage(path, "episodic")
+    _assert_error(caught.value, "io")
+    assert not (tmp_path / "a").exists()
+    storage = SQLiteStorage(path, "episodic", create_parent=True)
+    storage.close()
+    assert path.is_file()

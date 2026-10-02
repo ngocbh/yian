@@ -37,7 +37,7 @@ from agent_composer.memory.contracts import (
     VisibleInteraction,
     _MAX_JSON_NESTING,
 )
-from agent_composer.memory.storage import SQLiteStorage
+from agent_composer.memory.storage import SQLiteStorage, check_storage_path
 
 _SNAPSHOT_FORMAT = "agent_composer.episodic_memory"
 _SNAPSHOT_VERSION = 2
@@ -568,6 +568,7 @@ class EpisodicMemory:
 
         Use ``with EpisodicMemory(storage="memory.sqlite") as memory:`` to retain
         episodes across restarts and explicitly release the single file owner.
+        The file is opened at the first operation, not at construction.
         Closing idle run handles is not required before closing this backend.
     """
 
@@ -577,6 +578,7 @@ class EpisodicMemory:
         recall_limit: int | None = None,
         *,
         storage: str | os.PathLike[str] | None = None,
+        create_parent: bool = False,
     ) -> None:
         """Create one isolated episodic-memory namespace.
 
@@ -588,15 +590,17 @@ class EpisodicMemory:
                 Maximum episodes returned by contextual recall. None adopts the
                 stored or snapshot value, else 10.
             storage (`str | PathLike[str] | None`, defaults to `None`):
-                Optional local SQLite file with an existing parent. This backend
-                owns it until explicit close or context exit. None is process-local.
+                Optional local SQLite file. Nothing is opened until the first
+                operation; this backend then owns the file until close. None is
+                process-local.
+            create_parent (`bool`, defaults to `False`):
+                Create the storage file's parent directory at first open.
 
         Raises:
             TypeError: Raised when either limit is not an exact integer.
             ValueError: Raised when either limit is not positive.
-            MemoryOperationError: Storage is unavailable, occupied, or invalid,
-                or an explicit limit differs from the stored limits
-                (`episodic.config_conflict`).
+            MemoryOperationError: ``storage`` is not a local file path
+                (`storage.path`).
         """
         if max_episodes is not None:
             _positive_int(max_episodes, "max_episodes")
@@ -616,42 +620,54 @@ class EpisodicMemory:
         self._ever_opened = False
         self._ever_reset = False
         self._ever_committed = False
-        if storage is not None:
-            self._storage = SQLiteStorage(storage, _POLICY_NAME)
+        if type(create_parent) is not bool:
+            raise TypeError("create_parent must be a bool")
+        self._storage_path = None if storage is None else check_storage_path(storage)
+        self._create_parent = create_parent
+
+    def _open_storage(self) -> None:
+        """Open and load durable state once; the caller holds ``self._lock``."""
+        if self._storage is not None or self._storage_path is None:
+            return
+        self._storage = SQLiteStorage(
+            self._storage_path, _POLICY_NAME, create_parent=self._create_parent
+        )
+        try:
+            saved = self._storage.load()
+            if saved is None:
+                self._save_state(
+                    _snapshot_json(
+                        self._namespace, self._epoch, self._revision, self._state
+                    )
+                )
+            else:
+                snapshot, commits, opened, reset, committed = _parse_inventory(
+                    saved
+                )
+                saved_limits = snapshot[3].limits
+                _resolve_limits(self._requested, saved_limits, "storage")
+                self._namespace, self._epoch, self._revision, self._state = (
+                    snapshot
+                )
+                self._applied_commits = commits
+                self._ever_opened = opened
+                self._ever_reset = reset
+                self._ever_committed = committed
+        except BaseException as primary:
             try:
-                saved = self._storage.load()
-                if saved is None:
-                    self._save_state(
-                        _snapshot_json(
-                            self._namespace, self._epoch, self._revision, self._state
-                        )
+                self._storage.close()
+            except BaseException as cleanup:
+                if hasattr(primary, "add_note"):
+                    primary.add_note(
+                        f"EpisodicMemory cleanup failed: {type(cleanup).__name__}"
                     )
-                else:
-                    snapshot, commits, opened, reset, committed = _parse_inventory(
-                        saved
-                    )
-                    saved_limits = snapshot[3].limits
-                    _resolve_limits(self._requested, saved_limits, "storage")
-                    self._namespace, self._epoch, self._revision, self._state = (
-                        snapshot
-                    )
-                    self._applied_commits = commits
-                    self._ever_opened = opened
-                    self._ever_reset = reset
-                    self._ever_committed = committed
-            except BaseException as primary:
-                try:
-                    self._storage.close()
-                except BaseException as cleanup:
-                    if hasattr(primary, "add_note"):
-                        primary.add_note(
-                            f"EpisodicMemory cleanup failed: {type(cleanup).__name__}"
-                        )
-                raise
+            # Forget the failed handle so a later operation may retry the open.
+            self._storage = None
+            raise
 
     def _check_pid(self) -> None:
         """Reject inherited durable handles before touching any Python lock."""
-        if self._storage is not None and os.getpid() != self._pid:
+        if self._storage_path is not None and os.getpid() != self._pid:
             raise MemoryOperationError(
                 "storage",
                 "storage.forked",
@@ -668,6 +684,7 @@ class EpisodicMemory:
                 raise _operation_error(
                     "session", "episodic.closed", "memory backend is closed"
                 )
+            self._open_storage()
             if self._storage is not None:
                 self._storage.ensure_open()
             self._active_operations += 1
@@ -776,7 +793,8 @@ class EpisodicMemory:
 
         Raises:
             MemoryOperationError: The snapshot is invalid or incompatible, the
-                backend is closed, or durable state cannot be read or saved.
+                backend is closed, or durable state cannot be opened, read, or
+                saved.
         """
         with self._operation():
             parsed = None if snapshot is None else _parse_snapshot(snapshot)
@@ -835,7 +853,8 @@ class EpisodicMemory:
         """Clear episodes and begin a new generation, retaining commit tombstones.
 
         Raises:
-            `MemoryOperationError`: The backend is closed or storage cannot save.
+            `MemoryOperationError`: The backend is closed, or durable state
+                cannot be opened or saved.
         """
         with self._operation():
             cleared = _State(self._state.limits, ())

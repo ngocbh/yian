@@ -40,7 +40,7 @@ _RECORDED_ROUTE = (
         b'"flow_fingerprint":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",'
         b'"initial_pool":{"start_id":"__start__","store":{"__start__":{"kind":"object","value":{}}},'
         b'"system":{"run_id":{"kind":"str","value":"direct-engine-test"}}},"learnable":true,'
-        b'"memory_layout":null,"memory_snapshots":null,"num_workers":0,"start_wiring_override":{}},'
+        b'"memories":null,"memory_layout":null,"memory_snapshots":null,"memory_stacks":null,"num_workers":0,"start_wiring_override":{}},'
         b'"run_id":"direct-engine-test","schema":9,"seq":0}'
     ),
     (

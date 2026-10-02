@@ -45,7 +45,7 @@ _RECORDED_LINEAR = (
         b'"value":{"x":"Ada"}}},"system":{"now":{"kind":"datetime",'
         b'"value":"2026-09-20T01:23:31.293007+00:00"},"run_id":{"kind":"str",'
         b'"value":"historical-linear"},"today":{"kind":"date","value":"2026-09-20"}}},"learnable":false,'
-        b'"memory_layout":null,"memory_snapshots":null,"num_workers":0,'
+        b'"memories":null,"memory_layout":null,"memory_snapshots":null,"memory_stacks":null,"num_workers":0,'
         b'"start_wiring_override":{"x":"${input.x}"}},"run_id":"historical-linear","schema":9,"seq":0}'
     ),
     (

@@ -32,6 +32,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
 
 from agent_composer.diagnostics import Failure, FailureCode, OriginRef
 from agent_composer.memory import (
+    DeclSite,
     EvaluationEvidence,
     LearningFailure,
     LearningResult,
@@ -46,6 +47,8 @@ from agent_composer.memory import (
     MemoryScope,
     MemorySection,
     MemorySnapshotEnvelope,
+    MemorySpec,
+    MemoryStack,
     ModelTextInteraction,
     ModelValueInteraction,
     PolicyCommitOutcome,
@@ -103,6 +106,10 @@ class RunStartedRecord:
             Complete resolved agent configuration keyed by stable static node path.
         num_workers (`int`):
             Initial dispatcher worker count; zero selects serial execution.
+        memories (`tuple[MemorySpec, ...] | None`):
+            Sorted memory key table; `None` when memory is disabled.
+        memory_stacks (`tuple[MemoryStack, ...] | None`):
+            Each scoped target's ordered key stack, sorted by locator.
     """
 
     flow_fingerprint: str
@@ -113,6 +120,8 @@ class RunStartedRecord:
     memory_layout: tuple[MemoryFrameSpec, ...] | None = None
     memory_snapshots: tuple[MemorySnapshotEnvelope, ...] | None = None
     learnable: bool = False
+    memories: tuple[MemorySpec, ...] | None = None
+    memory_stacks: tuple[MemoryStack, ...] | None = None
 
     def __post_init__(self) -> None:
         """Validate the enabled-memory shape and its canonical policy inventory."""
@@ -121,6 +130,7 @@ class RunStartedRecord:
             self.memory_snapshots,
             self.learnable,
         )
+        _validate_run_memory_table(self.memory_layout, self.memories, self.memory_stacks)
 
 
 @dataclass(frozen=True, slots=True)
@@ -500,6 +510,41 @@ def _validate_run_memory_configuration(
         raise ValueError(
             "memory_snapshots policy names must equal memory_layout policy names"
         )
+
+
+def _validate_run_memory_table(
+    layout: tuple[MemoryFrameSpec, ...] | None,
+    memories: tuple[MemorySpec, ...] | None,
+    stacks: tuple[MemoryStack, ...] | None,
+) -> None:
+    """Validate the recorded key table and per-target key stacks."""
+    if (memories is None) != (stacks is None):
+        raise ValueError("memories and memory_stacks must both be recorded or both be absent")
+    if memories is None:
+        return
+    if layout is None:
+        raise ValueError("memories and memory_stacks cannot be recorded with disabled memory")
+    if type(memories) is not tuple or type(stacks) is not tuple:
+        raise TypeError("memories and memory_stacks must be tuples")
+    for spec in memories:
+        if type(spec) is not MemorySpec:
+            raise TypeError("memories items must be MemorySpec values")
+        MemorySpec(spec.key, spec.type, spec.config, spec.owners, spec.conversation_eligible)
+    keys = tuple(spec.key for spec in memories)
+    if keys != tuple(sorted(set(keys))):
+        raise ValueError("memories keys must be sorted and unique")
+    if set(keys) != {spec.policy_name for spec in layout}:
+        raise ValueError("memories keys must equal memory_layout policy names")
+    for stack in stacks:
+        if type(stack) is not MemoryStack:
+            raise TypeError("memory_stacks items must be MemoryStack values")
+        MemoryStack(stack.locator, stack.memories)
+    locators = tuple(stack.locator for stack in stacks)
+    if locators != tuple(sorted(set(locators))):
+        raise ValueError("memory_stacks locators must be sorted and unique")
+    unknown = sorted({key for stack in stacks for key in stack.memories} - set(keys))
+    if unknown:
+        raise ValueError(f"memory_stacks name unknown memory keys: {unknown}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -900,6 +945,8 @@ class _RunStartedPayload(_StrictModel):
     memory_layout: list[_MemoryFrameSpecPayload] | None
     memory_snapshots: list[_MemorySnapshotEnvelopePayload] | None
     learnable: bool
+    memories: list[_MemorySpecPayload] | None
+    memory_stacks: list[_MemoryStackPayload] | None
 
 
 class _RunResumedPayload(_StrictModel):
@@ -1093,6 +1140,31 @@ class _MemorySnapshotEnvelopePayload(_StrictModel):
 
     policy_name: str = Field(min_length=1)
     snapshot: dict[str, Any]
+
+
+class _DeclSitePayload(_StrictModel):
+    """Strict wire form of one memory declaration site."""
+
+    scope: list[str]
+    owner: list[str] = Field(min_length=1)
+    node: str | None
+
+
+class _MemorySpecPayload(_StrictModel):
+    """Strict wire form of one memory key-table entry."""
+
+    key: str = Field(min_length=1)
+    type: str = Field(min_length=1)
+    config: dict[str, Any]
+    owners: list[_DeclSitePayload] = Field(min_length=1)
+    conversation_eligible: bool
+
+
+class _MemoryStackPayload(_StrictModel):
+    """Strict wire form of one target's memory key stack."""
+
+    locator: list[str] = Field(min_length=1)
+    memories: list[str]
 
 
 class _MemorySectionPayload(_StrictModel):
@@ -1797,6 +1869,48 @@ def _snapshot_from_payload(payload: dict[str, Any]) -> MemorySnapshotEnvelope:
     )
 
 
+def _memory_spec_payload(spec: MemorySpec) -> dict[str, Any]:
+    """Encode one exact memory key-table entry."""
+    if type(spec) is not MemorySpec:
+        raise TypeError("memory table item must be a MemorySpec")
+    return {
+        "key": spec.key,
+        "type": spec.type,
+        "config": spec.config,
+        "owners": [
+            {"scope": list(site.scope), "owner": list(site.owner), "node": site.node}
+            for site in spec.owners
+        ],
+        "conversation_eligible": spec.conversation_eligible,
+    }
+
+
+def _memory_spec_from_payload(payload: dict[str, Any]) -> MemorySpec:
+    """Decode one already-validated memory key-table entry."""
+    return MemorySpec(
+        payload["key"],
+        payload["type"],
+        _copy_json(payload["config"]),
+        tuple(
+            DeclSite(tuple(site["scope"]), tuple(site["owner"]), site["node"])
+            for site in payload["owners"]
+        ),
+        payload["conversation_eligible"],
+    )
+
+
+def _memory_stack_payload(stack: MemoryStack) -> dict[str, Any]:
+    """Encode one exact target key stack."""
+    if type(stack) is not MemoryStack:
+        raise TypeError("memory stack item must be a MemoryStack")
+    return {"locator": list(stack.locator), "memories": list(stack.memories)}
+
+
+def _memory_stack_from_payload(payload: dict[str, Any]) -> MemoryStack:
+    """Decode one already-validated target key stack."""
+    return MemoryStack(tuple(payload["locator"]), tuple(payload["memories"]))
+
+
 def _memory_section_payload(section: MemorySection) -> dict[str, Any]:
     """Encode one exact separate recalled-memory section."""
     if type(section) is not MemorySection:
@@ -2286,6 +2400,8 @@ def _revalidate_run_record(record: RunRecord) -> None:
             record.memory_layout,
             record.memory_snapshots,
             record.learnable,
+            record.memories,
+            record.memory_stacks,
         )
         return
     if type(record) is RunResumedRecord:
@@ -2369,6 +2485,7 @@ def _payload_for_record(record: RunRecord) -> dict[str, Any]:
             record.memory_snapshots,
             record.learnable,
         )
+        _validate_run_memory_table(record.memory_layout, record.memories, record.memory_stacks)
         raw = {
             "flow_fingerprint": record.flow_fingerprint,
             "initial_pool": encode_pool(decode_pool(record.initial_pool)),
@@ -2391,6 +2508,16 @@ def _payload_for_record(record: RunRecord) -> dict[str, Any]:
                 ]
             ),
             "learnable": record.learnable,
+            "memories": (
+                None
+                if record.memories is None
+                else [_memory_spec_payload(spec) for spec in record.memories]
+            ),
+            "memory_stacks": (
+                None
+                if record.memory_stacks is None
+                else [_memory_stack_payload(stack) for stack in record.memory_stacks]
+            ),
         }
     elif isinstance(record, RunResumedRecord):
         raw = {
@@ -2523,6 +2650,18 @@ def _record_from_payload(kind: str, payload: _StrictModel) -> RunRecord:
                 )
             ),
             learnable=values["learnable"],
+            memories=(
+                None
+                if values["memories"] is None
+                else tuple(_memory_spec_from_payload(spec) for spec in values["memories"])
+            ),
+            memory_stacks=(
+                None
+                if values["memory_stacks"] is None
+                else tuple(
+                    _memory_stack_from_payload(stack) for stack in values["memory_stacks"]
+                )
+            ),
         )
     if kind == "run_resumed":
         return RunResumedRecord(

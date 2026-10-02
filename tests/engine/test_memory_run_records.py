@@ -10,6 +10,7 @@ import pytest
 
 from agent_composer.diagnostics import Failure
 from agent_composer.memory import (
+    DeclSite,
     EvaluationEvidence,
     LearnContext,
     MemoryEpisode,
@@ -26,6 +27,8 @@ from agent_composer.memory import (
     MemoryScope,
     MemorySection,
     MemorySnapshotEnvelope,
+    MemorySpec,
+    MemoryStack,
     ModelTextInteraction,
     ModelValueInteraction,
     ToolCallInteraction,
@@ -157,6 +160,8 @@ def _started(
     layout: tuple[MemoryFrameSpec, ...] | None = None,
     snapshots: tuple[MemorySnapshotEnvelope, ...] | None = None,
     learnable: bool = False,
+    memories: tuple[MemorySpec, ...] | None = None,
+    stacks: tuple[MemoryStack, ...] | None = None,
 ) -> RunStartedRecord:
     return RunStartedRecord(
         flow_fingerprint=_FINGERPRINT,
@@ -167,6 +172,8 @@ def _started(
         memory_layout=layout,
         memory_snapshots=snapshots,
         learnable=learnable,
+        memories=memories,
+        memory_stacks=stacks,
     )
 
 
@@ -462,6 +469,72 @@ def test_run_started_requires_canonical_layout_and_matching_snapshots() -> None:
             layout=(flow, other_root),
             snapshots=(snapshots[0],),
         )
+
+
+def test_run_started_records_a_key_table_and_stacks_beside_the_layout() -> None:
+    layout = (
+        MemoryFrameSpec(_flow_ref(), "profile", {"mode": "flow"}),
+        MemoryFrameSpec(_agent_ref(), "reflective", {"mode": "agent"}),
+    )
+    snapshots = (
+        MemorySnapshotEnvelope("profile", {"state": 1}),
+        MemorySnapshotEnvelope("reflective", {"state": 2}),
+    )
+    memories = (
+        MemorySpec("profile", "profile", {"mode": "flow"}, (DeclSite((), ("root",), None),), False),
+        MemorySpec("reflective", "reflective", {"mode": "agent"}, (DeclSite((), ("root",), "agent"),), True),
+    )
+    stacks = (
+        MemoryStack(("agent",), ("profile", "reflective")),
+        MemoryStack(("plain",), ("profile",)),
+    )
+    enabled = dict(layout=layout, snapshots=snapshots)
+
+    decoded = _round_trip(_started(**enabled, memories=memories, stacks=stacks))
+    assert decoded.memories == memories
+    assert decoded.memory_stacks == stacks
+    wire = json.loads(encode_record(RecordEnvelope(SCHEMA_VERSION, "run", 0, decoded)))
+    assert wire["payload"]["memories"] == [
+        {
+            "key": "profile",
+            "type": "profile",
+            "config": {"mode": "flow"},
+            "owners": [{"scope": [], "owner": ["root"], "node": None}],
+            "conversation_eligible": False,
+        },
+        {
+            "key": "reflective",
+            "type": "reflective",
+            "config": {"mode": "agent"},
+            "owners": [{"scope": [], "owner": ["root"], "node": "agent"}],
+            "conversation_eligible": True,
+        },
+    ]
+    assert wire["payload"]["memory_stacks"] == [
+        {"locator": ["agent"], "memories": ["profile", "reflective"]},
+        {"locator": ["plain"], "memories": ["profile"]},
+    ]
+    disabled = json.loads(encode_record(RecordEnvelope(SCHEMA_VERSION, "run", 0, _started())))
+    assert disabled["payload"]["memories"] is None
+    assert disabled["payload"]["memory_stacks"] is None
+    assert _round_trip(_started(**enabled)).memories is None
+
+    with pytest.raises(ValueError, match="both"):
+        _started(**enabled, memories=memories, stacks=None)
+    with pytest.raises(ValueError, match="disabled"):
+        _started(memories=(), stacks=())
+    with pytest.raises(ValueError, match="sorted and unique"):
+        _started(**enabled, memories=tuple(reversed(memories)), stacks=stacks)
+    with pytest.raises(ValueError, match="layout policy names"):
+        _started(**enabled, memories=memories[:1], stacks=stacks[1:])
+    with pytest.raises(ValueError, match="sorted and unique"):
+        _started(**enabled, memories=memories, stacks=tuple(reversed(stacks)))
+    with pytest.raises(ValueError, match="unknown memory keys"):
+        _started(**enabled, memories=memories, stacks=(MemoryStack(("agent",), ("missing",)),))
+
+    wire["payload"].pop("memory_stacks")
+    with pytest.raises(ValueError):
+        decode_record(json.dumps(wire).encode())
 
 
 @pytest.mark.parametrize(

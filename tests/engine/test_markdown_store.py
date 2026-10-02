@@ -28,9 +28,22 @@ def test_unknown_or_malformed_version_raises_lookup_error(tmp_path) -> None:
             store.read(version)
 
 
-def test_missing_parent_directory_is_rejected(tmp_path) -> None:
+def test_missing_parent_directory_fails_on_first_use(tmp_path) -> None:
+    store = FileMarkdownStore(tmp_path / "missing" / "ada.md")
+    assert not (tmp_path / "missing").exists()
+    with pytest.raises(FileNotFoundError, match="document directory does not exist"):
+        store.read()
     with pytest.raises(FileNotFoundError):
-        FileMarkdownStore(tmp_path / "missing" / "ada.md")
+        store.write("x", base_version=markdown_version(""))
+    assert not (tmp_path / "missing").exists()
+
+
+def test_create_parent_makes_the_directory_on_first_use(tmp_path) -> None:
+    path = tmp_path / "a" / "b" / "ada.md"
+    store = FileMarkdownStore(path, create_parent=True)
+    assert not (tmp_path / "a").exists()
+    assert store.read() == ("", markdown_version(""))
+    assert path.parent.is_dir()
 
 
 def test_write_is_compare_and_set_and_keeps_every_version(tmp_path) -> None:

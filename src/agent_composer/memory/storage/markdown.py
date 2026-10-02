@@ -112,23 +112,24 @@ class FileMarkdownStore:
     Every version this store returns or writes is kept under
     ``.<name>.versions/`` next to it, so recorded runs can reopen it later.
     Each write appends its versions and provenance to ``.<name>.writes.jsonl``.
-    Writers on one host serialize through ``.<name>.lock``. A person may edit
-    ``path`` directly; the next compare-and-set write then reports a mismatch.
+    Writers on one host serialize through ``.<name>.lock``. Nothing on disk is
+    touched until the first read or write. A person may edit ``path`` directly;
+    the next compare-and-set write then reports a mismatch.
     """
 
-    def __init__(self, path: str | os.PathLike[str]) -> None:
-        """Bind the store to one document path.
+    def __init__(self, path: str | os.PathLike[str], *, create_parent: bool = False) -> None:
+        """Bind the store to one document path without touching the filesystem.
 
         Args:
-            path (`str | os.PathLike[str]`): Markdown file. Its parent directory
-                must exist.
-
-        Raises:
-            `FileNotFoundError`: The parent directory does not exist.
+            path (`str | os.PathLike[str]`): Markdown file.
+            create_parent (`bool`, *optional*, defaults to `False`): Create the
+                parent directory on first use. Otherwise a missing parent fails
+                on first use with `FileNotFoundError`.
         """
+        if type(create_parent) is not bool:
+            raise TypeError("create_parent must be a bool")
         self.path = Path(path)
-        if not self.path.parent.is_dir():
-            raise FileNotFoundError(f"document directory does not exist: {self.path.parent}")
+        self._create_parent = create_parent
         self._versions = self.path.parent / f".{self.path.name}.versions"
         self._lock_path = self.path.parent / f".{self.path.name}.lock"
         self._writes = self.path.parent / f".{self.path.name}.writes.jsonl"
@@ -146,6 +147,8 @@ class FileMarkdownStore:
         Raises:
             `LookupError`: The named version is unknown.
             `ValueError`: The file is not valid UTF-8.
+            `FileNotFoundError`: The parent directory does not exist and
+                `create_parent` is off.
         """
         with self._locked():
             if version is None:
@@ -184,6 +187,8 @@ class FileMarkdownStore:
             `TypeError`: ``text`` or ``base_version`` is not a string.
             `ValueError`: The current file is not valid UTF-8.
             `MarkdownVersionMismatch`: ``base_version`` is not current.
+            `FileNotFoundError`: The parent directory does not exist and
+                `create_parent` is off.
         """
         if type(text) is not str or type(base_version) is not str:
             raise TypeError("text and base_version must be strings")
@@ -207,6 +212,12 @@ class FileMarkdownStore:
     @contextmanager
     def _locked(self) -> Iterator[None]:
         """Hold the host-wide exclusive lock for this document."""
+        if self._create_parent:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+        elif not self.path.parent.is_dir():
+            raise FileNotFoundError(
+                f"document directory does not exist: {self.path.parent}"
+            )
         fd = os.open(self._lock_path, os.O_RDWR | os.O_CREAT, 0o600)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX)

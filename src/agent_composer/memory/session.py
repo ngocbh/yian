@@ -1115,7 +1115,9 @@ class _Turn:
                 lease.request.compatibility
             ):
                 raise _error("incompatible", "turn compatibility changed")
-            live = self._session._memory._view or lease.before
+            live = self._session._memory._view
+            if live is None:
+                live = lease.before
             if not _same(self._view, live):
                 raise _error(
                     "conflict", "turn predecessor is not the current live view"
@@ -1127,7 +1129,7 @@ class _Turn:
             self._ordinal += 1
 
     def __enter__(self) -> _Turn:
-        """Acquire the authored conversation and persist its admission."""
+        """Acquire the instance conversation and persist its admission."""
         if self._entered:
             raise _error("stale", "a turn context can be entered only once")
         self._entered = True

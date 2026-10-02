@@ -41,6 +41,7 @@ def parse_memory_declarations(
         `LoadError`: The value has the wrong shape or a declaration is invalid.
     """
     if type(value) is str:
+        _reject_reserved(value, diagnostics, source_range)
         return (_declaration(value, value, {}, site, diagnostics, source_range),)
     if type(value) is not dict:
         raise diagnostics.error(
@@ -60,12 +61,7 @@ def parse_memory_declarations(
                 f"long_term_memory name {name!r} must be a string",
                 range=source_range,
             )
-        if name in _RESERVED_NAMES:
-            raise diagnostics.error(
-                f"long_term_memory name {name!r} is reserved "
-                f"(reserved: {', '.join(sorted(_RESERVED_NAMES))})",
-                range=source_range,
-            )
+        _reject_reserved(name, diagnostics, source_range)
         if type(entry) is str:
             declarations.append(
                 _declaration(name, entry, {}, site, diagnostics, source_range)
@@ -103,6 +99,18 @@ def parse_memory_declarations(
             _declaration(name, entry["type"], config, site, diagnostics, source_range)
         )
     return tuple(declarations)
+
+
+def _reject_reserved(
+    name: str, diagnostics: LoadDiagnostics, source_range: SourceRange | None
+) -> None:
+    """Raise a load error when ``name`` is one of the reserved memory names."""
+    if name in _RESERVED_NAMES:
+        raise diagnostics.error(
+            f"long_term_memory name {name!r} is reserved "
+            f"(reserved: {', '.join(sorted(_RESERVED_NAMES))})",
+            range=source_range,
+        )
 
 
 def _declaration(

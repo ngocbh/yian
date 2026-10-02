@@ -40,7 +40,7 @@ def test_invalid_memory_type_names_are_rejected(type_name: str) -> None:
 
 @pytest.mark.parametrize("key", ["storage", "store", "path"])
 def test_location_keys_are_banned_for_every_type(key: str) -> None:
-    with pytest.raises(ValueError, match="not allowed|forbidden private key"):
+    with pytest.raises(ValueError, match="is not allowed"):
         MemoryDecl("notes", "vector", {key: "x"}, _SITE)
 
 

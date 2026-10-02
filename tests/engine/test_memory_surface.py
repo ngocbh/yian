@@ -57,7 +57,10 @@ def test_mapping_and_long_form_keep_authored_order() -> None:
         ({"9notes": "episodic"}, "memory name"),
         ({"notes": "my.type"}, "memory type"),
         ("", "memory name"),
-        ({"notes": {"type": "episodic", "config": {"path": "x.sqlite"}}}, "not allowed|forbidden"),
+        ("name", "reserved"),
+        ("type", "reserved"),
+        ("config", "reserved"),
+        ({"notes": {"type": "episodic", "config": {"path": "x.sqlite"}}}, "is not allowed"),
         ({"notes": {"type": "episodic", "config": {"max_items": 3}}}, "unknown key"),
     ],
 )

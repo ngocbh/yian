@@ -15,10 +15,7 @@ from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Optional
 
 from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
-from agent_composer.compose.helpers.memory import (
-    memory_policy_declarations,
-    parse_memory_policy,
-)
+from agent_composer.compose.helpers.memory import parse_memory_declarations
 from agent_composer.compose.helpers.types import read_variables
 from agent_composer.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from agent_composer.compose.source import SourceCursor
@@ -184,13 +181,16 @@ class AgentDescriptor(NodeDescriptor):
                 range=ranges.get(("field", "steerable")) or own_range,
             )
         if "memories" in kwargs:
-            kwargs["memories"] = memory_policy_declarations(
-                parse_memory_policy(
-                    kwargs["memories"],
+            value = kwargs["memories"]
+            kwargs["memories"] = (
+                ()
+                if value is None
+                else parse_memory_declarations(
+                    value,
                     diagnostics=diagnostics,
                     source_range=ranges.get(("field", "long_term_memory")),
-                ),
-                DeclSite((), ("root",), node_id),
+                    site=DeclSite((), ("root",), node_id),
+                )
             )
         super()._validate_fields(
             node_id,
@@ -207,17 +207,23 @@ class AgentDescriptor(NodeDescriptor):
         site_path: tuple[str | int, ...],
         catalog_builder: "_SourceCatalogBuilder",
     ) -> "AgentDescriptor":
-        """Attach the one authored ``long_term_memory:`` value occurrence."""
+        """Attach one origin per authored ``long_term_memory:`` entry."""
         if not self.memories or not cursor.has("long_term_memory"):
             return self
-        origin = catalog_builder.register(
-            (*site_path, "field", "memory_policy"),
-            cursor.child("long_term_memory"),
-        )
-        return replace(self, memories=tuple(
-            MemoryDecl(decl.name, decl.type, decl.config, decl.site, origin)
-            for decl in self.memories
-        ))
+        value_cursor = cursor.child("long_term_memory")
+        stamped = []
+        for decl in self.memories:
+            path = (*site_path, "field", "memories", decl.name)
+            if value_cursor.has(decl.name):
+                origin = catalog_builder.register(
+                    path, value_cursor.child(decl.name), anchor="key"
+                )
+            else:  # sugar: the whole scalar value is the one entry
+                origin = catalog_builder.register(path, value_cursor)
+            stamped.append(
+                MemoryDecl(decl.name, decl.type, decl.config, decl.site, origin)
+            )
+        return replace(self, memories=tuple(stamped))
 
     def build(self, ctx: BuildContext) -> BuildResult:
         """Construct the runtime `AgentNode` (+ wiring) for this `AgentDescriptor`.

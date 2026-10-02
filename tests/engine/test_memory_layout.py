@@ -436,7 +436,7 @@ def test_single_agent_owner_is_conversation_eligible() -> None:
 
 def test_one_key_with_two_configs_is_a_setup_error_at_the_first_site() -> None:
     source = _NESTED.replace(
-        "long_term_memory: local", "long_term_memory: {name: inner, config: {limit: 4}}"
+        "long_term_memory: local", "long_term_memory: {inner: {type: inner, config: {limit: 4}}}"
     )
     with pytest.raises(MemorySetupError, match="memory 'inner'.*different type or config") as caught:
         resolve_memory_layout(load_flow(source).compiled)

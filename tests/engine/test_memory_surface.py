@@ -137,3 +137,40 @@ def test_def_flow_declarations_carry_the_def_owner() -> None:
     assert _shape(child.memories) == [
         ("notes", "episodic", {}, DeclSite((), ("def", "child"), None))
     ]
+
+
+def test_agent_declarations_are_parsed_and_stamped_with_the_node() -> None:
+    flow = load_flow(
+        "id: agents\n"
+        "name: agents\n"
+        "llm_config: {provider: openai, model: fake-model}\n"
+        "nodes:\n"
+        "  ask:\n"
+        "    kind: agent\n"
+        "    long_term_memory:\n"
+        "      chat: session\n"
+        "      facts: {type: episodic, config: {recall_limit: 2}}\n"
+        "    prompt: hi\n"
+        "    output: str\n"
+        "output: ${ask.output}\n"
+    )
+    site = DeclSite((), ("root",), "ask")
+    memories = flow.compiled.nodes["ask"].memories
+    assert _shape(memories) == [
+        ("chat", "session", {}, site),
+        ("facts", "episodic", {"recall_limit": 2}, site),
+    ]
+    resolver = flow.origin_resolver
+    assert [resolver.resolve(d.origin).range.start_line for d in memories] == [8, 9]
+
+
+def test_agent_null_declaration_is_absent_and_empty_mapping_fails() -> None:
+    base = (
+        "id: agents\nname: agents\n"
+        "llm_config: {provider: openai, model: fake-model}\n"
+        "nodes:\n  ask:\n    kind: agent\n    long_term_memory: VALUE\n"
+        "    prompt: hi\n    output: str\noutput: ${ask.output}\n"
+    )
+    assert load_flow(base.replace("VALUE", "null")).compiled.nodes["ask"].memories == ()
+    with pytest.raises(LoadError, match="declares no memory"):
+        load_flow(base.replace("VALUE", "{}"))

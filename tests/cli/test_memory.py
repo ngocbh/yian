@@ -54,7 +54,7 @@ def _configured(policy, config):
     if policy == "session":
         return _SESSION_FLOW.replace(
             "    long_term_memory: session\n",
-            f"    long_term_memory: {{name: session, config: {config}}}\n",
+            f"    long_term_memory: {{session: {{type: session, config: {config}}}}}\n",
         )
     return _CODE_FLOW.replace(
         "long_term_memory: POLICY\n",

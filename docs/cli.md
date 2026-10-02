@@ -5,8 +5,8 @@ recovers them from a durable log, drives the flow to a terminal state, and
 prints the output.
 
 ```console
-composer run FLOW.yaml [--inputs inputs.json] [--input k=v]... [--log PATH] [--memory-storage POLICY=PATH]... [-w N] [--provider NAME] [--model NAME] [--quiet] [--verbose] [--engine-trace]
-composer run FLOW.yaml --resume PATH [--memory-storage POLICY=PATH]... [-w N] [--quiet] [--verbose] [--engine-trace]
+composer run FLOW.yaml [--inputs inputs.json] [--input k=v]... [--log PATH] [--memory-root DIR] [--memory-storage KEY=PATH]... [-w N] [--provider NAME] [--model NAME] [--quiet] [--verbose] [--engine-trace]
+composer run FLOW.yaml --resume PATH [--memory-root DIR] [--memory-storage KEY=PATH]... [-w N] [--quiet] [--verbose] [--engine-trace]
 ```
 
 Commands below that use `examples/...` assume a repository clone and run from
@@ -63,8 +63,7 @@ Re-authentication cannot silently redirect an unfinished run to a new account.
 and `--log` before input prompts or provider setup. After repairing any incomplete
 tail, an already terminal log gets no new records and prints its recorded result.
 An eligible unfinished log appends a resume segment and retries nodes with a durable
-start but no durable outcome. Historical conversation records do not block this
-retry. Requests and tool actions may repeat; the run log neither reconstructs
+start but no durable outcome. Requests and tool actions may repeat; the run log neither reconstructs
 session memory nor provides exactly-once execution. See the
 [Python API recovery contract](api.md#durable-recovery-with-resume_flow).
 
@@ -76,48 +75,63 @@ corrupt, mismatched, or locked log) are reported as concise errors. Pass
 run. If a failed turn restarts the immutable chat flow from the last completed
 transcript, that restart gets a separate log rather than reusing the failed run.
 
-## Memory policies and storage
+## Memory and storage
 
-`composer run` automatically supplies the built-in policies named by the flow's
-`long_term_memory` declarations: `episodic`, `reflective`, and `session`. It
-discovers declarations in nested flows too and shares one backend per policy
-for that CLI invocation. A flow without declarations opens no memory backend.
-Custom policies require the Python API's `memory={...}` registry; the CLI reports
-an error if execution needs one.
-
-By default, backends are process-local and their state is lost when `composer run`
-exits. Opt selected policies into local SQLite storage with repeatable
-`--memory-storage POLICY=PATH` flags. Each policy must be declared in the flow,
-appear at most once in the flags, and use its own file in an existing directory:
+`composer run` builds every memory the flow declares, using
+`agent_composer.build_memories`. Without flags, each built-in memory
+(`episodic`, `reflective`, `session`, `profile`) lives in RAM for that one
+invocation. A flow without declarations opens no memory.
 
 ```console
-# A flow declaring session memory
-composer run flow.yaml --input question="First question" --log ./first.jsonl --memory-storage session=./session.sqlite
-composer run flow.yaml --input question="Follow-up" --log ./second.jsonl --memory-storage session=./session.sqlite
+# Keep every memory under ./mem/<flow id>/
+composer run flow.yaml --input question="First question" --memory-root ./mem
+composer run flow.yaml --input question="Follow-up" --memory-root ./mem
 
-# A flow declaring both policies
-composer run layered.yaml --memory-storage session=./session.sqlite --memory-storage episodic=./episodes.sqlite
+# Place one memory explicitly; others still follow --memory-root (or RAM)
+composer run flow.yaml --memory-root ./mem --memory-storage lib.notes=./notes.sqlite
 
-# Recover an unfinished run using the same memory store
-composer run flow.yaml --resume ./first.jsonl --memory-storage session=./session.sqlite
+# Recover an unfinished run with the same storage
+composer run flow.yaml --resume ./run.jsonl --memory-root ./mem
 ```
 
-Policies without a storage flag remain process-local. Storage paths belong to
-the CLI, not YAML or run logs. The files contain sensitive memory data, are
-unencrypted, and allow one owning backend at a time on a single host; do not
-use a shared network filesystem. Backends close after execution drains. See
-[durable memory](api.md#optional-durable-memory) for the full ownership contract.
+- `--memory-root DIR` stores memory key `notes` at
+  `DIR/<flow id>/notes.sqlite`, and key `lib.notes` (imported through
+  `uses: {lib: ...}`) at `DIR/<flow id>/lib/notes.sqlite`. A profile memory
+  uses `.md`. Directories are created on first use. The flow `id:` must be
+  usable as one directory name.
+- `--memory-storage KEY=PATH` (repeatable) places one built-in memory at PATH.
+  It overrides `--memory-root` for that key. PATH must be a local file path,
+  not `:memory:` or a `file:` URI. A bad path shape exits 1 before the run
+  starts. The directory must already exist; otherwise the run fails when that
+  memory first opens (`storage.io`, or `profile.store_unavailable` for a
+  profile).
+- These are bad parameters (exit 2): a malformed option, a repeated key, a key
+  the flow does not declare, and a key whose type is custom.
+- A flow that declares a custom memory type cannot run from the CLI.
+  `composer run` exits 1 with a setup error before it asks for inputs or
+  writes a log. This also applies to `--resume`, even of a finished run.
+  Build such a flow from Python with `build_memories(..., factories=...)` or
+  `supplied=...`.
+
+Nothing is opened before the run starts. Each `.sqlite` file has one owner at
+a time: a second `composer run` on the same file fails with `storage.busy`
+until the first exits. A profile's `.md` file has no single owner; writers take
+turns through a lock file beside it. The files are unencrypted and can contain
+prompts, replies, and learned notes. Use a local filesystem, not a shared
+network one. Two flow files with the same `id:` share a directory under one
+root. On case-insensitive filesystems, ids that differ only by case do too.
+Changing a memory's type makes its old file fail with `storage.kind`. Changing
+an episodic or reflective limit against an existing file fails with
+`<type>.config_conflict` until the file is reset or removed.
 
 Session history advances automatically during execution. This does not enable
-learning: `composer run` neither sets `learnable=True` nor calls `backward()`. Episodic
-and reflective policies can recall saved state, but adding learned episodes or
-lessons still requires explicit Python API backward learning.
+learning: `composer run` neither sets `learnable=True` nor calls `backward()`.
 
-To resume an unfinished memory-enabled run across CLI processes, supply the
-same durable stores. Run logs do not reconstruct session history; an interrupted
-request can be repeated against the latest stored history. A terminal resume
-only prints the recorded result and does not open memory stores. Older logs
-that recorded no enabled memory remain dormant when resumed.
+Both flags are accepted with `--resume`, and must name the storage the run
+used. A terminal resume only prints the recorded result and opens no memory
+(the registry is still built, so flag and custom-type errors still apply).
+Run logs do not reconstruct session history; an interrupted request can be
+repeated against the latest stored history.
 
 ## Skills
 
@@ -326,8 +340,9 @@ log before publishing the progress event that the CLI renders.
 | Flow failed | `1` (error printed to stderr) |
 | Flow failed to compile (bad YAML) | `1` (located error printed to stderr) |
 | Run-log creation or recovery failed | `1` (concise error printed to stderr) |
+| Memory setup failed (a custom memory type, a storage path that is not a local file, or a flow `id:` that cannot be a directory name) | `1` (concise error printed to stderr) |
 | Run cancelled at the input prompt | `1` |
-| Invalid CLI input (including a forbidden resume combination or required inputs missing without a TTY) | `2` |
+| Invalid CLI input (including a forbidden resume combination, a bad `--memory-root` or `--memory-storage` flag, or required inputs missing without a TTY) | `2` |
 | Run interrupted with Ctrl-C during execution | `130` |
 
 ## Compile errors

@@ -11,9 +11,10 @@ from agent_composer.compile.memory_layout import (
     resolve_memory_layout,
     scope_memory_declarations,
 )
+from agent_composer.compile.model import CompiledFlow
 from agent_composer.compose import load_flow
 from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.memory.contracts import DeclSite
+from agent_composer.memory.contracts import DeclSite, MemoryDecl, MemorySetupError
 
 _CODE = "tests.engine._compose_codefns:echo_x"
 
@@ -165,3 +166,42 @@ def test_scoping_leaves_the_cached_child_untouched(tmp_path: Path) -> None:
     assert _keys(flow) == ["x.notes", "y.notes"]
     alone = load_flow((tmp_path / "lib.yaml").read_text(), search_paths=[tmp_path])
     assert _keys(alone) == ["notes"]
+
+
+def _flow_with(*decls: MemoryDecl) -> CompiledFlow:
+    flow = load_flow(
+        "id: f\nname: f\nnodes:\n"
+        "  echo: {kind: code, code: tests.engine._compose_codefns:echo, "
+        "input: {topic: hi}, output: str}\n"
+        "output: ${echo.output}\n"
+    ).compiled
+    flow.memories = decls
+    return flow
+
+
+def _decl(name: str, scope: tuple[str, ...] = ()) -> MemoryDecl:
+    return MemoryDecl(name, "episodic", {}, DeclSite(scope, ("root",), None))
+
+
+def test_scope_segment_must_match_the_name_pattern() -> None:
+    with pytest.raises(MemorySetupError, match=r"alias '1lib'.*\[A-Za-z_\]"):
+        resolve_memory_layout(_flow_with(_decl("notes", ("1lib",))))
+
+
+def test_keys_equal_under_casefold_are_rejected() -> None:
+    with pytest.raises(MemorySetupError, match="'Notes' and 'notes' differ only by case"):
+        resolve_memory_layout(_flow_with(_decl("notes"), _decl("Notes")))
+
+
+def test_aliases_equal_under_casefold_are_rejected() -> None:
+    with pytest.raises(MemorySetupError, match="'LIB.notes' and 'lib.notes'"):
+        resolve_memory_layout(
+            _flow_with(_decl("notes", ("lib",)), _decl("notes", ("LIB",)))
+        )
+
+
+def test_dotted_alias_is_rejected_by_the_resolver(tmp_path: Path) -> None:
+    (tmp_path / "lib.yaml").write_text(_lib())
+    flow = load_flow(_root({"a": "my.lib"}, {"my.lib": "lib"}), search_paths=[tmp_path])
+    with pytest.raises(MemorySetupError, match="'my.lib'"):
+        resolve_memory_layout(flow.compiled)

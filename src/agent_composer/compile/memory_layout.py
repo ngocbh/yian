@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from agent_composer.compile.model import END_ID, START_ID, CompiledFlow, Flow
 from agent_composer.diagnostics import OriginRef
 from agent_composer.memory.contracts import (
+    MEMORY_IDENTIFIER_PATTERN,
     DeclSite,
     JsonObject,
     MemoryDecl,
@@ -587,6 +588,29 @@ def _memory_table(
     return tuple(table)
 
 
+def _check_key_spelling(memories: tuple[ResolvedMemory, ...]) -> None:
+    """Reject unsafe scope segments and keys that differ only by case."""
+    for memory in memories:
+        for owner, origin in zip(memory.owners, memory.origins):
+            for segment in owner.scope:
+                if MEMORY_IDENTIFIER_PATTERN.fullmatch(segment) is None:
+                    raise _setup_error(
+                        f"memory {memory.key!r}: uses: alias {segment!r} must "
+                        "match [A-Za-z_][A-Za-z0-9_-]* to scope memories",
+                        origin=origin,
+                    )
+    folded: dict[str, ResolvedMemory] = {}
+    for memory in memories:
+        earlier = folded.setdefault(memory.key.casefold(), memory)
+        if earlier is not memory:
+            raise _setup_error(
+                f"memory keys {earlier.key!r} and {memory.key!r} differ only by "
+                "case; storage paths would collide on case-insensitive filesystems",
+                origin=earlier.origins[0],
+                related=memory.origins,
+            )
+
+
 def memory_stacks(layout: ResolvedMemoryLayout) -> tuple[MemoryStack, ...]:
     """Return every scoped target's key stack, sorted by locator."""
     _revalidate_resolved_layout(layout)
@@ -714,11 +738,9 @@ def resolve_memory_layout(flow: CompiledFlow) -> ResolvedMemoryLayout:
                 for target in targets
             ),
         )
-    return ResolvedMemoryLayout(
-        enabled=True,
-        targets=tuple(targets),
-        memories=_memory_table(declared),
-    )
+    memories = _memory_table(declared)
+    _check_key_spelling(memories)
+    return ResolvedMemoryLayout(enabled=True, targets=tuple(targets), memories=memories)
 
 
 def _validate_unique_targets(layout: ResolvedMemoryLayout) -> None:

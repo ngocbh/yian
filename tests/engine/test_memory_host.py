@@ -507,3 +507,17 @@ def test_resume_accepts_one_callee_called_from_two_nodes(tmp_path: Path, source:
         resumed = resume_flow(load_flow(text, search_paths=[tmp_path]), log=log, memory=registry)
     assert resumed.status == "succeeded"
     assert resumed.output == 2
+
+
+def test_backward_checks_registry_types_too(tmp_path: Path) -> None:
+    flow = _flow("{notes: episodic}")
+    log = tmp_path / "run.jsonl"
+    with build_memories(flow) as registry:
+        assert run_flow(flow, {}, learnable=True, log=log, memory=registry).status == "succeeded"
+    before = log.read_bytes()
+    with build_memories(_flow("{notes: reflective}")) as other:
+        # A finished run opens no memory on resume; backward is where it is used.
+        resumed = resume_flow(flow, log=log, memory=other)
+        with pytest.raises(MemorySetupError, match=r"'notes'.*'episodic'.*'reflective'"):
+            resumed.backward("Review.")
+    assert log.read_bytes() == before

@@ -972,7 +972,7 @@ returns a `MemoryRegistry` keyed by memory key. A `storage` value must be a `str
 or `os.PathLike[str]` local file path; anything else is a `MemorySetupError` naming
 the key. `run_flow` requires every declared
 key, rejects one object under two keys, and checks a registry's types against the
-table. It opens one run session per key and stores the memory table, every
+table; `resume_flow` and delayed backward repeat that type check. It opens one run session per key and stores the memory table, every
 placement's `memory_stacks`, and the sessions' exact public snapshots in
 `RunStartedRecord`. `memory=None` leaves authored declarations dormant. For each
 opted-in AGENT node evaluation, recall returns one source-neutral section per key in

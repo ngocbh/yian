@@ -502,8 +502,8 @@ Most are just the functional model (above) made enforceable:
 - **Hosts build memory; runtime never does** — package-root
   `memory_host.build_memories(flow, root=, storage=, supplied=, factories=)`
   returns a `MemoryRegistry` with one backend per declared key, and closes the
-  backends it built when the host exits it. `run_flow` checks a registry's types
-  against the table and never constructs memory. `cli.memory` only parses
+  backends it built when the host exits it. `run_flow`, `resume_flow` and delayed
+  backward check a registry's types against the table; none constructs memory. `cli.memory` only parses
   `--memory-root DIR` and repeated `--memory-storage KEY=PATH` and calls the
   builder; `cli/run.py` closes the registry after controller work drains. Nothing
   opens before runtime requests `open_run`; terminal inspection opens no backend.

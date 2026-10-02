@@ -224,6 +224,7 @@ class _BackwardHandle:
             def open_memory() -> MemoryRuntime:
                 if self.memory is None:
                     raise MemorySetupError("backward requires this run's enabled memory mapping")
+                _check_registry_types(self.memory, state.memories)
                 program = copy.deepcopy(self.program)
                 apply_effective_llm_map(program, legacy_connection_map(state.effective_llm_by_static_path))
                 memory_table, origins, memory_stack_set = _resolve_runtime_memory_layout(program)

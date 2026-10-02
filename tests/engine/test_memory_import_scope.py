@@ -223,6 +223,19 @@ def test_dotted_alias_is_rejected_at_load(tmp_path: Path) -> None:
         load_flow(_root({"a": "my.lib"}, {"my.lib": "lib"}), search_paths=[tmp_path])
 
 
+def test_dotted_alias_is_named_before_a_rendered_key_clash(tmp_path: Path) -> None:
+    # "a.b" + notes and "a" -> "b" + notes both render as a.b.notes.
+    (tmp_path / "lib.yaml").write_text(_lib())
+    (tmp_path / "lib2.yaml").write_text(_lib("{notes: reflective}"))
+    (tmp_path / "mid.yaml").write_text(_lib("null", call="b", uses={"b": "lib2"}))
+    with pytest.raises(LoadError, match="alias 'a.b'") as caught:
+        load_flow(
+            _root({"n1": "a.b", "n2": "a"}, {"a.b": "lib", "a": "mid"}),
+            search_paths=[tmp_path],
+        )
+    assert "different type or config" not in str(caught.value)
+
+
 def test_imported_flow_memory_is_owned_by_a_scoped_root_site(tmp_path: Path) -> None:
     (tmp_path / "lib.yaml").write_text(_lib())
     flow = load_flow(

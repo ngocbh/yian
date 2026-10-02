@@ -594,17 +594,24 @@ def _memory_table(
     return tuple(table)
 
 
-def _check_key_spelling(memories: tuple[ResolvedMemory, ...]) -> None:
-    """Reject unsafe scope segments and keys that differ only by case."""
-    for memory in memories:
-        for owner, origin in zip(memory.owners, memory.origins):
-            for segment in owner.scope:
-                if MEMORY_IDENTIFIER_PATTERN.fullmatch(segment) is None:
-                    raise _setup_error(
-                        f"memory {memory.key!r}: uses: alias {segment!r} must "
-                        "match [A-Za-z_][A-Za-z0-9_-]* to scope memories",
-                        origin=origin,
-                    )
+def _check_scope_segments(declared: list[tuple[MemoryDecl, tuple[str, ...] | None]]) -> None:
+    """Reject unsafe scope segments before keys are grouped.
+
+    A dotted alias renders the same key as a nested import, so this runs
+    first to name the alias rather than a key clash.
+    """
+    for decl, _placement in declared:
+        for segment in decl.site.scope:
+            if MEMORY_IDENTIFIER_PATTERN.fullmatch(segment) is None:
+                raise _setup_error(
+                    f"memory {decl.key!r}: uses: alias {segment!r} must "
+                    "match [A-Za-z_][A-Za-z0-9_-]* to scope memories",
+                    origin=decl.origin,
+                )
+
+
+def _check_key_case(memories: tuple[ResolvedMemory, ...]) -> None:
+    """Reject keys that differ only by case."""
     folded: dict[str, ResolvedMemory] = {}
     for memory in memories:
         earlier = folded.setdefault(memory.key.casefold(), memory)
@@ -744,8 +751,9 @@ def resolve_memory_layout(flow: CompiledFlow) -> ResolvedMemoryLayout:
                 for target in targets
             ),
         )
+    _check_scope_segments(declared)
     memories = _memory_table(declared)
-    _check_key_spelling(memories)
+    _check_key_case(memories)
     return ResolvedMemoryLayout(enabled=True, targets=tuple(targets), memories=memories)
 
 

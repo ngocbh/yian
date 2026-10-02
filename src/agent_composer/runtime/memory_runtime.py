@@ -595,13 +595,13 @@ class MemoryRuntime:
         if type(request) is not MemoryCommitRequestedRecord:
             raise TypeError("backward commit requires an exact MemoryCommitRequestedRecord")
         request = MemoryCommitRequestedRecord(
-            request.policy_name, request.commit_id, request.mutations, attempt_id=request.attempt_id,
+            request.memory, request.commit_id, request.mutations, attempt_id=request.attempt_id,
         )
-        if request.policy_name not in self._sessions:
+        if request.memory not in self._sessions:
             raise ValueError("backward commit requires an enabled policy and attempt")
         mutations = _validate_mutations(request.mutations)
         try:
-            result = self._sessions[request.policy_name].commit(request.commit_id, mutations)
+            result = self._sessions[request.memory].commit(request.commit_id, mutations)
         except MemoryOperationError as exc:
             _raise_host_error(exc)
             return _operation_failure("commit", exc)

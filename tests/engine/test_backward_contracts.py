@@ -316,7 +316,7 @@ def test_backward_context_and_outcome_do_not_expose_mutable_authority() -> None:
         code="memory.learn",
         message="Could not compute a learning proposal.",
         scope=scope,
-        policy_name="history",
+        memory="history",
         frame_ref=frame,
         cause=cause,
         cause_type="MemoryOperationError",

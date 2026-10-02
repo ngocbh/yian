@@ -339,12 +339,12 @@ class BackwardFinishedRecord:
 
 @dataclass(frozen=True, slots=True)
 class MemoryCommitRequestedRecord:
-    """Request one policy's atomic idempotent mutation commit.
+    """Request one memory's atomic idempotent mutation commit.
 
     The required keyword-only `attempt_id` identifies the accepted backward attempt.
     """
 
-    policy_name: str
+    memory: str
     commit_id: str
     mutations: tuple[MemoryMutation, ...]
     attempt_id: int = field(kw_only=True)
@@ -352,39 +352,39 @@ class MemoryCommitRequestedRecord:
     def __post_init__(self) -> None:
         """Validate exact identity and canonical unique mutations."""
         _validate_attempt_id(self.attempt_id)
-        _require_nonempty_string(self.policy_name, "policy_name")
+        _require_nonempty_string(self.memory, "memory")
         _require_nonempty_string(self.commit_id, "commit_id")
         _validate_mutations(self.mutations)
 
 
 @dataclass(frozen=True, slots=True)
 class MemoryCommitSucceededRecord:
-    """Confirm one policy commit completed successfully.
+    """Confirm one memory commit completed successfully.
 
     The required positive keyword-only `attempt_id` identifies the accepted
-    backward attempt whose policy request this confirmation settles.
+    backward attempt whose memory request this confirmation settles.
     """
 
-    policy_name: str
+    memory: str
     commit_id: str
     attempt_id: int = field(kw_only=True)
 
     def __post_init__(self) -> None:
-        """Validate the exact policy and commit identities."""
+        """Validate the exact memory and commit identities."""
         _validate_attempt_id(self.attempt_id)
-        _require_nonempty_string(self.policy_name, "policy_name")
+        _require_nonempty_string(self.memory, "memory")
         _require_nonempty_string(self.commit_id, "commit_id")
 
 
 @dataclass(frozen=True, slots=True)
 class MemoryCommitFailedRecord:
-    """Retain one observed policy commit failure.
+    """Retain one observed memory commit failure.
 
     The required positive keyword-only `attempt_id` identifies the accepted
-    backward attempt whose policy request this failure settles.
+    backward attempt whose memory request this failure settles.
     """
 
-    policy_name: str
+    memory: str
     commit_id: str
     failure: MemoryOperationFailure
     attempt_id: int = field(kw_only=True)
@@ -392,7 +392,7 @@ class MemoryCommitFailedRecord:
     def __post_init__(self) -> None:
         """Validate exact identities and failure carrier."""
         _validate_attempt_id(self.attempt_id)
-        _require_nonempty_string(self.policy_name, "policy_name")
+        _require_nonempty_string(self.memory, "memory")
         _require_nonempty_string(self.commit_id, "commit_id")
         if type(self.failure) is not MemoryOperationFailure:
             raise TypeError("failure must be a MemoryOperationFailure")
@@ -1283,7 +1283,7 @@ class _NodeFailedPayload(_StrictModel):
 class _MemoryCommitRequestedPayload(_StrictModel):
     """Strict wire payload for one atomic policy commit request."""
 
-    policy_name: str = Field(min_length=1)
+    memory: str = Field(min_length=1)
     commit_id: str = Field(min_length=1)
     attempt_id: int = Field(gt=0)
     mutations: list[_MemoryMutationPayload]
@@ -1292,7 +1292,7 @@ class _MemoryCommitRequestedPayload(_StrictModel):
 class _MemoryCommitSucceededPayload(_StrictModel):
     """Strict wire payload for one successful policy commit."""
 
-    policy_name: str = Field(min_length=1)
+    memory: str = Field(min_length=1)
     commit_id: str = Field(min_length=1)
     attempt_id: int = Field(gt=0)
 
@@ -1300,7 +1300,7 @@ class _MemoryCommitSucceededPayload(_StrictModel):
 class _MemoryCommitFailedPayload(_StrictModel):
     """Strict wire payload for one failed policy commit."""
 
-    policy_name: str = Field(min_length=1)
+    memory: str = Field(min_length=1)
     commit_id: str = Field(min_length=1)
     attempt_id: int = Field(gt=0)
     failure: _MemoryOperationFailurePayload
@@ -1383,7 +1383,7 @@ class _BackwardFailurePayload(_StrictModel):
     run_id: str | None
     node_id: str | None
     node_started_seq: int | None
-    policy_name: str | None
+    memory: str | None
     frame_ref: _MemoryFrameRefPayload | None
     cause: _BackwardFailureCausePayload | _MemoryOperationFailurePayload | None
     cause_type: str | None
@@ -2339,7 +2339,7 @@ def _backward_failure_payload(failure: BackwardFailure) -> dict[str, Any]:
         "stage": checked.stage, "code": checked.code, "message": checked.message,
         "scope": _execution_scope_payload(checked.scope), "run_id": checked.run_id,
         "node_id": checked.node_id, "node_started_seq": checked.node_started_seq,
-        "policy_name": checked.policy_name,
+        "memory": checked.memory,
         "frame_ref": None if checked.frame_ref is None else _frame_ref_payload(checked.frame_ref),
         "cause": cause_payload,
         "cause_type": checked.cause_type, "traceback": checked.traceback,
@@ -2358,7 +2358,7 @@ def _backward_failure_from_payload(payload: dict[str, Any]) -> BackwardFailure:
         stage=payload["stage"], code=payload["code"], message=payload["message"],
         scope=_execution_scope_from_payload(payload["scope"]), run_id=payload["run_id"],
         node_id=payload["node_id"], node_started_seq=payload["node_started_seq"],
-        policy_name=payload["policy_name"],
+        memory=payload["memory"],
         frame_ref=None if payload["frame_ref"] is None else _frame_ref_from_payload(payload["frame_ref"]),
         cause=decoded_cause,
         cause_type=payload["cause_type"], traceback=payload["traceback"],
@@ -2446,18 +2446,18 @@ def _revalidate_run_record(record: RunRecord) -> None:
         return
     if type(record) is MemoryCommitRequestedRecord:
         MemoryCommitRequestedRecord(
-            record.policy_name,
+            record.memory,
             record.commit_id,
             record.mutations,
             attempt_id=record.attempt_id,
         )
         return
     if type(record) is MemoryCommitSucceededRecord:
-        MemoryCommitSucceededRecord(record.policy_name, record.commit_id, attempt_id=record.attempt_id)
+        MemoryCommitSucceededRecord(record.memory, record.commit_id, attempt_id=record.attempt_id)
         return
     if type(record) is MemoryCommitFailedRecord:
         MemoryCommitFailedRecord(
-            record.policy_name,
+            record.memory,
             record.commit_id,
             record.failure,
             attempt_id=record.attempt_id,
@@ -2575,7 +2575,7 @@ def _payload_for_record(record: RunRecord) -> dict[str, Any]:
         }
     elif isinstance(record, MemoryCommitRequestedRecord):
         raw = {
-            "policy_name": record.policy_name,
+            "memory": record.memory,
             "commit_id": record.commit_id,
             "attempt_id": record.attempt_id,
             "mutations": [
@@ -2584,13 +2584,13 @@ def _payload_for_record(record: RunRecord) -> dict[str, Any]:
         }
     elif isinstance(record, MemoryCommitSucceededRecord):
         raw = {
-            "policy_name": record.policy_name,
+            "memory": record.memory,
             "commit_id": record.commit_id,
             "attempt_id": record.attempt_id,
         }
     elif isinstance(record, MemoryCommitFailedRecord):
         raw = {
-            "policy_name": record.policy_name,
+            "memory": record.memory,
             "commit_id": record.commit_id,
             "attempt_id": record.attempt_id,
             "failure": _memory_failure_payload(record.failure),
@@ -2712,7 +2712,7 @@ def _record_from_payload(kind: str, payload: _StrictModel) -> RunRecord:
         )
     if kind == "memory_commit_requested":
         return MemoryCommitRequestedRecord(
-            policy_name=values["policy_name"],
+            memory=values["memory"],
             commit_id=values["commit_id"],
             attempt_id=values["attempt_id"],
             mutations=tuple(
@@ -2722,13 +2722,13 @@ def _record_from_payload(kind: str, payload: _StrictModel) -> RunRecord:
         )
     if kind == "memory_commit_succeeded":
         return MemoryCommitSucceededRecord(
-            policy_name=values["policy_name"],
+            memory=values["memory"],
             commit_id=values["commit_id"],
             attempt_id=values["attempt_id"],
         )
     if kind == "memory_commit_failed":
         return MemoryCommitFailedRecord(
-            policy_name=values["policy_name"],
+            memory=values["memory"],
             commit_id=values["commit_id"],
             attempt_id=values["attempt_id"],
             failure=_memory_failure_from_payload(values["failure"]),

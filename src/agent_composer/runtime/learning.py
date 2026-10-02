@@ -323,8 +323,8 @@ def _interrupted_failure() -> BackwardFailure:
 
 
 def _policy_outcomes(policy_order: tuple[str, ...], attempt: _BackwardAttempt) -> tuple[PolicyCommitOutcome, ...]:
-    requests = {record.policy_name: record for record in attempt.requests}
-    observations = {record.policy_name: record for record in attempt.observations}
+    requests = {record.memory: record for record in attempt.requests}
+    observations = {record.memory: record for record in attempt.observations}
     outcomes = []
     for name in policy_order:
         request, observation = requests.get(name), observations.get(name)
@@ -409,13 +409,13 @@ class RuntimeBackwardState:
                 raise ValueError("backward attempt IDs must follow accepted start order")
             if index < len(self.attempts) - 1 and attempt.finished is None:
                 raise ValueError("an unfinished attempt cannot precede another start")
-            if tuple(record.policy_name for record in attempt.requests) != self.policy_order[:len(attempt.requests)]:
+            if tuple(record.memory for record in attempt.requests) != self.policy_order[:len(attempt.requests)]:
                 raise ValueError("backward requests must follow recorded policy order")
             if len(attempt.observations) > len(attempt.requests) or len(attempt.requests) > len(attempt.observations) + 1:
                 raise ValueError("backward requests and observations must alternate")
             for result_index, observation in enumerate(attempt.observations):
                 request = attempt.requests[result_index]
-                if observation.policy_name != request.policy_name or observation.commit_id != request.commit_id:
+                if observation.memory != request.memory or observation.commit_id != request.commit_id:
                     raise ValueError("backward observation must match its accepted request")
                 if type(observation) is MemoryCommitFailedRecord and result_index < len(attempt.requests) - 1:
                     raise ValueError("a failed commit cannot be followed by another request")
@@ -528,7 +528,7 @@ def _validate_backward_finished(
             raise ValueError("failed Finished after Ready requires a recorded commit failure")
         policy = failed[0]
         expected = BackwardFailure("commit", policy.failure.code, policy.failure.message,
-                                   policy_name=policy.memory, cause=policy.failure)
+                                   memory=policy.memory, cause=policy.failure)
         if failure != expected or outcome.learning != _prefix_learning(backward):
             raise ValueError("commit Finished must match the exact accepted failure and policy states")
         return
@@ -537,7 +537,7 @@ def _validate_backward_finished(
             raise ValueError("learner failure requires one exact enabled frame and memory-operation cause")
         spec = backward.layout[backward.frame_order.index(failure.frame_ref)]
         expected = BackwardFailure("learn", failure.cause.code, failure.cause.message,
-                                   policy_name=spec.policy_name, frame_ref=spec.ref, cause=failure.cause)
+                                   memory=spec.policy_name, frame_ref=spec.ref, cause=failure.cause)
         if failure != expected or outcome.feedback is None:
             raise ValueError("learner Finished must retain the exact attributed failure and completed feedback")
         validate_attributed_backward(trace, current.started.feedback, outcome.feedback, record.attributed_results)
@@ -551,7 +551,7 @@ def _validate_backward_finished(
     if not has_feedback(current.started.feedback) or failure.code not in ("backward.execute", "backward.result"):
         raise ValueError("backward computation failure requires effective feedback and a driver failure code")
     if (failure.run_id != trace.run_id or failure.node_started_seq is None
-            or failure.policy_name is not None or failure.frame_ref is not None):
+            or failure.memory is not None or failure.frame_ref is not None):
         raise ValueError("backward computation failure requires accepted occurrence attribution")
     source = SourceRef(trace.run_id, failure.node_started_seq)
     try:
@@ -609,10 +609,10 @@ def reduce_backward_record(
         if current.ready is None or any(policy.status in ("unknown", "failed") for policy in backward.policy_outcomes):
             raise ValueError("backward commit request requires Ready and no pending or failed policy")
         index = len(current.requests)
-        if index >= len(backward.policy_order) or record.policy_name != backward.policy_order[index]:
+        if index >= len(backward.policy_order) or record.memory != backward.policy_order[index]:
             raise ValueError("backward request must name the next enabled policy")
         batch = _proposal_batches(backward, current.ready)[index]
-        expected_id = memory_commit_id(trace.run_id, record.policy_name, batch, backward.commit_attempt_key)
+        expected_id = memory_commit_id(trace.run_id, record.memory, batch, backward.commit_attempt_key)
         if record.mutations != batch or record.commit_id != expected_id:
             raise ValueError("backward commit batch and identity must match the ordered Ready proposals")
         next_attempt = replace(current, requests=(*current.requests, record))
@@ -620,7 +620,7 @@ def reduce_backward_record(
         if len(current.requests) != len(current.observations) + 1:
             raise ValueError("backward commit result requires a matching pending request")
         request = current.requests[-1]
-        if record.policy_name != request.policy_name or record.commit_id != request.commit_id:
+        if record.memory != request.memory or record.commit_id != request.commit_id:
             raise ValueError("backward commit result must match its pending policy and identity")
         next_attempt = replace(current, observations=(*current.observations, record))
     else:

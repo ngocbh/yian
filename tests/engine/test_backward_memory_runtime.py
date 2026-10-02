@@ -181,7 +181,7 @@ def test_late_proposal_failure_discards_all_staged_mutations(failure_kind):
     memory = {"A": _Memory(learn_outcomes=[[prior], fail]), "B": _Memory()}
     outcome = _drive(engine, memory)
     assert outcome.status == "failed" and outcome.failure.stage == "learn"
-    assert outcome.failure.frame_ref == layout[1].ref and outcome.failure.policy_name == "A"
+    assert outcome.failure.frame_ref == layout[1].ref and outcome.failure.memory == "A"
     assert outcome.failure.code == ("backward.interrupted" if failure_kind == "backend" else "memory.invalid_result")
     assert outcome.feedback.input_feedback == {"topic": ("review",)}
     assert outcome.learning.status == "failed"
@@ -202,7 +202,7 @@ def test_policy_failure_preserves_prior_success_and_stops_later_policies(invalid
     memory = {"A": _Memory(), "B": _Memory(commit_outcomes=[failed]), "C": _Memory()}
     outcome = _drive(engine, memory)
     assert outcome.status == "failed" and outcome.failure.stage == "commit"
-    assert outcome.failure.policy_name == "B" and outcome.failure.frame_ref is None
+    assert outcome.failure.memory == "B" and outcome.failure.frame_ref is None
     assert outcome.failure.code == ("memory.invalid_result" if invalid_result else "backward.interrupted")
     assert outcome.learning.status == "failed"
     assert [policy.status for policy in outcome.learning.policies] == ["succeeded", "failed", "unrequested"]

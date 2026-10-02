@@ -336,7 +336,7 @@ def test_removed_conversation_wire_kinds_are_rejected(kind):
 ])
 def test_memory_commit_wire_requires_a_positive_attempt(kind, payload):
     wire = {"schema": SCHEMA_VERSION, "run_id": "run", "seq": 0, "kind": kind,
-            "payload": {"policy_name": "history", "commit_id": "commit-1", "attempt_id": None, **payload}}
+            "payload": {"memory": "history", "commit_id": "commit-1", "attempt_id": None, **payload}}
     with pytest.raises(ValueError):
         decode_record(json.dumps(wire).encode())
 

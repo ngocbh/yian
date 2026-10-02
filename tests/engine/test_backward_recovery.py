@@ -885,7 +885,7 @@ def test_three_policy_failure_preserves_ordered_dispositions_and_admits_a_public
 
     assert learned == ["A", "B", "C"]
     assert outcome.status == "failed" and outcome.failure.stage == "commit"
-    assert outcome.failure.code == "backward.interrupted" and outcome.failure.policy_name == "B"
+    assert outcome.failure.code == "backward.interrupted" and outcome.failure.memory == "B"
     assert outcome.feedback == BackwardResult({"topic": ("topic review",)})
     assert outcome.learning.status == "failed"
     assert [(policy.memory, policy.status) for policy in outcome.learning.policies] == [
@@ -900,10 +900,10 @@ def test_three_policy_failure_preserves_ordered_dispositions_and_admits_a_public
         BackwardFinishedRecord,
     ]
     requests = [record for record in accepted if type(record) is MemoryCommitRequestedRecord]
-    assert [record.policy_name for record in requests] == ["A", "B"]
+    assert [record.memory for record in requests] == ["A", "B"]
     for request in requests:
         assert len(request.mutations) == 1
-        assert backends[request.policy_name].commit_calls == [(request.commit_id, request.mutations)]
+        assert backends[request.memory].commit_calls == [(request.commit_id, request.mutations)]
     assert [proposal.frame_ref for proposal in accepted[1].frame_proposals] == [
         backend.learn_contexts[0].frame_ref for backend in backends.values()
     ]

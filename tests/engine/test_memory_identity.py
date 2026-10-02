@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import FrozenInstanceError
 
 import pytest
@@ -21,6 +22,16 @@ from agent_composer.memory import (
 from agent_composer.memory.contracts import (
     _iter_memory_decl_origins,
     _rewrite_memory_decl_origins,
+)
+from agent_composer.runtime.contracts import BackwardFailure
+from agent_composer.runtime.log import (
+    SCHEMA_VERSION,
+    MemoryCommitFailedRecord,
+    MemoryCommitRequestedRecord,
+    MemoryCommitSucceededRecord,
+    RecordEnvelope,
+    decode_record,
+    encode_record,
 )
 
 
@@ -145,3 +156,17 @@ def test_learning_carriers_name_their_memory_key() -> None:
     assert result.policies[0].memory == "notes"
     with pytest.raises(ValueError, match="memory keys must be unique"):
         LearningResult("failed", (failure,), (outcome, outcome))
+
+
+def test_backward_failure_and_commit_records_name_their_memory_key() -> None:
+    assert BackwardFailure("commit", "declined", "", memory="notes").memory == "notes"
+    cause = MemoryOperationFailure("commit", "declined", "Declined.", True)
+    for record in (
+        MemoryCommitRequestedRecord("notes", "c1", (), attempt_id=1),
+        MemoryCommitSucceededRecord("notes", "c1", attempt_id=1),
+        MemoryCommitFailedRecord("notes", "c1", cause, attempt_id=1),
+    ):
+        assert record.memory == "notes"
+        wire = encode_record(RecordEnvelope(SCHEMA_VERSION, "run", 0, record))
+        assert json.loads(wire)["payload"]["memory"] == "notes"
+        assert decode_record(wire).record == record

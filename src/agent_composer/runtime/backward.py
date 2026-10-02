@@ -158,7 +158,7 @@ def _drive_opened_backward(state: RunState, log: RunLog, memory: MemoryRuntime |
             cause = exc.failure
         spec = next(spec for spec in state.memory_layout if spec.ref == exc.frame_ref)
         failure = BackwardFailure("learn", cause.code, cause.message,
-                                  policy_name=spec.policy_name, frame_ref=spec.ref, cause=cause)
+                                  memory=spec.policy_name, frame_ref=spec.ref, cause=cause)
         learning = _prefix_learning(state.backward_state, learner_failure=LearningFailure(
             spec.policy_name, "learn", cause, spec.ref,
         ))
@@ -176,7 +176,7 @@ def _drive_opened_backward(state: RunState, log: RunLog, memory: MemoryRuntime |
             _accept_backward(state, log, MemoryCommitFailedRecord(
                 policy_name, commit_id, cause, attempt_id=started.attempt_id,
             ))
-            failure = BackwardFailure("commit", cause.code, cause.message, policy_name=policy_name, cause=cause)
+            failure = BackwardFailure("commit", cause.code, cause.message, memory=policy_name, cause=cause)
             return _finish_backward(state, log, BackwardOutcome(
                 "failed", root, failure, _prefix_learning(state.backward_state),
             ))

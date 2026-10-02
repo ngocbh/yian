@@ -466,7 +466,7 @@ class BackwardFailure:
         node_id (`str | None`): Executing node's display ID, when applicable.
         node_started_seq (`int | None`): Positive accepted start sequence identifying
             a node occurrence together with its run ID.
-        policy_name (`str | None`): Responsible memory policy, when applicable.
+        memory (`str | None`): Responsible memory key, when applicable.
         frame_ref (`MemoryFrameRef | None`): Responsible owned memory frame, if any.
         cause (`Failure | MemoryOperationFailure | None`): Underlying source-neutral
             diagnostic, including a backend retryability hint when one exists.
@@ -482,7 +482,7 @@ class BackwardFailure:
     run_id: str | None = None
     node_id: str | None = None
     node_started_seq: int | None = None
-    policy_name: str | None = None
+    memory: str | None = None
     frame_ref: MemoryFrameRef | None = None
     cause: Failure | MemoryOperationFailure | None = None
     cause_type: str | None = None
@@ -500,7 +500,7 @@ class BackwardFailure:
         for name, value in (
             ("run_id", self.run_id),
             ("node_id", self.node_id),
-            ("policy_name", self.policy_name),
+            ("memory", self.memory),
             ("cause_type", self.cause_type),
             ("traceback", self.traceback),
         ):

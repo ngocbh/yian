@@ -777,7 +777,7 @@ def test_learner_failed_finished_keeps_completed_feedback_and_all_unrequested_po
     engine, (root, attributed) = _retained_backward(layout=layout)
     _accept_backward(engine, BackwardStartedRecord(1, "Review."))
     cause = MemoryOperationFailure("provider-stage", code, "No proposal.", retryable)
-    failure = BackwardFailure("learn", cause.code, cause.message, policy_name="alpha", frame_ref=layout[0].ref, cause=cause)
+    failure = BackwardFailure("learn", cause.code, cause.message, memory="alpha", frame_ref=layout[0].ref, cause=cause)
     learning = LearningResult("failed", (LearningFailure("alpha", "learn", cause, layout[0].ref),),
                               engine.state.backward_state.policy_outcomes)
     finished = BackwardFinishedRecord(1, BackwardOutcome("failed", root, failure, learning), attributed)
@@ -814,7 +814,7 @@ def test_known_commit_failure_stops_later_requests_and_admits_a_later_attempt(re
     with pytest.raises(ValueError):
         prepare_record(engine.state, MemoryCommitRequestedRecord("beta", memory_commit_id(engine.state.run_id, "beta", ()), (), attempt_id=1))
     learning = LearningResult("failed", (LearningFailure("alpha", "commit", cause),), engine.state.backward_state.policy_outcomes)
-    failure = BackwardFailure("commit", cause.code, cause.message, policy_name="alpha", cause=cause)
+    failure = BackwardFailure("commit", cause.code, cause.message, memory="alpha", cause=cause)
     _accept_backward(engine, BackwardFinishedRecord(1, BackwardOutcome("failed", root, failure, learning)))
     assert engine.state.backward_state.ever_requested and engine.state.backward_state.can_start
     _accept_backward(engine, BackwardStartedRecord(2, "Different."))
@@ -850,7 +850,7 @@ def test_any_finished_attempt_admits_a_later_start_with_fresh_proposals(closing)
         _accept_backward(engine, MemoryCommitFailedRecord("alpha", commit_id, cause, attempt_id=1))
         learning = LearningResult("failed", (LearningFailure("alpha", "commit", cause),),
                                   engine.state.backward_state.policy_outcomes)
-        failure = BackwardFailure("commit", cause.code, cause.message, policy_name="alpha", cause=cause)
+        failure = BackwardFailure("commit", cause.code, cause.message, memory="alpha", cause=cause)
         outcome = BackwardOutcome("failed", root, failure, learning)
     else:
         outcome = engine.state.backward_state.outcome

@@ -781,7 +781,7 @@ def test_policy_commit_outcome_keeps_protocol_identity_and_backend_hints(status,
 
     failure = MemoryOperationFailure("backend-stage", "retry", "Try later.", True) if has_failure else None
     outcome = PolicyCommitOutcome("history", status, commit_id, failure)
-    assert (outcome.policy_name, outcome.status, outcome.commit_id, outcome.failure) == (
+    assert (outcome.memory, outcome.status, outcome.commit_id, outcome.failure) == (
         "history", status, commit_id, failure,
     )
     with pytest.raises(FrozenInstanceError):
@@ -821,12 +821,12 @@ def test_policy_commit_outcome_rejects_inconsistent_optional_fields(status, comm
         PolicyCommitOutcome("history", status, commit_id, failure)
 
 
-@pytest.mark.parametrize("field", ["policy_name", "status", "commit_id"])
+@pytest.mark.parametrize("field", ["memory", "status", "commit_id"])
 @pytest.mark.parametrize("invalid", ["", "\ud800", 1, True])
 def test_policy_commit_outcome_requires_exact_valid_unicode_identities(field, invalid):
     from agent_composer.memory import PolicyCommitOutcome
 
-    values = {"policy_name": "history", "status": "unknown", "commit_id": "commit-1"}
+    values = {"memory": "history", "status": "unknown", "commit_id": "commit-1"}
     values[field] = invalid
     with pytest.raises((TypeError, ValueError)):
         PolicyCommitOutcome(**values)

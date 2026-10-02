@@ -1474,16 +1474,16 @@ def _validate_mutations(
 
 @dataclass(frozen=True, slots=True)
 class LearningFailure:
-    """One frame-local learn or policy-local commit failure in a run result."""
+    """One frame-local learn or memory-local commit failure in a run result."""
 
-    policy_name: str
+    memory: str
     operation: str
     failure: MemoryOperationFailure
     frame_ref: MemoryFrameRef | None = None
 
     def __post_init__(self) -> None:
         """Require exact attribution and one revalidated durable failure."""
-        _require_string(self.policy_name, "policy_name")
+        _require_string(self.memory, "memory")
         _require_string(self.operation, "operation")
         if self.operation not in ("learn", "commit"):
             raise ValueError("operation must be 'learn' or 'commit'")
@@ -1514,7 +1514,7 @@ class PolicyCommitOutcome:
     """One policy's confirmed or still-unresolved commit disposition.
 
     Attributes:
-        policy_name (`str`): Nonempty configured policy name.
+        memory (`str`): Non-empty memory key.
         status (`str`): `unrequested`, `unknown`, `succeeded`, or `failed`.
         commit_id (`str | None`): Nonempty protocol identity after a request;
             defaults to `None` and must be absent when unrequested.
@@ -1523,14 +1523,14 @@ class PolicyCommitOutcome:
             remain unchanged.
     """
 
-    policy_name: str
+    memory: str
     status: str
     commit_id: str | None = None
     failure: MemoryOperationFailure | None = None
 
     def __post_init__(self) -> None:
         """Validate exact identities and detach the optional failure carrier."""
-        _require_string(self.policy_name, "policy_name")
+        _require_string(self.memory, "memory")
         _require_string(self.status, "status")
         if self.status not in ("unrequested", "unknown", "succeeded", "failed"):
             raise ValueError("invalid policy commit status")
@@ -1560,7 +1560,7 @@ class LearningResult:
             from the known policy dispositions.
         failures (`tuple[LearningFailure, ...]`): Unique failure attributions in
             supplied order; defaults to an empty tuple.
-        policies (`tuple[PolicyCommitOutcome, ...]`): Unique policy names in
+        policies (`tuple[PolicyCommitOutcome, ...]`): Unique memory keys in
             supplied order; defaults to an empty tuple. Recorded run layout
             owns configured membership and order.
     """
@@ -1585,7 +1585,7 @@ class LearningResult:
                 raise TypeError("failures items must be LearningFailure values")
             failures.append(replace(failure))
             identity = (
-                failure.policy_name,
+                failure.memory,
                 failure.operation,
                 failure.frame_ref,
             )
@@ -1600,9 +1600,9 @@ class LearningResult:
             if type(policy) is not PolicyCommitOutcome:
                 raise TypeError("policies items must be PolicyCommitOutcome values")
             policies.append(replace(policy))
-            if policy.policy_name in names:
-                raise ValueError("learning policy names must be unique")
-            names.add(policy.policy_name)
+            if policy.memory in names:
+                raise ValueError("learning memory keys must be unique")
+            names.add(policy.memory)
         object.__setattr__(self, "policies", tuple(policies))
         object.__setattr__(self, "failures", tuple(failures))
         if self.status == "succeeded" and self.failures:

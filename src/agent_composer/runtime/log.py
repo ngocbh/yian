@@ -1344,7 +1344,7 @@ class _FrameProposalPayload(_StrictModel):
 class _LearningFailurePayload(_StrictModel):
     """Frame-local learn or policy-local commit failure attribution."""
 
-    policy_name: str = Field(min_length=1)
+    memory: str = Field(min_length=1)
     operation: Literal["learn", "commit"]
     failure: _MemoryOperationFailurePayload
     frame_ref: _MemoryFrameRefPayload | None
@@ -1353,7 +1353,7 @@ class _LearningFailurePayload(_StrictModel):
 class _PolicyCommitOutcomePayload(_StrictModel):
     """A policy disposition without inferred attempt completion."""
 
-    policy_name: str = Field(min_length=1)
+    memory: str = Field(min_length=1)
     status: Literal["unrequested", "unknown", "succeeded", "failed"]
     commit_id: str | None
     failure: _MemoryOperationFailurePayload | None
@@ -2283,7 +2283,7 @@ def _learning_result_payload(result: LearningResult) -> dict[str, Any]:
         "status": checked.status,
         "failures": [
             {
-                "policy_name": item.policy_name,
+                "memory": item.memory,
                 "operation": item.operation,
                 "failure": _memory_failure_payload(item.failure),
                 "frame_ref": None if item.frame_ref is None else _frame_ref_payload(item.frame_ref),
@@ -2292,7 +2292,7 @@ def _learning_result_payload(result: LearningResult) -> dict[str, Any]:
         ],
         "policies": [
             {
-                "policy_name": item.policy_name,
+                "memory": item.memory,
                 "status": item.status,
                 "commit_id": item.commit_id,
                 "failure": None if item.failure is None else _memory_failure_payload(item.failure),
@@ -2308,7 +2308,7 @@ def _learning_result_from_payload(payload: dict[str, Any]) -> LearningResult:
         payload["status"],
         tuple(
             LearningFailure(
-                item["policy_name"], item["operation"],
+                item["memory"], item["operation"],
                 _memory_failure_from_payload(item["failure"]),
                 None if item["frame_ref"] is None else _frame_ref_from_payload(item["frame_ref"]),
             )
@@ -2316,7 +2316,7 @@ def _learning_result_from_payload(payload: dict[str, Any]) -> LearningResult:
         ),
         tuple(
             PolicyCommitOutcome(
-                item["policy_name"], item["status"], item["commit_id"],
+                item["memory"], item["status"], item["commit_id"],
                 None if item["failure"] is None else _memory_failure_from_payload(item["failure"]),
             )
             for item in payload["policies"]

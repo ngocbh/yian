@@ -9,10 +9,14 @@ import pytest
 from agent_composer.diagnostics import OriginRef
 from agent_composer.memory import (
     DeclSite,
+    LearningFailure,
+    LearningResult,
     MemoryDecl,
+    MemoryOperationFailure,
     MemorySnapshotEnvelope,
     MemorySpec,
     MemoryStack,
+    PolicyCommitOutcome,
 )
 from agent_composer.memory.contracts import (
     _iter_memory_decl_origins,
@@ -130,3 +134,14 @@ def test_snapshot_envelope_names_its_memory_key() -> None:
     assert envelope.memory == "notes"
     assert envelope.snapshot == {"v": 1}
     assert not hasattr(envelope, "policy_name")
+
+
+def test_learning_carriers_name_their_memory_key() -> None:
+    cause = MemoryOperationFailure("commit", "declined", "Declined.", True)
+    failure = LearningFailure(memory="notes", operation="commit", failure=cause)
+    outcome = PolicyCommitOutcome(memory="notes", status="failed", commit_id="c", failure=cause)
+    assert (failure.memory, outcome.memory) == ("notes", "notes")
+    result = LearningResult("failed", (failure,), (outcome,))
+    assert result.policies[0].memory == "notes"
+    with pytest.raises(ValueError, match="memory keys must be unique"):
+        LearningResult("failed", (failure,), (outcome, outcome))

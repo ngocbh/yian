@@ -637,7 +637,7 @@ def test_backward_policy_batches_and_unfinished_prefixes_follow_accepted_layout_
         commit_id = memory_commit_id(engine.state.run_id, policy, batch)
         _accept_backward(engine, MemoryCommitRequestedRecord(policy, commit_id, batch, attempt_id=1))
         assert engine.state.backward_state.ever_requested
-        assert next(p for p in engine.state.backward_state.policy_outcomes if p.policy_name == policy).status == "unknown"
+        assert next(p for p in engine.state.backward_state.policy_outcomes if p.memory == policy).status == "unknown"
         assert engine.state.backward_state.can_start is False
         _accept_backward(engine, MemoryCommitSucceededRecord(policy, commit_id, attempt_id=1))
     interrupted = engine.state.backward_state.outcome

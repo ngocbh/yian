@@ -563,7 +563,7 @@ def test_terminal_resume_inspects_actual_public_attempt_prefixes_without_reopeni
     assert outcome.feedback == completed.feedback == BackwardResult({"topic": ("topic review",)})
     assert outcome.learning.status == "incomplete"
     policy, = outcome.learning.policies
-    assert policy.policy_name == "test" and policy.status == disposition and policy.failure is None
+    assert policy.memory == "test" and policy.status == disposition and policy.failure is None
     assert (policy.commit_id is None) is (disposition == "unrequested")
     assert inspected.events == []
     assert (inspected.input, inspected.status, inspected.output, inspected.failure) == forward[:4]
@@ -888,7 +888,7 @@ def test_three_policy_failure_preserves_ordered_dispositions_and_admits_a_public
     assert outcome.failure.code == "backward.interrupted" and outcome.failure.policy_name == "B"
     assert outcome.feedback == BackwardResult({"topic": ("topic review",)})
     assert outcome.learning.status == "failed"
-    assert [(policy.policy_name, policy.status) for policy in outcome.learning.policies] == [
+    assert [(policy.memory, policy.status) for policy in outcome.learning.policies] == [
         ("A", "succeeded"), ("B", "failed"), ("C", "unrequested"),
     ]
     assert outcome.learning.policies[1].failure == outcome.failure.cause

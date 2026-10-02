@@ -345,7 +345,7 @@ def _prefix_learning(
     if not backward.policy_order:
         return None
     policies = backward.policy_outcomes
-    failures = tuple(LearningFailure(item.policy_name, "commit", item.failure)
+    failures = tuple(LearningFailure(item.memory, "commit", item.failure)
                      for item in policies if item.status == "failed")
     if learner_failure is not None:
         failures = (learner_failure, *failures)
@@ -528,7 +528,7 @@ def _validate_backward_finished(
             raise ValueError("failed Finished after Ready requires a recorded commit failure")
         policy = failed[0]
         expected = BackwardFailure("commit", policy.failure.code, policy.failure.message,
-                                   policy_name=policy.policy_name, cause=policy.failure)
+                                   policy_name=policy.memory, cause=policy.failure)
         if failure != expected or outcome.learning != _prefix_learning(backward):
             raise ValueError("commit Finished must match the exact accepted failure and policy states")
         return

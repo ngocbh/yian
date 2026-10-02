@@ -89,11 +89,11 @@ has ordered messages and may have turn-dependent fields alongside them.
                 <span class="ac-request-badge">outer → local</span>
               </div>
               <ol class="ac-request-memory-frames" aria-label="Long-term memory recall order">
-                <li>Root-flow frame</li>
-                <li>Child-flow frame(s)</li>
-                <li>AGENT-local frame</li>
+                <li>Root-flow memories</li>
+                <li>Enclosing child-flow memories</li>
+                <li>AGENT memories</li>
               </ol>
-              <small>Only non-empty recalled frames appear.</small>
+              <small>Only non-empty recalled memories appear.</small>
             </div>
           </div>
         </li>
@@ -227,7 +227,7 @@ the usage received so far. Each tool call the interrupt skipped is reported as a
 | Node `input:` | Binds the local values available to prompt rendering and memory recall. It is not independently dumped into a message. |
 | AGENT `variables:` | Supplies typed local defaults to prompt rendering. Each invocation receives a fresh copy; see [agent-owned variables](syntax.md#agent-owned-variables). |
 | `prompt:` | Renders local `${name}` values into the initial `HumanMessage`. |
-| `long_term_memory:` plus host `memory={...}` | Supplies one memory context: recalled notes become labelled system sections; a session transcript contributes structured prior messages. |
+| `long_term_memory:` plus host `memory=build_memories(flow)` | Supplies one memory context: recalled notes become labelled system sections (`{"index", "memory", "text"}`); a session memory contributes structured prior messages. |
 | `tools: [name, ...]` | Resolves the granted ids from the run's tools (registered tools, or the host's `tools=` mapping) and binds their schemas beside the messages in `tool_calling` mode. A name may be a host-filled tool group, which expands to its tools. |
 | `skills: [name, ...]` or `skills: all` plus host `skills=` | Lists each granted skill's name and description in the system message and binds the built-in `load_skill` tool, which returns a skill's instructions or a bundled file on demand. See [agent skills](syntax.md#agent-skills-skills). |
 | Structured `output:` | Selects a provider-supported structured-output binding or a fallback schema instruction, then validates the returned value. A bare `str` remains free text. |
@@ -243,75 +243,68 @@ grants no skills. Authored `system_prompt:` is tracked in
 
 ### Memory is an outer-to-local stack
 
-An AGENT node may see zero or more memory frames:
+An AGENT node recalls a stack of memories, in order:
 
-1. the root flow's frame, if that flow declares `long_term_memory:`;
-2. one frame for each entered child flow that declares long-term memory;
-3. the AGENT node's local frame, if it has its own declaration.
+1. each enclosing flow's memories, outermost flow first, through CALL, MAP,
+   and LOOP;
+2. the AGENT node's own memories.
 
-Nonempty recalled notes contribute labelled sections. SessionMemory contributes
-a structured transcript through the same interface, preserving message roles and
-tool-result links. The innermost contributed transcript supplies prior history;
-all visible note sections remain available. Each frame owns and writes only its
-own state. MAP items and LOOP iterations reuse the statically
-authored frames rather than creating a new frame per occurrence.
-A `ProfileMemory` policy returns notes only from its outermost frame, so its
-document appears once however deeply it is declared.
+A memory key that appears twice is recalled once, at its outermost position.
+Each memory key contributes at most one labelled section; empty recalls are
+left out. A session memory contributes a structured transcript instead,
+preserving message roles and tool-result links. Only a key with exactly one
+declaring AGENT may supply a transcript, and one context holds at most one.
+Each memory is written only by its own learner. MAP items and LOOP iterations
+reuse the same memories rather than creating new ones per occurrence. A
+`ProfileMemory` is one key like any other: every AGENT whose stack holds it
+sees the whole document.
+
+An AGENT inside an imported child recalls the importing flow's memories by
+position, plus its own keys such as `lib.notes`. A child's declaration never
+binds to a parent's memory.
 
 ```yaml
 id: layered_memory
 name: layered_memory
-long_term_memory: reflective
-input:
-  topic: str
-
+long_term_memory: {notes: episodic}
 defs:
   research:
-    long_term_memory:
-      name: reflective
-      config:
-        recall_limit: 8
-    input:
-      topic: str
+    long_term_memory: {lessons: reflective}
+    input: {topic: str}
     nodes:
       investigate:
         kind: agent
-        mode: plain
-        long_term_memory: reflective
-        input:
-          topic: ${input.topic}
+        long_term_memory: {chat: session}
+        input: {topic: "${input.topic}"}
         output: str
-        prompt: "Investigate ${topic}."
+        prompt: Investigate ${topic}.
     output: ${investigate.output}
-
+input: {topic: str}
 nodes:
-  run_research:
-    kind: call
-    call: research
-    input:
-      topic: ${input.topic}
-
-output: ${run_research.output}
+  run: {kind: call, call: research, input: {topic: "${input.topic}"}}
+output: ${run.output}
 ```
 
-For `investigate`, recall is ordered root-flow → child-flow → AGENT-local.
-Each YAML declaration selects the `reflective` host policy by name; a Python host
-enables it by passing `memory={"reflective": implementation}` to `run_flow`. No
-`${memory}` reference is required. `learnable=True` independently retains accepted
-execution; forward returns before frame learning or learned-mutation commits. The host calls
-`result.backward(feedback)` explicitly afterward. Every enabled frame then
-receives its own history and descendant evidence, including empty histories,
-and can propose writes only for itself. New committed lessons can affect later
-fresh runs when the host reuses the memory implementation. See
-[Injecting agent memory](api.md#injecting-agent-memory) for the host API.
+For `investigate`, the stack is `notes` (root flow), then `lessons`
+(`research`), then `chat` (the AGENT). No `${memory}` reference is required. A
+Python host passes `memory=build_memories(flow)` to `run_flow`. `learnable=True`
+independently retains accepted execution; forward returns before memory learning
+or learned-mutation commits. The host calls `result.backward(feedback)`
+explicitly afterward. Every memory key then gets one `learn` call with its own
+batch, including empty ones, and can propose writes only for itself. New
+committed lessons can affect later fresh runs when the host reuses the same
+memories. See [Injecting agent memory](api.md#injecting-agent-memory) for the
+host API.
 
-For API conversation continuity, the host can inject
-[`SessionMemory`](api.md#sessionmemory-foundation) under a declared policy name.
-The innermost conversation-capable frame owns one conversation per authored AGENT
-leaf; other frames still provide recall. History advances during forward without
-learning. Repeated invocations queue, including MAP and LOOP occurrences; MAP
-does not fork conversations. Each new call applies current instructions and tool
-grants, and restoring historical tool calls never executes them.
+For API conversation continuity, declare a
+[`SessionMemory`](api.md#sessionmemory-foundation) on the AGENT, as `chat` is
+above. A session key has exactly one declaring AGENT, and an AGENT declares at
+most one session. That key holds one conversation, shared by every call site of
+the AGENT; other memories in the stack still provide recall. History advances
+during forward without learning. Repeated invocations take turns in admission
+order, including LOOP iterations and MAP items; MAP does not fork
+conversations. Each new call applies current instructions and tool grants, and
+restoring historical tool calls never executes them.
 
 ### AGENT backward uses the recorded invocation
 
@@ -326,8 +319,8 @@ with unavailable values distinguished from empty ones.
 
 The model returns validated input, self, and local-variable feedback. This is
 advice, not an automatic variable update, graph rewrite, or rerun. With no
-effective feedback, the AGENT backward call is skipped, while enabled memory
-frames still learn from accepted history. Memory-policy learners are separate
+effective feedback, the AGENT backward call is skipped, while every memory key
+still learns from accepted history. Memory learners are separate
 callbacks from this AGENT model call. Terminal resume invokes neither; see
 [explicit backward feedback](api.md#explicit-backward-feedback).
 

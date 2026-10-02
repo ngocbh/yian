@@ -17,32 +17,45 @@ from agent_composer.memory.contracts import (
 _BUILTINS = frozenset({"episodic", "reflective", "session"})
 
 
-def _create_backend(policy: str, storage: str | None) -> Memory:
-    """Import and construct only the selected built-in policy."""
-    if policy == "episodic":
-        from agent_composer.memory.episodic import EpisodicMemory
+_CONFIG_KEYS = {
+    "episodic": frozenset({"max_episodes", "recall_limit"}),
+    "reflective": frozenset({"max_items", "recall_limit"}),
+    "session": frozenset({"history_budget_chars", "recent_turns"}),
+}
+"""YAML config keys each CLI-built memory type accepts; learner models are excluded."""
 
-        return EpisodicMemory(storage=storage)
-    if policy == "reflective":
-        from agent_composer.memory.reflective import ReflectiveMemory
 
-        return ReflectiveMemory(storage=storage)
-    if policy == "session":
-        from agent_composer.memory.session import SessionMemory
+def _create_backend(memory_type: str, storage: str | None, config: JsonObject) -> Memory:
+    """Import and construct only the selected built-in memory type with its config.
 
-        return SessionMemory(storage=storage)
-    raise MemorySetupError(
-        f"Memory policy {policy!r} has no built-in CLI backend. "
-        "Use the Python API with memory={policy_name: implementation}."
-    )
+    Raises:
+        `MemorySetupError`: The type has no built-in CLI backend.
+        `TypeError` / `ValueError`: The constructor rejects ``config``.
+    """
+    if memory_type == "episodic":
+        from agent_composer.memory.episodic import EpisodicMemory as backend
+    elif memory_type == "reflective":
+        from agent_composer.memory.reflective import ReflectiveMemory as backend
+    elif memory_type == "session":
+        from agent_composer.memory.session import SessionMemory as backend
+    else:
+        raise MemorySetupError(
+            f"Memory policy {memory_type!r} has no built-in CLI backend. "
+            "Use the Python API with memory={policy_name: implementation}."
+        )
+    return backend(storage=storage, **config)
 
 
 class _LazyMemory:
     """Defer backend effects until the existing run boundary opens a policy."""
 
-    def __init__(self, policy: str, storage: str | None) -> None:
-        self._policy = policy
+    def __init__(
+        self, key: str, memory_type: str, storage: str | None, config: JsonObject
+    ) -> None:
+        self._key = key
+        self._type = memory_type
         self._storage = storage
+        self._config = config
         self._backend: Memory | None = None
         self._closed = False
 
@@ -51,10 +64,28 @@ class _LazyMemory:
             raise MemorySetupError("CLI memory host is closed")
 
     def open_run(self, *, snapshot: JsonObject | None = None) -> MemorySession:
-        """Create the backend once and pass the exact requested opening pin."""
+        """Create the backend once and pass the exact requested opening pin.
+
+        Raises:
+            `MemorySetupError`: The type has no built-in CLI backend, or its
+                config has a key outside the type's allowlist or a value the
+                constructor rejects.
+        """
         self._check_open()
         if self._backend is None:
-            self._backend = _create_backend(self._policy, self._storage)
+            allowed = _CONFIG_KEYS.get(self._type)
+            unknown = sorted(set(self._config) - allowed) if allowed is not None else []
+            if unknown:
+                raise MemorySetupError(
+                    f"memory {self._key!r} config has unknown key(s) {unknown}; "
+                    f"allowed: {', '.join(sorted(allowed))}"
+                )
+            try:
+                self._backend = _create_backend(self._type, self._storage, self._config)
+            except (TypeError, ValueError) as exc:
+                raise MemorySetupError(
+                    f"memory {self._key!r} config was rejected: {exc}"
+                ) from exc
         return self._backend.open_run(snapshot=snapshot)
 
     def reset(self) -> None:
@@ -86,9 +117,10 @@ class MemoryHost:
     """
 
     def __init__(self, compiled: CompiledFlow, storage: Iterable[str]) -> None:
-        policies = dict.fromkeys(
-            memory.key for memory in resolve_memory_layout(compiled).memories
-        )
+        policies = {
+            memory.key: (memory.type, memory.spec.config)
+            for memory in resolve_memory_layout(compiled).memories
+        }
         paths: dict[str, str] = {}
         for option in storage:
             policy, separator, path = option.partition("=")
@@ -107,7 +139,8 @@ class MemoryHost:
                 )
             paths[policy] = path
         self._policies = {
-            policy: _LazyMemory(policy, paths.get(policy)) for policy in policies
+            key: _LazyMemory(key, memory_type, paths.get(key), config)
+            for key, (memory_type, config) in policies.items()
         }
         self.registry: dict[str, Memory] | None = dict(self._policies) or None
         self._closed = False

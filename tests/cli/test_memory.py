@@ -49,6 +49,19 @@ def _source(policy):
     return _SESSION_FLOW if policy == "session" else _CODE_FLOW.replace("POLICY", policy)
 
 
+def _configured(policy, config):
+    """Return a flow that declares ``policy`` with a literal YAML config mapping."""
+    if policy == "session":
+        return _SESSION_FLOW.replace(
+            "    long_term_memory: session\n",
+            f"    long_term_memory: {{name: session, config: {config}}}\n",
+        )
+    return _CODE_FLOW.replace(
+        "long_term_memory: POLICY\n",
+        f"long_term_memory: {{name: {policy}, config: {config}}}\n",
+    )
+
+
 @pytest.fixture(autouse=True)
 def _offline_model(monkeypatch):
     """Answer every AGENT call locally so session flows run without a provider."""
@@ -85,7 +98,7 @@ def test_backend_is_lazy_and_reused_per_policy(policy, monkeypatch, tmp_path):
     monkeypatch.setattr(
         module,
         "_create_backend",
-        lambda name, path: (calls.append((name, path)), backend)[1],
+        lambda name, path, config: (calls.append((name, path, config)), backend)[1],
     )
     path = tmp_path / "memory=state.sqlite"
     with _host(policy, [f"{policy}={path}"]) as host:
@@ -94,7 +107,7 @@ def test_backend_is_lazy_and_reused_per_policy(policy, monkeypatch, tmp_path):
         assert calls == []
         assert lazy.open_run(snapshot={"pin": 1}) == {"pin": 1}
         assert lazy.open_run() is None
-        assert calls == [(policy, str(path)), ("open", {"pin": 1}), ("open", None)]
+        assert calls == [(policy, str(path), {}), ("open", {"pin": 1}), ("open", None)]
     assert calls[-1] == "close"
 
 
@@ -213,7 +226,7 @@ output: ${work.output}
     monkeypatch.setattr(
         module,
         "_create_backend",
-        lambda name, path: _Backend(calls[name], error if name == "session" else None),
+        lambda name, path, config: _Backend(calls[name], error if name == "session" else None),
     )
     with pytest.raises(OSError) as caught:
         with module.MemoryHost(flow.compiled, ()) as host:
@@ -262,7 +275,7 @@ def test_cli_activates_declared_policy_without_learning(policy, durable, tmp_pat
     if durable:
         # The CLI owner must release the lifetime lock before returning.
         module = importlib.import_module("agent_composer.cli.memory")
-        with module._create_backend(policy, str(path)) as reopened:
+        with module._create_backend(policy, str(path), {}) as reopened:
             with reopened.open_run() as opened:
                 assert str(path) not in repr(opened.snapshot)
 
@@ -327,9 +340,9 @@ def test_resume_laziness_follows_recorded_memory_authority(
     opened = []
     real_create = module._create_backend
 
-    def create(policy, path):
+    def create(policy, path, config):
         opened.append(policy)
-        return real_create(policy, path)
+        return real_create(policy, path, config)
 
     monkeypatch.setattr(module, "_create_backend", create)
     if terminal or not enabled:
@@ -382,8 +395,8 @@ def test_cli_cleanup_failure_has_concise_host_error(tmp_path, monkeypatch):
     real_create = module._create_backend
     error = MemoryOperationError("close", "test.close", "memory close failed", False)
 
-    def create(policy, path):
-        backend = real_create(policy, path)
+    def create(policy, path, config):
+        backend = real_create(policy, path, config)
         close = backend.close
 
         def fail_close():
@@ -408,9 +421,9 @@ def test_backend_creation_and_cleanup_run_in_controller_after_worker_drain(
     events = []
     primary = KeyboardInterrupt("cancel")
 
-    def create(policy, path):
+    def create(policy, path, config):
         events.append(("create", threading.current_thread().name))
-        backend = real_create(policy, path)
+        backend = real_create(policy, path, config)
         close = backend.close
 
         def close_backend():
@@ -563,8 +576,8 @@ def test_real_pooled_cancellation_keeps_storage_until_model_callback_drains(
             drained.set()
             return AIMessage(content="finished")
 
-    def create(policy, storage):
-        backend = real_create(policy, storage)
+    def create(policy, storage, config):
+        backend = real_create(policy, storage, config)
         close = backend.close
 
         def close_backend():
@@ -606,3 +619,59 @@ def test_real_pooled_cancellation_keeps_storage_until_model_callback_drains(
     )
     with SessionMemory(storage=path):
         pass
+
+
+@pytest.mark.parametrize(
+    "policy, config, expected",
+    [
+        ("episodic", "{max_episodes: 4, recall_limit: 2}", {"max_episodes": 4, "recall_limit": 2}),
+        ("reflective", "{max_items: 5, recall_limit: 3}", {"max_items": 5, "recall_limit": 3}),
+    ],
+)
+def test_yaml_config_reaches_the_built_in_constructor(policy, config, expected):
+    module = importlib.import_module("agent_composer.cli.memory")
+    flow = load_flow(_configured(policy, config))
+    with module.MemoryHost(flow.compiled, ()) as host:
+        with host.registry[policy].open_run() as session:
+            assert session.snapshot["config"] == expected
+
+
+@pytest.mark.parametrize(
+    "policy, config, detail",
+    [
+        ("episodic", "{bogus: 1}", "['bogus']"),
+        ("reflective", "{llm_config: {model: x}}", "['llm_config']"),
+        ("session", "{storage: x.sqlite}", "['storage']"),
+    ],
+)
+def test_yaml_config_outside_the_allowlist_is_a_setup_error(
+    policy, config, detail, monkeypatch
+):
+    module = importlib.import_module("agent_composer.cli.memory")
+    flow = load_flow(_configured(policy, config))
+    calls = []
+    monkeypatch.setattr(module, "_create_backend", lambda *args: calls.append(args))
+    with module.MemoryHost(flow.compiled, ()) as host:
+        with pytest.raises(
+            MemorySetupError,
+            match=rf"memory {policy!r} config has unknown key\(s\) {re.escape(detail)}",
+        ):
+            host.registry[policy].open_run()
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "policy, config, detail, cause",
+    [
+        ("reflective", "{max_items: 0}", "max_items", ValueError),
+        ("episodic", "{recall_limit: two}", "recall_limit", TypeError),
+        ("session", "{recent_turns: -1}", "recent_turns", ValueError),
+    ],
+)
+def test_rejected_yaml_config_is_a_setup_error_naming_the_key(policy, config, detail, cause):
+    module = importlib.import_module("agent_composer.cli.memory")
+    flow = load_flow(_configured(policy, config))
+    with module.MemoryHost(flow.compiled, ()) as host:
+        with pytest.raises(MemorySetupError, match=rf"memory {policy!r}.*{detail}") as caught:
+            host.registry[policy].open_run()
+    assert type(caught.value.__cause__) is cause

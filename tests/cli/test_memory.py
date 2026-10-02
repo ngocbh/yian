@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import re
+import subprocess
+import sys
+import threading
 
 import pytest
 from typer.testing import CliRunner
@@ -11,6 +14,9 @@ from agent_composer.cli import app
 import agent_composer.cli.run as run_cli
 from agent_composer.cli.memory import MemoryOptionError, build_cli_memories
 from agent_composer.compose import LoadError, load_flow
+from agent_composer.events import NodeStarted
+from agent_composer.memory.contracts import MemoryOperationError, MemorySetupError
+from agent_composer.run import run_flow
 from agent_composer.runtime.log import RunStartedRecord, decode_record
 
 _RUNNER = CliRunner()
@@ -212,3 +218,341 @@ def test_flags_are_accepted_with_resume(tmp_path):
 def test_yaml_config_outside_the_allowlist_fails_at_load(policy, config, detail):
     with pytest.raises(LoadError, match=detail):
         load_flow(_configured(policy, config))
+
+
+def _wrap_builtins(monkeypatch, wrap):
+    """Pass every built-in backend that build_memories constructs to ``wrap(backend, type)``."""
+    import agent_composer.memory_host as host
+
+    real = host._builtin
+
+    def builtin(type_name, *args, **kwargs):
+        backend = real(type_name, *args, **kwargs)
+        wrap(backend, type_name)
+        return backend
+
+    monkeypatch.setattr(host, "_builtin", builtin)
+
+
+class _Backend:
+    def __init__(self, calls, error=None):
+        self.calls = calls
+        self.error = error
+
+    def open_run(self, *, snapshot=None):
+        self.calls.append(("open", snapshot))
+        return snapshot
+
+    def reset(self):
+        self.calls.append("reset")
+
+    def close(self):
+        self.calls.append("close")
+        if self.error is not None:
+            raise self.error
+
+
+def test_no_declarations_build_an_empty_registry(monkeypatch):
+    import agent_composer.memory_host as host
+
+    monkeypatch.setattr(host, "_builtin", lambda *a, **k: pytest.fail("built"))
+    flow = load_flow(_flow_text(None))
+    with build_cli_memories(flow, root=None, storage_options=()) as registry:
+        assert len(registry) == 0
+
+
+@pytest.mark.parametrize("memory_type", ["episodic", "reflective", "session"])
+@pytest.mark.parametrize("durable", [False, True])
+def test_cli_activates_declared_memory_without_learning(memory_type, durable, tmp_path):
+    if memory_type == "session":
+        key, flow = "chat", _session_flow_file(tmp_path)
+    else:
+        key, flow = "notes", _flow_file(tmp_path, f"{{notes: {memory_type}}}")
+    path = tmp_path / "memory.sqlite"
+    options = [f"{key}={path}"] if durable else []
+    extra = [arg for option in options for arg in ("--memory-storage", option)]
+    result, log = _run(tmp_path, *extra, flow=flow)
+    assert result.exit_code == 0, result.output
+    records = _records(log)
+    started = records[0]
+    assert isinstance(started, RunStartedRecord)
+    assert [spec.key for spec in started.memories] == [key]
+    assert len(started.memory_snapshots) == 1
+    assert not started.learnable
+    assert all(not type(record).__name__.startswith("Backward") for record in records)
+    assert path.exists() == durable
+    if durable:
+        # The CLI must release the file before returning.
+        loaded = load_flow(flow.read_text())
+        with build_cli_memories(loaded, root=None, storage_options=options) as registry:
+            with registry[key].open_run() as opened:
+                assert str(path) not in repr(opened.snapshot)
+
+
+@pytest.mark.parametrize("terminal", [False, True])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_resume_opens_memory_only_when_the_record_needs_it(
+    terminal, enabled, tmp_path, monkeypatch
+):
+    from agent_composer.memory.session import SessionMemory
+
+    flow = _session_flow_file(tmp_path)
+    log = tmp_path / "run.jsonl"
+    memory_path = tmp_path / "memory.sqlite"
+    loaded = load_flow(flow.read_text())
+    primary = KeyboardInterrupt("stop before work")
+
+    def stop(event):
+        if not terminal and isinstance(event, NodeStarted) and event.node_id == "work":
+            raise primary
+
+    with SessionMemory() as backend:
+        kwargs = {"memory": {"chat": backend}} if enabled else {}
+        if terminal:
+            run_flow(loaded, {}, log=log, on_event=stop, **kwargs)
+        else:
+            with pytest.raises(KeyboardInterrupt) as caught:
+                run_flow(loaded, {}, log=log, on_event=stop, **kwargs)
+            assert caught.value is primary
+    before = log.read_bytes()
+    opened = []
+
+    def count_opens(backend, type_name):
+        open_run = backend.open_run
+
+        def counting(**kwargs):
+            opened.append(type_name)
+            return open_run(**kwargs)
+
+        backend.open_run = counting
+
+    _wrap_builtins(monkeypatch, count_opens)
+    args = ["run", str(flow), "--resume", str(log), "--quiet",
+            "--memory-storage", f"chat={memory_path}"]
+    if terminal or not enabled:
+        # An occupied store must not matter to terminal or historically dormant
+        # recovery. Entering the holder opens and locks the file.
+        with SessionMemory(storage=memory_path):
+            result = _RUNNER.invoke(app, args)
+        assert opened == []
+    else:
+        result = _RUNNER.invoke(app, args)
+        assert opened == ["session"]
+    assert result.exit_code == 0, result.output
+    assert log.read_bytes().startswith(before)
+    if terminal:
+        assert log.read_bytes() == before
+
+
+def test_cli_cleanup_failure_has_concise_host_error(tmp_path, monkeypatch):
+    error = MemoryOperationError("close", "test.close", "memory close failed", False)
+
+    def fail_close(backend, _type):
+        close = backend.close
+
+        def wrapped():
+            close()
+            raise error
+
+        backend.close = wrapped
+
+    _wrap_builtins(monkeypatch, fail_close)
+    result, _ = _run(tmp_path)
+    assert result.exit_code == 1
+    assert "run failed: memory close failed" in _plain(result.output)
+    assert "Traceback" not in result.output
+
+
+def test_first_open_and_cleanup_run_in_controller_after_worker_drain(tmp_path, monkeypatch):
+    events = []
+    primary = KeyboardInterrupt("cancel")
+
+    def watch(backend, _type):
+        open_run, close = backend.open_run, backend.close
+
+        def open_backend(**kwargs):
+            events.append(("open", threading.current_thread().name))
+            return open_run(**kwargs)
+
+        def close_backend():
+            assert events[-1][0] == "drained"
+            events.append(("close", threading.current_thread().name))
+            close()
+
+        backend.open_run, backend.close = open_backend, close_backend
+
+    def run(*args, memory, **kwargs):
+        with memory["chat"].open_run():
+            events.append(("drained", threading.current_thread().name))
+        raise primary
+
+    _wrap_builtins(monkeypatch, watch)
+    monkeypatch.setattr(run_cli, "_run_flow_controlled", run)
+    result = _RUNNER.invoke(app, ["run", str(_session_flow_file(tmp_path)), "--quiet"])
+    assert result.exit_code == 130, result.output
+    assert events == [(name, "ac-controller") for name in ["open", "drained", "close"]]
+
+
+def test_no_memory_flow_imports_no_concrete_backend():
+    script = """
+import sys
+from agent_composer.cli.memory import build_cli_memories
+from agent_composer.compose import load_flow
+flow = load_flow('id: no-memory\\nname: no_memory\\nnodes:\\n  work: {kind: code, code: return 7}\\noutput: ${work.output}\\n')
+with build_cli_memories(flow, root=None, storage_options=()) as registry:
+    assert len(registry) == 0
+assert not any('agent_composer.memory.' + name in sys.modules
+               for name in ('episodic', 'reflective', 'session', 'profile', 'storage'))
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, timeout=15
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_open_failure_closes_every_backend_and_creates_no_directory(tmp_path):
+    from agent_composer.memory.episodic import EpisodicMemory
+
+    flow = tmp_path / "flow.yaml"
+    flow.write_text(
+        _SESSION_FLOW.replace(
+            "name: cli_memory\n", "name: cli_memory\nlong_term_memory: {archive: episodic}\n"
+        )
+    )
+    # Run setup opens memories in sorted key order: archive opens (and creates
+    # its file), then chat fails because its parent directory is missing.
+    archive_path = tmp_path / "archive.sqlite"
+    absent = tmp_path / "absent"
+    result, _ = _run(
+        tmp_path,
+        "--memory-storage", f"archive={archive_path}",
+        "--memory-storage", f"chat={absent / 'chat.sqlite'}",
+        flow=flow,
+    )
+    assert result.exit_code == 1
+    assert "run failed:" in _plain(result.output)
+    assert "Traceback" not in result.output
+    assert not absent.exists()
+    assert archive_path.is_file()  # archive really opened before chat failed
+    with EpisodicMemory(storage=archive_path):  # entering opens; busy if still held
+        pass
+
+
+def test_cli_preserves_primary_when_cleanup_also_fails(tmp_path, monkeypatch):
+    import agent_composer.memory_host as host
+
+    primary = ValueError("initiating failure")
+    calls = []
+    monkeypatch.setattr(
+        host, "_builtin", lambda *a, **k: _Backend(calls, OSError("cleanup failure"))
+    )
+
+    def fail_run(*args, memory, **kwargs):
+        memory["chat"].open_run()
+        raise primary
+
+    monkeypatch.setattr(run_cli, "_run_flow_controlled", fail_run)
+    result = _RUNNER.invoke(app, ["run", str(_session_flow_file(tmp_path)), "--quiet"])
+    assert result.exit_code == 1
+    assert "run failed: initiating failure" in _plain(result.output)
+    assert "cleanup failure" not in _plain(result.output)
+    assert calls[-1] == "close"
+
+
+@pytest.mark.parametrize(
+    "policy, config, expected",
+    [
+        ("episodic", "{max_episodes: 4, recall_limit: 2}", {"max_episodes": 4, "recall_limit": 2}),
+        ("reflective", "{max_items: 5, recall_limit: 3}", {"max_items": 5, "recall_limit": 3}),
+    ],
+)
+def test_yaml_config_reaches_the_built_in_constructor(policy, config, expected):
+    flow = load_flow(_configured(policy, config))
+    with build_cli_memories(flow, root=None, storage_options=()) as registry:
+        with registry[policy].open_run() as session:
+            assert session.snapshot["config"] == expected
+
+
+@pytest.mark.parametrize(
+    "policy, config, detail, cause",
+    [
+        ("reflective", "{max_items: 0}", "max_items", ValueError),
+        ("episodic", "{recall_limit: two}", "recall_limit", TypeError),
+        ("session", "{recent_turns: -1}", "recent_turns", ValueError),
+    ],
+)
+def test_rejected_yaml_config_is_a_setup_error_naming_the_key(policy, config, detail, cause):
+    flow = load_flow(_configured(policy, config))
+    with pytest.raises(MemorySetupError, match=rf"memory {policy!r}.*{detail}") as caught:
+        build_cli_memories(flow, root=None, storage_options=())
+    assert type(caught.value.__cause__) is cause
+
+
+def test_real_pooled_cancellation_keeps_storage_until_model_callback_drains(
+    tmp_path, monkeypatch
+):
+    from langchain_core.messages import AIMessage
+    import agent_composer.llm_clients as llm_clients
+    from agent_composer.memory.session import SessionMemory
+
+    flow = _session_flow_file(tmp_path)
+    path = tmp_path / "memory.sqlite"
+    started = threading.Event()
+    drained = threading.Event()
+    close_threads = []
+    owned_errors = []
+    broker_ref = []
+
+    class Model:
+        def invoke(self, messages):
+            started.set()
+            assert broker_ref[0]._stop_event.wait(5)
+            try:
+                with SessionMemory(storage=path):
+                    pytest.fail("storage released before callback drained")
+            except MemoryOperationError as exc:
+                owned_errors.append(exc.code)
+            drained.set()
+            return AIMessage(content="finished")
+
+    def wrap_close(backend, _type):
+        close = backend.close
+
+        def close_backend():
+            assert drained.is_set()
+            close_threads.append(threading.current_thread().name)
+            close()
+
+        backend.close = close_backend
+
+    def interrupt(broker):
+        broker_ref.append(broker)
+        assert started.wait(5)
+        raise KeyboardInterrupt("cancel")
+
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _: Model())
+    monkeypatch.setattr(run_cli, "_ensure_provider_keys", lambda *a: None)
+    monkeypatch.setattr(run_cli.TerminalBroker, "serve", interrupt)
+    _wrap_builtins(monkeypatch, wrap_close)
+    result = _RUNNER.invoke(
+        app,
+        [
+            "run",
+            str(flow),
+            "--quiet",
+            "--num-workers",
+            "1",
+            "--memory-storage",
+            f"chat={path}",
+        ],
+    )
+    assert result.exit_code == 130, result.output
+    assert drained.is_set()
+    assert owned_errors == ["storage.busy"]
+    assert close_threads == ["ac-controller"]
+    assert not any(
+        t.name.startswith(("ac-worker-", "ac-controller"))
+        for t in threading.enumerate()
+    )
+    with SessionMemory(storage=path):
+        pass

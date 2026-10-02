@@ -175,3 +175,25 @@ def test_cli_resume_after_process_death_reuses_saved_history_and_repeats_request
             effects = opened.snapshot["conversation"]["effects"]
             assert [effect["status"] for effect in effects] == ["pending", "completed"]
             assert effects[0]["invocation"] != effects[1]["invocation"]
+
+
+def test_memory_root_keeps_session_history_under_the_flow_id(tmp_path):
+    flow = tmp_path / "flow.yaml"
+    flow.write_text(_FLOW)
+    root = tmp_path / "mem"
+    for index in range(2):
+        result = _invoke(
+            tmp_path,
+            "run",
+            str(flow),
+            "--quiet",
+            "--input",
+            f"question=question-{index}",
+            "--log",
+            str(tmp_path / f"run-{index}.jsonl"),
+            "--memory-root",
+            str(root),
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert f"Seen user messages: {index + 1}" in result.stdout
+    assert (root / "cli-session-restart" / "session.sqlite").is_file()

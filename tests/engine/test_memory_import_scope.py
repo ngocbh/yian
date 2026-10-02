@@ -160,12 +160,21 @@ def test_diamond_import_gives_independent_sets(tmp_path: Path) -> None:
     assert _keys(flow) == ["b.d.notes", "c.d.notes"]
 
 
-def test_scoping_leaves_the_cached_child_untouched(tmp_path: Path) -> None:
-    (tmp_path / "lib.yaml").write_text(_lib())
-    flow = load_flow(_root({"a": "x", "b": "y"}, {"x": "lib", "y": "lib"}), search_paths=[tmp_path])
+def test_scoping_leaves_the_cached_child_untouched() -> None:
+    lib = load_flow(_lib())
+    flow = load_flow(
+        _root({"a": "x", "b": "y"}, {"x": "lib", "y": "lib"}),
+        child_resolver=lambda flow_id, version: lib,
+    )
     assert _keys(flow) == ["x.notes", "y.notes"]
-    alone = load_flow((tmp_path / "lib.yaml").read_text(), search_paths=[tmp_path])
-    assert _keys(alone) == ["notes"]
+    # The resolver handed the same object to both aliases; neither rewrite reached it.
+    assert [d.key for d in lib.compiled.memories] == ["notes"]
+
+
+def test_library_without_memory_loads_under_a_dotted_alias(tmp_path: Path) -> None:
+    (tmp_path / "lib.yaml").write_text(_lib("null"))
+    flow = load_flow(_root({"a": "my.lib"}, {"my.lib": "lib"}), search_paths=[tmp_path])
+    assert _keys(flow) == []
 
 
 def test_malformed_imported_graph_is_a_load_error() -> None:

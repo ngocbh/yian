@@ -21,7 +21,7 @@ from agent_composer.memory import (
     ToolResultInteraction,
 )
 from agent_composer.memory.profile import ProfileMemory
-from agent_composer.memory.storage import FileMarkdownStore
+from agent_composer.memory.storage import FileMarkdownStore, markdown_version
 
 RECALL = RecallContext("system", "Say hi.", {}, ("chat", "reply"))
 CONFIG = {"provider": "ollama", "model": "local-profiler"}
@@ -97,6 +97,42 @@ def test_reset_is_refused(tmp_path) -> None:
     with pytest.raises(MemoryOperationError) as caught:
         _memory(tmp_path).reset()
     assert caught.value.code == "profile.reset_unsupported"
+
+
+def test_closed_backend_rejects_later_use_without_touching_the_store(tmp_path) -> None:
+    memory = ProfileMemory(FileMarkdownStore(tmp_path / "ada.md"))
+    memory.close()
+    memory.close()
+    calls = (
+        memory.open_run,
+        memory.reset,
+        memory.read,
+        lambda: memory.write("x", base_version=markdown_version("")),
+    )
+    for call in calls:
+        with pytest.raises(MemoryOperationError) as caught:
+            call()
+        assert caught.value.code == "profile.closed"
+        assert not caught.value.retryable
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_closing_the_backend_invalidates_its_open_sessions(tmp_path, monkeypatch) -> None:
+    _install(monkeypatch, "<profile># Ada\nBrief.</profile>")
+    memory = _memory(tmp_path)
+    session = memory.open_run()
+    batch = tuple(session.learn(LearnContext("run-1", "profile", (), _feedback("Be brief."))))
+    memory.close()
+    calls = (
+        lambda: session.recall(RECALL),
+        lambda: session.learn(LearnContext("run-1", "profile", (), _feedback("Be brief."))),
+        lambda: session.commit("commit-1", batch),
+    )
+    for call in calls:
+        with pytest.raises(MemoryOperationError) as caught:
+            call()
+        assert caught.value.code == "profile.closed"
+    assert (tmp_path / "ada.md").read_text() == "# Ada\n"
 
 
 def test_snapshot_pins_version_and_hash_without_text(tmp_path) -> None:

@@ -187,6 +187,7 @@ def test_factories_build_custom_types_with_config() -> None:
         ("{vec: vector}", {"factories": {"vector": _Custom}, "storage": {"vec": "x"}},
          "storage"),
         ("{notes: episodic}", {"storage": {"notes": ":memory:"}}, "not a local file path"),
+        ("{about: profile}", {"storage": {"about": "file:about.md"}}, "not a local file path"),
         ("{notes: episodic}", {"supplied": {"notes": object()}}, "not a Memory"),
         ("{vec: vector}", {"factories": {"vector": lambda **_: object()}}, "not a Memory"),
         ("{notes: {type: episodic, config: {max_episodes: 0}}}", {}, "rejected its config"),
@@ -348,13 +349,15 @@ def test_second_registry_on_one_root_is_busy_until_the_first_closes(tmp_path: Pa
     second.close()
 
 
-def test_open_after_close_is_closed_and_opens_no_file(tmp_path: Path) -> None:
-    flow = _flow("{notes: episodic}")
+@pytest.mark.parametrize("memory", ["episodic", "reflective", "profile"])
+def test_open_after_close_is_closed_and_opens_no_file(tmp_path: Path, memory: str) -> None:
+    flow = _flow(f"{{notes: {memory}}}")
     registry = build_memories(flow, root=tmp_path)
     registry.close()
-    with pytest.raises(MemoryOperationError) as caught:
-        registry["notes"].open_run()
-    assert caught.value.code == "episodic.closed"
+    for call in (registry["notes"].open_run, registry["notes"].reset):
+        with pytest.raises(MemoryOperationError) as caught:
+            call()
+        assert caught.value.code == f"{memory}.closed"
     assert list(tmp_path.iterdir()) == []
 
 

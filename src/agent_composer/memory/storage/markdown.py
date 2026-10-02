@@ -18,6 +18,7 @@ from threading import Lock
 from typing import Iterator, Protocol, runtime_checkable
 
 from agent_composer.memory.contracts import JsonObject
+from agent_composer.memory.storage.sqlite import check_storage_path
 
 
 class MarkdownVersionMismatch(Exception):
@@ -126,12 +127,19 @@ class FileMarkdownStore:
             create_parent (`bool`, *optional*, defaults to `False`): Create the
                 parent directory on first use. Otherwise a missing parent fails
                 on first use with `FileNotFoundError`.
+
+        Raises:
+            `TypeError`: ``create_parent`` is not a bool.
+            `MemoryOperationError`: ``path`` is not a local file path: empty,
+                ``:memory:``, a ``file:`` URI, bytes, or text with NUL or
+                non-UTF-8 characters (`storage.path`). A directory is detected
+                on first use.
         """
         if type(create_parent) is not bool:
             raise TypeError("create_parent must be a bool")
         # Bind a relative path to the current directory now so a later chdir
         # does not redirect the store; ".." stays for the OS to resolve.
-        self.path = Path(path).absolute()
+        self.path = Path(check_storage_path(path))
         self._create_parent = create_parent
         self._versions = self.path.parent / f".{self.path.name}.versions"
         self._lock_path = self.path.parent / f".{self.path.name}.lock"

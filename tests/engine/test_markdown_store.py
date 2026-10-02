@@ -7,6 +7,7 @@ import threading
 
 import pytest
 
+from agent_composer.memory.contracts import MemoryOperationError
 from agent_composer.memory.storage import (
     FileMarkdownStore,
     InMemoryMarkdownStore,
@@ -37,6 +38,24 @@ def test_missing_parent_directory_fails_on_first_use(tmp_path) -> None:
     with pytest.raises(FileNotFoundError):
         store.write("x", base_version=markdown_version(""))
     assert not (tmp_path / "missing").exists()
+
+
+@pytest.mark.parametrize(
+    "path", ["", ":memory:", "file:ada.md", "FILE:ada.md", "ada\x00.md", b"ada.md", "\udcff.md"]
+)
+def test_non_file_paths_are_rejected_at_construction(tmp_path, monkeypatch, path) -> None:
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(MemoryOperationError) as caught:
+        FileMarkdownStore(path)
+    assert caught.value.code == "storage.path"
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_directory_path_fails_on_first_use(tmp_path) -> None:
+    (tmp_path / "ada.md").mkdir()
+    store = FileMarkdownStore(tmp_path / "ada.md")
+    with pytest.raises(OSError):
+        store.read()
 
 
 def test_create_parent_makes_the_directory_on_first_use(tmp_path) -> None:

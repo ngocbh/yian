@@ -157,6 +157,19 @@ class ProfileMemory:
         self._api_key = pop_api_key(self._llm_config)
         self.max_chars = max_chars
         self.input_budget_chars = input_budget_chars
+        self._closed = False
+
+    def close(self) -> None:
+        """Reject later use of this backend and its sessions; repeated calls do nothing.
+
+        The store holds no handle, so closing does no I/O.
+        """
+        self._closed = True
+
+    def _ensure_open(self, stage: str) -> None:
+        """Reject use after close."""
+        if self._closed:
+            raise _error(stage, "profile.closed", "memory backend is closed")
 
     def read(self, version: str | None = None) -> tuple[str, str]:
         """Return ``(text, version)`` from the store for host display or editing.
@@ -170,7 +183,9 @@ class ProfileMemory:
 
         Raises:
             `LookupError`: The named version is unknown.
+            `MemoryOperationError`: ``profile.closed`` after close.
         """
+        self._ensure_open("read")
         return self._store.read(version)
 
     def write(self, text: str, *, base_version: str, provenance: JsonObject | None = None) -> str:
@@ -187,15 +202,19 @@ class ProfileMemory:
 
         Raises:
             `MarkdownVersionMismatch`: ``base_version`` is not current.
+            `MemoryOperationError`: ``profile.closed`` after close.
         """
+        self._ensure_open("write")
         return self._store.write(text, base_version=base_version, provenance=provenance)
 
     def reset(self) -> None:
         """Refuse engine resets; delete or rewrite the profile through the store.
 
         Raises:
-            `MemoryOperationError`: Always, with code ``profile.reset_unsupported``.
+            `MemoryOperationError`: Always: ``profile.closed`` after close, else
+                ``profile.reset_unsupported``.
         """
+        self._ensure_open("reset")
         raise _error("reset", "profile.reset_unsupported",
                      "profile memory is reset through its store, not the engine")
 
@@ -210,11 +229,13 @@ class ProfileMemory:
             `_ProfileSession`: Session whose recall uses the pinned document.
 
         Raises:
-            `MemoryOperationError`: ``profile.store_unavailable`` (retryable) when
-                the store cannot be reached, ``profile.store_invalid`` when its
-                document cannot be decoded, or ``profile.snapshot_unavailable``
-                when the recorded version is malformed, unknown, or changed.
+            `MemoryOperationError`: ``profile.closed`` after close,
+                ``profile.store_unavailable`` (retryable) when the store cannot
+                be reached, ``profile.store_invalid`` when its document cannot be
+                decoded, or ``profile.snapshot_unavailable`` when the recorded
+                version is malformed, unknown, or changed.
         """
+        self._ensure_open("open_run")
         if snapshot is None:
             try:
                 text, version = self._store.read(None)
@@ -275,7 +296,8 @@ class _ProfileSession:
         self._closed = True
 
     def _ensure_open(self, stage: str) -> None:
-        """Reject use after close."""
+        """Reject use after this session or its backend closes."""
+        self._memory._ensure_open(stage)
         if self._closed:
             raise _error(stage, "profile.closed", "profile session is closed")
 

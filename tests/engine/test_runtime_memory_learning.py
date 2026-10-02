@@ -1184,19 +1184,23 @@ def test_root_fallback_reaches_only_keys_owned_by_the_root_flow_site():
     from agent_composer.runtime.trace import RetainedTrace, TraceTerminal
 
     trace = RetainedTrace("synthetic", START_ID, END_ID)
-    trace.terminal = TraceTerminal(False, None, None, Failure("graph.terminal_unreachable", "no producer", None))
+    trace.terminal = TraceTerminal(
+        False, None, None, Failure("graph.terminal_unreachable", "no producer", None)
+    )
     memories = (
         MemorySpec("agent_notes", "agent_notes", {}, (DeclSite((), ("root",), "agent"),), True),
         MemorySpec("def_notes", "def_notes", {}, (DeclSite((), ("def", "child"), None),), False),
+        # An imported file's root flow is not the run's root flow.
+        MemorySpec("lib.notes", "lib.notes", {}, (DeclSite(("lib",), ("root",), None),), False),
         MemorySpec("shared", "shared", {}, (DeclSite((), ("def", "child"), None), _ROOT), False),
     )
     root, results = compute_backward(trace, "original text")
 
-    agent_notes, def_notes, shared = learning_module.project_owner_contexts(
+    agent_notes, def_notes, imported, shared = learning_module.project_owner_contexts(
         trace, memories, (), "original text", root, results,
     )
 
-    assert agent_notes.feedback == def_notes.feedback == ()
+    assert agent_notes.feedback == def_notes.feedback == imported.feedback == ()
     assert [entry["value"] for entry in shared.feedback] == ["original text"]
     assert all(entry["root"] for entry in shared.feedback)
 
@@ -1217,23 +1221,3 @@ def test_replay_rejects_an_eligible_node_scope_that_differs_from_its_recorded_st
     with pytest.raises(ValueError, match="exact recorded memory stack"):
         _replay_records(RunState(original), tuple(log), grow_builder=build_grow)
 
-
-def test_root_fallback_skips_a_memory_owned_by_an_imported_root_flow():
-    from agent_composer.runtime.backward import compute_backward
-    from agent_composer.runtime.trace import RetainedTrace, TraceTerminal
-
-    trace = RetainedTrace("synthetic", START_ID, END_ID)
-    trace.terminal = TraceTerminal(False, None, None, Failure("graph.terminal_unreachable", "no producer", None))
-    memories = (
-        MemorySpec("lib.notes", "episodic", {}, (DeclSite(("lib",), ("root",), None),), False),
-        MemorySpec("notes", "episodic", {}, (_ROOT,), False),
-    )
-    root, results = compute_backward(trace, "original text")
-
-    imported, own = learning_module.project_owner_contexts(
-        trace, memories, (), "original text", root, results,
-    )
-
-    assert imported.feedback == ()
-    assert [entry["value"] for entry in own.feedback] == ["original text"]
-    assert all(entry["root"] for entry in own.feedback)

@@ -154,7 +154,7 @@ def _validate_snapshots(
             envelope.snapshot,
         )
         if canonical.memory in restored:
-            raise ValueError("memory snapshot policy names must be unique")
+            raise ValueError("memory snapshot keys must be unique")
         supplied_names.append(canonical.memory)
         restored[canonical.memory] = canonical.snapshot
     if tuple(supplied_names) != policy_names:

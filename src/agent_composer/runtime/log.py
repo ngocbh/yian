@@ -1136,7 +1136,7 @@ class _MemoryFrameSpecPayload(_StrictModel):
 
 
 class _MemorySnapshotEnvelopePayload(_StrictModel):
-    """Strict wire form of one named policy snapshot."""
+    """Strict wire form of one memory snapshot."""
 
     memory: str = Field(min_length=1)
     snapshot: dict[str, Any]
@@ -1281,7 +1281,7 @@ class _NodeFailedPayload(_StrictModel):
 
 
 class _MemoryCommitRequestedPayload(_StrictModel):
-    """Strict wire payload for one atomic policy commit request."""
+    """Strict wire payload for one atomic memory commit request."""
 
     memory: str = Field(min_length=1)
     commit_id: str = Field(min_length=1)
@@ -1290,7 +1290,7 @@ class _MemoryCommitRequestedPayload(_StrictModel):
 
 
 class _MemoryCommitSucceededPayload(_StrictModel):
-    """Strict wire payload for one successful policy commit."""
+    """Strict wire payload for one successful memory commit."""
 
     memory: str = Field(min_length=1)
     commit_id: str = Field(min_length=1)
@@ -1298,7 +1298,7 @@ class _MemoryCommitSucceededPayload(_StrictModel):
 
 
 class _MemoryCommitFailedPayload(_StrictModel):
-    """Strict wire payload for one failed policy commit."""
+    """Strict wire payload for one failed memory commit."""
 
     memory: str = Field(min_length=1)
     commit_id: str = Field(min_length=1)
@@ -1342,7 +1342,7 @@ class _FrameProposalPayload(_StrictModel):
 
 
 class _LearningFailurePayload(_StrictModel):
-    """Frame-local learn or policy-local commit failure attribution."""
+    """Frame-local learn or memory-local commit failure attribution."""
 
     memory: str = Field(min_length=1)
     operation: Literal["learn", "commit"]

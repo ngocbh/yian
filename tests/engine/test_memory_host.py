@@ -300,3 +300,11 @@ def test_open_after_close_is_closed_and_opens_no_file(tmp_path: Path) -> None:
         registry["notes"].open_run()
     assert caught.value.code == "episodic.closed"
     assert list(tmp_path.iterdir()) == []
+
+
+def test_package_exports_the_host_builder() -> None:
+    import agent_composer
+
+    assert agent_composer.build_memories is build_memories
+    assert agent_composer.MemoryRegistry is MemoryRegistry
+    assert {"build_memories", "MemoryRegistry"} <= set(agent_composer.__all__)

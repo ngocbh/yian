@@ -15,6 +15,7 @@ Layers, leaf-to-root (a package imports only DOWN/leftward — never up, never i
 
     compile execution contracts  <-  runtime
     compose + compile.expand + runtime  <-  run.py
+    compile + compose + memory  <-  memory_host.py  <-  run.py, cli
 
 `diagnostics.py` is the dependency-free source-neutral value spine and owns
 `SourceRange`; `events` imports semantic failures from it but does not re-export
@@ -34,6 +35,10 @@ scheduler-state vocabulary used by its reducer.
 `run` (the package-root `run.py`) is the top-level run boundary: it consumes `compose`'s
 `ComposedFlow`, injects `compile.expand.build_grow`, and drives the runtime engine, so it
 sits above all three and is imported by none.
+`memory_host` (the package-root `memory_host.py`) builds the memories a flow declares
+(`build_memories`) and owns their lifetime in a `MemoryRegistry`. It reads the compiled
+memory table and constructs backends; `run.py` imports it only to check a registry's
+types, and the CLI calls it for `composer run`.
 This package facade resolves the public names below lazily so importing a leaf
 submodule does not bootstrap the whole engine.
 Nothing here imports a DB or a server. Durable authority is limited to the small
@@ -50,6 +55,7 @@ if TYPE_CHECKING:
     from agent_composer.compose import ComposedFlow, LoadError, load_flow
     from agent_composer.diagnostics import Failure
     from agent_composer.expr.expressions import ExpressionError, evaluate_when
+    from agent_composer.memory_host import MemoryRegistry, build_memories
     from agent_composer.run import run_flow
     from agent_composer.typesys.pool import VariablePool
 
@@ -69,6 +75,8 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "evaluate_when": ("agent_composer.expr.expressions", "evaluate_when"),
     "load_flow": ("agent_composer.compose", "load_flow"),
     "run_flow": ("agent_composer.run", "run_flow"),
+    "build_memories": ("agent_composer.memory_host", "build_memories"),
+    "MemoryRegistry": ("agent_composer.memory_host", "MemoryRegistry"),
 }
 
 __all__ = [
@@ -82,6 +90,8 @@ __all__ = [
     "evaluate_when",
     "load_flow",
     "run_flow",
+    "build_memories",
+    "MemoryRegistry",
 ]
 
 

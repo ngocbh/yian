@@ -4,16 +4,20 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from pathlib import Path
+from types import MappingProxyType
 
 import pytest
 
 from agent_composer.compose import load_flow
+from agent_composer.events import RunStarted
 from agent_composer.memory.contracts import MemoryOperationError, MemorySetupError
 from agent_composer.memory.episodic import EpisodicMemory
 from agent_composer.memory.profile import ProfileMemory
 from agent_composer.memory.reflective import ReflectiveMemory
 from agent_composer.memory.session import SessionMemory
 from agent_composer.memory_host import MemoryRegistry, build_memories
+from agent_composer.run import resume_flow, run_flow
+from tests.engine._memory_fakes import _Memory
 
 
 class _Closable:
@@ -308,3 +312,40 @@ def test_package_exports_the_host_builder() -> None:
     assert agent_composer.build_memories is build_memories
     assert agent_composer.MemoryRegistry is MemoryRegistry
     assert {"build_memories", "MemoryRegistry"} <= set(agent_composer.__all__)
+
+
+def test_run_flow_accepts_any_mapping() -> None:
+    flow = _flow("{notes: episodic}")
+    result = run_flow(flow, {}, memory=MappingProxyType({"notes": _Memory()}))
+    assert result.status == "succeeded"
+
+
+def test_registry_built_for_another_flow_is_rejected() -> None:
+    other = build_memories(_flow("{notes: reflective}"))
+    with pytest.raises(MemorySetupError, match=r"'notes'.*'episodic'.*'reflective'"):
+        run_flow(_flow("{notes: episodic}"), {}, memory=other)
+    other.close()
+
+
+def test_registry_for_this_flow_runs() -> None:
+    flow = _flow("{notes: episodic}")
+    with build_memories(flow) as registry:
+        assert run_flow(flow, {}, memory=registry).status == "succeeded"
+
+
+def test_resume_checks_registry_types_too(tmp_path: Path) -> None:
+    flow = _flow("{notes: episodic}")
+    log, root = tmp_path / "run.jsonl", tmp_path / "mem"
+
+    def stop_after_start(event: object) -> None:
+        if isinstance(event, RunStarted):
+            raise RuntimeError("host stop")
+
+    with build_memories(flow, root=root) as registry:
+        with pytest.raises(RuntimeError, match="host stop"):
+            run_flow(flow, {}, log=log, memory=registry, on_event=stop_after_start)
+    with build_memories(_flow("{notes: reflective}")) as other:
+        with pytest.raises(MemorySetupError, match=r"'notes'.*'episodic'.*'reflective'"):
+            resume_flow(flow, log=log, memory=other)
+    with build_memories(flow, root=root) as registry:
+        assert resume_flow(flow, log=log, memory=registry).status == "succeeded"

@@ -12,7 +12,7 @@ commit requests separately; the attempt driver owns their records and ordering.
 from __future__ import annotations
 
 from asyncio import CancelledError as AsyncCancelledError
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from concurrent.futures import CancelledError as FutureCancelledError
 from contextlib import contextmanager, nullcontext
 from copy import deepcopy
@@ -92,10 +92,10 @@ def _validate_origins(
     return {key: _revalidate_origin(origins[key]) for key in keys}
 
 
-def _validate_registry(memory: dict[str, Memory]) -> dict[str, Memory]:
+def _validate_registry(memory: Mapping[str, Memory]) -> dict[str, Memory]:
     """Return a detached exact registry and reject cross-name object aliases."""
-    if type(memory) is not dict:
-        raise TypeError("memory must be a dictionary or None")
+    if not isinstance(memory, Mapping):
+        raise TypeError("memory must be a mapping of memory keys to backends, or None")
     result: dict[str, Memory] = {}
     identities: dict[int, str] = {}
     for raw_name, implementation in memory.items():
@@ -240,7 +240,7 @@ class MemoryRuntime:
         *,
         memories: tuple[MemorySpec, ...],
         origins: dict[str, OriginRef | None],
-        memory: dict[str, Memory],
+        memory: Mapping[str, Memory],
         snapshots: tuple[MemorySnapshotEnvelope, ...] | None = None,
     ) -> "MemoryRuntime":
         """Validate and open one session per recorded memory key.

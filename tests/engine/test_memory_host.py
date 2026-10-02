@@ -376,10 +376,9 @@ def test_run_flow_accepts_any_mapping() -> None:
 
 
 def test_registry_built_for_another_flow_is_rejected() -> None:
-    other = build_memories(_flow("{notes: reflective}"))
-    with pytest.raises(MemorySetupError, match=r"'notes'.*'episodic'.*'reflective'"):
-        run_flow(_flow("{notes: episodic}"), {}, memory=other)
-    other.close()
+    with build_memories(_flow("{notes: reflective}")) as other:
+        with pytest.raises(MemorySetupError, match=r"'notes'.*'episodic'.*'reflective'"):
+            run_flow(_flow("{notes: episodic}"), {}, memory=other)
 
 
 def test_registry_for_this_flow_runs() -> None:

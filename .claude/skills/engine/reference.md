@@ -462,7 +462,7 @@ A storage value that is not a `str` or `os.PathLike[str]` (`None`, bytes, an
 int) raises `MemorySetupError` naming the key before any backend is built. The returned `MemoryRegistry` maps keys to
 backends and records their types; closing it closes the backends it built in
 reverse build order, attaches later failures as notes, and leaves supplied
-objects open. A failed build closes what it already built.
+objects open. A backend whose close raised stays owned, so a later close retries it. A failed build closes what it already built.
 
 `transcript.open_turn(request, check_stopped=check)` returns a queued context
 manager, where `transcript` is the `TranscriptSource` that recall returned.

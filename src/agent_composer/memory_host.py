@@ -32,10 +32,13 @@ def _note_cleanup(target: BaseException, cleanup: BaseException, label: str) -> 
             target.add_note(note)
 
 
-def _close_all(objects: Iterable[object]) -> BaseException | None:
+def _close_all(
+    objects: Iterable[object], failed: list[object] | None = None
+) -> BaseException | None:
     """Close each object that has a callable ``close``; return the first failure.
 
-    Later failures are attached to the first one as notes.
+    Later failures are attached to the first one as notes. Objects whose close
+    raised are appended to ``failed`` when it is given.
     """
     first: BaseException | None = None
     for item in objects:
@@ -45,6 +48,8 @@ def _close_all(objects: Iterable[object]) -> BaseException | None:
         try:
             close()
         except BaseException as exc:
+            if failed is not None:
+                failed.append(item)
             if first is None:
                 first = exc
             else:
@@ -78,7 +83,6 @@ class MemoryRegistry(Mapping[str, Memory]):
         self._memories = dict(memories)
         self.types: Mapping[str, str] = MappingProxyType(dict(types))
         self._owned = tuple(owned)
-        self._closed = False
 
     def __getitem__(self, key: str) -> Memory:
         """Return the backend for one memory key."""
@@ -93,15 +97,17 @@ class MemoryRegistry(Mapping[str, Memory]):
         return len(self._memories)
 
     def close(self) -> None:
-        """Close owned backends in reverse build order; repeated calls do nothing.
+        """Close owned backends in reverse build order.
+
+        A backend that closed is not closed again. One whose close raised stays
+        owned, so a later call retries it; once all closed, calls do nothing.
 
         Raises:
             `BaseException`: The first close failure, with later ones as notes.
         """
-        if self._closed:
-            return
-        self._closed = True
-        first = _close_all(reversed(self._owned))
+        failed: list[object] = []
+        first = _close_all(reversed(self._owned), failed)
+        self._owned = tuple(reversed(failed))
         if first is not None:
             raise first
 

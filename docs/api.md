@@ -567,7 +567,10 @@ These are `MemorySetupError`s:
   URI, an empty string), for a profile `.md` path as for a SQLite file;
 - `root` with a flow whose `id:` is not one safe path component.
 
-If a later key fails, everything already built is closed. Construction never
+If a later key fails, everything already built is closed. `close()` closes the
+backends the registry built, in reverse build order. A backend whose close
+raised (for example a retryable `episodic.busy`) stays owned, so a later
+`close()` retries it. Construction never
 touches the filesystem; files open on a backend's first operation
 (`open_run`, `reset`, or entering it with `with`). Learner models are not
 configurable from YAML. A keyed or custom reflective or profile learner comes

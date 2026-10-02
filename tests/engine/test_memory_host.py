@@ -69,6 +69,29 @@ def test_close_keeps_the_first_failure_and_notes_the_rest() -> None:
     assert caught.value.__notes__ == ["Additional memory cleanup failed: RuntimeError: second"]
 
 
+class _FailsOnce(_Closable):
+    def close(self) -> None:
+        error, self.error = self.error, None
+        self.log.append(self.name)
+        if error is not None:
+            raise error
+
+
+def test_close_retries_only_the_backends_that_failed() -> None:
+    log: list[str] = []
+    a, b, c = _Closable(log, "a"), _FailsOnce(log, "b", RuntimeError("busy")), _Closable(log, "c")
+    registry = MemoryRegistry(
+        {"a": a, "b": b, "c": c}, dict.fromkeys("abc", "t"), owned=(a, b, c)
+    )
+    with pytest.raises(RuntimeError, match="busy"):
+        registry.close()
+    assert log == ["c", "b", "a"]
+    registry.close()
+    assert log == ["c", "b", "a", "b"]
+    registry.close()
+    assert log == ["c", "b", "a", "b"]
+
+
 def _failure_with_note(message: str, note: str) -> RuntimeError:
     error = RuntimeError(message)
     error.add_note(note)

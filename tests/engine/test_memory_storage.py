@@ -310,6 +310,7 @@ def test_zero_byte_file_initializes_without_changing_permissions(tmp_path):
     [
         "kind",
         "version",
+        "frame_era_version",
         "boolean_version",
         "extra_field",
         "missing_field",
@@ -334,7 +335,9 @@ def test_invalid_store_rejected_without_overwriting_or_leaking_owner(tmp_path, d
         if damage == "kind":
             envelope["backend"] = "episodic"
         elif damage == "version":
-            envelope["version"] = 2
+            envelope["version"] = 3
+        elif damage == "frame_era_version":
+            envelope["version"] = 1
         elif damage == "boolean_version":
             envelope["version"] = True
         elif damage == "extra_field":
@@ -364,6 +367,8 @@ def test_invalid_store_rejected_without_overwriting_or_leaking_owner(tmp_path, d
         with pytest.raises(MemoryOperationError) as caught:
             SQLiteStorage(path, "session")
         assert caught.value.code != "storage.busy"
+        if damage in {"version", "frame_era_version"}:
+            assert caught.value.code == "storage.version"
         assert path.read_bytes() == before
 
 

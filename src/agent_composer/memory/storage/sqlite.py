@@ -16,7 +16,7 @@ from agent_composer.memory.contracts import (
     _thaw_json_object,
 )
 
-_VERSION = 1
+_VERSION = 2
 _SCHEMA = (
     "CREATE TABLE memory_state ("
     "id INTEGER PRIMARY KEY CHECK (id = 1), envelope TEXT NOT NULL)"

@@ -427,22 +427,29 @@ def _memory_setup_load_error(flow: ComposedFlow, exc: MemorySetupError) -> LoadE
 
     Returns:
         `LoadError`: Failure framed at ``exc.origin``. Its notes are the
-        exception's own notes, then one located note per related origin.
+        exception's own notes, then one located note per related origin whose
+        location differs from the primary frame and from every earlier note.
     """
     resolver = flow.origin_resolver
 
-    def frame(origin):
+    def frame(origin: OriginRef | None) -> DiagnosticFrame | None:
         return None if origin is None or resolver is None else resolver.resolve(origin)
 
     primary = frame(exc.origin)
     notes = list(getattr(exc, "__notes__", ()))
+    # Aliases of one file map distinct origins to one source location.
+    seen: set[tuple[str, int, int]] = set()
+    if primary is not None:
+        seen.add((primary.label, primary.range.start_line, primary.range.start_col))
     for origin in exc.related:
         other = frame(origin)
-        if other is not None:
-            notes.append(
-                f"related declaration at {other.label}:{other.range.start_line}:"
-                f"{other.range.start_col}"
-            )
+        if other is None:
+            continue
+        location = (other.label, other.range.start_line, other.range.start_col)
+        if location in seen:
+            continue
+        seen.add(location)
+        notes.append(f"related declaration at {location[0]}:{location[1]}:{location[2]}")
     return _UNLOCATED_DIAGNOSTICS.error(
         str(exc),
         frames=() if primary is None else (primary,),

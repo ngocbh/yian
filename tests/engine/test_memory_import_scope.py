@@ -256,3 +256,38 @@ def test_a_clash_inside_an_import_names_the_scoped_sites(tmp_path: Path) -> None
     assert diagnostic.frames[-1].label == "lib.yaml"
     assert diagnostic.message.endswith("at lib: root and lib: root AGENT 'ask'")
     assert diagnostic.notes[0] == "also declared at lib: root AGENT 'ask'"
+
+
+def test_a_related_note_at_the_primary_location_is_skipped(tmp_path: Path) -> None:
+    (tmp_path / "lib.yaml").write_text(_lib())
+    # Both aliases map one declaration in lib.yaml, so both origins share a location.
+    with pytest.raises(LoadError, match="differ only by case") as caught:
+        load_flow(_root({"a": "Lib", "b": "lib"}, {"Lib": "lib", "lib": "lib"}), search_paths=[tmp_path])
+    diagnostic = caught.value.diagnostic
+    assert diagnostic.frames[-1].label == "lib.yaml"
+    assert diagnostic.notes == ()
+
+
+def test_a_related_note_repeating_an_earlier_location_is_skipped() -> None:
+    from types import SimpleNamespace
+
+    from agent_composer.compose.loader import _memory_setup_load_error
+    from agent_composer.diagnostics import DiagnosticFrame, OriginRef, SourceRange
+
+    lines = {"p": 1, "a": 2, "a2": 2, "b": 3}
+
+    class _Resolver:
+        def resolve(self, origin):
+            line = lines[origin.key]
+            return DiagnosticFrame("f.yaml", "x\ny\nz\n", SourceRange(line, 1, line, 2))
+
+    exc = MemorySetupError(
+        "clash",
+        origin=OriginRef("p"),
+        related=(OriginRef("a"), OriginRef("a2"), OriginRef("b")),
+    )
+    error = _memory_setup_load_error(SimpleNamespace(origin_resolver=_Resolver()), exc)
+    assert error.diagnostic.notes == (
+        "related declaration at f.yaml:2:1",
+        "related declaration at f.yaml:3:1",
+    )

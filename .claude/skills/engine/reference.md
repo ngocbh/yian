@@ -459,7 +459,9 @@ supplied or custom keys, storage paths that are not local files (`""`,
 types, non-`Memory` values, and `root` without a safe flow `id` raise
 `MemorySetupError`, located at the key's declaration when one key is at fault.
 A storage value that is not a `str` or `os.PathLike[str]` (`None`, bytes, an
-int) raises `MemorySetupError` naming the key before any backend is built. The returned `MemoryRegistry` maps keys to
+int) raises `MemorySetupError` naming the key before any backend is built. Two
+built-in keys whose storage paths resolve to one file (links resolved, case
+ignored) raise `MemorySetupError` naming both keys. The returned `MemoryRegistry` maps keys to
 backends and records their types; closing it closes the backends it built in
 reverse build order, attaches later failures as notes, and leaves supplied
 objects open. A backend whose close raised stays owned, so a later close retries it. A failed build closes what it already built.

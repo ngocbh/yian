@@ -565,6 +565,9 @@ These are `MemorySetupError`s:
   `None`, bytes, or an int); the error names the key;
 - a `storage` value that is not a local file path (`:memory:`, a `file:`
   URI, an empty string), for a profile `.md` path as for a SQLite file;
+- two built-in keys whose storage paths (from `storage` or `root`) resolve to
+  the same file, compared after resolving links and ignoring case; the error
+  names both keys;
 - `root` with a flow whose `id:` is not one safe path component.
 
 If a later key fails, everything already built is closed. `close()` closes the

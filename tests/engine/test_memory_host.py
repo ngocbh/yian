@@ -316,6 +316,23 @@ def test_explicit_storage_overrides_root_and_needs_an_existing_parent(tmp_path: 
     assert (tmp_path / "mem" / "app" / "lib" / "notes.sqlite").is_file()
 
 
+def test_two_keys_may_not_share_a_storage_path(tmp_path: Path) -> None:
+    flow = _flow("{a: profile, b: profile}")
+    for other in ("p.md", "P.md", "sub/../p.md"):
+        with pytest.raises(MemorySetupError, match=r"memory 'b'.*also used by memory 'a'"):
+            build_memories(flow, storage={"a": tmp_path / "p.md", "b": tmp_path / other})
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_explicit_storage_may_not_reuse_a_root_derived_path(tmp_path: Path) -> None:
+    flow = _import_flow(tmp_path)
+    root = tmp_path / "mem"
+    taken = root / "app" / "notes.sqlite"
+    with pytest.raises(MemorySetupError, match=r"memory 'notes'.*also used by memory 'lib.notes'"):
+        build_memories(flow, root=root, storage={"lib.notes": taken})
+    assert not root.exists()
+
+
 def test_no_root_means_ram_and_no_flow_id_is_needed(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     flow = _flow("{notes: episodic, about: profile}", flow_id=None)

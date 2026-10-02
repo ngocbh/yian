@@ -204,7 +204,8 @@ def build_memories(
         `TypeError`: ``flow`` is not a `ComposedFlow`.
         `MemorySetupError`: The table is invalid, or a key cannot be built as
             asked (including a storage value that is not a str or
-            ``PathLike[str]``, or a path that is not a local file path).
+            ``PathLike[str]``, a path that is not a local file path, or two
+            built-in keys whose storage paths are equal, ignoring case).
             Anything already built is closed before the error propagates.
     """
     if not isinstance(flow, ComposedFlow):
@@ -250,10 +251,11 @@ def build_memories(
         )
     memories: dict[str, Memory] = {}
     owned: list[Memory] = []
+    paths: dict[str, str] = {}
     try:
         for memory in table:
             memories[memory.key] = _build_one(
-                memory, storage, supplied, factories, owned, base
+                memory, storage, supplied, factories, owned, base, paths
             )
     except BaseException as primary:
         # Construction is effect-free, so this cleanup does no I/O.
@@ -273,8 +275,12 @@ def _build_one(
     factories: dict,
     owned: list[Memory],
     base: Path | None,
+    paths: dict[str, str],
 ) -> Memory:
-    """Return the backend for one key, appending it to ``owned`` if built here."""
+    """Return the backend for one key, appending it to ``owned`` if built here.
+
+    ``paths`` maps each normalized built-in storage path seen so far to its key.
+    """
     builtin = memory.type in BUILTIN_MEMORY_CONFIG_KEYS
     if memory.key in supplied:
         if memory.key in storage:
@@ -333,6 +339,15 @@ def _build_one(
     except (TypeError, ValueError) as exc:
         raise _error(memory, f"{memory.type} rejected its config: {exc}") from exc
     owned.append(value)
+    if path is not None:
+        # Case-folded so two keys cannot share one file on a case-insensitive
+        # filesystem; realpath reads links but opens nothing.
+        normal = os.path.normcase(os.path.realpath(os.fspath(path))).casefold()
+        other = paths.setdefault(normal, memory.key)
+        if other != memory.key:
+            raise _error(
+                memory, f"storage {os.fspath(path)!r} is also used by memory {other!r}"
+            )
     return value
 
 

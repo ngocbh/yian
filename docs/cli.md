@@ -101,8 +101,8 @@ composer run flow.yaml --resume ./run.jsonl --memory-root ./mem
   usable as one directory name.
 - `--memory-storage KEY=PATH` (repeatable) places one built-in memory at PATH.
   It overrides `--memory-root` for that key. PATH must be a local file path,
-  not `:memory:` or a `file:` URI. A bad path shape exits 1 before the run
-  starts. The directory must already exist; otherwise the run fails when that
+  not `:memory:` or a `file:` URI. A bad path shape, or two memories on one
+  file (case ignored), exits 1 before the run starts. The directory must already exist; otherwise the run fails when that
   memory first opens (`storage.io`, or `profile.store_unavailable` for a
   profile).
 - These are bad parameters (exit 2): a malformed option, a repeated key, a key

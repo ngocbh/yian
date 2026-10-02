@@ -712,6 +712,21 @@ def test_check_storage_path_returns_an_absolute_path_without_io(tmp_path, monkey
         _assert_error(caught.value, "path")
 
 
+def test_storage_path_follows_symlinks_before_parent_steps(tmp_path):
+    target = tmp_path / "target" / "sub"
+    target.mkdir(parents=True)
+    (tmp_path / "link").symlink_to(target)
+    raw = os.path.join(str(tmp_path), "link", "..", "m.sqlite")
+    assert check_storage_path(raw) == raw
+    store = SQLiteStorage(raw, "session")
+    try:
+        store.save({"ok": True})
+    finally:
+        store.close()
+    assert (tmp_path / "target" / "m.sqlite").is_file()
+    assert not (tmp_path / "m.sqlite").exists()
+
+
 def test_create_parent_makes_missing_directories(tmp_path):
     path = tmp_path / "a" / "b" / "m.sqlite"
     with pytest.raises(MemoryOperationError) as caught:

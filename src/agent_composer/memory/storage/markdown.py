@@ -129,7 +129,9 @@ class FileMarkdownStore:
         """
         if type(create_parent) is not bool:
             raise TypeError("create_parent must be a bool")
-        self.path = Path(path)
+        # Bind a relative path to the current directory now so a later chdir
+        # does not redirect the store; ".." stays for the OS to resolve.
+        self.path = Path(path).absolute()
         self._create_parent = create_parent
         self._versions = self.path.parent / f".{self.path.name}.versions"
         self._lock_path = self.path.parent / f".{self.path.name}.lock"

@@ -47,6 +47,20 @@ def test_create_parent_makes_the_directory_on_first_use(tmp_path) -> None:
     assert path.parent.is_dir()
 
 
+def test_relative_path_is_bound_to_the_construction_directory(
+    tmp_path, monkeypatch
+) -> None:
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    monkeypatch.chdir(tmp_path / "a")
+    store = FileMarkdownStore("ada.md")
+    assert list((tmp_path / "a").iterdir()) == []
+    monkeypatch.chdir(tmp_path / "b")
+    store.write("hello", base_version=markdown_version(""))
+    assert (tmp_path / "a" / "ada.md").read_text(encoding="utf-8") == "hello"
+    assert not (tmp_path / "b" / "ada.md").exists()
+
+
 def test_write_is_compare_and_set_and_keeps_every_version(tmp_path) -> None:
     store = FileMarkdownStore(tmp_path / "ada.md")
     assert isinstance(store, MarkdownStore)

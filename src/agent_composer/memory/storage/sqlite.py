@@ -102,8 +102,8 @@ def check_storage_path(path: str | os.PathLike[str]) -> str:
         path (`str | PathLike[str]`): Candidate storage file.
 
     Returns:
-        `str`: ``os.path.abspath`` of the path. Symlinks are resolved later,
-        when the file is opened.
+        `str`: The path joined to the current directory if relative, without
+        normalizing ``..``. Symlinks are resolved later, when the file is opened.
 
     Raises:
         `MemoryOperationError`: Empty paths, SQLite URIs, in-memory targets,
@@ -120,7 +120,10 @@ def check_storage_path(path: str | os.PathLike[str]) -> str:
         ):
             raise ValueError("invalid file path")
         raw_path.encode("utf-8")
-        return os.path.abspath(raw_path)
+        if os.path.isabs(raw_path):
+            return raw_path
+        # Collapsing ".." here would skip a symlink the OS follows on open.
+        return os.path.join(os.getcwd(), raw_path)
     except (TypeError, ValueError):
         raise _error("path", "Memory storage requires a local file path.") from None
 

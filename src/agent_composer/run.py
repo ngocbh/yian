@@ -234,7 +234,8 @@ class _BackwardHandle:
                     subject="retained program",
                 )
                 return MemoryRuntime.open(layout=state.memory_layout, origins=origins,
-                                          memory=self.memory, snapshots=state.memory_snapshots)
+                                          memory=self.memory, snapshots=state.memory_snapshots,
+                                          memories=state.memories)
 
             return drive_backward(state, authority, feedback, open_memory=open_memory)
         except BaseException as exc:
@@ -516,6 +517,7 @@ def _run_flow_controlled(
             layout=memory_layout,
             origins=memory_origins,
             memory=memory,
+            memories=memory_table,
         )
 
     authority: RunLog | None = None
@@ -740,6 +742,7 @@ def _resume_flow_controlled(
                 origins=memory_origins,
                 memory=memory,
                 snapshots=state.memory_snapshots,
+                memories=state.memories,
             )
 
         events: list[Any] = []

@@ -39,6 +39,7 @@ from agent_composer.memory import (
     MemorySession,
     MemorySetupError,
     MemorySnapshotEnvelope,
+    MemorySpec,
 )
 from agent_composer.memory.contracts import _validate_mutations
 from agent_composer.nodes.base import _CapabilityFault, _HostStop
@@ -257,12 +258,14 @@ class MemoryRuntime:
         sessions: dict[str, MemorySession],
         frames: dict[MemoryFrameRef, _OpenedFrame],
         snapshots: tuple[MemorySnapshotEnvelope, ...],
+        eligible: frozenset[str] | None = None,
     ) -> None:
         self._layout = layout
         self._origins = origins
         self._sessions = sessions
         self._frames = frames
         self._snapshots = snapshots
+        self._eligible = eligible
         self._closed = False
 
     @property
@@ -283,6 +286,7 @@ class MemoryRuntime:
         origins: dict[MemoryFrameRef, OriginRef | None],
         memory: dict[str, Memory],
         snapshots: tuple[MemorySnapshotEnvelope, ...] | None = None,
+        memories: tuple[MemorySpec, ...] | None = None,
     ) -> "MemoryRuntime":
         """Validate and open one run-scoped memory authority.
 
@@ -290,6 +294,11 @@ class MemoryRuntime:
         fresh run.  A tuple restores the exact public snapshots recorded by
         ``RunStarted`` during recovery.
         """
+        if memories is not None:
+            if type(memories) is not tuple or any(type(m) is not MemorySpec for m in memories):
+                raise TypeError("memories must be a tuple of MemorySpec values")
+            if {m.key for m in memories} != {spec.policy_name for spec in layout}:
+                raise ValueError("memories must name exactly the layout's memory keys")
         _validate_layout(layout)
         canonical_origins = _validate_origins(layout, origins)
         registry = _validate_registry(memory)
@@ -392,6 +401,11 @@ class MemoryRuntime:
             sessions=opened_sessions,
             frames=opened_frames,
             snapshots=tuple(captured),
+            eligible=(
+                None
+                if memories is None
+                else frozenset(m.key for m in memories if m.conversation_eligible)
+            ),
         )
 
     @contextmanager
@@ -402,7 +416,7 @@ class MemoryRuntime:
         *,
         check_stopped: CheckStopped,
     ) -> Iterator[MemoryContext]:
-        """Recall each frame and admit the innermost contributed transcript.
+        """Recall each frame and admit the one transcript an eligible memory contributes.
 
         Notes retain outer-to-local ownership. Transcript selection uses only
         explicit recall contributions; losing sources are never opened. A live
@@ -424,7 +438,9 @@ class MemoryRuntime:
             `TypeError`: A carrier or callback has the wrong type.
             `ValueError`: Paths disagree or a transcript lacks an invocation.
             `RuntimeError`: The runtime is closed or a frame is not opened.
-            `MemoryRecallError`: A policy rejects recall or returns invalid content.
+            `MemoryRecallError`: A policy rejects recall or returns invalid content,
+                a memory that is not conversation-eligible returns a transcript, or
+                a second memory returns a transcript.
             `Exception`: An unexpected recall or transcript backend error.
 
         Example:
@@ -477,6 +493,22 @@ class MemoryRuntime:
             if section.text:
                 sections.append(section)
             if content.transcript is not None:
+                key = opened.spec.policy_name
+                if self._eligible is not None:
+                    if key not in self._eligible:
+                        raise MemoryRecallError(
+                            f"memory {key!r} returned a transcript but is not "
+                            "conversation-eligible; only a memory with one AGENT "
+                            "owner may hold a conversation",
+                            origin=opened.origin,
+                        )
+                    if selected is not None:
+                        raise MemoryRecallError(
+                            f"memory {key!r} returned a second transcript for "
+                            f"{'/'.join(scope.static_path)!r}; one AGENT may hold "
+                            "at most one conversation",
+                            origin=opened.origin,
+                        )
                 selected = content.transcript
         check_stopped()
         if selected is None:

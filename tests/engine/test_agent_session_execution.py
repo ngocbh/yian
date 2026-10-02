@@ -254,7 +254,7 @@ def test_cancelled_waiter_exits_but_active_run_keeps_lease_until_reply_is_saved(
 
 
 @pytest.mark.parametrize("outer_session,local_session", [(True, False), (False, True), (True, True)])
-def test_innermost_session_owns_history_without_hiding_other_recall(monkeypatch, outer_session, local_session):
+def test_agent_session_owns_history_and_a_flow_transcript_is_rejected(monkeypatch, outer_session, local_session):
     outer = SessionMemory() if outer_session else _Memory(recall_text="outer recall")
     local = SessionMemory() if local_session else _Memory(recall_text="local recall")
     flow = load_flow(_FLOW.replace("    long_term_memory: session\n", "    long_term_memory: local\n")
@@ -266,18 +266,18 @@ def test_innermost_session_owns_history_without_hiding_other_recall(monkeypatch,
         return AIMessage(content="answer")
 
     monkeypatch.setattr(llm_clients, "model_from_config", lambda _: _Model(invoke))
+    if outer_session:
+        result = run_flow(flow, {"question": "first"}, memory={"outer": outer, "local": local})
+        assert result.status == "failed"
+        assert result.failure.cause_type == "MemoryRecallError"
+        assert calls == []
+        return
     for question in ("first", "second"):
         assert run_flow(flow, {"question": question}, memory={"outer": outer, "local": local}).status == "succeeded"
     assert _humans(calls[1]) == ["first", "second"]
-    if not outer_session:
-        assert "outer recall" in calls[1][0].content and len(outer.recall_contexts) == 2
-    if not local_session:
-        assert "local recall" in calls[1][0].content and len(local.recall_contexts) == 2
-    owner = local if local_session else outer
-    view, = _views(owner)
-    assert view.key.frame_ref.static_path == (("execution-session", "answer") if local_session else ("execution-session",))
-    if outer_session and local_session:
-        assert _views(outer) == []
+    assert "outer recall" in calls[1][0].content and len(outer.recall_contexts) == 2
+    view, = _views(local)
+    assert view.key.frame_ref.static_path == ("execution-session", "answer")
 
 
 def test_loop_iterations_share_one_authored_conversation(monkeypatch):

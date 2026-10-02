@@ -19,7 +19,7 @@ from agent_composer.memory import (
     MemoryStack,
 )
 from agent_composer.memory.session import SessionMemory
-from agent_composer.nodes.code import CodeNode
+from agent_composer.nodes.agent.node import AgentNode
 from agent_composer.nodes.base import Output
 from agent_composer.run import resume_flow, run_flow
 from agent_composer.runtime.log import (
@@ -83,6 +83,19 @@ nodes:
 output: ${each.output}
 """
 
+_AGENT_FLOW = """id: memory-run
+name: memory_run
+llm_config: {provider: openai, model: fake-model}
+nodes:
+  work:
+    kind: agent
+    mode: plain
+    long_term_memory: test
+    prompt: hi
+    output: int
+output: ${work.output}
+"""
+
 
 def _records(path: Path):
     """Return the canonical durable records without retaining the file lock."""
@@ -109,18 +122,16 @@ def test_memory_context_opener_uses_same_runtime_on_fresh_and_resume(
         engines.append(kwargs["memory_context_opener"].__self__)
         return original_engine(*args, **kwargs)
 
-    def forward(node, inputs, *, open_memory_context):
+    def forward(node, inputs, *, open_memory_context, **_caps):
         turn = open_memory_context("system", "prompt", {"format": "test-v1"}).transcript
         entered.append(turn.view.key.consumer_static_path)
         ordinal = turn.request("model", {"input": "test"})
         turn.observe(ordinal, "completed", items=(ConversationItem("reply", "test-v1", {"value": 7}),))
         return Output(7)
 
-    # Keep the real canonical CODE manifest, replacing only this test's execution.
-    monkeypatch.setattr(CodeNode, "needs_memory_context", True)
-    monkeypatch.setattr(CodeNode, "forward", forward)
+    monkeypatch.setattr(AgentNode, "forward", forward)
     monkeypatch.setattr(boundary, "FlowEngine", engine)
-    flow = load_flow(_FLOW)
+    flow = load_flow(_AGENT_FLOW)
     if resume:
         def interrupt(event):
             if isinstance(event, NodeStarted) and event.node_id == "work":
@@ -152,12 +163,11 @@ def test_conversation_completes_before_dispatcher_output_contract_acceptance(
     tmp_path, monkeypatch, num_workers,
 ):
     memory = SessionMemory()
-    def forward(node, inputs, *, open_memory_context):
+    def forward(node, inputs, *, open_memory_context, **_caps):
         open_memory_context("system", "prompt", {}).transcript
         return Output("not an integer")
-    monkeypatch.setattr(CodeNode, "needs_memory_context", True)
-    monkeypatch.setattr(CodeNode, "forward", forward)
-    result = run_flow(load_flow(_FLOW), {}, log=tmp_path / "rejected.jsonl",
+    monkeypatch.setattr(AgentNode, "forward", forward)
+    result = run_flow(load_flow(_AGENT_FLOW), {}, log=tmp_path / "rejected.jsonl",
                       memory={"test": memory}, num_workers=num_workers)
     assert result.status == "failed"
     assert result.failure.code == "contract.output"

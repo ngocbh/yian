@@ -12,6 +12,7 @@ import pytest
 from agent_composer.diagnostics import OriginRef
 from agent_composer.memory import (
     ConversationInvocation,
+    DeclSite,
     MemoryContent,
     MemoryContextRequest,
     LearnContext,
@@ -24,6 +25,7 @@ from agent_composer.memory import (
     MemoryScope,
     MemorySetupError,
     MemorySnapshotEnvelope,
+    MemorySpec,
     RecallContext,
 )
 from agent_composer.compile.model import END_ID, START_ID
@@ -676,5 +678,77 @@ def test_stop_during_recall_prevents_transcript_source_acquisition():
                 check_stopped()
         assert caught.value is stop
         assert source_calls == []
+    finally:
+        runtime.close()
+
+
+def _table() -> tuple[MemorySpec, ...]:
+    """Return the key table matching ``_layout``: AGENT alpha, flow beta."""
+    return (
+        MemorySpec("alpha", "alpha", {}, (DeclSite((), ("root",), "agent"),), True),
+        MemorySpec("beta", "beta", {"limit": 2}, (DeclSite((), ("root",), None),), False),
+    )
+
+
+@pytest.mark.parametrize("contributor", ["alpha", "beta"])
+def test_context_admits_a_transcript_only_from_an_eligible_memory(contributor):
+    layout, origins = _layout()
+    policies = {name: _Memory(name, [], values={spec.ref: name for spec in layout})
+                for name in ("alpha", "beta")}
+    runtime = MemoryRuntime.open(layout=layout, origins=origins, memory=policies, memories=_table())
+    opened = []
+
+    @contextmanager
+    def open_turn(request, *, check_stopped):
+        opened.append(request)
+        yield "transcript"
+
+    try:
+        spec = next(spec for spec in layout if spec.policy_name == contributor)
+        frame = policies[contributor].session.frames[spec.ref]
+        frame.value = MemoryContent(frame.value, SimpleNamespace(open_turn=open_turn))
+        request = MemoryContextRequest(_context(), ConversationInvocation("run", 1), {})
+        if contributor == "alpha":
+            with runtime.open_context(_scope(layout), request, check_stopped=lambda: None) as context:
+                assert context.transcript == "transcript"
+            assert len(opened) == 1
+        else:
+            with pytest.raises(
+                MemoryRecallError,
+                match="memory 'beta' returned a transcript but is not conversation-eligible",
+            ) as caught:
+                _enter_context(runtime, _scope(layout), request, check_stopped=lambda: None)
+            assert caught.value.origin == origins[layout[0].ref]
+            assert opened == []
+    finally:
+        runtime.close()
+
+
+def test_context_rejects_a_second_transcript() -> None:
+    layout, origins = _layout()
+    policies = {name: _Memory(name, [], values={spec.ref: name for spec in layout})
+                for name in ("alpha", "beta")}
+    # Artificial table: both keys eligible, so only the second-transcript rule can fire.
+    table = (
+        MemorySpec("alpha", "alpha", {}, (DeclSite((), ("root",), "agent"),), True),
+        MemorySpec("beta", "beta", {"limit": 2}, (DeclSite((), ("root",), "other"),), True),
+    )
+    runtime = MemoryRuntime.open(layout=layout, origins=origins, memory=policies, memories=table)
+
+    @contextmanager
+    def open_turn(request, *, check_stopped):
+        yield "transcript"
+
+    try:
+        for spec in layout:
+            frame = policies[spec.policy_name].session.frames[spec.ref]
+            frame.value = MemoryContent(frame.value, SimpleNamespace(open_turn=open_turn))
+        request = MemoryContextRequest(_context(), ConversationInvocation("run", 1), {})
+        with pytest.raises(
+            MemoryRecallError,
+            match="memory 'alpha' returned a second transcript for 'root/agent'",
+        ) as caught:
+            _enter_context(runtime, _scope(layout), request, check_stopped=lambda: None)
+        assert caught.value.origin == origins[layout[1].ref]
     finally:
         runtime.close()

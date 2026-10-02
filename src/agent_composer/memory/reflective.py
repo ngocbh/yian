@@ -44,7 +44,7 @@ from agent_composer.memory.contracts import (
 from agent_composer.memory.storage import SQLiteStorage
 
 _SNAPSHOT_FORMAT = "agent_composer.reflective_memory"
-_SNAPSHOT_VERSION = 1
+_SNAPSHOT_VERSION = 2
 _POLICY_NAME = "reflective"
 _MAX_REFLECTION_PROMPT_CHARS = 32_000
 _MAX_FRAME_MATERIAL_CHARS = 1_000
@@ -82,19 +82,18 @@ class _Lesson:
 
 
 @dataclass(frozen=True, slots=True)
-class _EffectiveFrameSpec:
-    """Validated concrete configuration of one reflective frame."""
+class _Limits:
+    """Effective lesson and recall limits of one reflective instance."""
 
-    ref: MemoryFrameRef
     max_items: int
     recall_limit: int
 
 
 @dataclass(frozen=True, slots=True)
-class _FrameState:
-    """One frame specification and its ordered lessons."""
+class _State:
+    """The limits and ordered lessons of one reflective instance."""
 
-    spec: _EffectiveFrameSpec
+    limits: _Limits
     lessons: tuple[_Lesson, ...]
 
 
@@ -221,53 +220,22 @@ def _frame_ref_json(ref: MemoryFrameRef) -> JsonObject:
     }
 
 
-def _frame_ref_from_json(value: object, name: str) -> MemoryFrameRef:
-    """Decode and validate one exact frame identity."""
-    from agent_composer.memory.contracts import MemoryOwner
-
-    data = _copy_json_object(value, name)
-    if set(data) != {"owner", "root_flow_id", "static_path"}:
-        raise ValueError(f"{name} has invalid fields")
-    root_flow_id = _nonempty_string(data["root_flow_id"], f"{name}.root_flow_id")
-    owner_raw = _nonempty_string(data["owner"], f"{name}.owner")
-    try:
-        owner = MemoryOwner(owner_raw)
-    except ValueError as exc:
-        raise ValueError(f"{name}.owner is invalid") from exc
-    path_raw = data["static_path"]
-    if type(path_raw) is not list or not path_raw:
-        raise ValueError(f"{name}.static_path must be a non-empty array")
-    path: list[str] = []
-    for index, part in enumerate(path_raw):
-        path.append(_nonempty_string(part, f"{name}.static_path[{index}]"))
-    return MemoryFrameRef(root_flow_id, tuple(path), owner)
+def _source_json(run_id: str) -> JsonObject:
+    """Return stable source metadata for one proposed lesson mutation."""
+    return {"run_id": run_id}
 
 
-def _source_from_json(
-    value: object,
-    name: str,
-    expected_ref: MemoryFrameRef,
-) -> JsonObject:
-    """Decode one exact canonical lesson source for its containing frame."""
+def _source_from_json(value: object, name: str) -> JsonObject:
+    """Decode one exact canonical lesson source."""
     source = _copy_json_object(value, name)
-    if set(source) != {"frame_ref", "run_id"}:
+    if set(source) != {"run_id"}:
         raise ValueError(f"{name} has invalid fields")
-    run_id = _nonempty_string(source["run_id"], f"{name}.run_id")
-    source_ref = _frame_ref_from_json(source["frame_ref"], f"{name}.frame_ref")
-    if source_ref != expected_ref:
-        raise ValueError(f"{name}.frame_ref does not match its containing frame")
     canonical: JsonObject = {
-        "frame_ref": _frame_ref_json(source_ref),
-        "run_id": run_id,
+        "run_id": _nonempty_string(source["run_id"], f"{name}.run_id")
     }
     if _canonical_json(source) != _canonical_json(canonical):
         raise ValueError(f"{name} must be canonical")
     return canonical
-
-
-def _frame_sort_key(ref: MemoryFrameRef) -> tuple[str, tuple[str, ...], str]:
-    """Return the canonical static-frame order."""
-    return (ref.root_flow_id, ref.static_path, ref.owner.value)
 
 
 def _copy_lesson(lesson: _Lesson) -> _Lesson:
@@ -277,42 +245,27 @@ def _copy_lesson(lesson: _Lesson) -> _Lesson:
     )
 
 
-def _copy_frame_state(state: _FrameState) -> _FrameState:
-    """Defensively copy one internal frame state."""
-    return _FrameState(state.spec, tuple(_copy_lesson(item) for item in state.lessons))
+def _copy_state(state: _State) -> _State:
+    """Defensively copy one internal instance state."""
+    return _State(state.limits, tuple(_copy_lesson(item) for item in state.lessons))
 
 
-def _state_json(
-    namespace: str,
-    epoch: int,
-    revision: int,
-    frames: dict[MemoryFrameRef, _FrameState],
-) -> JsonObject:
+def _state_json(namespace: str, epoch: int, revision: int, state: _State) -> JsonObject:
     """Encode canonical lessons and identity without host model settings."""
-    encoded_frames: list[JsonValue] = []
-    for ref in sorted(frames, key=_frame_sort_key):
-        state = frames[ref]
-        encoded_frames.append(
-            {
-                "config": {
-                    "max_items": state.spec.max_items,
-                    "recall_limit": state.spec.recall_limit,
-                },
-                "lessons": [
-                    {
-                        "id": lesson.lesson_id,
-                        "source": _copy_json_object(lesson.source, "source"),
-                        "text": lesson.text,
-                    }
-                    for lesson in state.lessons
-                ],
-                "policy_name": _POLICY_NAME,
-                "ref": _frame_ref_json(ref),
-            }
-        )
     return {
+        "config": {
+            "max_items": state.limits.max_items,
+            "recall_limit": state.limits.recall_limit,
+        },
         "epoch": epoch,
-        "frames": encoded_frames,
+        "lessons": [
+            {
+                "id": lesson.lesson_id,
+                "source": _copy_json_object(lesson.source, "source"),
+                "text": lesson.text,
+            }
+            for lesson in state.lessons
+        ],
         "namespace": namespace,
         "revision": revision,
     }
@@ -322,12 +275,12 @@ def _snapshot_json(
     namespace: str,
     epoch: int,
     revision: int,
-    frames: dict[MemoryFrameRef, _FrameState],
+    state: _State,
     llm_config: JsonObject,
 ) -> JsonObject:
     """Encode one canonical session snapshot with its pinned model settings."""
     return {
-        **_state_json(namespace, epoch, revision, frames),
+        **_state_json(namespace, epoch, revision, state),
         "format": _SNAPSHOT_FORMAT,
         "llm_config": _copy_json_object(llm_config, "llm_config"),
         "version": _SNAPSHOT_VERSION,
@@ -341,12 +294,10 @@ def _snapshot_error(message: str) -> MemoryOperationError:
     )
 
 
-def _parse_state(
-    value: object,
-) -> tuple[str, int, int, dict[MemoryFrameRef, _FrameState]]:
+def _parse_state(value: object) -> tuple[str, int, int, _State]:
     """Decode the shared semantic state without requiring a model configuration."""
     data = _copy_json_object(value, "state")
-    if set(data) != {"namespace", "epoch", "revision", "frames"}:
+    if set(data) != {"config", "epoch", "lessons", "namespace", "revision"}:
         raise ValueError("state has invalid fields")
     namespace = _nonempty_string(data["namespace"], "snapshot.namespace")
     epoch = data["epoch"]
@@ -356,70 +307,47 @@ def _parse_state(
     if type(revision) is not int or revision < 0:
         raise ValueError("snapshot.revision must be a non-negative integer")
 
-    frames_raw = data["frames"]
-    if type(frames_raw) is not list:
-        raise TypeError("snapshot.frames must be an array")
-    frames: dict[MemoryFrameRef, _FrameState] = {}
-    prior_key: tuple[str, tuple[str, ...], str] | None = None
-    for index, raw_frame in enumerate(frames_raw):
-        frame = _copy_json_object(raw_frame, f"snapshot.frames[{index}]")
-        if set(frame) != {"config", "lessons", "policy_name", "ref"}:
-            raise ValueError(f"snapshot.frames[{index}] has invalid fields")
-        if frame["policy_name"] != _POLICY_NAME:
-            raise ValueError(f"snapshot.frames[{index}] has invalid policy")
-        ref = _frame_ref_from_json(frame["ref"], f"snapshot.frames[{index}].ref")
-        key = _frame_sort_key(ref)
-        if prior_key is not None and key <= prior_key:
-            raise ValueError("snapshot.frames must be uniquely sorted")
-        prior_key = key
-        config = _copy_json_object(frame["config"], f"snapshot.frames[{index}].config")
-        if set(config) != {"max_items", "recall_limit"}:
-            raise ValueError(f"snapshot.frames[{index}].config has invalid fields")
-        max_items = _positive_int(
-            config["max_items"], f"snapshot.frames[{index}].config.max_items"
-        )
-        recall_limit = _positive_int(
-            config["recall_limit"],
-            f"snapshot.frames[{index}].config.recall_limit",
-        )
-        lessons_raw = frame["lessons"]
-        if type(lessons_raw) is not list:
-            raise TypeError(f"snapshot.frames[{index}].lessons must be an array")
-        lessons: list[_Lesson] = []
-        lesson_ids: set[str] = set()
-        for lesson_index, raw_lesson in enumerate(lessons_raw):
-            lesson = _copy_json_object(
-                raw_lesson,
-                f"snapshot.frames[{index}].lessons[{lesson_index}]",
-            )
-            if set(lesson) != {"id", "source", "text"}:
-                raise ValueError("snapshot lesson has invalid fields")
-            lesson_id = _nonempty_string(lesson["id"], "snapshot lesson id")
-            text = _nonempty_string(lesson["text"], "snapshot lesson text")
-            if not text.strip():
-                raise ValueError("snapshot lesson text must not be blank")
-            if lesson_id in lesson_ids:
-                raise ValueError("snapshot lesson ids must be unique per frame")
-            lesson_ids.add(lesson_id)
-            source = _source_from_json(lesson["source"], "snapshot lesson source", ref)
-            lessons.append(_Lesson(lesson_id, text, source))
-        if len(lessons) > max_items:
-            raise ValueError("snapshot frame exceeds max_items")
-        spec = _EffectiveFrameSpec(ref, max_items, recall_limit)
-        frames[ref] = _FrameState(spec, tuple(lessons))
-    return namespace, epoch, revision, frames
+    config = _copy_json_object(data["config"], "snapshot.config")
+    if set(config) != {"max_items", "recall_limit"}:
+        raise ValueError("snapshot.config has invalid fields")
+    limits = _Limits(
+        _positive_int(config["max_items"], "snapshot.config.max_items"),
+        _positive_int(config["recall_limit"], "snapshot.config.recall_limit"),
+    )
+    lessons_raw = data["lessons"]
+    if type(lessons_raw) is not list:
+        raise TypeError("snapshot.lessons must be an array")
+    lessons: list[_Lesson] = []
+    lesson_ids: set[str] = set()
+    for lesson_index, raw_lesson in enumerate(lessons_raw):
+        lesson = _copy_json_object(raw_lesson, f"snapshot.lessons[{lesson_index}]")
+        if set(lesson) != {"id", "source", "text"}:
+            raise ValueError("snapshot lesson has invalid fields")
+        lesson_id = _nonempty_string(lesson["id"], "snapshot lesson id")
+        text = _nonempty_string(lesson["text"], "snapshot lesson text")
+        if not text.strip():
+            raise ValueError("snapshot lesson text must not be blank")
+        if lesson_id in lesson_ids:
+            raise ValueError("snapshot lesson ids must be unique")
+        lesson_ids.add(lesson_id)
+        source = _source_from_json(lesson["source"], "snapshot lesson source")
+        lessons.append(_Lesson(lesson_id, text, source))
+    if len(lessons) > limits.max_items:
+        raise ValueError("snapshot exceeds max_items")
+    return namespace, epoch, revision, _State(limits, tuple(lessons))
 
 
 def _parse_snapshot(
     value: object,
-) -> tuple[str, int, int, dict[MemoryFrameRef, _FrameState], JsonObject]:
+) -> tuple[str, int, int, _State, JsonObject]:
     """Strictly decode one canonical reflective-memory snapshot."""
     try:
         data = _copy_json_object(value, "snapshot")
         expected = {
+            "config",
             "epoch",
             "format",
-            "frames",
+            "lessons",
             "llm_config",
             "namespace",
             "revision",
@@ -451,29 +379,17 @@ def _parse_snapshot(
         if not provider.strip() or not model.strip():
             raise ValueError("snapshot.llm_config must pin nonblank provider and model")
 
-        namespace, epoch, revision, frames = _parse_state(
-            {key: data[key] for key in ("namespace", "epoch", "revision", "frames")}
+        namespace, epoch, revision, state = _parse_state(
+            {
+                key: data[key]
+                for key in ("config", "epoch", "lessons", "namespace", "revision")
+            }
         )
-        return namespace, epoch, revision, frames, complete_llm
+        return namespace, epoch, revision, state, complete_llm
     except MemoryOperationError:
         raise
     except (TypeError, ValueError, ValidationError, RecursionError) as exc:
         raise _snapshot_error("recorded memory snapshot is invalid") from exc
-
-
-def _compatible_same_generation(
-    current: dict[MemoryFrameRef, _FrameState],
-    recorded: dict[MemoryFrameRef, _FrameState],
-) -> bool:
-    """Accept exact current state plus harmless recorded empty frame declarations."""
-    for ref, current_state in current.items():
-        recorded_state = recorded.get(ref)
-        if recorded_state is None or recorded_state != current_state:
-            return False
-    for ref, recorded_state in recorded.items():
-        if ref not in current and recorded_state.lessons:
-            return False
-    return True
 
 
 def _episode_json(episode: MemoryEpisode) -> JsonObject:
@@ -569,11 +485,6 @@ def _bounded_episode_material(context: LearnContext) -> str:
     return _bounded_json_material(payload, _MAX_EPISODE_MATERIAL_CHARS)
 
 
-def _source_json(run_id: str, frame_ref: MemoryFrameRef) -> JsonObject:
-    """Return stable source metadata for one proposed lesson mutation."""
-    return {"frame_ref": _frame_ref_json(frame_ref), "run_id": run_id}
-
-
 def _mutation_digest_payload(
     context: LearnContext,
     index: int,
@@ -589,7 +500,7 @@ def _mutation_digest_payload(
 
 
 def _parse_inventory(value: object) -> tuple[
-    tuple[str, int, int, dict[MemoryFrameRef, _FrameState]],
+    tuple[str, int, int, _State],
     dict[str, str],
     bool,
     bool,
@@ -610,7 +521,7 @@ def _parse_inventory(value: object) -> tuple[
         if type(data["version"]) is not int or data["version"] != 1:
             raise ValueError("unsupported inventory version")
         state = _parse_state(data["state"])
-        _, epoch, revision, frames = state
+        _, epoch, revision, instance = state
         opened, reset, committed = (
             data[key] for key in ("ever_opened", "ever_reset", "ever_committed")
         )
@@ -624,10 +535,10 @@ def _parse_inventory(value: object) -> tuple[
                 char not in "0123456789abcdef" for char in digest
             ):
                 raise ValueError("invalid commit digest")
-        has_lessons = any(state.lessons for state in frames.values())
+        has_lessons = bool(instance.lessons)
         if (
             not opened
-            and (frames or revision or committed or commits)
+            and (has_lessons or revision or committed or commits)
             or not committed
             and (revision or commits or has_lessons)
             or reset
@@ -675,9 +586,10 @@ class ReflectiveMemory:
                 Recorded sessions retain their exact pinned model configuration.
                 ``api_key`` is rejected, so the learner always authenticates with
                 environment or saved-connection credentials.
-            max_items (`int`, defaults to `100`): Positive lesson limit for new frames.
+            max_items (`int`, defaults to `100`): Positive lesson limit of this
+                instance.
             recall_limit (`int`, defaults to `20`): Positive contextual recall limit
-                for new frames. Saved frames retain their own limits.
+                of this instance.
             storage (`str | PathLike[str] | None`, defaults to `None`): Optional
                 local SQLite file with an existing parent, owned until close or
                 context exit. None keeps state process-local.
@@ -687,8 +599,10 @@ class ReflectiveMemory:
             ValueError: Limits or model settings are invalid.
             MemoryOperationError: Storage is unavailable, occupied, or invalid.
         """
-        self._default_max_items = _positive_int(max_items, "max_items")
-        self._default_recall_limit = _positive_int(recall_limit, "recall_limit")
+        limits = _Limits(
+            _positive_int(max_items, "max_items"),
+            _positive_int(recall_limit, "recall_limit"),
+        )
         raw_config = (
             {} if llm_config is None else _copy_json_object(llm_config, "llm_config")
         )
@@ -712,7 +626,7 @@ class ReflectiveMemory:
         self._namespace = uuid4().hex
         self._epoch = 0
         self._revision = 0
-        self._frames: dict[MemoryFrameRef, _FrameState] = {}
+        self._state = _State(limits, ())
         self._applied_commits: dict[str, str] = {}
         self._ever_opened = False
         self._ever_reset = False
@@ -724,12 +638,12 @@ class ReflectiveMemory:
                 if saved is None:
                     self._save_state(
                         _state_json(
-                            self._namespace, self._epoch, self._revision, self._frames
+                            self._namespace, self._epoch, self._revision, self._state
                         )
                     )
                 else:
                     state, commits, opened, reset, committed = _parse_inventory(saved)
-                    self._namespace, self._epoch, self._revision, self._frames = state
+                    self._namespace, self._epoch, self._revision, self._state = state
                     self._applied_commits = commits
                     self._ever_opened = opened
                     self._ever_reset = reset
@@ -930,18 +844,16 @@ class ReflectiveMemory:
                 namespace = self._namespace
                 epoch = self._epoch
                 revision = self._revision
-                frames = {
-                    ref: _copy_frame_state(state) for ref, state in self._frames.items()
-                }
+                state = _copy_state(self._state)
                 llm_config = self._effective_llm_config()
             else:
-                namespace, epoch, revision, frames, llm_config = parsed
+                namespace, epoch, revision, state, llm_config = parsed
                 if namespace != self._namespace:
                     pristine = (
                         not self._ever_opened
                         and not self._ever_reset
                         and not self._ever_committed
-                        and not self._frames
+                        and not self._state.lessons
                         and self._epoch == 0
                         and self._revision == 0
                     )
@@ -959,31 +871,22 @@ class ReflectiveMemory:
                         raise _snapshot_error(
                             "snapshot revision is ahead of the memory state"
                         )
-                    if revision == self._revision and not _compatible_same_generation(
-                        self._frames, frames
-                    ):
+                    if revision == self._revision and state != self._state:
                         raise _snapshot_error(
                             "snapshot state does not match the current generation"
                         )
-                frames = {
-                    ref: _copy_frame_state(state) for ref, state in frames.items()
-                }
             if adopt or not self._ever_opened:
-                adopted_frames = (
-                    {ref: _copy_frame_state(state) for ref, state in frames.items()}
-                    if adopt
-                    else self._frames
-                )
+                adopted_state = _copy_state(state) if adopt else self._state
                 committed = (
-                    revision > 0 or any(state.lessons for state in frames.values())
+                    revision > 0 or bool(state.lessons)
                     if adopt
                     else self._ever_committed
                 )
                 candidate = (
-                    _state_json(namespace, epoch, revision, adopted_frames)
+                    _state_json(namespace, epoch, revision, adopted_state)
                     if adopt
                     else _state_json(
-                        self._namespace, self._epoch, self._revision, self._frames
+                        self._namespace, self._epoch, self._revision, self._state
                     )
                 )
                 self._save_state(candidate, ever_opened=True, ever_committed=committed)
@@ -991,7 +894,7 @@ class ReflectiveMemory:
                     self._namespace = namespace
                     self._epoch = epoch
                     self._revision = revision
-                    self._frames = adopted_frames
+                    self._state = adopted_state
                     self._ever_committed = committed
                 self._ever_opened = True
             return _ReflectiveSession(
@@ -999,7 +902,7 @@ class ReflectiveMemory:
                 namespace,
                 epoch,
                 revision,
-                frames,
+                state,
                 llm_config,
             )
 
@@ -1011,10 +914,12 @@ class ReflectiveMemory:
                 be saved. A failed save leaves live lessons unchanged.
         """
         with self._operation():
+            cleared = _State(self._state.limits, ())
             self._save_state(
-                _state_json(self._namespace, self._epoch + 1, 0, {}), ever_reset=True
+                _state_json(self._namespace, self._epoch + 1, 0, cleared),
+                ever_reset=True,
             )
-            self._frames = {}
+            self._state = cleared
             self._epoch += 1
             self._revision = 0
             self._ever_reset = True
@@ -1029,14 +934,14 @@ class _ReflectiveSession:
         namespace: str,
         epoch: int,
         revision: int,
-        frames: dict[MemoryFrameRef, _FrameState],
+        state: _State,
         llm_config: JsonObject,
     ) -> None:
         self._memory = memory
         self._namespace = namespace
         self._epoch = epoch
         self._revision = revision
-        self._frames = frames
+        self._state = state
         self._llm_config = _copy_json_object(llm_config, "llm_config")
         self._opened: dict[MemoryFrameRef, _ReflectiveFrame] = {}
         self._closed = False
@@ -1053,16 +958,11 @@ class _ReflectiveSession:
         """Return the public durable source-neutral state pinned for this run."""
         with self._memory._operation():
             self._ensure_open()
-            frames = {
-                ref: _copy_frame_state(state) for ref, state in self._frames.items()
-            }
-            for ref, frame in self._opened.items():
-                frames.setdefault(ref, _FrameState(frame._spec, ()))
             return _snapshot_json(
                 self._namespace,
                 self._epoch,
                 self._revision,
-                frames,
+                self._state,
                 self._llm_config,
             )
 
@@ -1095,61 +995,12 @@ class _ReflectiveSession:
         with self._memory._lock:
             self._closed = True
 
-    def _normalize_spec(
-        self,
-        spec: MemoryFrameSpec,
-        recorded: _FrameState | None,
-    ) -> _EffectiveFrameSpec:
-        """Validate one reflective frame and fill its local defaults."""
-        if type(spec) is not MemoryFrameSpec:
-            raise _operation_error(
-                "open_frame",
-                "reflective.invalid_frame",
-                "spec must be a MemoryFrameSpec",
-            )
-        if spec.policy_name != _POLICY_NAME:
-            raise _operation_error(
-                "open_frame",
-                "reflective.invalid_policy",
-                "frame policy must be 'reflective'",
-            )
-        config = spec.config
-        unknown = set(config) - {"max_items", "recall_limit"}
-        if unknown:
-            raise _operation_error(
-                "open_frame",
-                "reflective.invalid_frame_config",
-                "frame configuration contains unsupported fields",
-            )
-        try:
-            default_max_items = (
-                recorded.spec.max_items
-                if recorded is not None
-                else self._memory._default_max_items
-            )
-            default_recall_limit = (
-                recorded.spec.recall_limit
-                if recorded is not None
-                else self._memory._default_recall_limit
-            )
-            max_items = _positive_int(
-                config.get("max_items", default_max_items),
-                "max_items",
-            )
-            recall_limit = _positive_int(
-                config.get("recall_limit", default_recall_limit),
-                "recall_limit",
-            )
-        except (TypeError, ValueError) as exc:
-            raise _operation_error(
-                "open_frame",
-                "reflective.invalid_frame_config",
-                "frame configuration values are invalid",
-            ) from exc
-        return _EffectiveFrameSpec(spec.ref, max_items, recall_limit)
-
     def open_frame(self, spec: MemoryFrameSpec) -> _ReflectiveFrame:
-        """Open one frame idempotently against the pinned session snapshot."""
+        """Return the view of this instance's state for one frame reference.
+
+        The frame's policy name and configuration are ignored. The instance
+        limits come from the backend.
+        """
         with self._memory._operation():
             self._ensure_open()
             if type(spec) is not MemoryFrameSpec:
@@ -1158,26 +1009,11 @@ class _ReflectiveSession:
                     "reflective.invalid_frame",
                     "spec must be a MemoryFrameSpec",
                 )
-            recorded = self._frames.get(spec.ref)
-            effective = self._normalize_spec(spec, recorded)
-            opened = self._opened.get(effective.ref)
-            if opened is not None:
-                if opened._requested_spec != spec or opened._spec != effective:
-                    raise _operation_error(
-                        "open_frame",
-                        "reflective.frame_conflict",
-                        "the frame was already opened with a different specification",
-                    )
-                return opened
-            if recorded is not None and recorded.spec != effective:
-                raise _operation_error(
-                    "open_frame",
-                    "reflective.frame_conflict",
-                    "the recorded frame has a different specification",
-                )
-            frame = _ReflectiveFrame(self, effective, spec)
-            self._opened[effective.ref] = frame
-            return frame
+            opened = self._opened.get(spec.ref)
+            if opened is None:
+                opened = _ReflectiveFrame(self, spec.ref)
+                self._opened[spec.ref] = opened
+            return opened
 
     def _assert_current_generation(self, stage: str) -> None:
         """Require this proposal session to remain the current generation."""
@@ -1192,13 +1028,6 @@ class _ReflectiveSession:
                 "memory session is stale",
                 retryable=False,
             )
-
-    def _state_for(self, ref: MemoryFrameRef) -> _FrameState:
-        """Return the pinned frame state or its declared empty initial state."""
-        state = self._frames.get(ref)
-        if state is not None:
-            return state
-        return _FrameState(self._opened[ref]._spec, ())
 
     def _batch_digest(self, mutations: tuple[MemoryMutation, ...]) -> str:
         """Compute a canonical digest before generation-dependent validation."""
@@ -1280,7 +1109,7 @@ class _ReflectiveSession:
             )
         try:
             lesson_id = _nonempty_string(payload["lesson_id"], "lesson_id")
-            source = _source_from_json(payload["source"], "source", mutation.frame_ref)
+            source = _source_from_json(payload["source"], "source")
         except (TypeError, ValueError) as exc:
             raise _operation_error(
                 "commit",
@@ -1341,33 +1170,18 @@ class _ReflectiveSession:
 
             self._validate_batch_ownership(mutations)
             self._assert_current_generation("commit")
-            frames = {
-                ref: _copy_frame_state(state)
-                for ref, state in self._memory._frames.items()
-            }
-            for ref, opened in self._opened.items():
-                existing = frames.get(ref)
-                if existing is not None and existing.spec != opened._spec:
-                    raise _operation_error(
-                        "commit",
-                        "reflective.frame_conflict",
-                        "current frame specification changed",
-                    )
-                frames.setdefault(ref, _FrameState(opened._spec, ()))
-
-            touched: set[tuple[MemoryFrameRef, str]] = set()
+            state = _copy_state(self._memory._state)
+            lessons = list(state.lessons)
+            touched: set[str] = set()
             for mutation in mutations:
                 action, lesson_id, text, source = self._validated_action(mutation)
-                target = (mutation.frame_ref, lesson_id)
-                if target in touched:
+                if lesson_id in touched:
                     raise _operation_error(
                         "commit",
                         "reflective.invalid_mutation",
                         "a batch cannot target one lesson more than once",
                     )
-                touched.add(target)
-                state = frames[mutation.frame_ref]
-                lessons = list(state.lessons)
+                touched.add(lesson_id)
                 position = next(
                     (
                         index
@@ -1400,15 +1214,14 @@ class _ReflectiveSession:
                             "remove mutation targets a missing lesson",
                         )
                     lessons.pop(position)
-                frames[mutation.frame_ref] = _FrameState(state.spec, tuple(lessons))
 
-            for state in frames.values():
-                if len(state.lessons) > state.spec.max_items:
-                    raise _operation_error(
-                        "commit",
-                        "reflective.max_items",
-                        "mutation batch exceeds max_items",
-                    )
+            state = _State(state.limits, tuple(lessons))
+            if len(state.lessons) > state.limits.max_items:
+                raise _operation_error(
+                    "commit",
+                    "reflective.max_items",
+                    "mutation batch exceeds max_items",
+                )
 
             commits = {**self._memory._applied_commits, commit_id: digest}
             self._memory._save_state(
@@ -1416,12 +1229,12 @@ class _ReflectiveSession:
                     self._memory._namespace,
                     self._memory._epoch,
                     self._memory._revision + 1,
-                    frames,
+                    state,
                 ),
                 applied_commits=commits,
                 ever_committed=True,
             )
-            self._memory._frames = frames
+            self._memory._state = state
             self._memory._applied_commits = commits
             self._memory._revision += 1
             self._memory._ever_committed = True
@@ -1433,16 +1246,14 @@ class _ReflectiveFrame:
     def __init__(
         self,
         session: _ReflectiveSession,
-        spec: _EffectiveFrameSpec,
-        requested_spec: MemoryFrameSpec,
+        ref: MemoryFrameRef,
     ) -> None:
         self._session = session
-        self._spec = spec
-        self._requested_spec = requested_spec
+        self._ref = ref
 
     def _lessons(self) -> tuple[_Lesson, ...]:
-        """Return this frame's pinned immutable lessons."""
-        return self._session._state_for(self._spec.ref).lessons
+        """Return the instance's pinned immutable lessons."""
+        return self._session._state.lessons
 
     @staticmethod
     def _format(lessons: list[_Lesson] | tuple[_Lesson, ...]) -> str:
@@ -1490,7 +1301,8 @@ class _ReflectiveFrame:
                 item[1].lesson_id,
             ),
         )
-        selected = [lesson for _, lesson in ranked[: self._spec.recall_limit]]
+        limit = self._session._state.limits.recall_limit
+        selected = [lesson for _, lesson in ranked[:limit]]
         return self._format(selected)
 
     def _reflection_prompt(self, context: LearnContext) -> str:
@@ -1504,14 +1316,15 @@ class _ReflectiveFrame:
             for lesson in self._lessons()
         ]
         frame_material = _bounded_json_material(
-            _frame_ref_json(self._spec.ref), _MAX_FRAME_MATERIAL_CHARS
+            _frame_ref_json(self._ref), _MAX_FRAME_MATERIAL_CHARS
         )
         lesson_material = _bounded_json_material(
             cast(JsonValue, lessons), _MAX_LESSON_MATERIAL_CHARS
         )
         episode_material = _bounded_episode_material(context)
         limit_material = _bounded_json_material(
-            {"max_items": self._spec.max_items}, _MAX_LIMIT_MATERIAL_CHARS
+            {"max_items": self._session._state.limits.max_items},
+            _MAX_LIMIT_MATERIAL_CHARS,
         )
         return (
             f"Frame: {frame_material}\n"
@@ -1547,7 +1360,7 @@ class _ReflectiveFrame:
         current = {lesson.lesson_id: lesson for lesson in self._lessons()}
         touched: set[str] = set()
         proposals: list[MemoryMutation] = []
-        source = _source_json(context.run_id, context.frame_ref)
+        source = _source_json(context.run_id)
         for index, action in enumerate(actions):
             lesson_id = action.lesson_id
             if type(lesson_id) is not str or not lesson_id:
@@ -1616,7 +1429,7 @@ class _ReflectiveFrame:
             )
             proposals.append(MemoryMutation(mutation_id, context.frame_ref, payload))
 
-        if len(current) > self._spec.max_items:
+        if len(current) > self._session._state.limits.max_items:
             raise _operation_error(
                 "learn",
                 "reflective.max_items",
@@ -1637,7 +1450,7 @@ class _ReflectiveFrame:
                 "reflective.invalid_context",
                 "context must be a LearnContext",
             )
-        if context.frame_ref != self._spec.ref:
+        if context.frame_ref != self._ref:
             raise _operation_error(
                 "learn",
                 "reflective.invalid_context",

@@ -59,14 +59,7 @@ def test_learned_lessons_and_limits_survive_reopen(monkeypatch, tmp_path):
         with memory.open_run() as opened:
             assert opened.open_frame(_spec()).recall() == "[lesson] Use evidence"
             opened.open_frame(_spec("new"))
-            configs = {
-                item["ref"]["static_path"][-1]: item["config"]
-                for item in opened.snapshot["frames"]
-            }
-            assert configs == {
-                "agent": {"max_items": 2, "recall_limit": 1},
-                "new": {"max_items": 9, "recall_limit": 7},
-            }
+            assert opened.snapshot["config"] == {"max_items": 2, "recall_limit": 1}
         with memory.open_run(snapshot=old) as stale:
             assert stale.snapshot == old
             assert stale.open_frame(_spec()).recall() == ""
@@ -104,7 +97,7 @@ def test_pristine_snapshot_adoption_keeps_constructor_model(monkeypatch, tmp_pat
         assert _snapshot(memory)["llm_config"]["model"] == "current"
     with _memory(path) as memory:
         current = _snapshot(memory)
-        assert current["frames"] == saved["frames"]
+        assert current["lessons"] == saved["lessons"]
         assert current["llm_config"]["model"] == "current"
 
 
@@ -158,7 +151,7 @@ def test_none_storage_never_opens_sqlite(monkeypatch):
 
     monkeypatch.setattr(sqlite3, "connect", forbidden)
     with _memory() as memory:
-        assert _snapshot(memory)["frames"] == []
+        assert _snapshot(memory)["lessons"] == []
 
 
 def test_invalid_defaults_do_not_create_storage(tmp_path):
@@ -245,7 +238,7 @@ def test_commit_tombstones_survive_removal_reset_and_stale_replay(
         batch = _learn(monkeypatch, memory)
         _learn(monkeypatch, memory, "removed", "remove")
         expected = _snapshot(memory)
-        assert expected["frames"][0]["lessons"] == []
+        assert expected["lessons"] == []
     with _memory(path) as memory:
         with memory.open_run(snapshot=old) as stale:
             stale.commit("learned", batch)
@@ -261,11 +254,11 @@ def test_commit_tombstones_survive_removal_reset_and_stale_replay(
             with pytest.raises(c.MemoryOperationError) as caught:
                 opened.commit("learned", ())
             assert caught.value.code == "reflective.commit_collision"
-        assert _snapshot(memory)["frames"] == []
+        assert _snapshot(memory)["lessons"] == []
         assert memory._epoch == 1 and memory._revision == 0
 
 
-def test_recorded_empty_frame_limits_survive_reopen(tmp_path):
+def test_recorded_limits_survive_reopen(tmp_path):
     path = tmp_path / "memory.sqlite"
     with _memory(path, max_items=4, recall_limit=2) as memory:
         with memory.open_run() as opened:
@@ -277,7 +270,7 @@ def test_recorded_empty_frame_limits_survive_reopen(tmp_path):
             assert resumed.snapshot == saved
             resumed.commit("declare", ())
     with _memory(path) as memory:
-        assert _snapshot(memory)["frames"][0]["config"] == {
+        assert _snapshot(memory)["config"] == {
             "max_items": 4,
             "recall_limit": 2,
         }
@@ -289,7 +282,7 @@ def _ram_state(memory):
             memory._namespace,
             memory._epoch,
             memory._revision,
-            memory._frames,
+            memory._state,
             memory._applied_commits,
             memory._ever_opened,
             memory._ever_reset,
@@ -404,7 +397,7 @@ def test_uncertain_save_poisoning_blocks_ram_reads_and_keeps_primary(
         "uncommitted",
         "reset",
         "config",
-        "frame_order",
+        "stale_frames",
         "source",
         "duplicate_lesson",
         "overflow",
@@ -420,7 +413,7 @@ def test_invalid_inventory_releases_ownership_without_rewriting(
     storage = SQLiteStorage(path, "reflective")
     inventory = storage.load()
     state = inventory["state"]
-    frame = state["frames"][0]
+    frame = state
     if case == "extra":
         inventory["extra"] = None
     elif case == "version":
@@ -439,10 +432,10 @@ def test_invalid_inventory_releases_ownership_without_rewriting(
         inventory["ever_reset"] = True
     elif case == "config":
         frame["config"]["max_items"] = True
-    elif case == "frame_order":
-        state["frames"].append(deepcopy(frame))
+    elif case == "stale_frames":
+        state["frames"] = []
     elif case == "source":
-        frame["lessons"][0]["source"]["frame_ref"]["static_path"] = ["other"]
+        frame["lessons"][0]["source"]["frame_ref"] = {}
     elif case == "duplicate_lesson":
         frame["config"]["max_items"] = 2
         frame["lessons"].append(deepcopy(frame["lessons"][0]))

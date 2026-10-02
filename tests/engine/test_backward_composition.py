@@ -609,7 +609,7 @@ output: ${input.text}
     with backend.open_run() as session:
         committed = session.snapshot
     assert committed["revision"] == initial["revision"] + 1
-    assert sum(len(frame["lessons"]) for frame in committed["frames"]) == (0 if action == "noop" else 1)
+    assert len(committed["lessons"]) == (0 if action == "noop" else 1)
     assert learner.calls == 1 and len(configurations) == len(schemas) == 1
 
     forward_state = deepcopy((first.status, first.output, first.failure))

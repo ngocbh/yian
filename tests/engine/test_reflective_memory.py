@@ -88,7 +88,7 @@ def _mutation(
     payload: dict[str, object] = {
         "action": action,
         "lesson_id": lesson_id,
-        "source": reflective._source_json("run-1", ref),
+        "source": reflective._source_json("run-1"),
     }
     if text is not None:
         payload["text"] = text
@@ -171,17 +171,13 @@ def test_constructor_and_frame_configuration_are_exact() -> None:
     with memory.open_run() as session:
         frame = session.open_frame(_spec())
         assert session.open_frame(_spec()) is frame
-        with pytest.raises(MemoryOperationError, match="different"):
-            session.open_frame(_spec(config={"max_items": 7}))
-        with pytest.raises(MemoryOperationError, match="policy") as exc:
-            session.open_frame(MemoryFrameSpec(_ref(), "other", {}))
-        assert exc.value.retryable is False
-        with pytest.raises(MemoryOperationError) as unknown_error:
-            session.open_frame(_spec(config={"unknown": 1}))
-        assert unknown_error.value.code == "reflective.invalid_frame_config"
-        with pytest.raises(MemoryOperationError) as value_error:
-            session.open_frame(_spec(config={"max_items": True}))
-        assert value_error.value.code == "reflective.invalid_frame_config"
+        for spec in (
+            _spec(config={"max_items": 7}),
+            MemoryFrameSpec(_ref(), "other", {}),
+            _spec(config={"unknown": 1}),
+            _spec(config={"max_items": True}),
+        ):
+            assert session.open_frame(spec) is frame
 
 
 def test_snapshot_contains_only_public_pinned_model_configuration() -> None:
@@ -414,16 +410,17 @@ def test_snapshot_rejects_malformed_foreign_and_extra_lesson_sources() -> None:
     with memory.open_run() as session:
         base = session.snapshot
 
-    valid_source = reflective._source_json("run-1", _ref())
+    valid_source = reflective._source_json("run-1")
     malformed_sources: list[object] = [
         "not-an-object",
-        {"frame_ref": valid_source["frame_ref"]},
-        reflective._source_json("run-1", _ref("foreign")),
+        {},
+        {"run_id": ""},
+        {**valid_source, "frame_ref": {}},
         {**valid_source, "extra": "source-secret"},
     ]
     for malformed in malformed_sources:
         snapshot = json.loads(json.dumps(base))
-        snapshot["frames"][0]["lessons"][0]["source"] = malformed
+        snapshot["lessons"][0]["source"] = malformed
         with pytest.raises(MemoryOperationError) as exc:
             ReflectiveMemory().open_run(snapshot=snapshot)
         assert exc.value.code == "reflective.invalid_snapshot"
@@ -435,8 +432,7 @@ def test_frame_idempotency_and_closed_session_operations() -> None:
     session = memory.open_run()
     frame = session.open_frame(_spec(config={"recall_limit": 2}))
     assert session.open_frame(_spec(config={"recall_limit": 2})) is frame
-    with pytest.raises(MemoryOperationError, match="different"):
-        session.open_frame(_spec(config={"recall_limit": 3}))
+    assert session.open_frame(_spec(config={"recall_limit": 3})) is frame
     session.close()
     session.close()
     with pytest.raises(MemoryOperationError, match="closed"):
@@ -447,6 +443,49 @@ def test_frame_idempotency_and_closed_session_operations() -> None:
         frame.learn(_context())
     with pytest.raises(MemoryOperationError, match="closed"):
         session.commit("commit", ())
+
+
+def test_frames_of_one_instance_share_one_lesson_list_and_limit() -> None:
+    memory = ReflectiveMemory(
+        {"provider": "ollama", "model": "qwen"}, max_items=2, recall_limit=1
+    )
+    with memory.open_run() as session:
+        first = session.open_frame(_spec("first"))
+        assert session.open_frame(_spec("first", {"max_items": 9})) is first
+        session.open_frame(_spec("second", {"max_items": 9}))
+        session.commit(
+            "seed",
+            (
+                _mutation(_ref("first"), "one", "add", "one", "first lesson"),
+                _mutation(_ref("second"), "two", "add", "two", "second lesson"),
+            ),
+        )
+    with memory.open_run() as session:
+        snapshot = session.snapshot
+        assert snapshot["version"] == 2
+        assert set(snapshot) == {
+            "config",
+            "epoch",
+            "format",
+            "lessons",
+            "llm_config",
+            "namespace",
+            "revision",
+            "version",
+        }
+        assert snapshot["config"] == {"max_items": 2, "recall_limit": 1}
+        assert [lesson["source"] for lesson in snapshot["lessons"]] == [
+            {"run_id": "run-1"},
+            {"run_id": "run-1"},
+        ]
+        recalled = session.open_frame(_spec("second")).recall()
+        assert recalled == "[one] first lesson\n[two] second lesson"
+        with pytest.raises(MemoryOperationError) as exc:
+            session.commit(
+                "overflow",
+                (_mutation(_ref("second"), "three", "add", "three", "third"),),
+            )
+        assert exc.value.code == "reflective.max_items"
 
 
 def test_recall_all_and_context_ranking_are_deterministic(
@@ -552,14 +591,7 @@ def test_learn_uses_pinned_config_and_returns_deterministic_proposals(
         assert first[0].payload == {
             "action": "add",
             "lesson_id": "one",
-            "source": {
-                "frame_ref": {
-                    "owner": "agent",
-                    "root_flow_id": "root",
-                    "static_path": ["root", "agent"],
-                },
-                "run_id": "run-1",
-            },
+            "source": {"run_id": "run-1"},
             "text": "Keep it short",
         }
 

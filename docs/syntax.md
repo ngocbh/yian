@@ -301,8 +301,10 @@ one session. Every call site of that AGENT shares one conversation; repeated
 calls, LOOP iterations, and MAP items take turns in admission order. History
 updates automatically during forward, without enabling learning.
 
-Declarations reachable from the root are checked when the flow loads. An
-uncalled def or alias is not checked.
+Each declaration's form and config are checked for every def and import. The
+rules that compare declarations (one type and config per key, session
+placement, case collisions, alias names) apply only to declarations reachable
+from the root.
 
 **Supplying memory.** `composer run` builds every built-in memory in RAM, or
 on disk with `--memory-root DIR` / `--memory-storage KEY=PATH` (see

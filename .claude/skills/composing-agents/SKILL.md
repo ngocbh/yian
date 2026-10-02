@@ -281,7 +281,9 @@ are an error. An AGENT recalls each enclosing flow's memories, outermost first,
 through CALL, MAP, and LOOP, then its own; a repeated key appears once. A child's
 declaration never binds to a parent's memory. Other node kinds and anonymous inline
 CALL/MAP/LOOP bodies cannot carry `long_term_memory:`; use a named `defs:` flow.
-Declarations reachable from the root are checked when the flow loads.
+Each declaration's form and config are checked for every def and import; the rules
+that compare declarations (one type and config per key, session placement, case
+collisions, alias names) apply only to declarations reachable from the root.
 
 A `session` memory is declared on exactly one AGENT, never on a flow, and an AGENT
 declares at most one. It supplies a structured transcript, while other memories

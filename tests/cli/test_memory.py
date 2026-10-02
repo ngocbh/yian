@@ -18,8 +18,9 @@ from agent_composer.cli.memory import (
     parse_memory_storage,
 )
 from agent_composer.compose import LoadError, load_flow
-from agent_composer.events import NodeStarted
+from agent_composer.events import NodeStarted, RunStarted
 from agent_composer.memory.contracts import MemoryOperationError, MemorySetupError
+from agent_composer.memory_host import build_memories
 from agent_composer.run import run_flow
 from agent_composer.runtime.log import RunStartedRecord, decode_record
 
@@ -609,3 +610,25 @@ def test_cli_module_docstrings_name_the_new_flags():
     for doc in (cli_package.__doc__, run_cli.__doc__):
         assert "--memory-root" in doc
         assert "POLICY=PATH" not in doc
+
+
+def test_resume_accepts_one_def_called_from_two_nodes(tmp_path):
+    flow = tmp_path / "flow.yaml"
+    flow.write_text(
+        "id: two-calls\nname: two_calls\nlong_term_memory: {notes: episodic}\n"
+        "defs:\n  child:\n    nodes:\n      work: {kind: code, code: return 1, output: int}\n"
+        "    output: ${work.output}\n"
+        "nodes:\n  one: {kind: call, call: child}\n  two: {kind: call, call: child}\n"
+        "output: ${one.output + two.output}\n"
+    )
+    log = tmp_path / "run.jsonl"
+
+    def stop_after_start(event):
+        if isinstance(event, RunStarted):
+            raise RuntimeError("host stop")
+
+    composed = load_flow(flow.read_text())
+    with build_memories(composed) as registry, pytest.raises(RuntimeError, match="host stop"):
+        run_flow(composed, {}, log=log, memory=registry, on_event=stop_after_start)
+    resumed = _RUNNER.invoke(app, ["run", str(flow), "--resume", str(log), "--quiet"])
+    assert resumed.exit_code == 0, resumed.output

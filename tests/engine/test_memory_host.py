@@ -459,3 +459,51 @@ def test_resume_checks_registry_types_too(tmp_path: Path) -> None:
             resume_flow(flow, log=log, memory=other)
     with build_memories(flow, root=root) as registry:
         assert resume_flow(flow, log=log, memory=registry).status == "succeeded"
+
+
+_TWO_CALLS = """id: two-calls
+name: two_calls
+long_term_memory: {notes: episodic}
+defs:
+  child:
+    nodes:
+      work: {kind: code, code: return 1, output: int}
+    output: ${work.output}
+nodes:
+  one: {kind: call, call: child}
+  two: {kind: call, call: child}
+output: ${one.output + two.output}
+"""
+
+
+_TWO_USES_CALLS = """id: two-uses-calls
+name: two_uses_calls
+nodes:
+  one: {kind: call, call: lib}
+  two: {kind: call, call: lib}
+output: ${one.output + two.output}
+uses:
+  lib: lib
+"""
+
+
+@pytest.mark.parametrize("source", ["def", "uses"])
+def test_resume_accepts_one_callee_called_from_two_nodes(tmp_path: Path, source: str) -> None:
+    (tmp_path / "lib.yaml").write_text(
+        "id: lib\nname: lib\nlong_term_memory: {notes: episodic}\nnodes:\n"
+        "  work: {kind: code, code: return 1, output: int}\noutput: ${work.output}\n"
+    )
+    text = _TWO_CALLS if source == "def" else _TWO_USES_CALLS
+    log = tmp_path / "run.jsonl"
+
+    def stop_after_start(event: object) -> None:
+        if isinstance(event, RunStarted):
+            raise RuntimeError("host stop")
+
+    with build_memories(load_flow(text, search_paths=[tmp_path])) as registry:
+        with pytest.raises(RuntimeError, match="host stop"):
+            run_flow(load_flow(text, search_paths=[tmp_path]), {}, log=log, memory=registry,
+                     on_event=stop_after_start)
+        resumed = resume_flow(load_flow(text, search_paths=[tmp_path]), log=log, memory=registry)
+    assert resumed.status == "succeeded"
+    assert resumed.output == 2

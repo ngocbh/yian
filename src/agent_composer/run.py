@@ -38,6 +38,7 @@ from agent_composer.compile.llm_cascade import (
 )
 from agent_composer.compile.manifest import flow_fingerprint
 from agent_composer.compile.memory_layout import (
+    ResolvedMemoryLayout,
     apply_memory_layout,
     check_session_compatibility,
     memory_stacks,
@@ -964,6 +965,17 @@ def _resolve_runtime_memory_layout(
     if effective_llm is not None:
         check_session_compatibility(resolved, effective_llm)
     apply_memory_layout(flow, resolved)
+    return _memory_layout_parts(resolved)
+
+
+def _memory_layout_parts(
+    resolved: ResolvedMemoryLayout,
+) -> tuple[
+    tuple[MemorySpec, ...],
+    dict[str, OriginRef | None],
+    tuple[MemoryStack, ...],
+]:
+    """Return one layout's record-facing key table, per-key origins and stacks."""
     return (
         tuple(memory.spec for memory in resolved.memories),
         {memory.spec.key: memory.origin for memory in resolved.memories},
@@ -991,10 +1003,14 @@ def _resolve_authored_memory_layout(
     dict[str, OriginRef | None],
     tuple[MemoryStack, ...],
 ]:
-    """Resolve memory only on a fresh static copy, never replayed growth."""
+    """Purely resolve memory on the authored static program, never replayed growth.
+
+    Nothing is stamped, so a def called from several nodes needs no de-aliasing;
+    the table, origins and stacks equal those a fresh run records.
+    """
     if not isinstance(flow, ComposedFlow):
         raise TypeError("memory layout resolution expects a ComposedFlow")
-    return _resolve_runtime_memory_layout(copy.deepcopy(flow.compiled))
+    return _memory_layout_parts(resolve_memory_layout(flow.compiled))
 
 
 def _check_recorded_memory_table(

@@ -204,3 +204,16 @@ def test_dotted_alias_is_rejected_at_load(tmp_path: Path) -> None:
     (tmp_path / "lib.yaml").write_text(_lib())
     with pytest.raises(LoadError, match="'my.lib'"):
         load_flow(_root({"a": "my.lib"}, {"my.lib": "lib"}), search_paths=[tmp_path])
+
+
+def test_imported_flow_memory_is_owned_by_a_scoped_root_site(tmp_path: Path) -> None:
+    (tmp_path / "lib.yaml").write_text(_lib())
+    flow = load_flow(
+        _root({"a": "lib"}, {"lib": "lib"}, "{notes: episodic}"),
+        search_paths=[tmp_path],
+    )
+    owners = {m.key: m.owners for m in resolve_memory_layout(flow.compiled).memories}
+    assert owners == {
+        "lib.notes": (DeclSite(("lib",), ("root",), None),),
+        "notes": (DeclSite((), ("root",), None),),
+    }

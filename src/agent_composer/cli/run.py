@@ -1441,7 +1441,8 @@ def run(
     except MemoryOptionError as exc:
         raise typer.BadParameter(str(exc), param_hint=exc.param_hint) from exc
     except (TypeError, ValueError) as exc:
-        _render_host_run_error("run", exc, engine_trace=engine_trace)
+        action = "resume" if resume is not None else "run"
+        _render_host_run_error(action, exc, engine_trace=engine_trace)
         raise typer.Exit(code=1)
     memory_options = {"memory": registry} if registry else {}
     # Claude Code and Codex skill folders (user, then project up to the git root),

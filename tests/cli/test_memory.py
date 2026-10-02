@@ -187,15 +187,27 @@ def test_memory_root_without_flow_id_is_a_bad_parameter(tmp_path):
     assert caught.value.param_hint == "--memory-root"
 
 
-def test_custom_type_points_to_the_python_api(tmp_path, monkeypatch):
+@pytest.mark.parametrize("resume", [False, True], ids=["fresh", "resume"])
+def test_custom_type_points_to_the_python_api(tmp_path, monkeypatch, resume):
+    if resume:
+        finished, log = _run(tmp_path, flow=_flow_file(tmp_path, memory=None))
+        assert finished.exit_code == 0, finished.output
+        before = log.read_bytes()
     _no_inputs_or_provider(monkeypatch)
     flow = _flow_file(tmp_path, "{vec: vector}")
-    result, log = _run(tmp_path, flow=flow)
+    if resume:
+        result = _RUNNER.invoke(app, ["run", str(flow), "--resume", str(log), "--quiet"])
+    else:
+        result, log = _run(tmp_path, flow=flow)
     assert result.exit_code == 1
     text = _plain(result.output)
+    assert text.startswith("resume failed:" if resume else "run failed:")
     assert "Python API" in text and "build_memories" in text
     assert "Traceback" not in result.output
-    assert not log.exists()
+    if resume:
+        assert log.read_bytes() == before
+    else:
+        assert not log.exists()
 
 
 def test_flags_are_accepted_with_resume(tmp_path):

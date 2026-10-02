@@ -19,6 +19,18 @@ BACKENDS: list[tuple[object, Callable[..., object]]] = [
     (episodic_module, lambda path, **kw: EpisodicMemory(storage=path, **kw)),
 ]
 
+from agent_composer.memory import reflective as reflective_module
+from agent_composer.memory.reflective import ReflectiveMemory
+
+_REFLECTIVE_LLM = {"provider": "ollama", "model": "current"}
+
+BACKENDS.append(
+    (
+        reflective_module,
+        lambda path, **kw: ReflectiveMemory(_REFLECTIVE_LLM, storage=path, **kw),
+    )
+)
+
 
 def _ids(case) -> str:
     return case[0].__name__.rsplit(".", 1)[-1]

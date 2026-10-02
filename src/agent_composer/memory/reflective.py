@@ -39,7 +39,7 @@ from agent_composer.memory.contracts import (
     VisibleInteraction,
     _MAX_JSON_NESTING,
 )
-from agent_composer.memory.storage import SQLiteStorage
+from agent_composer.memory.storage import SQLiteStorage, check_storage_path
 
 _SNAPSHOT_FORMAT = "agent_composer.reflective_memory"
 _SNAPSHOT_VERSION = 2
@@ -579,6 +579,7 @@ class ReflectiveMemory:
     Examples:
         ``with ReflectiveMemory(storage="memory.sqlite") as memory:`` retains
         lessons across restarts and releases the single file owner on exit.
+        The file is opened at the first operation, not at construction.
         Idle run handles do not need to close before the backend.
     """
 
@@ -589,6 +590,7 @@ class ReflectiveMemory:
         max_items: int | None = None,
         recall_limit: int | None = None,
         storage: str | os.PathLike[str] | None = None,
+        create_parent: bool = False,
     ) -> None:
         """Create or reopen one reflective-memory namespace.
 
@@ -604,15 +606,17 @@ class ReflectiveMemory:
                 returned by contextual recall. None adopts the stored or snapshot
                 value, else 20.
             storage (`str | PathLike[str] | None`, defaults to `None`): Optional
-                local SQLite file with an existing parent, owned until close or
-                context exit. None keeps state process-local.
+                local SQLite file. Nothing is opened until the first operation;
+                this backend then owns the file until close. None keeps state
+                process-local.
+            create_parent (`bool`, defaults to `False`): Create the storage
+                file's parent directory at first open.
 
         Raises:
             TypeError: Limits or model settings have invalid types.
             ValueError: Limits or model settings are invalid.
-            MemoryOperationError: Storage is unavailable, occupied, or invalid,
-                or an explicit limit differs from the stored limits
-                (`reflective.config_conflict`).
+            MemoryOperationError: ``storage`` is not a local file path
+                (`storage.path`).
         """
         if max_items is not None:
             _positive_int(max_items, "max_items")
@@ -647,37 +651,49 @@ class ReflectiveMemory:
         self._ever_opened = False
         self._ever_reset = False
         self._ever_committed = False
-        if storage is not None:
-            self._storage = SQLiteStorage(storage, _POLICY_NAME)
-            try:
-                saved = self._storage.load()
-                if saved is None:
-                    self._save_state(
-                        _state_json(
-                            self._namespace, self._epoch, self._revision, self._state
-                        )
+        if type(create_parent) is not bool:
+            raise TypeError("create_parent must be a bool")
+        self._storage_path = None if storage is None else check_storage_path(storage)
+        self._create_parent = create_parent
+
+    def _open_storage(self) -> None:
+        """Open and load durable state once; the caller holds ``self._lock``."""
+        if self._storage is not None or self._storage_path is None:
+            return
+        self._storage = SQLiteStorage(
+            self._storage_path, _POLICY_NAME, create_parent=self._create_parent
+        )
+        try:
+            saved = self._storage.load()
+            if saved is None:
+                self._save_state(
+                    _state_json(
+                        self._namespace, self._epoch, self._revision, self._state
                     )
-                else:
-                    state, commits, opened, reset, committed = _parse_inventory(saved)
-                    _resolve_limits(self._requested, state[3].limits, "storage")
-                    self._namespace, self._epoch, self._revision, self._state = state
-                    self._applied_commits = commits
-                    self._ever_opened = opened
-                    self._ever_reset = reset
-                    self._ever_committed = committed
-            except BaseException as primary:
-                try:
-                    self._storage.close()
-                except BaseException as cleanup:
-                    if hasattr(primary, "add_note"):
-                        primary.add_note(
-                            f"ReflectiveMemory cleanup failed: {type(cleanup).__name__}"
-                        )
-                raise
+                )
+            else:
+                state, commits, opened, reset, committed = _parse_inventory(saved)
+                _resolve_limits(self._requested, state[3].limits, "storage")
+                self._namespace, self._epoch, self._revision, self._state = state
+                self._applied_commits = commits
+                self._ever_opened = opened
+                self._ever_reset = reset
+                self._ever_committed = committed
+        except BaseException as primary:
+            try:
+                self._storage.close()
+            except BaseException as cleanup:
+                if hasattr(primary, "add_note"):
+                    primary.add_note(
+                        f"ReflectiveMemory cleanup failed: {type(cleanup).__name__}"
+                    )
+            # Forget the failed handle so a later operation may retry the open.
+            self._storage = None
+            raise
 
     def _check_pid(self) -> None:
         """Reject inherited durable handles before touching any Python lock."""
-        if self._storage is not None and os.getpid() != self._pid:
+        if self._storage_path is not None and os.getpid() != self._pid:
             raise _operation_error(
                 "storage", "storage.forked", "Memory storage cannot be used after fork."
             )
@@ -691,6 +707,7 @@ class ReflectiveMemory:
                 raise _operation_error(
                     "session", "reflective.closed", "memory backend is closed"
                 )
+            self._open_storage()
             if self._storage is not None:
                 self._storage.ensure_open()
             self._active_operations += 1
@@ -852,7 +869,7 @@ class ReflectiveMemory:
 
         Raises:
             MemoryOperationError: The snapshot or model configuration is invalid,
-                the backend is closed, or durable state cannot be saved.
+                the backend is closed, or durable state cannot be opened or saved.
         """
         with self._operation():
             parsed = None if snapshot is None else _parse_snapshot(snapshot)
@@ -929,7 +946,7 @@ class ReflectiveMemory:
 
         Raises:
             MemoryOperationError: The backend is closed or durable state cannot
-                be saved. A failed save leaves live lessons unchanged.
+                be opened or saved. A failed save leaves live lessons unchanged.
         """
         with self._operation():
             cleared = _State(self._state.limits, ())

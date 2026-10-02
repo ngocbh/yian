@@ -25,6 +25,13 @@ from tests.engine.test_reflective_memory import (
 _CONFIG = {"provider": "ollama", "model": "current"}
 
 
+def _first_open(memory):
+    """Open lazy storage without starting a run, as the constructor once did."""
+    with memory._operation():
+        pass
+    return memory
+
+
 def _memory(path=None, **kwargs):
     return ReflectiveMemory(_CONFIG, storage=path, **kwargs)
 
@@ -98,16 +105,16 @@ def test_pristine_snapshot_adoption_keeps_constructor_model(monkeypatch, tmp_pat
         assert current["llm_config"]["model"] == "current"
 
 
-def test_constructor_persists_identity_without_resolving_model(monkeypatch, tmp_path):
+def test_first_open_persists_identity_without_resolving_model(monkeypatch, tmp_path):
     def forbidden():
         raise AssertionError("ambient model must not be resolved at construction")
 
     monkeypatch.setattr(reflective, "resolve_model_config", forbidden)
     path = tmp_path / "memory.sqlite"
-    memory = ReflectiveMemory(storage=path)
+    memory = _first_open(ReflectiveMemory(storage=path))
     namespace = memory._namespace
     with pytest.raises(c.MemoryOperationError) as caught:
-        ReflectiveMemory(storage=path)
+        _first_open(ReflectiveMemory(storage=path))
     assert caught.value.code == "storage.busy"
     memory.close()
     memory.close()
@@ -271,22 +278,22 @@ def test_recorded_limits_survive_reopen(tmp_path):
 
 def test_explicit_limits_must_match_stored_limits(tmp_path):
     path = tmp_path / "memory.sqlite"
-    _memory(path, max_items=4, recall_limit=2).close()
+    _first_open(_memory(path, max_items=4, recall_limit=2)).close()
     with _memory(path) as memory:
         assert memory._state.limits == reflective._Limits(4, 2)
     with _memory(path, recall_limit=2) as memory:
         assert memory._state.limits.max_items == 4
     with pytest.raises(c.MemoryOperationError) as caught:
-        _memory(path, max_items=5)
+        _first_open(_memory(path, max_items=5))
     assert caught.value.code == "reflective.config_conflict"
-    _memory(path).close()
+    _first_open(_memory(path)).close()
 
 
 def test_a_fresh_store_pins_its_default_limits(tmp_path):
     path = tmp_path / "memory.sqlite"
-    _memory(path).close()
+    _first_open(_memory(path)).close()
     with pytest.raises(c.MemoryOperationError) as caught:
-        _memory(path, max_items=5)
+        _first_open(_memory(path, max_items=5))
     assert caught.value.code == "reflective.config_conflict"
 
 
@@ -308,7 +315,7 @@ def _ram_state(memory):
 
 @pytest.mark.parametrize("operation", ["open", "adopt", "reset", "commit"])
 def test_failed_save_never_publishes_candidate_ram(tmp_path, monkeypatch, operation):
-    memory = _memory(tmp_path / "memory.sqlite")
+    memory = _first_open(_memory(tmp_path / "memory.sqlite"))
     session = frame = None
     if operation == "commit":
         session = memory.open_run()
@@ -389,7 +396,7 @@ def test_uncertain_save_poisoning_blocks_ram_reads_and_keeps_primary(
                 operation()
             assert failed.value.code == "storage.poisoned"
         with pytest.raises(c.MemoryOperationError) as busy:
-            _memory(path)
+            _first_open(_memory(path))
         assert busy.value.code == "storage.busy"
     finally:
         opened.close()
@@ -461,7 +468,7 @@ def test_invalid_inventory_releases_ownership_without_rewriting(
     storage.save(inventory)
     storage.close()
     with pytest.raises(c.MemoryOperationError) as caught:
-        _memory(path)
+        _first_open(_memory(path))
     assert caught.value.code == "reflective.invalid_storage"
     storage = SQLiteStorage(path, "reflective")
     try:
@@ -532,7 +539,7 @@ def _close_during_callback(path, phase, reentrant):
                     memory.close()
                 assert caught.value.code == "reflective.busy"
                 with pytest.raises(c.MemoryOperationError) as busy:
-                    _memory(path)
+                    _first_open(_memory(path))
                 assert busy.value.code == "storage.busy"
             finally:
                 release.set()
@@ -830,11 +837,11 @@ def test_context_cleanup_preserves_primary_exception(
             memory.close()
 
 
-def test_constructor_cleanup_preserves_cancellation_and_releases_owner(
+def test_first_open_cleanup_preserves_cancellation_and_releases_owner(
     tmp_path, monkeypatch
 ):
     path = tmp_path / "memory.sqlite"
-    _memory(path).close()
+    _first_open(_memory(path)).close()
     primary = KeyboardInterrupt("initialization stopped")
     parse, close = reflective._parse_inventory, SQLiteStorage.close
 
@@ -848,7 +855,7 @@ def test_constructor_cleanup_preserves_cancellation_and_releases_owner(
     monkeypatch.setattr(reflective, "_parse_inventory", reject)
     monkeypatch.setattr(SQLiteStorage, "close", cleanup)
     with pytest.raises(KeyboardInterrupt) as caught:
-        _memory(path)
+        _first_open(_memory(path))
     assert caught.value is primary
     monkeypatch.setattr(reflective, "_parse_inventory", parse)
     monkeypatch.setattr(SQLiteStorage, "close", close)

@@ -75,8 +75,20 @@ corrupt, mismatched, or locked log) are reported as concise errors. Pass
 run. If a failed turn restarts the immutable chat flow from the last completed
 transcript, that restart gets a separate log rather than reusing the failed run.
 
-`composer chat` and its `run_flow` tool supply no long-term memory: memories a
-flow declares stay off, and session conversations are not kept.
+`composer chat` builds the built-in memories a chat flow declares under
+`~/.agent_composer/sessions/<session id>/`, laid out like `--memory-root`. Each
+start creates a new session and prints its id. `--session ID` continues that
+session's memory. A failed-turn restart keeps the same memory. A flow that
+declares no memory creates no session. The `run_flow` tool inside chat supplies
+no memory, so a flow it runs keeps declared memories in RAM for that run only.
+[`examples/chat.yaml`](https://github.com/ngocbh/agent-composer/blob/main/examples/chat.yaml)
+keeps the conversation in a session memory;
+`examples/chat_no_memory.yaml` threads a transcript string instead.
+
+```console
+composer chat examples/chat.yaml                  # prints: session 20261002-101500-3fa9c1 ...
+composer chat examples/chat.yaml --session 20261002-101500-3fa9c1
+```
 
 ## Memory and storage
 

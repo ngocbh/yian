@@ -1,5 +1,5 @@
 # The default `composer chat` flow — a composer assistant with flow-op tools.
-# Same LOOP-per-turn shape as examples/chat.yaml; the reply agent is tool_calling.
+# Same LOOP-per-turn shape as examples/chat_no_memory.yaml; the reply agent is tool_calling.
 # A CASE keeps textual exit flow-owned; the body's output bindings rejoin the
 # typed exit record and normal transcript.
 id: composer-chat

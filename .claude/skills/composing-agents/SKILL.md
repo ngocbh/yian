@@ -309,9 +309,9 @@ history and recent whole turns stay intact, even above the soft budget.
 `composer run` builds every built-in memory in RAM, or on disk with
 `--memory-root DIR` (key `lib.notes` lives at `DIR/<flow id>/lib/notes.sqlite`) and
 repeatable `--memory-storage KEY=PATH`. It cannot run a flow that declares a custom
-type, and it never runs backward learning. `composer chat` and its `run_flow` tool
-supply no long-term memory: declared memories stay off (session conversations are
-not kept). Supply the same storage on unfinished
+type, and it never runs backward learning. `composer chat` keeps built-in memories
+under `~/.agent_composer/sessions/<session id>/`, a new session per start, and
+`--session ID` continues one; its `run_flow` tool supplies no memory. Supply the same storage on unfinished
 `--resume`; terminal inspection opens none. A storage file has one owner until its
 backend closes. From Python, pass
 `memory=build_memories(flow, root=..., storage=..., supplied=..., factories=...)` to
@@ -547,7 +547,9 @@ not intercept it — while terminal EOF may be normalized to `/exit`. **Gotcha:*
 the body's `output:` must EQUAL the carried record. A lone multi-ref coalesce has
 no inferable type; adjacent defaulted spans preserve `str`, and comparing the
 optional exit field with `true` proves the carried `bool`. See
-[`templates/chat.yaml`](templates/chat.yaml).
+[`templates/chat.yaml`](templates/chat.yaml). To keep history in memory instead of a
+transcript, give the reply AGENT `long_term_memory: {chat: session}` and pass only the
+new message (`examples/chat.yaml`).
 
 ## Run-ordering without data (`depends_on` / `runs_after`)
 Both gate a node on another **settling** even when no value flows. `depends_on:

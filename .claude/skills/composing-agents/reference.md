@@ -282,7 +282,9 @@ EOF is normalized by the bundled host. The loop body's `output:` must EQUAL the 
 record. A lone multi-ref coalesce has no inferable type, so the template uses adjacent
 defaulted spans for the `str` field and compares the optional exit field with `true` to
 prove `bool`. This is the shape `composer chat` runs; see `chat.yaml` (and
-`examples/chat.yaml` for a runnable copy).
+`examples/chat_no_memory.yaml` for a runnable copy). `examples/chat.yaml` drops the
+transcript: its reply AGENT declares `long_term_memory: {chat: session}` and carries
+`{exited: bool, reply: str}`.
 
 ## Gotchas
 
@@ -427,9 +429,9 @@ config, `root` without a safe flow `id`, and two built-in keys on one storage fi
 `composer run` builds every built-in memory in RAM, or with `--memory-root DIR` at
 `DIR/<flow id>/<scope...>/<name>.sqlite` (`.md` for profile), with repeatable
 `--memory-storage KEY=PATH` overriding one key. It refuses a flow with a
-custom type, even on `--resume`. `composer chat` and its `run_flow` tool supply no
-long-term memory, so declared memories stay off and session conversations are not
-kept. Use the same storage on unfinished resume; paths
+custom type, even on `--resume`. `composer chat` keeps built-in memories under
+`~/.agent_composer/sessions/<session id>/` (new id per start, `--session ID`
+continues); its `run_flow` tool supplies no memory. Use the same storage on unfinished resume; paths
 never belong in YAML or run logs, and terminal inspection opens no backend. A
 library host passes `memory=build_memories(flow, root=, storage=, supplied=,
 factories=)` to `run_flow`; Python's `memory=None` remains dormant.

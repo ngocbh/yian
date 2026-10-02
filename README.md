@@ -109,12 +109,13 @@ CLI](docs/cli.md) for input behavior, diagnostics, concurrency, and recovery.
 For an interactive flow-backed chat:
 
 ```console
-composer chat [FLOW] [--workspace DIR] [--provider P] [--model M]
+composer chat [FLOW] [--workspace DIR] [--provider P] [--model M] [--session ID]
 ```
 
 The default composer chat can inspect, validate, run, and—after explicit
 approval—write flows inside its workspace. A supplied chat flow owns its own
-typed exit behavior.
+typed exit behavior. Memories a chat flow declares are kept per session under
+`~/.agent_composer/sessions/`; `--session ID` continues one.
 
 ## Use the Python API
 

@@ -171,6 +171,17 @@ def test_bad_storage_path_shape_fails_before_inputs_provider_and_log(tmp_path, m
     assert not log.exists()
 
 
+def test_unsafe_flow_id_with_memory_root_names_the_memory_root(tmp_path):
+    root = tmp_path / "mem"
+    flow = _flow_file(tmp_path, flow_id='"a/b"')
+    result, log = _run(tmp_path, "--memory-root", str(root), flow=flow)
+    assert result.exit_code == 1, result.output
+    text = _plain(result.output)
+    assert "flow id 'a/b' cannot name a directory under the memory root" in text
+    assert "root=" not in text
+    assert not root.exists() and not log.exists()
+
+
 def test_memory_storage_for_a_custom_key_is_a_bad_parameter(tmp_path):
     flow = _flow_file(tmp_path, "{vec: vector}")
     result, _ = _run(tmp_path, "--memory-storage", "vec=v.sqlite", flow=flow)

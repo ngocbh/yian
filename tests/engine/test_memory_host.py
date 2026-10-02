@@ -353,7 +353,7 @@ def test_root_requires_a_safe_flow_id(tmp_path: Path, flow_id) -> None:
 def test_unsafe_flow_ids_are_rejected_before_touching_disk(tmp_path: Path, flow_id) -> None:
     flow = _flow("{notes: episodic}")
     flow.compiled.flow_id = flow_id  # bypass the loader's id grammar
-    with pytest.raises(MemorySetupError, match="flow id"):
+    with pytest.raises(MemorySetupError, match="cannot name a directory under the memory root"):
         build_memories(flow, root=tmp_path)
     assert list(tmp_path.iterdir()) == []
 

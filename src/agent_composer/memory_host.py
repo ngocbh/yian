@@ -220,7 +220,7 @@ def build_memories(
             )
         if flow_id in ("", ".", "..") or any(ch in flow_id for ch in "/\\\x00"):
             raise MemorySetupError(
-                f"flow id {flow_id!r} is not one safe path component for root="
+                f"flow id {flow_id!r} cannot name a directory under the memory root"
             )
         base = Path(os.fspath(root), flow_id)
     storage = dict(storage or {})

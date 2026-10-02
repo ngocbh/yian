@@ -24,6 +24,14 @@ from agent_composer.memory.contracts import (
 )
 
 
+def _note_cleanup(target: BaseException, cleanup: BaseException, label: str) -> None:
+    """Attach one cleanup failure, and the notes it carries, to ``target``."""
+    if hasattr(target, "add_note"):
+        target.add_note(f"{label}: {type(cleanup).__name__}: {cleanup}")
+        for note in getattr(cleanup, "__notes__", ()):
+            target.add_note(note)
+
+
 def _close_all(objects: Iterable[object]) -> BaseException | None:
     """Close each object that has a callable ``close``; return the first failure.
 
@@ -39,8 +47,8 @@ def _close_all(objects: Iterable[object]) -> BaseException | None:
         except BaseException as exc:
             if first is None:
                 first = exc
-            elif hasattr(first, "add_note"):
-                first.add_note(f"Additional memory cleanup failed: {type(exc).__name__}")
+            else:
+                _note_cleanup(first, exc, "Additional memory cleanup failed")
     return first
 
 
@@ -113,8 +121,7 @@ class MemoryRegistry(Mapping[str, Memory]):
         except BaseException as cleanup:
             if exc is None:
                 raise
-            if hasattr(exc, "add_note"):
-                exc.add_note(f"Memory cleanup failed: {type(cleanup).__name__}")
+            _note_cleanup(exc, cleanup, "Memory cleanup failed")
 
 
 def _error(memory: ResolvedMemory, message: str) -> MemorySetupError:
@@ -235,10 +242,8 @@ def build_memories(
     except BaseException as primary:
         # Construction is effect-free, so this cleanup does no I/O.
         cleanup = _close_all(reversed(owned))
-        if cleanup is not None and hasattr(primary, "add_note"):
-            primary.add_note(f"Memory cleanup failed: {type(cleanup).__name__}")
-            for note in getattr(cleanup, "__notes__", ()):
-                primary.add_note(note)
+        if cleanup is not None:
+            _note_cleanup(primary, cleanup, "Memory cleanup failed")
         raise
     return MemoryRegistry(
         memories, {memory.key: memory.type for memory in table}, owned=tuple(owned)

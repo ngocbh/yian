@@ -66,16 +66,38 @@ def test_close_keeps_the_first_failure_and_notes_the_rest() -> None:
     with pytest.raises(RuntimeError, match="first") as caught:
         registry.close()
     assert log == ["b", "a"]
-    assert any("RuntimeError" in note for note in caught.value.__notes__)
+    assert caught.value.__notes__ == ["Additional memory cleanup failed: RuntimeError: second"]
+
+
+def _failure_with_note(message: str, note: str) -> RuntimeError:
+    error = RuntimeError(message)
+    error.add_note(note)
+    return error
+
+
+def test_close_copies_the_notes_of_later_failures() -> None:
+    log: list[str] = []
+    second = _failure_with_note("second", "second detail")
+    a, b = _Closable(log, "a", second), _Closable(log, "b", RuntimeError("first"))
+    registry = MemoryRegistry({"a": a, "b": b}, {"a": "t", "b": "t"}, owned=(a, b))
+    with pytest.raises(RuntimeError, match="first") as caught:
+        registry.close()
+    assert caught.value.__notes__ == [
+        "Additional memory cleanup failed: RuntimeError: second",
+        "second detail",
+    ]
 
 
 def test_exit_keeps_the_primary_exception() -> None:
     log: list[str] = []
-    a = _Closable(log, "a", RuntimeError("cleanup"))
+    a = _Closable(log, "a", _failure_with_note("cleanup", "cleanup detail"))
     with pytest.raises(KeyError) as caught:
         with MemoryRegistry({"a": a}, {"a": "t"}, owned=(a,)):
             raise KeyError("primary")
-    assert any("cleanup failed" in note for note in caught.value.__notes__)
+    assert caught.value.__notes__ == [
+        "Memory cleanup failed: RuntimeError: cleanup",
+        "cleanup detail",
+    ]
 
 
 def _flow(memory: str, *, flow_id: str | None = "host-flow", agent_memory: str | None = None):
@@ -274,13 +296,13 @@ def test_partial_failure_closes_what_was_built_in_reverse(tmp_path: Path) -> Non
 
     factories = {
         "alpha": lambda: _Closable(log, "a"),
-        "beta": lambda: _Closable(log, "b", RuntimeError("b close")),
+        "beta": lambda: _Closable(log, "b", _failure_with_note("b close", "b detail")),
         "gamma": failing,
     }
     with pytest.raises(MemorySetupError, match="gamma refused") as caught:
         build_memories(flow, factories=factories)
     assert log == ["b", "a"]
-    assert any("RuntimeError" in note for note in caught.value.__notes__)
+    assert caught.value.__notes__ == ["Memory cleanup failed: RuntimeError: b close", "b detail"]
 
 
 def test_second_registry_on_one_root_is_busy_until_the_first_closes(tmp_path: Path) -> None:

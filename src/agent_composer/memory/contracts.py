@@ -530,16 +530,16 @@ class MemoryEpisodeStatus(str, Enum):
 class MemorySnapshotEnvelope:
     """One opaque public durable snapshot declared by a memory backend."""
 
-    policy_name: str
+    memory: str
     _snapshot: _FrozenJsonObject = field(repr=False)
 
-    def __init__(self, policy_name: str, snapshot: JsonObject) -> None:
-        """Validate the policy name and retain a defensive JSON snapshot."""
+    def __init__(self, memory: str, snapshot: JsonObject) -> None:
+        """Validate the memory key and retain a defensive JSON snapshot."""
         frozen = _freeze_json_object(snapshot, "snapshot")
         object.__setattr__(
             self,
-            "policy_name",
-            _require_string(policy_name, "policy_name"),
+            "memory",
+            _require_string(memory, "memory"),
         )
         object.__setattr__(
             self,

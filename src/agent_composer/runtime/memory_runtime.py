@@ -150,13 +150,13 @@ def _validate_snapshots(
                 "memory snapshots must contain MemorySnapshotEnvelope values"
             )
         canonical = MemorySnapshotEnvelope(
-            envelope.policy_name,
+            envelope.memory,
             envelope.snapshot,
         )
-        if canonical.policy_name in restored:
+        if canonical.memory in restored:
             raise ValueError("memory snapshot policy names must be unique")
-        supplied_names.append(canonical.policy_name)
-        restored[canonical.policy_name] = canonical.snapshot
+        supplied_names.append(canonical.memory)
+        restored[canonical.memory] = canonical.snapshot
     if tuple(supplied_names) != policy_names:
         raise ValueError(
             "memory snapshots must exactly match referenced policies in canonical order"
@@ -381,7 +381,7 @@ class MemoryRuntime:
             if snapshots is not None and tuple(captured) != snapshots:
                 differing = next(
                     (
-                        expected.policy_name
+                        expected.memory
                         for expected, actual in zip(snapshots, captured)
                         if expected != actual
                     ),

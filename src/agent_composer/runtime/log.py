@@ -501,14 +501,14 @@ def _validate_run_memory_configuration(
             raise TypeError(
                 "memory_snapshots items must be MemorySnapshotEnvelope values"
             )
-        MemorySnapshotEnvelope(snapshot.policy_name, snapshot.snapshot)
-    snapshot_names = tuple(snapshot.policy_name for snapshot in snapshots)
+        MemorySnapshotEnvelope(snapshot.memory, snapshot.snapshot)
+    snapshot_names = tuple(snapshot.memory for snapshot in snapshots)
     if snapshot_names != tuple(sorted(set(snapshot_names))):
-        raise ValueError("memory_snapshots policy names must be sorted and unique")
+        raise ValueError("memory_snapshots memory keys must be sorted and unique")
     referenced_names = {spec.policy_name for spec in layout}
     if set(snapshot_names) != referenced_names:
         raise ValueError(
-            "memory_snapshots policy names must equal memory_layout policy names"
+            "memory_snapshots memory keys must equal memory_layout policy names"
         )
 
 
@@ -1138,7 +1138,7 @@ class _MemoryFrameSpecPayload(_StrictModel):
 class _MemorySnapshotEnvelopePayload(_StrictModel):
     """Strict wire form of one named policy snapshot."""
 
-    policy_name: str = Field(min_length=1)
+    memory: str = Field(min_length=1)
     snapshot: dict[str, Any]
 
 
@@ -1854,9 +1854,9 @@ def _snapshot_payload(snapshot: MemorySnapshotEnvelope) -> dict[str, Any]:
     """Encode one exact named memory snapshot envelope."""
     if type(snapshot) is not MemorySnapshotEnvelope:
         raise TypeError("memory snapshot must be a MemorySnapshotEnvelope")
-    MemorySnapshotEnvelope(snapshot.policy_name, snapshot.snapshot)
+    MemorySnapshotEnvelope(snapshot.memory, snapshot.snapshot)
     return {
-        "policy_name": snapshot.policy_name,
+        "memory": snapshot.memory,
         "snapshot": snapshot.snapshot,
     }
 
@@ -1864,7 +1864,7 @@ def _snapshot_payload(snapshot: MemorySnapshotEnvelope) -> dict[str, Any]:
 def _snapshot_from_payload(payload: dict[str, Any]) -> MemorySnapshotEnvelope:
     """Decode one already-validated named memory snapshot envelope."""
     return MemorySnapshotEnvelope(
-        policy_name=payload["policy_name"],
+        memory=payload["memory"],
         snapshot=_copy_json(payload["snapshot"]),
     )
 

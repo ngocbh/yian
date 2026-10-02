@@ -458,7 +458,7 @@ def test_recorded_nested_growth_resumes_with_exact_memory_and_trace(tmp_path, mo
     prefix = b"\n".join(_RECORDED_GROWTH_PREFIX) + b"\n"
     path.write_bytes(prefix)
     initial = decode_record(_RECORDED_GROWTH_PREFIX[0]).record
-    snapshots = {item.policy_name: item.snapshot for item in initial.memory_snapshots}
+    snapshots = {item.memory: item.snapshot for item in initial.memory_snapshots}
     assert set(snapshots) == {"episodic", "reflective"}
     for name, snapshot in snapshots.items():
         assert snapshot["format"] == "agent_composer." + name + "_memory"

@@ -7,7 +7,13 @@ from dataclasses import FrozenInstanceError
 import pytest
 
 from agent_composer.diagnostics import OriginRef
-from agent_composer.memory import DeclSite, MemoryDecl, MemorySpec, MemoryStack
+from agent_composer.memory import (
+    DeclSite,
+    MemoryDecl,
+    MemorySnapshotEnvelope,
+    MemorySpec,
+    MemoryStack,
+)
 from agent_composer.memory.contracts import (
     _iter_memory_decl_origins,
     _rewrite_memory_decl_origins,
@@ -117,3 +123,10 @@ def test_memory_stack_requires_locator_and_unique_keys() -> None:
         MemoryStack((), ("notes",))
     with pytest.raises(ValueError, match="unique"):
         MemoryStack(("ask",), ("notes", "notes"))
+
+
+def test_snapshot_envelope_names_its_memory_key() -> None:
+    envelope = MemorySnapshotEnvelope(memory="notes", snapshot={"v": 1})
+    assert envelope.memory == "notes"
+    assert envelope.snapshot == {"v": 1}
+    assert not hasattr(envelope, "policy_name")

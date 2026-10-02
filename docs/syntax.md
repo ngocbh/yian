@@ -74,8 +74,8 @@ Rules:
   node by name (`name` → `${input.name}`), so you refer to it bare in the prompt.
 - The flow `output:` is the node's output **type**; the flow returns that node's
   output (no explicit `output: ${...}` line).
-- Any other field (`prompt:`, `tools:`, `skills:`, `llm_config:`, node-local `asserts:`, …)
-  is the node body.
+- Any other field (`prompt:`, `system_prompt:`, `tools:`, `skills:`, `llm_config:`,
+  node-local `asserts:`, …) is the node body.
 - Allowed only for the **value-producing leaf kinds** — `agent`, `code`, `model`,
   `tool`, `human_input`. `case`/`call`/`map` reference other nodes a one-node flow
   has none of, so they need the full `nodes:` form.
@@ -89,7 +89,7 @@ Everywhere you wire data you use a `${...}` reference:
 | `${input.X}` | field `X` of the flow's input |
 | `${node.output}` | node `node`'s whole value |
 | `${node.output.field}` | dot into an object value |
-| `${name}` / bare `name` | a local input in a node's `prompt:` or a `case` `when:`; AGENT prompts also see their own declared `variables:` |
+| `${name}` / bare `name` | a local input in a node's `prompt:`, an AGENT's `system_prompt:`, or a `case` `when:`; AGENT prompts also see their own declared `variables:` |
 
 A whole-string `${ref}` resolves to the **typed value**; embedded in surrounding
 text it is stringified.
@@ -100,8 +100,9 @@ non-strict behavior—a whole null remains a typed null, while an embedded null
 contributes empty text.
 
 !!! important "Prompt names are local"
-    Inside a `prompt:` use names from the node's own `input:` block, written
-    bare, like `${name}`. An AGENT prompt also sees its own `variables:`. Pool references
+    Inside a `prompt:` or an AGENT `system_prompt:` use names from the node's own
+    `input:` block, written bare, like `${name}`. An AGENT prompt also sees its own
+    `variables:`. Pool references
     (`${input.x}`, `${other.output}`) belong in the `input:` block, not the
     prompt. Bind it there, then refer to the local name in the prompt.
 
@@ -401,10 +402,11 @@ nodes:
       model: claude-opus-4-8    # fills the one field the flow leaves unset
 ```
 
-A flow file cannot set `api_key` at any level; loading such a flow fails. A
-library host passes the provider key in `run_flow(..., llm_config={..., "api_key": key})`
-instead (see [the Python API](api.md)). The key goes to every AGENT of that
-provider, including one with `inherit: false`.
+A flow file cannot set `api_key` or `base_url` at any level; loading such a flow
+fails. A library host passes the provider key, and optionally the endpoint it goes
+to, in `run_flow(..., llm_config={..., "api_key": key, "base_url": url})` instead
+(see [the Python API](api.md)). The key and its `base_url` go to every AGENT of
+that provider, including one with `inherit: false`.
 
 The CLI flags are the *outermost authored* layer — they fill gaps, they do **not**
 override an AGENT node or flow that set the field. The run resolves the complete
@@ -472,6 +474,50 @@ path and name: MAP items and LOOP iterations of that node share its declaration,
 while distinct authored callsites have distinct owners. Variables introduce no
 data dependencies or flow outputs. A variable named `temperature` is prompt data;
 configure model temperature through `llm_config:`.
+
+#### System prompt — `system_prompt:`
+
+Every AGENT model request starts with a system message. By default it is a fixed
+framework instruction. `system_prompt:` replaces it with your own:
+
+```yaml
+id: chat
+name: chat
+input:
+  name: str
+  title: str
+  message: str
+nodes:
+  reply:
+    kind: agent
+    input:
+      name: ${input.name}
+      title: ${input.title}
+      message: ${input.message}
+    system_prompt: "You are ${name}, ${title}. Speak as ${name} in the first person."
+    prompt: ${message}
+    output: str
+output: ${reply.output}
+```
+
+- It **replaces** the framework instruction; it does not add to it. Omitting it
+  keeps the framework instruction exactly as before.
+- It is a template with the same rules as `prompt:`: it reads the node's own
+  `input:` names and `variables:`, written bare. An unknown name or a pool
+  reference such as `${input.name}` is a load error at the `system_prompt:` line.
+  A null value at run time fails the node before any model call.
+- The value must be a non-empty string.
+- Granted [`skills:`](#agent-skills-skills) are listed after it, then recalled
+  [`long_term_memory:`](#agent-memory-long_term_memory) sections. Memory recall
+  receives the rendered system prompt without the skill listing.
+- Every model request of the node uses it: `plain` and `tool_calling` modes,
+  tool rounds, and structured generation.
+- It is part of the flow's identity. Changing it changes the flow fingerprint, so a
+  run log cannot be resumed with a different system prompt. With `learnable=True`,
+  the rendered text is recorded with the node's evidence, so backward learning
+  sees what the model saw.
+- A compact single-node flow accepts `system_prompt:` at the top level.
+- There is no flow-level default; set it on each AGENT node that needs one.
 
 #### Agent skills — `skills:`
 

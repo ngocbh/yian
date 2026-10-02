@@ -332,10 +332,12 @@ prove `bool`. This is the shape `composer chat` runs; see `chat.yaml` (and
 
 Use `composer auth openai` to select subscription or API-key authentication. Both use
 `provider: openai` and the same Composer execution and memory paths. A flow's
-`llm_config:` cannot set `api_key`; a Python host passes the key in the run's
-`llm_config` (it needs `provider`) and again to `resume_flow`/`result.backward` as
-`api_key=key`. It is never recorded, and it reaches every AGENT of that provider,
-`inherit: false` ones included.
+`llm_config:` cannot set `api_key` or `base_url`; a Python host passes the key in
+the run's `llm_config` (it needs `provider`) and again to
+`resume_flow`/`result.backward` as `api_key=key`. It is never recorded, and it
+reaches every AGENT of that provider, `inherit: false` ones included. A
+`base_url` beside the key (https, or http for local hosts) is where that key is
+sent; the log records it on those agents and resume/backward reuse it.
 
 Model fields resolve **per field, most-specific wins**. An AGENT node fills only the fields
 it leaves unset from the layer outside it. Precedence (most specific first):

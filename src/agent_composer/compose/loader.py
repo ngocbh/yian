@@ -76,6 +76,7 @@ from agent_composer.compose.source import (
     SourceDocument,
 )
 from agent_composer.compose.source.catalog import _SourceCatalogBuilder, _scope_origin
+from agent_composer.llm_clients.config import host_only_field_error
 
 
 _UNLOCATED_DIAGNOSTICS = LoadDiagnostics()
@@ -654,14 +655,14 @@ def load_flow(
     return flow
 
 
-def _reject_authored_api_key(
+def _reject_authored_host_fields(
     llm_config: Any, where: str, *, diagnostics: LoadDiagnostics, cursor: SourceCursor | None,
 ) -> None:
-    """Refuse a flow- or def-level ``llm_config.api_key``; only the host supplies keys."""
-    if isinstance(llm_config, Mapping) and "api_key" in llm_config:
+    """Refuse a flow- or def-level ``api_key`` or ``base_url``; only the host sets them."""
+    message = host_only_field_error(llm_config)
+    if message is not None:
         raise diagnostics.error(
-            f"{where}: llm_config.api_key is a host credential; pass it in the run's "
-            "llm_config, not in a flow file",
+            f"{where}: {message}",
             range=(
                 cursor.range_of("llm_config")
                 if cursor is not None and cursor.has("llm_config")
@@ -680,7 +681,7 @@ def _load_flow(
     diagnostics = LoadDiagnostics.from_document(document)
     f = parse_file(document)
     _reject_authored_private_callable_names(root, f.defs, f.uses)
-    _reject_authored_api_key(f.llm_config, "flow", diagnostics=diagnostics, cursor=root)
+    _reject_authored_host_fields(f.llm_config, "flow", diagnostics=diagnostics, cursor=root)
     _validate_system(
         f.system,
         root.child("system") if root.has("system") else None,
@@ -1142,7 +1143,7 @@ def _load_def(
                 else None
             ),
         )
-    _reject_authored_api_key(
+    _reject_authored_host_fields(
         body.get("llm_config"), f"defs entry {name!r}", diagnostics=diagnostics, cursor=def_cursor
     )
     nodes_cursor = _def_assembly_cursor(def_cursor, body["nodes"])

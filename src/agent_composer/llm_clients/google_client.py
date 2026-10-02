@@ -22,7 +22,11 @@ class NormalizedChatGoogleGenerativeAI(ChatGoogleGenerativeAI):
 
 
 class GoogleClient(BaseLLMClient):
-    """Client for Google Gemini models."""
+    """Client for Google Gemini models.
+
+    With a ``base_url``, the model's httpx client does not follow redirects, so the
+    key goes only to that URL.
+    """
 
     def __init__(self, model: str, base_url: Optional[str] = None, **kwargs):
         super().__init__(model, base_url, **kwargs)
@@ -34,6 +38,9 @@ class GoogleClient(BaseLLMClient):
 
         if self.base_url:
             llm_kwargs["base_url"] = self.base_url
+            # The SDK sends the key in x-goog-api-key, which httpx re-sends on a
+            # cross-origin redirect.
+            llm_kwargs["client_args"] = {"follow_redirects": False}
 
         for key in ("timeout", "max_retries", "temperature", "callbacks", "http_client", "http_async_client"):
             if key in self.kwargs:

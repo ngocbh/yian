@@ -209,6 +209,32 @@ runtime records the failure. Authored layers cannot set `api_key` or `_host_key`
 because they reach the recorded effective map; the loader rejects a flow- or
 def-level `api_key`.
 
+`LLMConfig.base_url` is where a config's key is sent, so a host key is never sent
+to a `base_url` from an authored layer. This covers authored layers only: when the
+host passes a key without `base_url`, the provider's default endpoint or its
+environment variables (`OPENAI_BASE_URL`, `VLLM_BASE_URL`, `ANTHROPIC_BASE_URL`,
+`AZURE_OPENAI_ENDPOINT`, and so on) pick the endpoint, as before, and some clients
+read them on every call, including on resume. A host that wants a fixed endpoint
+passes `base_url` with the key. `LLMConfig` accepts it only beside `api_key` and
+`provider`, requires `https` (`http` only for local hosts) with no credentials,
+query, or fragment, checks the exact string it stores (`validate_base_url` rejects
+whitespace, control and non-ASCII characters, bad ports, and over-long URLs rather
+than normalising them), never echoes it in errors, and rejects it for `azure` and
+`ollama`. The `anthropic` and `google` clients, whose key headers httpx re-sends
+on a cross-origin redirect, do not follow redirects from a `base_url`. An unset
+`base_url` is dropped from dumps, so existing records and snapshots are unchanged.
+`run_flow` pops it with the key (`pop_host_credentials`) and
+`ConnectionSnapshot.bind(host_base_url=...)` writes it into the recorded effective
+config of each marked agent; an OpenAI agent's `host` connection takes it as its
+endpoint, and `split_model_config` fails a `base_url` that does not match a host
+connection's endpoint. The loader, `AgentNode`, and the cascade reject an authored
+`base_url` (`host_only_field_error`), and the cascade fails an effective config
+whose `base_url` lacks the `_host_key` marker, so a Python-built or mutated flow
+cannot redirect the key. It also re-checks a recorded `base_url` with
+`validate_base_url`, so an edited log fails when resume starts. Resume and
+backward reuse the recorded `base_url` with the re-supplied key; `ProfileMemory`
+takes one beside its own key; `ReflectiveMemory` rejects it.
+
 The transport requires a completed Responses event before returning a model
 reply. Early EOF and incomplete replies raise rather than exposing tool calls
 for execution. Cooperative cancellation closes the stream; network operations
@@ -368,6 +394,15 @@ AGENT returns its canonical declarations for common feedback target validation.
 The stable owner is `(execution_scope.static_path, variable.name)`, so repeated
 MAP/LOOP occurrences retain one authored owner and distinct callsites retain
 distinct owners. This declaration inventory does not itself activate backward.
+
+`AgentNode.system_prompt` is an optional template. When set, AGENT renders it
+from the same inputs-plus-variables record as the prompt, and the result replaces
+`DEFAULT_SYSTEM`; when `None`, the mode receives `DEFAULT_SYSTEM` unchanged. The
+skill listing and then memory sections append after this effective system prompt,
+and every mode (plain, tool calling, structured generation) sends it. It is recorded
+as `EvaluationEvidence.base_system_prompt`, so backward and recovery read what the
+model saw. The manifest includes the template only when set, so flows without one
+keep their fingerprints.
 
 `TypeCheckError.path` contains only contract-relative record names and actual list
 indices. A supplied-value rejection resolves that path through `ContractOrigins`
@@ -893,8 +928,9 @@ in it. `FlowEngine(skills=...)` treats the mapping as opaque. The evaluator pass
 it only to nodes whose `needs_skills` trait is `True` (`AgentNode`), so runtime
 stays kind-blind.
 
-The AGENT renders the sorted listing into `base_system_prompt`. The memory context
-still opens with `DEFAULT_SYSTEM`, so recall queries do not change. The AGENT
+The AGENT renders the sorted listing into `base_system_prompt`, after the effective
+system prompt. The memory context opens with the effective system prompt without
+the listing, so skill grants do not change recall queries. The AGENT
 serves `load_skill` calls through the same `invoke_tool_effect` path as registered
 tools and records each result as evidence. A non-empty grant is AGENT execution
 identity (`sorted(names)` or `"all"`); an empty grant is omitted so older

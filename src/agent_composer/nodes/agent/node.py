@@ -59,6 +59,9 @@ def is_text_output(contract: Any) -> bool:
 class AgentNode(Node):
     """An LLM-backed leaf configured by a prompt, mode, and authored tools.
 
+    ``system_prompt`` is an optional template that replaces ``DEFAULT_SYSTEM``;
+    it renders against the same local record as ``prompt``.
+
     Modes normalize ``llm_config`` through the call-time ``model_from_config``
     seam. ``memories`` holds the AGENT's authored memory declarations; compile
     derives runtime scope. ``variables`` retains typed local declarations with
@@ -80,6 +83,7 @@ class AgentNode(Node):
         node_id: str,
         *,
         prompt: str = "",
+        system_prompt: str | None = None,
         tools: Optional[list[str]] = None,
         llm_config: Optional[dict[str, Any]] = None,
         llm_inherit: bool = True,
@@ -93,6 +97,11 @@ class AgentNode(Node):
     ) -> None:
         super().__init__(node_id, title=title)
         self.prompt = prompt or ""
+        if system_prompt is not None and (type(system_prompt) is not str or not system_prompt):
+            raise TypeError(
+                f"AGENT node {node_id!r}: system_prompt must be a non-empty string or None"
+            )
+        self.system_prompt = system_prompt
         self.tools = tools or []
         if "builtin_tools" in self.tools:
             raise ValueError(
@@ -316,6 +325,8 @@ class AgentNode(Node):
     ) -> Output:
         """Render fresh locals once, publish established capture, and run the mode.
 
+        The authored ``system_prompt`` renders against the same inputs and
+        variables as ``prompt``; without one the mode receives ``DEFAULT_SYSTEM``.
         ``capture_render`` is an optional evaluator-owned sink. It receives the
         actual template, resolved variable values/domains, and rendered prompt
         once, including established partial locals if preparation fails. Unknown
@@ -353,6 +364,8 @@ class AgentNode(Node):
 
         Raises:
             `ValueError`: A variable collides with a declared or delivered input.
+            `ExpressionError`: The prompt or system prompt names a missing value or
+                renders a null.
             `SkillError`: The node grants skills the host did not supply.
             `_CapabilityFault`: Capture or conversation access fails; the
                 evaluator re-raises its original host exception.
@@ -389,17 +402,23 @@ class AgentNode(Node):
             prompt = render_template_record(template, {**inputs, **variables})
             if captured is not None:
                 captured["rendered_prompt"] = prompt
+            system_prompt = (
+                DEFAULT_SYSTEM
+                if self.system_prompt is None
+                else render_template_record(self.system_prompt, {**inputs, **variables})
+            )
         finally:
             if capture_render is not None:
                 capture_render(captured)
         if stop_event is not None and stop_event.is_set():
             raise _HostStop(primary=False)
         granted = self._granted_skills(skills)
-        base_system_prompt = system_prompt_with_skills(DEFAULT_SYSTEM, granted)
+        base_system_prompt = system_prompt_with_skills(system_prompt, granted)
+        # Recall sees the system prompt without the skill listing, so grants never change recall.
         memory_context = (
             MemoryContext()
             if open_memory_context is None
-            else open_memory_context(DEFAULT_SYSTEM, prompt, compatibility(self.llm_config))
+            else open_memory_context(system_prompt, prompt, compatibility(self.llm_config))
         )
         if stop_event is not None and stop_event.is_set():
             raise _HostStop(primary=False)

@@ -21,6 +21,7 @@ from agent_composer.compose.nodes.base import BuildContext, BuildResult, NodeDes
 from agent_composer.compose.source import SourceCursor
 from agent_composer.diagnostics import SourceRange
 from agent_composer.llm_clients import LLMConfig
+from agent_composer.llm_clients.config import host_only_field_error
 from agent_composer.memory.contracts import DeclSite, MemoryDecl
 from agent_composer.nodes.agent import AgentNode
 from agent_composer.nodes.agent.node import is_text_output
@@ -56,7 +57,8 @@ def _validate_llm_config(
         `tuple[dict[str, Any], bool]`: Config without `inherit`, then its boolean value.
 
     Raises:
-        `LoadError`: The config is not a mapping, sets `api_key`, or violates `LLMConfig`.
+        `LoadError`: The config is not a mapping, sets `api_key` or `base_url`, or
+            violates `LLMConfig`.
     """
     diagnostics = diagnostics or LoadDiagnostics()
     if cfg is None:
@@ -70,12 +72,9 @@ def _validate_llm_config(
     if not cfg:
         return {}, True
     inherit = bool(cfg.pop("inherit", True))
-    if "api_key" in cfg:
-        raise diagnostics.error(
-            f"node {node_id!r}: llm_config.api_key is a host credential; pass it in "
-            "the run's llm_config, not in a flow file",
-            range=source_range,
-        )
+    host_only = host_only_field_error(cfg)
+    if host_only is not None:
+        raise diagnostics.error(f"node {node_id!r}: {host_only}", range=source_range)
     try:
         LLMConfig(**cfg)
     except Exception as exc:
@@ -88,7 +87,7 @@ def _validate_llm_config(
 
 @dataclass(frozen=True, kw_only=True)
 class AgentDescriptor(NodeDescriptor):
-    """kind=agent — an LLM reasoner (prompt + mode + optional tools/llm).
+    """kind=agent — an LLM reasoner (prompt + optional system prompt + mode + optional tools/llm).
 
     Inherits the common descriptor fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` +
     the Compose-only `range`/`field_ranges` parse metadata) from `NodeDescriptor`, along with the `input:`/
@@ -96,11 +95,11 @@ class AgentDescriptor(NodeDescriptor):
     retired memory key before the default allowed/required key check; only the agent-specific
     fields are declared here, while `inputs`/`outputs` come from the base.
 
-    Class attrs: `kind="agent"`; `allowed` adds normalized `inputs`/`outputs` plus `prompt`/`tools`/
-    `variables`/`mode`/`llm_config`/`long_term_memory`/`retries`/`asserts`/`steerable` to the commons;
-    `required` is empty (no mandatory flat field); `binding_fields=("inputs",)` — a
-    `prompt:`'s `${...}` refs are handled by
-    template scanning, not the inline-call desugar, so only `inputs` is walked.
+    Class attrs: `kind="agent"`; `allowed` adds normalized `inputs`/`outputs` plus `prompt`/
+    `system_prompt`/`tools`/`variables`/`mode`/`llm_config`/`long_term_memory`/`retries`/`asserts`/
+    `steerable` to the commons; `required` is empty (no mandatory flat field);
+    `binding_fields=("inputs",)` — the `${...}` refs of `prompt:` and `system_prompt:` are handled
+    by template scanning, not the inline-call desugar, so only `inputs` is walked.
     """
 
     kind = "agent"
@@ -108,6 +107,7 @@ class AgentDescriptor(NodeDescriptor):
         "inputs",
         "outputs",
         "prompt",
+        "system_prompt",
         "variables",
         "tools",
         "skills",
@@ -123,6 +123,7 @@ class AgentDescriptor(NodeDescriptor):
     keyword_remap = {"long_term_memory": "memories"}
 
     prompt: Optional[str] = None
+    system_prompt: Optional[str] = None
     variables: dict[str, Any] = field(default_factory=dict)
     tools: list[str] = field(default_factory=list)
     skills: list[str] | str = field(default_factory=list)
@@ -165,7 +166,15 @@ class AgentDescriptor(NodeDescriptor):
         own_range: SourceRange | None,
         diagnostics: LoadDiagnostics,
     ) -> None:
-        """Check the `skills:` and `steerable:` shapes and parse a present named policy."""
+        """Check the `system_prompt:`, `skills:`, and `steerable:` shapes and parse a present named policy."""
+        if "system_prompt" in kwargs:
+            system_prompt = kwargs["system_prompt"]
+            if not isinstance(system_prompt, str) or not system_prompt:
+                raise diagnostics.error(
+                    f"node {node_id!r} (kind={cls.kind}): `system_prompt:` must be a "
+                    "non-empty string",
+                    range=ranges.get(("field", "system_prompt")) or own_range,
+                )
         skills = kwargs.get("skills")
         if skills is not None and skills != "all" and not (
             isinstance(skills, list) and all(isinstance(name, str) for name in skills)
@@ -262,6 +271,7 @@ class AgentDescriptor(NodeDescriptor):
             node = AgentNode(
                 self.id,
                 prompt=self.prompt or "",
+                system_prompt=self.system_prompt,
                 tools=list(self.tools),
                 llm_config=own_cfg,
                 llm_inherit=inherit,

@@ -21,7 +21,12 @@ from typing import Any
 
 from pydantic import SecretStr
 
-from agent_composer.llm_clients.config import LLMConfig, merge_llm_config
+from agent_composer.llm_clients.config import (
+    LLMConfig,
+    host_only_field_error,
+    merge_llm_config,
+    validate_base_url,
+)
 from agent_composer.llm_clients.connection import HOST_KEY_MARKER, validate_connection
 from agent_composer.nodes.agent import AgentNode
 
@@ -248,8 +253,19 @@ def _require_concrete_selection(config: dict[str, Any], *, path: str) -> None:
     """Reject a config that could fall through to ambient provider/model settings."""
     if config.get(HOST_KEY_MARKER, True) is not True:
         raise ValueError(f"effective LLM config for {path!r} has an invalid host key marker")
-    # Only a resolved map carries the marker; authored layers may not.
-    _validate_layer({key: value for key, value in config.items() if key != HOST_KEY_MARKER})
+    if "base_url" in config:
+        if HOST_KEY_MARKER not in config:
+            raise ValueError(f"effective LLM config for {path!r} has a base_url without a host key")
+        # A recorded map is replayed on resume; check its URL before any node runs.
+        try:
+            validate_base_url(config["base_url"])
+        except ValueError as exc:
+            raise ValueError(f"effective LLM config for {path!r}: {exc}") from None
+    # Only a resolved map carries the marker and the host key's base_url;
+    # authored layers may not.
+    _validate_layer({
+        key: value for key, value in config.items() if key not in (HOST_KEY_MARKER, "base_url")
+    })
     missing = [
         field
         for field in _REQUIRED_SELECTION_FIELDS
@@ -263,12 +279,11 @@ def _require_concrete_selection(config: dict[str, Any], *, path: str) -> None:
 
 def _validate_layer(config: dict[str, Any]) -> None:
     """Reject retired options, keys, and malformed host metadata before composition."""
-    if "api_key" in config:
-        # Every layer here ends up in the recorded effective map.
-        raise ValueError(
-            "llm_config.api_key is a host credential; pass it in the run's llm_config, "
-            "not in a flow file"
-        )
+    host_only = host_only_field_error(config)
+    if host_only is not None:
+        # Every layer here ends up in the recorded effective map, and a lower
+        # layer's base_url would redirect the host key.
+        raise ValueError(host_only)
     if HOST_KEY_MARKER in config:
         raise ValueError(f"llm_config.{HOST_KEY_MARKER} is internal to recorded runs")
     if str(config.get("provider", "")).lower() == "codex" or any(key in config for key in ("sandbox", "cwd")):

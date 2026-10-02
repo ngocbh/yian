@@ -93,6 +93,7 @@ _KIND_FIELDS: dict[NodeKind, frozenset[str]] = {
     NodeKind.AGENT: frozenset(
         {
             "prompt",
+            "system_prompt",
             "tools",
             "own_llm_config",
             "llm_inherit",
@@ -1714,6 +1715,9 @@ def _node_manifest(
         # Omitted when false so flows that never opt in keep their identity.
         if node.steerable:
             manifest["steerable"] = True
+        # Omitted when unset so flows on the default system prompt keep their identity.
+        if node.system_prompt is not None:
+            manifest["system_prompt"] = node.system_prompt
         memories = _memories_manifest(node.memories, ctx, f"{path}.memories")
         manifest.update(
             {

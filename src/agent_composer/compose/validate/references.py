@@ -8,15 +8,16 @@ Every located problem accumulates; one `LoadError` is raised carrying them all.
 
 Two subtleties mirror the representation-neutral collector:
 
-- **Prompt scope**: an AGENT prompt may interpolate this node's inputs and variables as
-  bare `${name}`; a `${<id>.output}`/`${input.X}`/`${system.X}` in a prompt is a located error.
+- **Prompt scope**: an AGENT `prompt:` or `system_prompt:` may interpolate this node's inputs
+  and variables as bare `${name}`; a `${<id>.output}`/`${input.X}`/`${system.X}` in either is a
+  located error.
 - **Case node-local refs**: the desugared CASE `when:` strings use `${__rN}`/`${__on}`,
   which resolve against the bound input record — they are EXCLUDED here (only the
   `__rN`/`__on` SOURCES are classified, against the pool; mirrors the strict CASE check).
 
 Located parse metadata: each error anchors on the referencing field's `SourceRange`, read
 from the transient Compose `BuildResult` (the coarse per-field span — e.g. the node's
-`input:` mapping for an input-binding ref, its `prompt:` for a prompt ref).
+`input:` mapping for an input-binding ref, its `prompt:` or `system_prompt:` for a template ref).
 
 Imports flow down only: `compile.validation` (the leaf namespace checker), `expr` (the
 binding parser), `nodes` (Node/AgentNode behavior and the output-contract
@@ -150,31 +151,38 @@ def validate_references(
         node = result.node
         franges = result.field_ranges
         node_range = result.node_range
-        # Prompt scope: a strict AGENT prompt may interpolate ONLY this node's
-        # declared inputs and variables as `${name}` (or a builtin-call argument);
-        # a pool ref in a prompt is loud, and an unknown builtin / malformed span is
-        # rejected here (via `prompt_refs`, the renderer's compile-time companion).
-        if isinstance(node, AgentNode) and node.prompt:
-            prompt_rng = franges.get(("field", "prompt")) or node_range
+        # Prompt scope: a strict AGENT prompt or system prompt may interpolate ONLY
+        # this node's declared inputs and variables as `${name}` (or a builtin-call
+        # argument); a pool ref in either is loud, and an unknown builtin / malformed
+        # span is rejected here (via `prompt_refs`, the renderer's compile-time companion).
+        if isinstance(node, AgentNode):
             declared = {p.name for p in (node.params or [])}
             declared.update(variable.name for variable in node.variables)
-            try:
-                refs = prompt_refs(node.prompt)
-            except ExpressionError as exc:
-                errors.append((f"node {node_id!r} prompt: {exc}", prompt_rng))
-                refs = []
-            for ref in refs:
-                head = ref.split(".", 1)[0].strip()
-                if head not in declared:
-                    hint = (
-                        " (a pool ref belongs in an input `from:`, not a strict AGENT prompt)"
-                        if head in _PROMPT_FORBIDDEN_HEADS or head in valid_targets
-                        else ""
-                    )
-                    errors.append((
-                        f"node {node_id!r} prompt: ${{{ref}}} is not a declared input or variable{hint}",
-                        prompt_rng,
-                    ))
+            for field_name, template in (
+                ("prompt", node.prompt),
+                ("system_prompt", node.system_prompt),
+            ):
+                if not template:
+                    continue
+                prompt_rng = franges.get(("field", field_name)) or node_range
+                try:
+                    refs = prompt_refs(template)
+                except ExpressionError as exc:
+                    errors.append((f"node {node_id!r} {field_name}: {exc}", prompt_rng))
+                    refs = []
+                for ref in refs:
+                    head = ref.split(".", 1)[0].strip()
+                    if head not in declared:
+                        hint = (
+                            " (a pool ref belongs in an input `from:`, not a strict AGENT prompt)"
+                            if head in _PROMPT_FORBIDDEN_HEADS or head in valid_targets
+                            else ""
+                        )
+                        errors.append((
+                            f"node {node_id!r} {field_name}: ${{{ref}}} is not a declared "
+                            f"input or variable{hint}",
+                            prompt_rng,
+                        ))
         # Node-owned reserved wiring (`over`, `until`, ...) follows the same pool reference
         # grammar as ordinary inputs. It never receives a body-local scope: in particular,
         # MAP's `${item}` is valid only in each per-element input, not in `over:`.

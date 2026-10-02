@@ -7,9 +7,20 @@ and `factory.model_from_config` turns API selections into ready chat models.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+import ipaddress
+import re
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 
 # One provider vocabulary shared by the validated config carrier and the factory that
@@ -35,6 +46,32 @@ SUPPORTED_LLM_PROVIDERS: tuple[str, ...] = (
 # `typing.Literal` flattens a tuple argument into its member values. Deriving the type
 # from the tuple keeps Pydantic's enum validation/schema and the factory gate in lockstep.
 LLMProvider = Literal[SUPPORTED_LLM_PROVIDERS]  # type: ignore[valid-type]
+
+# Dedicated clients that cannot take a host base_url: Azure builds its endpoint from
+# AZURE_OPENAI_ENDPOINT and an API version, and the native Ollama client sends no key.
+_NO_BASE_URL_PROVIDERS = {
+    "azure": (
+        "provider azure does not take llm_config.base_url; for an Azure OpenAI "
+        "resource's /openai/v1/ endpoint use provider openai with that base_url"
+    ),
+    "ollama": (
+        "provider ollama does not take llm_config.base_url; it sends no api_key, so "
+        "set OLLAMA_BASE_URL instead"
+    ),
+}
+_LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
+_MAX_BASE_URL_LENGTH = 2048
+# RFC 3986 characters minus "?" and "#", since a query or fragment is refused anyway.
+# Everything else (whitespace, controls, non-ASCII) is something urlsplit or httpx
+# would strip, normalise, or encode, so the string sent would differ from the one
+# checked here.
+_URL_CHARACTERS = re.compile(r"[A-Za-z0-9\-._~:/\[\]@!$&'()*+,;=%]*")
+# A DNS name or bracketed IPv6 literal, an optional all-digit port, then a path. The
+# host part has no "@", so userinfo never matches.
+_URL_SHAPE = re.compile(
+    r"(?P<scheme>https?)://(?P<host>[A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])"
+    r"(?::(?P<port>[0-9]{1,5}))?(?P<path>/.*)?"
+)
 
 
 class LLMConfig(BaseModel):
@@ -67,12 +104,30 @@ class LLMConfig(BaseModel):
             and left out of every `model_dump`; read it with `api_key.get_secret_value()`.
             `None` keeps the environment or saved-connection key. An empty key is
             rejected, since some clients would treat it as unset and read the environment.
+        base_url (`str`, *optional*, defaults to `None`):
+            API endpoint that replaces the provider's default, such as an Azure OpenAI
+            resource's `https://<resource>.openai.azure.com/openai/v1/` with
+            `provider="openai"`. It decides where `api_key` is sent, so it needs
+            `api_key` and `provider` in the same config. It must be a lowercase
+            `https://` URL without credentials, query, or fragment; `http://` is
+            allowed only for exactly `localhost`, `127.0.0.1`, and `[::1]`. It is
+            checked and stored as written, so whitespace, control characters,
+            non-ASCII characters (use a host's `xn--` form), a bad port, or more than
+            2048 characters are rejected rather than normalised (see
+            `validate_base_url`). The `azure` and `ollama` providers reject it.
+            Unlike the key, it appears in `model_dump` when set.
 
     Example:
         ```python
         config = LLMConfig(provider="anthropic", model="claude-sonnet-4-5", api_key=key)
         "api_key" in config.model_dump()  # False
         config.api_key.get_secret_value() == key  # True
+        LLMConfig(
+            provider="openai",
+            model="gpt-5.4",
+            base_url="https://<resource>.openai.azure.com/openai/v1/",
+            api_key=key,
+        )
         ```
     """
 
@@ -85,6 +140,7 @@ class LLMConfig(BaseModel):
     # Excluded from dumps so the key never reaches a record, and so configs without
     # a key dump exactly as they did before the field existed.
     api_key: Optional[SecretStr] = Field(default=None, exclude=True)
+    base_url: Optional[str] = None
     # `model` is a regular field here; don't warn on the model_ namespace.
     # extra="forbid" makes typo'd llm_config: keys (e.g. `temparature` instead of
     # `temperature`) loud at LOAD time, not silent. hide_input_in_errors keeps
@@ -116,6 +172,116 @@ class LLMConfig(BaseModel):
             raise ValueError("api_key must not be empty")
         return value
 
+    @field_validator("base_url")
+    @classmethod
+    def _require_safe_url(cls, value: Optional[str]) -> Optional[str]:
+        """Accept an HTTPS endpoint, or plain HTTP only on the local machine."""
+        return value if value is None else validate_base_url(value)
+
+    @model_validator(mode="after")
+    def _bind_base_url_to_key(self) -> "LLMConfig":
+        """Require a base_url to travel with the key and provider it serves."""
+        if self.base_url is None:
+            return self
+        if self.api_key is None or self.provider is None:
+            raise ValueError(
+                "llm_config.base_url needs llm_config.api_key and llm_config.provider in "
+                "the same config, since it decides where that key is sent"
+            )
+        if self.provider in _NO_BASE_URL_PROVIDERS:
+            raise ValueError(_NO_BASE_URL_PROVIDERS[self.provider])
+        return self
+
+    @model_serializer(mode="wrap")
+    def _omit_unset_base_url(self, handler):
+        """Dump an unset base_url as absent, so existing recorded dumps stay identical."""
+        data = handler(self)
+        if self.base_url is None and isinstance(data, dict):
+            data.pop("base_url", None)
+        return data
+
+
+def validate_base_url(value: Any) -> str:
+    """Return ``value`` unchanged if it is an allowed ``llm_config.base_url``.
+
+    The check runs on the exact string the client will use: it must be a lowercase
+    ``https://`` URL (``http://`` only for exactly ``localhost``, ``127.0.0.1``, or
+    ``[::1]``) of a host, an optional port from 1 to 65535, and a path, at most 2048
+    characters long. Credentials, a query, a fragment, whitespace, control characters,
+    and non-ASCII characters are refused rather than normalised; write an
+    internationalised host in its ``xn--`` form. Errors never echo the value.
+
+    Args:
+        value (`Any`): The candidate URL.
+
+    Returns:
+        `str`: ``value`` itself.
+
+    Raises:
+        `ValueError`: ``value`` is not an allowed URL.
+    """
+    if not isinstance(value, str):
+        raise ValueError("base_url must be a string")
+    if len(value) > _MAX_BASE_URL_LENGTH:
+        raise ValueError(f"base_url must be at most {_MAX_BASE_URL_LENGTH} characters")
+    if not _URL_CHARACTERS.fullmatch(value):
+        raise ValueError(
+            "base_url may contain only ASCII URL characters, with no whitespace or "
+            "control characters; write an internationalised host in its xn-- form"
+        )
+    shape = _URL_SHAPE.fullmatch(value)
+    host = shape and shape["host"].lower()
+    if host and host.startswith("["):
+        host = host[1:-1]
+        try:
+            ipaddress.IPv6Address(host)
+        except ValueError:
+            host = None
+    if not host:
+        raise ValueError(
+            "base_url must be a lowercase https:// or http:// URL of a host, an "
+            "optional port, and a path, without credentials, query, or fragment"
+        )
+    if shape["port"] is not None and not 1 <= int(shape["port"]) <= 65535:
+        raise ValueError("base_url port must be a number from 1 to 65535")
+    if shape["scheme"] != "https" and host not in _LOCAL_HOSTS:
+        raise ValueError(
+            "base_url must use https; http is allowed only for localhost, "
+            "127.0.0.1, and ::1"
+        )
+    return value
+
+
+# Fields only the host's run layer may set. Authored layers reach the recorded
+# effective map, and a flow-level base_url could send the host key elsewhere.
+_HOST_ONLY_FIELDS = {
+    "api_key": (
+        "llm_config.api_key is a host credential; pass it in the run's llm_config, "
+        "not in a flow file"
+    ),
+    "base_url": (
+        "llm_config.base_url decides where the host's api_key is sent; pass it with "
+        "that key in the run's llm_config, not in a flow file"
+    ),
+}
+
+
+def host_only_field_error(config: Any) -> Optional[str]:
+    """Return why an authored ``llm_config`` layer may not be used, or `None`.
+
+    Args:
+        config (`Any`): One authored layer; a non-mapping has no host-only field.
+
+    Returns:
+        `str | None`: The message for the first host-only field the layer sets.
+    """
+    if not isinstance(config, Mapping):
+        return None
+    for field, message in _HOST_ONLY_FIELDS.items():
+        if field in config:
+            return message
+    return None
+
 
 def pop_api_key(config: dict[str, Any]) -> Optional[SecretStr]:
     """Pop a host ``api_key`` from one config layer and return it as a `SecretStr`.
@@ -142,6 +308,35 @@ def pop_api_key(config: dict[str, Any]) -> Optional[SecretStr]:
             "that provider"
         )
     return LLMConfig(provider=config["provider"], api_key=raw).api_key
+
+
+def pop_host_credentials(
+    config: dict[str, Any],
+) -> tuple[Optional[SecretStr], Optional[str]]:
+    """Pop a host ``api_key`` and the ``base_url`` it goes to from one config layer.
+
+    Popping both from the same layer is what binds the URL to the key: a base_url
+    decides where the key is sent, so it is accepted only beside that key and the
+    layer's ``provider``. Errors never echo the URL or the key.
+
+    Args:
+        config (`dict[str, Any]`): A mutable ``llm_config`` layer; ``api_key`` and
+            ``base_url`` are removed.
+
+    Returns:
+        `tuple[SecretStr | None, str | None]`: The validated key and URL; either is
+            `None` when the layer has none.
+
+    Raises:
+        `ValueError`: The key is invalid or lacks ``provider`` (see `pop_api_key`),
+            the layer has a ``base_url`` but no ``api_key``, the URL is not allowed
+            (see `validate_base_url`), or the provider does not take a base_url.
+    """
+    api_key = pop_api_key(config)
+    raw = config.pop("base_url", None)
+    if raw is None:
+        return api_key, None
+    return api_key, LLMConfig(provider=config.get("provider"), base_url=raw, api_key=api_key).base_url
 
 
 def merge_llm_config(specific: dict, base: dict) -> dict:

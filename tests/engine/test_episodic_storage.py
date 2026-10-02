@@ -151,7 +151,7 @@ def test_history_limits_and_pinned_snapshots_survive_restart(tmp_path):
         old = _snapshot(memory)
         _append(memory, "first")
         expected = _snapshot(memory)
-    with EpisodicMemory(9, 7, storage=path) as memory:
+    with EpisodicMemory(storage=path) as memory:
         assert _snapshot(memory) == expected
         with memory.open_run() as opened:
             frame = opened.open_frame(_spec())
@@ -617,7 +617,7 @@ def test_recorded_limits_survive_a_reopen(tmp_path):
         with memory.open_run() as opened:
             opened.open_frame(_spec())
             recorded = opened.snapshot
-    with EpisodicMemory(99, 88, storage=path) as memory:
+    with EpisodicMemory(storage=path) as memory:
         with memory.open_run(snapshot=recorded) as replay:
             replay.open_frame(_spec())
             assert replay.snapshot == recorded
@@ -627,6 +627,27 @@ def test_recorded_limits_survive_a_reopen(tmp_path):
             "max_episodes": 4,
             "recall_limit": 2,
         }
+
+
+def test_explicit_limits_must_match_stored_limits(tmp_path):
+    path = tmp_path / "memory.sqlite"
+    EpisodicMemory(4, 2, storage=path).close()
+    with EpisodicMemory(storage=path) as memory:
+        assert _snapshot(memory)["config"] == {"max_episodes": 4, "recall_limit": 2}
+    with EpisodicMemory(4, storage=path) as memory:
+        assert _snapshot(memory)["config"]["recall_limit"] == 2
+    with pytest.raises(c.MemoryOperationError) as caught:
+        EpisodicMemory(5, storage=path)
+    assert caught.value.code == "episodic.config_conflict"
+    EpisodicMemory(storage=path).close()
+
+
+def test_a_fresh_store_pins_its_default_limits(tmp_path):
+    path = tmp_path / "memory.sqlite"
+    EpisodicMemory(storage=path).close()
+    with pytest.raises(c.MemoryOperationError) as caught:
+        EpisodicMemory(5, storage=path)
+    assert caught.value.code == "episodic.config_conflict"
 
 
 def test_corrupt_private_state_never_partially_adopts_ram(tmp_path):

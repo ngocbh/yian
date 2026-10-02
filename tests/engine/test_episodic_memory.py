@@ -147,6 +147,22 @@ def test_frames_of_one_instance_share_one_history_and_one_limit() -> None:
         assert owners == ["second", "third"]
 
 
+def test_unset_limits_adopt_recorded_ones_and_explicit_ones_must_match() -> None:
+    with EpisodicMemory().open_run() as session:
+        assert session.snapshot["config"] == {"max_episodes": 100, "recall_limit": 10}
+    with EpisodicMemory(max_episodes=4, recall_limit=2).open_run() as session:
+        recorded = session.snapshot
+    with EpisodicMemory().open_run(snapshot=recorded) as session:
+        assert session.snapshot == recorded
+    with EpisodicMemory(max_episodes=4).open_run(snapshot=recorded) as session:
+        assert session.snapshot == recorded
+    for kwargs in ({"max_episodes": 5}, {"recall_limit": 3}):
+        with pytest.raises(MemoryOperationError) as exc:
+            EpisodicMemory(**kwargs).open_run(snapshot=recorded)
+        assert exc.value.code == "episodic.config_conflict"
+        assert exc.value.retryable is False
+
+
 def test_snapshot_is_closed_canonical_and_defensive() -> None:
     memory = EpisodicMemory(max_episodes=4, recall_limit=2)
     with memory.open_run() as session:
@@ -179,7 +195,7 @@ def test_snapshot_restore_rules_and_recorded_defaults() -> None:
         recorded = session.snapshot
     with original.open_run(snapshot=recorded) as current:
         assert current.snapshot == recorded
-    restored = EpisodicMemory(max_episodes=99, recall_limit=88)
+    restored = EpisodicMemory()
     with restored.open_run(snapshot=recorded) as session:
         session.open_frame(_spec())
         assert session.snapshot == recorded

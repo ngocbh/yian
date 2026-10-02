@@ -64,6 +64,9 @@ class _State:
     episodes: tuple[JsonObject, ...]
 
 
+_DEFAULT_LIMITS = _Limits(100, 10)
+
+
 def _operation_error(stage: str, code: str, message: str) -> MemoryOperationError:
     """Build one stable nonretryable backend failure."""
     return MemoryOperationError(stage, code, message, False)
@@ -76,6 +79,29 @@ def _positive_int(value: object, name: str) -> int:
     if value <= 0:
         raise ValueError(f"{name} must be positive")
     return value
+
+
+def _resolve_limits(
+    requested: tuple[int | None, int | None],
+    recorded: _Limits | None,
+    stage: str,
+) -> _Limits:
+    """Fill unset limits from recorded ones or defaults; reject explicit conflicts."""
+    max_episodes, recall_limit = requested
+    if recorded is not None and (
+        max_episodes not in (None, recorded.max_episodes)
+        or recall_limit not in (None, recorded.recall_limit)
+    ):
+        raise _operation_error(
+            stage,
+            "episodic.config_conflict",
+            "configured limits differ from the recorded limits",
+        )
+    base = _DEFAULT_LIMITS if recorded is None else recorded
+    return _Limits(
+        base.max_episodes if max_episodes is None else max_episodes,
+        base.recall_limit if recall_limit is None else recall_limit,
+    )
 
 
 def _json_string(value: object, name: str, *, nonempty: bool = False) -> str:
@@ -607,18 +633,20 @@ class EpisodicMemory:
 
     def __init__(
         self,
-        max_episodes: int = 100,
-        recall_limit: int = 10,
+        max_episodes: int | None = None,
+        recall_limit: int | None = None,
         *,
         storage: str | os.PathLike[str] | None = None,
     ) -> None:
         """Create one isolated episodic-memory namespace.
 
         Args:
-            max_episodes (`int`, defaults to `100`):
-                Maximum retained episodes of this instance.
-            recall_limit (`int`, defaults to `10`):
-                Maximum episodes returned by contextual recall.
+            max_episodes (`int | None`, defaults to `None`):
+                Maximum retained episodes. None adopts the stored or snapshot
+                value, else 100.
+            recall_limit (`int | None`, defaults to `None`):
+                Maximum episodes returned by contextual recall. None adopts the
+                stored or snapshot value, else 10.
             storage (`str | PathLike[str] | None`, defaults to `None`):
                 Optional local SQLite file with an existing parent. This backend
                 owns it until explicit close or context exit. None is process-local.
@@ -626,12 +654,15 @@ class EpisodicMemory:
         Raises:
             TypeError: Raised when either limit is not an exact integer.
             ValueError: Raised when either limit is not positive.
-            MemoryOperationError: Storage is unavailable, occupied, or invalid.
+            MemoryOperationError: Storage is unavailable, occupied, or invalid,
+                or an explicit limit differs from the stored limits
+                (`episodic.config_conflict`).
         """
-        limits = _Limits(
-            _positive_int(max_episodes, "max_episodes"),
-            _positive_int(recall_limit, "recall_limit"),
-        )
+        if max_episodes is not None:
+            _positive_int(max_episodes, "max_episodes")
+        if recall_limit is not None:
+            _positive_int(recall_limit, "recall_limit")
+        self._requested = (max_episodes, recall_limit)
         self._lock = RLock()
         self._pid = os.getpid()
         self._storage: SQLiteStorage | None = None
@@ -640,7 +671,7 @@ class EpisodicMemory:
         self._namespace = uuid4().hex
         self._epoch = 0
         self._revision = 0
-        self._state = _State(limits, ())
+        self._state = _State(_resolve_limits(self._requested, None, "storage"), ())
         self._applied_commits: dict[str, str] = {}
         self._ever_opened = False
         self._ever_reset = False
@@ -659,6 +690,8 @@ class EpisodicMemory:
                     snapshot, commits, opened, reset, committed = _parse_inventory(
                         saved
                     )
+                    saved_limits = snapshot[3].limits
+                    _resolve_limits(self._requested, saved_limits, "storage")
                     self._namespace, self._epoch, self._revision, self._state = (
                         snapshot
                     )
@@ -807,6 +840,9 @@ class EpisodicMemory:
         """
         with self._operation():
             parsed = None if snapshot is None else _parse_snapshot(snapshot)
+            if parsed is not None:
+                recorded_limits = parsed[3].limits
+                _resolve_limits(self._requested, recorded_limits, "open_run")
             adopt = False
             if parsed is None:
                 namespace = self._namespace

@@ -137,6 +137,15 @@ alias before CALL/MAP/LOOP bake the child graph. Repeated calls through one alia
 view; distinct aliases and diamond branches receive disjoint origin keys. Only successfully
 compiled, complete flows enter the physical cache.
 
+Memory declared in an imported file is scoped by its alias. `notes` declared
+in a file imported as `lib` has memory key `lib.notes`. If that file is imported
+as `d` by a file that is itself imported as `b`, the key is `b.d.notes`. Two
+libraries that both declare `notes` therefore never share memory, and one file
+imported under two aliases gets two independent sets. An AGENT inside the child
+still recalls the importing flow's memories by position. A child declaration
+never binds to a parent's memory. An alias that scopes memory must match
+`[A-Za-z_][A-Za-z0-9_-]*`.
+
 ---
 
 ## Descriptors vs. nodes

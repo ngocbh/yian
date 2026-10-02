@@ -50,16 +50,14 @@ The run-loop primitives live in `agent_composer.run`.
 ## Session memory foundation
 
 The optional turn contracts and backend support API-backed AGENT
-message conversation history through host injection
-into `run_flow`. Historical
-conversation RunLog wrappers remain readable as inert metadata; they do not
-rebuild history. Explicit API backward self-feedback can be committed as notes
-for future recall. API context summaries preserve raw history and recent whole
-turns. Host-only `storage=path` optionally preserves complete backend state across
-restarts; `storage=None` remains process-local. See
-[durable memory](api.md#optional-durable-memory). `composer run` activates declared built-in
-policies; optional `--memory-storage POLICY=PATH` preserves selected policies across
-CLI processes. It does not run backward learning. See
+message conversation history through host injection into `run_flow`. Run logs
+do not rebuild history. Explicit API backward self-feedback can be committed as
+notes for future recall. API context summaries preserve raw history and recent
+whole turns. Host-only `storage=path` optionally preserves complete backend state
+across restarts and opens on first use; `storage=None` remains process-local. See
+[durable memory](api.md#optional-durable-memory). `composer run` builds declared
+built-in memories; `--memory-root DIR` or `--memory-storage KEY=PATH` keeps them
+on disk. It does not run backward learning. See
 [SessionMemory foundation](api.md#sessionmemory-foundation) for ownership,
 history updates, retry, and reset semantics.
 
@@ -71,8 +69,9 @@ existing run-handle protocol, not the concrete `SessionMemory` backend.
 
 ### Optional capabilities
 
-Frame recall returns text or `MemoryContent`. Rich content can supply a transcript
-source alongside notes; the evaluator admits it into one transient context.
+Each memory's recall returns text or `MemoryContent`. Rich content can supply a
+transcript source alongside notes; the evaluator admits at most one transcript,
+from a session memory declared on that AGENT, into one transient context.
 
 ::: agent_composer.memory.MemoryContent
 
@@ -85,10 +84,6 @@ source alongside notes; the evaluator admits it into one transient context.
 ::: agent_composer.memory.ConversationTurn
 
 ### Immutable conversation carriers
-
-::: agent_composer.memory.ConversationKey
-    options:
-      merge_init_into_class: true
 
 ::: agent_composer.memory.ConversationInvocation
     options:
@@ -154,6 +149,15 @@ source alongside notes; the evaluator admits it into one transient context.
 
 ::: agent_composer.memory.conversation.conversation_checkpoint_from_json
 
+## Building memories
+
+`build_memories` reads a flow's memory table and builds one backend per memory
+key. See [building memories](api.md#building-memories-with-build_memories).
+
+::: agent_composer.memory_host.build_memories
+
+::: agent_composer.memory_host.MemoryRegistry
+
 ## Profile memory
 
 Import the concrete backend from `agent_composer.memory.profile` and stores from
@@ -166,6 +170,8 @@ Import the concrete backend from `agent_composer.memory.profile` and stores from
 ::: agent_composer.memory.storage.markdown.FileMarkdownStore
 
 ::: agent_composer.memory.storage.markdown.MarkdownVersionMismatch
+
+::: agent_composer.memory.storage.InMemoryMarkdownStore
 
 ## Compose source provenance
 
@@ -205,12 +211,10 @@ The lower-level runtime surface is deliberately scoped to
 The log stores only this closed transition vocabulary. Run success and failure
 observers are derived by reducing these records; there is no separate forward
 terminal record. Backward attempts have their own Started/Ready/Finished records.
-New writes use schema 8. Readers retain schemas 7 and 8 with unchanged validation
-for the thirteen pre-existing kinds; conversation records require schema 8.
-Historical accepted bytes are preserved when new records extend an older prefix.
-The four conversation wrappers are inert compatibility metadata. Runtime validates
-their unfinished-start ownership and scope but retains no conversation projection,
-restores no memory, and grants no external effects.
+Logs use schema 9. A log written with schema 7 or 8 is rejected on read with
+"run log schema N predates schema 9 and is not supported". Accepted bytes are
+preserved when new records extend a prefix. Run logs hold no conversation
+history; that belongs to the memory backend.
 
 ::: agent_composer.runtime.log.RecordEnvelope
 
@@ -240,25 +244,9 @@ restores no memory, and grants no external effects.
 
 ::: agent_composer.runtime.log.MemoryCommitFailedRecord
 
-::: agent_composer.runtime.log.ConversationAdmittedRecord
-    options:
-      merge_init_into_class: true
-
-::: agent_composer.runtime.log.ConversationEffectRequestedRecord
-    options:
-      merge_init_into_class: true
-
-::: agent_composer.runtime.log.ConversationEffectObservedRecord
-    options:
-      merge_init_into_class: true
-
-::: agent_composer.runtime.log.ConversationClosedRecord
-    options:
-      merge_init_into_class: true
-
 ::: agent_composer.runtime.contracts.ForwardCapture
 
-::: agent_composer.runtime.contracts.FrameProposal
+::: agent_composer.runtime.contracts.MemoryProposal
 
 ::: agent_composer.runtime.contracts.AttributedBackwardResult
 

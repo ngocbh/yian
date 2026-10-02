@@ -38,7 +38,10 @@ from agent_composer.compile.llm_cascade import (
 )
 from agent_composer.compile.manifest import flow_fingerprint
 from agent_composer.compile.memory_layout import (
+    ResolvedMemoryLayout,
     apply_memory_layout,
+    check_session_compatibility,
+    memory_stacks,
     resolve_memory_layout,
 )
 from agent_composer.compile.model import CompiledFlow
@@ -53,10 +56,11 @@ from agent_composer.expr.lineage import FeedbackValue
 from agent_composer.memory import (
     LearningResult,
     Memory,
-    MemoryFrameRef,
-    MemoryFrameSpec,
     MemorySetupError,
+    MemorySpec,
+    MemoryStack,
 )
+from agent_composer.memory_host import MemoryRegistry
 from agent_composer.nodes.base import Steering
 from agent_composer.nodes.binding import coerce_inputs
 from agent_composer.runtime.engine import FlowEngine
@@ -159,7 +163,7 @@ class RunResult:
         Raises:
             `TypeError`: Feedback has an invalid ordinary-message carrier.
             `ValueError`: Retention is disabled or feedback is invalid.
-            `MemorySetupError`: Enabled policies cannot restore their recorded
+            `MemorySetupError`: Enabled memories cannot restore their recorded
                 snapshots. Host and log faults also propagate while preserving
                 the accepted prefix.
             `RuntimeError`: Another backward call on this result is in progress,
@@ -194,7 +198,7 @@ class _BackwardHandle:
     run_id: str
     path: Path | None
     records: tuple[RecordEnvelope, ...]
-    memory: dict[str, Memory] | None
+    memory: Mapping[str, Memory] | None
     outcome: BackwardOutcome | None
     # Held in memory for this result's own backward calls; never recorded.
     api_key: SecretStr | None = field(default=None, repr=False)
@@ -220,12 +224,15 @@ class _BackwardHandle:
             def open_memory() -> MemoryRuntime:
                 if self.memory is None:
                     raise MemorySetupError("backward requires this run's enabled memory mapping")
+                _check_registry_types(self.memory, state.memories)
                 program = copy.deepcopy(self.program)
                 apply_effective_llm_map(program, legacy_connection_map(state.effective_llm_by_static_path))
-                layout, origins = _resolve_runtime_memory_layout(program)
-                if layout != state.memory_layout:
-                    raise ValueError("recorded memory layout does not match the retained program")
-                return MemoryRuntime.open(layout=state.memory_layout, origins=origins,
+                memory_table, origins, memory_stack_set = _resolve_runtime_memory_layout(program)
+                _check_recorded_memory_table(
+                    state.memories, state.memory_stacks, memory_table, memory_stack_set,
+                    subject="retained program",
+                )
+                return MemoryRuntime.open(memories=state.memories, origins=origins,
                                           memory=self.memory, snapshots=state.memory_snapshots)
 
             return drive_backward(state, authority, feedback, open_memory=open_memory)
@@ -279,7 +286,7 @@ def run_flow(
     on_event: EventHook | None = None,
     on_stream: StreamHook | None = None,
     llm_config: dict[str, Any] | None = None,
-    memory: dict[str, Memory] | None = None,
+    memory: Mapping[str, Memory] | None = None,
     learnable: bool = False,
     tools: Mapping[str, BaseTool | Callable[..., Any] | Sequence[BaseTool | Callable[..., Any]]] | None = None,
     skills: Mapping[str, Skill] | None = None,
@@ -329,14 +336,15 @@ def run_flow(
             endpoint those agents send the key to. The log records it on them,
             so a resume or backward call sends the key there too. Flow files
             cannot set ``api_key`` or ``base_url``.
-        memory (`dict[str, Memory] | None`, *optional*, defaults to `None`):
-            Host-injected policy implementations keyed by authored policy name.
-            ``None`` leaves every authored policy dormant. A mapping enables
-            recall and optional conversation history, and records exact per-policy
-            recovery snapshots. Session history advances during forward execution.
+        memory (`Mapping[str, Memory] | None`, *optional*, defaults to `None`):
+            Backend for each declared memory key, typically a `MemoryRegistry`
+            from `build_memories`. Extra keys are ignored. ``None`` leaves every
+            declared memory dormant. A mapping enables recall and optional
+            conversation history, and records exact per-memory recovery
+            snapshots. Session history advances during forward execution.
         learnable (`bool`, *optional*, defaults to `False`):
             Retain accepted execution for a later explicit `RunResult.backward`
-            call. Forward execution runs no frame learners or learned-mutation
+            call. Forward execution runs no memory learners or learned-mutation
             commits. Memory is optional; an enabled mapping supplies owned learners
             for that call. Automatic session history is independent of retention.
         tools (`Mapping[str, BaseTool | Callable[..., Any] | Sequence[BaseTool | Callable[..., Any]]] | None`, *optional*, defaults to `None`):
@@ -401,7 +409,7 @@ def run_flow(
             run's tools, or an AGENT grants skills while `skills` is `None` or
             lacks a listed skill.
         `MemorySetupError`:
-            Memory is enabled without a required policy implementation, cannot
+            Memory is enabled without a required memory implementation, cannot
             open an exact run snapshot, or has an invalid configuration.
         `FileExistsError`:
             ``log`` names an existing path.
@@ -441,7 +449,7 @@ def _run_flow_controlled(
     on_event: EventHook | None = None,
     on_stream: StreamHook | None = None,
     llm_config: dict[str, Any] | None = None,
-    memory: dict[str, Memory] | None = None,
+    memory: Mapping[str, Memory] | None = None,
     learnable: bool = False,
     tools: Mapping[str, BaseTool | Callable[..., Any] | Sequence[BaseTool | Callable[..., Any]]] | None = None,
     skills: Mapping[str, Skill] | None = None,
@@ -505,12 +513,15 @@ def _run_flow_controlled(
     }
 
     memory_runtime: MemoryRuntime | None = None
+    memory_table: tuple[MemorySpec, ...] | None = None
+    memory_stack_set: tuple[MemoryStack, ...] | None = None
     if memory is not None:
-        memory_layout, memory_origins = _resolve_runtime_memory_layout(private_flow)
+        memory_table, memory_origins, memory_stack_set = _resolve_runtime_memory_layout(
+            private_flow, effective_llm=effective_llm,
+        )
+        _check_registry_types(memory, memory_table)
         memory_runtime = MemoryRuntime.open(
-            layout=memory_layout,
-            origins=memory_origins,
-            memory=memory,
+            memories=memory_table, origins=memory_origins, memory=memory,
         )
 
     authority: RunLog | None = None
@@ -526,13 +537,12 @@ def _run_flow_controlled(
                 start_wiring_override=start_wiring_override,
                 effective_llm_by_static_path=effective_llm,
                 num_workers=num_workers,
-                memory_layout=(
-                    None if memory_runtime is None else memory_runtime.layout
-                ),
                 memory_snapshots=(
                     None if memory_runtime is None else memory_runtime.snapshots
                 ),
                 learnable=learnable,
+                memories=memory_table,
+                memory_stacks=memory_stack_set,
             ),
         )
 
@@ -587,7 +597,7 @@ def resume_flow(
     num_workers: int | None = None,
     on_event: EventHook | None = None,
     on_stream: StreamHook | None = None,
-    memory: dict[str, Memory] | None = None,
+    memory: Mapping[str, Memory] | None = None,
     tools: Mapping[str, BaseTool | Callable[..., Any] | Sequence[BaseTool | Callable[..., Any]]] | None = None,
     skills: Mapping[str, Skill] | None = None,
     steering: Steering | None = None,
@@ -614,10 +624,11 @@ def resume_flow(
             fresh in-loop observers.
         on_stream (`Callable[[StreamChunk], None] | None`, *optional*, defaults to `None`):
             Callback for new transient stream chunks, which are never replayed.
-        memory (`dict[str, Memory] | None`, *optional*, defaults to `None`):
-            Host-injected policy implementations required when the recorded run
-            enabled memory and still has unfinished forward execution. Terminal
-            inspection opens no policies; supplied references remain available
+        memory (`Mapping[str, Memory] | None`, *optional*, defaults to `None`):
+            Backend for each declared memory key, typically a `MemoryRegistry`
+            from `build_memories`. Extra keys are ignored. Required when the
+            recorded run enabled memory and still has unfinished forward execution. Terminal
+            inspection opens no memories; supplied references remain available
             for later explicit backward calls.
         tools (`Mapping[str, BaseTool | Callable[..., Any] | Sequence[BaseTool | Callable[..., Any]]] | None`, *optional*, defaults to `None`):
             The tools the resumed segment sees, with the same rules as
@@ -685,7 +696,7 @@ def _resume_flow_controlled(
     num_workers: int | None = None,
     on_event: EventHook | None = None,
     on_stream: StreamHook | None = None,
-    memory: dict[str, Memory] | None = None,
+    memory: Mapping[str, Memory] | None = None,
     tools: Mapping[str, BaseTool | Callable[..., Any] | Sequence[BaseTool | Callable[..., Any]]] | None = None,
     skills: Mapping[str, Skill] | None = None,
     steering: Steering | None = None,
@@ -713,20 +724,19 @@ def _resume_flow_controlled(
         _check_tool_grants(flow.compiled, run_tools)
         skills = _check_skills(flow.compiled, skills)
 
-        if state.memory_layout is not None:
+        if state.memories is not None:
             if memory is None:
                 raise MemorySetupError(
                     "resuming this run requires its enabled memory mapping"
                 )
-            memory_layout, memory_origins = _resolve_authored_memory_layout(
-                flow
+            _check_registry_types(memory, state.memories)
+            memory_table, memory_origins, memory_stack_set = _resolve_authored_memory_layout(flow)
+            _check_recorded_memory_table(
+                state.memories, state.memory_stacks, memory_table, memory_stack_set,
+                subject="supplied flow",
             )
-            if memory_layout != state.memory_layout:
-                raise ValueError(
-                    "recorded memory layout does not match the supplied flow"
-                )
             memory_runtime = MemoryRuntime.open(
-                layout=state.memory_layout,
+                memories=state.memories,
                 origins=memory_origins,
                 memory=memory,
                 snapshots=state.memory_snapshots,
@@ -931,12 +941,12 @@ def _replay_compiled_run_log(
         bind_api_key(private_flow, api_key)
     if first.record.learnable:
         apply_execution_layout(private_flow, resolve_execution_layout(private_flow))
-    if first.record.memory_layout is not None:
-        replay_layout, _ = _resolve_runtime_memory_layout(private_flow)
-        if replay_layout != first.record.memory_layout:
-            raise ValueError(
-                "recorded memory layout does not match the supplied flow"
-            )
+    if first.record.memories is not None:
+        replay_memories, _, replay_stacks = _resolve_runtime_memory_layout(private_flow)
+        _check_recorded_memory_table(
+            first.record.memories, first.record.memory_stacks, replay_memories, replay_stacks,
+            subject="supplied flow",
+        )
     state = _replay_records(
         RunState(private_flow),
         tuple(canonical),
@@ -949,39 +959,81 @@ def _replay_compiled_run_log(
 
 def _resolve_runtime_memory_layout(
     flow: CompiledFlow,
+    *,
+    effective_llm: dict[str, dict] | None = None,
 ) -> tuple[
-    tuple[MemoryFrameSpec, ...],
-    dict[MemoryFrameRef, OriginRef | None],
+    tuple[MemorySpec, ...],
+    dict[str, OriginRef | None],
+    tuple[MemoryStack, ...],
 ]:
-    """Derive, canonically order, and atomically stamp one private graph."""
+    """Derive the key table, origins and stacks, and stamp one private graph.
+
+    With ``effective_llm``, first check that each session key resolves one
+    conversation compatibility across its placements.
+    """
     resolved = resolve_memory_layout(flow)
+    if effective_llm is not None:
+        check_session_compatibility(resolved, effective_llm)
     apply_memory_layout(flow, resolved)
-    ordered = tuple(
-        sorted(
-            resolved.frames,
-            key=lambda frame: (
-                frame.spec.ref.root_flow_id,
-                frame.spec.ref.static_path,
-                frame.spec.ref.owner.value,
-            ),
-        )
-    )
+    return _memory_layout_parts(resolved)
+
+
+def _memory_layout_parts(
+    resolved: ResolvedMemoryLayout,
+) -> tuple[
+    tuple[MemorySpec, ...],
+    dict[str, OriginRef | None],
+    tuple[MemoryStack, ...],
+]:
+    """Return one layout's record-facing key table, per-key origins and stacks."""
     return (
-        tuple(frame.spec for frame in ordered),
-        {frame.spec.ref: frame.origin for frame in ordered},
+        tuple(memory.spec for memory in resolved.memories),
+        {memory.spec.key: memory.origin for memory in resolved.memories},
+        memory_stacks(resolved),
     )
+
+
+def _check_registry_types(memory: Mapping[str, Memory], specs: tuple[MemorySpec, ...]) -> None:
+    """Reject a registry whose declared types differ from this flow's table."""
+    if not isinstance(memory, MemoryRegistry):
+        return
+    for spec in specs:
+        built = memory.types.get(spec.key)
+        if built is not None and built != spec.type:
+            raise MemorySetupError(
+                f"memory {spec.key!r} is declared as {spec.type!r} but the registry "
+                f"built it as {built!r}; build the registry from the flow you run"
+            )
 
 
 def _resolve_authored_memory_layout(
     flow: ComposedFlow,
 ) -> tuple[
-    tuple[MemoryFrameSpec, ...],
-    dict[MemoryFrameRef, OriginRef | None],
+    tuple[MemorySpec, ...],
+    dict[str, OriginRef | None],
+    tuple[MemoryStack, ...],
 ]:
-    """Resolve memory only on a fresh static copy, never replayed growth."""
+    """Purely resolve memory on the authored static program, never replayed growth.
+
+    Nothing is stamped, so a def called from several nodes needs no de-aliasing;
+    the table, origins and stacks equal those a fresh run records.
+    """
     if not isinstance(flow, ComposedFlow):
         raise TypeError("memory layout resolution expects a ComposedFlow")
-    return _resolve_runtime_memory_layout(copy.deepcopy(flow.compiled))
+    return _memory_layout_parts(resolve_memory_layout(flow.compiled))
+
+
+def _check_recorded_memory_table(
+    recorded_memories: tuple[MemorySpec, ...] | None,
+    recorded_stacks: tuple[MemoryStack, ...] | None,
+    memories: tuple[MemorySpec, ...],
+    stacks: tuple[MemoryStack, ...],
+    *,
+    subject: str,
+) -> None:
+    """Reject a recorded key table or stack set that the flow does not resolve."""
+    if recorded_memories != memories or recorded_stacks != stacks:
+        raise ValueError(f"recorded memory table or stacks do not match the {subject}")
 
 
 def _publish_boundary_observers(
@@ -1041,7 +1093,7 @@ def _result_from_state(
 
 
 def _retained_handle(
-    program: CompiledFlow | None, state: RunState, log: RunLog, memory: dict[str, Memory] | None,
+    program: CompiledFlow | None, state: RunState, log: RunLog, memory: Mapping[str, Memory] | None,
     *, locator: Path | None, api_key: SecretStr | None = None,
 ) -> _BackwardHandle | None:
     """Detach delayed authority without keeping an opened session or public wrapper."""

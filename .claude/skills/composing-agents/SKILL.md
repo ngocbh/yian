@@ -264,50 +264,65 @@ variable has the same name, such as `temperature`.
 
 ### Agent memory — `long_term_memory:`
 
-Put `long_term_memory: NAME` on a full flow (`nodes:` form) or an AGENT node to
-declare long-term memory and select a named host policy. The object form is
-`long_term_memory: {name: NAME, config: {...}}`; config is public behavior only,
-so never author credentials, tenant/backend locations, or Python imports there.
-Flow frames are inherited by every AGENT node in that flow, and an AGENT node
-may add its own local frame. Each frame writes only itself. MAP/LOOP executions
-reuse the frames authored on their flows and AGENT nodes rather than creating
-per-item/per-iteration frames.
-Other node kinds and anonymous inline child flows cannot carry this declaration.
-`composer run` automatically hosts declared `episodic`, `reflective`, and `session`
-policies; custom policies, including `ProfileMemory`, require Python injection.
-Library hosts enable recall
-with `run_flow(..., memory={NAME: implementation})`; `memory=None` stays dormant.
-For API conversation continuity, declare `long_term_memory: session`; Python hosts
-inject `SessionMemory()` as `"session"`;
-frame config is empty. All policies contribute through one memory context:
-SessionMemory supplies a structured transcript, while ordinary memories supply
-notes/instructions. Preserve transcript roles and tool results; do not flatten
-history into a note. The innermost frame contributing a transcript owns one
-conversation per authored AGENT leaf; other frames still provide recall. Repeated
-calls queue, including MAP items and LOOP iterations. MAP does not fork history
-or promise input-index admission order; use non-session memory for independent
-items. Session history updates automatically during forward, without learning.
-Explicit API backward self-feedback can become committed SessionMemory notes for
-future calls through the same policy, without another model call or YAML option.
-Notes stay scoped to the owning frame and authored leaf; recall is pinned when
-the run opens. Host-only `SessionMemory(history_budget_chars=32_000, recent_turns=4)`
-controls API summaries of older context; do not put these settings in YAML.
-Raw history and recent whole turns stay intact, even above the soft budget.
-Episodic, reflective, and session backends accept optional `storage=path` for local
-SQLite durability; the default `None` remains process-local. Never put a storage
-path in YAML. A file has one owner until backend close; active work or queued
-turns block close, idle run handles do not. In `composer run`, repeat
-`--memory-storage POLICY=PATH` to persist selected declared policies; others stay
-process-local and lose state on exit. Supply the same stores on unfinished
-resume; terminal inspection opens none. CLI activation does not run backward
-learning.
+`long_term_memory:` names one or more memories on a full flow (`nodes:` form, root
+file or `defs:` entry) or on an AGENT node. Each memory has a name and a type. YAML
+holds public behavior config only, never storage paths, credentials, or Python
+imports. Three forms:
+
+- `long_term_memory: episodic` — one memory named after its type;
+- `long_term_memory: {notes: episodic, chat: session}` — one memory per `name: type`;
+- `long_term_memory: {notes: {type: episodic, config: {max_episodes: 50}}}` — long
+  form; only `type` and `config` are allowed.
+
+`null` is the same as leaving the key out. `{}` and the retired
+`{name: X, config: ...}` form are errors; `name`, `type`, and `config` cannot be
+memory names. Built-in types and their config keys: `episodic` (`max_episodes`,
+`recall_limit`), `reflective` (`max_items`, `recall_limit`), `session`
+(`history_budget_chars`, `recent_turns`), `profile` (`max_chars`,
+`input_budget_chars`). Any other type is custom and needs a Python host. `storage`,
+`store`, `path`, and `api_key` are rejected in config.
+
+A memory's key is its name prefixed by the `uses:` aliases it was imported
+through: `notes` in the root file, `lib.notes` in a file imported as `lib`. The same
+key declared twice in one file is one memory, so type and config must agree; two
+libraries that both declare `notes` stay independent. Keys that differ only by case
+are an error. An AGENT recalls each enclosing flow's memories, outermost first,
+through CALL, MAP, and LOOP, then its own; a repeated key appears once. A child's
+declaration never binds to a parent's memory. Other node kinds and anonymous inline
+CALL/MAP/LOOP bodies cannot carry `long_term_memory:`; use a named `defs:` flow.
+Each declaration's form and config are checked for every def and import; the rules
+that compare declarations (one type and config per key, session placement, case
+collisions, alias names) apply only to declarations reachable from the root.
+
+A `session` memory is declared on exactly one AGENT, never on a flow, and an AGENT
+declares at most one. It supplies a structured transcript, while other memories
+supply notes; preserve transcript roles and tool results, and do not flatten
+history into a note. Every call site of that AGENT shares one conversation:
+repeated calls, LOOP iterations, and MAP items queue in admission order, not MAP
+input order, so use non-session memory for independent items. History updates
+automatically during forward, without learning. Explicit API backward
+self-feedback can become committed session notes for later calls, without another
+model call; recall is pinned when the run opens. `history_budget_chars` (default
+32_000) and `recent_turns` (default 4) control API summaries of older context; raw
+history and recent whole turns stay intact, even above the soft budget.
+
+`composer run` builds every built-in memory in RAM, or on disk with
+`--memory-root DIR` (key `lib.notes` lives at `DIR/<flow id>/lib/notes.sqlite`) and
+repeatable `--memory-storage KEY=PATH`. It cannot run a flow that declares a custom
+type, and it never runs backward learning. `composer chat` and its `run_flow` tool
+supply no long-term memory: declared memories stay off (session conversations are
+not kept). Supply the same storage on unfinished
+`--resume`; terminal inspection opens none. A storage file has one owner until its
+backend closes. From Python, pass
+`memory=build_memories(flow, root=..., storage=..., supplied=..., factories=...)` to
+`run_flow`; `memory=None` leaves declarations dormant.
 Independently, `learnable=True` retains
 execution for a later explicit `result.backward(feedback)` call; forward returns
-before frame learning or learned-mutation commits. `result.backward()` with no external feedback still
-runs every enabled frame learner, while unreached AGENT backward model calls are
-skipped. The separate outcome never changes forward values or updates local
-variables. Terminal `resume_flow` inspects without learning; it does not retry a
-backward attempt. See the [Python API](../../../docs/api.md#explicit-backward-feedback)
+before memory learning or learned-mutation commits. `result.backward()` with no
+external feedback still gives every memory key one learn call, while unreached
+AGENT backward model calls are skipped. The separate outcome never changes forward
+values or updates local variables. Terminal `resume_flow` inspects without learning;
+it does not retry a backward attempt. See the [Python API](../../../docs/api.md#explicit-backward-feedback)
 for feedback shapes and repeated backward attempts.
 
 ### `code` — deterministic Python
@@ -627,7 +642,7 @@ starts, and a `human_input` node fails when it asks. There is no authored
   `Literal[...]`/other supported shape for structured generation.
 - [ ] Every `prompt:` and `system_prompt:` references local inputs or, for an AGENT, its own declared variables.
 - [ ] Every variable has a typed default and a name distinct from local inputs.
-- [ ] Every `long_term_memory:` declaration is on a flow or `agent`, selects a host-registered memory policy by name, and contains only public behavior config.
+- [ ] Every `long_term_memory:` declaration is on a full flow or `agent`, uses one of the three forms with only allowlisted built-in config keys (or a custom type a Python host builds), and puts each `session` on exactly one AGENT.
 - [ ] Each `case` has an `else:` (or its `Literal` cases are exhaustive); branches are joined with `|`.
 - [ ] `tool` ids are registered or passed per run with `tools=` (AGENT `tools:` may name a host-filled group); a `code` `module:function` is importable (or an inline `code: |` body `return`s a value); `call`/`uses:` targets resolve on the search path.
 - [ ] Every CALL/MAP/LOOP has exactly one child form: named `call:`, or non-empty inline `nodes:` plus an `output:` key; inline parent/item dependencies cross through outer `input:`.

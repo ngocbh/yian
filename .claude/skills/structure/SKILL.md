@@ -68,6 +68,7 @@ diagnostics  <-  events
 
 compile runtime contracts <── runtime
 compose + compile.expand + runtime <── package-root run.py
+compile memory table + memory backends <── package-root memory_host.py <── cli
 ```
 
 `diagnostics.py` is the lowest source-neutral value leaf. It owns concrete
@@ -84,7 +85,7 @@ contracts but never imports `compile.expand`. `run.py` injects
 `compile.expand.build_grow` into runtime instead. Runtime owns run-record/log
 codecs, scheduler-state vocabulary, append-before-apply reducer state, and dispatch; `run.py` owns fresh-log
 creation, locked prefix recovery, delayed backward handles, and log closure.
-A retained handle holds private program/data and policy references, not open
+A retained handle holds private program/data and memory references, not open
 sessions or a lock; its guarded call reopens authority and fresh recorded-snapshot
 resources. Spawner seed schemas are owned by their node packages; runtime's
 `common.py` owns the scheduling-state vocabulary used by its reducer.
@@ -101,7 +102,7 @@ capture and never imports `nodes/base.py` back. `nodes/base.py` owns
 connections, and child boundaries within its existing restricted import set.
 `compile/execution_layout.py` derives and
 atomically applies authored node/flow paths and boundaries without reading memory
-policies or creating another child-cloning mechanism. `runtime/contracts.py` owns
+declarations or creating another child-cloning mechanism. `runtime/contracts.py` owns
 forward captures and backward outcome, failure, and attribution carriers shared by records and
 consumers; it never imports runtime log, state, trace, driver, or the package-root
 run boundary. `runtime/trace.py` derives accepted execution and producer indexes
@@ -115,10 +116,10 @@ attempt projections, and owner-context construction. Reducer replay uses those
 rules without callbacks or context materialization. `runtime/backward.py` consumes
 history in one reverse accepted-outcome walk and owns callback invocation plus
 the explicit attempt driver. `runtime.memory_runtime` opens injected sessions,
-stages frame proposals, and delivers detached policy batches. Neither reconstructs
+stages memory proposals, and delivers one detached batch per memory key. Neither reconstructs
 graph topology or interprets node kinds. `FlowEngine` schedules forward only;
 both drivers use the same state prepare/append/reduce authority. No legacy
-auto-learning driver or per-frame attempt state remains.
+auto-learning driver or per-key attempt state remains.
 `compile.expand` constructs growth recipes alongside topology; `runtime.state`
 validates them through the shared growth boundary before `runtime.trace` joins
 them to accepted binding routes. Runtime never dispatches on spawner kind.
@@ -126,7 +127,7 @@ them to accepted binding routes. Runtime never dispatches on spawner kind.
 Memory conversation ownership follows the same lower-layer boundary.
 `memory/contracts.py` owns immutable conversation carriers, `MemoryContent`,
 `MemoryContextRequest`, `MemoryContext`, and `TranscriptSource`/`ConversationTurn`.
-Frame recall returns text or a rich content contribution; session transcripts and
+Memory recall returns text or a rich content contribution; session transcripts and
 notes share this interface. Only the admitted context holds a live turn. `memory/conversation.py` owns the pure fold,
 strict codecs, and digests. `memory/session.py` owns the concrete
 `SessionMemory` backend: views, FIFO leases, atomic history/note publication, and
@@ -140,11 +141,10 @@ owns the versioned `MarkdownStore` document interface and `FileMarkdownStore`. B
 publishing RAM. Storage never imports concrete backends or serializes their live
 handles, queues, or callbacks. Optional host-only paths do not reach runtime,
 public snapshots, or YAML; the contracts-only facade does not export the adapter.
-There is no runtime conversation projection or recovery channel. `runtime.state`
-privately validates the four legacy wrappers owned by `runtime.log` and advances
-record/trace sequencing only. Those inert wrappers neither reconstruct history nor
-grant effects. Keep mutable backend coordination and stored conversation state out
-of the scheduler. Runtime selects the innermost recalled transcript source and
+There is no runtime conversation projection or recovery channel, and the run log
+holds no conversation records. Keep mutable backend coordination and stored
+conversation state out of the scheduler. Runtime admits a recalled transcript
+source only from a key the recorded table marks `conversation_eligible` and
 binds authored scope and accepted invocation identity; `eval_node` owns the lazy
 turn lifetime through execution/cleanup, never provider message encoding.
 `nodes/agent/memory.py` owns stateless API message encoding and effect
@@ -156,11 +156,13 @@ run outside the backend lock under its existing lease.
 bracketing model/tool calls, and projecting provider usage. It imports `events`
 and publishes only through evaluator-supplied sinks; it never records, retains,
 or prices anything.
-`cli/memory.py` owns lazy CLI policy selection and backend lifetime. It reads the
-pure static memory layout and lower memory contracts, importing only selected
-built-in implementations when `open_run` is requested. `cli/run.py` injects that
-registry and owns its context until engine work drains. Storage flags remain
-host-only; runtime never imports this module or constructs memory policies.
+Package-root `memory_host.py` builds the memories a flow declares
+(`build_memories`) and owns their lifetime in a `MemoryRegistry`. It reads the
+compiled memory table and imports only the selected built-in backend modules.
+`cli/memory.py` parses `--memory-root` and `--memory-storage KEY=PATH` and calls
+it; `cli/run.py` passes the registry to the run and closes it only after engine
+work drains. Storage flags remain host-only; runtime never imports either module
+or constructs memory.
 
 The `memory` facade exports contracts only: concrete session, episodic,
 reflection, and profile backends must be imported from their own modules, not eagerly from

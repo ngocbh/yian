@@ -7,21 +7,21 @@ import copy
 import pytest
 
 import agent_composer.runtime.learning as learning_module
+import agent_composer.runtime.state as state_module
 from agent_composer.compile.expand import build_grow
 from agent_composer.compile.model import END_ID, START_ID
 from agent_composer.diagnostics import Failure, OriginRef
 from agent_composer.events import RunFailed, RunSucceeded
 from agent_composer.memory import (
+    DeclSite,
     EvaluationEvidence,
-    MemoryFrameRef,
-    MemoryFrameSpec,
     MemoryMutation,
     MemoryOccurrenceKind,
-    MemoryOccurrenceRef,
     MemoryOccurrenceSegment,
-    MemoryOwner,
     MemoryScope,
     MemorySnapshotEnvelope,
+    MemorySpec,
+    MemoryStack,
     ModelTextInteraction,
 )
 from agent_composer.nodes.agent import AgentNode
@@ -54,7 +54,7 @@ from tests.engine._fakes import FuncNode
 from tests.engine._graph_builder import _forward_capture, _graph
 
 
-def test_owner_contexts_include_general_occurrences_and_empty_frames(monkeypatch):
+def test_owner_contexts_include_general_occurrences_and_empty_memories(monkeypatch):
     from agent_composer.compile.model import FlowOutput
     from agent_composer.nodes.base import BackwardResult
     from agent_composer.nodes.contracts import Parameter
@@ -62,10 +62,11 @@ def test_owner_contexts_include_general_occurrences_and_empty_frames(monkeypatch
     from tests.engine._backward_fakes import RecordingBackwardNode
     from tests.engine._graph_builder import _engine
 
-    outer = MemoryFrameRef("root", ("root",), MemoryOwner.FLOW)
-    local = MemoryFrameRef("root", ("root", "work"), MemoryOwner.AGENT)
-    empty = MemoryFrameRef("root", ("root", "unused"), MemoryOwner.FLOW)
-    layout = _layout((outer, local, empty))
+    memories = (
+        MemorySpec("empty", "empty", {}, (DeclSite((), ("def", "unused"), None),), False),
+        MemorySpec("local", "local", {}, (DeclSite((), ("root",), "work"),), True),
+        MemorySpec("outer", "outer", {}, (_ROOT,), False),
+    )
     node = RecordingBackwardNode(
         "work", lambda inputs: inputs["topic"],
         lambda _context, feedback: BackwardResult(
@@ -77,30 +78,30 @@ def test_owner_contexts_include_general_occurrences_and_empty_frames(monkeypatch
     node.declared_variables = lambda: (Parameter("tone"),)
     flow = _graph([node], [(START_ID, "work")], outputs=[FlowOutput("answer", "${work.output}")])
     for current in flow.nodes.values():
-        stack = (outer, local) if current is node else (outer,)
-        current.memory_scope = MemoryScope("root", ("root", current.id), stack)
-    engine = _engine(flow, {"topic": "reefs"}, learnable=True, memory_layout=layout,
-                     memory_snapshots=(MemorySnapshotEnvelope(_POLICY, {}),))
+        keys = ("outer", "local") if current is node else ("outer",)
+        current.memory_scope = MemoryScope((current.id,), keys)
+    stacks = _stacks(*(current.memory_scope for current in flow.nodes.values()))
+    engine = _engine(flow, {"topic": "reefs"}, learnable=True, memories=memories, memory_stacks=stacks,
+                     memory_snapshots=tuple(MemorySnapshotEnvelope(spec.key, {}) for spec in memories))
     list(engine.run())
     trace = engine.state.trace
     root, results = compute_backward(trace, "review")
     monkeypatch.setattr(node, "callback", lambda *_: pytest.fail("projection invoked backward"))
 
-    contexts = learning_module.project_owner_contexts(trace, layout, "review", root, results)
+    contexts = learning_module.project_owner_contexts(trace, memories, stacks, "review", root, results)
 
-    assert tuple(context.frame_ref for context in contexts) == tuple(spec.ref for spec in layout)
-    by_frame = {context.frame_ref: context for context in contexts}
-    assert len(by_frame[outer].episodes) == len(trace.occurrences) == 3
-    assert by_frame[empty].episodes == () and by_frame[empty].feedback == ()
-    local_episode, = by_frame[local].episodes
+    assert tuple(context.memory for context in contexts) == ("empty", "local", "outer")
+    by_key = {context.memory: context for context in contexts}
+    assert len(by_key["outer"].episodes) == len(trace.occurrences) == 3
+    assert by_key["empty"].episodes == () and by_key["empty"].feedback == ()
+    local_episode, = by_key["local"].episodes
     assert local_episode.inputs == {"topic": "reefs", "literal": {"default": [1]}}
     assert local_episode.interactions == ()
-    inherited = next(episode for episode in by_frame[outer].episodes
+    inherited = next(episode for episode in by_key["outer"].episodes
                      if episode.execution_seq == local_episode.execution_seq)
-    assert inherited.owner_static_path == local_episode.owner_static_path == ("root", "work")
-    assert inherited.occurrence.frame_ref == outer
-    assert local_episode.occurrence.frame_ref == local
-    entries = by_frame[local].feedback
+    assert inherited.owner_static_path == local_episode.owner_static_path == ("work",)
+    assert inherited.occurrence_path == local_episode.occurrence_path == ()
+    entries = by_key["local"].feedback
     assert [(entry["channel"], entry["target_name"], entry["value"]) for entry in entries] == [
         ("output", None, "review"), ("input", "topic", "review"),
         ("input", "literal", "keep literal"), ("self", None, "first"), ("self", None, "second"),
@@ -121,8 +122,8 @@ def test_owner_contexts_include_general_occurrences_and_empty_frames(monkeypatch
     assert [entry for entry in entries if entry["channel"] == "stopped"] == []
     entries[0]["value"] = "mutated"
     local_episode.inputs["literal"]["default"].append(2)
-    assert by_frame[local].feedback[0]["value"] == "review"
-    assert by_frame[local].episodes[0].inputs["literal"] == {"default": [1]}
+    assert by_key["local"].feedback[0]["value"] == "review"
+    assert by_key["local"].episodes[0].inputs["literal"] == {"default": [1]}
 
 
 _RUN_ID = "learning-run"
@@ -140,78 +141,62 @@ class _TraceNode(Node):
         return inputs
 
 
-def _refs(node_id: str = "agent") -> tuple[MemoryFrameRef, MemoryFrameRef]:
-    """Return one outer FLOW frame and its nested AGENT frame."""
-    return (
-        MemoryFrameRef("root", ("root", "flow"), MemoryOwner.FLOW),
-        MemoryFrameRef(
-            "root",
-            ("root", "flow", node_id),
-            MemoryOwner.AGENT,
-        ),
-    )
+_ROOT = DeclSite((), ("root",), None)
+
+
+def _keys() -> tuple[str, ...]:
+    """Return one outer and one local memory key in stack order."""
+    return ("outer", "local")
 
 
 def _occurrence(index: int = 2) -> tuple[MemoryOccurrenceSegment, ...]:
     """Return one canonical dynamic MAP occurrence."""
-    return (
-        MemoryOccurrenceSegment(
-            MemoryOccurrenceKind.MAP_ITEM,
-            ("root", "flow"),
-            index,
-        ),
-    )
+    return (MemoryOccurrenceSegment(MemoryOccurrenceKind.MAP_ITEM, ("flow",), index),)
 
 
 def _scope(
     node_id: str = "agent",
     *,
-    frames: tuple[MemoryFrameRef, ...] | None = None,
+    memories: tuple[str, ...] | None = None,
     occurrence: tuple[MemoryOccurrenceSegment, ...] | None = None,
 ) -> MemoryScope:
     """Return one exact trace scope for a test node."""
-    stack = _refs(node_id) if frames is None else frames
     return MemoryScope(
-        root_flow_id="root",
-        static_path=stack[-1].static_path,
-        frame_stack=stack,
-        occurrence_path=_occurrence() if occurrence is None else occurrence,
+        ("flow", node_id),
+        _keys() if memories is None else memories,
+        _occurrence() if occurrence is None else occurrence,
     )
 
 
-def _layout(
-    frames: tuple[MemoryFrameRef, ...],
-) -> tuple[MemoryFrameSpec, ...]:
-    """Return canonical layout order for exact frames."""
-    return tuple(
-        MemoryFrameSpec(ref, _POLICY, {"limit": 3})
-        for ref in sorted(
-            frames,
-            key=lambda item: (
-                item.root_flow_id,
-                item.static_path,
-                item.owner.value,
-            ),
-        )
-    )
+def _table(keys: tuple[str, ...]) -> tuple[MemorySpec, ...]:
+    """Return the sorted key table for ``keys``, all owned by the root flow."""
+    return tuple(MemorySpec(key, key, {"limit": 3}, (_ROOT,), False) for key in sorted(keys))
+
+
+def _stacks(*scopes: MemoryScope) -> tuple[MemoryStack, ...]:
+    """Return the recorded stacks for ``scopes``, deduplicated and sorted by locator."""
+    stacks = {scope.static_path: MemoryStack(scope.static_path, scope.memories) for scope in scopes}
+    return tuple(stacks[locator] for locator in sorted(stacks))
 
 
 def _owner_engine(flow, inputs=None, **kwargs):
     """Use the real static scope pass with the existing direct engine fixture."""
     from agent_composer.compile.llm_cascade import apply_effective_llm_map
     from agent_composer.compile.memory_layout import apply_memory_layout, resolve_memory_layout
-    from agent_composer.memory import MemoryPolicySpec
-    from tests.engine._graph_builder import _engine
+    from agent_composer.memory import MemoryDecl
+    from tests.engine._graph_builder import _engine, memory_record
 
     flow.flow_id = flow.flow_id or "root"
-    flow.memory_policy = MemoryPolicySpec(_POLICY, {})
+    flow.memories = (MemoryDecl(_POLICY, _POLICY, {}, _ROOT),)
     apply_effective_llm_map(flow, {})
-    resolved = resolve_memory_layout(flow)
-    apply_memory_layout(flow, resolved)
-    layout = tuple(frame.spec for frame in resolved.frames)
-    engine = _engine(flow, inputs, learnable=True, memory_layout=layout,
-                     memory_snapshots=(MemorySnapshotEnvelope(_POLICY, {}),), **kwargs)
-    return engine, layout
+    apply_memory_layout(flow, resolve_memory_layout(flow))
+    memories, stacks = memory_record(flow)
+    engine = _engine(
+        flow, inputs, learnable=True, memories=memories, memory_stacks=stacks,
+        memory_snapshots=tuple(MemorySnapshotEnvelope(spec.key, {}) for spec in memories),
+        **kwargs,
+    )
+    return engine, memories, stacks
 
 
 @pytest.mark.parametrize("opaque", [False, True])
@@ -227,10 +212,10 @@ def test_owner_feedback_retains_literals_and_opaque_local_stops(opaque, monkeypa
     node = RecordingBackwardNode("work", lambda inputs: inputs["x"], lambda _c, f: BackwardResult({"x": f}),
                                  reads={"x": "${owner_identity(input.topic)}" if opaque else "literal"})
     flow = _graph([node], [(START_ID, "work")], outputs=[FlowOutput("answer", "${work.output}")])
-    engine, layout = _owner_engine(flow, {"topic": "reef"})
+    engine, memories, stacks = _owner_engine(flow, {"topic": "reef"})
     list(engine.run())
     root, results = compute_backward(engine.state.trace, "unchanged")
-    contexts = learning_module.project_owner_contexts(engine.state.trace, layout, "unchanged", root, results)
+    contexts = learning_module.project_owner_contexts(engine.state.trace, memories, stacks, "unchanged", root, results)
     work = [entry for entry in contexts[0].feedback if entry["owner_static_path"] == ["work"]]
     expected = [("output", "unchanged"), ("input", "unchanged")]
     if opaque:
@@ -272,11 +257,11 @@ def test_owner_contexts_keep_unavailable_inputs_and_causal_failures(failure_kind
         node.forward = lambda _: Route("go")
         node.params = [Parameter("x")]
         flow.wiring[node.id] = {"x": [1]}
-    engine, layout = _owner_engine(flow)
+    engine, memories, stacks = _owner_engine(flow)
     list(engine.run())
     root, results = compute_backward(engine.state.trace, "review failure")
-    context, = learning_module.project_owner_contexts(engine.state.trace, layout, "review failure", root, results)
-    episode = next(item for item in context.episodes if item.owner_static_path == ("root", node.id))
+    context, = learning_module.project_owner_contexts(engine.state.trace, memories, stacks, "review failure", root, results)
+    episode = next(item for item in context.episodes if item.owner_static_path == (node.id,))
     assert episode.status is MemoryEpisodeStatus.FAILED and episode.output is None
     assert episode.inputs == (None if failure_kind == "binding" else {"x": [1]})
     assert episode.failure == learning_module.failure_json(engine.state.trace.terminal.failure)
@@ -294,11 +279,11 @@ def test_owner_context_root_default_is_owned_once_by_accepted_start():
 
     start = StartNode(START_ID, params=[Parameter("topic", has_default=True, default="reef")])
     end = EndNode.record(END_ID, output_names=["answer"])
-    engine, layout = _owner_engine(_graph([start, end], [(START_ID, END_ID)],
-                                         wiring={END_ID: {"answer": "${input.topic}"}}))
+    engine, memories, stacks = _owner_engine(_graph([start, end], [(START_ID, END_ID)],
+                                                  wiring={END_ID: {"answer": "${input.topic}"}}))
     list(engine.run())
     root, results = compute_backward(engine.state.trace, "keep default")
-    context, = learning_module.project_owner_contexts(engine.state.trace, layout, "keep default", root, results)
+    context, = learning_module.project_owner_contexts(engine.state.trace, memories, stacks, "keep default", root, results)
     assert root.input_feedback == {"topic": ("keep default",)}
     assert not any(entry.get("root") for entry in context.feedback)
     start_inputs = [entry for entry in context.feedback if entry["channel"] == "input"
@@ -312,13 +297,14 @@ def test_owner_context_projects_synthetic_source_free_failure_only_to_root_flow(
 
     trace = RetainedTrace("synthetic", START_ID, END_ID)
     trace.terminal = TraceTerminal(False, None, None, Failure("graph.terminal_unreachable", "no producer", None))
-    root_frame = MemoryFrameRef("root", ("root",), MemoryOwner.FLOW)
-    child_frame = MemoryFrameRef("root", ("root", "child"), MemoryOwner.FLOW)
-    layout = _layout((root_frame, child_frame))
+    memories = (
+        MemorySpec("inner", "inner", {}, (DeclSite((), ("def", "child"), None),), False),
+        MemorySpec("outer", "outer", {}, (_ROOT,), False),
+    )
     root, results = compute_backward(trace, "original text")
-    parent, child = learning_module.project_owner_contexts(trace, layout, "original text", root, results)
-    assert parent.episodes == child.episodes == () and child.feedback == ()
-    assert parent.feedback == ({
+    inner, outer = learning_module.project_owner_contexts(trace, memories, (), "original text", root, results)
+    assert outer.episodes == inner.episodes == () and inner.feedback == ()
+    assert outer.feedback == ({
         "execution_seq": None, "owner_static_path": None, "occurrence_path": None,
         "execution_scope": None, "root": True, "channel": "self", "target_name": None,
         "value": "original text", "message_index": 0, "contribution_context": {},
@@ -336,8 +322,7 @@ def test_owner_context_root_fallback_uses_only_actual_source_zero_fields(same_bo
 
     start = StartNode(START_ID, params=[Parameter("topic"), Parameter("omitted", has_default=True, default="unused")])
     start.forward = lambda _inputs: Route("default")
-    frame = MemoryFrameRef("root", ("root",), MemoryOwner.FLOW)
-    start.memory_scope = MemoryScope("root", ("root", START_ID), (frame,))
+    start.memory_scope = MemoryScope((START_ID,), (_POLICY,))
     flow = CompiledFlow({START_ID: start}, [])
     flow.end_id = START_ID if same_boundary else END_ID
     pool = VariablePool(start_id=START_ID)
@@ -346,14 +331,16 @@ def test_owner_context_root_fallback_uses_only_actual_source_zero_fields(same_bo
         pool.set(END_ID, "preseeded result")
     pool.add_system("run_id", _RUN_ID)
     state, log = RunState(flow), MemoryRunLog(_RUN_ID)
-    layout = _layout((frame,))
+    memories, stacks = _table((_POLICY,)), _stacks(start.memory_scope)
     commit_prepared(log, state, prepare_run_started(state, RunStartData(
-        _RUN_ID, _FINGERPRINT, pool, {}, {}, 0, learnable=True,
-        memory_layout=layout, memory_snapshots=(MemorySnapshotEnvelope(_POLICY, {}),),
+        run_id=_RUN_ID, flow_fingerprint=_FINGERPRINT, initial_pool=pool,
+        start_wiring_override={}, effective_llm_by_static_path={}, num_workers=0,
+        learnable=True, memories=memories, memory_stacks=stacks,
+        memory_snapshots=(MemorySnapshotEnvelope(_POLICY, {}),),
     )))
     list(FlowEngine(state, log, grow_builder=build_grow, num_workers=0).run())
     root, results = compute_backward(state.trace, "review")
-    context, = learning_module.project_owner_contexts(state.trace, layout, "review", root, results)
+    context, = learning_module.project_owner_contexts(state.trace, memories, stacks, "review", root, results)
     assert all(not item.invoked for item in results)
     assert len(context.episodes) == 1
     assert [(entry["target_name"], entry["value"]) for entry in context.feedback] == (
@@ -374,8 +361,8 @@ def test_owner_context_error_identifies_receiver_without_changing_forward_accept
         value = [value]
     node = RecordingBackwardNode("work", lambda inputs: inputs["x"], lambda _c, f: BackwardResult({"x": f}),
                                  reads={"x": value})
-    engine, layout = _owner_engine(_graph([node], [(START_ID, "work")],
-                                         outputs=[FlowOutput("answer", "${work.output}")]))
+    engine, memories, stacks = _owner_engine(_graph([node], [(START_ID, "work")],
+                                                  outputs=[FlowOutput("answer", "${work.output}")]))
     list(engine.run())
     trace = engine.state.trace
     assert trace.terminal.succeeded and trace.terminal.output == value
@@ -384,10 +371,10 @@ def test_owner_context_error_identifies_receiver_without_changing_forward_accept
     accepted = tuple(engine.log)
     if material == "contribution":
         empty_root, empty_results = compute_backward(trace, None)
-        assert learning_module.project_owner_contexts(trace, layout, None, empty_root, empty_results)
+        assert learning_module.project_owner_contexts(trace, memories, stacks, None, empty_root, empty_results)
     with pytest.raises(learning_module.OwnerContextError) as caught:
-        learning_module.project_owner_contexts(trace, layout, feedback, root, results)
-    assert caught.value.frame_ref == layout[0].ref
+        learning_module.project_owner_contexts(trace, memories, stacks, feedback, root, results)
+    assert caught.value.memory == memories[0].key
     assert type(caught.value.original) is ValueError and caught.value.__cause__ is caught.value.original
     assert "nesting" in str(caught.value.original)
     assert tuple(engine.log) == accepted and trace.terminal.output == value
@@ -401,24 +388,31 @@ def test_owner_context_authority_errors_are_not_context_construction_failures(mo
 
     node = RecordingBackwardNode("work", lambda inputs: inputs["x"], lambda _c, f: BackwardResult({"x": f}),
                                  reads={"x": "${input.topic}"})
-    engine, layout = _owner_engine(_graph([node], [(START_ID, "work")],
-                                         outputs=[FlowOutput("answer", "${work.output}")]), {"topic": "reef"})
+    engine, memories, stacks = _owner_engine(_graph([node], [(START_ID, "work")],
+                                                  outputs=[FlowOutput("answer", "${work.output}")]), {"topic": "reef"})
     list(engine.run())
     trace = engine.state.trace
     root, results = compute_backward(trace, "review")
     with pytest.raises(ValueError, match="complete accepted occurrence order"):
-        learning_module.project_owner_contexts(trace, layout, "review", root, results[:-1])
-    with pytest.raises(ValueError, match="complete recorded layout"):
-        learning_module.project_owner_contexts(trace, (), "review", root, results)
-    for invalid_layout in (None, list(layout), tuple(reversed((*layout, *layout)))):
+        learning_module.project_owner_contexts(trace, memories, stacks, "review", root, results[:-1])
+    with pytest.raises(ValueError, match="recorded memory stack"):
+        learning_module.project_owner_contexts(trace, (), (), "review", root, results)
+    for invalid_table in (None, list(memories), tuple(reversed((*memories, *memories)))):
         with pytest.raises((TypeError, ValueError)):
-            learning_module.project_owner_contexts(trace, invalid_layout, "review", root, results)
+            learning_module.project_owner_contexts(trace, invalid_table, stacks, "review", root, results)
+    with pytest.raises(TypeError, match="memory stacks"):
+        learning_module.project_owner_contexts(trace, memories, list(stacks), "review", root, results)
+    with pytest.raises(ValueError, match="unique locators"):
+        learning_module.project_owner_contexts(trace, memories, (*stacks, stacks[0]), "review", root, results)
     occurrence = trace.occurrences[1]
     forged = copy.deepcopy(occurrence.memory_scope)
-    object.__setattr__(forged, "frame_stack", list(forged.frame_stack))
+    object.__setattr__(forged, "memories", list(forged.memories))
     object.__setattr__(occurrence, "_memory_scope", forged)
-    with pytest.raises(TypeError, match="frame_stack"):
-        learning_module.project_owner_contexts(trace, layout, "review", root, results)
+    with pytest.raises(TypeError, match="memories"):
+        learning_module.project_owner_contexts(trace, memories, stacks, "review", root, results)
+    object.__setattr__(forged, "memories", ())
+    with pytest.raises(ValueError, match="recorded memory stack"):
+        learning_module.project_owner_contexts(trace, memories, stacks, "review", root, results)
     object.__setattr__(occurrence, "_memory_scope", engine.state.flow.nodes[occurrence.node_id].memory_scope)
     original_lookup = trace.lookup_source
 
@@ -429,7 +423,7 @@ def test_owner_context_authority_errors_are_not_context_construction_failures(mo
 
     monkeypatch.setattr(trace, "lookup_source", broken_lookup)
     with pytest.raises(KeyError, match="missing source authority"):
-        learning_module.project_owner_contexts(trace, layout, "review", root, results)
+        learning_module.project_owner_contexts(trace, memories, stacks, "review", root, results)
 
 
 def test_owner_context_projection_from_replay_does_not_reinvoke_handlers(monkeypatch):
@@ -440,43 +434,43 @@ def test_owner_context_projection_from_replay_does_not_reinvoke_handlers(monkeyp
 
     node = RecordingBackwardNode("work", lambda inputs: inputs["x"], lambda _c, f: BackwardResult({"x": f}),
                                  reads={"x": "${input.topic}"})
-    engine, layout = _owner_engine(_graph([node], [(START_ID, "work")],
-                                         outputs=[FlowOutput("answer", "${work.output}")]), {"topic": "reef"})
+    engine, memories, stacks = _owner_engine(_graph([node], [(START_ID, "work")],
+                                                  outputs=[FlowOutput("answer", "${work.output}")]), {"topic": "reef"})
     original = copy.deepcopy(engine.state.flow)
     list(engine.run())
     root, results = compute_backward(engine.state.trace, "review")
-    expected = learning_module.project_owner_contexts(engine.state.trace, layout, "review", root, results)
+    expected = learning_module.project_owner_contexts(engine.state.trace, memories, stacks, "review", root, results)
     for current in original.nodes.values():
         current.forward = lambda *_: pytest.fail("replayed forward")
         current.backward = lambda *_: pytest.fail("replayed backward")
         current.capture_backward_context = lambda *_: pytest.fail("recaptured backward")
     replayed = _replay_records(RunState(original), tuple(engine.log), grow_builder=build_grow)
     monkeypatch.setattr(type(replayed.trace), "backward_handlers", property(lambda _: pytest.fail("read callback")))
-    assert learning_module.project_owner_contexts(replayed.trace, layout, "review", root, results) == expected
+    assert learning_module.project_owner_contexts(replayed.trace, memories, stacks, "review", root, results) == expected
 
 
-def test_owner_context_empty_map_retains_growth_and_unexecuted_child_frame():
+def test_owner_context_empty_map_retains_growth_and_unexecuted_child_memory():
     from agent_composer.compile.model import FlowOutput
-    from agent_composer.memory import MemoryPolicySpec
+    from agent_composer.memory import DeclSite, MemoryDecl
     from agent_composer.nodes.contracts import Parameter
     from agent_composer.runtime.backward import compute_backward
 
     child = _graph([FuncNode("work", lambda inputs: inputs["x"], reads={"x": "${input.x}"})],
                    [(START_ID, "work")], outputs=[FlowOutput("answer", "${work.output}")])
-    child.memory_policy = MemoryPolicySpec(_POLICY, {})
+    child.memories = (MemoryDecl("child_notes", "child_notes", {}, DeclSite((), ("def", "child"), None)),)
     mapper = MapNode("map", flow_id="child", child=child)
     mapper.params = [Parameter("x")]
-    engine, layout = _owner_engine(_graph([mapper], [(START_ID, "map")],
-                                         wiring={"map": {"over": [], "x": "${item}"}},
-                                         outputs=[FlowOutput("answer", "${map.output}")]))
+    engine, memories, stacks = _owner_engine(_graph([mapper], [(START_ID, "map")],
+                                                  wiring={"map": {"over": [], "x": "${item}"}},
+                                                  outputs=[FlowOutput("answer", "${map.output}")]))
     list(engine.run())
     root, results = compute_backward(engine.state.trace, None)
-    outer, child_context = learning_module.project_owner_contexts(engine.state.trace, layout, None, root, results)
+    child_context, outer = learning_module.project_owner_contexts(engine.state.trace, memories, stacks, None, root, results)
     assert len(outer.episodes) == len(engine.state.trace.occurrences) == 5
     assert outer.feedback == ()
     assert child_context.episodes == child_context.feedback == ()
     grown, = [episode for episode in outer.episodes if episode.output == {"kind": "grow", "seed": [], "prune_ids": []}]
-    assert grown.owner_static_path == ("root", "map")
+    assert grown.owner_static_path == ("map",)
 
 
 @pytest.mark.parametrize("scope_available", [False, True])
@@ -491,8 +485,8 @@ def test_owner_feedback_uses_recorded_execution_coordinates_independently_of_mem
         ("authored", "worker"), ("authored",), (ExecutionPosition("map_item", ("authored",), 3),),
     ) if scope_available else None)
     node.backward = lambda *_: BackwardResult(self_feedback=("local",))
-    layout = _layout(node.memory_scope.frame_stack)
-    state, log = _start_trace_node(node, layout=layout, learnable=True)
+    memories, stacks = _table(node.memory_scope.memories), _stacks(node.memory_scope)
+    state, log = _start_trace_node(node, keys=node.memory_scope.memories, learnable=True)
     commit_prepared(log, state, prepare_node_failed(
         state, Failure("node.execute", "failed", node.id), evidence=_evidence(node.memory_scope),
         forward_capture=_forward_capture(node, {"question": "q"}),
@@ -502,7 +496,7 @@ def test_owner_feedback_uses_recorded_execution_coordinates_independently_of_mem
     assert recorded_scope == node.execution_scope
     node.execution_scope = ExecutionScope(("changed",))
     root, results = compute_backward(state.trace, "review")
-    contexts = learning_module.project_owner_contexts(state.trace, layout, "review", root, results)
+    contexts = learning_module.project_owner_contexts(state.trace, memories, stacks, "review", root, results)
     for context in contexts:
         for entry in context.feedback:
             assert entry["owner_static_path"] == (["authored", "worker"] if scope_available else None)
@@ -516,8 +510,8 @@ def test_owner_feedback_uses_recorded_execution_coordinates_independently_of_mem
     for context in contexts:
         episode, = context.episodes
         assert episode.inputs == {"question": "q"}
-        assert episode.owner_static_path == ("root", "flow", "agent")
-        assert episode.occurrence.occurrence_path == _occurrence()
+        assert episode.owner_static_path == ("flow", "agent")
+        assert episode.occurrence_path == _occurrence()
         assert episode.interactions == (ModelTextInteraction("answer"),)
         assert episode.base_system_prompt == "system" and episode.prompt == "prompt"
 
@@ -538,12 +532,12 @@ def test_owner_variable_batches_follow_captured_inventory_across_wire_round_trip
         self_feedback=("second", "first"), variable_feedback=batches,
     ))
     node.declared_variables = lambda: (Parameter("zeta"), Parameter("alpha"))
-    engine, layout = _owner_engine(_graph([node], [(START_ID, "work")],
-                                         outputs=[FlowOutput("answer", "${work.output}")]))
+    engine, memories, stacks = _owner_engine(_graph([node], [(START_ID, "work")],
+                                                  outputs=[FlowOutput("answer", "${work.output}")]))
     list(engine.run())
     root, results = compute_backward(engine.state.trace, "review")
     node.declared_variables = lambda: pytest.fail("read mutable declarations")
-    contexts = learning_module.project_owner_contexts(engine.state.trace, layout, "review", root, results)
+    contexts = learning_module.project_owner_contexts(engine.state.trace, memories, stacks, "review", root, results)
     assert [(entry["target_name"], entry["value"], entry["message_index"])
             for entry in contexts[0].feedback if entry["channel"] == "variable"] == [
         ("zeta", "z2", 0), ("zeta", "z1", 1), ("alpha", "a2", 0), ("alpha", "a1", 1),
@@ -555,27 +549,40 @@ def test_owner_variable_batches_follow_captured_inventory_across_wire_round_trip
                if entry["channel"] in ("self", "variable"))
     ready = BackwardReadyRecord(1, root, results, ())
     decoded = decode_record(encode_record(RecordEnvelope(SCHEMA_VERSION, engine.state.run_id, 0, ready))).record
-    assert learning_module.project_owner_contexts(engine.state.trace, layout, "review", decoded.root_result,
-                                                 decoded.attributed_results) == contexts
+    assert learning_module.project_owner_contexts(
+        engine.state.trace, memories, stacks, "review", decoded.root_result, decoded.attributed_results,
+    ) == contexts
 
 
 def _new_state(
     node: Node,
     *,
-    layout: tuple[MemoryFrameSpec, ...] | None,
+    keys: tuple[str, ...] | None,
     learnable: bool,
     route_handle: str | None = None,
+    stacks: tuple[MemoryStack, ...] | None = None,
 ) -> tuple[RunState, MemoryRunLog]:
-    """Initialize a direct reducer authority and leave START ready."""
+    """Initialize a direct reducer authority and leave START ready.
+
+    ``keys=None`` disables memory. Otherwise the table holds ``keys`` and the
+    stacks default to the node's own scope.
+    """
     flow = _graph([node], [(START_ID, node.id), (node.id, END_ID, route_handle)])
     state = RunState(flow)
     pool = VariablePool(start_id=flow.start_id)
     pool.set(flow.start_id, {})
     pool.add_system("run_id", _RUN_ID)
-    snapshots = None if layout is None else tuple(
-        MemorySnapshotEnvelope(policy_name, {"epoch": 4})
-        for policy_name in sorted({spec.policy_name for spec in layout})
-    )
+    if keys is None:
+        memories = snapshots = recorded_stacks = None
+    else:
+        memories = _table(keys)
+        snapshots = tuple(MemorySnapshotEnvelope(spec.key, {"epoch": 4}) for spec in memories)
+        if stacks is not None:
+            recorded_stacks = stacks
+        elif node.memory_scope is not None:
+            recorded_stacks = _stacks(node.memory_scope)
+        else:
+            recorded_stacks = ()
     log = MemoryRunLog(_RUN_ID)
     commit_prepared(
         log,
@@ -589,9 +596,10 @@ def _new_state(
                 start_wiring_override={},
                 effective_llm_by_static_path={},
                 num_workers=0,
-                memory_layout=layout,
                 memory_snapshots=snapshots,
                 learnable=learnable,
+                memories=memories,
+                memory_stacks=recorded_stacks,
             ),
         ),
     )
@@ -601,12 +609,15 @@ def _new_state(
 def _start_trace_node(
     node: Node,
     *,
-    layout: tuple[MemoryFrameSpec, ...] | None,
+    keys: tuple[str, ...] | None,
     learnable: bool,
     route_handle: str | None = None,
+    stacks: tuple[MemoryStack, ...] | None = None,
 ) -> tuple[RunState, MemoryRunLog]:
     """Drive START and leave ``node`` as the sole in-flight outcome."""
-    state, log = _new_state(node, layout=layout, learnable=learnable, route_handle=route_handle)
+    state, log = _new_state(
+        node, keys=keys, learnable=learnable, route_handle=route_handle, stacks=stacks,
+    )
     commit_prepared(log, state, prepare_node_started(state, START_ID))
     commit_prepared(log, state, prepare_node_succeeded(
         state, START_ID, {},
@@ -629,14 +640,13 @@ def _evidence(scope: MemoryScope | None) -> EvaluationEvidence:
 
 def _successful_terminal(
     *,
-    frames: tuple[MemoryFrameRef, ...] | None = None,
-) -> tuple[RunState, MemoryRunLog, tuple[MemoryFrameSpec, ...]]:
+    memories: tuple[str, ...] | None = None,
+) -> tuple[RunState, MemoryRunLog, tuple[MemorySpec, ...]]:
     """Return a terminal-success run with one accepted trace episode."""
     node = _TraceNode("agent")
-    scope = _scope(node.id, frames=frames)
+    scope = _scope(node.id, memories=memories)
     node.memory_scope = scope
-    layout = _layout(scope.frame_stack)
-    state, log = _start_trace_node(node, layout=layout, learnable=True)
+    state, log = _start_trace_node(node, keys=scope.memories, learnable=True)
     commit_prepared(
         log,
         state,
@@ -653,7 +663,7 @@ def _successful_terminal(
         state, END_ID, None, forward_capture=_forward_capture(state.flow.nodes[END_ID], {}),
     ))
     assert isinstance(state.result, RunSucceeded)
-    return state, log, layout
+    return state, log, _table(scope.memories)
 
 
 def _commit_record(state: RunState, log: MemoryRunLog, record) -> None:
@@ -664,35 +674,35 @@ def _commit_record(state: RunState, log: MemoryRunLog, record) -> None:
 
 
 def test_runstarted_retains_defensive_memory_authority_and_projects_episodes() -> None:
-    state, _log, layout = _successful_terminal()
-    outer, agent = _refs()
+    state, _log, table = _successful_terminal()
 
-    assert state.memory_layout == layout
-    assert state.memory_layout is not layout
+    assert state.memories == table
     assert state.memory_snapshots == (
-        MemorySnapshotEnvelope(_POLICY, {"epoch": 4}),
+        MemorySnapshotEnvelope("local", {"epoch": 4}),
+        MemorySnapshotEnvelope("outer", {"epoch": 4}),
     )
     assert state.learnable is True
-    assert state.learning_state.frame_order == (outer, agent)
+    assert state.learning_state.memory_order == ("local", "outer")
 
-    outer_episode = state.learning_state.episodes_for(outer)
-    agent_episode = state.learning_state.episodes_for(agent)
-    assert len(outer_episode) == len(agent_episode) == 1
-    assert outer_episode[0].owner_static_path == agent.static_path
-    assert outer_episode[0].occurrence == MemoryOccurrenceRef(outer, _occurrence())
-    assert agent_episode[0].occurrence == MemoryOccurrenceRef(agent, _occurrence())
+    outer_episode = state.learning_state.episodes_for("outer")
+    local_episode = state.learning_state.episodes_for("local")
+    assert len(outer_episode) == len(local_episode) == 1
+    assert outer_episode[0].owner_static_path == ("flow", "agent")
+    assert outer_episode[0].occurrence_path == _occurrence()
+    assert local_episode[0].occurrence_path == _occurrence()
     assert outer_episode[0].output == {"answer": 7}
     assert outer_episode[0].inputs == {"question": "q"}
     assert outer_episode[0].interactions == (ModelTextInteraction("answer"),)
-    context = state.learning_state.learn_context(_RUN_ID, outer)
+    context = state.learning_state.learn_context(_RUN_ID, "outer")
+    assert context.memory == "outer"
     assert context.episodes == outer_episode
     assert context.feedback == ()
 
-    detached = state.memory_layout[0].config
+    detached = state.memories[0].config
     detached["limit"] = 999
     snapshot = state.memory_snapshots[0].snapshot
     snapshot["epoch"] = 999
-    assert state.memory_layout[0].config == {"limit": 3}
+    assert state.memories[0].config == {"limit": 3}
     assert state.memory_snapshots[0].snapshot == {"epoch": 4}
 
 
@@ -706,7 +716,7 @@ def test_engine_episodes_use_the_physical_start_sequence_for_every_outcome(kind)
 
     node = Spawner("agent") if kind == "growth" else _TraceNode("agent")
     node.memory_scope = _scope(node.id)
-    state, log = _start_trace_node(node, layout=_layout(node.memory_scope.frame_stack), learnable=True,
+    state, log = _start_trace_node(node, keys=node.memory_scope.memories, learnable=True,
                                    route_handle="go" if kind == "route" else None)
     physical_sequence = state.trace.started[node.id]
     outcome_sequence = state.next_sequence
@@ -722,8 +732,8 @@ def test_engine_episodes_use_the_physical_start_sequence_for_every_outcome(kind)
         prepared = prepare_expanded(state, node.id, Grow(seed={}), lambda spawner, _seed: _fragment(spawner.id), **kwargs)
     commit_prepared(log, state, prepared)
     assert physical_sequence != outcome_sequence
-    for frame_ref in node.memory_scope.frame_stack:
-        episode = state.learning_state.episodes_for(frame_ref)[-1]
+    for memory in node.memory_scope.memories:
+        episode = state.learning_state.episodes_for(memory)[-1]
         assert episode.execution_seq == physical_sequence
     assert state.trace.occurrences[-1].source.execution_seq == physical_sequence
 
@@ -734,19 +744,17 @@ def test_causal_route_episode_retains_the_accepted_failure():
     scope = _scope()
     failure = Failure("graph.terminal_unreachable", "No terminal route.", "agent")
     record = NodeRoutedRecord("agent", "go", evidence=_evidence(scope), terminal_failure=failure)
-    for _frame_ref, episode in project_outcome_episodes(_RUN_ID, record):
+    for _memory, episode in project_outcome_episodes(_RUN_ID, record):
         assert episode.status is MemoryEpisodeStatus.FAILED
         assert episode.output is None
         assert episode.failure["code"] == failure.code
 
 
 def test_failure_episode_uses_full_canonical_durable_failure_json() -> None:
-    agent = _refs()[1]
     node = _TraceNode("agent")
-    scope = _scope(node.id, frames=(agent,))
+    scope = _scope(node.id, memories=("local",))
     node.memory_scope = scope
-    layout = _layout((agent,))
-    state, _log = _start_trace_node(node, layout=layout, learnable=True)
+    state, _log = _start_trace_node(node, keys=("local",), learnable=True)
     failure = Failure(
         "node.execute",
         "visible",
@@ -762,7 +770,7 @@ def test_failure_episode_uses_full_canonical_durable_failure_json() -> None:
     commit_prepared(_log, state, prepared)
 
     assert isinstance(state.result, RunFailed)
-    episode = state.learning_state.episodes_for(agent)[0]
+    episode = state.learning_state.episodes_for("local")[0]
     assert episode.failure == {
         "code": "node.execute",
         "message": "visible",
@@ -781,8 +789,8 @@ def test_evidence_is_rejected_when_learning_is_not_enabled(
 ) -> None:
     node = _TraceNode("agent")
     node.memory_scope = _scope(node.id)
-    layout = _layout(node.memory_scope.frame_stack) if enabled else None
-    state, _log = _start_trace_node(node, layout=layout, learnable=learnable)
+    keys = node.memory_scope.memories if enabled else None
+    state, _log = _start_trace_node(node, keys=keys, learnable=learnable)
 
     with pytest.raises(ValueError, match="ineligible for evaluation evidence"):
         prepare_node_succeeded(
@@ -798,8 +806,7 @@ def test_learning_requires_evidence_and_rejects_ineligible_or_unrecorded_scope(
 ) -> None:
     node = _TraceNode("agent")
     node.memory_scope = _scope(node.id)
-    layout = _layout(node.memory_scope.frame_stack)
-    state, _log = _start_trace_node(node, layout=layout, learnable=True)
+    state, _log = _start_trace_node(node, keys=_keys(), learnable=True)
     with pytest.raises(ValueError, match="requires evaluation evidence"):
         prepare_node_succeeded(
             state, node.id, "done", forward_capture=_forward_capture(node, {}),
@@ -807,12 +814,7 @@ def test_learning_requires_evidence_and_rejects_ineligible_or_unrecorded_scope(
 
     ordinary = FuncNode("ordinary", lambda _inputs: "done")
     ordinary.memory_scope = _scope(ordinary.id)
-    ordinary_layout = _layout(ordinary.memory_scope.frame_stack)
-    ordinary_state, _ = _start_trace_node(
-        ordinary,
-        layout=ordinary_layout,
-        learnable=True,
-    )
+    ordinary_state, _ = _start_trace_node(ordinary, keys=_keys(), learnable=True)
     with pytest.raises(ValueError, match="ineligible"):
         prepare_node_succeeded(
             ordinary_state,
@@ -829,20 +831,15 @@ def test_learning_requires_evidence_and_rejects_ineligible_or_unrecorded_scope(
         is None
     )
 
-    wrong_agent = MemoryFrameRef(
-        "root",
-        ("root", "flow", "wrong"),
-        MemoryOwner.AGENT,
-    )
     mismatched = _TraceNode("agent")
     mismatched.memory_scope = _scope(mismatched.id)
-    mismatched_layout = _layout((_refs()[0], wrong_agent))
     mismatched_state, _ = _start_trace_node(
         mismatched,
-        layout=mismatched_layout,
+        keys=_keys(),
         learnable=True,
+        stacks=(MemoryStack(("flow", "agent"), ("outer",)),),
     )
-    with pytest.raises(ValueError, match="exact recorded frame stack"):
+    with pytest.raises(ValueError, match="exact recorded memory stack"):
         prepare_node_succeeded(
             mismatched_state,
             mismatched.id,
@@ -852,9 +849,24 @@ def test_learning_requires_evidence_and_rejects_ineligible_or_unrecorded_scope(
         )
 
 
-def test_empty_enabled_layout_retains_scope_free_evidence_without_episodes() -> None:
+def test_learning_rejects_a_scope_without_a_recorded_stack() -> None:
     node = _TraceNode("agent")
-    state, _log = _start_trace_node(node, layout=(), learnable=True)
+    node.memory_scope = _scope(node.id)
+    state, _log = _start_trace_node(node, keys=_keys(), learnable=True, stacks=())
+
+    with pytest.raises(ValueError, match="has no recorded memory stack"):
+        prepare_node_succeeded(
+            state,
+            node.id,
+            "done",
+            evidence=_evidence(node.memory_scope),
+            forward_capture=_forward_capture(node, {"question": "q"}),
+        )
+
+
+def test_empty_enabled_table_retains_scope_free_evidence_without_episodes() -> None:
+    node = _TraceNode("agent")
+    state, _log = _start_trace_node(node, keys=(), learnable=True)
 
     prepared = prepare_node_succeeded(
         state, node.id, "done", evidence=_evidence(None),
@@ -872,59 +884,47 @@ def test_empty_enabled_layout_retains_scope_free_evidence_without_episodes() -> 
         )
 
 
-@pytest.mark.parametrize("retained", ["outer", "agent"])
-def test_learning_rejects_trace_scope_that_omits_an_applicable_frame(
+@pytest.mark.parametrize("retained", ["outer", "local"])
+def test_learning_rejects_trace_scope_that_omits_a_recorded_memory(
     retained: str,
 ) -> None:
-    outer, agent = _refs()
-    frame_stack = (outer,) if retained == "outer" else (agent,)
     node = _TraceNode("agent")
-    node.memory_scope = MemoryScope(
-        root_flow_id="root",
-        static_path=agent.static_path,
-        frame_stack=frame_stack,
-        occurrence_path=_occurrence(),
-    )
+    node.memory_scope = _scope(node.id, memories=(retained,))
     state, _log = _start_trace_node(
         node,
-        layout=_layout((outer, agent)),
+        keys=_keys(),
         learnable=True,
+        stacks=_stacks(_scope(node.id)),
     )
 
-    with pytest.raises(ValueError, match="exact recorded frame stack"):
+    with pytest.raises(ValueError, match="exact recorded memory stack"):
         prepare_node_succeeded(
             state, node.id, "done", forward_capture=_forward_capture(node, {}),
         )
 
 
 def test_expanded_map_occurrence_projects_and_replays_from_live_node_scope() -> None:
-    outer = _refs()[0]
     child_agent = AgentNode("agent", prompt="visible")
     child = _graph(
         [child_agent],
         [(START_ID, child_agent.id), (child_agent.id, END_ID)],
     )
     for node_id, node in child.nodes.items():
-        node.memory_scope = MemoryScope(
-            root_flow_id="root",
-            static_path=("root", "flow", "map", "child", node_id),
-            frame_stack=(outer,),
-        )
+        node.memory_scope = MemoryScope(("flow", "map", "child", node_id), ("outer",))
     spawner = MapNode(
         "map",
         flow_id="child",
         child=child,
         child_inputs=[],
     )
-    spawner.memory_scope = MemoryScope(
-        root_flow_id="root",
-        static_path=("root", "flow", "map"),
-        frame_stack=(outer,),
-    )
+    spawner.memory_scope = MemoryScope(("flow", "map"), ("outer",))
     state, log = _start_trace_node(
         spawner,
-        layout=_layout((outer,)),
+        keys=("outer",),
         learnable=True,
+        stacks=_stacks(
+            spawner.memory_scope, *(node.memory_scope for node in child.nodes.values()),
+        ),
     )
     pristine_flow = copy.deepcopy(state.flow)
 
@@ -956,6 +956,7 @@ def test_expanded_map_occurrence_projects_and_replays_from_live_node_scope() -> 
     dynamic_agent = state.flow.nodes["map#0/agent"]
     dynamic_scope = dynamic_agent.memory_scope
     assert type(dynamic_scope) is MemoryScope
+    assert dynamic_scope.static_path == ("flow", "map", "child", "agent")
     succeed(
         dynamic_agent.id,
         "visible",
@@ -966,14 +967,10 @@ def test_expanded_map_occurrence_projects_and_replays_from_live_node_scope() -> 
     succeed(END_ID, None)
     assert isinstance(state.result, RunSucceeded)
 
-    episode = state.learning_state.episodes_for(outer)[0]
+    episode = state.learning_state.episodes_for("outer")[0]
     assert episode.owner_static_path == dynamic_scope.static_path
-    assert episode.occurrence.occurrence_path == (
-        MemoryOccurrenceSegment(
-            MemoryOccurrenceKind.MAP_ITEM,
-            spawner.memory_scope.static_path,
-            0,
-        ),
+    assert episode.occurrence_path == (
+        MemoryOccurrenceSegment(MemoryOccurrenceKind.MAP_ITEM, ("flow", "map"), 0),
     )
 
     replayed = _replay_records(
@@ -982,17 +979,16 @@ def test_expanded_map_occurrence_projects_and_replays_from_live_node_scope() -> 
         grow_builder=build_grow,
     )
     assert replayed.learning_state == state.learning_state
-    assert replayed.learning_state.episodes_for(outer) == (episode,)
+    assert replayed.learning_state.episodes_for("outer") == (episode,)
 
 
 def test_route_and_growth_projection_use_closed_source_neutral_envelopes() -> None:
-    agent = _refs()[1]
-    scope = _scope(frames=(agent,))
+    scope = _scope(memories=("local",))
     evidence = _evidence(scope)
     route = project_outcome_episodes(
         _RUN_ID,
         NodeRoutedRecord("agent", "yes", evidence=evidence),
-    )[0][1]
+    )
     growth = project_outcome_episodes(
         _RUN_ID,
         NodeExpandedRecord(
@@ -1002,10 +998,11 @@ def test_route_and_growth_projection_use_closed_source_neutral_envelopes() -> No
             "b" * 64,
             evidence=evidence,
         ),
-    )[0][1]
+    )
 
-    assert route.output == {"kind": "route", "handle": "yes"}
-    assert growth.output == {
+    assert [memory for memory, _episode in route] == ["local"]
+    assert route[0][1].output == {"kind": "route", "handle": "yes"}
+    assert growth[0][1].output == {
         "kind": "grow",
         "seed": {"value": [1, 2]},
         "prune_ids": ["a", "z"],
@@ -1014,33 +1011,21 @@ def test_route_and_growth_projection_use_closed_source_neutral_envelopes() -> No
 
 def test_episode_order_is_record_order_while_occurrence_inventory_is_structural(
 ) -> None:
-    agent = _refs()[1]
-    layout = _layout((agent,))
-    learning = RuntimeLearningState.for_layout(layout)
+    learning = RuntimeLearningState.for_memories(_table(("local",)))
     for index, handle in ((2, "second-structurally"), (0, "first-structurally")):
-        scope = _scope(frames=(agent,), occurrence=_occurrence(index))
-        record = NodeRoutedRecord(
-            "agent",
-            handle,
-            evidence=_evidence(scope),
-        )
-        learning = learning.append_episodes(
-            project_outcome_episodes(_RUN_ID, record)
-        )
+        scope = _scope(memories=("local",), occurrence=_occurrence(index))
+        record = NodeRoutedRecord("agent", handle, evidence=_evidence(scope))
+        learning = learning.append_episodes(project_outcome_episodes(_RUN_ID, record))
 
-    assert [episode.output["handle"] for episode in learning.episodes_for(agent)] == [
+    assert [episode.output["handle"] for episode in learning.episodes_for("local")] == [
         "second-structurally",
         "first-structurally",
     ]
-    assert [
-        occurrence.occurrence_path[0].index
-        for occurrence in learning.occurrence_inventory(agent)
-    ] == [0, 2]
+    assert [path[0].index for path in learning.occurrence_inventory("local")] == [0, 2]
 
 
 def test_episode_append_validates_only_new_persistent_history(monkeypatch) -> None:
-    agent = _refs()[1]
-    learning = RuntimeLearningState.for_layout(_layout((agent,)))
+    learning = RuntimeLearningState.for_memories(_table(("local",)))
     original = learning_module._revalidate_episode
     validations = 0
 
@@ -1051,7 +1036,7 @@ def test_episode_append_validates_only_new_persistent_history(monkeypatch) -> No
 
     monkeypatch.setattr(learning_module, "_revalidate_episode", count_validation)
     for index in range(129):
-        scope = _scope(frames=(agent,), occurrence=_occurrence(index))
+        scope = _scope(memories=("local",), occurrence=_occurrence(index))
         learning = learning.append_episodes(
             project_outcome_episodes(
                 _RUN_ID,
@@ -1060,12 +1045,12 @@ def test_episode_append_validates_only_new_persistent_history(monkeypatch) -> No
         )
 
     assert validations == 129
-    episodes = learning.episodes_for(agent)
+    episodes = learning.episodes_for("local")
     assert [episode.output["handle"] for episode in episodes] == [
         str(index) for index in range(129)
     ]
     with pytest.raises(ValueError, match="run_id disagrees"):
-        learning.learn_context("another-run", agent)
+        learning.learn_context("another-run", "local")
     with pytest.raises(ValueError, match="run_id disagrees"):
         learning.append_episodes(
             project_outcome_episodes(
@@ -1073,87 +1058,89 @@ def test_episode_append_validates_only_new_persistent_history(monkeypatch) -> No
                 NodeRoutedRecord(
                     "agent",
                     "foreign",
-                    evidence=_evidence(_scope(frames=(agent,))),
+                    evidence=_evidence(_scope(memories=("local",))),
                 ),
             )
         )
 
 
-def test_large_frame_inventory_uses_indexed_lookup(monkeypatch) -> None:
-    refs = tuple(
-        MemoryFrameRef(
-            "root",
-            ("root", "agents", f"agent-{index:04d}"),
-            MemoryOwner.AGENT,
-        )
-        for index in range(1024)
-    )
-    learning = RuntimeLearningState.for_layout(_layout(refs))
-    original_equality = MemoryFrameRef.__eq__
-    comparisons = 0
+def test_learning_state_rejects_unknown_or_malformed_memory_keys() -> None:
+    learning = RuntimeLearningState.for_memories(_table(_keys()))
+    assert RuntimeLearningState.for_memories(None) == RuntimeLearningState()
+    with pytest.raises(ValueError, match="absent from the recorded table"):
+        learning.episodes_for("missing")
+    with pytest.raises(TypeError):
+        learning.episodes_for(("outer",))
+    with pytest.raises(ValueError, match="sorted and unique"):
+        RuntimeLearningState(memory_order=("outer", "local"), episodes=learning.episodes)
+    with pytest.raises(ValueError, match="align with memory_order"):
+        RuntimeLearningState(memory_order=("local",), episodes=learning.episodes)
 
-    def count_equality(left, right) -> bool:
-        nonlocal comparisons
-        comparisons += 1
-        return original_equality(left, right)
 
-    monkeypatch.setattr(MemoryFrameRef, "__eq__", count_equality)
-    for ref in refs:
-        assert learning.episodes_for(ref) == ()
+def test_large_memory_table_uses_indexed_lookup(monkeypatch) -> None:
+    keys = tuple(f"agent-{index:04d}" for index in range(1024))
+    learning = RuntimeLearningState.for_memories(_table(keys))
+    original_bisect = learning_module.bisect_left
+    calls = reads = 0
 
-    assert comparisons <= len(refs) * 2
+    class _CountingOrder:
+        def __init__(self, items: tuple[str, ...]) -> None:
+            self.items = items
+
+        def __len__(self) -> int:
+            return len(self.items)
+
+        def __getitem__(self, index: int) -> str:
+            nonlocal reads
+            reads += 1
+            return self.items[index]
+
+    def counting_bisect(items, value, *args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original_bisect(_CountingOrder(items), value, *args, **kwargs)
+
+    monkeypatch.setattr(learning_module, "bisect_left", counting_bisect)
+    for key in keys:
+        assert learning.episodes_for(key) == ()
+
+    assert calls == len(keys)
+    assert reads <= len(keys) * 11
 
 
 def test_graph_outcome_uses_constant_memory_roots_and_indexed_scope(
     monkeypatch,
 ) -> None:
-    refs = tuple(
-        MemoryFrameRef(
-            "root",
-            ("root", "agents", f"agent-{index:04d}"),
-            MemoryOwner.AGENT,
-        )
-        for index in range(1024)
-    )
-    target = refs[-1]
+    keys = tuple(f"agent-{index:04d}" for index in range(1024))
     node = _TraceNode("agent")
-    node.memory_scope = MemoryScope(
-        root_flow_id="root",
-        static_path=target.static_path,
-        frame_stack=(target,),
+    node.memory_scope = MemoryScope(("agents", "agent-1023"), (keys[-1],))
+    stacks = tuple(
+        MemoryStack(("agents", key), (key,)) for key in keys
     )
-    state, log = _start_trace_node(node, layout=_layout(refs), learnable=True)
+    state, log = _start_trace_node(node, keys=keys, learnable=True, stacks=stacks)
 
-    def reject_full_layout_validation(*_args, **_kwargs) -> None:
-        pytest.fail("hot graph transition rescanned the complete memory layout")
+    def reject_full_table_rebuild(*_args, **_kwargs):
+        pytest.fail("hot graph transition rebuilt the complete memory table")
 
-    original_applicable = RuntimeLearningState.applicable_frames
-    applicable_calls = 0
+    original_recorded_stack = state_module._recorded_stack
+    stack_calls = 0
 
-    def count_applicable(self, root_flow_id, static_path):
-        nonlocal applicable_calls
-        applicable_calls += 1
-        return original_applicable(self, root_flow_id, static_path)
+    def count_recorded_stack(recorded, locator):
+        nonlocal stack_calls
+        stack_calls += 1
+        return original_recorded_stack(recorded, locator)
 
-    original_frame_key = learning_module.frame_key
-    key_calls = 0
+    original_index = RuntimeLearningState._memory_index
+    index_calls = 0
 
-    def count_frame_key(ref):
-        nonlocal key_calls
-        key_calls += 1
-        return original_frame_key(ref)
+    def count_index(self, memory):
+        nonlocal index_calls
+        index_calls += 1
+        return original_index(self, memory)
 
-    monkeypatch.setattr(
-        RuntimeLearningState,
-        "validate_layout",
-        reject_full_layout_validation,
-    )
-    monkeypatch.setattr(
-        RuntimeLearningState,
-        "applicable_frames",
-        count_applicable,
-    )
-    monkeypatch.setattr(learning_module, "frame_key", count_frame_key)
+    monkeypatch.setattr(RuntimeLearningState, "for_memories", classmethod(reject_full_table_rebuild))
+    monkeypatch.setattr(state_module, "_recorded_stack", count_recorded_stack)
+    monkeypatch.setattr(RuntimeLearningState, "_memory_index", count_index)
 
     prepared = prepare_node_succeeded(
         state,
@@ -1164,38 +1151,72 @@ def test_graph_outcome_uses_constant_memory_roots_and_indexed_scope(
     )
     commit_prepared(log, state, prepared)
 
-    assert applicable_calls == 1
-    assert key_calls < 100
+    assert stack_calls == 1
+    assert index_calls < 100
 
 
 def test_commit_id_has_one_documented_canonical_encoding() -> None:
-    ref = MemoryFrameRef("root", ("root", "agent"), MemoryOwner.AGENT)
-    mutations = (
-        MemoryMutation("m", ref, {"z": 1, "a": ["é", None]}),
+    mutations = (MemoryMutation("m", {"z": 1, "a": ["é", None]}),)
+
+    assert memory_commit_id("run", "notes", mutations, 1) == (
+        "ac-memory-v3:"
+        "250e0a4c357acfd6ef4d37a84a5207bffdb3df2e343816df5e7219401a7bf47b"
+    )
+    assert memory_commit_id("run", "notes", mutations, 2) == (
+        "ac-memory-v3:"
+        "1c87e547bc72a30942158a6c0c0bc3dc4fa21245e45564ac7571175e48cdf64a"
     )
 
-    assert memory_commit_id("run", "policy", mutations) == (
-        "ac-memory-v1:"
-        "6c8c1507c9c8c0d6ca4a6239ec397ca950fae2f206146db324ce22098e22f5d6"
-    )
 
+def test_commit_id_requires_a_positive_attempt_and_separates_attempts() -> None:
+    mutations = (MemoryMutation("m", {"z": 1, "a": ["é", None]}),)
 
-def test_commit_id_with_an_attempt_uses_a_separate_versioned_encoding() -> None:
-    ref = MemoryFrameRef("root", ("root", "agent"), MemoryOwner.AGENT)
-    mutations = (
-        MemoryMutation("m", ref, {"z": 1, "a": ["é", None]}),
-    )
-
-    assert memory_commit_id("run", "policy", mutations, attempt_id=None) == (
-        memory_commit_id("run", "policy", mutations)
-    )
-    assert memory_commit_id("run", "policy", mutations, attempt_id=2) == (
-        "ac-memory-v2:"
-        "8d3dd7eb8bc36b1eacff069eea6374b5955dba8ff1787291f4a3e71e3271433a"
-    )
-    assert memory_commit_id("run", "policy", (), attempt_id=2) != (
-        memory_commit_id("run", "policy", (), attempt_id=3)
-    )
-    for invalid in (0, -1, True, "2", 2.0):
+    assert memory_commit_id("run", "notes", (), 2) != memory_commit_id("run", "notes", (), 3)
+    for invalid in (None, 0, -1, True, "2", 2.0):
         with pytest.raises(ValueError, match="attempt_id"):
-            memory_commit_id("run", "policy", mutations, attempt_id=invalid)
+            memory_commit_id("run", "notes", mutations, invalid)
+    with pytest.raises(TypeError):
+        memory_commit_id("run", "notes", list(mutations), 1)
+
+
+def test_root_fallback_reaches_only_keys_owned_by_the_root_flow_site():
+    from agent_composer.runtime.backward import compute_backward
+    from agent_composer.runtime.trace import RetainedTrace, TraceTerminal
+
+    trace = RetainedTrace("synthetic", START_ID, END_ID)
+    trace.terminal = TraceTerminal(
+        False, None, None, Failure("graph.terminal_unreachable", "no producer", None)
+    )
+    memories = (
+        MemorySpec("agent_notes", "agent_notes", {}, (DeclSite((), ("root",), "agent"),), True),
+        MemorySpec("def_notes", "def_notes", {}, (DeclSite((), ("def", "child"), None),), False),
+        # An imported file's root flow is not the run's root flow.
+        MemorySpec("lib.notes", "lib.notes", {}, (DeclSite(("lib",), ("root",), None),), False),
+        MemorySpec("shared", "shared", {}, (DeclSite((), ("def", "child"), None), _ROOT), False),
+    )
+    root, results = compute_backward(trace, "original text")
+
+    agent_notes, def_notes, imported, shared = learning_module.project_owner_contexts(
+        trace, memories, (), "original text", root, results,
+    )
+
+    assert agent_notes.feedback == def_notes.feedback == imported.feedback == ()
+    assert [entry["value"] for entry in shared.feedback] == ["original text"]
+    assert all(entry["root"] for entry in shared.feedback)
+
+
+def test_replay_rejects_an_eligible_node_scope_that_differs_from_its_recorded_stack():
+    node = _TraceNode("agent")
+    node.memory_scope = _scope(node.id)
+    state, log = _start_trace_node(node, keys=_keys(), learnable=True)
+    original = copy.deepcopy(state.flow)
+    commit_prepared(log, state, prepare_node_succeeded(
+        state, node.id, "done", evidence=_evidence(node.memory_scope),
+        forward_capture=_forward_capture(node, {"question": "q"}),
+    ))
+    replayed = _replay_records(RunState(copy.deepcopy(original)), tuple(log), grow_builder=build_grow)
+    assert replayed.next_sequence == state.next_sequence
+
+    original.nodes["agent"].memory_scope = _scope(node.id, memories=("outer",))
+    with pytest.raises(ValueError, match="exact recorded memory stack"):
+        _replay_records(RunState(original), tuple(log), grow_builder=build_grow)

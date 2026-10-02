@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field, replace
 from enum import Enum
 import json
 from math import isfinite
-from types import NoneType, TracebackType
+import re
+from types import MappingProxyType, NoneType, TracebackType
 from typing import Callable, Iterator, Literal, Protocol, TypeAlias, runtime_checkable
 
 from agent_composer.diagnostics import OriginRef
@@ -479,11 +481,89 @@ def _require_origin(value: object, name: str = "origin") -> OriginRef | None:
     return value
 
 
-class MemoryOwner(str, Enum):
-    """Closed set of semantic entities that may own a memory frame."""
+MEMORY_IDENTIFIER_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
+"""Grammar shared by memory names, memory type names and ``uses:`` scope segments."""
 
-    FLOW = "flow"
-    AGENT = "agent"
+_LOCATION_CONFIG_KEYS = frozenset({"storage", "store", "path"})
+
+BUILTIN_MEMORY_CONFIG_KEYS: Mapping[str, frozenset[str]] = MappingProxyType(
+    {
+        "episodic": frozenset({"max_episodes", "recall_limit"}),
+        "reflective": frozenset({"max_items", "recall_limit"}),
+        "session": frozenset({"history_budget_chars", "recent_turns"}),
+        "profile": frozenset({"max_chars", "input_budget_chars"}),
+    }
+)
+"""Config keys each built-in memory type accepts from YAML; values are checked later."""
+
+
+def _require_memory_identifier(value: object, what: str) -> str:
+    """Return a memory name or type name that matches the shared grammar."""
+    if type(value) is not str:
+        raise TypeError(f"{what} must be a string")
+    if MEMORY_IDENTIFIER_PATTERN.fullmatch(value) is None:
+        raise ValueError(f"{what} {value!r} must match [A-Za-z_][A-Za-z0-9_-]*")
+    return value
+
+
+def check_memory_declaration(name: object, type_name: object, config: object) -> None:
+    """Check one declaration's name, type and config shape without building it.
+
+    Args:
+        name (`object`): Memory name; must match `MEMORY_IDENTIFIER_PATTERN`.
+        type_name (`object`): Memory type; same grammar.
+        config (`object`): Finite JSON object. It may not hold private keys or
+            storage locations, and a built-in type allows only the keys in
+            `BUILTIN_MEMORY_CONFIG_KEYS`.
+
+    Raises:
+        `TypeError`: A value has the wrong Python type.
+        `ValueError`: A value breaks a shape rule.
+    """
+    _require_memory_identifier(name, "memory name")
+    _require_memory_identifier(type_name, "memory type")
+    frozen = _freeze_json_object(config, "config")
+    _reject_private_memory_keys(frozen, "config")
+    for key in config:
+        if key in _LOCATION_CONFIG_KEYS:
+            raise ValueError(
+                f"config key {key!r} is not allowed: storage belongs to the host "
+                "(build_memories storage=/root= or composer run --memory-root)"
+            )
+    allowed = BUILTIN_MEMORY_CONFIG_KEYS.get(type_name)
+    if allowed is not None:
+        extra = sorted(set(config) - allowed)
+        if extra:
+            raise ValueError(
+                f"{type_name} memory config has unknown key(s) {extra} "
+                f"(allowed: {', '.join(sorted(allowed))})"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class DeclSite:
+    """The definition site of one memory declaration.
+
+    ``scope`` is the import-alias path from the root file (``()`` for the root
+    file). ``owner`` is the lexical flow path compose threads: ``("root",)``,
+    ``("def", name)``, or an inline body's path. ``node`` is the declaring AGENT
+    id, or ``None`` for a flow declaration.
+    """
+
+    scope: tuple[str, ...]
+    owner: tuple[str, ...]
+    node: str | None = None
+
+    def __post_init__(self) -> None:
+        """Require exact string paths and an optional non-empty node id."""
+        _require_path(self.scope, "scope", allow_empty=True)
+        _require_path(self.owner, "owner")
+        if self.node is not None:
+            _require_string(self.node, "node")
+
+    def sort_key(self) -> tuple[tuple[str, ...], tuple[str, ...], bool, str]:
+        """Return a total order that puts a flow site before AGENT sites."""
+        return (self.scope, self.owner, self.node is not None, self.node or "")
 
 
 class MemoryOccurrenceKind(str, Enum):
@@ -491,13 +571,6 @@ class MemoryOccurrenceKind(str, Enum):
 
     MAP_ITEM = "map_item"
     LOOP_ITERATION = "loop_iteration"
-
-
-class MemoryBoundaryKind(str, Enum):
-    """Closed set of boundaries around one memory-owning flow."""
-
-    START = "start"
-    END = "end"
 
 
 class MemoryEpisodeStatus(str, Enum):
@@ -511,16 +584,16 @@ class MemoryEpisodeStatus(str, Enum):
 class MemorySnapshotEnvelope:
     """One opaque public durable snapshot declared by a memory backend."""
 
-    policy_name: str
+    memory: str
     _snapshot: _FrozenJsonObject = field(repr=False)
 
-    def __init__(self, policy_name: str, snapshot: JsonObject) -> None:
-        """Validate the policy name and retain a defensive JSON snapshot."""
+    def __init__(self, memory: str, snapshot: JsonObject) -> None:
+        """Validate the memory key and retain a defensive JSON snapshot."""
         frozen = _freeze_json_object(snapshot, "snapshot")
         object.__setattr__(
             self,
-            "policy_name",
-            _require_string(policy_name, "policy_name"),
+            "memory",
+            _require_string(memory, "memory"),
         )
         object.__setattr__(
             self,
@@ -571,200 +644,72 @@ class MemoryOccurrenceSegment:
             raise ValueError("index must be non-negative")
 
 
-@dataclass(frozen=True, slots=True)
-class MemoryFrameRef:
-    """Stable authored identity of one flow- or AGENT-owned memory frame."""
-
-    root_flow_id: str
-    static_path: tuple[str, ...]
-    owner: MemoryOwner
-
-    def __post_init__(self) -> None:
-        """Validate the root, static path, and closed owner vocabulary."""
-        _require_string(self.root_flow_id, "root_flow_id")
-        _require_path(self.static_path, "static_path")
-        if self.static_path[0] != self.root_flow_id:
-            raise ValueError("static_path must begin with root_flow_id")
-        if type(self.owner) is not MemoryOwner:
-            raise TypeError("owner must be a MemoryOwner")
-
-
 def _require_occurrence_path(value: object) -> tuple[MemoryOccurrenceSegment, ...]:
-    """Return one exact immutable path of structured occurrence segments."""
+    """Return one exact, revalidated, lexically nested occurrence path."""
     if type(value) is not tuple:
         raise TypeError("occurrence_path must be a tuple")
+    prior: tuple[str, ...] | None = None
     for segment in value:
         if type(segment) is not MemoryOccurrenceSegment:
             raise TypeError(
                 "occurrence_path items must be MemoryOccurrenceSegment values"
             )
+        MemoryOccurrenceSegment(segment.kind, segment.static_path, segment.index)
+        if prior is not None and (
+            len(segment.static_path) <= len(prior)
+            or segment.static_path[: len(prior)] != prior
+        ):
+            raise ValueError("occurrence segments must follow lexical nesting order")
+        prior = segment.static_path
     return value
 
 
-@dataclass(frozen=True, slots=True)
-class MemoryOccurrenceRef:
-    """One dynamic execution occurrence of a stable authored memory frame."""
-
-    frame_ref: MemoryFrameRef
-    occurrence_path: tuple[MemoryOccurrenceSegment, ...] = ()
-
-    def __post_init__(self) -> None:
-        """Validate the frame identity and immutable occurrence path."""
-        if type(self.frame_ref) is not MemoryFrameRef:
-            raise TypeError("frame_ref must be a MemoryFrameRef")
-        MemoryFrameRef(
-            self.frame_ref.root_flow_id,
-            self.frame_ref.static_path,
-            self.frame_ref.owner,
+def _require_occurrence_contains(
+    occurrence_path: tuple[MemoryOccurrenceSegment, ...],
+    static_path: tuple[str, ...],
+) -> None:
+    """Require the innermost occurrence segment to strictly contain ``static_path``."""
+    if not occurrence_path:
+        return
+    inner = occurrence_path[-1].static_path
+    if len(inner) >= len(static_path) or static_path[: len(inner)] != inner:
+        raise ValueError(
+            "the innermost occurrence segment must contain the scoped node"
         )
-        _require_occurrence_path(self.occurrence_path)
-        prior_path: tuple[str, ...] | None = None
-        for segment in self.occurrence_path:
-            MemoryOccurrenceSegment(segment.kind, segment.static_path, segment.index)
-            if segment.static_path[0] != self.frame_ref.root_flow_id:
-                raise ValueError("occurrence segment root must match the frame")
-            if prior_path is None:
-                frame_path = self.frame_ref.static_path
-                comparable = (
-                    frame_path[: len(segment.static_path)] == segment.static_path
-                    or segment.static_path[: len(frame_path)] == frame_path
-                )
-                if not comparable:
-                    raise ValueError(
-                        "frame and first occurrence paths must be lexically comparable"
-                    )
-            if prior_path is not None and (
-                len(segment.static_path) <= len(prior_path)
-                or segment.static_path[: len(prior_path)] != prior_path
-            ):
-                raise ValueError(
-                    "occurrence segments must follow lexical nesting order"
-                )
-            prior_path = segment.static_path
-
-
-@dataclass(frozen=True, slots=True)
-class MemoryBoundary:
-    """A START or END boundary belonging to one memory-owning flow frame."""
-
-    kind: MemoryBoundaryKind
-    frame_ref: MemoryFrameRef
-
-    def __post_init__(self) -> None:
-        """Require a closed boundary kind and a flow-owned frame."""
-        if type(self.kind) is not MemoryBoundaryKind:
-            raise TypeError("kind must be a MemoryBoundaryKind")
-        if type(self.frame_ref) is not MemoryFrameRef:
-            raise TypeError("frame_ref must be a MemoryFrameRef")
-        MemoryFrameRef(
-            self.frame_ref.root_flow_id,
-            self.frame_ref.static_path,
-            self.frame_ref.owner,
-        )
-        if self.frame_ref.owner is not MemoryOwner.FLOW:
-            raise ValueError("a memory boundary must belong to a flow frame")
 
 
 @dataclass(frozen=True, slots=True)
 class MemoryScope:
-    """The immutable memory context carried by one compiled execution node."""
+    """The memory keys and occurrence path carried by one compiled node.
 
-    root_flow_id: str
+    ``static_path`` is the node's root-relative locator. ``memories`` lists
+    the keys the node recalls and learns into, outermost first.
+    """
+
     static_path: tuple[str, ...]
-    frame_stack: tuple[MemoryFrameRef, ...] = ()
+    memories: tuple[str, ...] = ()
     occurrence_path: tuple[MemoryOccurrenceSegment, ...] = ()
-    boundary: MemoryBoundary | None = None
 
     def __post_init__(self) -> None:
-        """Validate paths and keep every nested identity within one root flow."""
-        _require_string(self.root_flow_id, "root_flow_id")
+        """Validate the locator, unique keys, and the nested occurrence path."""
         _require_path(self.static_path, "static_path")
-        if self.static_path[0] != self.root_flow_id:
-            raise ValueError("static_path must begin with root_flow_id")
-        if type(self.frame_stack) is not tuple:
-            raise TypeError("frame_stack must be a tuple")
-        prior_path: tuple[str, ...] | None = None
-        seen_frames: set[MemoryFrameRef] = set()
-        for index, frame in enumerate(self.frame_stack):
-            if type(frame) is not MemoryFrameRef:
-                raise TypeError("frame_stack items must be MemoryFrameRef values")
-            MemoryFrameRef(frame.root_flow_id, frame.static_path, frame.owner)
-            if frame.root_flow_id != self.root_flow_id:
-                raise ValueError("frame_stack root_flow_id must match the scope")
-            if frame in seen_frames:
-                raise ValueError("frame_stack must contain unique frame refs")
-            if (
-                prior_path is not None
-                and frame.static_path[: len(prior_path)] != prior_path
-            ):
-                raise ValueError("frame_stack must follow lexical ownership order")
-            if prior_path is not None and len(frame.static_path) == len(prior_path):
-                raise ValueError("frame_stack ownership paths must be strictly nested")
-            if frame.owner is MemoryOwner.AGENT and index != len(self.frame_stack) - 1:
-                raise ValueError("an AGENT frame must be the final local frame")
-            seen_frames.add(frame)
-            prior_path = frame.static_path
-        if self.frame_stack:
-            inner = self.frame_stack[-1]
-            if inner.owner is MemoryOwner.AGENT:
-                if self.static_path != inner.static_path:
-                    raise ValueError("an AGENT frame must own its exact node path")
-            elif (
-                len(self.static_path) <= len(inner.static_path)
-                or self.static_path[: len(inner.static_path)] != inner.static_path
-            ):
-                raise ValueError("a FLOW frame must lexically contain the node path")
+        _require_path(self.memories, "memories", allow_empty=True)
+        if len(set(self.memories)) != len(self.memories):
+            raise ValueError("memories must be unique")
         _require_occurrence_path(self.occurrence_path)
-        prior_occurrence_path: tuple[str, ...] | None = None
-        for segment in self.occurrence_path:
-            MemoryOccurrenceSegment(segment.kind, segment.static_path, segment.index)
-            if segment.static_path[0] != self.root_flow_id:
-                raise ValueError("occurrence segment root must match the scope")
-            if prior_occurrence_path is not None and (
-                len(segment.static_path) <= len(prior_occurrence_path)
-                or segment.static_path[: len(prior_occurrence_path)]
-                != prior_occurrence_path
-            ):
-                raise ValueError(
-                    "occurrence segments must follow lexical nesting order"
-                )
-            prior_occurrence_path = segment.static_path
-        if prior_occurrence_path is not None and (
-            len(prior_occurrence_path) >= len(self.static_path)
-            or self.static_path[: len(prior_occurrence_path)]
-            != prior_occurrence_path
-        ):
-            raise ValueError(
-                "the innermost occurrence segment must contain the scoped node"
-            )
-        if self.boundary is not None:
-            if type(self.boundary) is not MemoryBoundary:
-                raise TypeError("boundary must be a MemoryBoundary or None")
-            MemoryBoundary(self.boundary.kind, self.boundary.frame_ref)
-            if self.boundary.frame_ref.root_flow_id != self.root_flow_id:
-                raise ValueError("boundary root_flow_id must match the scope")
-            if not self.frame_stack or self.boundary.frame_ref != self.frame_stack[-1]:
-                raise ValueError(
-                    "boundary frame must be the innermost newly owned flow frame"
-                )
+        _require_occurrence_contains(self.occurrence_path, self.static_path)
 
 
 @dataclass(frozen=True, slots=True)
 class MemorySection:
-    """One separately framed memory text section visible to an AGENT."""
+    """One memory's recalled text, shown to an AGENT as its own section."""
 
-    frame_ref: MemoryFrameRef
+    memory: str
     text: str
 
     def __post_init__(self) -> None:
-        """Require an exact frame identity and exact text value."""
-        if type(self.frame_ref) is not MemoryFrameRef:
-            raise TypeError("frame_ref must be a MemoryFrameRef")
-        MemoryFrameRef(
-            self.frame_ref.root_flow_id,
-            self.frame_ref.static_path,
-            self.frame_ref.owner,
-        )
+        """Require a non-empty memory key and an exact text value."""
+        _require_string(self.memory, "memory")
         _require_string(self.text, "text", nonempty=False)
 
 
@@ -886,13 +831,7 @@ class EvaluationEvidence:
         if scope is not None:
             if type(scope) is not MemoryScope:
                 raise TypeError("scope must be a MemoryScope or None")
-            MemoryScope(
-                scope.root_flow_id,
-                scope.static_path,
-                scope.frame_stack,
-                scope.occurrence_path,
-                scope.boundary,
-            )
+            MemoryScope(scope.static_path, scope.memories, scope.occurrence_path)
         object.__setattr__(self, "scope", scope)
         if bound_inputs is not None and type(bound_inputs) is not dict:
             raise TypeError("bound_inputs must be an exact JSON object or None")
@@ -916,24 +855,25 @@ class EvaluationEvidence:
         if type(memory_sections) is not tuple:
             raise TypeError("memory_sections must be a tuple")
         stack_positions = {
-            frame: index for index, frame in enumerate(scope.frame_stack if scope is not None else ())
+            key: index
+            for index, key in enumerate(scope.memories if scope is not None else ())
         }
-        seen_frames: set[MemoryFrameRef] = set()
+        seen: set[str] = set()
         positions: list[int] = []
         for section in memory_sections:
             if type(section) is not MemorySection:
                 raise TypeError("memory_sections items must be MemorySection values")
-            MemorySection(section.frame_ref, section.text)
-            if section.frame_ref in seen_frames:
-                raise ValueError("memory_sections frame_ref values must be unique")
-            if section.frame_ref not in stack_positions:
+            MemorySection(section.memory, section.text)
+            if section.memory in seen:
+                raise ValueError("memory_sections memory values must be unique")
+            if section.memory not in stack_positions:
                 raise ValueError(
-                    "memory_sections frames must appear in scope.frame_stack"
+                    "memory_sections memories must appear in scope.memories"
                 )
-            seen_frames.add(section.frame_ref)
-            positions.append(stack_positions[section.frame_ref])
+            seen.add(section.memory)
+            positions.append(stack_positions[section.memory])
         if positions != sorted(positions):
-            raise ValueError("memory_sections must follow scope.frame_stack order")
+            raise ValueError("memory_sections must follow scope.memories order")
         object.__setattr__(self, "memory_sections", memory_sections)
 
         if type(interactions) is not tuple:
@@ -951,106 +891,159 @@ class EvaluationEvidence:
 
 
 @dataclass(frozen=True, slots=True, init=False)
-class MemoryPolicySpec:
-    """One authored named memory policy and its source-neutral configuration."""
+class MemoryDecl:
+    """One authored memory declaration: name, backend type, config, and site."""
 
     name: str
+    type: str
     _config: _FrozenJsonObject = field(repr=False)
+    site: DeclSite
     origin: OriginRef | None
 
     def __init__(
         self,
         name: str,
+        type: str,
         config: JsonObject,
+        site: DeclSite,
         origin: OriginRef | None = None,
     ) -> None:
-        """Validate and snapshot one authored policy specification."""
-        object.__setattr__(self, "name", _require_string(name, "name"))
+        """Validate and snapshot one declaration."""
+        check_memory_declaration(name, type, config)
+        object.__setattr__(self, "name", name)
+        object.__setattr__(self, "type", type)
         frozen = _freeze_json_object(config, "config")
         _reject_private_memory_keys(frozen, "config")
         object.__setattr__(self, "_config", frozen)
+        if site.__class__ is not DeclSite:
+            raise TypeError("site must be a DeclSite")
+        object.__setattr__(self, "site", DeclSite(site.scope, site.owner, site.node))
         object.__setattr__(self, "origin", _require_origin(origin))
 
     @property
     def config(self) -> JsonObject:
-        """Return a fresh plain-JSON copy of the policy configuration."""
+        """Return a fresh plain-JSON copy of the declaration configuration."""
         return _thaw_json_object(self._config)
 
+    @property
+    def key(self) -> str:
+        """Return the rendered memory key ``".".join((*site.scope, name))``."""
+        return ".".join((*self.site.scope, self.name))
 
-def _iter_memory_policy_origin(
-    spec: MemoryPolicySpec,
+
+def _iter_memory_decl_origins(
+    decls: tuple[MemoryDecl, ...],
     seen: set[int],
 ) -> Iterator[OriginRef]:
-    """Yield one policy origin while preserving shared-carrier identity."""
-    if type(spec) is not MemoryPolicySpec:
-        raise TypeError("memory policy must be an exact MemoryPolicySpec")
-    identity = id(spec)
-    if identity in seen:
-        return
-    seen.add(identity)
-    origin = _require_origin(spec.origin, "memory policy origin")
-    if origin is not None:
-        yield origin
+    """Yield declaration origins while preserving shared-carrier identity."""
+    if type(decls) is not tuple:
+        raise TypeError("memories must be a tuple")
+    for decl in decls:
+        if type(decl) is not MemoryDecl:
+            raise TypeError("memories items must be exact MemoryDecl values")
+        identity = id(decl)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        origin = _require_origin(decl.origin, "memory declaration origin")
+        if origin is not None:
+            yield origin
 
 
-def _rewrite_memory_policy_origin(
-    spec: MemoryPolicySpec,
+def _rewrite_memory_decl_origins(
+    decls: tuple[MemoryDecl, ...],
     mapper: Callable[[OriginRef], OriginRef],
     seen: set[int],
 ) -> None:
-    """Rewrite one policy origin in a private copy without replacing aliases."""
-    if type(spec) is not MemoryPolicySpec:
-        raise TypeError("memory policy must be an exact MemoryPolicySpec")
-    identity = id(spec)
-    if identity in seen:
-        return
-    seen.add(identity)
-    origin = _require_origin(spec.origin, "memory policy origin")
-    if origin is None:
-        return
-    mapped = mapper(origin)
-    if not isinstance(mapped, OriginRef):
-        raise TypeError("origin mapper must return an OriginRef")
-    object.__setattr__(spec, "origin", OriginRef(mapped.key))
+    """Rewrite declaration origins in a private copy without replacing aliases."""
+    if type(decls) is not tuple:
+        raise TypeError("memories must be a tuple")
+    for decl in decls:
+        if type(decl) is not MemoryDecl:
+            raise TypeError("memories items must be exact MemoryDecl values")
+        identity = id(decl)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        origin = _require_origin(decl.origin, "memory declaration origin")
+        if origin is None:
+            continue
+        mapped = mapper(origin)
+        if not isinstance(mapped, OriginRef):
+            raise TypeError("origin mapper must return an OriginRef")
+        object.__setattr__(decl, "origin", OriginRef(mapped.key))
 
 
 @dataclass(frozen=True, slots=True, init=False)
-class MemoryFrameSpec:
-    """Origin-free effective policy configuration for one memory frame."""
+class MemorySpec:
+    """One recorded memory: key, type, effective config, and owning sites."""
 
-    ref: MemoryFrameRef
-    policy_name: str
+    key: str
+    type: str
     _config: _FrozenJsonObject = field(repr=False)
+    owners: tuple[DeclSite, ...]
+    conversation_eligible: bool
 
     def __init__(
         self,
-        ref: MemoryFrameRef,
-        policy_name: str,
+        key: str,
+        type: str,
         config: JsonObject,
+        owners: tuple[DeclSite, ...],
+        conversation_eligible: bool,
     ) -> None:
-        """Validate and snapshot one effective frame specification."""
-        if type(ref) is not MemoryFrameRef:
-            raise TypeError("ref must be a MemoryFrameRef")
-        MemoryFrameRef(ref.root_flow_id, ref.static_path, ref.owner)
-        object.__setattr__(self, "ref", ref)
-        object.__setattr__(
-            self,
-            "policy_name",
-            _require_string(policy_name, "policy_name"),
-        )
+        """Validate one table entry; eligibility must match its owners."""
+        object.__setattr__(self, "key", _require_string(key, "key"))
+        object.__setattr__(self, "type", _require_string(type, "type"))
         frozen = _freeze_json_object(config, "config")
         _reject_private_memory_keys(frozen, "config")
         object.__setattr__(self, "_config", frozen)
+        if owners.__class__ is not tuple:
+            raise TypeError("owners must be a tuple")
+        if not owners:
+            raise ValueError("owners must be non-empty")
+        copied = []
+        for owner in owners:
+            if owner.__class__ is not DeclSite:
+                raise TypeError("owners items must be DeclSite values")
+            copied.append(DeclSite(owner.scope, owner.owner, owner.node))
+        keys = [owner.sort_key() for owner in copied]
+        if keys != sorted(set(keys)):
+            raise ValueError("owners must be sorted and unique by DeclSite.sort_key()")
+        object.__setattr__(self, "owners", tuple(copied))
+        if conversation_eligible.__class__ is not bool:
+            raise TypeError("conversation_eligible must be a boolean")
+        expected = len(copied) == 1 and copied[0].node is not None
+        if conversation_eligible != expected:
+            raise ValueError(
+                "conversation_eligible must be true exactly for one AGENT owner"
+            )
+        object.__setattr__(self, "conversation_eligible", conversation_eligible)
 
     @property
     def config(self) -> JsonObject:
-        """Return a fresh plain-JSON copy of the frame configuration."""
+        """Return a fresh plain-JSON copy of the effective configuration."""
         return _thaw_json_object(self._config)
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryStack:
+    """The ordered memory keys one static target recalls and learns into."""
+
+    locator: tuple[str, ...]
+    memories: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        """Require a non-empty locator and unique non-empty keys."""
+        _require_path(self.locator, "locator")
+        _require_path(self.memories, "memories", allow_empty=True)
+        if len(set(self.memories)) != len(self.memories):
+            raise ValueError("memories must be unique")
 
 
 @dataclass(frozen=True, slots=True, init=False)
 class RecallContext:
-    """Visible AGENT context from which a memory policy may derive a query."""
+    """Visible AGENT context from which a memory may derive a query."""
 
     base_system_prompt: str
     prompt: str
@@ -1098,7 +1091,7 @@ class MemoryEpisode:
     """
 
     run_id: str
-    occurrence: MemoryOccurrenceRef
+    occurrence_path: tuple[MemoryOccurrenceSegment, ...]
     owner_static_path: tuple[str, ...]
     status: MemoryEpisodeStatus
     _inputs: _FrozenJsonObject | None = field(repr=False)
@@ -1113,7 +1106,7 @@ class MemoryEpisode:
     def __init__(
         self,
         run_id: str,
-        occurrence: MemoryOccurrenceRef,
+        occurrence_path: tuple[MemoryOccurrenceSegment, ...],
         owner_static_path: tuple[str, ...],
         status: MemoryEpisodeStatus,
         inputs: JsonObject | None,
@@ -1139,15 +1132,15 @@ class MemoryEpisode:
             if execution_seq < 0:
                 raise ValueError("execution_seq must be non-negative")
         object.__setattr__(self, "execution_seq", execution_seq)
-        if type(occurrence) is not MemoryOccurrenceRef:
-            raise TypeError("occurrence must be a MemoryOccurrenceRef")
-        MemoryOccurrenceRef(occurrence.frame_ref, occurrence.occurrence_path)
-        object.__setattr__(self, "occurrence", occurrence)
+        object.__setattr__(
+            self, "occurrence_path", _require_occurrence_path(occurrence_path)
+        )
         object.__setattr__(
             self,
             "owner_static_path",
             _require_path(owner_static_path, "owner_static_path"),
         )
+        _require_occurrence_contains(self.occurrence_path, self.owner_static_path)
         if type(status) is not MemoryEpisodeStatus:
             raise TypeError("status must be a MemoryEpisodeStatus")
         object.__setattr__(self, "status", status)
@@ -1187,7 +1180,7 @@ class MemoryEpisode:
         for section in memory_sections:
             if type(section) is not MemorySection:
                 raise TypeError("memory_sections items must be MemorySection values")
-            MemorySection(section.frame_ref, section.text)
+            MemorySection(section.memory, section.text)
         object.__setattr__(self, "memory_sections", memory_sections)
         if type(interactions) is not tuple:
             raise TypeError("interactions must be a tuple")
@@ -1212,26 +1205,23 @@ class MemoryEpisode:
 
 @dataclass(frozen=True, slots=True, init=False)
 class LearnContext:
-    """One frame-local ordered batch presented to a memory policy."""
+    """One memory's ordered learning batch."""
 
     run_id: str
-    frame_ref: MemoryFrameRef
+    memory: str
     episodes: tuple[MemoryEpisode, ...]
     _feedback: tuple[_FrozenJson, ...] = field(repr=False)
 
     def __init__(
         self,
         run_id: str,
-        frame_ref: MemoryFrameRef,
+        memory: str,
         episodes: tuple[MemoryEpisode, ...],
         feedback: tuple[JsonValue, ...] = (),
     ) -> None:
-        """Validate and snapshot one frame-local learning context."""
+        """Validate and snapshot one memory's learning context."""
         object.__setattr__(self, "run_id", _require_string(run_id, "run_id"))
-        if type(frame_ref) is not MemoryFrameRef:
-            raise TypeError("frame_ref must be a MemoryFrameRef")
-        MemoryFrameRef(frame_ref.root_flow_id, frame_ref.static_path, frame_ref.owner)
-        object.__setattr__(self, "frame_ref", frame_ref)
+        object.__setattr__(self, "memory", _require_string(memory, "memory"))
         if type(episodes) is not tuple:
             raise TypeError("episodes must be a tuple")
         for episode in episodes:
@@ -1239,7 +1229,7 @@ class LearnContext:
                 raise TypeError("episodes items must be MemoryEpisode values")
             MemoryEpisode(
                 run_id=episode.run_id,
-                occurrence=episode.occurrence,
+                occurrence_path=episode.occurrence_path,
                 owner_static_path=episode.owner_static_path,
                 status=episode.status,
                 inputs=episode.inputs,
@@ -1253,10 +1243,6 @@ class LearnContext:
             )
             if episode.run_id != self.run_id:
                 raise ValueError("episode run_id must match the learning context")
-            if episode.occurrence.frame_ref != frame_ref:
-                raise ValueError(
-                    "episode occurrence frame_ref must match the learning context"
-                )
         object.__setattr__(self, "episodes", episodes)
         if type(feedback) is not tuple:
             raise TypeError("feedback must be a tuple")
@@ -1277,16 +1263,14 @@ class LearnContext:
 
 @dataclass(frozen=True, slots=True, init=False)
 class MemoryMutation:
-    """One policy-proposed JSON mutation for a single owning memory frame."""
+    """One JSON mutation a memory proposed."""
 
     mutation_id: str
-    frame_ref: MemoryFrameRef
     _payload: _FrozenJson = field(repr=False)
 
     def __init__(
         self,
         mutation_id: str,
-        frame_ref: MemoryFrameRef,
         payload: JsonValue,
     ) -> None:
         """Validate and snapshot one proposed mutation."""
@@ -1295,10 +1279,6 @@ class MemoryMutation:
             "mutation_id",
             _require_string(mutation_id, "mutation_id"),
         )
-        if type(frame_ref) is not MemoryFrameRef:
-            raise TypeError("frame_ref must be a MemoryFrameRef")
-        MemoryFrameRef(frame_ref.root_flow_id, frame_ref.static_path, frame_ref.owner)
-        object.__setattr__(self, "frame_ref", frame_ref)
         object.__setattr__(self, "_payload", _freeze_json(payload, name="payload"))
 
     @property
@@ -1309,8 +1289,6 @@ class MemoryMutation:
 
 def _validate_mutations(
     mutations: tuple[MemoryMutation, ...],
-    *,
-    frame_ref: MemoryFrameRef | None = None,
 ) -> tuple[MemoryMutation, ...]:
     """Revalidate and detach a mutation batch, preserving its semantic order."""
     if type(mutations) is not tuple:
@@ -1319,18 +1297,7 @@ def _validate_mutations(
     for mutation in mutations:
         if type(mutation) is not MemoryMutation:
             raise TypeError("mutations items must be MemoryMutation values")
-        ref = mutation.frame_ref
-        if type(ref) is not MemoryFrameRef:
-            raise TypeError("mutation frame_ref must be a MemoryFrameRef")
-        copied.append(
-            MemoryMutation(
-                mutation.mutation_id,
-                MemoryFrameRef(ref.root_flow_id, ref.static_path, ref.owner),
-                mutation.payload,
-            )
-        )
-        if frame_ref is not None and mutation.frame_ref != frame_ref:
-            raise ValueError("mutation frame_ref must match the learning frame")
+        copied.append(MemoryMutation(mutation.mutation_id, mutation.payload))
     ids = tuple(mutation.mutation_id for mutation in mutations)
     if len(ids) != len(set(ids)):
         raise ValueError("mutation IDs must be unique")
@@ -1339,16 +1306,15 @@ def _validate_mutations(
 
 @dataclass(frozen=True, slots=True)
 class LearningFailure:
-    """One frame-local learn or policy-local commit failure in a run result."""
+    """One memory's learn or commit failure in a run result."""
 
-    policy_name: str
+    memory: str
     operation: str
     failure: MemoryOperationFailure
-    frame_ref: MemoryFrameRef | None = None
 
     def __post_init__(self) -> None:
         """Require exact attribution and one revalidated durable failure."""
-        _require_string(self.policy_name, "policy_name")
+        _require_string(self.memory, "memory")
         _require_string(self.operation, "operation")
         if self.operation not in ("learn", "commit"):
             raise ValueError("operation must be 'learn' or 'commit'")
@@ -1360,26 +1326,14 @@ class LearningFailure:
             self.failure.message,
             self.failure.retryable,
         )
-        if self.frame_ref is not None:
-            if type(self.frame_ref) is not MemoryFrameRef:
-                raise TypeError("frame_ref must be a MemoryFrameRef or None")
-            MemoryFrameRef(
-                self.frame_ref.root_flow_id,
-                self.frame_ref.static_path,
-                self.frame_ref.owner,
-            )
-        if self.operation == "learn" and self.frame_ref is None:
-            raise ValueError("a learn failure requires frame_ref")
-        if self.operation == "commit" and self.frame_ref is not None:
-            raise ValueError("a commit failure cannot carry frame_ref")
 
 
 @dataclass(frozen=True, slots=True)
 class PolicyCommitOutcome:
-    """One policy's confirmed or still-unresolved commit disposition.
+    """One memory's confirmed or still-unresolved commit disposition.
 
     Attributes:
-        policy_name (`str`): Nonempty configured policy name.
+        memory (`str`): Non-empty memory key.
         status (`str`): `unrequested`, `unknown`, `succeeded`, or `failed`.
         commit_id (`str | None`): Nonempty protocol identity after a request;
             defaults to `None` and must be absent when unrequested.
@@ -1388,14 +1342,14 @@ class PolicyCommitOutcome:
             remain unchanged.
     """
 
-    policy_name: str
+    memory: str
     status: str
     commit_id: str | None = None
     failure: MemoryOperationFailure | None = None
 
     def __post_init__(self) -> None:
         """Validate exact identities and detach the optional failure carrier."""
-        _require_string(self.policy_name, "policy_name")
+        _require_string(self.memory, "memory")
         _require_string(self.status, "status")
         if self.status not in ("unrequested", "unknown", "succeeded", "failed"):
             raise ValueError("invalid policy commit status")
@@ -1420,12 +1374,12 @@ class LearningResult:
 
     Attributes:
         status (`str`): `succeeded`, `failed`, or `incomplete`. Success requires
-            no failures and only successful supplied policies. Failure requires
+            no failures and only successful supplied memory outcomes. Failure requires
             an actual attributed failure. Incomplete does not infer completion
-            from the known policy dispositions.
+            from the known memory dispositions.
         failures (`tuple[LearningFailure, ...]`): Unique failure attributions in
             supplied order; defaults to an empty tuple.
-        policies (`tuple[PolicyCommitOutcome, ...]`): Unique policy names in
+        policies (`tuple[PolicyCommitOutcome, ...]`): Unique memory keys in
             supplied order; defaults to an empty tuple. Recorded run layout
             owns configured membership and order.
     """
@@ -1444,16 +1398,12 @@ class LearningResult:
         if type(self.failures) is not tuple:
             raise TypeError("learning failures must be a tuple")
         failures = []
-        identities: set[tuple[str, str, MemoryFrameRef | None]] = set()
+        identities: set[tuple[str, str]] = set()
         for failure in self.failures:
             if type(failure) is not LearningFailure:
                 raise TypeError("failures items must be LearningFailure values")
             failures.append(replace(failure))
-            identity = (
-                failure.policy_name,
-                failure.operation,
-                failure.frame_ref,
-            )
+            identity = (failure.memory, failure.operation)
             if identity in identities:
                 raise ValueError("learning failure attribution must be unique")
             identities.add(identity)
@@ -1465,9 +1415,9 @@ class LearningResult:
             if type(policy) is not PolicyCommitOutcome:
                 raise TypeError("policies items must be PolicyCommitOutcome values")
             policies.append(replace(policy))
-            if policy.policy_name in names:
-                raise ValueError("learning policy names must be unique")
-            names.add(policy.policy_name)
+            if policy.memory in names:
+                raise ValueError("learning memory keys must be unique")
+            names.add(policy.memory)
         object.__setattr__(self, "policies", tuple(policies))
         object.__setattr__(self, "failures", tuple(failures))
         if self.status == "succeeded" and self.failures:
@@ -1479,7 +1429,7 @@ class LearningResult:
 
 
 class MemoryOperationError(Exception):
-    """Typed ordinary failure raised by a memory policy or session operation."""
+    """Typed ordinary failure raised by a memory or session operation."""
 
     def __init__(
         self,
@@ -1488,7 +1438,7 @@ class MemoryOperationError(Exception):
         message: str,
         retryable: bool,
     ) -> None:
-        """Create one stable policy/session failure."""
+        """Create one stable memory or session failure."""
         self.stage = _require_string(stage, "stage")
         self.code = _require_string(code, "code")
         self.message = _require_string(message, "message")
@@ -1499,17 +1449,36 @@ class MemoryOperationError(Exception):
 
 
 class MemorySetupError(ValueError):
-    """Invalid host memory setup, optionally attributed to authored policy syntax."""
+    """Invalid host memory setup, attributed to authored declarations when known.
 
-    def __init__(self, message: str, *, origin: OriginRef | None = None) -> None:
-        """Create one setup failure with optional opaque source identity."""
+    Attributes:
+        origin (`OriginRef | None`): Primary declaration site.
+        related (`tuple[OriginRef, ...]`): Other sites of the same failure, in
+            declaration-site order.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        origin: OriginRef | None = None,
+        related: tuple[OriginRef, ...] = (),
+    ) -> None:
+        """Create one setup failure with optional opaque source identities."""
         message = _require_string(message, "message", nonempty=False)
         self.origin = _require_origin(origin)
+        if type(related) is not tuple:
+            raise TypeError("related must be a tuple of OriginRef values")
+        for item in related:
+            if item is None:
+                raise TypeError("related must not contain None")
+            _require_origin(item, "related origin")
+        self.related = related
         super().__init__(message)
 
 
 class MemoryRecallError(Exception):
-    """Ordinary recall failure attributed to an authored memory policy site."""
+    """Ordinary recall failure attributed to a memory declaration site."""
 
     def __init__(self, message: str, *, origin: OriginRef | None = None) -> None:
         """Create one recall wrapper; callers retain causes with ``raise ... from``."""
@@ -1538,19 +1507,6 @@ class EvaluationTrace(Protocol):
 
     def record_interaction(self, interaction: VisibleInteraction) -> None:
         """Append one exact visible model or tool interaction."""
-        ...
-
-
-@runtime_checkable
-class MemoryFrame(Protocol):
-    """One opened frame through which a policy recalls and proposes learning."""
-
-    def recall(self, context: RecallContext | None = None) -> str | MemoryContent:
-        """Return notes and an optional transcript source for one invocation."""
-        ...
-
-    def learn(self, context: LearnContext) -> list[MemoryMutation]:
-        """Return this frame's exact list of proposed mutations."""
         ...
 
 
@@ -1584,8 +1540,15 @@ class MemorySession(Protocol):
         """Release resources held by this run session."""
         ...
 
-    def open_frame(self, spec: MemoryFrameSpec) -> MemoryFrame:
-        """Open one effective frame idempotently within this session."""
+    def recall(self, context: RecallContext | None = None) -> str | MemoryContent:
+        """Return notes and an optional transcript source for one invocation.
+
+        ``None`` asks for the whole memory, as a host inspection does.
+        """
+        ...
+
+    def learn(self, context: LearnContext) -> list[MemoryMutation]:
+        """Return this memory's exact list of proposed mutations for one batch."""
         ...
 
     def commit(
@@ -1593,7 +1556,7 @@ class MemorySession(Protocol):
         commit_id: str,
         mutations: tuple[MemoryMutation, ...],
     ) -> None:
-        """Atomically commit one immutable policy mutation batch.
+        """Atomically commit one immutable memory mutation batch.
 
         ``commit_id`` is stable within one backward attempt, so a repeated
         commit of that attempt may be a no-op. Every later attempt that
@@ -1613,30 +1576,6 @@ class Memory(Protocol):
     def reset(self) -> None:
         """Clear current memory state according to the backend's policy."""
         ...
-
-
-@dataclass(frozen=True, slots=True)
-class ConversationKey:
-    """One authored leaf conversation within its owning memory frame."""
-
-    frame_ref: MemoryFrameRef
-    consumer_static_path: tuple[str, ...]
-
-    def __post_init__(self) -> None:
-        """Require an exact AGENT owner or a FLOW owner's strict descendant."""
-        if type(self.frame_ref) is not MemoryFrameRef:
-            raise TypeError("frame_ref must be a MemoryFrameRef")
-        ref = replace(self.frame_ref)
-        path = _require_path(self.consumer_static_path, "consumer_static_path")
-        if ref.owner is MemoryOwner.AGENT:
-            if path != ref.static_path:
-                raise ValueError("AGENT consumer must equal the frame owner path")
-        elif (
-            len(path) <= len(ref.static_path)
-            or path[: len(ref.static_path)] != ref.static_path
-        ):
-            raise ValueError("FLOW consumer must be a strict descendant of the frame")
-        object.__setattr__(self, "frame_ref", ref)
 
 
 def _require_counter(value: object, name: str, *, positive: bool = False) -> int:
@@ -1741,10 +1680,8 @@ class ConversationItem:
 
 @dataclass(frozen=True, slots=True)
 class ConversationStamp:
-    """The owner, generation, predecessor revision, and operation identity."""
+    """The conversation generation, predecessor revision, and operation identity."""
 
-    policy_name: str
-    key: ConversationKey
     invocation: ConversationInvocation
     namespace: str
     generation: int
@@ -1753,11 +1690,7 @@ class ConversationStamp:
 
     def __post_init__(self) -> None:
         """Detach exact identity carriers and validate nonnegative counters."""
-        _require_string(self.policy_name, "policy_name")
         _require_string(self.namespace, "namespace")
-        if type(self.key) is not ConversationKey:
-            raise TypeError("key must be a ConversationKey")
-        object.__setattr__(self, "key", replace(self.key))
         object.__setattr__(self, "invocation", _copy_invocation(self.invocation))
         _require_counter(self.generation, "generation")
         _require_counter(self.expected_revision, "expected_revision")
@@ -1949,7 +1882,6 @@ class ConversationView:
     namespace: str
     generation: int
     revision: int
-    key: ConversationKey
     _compatibility: _FrozenJsonObject = field(repr=False)
     items: tuple[ConversationItem, ...]
     effects: tuple[ConversationEffectState, ...]
@@ -1961,7 +1893,6 @@ class ConversationView:
         namespace: str,
         generation: int,
         revision: int,
-        key: ConversationKey,
         compatibility: JsonObject,
         items: tuple[ConversationItem, ...],
         effects: tuple[ConversationEffectState, ...],
@@ -1974,7 +1905,6 @@ class ConversationView:
             namespace (`str`): Nonempty backend namespace identity.
             generation (`int`): Nonnegative reset generation.
             revision (`int`): Nonnegative count of accepted checkpoints.
-            key (`ConversationKey`): Exact authored conversation owner.
             compatibility (`JsonObject`): Retained opaque compatibility descriptor.
             items (`tuple[ConversationItem, ...]`): Ordered items with unique IDs.
             effects (`tuple[ConversationEffectState, ...]`): Unique invocation and
@@ -1993,9 +1923,6 @@ class ConversationView:
             self, "generation", _require_counter(generation, "generation")
         )
         object.__setattr__(self, "revision", _require_counter(revision, "revision"))
-        if type(key) is not ConversationKey:
-            raise TypeError("key must be a ConversationKey")
-        object.__setattr__(self, "key", replace(key))
         object.__setattr__(
             self, "_compatibility", _freeze_json_object(compatibility, "compatibility")
         )
@@ -2071,7 +1998,6 @@ def _copy_conversation_view(value: object) -> ConversationView:
         value.namespace,
         value.generation,
         value.revision,
-        value.key,
         value.compatibility,
         value.items,
         value.effects,
@@ -2104,8 +2030,7 @@ class ConversationAdmitted:
         stamp = _copy_conversation_stamp(self.stamp, admission=True)
         baseline = _copy_conversation_view(self.baseline)
         if (
-            stamp.key != baseline.key
-            or stamp.namespace != baseline.namespace
+            stamp.namespace != baseline.namespace
             or stamp.generation != baseline.generation
             or stamp.expected_revision != baseline.revision
         ):
@@ -2297,7 +2222,7 @@ class TranscriptSource(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class MemoryContent:
-    """One frame's transient notes and optional structured transcript source.
+    """One memory's transient notes and optional structured transcript source.
 
     Args:
         text (`str`, defaults to `""`): Exact UTF-8 notes; empty text contributes
@@ -2310,8 +2235,8 @@ class MemoryContent:
         `ValueError`: Text is not valid UTF-8.
 
     Example:
-        Return `MemoryContent("Prefer concise answers.")` from a notes frame, or
-        `MemoryContent(transcript=self)` from a frame that owns a session.
+        Return `MemoryContent("Prefer concise answers.")` from a notes memory, or
+        `MemoryContent(transcript=self)` from a memory that owns a conversation.
     """
 
     text: str = ""
@@ -2356,7 +2281,7 @@ class MemoryContextRequest:
 
         Example:
             `MemoryContextRequest(recall, None, {})` supports direct evaluation
-            of text-only policies. A transcript contribution requires an identity.
+            of text-only memories. A transcript contribution requires an identity.
         """
         if type(recall) is not RecallContext:
             raise TypeError("recall must be a RecallContext")
@@ -2405,4 +2330,4 @@ class MemoryContext:
         for section in self.sections:
             if type(section) is not MemorySection:
                 raise TypeError("sections must contain MemorySection values")
-            MemorySection(section.frame_ref, section.text)
+            MemorySection(section.memory, section.text)

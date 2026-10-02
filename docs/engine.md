@@ -162,7 +162,7 @@ spawner kind means setting traits on its node; the core never gains a branch. De
 
 Node evaluation may raise (a failed assert, a bad LLM response); the engine catches the
 exception at the evaluation boundary. The dispatcher then prepares and commits a
-schema-8 `NodeFailedRecord` carrying one nested, immutable `Failure`, optional
+`NodeFailedRecord` carrying one nested, immutable `Failure`, optional
 model/tool evaluation evidence, and forward capture when retention is enabled.
 Only after the record is appended does the
 reducer expose that same `Failure` through `NodeFailed`, terminal `RunFailed`, and
@@ -198,18 +198,15 @@ RunStartedRecord | RunResumedRecord | NodeStartedRecord |
 NodeSucceededRecord | NodeRoutedRecord | NodeExpandedRecord | NodeFailedRecord |
 MemoryCommitRequestedRecord |
 MemoryCommitSucceededRecord | MemoryCommitFailedRecord |
-BackwardStartedRecord | BackwardReadyRecord | BackwardFinishedRecord |
-ConversationAdmittedRecord | ConversationEffectRequestedRecord |
-ConversationEffectObservedRecord | ConversationClosedRecord
+BackwardStartedRecord | BackwardReadyRecord | BackwardFinishedRecord
 ```
 
-New records use schema 8; readers accept exactly schemas 7 and 8. The thirteen
-pre-existing kinds retain unchanged strict payload validation in both versions,
-while the four conversation kinds require schema 8. Recovery preserves accepted
-historical schemas and canonical bytes, appending new records without rewriting
-the prefix; mixed schema-7/8 logs reopen normally. Other versions are rejected.
+Records use schema 9, and readers accept only schema 9. A log written with
+schema 7 or 8 is rejected on read with "run log schema N predates schema 9 and
+is not supported"; other versions are rejected too. Recovery preserves the
+accepted prefix's canonical bytes and appends new records without rewriting it.
 
-In both schemas, node outcome records require forward capture when the recorded run
+Node outcome records require forward capture when the recorded run
 has `learnable=True` and omit it when `learnable=False`. Optional model/tool evaluation
 evidence is separate. There is no separate forward terminal record: success is derived
 from the terminal value once the graph is quiescent. Failure is derived either from
@@ -220,19 +217,19 @@ later, and persists that failure on the causal `NodeRoutedRecord`. Replay
 structurally revalidates the route before restoring the recorded failure; a later
 explicit node failure still wins immediately.
 
-Historical conversation records remain readable as inert compatibility metadata,
-independently of `learnable`. Runtime validates their envelope, unfinished start,
-and memory scope, but does not reconstruct conversations or restore memory. They
-bind no outputs, advance no frontier, and publish no observers. SessionMemory owns
-saved conversation state. AGENT execution uses an optional turn from
-the innermost capable frame; the evaluator owns its lifetime through wrapped
-execution and cleanup, not later dispatcher acceptance. Runtime binds authored
-scope and accepted run/start identity without interpreting provider messages.
-Learned notes reuse the existing frame learning/commit/recall lifecycle; they do
-not add runtime conversation state. API summary selection and derived cache also
-belong to SessionMemory, with injected adapter/model callbacks. Optional SQLite
-storage belongs to the memory backends. The CLI supplies declared built-in
-policies lazily and owns their lifetime; runtime never constructs them.
+SessionMemory owns saved conversation state. Runtime does not reconstruct
+conversations or restore memory from the log. An AGENT that declares a session
+memory gets an optional turn from that memory key. Every call site of that
+AGENT shares the key's one conversation, in FIFO admission order. The evaluator
+owns the turn's lifetime through wrapped execution and cleanup, not later
+dispatcher acceptance. Runtime binds authored scope and accepted run/start
+identity without interpreting provider messages. Learned notes reuse the
+existing per-memory learning/commit/recall lifecycle; they do not add runtime
+conversation state. API summary selection and derived cache also belong to
+SessionMemory, with injected adapter/model callbacks. Optional SQLite storage
+belongs to the memory backends, which open it on first use. Hosts build memory
+with `build_memories`; `run_flow` never constructs it. `composer run` uses the
+same builder, in RAM or under `--memory-root`.
 See [SessionMemory foundation](api.md#sessionmemory-foundation).
 
 When retention is enabled, the trace keeps the actual terminal producer and
@@ -261,25 +258,28 @@ call from its accepted prompt, locals, evidence, and effective configuration.
 No default, render, recall, expression function, or forward node is rerun.
 
 The driver validates root feedback before accepting `BackwardStartedRecord`.
-It completes the reverse fold, projects every enabled frame's owner context,
-and runs frame learners in recorded layout order. All proposals must be valid
-before one `BackwardReadyRecord`; a known computation/learner failure can finish
-earlier, and no policy commits occur before Ready. Each enabled policy then gets
-one ordered batch, including an empty one, with a durable
-`MemoryCommitRequestedRecord` before the backend call and an accepted success or
-failure observation afterward. Commit records require a positive `attempt_id`.
-A known commit failure stops later policies. `BackwardFinishedRecord` records
+It completes the reverse fold, builds one context per memory key from the
+recorded memory stacks, and runs one learner per memory key, in sorted key
+order. All proposals must be valid before one `BackwardReadyRecord`; a known
+computation/learner failure can finish earlier, and no memory commits occur
+before Ready. Each memory key then gets one ordered batch, including an empty
+one, with a durable `MemoryCommitRequestedRecord` before the backend call and an
+accepted success or failure observation afterward. Commit records require a
+positive `attempt_id`, and every attempt uses `ac-memory-v3` commit IDs. A known
+commit failure stops later memories. `BackwardFinishedRecord` records
 the separate final outcome, never replacing the forward output or failure.
 
 `runtime.learning` owns shared pure message ordering/transfer validation,
 root projections, attempt state, and owner-context construction. Ready replay
 validates the exact accepted occurrence inventory and routes without invoking
-callbacks or materializing transcript contexts. Owner contexts include all
-accepted outcome kinds and empty/unexecuted frames. Their feedback keeps original
-root-relative execution coordinates; memory scopes select receiver frames.
+callbacks or materializing transcript contexts. Memory contexts include all
+accepted outcome kinds; a memory without executions gets an empty context. Their
+feedback keeps original root-relative execution coordinates; each occurrence's
+recorded memory stack selects the keys that receive it. Unattributed root
+feedback goes only to memories declared on the root flow.
 
-No effective feedback means no AGENT backward model work, but all enabled frame
-learners still run. Every explicit call starts a new attempt and recomputes it
+No effective feedback means no AGENT backward model work, but every memory
+key's learner still runs. Every explicit call starts a new attempt and recomputes it
 with fresh sessions from the original snapshots; Ready proposals are never
 resumed. An unfinished earlier attempt is first closed as interrupted. An
 unconfirmed request remains `unknown`, including when the
@@ -327,7 +327,7 @@ do not leak into the dispatcher or later worker calls.
 | `node.forward(inputs, **caps) → NodeResult` | the one kind-specific body step |
 | `node.is_spawner` | may it return `Grow`? |
 | read-boundary traits | `binds_per_item`, `bind_reserved`, `reserved_wiring_keys`, `needs_stop_event`, `needs_tools`, `needs_live_events` |
-| memory/evidence traits | `needs_memory_context` opts into recalled notes and an optional transcript; `needs_skills` receives the run's host `skills=` mapping; `needs_evaluation_trace` opts into model/tool evidence when `learnable=True`; `memory_scope` supplies optional memory context and validates recalled frames |
+| memory/evidence traits | `needs_memory_context` opts into recalled notes and an optional transcript; `needs_skills` receives the run's host `skills=` mapping; `needs_evaluation_trace` opts into model/tool evidence when `learnable=True`; `memory_scope` supplies optional memory context and validates recalled memory keys |
 | forward capture | recorded `learnable=True` retains general binding data independently of memory scope |
 | output metadata | `output_contract` validates committed values; `commit_as` selects a logical success target |
 | growth traits | `grow_depth_delta`, `is_loop` |

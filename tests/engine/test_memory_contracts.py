@@ -13,28 +13,24 @@ import pytest
 
 from agent_composer.diagnostics import OriginRef
 from agent_composer.memory import (
+    DeclSite,
+    EvaluationEvidence,
     JsonObject,
     LearnContext,
     LearningFailure,
     LearningResult,
     Memory,
-    MemoryBoundary,
-    MemoryBoundaryKind,
+    MemoryDecl,
     MemoryEpisode,
     MemoryEpisodeStatus,
-    MemoryFrame,
-    MemoryFrameRef,
-    MemoryFrameSpec,
     MemoryMutation,
     MemoryOccurrenceKind,
-    MemoryOccurrenceRef,
     MemoryOccurrenceSegment,
     MemoryOperationError,
     MemoryOperationFailure,
-    MemoryOwner,
-    MemoryPolicySpec,
     MemoryRecallError,
     MemoryScope,
+    MemorySection,
     MemorySession,
     MemorySetupError,
     ModelTextInteraction,
@@ -42,45 +38,41 @@ from agent_composer.memory import (
     RecallContext,
     ToolCallInteraction,
 )
+from agent_composer.runtime.contracts import BackwardFailure, MemoryProposal
 
 
-def _flow_ref() -> MemoryFrameRef:
-    """Return one stable flow-frame identity for contract tests."""
-    return MemoryFrameRef("root", ("root", "child"), MemoryOwner.FLOW)
+def _decl(config: Any, origin: OriginRef | None = None) -> MemoryDecl:
+    """Build a custom-type declaration, so the built-in key allowlist does not apply."""
+    return MemoryDecl("notes", "custom", config, DeclSite((), ("root",), None), origin)
 
 
-def _agent_ref() -> MemoryFrameRef:
-    """Return one stable agent-frame identity for contract tests."""
-    return MemoryFrameRef("root", ("root", "child", "agent"), MemoryOwner.AGENT)
+_AGENT_PATH = ("root", "child", "agent")
+"""One authored AGENT locator for episode contract tests."""
 
 
 def test_identity_values_are_frozen_structured_products() -> None:
-    """Static frame identity stays separate from dynamic occurrence identity."""
-    frame = _agent_ref()
-    segment = MemoryOccurrenceSegment(
-        MemoryOccurrenceKind.MAP_ITEM,
-        ("root", "child"),
-        2,
-    )
-    occurrence = MemoryOccurrenceRef(frame, (segment,))
-    boundary = MemoryBoundary(MemoryBoundaryKind.START, _flow_ref())
-    scope = MemoryScope(
-        root_flow_id="root",
-        static_path=("root", "child", "agent"),
-        frame_stack=(_flow_ref(), frame),
-        occurrence_path=(segment,),
-    )
+    """A scope holds its keys and occurrence path as frozen values."""
+    scope_segment = MemoryOccurrenceSegment(MemoryOccurrenceKind.MAP_ITEM, ("child",), 2)
+    scope = MemoryScope(("child", "agent"), ("outer", "local"), (scope_segment,))
 
-    assert frame == MemoryFrameRef(
-        "root", ("root", "child", "agent"), MemoryOwner.AGENT
-    )
-    assert occurrence == MemoryOccurrenceRef(frame, (segment,))
-    assert scope.frame_stack == (_flow_ref(), frame)
-    assert scope.occurrence_path == (segment,)
-    assert scope.boundary is None
-    assert boundary.frame_ref == _flow_ref()
+    assert scope.memories == ("outer", "local")
+    assert scope.occurrence_path == (scope_segment,)
     with pytest.raises(FrozenInstanceError):
-        frame.root_flow_id = "other"  # type: ignore[misc]
+        scope.memories = ("other",)  # type: ignore[misc]
+
+
+def test_memory_scope_has_no_boundary() -> None:
+    """START and END are marked by ExecutionScope; memory scopes carry no boundary."""
+    import agent_composer.memory as memory
+    import agent_composer.memory.contracts as contracts
+
+    assert not hasattr(memory, "MemoryBoundary")
+    assert not hasattr(memory, "MemoryBoundaryKind")
+    assert not hasattr(contracts, "MemoryBoundary")
+    assert not hasattr(contracts, "MemoryBoundaryKind")
+    assert "boundary" not in MemoryScope.__dataclass_fields__
+    with pytest.raises(TypeError):
+        MemoryScope("root", ("root", "child"), (), (), None)  # type: ignore[call-arg]
 
 
 @pytest.mark.parametrize(
@@ -113,34 +105,16 @@ def test_identity_values_are_frozen_structured_products() -> None:
             "index",
         ),
         (
-            lambda: MemoryFrameRef("", ("root",), MemoryOwner.FLOW),
-            ValueError,
-            "root_flow_id",
-        ),
-        (
-            lambda: MemoryFrameRef("root", ("",), MemoryOwner.FLOW),
+            lambda: MemoryScope(("",)),
             ValueError,
             "static_path",
         ),
         (
-            lambda: MemoryOccurrenceRef(_agent_ref(), []),  # type: ignore[arg-type]
+            lambda: MemoryScope(("root",), (), []),  # type: ignore[arg-type]
             TypeError,
             "occurrence_path",
         ),
-        (
-            lambda: MemoryBoundary(MemoryBoundaryKind.END, _agent_ref()),
-            ValueError,
-            "flow",
-        ),
-        (
-            lambda: MemoryScope(
-                "other",
-                ("root",),
-                frame_stack=(_flow_ref(),),
-            ),
-            ValueError,
-            "root_flow_id",
-        ),
+        (lambda: MemoryScope(("root",), ("a", "a")), ValueError, "unique"),
     ],
 )
 def test_identity_values_reject_ambiguous_paths_and_indices(
@@ -153,24 +127,12 @@ def test_identity_values_reject_ambiguous_paths_and_indices(
         factory()
 
 
-def test_occurrence_references_require_a_comparable_first_static_path() -> None:
-    """A frame occurrence cannot borrow an unrelated dynamic callsite path."""
-    unrelated = MemoryOccurrenceSegment(
-        MemoryOccurrenceKind.MAP_ITEM,
-        ("root", "other"),
-        0,
-    )
-
-    with pytest.raises(ValueError, match="lexically comparable"):
-        MemoryOccurrenceRef(_agent_ref(), (unrelated,))
-
-
 @pytest.mark.parametrize(
     "segment_path",
     [
-        ("root", "other"),
-        ("root", "child", "agent"),
-        ("root", "child", "agent", "inner"),
+        ("other",),
+        ("child", "agent"),
+        ("child", "agent", "inner"),
     ],
 )
 def test_scope_occurrence_path_must_strictly_contain_the_node(
@@ -184,36 +146,11 @@ def test_scope_occurrence_path_must_strictly_contain_the_node(
     )
 
     with pytest.raises(ValueError, match="innermost occurrence segment"):
-        MemoryScope(
-            "root",
-            ("root", "child", "agent"),
-            occurrence_path=(segment,),
-        )
-
-
-class _ForgedFrameRef(MemoryFrameRef):
-    """A frame-reference subclass that bypasses base validation."""
-
-    def __post_init__(self) -> None:
-        """Deliberately skip validation for nested-carrier hardening tests."""
+        MemoryScope(("child", "agent"), occurrence_path=(segment,))
 
 
 class _ForgedOccurrenceSegment(MemoryOccurrenceSegment):
     """An occurrence-segment subclass that bypasses base validation."""
-
-    def __post_init__(self) -> None:
-        """Deliberately skip validation for nested-carrier hardening tests."""
-
-
-class _ForgedBoundary(MemoryBoundary):
-    """A boundary subclass that bypasses base validation."""
-
-    def __post_init__(self) -> None:
-        """Deliberately skip validation for nested-carrier hardening tests."""
-
-
-class _ForgedOccurrenceRef(MemoryOccurrenceRef):
-    """An occurrence-reference subclass that bypasses base validation."""
 
     def __post_init__(self) -> None:
         """Deliberately skip validation for nested-carrier hardening tests."""
@@ -225,67 +162,43 @@ class _ForgedEpisode(MemoryEpisode):
 
 def test_nested_memory_carriers_reject_forged_subclass_values() -> None:
     """Nested memory products accept only exact, already-validated value types."""
-    forged_frame = _ForgedFrameRef("root", (), MemoryOwner.AGENT)
     forged_segment = _ForgedOccurrenceSegment(
         MemoryOccurrenceKind.MAP_ITEM,
         ("root", "mapped"),
         -1,
     )
-    forged_boundary = _ForgedBoundary(MemoryBoundaryKind.START, _agent_ref())
-    forged_occurrence = _ForgedOccurrenceRef(_agent_ref(), ())
     forged_episode = object.__new__(_ForgedEpisode)
     object.__setattr__(forged_episode, "run_id", "")
 
-    with pytest.raises(TypeError, match="frame_ref"):
-        MemoryOccurrenceRef(forged_frame)
     with pytest.raises(TypeError, match="occurrence_path"):
-        MemoryOccurrenceRef(_agent_ref(), (forged_segment,))
-    with pytest.raises(TypeError, match="frame_ref"):
-        MemoryBoundary(MemoryBoundaryKind.START, forged_frame)
-    with pytest.raises(TypeError, match="frame_stack"):
-        MemoryScope("root", ("root",), frame_stack=(forged_frame,))
-    with pytest.raises(TypeError, match="boundary"):
-        MemoryScope("root", ("root",), boundary=forged_boundary)
-    with pytest.raises(TypeError, match="ref"):
-        MemoryFrameSpec(forged_frame, "reflective", {})
-    with pytest.raises(TypeError, match="occurrence"):
-        MemoryEpisode(
-            "run",
-            forged_occurrence,
-            ("root", "agent"),
-            MemoryEpisodeStatus.SUCCEEDED,
-            {},
-        )
-    with pytest.raises(TypeError, match="frame_ref"):
-        LearnContext("run", forged_frame, ())
+        MemoryScope(("mapped", "x"), occurrence_path=(forged_segment,))
+    with pytest.raises(TypeError, match="occurrence_path"):
+        MemoryEpisode("run", (forged_segment,), ("agent",), MemoryEpisodeStatus.SUCCEEDED, {})
     with pytest.raises(TypeError, match="episodes"):
-        LearnContext("run", _agent_ref(), (forged_episode,))
-    with pytest.raises(TypeError, match="frame_ref"):
-        MemoryMutation("mutation", forged_frame, {})
+        LearnContext("run", "notes", (forged_episode,))
 
 
-def test_policy_specs_preserve_origin_and_isolate_canonical_json() -> None:
-    """Caller mutation cannot change a frozen policy specification."""
-    origin = OriginRef("policy")
+def test_memory_decls_preserve_origin_and_isolate_canonical_json() -> None:
+    """Caller mutation cannot change a frozen memory declaration."""
+    origin = OriginRef("decl")
     source: JsonObject = {
         "z": [{"enabled": True}],
         "a": {"threshold": 0.5},
     }
-    policy = MemoryPolicySpec("reflective", source, origin)
+    decl = _decl(source, origin)
 
     source["z"][0]["enabled"] = False  # type: ignore[index]
-    first = policy.config
+    first = decl.config
     first["a"]["threshold"] = 1.0  # type: ignore[index]
 
-    assert policy.name == "reflective"
-    assert policy.origin is origin
-    assert policy.config == {
+    assert decl.name == "notes"
+    assert decl.origin is origin
+    assert decl.config == {
         "a": {"threshold": 0.5},
         "z": [{"enabled": True}],
     }
-    assert list(policy.config) == ["a", "z"]
-    assert policy == MemoryPolicySpec(
-        "reflective",
+    assert list(decl.config) == ["a", "z"]
+    assert decl == _decl(
         {"a": {"threshold": 0.5}, "z": [{"enabled": True}]},
         origin,
     )
@@ -294,11 +207,8 @@ def test_policy_specs_preserve_origin_and_isolate_canonical_json() -> None:
 def test_json_scalar_identity_preserves_exact_types_at_every_depth() -> None:
     """Boolean, integer, and float JSON values remain distinct frozen values."""
     values = (True, 1, 1.0)
-    policies = tuple(
-        MemoryPolicySpec(
-            "reflective",
-            {"nested": [value, {"value": value}]},
-        )
+    decls = tuple(
+        _decl({"nested": [value, {"value": value}]})
         for value in values
     )
     contexts = tuple(
@@ -306,24 +216,24 @@ def test_json_scalar_identity_preserves_exact_types_at_every_depth() -> None:
         for value in values
     )
     mutations = tuple(
-        MemoryMutation("same", _agent_ref(), [value, {"value": value}])
+        MemoryMutation("same", [value, {"value": value}])
         for value in values
     )
 
-    assert len(set(policies)) == 3
-    assert len({hash(policy) for policy in policies}) == 3
+    assert len(set(decls)) == 3
+    assert len({hash(decl) for decl in decls}) == 3
     assert len(set(contexts)) == 3
     assert len({hash(context) for context in contexts}) == 3
     assert len(set(mutations)) == 3
     assert len({hash(mutation) for mutation in mutations}) == 3
 
-    for expected_type, policy, context, mutation in zip(
+    for expected_type, decl, context, mutation in zip(
         (bool, int, float),
-        policies,
+        decls,
         contexts,
         mutations,
     ):
-        nested = policy.config["nested"]
+        nested = decl.config["nested"]
         assert type(nested[0]) is expected_type  # type: ignore[index]
         assert type(nested[1]["value"]) is expected_type  # type: ignore[index]
         assert type(context.inputs["value"]) is expected_type
@@ -355,7 +265,7 @@ class _ListSubclass(list[object]):
 def test_json_contracts_reject_non_exact_or_non_finite_values(config: Any) -> None:
     """Only exact, finite JSON shapes may cross the memory boundary."""
     with pytest.raises((TypeError, ValueError), match="JSON|json|finite|key"):
-        MemoryPolicySpec("reflective", config)
+        _decl(config)
 
 
 def test_json_contracts_reject_cycles() -> None:
@@ -364,15 +274,15 @@ def test_json_contracts_reject_cycles() -> None:
     config["self"] = config
 
     with pytest.raises(ValueError, match="circular"):
-        MemoryPolicySpec("reflective", config)
+        _decl(config)
 
 
 @pytest.mark.parametrize(
     "factory",
     [
         lambda: ModelTextInteraction(chr(0xD800)),
-        lambda: MemoryPolicySpec("reflective", {"text": chr(0xD800)}),
-        lambda: MemoryPolicySpec("reflective", {chr(0xD800): "text"}),
+        lambda: _decl({"text": chr(0xD800)}),
+        lambda: _decl({chr(0xD800): "text"}),
     ],
 )
 def test_memory_strings_must_have_a_canonical_utf8_representation(factory: Any) -> None:
@@ -409,17 +319,17 @@ def test_context_episode_and_mutation_keep_json_snapshots() -> None:
     context = RecallContext("base", "prompt", inputs, ("root", "agent"))
     episode = MemoryEpisode(
         run_id="run",
-        occurrence=MemoryOccurrenceRef(_agent_ref()),
+        occurrence_path=(),
         owner_static_path=("root", "child", "agent"),
         status=MemoryEpisodeStatus.SUCCEEDED,
         inputs=inputs,
         output=output,
         interactions=(interaction,),
     )
-    mutation = MemoryMutation("m1", _agent_ref(), payload)
+    mutation = MemoryMutation("m1", payload)
     learn = LearnContext(
         "run",
-        _agent_ref(),
+        "notes",
         (episode,),
         feedback=({"score": 1},),
     )
@@ -448,7 +358,7 @@ def test_episode_status_enforces_output_or_failure_shape() -> None:
     """Accepted success and failure episodes cannot carry conflicting outcomes."""
     failed = MemoryEpisode(
         run_id="run",
-        occurrence=MemoryOccurrenceRef(_agent_ref()),
+        occurrence_path=(),
         owner_static_path=("root", "child", "agent"),
         status=MemoryEpisodeStatus.FAILED,
         inputs={},
@@ -460,7 +370,7 @@ def test_episode_status_enforces_output_or_failure_shape() -> None:
     with pytest.raises(ValueError, match="failure"):
         MemoryEpisode(
             run_id="run",
-            occurrence=MemoryOccurrenceRef(_agent_ref()),
+            occurrence_path=(),
             owner_static_path=("root", "child", "agent"),
             status=MemoryEpisodeStatus.FAILED,
             inputs={},
@@ -468,7 +378,7 @@ def test_episode_status_enforces_output_or_failure_shape() -> None:
     with pytest.raises(ValueError, match="output"):
         MemoryEpisode(
             run_id="run",
-            occurrence=MemoryOccurrenceRef(_agent_ref()),
+            occurrence_path=(),
             owner_static_path=("root", "child", "agent"),
             status=MemoryEpisodeStatus.FAILED,
             inputs={},
@@ -478,7 +388,7 @@ def test_episode_status_enforces_output_or_failure_shape() -> None:
     with pytest.raises(ValueError, match="failure"):
         MemoryEpisode(
             run_id="run",
-            occurrence=MemoryOccurrenceRef(_agent_ref()),
+            occurrence_path=(),
             owner_static_path=("root", "child", "agent"),
             status=MemoryEpisodeStatus.SUCCEEDED,
             inputs={},
@@ -490,26 +400,25 @@ def test_episode_status_enforces_output_or_failure_shape() -> None:
 @pytest.mark.parametrize("sequence", [0, 17])
 def test_episode_execution_sequence_is_optional_and_survives_context_copy(sequence) -> None:
     """Physical identity extends the existing positional host constructor."""
-    occurrence = MemoryOccurrenceRef(_agent_ref())
-    legacy = MemoryEpisode("run", occurrence, _agent_ref().static_path,
+    legacy = MemoryEpisode("run", (), _AGENT_PATH,
                            MemoryEpisodeStatus.SUCCEEDED, {}, "answer", None, (), None, None, ())
     assert legacy.execution_seq is None
     inputs = {"items": [1]}
-    episode = MemoryEpisode("run", occurrence, _agent_ref().static_path,
+    episode = MemoryEpisode("run", (), _AGENT_PATH,
                             MemoryEpisodeStatus.SUCCEEDED, inputs, "answer", execution_seq=sequence)
-    context = LearnContext("run", _agent_ref(), (episode,))
+    context = LearnContext("run", "notes", (episode,))
     inputs["items"].append(2)
     assert context.episodes[0].execution_seq == sequence
     assert context.episodes[0].inputs == {"items": [1]}
     object.__setattr__(episode, "execution_seq", True)
     with pytest.raises(TypeError, match="execution_seq"):
-        LearnContext("run", _agent_ref(), (episode,))
+        LearnContext("run", "notes", (episode,))
 
 
 @pytest.mark.parametrize("sequence", [False, True, -1, 1.0, "1"])
 def test_episode_rejects_nonphysical_execution_sequences(sequence) -> None:
     with pytest.raises((TypeError, ValueError), match="execution_seq"):
-        MemoryEpisode("run", MemoryOccurrenceRef(_agent_ref()), _agent_ref().static_path,
+        MemoryEpisode("run", (), _AGENT_PATH,
                       MemoryEpisodeStatus.SUCCEEDED, {}, execution_seq=sequence)
 
 
@@ -518,65 +427,28 @@ def test_episode_rejects_integer_subclass_execution_sequence() -> None:
         pass
 
     with pytest.raises(TypeError, match="execution_seq"):
-        MemoryEpisode("run", MemoryOccurrenceRef(_agent_ref()), _agent_ref().static_path,
+        MemoryEpisode("run", (), _AGENT_PATH,
                       MemoryEpisodeStatus.SUCCEEDED, {}, execution_seq=Sequence(1))
 
 
-def test_learn_context_requires_frame_local_episode_identity() -> None:
-    """A learning batch contains only episodes assigned to its run and frame."""
-    outer_flow_episode = MemoryEpisode(
-        run_id="run",
-        occurrence=MemoryOccurrenceRef(_flow_ref()),
-        owner_static_path=("root", "child", "agent"),
-        status=MemoryEpisodeStatus.SUCCEEDED,
-        inputs={},
-        output="answer",
-    )
-    context = LearnContext("run", _flow_ref(), (outer_flow_episode,))
-
-    assert context.episodes == (outer_flow_episode,)
-    assert context.episodes[0].owner_static_path == ("root", "child", "agent")
-
+def test_learn_context_requires_episodes_of_its_run() -> None:
+    """A learning batch contains only episodes of its own run."""
     wrong_run = MemoryEpisode(
         run_id="other-run",
-        occurrence=MemoryOccurrenceRef(_flow_ref()),
+        occurrence_path=(),
         owner_static_path=("root", "child", "agent"),
         status=MemoryEpisodeStatus.SUCCEEDED,
         inputs={},
         output="answer",
     )
     with pytest.raises(ValueError, match="run_id"):
-        LearnContext("run", _flow_ref(), (wrong_run,))
-
-    wrong_frame = MemoryEpisode(
-        run_id="run",
-        occurrence=MemoryOccurrenceRef(_agent_ref()),
-        owner_static_path=("root", "child", "agent"),
-        status=MemoryEpisodeStatus.SUCCEEDED,
-        inputs={},
-        output="answer",
-    )
-    with pytest.raises(ValueError, match="frame_ref"):
-        LearnContext("run", _flow_ref(), (wrong_frame,))
-
-
-class _FakeFrame:
-    """A small structural implementation of the frame protocol."""
-
-    def recall(self, context: RecallContext | None = None) -> str:
-        """Return all memory for ``None`` and one query marker otherwise."""
-        return "all" if context is None else context.prompt
-
-    def learn(self, context: LearnContext) -> list[MemoryMutation]:
-        """Return the protocol's intentional mutable proposal list."""
-        return [MemoryMutation("learned", context.frame_ref, {"run": context.run_id})]
+        LearnContext("run", "notes", (wrong_run,))
 
 
 class _FakeSession:
     """A small structural implementation of the run-session protocol."""
 
-    def __init__(self, frame: MemoryFrame) -> None:
-        self._frame = frame
+    def __init__(self) -> None:
         self._snapshot: JsonObject = {"namespace": "test"}
         self.closed = False
 
@@ -602,10 +474,13 @@ class _FakeSession:
         """Mark this fake session closed."""
         self.closed = True
 
-    def open_frame(self, spec: MemoryFrameSpec) -> MemoryFrame:
-        """Return the fake frame for any valid frame specification."""
-        assert spec.policy_name == "reflective"
-        return self._frame
+    def recall(self, context: RecallContext | None = None) -> str:
+        """Return all memory for ``None`` and one query marker otherwise."""
+        return "all" if context is None else context.prompt
+
+    def learn(self, context: LearnContext) -> list[MemoryMutation]:
+        """Return the protocol's intentional mutable proposal list."""
+        return [MemoryMutation("learned", {"run": context.run_id})]
 
     def commit(
         self,
@@ -621,13 +496,12 @@ class _FakeMemory:
     """A small structural implementation of the memory protocol."""
 
     def __init__(self) -> None:
-        self.frame = _FakeFrame()
         self.reset_count = 0
 
     def open_run(self, *, snapshot: JsonObject | None = None) -> MemorySession:
         """Open one fake session, accepting a recorded snapshot if supplied."""
         assert snapshot is None or snapshot["namespace"] == "test"
-        return _FakeSession(self.frame)
+        return _FakeSession()
 
     def reset(self) -> None:
         """Record one reset request."""
@@ -636,18 +510,16 @@ class _FakeMemory:
 
 def test_protocols_accept_narrow_structural_implementations() -> None:
     """Backends implement source-neutral protocols without inheriting engine code."""
-    frame = _FakeFrame()
     memory = _FakeMemory()
     session = memory.open_run()
-    context = LearnContext("run", _agent_ref(), ())
+    context = LearnContext("run", "notes", ())
 
-    assert isinstance(frame, MemoryFrame)
     assert isinstance(session, MemorySession)
     assert isinstance(memory, Memory)
-    assert frame.recall() == "all"
-    assert frame.recall(None) == "all"
-    assert isinstance(frame.learn(context), list)
-    assert frame.learn(context)[0].payload == {"run": "run"}
+    assert session.recall() == "all"
+    assert session.recall(None) == "all"
+    assert isinstance(session.learn(context), list)
+    assert session.learn(context)[0].payload == {"run": "run"}
     returned = session.snapshot
     returned["namespace"] = "changed"
     assert session.snapshot == {"namespace": "test"}
@@ -689,7 +561,6 @@ def test_learning_result_keeps_primary_independent_failure_attribution() -> None
         "reflective",
         "learn",
         MemoryOperationFailure("learn", "busy", "try later", True),
-        _agent_ref(),
     )
     final = LearningFailure(
         "profile",
@@ -703,15 +574,6 @@ def test_learning_result_keeps_primary_independent_failure_attribution() -> None
     assert result.failures == (retryable, final)
     assert LearningResult("failed", (retryable,)).failures == (retryable,)
     assert LearningResult("incomplete", (final,)).failures == (final,)
-    with pytest.raises(ValueError, match="frame_ref"):
-        LearningFailure("reflective", "learn", final.failure)
-    with pytest.raises(ValueError, match="cannot carry"):
-        LearningFailure(
-            "reflective",
-            "commit",
-            final.failure,
-            _agent_ref(),
-        )
 
 
 def test_memory_recall_error_preserves_an_explicit_exception_cause() -> None:
@@ -740,11 +602,11 @@ def test_memory_origins_revalidate_subclass_keys_without_losing_identity() -> No
     """Valid origin subclasses survive while forged invalid keys fail closed."""
     valid = _ForgedOrigin("valid")
 
-    assert MemoryPolicySpec("reflective", {}, valid).origin is valid
+    assert _decl({}, valid).origin is valid
     with pytest.raises(ValueError, match="origin key"):
-        MemoryPolicySpec("reflective", {}, _ForgedOrigin(""))
+        _decl({}, _ForgedOrigin(""))
     with pytest.raises(ValueError, match="origin key"):
-        MemoryPolicySpec("reflective", {}, _ForgedOrigin(1))  # type: ignore[arg-type]
+        _decl({}, _ForgedOrigin(1))  # type: ignore[arg-type]
 
 
 def test_importing_memory_contracts_does_not_load_heavy_backends() -> None:
@@ -789,7 +651,7 @@ def test_policy_commit_outcome_keeps_protocol_identity_and_backend_hints(status,
 
     failure = MemoryOperationFailure("backend-stage", "retry", "Try later.", True) if has_failure else None
     outcome = PolicyCommitOutcome("history", status, commit_id, failure)
-    assert (outcome.policy_name, outcome.status, outcome.commit_id, outcome.failure) == (
+    assert (outcome.memory, outcome.status, outcome.commit_id, outcome.failure) == (
         "history", status, commit_id, failure,
     )
     with pytest.raises(FrozenInstanceError):
@@ -829,12 +691,12 @@ def test_policy_commit_outcome_rejects_inconsistent_optional_fields(status, comm
         PolicyCommitOutcome("history", status, commit_id, failure)
 
 
-@pytest.mark.parametrize("field", ["policy_name", "status", "commit_id"])
+@pytest.mark.parametrize("field", ["memory", "status", "commit_id"])
 @pytest.mark.parametrize("invalid", ["", "\ud800", 1, True])
 def test_policy_commit_outcome_requires_exact_valid_unicode_identities(field, invalid):
     from agent_composer.memory import PolicyCommitOutcome
 
-    values = {"policy_name": "history", "status": "unknown", "commit_id": "commit-1"}
+    values = {"memory": "history", "status": "unknown", "commit_id": "commit-1"}
     values[field] = invalid
     with pytest.raises((TypeError, ValueError)):
         PolicyCommitOutcome(**values)
@@ -864,3 +726,119 @@ def test_learning_result_revalidates_exact_nested_policy_carriers():
     object.__setattr__(failure, "retryable", 1)
     with pytest.raises(TypeError, match="retryable"):
         PolicyCommitOutcome("history", "failed", "commit-1", failure)
+
+
+def test_scope_carries_a_root_relative_path_and_memory_keys() -> None:
+    segment = MemoryOccurrenceSegment(MemoryOccurrenceKind.MAP_ITEM, ("child",), 2)
+    scope = MemoryScope(("child", "agent"), ("notes", "chat"), (segment,))
+    assert (scope.static_path, scope.memories, scope.occurrence_path) == (
+        ("child", "agent"),
+        ("notes", "chat"),
+        (segment,),
+    )
+    assert MemoryScope(("plain",)).memories == ()
+    with pytest.raises(ValueError, match="unique"):
+        MemoryScope(("agent",), ("notes", "notes"))
+    with pytest.raises(ValueError, match="memories"):
+        MemoryScope(("agent",), ("",))
+    with pytest.raises(TypeError, match="memories"):
+        MemoryScope(("agent",), ["notes"])  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="innermost occurrence segment"):
+        MemoryScope(("child",), (), (segment,))
+
+
+def test_sections_follow_the_scope_key_order() -> None:
+    segment = MemoryOccurrenceSegment(MemoryOccurrenceKind.LOOP_ITERATION, ("loop",), 0)
+    scope = MemoryScope(("loop", "agent"), ("notes", "chat"), (segment,))
+    outer, inner = MemorySection("notes", "outer"), MemorySection("chat", "inner")
+    evidence = EvaluationEvidence(scope, {}, "base", "prompt", (outer, inner))
+    assert [section.memory for section in evidence.memory_sections] == ["notes", "chat"]
+    with pytest.raises(ValueError, match="scope.memories order"):
+        EvaluationEvidence(scope, {}, "base", "prompt", (inner, outer))
+    with pytest.raises(ValueError, match="unique"):
+        EvaluationEvidence(scope, {}, "base", "prompt", (outer, MemorySection("notes", "b")))
+    with pytest.raises(ValueError, match="appear in scope.memories"):
+        EvaluationEvidence(scope, {}, "base", "prompt", (MemorySection("other", "x"),))
+    with pytest.raises(ValueError, match="memory"):
+        MemorySection("", "text")
+
+
+def test_episodes_contexts_mutations_and_failures_name_the_memory_key() -> None:
+    segment = MemoryOccurrenceSegment(MemoryOccurrenceKind.LOOP_ITERATION, ("loop",), 0)
+    episode = MemoryEpisode(
+        "run",
+        (segment,),
+        ("loop", "agent"),
+        MemoryEpisodeStatus.SUCCEEDED,
+        {},
+        output="answer",
+        memory_sections=(MemorySection("notes", "outer"),),
+    )
+    assert episode.occurrence_path == (segment,)
+    with pytest.raises(ValueError, match="innermost occurrence segment"):
+        MemoryEpisode("run", (segment,), ("other",), MemoryEpisodeStatus.SUCCEEDED, {})
+    context = LearnContext("run", "notes", (episode,), feedback=("good",))
+    assert (context.memory, context.episodes, context.feedback) == ("notes", (episode,), ("good",))
+    with pytest.raises(ValueError, match="memory"):
+        LearnContext("run", "", ())
+    mutation = MemoryMutation("m1", {"add": 1})
+    assert (mutation.mutation_id, mutation.payload) == ("m1", {"add": 1})
+    assert not hasattr(mutation, "frame_ref")
+    proposal = MemoryProposal("notes", (mutation,))
+    assert proposal.memory == "notes" and proposal.mutations == (mutation,)
+    with pytest.raises(ValueError, match="unique"):
+        MemoryProposal("notes", (mutation, MemoryMutation("m1", {})))
+    cause = MemoryOperationFailure("learn", "notes.failed", "boom", False)
+    assert LearningFailure("notes", "learn", cause).memory == "notes"
+    assert not hasattr(LearningFailure("notes", "commit", cause), "frame_ref")
+    assert not hasattr(BackwardFailure("learn", "x", "y", memory="notes"), "frame_ref")
+
+
+class _KeySession:
+    """A structural run session that recalls and learns without frames."""
+
+    snapshot: JsonObject = {}
+
+    def __enter__(self) -> _KeySession:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
+
+    def close(self) -> None:
+        """Release nothing."""
+
+    def recall(self, context: RecallContext | None = None) -> str:
+        return "all" if context is None else context.prompt
+
+    def learn(self, context: LearnContext) -> list[MemoryMutation]:
+        return [MemoryMutation("learned", {"memory": context.memory})]
+
+    def commit(self, commit_id: str, mutations: tuple[MemoryMutation, ...]) -> None:
+        assert commit_id and isinstance(mutations, tuple)
+
+
+def test_session_protocol_recalls_and_learns_without_frames() -> None:
+    session = _KeySession()
+    assert isinstance(session, MemorySession)
+    assert session.learn(LearnContext("run", "notes", ()))[0].payload == {"memory": "notes"}
+    assert "open_frame" not in MemorySession.__dict__
+
+
+def test_frame_types_are_gone() -> None:
+    import agent_composer.memory as memory
+    import agent_composer.memory.contracts as contracts
+    import agent_composer.runtime.contracts as runtime_contracts
+
+    for name in (
+        "MemoryFrame",
+        "MemoryFrameRef",
+        "MemoryFrameSpec",
+        "MemoryOccurrenceRef",
+        "MemoryOwner",
+    ):
+        assert name not in memory.__all__
+        assert not hasattr(memory, name)
+        assert not hasattr(contracts, name)
+    assert not hasattr(runtime_contracts, "FrameProposal")
+    assert "open_frame" not in vars(contracts.MemorySession)

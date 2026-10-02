@@ -225,77 +225,97 @@ Keys in use today:
 
 ## Agent memory — `long_term_memory:`
 
-`long_term_memory:` declares long-term memory on a full flow (the ordinary
-`nodes:` form) or an AGENT node. Its value selects a named host policy. The
-declaration contains public behavior only; the Python host supplies the matching
-implementation at run time.
+`long_term_memory:` names one or more memories on a full flow (the ordinary
+`nodes:` form, root file or `defs:` entry) or on an AGENT node. Each memory has
+a **name** and a **type**. YAML holds public behavior only; the host builds the
+backend and decides where it is stored.
 
 ```yaml
-id: research
-name: research
+id: support
+name: support
 long_term_memory:
-  name: reflective
-  config:
-    max_items: 100
-    recall_limit: 12
-input:
-  topic: str
+  notes: episodic
+  lessons:
+    type: reflective
+    config: {max_items: 100, recall_limit: 12}
+input: {question: str}
 nodes:
-  investigate:
+  answer:
     kind: agent
-    long_term_memory: reflective
-    input: {topic: "${input.topic}"}
+    long_term_memory: {chat: session}
+    input: {question: "${input.question}"}
     output: str
-    prompt: Investigate ${topic}.
-output: ${investigate.output}
+    prompt: Answer ${question}.
+output: ${answer.output}
 ```
 
-The short form is `long_term_memory: reflective`. The mapping form accepts
-exactly `name:` and an optional literal `config:` mapping; `name` selects the
-host policy. Do not put credentials,
-tenant IDs, Python imports, backend paths, or persistence locations in YAML;
-those belong to the host-created memory object.
+Three forms are accepted:
 
-A flow declaration creates one flow-owned frame inherited by every AGENT node
-executed in that flow. A declaration on an AGENT node creates a second, local
-frame. Recall stacks those sections from the outer flow inward, while each frame
-learns and writes only its own state. CALL enters the called flow's frames. MAP
-items and LOOP iterations do not create frames of their own; repeated executions
-contribute occurrences to the same static frame authored on the flow or AGENT
-node. `long_term_memory:` is invalid on other node kinds and on anonymous inline
-CALL/MAP/LOOP bodies; use a named `defs:` flow when the child itself needs a flow
-frame.
+| Form | Meaning |
+|---|---|
+| `long_term_memory: episodic` | Sugar for `{episodic: episodic}`: one memory named after its type. |
+| `long_term_memory: {notes: episodic, chat: session}` | One memory per entry, `name: type`. |
+| `long_term_memory: {notes: {type: episodic, config: {...}}}` | Long form with literal `config`. Only `type` and `config` are allowed. |
 
-`composer run` automatically supplies declared `episodic`, `reflective`, and `session`
-policies. They are process-local unless the host flag
-`--memory-storage POLICY=PATH` selects a durable store; storage never belongs in
-YAML. Custom policies, including `ProfileMemory` (which needs a document store),
-require Python host injection. For Python calls, declarations
-remain dormant unless the host passes a `memory={...}` registry to `run_flow`,
-keyed by the selected policy names. All memories contribute through one context:
-ordinary memories supply notes or instructions, and SessionMemory supplies a
-structured session transcript alongside any learned notes.
-For conversation continuity, declare `long_term_memory: session`; Python hosts
-inject `SessionMemory()` under `"session"`. It accepts no frame config. The host can set
-`SessionMemory(history_budget_chars=32_000, recent_turns=4)` for API context
-summaries; these settings do not belong in YAML and do not truncate raw history.
-The innermost frame contributing a transcript owns a separate conversation for each
-authored AGENT leaf; other frames still provide recall. Repeated calls queue in
-admission order, including LOOP iterations and MAP items. MAP does not fork
-history or guarantee input-index admission order; use non-session memory when
-items should be independent. History updates automatically during forward,
-without enabling learning. Explicit API backward learning can commit self-feedback
-as notes for future runs through the same memory policy; it requires no additional
-YAML selector. See [SessionMemory](api.md#sessionmemory-foundation).
+`long_term_memory: null` is the same as leaving the key out. `{}` is an error.
+The retired `{name: X, config: ...}` form is also an error; `name`, `type`,
+and `config` are reserved and cannot be memory names. Names and type names match
+`[A-Za-z_][A-Za-z0-9_-]*`.
 
-Independently, `learnable=True` retains
-accepted execution for an explicit `result.backward(feedback)` call after forward
-returns. Forward does not run frame learners or commit learned mutations; session
-history updates are separate. A call with no external feedback still
-presents history to every enabled memory frame; backward outcomes stay separate
-from the forward result. See [the Python API](api.md#explicit-backward-feedback).
-The `composer run` CLI activates memory but does not expose backward or learning
-commands. See [CLI memory](cli.md#memory-policies-and-storage).
+Built-in types and the config keys they accept:
+
+| Type | Config keys |
+|---|---|
+| `episodic` | `max_episodes`, `recall_limit` |
+| `reflective` | `max_items`, `recall_limit` |
+| `session` | `history_budget_chars`, `recent_turns` |
+| `profile` | `max_chars`, `input_budget_chars` |
+
+Any other type name is a custom type that the Python host builds (see
+[building memories](api.md#building-memories-with-build_memories)). In any
+type, `storage`, `store`, and `path` are rejected as config keys, and
+`api_key` is rejected anywhere: storage locations and credentials belong to
+the host.
+
+**Memory keys.** A memory is identified by its key, the name prefixed by the
+`uses:` aliases it was imported through: `notes` in the root file, `lib.notes`
+in a file imported as `lib`, `b.d.notes` through two imports. Declaring the
+same key in two places of one file (for example on the flow and on an AGENT)
+is the same memory. The type and config must then agree. Two libraries that
+both declare `notes` stay independent (`liba.notes`, `libb.notes`), and so does
+one file imported under two aliases. Keys that differ only by case are an
+error, as is an alias that does not match the name pattern when it scopes a
+memory.
+
+**Stacking.** An AGENT recalls, in order: each enclosing flow's memories,
+outermost first, through CALL, MAP, and LOOP; then its own. A repeated key
+appears once, at its outermost position. An AGENT inside an imported child
+recalls the importing flow's memories by position, but a child's declaration
+never binds to a parent's memory. `long_term_memory:` is invalid on other node
+kinds and on anonymous inline CALL/MAP/LOOP bodies; use a named `defs:` flow
+when the child needs flow-level memory. The key itself is rejected there, even
+as `long_term_memory: null`; `null` means absent only where the key is allowed.
+
+**Session.** A `session` memory must be declared on an AGENT, never on a flow.
+Each session key has exactly one declaring AGENT, and an AGENT declares at most
+one session. Every call site of that AGENT shares one conversation; repeated
+calls, LOOP iterations, and MAP items take turns in admission order. History
+updates automatically during forward, without enabling learning.
+
+Each declaration's form and config are checked for every def and import. The
+rules that compare declarations (one type and config per key, session
+placement, case collisions, alias names) apply only to declarations reachable
+from the root.
+
+**Supplying memory.** `composer run` builds every built-in memory in RAM, or
+on disk with `--memory-root DIR` / `--memory-storage KEY=PATH` (see
+[CLI memory](cli.md#memory-and-storage)). It does not build custom types; a
+flow that declares one runs from Python. From Python, pass
+`memory=build_memories(flow, ...)` to `run_flow`; `memory=None` leaves
+declarations dormant. `learnable=True` independently retains accepted execution
+for an explicit `result.backward(feedback)`. Every memory key then gets one
+learn call. The CLI does not run backward. See
+[the Python API](api.md#explicit-backward-feedback).
 
 ## Node kinds
 

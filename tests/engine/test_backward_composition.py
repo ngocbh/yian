@@ -11,7 +11,7 @@ import agent_composer.llm_clients as llm_clients
 from agent_composer.compose import load_flow
 from agent_composer.events import NodeSucceeded
 from agent_composer.expr.builtins import TEMPLATE_FNS
-from agent_composer.memory import MemoryMutation, MemoryOwner
+from agent_composer.memory import MemoryMutation
 from agent_composer.nodes.base import BackwardResult
 from agent_composer.nodes.code import CodeNode
 from agent_composer.run import resume_flow, run_flow
@@ -439,17 +439,17 @@ output: ${outer.output}
     assert path.read_bytes() == before and calls == [["same"]]
 
 
-@pytest.mark.parametrize("foreign_proposal", [False, True])
-def test_owned_frames_learn_complete_history_and_reject_inherited_mutations(tmp_path, monkeypatch, foreign_proposal):
+@pytest.mark.parametrize("invalid_proposal", [False, True])
+def test_owned_memories_learn_complete_history_and_reject_invalid_proposals(tmp_path, monkeypatch, invalid_proposal):
     flow = load_flow("""id: owned-composition
 name: owned_composition
-long_term_memory: test
+long_term_memory: outer
 llm_config: {provider: ollama, model: local-test}
 input:
   topic: str
 defs:
   child:
-    long_term_memory: test
+    long_term_memory: inner
     input:
       topic: str
     nodes:
@@ -460,7 +460,7 @@ defs:
       author:
         kind: agent
         mode: plain
-        long_term_memory: test
+        long_term_memory: local
         variables:
           tone: str = concise
         input:
@@ -486,20 +486,17 @@ nodes:
       topic: ${input.topic}
 output: ${invoke.output | unused.output}
 """)
-    backend = _Memory(recall_text="Preserve detail.")
+    backends = {key: _Memory(recall_text="Preserve detail.") for key in ("inner", "local", "outer")}
     forward_chat = _BackwardChat([AIMessage(content="answer")])
     monkeypatch.setattr(llm_clients, "model_from_config", lambda config: forward_chat)
     path = tmp_path / "owned.jsonl"
-    result = run_flow(flow, {"topic": "reefs"}, learnable=True, log=path, memory={"test": backend})
+    result = run_flow(flow, {"topic": "reefs"}, learnable=True, log=path, memory=backends)
     assert result.status == "succeeded" and result.output == "answer"
-    assert forward_chat.calls == 1 and backend.learn_contexts == backend.commit_calls == []
+    assert forward_chat.calls == 1
+    assert all(backend.learn_contexts == backend.commit_calls == [] for backend in backends.values())
     with JsonlRunLog.resume(path) as log:
         forward = tuple(log)
-    layout = forward[0].record.memory_layout
-    assert len(layout) == 5
-    root_ref = layout[0].ref
-    agent_ref, = [spec.ref for spec in layout if spec.ref.owner is MemoryOwner.AGENT
-                  and spec.ref.static_path == ("owned-composition", "invoke", "author")]
+    assert [spec.key for spec in forward[0].record.memories] == ["inner", "local", "outer"]
     author, = [item for item in forward if type(item.record) is NodeSucceededRecord
                and item.record.node_id == "invoke/author"]
     agent_sequence, = [item.seq for item in forward if type(item.record) is NodeStartedRecord
@@ -507,13 +504,14 @@ output: ${invoke.output | unused.output}
     assert author.seq > agent_sequence
     assert len(author.record.evidence.memory_sections) == 3
 
-    # Learners receive only their own frame despite inherited recall/evidence.
+    # Each learner receives only its own memory's context despite inherited recall/evidence.
     def propose(context):
-        assert backward_chat.calls == 1 and backend.commit_calls == []
-        owner = root_ref if foreign_proposal and context.frame_ref == agent_ref else context.frame_ref
-        return [MemoryMutation("/".join(context.frame_ref.static_path), owner, {"seen": len(context.episodes)})]
+        assert backward_chat.calls == 1
+        assert all(backend.commit_calls == [] for backend in backends.values())
+        return [MemoryMutation(context.memory, {"seen": len(context.episodes)})]
 
-    backend.learn_outcomes = [propose] * len(layout)
+    for key, backend in backends.items():
+        backend.learn_outcomes = [(lambda context: ()) if invalid_proposal and key == "local" else propose]
     backward_chat = _BackwardChat([_reply(input_feedback={"topic": ["Refine topic."]},
                                          self_feedback=["Keep context.", "Avoid guessing."],
                                          variable_feedback={"tone": ["Stay concise.", "Be precise."]})])
@@ -523,24 +521,22 @@ output: ${invoke.output | unused.output}
     assert backward_chat.calls == 1 and backward_chat.bound_tools is None
     with JsonlRunLog.resume(path) as log:
         records = tuple(item.record for item in log)
-    if foreign_proposal:
+    if invalid_proposal:
         assert outcome.status == "failed" and outcome.failure.stage == "learn"
-        assert outcome.failure.code == "memory.invalid_result" and outcome.failure.frame_ref == agent_ref
+        assert outcome.failure.code == "memory.invalid_result" and outcome.failure.memory == "local"
         assert not any(type(record) in (BackwardReadyRecord, MemoryCommitRequestedRecord) for record in records)
-        assert backend.commit_calls == []
+        assert all(backend.commit_calls == [] for backend in backends.values())
         assert type(records[-1]) is BackwardFinishedRecord
         return
 
     assert outcome.status == "succeeded" and outcome.learning.status == "succeeded"
-    assert tuple(context.frame_ref for context in backend.learn_contexts) == tuple(spec.ref for spec in layout)
-    assert len(backend.commit_calls) == 1
-    assert tuple(mutation.frame_ref for mutation in backend.commit_calls[0][1]) == tuple(spec.ref for spec in layout)
-    for context in backend.learn_contexts:
-        if "unused" in context.frame_ref.static_path:
-            assert context.episodes == () and context.feedback == ()
-            continue
+    for key, backend in backends.items():
+        context, = backend.learn_contexts
+        assert context.memory == key
+        (_, mutations), = backend.commit_calls
+        assert [mutation.mutation_id for mutation in mutations] == [key]
         episode, = [episode for episode in context.episodes if episode.execution_seq == agent_sequence]
-        assert episode.owner_static_path == ("owned-composition", "invoke", "author")
+        assert episode.owner_static_path == ("invoke", "author")
         assert episode.output == "answer"
         entries = [entry for entry in context.feedback if entry["execution_seq"] == agent_sequence]
         assert all(entry["owner_static_path"] == ["invoke", "author"] for entry in entries)
@@ -551,11 +547,10 @@ output: ${invoke.output | unused.output}
             messages = [entry for entry in entries if entry["channel"] == channel]
             assert [entry["message_index"] for entry in messages] == [0, 1]
             assert all(entry["target_name"] == target and entry["contribution_context"] == {} for entry in messages)
-        if context.frame_ref == agent_ref:
-            assert len(context.episodes) == 1
-        else:
-            assert any(episode.owner_static_path == ("owned-composition", "invoke", "work")
-                       for episode in context.episodes)
+    assert len(backends["local"].learn_contexts[0].episodes) == 1
+    for key in ("inner", "outer"):
+        assert any(episode.owner_static_path == ("invoke", "work")
+                   for episode in backends[key].learn_contexts[0].episodes)
 
 
 @pytest.mark.parametrize("action", ["noop", "add"])
@@ -609,7 +604,7 @@ output: ${input.text}
     with backend.open_run() as session:
         committed = session.snapshot
     assert committed["revision"] == initial["revision"] + 1
-    assert sum(len(frame["lessons"]) for frame in committed["frames"]) == (0 if action == "noop" else 1)
+    assert len(committed["lessons"]) == (0 if action == "noop" else 1)
     assert learner.calls == 1 and len(configurations) == len(schemas) == 1
 
     forward_state = deepcopy((first.status, first.output, first.failure))

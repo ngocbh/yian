@@ -16,7 +16,6 @@ import agent_composer.memory.contracts as c
 from agent_composer.memory.session import SessionMemory
 from agent_composer.memory.storage import SQLiteStorage
 from tests.engine._session_fakes import (
-    REF,
     append_reply,
     harness,
     item,
@@ -27,6 +26,13 @@ from tests.engine.test_session_notes import _note
 from tests.engine.test_session_summaries import _prepare, _project, _seed
 
 
+def _first_open(memory):
+    """Open lazy storage without starting a run, as the constructor once did."""
+    with memory._locked():
+        pass
+    return memory
+
+
 def _complete(memory, name="a"):
     with harness(memory) as h:
         with h.frame.open_turn(request(name), check_stopped=lambda: None) as turn:
@@ -35,30 +41,24 @@ def _complete(memory, name="a"):
 
 def _mutation():
     note = _note()
-    return c.MemoryMutation(
-        note["note_id"], REF, {"operation": "append_note", "note": note}
-    )
+    return c.MemoryMutation(note["note_id"], {"operation": "append_note", "note": note})
 
 
-@pytest.mark.parametrize("version", [1, 2])
-def test_completed_history_and_identity_survive_reopen(tmp_path, version):
+def test_completed_history_and_identity_survive_reopen(tmp_path):
     path = tmp_path / "memory.sqlite"
     with SessionMemory(storage=path) as memory:
         opening = snapshot(memory)
-        if version == 1:
-            opening["version"] = 1
-            del opening["notes"]
         _complete(memory)
         saved = snapshot(memory)
     with SessionMemory(storage=path) as memory:
         assert snapshot(memory) == saved
         with memory.open_run(snapshot=opening) as restored:
             assert restored.snapshot == opening
-            frame = restored.open_frame(c.MemoryFrameSpec(REF, "session", {}))
+            frame = restored
             with frame.open_turn(request("b"), check_stopped=lambda: None) as turn:
                 assert turn.view.items == (item("a", "a"),)
                 append_reply(turn, "b", "b")
-        assert len(snapshot(memory)["conversations"][0]["items"]) == 2
+        assert len(snapshot(memory)["conversation"]["items"]) == 2
 
 
 def test_partial_model_observation_and_unknown_request_survive_reopen(tmp_path):
@@ -81,25 +81,8 @@ def test_partial_model_observation_and_unknown_request_survive_reopen(tmp_path):
                 repeated = turn.request("model", {"prompt": "question"})
                 turn.observe(repeated, "completed")
         assert [
-            e["status"] for e in snapshot(memory)["conversations"][0]["effects"]
+            e["status"] for e in snapshot(memory)["conversation"]["effects"]
         ] == ["pending", "completed"]
-
-
-def test_legacy_snapshot_adoption_pins_exact_envelope_after_reopen(tmp_path):
-    source = SessionMemory()
-    _complete(source)
-    old = snapshot(source)
-    old.pop("notes")
-    old["version"] = 1
-    expected = deepcopy(old)
-    path = tmp_path / "memory.sqlite"
-    with SessionMemory(storage=path) as memory:
-        with memory.open_run(snapshot=old) as restored:
-            assert restored.snapshot == expected
-    with SessionMemory(storage=path) as memory:
-        with memory.open_run(snapshot=old) as restored:
-            assert restored.snapshot == expected
-        assert snapshot(memory) == {**expected, "version": 2, "notes": []}
 
 
 def test_notes_and_commit_tombstones_survive_restart_and_reset(tmp_path):
@@ -150,7 +133,7 @@ def test_idle_handles_do_not_block_close_and_are_invalidated(tmp_path):
     path = tmp_path / "memory.sqlite"
     memory = SessionMemory(storage=path)
     opened = memory.open_run()
-    frame = opened.open_frame(c.MemoryFrameSpec(REF, "session", {}))
+    frame = opened
     memory.close()
     memory.close()
     for operation in (
@@ -201,7 +184,7 @@ def test_owner_kind_and_corrupt_store_are_rejected(tmp_path):
     path = tmp_path / "memory.sqlite"
     with SessionMemory(storage=path):
         with pytest.raises(c.MemoryOperationError) as caught:
-            SessionMemory(storage=path)
+            _first_open(SessionMemory(storage=path))
         assert caught.value.code == "storage.busy"
     with pytest.raises(c.MemoryOperationError) as caught:
         SQLiteStorage(path, "episodic")
@@ -211,7 +194,7 @@ def test_owner_kind_and_corrupt_store_are_rejected(tmp_path):
             "UPDATE memory_state SET envelope = ?", ('{"version":1,"version":1}',)
         )
     with pytest.raises(c.MemoryOperationError) as caught:
-        SessionMemory(storage=path)
+        _first_open(SessionMemory(storage=path))
     assert caught.value.code == "storage.corrupt"
 
 
@@ -231,7 +214,6 @@ def test_owner_kind_and_corrupt_store_are_rejected(tmp_path):
         "notes",
         "summaries_type",
         "summary_extra",
-        "summary_key",
         "summary_namespace",
         "summary_generation",
         "summary_version",
@@ -272,17 +254,15 @@ def test_invalid_inventory_never_rewrites_store_and_releases_owner(tmp_path, cas
     elif case == "digest":
         value["applied_commits"] = {"c": "A" * 64}
     elif case == "duplicate_view":
-        value["snapshot"]["conversations"] *= 2
+        value["snapshot"]["conversation"] = [value["snapshot"]["conversation"]] * 2
     elif case == "foreign_view":
-        value["snapshot"]["conversations"][0]["namespace"] = "foreign"
+        value["snapshot"]["conversation"]["namespace"] = "foreign"
     elif case == "notes":
         value["snapshot"]["notes"] = [_note(run_id="unadmitted")]
     elif case == "summaries_type":
         value["summaries"] = {}
     elif case == "summary_extra":
         summary["extra"] = None
-    elif case == "summary_key":
-        summary["key"]["consumer_static_path"] = ["root", "other"]
     elif case == "summary_namespace":
         summary["namespace"] = "foreign"
     elif case == "summary_generation":
@@ -304,7 +284,7 @@ def test_invalid_inventory_never_rewrites_store_and_releases_owner(tmp_path, cas
     storage.save(value)
     storage.close()
     with pytest.raises(c.MemoryOperationError) as caught:
-        SessionMemory(storage=path)
+        _first_open(SessionMemory(storage=path))
     assert caught.value.code == "session.invalid_storage"
     storage = SQLiteStorage(path, "session")
     try:
@@ -318,7 +298,7 @@ def _ram(memory):
         (
             memory._namespace,
             memory._generation,
-            memory._views,
+            memory._view,
             memory._notes,
             memory._used,
             memory._applied_commits,
@@ -347,11 +327,12 @@ def test_failed_save_does_not_publish_candidate_or_advance_ordinal(
     memory = SessionMemory(
         storage=tmp_path / "memory.sqlite", history_budget_chars=1, recent_turns=0
     )
+    _first_open(memory)
     opened = turn = None
     if operation not in {"open", "adopt", "reset"}:
         _complete(memory)
         opened = memory.open_run()
-        frame = opened.open_frame(c.MemoryFrameSpec(REF, "session", {}))
+        frame = opened
         if operation != "commit":
             turn = frame.open_turn(request("next"), check_stopped=lambda: None)
             if operation != "admit":
@@ -429,7 +410,7 @@ def test_uncertain_write_poisoning_keeps_ram_and_drains_lease(
     path = tmp_path / "memory.sqlite"
     memory = SessionMemory(storage=path)
     opened = memory.open_run()
-    frame = opened.open_frame(c.MemoryFrameSpec(REF, "session", {}))
+    frame = opened
     turn = frame.open_turn(request(), check_stopped=lambda: None).__enter__()
     before = _ram(memory)
     before_ordinal = turn._ordinal
@@ -461,11 +442,11 @@ def test_uncertain_write_poisoning_keeps_ram_and_drains_lease(
     with pytest.raises(BaseException) as original:
         turn.__exit__(type(primary), primary, None)
     assert original.value is primary
-    assert not memory._active and not memory._queues
+    assert not memory._active and not memory._queue
     opened.close()
     memory.close()
     with SessionMemory(storage=path) as reopened:
-        view = snapshot(reopened)["conversations"][0]
+        view = snapshot(reopened)["conversation"]
         assert len(view["effects"]) == int(after_commit)
         if after_commit:
             assert view["effects"][0]["status"] == "pending"
@@ -499,8 +480,8 @@ def test_summary_cache_persists_and_extends_without_losing_raw_prefix(tmp_path):
                 assert "oversized saved summary" in calls[0][0]
                 assert '"2"' in calls[0][0] and '"0"' not in calls[0][0]
         assert (
-            snapshot(memory)["conversations"][0]["items"]
-            == saved["conversations"][0]["items"]
+            snapshot(memory)["conversation"]["items"]
+            == saved["conversation"]["items"]
         )
         memory.reset()
     with SessionMemory(storage=path) as memory:
@@ -514,7 +495,7 @@ def test_callback_drain_owns_backend_even_after_run_close(tmp_path, phase, close
     memory = SessionMemory(storage=path, history_budget_chars=1, recent_turns=0)
     _seed(memory, 1)
     opened = memory.open_run()
-    frame = opened.open_frame(c.MemoryFrameSpec(REF, "session", {}))
+    frame = opened
     entered, release = Event(), Event()
     errors = []
     once = False
@@ -575,7 +556,7 @@ def test_callback_drain_owns_backend_even_after_run_close(tmp_path, phase, close
                     memory.close()
                 assert busy.value.code == "session.busy"
         with pytest.raises(c.MemoryOperationError) as owner:
-            SessionMemory(storage=path)
+            _first_open(SessionMemory(storage=path))
         assert owner.value.code == "storage.busy"
     finally:
         release.set()
@@ -588,7 +569,7 @@ def test_callback_drain_owns_backend_even_after_run_close(tmp_path, phase, close
     if phase == "summary":
         assert next(iter(memory._summaries.values())).text == "saved summary"
     if phase == "effect":
-        assert snapshot(memory)["conversations"][0]["items"][-1]["item_id"] == "actual"
+        assert snapshot(memory)["conversation"]["items"][-1]["item_id"] == "actual"
     opened.close()
     memory.close()
     with SessionMemory(storage=path):
@@ -599,8 +580,8 @@ def test_waiting_turn_keeps_fifo_and_cannot_be_discarded_by_close(tmp_path):
     memory = SessionMemory(storage=tmp_path / "memory.sqlite")
     first = memory.open_run()
     later = memory.open_run()
-    frame = first.open_frame(c.MemoryFrameSpec(REF, "session", {}))
-    other = later.open_frame(c.MemoryFrameSpec(REF, "session", {}))
+    frame = first
+    other = later
     turn = frame.open_turn(request(), check_stopped=lambda: None).__enter__()
     queued = Event()
     finished = []
@@ -639,7 +620,7 @@ def _bounded(function, *args):
 def _fork_while_locked(path):
     with SessionMemory(storage=path) as memory:
         with memory.open_run() as opened:
-            frame = opened.open_frame(c.MemoryFrameSpec(REF, "session", {}))
+            frame = opened
             checks = []
             with frame.open_turn(
                 request(), check_stopped=lambda: checks.append(os.getpid())
@@ -733,7 +714,7 @@ def _fork_during_callback(path, phase, interrupt):
         ) as memory:
             _seed(memory, 1)
             with memory.open_run() as opened:
-                frame = opened.open_frame(c.MemoryFrameSpec(REF, "session", {}))
+                frame = opened
 
                 def check():
                     if phase == "stop":
@@ -777,7 +758,7 @@ def test_callback_fork_does_not_deadlock_or_replace_primary(tmp_path, phase, int
 def test_first_finish_failure_survives_secondary_release_failure(tmp_path, monkeypatch):
     memory = SessionMemory(storage=tmp_path / "memory.sqlite")
     opened = memory.open_run()
-    frame = opened.open_frame(c.MemoryFrameSpec(REF, "session", {}))
+    frame = opened
     turn = frame.open_turn(request(), check_stopped=lambda: None).__enter__()
     primary = RuntimeError("close publication failed")
 
@@ -801,7 +782,7 @@ def test_first_finish_failure_survives_secondary_release_failure(tmp_path, monke
 def _crash_after_observation(path):
     memory = SessionMemory(storage=path)
     opened = memory.open_run()
-    frame = opened.open_frame(c.MemoryFrameSpec(REF, "session", {}))
+    frame = opened
     turn = frame.open_turn(request(), check_stopped=lambda: None).__enter__()
     completed = turn.request("model", {}, items=(item("u", "question"),))
     turn.observe(completed, "completed", items=(item("a", "answer"),))
@@ -864,8 +845,8 @@ def test_poisoned_storage_still_drains_queued_and_active_owners(tmp_path):
     memory = SessionMemory(storage=tmp_path / "memory.sqlite")
     opened = memory.open_run()
     other = memory.open_run()
-    frame = opened.open_frame(c.MemoryFrameSpec(REF, "session", {}))
-    waiting = other.open_frame(c.MemoryFrameSpec(REF, "session", {}))
+    frame = opened
+    waiting = other
     turn = frame.open_turn(request(), check_stopped=lambda: None).__enter__()
     queued, proceed = Event(), Event()
     errors = []
@@ -889,7 +870,7 @@ def test_poisoned_storage_still_drains_queued_and_active_owners(tmp_path):
     worker.join(5)
     assert not worker.is_alive() and len(errors) == 1
     assert errors[0].code == "storage.poisoned"
-    assert not memory._queues and memory._active
+    assert not memory._queue and memory._active
     with pytest.raises(c.MemoryOperationError) as caught:
         turn.__exit__(None, None, None)
     assert caught.value.code == "storage.poisoned"
@@ -906,54 +887,29 @@ def _message_snapshot_fixture():
     return json.loads(path.read_text())
 
 
-def test_pre_removal_message_snapshot_preserves_history_and_digests(tmp_path):
-    from agent_composer.memory.conversation import (
-        checkpoint_digest,
-        conversation_view_from_json,
-    )
-
+def test_frame_era_snapshot_is_rejected_without_mutation(tmp_path):
     original = _message_snapshot_fixture()
     expected = deepcopy(original)
-    baseline = conversation_view_from_json(original["conversations"][0])
-    observation = c.ConversationEffectObserved(
-        c.ConversationStamp(
-            "session",
-            baseline.key,
-            c.ConversationInvocation("baseline", 1),
-            baseline.namespace,
-            0,
-            2,
-            2,
-        ),
-        1,
-        "completed",
-        (item("output", "Hello back"),),
-        None,
-    )
-    assert checkpoint_digest(observation) == baseline.applied[2].event_digest
-    path = tmp_path / "memory.sqlite"
-    with SessionMemory(storage=path) as memory:
-        with memory.open_run(snapshot=original) as restored:
-            assert restored.snapshot == expected
-        assert snapshot(memory) == expected
-    with SessionMemory(storage=path) as memory:
-        assert snapshot(memory) == expected
-        with harness(memory) as h:
-            with h.frame.open_turn(request("next"), check_stopped=lambda: None) as turn:
-                assert turn.view.items == (
-                    item("input", "Hello", "user"),
-                    item("output", "Hello back"),
-                )
-                append_reply(turn, "next", "Continued")
-        view = snapshot(memory)["conversations"][0]
-        assert view["applied"][:4] == expected["conversations"][0]["applied"]
+    with SessionMemory(storage=tmp_path / "memory.sqlite") as memory:
+        before = snapshot(memory)
+        with pytest.raises(c.MemoryOperationError) as caught:
+            memory.open_run(snapshot=original)
+        assert caught.value.code == "session.invalid_snapshot"
+        assert snapshot(memory) == before
+    # A pristine backend would adopt any valid snapshot, so this isolates the
+    # version check from the used-backend lineage check above.
+    with pytest.raises(c.MemoryOperationError) as pristine:
+        SessionMemory().open_run(snapshot=original)
+    assert pristine.value.code == "session.invalid_snapshot"
     assert original == expected
 
 
 @pytest.mark.parametrize("legacy", ["reference", "native_session"])
 def test_legacy_native_snapshot_is_rejected_without_mutation(tmp_path, legacy):
-    original = _message_snapshot_fixture()
-    view = original["conversations"][0]
+    source = SessionMemory()
+    _complete(source)
+    original = snapshot(source)
+    view = original["conversation"]
     if legacy == "reference":
         view["reference"] = {"provider": "codex", "session_id": "thread"}
     else:
@@ -979,7 +935,7 @@ def test_legacy_native_storage_is_rejected_without_rewriting(tmp_path, legacy):
         _complete(memory)
     with closing(SQLiteStorage(path, "session")) as storage:
         value = storage.load()
-        view = value["snapshot"]["conversations"][0]
+        view = value["snapshot"]["conversation"]
         if legacy == "reference":
             view["reference"] = {"provider": "codex", "session_id": "thread"}
         else:
@@ -989,7 +945,7 @@ def test_legacy_native_storage_is_rejected_without_rewriting(tmp_path, legacy):
     with pytest.raises(
         c.MemoryOperationError, match="use fresh SessionMemory"
     ) as caught:
-        SessionMemory(storage=path)
+        _first_open(SessionMemory(storage=path))
     assert caught.value.code == "session.unsupported_history"
     assert path.read_bytes() == original_bytes
     with closing(SQLiteStorage(path, "session")) as storage:

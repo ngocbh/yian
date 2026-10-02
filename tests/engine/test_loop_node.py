@@ -7,7 +7,7 @@ These test `run`/`respawn` and compile-owned reconstruction directly (no engine)
 """
 from agent_composer.compile.expand import build_grow
 from agent_composer.diagnostics import OriginRef
-from agent_composer.memory import MemoryFrameRef, MemoryOwner, MemoryScope
+from agent_composer.memory import MemoryScope
 from agent_composer.nodes.base import Grow, NodeKind, Output
 from agent_composer.nodes.contracts import (
     Assertion,
@@ -137,12 +137,7 @@ def test_respawn_preserves_the_derived_base_memory_scope() -> None:
         predicate="${x}",
         max_iters=3,
     )
-    frame = MemoryFrameRef("root", ("root",), MemoryOwner.FLOW)
-    node.memory_scope = MemoryScope(
-        "root",
-        ("root", "loop"),
-        frame_stack=(frame,),
-    )
+    node.memory_scope = MemoryScope(("loop",), memories=("outer",))
 
     clone = node.respawn(1)
 

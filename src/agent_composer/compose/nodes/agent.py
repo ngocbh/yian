@@ -15,17 +15,14 @@ from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Optional
 
 from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
-from agent_composer.compose.helpers.memory import (
-    attach_memory_policy_origin,
-    parse_memory_policy,
-)
+from agent_composer.compose.helpers.memory import parse_memory_declarations
 from agent_composer.compose.helpers.types import read_variables
 from agent_composer.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from agent_composer.compose.source import SourceCursor
 from agent_composer.diagnostics import SourceRange
 from agent_composer.llm_clients import LLMConfig
 from agent_composer.llm_clients.config import host_only_field_error
-from agent_composer.memory.contracts import MemoryPolicySpec
+from agent_composer.memory.contracts import DeclSite, MemoryDecl
 from agent_composer.nodes.agent import AgentNode
 from agent_composer.nodes.agent.node import is_text_output
 from agent_composer.nodes.contracts import Parameter, ValueContract
@@ -123,7 +120,7 @@ class AgentDescriptor(NodeDescriptor):
     )
     required = NodeDescriptor.require()
     binding_fields = ("inputs",)
-    keyword_remap = {"long_term_memory": "memory_policy"}
+    keyword_remap = {"long_term_memory": "memories"}
 
     prompt: Optional[str] = None
     system_prompt: Optional[str] = None
@@ -135,20 +132,19 @@ class AgentDescriptor(NodeDescriptor):
     retries: int = 2
     asserts: list[str] = field(default_factory=list)
     steerable: bool = False
-    memory_policy: MemoryPolicySpec | None = None
+    memories: tuple[MemoryDecl, ...] = ()
     # INTERNAL — never parsed from YAML; set only by the adaptive_questions desugar pass.
     # When present it overrides the surface-derived contract for a synthesized structured
     # agent whose codomain is code-built and has no surface type-string.
     output_contract_override: Optional[ValueContract] = None
 
     def __post_init__(self) -> None:
-        """Validate the optional source-neutral policy carrier."""
+        """Validate the source-neutral declaration tuple."""
         super().__post_init__()
-        if self.memory_policy is not None and type(self.memory_policy) is not MemoryPolicySpec:
-            raise TypeError(
-                "agent descriptor memory_policy must be an exact "
-                "MemoryPolicySpec or None"
-            )
+        if type(self.memories) is not tuple or any(
+            type(decl) is not MemoryDecl for decl in self.memories
+        ):
+            raise TypeError("agent descriptor memories must be a tuple of exact MemoryDecl values")
 
     @classmethod
     def _normalize_cursor(cls, cursor: SourceCursor) -> SourceCursor:
@@ -193,11 +189,17 @@ class AgentDescriptor(NodeDescriptor):
                 f"node {node_id!r} (kind={cls.kind}): `steerable:` must be true or false",
                 range=ranges.get(("field", "steerable")) or own_range,
             )
-        if "memory_policy" in kwargs:
-            kwargs["memory_policy"] = parse_memory_policy(
-                kwargs["memory_policy"],
-                diagnostics=diagnostics,
-                source_range=ranges.get(("field", "long_term_memory")),
+        if "memories" in kwargs:
+            value = kwargs["memories"]
+            kwargs["memories"] = (
+                ()
+                if value is None
+                else parse_memory_declarations(
+                    value,
+                    diagnostics=diagnostics,
+                    source_range=ranges.get(("field", "long_term_memory")),
+                    site=DeclSite((), ("root",), node_id),
+                )
             )
         super()._validate_fields(
             node_id,
@@ -214,18 +216,23 @@ class AgentDescriptor(NodeDescriptor):
         site_path: tuple[str | int, ...],
         catalog_builder: "_SourceCatalogBuilder",
     ) -> "AgentDescriptor":
-        """Attach the one authored ``long_term_memory:`` value occurrence."""
-        spec = self.memory_policy
-        if spec is None or not cursor.has("long_term_memory"):
+        """Attach one origin per authored ``long_term_memory:`` entry."""
+        if not self.memories or not cursor.has("long_term_memory"):
             return self
-        origin = catalog_builder.register(
-            (*site_path, "field", "memory_policy"),
-            cursor.child("long_term_memory"),
-        )
-        return replace(
-            self,
-            memory_policy=attach_memory_policy_origin(spec, origin),
-        )
+        value_cursor = cursor.child("long_term_memory")
+        stamped = []
+        for decl in self.memories:
+            path = (*site_path, "field", "memories", decl.name)
+            if value_cursor.has(decl.name):
+                origin = catalog_builder.register(
+                    path, value_cursor.child(decl.name), anchor="key"
+                )
+            else:  # sugar: the whole scalar value is the one entry
+                origin = catalog_builder.register(path, value_cursor)
+            stamped.append(
+                MemoryDecl(decl.name, decl.type, decl.config, decl.site, origin)
+            )
+        return replace(self, memories=tuple(stamped))
 
     def build(self, ctx: BuildContext) -> BuildResult:
         """Construct the runtime `AgentNode` (+ wiring) for this `AgentDescriptor`.
@@ -256,6 +263,10 @@ class AgentDescriptor(NodeDescriptor):
                 range=steerable_range,
             )
         variables = self._read_variables(ctx)
+        memories = tuple(
+            MemoryDecl(decl.name, decl.type, decl.config, DeclSite((), ctx.owner, self.id), decl.origin)
+            for decl in self.memories
+        )
         try:
             node = AgentNode(
                 self.id,
@@ -267,7 +278,7 @@ class AgentDescriptor(NodeDescriptor):
                 mode=self.mode,
                 retries=self.retries,
                 title=self.node_name,
-                memory_policy=self.memory_policy,
+                memories=memories,
                 variables=variables,
                 skills=self.skills,
                 steerable=self.steerable,

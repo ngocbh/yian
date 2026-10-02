@@ -60,21 +60,24 @@ it adapts provider messages to lower memory contracts without storing history.
 `memory/session.py` owns history, FIFO admission, and derived summary publication;
 `memory/summary.py` owns pure whole-turn selection and cache-prefix proofs. The
 API adapter injects projection and current-model callbacks, never stores summaries.
+Session admission is per memory key: one conversation per session key, owned by
+its single declaring AGENT.
 Likewise `nodes/agent/live.py`, not `runtime/`, owns AGENT streaming and in-loop observers;
 runtime only forwards opaque sinks by trait.
 Runtime only binds authored scope and accepted invocation identity and manages
 the lazy capability lifetime; it neither encodes provider messages nor
 reconstructs history from the run log.
 
-Optional persistence belongs below concrete memory policies in
+Optional persistence belongs below concrete memory backends in
 `memory/storage/`: `SQLiteStorage` owns one local SQLite file and finite-JSON transactions,
 not semantic snapshots, run handles, clients, or queues. Backends validate and
 save candidates before publishing live state. Host-only storage paths never enter
 YAML or runtime records, and the memory facade remains contracts-only.
 
-CLI activation belongs in `cli/memory.py`, above pure layout discovery and memory
-contracts. It owns lazy built-in backend selection and cleanup; `cli/run.py`
-injects the registry into the existing run boundary. Runtime does not select or
+Host construction belongs in package-root `memory_host.py` (`build_memories`,
+`MemoryRegistry`), above `compile`'s memory table and `memory/` backends.
+`cli/memory.py` only parses `--memory-root`/`--memory-storage KEY=PATH` and calls
+it; `cli/run.py` owns the registry's lifetime. Runtime does not select or
 construct implementations, and terminal inspection acquires no memory resources.
 
 ## Import-direction smell test

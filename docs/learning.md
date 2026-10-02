@@ -11,10 +11,10 @@ flowchart LR
     result --> attempt["result.backward(feedback)"]
     attempt --> fold["reverse fold over accepted data lineage"]
     fold --> nodes["node backward hooks"]
-    fold --> frames["owner-scoped frame learners"]
+    fold --> learners["one learn call per memory key"]
     nodes --> ready["validated feedback and proposals"]
-    frames --> ready
-    ready --> commits["ordered policy commits"]
+    learners --> ready
+    ready --> commits["memory commits in key order"]
     commits --> outcome["BackwardOutcome"]
 ```
 
@@ -31,24 +31,24 @@ data routes, and invocation context so a later reverse pass can attribute
 feedback. It does **not** require a memory backend, and it does not call a learner
 during forward execution.
 
-`memory=` is separate host-provided infrastructure for recall and durable policy
-updates. An authored `long_term_memory` declaration chooses a policy name; the
-host supplies its implementation under that name. Recall and optional session
-history can be enabled without `learnable=True`, and a learnable run can operate
-without any memory policy.
+`memory=` is separate host-provided infrastructure for recall and durable memory
+updates. An authored `long_term_memory` declaration names memories, each
+identified by a memory key; the host supplies one backend per key, usually with
+`build_memories(flow)`. Recall and optional session history can be enabled
+without `learnable=True`, and a learnable run can operate without any memory.
 
-`composer run` acts as a host for declared built-in policies automatically. Its
-`--memory-storage POLICY=PATH` option enables persistence for selected policies;
-others remain process-local. It does not enable learning or call `backward()`.
-Session history still advances during forward, while saving episodic or reflective
-learning requires the explicit Python API. See
-[CLI memory](cli.md#memory-policies-and-storage).
+`composer run` builds every declared built-in memory automatically, in RAM for
+the process. `composer run --memory-root DIR` (or `--memory-storage KEY=PATH`)
+keeps built-in memories on disk. It does not enable learning or call
+`backward()`. Session history still advances during forward, while saving
+episodic or reflective learning requires the explicit Python API. See
+[CLI memory](cli.md#memory-and-storage).
 
 | Setting | What it enables | What forward execution does |
 | --- | --- | --- |
 | `learnable=True` | Retained execution and a later `backward()` call | Records accepted facts; does not learn or commit |
-| `memory={...}` | Recall and optional session history for declared frames | Opens policy snapshots, recalls context, and advances enabled session history |
-| Both | Feedback-informed frame learning plus forward memory capabilities | Retains execution and uses memory; does not run learners or commit learned mutations |
+| `memory={...}` | Recall and optional session history for declared memories | Opens memory snapshots, recalls context, and advances enabled session history |
+| Both | Feedback-informed per-memory learning plus forward memory capabilities | Retains execution and uses memory; does not run learners or commit learned mutations |
 
 This separation lets an application collect evaluator feedback without a memory
 backend, or use recalled context in an ordinary non-learnable run.
@@ -88,7 +88,7 @@ assert result.output == forward_output
 Invalid feedback is rejected before the attempt opens a memory session or records
 an attempt. An empty string is still feedback. Calling `backward()` with no
 external feedback skips AGENT model work when nothing reaches an AGENT, while
-enabled memory frames can still learn from their accepted history.
+every declared memory key can still learn from its accepted history.
 
 For the complete public call and exact feedback examples, see
 [explicit backward feedback](api.md#explicit-backward-feedback).
@@ -128,35 +128,42 @@ See [runtime nodes](nodes.md#the-contract) for the hook contract and
 
 ## What memory may learn
 
-Memory belongs to the flow or AGENT frame that declared it. A node or child flow
-may contribute feedback and history to an ancestor frame, but it cannot mutate
-that inherited frame. Only the receiving frame's learner can propose mutations
-for its own memory.
+Each memory key is edited only by its own learner. A node or child flow may
+contribute feedback and history to a memory in its stack, but only that
+memory's learner can propose mutations for it.
 
-After the reverse fold, every enabled frame receives an owner-scoped
-`LearnContext` in recorded layout order. This includes frames with empty feedback,
-empty history, or no reached occurrence. The policy decides whether execution
-history, feedback, or both justify a proposal. For example, a history database
-can append a record while a reflective policy can propose a lesson.
+On `backward()`, every memory key gets exactly one `learn` call, in sorted key
+order, even with an empty batch. The batch holds every accepted occurrence
+whose recorded stack contains the key, of any node kind, with its episode and
+attributed feedback. Unattributed root feedback goes only to memories declared
+on the root file's flow; an imported file's flow memory, such as `lib.notes`,
+does not receive it. The memory decides whether execution history, feedback,
+or both justify a proposal. For example, an episodic memory can append a record
+while a reflective memory can propose a lesson.
 
-The engine stays policy-neutral. It supplies the retained context, validates the
-proposal, and later invokes the policy's existing commit interface; it does not
+The engine stays memory-neutral. It supplies the retained context, validates the
+proposal, and later invokes the memory's existing commit interface; it does not
 invent lessons or perform backend-specific writes. See
-[injecting agent memory](api.md#injecting-agent-memory) for the host-side policy
+[injecting agent memory](api.md#injecting-agent-memory) for the host-side
 interfaces and [AGENT memory](agent.md#memory-is-an-outer-to-local-stack) for
 recall order.
 
 ## Episodic memory
 
-`EpisodicMemory` is the built-in deterministic history policy. Import it from
-`agent_composer.memory.episodic` and inject it under the authored `episodic`
-name. It proposes one append mutation for every owner-scoped `MemoryEpisode` it
-receives, including executions without external feedback. Nothing is appended
-during forward execution: `learnable=True` retains the episode, and a successful
-later `backward()` attempt commits it.
+`EpisodicMemory` is the built-in deterministic history memory. Declare it, for
+example `long_term_memory: {notes: episodic}`, and `build_memories` constructs
+it; import it from `agent_composer.memory.episodic` to build one yourself. It
+proposes one append mutation for every `MemoryEpisode` in its batch, including
+executions without external feedback. Nothing is appended during forward
+execution: `learnable=True` retains the episode, and a successful later
+`backward()` attempt commits it.
 
-Each static frame has two positive integer settings. `max_episodes` bounds the
-stored history and evicts its oldest entries after a commit. `recall_limit`
+Each memory has two optional positive integer limits, set by YAML `config` or
+the constructor. An unset limit adopts the stored value, else the default; a
+different explicit value raises `episodic.config_conflict`. `ReflectiveMemory`
+limits (`max_items`, `recall_limit`) follow the same rule with
+`reflective.config_conflict`. `max_episodes` bounds the stored history and
+evicts its oldest entries after a commit. `recall_limit`
 bounds contextual AGENT recall. Contextual recall uses deterministic lexical
 overlap and recency; context-free recall returns the complete bounded history in
 chronological order. Entries are canonical JSON and preserve the run ID,
@@ -183,20 +190,21 @@ recovery contract.
 
 `ProfileMemory` keeps one markdown document per instance, for example one per
 person. Import it from `agent_composer.memory.profile`, give it a store, and
-inject it under the policy name your flows declare:
+pass it under the memory key your flow declares. For a flow that declares
+`long_term_memory: {about: profile}`:
 
 ```python
 from agent_composer.memory.profile import ProfileMemory
 from agent_composer.memory.storage import FileMarkdownStore
 
 profile = ProfileMemory(FileMarkdownStore("people/ada.md"))
-result = run_flow(flow, inputs, memory={"profile": profile}, learnable=True)
+result = run_flow(flow, inputs, memory={"about": profile}, learnable=True)
 ```
 
 - **Recall.** A run pins the version that is current when it starts. Every AGENT
-  under the outermost frame that declares the policy sees the whole document,
-  even while someone edits it. Nested frames of the same policy add nothing, and
-  two unrelated top-level frames are a setup error. Frame config is empty.
+  whose stack holds the profile's key sees the whole document, even while
+  someone edits it. A profile memory is one key like any other. YAML `config`
+  accepts `max_chars` and `input_budget_chars`.
 - **Learning.** `backward(feedback)` makes one tool-free model call. It sends the
   current document, the version the run saw when it differs, the feedback, and
   recent AGENT episodes within `input_budget_chars` (default 24,000). The newest
@@ -213,7 +221,7 @@ result = run_flow(flow, inputs, memory={"profile": profile}, learnable=True)
   commit failures (`profile.store_unavailable`, `profile.store_invalid`) are not
   retryable, because the write may have landed.
 - **Interrupted attempts.** If the process dies during commit, the resumed run
-  reports the policy as `unknown`, with its `commit_id`, in
+  reports the memory as `unknown`, with its `commit_id`, in
   `result.backward_outcome.learning.policies`. The write may have landed. Before
   you retry, look for that `commit_id` in the store's write provenance. If it is
   there, the feedback is already applied. A missing entry is not proof that
@@ -229,13 +237,18 @@ result = run_flow(flow, inputs, memory={"profile": profile}, learnable=True)
 - **Host edits.** `profile.read()` returns `(text, version)`, and
   `profile.write(text, base_version=version)` is the same compare-and-set without
   a size limit. `reset()` is refused; delete or rewrite the file through the store.
+- **Close.** `profile.close()` does no I/O. Afterwards `open_run`, `reset`,
+  `read`, `write`, and its open sessions raise `MemoryOperationError` with code
+  `profile.closed`. A registry from `build_memories` closes the profiles it built.
 
-`FileMarkdownStore(path)` keeps the current document as a plain editable file. Next
-to it are content-addressed copies of every version it has handed out
+`FileMarkdownStore(path)` keeps the current document as a plain editable file.
+`path` must be a local file path: empty, `:memory:`, and `file:` URIs raise
+`MemoryOperationError` with code `storage.path`. Next to it are
+content-addressed copies of every version it has handed out
 (`.<name>.versions/`), a lock file, and a write log (`.<name>.writes.jsonl`).
 Each write-log line is JSON with `base_version`, `version`, and `provenance`.
-From `ProfileMemory`, provenance holds `run_id`, `commit_id`, `frame`,
-`seen_version`, and the distinct `feedback` values. A crash while appending can
+From `ProfileMemory`, provenance holds `run_id`, `commit_id`, `seen_version`,
+and the distinct `feedback` values. A crash while appending can
 leave a partial last line; readers should skip lines that are not valid JSON.
 Locking is single-host. Other storage implements the `MarkdownStore` protocol:
 `read(version=None) -> (text, version)` and
@@ -248,36 +261,36 @@ Locking is single-host. Other storage implements the `MarkdownStore` protocol:
 
 One backward attempt has two phases:
 
-1. Run the reverse fold and every enabled frame learner. The runtime validates all
-   feedback and proposals before it accepts `BackwardReadyRecord`.
-2. Commit each policy's complete batch in recorded policy order. Empty batches are
-   still valid commits.
+1. Run the reverse fold and one `learn` call per memory key. The runtime
+   validates all feedback and proposals before it accepts `BackwardReadyRecord`.
+2. Commit each memory key's complete batch in sorted key order. Empty batches
+   are still valid commits.
 
-A callback or learner failure finishes the attempt as failed before any policy
-commit begins. Policy commits are individually durable; there is no cross-policy
-rollback. The learning result records each policy as `unrequested`, `unknown`,
-`succeeded`, or `failed`. `unknown` means the runtime recorded a request but did
-not durably observe the backend result.
+A callback or learner failure finishes the attempt as failed before any memory
+commit begins. Memory commits are individually durable; there is no rollback
+across memory keys. The learning result records each memory key as
+`unrequested`, `unknown`, `succeeded`, or `failed`, in `learning.policies`
+entries whose `.memory` names the key. `unknown` means the runtime recorded a
+request but did not durably observe the backend result.
 
 Every `backward()` call is a new attempt on the same run, whatever the earlier
 attempts did: succeeded, failed, committed, or crashed. Each attempt opens fresh
 sessions from the run's original snapshots and recomputes all callbacks and
 proposals. An unfinished earlier attempt, such as one killed during a commit, is
 first closed as interrupted; its unconfirmed requests stay `unknown`. The runtime
-never resumes a half-computed attempt, retries automatically, rebases a policy, or
-rolls back a different policy's confirmed commit.
+never resumes a half-computed attempt, retries automatically, rebases a memory,
+or rolls back a different memory's confirmed commit.
 
-Attempts are distinct for memory. After the first attempt that sends commits,
-each later attempt uses commit IDs that include its attempt number, so a backend
-that deduplicates by commit ID still applies an identical later batch. This
-also means a new attempt after an `unknown` request may write twice: the backend
-may have applied the first request, and it cannot match the new ID to it. The
-host reconciles, for example by checking the store before it calls `backward()`
-again. A learner sees only the current attempt's feedback, never an earlier
-attempt's. A policy
-may still reject a later attempt: the built-in `EpisodicMemory` and
-`ReflectiveMemory` fail `learn` with a `stale_generation` code once their memory
-has moved past the run's snapshot.
+Attempts are distinct for memory. Every attempt's commit IDs (`ac-memory-v3:`)
+include its attempt number, so a backend that deduplicates by commit ID still
+applies an identical later batch. This also means a new attempt after an
+`unknown` request may write twice: the backend may have applied the first
+request, and it cannot match the new ID to it. The host reconciles, for example
+by checking the store before it calls `backward()` again. A learner sees only
+the current attempt's feedback, never an earlier attempt's. A memory may still
+reject a later attempt: the built-in `EpisodicMemory` and `ReflectiveMemory`
+fail `learn` with a `stale_generation` code once their memory has moved past
+the run's snapshot.
 
 ## Durable feedback and recovery
 
@@ -298,7 +311,8 @@ outcome = recovered.backward("Make the explanation shorter.")
 
 Recovery folds the same append-only records used live and reconstructs the
 retained reverse tape. It never starts backward work or memory learning by itself.
-For a memory-enabled backward attempt, pass the original policy mapping to
+For a memory-enabled backward attempt, pass a mapping with the same memory keys,
+such as `build_memories(flow, ...)` over the same storage, to
 `resume_flow(..., memory=...)` so it can reopen the recorded snapshots. You may
 call `backward()` on the same log again later, from any process; each call appends
 a new attempt. The run handle and durable log reject overlapping backward attempts.
@@ -310,13 +324,13 @@ documents the locking and interrupted-forward boundary.
 
 ## Boundaries of the mechanism
 
-Learning from feedback helps a policy improve its own memory state for later
+Learning from feedback helps a memory improve its own state for later
 runs. It does not change an already completed forward result. It also does not:
 
 - choose a different authored path or edit the flow graph;
 - apply variable feedback as a replacement value;
 - rerun node forward calls, tools, prompts, recall, or opaque functions;
-- make a memory backend's commits cross-policy atomic; or
+- make commits atomic across memory keys; or
 - guarantee exactly-once external effects after an interrupted forward node.
 
 Those boundaries keep the authored flow deterministic while making feedback,

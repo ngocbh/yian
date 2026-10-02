@@ -14,7 +14,7 @@ from unittest.mock import patch
 import pytest
 
 from agent_composer.memory.contracts import MemoryOperationError, _MAX_JSON_NESTING
-from agent_composer.memory.storage import SQLiteStorage
+from agent_composer.memory.storage import SQLiteStorage, check_storage_path
 
 
 def _assert_error(error: MemoryOperationError, code: str) -> None:
@@ -310,6 +310,7 @@ def test_zero_byte_file_initializes_without_changing_permissions(tmp_path):
     [
         "kind",
         "version",
+        "frame_era_version",
         "boolean_version",
         "extra_field",
         "missing_field",
@@ -334,7 +335,9 @@ def test_invalid_store_rejected_without_overwriting_or_leaking_owner(tmp_path, d
         if damage == "kind":
             envelope["backend"] = "episodic"
         elif damage == "version":
-            envelope["version"] = 2
+            envelope["version"] = 3
+        elif damage == "frame_era_version":
+            envelope["version"] = 1
         elif damage == "boolean_version":
             envelope["version"] = True
         elif damage == "extra_field":
@@ -364,6 +367,8 @@ def test_invalid_store_rejected_without_overwriting_or_leaking_owner(tmp_path, d
         with pytest.raises(MemoryOperationError) as caught:
             SQLiteStorage(path, "session")
         assert caught.value.code != "storage.busy"
+        if damage in {"version", "frame_era_version"}:
+            assert caught.value.code == "storage.version"
         assert path.read_bytes() == before
 
 
@@ -694,3 +699,40 @@ def test_postfork_guard_precedes_python_lock_and_sqlite(tmp_path):
         _assert_error(caught.value, "busy")
     finally:
         store.close()
+
+
+def test_check_storage_path_returns_an_absolute_path_without_io(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert check_storage_path("m.sqlite") == os.path.join(os.getcwd(), "m.sqlite")
+    assert check_storage_path(tmp_path / "x" / "m.sqlite") == str(tmp_path / "x" / "m.sqlite")
+    assert list(tmp_path.iterdir()) == []
+    for bad in ("", ":memory:", "FILE:m.sqlite", "a\x00b", b"m.sqlite", 3):
+        with pytest.raises(MemoryOperationError) as caught:
+            check_storage_path(bad)
+        _assert_error(caught.value, "path")
+
+
+def test_storage_path_follows_symlinks_before_parent_steps(tmp_path):
+    target = tmp_path / "target" / "sub"
+    target.mkdir(parents=True)
+    (tmp_path / "link").symlink_to(target)
+    raw = os.path.join(str(tmp_path), "link", "..", "m.sqlite")
+    assert check_storage_path(raw) == raw
+    store = SQLiteStorage(raw, "session")
+    try:
+        store.save({"ok": True})
+    finally:
+        store.close()
+    assert (tmp_path / "target" / "m.sqlite").is_file()
+    assert not (tmp_path / "m.sqlite").exists()
+
+
+def test_create_parent_makes_missing_directories(tmp_path):
+    path = tmp_path / "a" / "b" / "m.sqlite"
+    with pytest.raises(MemoryOperationError) as caught:
+        SQLiteStorage(path, "episodic")
+    _assert_error(caught.value, "io")
+    assert not (tmp_path / "a").exists()
+    storage = SQLiteStorage(path, "episodic", create_parent=True)
+    storage.close()
+    assert path.is_file()

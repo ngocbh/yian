@@ -1,22 +1,21 @@
 """Run-scoped orchestration for host-injected memory implementations.
 
-The compile layer supplies one canonical tuple of source-neutral frame specs and
-their optional authored origins.  This module validates the host registry, opens
-exactly one session per referenced policy, opens every static frame, captures the
-public recovery snapshots, and admits ordered memory context for the evaluator. It does
-not resolve YAML, inspect node kinds, or construct a concrete memory backend.
-The explicit backward path stages complete frame proposals and performs accepted
+The compile layer supplies the recorded memory table, one ``MemorySpec`` per
+key, and each key's optional authored origin. This module validates the host
+registry, opens exactly one session per key, captures the public recovery
+snapshots, and admits ordered memory context for the evaluator. It does not
+resolve YAML, inspect node kinds, or construct a concrete memory backend. The
+explicit backward path stages one proposal per key and performs accepted
 commit requests separately; the attempt driver owns their records and ordering.
 """
 
 from __future__ import annotations
 
 from asyncio import CancelledError as AsyncCancelledError
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from concurrent.futures import CancelledError as FutureCancelledError
 from contextlib import contextmanager, nullcontext
 from copy import deepcopy
-from dataclasses import dataclass
 from typing import Any
 
 from agent_composer.diagnostics import OriginRef
@@ -28,9 +27,6 @@ from agent_composer.memory import (
     MemoryContent,
     MemoryContext,
     MemoryContextRequest,
-    MemoryFrame,
-    MemoryFrameRef,
-    MemoryFrameSpec,
     MemoryOperationError,
     MemoryOperationFailure,
     MemoryRecallError,
@@ -39,16 +35,12 @@ from agent_composer.memory import (
     MemorySession,
     MemorySetupError,
     MemorySnapshotEnvelope,
+    MemorySpec,
 )
 from agent_composer.memory.contracts import _validate_mutations
 from agent_composer.nodes.base import _CapabilityFault, _HostStop
-from agent_composer.runtime.contracts import FrameProposal
+from agent_composer.runtime.contracts import MemoryProposal
 from agent_composer.runtime.log import MemoryCommitRequestedRecord
-
-
-def _frame_key(ref: MemoryFrameRef) -> tuple[str, tuple[str, ...], str]:
-    """Return the canonical structural order of one memory frame."""
-    return (ref.root_flow_id, ref.static_path, ref.owner.value)
 
 
 def _require_name(value: object, name: str) -> str:
@@ -69,57 +61,47 @@ def _revalidate_origin(value: OriginRef | None) -> OriginRef | None:
     if value is None:
         return None
     if not isinstance(value, OriginRef):
-        raise TypeError("memory frame origins must be OriginRef values or None")
+        raise TypeError("memory origins must be OriginRef values or None")
     OriginRef(value.key)
     return value
 
 
-def _validate_layout(layout: tuple[MemoryFrameSpec, ...]) -> None:
-    """Require canonical unique frame order and exact effective specs."""
-    if type(layout) is not tuple:
-        raise TypeError("memory layout must be a tuple")
-    for spec in layout:
-        if type(spec) is not MemoryFrameSpec:
-            raise TypeError("memory layout items must be MemoryFrameSpec values")
-        MemoryFrameSpec(spec.ref, spec.policy_name, spec.config)
-    keys = tuple(_frame_key(spec.ref) for spec in layout)
+def _validate_memories(memories: tuple[MemorySpec, ...]) -> tuple[str, ...]:
+    """Require exact revalidated specs in sorted unique key order; return the keys."""
+    if type(memories) is not tuple or any(type(spec) is not MemorySpec for spec in memories):
+        raise TypeError("memories must be a tuple of MemorySpec values")
+    for spec in memories:
+        MemorySpec(spec.key, spec.type, spec.config, spec.owners, spec.conversation_eligible)
+    keys = tuple(spec.key for spec in memories)
     if keys != tuple(sorted(set(keys))):
-        raise ValueError("memory layout frame refs must be sorted and unique")
-    if len({spec.ref.root_flow_id for spec in layout}) > 1:
-        raise ValueError("memory layout frame refs must share one root_flow_id")
+        raise ValueError("memories must be sorted by key and unique")
+    return keys
 
 
 def _validate_origins(
-    layout: tuple[MemoryFrameSpec, ...],
-    origins: dict[MemoryFrameRef, OriginRef | None],
-) -> dict[MemoryFrameRef, OriginRef | None]:
-    """Return a detached exact origin map aligned with ``layout``."""
+    keys: tuple[str, ...],
+    origins: dict[str, OriginRef | None],
+) -> dict[str, OriginRef | None]:
+    """Return a detached exact origin map with one entry per memory key."""
     if type(origins) is not dict:
-        raise TypeError("memory frame origins must be a dictionary")
-    expected = {spec.ref for spec in layout}
-    if set(origins) != expected:
-        raise ValueError("memory frame origins must exactly match the layout")
-    result: dict[MemoryFrameRef, OriginRef | None] = {}
-    for ref, origin in origins.items():
-        if type(ref) is not MemoryFrameRef:
-            raise TypeError("memory frame origin keys must be MemoryFrameRef values")
-        MemoryFrameRef(ref.root_flow_id, ref.static_path, ref.owner)
-        result[ref] = _revalidate_origin(origin)
-    return result
+        raise TypeError("memory origins must be a dictionary")
+    if any(type(key) is not str for key in origins):
+        raise TypeError("memory origin keys must be strings")
+    if set(origins) != set(keys):
+        raise ValueError("memory origins must exactly match the memory keys")
+    return {key: _revalidate_origin(origins[key]) for key in keys}
 
 
-def _validate_registry(memory: dict[str, Memory]) -> dict[str, Memory]:
+def _validate_registry(memory: Mapping[str, Memory]) -> dict[str, Memory]:
     """Return a detached exact registry and reject cross-name object aliases."""
-    if type(memory) is not dict:
-        raise TypeError("memory must be a dictionary or None")
+    if not isinstance(memory, Mapping):
+        raise TypeError("memory must be a mapping of memory keys to backends, or None")
     result: dict[str, Memory] = {}
     identities: dict[int, str] = {}
     for raw_name, implementation in memory.items():
-        name = _require_name(raw_name, "memory policy name")
+        name = _require_name(raw_name, "memory name")
         if not isinstance(implementation, Memory):
-            raise TypeError(
-                f"memory policy {name!r} must implement the Memory protocol"
-            )
+            raise TypeError(f"memory {name!r} must implement the Memory protocol")
         identity = id(implementation)
         prior = identities.get(identity)
         if prior is not None:
@@ -134,80 +116,56 @@ def _validate_registry(memory: dict[str, Memory]) -> dict[str, Memory]:
 
 def _validate_snapshots(
     snapshots: tuple[MemorySnapshotEnvelope, ...] | None,
-    policy_names: tuple[str, ...],
+    keys: tuple[str, ...],
 ) -> dict[str, dict[str, Any] | None]:
-    """Return the per-policy restore payload, or fresh ``None`` payloads."""
+    """Return the per-key restore payload, or fresh ``None`` payloads."""
     if snapshots is None:
-        return {name: None for name in policy_names}
+        return {name: None for name in keys}
     if type(snapshots) is not tuple:
         raise TypeError("memory snapshots must be a tuple or None")
     restored: dict[str, dict[str, Any] | None] = {}
-    supplied_names: list[str] = []
+    supplied: list[str] = []
     for envelope in snapshots:
         if type(envelope) is not MemorySnapshotEnvelope:
             raise TypeError(
                 "memory snapshots must contain MemorySnapshotEnvelope values"
             )
         canonical = MemorySnapshotEnvelope(
-            envelope.policy_name,
+            envelope.memory,
             envelope.snapshot,
         )
-        if canonical.policy_name in restored:
-            raise ValueError("memory snapshot policy names must be unique")
-        supplied_names.append(canonical.policy_name)
-        restored[canonical.policy_name] = canonical.snapshot
-    if tuple(supplied_names) != policy_names:
+        if canonical.memory in restored:
+            raise ValueError("memory snapshot keys must be unique")
+        supplied.append(canonical.memory)
+        restored[canonical.memory] = canonical.snapshot
+    if tuple(supplied) != keys:
         raise ValueError(
-            "memory snapshots must exactly match referenced policies in canonical order"
+            "memory snapshots must exactly match the memory keys in canonical order"
         )
     return restored
 
 
 def _validate_session(
     value: object,
-    policy_name: str,
+    key: str,
     origin: OriginRef | None,
 ) -> MemorySession:
     """Require the narrow callable session surface without reading properties."""
-    for attribute in ("open_frame", "commit", "close"):
+    for attribute in ("recall", "learn", "commit", "close"):
         if not callable(getattr(value, attribute, None)):
             raise MemorySetupError(
-                f"memory policy {policy_name!r} returned an invalid run session",
+                f"memory {key!r} returned an invalid run session",
                 origin=origin,
             )
     return value  # type: ignore[return-value]
-
-
-def _validate_frame(
-    value: object,
-    policy_name: str,
-    origin: OriginRef | None,
-) -> MemoryFrame:
-    """Require the narrow callable frame surface."""
-    for attribute in ("recall", "learn"):
-        if not callable(getattr(value, attribute, None)):
-            raise MemorySetupError(
-                f"memory policy {policy_name!r} returned an invalid frame",
-                origin=origin,
-            )
-    return value  # type: ignore[return-value]
-
-
-@dataclass(frozen=True, slots=True)
-class _OpenedFrame:
-    """One effective frame paired with its opened backend handle and origin."""
-
-    spec: MemoryFrameSpec
-    frame: MemoryFrame
-    origin: OriginRef | None
 
 
 class _LearningProposalError(Exception):
-    """One known frame-local proposal failure before any commit request."""
+    """One known per-key proposal failure before any commit request."""
 
-    def __init__(self, frame_ref: MemoryFrameRef, failure: MemoryOperationFailure) -> None:
-        """Keep the owning frame and sanitized failure at the proposal boundary."""
-        self.frame_ref = frame_ref
+    def __init__(self, memory: str, failure: MemoryOperationFailure) -> None:
+        """Keep the owning memory key and sanitized failure at the proposal boundary."""
+        self.memory = memory
         self.failure = failure
         super().__init__(failure.message)
 
@@ -247,150 +205,114 @@ def _raise_host_error(error: BaseException) -> None:
 
 
 class MemoryRuntime:
-    """One opened set of policy sessions shared by execution and learning."""
+    """One opened set of per-key sessions shared by execution and learning."""
 
     def __init__(
         self,
         *,
-        layout: tuple[MemoryFrameSpec, ...],
-        origins: dict[MemoryFrameRef, OriginRef | None],
+        memories: tuple[MemorySpec, ...],
+        origins: dict[str, OriginRef | None],
         sessions: dict[str, MemorySession],
-        frames: dict[MemoryFrameRef, _OpenedFrame],
         snapshots: tuple[MemorySnapshotEnvelope, ...],
     ) -> None:
-        self._layout = layout
+        self._memories = memories
         self._origins = origins
         self._sessions = sessions
-        self._frames = frames
         self._snapshots = snapshots
+        self._eligible = frozenset(
+            spec.key for spec in memories if spec.conversation_eligible
+        )
         self._closed = False
 
     @property
-    def layout(self) -> tuple[MemoryFrameSpec, ...]:
-        """Return the immutable canonical frame inventory for this run."""
-        return self._layout
+    def memories(self) -> tuple[MemorySpec, ...]:
+        """Return the immutable recorded memory table for this run."""
+        return self._memories
 
     @property
     def snapshots(self) -> tuple[MemorySnapshotEnvelope, ...]:
-        """Return the immutable public snapshots captured after frame opening."""
+        """Return the immutable public snapshots captured after opening."""
         return self._snapshots
 
     @classmethod
     def open(
         cls,
         *,
-        layout: tuple[MemoryFrameSpec, ...],
-        origins: dict[MemoryFrameRef, OriginRef | None],
-        memory: dict[str, Memory],
+        memories: tuple[MemorySpec, ...],
+        origins: dict[str, OriginRef | None],
+        memory: Mapping[str, Memory],
         snapshots: tuple[MemorySnapshotEnvelope, ...] | None = None,
     ) -> "MemoryRuntime":
-        """Validate and open one run-scoped memory authority.
+        """Validate and open one session per recorded memory key.
 
-        ``snapshots=None`` opens the implementations at their current state for a
-        fresh run.  A tuple restores the exact public snapshots recorded by
-        ``RunStarted`` during recovery.
+        ``snapshots=None`` opens the implementations at their current state
+        for a fresh run. A tuple restores the exact public snapshots recorded
+        by ``RunStarted`` during recovery. An empty table opens nothing.
         """
-        _validate_layout(layout)
-        canonical_origins = _validate_origins(layout, origins)
+        keys = _validate_memories(memories)
+        canonical_origins = _validate_origins(keys, origins)
         registry = _validate_registry(memory)
-        policy_names = tuple(sorted({spec.policy_name for spec in layout}))
-        restore = _validate_snapshots(snapshots, policy_names)
-        first_origin: dict[str, OriginRef | None] = {}
-        for spec in layout:
-            first_origin.setdefault(spec.policy_name, canonical_origins[spec.ref])
-        for policy_name in policy_names:
-            if policy_name not in registry:
+        restore = _validate_snapshots(snapshots, keys)
+        for key in keys:
+            if key not in registry:
                 raise MemorySetupError(
-                    f"memory policy {policy_name!r} was not supplied by the host",
-                    origin=first_origin[policy_name],
+                    f"memory {key!r} was not supplied by the host",
+                    origin=canonical_origins[key],
                 )
 
         opened_sessions: dict[str, MemorySession] = {}
-        opened_frames: dict[MemoryFrameRef, _OpenedFrame] = {}
         try:
-            for policy_name in policy_names:
-                implementation = registry[policy_name]
+            for key in keys:
                 try:
-                    session = implementation.open_run(
-                        snapshot=restore[policy_name]
-                    )
+                    session = registry[key].open_run(snapshot=restore[key])
                     if callable(getattr(session, "close", None)):
-                        opened_sessions[policy_name] = session  # type: ignore[assignment]
-                    opened_sessions[policy_name] = _validate_session(
-                        session,
-                        policy_name,
-                        first_origin[policy_name],
+                        opened_sessions[key] = session  # type: ignore[assignment]
+                    opened_sessions[key] = _validate_session(
+                        session, key, canonical_origins[key],
                     )
                 except MemoryOperationError as exc:
                     raise MemorySetupError(
-                        f"memory policy {policy_name!r} could not open its run session: "
-                        f"{exc.message}",
-                        origin=first_origin[policy_name],
-                    ) from exc
-
-            for spec in layout:
-                try:
-                    frame = opened_sessions[spec.policy_name].open_frame(spec)
-                    opened_frames[spec.ref] = _OpenedFrame(
-                        spec,
-                        _validate_frame(
-                            frame,
-                            spec.policy_name,
-                            canonical_origins[spec.ref],
-                        ),
-                        canonical_origins[spec.ref],
-                    )
-                except MemoryOperationError as exc:
-                    raise MemorySetupError(
-                        f"memory policy {spec.policy_name!r} could not open frame "
-                        f"{spec.ref.static_path!r}: {exc.message}",
-                        origin=canonical_origins[spec.ref],
+                        f"memory {key!r} could not open its run session: {exc.message}",
+                        origin=canonical_origins[key],
                     ) from exc
 
             captured: list[MemorySnapshotEnvelope] = []
-            for policy_name in policy_names:
+            for key in keys:
                 try:
                     captured.append(
-                        MemorySnapshotEnvelope(
-                            policy_name,
-                            opened_sessions[policy_name].snapshot,
-                        )
+                        MemorySnapshotEnvelope(key, opened_sessions[key].snapshot)
                     )
                 except MemoryOperationError as exc:
                     raise MemorySetupError(
-                        f"memory policy {policy_name!r} could not export its run "
-                        f"snapshot: {exc.message}",
-                        origin=first_origin[policy_name],
+                        f"memory {key!r} could not export its run snapshot: {exc.message}",
+                        origin=canonical_origins[key],
                     ) from exc
                 except (AttributeError, TypeError, ValueError, RecursionError) as exc:
                     raise MemorySetupError(
-                        f"memory policy {policy_name!r} exported an invalid run snapshot",
-                        origin=first_origin[policy_name],
+                        f"memory {key!r} exported an invalid run snapshot",
+                        origin=canonical_origins[key],
                     ) from exc
             if snapshots is not None and tuple(captured) != snapshots:
                 differing = next(
                     (
-                        expected.policy_name
+                        expected.memory
                         for expected, actual in zip(snapshots, captured)
                         if expected != actual
                     ),
-                    policy_names[0] if policy_names else None,
+                    keys[0] if keys else None,
                 )
                 raise MemorySetupError(
                     "restored memory session did not reproduce its recorded snapshot",
-                    origin=(
-                        None if differing is None else first_origin[differing]
-                    ),
+                    origin=None if differing is None else canonical_origins[differing],
                 )
         except BaseException as primary:
             _close_sessions(opened_sessions, primary)
             raise
 
         return cls(
-            layout=layout,
+            memories=memories,
             origins=canonical_origins,
             sessions=opened_sessions,
-            frames=opened_frames,
             snapshots=tuple(captured),
         )
 
@@ -402,15 +324,17 @@ class MemoryRuntime:
         *,
         check_stopped: CheckStopped,
     ) -> Iterator[MemoryContext]:
-        """Recall each frame and admit the innermost contributed transcript.
+        """Recall each key in the scope and admit its one eligible transcript.
 
-        Notes retain outer-to-local ownership. Transcript selection uses only
-        explicit recall contributions; losing sources are never opened. A live
-        transcript requires the accepted invocation, while text-only contexts do
-        not. The admitted backend resource lasts until this context exits.
+        Sections keep the scope's outermost-first key order. Only a
+        conversation-eligible key may contribute a transcript, and at most
+        one key may do so; a losing source is never opened. A live
+        transcript requires the accepted invocation, while text-only
+        contexts do not. The admitted backend resource lasts until this
+        context exits.
 
         Args:
-            scope (`MemoryScope`): Exact compiled consumer scope over opened frames.
+            scope (`MemoryScope`): Exact compiled consumer scope over opened keys.
             request (`MemoryContextRequest`): Matching recall context, optional
                 accepted invocation, and detached compatibility descriptor.
             check_stopped (`CheckStopped`): Checked after recall, before any
@@ -423,8 +347,10 @@ class MemoryRuntime:
         Raises:
             `TypeError`: A carrier or callback has the wrong type.
             `ValueError`: Paths disagree or a transcript lacks an invocation.
-            `RuntimeError`: The runtime is closed or a frame is not opened.
-            `MemoryRecallError`: A policy rejects recall or returns invalid content.
+            `RuntimeError`: The runtime is closed or a key is not opened.
+            `MemoryRecallError`: A memory rejects recall, returns invalid
+                content, returns a transcript without being
+                conversation-eligible, or returns a second transcript.
             `Exception`: An unexpected recall or transcript backend error.
 
         Example:
@@ -435,10 +361,7 @@ class MemoryRuntime:
             raise RuntimeError("memory runtime is closed")
         if type(scope) is not MemoryScope:
             raise TypeError("memory context scope must be a MemoryScope")
-        scope = MemoryScope(
-            scope.root_flow_id, scope.static_path, scope.frame_stack,
-            scope.occurrence_path, scope.boundary,
-        )
+        scope = MemoryScope(scope.static_path, scope.memories, scope.occurrence_path)
         if type(request) is not MemoryContextRequest:
             raise TypeError("memory request must be a MemoryContextRequest")
         request = MemoryContextRequest(
@@ -448,35 +371,48 @@ class MemoryRuntime:
             raise TypeError("check_stopped must be callable")
         if request.recall.consumer_static_path != scope.static_path:
             raise ValueError("memory context request does not match the consumer scope")
+        if not set(scope.memories) <= self._sessions.keys():
+            raise RuntimeError("memory scope names a memory outside the opened table")
         sections: list[MemorySection] = []
         selected = None
-        for ref in scope.frame_stack:
-            opened = self._frames.get(ref)
-            if opened is None:
-                raise RuntimeError("memory scope names a frame outside the opened layout")
+        for key in scope.memories:
+            session = self._sessions[key]
+            origin = self._origins[key]
             try:
-                content = opened.frame.recall(request.recall)
+                content = session.recall(request.recall)
             except MemoryOperationError as exc:
                 raise MemoryRecallError(
-                    f"memory policy {opened.spec.policy_name!r} recall failed: "
-                    f"{exc.message}",
-                    origin=opened.origin,
+                    f"memory {key!r} recall failed: {exc.message}",
+                    origin=origin,
                 ) from exc
             try:
                 if type(content) is MemoryContent:
                     content = MemoryContent(content.text, content.transcript)
                 else:
                     content = MemoryContent(content)
-                section = MemorySection(ref, content.text)
+                section = MemorySection(key, content.text)
             except (TypeError, ValueError, RecursionError) as exc:
                 raise MemoryRecallError(
-                    f"memory policy {opened.spec.policy_name!r} returned invalid "
-                    "recall content",
-                    origin=opened.origin,
+                    f"memory {key!r} returned invalid recall content",
+                    origin=origin,
                 ) from exc
             if section.text:
                 sections.append(section)
             if content.transcript is not None:
+                if key not in self._eligible:
+                    raise MemoryRecallError(
+                        f"memory {key!r} returned a transcript but is not "
+                        "conversation-eligible; only a memory with one AGENT "
+                        "owner may hold a conversation",
+                        origin=origin,
+                    )
+                if selected is not None:
+                    raise MemoryRecallError(
+                        f"memory {key!r} returned a second transcript for "
+                        f"{'/'.join(scope.static_path)!r}; one AGENT may hold "
+                        "at most one conversation",
+                        origin=origin,
+                    )
                 selected = content.transcript
         check_stopped()
         if selected is None:
@@ -491,15 +427,17 @@ class MemoryRuntime:
         with manager as transcript:
             yield MemoryContext(tuple(sections), transcript)
 
-    def propose_learning(self, contexts: tuple[LearnContext, ...]) -> tuple[FrameProposal, ...]:
-        """Stage every owned frame's proposal without writing records or memory.
+    def propose_learning(
+        self, contexts: tuple[LearnContext, ...],
+    ) -> tuple[MemoryProposal, ...]:
+        """Stage every key's proposal without writing records or memory.
 
         Args:
-            contexts (`tuple[LearnContext, ...]`): Complete detached owner contexts
-                in this runtime's recorded layout order, including empty frames.
+            contexts (`tuple[LearnContext, ...]`): One detached context per
+                recorded key, in table order, including empty batches.
 
         Returns:
-            `tuple[FrameProposal, ...]`: Validated owned mutations in layout order.
+            `tuple[MemoryProposal, ...]`: Validated mutations in table order.
 
         Raises:
             `TypeError`, `ValueError`: For invalid context coverage or carriers.
@@ -509,35 +447,37 @@ class MemoryRuntime:
         """
         if self._closed:
             raise RuntimeError("memory runtime is closed")
-        if type(contexts) is not tuple or any(type(context) is not LearnContext for context in contexts):
+        if type(contexts) is not tuple or any(
+            type(context) is not LearnContext for context in contexts
+        ):
             raise TypeError("learning contexts must be a tuple of exact LearnContext values")
         copied = tuple(deepcopy(LearnContext(
-            context.run_id, context.frame_ref, context.episodes, context.feedback,
+            context.run_id, context.memory, context.episodes, context.feedback,
         )) for context in contexts)
-        if tuple(context.frame_ref for context in copied) != tuple(spec.ref for spec in self._layout):
-            raise ValueError("learning contexts must cover the complete recorded layout in order")
+        if tuple(context.memory for context in copied) != tuple(
+            spec.key for spec in self._memories
+        ):
+            raise ValueError(
+                "learning contexts must cover the complete recorded memory table in order"
+            )
         if len({context.run_id for context in copied}) > 1:
             raise ValueError("learning contexts must belong to one run")
 
         proposals = []
-        policy_ids: dict[str, set[str]] = {}
-        for spec, context in zip(self._layout, copied):
+        for context in copied:
+            key = context.memory
             try:
-                raw = self._frames[spec.ref].frame.learn(context)
+                raw = self._sessions[key].learn(context)
             except MemoryOperationError as exc:
                 _raise_host_error(exc)
-                raise _LearningProposalError(spec.ref, _operation_failure("learn", exc)) from exc
+                raise _LearningProposalError(key, _operation_failure("learn", exc)) from exc
             try:
                 if type(raw) is not list:
                     raise TypeError("memory learn() must return an exact list")
-                proposal = FrameProposal(spec.ref, tuple(raw))
-                known_ids = policy_ids.setdefault(spec.policy_name, set())
-                if any(mutation.mutation_id in known_ids for mutation in proposal.mutations):
-                    raise ValueError("memory mutation ids must be unique within one policy commit")
+                proposal = MemoryProposal(key, tuple(raw))
             except (AttributeError, TypeError, ValueError) as exc:
                 _raise_host_error(exc)
-                raise _LearningProposalError(spec.ref, _invalid_result_failure("learn")) from exc
-            known_ids.update(mutation.mutation_id for mutation in proposal.mutations)
+                raise _LearningProposalError(key, _invalid_result_failure("learn")) from exc
             proposals.append(proposal)
         return tuple(proposals)
 
@@ -546,7 +486,7 @@ class MemoryRuntime:
 
         Args:
             request (`MemoryCommitRequestedRecord`): The accepted attempt-aware
-                request, with its exact policy, stable ID, and ordered batch.
+                request, with its exact memory key, stable ID, and ordered batch.
 
         Returns:
             `MemoryOperationFailure | None`: A known backend/return-contract failure,
@@ -561,20 +501,20 @@ class MemoryRuntime:
         if type(request) is not MemoryCommitRequestedRecord:
             raise TypeError("backward commit requires an exact MemoryCommitRequestedRecord")
         request = MemoryCommitRequestedRecord(
-            request.policy_name, request.commit_id, request.mutations, attempt_id=request.attempt_id,
+            request.memory, request.commit_id, request.mutations, attempt_id=request.attempt_id,
         )
-        if request.policy_name not in self._sessions:
-            raise ValueError("backward commit requires an enabled policy and attempt")
+        if request.memory not in self._sessions:
+            raise ValueError("backward commit requires an enabled memory and attempt")
         mutations = _validate_mutations(request.mutations)
         try:
-            result = self._sessions[request.policy_name].commit(request.commit_id, mutations)
+            result = self._sessions[request.memory].commit(request.commit_id, mutations)
         except MemoryOperationError as exc:
             _raise_host_error(exc)
             return _operation_failure("commit", exc)
         return None if result is None else _invalid_result_failure("commit")
 
     def close(self) -> None:
-        """Close every opened session in reverse policy order exactly once."""
+        """Close every opened session in reverse key order exactly once."""
         self._close_preserving(None)
 
     def _close_preserving(self, primary_error: BaseException | None) -> None:
@@ -591,9 +531,9 @@ def _close_sessions(
 ) -> None:
     """Close sessions in reverse order while preserving an initiating failure."""
     first_error: BaseException | None = None
-    for policy_name in reversed(tuple(sessions)):
+    for key in reversed(tuple(sessions)):
         try:
-            sessions[policy_name].close()
+            sessions[key].close()
         except BaseException as exc:
             target = primary_error if primary_error is not None else first_error
             if target is None:
@@ -601,7 +541,7 @@ def _close_sessions(
                 continue
             try:
                 target.add_note(
-                    f"memory policy {policy_name!r} session close also raised "
+                    f"memory {key!r} session close also raised "
                     f"{type(exc).__name__}: {exc}"
                 )
             except BaseException:
@@ -637,7 +577,7 @@ def _unexpected_operation_failure(operation: str) -> MemoryOperationFailure:
 
 
 def _invalid_result_failure(operation: str) -> MemoryOperationFailure:
-    """Return one stable final failure for a malformed policy return value."""
+    """Return one stable final failure for a malformed memory return value."""
     return MemoryOperationFailure(
         operation,
         "memory.invalid_result",

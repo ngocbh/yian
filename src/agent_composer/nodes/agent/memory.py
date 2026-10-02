@@ -50,7 +50,7 @@ def system_prompt_with_memory(
     base_system_prompt: str,
     memory_sections: tuple[MemorySection, ...],
 ) -> str:
-    """Frame opaque policy text as labelled outer-to-local system sections."""
+    """Frame opaque memory text as labelled outer-to-local system sections."""
     if not memory_sections:
         return base_system_prompt
     payload = {
@@ -58,8 +58,7 @@ def system_prompt_with_memory(
         "sections": [
             {
                 "index": index,
-                "owner": section.frame_ref.owner.value.upper(),
-                "static_path": section.frame_ref.static_path,
+                "memory": section.memory,
                 "text": section.text,
             }
             for index, section in enumerate(memory_sections, start=1)

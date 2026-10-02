@@ -31,7 +31,7 @@ from agent_composer.diagnostics import (
     ResolverTable,
     SourceRange,
 )
-from agent_composer.memory import MemoryPolicySpec
+from agent_composer.memory import DeclSite, MemoryDecl
 from agent_composer.nodes.agent import AgentNode
 from agent_composer.nodes.base import Node
 from agent_composer.nodes.call import CallNode
@@ -388,20 +388,27 @@ def test_case_predicate_origins_traverse_and_rewrite_by_arm_identity() -> None:
     assert shared.origin == _origin("case/shared")
 
 
-def test_shared_memory_policy_origin_traverses_and_rewrites_once() -> None:
-    """A flow and AGENT may deliberately alias one immutable policy carrier."""
-    shared = MemoryPolicySpec(
-        "reflective",
-        {"max_items": 4},
-        _origin("policy/shared"),
+def _shared_decl(origin: OriginRef | None) -> MemoryDecl:
+    return MemoryDecl(
+        "reflective", "reflective", {"max_items": 4}, DeclSite((), ("root",), "agent"), origin,
     )
-    agent = AgentNode("agent", memory_policy=shared)
-    flow = CompiledFlow.from_parts(
-        nodes={"agent": agent},
+
+
+def _aliased_flow(shared: MemoryDecl) -> CompiledFlow:
+    return CompiledFlow.from_parts(
+        nodes={
+            "left": AgentNode("left", memories=(shared,)),
+            "right": AgentNode("right", memories=(shared,)),
+        },
         edges=[],
-        wiring={"agent": {}},
-        memory_policy=shared,
+        wiring={"left": {}, "right": {}},
     )
+
+
+def test_shared_memory_decl_origin_traverses_and_rewrites_once() -> None:
+    """Two AGENTs may deliberately alias one immutable declaration carrier."""
+    shared = _shared_decl(_origin("policy/shared"))
+    flow = _aliased_flow(shared)
 
     assert list(iter_flow_origins(flow)) == [_origin("policy/shared")]
     calls: list[OriginRef] = []
@@ -411,38 +418,25 @@ def test_shared_memory_policy_origin_traverses_and_rewrites_once() -> None:
 
     rewritten = rewrite_flow_origins(
         flow,
-        lambda origin: (
-            calls.append(origin) or DerivedOrigin(f"mapped/{origin.key}")
-        ),
+        lambda origin: (calls.append(origin) or DerivedOrigin(f"mapped/{origin.key}")),
     )
 
     assert calls == [_origin("policy/shared")]
-    assert rewritten.memory_policy is rewritten.nodes["agent"].memory_policy
-    assert type(rewritten.memory_policy.origin) is OriginRef
-    assert rewritten.memory_policy.origin == _origin("mapped/policy/shared")
-    assert flow.memory_policy is shared
-    assert agent.memory_policy is shared
+    left, right = rewritten.nodes["left"].memories[0], rewritten.nodes["right"].memories[0]
+    assert left is right
+    assert type(left.origin) is OriginRef
+    assert left.origin == _origin("mapped/policy/shared")
+    assert flow.nodes["left"].memories[0] is shared
     assert shared.origin == _origin("policy/shared")
 
 
-def test_source_free_memory_policy_adds_no_origin() -> None:
-    shared = MemoryPolicySpec("reflective", {})
-    flow = CompiledFlow.from_parts(
-        nodes={"agent": AgentNode("agent", memory_policy=shared)},
-        edges=[],
-        memory_policy=shared,
-    )
-
-    assert list(iter_flow_origins(flow)) == []
+def test_source_free_memory_decl_adds_no_origin() -> None:
+    assert list(iter_flow_origins(_aliased_flow(_shared_decl(None)))) == []
 
 
-def test_memory_policy_origin_rebase_routes_the_single_shared_site() -> None:
-    shared = MemoryPolicySpec("reflective", {}, _origin("policy/shared"))
-    flow = CompiledFlow.from_parts(
-        nodes={"agent": AgentNode("agent", memory_policy=shared)},
-        edges=[],
-        memory_policy=shared,
-    )
+def test_memory_decl_origin_rebase_routes_the_single_shared_site() -> None:
+    shared = _shared_decl(_origin("policy/shared"))
+    flow = _aliased_flow(shared)
     frame = DiagnosticFrame(
         label="memory.yaml",
         text="long_term_memory: reflective\n",
@@ -456,14 +450,12 @@ def test_memory_policy_origin_rebase_routes_the_single_shared_site() -> None:
     mapped: list[OriginRef] = []
     rebased, table = rebase_flow_origins(
         flow,
-        lambda origin: (
-            mapped.append(origin) or _origin(f"alias/{origin.key}")
-        ),
+        lambda origin: (mapped.append(origin) or _origin(f"alias/{origin.key}")),
         resolver=Resolver(),
     )
 
     assert mapped == [_origin("policy/shared")]
-    assert rebased.memory_policy is rebased.nodes["agent"].memory_policy
+    assert rebased.nodes["left"].memories[0] is rebased.nodes["right"].memories[0]
     assert table.resolve(_origin("alias/policy/shared")) == frame
 
 

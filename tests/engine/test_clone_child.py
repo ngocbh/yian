@@ -110,12 +110,11 @@ def test_clone_child_rejects_a_dynamic_static_memory_template_atomically() -> No
     child = _single()
     occurrence = MemoryOccurrenceSegment(
         MemoryOccurrenceKind.MAP_ITEM,
-        ("root", "call"),
+        ("call",),
         0,
     )
     child.nodes["head"].memory_scope = MemoryScope(
-        "root",
-        ("root", "call", "head"),
+        ("call", "head"),
         occurrence_path=(occurrence,),
     )
 
@@ -128,13 +127,10 @@ def test_clone_child_rejects_a_dynamic_static_memory_template_atomically() -> No
 def test_clone_child_revalidates_forged_occurrence_before_propagation() -> None:
     child = _single()
     for node_id, node in child.nodes.items():
-        node.memory_scope = MemoryScope(
-            "root",
-            ("root", "call", node_id),
-        )
+        node.memory_scope = MemoryScope(("call", node_id))
     occurrence = MemoryOccurrenceSegment(
         MemoryOccurrenceKind.MAP_ITEM,
-        ("root", "map"),
+        ("map",),
         0,
     )
     # ``False == 0``; an equality-only guard would silently propagate this.
@@ -155,11 +151,11 @@ def test_clone_child_revalidates_forged_occurrence_before_propagation() -> None:
 
 def test_clone_child_revalidates_forged_static_scope_without_mutating_source() -> None:
     class StringSubclass(str):
-        """Equality-compatible but noncanonical root identity."""
+        """Equality-compatible but noncanonical memory key."""
 
     child = _single()
-    scope = MemoryScope("root", ("root", "call", "head"))
-    object.__setattr__(scope, "root_flow_id", StringSubclass("root"))
+    scope = MemoryScope(("call", "head"), ("outer",))
+    object.__setattr__(scope, "memories", (StringSubclass("outer"),))
     child.nodes["head"].memory_scope = scope
 
     with pytest.raises(MemorySetupError, match="noncanonical static memory scope"):

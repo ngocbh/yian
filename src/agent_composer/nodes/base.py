@@ -625,7 +625,7 @@ class Node(ABC):
             memory layout resolution stamps it before execution when memory is
             enabled, and ordinary nodes otherwise retain ``None``.
         execution_scope (`ExecutionScope | None`):
-            Compile-derived authored location, independent of memory policies.
+            Compile-derived authored location, independent of memory declarations.
             Static layout resolution stamps root-relative paths on private node
             templates; direct construction starts with ``None``.
         env (`dict[str, Any]`):

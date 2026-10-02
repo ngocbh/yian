@@ -336,10 +336,10 @@ Most are just the functional model (above) made enforceable:
   visible after append + apply (transient `StreamChunk`s and in-loop AGENT
   observers are the only exceptions and are never recorded). Recovery validates a contiguous prefix and folds
   it through the same reducer path before recording an eligible ordered retry
-  frontier. New writes use schema 8; readers accept exactly 7 and 8, preserving
-  historical envelope schemas and canonical bytes through preparation, replay,
-  trace, and append checks. Do not rewrite accepted prefixes. The thirteen older
-  kinds retain identical payload validation; four conversation kinds require 8.
+  frontier. Logs use schema 9; readers reject schemas 7 and 8 rather than
+  migrating them, and preserve canonical bytes through preparation, replay,
+  trace, and append checks. Do not rewrite accepted prefixes. The run log holds
+  no conversation records; session history lives only in the backend.
 - **Blocking authorable effects return ordinary outputs** — an AGENT node's
   explicitly granted `ask_user` tool and HUMAN_INPUT call the run's own handler
   (passed as `tools={"ask_user": ...}`) inside their live invocation. A group
@@ -444,12 +444,12 @@ Most are just the functional model (above) made enforceable:
   parents retain selected feedback/path, and literal routes remain silent stops.
 - **Execution location is independent of memory ownership** — derive
   root-relative authored node/flow paths and explicit boundary roles through
-  `compile.execution_layout`; do not parse runtime IDs or require a memory policy
-  or new flow ID. Apply the layout after existing run setup makes private child
-  copies per callsite. Validate the complete layout, target identities, aliases,
-  and existing scopes before writing any scope. Derived `Node.execution_scope`
-  is explicitly excluded from authored fingerprints; memory frame ownership
-  remains separate.
+  `compile.execution_layout`; do not parse runtime IDs or require a memory
+  declaration or new flow ID. Apply the layout after existing run setup makes
+  private child copies per callsite. Validate the complete layout, target
+  identities, aliases, and existing scopes before writing any scope. Derived
+  `Node.execution_scope` is explicitly excluded from authored fingerprints;
+  memory keys and stacks remain separate.
 - **Growth connects recorded inputs explicitly** — source-neutral fragment
   recipes select CALL/LOOP parameter routes or MAP item-index/parameter routes.
   Retain real child START/END pairs; synthetic MAP fan nodes are not child-flow
@@ -463,11 +463,11 @@ Most are just the functional model (above) made enforceable:
   position. Do not parse runtime IDs or change memory ownership to derive these
   execution positions.
 - **Retained history follows accepted records** — the recorded `learnable` flag
-  controls retention. Schemas 7 and 8 require `ForwardCapture` on every accepted node
+  controls retention. Schema 9 requires `ForwardCapture` on every accepted node
   outcome when `learnable=True` and omits it when `learnable=False`. Model/tool evidence
   remains separate from general capture and may have no memory scope; recalled
-  sections still require matching ordered
-  frame membership. Identify executions by run ID and accepted start sequence,
+  sections still follow the scope's recorded memory stack, one per key, in
+  order. Identify executions by run ID and accepted start sequence,
   with outcome order recorded separately. Sequence zero is the root input source.
   Read value, presence, and producer from one immutable current writer entry at
   the actual binding lookup. Redirected output names retain the physical producer.
@@ -484,31 +484,43 @@ Most are just the functional model (above) made enforceable:
   prompt, ordered recall sections, and visible interactions; the private
   `_evaluation_evidence` backward-context bridge comes only from that record.
 - **Memory setup and learning are record-authoritative** — authored
-  `long_term_memory:` declarations select policies that resolve to static frames
-  owned by flows or AGENT nodes; MAP items and LOOP iterations reuse those frames.
-  `memory=None` is dormant, while a host-injected registry opens run-scoped
-  sessions with pinned opening snapshots and supplies one kind-blind memory-context capability, independently of `learnable`. SessionMemory
-  reads latest live history after admission, not a frozen opening transcript.
-  `learnable=True` retains execution only; forward runs no learners or
-  learned-mutation commits. Automatic conversation updates are separate.
-  Explicit `RunResult.backward(feedback)` performs the reverse fold, then every
-  enabled frame learner in layout order, including empty/unexecuted histories.
-  A receiver writes only its own frame; descendant evidence preserves original
-  execution coordinates. No learner mutates an inherited parent frame.
-- **CLI memory is host-owned and lazy** — `cli.memory` uses the pure static layout
-  to supply one backend per declared built-in policy. Repeated
-  `--memory-storage POLICY=PATH` selects durable files outside YAML and run records;
-  omitted policies stay process-local. Open only when runtime requests `open_run`
-  and close after controller work drains. Terminal inspection and old dormant
-  logs open no backend. Custom policies require Python injection. Never construct
-  policies in runtime, enable learning implicitly, or change `memory=None` dormancy.
+  `long_term_memory:` entries become `MemoryDecl(name, type, config, site)`; a
+  memory's key is its name prefixed by the site's `uses:` scope.
+  `scope_memory_declarations` adds the alias in `_rebase_external_child`, and
+  `load_flow` runs `resolve_memory_layout` on the assembled root, turning a
+  `MemorySetupError` into a located `LoadError`. The resolver yields one
+  `ResolvedMemory` per key and one stack per placement: enclosing flows' keys,
+  outermost first, then the AGENT's own, each key once. `RunStarted` records the
+  key table (`memories`) and stacks (`memory_stacks`); evidence, recovery, and
+  backward check scopes against them. `memory=None` is dormant, while a
+  host-supplied mapping opens one run-scoped session per key with pinned opening
+  snapshots and supplies one kind-blind memory-context capability, independently
+  of `learnable`. SessionMemory reads latest live history after admission, not a
+  frozen opening transcript. `learnable=True` retains execution only; forward runs
+  no learners or learned-mutation commits. Automatic conversation updates are
+  separate. Explicit `RunResult.backward(feedback)` performs the reverse fold,
+  then gives every memory key exactly one learn call in sorted key order,
+  including empty batches. A key's batch holds the accepted occurrences whose
+  recorded stack contains it; unattributed root feedback goes only to keys owned
+  by the root flow site `DeclSite((), ("root",), None)`.
+- **Hosts build memory; runtime never does** — package-root
+  `memory_host.build_memories(flow, root=, storage=, supplied=, factories=)`
+  returns a `MemoryRegistry` with one backend per declared key, and closes the
+  backends it built when the host exits it. `run_flow`, `resume_flow` and delayed
+  backward check a registry's types against the table; none constructs memory. `cli.memory` only parses
+  `--memory-root DIR` and repeated `--memory-storage KEY=PATH` and calls the
+  builder; `cli/run.py` closes the registry after controller work drains. Nothing
+  opens before runtime requests `open_run`; terminal inspection opens no backend.
+  The CLI refuses a flow with a custom type. Never construct memory in runtime,
+  enable learning implicitly, or change `memory=None` dormancy.
 - **Episodic memory appends canonical execution history** — import the built-in
-  backend from `agent_composer.memory.episodic`. An authored
-  `long_term_memory: episodic` frame accepts positive `max_episodes` and
-  `recall_limit` settings. Learning deterministically proposes one append per
+  backend from `agent_composer.memory.episodic`. An episodic memory's config
+  accepts positive `max_episodes` and `recall_limit`; an unset limit adopts the
+  stored value or the built-in default, and an explicit one that differs raises
+  `episodic.config_conflict`. Learning deterministically proposes one append per
   owner-scoped episode. After the attempt reaches Ready, the engine requests the
-  policy batch; the backend commits it atomically and idempotently, then evicts
-  the oldest entries beyond the frame bound. Context-free recall is
+  key's batch; the backend commits it atomically and idempotently, then evicts
+  the oldest entries beyond `max_episodes`. Context-free recall is
   chronological. Contextual recall ranks lexical
   overlap and then recency within its limit. Sessions retain immutable JSON
   snapshots; stale sessions may recall their pinned view but cannot learn or
@@ -516,22 +528,29 @@ Most are just the functional model (above) made enforceable:
 - **Profile memory rewrites one document** — import `ProfileMemory` from
   `agent_composer.memory.profile` and a store from
   `agent_composer.memory.storage`. The snapshot pins `profile_version` and
-  `text_sha256`, never the text. Only the outermost frame of the policy recalls
-  and learns; frame config is empty. Learning is one tool-free model call over
+  `text_sha256`, never the text. Every stack holding the key recalls the whole
+  document; config accepts `max_chars` and `input_budget_chars`. Learning is
+  one tool-free model call over
   feedback, the current document, and budgeted episodes with their visible
   interactions; it returns `<profile>...</profile>` within `max_chars`. Commit
   is a store compare-and-set with no model call. Only `profile.version_mismatch`
   is retryable (nothing was written), and it is retried as a new backward
   attempt, never inside the backend. The store has no commit-id replay: a killed
   attempt stays `unknown`, and hosts find its `commit_id` in store provenance.
+  `FileMarkdownStore` takes the same local path rule as SQLite storage.
+  `close()` does no I/O; afterwards the backend and its sessions raise
+  `profile.closed`.
 - **Durable memory belongs to the backend, not runtime** — the episodic,
-  reflective, and session backends default to `storage=None` with no I/O.
+  reflective, and session backends default to `storage=None` with no I/O. With a
+  path, construction only checks its shape and starts PID ownership; storage
+  opens on the first `open_run` or `reset`, under the backend's lock. `close()`
+  before any open does no I/O, and later use raises `<type>.closed`.
   `memory.storage.SQLiteStorage` supplies one lifetime SQLite owner and finite-JSON
   transactions. Persist validated candidates before RAM publication, including
   reset/adoption and private commit tombstones;
   preserve public snapshot formats and exact run-opening pins. Do not store host
   constructor defaults, callbacks, live handles, queues, or clients. Current host
-  settings govern future work after reopening; saved frame limits and recorded
+  settings govern future work after reopening; saved memory limits and recorded
   model settings stay pinned. Session summary caches retain exact prefix proofs;
   ignore coverage that would hide newly protected recent turns. Close rejects
   active operations/queued turns immediately, but permits idle run handles and
@@ -540,15 +559,18 @@ Most are just the functional model (above) made enforceable:
   exceptions. No runtime storage branch or new log field is needed.
 - **SessionMemory owns conversation state and FIFO admission** — import
   `SessionMemory` from `agent_composer.memory.session`, not the contracts-only
-  facade. `MemoryFrame.recall()` accepts text or `MemoryContent(text, transcript)`;
+  facade. `MemorySession.recall()` returns text or `MemoryContent(text, transcript)`;
   SessionMemory supplies its notes and `TranscriptSource` through this same path. API-backed AGENT execution through
-  `run_flow` retains conversations when the host injects the backend.
-  The CLI hosts declared built-in policies automatically.
+  `run_flow` retains conversations when the host supplies the backend.
+  The CLI builds declared built-in memories automatically.
   `memory.conversation` owns the pure fold, strict codecs, and digests;
   `memory.session` owns live views, FIFO leases, and atomic publication;
   `memory.summary` owns pure whole-turn selection and cache-prefix proofs. These stay
   below nodes/runtime/providers. Runtime keeps no conversation projection, effect
-  ledger, checkpoint callback, or reconciliation channel. It recalls all frames once and selects the innermost contributed transcript,
+  ledger, checkpoint callback, or reconciliation channel. It recalls each key of
+  the stack once and admits a transcript only from a key whose recorded
+  `MemorySpec.conversation_eligible` is true; an ineligible or second transcript
+  raises `MemoryRecallError`. It
   then binds authored scope plus accepted run/start identity into one lazy
   evaluator-owned `MemoryContext`. Notes stay ordered outer-to-local. Use
   `needs_memory_context` and `open_memory_context(system, prompt, compatibility)`;
@@ -557,16 +579,13 @@ Most are just the functional model (above) made enforceable:
   lease through stream cleanup, post-assertions, and result-shape validation;
   later dispatcher acceptance is not part of turn completion. No lease travels
   in worker results. The stateless AGENT adapter owns provider encoding/effects,
-  not stored history. Four schema-8 wrappers
-  remain strict, inert historical metadata: validate run/start/frame/policy/scope
-  and lifecycle, append before applying record/trace sequencing only. They grant
-  no effects and create no output, frontier change, episode, or observer. Reject
-  wrappers after success/backward or after their originating start is no longer
-  unfinished; after failure permit only observations/close. Ordinary retry may
+  not stored history. The run log holds no conversation records, and schema 9
+  rejects older logs that did. Ordinary retry may
   resend requests and repeat tool actions. Do not reconstruct memory from the run
   log or require conversation closure before node success. See
   [the conversation and retry contract](reference.md#session-conversation-foundation).
-  API summaries use host-only `history_budget_chars=32_000` and `recent_turns=4`.
+  API summaries use `history_budget_chars` (default 32_000) and `recent_turns`
+  (default 4), set as constructor keywords or YAML config.
   Preserve all raw history and the latest four prior whole admissions plus the
   active turn, even above budget. A concrete optional turn capability owns the
   derived cache; injected projection/current-model callbacks run outside the lock
@@ -576,10 +595,10 @@ Most are just the functional model (above) made enforceable:
   or truncate an oversized valid summary, and never persist summary/repair context
   as raw messages. Final structured context keeps the prepared prefix plus a safe
   active-turn projection. Reset clears cache; old snapshots never rewind it.
-  One authored frame plus leaf static path owns a conversation and queue;
-  MAP/LOOP positions do not fork it. FIFO is admission order, not MAP input order.
-  All ordinary recall frames remain active; a local non-session frame does not
-  hide an enclosing conversation frame. Acquire the FIFO lease before reading live
+  One session instance holds one conversation and queue, owned by the single AGENT
+  that declares its key; call sites and MAP/LOOP positions do not fork it. FIFO is
+  admission order, not MAP input order. Other recalled memories stay active beside
+  it. Acquire the FIFO lease before reading live
   history while keeping the run-opening snapshot pinned. Publish requests and
   observations directly in the backend; external calls and stop checks run outside
   its condition lock. Preserve observations before honoring stop and keep unknown
@@ -587,17 +606,17 @@ Most are just the functional model (above) made enforceable:
   run cancels its waiters but retains an active lease until its owner exits; no
   later turn may overlap the finishing external call. Released turns cannot write.
   Reset is backend-wide, fails unchanged while any turn is active or queued,
-  and invalidates old-generation handles. Frame config is empty; conversation
+  and invalidates old-generation handles. Conversation
   updates through the optional turn capability are independent of `learnable`.
   Explicit API backward self-feedback becomes deterministic learned-note mutations
-  through existing frame learn/session commit. Only the actually admitted owning
-  frame and leaf learn a note; join feedback execution sequence to the episode's
-  root-prefixed owner path, never guess from a dynamic node name. No extra model
+  through the key's learn/session commit. The memory learns notes only from
+  invocations it admitted; join feedback execution sequence to the episode's
+  root-relative owner path, never guess from a dynamic node name. No extra model
   call or runtime note projection. Commit validates the entire batch before
   atomic publication and retains idempotency bookkeeping across reset. Contextual
-  recall contributes pinned opening notes and the transcript source for the leaf;
+  recall contributes pinned opening notes and the transcript source;
   context-free recall contributes empty text with the source. Notes never rewrite raw conversations. New public snapshots use
-  version 2; accept version 1 as no notes and preserve its exact pinned envelope.
+  version 3 (one conversation view plus notes); older versions are invalid.
   API compatibility uses provider plus versioned message format; compatible
   model changes retain history. Apply current instructions/recall/tool grants
   on each call. Never dispatch old tool calls while restoring history. Keep raw
@@ -653,23 +672,23 @@ Most are just the functional model (above) made enforceable:
   The guarantee is about authored layers: a host key without `base_url` still
   goes to the provider's default or env endpoint (`OPENAI_BASE_URL`, etc.).
 - **One attempt barrier precedes commits** — accept Started, complete backward
-  results and all frame proposals, then accept Ready. Commit each enabled policy
-  once in recorded order, even with an empty batch, accepting its positive-attempt
+  results and all memory proposals, then accept Ready. Commit each memory key
+  once in sorted key order, even with an empty batch, accepting its positive-attempt
   request before the backend effect and observation afterward. A known failure
-  stops later policies; Finished records the separate outcome. No per-frame
-  learning records, nullable legacy attempt IDs, or per-frame retry frontier.
-  Keep `unrequested`/`unknown`/`succeeded`/`failed` policy observations distinct.
+  stops later keys; Finished records the separate outcome. No per-key learning
+  records or retry frontier.
+  Keep `unrequested`/`unknown`/`succeeded`/`failed` commit observations distinct.
   Any finished attempt admits another; an unfinished one is closed as interrupted
   first. Each attempt recomputes everything using fresh sessions and original
-  snapshots, and later requesting attempts use attempt-scoped commit IDs. Never
-  resume Ready proposals or infer retry policy from backend hints.
+  snapshots, and every attempt uses `ac-memory-v3` commit IDs over its own
+  `attempt_id`. Never resume Ready proposals or infer retries from backend hints.
 - **Delayed backward owns no idle resources** — `run.py` keeps private program
-  and accepted data plus policy references. Each call reopens/replays authority,
+  and accepted data plus memory references. Each call reopens/replays authority,
   uses a nonblocking handle guard and durable locks, restores recorded snapshots,
   and closes resources. Preserve primary host/cleanup errors and the accepted
   prefix; poison an unrefreshable handle. Invalid submissions leave prior observed
   outcome objects unchanged. Terminal resume is inspection only, opening no
-  policies and invoking no backward/learning work. Forward fields never change.
+  memory and invoking no backward/learning work. Forward fields never change.
 - **`Node.env` is engine-opaque** — a per-node `dict[str,Any]` of static config the compiler
   bakes at build (`{**flow_env, **node_env}`, node wins, flow-local). The engine NEVER reads it;
   only a node's own `forward()` interprets known keys (e.g. an AGENT node's `max_tool_iterations`). It is the

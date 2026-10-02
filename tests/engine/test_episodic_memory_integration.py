@@ -18,8 +18,7 @@ nodes:
     kind: agent
     mode: plain
     long_term_memory:
-      name: episodic
-      config: {max_episodes: 4, recall_limit: 2}
+      episodic: {type: episodic, config: {max_episodes: 4, recall_limit: 2}}
     input: {topic: "${input.topic}"}
     prompt: Explain ${topic}.
     output: str

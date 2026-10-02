@@ -26,7 +26,7 @@ flowchart TD
     terminal -->|expected failure| failure["Failure"]
     output --> result["RunResult<br/>forward returns"]
     failure --> result
-    result -. "explicit backward(feedback)<br/>requires learnable=True" .-> backward["reverse computation<br/>then owned frame proposals/commits"]
+    result -. "explicit backward(feedback)<br/>requires learnable=True" .-> backward["reverse computation<br/>then per-memory proposals/commits"]
     backward --> outcome["BackwardOutcome<br/>feedback + learning"]
 
     initialize -. "setup, host, or log fault" .-> raised["exception propagates"]
@@ -91,7 +91,9 @@ configuration, and optionally opens host-injected memory sessions. It creates:
 
 The variable pool is runtime graph state, not agent memory. Agent memory is an
 optional host capability configured by authored `long_term_memory` declarations.
-Each declaration selects a policy name resolved through `run_flow(memory=...)`.
+Each declaration names memories identified by memory keys (`notes`, `lib.notes`).
+The host builds them with `build_memories` and passes the registry as
+`run_flow(memory=...)`.
 
 Initialization becomes real only when its complete `RunStartedRecord` is
 appended and applied. That record fixes the run identity, initial typed values,
@@ -152,7 +154,7 @@ putting YAML coordinates into runtime semantics.
 returns before any learner or commit. Backward uses the same record authority and
 returns a separate `BackwardOutcome`, observed through `backward_outcome` and its
 `learning` projection. It never changes the primary output, `Failure`, or events.
-All backward results and owned frame proposals precede Ready and any policy
+All backward results and memory proposals precede Ready and any memory
 commit. Every explicit `backward()` call starts a new whole attempt, whatever
 earlier attempts did; terminal recovery never starts one by itself.
 
@@ -182,7 +184,7 @@ its accepted backward prefix and opens no memory sessions. Inputs, run identity,
 resolved model configuration, dynamic growth, and memory snapshots come from
 the log rather than current defaults.
 
-Historical conversation metadata does not block ordinary retry. Conversation
+Conversation
 history belongs to the memory backend; runtime does not reconstruct it from the
 run log or claim to resume an external request midway through. See the
 [Python API recovery contract](api.md#durable-recovery-with-resume_flow).
@@ -201,11 +203,11 @@ object:
 | Source presentation | `compose/` | `SourceDocument`, source cursors, load diagnostics, and an optional origin resolver |
 | Semantic program | `compile/` | `CompiledFlow` plus opaque origins; no YAML ranges or mutable run state |
 | Node execution | `nodes/` | Plain bound inputs and one `Output`, `Route`, or `Grow`; no shared-state access |
-| Run setup and delayed backward | `run.py` | Private graph/data, injected policy references, guarded log/resource lifetime, and `RunResult` |
+| Run setup and delayed backward | `run.py` | Private graph/data, the injected memory registry, guarded log/resource lifetime, and `RunResult` |
 | Runtime authority | `runtime/` | `RunRecord` sequence reduced into `RunState`; no YAML parsing or node-kind dispatch |
 | Backward computation | `nodes/` + `runtime/` | Recorded node context and three result channels; shared pure transfer/context validation below drivers |
 | Typed graph state | `typesys/` | Losslessly serializable values and the variable pool |
-| Agent memory | `memory/` + host | Source-neutral policy protocols and host-owned implementations; separate from the variable pool |
+| Agent memory | `memory/` + host | Source-neutral memory protocols and built-in backends; package-root `memory_host.py` builds the declared memories for a host; separate from the variable pool |
 
 This separation keeps source presentation optional, compiled programs reusable,
 runtime recovery record-authoritative, and the engine independent of node kinds.

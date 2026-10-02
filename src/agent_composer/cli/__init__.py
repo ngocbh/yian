@@ -14,15 +14,14 @@ model configuration. The main thread owns terminal prompts/renders while a
 controller drives the flow;
 blocking HUMAN_INPUT/``ask_user`` calls cross that broker. WAIT remains live in
 its worker until its deadline. The CLI owns path policy, not engine scheduling
-or durable state-transition logic. `memory` discovers declared policies through
-the compiled layout and lazily constructs built-in backends at the run boundary.
-The controller owns their complete lifetime, after worker drain; optional
-`--memory-storage POLICY=PATH` paths remain host-only. Terminal and historically
-memory-dormant recovery never opens those backends.
+or durable state-transition logic. `memory` turns ``--memory-root`` and
+``--memory-storage KEY=PATH`` into a `MemoryRegistry` from
+`agent_composer.build_memories`; the controller owns its lifetime, after worker
+drain. Storage paths stay host-only. A terminal resume never opens memory.
 
 Knows about: compose; compile metadata and LLM-cascade helpers; the package-root run
-boundary; memory contracts and built-in backends; events; node host-stop signals;
-typed values; tools; LLM API-key metadata;
+boundary; the package-root memory host; memory contracts and built-in backends;
+events; node host-stop signals; typed values; tools; LLM API-key metadata;
 process defaults in ``_settings``; and peer CLI modules. Never imports runtime scheduling
 internals or provider SDKs; owns no graph mutation.
 """

@@ -1,151 +1,106 @@
-"""Select and own lazy built-in memory backends for one CLI controller."""
+"""Turn `composer run` memory flags into one host-built memory registry.
+
+The CLI builds only built-in memory types. A flow with a custom type fails
+here, before any run or resume, even a terminal ``--resume`` that would open
+no memory; such flows run through the Python API.
+"""
 
 from __future__ import annotations
 
 from collections.abc import Iterable
-from types import TracebackType
+from os import PathLike
 
 from agent_composer.compile.memory_layout import resolve_memory_layout
-from agent_composer.compile.model import CompiledFlow
-from agent_composer.memory.contracts import (
-    JsonObject,
-    Memory,
-    MemorySession,
-    MemorySetupError,
-)
-
-_BUILTINS = frozenset({"episodic", "reflective", "session"})
+from agent_composer.compose.loader import ComposedFlow
+from agent_composer.memory.contracts import BUILTIN_MEMORY_CONFIG_KEYS, MemorySetupError
+from agent_composer.memory_host import MemoryRegistry, build_memories
 
 
-def _create_backend(policy: str, storage: str | None) -> Memory:
-    """Import and construct only the selected built-in policy."""
-    if policy == "episodic":
-        from agent_composer.memory.episodic import EpisodicMemory
+class MemoryOptionError(ValueError):
+    """A memory flag value is invalid; ``param_hint`` names the flag."""
 
-        return EpisodicMemory(storage=storage)
-    if policy == "reflective":
-        from agent_composer.memory.reflective import ReflectiveMemory
-
-        return ReflectiveMemory(storage=storage)
-    if policy == "session":
-        from agent_composer.memory.session import SessionMemory
-
-        return SessionMemory(storage=storage)
-    raise MemorySetupError(
-        f"Memory policy {policy!r} has no built-in CLI backend. "
-        "Use the Python API with memory={policy_name: implementation}."
-    )
+    def __init__(self, message: str, *, param_hint: str) -> None:
+        """Record the message and the flag it belongs to."""
+        super().__init__(message)
+        self.param_hint = param_hint
 
 
-class _LazyMemory:
-    """Defer backend effects until the existing run boundary opens a policy."""
+def parse_memory_storage(options: Iterable[str]) -> dict[str, str]:
+    """Parse repeated ``KEY=PATH`` options into a key -> path mapping.
 
-    def __init__(self, policy: str, storage: str | None) -> None:
-        self._policy = policy
-        self._storage = storage
-        self._backend: Memory | None = None
-        self._closed = False
-
-    def _check_open(self) -> None:
-        if self._closed:
-            raise MemorySetupError("CLI memory host is closed")
-
-    def open_run(self, *, snapshot: JsonObject | None = None) -> MemorySession:
-        """Create the backend once and pass the exact requested opening pin."""
-        self._check_open()
-        if self._backend is None:
-            self._backend = _create_backend(self._policy, self._storage)
-        return self._backend.open_run(snapshot=snapshot)
-
-    def reset(self) -> None:
-        """Reset an already constructed backend without opening unused policies."""
-        self._check_open()
-        if self._backend is not None:
-            self._backend.reset()
-
-    def close(self) -> None:
-        """Invalidate the wrapper and close its concrete backend, if any."""
-        if self._closed:
-            return
-        self._closed = True
-        if self._backend is not None:
-            self._backend.close()
-
-
-class MemoryHost:
-    """Own declared CLI memory policies without opening resources during setup.
-
-    Args:
-        compiled (`CompiledFlow`): Loaded authored graph used for pure policy discovery.
-        storage (`Iterable[str]`): Repeated `POLICY=PATH` options; omitted policies
-            remain process-local. Paths are passed unchanged to their backend.
+    Surrounding whitespace is stripped from KEY; PATH is kept as given.
 
     Raises:
-        `ValueError`: A storage option is malformed, repeated, unknown, or undeclared.
-        `MemorySetupError`: The compiled memory layout is invalid.
+        `MemoryOptionError`: An option is malformed or repeats a key.
     """
+    paths: dict[str, str] = {}
+    for option in options:
+        key, separator, path = option.partition("=")
+        key = key.strip()
+        if not separator or not key or not path.strip():
+            raise MemoryOptionError(
+                f"expected KEY=PATH, got {option!r}",
+                param_hint="--memory-storage",
+            )
+        if key in paths:
+            raise MemoryOptionError(
+                f"duplicate key {key!r}", param_hint="--memory-storage"
+            )
+        paths[key] = path
+    return paths
 
-    def __init__(self, compiled: CompiledFlow, storage: Iterable[str]) -> None:
-        policies = dict.fromkeys(
-            frame.spec.policy_name for frame in resolve_memory_layout(compiled).frames
+
+def build_cli_memories(
+    flow: ComposedFlow,
+    *,
+    root: str | PathLike[str] | None,
+    storage_options: Iterable[str],
+) -> MemoryRegistry:
+    """Build every declared memory from the CLI flags.
+
+    Args:
+        flow (`ComposedFlow`): Loaded flow.
+        root (`str | PathLike[str] | None`): ``--memory-root`` value.
+        storage_options (`Iterable[str]`): Repeated ``--memory-storage`` values.
+
+    Returns:
+        `MemoryRegistry`: Registry to pass to the run and close afterwards.
+
+    Raises:
+        `MemoryOptionError`: A flag value is invalid for this flow.
+        `MemorySetupError`: The flow declares a custom type, or building fails.
+    """
+    storage = parse_memory_storage(storage_options)
+    types = {m.key: m.type for m in resolve_memory_layout(flow.compiled).memories}
+    builtins = ", ".join(sorted(BUILTIN_MEMORY_CONFIG_KEYS))
+    for key in storage:
+        if key not in types:
+            raise MemoryOptionError(
+                f"key {key!r} is not a memory declared by this "
+                f"flow (declared: {', '.join(sorted(types)) or 'none'})",
+                param_hint="--memory-storage",
+            )
+        if types[key] not in BUILTIN_MEMORY_CONFIG_KEYS:
+            raise MemoryOptionError(
+                f"key {key!r} has custom type {types[key]!r}; "
+                f"the CLI stores only built-in types ({builtins})",
+                param_hint="--memory-storage",
+            )
+    custom = sorted(k for k, t in types.items() if t not in BUILTIN_MEMORY_CONFIG_KEYS)
+    if custom:
+        raise MemorySetupError(
+            f"this flow declares custom memory type(s) for {custom}; composer run "
+            f"builds only built-in types ({builtins}). Use the Python API: "
+            "registry = build_memories(flow, factories=... or supplied=...), then "
+            "run_flow(flow, inputs, memory=registry)."
         )
-        paths: dict[str, str] = {}
-        for option in storage:
-            policy, separator, path = option.partition("=")
-            if not separator or not policy.strip() or not path.strip():
-                raise ValueError("--memory-storage requires POLICY=PATH")
-            if policy in paths:
-                raise ValueError(f"duplicate --memory-storage policy {policy!r}")
-            if policy not in _BUILTINS:
-                raise ValueError(
-                    f"--memory-storage policy {policy!r} is not a built-in "
-                    "policy (episodic, reflective, session)"
-                )
-            if policy not in policies:
-                raise ValueError(
-                    f"--memory-storage policy {policy!r} is not declared in this flow"
-                )
-            paths[policy] = path
-        self._policies = {
-            policy: _LazyMemory(policy, paths.get(policy)) for policy in policies
-        }
-        self.registry: dict[str, Memory] | None = dict(self._policies) or None
-        self._closed = False
+    if root is not None and flow.compiled.flow_id is None:
+        raise MemoryOptionError(
+            "--memory-root needs a flow with an id: field; memory lives under "
+            "DIR/<flow id>/",
+            param_hint="--memory-root",
+        )
+    return build_memories(flow, root=root, storage=storage)
 
-    def __enter__(self) -> MemoryHost:
-        if self._closed:
-            raise MemorySetupError("CLI memory host is closed")
-        return self
 
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> None:
-        try:
-            self.close()
-        except BaseException as cleanup:
-            if exc is None:
-                raise
-            if hasattr(exc, "add_note"):
-                exc.add_note(f"CLI memory cleanup failed: {type(cleanup).__name__}")
-
-    def close(self) -> None:
-        """Close every constructed backend, preserving the first cleanup failure."""
-        if self._closed:
-            return
-        self._closed = True
-        first_error: BaseException | None = None
-        for policy in reversed(tuple(self._policies.values())):
-            try:
-                policy.close()
-            except BaseException as exc:
-                if first_error is None:
-                    first_error = exc
-                elif hasattr(first_error, "add_note"):
-                    first_error.add_note(
-                        f"Additional CLI memory cleanup failed: {type(exc).__name__}"
-                    )
-        if first_error is not None:
-            raise first_error
+__all__ = ["MemoryOptionError", "build_cli_memories", "parse_memory_storage"]

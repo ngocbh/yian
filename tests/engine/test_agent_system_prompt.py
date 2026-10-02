@@ -29,7 +29,7 @@ from agent_composer.skills import Skill
 from agent_composer.skills.tool import system_prompt_with_skills
 from agent_composer.tools import ToolSet
 from agent_composer.typesys import Type, ValueKind, VariablePool
-from tests.engine.test_agent_memory_recall import _CaptureModel, _opener, _refs, _scope
+from tests.engine.test_agent_memory_recall import _CaptureModel, _keys, _opener, _scope
 from tests.engine.test_run_backward import _records
 
 TEMPLATE = "You are ${name}, ${title}. Speak as ${name} in the first person."
@@ -98,8 +98,8 @@ def test_memory_sections_append_after_the_authored_prompt(monkeypatch) -> None:
     model = _model(monkeypatch)
     node = _node()
     node.memory_scope = _scope()
-    flow_ref, agent_ref = _refs()
-    sections = (MemorySection(flow_ref, "outer facts"), MemorySection(agent_ref, "local facts"))
+    flow_key, agent_key = _keys()
+    sections = (MemorySection(flow_key, "outer facts"), MemorySection(agent_key, "local facts"))
     recalled: list[str] = []
 
     def recall(_scope, context):

@@ -1,7 +1,7 @@
 """Episodic memory with snapshot-isolated runs and optional SQLite persistence.
 
 The backend owns retained episode history behind the source-neutral memory
-protocols.  This module establishes the session, frame, snapshot, and commit
+protocols.  This module establishes the session, instance, snapshot, and commit
 boundaries without depending on the workflow engine or providers. Optional
 durability uses the private single-owner storage adapter below this backend.
 """
@@ -24,13 +24,9 @@ from agent_composer.memory.contracts import (
     LearnContext,
     MemoryEpisode,
     MemoryEpisodeStatus,
-    MemoryFrameRef,
-    MemoryFrameSpec,
     MemoryMutation,
     MemoryOperationError,
-    MemoryOwner,
     MemoryOccurrenceKind,
-    MemoryOccurrenceRef,
     MemoryOccurrenceSegment,
     MemorySection,
     ModelTextInteraction,
@@ -41,28 +37,30 @@ from agent_composer.memory.contracts import (
     VisibleInteraction,
     _MAX_JSON_NESTING,
 )
-from agent_composer.memory.storage import SQLiteStorage
+from agent_composer.memory.storage import SQLiteStorage, check_storage_path
 
 _SNAPSHOT_FORMAT = "agent_composer.episodic_memory"
-_SNAPSHOT_VERSION = 1
+_SNAPSHOT_VERSION = 2
 _POLICY_NAME = "episodic"
 
 
 @dataclass(frozen=True, slots=True)
-class _EffectiveFrameSpec:
-    """Validated concrete configuration of one episodic frame."""
+class _Limits:
+    """Effective retention and recall limits of one episodic instance."""
 
-    ref: MemoryFrameRef
     max_episodes: int
     recall_limit: int
 
 
 @dataclass(frozen=True, slots=True)
-class _FrameState:
-    """One frame specification and its ordered episode records."""
+class _State:
+    """The limits and ordered retained entries of one episodic instance."""
 
-    spec: _EffectiveFrameSpec
+    limits: _Limits
     episodes: tuple[JsonObject, ...]
+
+
+_DEFAULT_LIMITS = _Limits(100, 10)
 
 
 def _operation_error(stage: str, code: str, message: str) -> MemoryOperationError:
@@ -77,6 +75,29 @@ def _positive_int(value: object, name: str) -> int:
     if value <= 0:
         raise ValueError(f"{name} must be positive")
     return value
+
+
+def _resolve_limits(
+    requested: tuple[int | None, int | None],
+    recorded: _Limits | None,
+    stage: str,
+) -> _Limits:
+    """Fill unset limits from recorded ones or defaults; reject explicit conflicts."""
+    max_episodes, recall_limit = requested
+    if recorded is not None and (
+        max_episodes not in (None, recorded.max_episodes)
+        or recall_limit not in (None, recorded.recall_limit)
+    ):
+        raise _operation_error(
+            stage,
+            "episodic.config_conflict",
+            "configured limits differ from the recorded limits",
+        )
+    base = _DEFAULT_LIMITS if recorded is None else recorded
+    return _Limits(
+        base.max_episodes if max_episodes is None else max_episodes,
+        base.recall_limit if recall_limit is None else recall_limit,
+    )
 
 
 def _json_string(value: object, name: str, *, nonempty: bool = False) -> str:
@@ -170,68 +191,27 @@ def _lexical_terms(value: str) -> frozenset[str]:
     return frozenset(terms)
 
 
-def _frame_ref_json(ref: MemoryFrameRef) -> JsonObject:
-    """Encode one stable frame identity as JSON."""
-    return {
-        "owner": ref.owner.value,
-        "root_flow_id": ref.root_flow_id,
-        "static_path": list(ref.static_path),
-    }
+def _occurrence_path_json(path: tuple[MemoryOccurrenceSegment, ...]) -> list[JsonValue]:
+    """Encode one root-relative occurrence path."""
+    return [
+        {
+            "index": segment.index,
+            "kind": segment.kind.value,
+            "static_path": list(segment.static_path),
+        }
+        for segment in path
+    ]
 
 
-def _frame_ref_from_json(value: object, name: str) -> MemoryFrameRef:
-    """Decode one exact frame identity."""
-    data = _copy_object(value, name)
-    if set(data) != {"owner", "root_flow_id", "static_path"}:
-        raise ValueError(f"{name} has invalid fields")
-    root = _json_string(data["root_flow_id"], f"{name}.root_flow_id", nonempty=True)
-    owner_raw = _json_string(data["owner"], f"{name}.owner", nonempty=True)
-    try:
-        owner = MemoryOwner(owner_raw)
-    except ValueError as exc:
-        raise ValueError(f"{name}.owner is invalid") from exc
-    path_raw = data["static_path"]
-    if type(path_raw) is not list or not path_raw:
-        raise ValueError(f"{name}.static_path must be a non-empty array")
-    path = tuple(
-        _json_string(part, f"{name}.static_path[{index}]", nonempty=True)
-        for index, part in enumerate(path_raw)
-    )
-    return MemoryFrameRef(root, path, owner)
-
-
-def _frame_sort_key(ref: MemoryFrameRef) -> tuple[str, tuple[str, ...], str]:
-    """Return the canonical static-frame order."""
-    return (ref.root_flow_id, ref.static_path, ref.owner.value)
-
-
-def _occurrence_json(occurrence: MemoryOccurrenceRef) -> JsonObject:
-    """Encode one dynamic occurrence without losing its authored frame."""
-    return {
-        "frame_ref": _frame_ref_json(occurrence.frame_ref),
-        "occurrence_path": [
-            {
-                "index": segment.index,
-                "kind": segment.kind.value,
-                "static_path": list(segment.static_path),
-            }
-            for segment in occurrence.occurrence_path
-        ],
-    }
-
-
-def _occurrence_from_json(value: object, name: str) -> MemoryOccurrenceRef:
-    """Decode one exact dynamic occurrence."""
-    data = _copy_object(value, name)
-    if set(data) != {"frame_ref", "occurrence_path"}:
-        raise ValueError(f"{name} has invalid fields")
-    ref = _frame_ref_from_json(data["frame_ref"], f"{name}.frame_ref")
-    path_raw = data["occurrence_path"]
-    if type(path_raw) is not list:
-        raise TypeError(f"{name}.occurrence_path must be an array")
+def _occurrence_path_from_json(
+    value: object, name: str
+) -> tuple[MemoryOccurrenceSegment, ...]:
+    """Decode one exact root-relative occurrence path."""
+    if type(value) is not list:
+        raise TypeError(f"{name} must be an array")
     path: list[MemoryOccurrenceSegment] = []
-    for index, raw in enumerate(path_raw):
-        item_name = f"{name}.occurrence_path[{index}]"
+    for index, raw in enumerate(value):
+        item_name = f"{name}[{index}]"
         item = _copy_object(raw, item_name)
         if set(item) != {"index", "kind", "static_path"}:
             raise ValueError(f"{item_name} has invalid fields")
@@ -251,7 +231,7 @@ def _occurrence_from_json(value: object, name: str) -> MemoryOccurrenceRef:
         if type(sequence) is not int or sequence < 0:
             raise ValueError(f"{item_name}.index is invalid")
         path.append(MemoryOccurrenceSegment(kind, static_path, sequence))
-    return MemoryOccurrenceRef(ref, tuple(path))
+    return tuple(path)
 
 
 def _interaction_json(interaction: object) -> JsonObject:
@@ -305,10 +285,10 @@ def _episode_json(episode: MemoryEpisode) -> JsonObject:
         "inputs": episode.inputs,
         "interactions": [_interaction_json(item) for item in episode.interactions],
         "memory_sections": [
-            {"frame_ref": _frame_ref_json(section.frame_ref), "text": section.text}
+            {"memory": section.memory, "text": section.text}
             for section in episode.memory_sections
         ],
-        "occurrence": _occurrence_json(episode.occurrence),
+        "occurrence_path": _occurrence_path_json(episode.occurrence_path),
         "output": episode.output,
         "owner_static_path": list(episode.owner_static_path),
         "prompt": episode.prompt,
@@ -327,7 +307,7 @@ def _episode_from_json(value: object, name: str) -> MemoryEpisode:
         "inputs",
         "interactions",
         "memory_sections",
-        "occurrence",
+        "occurrence_path",
         "output",
         "owner_static_path",
         "prompt",
@@ -356,11 +336,11 @@ def _episode_from_json(value: object, name: str) -> MemoryEpisode:
     for index, raw in enumerate(sections_raw):
         section_name = f"{name}.memory_sections[{index}]"
         section = _copy_object(raw, section_name)
-        if set(section) != {"frame_ref", "text"}:
+        if set(section) != {"memory", "text"}:
             raise ValueError(f"{section_name} has invalid fields")
         sections.append(
             MemorySection(
-                _frame_ref_from_json(section["frame_ref"], f"{section_name}.frame_ref"),
+                _json_string(section["memory"], f"{section_name}.memory", nonempty=True),
                 _json_string(section["text"], f"{section_name}.text"),
             )
         )
@@ -383,7 +363,7 @@ def _episode_from_json(value: object, name: str) -> MemoryEpisode:
         prompt = _json_string(prompt, f"{name}.prompt")
     return MemoryEpisode(
         _json_string(data["run_id"], f"{name}.run_id", nonempty=True),
-        _occurrence_from_json(data["occurrence"], f"{name}.occurrence"),
+        _occurrence_path_from_json(data["occurrence_path"], f"{name}.occurrence_path"),
         owner_path,
         status,
         None if inputs is None else _copy_object(inputs, f"{name}.inputs"),
@@ -405,73 +385,39 @@ def _stored_entry(entry_id: str, episode: MemoryEpisode) -> JsonObject:
     return {"entry_id": entry_id, "episode": _episode_json(episode)}
 
 
-def _validate_episode_owner(
-    episode: MemoryEpisode, expected_ref: MemoryFrameRef
-) -> None:
-    """Require one episode to belong to its containing memory frame."""
-    if episode.occurrence.frame_ref != expected_ref:
-        raise ValueError("episode occurrence belongs to a different frame")
-    frame_path = expected_ref.static_path
-    owner_path = episode.owner_static_path
-    if expected_ref.owner is MemoryOwner.AGENT:
-        valid_owner = owner_path == frame_path
-    else:
-        valid_owner = owner_path[: len(frame_path)] == frame_path
-    if not valid_owner:
-        raise ValueError("episode lies outside its owning frame")
-
-
-def _validate_entry(
-    value: object, name: str, expected_ref: MemoryFrameRef
-) -> JsonObject:
+def _validate_entry(value: object, name: str) -> JsonObject:
     """Validate one retained entry and return its canonical defensive copy."""
     data = _copy_object(value, name)
     if set(data) != {"entry_id", "episode"}:
         raise ValueError(f"{name} has invalid fields")
     entry_id = _json_string(data["entry_id"], f"{name}.entry_id", nonempty=True)
     episode = _episode_from_json(data["episode"], f"{name}.episode")
-    _validate_episode_owner(episode, expected_ref)
     canonical = _stored_entry(entry_id, episode)
     if _canonical_json(data) != _canonical_json(canonical):
         raise ValueError(f"{name} must be canonical")
     return canonical
 
 
-def _copy_state(state: _FrameState) -> _FrameState:
-    """Defensively copy one immutable frame state."""
-    return _FrameState(
-        state.spec,
+def _copy_state(state: _State) -> _State:
+    """Defensively copy one immutable instance state."""
+    return _State(
+        state.limits,
         tuple(_copy_object(episode, "episode") for episode in state.episodes),
     )
 
 
 def _snapshot_json(
-    namespace: str,
-    epoch: int,
-    revision: int,
-    frames: dict[MemoryFrameRef, _FrameState],
+    namespace: str, epoch: int, revision: int, state: _State
 ) -> JsonObject:
     """Encode one canonical episodic-memory snapshot."""
-    encoded: list[JsonValue] = []
-    for ref in sorted(frames, key=_frame_sort_key):
-        state = frames[ref]
-        encoded.append(
-            {
-                "config": {
-                    "max_episodes": state.spec.max_episodes,
-                    "recall_limit": state.spec.recall_limit,
-                },
-                "episodes": [
-                    _copy_object(episode, "episode") for episode in state.episodes
-                ],
-                "policy_name": _POLICY_NAME,
-                "ref": _frame_ref_json(ref),
-            }
-        )
     return {
+        "config": {
+            "max_episodes": state.limits.max_episodes,
+            "recall_limit": state.limits.recall_limit,
+        },
+        "episodes": [_copy_object(episode, "episode") for episode in state.episodes],
         "epoch": epoch,
         "format": _SNAPSHOT_FORMAT,
-        "frames": encoded,
         "namespace": namespace,
         "revision": revision,
         "version": _SNAPSHOT_VERSION,
@@ -485,16 +431,15 @@ def _snapshot_error() -> MemoryOperationError:
     )
 
 
-def _parse_snapshot(
-    value: object,
-) -> tuple[str, int, int, dict[MemoryFrameRef, _FrameState]]:
+def _parse_snapshot(value: object) -> tuple[str, int, int, _State]:
     """Strictly decode one canonical episodic-memory snapshot."""
     try:
         data = _copy_object(value, "snapshot")
         if set(data) != {
+            "config",
+            "episodes",
             "epoch",
             "format",
-            "frames",
             "namespace",
             "revision",
             "version",
@@ -511,68 +456,38 @@ def _parse_snapshot(
             raise ValueError("snapshot.epoch must be a non-negative integer")
         if type(revision) is not int or revision < 0:
             raise ValueError("snapshot.revision must be a non-negative integer")
-        frames_raw = data["frames"]
-        if type(frames_raw) is not list:
-            raise TypeError("snapshot.frames must be an array")
-        frames: dict[MemoryFrameRef, _FrameState] = {}
-        prior: tuple[str, tuple[str, ...], str] | None = None
-        for index, raw in enumerate(frames_raw):
-            frame = _copy_object(raw, f"snapshot.frames[{index}]")
-            if set(frame) != {"config", "episodes", "policy_name", "ref"}:
-                raise ValueError("snapshot frame has invalid fields")
-            if frame["policy_name"] != _POLICY_NAME:
-                raise ValueError("snapshot frame has invalid policy")
-            ref = _frame_ref_from_json(frame["ref"], f"snapshot.frames[{index}].ref")
-            key = _frame_sort_key(ref)
-            if prior is not None and key <= prior:
-                raise ValueError("snapshot.frames must be uniquely sorted")
-            prior = key
-            config = _copy_object(frame["config"], f"snapshot.frames[{index}].config")
-            if set(config) != {"max_episodes", "recall_limit"}:
-                raise ValueError("snapshot frame config has invalid fields")
-            max_episodes = _positive_int(config["max_episodes"], "max_episodes")
-            recall_limit = _positive_int(config["recall_limit"], "recall_limit")
-            episodes = frame["episodes"]
-            if type(episodes) is not list:
-                raise ValueError("snapshot frame episodes must be an array")
-            if len(episodes) > max_episodes:
-                raise ValueError("snapshot frame exceeds its retention limit")
-            decoded = tuple(
-                _validate_entry(
-                    item,
-                    f"snapshot.frames[{index}].episodes[{episode_index}]",
-                    ref,
-                )
-                for episode_index, item in enumerate(episodes)
-            )
-            entry_ids = [cast(str, item["entry_id"]) for item in decoded]
-            if len(entry_ids) != len(set(entry_ids)):
-                raise ValueError("snapshot frame episode IDs must be unique")
-            spec = _EffectiveFrameSpec(ref, max_episodes, recall_limit)
-            frames[ref] = _FrameState(spec, decoded)
-        canonical = _snapshot_json(namespace, epoch, revision, frames)
+        config = _copy_object(data["config"], "snapshot.config")
+        if set(config) != {"max_episodes", "recall_limit"}:
+            raise ValueError("snapshot config has invalid fields")
+        limits = _Limits(
+            _positive_int(config["max_episodes"], "max_episodes"),
+            _positive_int(config["recall_limit"], "recall_limit"),
+        )
+        episodes = data["episodes"]
+        if type(episodes) is not list:
+            raise ValueError("snapshot episodes must be an array")
+        if len(episodes) > limits.max_episodes:
+            raise ValueError("snapshot exceeds its retention limit")
+        decoded = tuple(
+            _validate_entry(item, f"snapshot.episodes[{index}]")
+            for index, item in enumerate(episodes)
+        )
+        entry_ids = [cast(str, item["entry_id"]) for item in decoded]
+        if len(entry_ids) != len(set(entry_ids)):
+            raise ValueError("snapshot episode IDs must be unique")
+        state = _State(limits, decoded)
+        canonical = _snapshot_json(namespace, epoch, revision, state)
         if _canonical_json(data) != _canonical_json(canonical):
             raise ValueError("snapshot must be canonical")
-        return namespace, epoch, revision, frames
+        return namespace, epoch, revision, state
     except MemoryOperationError:
         raise
     except (TypeError, ValueError, RecursionError) as exc:
         raise _snapshot_error() from exc
 
 
-def _compatible(
-    current: dict[MemoryFrameRef, _FrameState],
-    recorded: dict[MemoryFrameRef, _FrameState],
-) -> bool:
-    """Accept current state plus harmless recorded empty declarations."""
-    for ref, state in current.items():
-        if recorded.get(ref) != state:
-            return False
-    return all(ref in current or not state.episodes for ref, state in recorded.items())
-
-
 def _parse_inventory(value: object) -> tuple[
-    tuple[str, int, int, dict[MemoryFrameRef, _FrameState]],
+    tuple[str, int, int, _State],
     dict[str, str],
     bool,
     bool,
@@ -593,7 +508,7 @@ def _parse_inventory(value: object) -> tuple[
         if type(data["version"]) is not int or data["version"] != 1:
             raise ValueError("unsupported inventory version")
         snapshot = _parse_snapshot(data["snapshot"])
-        _, epoch, revision, frames = snapshot
+        _, epoch, revision, state = snapshot
         opened, reset, committed = (
             data[key] for key in ("ever_opened", "ever_reset", "ever_committed")
         )
@@ -609,7 +524,7 @@ def _parse_inventory(value: object) -> tuple[
                 raise ValueError("invalid commit digest")
         if (
             not opened
-            and (frames or revision or committed or commits)
+            and (state.episodes or revision or committed or commits)
             or not committed
             and (revision or commits)
             or reset
@@ -653,35 +568,45 @@ class EpisodicMemory:
 
         Use ``with EpisodicMemory(storage="memory.sqlite") as memory:`` to retain
         episodes across restarts and explicitly release the single file owner.
+        The file is opened at the first operation, not at construction.
         Closing idle run handles is not required before closing this backend.
     """
 
     def __init__(
         self,
-        max_episodes: int = 100,
-        recall_limit: int = 10,
+        max_episodes: int | None = None,
+        recall_limit: int | None = None,
         *,
         storage: str | os.PathLike[str] | None = None,
+        create_parent: bool = False,
     ) -> None:
         """Create one isolated episodic-memory namespace.
 
         Args:
-            max_episodes (`int`, defaults to `100`):
-                Maximum retained episodes for each frame.
-            recall_limit (`int`, defaults to `10`):
-                Maximum episodes returned by contextual recall.
+            max_episodes (`int | None`, defaults to `None`):
+                Maximum retained episodes. None adopts the stored or snapshot
+                value, else 100.
+            recall_limit (`int | None`, defaults to `None`):
+                Maximum episodes returned by contextual recall. None adopts the
+                stored or snapshot value, else 10.
             storage (`str | PathLike[str] | None`, defaults to `None`):
-                Optional local SQLite file with an existing parent. This backend
-                owns it until explicit close or context exit. None is process-local.
-                Current limits default only new frames, never saved frame settings.
+                Optional local SQLite file. Nothing is opened until the first
+                operation; this backend then owns the file until close. None is
+                process-local.
+            create_parent (`bool`, defaults to `False`):
+                Create the storage file's parent directory at first open.
 
         Raises:
             TypeError: Raised when either limit is not an exact integer.
             ValueError: Raised when either limit is not positive.
-            MemoryOperationError: Storage is unavailable, occupied, or invalid.
+            MemoryOperationError: ``storage`` is not a local file path
+                (`storage.path`).
         """
-        self._default_max_episodes = _positive_int(max_episodes, "max_episodes")
-        self._default_recall_limit = _positive_int(recall_limit, "recall_limit")
+        if max_episodes is not None:
+            _positive_int(max_episodes, "max_episodes")
+        if recall_limit is not None:
+            _positive_int(recall_limit, "recall_limit")
+        self._requested = (max_episodes, recall_limit)
         self._lock = RLock()
         self._pid = os.getpid()
         self._storage: SQLiteStorage | None = None
@@ -690,45 +615,59 @@ class EpisodicMemory:
         self._namespace = uuid4().hex
         self._epoch = 0
         self._revision = 0
-        self._frames: dict[MemoryFrameRef, _FrameState] = {}
+        self._state = _State(_resolve_limits(self._requested, None, "storage"), ())
         self._applied_commits: dict[str, str] = {}
         self._ever_opened = False
         self._ever_reset = False
         self._ever_committed = False
-        if storage is not None:
-            self._storage = SQLiteStorage(storage, _POLICY_NAME)
+        if type(create_parent) is not bool:
+            raise TypeError("create_parent must be a bool")
+        self._storage_path = None if storage is None else check_storage_path(storage)
+        self._create_parent = create_parent
+
+    def _open_storage(self) -> None:
+        """Open and load durable state once; the caller holds ``self._lock``."""
+        if self._storage is not None or self._storage_path is None:
+            return
+        self._storage = SQLiteStorage(
+            self._storage_path, _POLICY_NAME, create_parent=self._create_parent
+        )
+        try:
+            saved = self._storage.load()
+            if saved is None:
+                self._save_state(
+                    _snapshot_json(
+                        self._namespace, self._epoch, self._revision, self._state
+                    )
+                )
+            else:
+                snapshot, commits, opened, reset, committed = _parse_inventory(
+                    saved
+                )
+                saved_limits = snapshot[3].limits
+                _resolve_limits(self._requested, saved_limits, "storage")
+                self._namespace, self._epoch, self._revision, self._state = (
+                    snapshot
+                )
+                self._applied_commits = commits
+                self._ever_opened = opened
+                self._ever_reset = reset
+                self._ever_committed = committed
+        except BaseException as primary:
             try:
-                saved = self._storage.load()
-                if saved is None:
-                    self._save_state(
-                        _snapshot_json(
-                            self._namespace, self._epoch, self._revision, self._frames
-                        )
+                self._storage.close()
+            except BaseException as cleanup:
+                if hasattr(primary, "add_note"):
+                    primary.add_note(
+                        f"EpisodicMemory cleanup failed: {type(cleanup).__name__}"
                     )
-                else:
-                    snapshot, commits, opened, reset, committed = _parse_inventory(
-                        saved
-                    )
-                    self._namespace, self._epoch, self._revision, self._frames = (
-                        snapshot
-                    )
-                    self._applied_commits = commits
-                    self._ever_opened = opened
-                    self._ever_reset = reset
-                    self._ever_committed = committed
-            except BaseException as primary:
-                try:
-                    self._storage.close()
-                except BaseException as cleanup:
-                    if hasattr(primary, "add_note"):
-                        primary.add_note(
-                            f"EpisodicMemory cleanup failed: {type(cleanup).__name__}"
-                        )
-                raise
+            # Forget the failed handle so a later operation may retry the open.
+            self._storage = None
+            raise
 
     def _check_pid(self) -> None:
         """Reject inherited durable handles before touching any Python lock."""
-        if self._storage is not None and os.getpid() != self._pid:
+        if self._storage_path is not None and os.getpid() != self._pid:
             raise MemoryOperationError(
                 "storage",
                 "storage.forked",
@@ -745,6 +684,7 @@ class EpisodicMemory:
                 raise _operation_error(
                     "session", "episodic.closed", "memory backend is closed"
                 )
+            self._open_storage()
             if self._storage is not None:
                 self._storage.ensure_open()
             self._active_operations += 1
@@ -853,26 +793,28 @@ class EpisodicMemory:
 
         Raises:
             MemoryOperationError: The snapshot is invalid or incompatible, the
-                backend is closed, or durable state cannot be read or saved.
+                backend is closed, or durable state cannot be opened, read, or
+                saved.
         """
         with self._operation():
             parsed = None if snapshot is None else _parse_snapshot(snapshot)
+            if parsed is not None:
+                recorded_limits = parsed[3].limits
+                _resolve_limits(self._requested, recorded_limits, "open_run")
             adopt = False
             if parsed is None:
                 namespace = self._namespace
                 epoch = self._epoch
                 revision = self._revision
-                frames = {
-                    ref: _copy_state(state) for ref, state in self._frames.items()
-                }
+                state = _copy_state(self._state)
             else:
-                namespace, epoch, revision, frames = parsed
+                namespace, epoch, revision, state = parsed
                 if namespace != self._namespace:
                     pristine = (
                         not self._ever_opened
                         and not self._ever_reset
                         and not self._ever_committed
-                        and not self._frames
+                        and not self._state.episodes
                         and self._epoch == 0
                         and self._revision == 0
                     )
@@ -882,22 +824,15 @@ class EpisodicMemory:
                 else:
                     if epoch != self._epoch or revision > self._revision:
                         raise _snapshot_error()
-                    if revision == self._revision and not _compatible(
-                        self._frames, frames
-                    ):
+                    if revision == self._revision and state != self._state:
                         raise _snapshot_error()
-                frames = {ref: _copy_state(state) for ref, state in frames.items()}
             if adopt or not self._ever_opened:
-                adopted_frames = (
-                    {ref: _copy_state(state) for ref, state in frames.items()}
-                    if adopt
-                    else self._frames
-                )
+                adopted_state = _copy_state(state) if adopt else self._state
                 candidate = (
-                    _snapshot_json(namespace, epoch, revision, frames)
+                    _snapshot_json(namespace, epoch, revision, state)
                     if adopt
                     else _snapshot_json(
-                        self._namespace, self._epoch, self._revision, self._frames
+                        self._namespace, self._epoch, self._revision, self._state
                     )
                 )
                 self._save_state(
@@ -909,22 +844,25 @@ class EpisodicMemory:
                     self._namespace = namespace
                     self._epoch = epoch
                     self._revision = revision
-                    self._frames = adopted_frames
+                    self._state = adopted_state
                     self._ever_committed = revision > 0
                 self._ever_opened = True
-            return _EpisodicSession(self, namespace, epoch, revision, frames)
+            return _EpisodicSession(self, namespace, epoch, revision, state)
 
     def reset(self) -> None:
         """Clear episodes and begin a new generation, retaining commit tombstones.
 
         Raises:
-            `MemoryOperationError`: The backend is closed or storage cannot save.
+            `MemoryOperationError`: The backend is closed, or durable state
+                cannot be opened or saved.
         """
         with self._operation():
+            cleared = _State(self._state.limits, ())
             self._save_state(
-                _snapshot_json(self._namespace, self._epoch + 1, 0, {}), ever_reset=True
+                _snapshot_json(self._namespace, self._epoch + 1, 0, cleared),
+                ever_reset=True,
             )
-            self._frames = {}
+            self._state = cleared
             self._epoch += 1
             self._revision = 0
             self._ever_reset = True
@@ -952,14 +890,13 @@ class _EpisodicSession:
         namespace: str,
         epoch: int,
         revision: int,
-        frames: dict[MemoryFrameRef, _FrameState],
+        state: _State,
     ) -> None:
         self._memory = memory
         self._namespace = namespace
         self._epoch = epoch
         self._revision = revision
-        self._frames = frames
-        self._opened: dict[MemoryFrameRef, _EpisodicFrame] = {}
+        self._state = state
         self._closed = False
 
     def _ensure_open(self) -> None:
@@ -974,10 +911,81 @@ class _EpisodicSession:
         """Return a defensive public snapshot pinned for this run."""
         with self._memory._operation():
             self._ensure_open()
-            frames = {ref: _copy_state(state) for ref, state in self._frames.items()}
-            for ref, frame in self._opened.items():
-                frames.setdefault(ref, _FrameState(frame._spec, ()))
-            return _snapshot_json(self._namespace, self._epoch, self._revision, frames)
+            return _snapshot_json(
+                self._namespace, self._epoch, self._revision, self._state
+            )
+
+    def recall(self, context: RecallContext | None = None) -> str:
+        """Render pinned retained history, optionally ranked by lexical relevance."""
+        with self._memory._operation():
+            self._ensure_open()
+            if context is not None and type(context) is not RecallContext:
+                raise _operation_error(
+                    "recall", "episodic.invalid_context", "context is invalid"
+                )
+            entries = self._state.episodes
+            if context is not None:
+                try:
+                    query = self._memory.rewrite_query(context)
+                except Exception as exc:
+                    raise _operation_error(
+                        "recall", "episodic.invalid_query", "query rewriting failed"
+                    ) from exc
+                self._memory._check_pid()
+                if type(query) is not str:
+                    raise _operation_error(
+                        "recall",
+                        "episodic.invalid_query",
+                        "query rewriting must return text",
+                    )
+                query_terms = _lexical_terms(query)
+                ranked = sorted(
+                    enumerate(entries),
+                    key=lambda pair: (
+                        -len(query_terms & _lexical_terms(_canonical_json(pair[1]))),
+                        -pair[0],
+                    ),
+                )
+                entries = tuple(
+                    entry for _, entry in ranked[: self._state.limits.recall_limit]
+                )
+            return "\n".join(_canonical_json(entry) for entry in entries)
+
+    def learn(self, context: LearnContext) -> list[MemoryMutation]:
+        """Propose one deterministic append for every episode in the batch."""
+        with self._memory._operation():
+            self._ensure_open()
+            if type(context) is not LearnContext:
+                raise _operation_error(
+                    "learn", "episodic.invalid_context", "learning context is invalid"
+                )
+            self._assert_current("learn")
+            try:
+                context = LearnContext(
+                    context.run_id, context.memory, context.episodes, context.feedback
+                )
+            except (TypeError, ValueError) as exc:
+                raise _operation_error(
+                    "learn", "episodic.invalid_context", "learning context is invalid"
+                ) from exc
+            mutations: list[MemoryMutation] = []
+            for ordinal, episode in enumerate(context.episodes):
+                identity: JsonObject = {
+                    "episode": _episode_json(episode),
+                    "memory": context.memory,
+                    "ordinal": ordinal,
+                    "run_id": context.run_id,
+                }
+                entry_id = hashlib.sha256(
+                    _canonical_json(identity).encode("utf-8")
+                ).hexdigest()
+                mutations.append(
+                    MemoryMutation(
+                        entry_id,
+                        {"entry": _stored_entry(entry_id, episode), "operation": "append"},
+                    )
+                )
+            return mutations
 
     def __enter__(self) -> _EpisodicSession:
         """Enter this still-open session."""
@@ -1008,83 +1016,6 @@ class _EpisodicSession:
         with self._memory._lock:
             self._closed = True
 
-    def _normalize_spec(
-        self, spec: MemoryFrameSpec, recorded: _FrameState | None
-    ) -> _EffectiveFrameSpec:
-        """Validate one frame and fill its local defaults."""
-        if type(spec) is not MemoryFrameSpec:
-            raise _operation_error(
-                "open_frame", "episodic.invalid_frame", "spec must be a MemoryFrameSpec"
-            )
-        if spec.policy_name != _POLICY_NAME:
-            raise _operation_error(
-                "open_frame",
-                "episodic.invalid_policy",
-                "frame policy must be 'episodic'",
-            )
-        config = spec.config
-        if set(config) - {"max_episodes", "recall_limit"}:
-            raise _operation_error(
-                "open_frame",
-                "episodic.invalid_frame_config",
-                "frame configuration contains unsupported fields",
-            )
-        try:
-            max_default = (
-                recorded.spec.max_episodes
-                if recorded is not None
-                else self._memory._default_max_episodes
-            )
-            recall_default = (
-                recorded.spec.recall_limit
-                if recorded is not None
-                else self._memory._default_recall_limit
-            )
-            return _EffectiveFrameSpec(
-                spec.ref,
-                _positive_int(config.get("max_episodes", max_default), "max_episodes"),
-                _positive_int(
-                    config.get("recall_limit", recall_default), "recall_limit"
-                ),
-            )
-        except (TypeError, ValueError) as exc:
-            raise _operation_error(
-                "open_frame",
-                "episodic.invalid_frame_config",
-                "frame configuration values are invalid",
-            ) from exc
-
-    def open_frame(self, spec: MemoryFrameSpec) -> _EpisodicFrame:
-        """Open one frame idempotently against the pinned snapshot."""
-        with self._memory._operation():
-            self._ensure_open()
-            if type(spec) is not MemoryFrameSpec:
-                raise _operation_error(
-                    "open_frame",
-                    "episodic.invalid_frame",
-                    "spec must be a MemoryFrameSpec",
-                )
-            recorded = self._frames.get(spec.ref)
-            effective = self._normalize_spec(spec, recorded)
-            opened = self._opened.get(effective.ref)
-            if opened is not None:
-                if opened._requested_spec != spec or opened._spec != effective:
-                    raise _operation_error(
-                        "open_frame",
-                        "episodic.frame_conflict",
-                        "the frame was already opened with a different specification",
-                    )
-                return opened
-            if recorded is not None and recorded.spec != effective:
-                raise _operation_error(
-                    "open_frame",
-                    "episodic.frame_conflict",
-                    "the recorded frame has a different specification",
-                )
-            frame = _EpisodicFrame(self, effective, spec)
-            self._opened[effective.ref] = frame
-            return frame
-
     def _assert_current(self, stage: str) -> None:
         """Require this session to remain the current memory generation."""
         if (
@@ -1112,7 +1043,6 @@ class _EpisodicSession:
                 )
             encoded.append(
                 {
-                    "frame_ref": _frame_ref_json(mutation.frame_ref),
                     "mutation_id": mutation.mutation_id,
                     "payload": mutation.payload,
                 }
@@ -1148,29 +1078,20 @@ class _EpisodicSession:
                     "commit id collision with a different batch",
                 )
             self._assert_current("commit")
-            frames = {
-                ref: _copy_state(state) for ref, state in self._memory._frames.items()
-            }
-            for ref, opened in self._opened.items():
-                current = frames.get(ref)
-                if current is not None and current.spec != opened._spec:
-                    raise _operation_error(
-                        "commit",
-                        "episodic.frame_conflict",
-                        "current frame specification changed",
-                    )
-                frames.setdefault(ref, _FrameState(opened._spec, ()))
+            state = _copy_state(self._memory._state)
+            if state.limits != self._state.limits:
+                raise _operation_error(
+                    "commit",
+                    "episodic.config_conflict",
+                    "current memory limits changed",
+                )
             seen_mutations: set[str] = set()
-            additions: dict[MemoryFrameRef, list[JsonObject]] = {}
+            additions: list[JsonObject] = []
             try:
                 for index, mutation in enumerate(mutations):
                     if mutation.mutation_id in seen_mutations:
                         raise ValueError("mutation IDs must be unique")
                     seen_mutations.add(mutation.mutation_id)
-                    if mutation.frame_ref not in self._opened:
-                        raise ValueError(
-                            "mutation frame was not opened by this session"
-                        )
                     payload = _copy_object(
                         mutation.payload, f"mutations[{index}].payload"
                     )
@@ -1182,24 +1103,21 @@ class _EpisodicSession:
                             "mutation payload must be a closed append operation"
                         )
                     entry = _validate_entry(
-                        payload["entry"],
-                        f"mutations[{index}].payload.entry",
-                        mutation.frame_ref,
+                        payload["entry"], f"mutations[{index}].payload.entry"
                     )
                     if entry["entry_id"] != mutation.mutation_id:
                         raise ValueError("mutation and entry IDs must match")
-                    additions.setdefault(mutation.frame_ref, []).append(entry)
-                for ref, entries in additions.items():
-                    state = frames[ref]
-                    existing_ids = {
-                        cast(str, entry["entry_id"]) for entry in state.episodes
-                    }
-                    incoming_ids = {cast(str, entry["entry_id"]) for entry in entries}
-                    if existing_ids & incoming_ids:
-                        raise ValueError("episode entry is already retained")
-                    retained = state.episodes + tuple(entries)
-                    retained = retained[-state.spec.max_episodes :]
-                    frames[ref] = _FrameState(state.spec, retained)
+                    additions.append(entry)
+                existing_ids = {
+                    cast(str, entry["entry_id"]) for entry in state.episodes
+                }
+                incoming_ids = {cast(str, entry["entry_id"]) for entry in additions}
+                if existing_ids & incoming_ids:
+                    raise ValueError("episode entry is already retained")
+                retained = (state.episodes + tuple(additions))[
+                    -state.limits.max_episodes :
+                ]
+                state = _State(state.limits, retained)
             except (TypeError, ValueError, RecursionError) as exc:
                 raise _operation_error(
                     "commit", "episodic.invalid_batch", "mutation batch is invalid"
@@ -1208,105 +1126,12 @@ class _EpisodicSession:
             revision = self._memory._revision + 1
             self._memory._save_state(
                 _snapshot_json(
-                    self._memory._namespace, self._memory._epoch, revision, frames
+                    self._memory._namespace, self._memory._epoch, revision, state
                 ),
                 applied_commits=commits,
                 ever_committed=True,
             )
-            self._memory._frames = frames
+            self._memory._state = state
             self._memory._applied_commits = commits
             self._memory._revision = revision
             self._memory._ever_committed = True
-
-
-class _EpisodicFrame:
-    """One session-bound episodic memory frame."""
-
-    def __init__(
-        self,
-        session: _EpisodicSession,
-        spec: _EffectiveFrameSpec,
-        requested_spec: MemoryFrameSpec,
-    ) -> None:
-        self._session = session
-        self._spec = spec
-        self._requested_spec = requested_spec
-
-    def recall(self, context: RecallContext | None = None) -> str:
-        """Render pinned retained history, optionally ranked by lexical relevance."""
-        with self._session._memory._operation():
-            self._session._ensure_open()
-            if context is not None and type(context) is not RecallContext:
-                raise _operation_error(
-                    "recall", "episodic.invalid_context", "context is invalid"
-                )
-            state = self._session._frames.get(self._spec.ref)
-            entries = () if state is None else state.episodes
-            if context is not None:
-                try:
-                    query = self._session._memory.rewrite_query(context)
-                except Exception as exc:
-                    raise _operation_error(
-                        "recall", "episodic.invalid_query", "query rewriting failed"
-                    ) from exc
-                self._session._memory._check_pid()
-                if type(query) is not str:
-                    raise _operation_error(
-                        "recall",
-                        "episodic.invalid_query",
-                        "query rewriting must return text",
-                    )
-                query_terms = _lexical_terms(query)
-                ranked = sorted(
-                    enumerate(entries),
-                    key=lambda pair: (
-                        -len(query_terms & _lexical_terms(_canonical_json(pair[1]))),
-                        -pair[0],
-                    ),
-                )
-                entries = tuple(entry for _, entry in ranked[: self._spec.recall_limit])
-            return "\n".join(_canonical_json(entry) for entry in entries)
-
-    def learn(self, context: LearnContext) -> list[MemoryMutation]:
-        """Propose one deterministic append for every owner-scoped episode."""
-        with self._session._memory._operation():
-            self._session._ensure_open()
-            if type(context) is not LearnContext or context.frame_ref != self._spec.ref:
-                raise _operation_error(
-                    "learn", "episodic.invalid_context", "learning context is invalid"
-                )
-            self._session._assert_current("learn")
-            try:
-                context = LearnContext(
-                    context.run_id,
-                    context.frame_ref,
-                    context.episodes,
-                    context.feedback,
-                )
-                for episode in context.episodes:
-                    _validate_episode_owner(episode, self._spec.ref)
-            except (TypeError, ValueError) as exc:
-                raise _operation_error(
-                    "learn", "episodic.invalid_context", "learning context is invalid"
-                ) from exc
-            mutations: list[MemoryMutation] = []
-            for ordinal, episode in enumerate(context.episodes):
-                encoded = _episode_json(episode)
-                identity: JsonObject = {
-                    "episode": encoded,
-                    "frame_ref": _frame_ref_json(self._spec.ref),
-                    "ordinal": ordinal,
-                    "run_id": context.run_id,
-                }
-                entry_id = hashlib.sha256(
-                    _canonical_json(identity).encode("utf-8")
-                ).hexdigest()
-                entry = _stored_entry(entry_id, episode)
-                mutations.append(
-                    MemoryMutation(
-                        entry_id,
-                        self._spec.ref,
-                        {"entry": entry, "operation": "append"},
-                    )
-                )
-            return mutations

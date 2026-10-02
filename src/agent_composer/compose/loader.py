@@ -42,6 +42,10 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from agent_composer.compile.memory_layout import (
+    resolve_memory_layout,
+    scope_memory_declarations,
+)
 from agent_composer.compile.model import CompiledFlow
 from agent_composer.compile.origins import iter_flow_origins, rebase_flow_origins
 from agent_composer.diagnostics import (
@@ -50,13 +54,14 @@ from agent_composer.diagnostics import (
     OriginResolver,
     ResolverTable,
 )
+from agent_composer.memory.contracts import DeclSite, MemorySetupError
 from agent_composer.typesys.values import TypeCheckError
 from agent_composer.typesys.types import read_typedefs
 from agent_composer.compose.build.pipeline import _assemble, ComposedFlow
 from agent_composer.compose.desugar.inline_bodies import INLINE_FLOW_PREFIX
 from agent_composer.compose.nodes.resolver import ChildResolver
 from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
-from agent_composer.compose.helpers.memory import parse_memory_policy
+from agent_composer.compose.helpers.memory import parse_memory_declarations
 from agent_composer.compose.helpers.uses import parse_uses_ref
 from agent_composer.compose.helpers.source import _boundary_field_ranges
 from agent_composer.compose.parse.file import (
@@ -374,6 +379,9 @@ def _validate_external_child(alias: str, child: object) -> tuple[OriginRef, ...]
 def _rebase_external_child(alias: str, child: object) -> ComposedFlow:
     """Return one validated child copy scoped under its lexical alias.
 
+    Every reachable memory declaration in the copy gains ``alias`` as its
+    outermost scope segment.
+
     Args:
         alias (`str`): Authored ``uses:`` alias owning the returned view.
         child (`object`): Canonical `ComposedFlow` returned by the host resolver.
@@ -393,9 +401,12 @@ def _rebase_external_child(alias: str, child: object) -> ComposedFlow:
             lambda origin: _scope_origin(alias, origin),
             resolver=child.origin_resolver,
         )
+        # rebase_flow_origins returned an independent deep copy, so the scope
+        # rewrite cannot reach the cached canonical child.
+        scope_memory_declarations(compiled, alias)
     except Exception as exc:
         raise _UNLOCATED_DIAGNOSTICS.error(
-            f"uses: alias {alias!r} could not rebase child origins: {exc}"
+            f"uses: alias {alias!r} could not rebase child: {exc}"
         ) from exc
     if len(table) != len(origins):
         raise _UNLOCATED_DIAGNOSTICS.error(
@@ -405,6 +416,45 @@ def _rebase_external_child(alias: str, child: object) -> ComposedFlow:
         child,
         compiled=compiled,
         origin_resolver=table if origins else None,
+    )
+
+
+def _memory_setup_load_error(flow: ComposedFlow, exc: MemorySetupError) -> LoadError:
+    """Locate one memory layout failure at its first declaration site.
+
+    Args:
+        flow (`ComposedFlow`): Loaded root whose resolver maps origins to source.
+        exc (`MemorySetupError`): Resolver failure with its origins and notes.
+
+    Returns:
+        `LoadError`: Failure framed at ``exc.origin``. Its notes are the
+        exception's own notes, then one located note per related origin whose
+        location differs from the primary frame and from every earlier note.
+    """
+    resolver = flow.origin_resolver
+
+    def frame(origin: OriginRef | None) -> DiagnosticFrame | None:
+        return None if origin is None or resolver is None else resolver.resolve(origin)
+
+    primary = frame(exc.origin)
+    notes = list(getattr(exc, "__notes__", ()))
+    # Aliases of one file map distinct origins to one source location.
+    seen: set[tuple[str, int, int]] = set()
+    if primary is not None:
+        seen.add((primary.label, primary.range.start_line, primary.range.start_col))
+    for origin in exc.related:
+        other = frame(origin)
+        if other is None:
+            continue
+        location = (other.label, other.range.start_line, other.range.start_col)
+        if location in seen:
+            continue
+        seen.add(location)
+        notes.append(f"related declaration at {location[0]}:{location[1]}:{location[2]}")
+    return _UNLOCATED_DIAGNOSTICS.error(
+        str(exc),
+        frames=() if primary is None else (primary,),
+        notes=notes,
     )
 
 
@@ -595,7 +645,14 @@ def load_flow(
     if type(source_label) is not str:
         raise TypeError("source_label must be a string")
     document = parse_source_document(text, source_label)
-    return _load_flow(document, child_resolver, search_paths, _LoadCtx())
+    flow = _load_flow(document, child_resolver, search_paths, _LoadCtx())
+    # Only the root load sees the fully assembled graph, imports included;
+    # children loaded for uses: are checked as part of their importer.
+    try:
+        resolve_memory_layout(flow.compiled)
+    except MemorySetupError as exc:
+        raise _memory_setup_load_error(flow, exc) from exc
+    return flow
 
 
 def _reject_authored_host_fields(
@@ -673,14 +730,15 @@ def _load_flow(
         uses_cursor=uses_cursor,
         diagnostics=diagnostics,
     )
-    root_memory_policy = (
-        parse_memory_policy(
+    root_memories = (
+        parse_memory_declarations(
             f.long_term_memory,
             diagnostics=diagnostics,
             source_range=root.range_of("long_term_memory"),
+            site=DeclSite((), ("root",), None),
         )
-        if root.has("nodes") and root.has("long_term_memory")
-        else None
+        if root.has("nodes") and f.long_term_memory is not None
+        else ()
     )
     callable_scope.eager_load_defs()
 
@@ -711,8 +769,8 @@ def _load_flow(
             else None
         ),
         flow_id=f.id,
-        memory_policy=root_memory_policy,
-        memory_policy_cursor=(
+        memories=root_memories,
+        memories_cursor=(
             root.child("long_term_memory")
             if root.has("nodes") and root.has("long_term_memory")
             else None
@@ -1090,8 +1148,8 @@ def _load_def(
     )
     nodes_cursor = _def_assembly_cursor(def_cursor, body["nodes"])
     try:
-        memory_policy = (
-            parse_memory_policy(
+        def_memories = (
+            parse_memory_declarations(
                 body["long_term_memory"],
                 diagnostics=diagnostics,
                 source_range=(
@@ -1099,9 +1157,10 @@ def _load_def(
                     if def_cursor is not None
                     else None
                 ),
+                site=DeclSite((), ("def", name), None),
             )
-            if "long_term_memory" in body
-            else None
+            if body.get("long_term_memory") is not None
+            else ()
         )
         return _assemble(
             inputs_section=body.get("inputs") or {},
@@ -1128,8 +1187,8 @@ def _load_def(
                 or _source_child(def_cursor, "outputs")
             ),
             flow_id=name,
-            memory_policy=memory_policy,
-            memory_policy_cursor=_source_child(def_cursor, "long_term_memory"),
+            memories=def_memories,
+            memories_cursor=_source_child(def_cursor, "long_term_memory"),
         )
     except LoadError as exc:
         raise diagnostics.prepend(

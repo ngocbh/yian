@@ -7,8 +7,10 @@ import threading
 
 import pytest
 
+from agent_composer.memory.contracts import MemoryOperationError
 from agent_composer.memory.storage import (
     FileMarkdownStore,
+    InMemoryMarkdownStore,
     MarkdownStore,
     MarkdownVersionMismatch,
     markdown_version,
@@ -28,9 +30,54 @@ def test_unknown_or_malformed_version_raises_lookup_error(tmp_path) -> None:
             store.read(version)
 
 
-def test_missing_parent_directory_is_rejected(tmp_path) -> None:
+def test_missing_parent_directory_fails_on_first_use(tmp_path) -> None:
+    store = FileMarkdownStore(tmp_path / "missing" / "ada.md")
+    assert not (tmp_path / "missing").exists()
+    with pytest.raises(FileNotFoundError, match="document directory does not exist"):
+        store.read()
     with pytest.raises(FileNotFoundError):
-        FileMarkdownStore(tmp_path / "missing" / "ada.md")
+        store.write("x", base_version=markdown_version(""))
+    assert not (tmp_path / "missing").exists()
+
+
+@pytest.mark.parametrize(
+    "path", ["", ":memory:", "file:ada.md", "FILE:ada.md", "ada\x00.md", b"ada.md", "\udcff.md"]
+)
+def test_non_file_paths_are_rejected_at_construction(tmp_path, monkeypatch, path) -> None:
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(MemoryOperationError) as caught:
+        FileMarkdownStore(path)
+    assert caught.value.code == "storage.path"
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_directory_path_fails_on_first_use(tmp_path) -> None:
+    (tmp_path / "ada.md").mkdir()
+    store = FileMarkdownStore(tmp_path / "ada.md")
+    with pytest.raises(OSError):
+        store.read()
+
+
+def test_create_parent_makes_the_directory_on_first_use(tmp_path) -> None:
+    path = tmp_path / "a" / "b" / "ada.md"
+    store = FileMarkdownStore(path, create_parent=True)
+    assert not (tmp_path / "a").exists()
+    assert store.read() == ("", markdown_version(""))
+    assert path.parent.is_dir()
+
+
+def test_relative_path_is_bound_to_the_construction_directory(
+    tmp_path, monkeypatch
+) -> None:
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    monkeypatch.chdir(tmp_path / "a")
+    store = FileMarkdownStore("ada.md")
+    assert list((tmp_path / "a").iterdir()) == []
+    monkeypatch.chdir(tmp_path / "b")
+    store.write("hello", base_version=markdown_version(""))
+    assert (tmp_path / "a" / "ada.md").read_text(encoding="utf-8") == "hello"
+    assert not (tmp_path / "b" / "ada.md").exists()
 
 
 def test_write_is_compare_and_set_and_keeps_every_version(tmp_path) -> None:
@@ -93,3 +140,31 @@ def test_concurrent_writers_from_one_base_have_exactly_one_winner(tmp_path) -> N
         thread.join()
     winners = [version for version in results if version is not None]
     assert len(winners) == 1 and store.read()[1] == winners[0]
+
+
+def test_in_memory_store_is_a_compare_and_set_markdown_store() -> None:
+    store = InMemoryMarkdownStore()
+    assert isinstance(store, MarkdownStore)
+    text, empty = store.read()
+    assert (text, empty) == ("", markdown_version(""))
+    first = store.write("# Ada\n", base_version=empty, provenance={"run": "r1"})
+    assert store.read() == ("# Ada\n", first)
+    with pytest.raises(MarkdownVersionMismatch) as caught:
+        store.write("lost\n", base_version=empty)
+    assert (caught.value.expected, caught.value.current) == (empty, first)
+    assert store.read(empty) == ("", empty)
+    with pytest.raises(LookupError):
+        store.read("sha256:" + "0" * 64)
+
+
+def test_in_memory_store_accepts_initial_text_and_checks_types() -> None:
+    store = InMemoryMarkdownStore("seed\n")
+    current = markdown_version("seed\n")
+    assert store.read() == ("seed\n", current)
+    with pytest.raises(TypeError):
+        store.write(b"x", base_version=current)
+    with pytest.raises(TypeError):
+        store.write("x", base_version=None)
+    with pytest.raises(TypeError):
+        InMemoryMarkdownStore(None)
+    assert store.read() == ("seed\n", current)

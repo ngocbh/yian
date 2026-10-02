@@ -8,11 +8,7 @@ from dataclasses import dataclass
 import hashlib
 import json
 
-from agent_composer.memory.contracts import (
-    ConversationInvocation,
-    ConversationKey,
-    ConversationView,
-)
+from agent_composer.memory.contracts import ConversationInvocation, ConversationView
 
 
 def admissions(view: ConversationView) -> tuple[ConversationInvocation, ...]:
@@ -55,7 +51,6 @@ class Summary:
 
     namespace: str
     generation: int
-    key: ConversationKey
     projection_version: str
     covered: tuple[ConversationInvocation, ...]
     digest: str
@@ -75,8 +70,8 @@ class Summary:
     ) -> bool:
         """Check ownership and complete prefix evidence before reusing text."""
         return (
-            (self.namespace, self.generation, self.key, self.projection_version)
-            == (view.namespace, view.generation, view.key, version)
+            (self.namespace, self.generation, self.projection_version)
+            == (view.namespace, view.generation, version)
             and bool(self.covered)
             and prior[: len(self.covered)] == self.covered
             and self.digest == prefix_digest(view, len(self.covered))

@@ -20,11 +20,16 @@ from tests.engine.test_reflective_memory import (
     _context,
     _install_model,
     _mutation,
-    _ref,
-    _spec,
 )
 
 _CONFIG = {"provider": "ollama", "model": "current"}
+
+
+def _first_open(memory):
+    """Open lazy storage without starting a run, as the constructor once did."""
+    with memory._operation():
+        pass
+    return memory
 
 
 def _memory(path=None, **kwargs):
@@ -42,7 +47,7 @@ def _learn(monkeypatch, memory, commit_id="learned", action="add", text="Use evi
         actions[0]["text"] = text
     _install_model(monkeypatch, {"actions": actions})
     with memory.open_run() as opened:
-        frame = opened.open_frame(_spec())
+        frame = opened
         batch = tuple(frame.learn(_context(run_id=commit_id)))
         opened.commit(commit_id, batch)
     return batch
@@ -54,24 +59,16 @@ def test_learned_lessons_and_limits_survive_reopen(monkeypatch, tmp_path):
         old = _snapshot(memory)
         _learn(monkeypatch, memory)
         expected = _snapshot(memory)
-    with _memory(path, max_items=9, recall_limit=7) as memory:
+    with _memory(path) as memory:
         assert _snapshot(memory) == expected
         with memory.open_run() as opened:
-            assert opened.open_frame(_spec()).recall() == "[lesson] Use evidence"
-            opened.open_frame(_spec("new"))
-            configs = {
-                item["ref"]["static_path"][-1]: item["config"]
-                for item in opened.snapshot["frames"]
-            }
-            assert configs == {
-                "agent": {"max_items": 2, "recall_limit": 1},
-                "new": {"max_items": 9, "recall_limit": 7},
-            }
+            assert opened.recall() == "[lesson] Use evidence"
+            assert opened.snapshot["config"] == {"max_items": 2, "recall_limit": 1}
         with memory.open_run(snapshot=old) as stale:
             assert stale.snapshot == old
-            assert stale.open_frame(_spec()).recall() == ""
+            assert stale.recall() == ""
             with pytest.raises(c.MemoryOperationError) as caught:
-                stale.open_frame(_spec()).learn(_context())
+                stale.learn(_context())
             assert caught.value.code == "reflective.stale_generation"
 
 
@@ -87,9 +84,9 @@ def test_saved_snapshots_pin_model_but_new_sessions_use_host_config(
         _, configs = _install_model(monkeypatch, {"actions": [{"action": "noop"}]})
         with memory.open_run(snapshot=saved) as resumed:
             assert resumed.snapshot == saved
-            resumed.open_frame(_spec()).learn(_context())
+            resumed.learn(_context())
         with memory.open_run() as fresh:
-            fresh.open_frame(_spec()).learn(_context())
+            fresh.learn(_context())
         assert [config["model"] for config in configs] == ["old", "current"]
 
 
@@ -104,20 +101,20 @@ def test_pristine_snapshot_adoption_keeps_constructor_model(monkeypatch, tmp_pat
         assert _snapshot(memory)["llm_config"]["model"] == "current"
     with _memory(path) as memory:
         current = _snapshot(memory)
-        assert current["frames"] == saved["frames"]
+        assert current["lessons"] == saved["lessons"]
         assert current["llm_config"]["model"] == "current"
 
 
-def test_constructor_persists_identity_without_resolving_model(monkeypatch, tmp_path):
+def test_first_open_persists_identity_without_resolving_model(monkeypatch, tmp_path):
     def forbidden():
         raise AssertionError("ambient model must not be resolved at construction")
 
     monkeypatch.setattr(reflective, "resolve_model_config", forbidden)
     path = tmp_path / "memory.sqlite"
-    memory = ReflectiveMemory(storage=path)
+    memory = _first_open(ReflectiveMemory(storage=path))
     namespace = memory._namespace
     with pytest.raises(c.MemoryOperationError) as caught:
-        ReflectiveMemory(storage=path)
+        _first_open(ReflectiveMemory(storage=path))
     assert caught.value.code == "storage.busy"
     memory.close()
     memory.close()
@@ -158,7 +155,7 @@ def test_none_storage_never_opens_sqlite(monkeypatch):
 
     monkeypatch.setattr(sqlite3, "connect", forbidden)
     with _memory() as memory:
-        assert _snapshot(memory)["frames"] == []
+        assert _snapshot(memory)["lessons"] == []
 
 
 def test_invalid_defaults_do_not_create_storage(tmp_path):
@@ -174,13 +171,12 @@ def test_whole_commit_is_validated_before_saving(tmp_path, monkeypatch):
         _learn(monkeypatch, memory)
         before = _snapshot(memory)
         with memory.open_run() as opened:
-            opened.open_frame(_spec())
             with pytest.raises(c.MemoryOperationError) as caught:
                 opened.commit(
                     "invalid",
                     (
-                        _mutation(_ref(), "good", "revise", "lesson", "Changed"),
-                        _mutation(_ref(), "bad", "remove", "missing"),
+                        _mutation("good", "revise", "lesson", "Changed"),
+                        _mutation("bad", "remove", "missing"),
                     ),
                 )
             assert caught.value.code == "reflective.invalid_mutation"
@@ -194,19 +190,18 @@ def test_whole_commit_is_validated_before_saving(tmp_path, monkeypatch):
 def test_idle_handles_do_not_block_close_and_are_invalidated(tmp_path, durable):
     memory = _memory(tmp_path / "memory.sqlite" if durable else None)
     opened = memory.open_run()
-    frame = opened.open_frame(_spec())
+    frame = opened
     memory.close()
     for operation in (
         memory.open_run,
         memory.reset,
         memory.__enter__,
         lambda: opened.snapshot,
-        lambda: opened.open_frame(_spec()),
         lambda: opened.commit("c", ()),
         frame.recall,
         lambda: frame.learn(_context()),
         lambda: memory.rewrite_query(
-            c.RecallContext("", "query", {}, _ref().static_path)
+            c.RecallContext("", "query", {}, ("agent",))
         ),
     ):
         with pytest.raises(c.MemoryOperationError) as caught:
@@ -245,7 +240,7 @@ def test_commit_tombstones_survive_removal_reset_and_stale_replay(
         batch = _learn(monkeypatch, memory)
         _learn(monkeypatch, memory, "removed", "remove")
         expected = _snapshot(memory)
-        assert expected["frames"][0]["lessons"] == []
+        assert expected["lessons"] == []
     with _memory(path) as memory:
         with memory.open_run(snapshot=old) as stale:
             stale.commit("learned", batch)
@@ -261,26 +256,45 @@ def test_commit_tombstones_survive_removal_reset_and_stale_replay(
             with pytest.raises(c.MemoryOperationError) as caught:
                 opened.commit("learned", ())
             assert caught.value.code == "reflective.commit_collision"
-        assert _snapshot(memory)["frames"] == []
+        assert _snapshot(memory)["lessons"] == []
         assert memory._epoch == 1 and memory._revision == 0
 
 
-def test_recorded_empty_frame_limits_survive_reopen(tmp_path):
+def test_recorded_limits_survive_reopen(tmp_path):
     path = tmp_path / "memory.sqlite"
     with _memory(path, max_items=4, recall_limit=2) as memory:
         with memory.open_run() as opened:
-            opened.open_frame(_spec())
             saved = opened.snapshot
-    with _memory(path, max_items=99, recall_limit=88) as memory:
+    with _memory(path) as memory:
         with memory.open_run(snapshot=saved) as resumed:
-            resumed.open_frame(_spec())
             assert resumed.snapshot == saved
             resumed.commit("declare", ())
     with _memory(path) as memory:
-        assert _snapshot(memory)["frames"][0]["config"] == {
+        assert _snapshot(memory)["config"] == {
             "max_items": 4,
             "recall_limit": 2,
         }
+
+
+def test_explicit_limits_must_match_stored_limits(tmp_path):
+    path = tmp_path / "memory.sqlite"
+    _first_open(_memory(path, max_items=4, recall_limit=2)).close()
+    with _memory(path) as memory:
+        assert memory._state.limits == reflective._Limits(4, 2)
+    with _memory(path, recall_limit=2) as memory:
+        assert memory._state.limits.max_items == 4
+    with pytest.raises(c.MemoryOperationError) as caught:
+        _first_open(_memory(path, max_items=5))
+    assert caught.value.code == "reflective.config_conflict"
+    _first_open(_memory(path)).close()
+
+
+def test_a_fresh_store_pins_its_default_limits(tmp_path):
+    path = tmp_path / "memory.sqlite"
+    _first_open(_memory(path)).close()
+    with pytest.raises(c.MemoryOperationError) as caught:
+        _first_open(_memory(path, max_items=5))
+    assert caught.value.code == "reflective.config_conflict"
 
 
 def _ram_state(memory):
@@ -289,7 +303,7 @@ def _ram_state(memory):
             memory._namespace,
             memory._epoch,
             memory._revision,
-            memory._frames,
+            memory._state,
             memory._applied_commits,
             memory._ever_opened,
             memory._ever_reset,
@@ -301,11 +315,11 @@ def _ram_state(memory):
 
 @pytest.mark.parametrize("operation", ["open", "adopt", "reset", "commit"])
 def test_failed_save_never_publishes_candidate_ram(tmp_path, monkeypatch, operation):
-    memory = _memory(tmp_path / "memory.sqlite")
+    memory = _first_open(_memory(tmp_path / "memory.sqlite"))
     session = frame = None
     if operation == "commit":
         session = memory.open_run()
-        frame = session.open_frame(_spec())
+        frame = session
     before = _ram_state(memory)
     primary = RuntimeError("save failed")
 
@@ -323,7 +337,7 @@ def test_failed_save_never_publishes_candidate_ram(tmp_path, monkeypatch, operat
             elif operation == "reset":
                 memory.reset()
             else:
-                session.commit("commit", (_mutation(_ref(), "m", "add", "l", "text"),))
+                session.commit("commit", (_mutation("m", "add", "l", "text"),))
         assert caught.value is primary
         assert _ram_state(memory) == before
     finally:
@@ -358,12 +372,12 @@ def test_uncertain_save_poisoning_blocks_ram_reads_and_keeps_primary(
     path = tmp_path / "memory.sqlite"
     memory = _memory(path)
     opened = memory.open_run()
-    frame = opened.open_frame(_spec())
+    frame = opened
     before = _ram_state(memory)
     memory._storage._connection.armed = True
     try:
         with pytest.raises(BaseException) as caught:
-            opened.commit("uncertain", (_mutation(_ref(), "m", "add", "l", "text"),))
+            opened.commit("uncertain", (_mutation("m", "add", "l", "text"),))
         if cancel:
             assert caught.value is primary
         else:
@@ -376,14 +390,13 @@ def test_uncertain_save_poisoning_blocks_ram_reads_and_keeps_primary(
             lambda: opened.snapshot,
             frame.recall,
             lambda: frame.learn(_context()),
-            lambda: opened.open_frame(_spec()),
             lambda: opened.commit("c", ()),
         ):
             with pytest.raises(c.MemoryOperationError) as failed:
                 operation()
             assert failed.value.code == "storage.poisoned"
         with pytest.raises(c.MemoryOperationError) as busy:
-            _memory(path)
+            _first_open(_memory(path))
         assert busy.value.code == "storage.busy"
     finally:
         opened.close()
@@ -404,7 +417,7 @@ def test_uncertain_save_poisoning_blocks_ram_reads_and_keeps_primary(
         "uncommitted",
         "reset",
         "config",
-        "frame_order",
+        "stale_frames",
         "source",
         "duplicate_lesson",
         "overflow",
@@ -420,7 +433,7 @@ def test_invalid_inventory_releases_ownership_without_rewriting(
     storage = SQLiteStorage(path, "reflective")
     inventory = storage.load()
     state = inventory["state"]
-    frame = state["frames"][0]
+    frame = state
     if case == "extra":
         inventory["extra"] = None
     elif case == "version":
@@ -439,10 +452,10 @@ def test_invalid_inventory_releases_ownership_without_rewriting(
         inventory["ever_reset"] = True
     elif case == "config":
         frame["config"]["max_items"] = True
-    elif case == "frame_order":
-        state["frames"].append(deepcopy(frame))
+    elif case == "stale_frames":
+        state["frames"] = []
     elif case == "source":
-        frame["lessons"][0]["source"]["frame_ref"]["static_path"] = ["other"]
+        frame["lessons"][0]["source"]["frame_ref"] = {}
     elif case == "duplicate_lesson":
         frame["config"]["max_items"] = 2
         frame["lessons"].append(deepcopy(frame["lessons"][0]))
@@ -455,7 +468,7 @@ def test_invalid_inventory_releases_ownership_without_rewriting(
     storage.save(inventory)
     storage.close()
     with pytest.raises(c.MemoryOperationError) as caught:
-        _memory(path)
+        _first_open(_memory(path))
     assert caught.value.code == "reflective.invalid_storage"
     storage = SQLiteStorage(path, "reflective")
     try:
@@ -469,7 +482,7 @@ def _close_during_callback(path, phase, reentrant):
     errors = []
     memory = _memory(path)
     opened = memory.open_run()
-    frame = opened.open_frame(_spec())
+    frame = opened
 
     def callback():
         if reentrant:
@@ -504,7 +517,7 @@ def _close_during_callback(path, phase, reentrant):
     def work():
         try:
             if phase == "query":
-                frame.recall(c.RecallContext("", "query", {}, _ref().static_path))
+                frame.recall(c.RecallContext("", "query", {}, ("agent",)))
             else:
                 frame.learn(_context())
         except BaseException as error:
@@ -526,7 +539,7 @@ def _close_during_callback(path, phase, reentrant):
                     memory.close()
                 assert caught.value.code == "reflective.busy"
                 with pytest.raises(c.MemoryOperationError) as busy:
-                    _memory(path)
+                    _first_open(_memory(path))
                 assert busy.value.code == "storage.busy"
             finally:
                 release.set()
@@ -547,7 +560,7 @@ def _close_during_callback(path, phase, reentrant):
 def _fork_while_locked(path):
     memory = _memory(path)
     opened = memory.open_run()
-    frame = opened.open_frame(_spec())
+    frame = opened
     locked, release = Event(), Event()
 
     def hold():
@@ -569,10 +582,9 @@ def _fork_while_locked(path):
                 opened.close,
                 frame.recall,
                 lambda: frame.learn(_context()),
-                lambda: opened.open_frame(_spec()),
                 lambda: opened.commit("c", ()),
                 lambda: memory.rewrite_query(
-                    c.RecallContext("", "query", {}, _ref().static_path)
+                    c.RecallContext("", "query", {}, ("agent",))
                 ),
             ):
                 try:
@@ -625,7 +637,7 @@ def test_actual_process_restart_restores_learned_lessons(tmp_path):
     _bounded(_write_in_another_process, (str(path),))
     with _memory(path) as memory:
         with memory.open_run() as opened:
-            assert opened.open_frame(_spec()).recall() == "[lesson] Use evidence"
+            assert opened.recall() == "[lesson] Use evidence"
             assert opened.snapshot["revision"] == 1
 
 
@@ -647,7 +659,7 @@ def test_fork_guard_precedes_inherited_backend_lock(tmp_path):
 def _fork_inside_callback(path, phase, fail=False, managed=False):
     memory = _memory(path)
     opened = memory.open_run()
-    frame = opened.open_frame(_spec())
+    frame = opened
     child_pid = None
     primary = KeyboardInterrupt("callback interrupted after fork")
 
@@ -718,7 +730,7 @@ def _fork_inside_callback(path, phase, fail=False, managed=False):
                     contexts.enter_context(memory)
                     contexts.enter_context(opened)
                 if phase == "query":
-                    frame.recall(c.RecallContext("", "query", {}, _ref().static_path))
+                    frame.recall(c.RecallContext("", "query", {}, ("agent",)))
                 else:
                     frame.learn(_context())
         except c.MemoryOperationError as error:
@@ -788,7 +800,7 @@ def test_structured_result_inspection_preserves_error_translation(
     with _memory(tmp_path / "memory.sqlite") as memory:
         with memory.open_run() as opened:
             with pytest.raises(c.MemoryOperationError) as caught:
-                opened.open_frame(_spec()).learn(_context())
+                opened.learn(_context())
     assert caught.value.code == "reflective.structured_output"
     assert caught.value.retryable is False
     if raises:
@@ -825,11 +837,11 @@ def test_context_cleanup_preserves_primary_exception(
             memory.close()
 
 
-def test_constructor_cleanup_preserves_cancellation_and_releases_owner(
+def test_first_open_cleanup_preserves_cancellation_and_releases_owner(
     tmp_path, monkeypatch
 ):
     path = tmp_path / "memory.sqlite"
-    _memory(path).close()
+    _first_open(_memory(path)).close()
     primary = KeyboardInterrupt("initialization stopped")
     parse, close = reflective._parse_inventory, SQLiteStorage.close
 
@@ -843,7 +855,7 @@ def test_constructor_cleanup_preserves_cancellation_and_releases_owner(
     monkeypatch.setattr(reflective, "_parse_inventory", reject)
     monkeypatch.setattr(SQLiteStorage, "close", cleanup)
     with pytest.raises(KeyboardInterrupt) as caught:
-        _memory(path)
+        _first_open(_memory(path))
     assert caught.value is primary
     monkeypatch.setattr(reflective, "_parse_inventory", parse)
     monkeypatch.setattr(SQLiteStorage, "close", close)

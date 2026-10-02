@@ -11,7 +11,7 @@ import pytest
 
 import agent_composer.llm_clients as llm_clients
 from agent_composer import load_flow, run_flow
-from agent_composer.memory import MemoryOperationError
+from agent_composer.memory import MemoryOperationError, MemorySetupError
 from agent_composer.memory.conversation import conversation_view_from_json
 from agent_composer.memory.session import SessionMemory
 from agent_composer.nodes.agent.memory import decode_message
@@ -22,13 +22,13 @@ from tests.engine._memory_fakes import _Memory
 
 _FLOW = """id: execution-session
 name: execution_session
-long_term_memory: session
 llm_config: {provider: openai, model: fake-model}
 input: {question: str}
 nodes:
   answer:
     kind: agent
     mode: plain
+    long_term_memory: session
     input: {question: "${input.question}"}
     prompt: ${question}
     output: str
@@ -104,7 +104,7 @@ def _wait_queue(memory, count):
     # Observe actual reserved tickets, not thread-start timing or sleeps.
     with memory._condition:
         assert memory._condition.wait_for(
-            lambda: sum(len(queue) for queue in memory._queues.values()) == count,
+            lambda: len(memory._queue) == count,
             timeout=5,
         )
 
@@ -115,7 +115,8 @@ def _snapshot(memory):
 
 
 def _views(memory):
-    return [conversation_view_from_json(raw) for raw in _snapshot(memory)["conversations"]]
+    raw = _snapshot(memory)["conversation"]
+    return [] if raw is None else [conversation_view_from_json(raw)]
 
 
 def _humans(messages):
@@ -179,15 +180,14 @@ def test_same_authored_agent_queues_real_runs_in_admission_order():
 
 
 @_bounded
-def test_distinct_authored_leaves_overlap_under_one_flow_session_frame():
-    memory, barrier = SessionMemory(), Barrier(2)
+def test_two_session_agents_overlap_on_separate_instances():
+    left, right, barrier = SessionMemory(), SessionMemory(), Barrier(2)
     flow = load_flow("""id: two-leaves
 name: two_leaves
-long_term_memory: session
 llm_config: {provider: openai, model: fake-model}
 nodes:
-  left: {kind: agent, mode: plain, prompt: left, output: str}
-  right: {kind: agent, mode: plain, prompt: right, output: str}
+  left: {kind: agent, mode: plain, long_term_memory: left_chat, prompt: left, output: str}
+  right: {kind: agent, mode: plain, long_term_memory: right_chat, prompt: right, output: str}
 output: ${[left.output, right.output]}
 """)
 
@@ -197,14 +197,12 @@ output: ${[left.output, right.output]}
 
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(llm_clients, "model_from_config", lambda _: _Model(invoke))
-        result = run_flow(flow, {}, memory={"session": memory}, num_workers=2)
+        result = run_flow(
+            flow, {}, memory={"left_chat": left, "right_chat": right}, num_workers=2
+        )
     assert result.status == "succeeded", result.failure
     assert result.output == ["left", "right"]
-    views = _views(memory)
-    assert {view.key.consumer_static_path for view in views} == {
-        ("two-leaves", "left"), ("two-leaves", "right"),
-    }
-    assert len({view.key.frame_ref for view in views}) == 1
+    assert len(_views(left)) == 1 and len(_views(right)) == 1
 
 
 @_bounded
@@ -257,11 +255,11 @@ def test_cancelled_waiter_exits_but_active_run_keeps_lease_until_reply_is_saved(
 
 
 @pytest.mark.parametrize("outer_session,local_session", [(True, False), (False, True), (True, True)])
-def test_innermost_session_owns_history_without_hiding_other_recall(monkeypatch, outer_session, local_session):
+def test_agent_session_owns_history_and_a_flow_transcript_is_rejected(monkeypatch, outer_session, local_session):
     outer = SessionMemory() if outer_session else _Memory(recall_text="outer recall")
     local = SessionMemory() if local_session else _Memory(recall_text="local recall")
-    flow = load_flow(_FLOW.replace("long_term_memory: session", "long_term_memory: outer")
-                     .replace("    mode: plain", "    mode: plain\n    long_term_memory: local"))
+    flow = load_flow(_FLOW.replace("    long_term_memory: session\n", "    long_term_memory: local\n")
+                     .replace("name: execution_session\n", "name: execution_session\nlong_term_memory: outer\n"))
     calls = []
 
     def invoke(messages):
@@ -269,24 +267,23 @@ def test_innermost_session_owns_history_without_hiding_other_recall(monkeypatch,
         return AIMessage(content="answer")
 
     monkeypatch.setattr(llm_clients, "model_from_config", lambda _: _Model(invoke))
+    if outer_session:
+        result = run_flow(flow, {"question": "first"}, memory={"outer": outer, "local": local})
+        assert result.status == "failed"
+        assert result.failure.cause_type == "MemoryRecallError"
+        assert "not conversation-eligible" in result.failure.message
+        assert calls == []
+        return
     for question in ("first", "second"):
         assert run_flow(flow, {"question": question}, memory={"outer": outer, "local": local}).status == "succeeded"
     assert _humans(calls[1]) == ["first", "second"]
-    if not outer_session:
-        assert "outer recall" in calls[1][0].content and len(outer.recall_contexts) == 2
-    if not local_session:
-        assert "local recall" in calls[1][0].content and len(local.recall_contexts) == 2
-    owner = local if local_session else outer
-    view, = _views(owner)
-    assert view.key.frame_ref.static_path == (("execution-session", "answer") if local_session else ("execution-session",))
-    if outer_session and local_session:
-        assert _views(outer) == []
+    assert "outer recall" in calls[1][0].content and len(outer.recall_contexts) == 2
+    view, = _views(local)
 
 
 def test_loop_iterations_share_one_authored_conversation(monkeypatch):
     flow = load_flow("""id: session-loop
 name: session_loop
-long_term_memory: session
 llm_config: {provider: openai, model: fake-model}
 defs:
   body:
@@ -295,6 +292,7 @@ defs:
       answer:
         kind: agent
         mode: plain
+        long_term_memory: session
         input: {question: "${input.question}"}
         prompt: ${question}
         output: str
@@ -327,14 +325,12 @@ output: ${repeat.output.question}
     ]
     view, = _views(memory)
     assert len(view.closed_invocations) == 3
-    assert view.key.consumer_static_path == ("session-loop", "repeat", "answer")
 
 
 @_bounded
 def test_parallel_map_shares_authored_history_without_changing_result_order():
     flow = load_flow("""id: session-map
 name: session_map
-long_term_memory: session
 llm_config: {provider: openai, model: fake-model}
 input: {questions: "list[str]"}
 defs:
@@ -344,6 +340,7 @@ defs:
       answer:
         kind: agent
         mode: plain
+        long_term_memory: session
         input: {question: "${input.question}"}
         prompt: ${question}
         output: str
@@ -376,13 +373,11 @@ output: ${each.output}
     assert [_humans(messages) for messages in calls] == [admitted[:index] for index in (1, 2, 3)]
     view, = _views(memory)
     assert len(view.closed_invocations) == 3
-    assert view.key.consumer_static_path == ("session-map", "each", "answer")
 
 
-def test_two_callsites_of_one_child_keep_separate_conversations(monkeypatch):
+def test_two_callsites_of_one_child_share_one_conversation(monkeypatch):
     flow = load_flow("""id: session-calls
 name: session_calls
-long_term_memory: session
 llm_config: {provider: openai, model: fake-model}
 defs:
   body:
@@ -391,6 +386,7 @@ defs:
       answer:
         kind: agent
         mode: plain
+        long_term_memory: session
         input: {question: "${input.question}"}
         prompt: ${question}
         output: str
@@ -411,9 +407,58 @@ output: ${[left.output, right.output]}
         result = run_flow(flow, {}, memory={"session": memory})
         assert result.status == "succeeded", result.failure
         assert result.output == ["left", "right"]
-    assert sorted(_humans(messages) for messages in calls) == [
-        ["left"], ["left", "left"], ["right"], ["right", "right"],
-    ]
-    assert {view.key.consumer_static_path for view in _views(memory)} == {
-        ("session-calls", "left", "answer"), ("session-calls", "right", "answer"),
-    }
+    assert [len(_humans(messages)) for messages in calls] == [1, 2, 3, 4]
+    assert _humans(calls[-1]) == [messages[-1].content for messages in calls]
+    view, = _views(memory)
+    assert len(view.closed_invocations) == 4
+
+
+_PROVIDER_SPLIT = """id: provider-split
+name: provider_split
+defs:
+  ask:
+    kind: agent
+    mode: plain
+    long_term_memory: session
+    prompt: hi
+    output: str
+  via_one:
+    llm_config: {provider: openai, model: one}
+    nodes:
+      inner: {kind: call, call: ask}
+    output: ${inner.output}
+  via_two:
+    llm_config: {provider: PROVIDER, model: two}
+    nodes:
+      inner: {kind: call, call: ask}
+    output: ${inner.output}
+nodes:
+  a: {kind: call, call: via_one}
+  b: {kind: call, call: via_two}
+output: ${[a.output, b.output]}
+"""
+
+
+def test_one_session_under_two_providers_fails_at_run_setup(monkeypatch):
+    flow = load_flow(_PROVIDER_SPLIT.replace("PROVIDER", "anthropic"))
+    monkeypatch.setattr(
+        llm_clients, "model_from_config", lambda _: pytest.fail("model called before setup check")
+    )
+    with pytest.raises(MemorySetupError) as caught:
+        run_flow(flow, {}, memory={"session": SessionMemory()})
+    message = str(caught.value)
+    assert "session memory 'session' resolves provider" in message
+    assert "'a/inner/ask'" in message and "'b/inner/ask'" in message
+    assert "pin a provider on the AGENT" in message
+
+
+def test_one_session_under_two_models_of_one_provider_runs(monkeypatch):
+    flow = load_flow(_PROVIDER_SPLIT.replace("PROVIDER", "openai"))
+    monkeypatch.setattr(
+        llm_clients,
+        "model_from_config",
+        lambda _: _Model(lambda messages: AIMessage(content="ok")),
+    )
+    result = run_flow(flow, {}, memory={"session": SessionMemory()})
+    assert result.status == "succeeded", result.failure
+    assert result.output == ["ok", "ok"]

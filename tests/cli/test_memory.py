@@ -1,6 +1,7 @@
-"""CLI-owned memory selection, lazy lifetime, and run-boundary integration."""
+"""composer run memory flags, registry lifetime, and run-boundary integration."""
 
-import importlib
+from __future__ import annotations
+
 import re
 import subprocess
 import sys
@@ -11,19 +12,23 @@ from typer.testing import CliRunner
 
 from agent_composer.cli import app
 import agent_composer.cli.run as run_cli
-from agent_composer.compose import load_flow
-from agent_composer.events import NodeStarted
-from agent_composer.memory.contracts import (
-    Memory,
-    MemoryOperationError,
-    MemorySetupError,
+from agent_composer.cli.memory import (
+    MemoryOptionError,
+    build_cli_memories,
+    parse_memory_storage,
 )
+from agent_composer.compose import LoadError, load_flow
+from agent_composer.events import NodeStarted, RunStarted
+from agent_composer.memory.contracts import MemoryOperationError, MemorySetupError
+from agent_composer.memory_host import build_memories
 from agent_composer.run import run_flow
 from agent_composer.runtime.log import RunStartedRecord, decode_record
 
-_CODE_FLOW = """id: cli-memory
+_RUNNER = CliRunner()
+
+_CODE_FLOW = """IDLINE
 name: cli_memory
-long_term_memory: POLICY
+long_term_memory: MEMORY
 nodes:
   work:
     kind: code
@@ -32,90 +37,236 @@ nodes:
 output: ${work.output}
 """
 
-
-def _host(policy="session", storage=()):
-    module = importlib.import_module("agent_composer.cli.memory")
-    source = _CODE_FLOW.replace("POLICY", policy)
-    return module.MemoryHost(load_flow(source).compiled, storage)
-
-
-def test_no_declarations_leave_memory_dormant(monkeypatch):
-    module = importlib.import_module("agent_composer.cli.memory")
-    flow = load_flow(_CODE_FLOW.replace("long_term_memory: POLICY\n", ""))
-    monkeypatch.setattr(module, "_create_backend", lambda *args: pytest.fail("opened"))
-    with module.MemoryHost(flow.compiled, ()) as host:
-        assert host.registry is None
+_SESSION_FLOW = """id: cli-memory
+name: cli_memory
+nodes:
+  work:
+    kind: agent
+    mode: plain
+    long_term_memory: {chat: session}
+    prompt: hello
+    output: str
+output: ${work.output}
+"""
 
 
-@pytest.mark.parametrize("policy", ["episodic", "reflective", "session"])
-def test_backend_is_lazy_and_reused_per_policy(policy, monkeypatch, tmp_path):
-    module = importlib.import_module("agent_composer.cli.memory")
-    calls = []
-    backend = _Backend(calls)
-    monkeypatch.setattr(
-        module,
-        "_create_backend",
-        lambda name, path: (calls.append((name, path)), backend)[1],
-    )
-    path = tmp_path / "memory=state.sqlite"
-    with _host(policy, [f"{policy}={path}"]) as host:
-        lazy = host.registry[policy]
-        assert isinstance(lazy, Memory)
-        assert calls == []
-        assert lazy.open_run(snapshot={"pin": 1}) == {"pin": 1}
-        assert lazy.open_run() is None
-        assert calls == [(policy, str(path)), ("open", {"pin": 1}), ("open", None)]
-    assert calls[-1] == "close"
+@pytest.fixture(autouse=True)
+def _offline_model(monkeypatch):
+    """Answer every AGENT call locally so session flows run without a provider."""
+    from langchain_core.messages import AIMessage
+    import agent_composer.llm_clients as llm_clients
+
+    class _Model:
+        def invoke(self, messages):
+            return AIMessage(content="7")
+
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda config: _Model())
+    monkeypatch.setattr(run_cli, "_ensure_provider_keys", lambda *args: None)
+
+
+def _flow_text(memory="{notes: episodic}", flow_id="cli-memory"):
+    """Return the CODE flow; ``memory=None`` drops the declaration line."""
+    text = _CODE_FLOW.replace("IDLINE\n", f"id: {flow_id}\n" if flow_id else "")
+    if memory is None:
+        return text.replace("long_term_memory: MEMORY\n", "")
+    return text.replace("MEMORY", memory)
+
+
+def _flow_file(tmp_path, memory="{notes: episodic}", flow_id="cli-memory"):
+    path = tmp_path / "flow.yaml"
+    path.write_text(_flow_text(memory, flow_id))
+    return path
+
+
+def _session_flow_file(tmp_path):
+    path = tmp_path / "flow.yaml"
+    path.write_text(_SESSION_FLOW)
+    return path
+
+
+def _configured(policy, config):
+    """Return a flow that declares memory ``policy`` of type ``policy`` with a YAML config."""
+    if policy == "session":
+        return _SESSION_FLOW.replace(
+            "{chat: session}", f"{{session: {{type: session, config: {config}}}}}"
+        )
+    return _flow_text(f"{{{policy}: {{type: {policy}, config: {config}}}}}")
+
+
+def _plain(text):
+    """Strip ANSI styles and collapse whitespace, so wrapped messages match."""
+    # cli.run's err_console fixes its width when the module is imported, so a
+    # test cannot widen it; long messages wrap at 80 columns.
+    return " ".join(re.sub(r"\x1b\[[0-9;]*m", "", text).split())
+
+
+def _records(path):
+    return [decode_record(line).record for line in path.read_bytes().splitlines()]
+
+
+def _run(tmp_path, *extra, flow=None):
+    flow = flow or _flow_file(tmp_path)
+    log = tmp_path / "run.jsonl"
+    result = _RUNNER.invoke(app, ["run", str(flow), "--log", str(log), "--quiet", *extra])
+    return result, log
+
+
+def _no_inputs_or_provider(monkeypatch):
+    monkeypatch.setattr(run_cli, "_gather_missing_inputs", lambda *a, **k: pytest.fail("inputs"))
+    monkeypatch.setattr(run_cli, "_ensure_provider_keys", lambda *a, **k: pytest.fail("provider"))
+
+
+def test_memory_root_persists_every_builtin_under_the_flow_id(tmp_path):
+    root = tmp_path / "mem"
+    flow = _flow_file(tmp_path, "{notes: episodic, lessons: reflective, about: profile}")
+    result, log = _run(tmp_path, "--memory-root", str(root), flow=flow)
+    assert result.exit_code == 0, result.output
+    assert (root / "cli-memory" / "notes.sqlite").is_file()
+    assert (root / "cli-memory" / "lessons.sqlite").is_file()
+    assert (root / "cli-memory" / ".about.md.lock").exists()
+    assert isinstance(_records(log)[0], RunStartedRecord)
+
+
+def test_memory_storage_is_keyed_by_memory_key(tmp_path):
+    path = tmp_path / "notes.sqlite"
+    result, _ = _run(tmp_path, "--memory-storage", f"notes={path}")
+    assert result.exit_code == 0, result.output
+    assert path.is_file()
+
+
+def test_no_flags_keep_builtins_in_ram(tmp_path):
+    flow = _flow_file(tmp_path, "{notes: episodic, lessons: reflective, about: profile}")
+    result, _ = _run(tmp_path, flow=flow)
+    assert result.exit_code == 0, result.output
+    # tests/cli/conftest.py creates tmp_path/home for every CLI test.
+    stored = [p for p in tmp_path.rglob("*") if p.suffix in {".sqlite", ".md", ".lock"}]
+    assert stored == []
 
 
 @pytest.mark.parametrize(
-    "options, message",
+    "options",
     [
-        (["session"], "POLICY=PATH"),
-        (["=memory.sqlite"], "POLICY=PATH"),
-        (["session="], "POLICY=PATH"),
-        (["session=   "], "POLICY=PATH"),
-        ([" =memory.sqlite"], "POLICY=PATH"),
-        (["session=a", "session=b"], "duplicate"),
-        (["unknown=a"], "built-in"),
-        (["episodic=a"], "not declared"),
+        ["notes"],
+        ["notes="],
+        ["=x.sqlite"],
+        ["missing=a.sqlite"],
+        ["notes=a.sqlite", "notes=b.sqlite"],
     ],
 )
-def test_storage_options_reject_invalid_assignments(options, message):
-    with pytest.raises(ValueError, match=message):
-        _host(storage=options)
+def test_bad_memory_storage_is_a_bad_parameter_before_inputs_provider_and_log(
+    tmp_path, options, monkeypatch
+):
+    _no_inputs_or_provider(monkeypatch)
+    args = []
+    for option in options:
+        args += ["--memory-storage", option]
+    result, log = _run(tmp_path, *args)
+    assert result.exit_code == 2, result.output
+    # Typer prefixes the flag name; the message itself does not repeat it.
+    assert _plain(result.output).count("--memory-storage") == 1
+    assert not log.exists()
 
 
-def test_nested_declarations_deduplicate_without_mutating_layout():
-    module = importlib.import_module("agent_composer.cli.memory")
-    flow = load_flow("""id: nested-memory
-name: nested_memory
-long_term_memory: episodic
-defs:
-  leaf:
-    long_term_memory: session
-    nodes:
-      reply:
-        kind: agent
-        long_term_memory: reflective
-        prompt: hello
-        output: str
-    output: ${reply.output}
-nodes:
-  first: {kind: call, call: leaf}
-  second: {kind: call, call: leaf}
-output: ${second.output}
-""")
-    assert flow.compiled.nodes["first"].memory_scope is None
-    with module.MemoryHost(flow.compiled, ()) as host:
-        assert list(host.registry) == ["episodic", "session", "reflective"]
-    assert flow.compiled.nodes["first"].memory_scope is None
+def test_memory_storage_key_is_stripped_and_path_kept() -> None:
+    assert parse_memory_storage([" notes =./a b.sqlite"]) == {"notes": "./a b.sqlite"}
+    with pytest.raises(MemoryOptionError, match="duplicate key 'notes'"):
+        parse_memory_storage(["notes=a", " notes=b"])
 
 
-def test_custom_policy_fails_only_when_opened():
-    with _host("custom_policy") as host:
-        with pytest.raises(MemorySetupError, match="Python.*memory="):
-            host.registry["custom_policy"].open_run()
+def test_bad_storage_path_shape_fails_before_inputs_provider_and_log(tmp_path, monkeypatch):
+    _no_inputs_or_provider(monkeypatch)
+    result, log = _run(tmp_path, "--memory-storage", "notes=:memory:")
+    assert result.exit_code == 1, result.output
+    assert "memory 'notes': storage ':memory:' is not a local file path" in _plain(result.output)
+    assert "Traceback" not in result.output
+    assert not log.exists()
+
+
+def test_unsafe_flow_id_with_memory_root_names_the_memory_root(tmp_path):
+    root = tmp_path / "mem"
+    flow = _flow_file(tmp_path, flow_id='"a/b"')
+    result, log = _run(tmp_path, "--memory-root", str(root), flow=flow)
+    assert result.exit_code == 1, result.output
+    text = _plain(result.output)
+    assert "flow id 'a/b' cannot name a directory under the memory root" in text
+    assert "root=" not in text
+    assert not root.exists() and not log.exists()
+
+
+def test_memory_storage_for_a_custom_key_is_a_bad_parameter(tmp_path):
+    flow = _flow_file(tmp_path, "{vec: vector}")
+    result, _ = _run(tmp_path, "--memory-storage", "vec=v.sqlite", flow=flow)
+    assert result.exit_code == 2
+    assert "custom" in _plain(result.output)
+
+
+def test_memory_root_without_flow_id_is_a_bad_parameter(tmp_path):
+    # YAML requires id:, so only a flow compiled in Python can lack one.
+    flow = load_flow(_flow_text())
+    flow.compiled.flow_id = None
+    with pytest.raises(MemoryOptionError, match="--memory-root") as caught:
+        build_cli_memories(flow, root=tmp_path / "mem", storage_options=())
+    assert caught.value.param_hint == "--memory-root"
+
+
+@pytest.mark.parametrize("resume", [False, True], ids=["fresh", "resume"])
+def test_custom_type_points_to_the_python_api(tmp_path, monkeypatch, resume):
+    if resume:
+        finished, log = _run(tmp_path, flow=_flow_file(tmp_path, memory=None))
+        assert finished.exit_code == 0, finished.output
+        before = log.read_bytes()
+    _no_inputs_or_provider(monkeypatch)
+    flow = _flow_file(tmp_path, "{vec: vector}")
+    if resume:
+        result = _RUNNER.invoke(app, ["run", str(flow), "--resume", str(log), "--quiet"])
+    else:
+        result, log = _run(tmp_path, flow=flow)
+    assert result.exit_code == 1
+    text = _plain(result.output)
+    assert text.startswith("resume failed:" if resume else "run failed:")
+    assert "Python API" in text and "build_memories" in text
+    assert "Traceback" not in result.output
+    if resume:
+        assert log.read_bytes() == before
+    else:
+        assert not log.exists()
+
+
+def test_flags_are_accepted_with_resume(tmp_path):
+    root = tmp_path / "mem"
+    result, log = _run(tmp_path, "--memory-root", str(root))
+    assert result.exit_code == 0, result.output
+    before = log.read_bytes()
+    resumed = _RUNNER.invoke(
+        app, ["run", str(_flow_file(tmp_path)), "--resume", str(log), "--quiet",
+              "--memory-root", str(root)]
+    )
+    assert resumed.exit_code == 0, resumed.output
+    assert log.read_bytes() == before
+
+
+@pytest.mark.parametrize("policy, config, detail", [
+    ("episodic", "{bogus: 1}", r"episodic memory config has unknown key\(s\) \['bogus'\]"),
+    ("reflective", "{llm_config: {model: x}}", r"unknown key\(s\) \['llm_config'\]"),
+    ("session", "{storage: x.sqlite}", "config key 'storage' is not allowed"),
+])
+def test_yaml_config_outside_the_allowlist_fails_at_load(policy, config, detail):
+    with pytest.raises(LoadError, match=detail):
+        load_flow(_configured(policy, config))
+
+
+def _wrap_builtins(monkeypatch, wrap):
+    """Pass every built-in backend that build_memories constructs to ``wrap(backend, type)``."""
+    import agent_composer.memory_host as host
+
+    real = host._builtin
+
+    def builtin(type_name, *args, **kwargs):
+        backend = real(type_name, *args, **kwargs)
+        wrap(backend, type_name)
+        return backend
+
+    monkeypatch.setattr(host, "_builtin", builtin)
 
 
 class _Backend:
@@ -136,146 +287,51 @@ class _Backend:
             raise self.error
 
 
-def test_unused_wrapper_cannot_construct_after_host_close(monkeypatch):
-    module = importlib.import_module("agent_composer.cli.memory")
-    monkeypatch.setattr(module, "_create_backend", lambda *args: pytest.fail("opened"))
-    with _host() as host:
-        lazy = host.registry["session"]
-    with pytest.raises(MemorySetupError, match="closed"):
-        lazy.open_run()
-    with pytest.raises(MemorySetupError, match="closed"):
-        lazy.reset()
-    host.close()
+def test_no_declarations_build_an_empty_registry(monkeypatch):
+    import agent_composer.memory_host as host
+
+    monkeypatch.setattr(host, "_builtin", lambda *a, **k: pytest.fail("built"))
+    flow = load_flow(_flow_text(None))
+    with build_cli_memories(flow, root=None, storage_options=()) as registry:
+        assert len(registry) == 0
 
 
-@pytest.mark.parametrize(
-    "primary", [ValueError("primary"), KeyboardInterrupt("primary")]
-)
-def test_cleanup_preserves_primary_exception(primary, monkeypatch):
-    module = importlib.import_module("agent_composer.cli.memory")
-    calls = []
-    monkeypatch.setattr(
-        module, "_create_backend", lambda *args: _Backend(calls, OSError("close"))
-    )
-    with pytest.raises(type(primary)) as caught:
-        with _host() as host:
-            host.registry["session"].open_run()
-            raise primary
-    assert caught.value is primary
-    assert calls[-1] == "close"
-
-
-def test_all_backends_close_before_first_cleanup_failure_is_raised(monkeypatch):
-    module = importlib.import_module("agent_composer.cli.memory")
-    flow = load_flow("""id: two-memory
-name: two_memory
-long_term_memory: episodic
-nodes:
-  work:
-    kind: agent
-    long_term_memory: session
-    prompt: hello
-    output: str
-output: ${work.output}
-""")
-    calls = {"episodic": [], "session": []}
-    error = OSError("session close")
-    monkeypatch.setattr(
-        module,
-        "_create_backend",
-        lambda name, path: _Backend(calls[name], error if name == "session" else None),
-    )
-    with pytest.raises(OSError) as caught:
-        with module.MemoryHost(flow.compiled, ()) as host:
-            for lazy in host.registry.values():
-                lazy.open_run()
-    assert caught.value is error
-    assert all(values[-1] == "close" for values in calls.values())
-
-
-_RUNNER = CliRunner()
-
-
-def _flow_file(tmp_path, policy="session"):
-    path = tmp_path / "flow.yaml"
-    path.write_text(_CODE_FLOW.replace("POLICY", policy))
-    return path
-
-
-def _records(path):
-    return [decode_record(line).record for line in path.read_bytes().splitlines()]
-
-
-def _plain(text):
-    return re.sub(r"\x1b\[[0-9;]*m", "", text)
-
-
-@pytest.mark.parametrize("policy", ["episodic", "reflective", "session"])
+@pytest.mark.parametrize("memory_type", ["episodic", "reflective", "session"])
 @pytest.mark.parametrize("durable", [False, True])
-def test_cli_activates_declared_policy_without_learning(policy, durable, tmp_path):
-    flow = _flow_file(tmp_path, policy)
-    log = tmp_path / "run.jsonl"
+def test_cli_activates_declared_memory_without_learning(memory_type, durable, tmp_path):
+    if memory_type == "session":
+        key, flow = "chat", _session_flow_file(tmp_path)
+    else:
+        key, flow = "notes", _flow_file(tmp_path, f"{{notes: {memory_type}}}")
     path = tmp_path / "memory.sqlite"
-    args = ["run", str(flow), "--log", str(log), "--quiet"]
-    if durable:
-        args += ["--memory-storage", f"{policy}={path}"]
-    result = _RUNNER.invoke(app, args)
+    options = [f"{key}={path}"] if durable else []
+    extra = [arg for option in options for arg in ("--memory-storage", option)]
+    result, log = _run(tmp_path, *extra, flow=flow)
     assert result.exit_code == 0, result.output
     records = _records(log)
     started = records[0]
     assert isinstance(started, RunStartedRecord)
-    assert started.memory_layout is not None
+    assert [spec.key for spec in started.memories] == [key]
     assert len(started.memory_snapshots) == 1
     assert not started.learnable
     assert all(not type(record).__name__.startswith("Backward") for record in records)
     assert path.exists() == durable
     if durable:
-        # The CLI owner must release the lifetime lock before returning.
-        module = importlib.import_module("agent_composer.cli.memory")
-        with module._create_backend(policy, str(path)) as reopened:
-            with reopened.open_run() as opened:
+        # The CLI must release the file before returning.
+        loaded = load_flow(flow.read_text())
+        with build_cli_memories(loaded, root=None, storage_options=options) as registry:
+            with registry[key].open_run() as opened:
                 assert str(path) not in repr(opened.snapshot)
-
-
-@pytest.mark.parametrize(
-    "options",
-    [
-        ["session"],
-        ["session="],
-        ["missing=a"],
-        ["episodic=a"],
-        ["session=a", "session=b"],
-    ],
-)
-def test_invalid_cli_storage_fails_before_inputs_provider_and_log(
-    options, tmp_path, monkeypatch
-):
-    flow = _flow_file(tmp_path)
-    log = tmp_path / "run.jsonl"
-    monkeypatch.setattr(
-        run_cli, "_gather_missing_inputs", lambda *a, **k: pytest.fail("inputs")
-    )
-    monkeypatch.setattr(
-        run_cli, "_ensure_provider_keys", lambda *a, **k: pytest.fail("provider")
-    )
-    args = ["run", str(flow), "--log", str(log)]
-    for option in options:
-        args += ["--memory-storage", option]
-    result = _RUNNER.invoke(app, args)
-    assert result.exit_code == 2, result.output
-    assert "--memory-storage" in _plain(result.output)
-    assert not log.exists()
 
 
 @pytest.mark.parametrize("terminal", [False, True])
 @pytest.mark.parametrize("enabled", [False, True])
-def test_resume_laziness_follows_recorded_memory_authority(
+def test_resume_opens_memory_only_when_the_record_needs_it(
     terminal, enabled, tmp_path, monkeypatch
 ):
-    module = importlib.import_module("agent_composer.cli.memory")
     from agent_composer.memory.session import SessionMemory
 
-    flow = _flow_file(tmp_path)
+    flow = _session_flow_file(tmp_path)
     log = tmp_path / "run.jsonl"
     memory_path = tmp_path / "memory.sqlite"
     loaded = load_flow(flow.read_text())
@@ -286,7 +342,7 @@ def test_resume_laziness_follows_recorded_memory_authority(
             raise primary
 
     with SessionMemory() as backend:
-        kwargs = {"memory": {"session": backend}} if enabled else {}
+        kwargs = {"memory": {"chat": backend}} if enabled else {}
         if terminal:
             run_flow(loaded, {}, log=log, on_event=stop, **kwargs)
         else:
@@ -295,42 +351,27 @@ def test_resume_laziness_follows_recorded_memory_authority(
             assert caught.value is primary
     before = log.read_bytes()
     opened = []
-    real_create = module._create_backend
 
-    def create(policy, path):
-        opened.append(policy)
-        return real_create(policy, path)
+    def count_opens(backend, type_name):
+        open_run = backend.open_run
 
-    monkeypatch.setattr(module, "_create_backend", create)
+        def counting(**kwargs):
+            opened.append(type_name)
+            return open_run(**kwargs)
+
+        backend.open_run = counting
+
+    _wrap_builtins(monkeypatch, count_opens)
+    args = ["run", str(flow), "--resume", str(log), "--quiet",
+            "--memory-storage", f"chat={memory_path}"]
     if terminal or not enabled:
-        # An occupied store must not matter to terminal or historically dormant recovery.
+        # An occupied store must not matter to terminal or historically dormant
+        # recovery. Entering the holder opens and locks the file.
         with SessionMemory(storage=memory_path):
-            result = _RUNNER.invoke(
-                app,
-                [
-                    "run",
-                    str(flow),
-                    "--resume",
-                    str(log),
-                    "--quiet",
-                    "--memory-storage",
-                    f"session={memory_path}",
-                ],
-            )
+            result = _RUNNER.invoke(app, args)
         assert opened == []
     else:
-        result = _RUNNER.invoke(
-            app,
-            [
-                "run",
-                str(flow),
-                "--resume",
-                str(log),
-                "--quiet",
-                "--memory-storage",
-                f"session={memory_path}",
-            ],
-        )
+        result = _RUNNER.invoke(app, args)
         assert opened == ["session"]
     assert result.exit_code == 0, result.output
     assert log.read_bytes().startswith(before)
@@ -338,83 +379,65 @@ def test_resume_laziness_follows_recorded_memory_authority(
         assert log.read_bytes() == before
 
 
-def test_cli_custom_policy_fails_with_python_host_guidance(tmp_path):
-    flow = _flow_file(tmp_path, "custom_policy")
-    result = _RUNNER.invoke(app, ["run", str(flow), "--quiet"])
-    assert result.exit_code == 1
-    assert "Python API" in _plain(result.output)
-    assert "memory=" in _plain(result.output)
-    assert "Traceback" not in result.output
-
-
 def test_cli_cleanup_failure_has_concise_host_error(tmp_path, monkeypatch):
-    module = importlib.import_module("agent_composer.cli.memory")
-    real_create = module._create_backend
     error = MemoryOperationError("close", "test.close", "memory close failed", False)
 
-    def create(policy, path):
-        backend = real_create(policy, path)
+    def fail_close(backend, _type):
         close = backend.close
 
-        def fail_close():
+        def wrapped():
             close()
             raise error
 
-        backend.close = fail_close
-        return backend
+        backend.close = wrapped
 
-    monkeypatch.setattr(module, "_create_backend", create)
-    result = _RUNNER.invoke(app, ["run", str(_flow_file(tmp_path)), "--quiet"])
+    _wrap_builtins(monkeypatch, fail_close)
+    result, _ = _run(tmp_path)
     assert result.exit_code == 1
     assert "run failed: memory close failed" in _plain(result.output)
     assert "Traceback" not in result.output
 
 
-def test_backend_creation_and_cleanup_run_in_controller_after_worker_drain(
-    tmp_path, monkeypatch
-):
-    module = importlib.import_module("agent_composer.cli.memory")
-    real_create = module._create_backend
+def test_first_open_and_cleanup_run_in_controller_after_worker_drain(tmp_path, monkeypatch):
     events = []
     primary = KeyboardInterrupt("cancel")
 
-    def create(policy, path):
-        events.append(("create", threading.current_thread().name))
-        backend = real_create(policy, path)
-        close = backend.close
+    def watch(backend, _type):
+        open_run, close = backend.open_run, backend.close
+
+        def open_backend(**kwargs):
+            events.append(("open", threading.current_thread().name))
+            return open_run(**kwargs)
 
         def close_backend():
             assert events[-1][0] == "drained"
             events.append(("close", threading.current_thread().name))
             close()
 
-        backend.close = close_backend
-        return backend
+        backend.open_run, backend.close = open_backend, close_backend
 
     def run(*args, memory, **kwargs):
-        with memory["session"].open_run():
+        with memory["chat"].open_run():
             events.append(("drained", threading.current_thread().name))
         raise primary
 
-    monkeypatch.setattr(module, "_create_backend", create)
+    _wrap_builtins(monkeypatch, watch)
     monkeypatch.setattr(run_cli, "_run_flow_controlled", run)
-    result = _RUNNER.invoke(app, ["run", str(_flow_file(tmp_path)), "--quiet"])
+    result = _RUNNER.invoke(app, ["run", str(_session_flow_file(tmp_path)), "--quiet"])
     assert result.exit_code == 130, result.output
-    assert events == [
-        (name, "ac-controller") for name in ["create", "drained", "close"]
-    ]
+    assert events == [(name, "ac-controller") for name in ["open", "drained", "close"]]
 
 
-def test_no_memory_flow_imports_no_concrete_backend(tmp_path):
+def test_no_memory_flow_imports_no_concrete_backend():
     script = """
 import sys
-from agent_composer.cli.memory import MemoryHost
+from agent_composer.cli.memory import build_cli_memories
 from agent_composer.compose import load_flow
 flow = load_flow('id: no-memory\\nname: no_memory\\nnodes:\\n  work: {kind: code, code: return 7}\\noutput: ${work.output}\\n')
-with MemoryHost(flow.compiled, ()) as host:
-    assert host.registry is None
+with build_cli_memories(flow, root=None, storage_options=()) as registry:
+    assert len(registry) == 0
 assert not any('agent_composer.memory.' + name in sys.modules
-               for name in ('episodic', 'reflective', 'session', 'storage'))
+               for name in ('episodic', 'reflective', 'session', 'profile', 'storage'))
 """
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True, timeout=15
@@ -422,86 +445,82 @@ assert not any('agent_composer.memory.' + name in sys.modules
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.parametrize(
-    "kind, extra",
-    [("map", "    over: [1, 2]\n"), ("loop", "    while: false\n    max: 1\n")],
-)
-def test_discovery_includes_map_and_loop_children(kind, extra):
-    module = importlib.import_module("agent_composer.cli.memory")
-    loaded = load_flow("""id: child-memory
-name: child_memory
-defs:
-  leaf:
-    long_term_memory: session
-    nodes:
-      work: {kind: code, code: 'return {}', output: {}}
-    output: ${work.output}
-nodes:
-  child:
-    kind: KIND
-    call: leaf
-EXTRAoutput: ${child.output}
-""".replace("KIND", kind).replace("EXTRA", extra))
-    with module.MemoryHost(loaded.compiled, ()) as host:
-        assert list(host.registry) == ["session"]
-
-
-def test_repeatable_storage_and_later_constructor_failure_close_prior_backend(
-    tmp_path, monkeypatch
-):
+def test_open_failure_closes_every_backend_and_creates_no_directory(tmp_path):
     from agent_composer.memory.episodic import EpisodicMemory
 
-    flow = _flow_file(tmp_path, "episodic")
+    flow = tmp_path / "flow.yaml"
     flow.write_text(
-        flow.read_text().replace(
-            "    kind: code\n    code: return 7\n    output: int",
-            "    kind: agent\n    long_term_memory: session\n    prompt: hello\n    output: str",
+        _SESSION_FLOW.replace(
+            "name: cli_memory\n", "name: cli_memory\nlong_term_memory: {archive: episodic}\n"
         )
     )
-    monkeypatch.setattr(run_cli, "_ensure_provider_keys", lambda *a: None)
-    episodic_path = tmp_path / "episodic.sqlite"
-    absent_parent = tmp_path / "absent"
-    session_path = absent_parent / "session.sqlite"
-    result = _RUNNER.invoke(
-        app,
-        [
-            "run",
-            str(flow),
-            "--quiet",
-            "--memory-storage",
-            f"episodic={episodic_path}",
-            "--memory-storage",
-            f"session={session_path}",
-        ],
+    # Run setup opens memories in sorted key order: archive opens (and creates
+    # its file), then chat fails because its parent directory is missing.
+    archive_path = tmp_path / "archive.sqlite"
+    absent = tmp_path / "absent"
+    result, _ = _run(
+        tmp_path,
+        "--memory-storage", f"archive={archive_path}",
+        "--memory-storage", f"chat={absent / 'chat.sqlite'}",
+        flow=flow,
     )
     assert result.exit_code == 1
     assert "run failed:" in _plain(result.output)
     assert "Traceback" not in result.output
-    assert not absent_parent.exists()
-    with EpisodicMemory(storage=episodic_path):
+    assert not absent.exists()
+    assert archive_path.is_file()  # archive really opened before chat failed
+    with EpisodicMemory(storage=archive_path):  # entering opens; busy if still held
         pass
 
 
 def test_cli_preserves_primary_when_cleanup_also_fails(tmp_path, monkeypatch):
-    module = importlib.import_module("agent_composer.cli.memory")
+    import agent_composer.memory_host as host
+
     primary = ValueError("initiating failure")
     calls = []
     monkeypatch.setattr(
-        module,
-        "_create_backend",
-        lambda *args: _Backend(calls, OSError("cleanup failure")),
+        host, "_builtin", lambda *a, **k: _Backend(calls, OSError("cleanup failure"))
     )
 
     def fail_run(*args, memory, **kwargs):
-        memory["session"].open_run()
+        memory["chat"].open_run()
         raise primary
 
     monkeypatch.setattr(run_cli, "_run_flow_controlled", fail_run)
-    result = _RUNNER.invoke(app, ["run", str(_flow_file(tmp_path)), "--quiet"])
+    result = _RUNNER.invoke(app, ["run", str(_session_flow_file(tmp_path)), "--quiet"])
     assert result.exit_code == 1
     assert "run failed: initiating failure" in _plain(result.output)
     assert "cleanup failure" not in _plain(result.output)
     assert calls[-1] == "close"
+
+
+@pytest.mark.parametrize(
+    "policy, config, expected",
+    [
+        ("episodic", "{max_episodes: 4, recall_limit: 2}", {"max_episodes": 4, "recall_limit": 2}),
+        ("reflective", "{max_items: 5, recall_limit: 3}", {"max_items": 5, "recall_limit": 3}),
+    ],
+)
+def test_yaml_config_reaches_the_built_in_constructor(policy, config, expected):
+    flow = load_flow(_configured(policy, config))
+    with build_cli_memories(flow, root=None, storage_options=()) as registry:
+        with registry[policy].open_run() as session:
+            assert session.snapshot["config"] == expected
+
+
+@pytest.mark.parametrize(
+    "policy, config, detail, cause",
+    [
+        ("reflective", "{max_items: 0}", "max_items", ValueError),
+        ("episodic", "{recall_limit: two}", "recall_limit", TypeError),
+        ("session", "{recent_turns: -1}", "recent_turns", ValueError),
+    ],
+)
+def test_rejected_yaml_config_is_a_setup_error_naming_the_key(policy, config, detail, cause):
+    flow = load_flow(_configured(policy, config))
+    with pytest.raises(MemorySetupError, match=rf"memory {policy!r}.*{detail}") as caught:
+        build_cli_memories(flow, root=None, storage_options=())
+    assert type(caught.value.__cause__) is cause
 
 
 def test_real_pooled_cancellation_keeps_storage_until_model_callback_drains(
@@ -511,21 +530,13 @@ def test_real_pooled_cancellation_keeps_storage_until_model_callback_drains(
     import agent_composer.llm_clients as llm_clients
     from agent_composer.memory.session import SessionMemory
 
-    module = importlib.import_module("agent_composer.cli.memory")
-    flow = _flow_file(tmp_path)
-    flow.write_text(
-        flow.read_text().replace(
-            "    kind: code\n    code: return 7\n    output: int",
-            "    kind: agent\n    mode: plain\n    prompt: hello\n    output: str",
-        )
-    )
+    flow = _session_flow_file(tmp_path)
     path = tmp_path / "memory.sqlite"
     started = threading.Event()
     drained = threading.Event()
     close_threads = []
     owned_errors = []
     broker_ref = []
-    real_create = module._create_backend
 
     class Model:
         def invoke(self, messages):
@@ -539,8 +550,7 @@ def test_real_pooled_cancellation_keeps_storage_until_model_callback_drains(
             drained.set()
             return AIMessage(content="finished")
 
-    def create(policy, storage):
-        backend = real_create(policy, storage)
+    def wrap_close(backend, _type):
         close = backend.close
 
         def close_backend():
@@ -549,7 +559,6 @@ def test_real_pooled_cancellation_keeps_storage_until_model_callback_drains(
             close()
 
         backend.close = close_backend
-        return backend
 
     def interrupt(broker):
         broker_ref.append(broker)
@@ -559,7 +568,7 @@ def test_real_pooled_cancellation_keeps_storage_until_model_callback_drains(
     monkeypatch.setattr(llm_clients, "model_from_config", lambda _: Model())
     monkeypatch.setattr(run_cli, "_ensure_provider_keys", lambda *a: None)
     monkeypatch.setattr(run_cli.TerminalBroker, "serve", interrupt)
-    monkeypatch.setattr(module, "_create_backend", create)
+    _wrap_builtins(monkeypatch, wrap_close)
     result = _RUNNER.invoke(
         app,
         [
@@ -569,7 +578,7 @@ def test_real_pooled_cancellation_keeps_storage_until_model_callback_drains(
             "--num-workers",
             "1",
             "--memory-storage",
-            f"session={path}",
+            f"chat={path}",
         ],
     )
     assert result.exit_code == 130, result.output
@@ -582,3 +591,44 @@ def test_real_pooled_cancellation_keeps_storage_until_model_callback_drains(
     )
     with SessionMemory(storage=path):
         pass
+
+
+def test_run_help_describes_memory_flags():
+    result = _RUNNER.invoke(app, ["run", "--help"], terminal_width=200)
+    text = _plain(result.output)
+    assert "--memory-root" in text
+    assert "KEY=PATH" in text
+    # Rich wraps help inside a box; drop its borders before matching a sentence.
+    unboxed = _plain(result.output.replace("\u2502", " "))
+    assert "Without either flag, memory lives in process RAM." in unboxed
+    assert "POLICY" not in text
+
+
+def test_cli_module_docstrings_name_the_new_flags():
+    import agent_composer.cli as cli_package
+
+    for doc in (cli_package.__doc__, run_cli.__doc__):
+        assert "--memory-root" in doc
+        assert "POLICY=PATH" not in doc
+
+
+def test_resume_accepts_one_def_called_from_two_nodes(tmp_path):
+    flow = tmp_path / "flow.yaml"
+    flow.write_text(
+        "id: two-calls\nname: two_calls\nlong_term_memory: {notes: episodic}\n"
+        "defs:\n  child:\n    nodes:\n      work: {kind: code, code: return 1, output: int}\n"
+        "    output: ${work.output}\n"
+        "nodes:\n  one: {kind: call, call: child}\n  two: {kind: call, call: child}\n"
+        "output: ${one.output + two.output}\n"
+    )
+    log = tmp_path / "run.jsonl"
+
+    def stop_after_start(event):
+        if isinstance(event, RunStarted):
+            raise RuntimeError("host stop")
+
+    composed = load_flow(flow.read_text())
+    with build_memories(composed) as registry, pytest.raises(RuntimeError, match="host stop"):
+        run_flow(composed, {}, log=log, memory=registry, on_event=stop_after_start)
+    resumed = _RUNNER.invoke(app, ["run", str(flow), "--resume", str(log), "--quiet"])
+    assert resumed.exit_code == 0, resumed.output

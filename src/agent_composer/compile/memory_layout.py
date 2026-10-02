@@ -1,50 +1,37 @@
 """Derive and atomically stamp source-neutral static memory scopes.
 
-Memory policy declarations remain authored identity on ``CompiledFlow`` and
-``AgentNode``. This module resolves them into immutable frame specifications and
-one exact ``MemoryScope`` for every statically reachable node. Resolution is
-pure; applying a resolved layout is a separate, all-or-nothing mutation over a
-private compiled graph.
+Memory declarations remain authored identity on ``CompiledFlow`` and
+``AgentNode``. This module resolves them into a sorted memory key table and
+one exact ``MemoryScope`` for every statically reachable node. A scope names
+the node's root-relative locator and the keys it recalls and learns into,
+outermost first. Resolution is pure; applying a resolved layout is a
+separate, all-or-nothing mutation over a private compiled graph.
 """
 
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Iterator
 
 from agent_composer.compile.model import END_ID, START_ID, CompiledFlow, Flow
 from agent_composer.diagnostics import OriginRef
 from agent_composer.memory.contracts import (
-    MemoryBoundary,
-    MemoryBoundaryKind,
-    MemoryFrameRef,
-    MemoryFrameSpec,
+    MEMORY_IDENTIFIER_PATTERN,
+    DeclSite,
+    JsonObject,
+    MemoryDecl,
     MemoryOccurrenceSegment,
-    MemoryOwner,
-    MemoryPolicySpec,
     MemoryScope,
     MemorySetupError,
+    MemorySpec,
+    MemoryStack,
 )
 from agent_composer.nodes.agent import AgentNode
+from agent_composer.nodes.agent.memory import compatibility
 from agent_composer.nodes.base import Node
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
-
-
-def _revalidate_memory_frame_ref(
-    value: MemoryFrameRef,
-    *,
-    name: str,
-) -> MemoryFrameRef:
-    """Replay every exact nested invariant of one frozen frame identity."""
-    if type(value) is not MemoryFrameRef:
-        raise TypeError(f"{name} must be an exact MemoryFrameRef")
-    MemoryFrameRef(
-        root_flow_id=value.root_flow_id,
-        static_path=value.static_path,
-        owner=value.owner,
-    )
-    return value
 
 
 def _revalidate_memory_occurrence_path(
@@ -69,19 +56,6 @@ def _revalidate_memory_occurrence_path(
     return value
 
 
-def _revalidate_memory_boundary(
-    value: MemoryBoundary,
-    *,
-    name: str,
-) -> MemoryBoundary:
-    """Replay every exact nested invariant of one flow boundary."""
-    if type(value) is not MemoryBoundary:
-        raise TypeError(f"{name} must be an exact MemoryBoundary")
-    _revalidate_memory_frame_ref(value.frame_ref, name=f"{name}.frame_ref")
-    MemoryBoundary(kind=value.kind, frame_ref=value.frame_ref)
-    return value
-
-
 def _revalidate_memory_scope(
     value: MemoryScope,
     *,
@@ -89,67 +63,74 @@ def _revalidate_memory_scope(
 ) -> MemoryScope:
     """Replay every exact invariant nested below one frozen memory scope.
 
-    Frozen dataclasses can still be forged through ``object.__setattr__``. This
-    validator reconstructs each carrier layer so string/enum subclasses and
-    equality-collapsing values such as ``True`` for an occurrence index cannot
-    cross the compile boundary unnoticed.
+    Frozen dataclasses can still be forged through ``object.__setattr__``.
+    Reconstructing each layer keeps string subclasses and equality-collapsing
+    values such as ``True`` for an occurrence index from crossing the compile
+    boundary unnoticed.
     """
     if type(value) is not MemoryScope:
         raise TypeError(f"{name} must be an exact MemoryScope")
-    if type(value.frame_stack) is not tuple:
-        raise TypeError(f"{name}.frame_stack must be an exact tuple")
-    for index, frame in enumerate(value.frame_stack):
-        _revalidate_memory_frame_ref(
-            frame,
-            name=f"{name}.frame_stack[{index}]",
-        )
     _revalidate_memory_occurrence_path(
         value.occurrence_path,
         name=f"{name}.occurrence_path",
     )
-    if value.boundary is not None:
-        _revalidate_memory_boundary(value.boundary, name=f"{name}.boundary")
     MemoryScope(
-        root_flow_id=value.root_flow_id,
         static_path=value.static_path,
-        frame_stack=value.frame_stack,
+        memories=value.memories,
         occurrence_path=value.occurrence_path,
-        boundary=value.boundary,
-    )
-    return value
-
-
-def _revalidate_memory_frame_spec(
-    value: MemoryFrameSpec,
-    *,
-    name: str,
-) -> MemoryFrameSpec:
-    """Replay one effective frame spec including its frozen config snapshot."""
-    if type(value) is not MemoryFrameSpec:
-        raise TypeError(f"{name} must be an exact MemoryFrameSpec")
-    _revalidate_memory_frame_ref(value.ref, name=f"{name}.ref")
-    MemoryFrameSpec(
-        ref=value.ref,
-        policy_name=value.policy_name,
-        config=value.config,
     )
     return value
 
 
 @dataclass(frozen=True, slots=True)
-class ResolvedMemoryFrame:
-    """One effective frame specification plus its diagnostic policy site."""
+class ResolvedMemory:
+    """One reachable memory key with its owners and AGENT placements.
 
-    spec: MemoryFrameSpec
-    origin: OriginRef | None = field(default=None, compare=False)
+    ``placements`` lists the locators of AGENT targets whose own declarations
+    include the key; the run-setup session check reads it. ``origins`` aligns
+    with ``owners`` and serves diagnostics only.
+    """
+
+    key: str
+    type: str
+    config: JsonObject
+    owners: tuple[DeclSite, ...]
+    conversation_eligible: bool
+    placements: tuple[tuple[str, ...], ...]
+    origins: tuple[OriginRef | None, ...] = field(compare=False)
 
     def __post_init__(self) -> None:
-        """Require exact source-neutral carriers."""
-        _revalidate_memory_frame_spec(self.spec, name="spec")
-        if self.origin is not None:
-            if not isinstance(self.origin, OriginRef):
-                raise TypeError("origin must be an OriginRef or None")
-            OriginRef(self.origin.key)
+        """Validate through ``MemorySpec`` and pin a private config copy."""
+        spec = MemorySpec(
+            self.key, self.type, self.config, self.owners, self.conversation_eligible
+        )
+        object.__setattr__(self, "config", spec.config)
+        object.__setattr__(self, "owners", spec.owners)
+        if type(self.placements) is not tuple or any(
+            type(locator) is not tuple
+            or not locator
+            or any(type(part) is not str or not part for part in locator)
+            for locator in self.placements
+        ):
+            raise ValueError("placements must be a tuple of non-empty string locators")
+        if list(self.placements) != sorted(set(self.placements)):
+            raise ValueError("placements must be sorted and unique")
+        if type(self.origins) is not tuple or len(self.origins) != len(self.owners):
+            raise ValueError("origins must align with owners")
+        if any(o is not None and not isinstance(o, OriginRef) for o in self.origins):
+            raise TypeError("origins must hold OriginRef values or None")
+
+    @property
+    def spec(self) -> MemorySpec:
+        """Return the record-facing table entry."""
+        return MemorySpec(
+            self.key, self.type, self.config, self.owners, self.conversation_eligible
+        )
+
+    @property
+    def origin(self) -> OriginRef | None:
+        """Return the first owner's origin, where key-level errors point."""
+        return self.origins[0]
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,67 +157,83 @@ class ResolvedMemoryTarget:
 
 @dataclass(frozen=True, slots=True)
 class ResolvedMemoryLayout:
-    """Immutable static memory layout ready for atomic application."""
+    """Immutable static memory layout ready for atomic application.
 
-    root_flow_id: str | None
-    frames: tuple[ResolvedMemoryFrame, ...]
+    ``enabled`` is true when a reachable flow or AGENT declares a memory.
+    Then every target has a scope whose ``static_path`` is its locator and
+    whose keys are all in ``memories``. A disabled layout has no scopes and
+    no memories.
+    """
+
+    enabled: bool
     targets: tuple[ResolvedMemoryTarget, ...]
+    memories: tuple[ResolvedMemory, ...] = ()
 
     def __post_init__(self) -> None:
-        """Validate exact immutable layout containers."""
-        if self.root_flow_id is not None and (
-            type(self.root_flow_id) is not str or not self.root_flow_id
-        ):
-            raise ValueError("root_flow_id must be a non-empty exact string or None")
-        if type(self.frames) is not tuple or any(
-            type(frame) is not ResolvedMemoryFrame for frame in self.frames
-        ):
-            raise TypeError("frames must be a tuple of ResolvedMemoryFrame values")
+        """Validate exact containers and that every scope agrees with the table."""
+        if type(self.enabled) is not bool:
+            raise TypeError("enabled must be a bool")
         if type(self.targets) is not tuple or any(
             type(target) is not ResolvedMemoryTarget for target in self.targets
         ):
             raise TypeError("targets must be a tuple of ResolvedMemoryTarget values")
-        for frame in self.frames:
-            ResolvedMemoryFrame(spec=frame.spec, origin=frame.origin)
+        if type(self.memories) is not tuple or any(
+            type(memory) is not ResolvedMemory for memory in self.memories
+        ):
+            raise TypeError("memories must be a tuple of ResolvedMemory values")
         for target in self.targets:
             ResolvedMemoryTarget(
                 locator=target.locator,
                 scope=target.scope,
                 node=target.node,
             )
-        if self.root_flow_id is None and self.frames:
-            raise ValueError("a disabled memory layout cannot contain frames")
-        for target in self.targets:
-            if self.root_flow_id is None:
-                if target.scope is not None:
-                    raise ValueError("a disabled memory layout cannot contain scopes")
-            elif target.scope is None:
+        for memory in self.memories:
+            ResolvedMemory(
+                memory.key,
+                memory.type,
+                memory.config,
+                memory.owners,
+                memory.conversation_eligible,
+                memory.placements,
+                memory.origins,
+            )
+        keys = [memory.key for memory in self.memories]
+        if keys != sorted(set(keys)):
+            raise ValueError("memories must be sorted and unique by key")
+        if not self.enabled:
+            if self.memories:
+                raise ValueError("a disabled memory layout cannot contain memories")
+            if any(target.scope is not None for target in self.targets):
+                raise ValueError("a disabled memory layout cannot contain scopes")
+            return
+        if not self.memories:
+            raise ValueError("an enabled memory layout must contain memories")
+        known = set(keys)
+        for index, target in enumerate(self.targets):
+            if target.scope is None:
                 raise ValueError("an enabled memory layout must scope every target")
-        if self.root_flow_id is not None:
-            for index, frame in enumerate(self.frames):
-                if frame.spec.ref.root_flow_id != self.root_flow_id:
-                    raise ValueError(
-                        f"frames[{index}] root_flow_id must match the layout"
-                    )
-            for index, target in enumerate(self.targets):
-                if target.scope.root_flow_id != self.root_flow_id:
-                    raise ValueError(
-                        f"targets[{index}] scope root_flow_id must match the layout"
-                    )
-
-    @property
-    def enabled(self) -> bool:
-        """Return whether at least one reachable memory policy enabled layout."""
-        return self.root_flow_id is not None
+            if target.scope.static_path != target.locator:
+                raise ValueError(
+                    f"targets[{index}] scope static_path must equal its locator"
+                )
+            if not set(target.scope.memories) <= known:
+                raise ValueError(
+                    f"targets[{index}] scope names a memory outside the table"
+                )
 
 
 def _setup_error(
     message: str,
     *,
     origin: OriginRef | None = None,
+    related: tuple[OriginRef | None, ...] = (),
 ) -> MemorySetupError:
-    """Build one layout failure with the best available authored origin."""
-    return MemorySetupError(message, origin=origin)
+    """Build one layout failure with its first authored site and any others."""
+    return MemorySetupError(
+        message,
+        origin=origin,
+        related=tuple(item for item in related if item is not None),
+    )
 
 
 def _revalidate_resolved_layout(layout: ResolvedMemoryLayout) -> None:
@@ -244,29 +241,19 @@ def _revalidate_resolved_layout(layout: ResolvedMemoryLayout) -> None:
     if type(layout) is not ResolvedMemoryLayout:
         raise TypeError("layout must be an exact ResolvedMemoryLayout")
     ResolvedMemoryLayout(
-        root_flow_id=layout.root_flow_id,
-        frames=layout.frames,
+        enabled=layout.enabled,
         targets=layout.targets,
+        memories=layout.memories,
     )
-
-
-def _flow_policy(flow: Flow) -> MemoryPolicySpec | None:
-    """Return the optional policy owned by an exact compiled flow."""
-    if type(flow) is not CompiledFlow:
-        return None
-    policy = flow.memory_policy
-    if policy is not None and type(policy) is not MemoryPolicySpec:
-        raise _setup_error("flow memory_policy must be an exact MemoryPolicySpec")
-    return policy
 
 
 def _validate_memory_flow_boundaries(
     flow: Flow,
     *,
-    policy: MemoryPolicySpec,
+    decl: MemoryDecl,
 ) -> None:
-    """Require exact direct START/END targets before emitting a flow frame."""
-    origin = policy.origin
+    """Require exact direct START/END targets before a flow owns memory."""
+    origin = decl.origin
     if type(flow.nodes) is not dict:
         raise _setup_error(
             "a memory-owning flow requires an exact node dictionary",
@@ -321,17 +308,69 @@ def _validate_memory_flow_boundaries(
         )
 
 
-def _agent_policy(node: Node) -> MemoryPolicySpec | None:
-    """Return the optional policy owned by an exact AGENT node."""
-    if type(node) is not AgentNode:
-        return None
-    policy = node.memory_policy
-    if policy is not None and type(policy) is not MemoryPolicySpec:
+def _owner_decls(
+    decls: object,
+    *,
+    label: str,
+    origin: OriginRef | None,
+    node: str | None,
+) -> tuple[MemoryDecl, ...]:
+    """Return one owner's declarations in authored order, each key once.
+
+    Every declaration's site must name ``node``, the owning AGENT id or
+    ``None`` for a flow, so a hand-built graph cannot forge another owner.
+    """
+    if type(decls) is not tuple or any(type(decl) is not MemoryDecl for decl in decls):
         raise _setup_error(
-            f"AGENT node {node.id!r} memory_policy must be an exact MemoryPolicySpec",
-            origin=node.origin,
+            f"{label} memories must be a tuple of exact MemoryDecl values",
+            origin=origin,
         )
-    return policy
+    seen: set[str] = set()
+    for decl in decls:
+        if decl.site.node != node:
+            raise _setup_error(
+                f"{label} memory {decl.key!r} names site node {decl.site.node!r}",
+                origin=decl.origin,
+            )
+        if decl.key in seen:
+            raise _setup_error(
+                f"{label} declares memory {decl.key!r} more than once",
+                origin=decl.origin,
+            )
+        seen.add(decl.key)
+    return decls
+
+
+def _flow_decls(flow: Flow) -> tuple[MemoryDecl, ...]:
+    """Return the declarations owned by an exact compiled flow."""
+    if type(flow) is not CompiledFlow:
+        return ()
+    return _owner_decls(flow.memories, label="flow", origin=None, node=None)
+
+
+def _agent_decls(node: Node) -> tuple[MemoryDecl, ...]:
+    """Return the declarations owned by an exact AGENT node."""
+    if type(node) is not AgentNode:
+        return ()
+    return _owner_decls(
+        node.memories, label=f"AGENT node {node.id!r}", origin=node.origin, node=node.id
+    )
+
+
+def _extend_stack(
+    stack: tuple[str, ...],
+    decls: tuple[MemoryDecl, ...],
+) -> tuple[str, ...]:
+    """Append each declared key not already in ``stack``.
+
+    A repeated key keeps its outermost position, so it yields one recall
+    section and enters each learning batch once.
+    """
+    keys = list(stack)
+    for decl in decls:
+        if decl.key not in keys:
+            keys.append(decl.key)
+    return tuple(keys)
 
 
 def _flow_nodes(flow: Flow, *, origin: OriginRef | None = None) -> list[tuple[str, Node]]:
@@ -395,101 +434,260 @@ def _node_child(node: Node) -> Flow | None:
     return child
 
 
-def _walk_targets(
-    flow: Flow,
-    *,
-    locator: tuple[str, ...] = (),
-    active_flows: set[int] | None = None,
-    owner_origin: OriginRef | None = None,
-) -> Iterator[tuple[tuple[str, ...], Node]]:
-    """Yield every reachable static node while allowing non-recursive aliases."""
-    active = set() if active_flows is None else active_flows
-    flow_identity = id(flow)
-    if flow_identity in active:
-        raise _setup_error(
-            "recursive child-flow cycle is not memory-layout resolvable",
-            origin=owner_origin,
-        )
-    active.add(flow_identity)
-    try:
-        _flow_policy(flow)
-        for node_id, node in _flow_nodes(flow, origin=owner_origin):
-            node_locator = (*locator, node_id)
-            _agent_policy(node)
-            yield node_locator, node
+def scope_memory_declarations(flow: Flow, alias: str) -> Flow:
+    """Prefix ``alias`` to the scope of every reachable memory declaration, in place.
+
+    Call this only on a graph the caller owns, such as the independent copy
+    that ``uses:`` rebasing returns. The walk follows the same static children
+    as layout resolution and visits each flow and node object once, so a def
+    baked into several call sites, or a node shared by two copied flows, is
+    rewritten once.
+
+    Args:
+        flow (`Flow`): Owned root of the graph to rewrite.
+        alias (`str`): ``uses:`` alias that scopes the imported graph.
+
+    Returns:
+        `Flow`: ``flow`` itself, after the rewrite.
+    """
+    seen_flows: set[int] = set()
+    seen_nodes: set[int] = set()
+    pending = [flow]
+    while pending:
+        current = pending.pop()
+        if id(current) in seen_flows:
+            continue
+        seen_flows.add(id(current))
+        if isinstance(current, CompiledFlow):
+            current.memories = _scoped(current.memories, alias)
+        for _node_id, node in _flow_nodes(current):
+            if id(node) in seen_nodes:
+                continue
+            seen_nodes.add(id(node))
+            if isinstance(node, AgentNode):
+                node.memories = _scoped(node.memories, alias)
             child = _node_child(node)
             if child is not None:
-                yield from _walk_targets(
-                    child,
-                    locator=node_locator,
-                    active_flows=active,
-                    owner_origin=node.origin,
-                )
-    finally:
-        active.remove(flow_identity)
+                pending.append(child)
+    return flow
 
 
-def _first_policy(
-    flow: Flow,
-    *,
-    active_flows: set[int] | None = None,
-    owner_origin: OriginRef | None = None,
-) -> MemoryPolicySpec | None:
-    """Return the first reachable policy while validating the static child tree."""
-    active = set() if active_flows is None else active_flows
-    flow_identity = id(flow)
-    if flow_identity in active:
-        raise _setup_error(
-            "recursive child-flow cycle is not memory-layout resolvable",
-            origin=owner_origin,
+def _scoped(memories: tuple[MemoryDecl, ...], alias: str) -> tuple[MemoryDecl, ...]:
+    """Return declarations whose site scope starts with ``alias``."""
+    return tuple(
+        MemoryDecl(
+            decl.name,
+            decl.type,
+            decl.config,
+            DeclSite((alias, *decl.site.scope), decl.site.owner, decl.site.node),
+            decl.origin,
         )
-    active.add(flow_identity)
-    try:
-        policy = _flow_policy(flow)
-        if policy is not None:
-            return policy
-        for _, node in _flow_nodes(flow, origin=owner_origin):
-            policy = _agent_policy(node)
-            if policy is not None:
-                return policy
-            child = _node_child(node)
-            if child is not None:
-                policy = _first_policy(
-                    child,
-                    active_flows=active,
-                    owner_origin=node.origin,
-                )
-                if policy is not None:
-                    return policy
-        return None
-    finally:
-        active.remove(flow_identity)
-
-
-def _resolved_frame(
-    policy: MemoryPolicySpec,
-    ref: MemoryFrameRef,
-) -> ResolvedMemoryFrame:
-    """Lower one authored policy into its effective source-neutral frame spec."""
-    return ResolvedMemoryFrame(
-        spec=MemoryFrameSpec(ref, policy.name, policy.config),
-        origin=policy.origin,
+        for decl in memories
     )
 
 
-def _resolve_enabled_flow(
+def _site_label(site: DeclSite) -> str:
+    """Render one declaration site for diagnostics, led by its import scope if any."""
+    label = "/".join(site.owner)
+    if site.node is not None:
+        label = f"{label} AGENT {site.node!r}"
+    return f"{'.'.join(site.scope)}: {label}" if site.scope else label
+
+
+def _note(error: BaseException, text: str) -> None:
+    """Attach one note; ``BaseException.add_note`` is new in Python 3.11."""
+    notes = getattr(error, "__notes__", None)
+    if notes is None:
+        notes = []
+        error.__notes__ = notes
+    notes.append(text)
+
+
+def _canonical_json(value: object) -> str:
+    """Encode one JSON value for exact comparison, so ``1``, ``1.0`` and ``true`` differ."""
+    return json.dumps(
+        value, sort_keys=True, ensure_ascii=False, allow_nan=False, separators=(",", ":")
+    )
+
+
+def _memory_table(
+    declared: list[tuple[MemoryDecl, tuple[str, ...] | None]],
+) -> tuple[ResolvedMemory, ...]:
+    """Group reachable declarations by key and enforce the per-key rules.
+
+    Each key has one type and config. A session key has exactly one owner, an
+    AGENT, and an AGENT owns at most one session key.
+    """
+    by_key: dict[str, list[tuple[MemoryDecl, tuple[str, ...] | None]]] = {}
+    for decl, placement in declared:
+        by_key.setdefault(decl.key, []).append((decl, placement))
+    table: list[ResolvedMemory] = []
+    for key in sorted(by_key):
+        entries = by_key[key]
+        # Stable sort: declarations at one site keep walk order.
+        declarations = sorted((decl for decl, _ in entries), key=lambda decl: decl.site.sort_key())
+        first = declarations[0]
+        first_config = _canonical_json(first.config)
+        conflicts = [
+            decl for decl in declarations[1:]
+            if decl.type != first.type or _canonical_json(decl.config) != first_config
+        ]
+        if conflicts:
+            # A def called from several nodes repeats its declaration, as one
+            # object or as per-call copies; list each other declaration once,
+            # compared by site and value rather than identity.
+            distinct: dict[tuple[DeclSite, str, str], MemoryDecl] = {}
+            for decl in declarations:
+                distinct.setdefault((decl.site, decl.type, _canonical_json(decl.config)), decl)
+            others = list(distinct.values())[1:]
+            error = _setup_error(
+                f"memory {key!r} is declared with different type or config "
+                f"at {_site_label(first.site)} and {_site_label(conflicts[0].site)}",
+                origin=first.origin,
+                related=tuple(decl.origin for decl in others),
+            )
+            for decl in others:
+                _note(error, f"also declared at {_site_label(decl.site)}")
+            raise error
+        by_site: dict[DeclSite, MemoryDecl] = {}
+        for decl in declarations:
+            by_site.setdefault(decl.site, decl)
+        ordered = list(by_site.values())
+        if first.type == "session":
+            flow_decl = next((d for d in ordered if d.site.node is None), None)
+            if flow_decl is not None:
+                raise _setup_error(
+                    f"session memory {key!r} cannot be declared on a flow "
+                    f"({_site_label(flow_decl.site)}); declare it on one AGENT",
+                    origin=flow_decl.origin,
+                )
+            if len(ordered) > 1:
+                error = _setup_error(
+                    f"session memory {key!r} has more than one owner: "
+                    + ", ".join(_site_label(d.site) for d in ordered)
+                    + "; give each AGENT its own session memory",
+                    origin=ordered[0].origin,
+                    related=tuple(decl.origin for decl in ordered[1:]),
+                )
+                for decl in ordered[1:]:
+                    _note(error, f"also owned at {_site_label(decl.site)}")
+                raise error
+        owners = tuple(decl.site for decl in ordered)
+        table.append(
+            ResolvedMemory(
+                key=key,
+                type=first.type,
+                config=first.config,
+                owners=owners,
+                conversation_eligible=len(owners) == 1 and owners[0].node is not None,
+                placements=tuple(
+                    sorted({p for _, p in entries if p is not None})
+                ),
+                origins=tuple(decl.origin for decl in ordered),
+            )
+        )
+    sessions_by_agent: dict[DeclSite, list[ResolvedMemory]] = {}
+    for memory in table:
+        if memory.type == "session":
+            sessions_by_agent.setdefault(memory.owners[0], []).append(memory)
+    for site, sessions in sessions_by_agent.items():
+        if len(sessions) > 1:
+            error = _setup_error(
+                f"{_site_label(site)} declares more than one session memory: "
+                + ", ".join(repr(memory.key) for memory in sessions),
+                origin=sessions[0].origin,
+                related=tuple(memory.origin for memory in sessions[1:]),
+            )
+            for memory in sessions[1:]:
+                _note(error, f"also declares {memory.key!r}")
+            raise error
+    return tuple(table)
+
+
+def _check_scope_segments(declared: list[tuple[MemoryDecl, tuple[str, ...] | None]]) -> None:
+    """Reject unsafe scope segments before keys are grouped.
+
+    A dotted alias renders the same key as a nested import, so this runs
+    first to name the alias rather than a key clash.
+    """
+    for decl, _placement in declared:
+        for segment in decl.site.scope:
+            if MEMORY_IDENTIFIER_PATTERN.fullmatch(segment) is None:
+                raise _setup_error(
+                    f"memory {decl.key!r}: uses: alias {segment!r} must "
+                    "match [A-Za-z_][A-Za-z0-9_-]* to scope memories",
+                    origin=decl.origin,
+                )
+
+
+def _check_key_case(memories: tuple[ResolvedMemory, ...]) -> None:
+    """Reject keys that differ only by case."""
+    folded: dict[str, ResolvedMemory] = {}
+    for memory in memories:
+        earlier = folded.setdefault(memory.key.casefold(), memory)
+        if earlier is not memory:
+            raise _setup_error(
+                f"memory keys {earlier.key!r} and {memory.key!r} differ only by "
+                "case; storage paths would collide on case-insensitive filesystems",
+                origin=earlier.origins[0],
+                related=memory.origins,
+            )
+
+
+def memory_stacks(layout: ResolvedMemoryLayout) -> tuple[MemoryStack, ...]:
+    """Return every scoped target's key stack, sorted by locator."""
+    _revalidate_resolved_layout(layout)
+    if not layout.enabled:
+        return ()
+    return tuple(
+        sorted(
+            (MemoryStack(target.locator, target.scope.memories) for target in layout.targets),
+            key=lambda stack: stack.locator,
+        )
+    )
+
+
+def check_session_compatibility(
+    layout: ResolvedMemoryLayout,
+    effective_llm: Mapping[str, object],
+) -> None:
+    """Require every placement of a session key to resolve one compatibility.
+
+    ``effective_llm`` is the run's resolved LLM map keyed by ``"/".join``
+    of root-relative node ids. Compatibility is provider plus message
+    format; model differences are allowed. Every placement must have an
+    entry in ``effective_llm``; a missing entry is a ``KeyError``, because
+    the cascade and the layout then disagree about the flow.
+    """
+    _revalidate_resolved_layout(layout)
+    for memory in layout.memories:
+        if memory.type != "session" or len(memory.placements) < 2:
+            continue
+        first_path = "/".join(memory.placements[0])
+        first = compatibility(effective_llm[first_path])
+        for placement in memory.placements[1:]:
+            path = "/".join(placement)
+            other = compatibility(effective_llm[path])
+            if _canonical_json(other) != _canonical_json(first):
+                raise _setup_error(
+                    f"session memory {memory.key!r} resolves provider "
+                    f"{first['provider']!r} at {first_path!r} but "
+                    f"{other['provider']!r} at {path!r}; pin a provider on the AGENT",
+                    origin=memory.origin,
+                )
+
+
+def _resolve_flow(
     flow: Flow,
     *,
-    root_flow_id: str,
-    flow_path: tuple[str, ...],
     locator: tuple[str, ...],
-    inherited_frames: tuple[MemoryFrameRef, ...],
-    frames: list[ResolvedMemoryFrame],
+    inherited: tuple[str, ...],
     targets: list[ResolvedMemoryTarget],
+    declared: list[tuple[MemoryDecl, tuple[str, ...] | None]],
     active_flows: set[int],
     owner_origin: OriginRef | None = None,
 ) -> None:
-    """Resolve one enabled flow occurrence into ordered frames and node scopes."""
+    """Resolve one flow occurrence into node scopes and reachable declarations."""
     flow_identity = id(flow)
     if flow_identity in active_flows:
         raise _setup_error(
@@ -498,62 +696,34 @@ def _resolve_enabled_flow(
         )
     active_flows.add(flow_identity)
     try:
-        flow_policy = _flow_policy(flow)
-        flow_frame: MemoryFrameRef | None = None
-        frame_stack = inherited_frames
-        if flow_policy is not None:
-            _validate_memory_flow_boundaries(flow, policy=flow_policy)
-            flow_frame = MemoryFrameRef(
-                root_flow_id=root_flow_id,
-                static_path=flow_path,
-                owner=MemoryOwner.FLOW,
-            )
-            frames.append(_resolved_frame(flow_policy, flow_frame))
-            frame_stack = (*frame_stack, flow_frame)
+        flow_decls = _flow_decls(flow)
+        if flow_decls:
+            _validate_memory_flow_boundaries(flow, decl=flow_decls[0])
+            declared.extend((decl, None) for decl in flow_decls)
+        stack = _extend_stack(inherited, flow_decls)
 
         for node_id, node in _flow_nodes(flow, origin=owner_origin):
             node_locator = (*locator, node_id)
-            node_path = (*flow_path, node_id)
-            node_frames = frame_stack
-            agent_policy = _agent_policy(node)
-            if agent_policy is not None:
-                agent_frame = MemoryFrameRef(
-                    root_flow_id=root_flow_id,
-                    static_path=node_path,
-                    owner=MemoryOwner.AGENT,
-                )
-                frames.append(_resolved_frame(agent_policy, agent_frame))
-                node_frames = (*node_frames, agent_frame)
-
-            boundary: MemoryBoundary | None = None
-            if flow_frame is not None and node_id == flow.start_id:
-                boundary = MemoryBoundary(MemoryBoundaryKind.START, flow_frame)
-            elif flow_frame is not None and node_id == flow.end_id:
-                boundary = MemoryBoundary(MemoryBoundaryKind.END, flow_frame)
-
+            agent_decls = _agent_decls(node)
+            declared.extend((decl, node_locator) for decl in agent_decls)
             targets.append(
                 ResolvedMemoryTarget(
                     locator=node_locator,
                     scope=MemoryScope(
-                        root_flow_id=root_flow_id,
-                        static_path=node_path,
-                        frame_stack=node_frames,
-                        boundary=boundary,
+                        static_path=node_locator,
+                        memories=_extend_stack(stack, agent_decls),
                     ),
                     node=node,
                 )
             )
-
             child = _node_child(node)
             if child is not None:
-                _resolve_enabled_flow(
+                _resolve_flow(
                     child,
-                    root_flow_id=root_flow_id,
-                    flow_path=node_path,
                     locator=node_locator,
-                    inherited_frames=frame_stack,
-                    frames=frames,
+                    inherited=stack,
                     targets=targets,
+                    declared=declared,
                     active_flows=active_flows,
                     owner_origin=node.origin,
                 )
@@ -562,52 +732,39 @@ def _resolve_enabled_flow(
 
 
 def resolve_memory_layout(flow: CompiledFlow) -> ResolvedMemoryLayout:
-    """Purely derive frame specs and exact static node scopes for ``flow``.
+    """Purely derive the memory key table and static node scopes for ``flow``.
 
-    Existing ``Node.memory_scope`` values are deliberately ignored. A graph with
-    no reachable flow- or AGENT-owned policy resolves to a disabled layout and
-    does not require a root flow id. Once any policy is reachable, the root id is
-    mandatory and every reachable static node receives a scope, including
-    memory-neutral composite drivers and flow boundaries.
+    Existing ``Node.memory_scope`` values are ignored. A graph with no
+    reachable flow or AGENT declaration resolves to a disabled layout whose
+    targets carry no scope. Otherwise every reachable static node receives a
+    scope, including memory-neutral composite drivers and flow boundaries.
+    No flow id is required.
     """
     if type(flow) is not CompiledFlow:
         raise TypeError("resolve_memory_layout expects an exact CompiledFlow")
 
-    first_policy = _first_policy(flow)
-    if first_policy is None:
-        return ResolvedMemoryLayout(
-            root_flow_id=None,
-            frames=(),
-            targets=tuple(
-                ResolvedMemoryTarget(locator=locator, scope=None, node=node)
-                for locator, node in _walk_targets(flow)
-            ),
-        )
-
-    root_flow_id = flow.flow_id
-    if type(root_flow_id) is not str or not root_flow_id:
-        raise _setup_error(
-            "a flow with reachable memory policies requires a non-empty root flow_id",
-            origin=first_policy.origin,
-        )
-
-    frames: list[ResolvedMemoryFrame] = []
     targets: list[ResolvedMemoryTarget] = []
-    _resolve_enabled_flow(
+    declared: list[tuple[MemoryDecl, tuple[str, ...] | None]] = []
+    _resolve_flow(
         flow,
-        root_flow_id=root_flow_id,
-        flow_path=(root_flow_id,),
         locator=(),
-        inherited_frames=(),
-        frames=frames,
+        inherited=(),
         targets=targets,
+        declared=declared,
         active_flows=set(),
     )
-    return ResolvedMemoryLayout(
-        root_flow_id=root_flow_id,
-        frames=tuple(frames),
-        targets=tuple(targets),
-    )
+    if not declared:
+        return ResolvedMemoryLayout(
+            enabled=False,
+            targets=tuple(
+                ResolvedMemoryTarget(locator=target.locator, scope=None, node=target.node)
+                for target in targets
+            ),
+        )
+    _check_scope_segments(declared)
+    memories = _memory_table(declared)
+    _check_key_case(memories)
+    return ResolvedMemoryLayout(enabled=True, targets=tuple(targets), memories=memories)
 
 
 def _validate_unique_targets(layout: ResolvedMemoryLayout) -> None:
@@ -637,7 +794,7 @@ def apply_memory_layout(
 ) -> None:
     """Atomically apply one previously resolved layout to its exact graph.
 
-    The complete graph, semantic paths, frame specs, exact node identities,
+    The complete graph, semantic paths, the key table, exact node identities,
     duplicate targets, and every existing scope are validated first. Only after
     that pass succeeds are scopes assigned, so a stale or partially stamped graph
     cannot receive a partial layout. Reapplying the same layout is a no-op.
@@ -683,9 +840,12 @@ def apply_memory_layout(
 
 
 __all__ = [
-    "ResolvedMemoryFrame",
+    "ResolvedMemory",
     "ResolvedMemoryLayout",
     "ResolvedMemoryTarget",
     "apply_memory_layout",
+    "check_session_compatibility",
+    "memory_stacks",
     "resolve_memory_layout",
+    "scope_memory_declarations",
 ]

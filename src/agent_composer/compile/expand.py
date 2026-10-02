@@ -471,7 +471,7 @@ def map_subgraph(
     generated fan-out/fan-in boundaries receive that same authored context.
 
     When ``memory_scope`` is present, element ``i`` appends a structured MAP-item occurrence to
-    its cloned child nodes. The generated fan nodes retain the spawner scope with no flow boundary.
+    its cloned child nodes. The generated fan nodes reuse the spawner's memory scope.
     Execution scopes also append the explicit item index; seed recipes select that same
     index and parameter name. Only actual item START/END pairs become child boundaries.
 
@@ -535,7 +535,7 @@ def map_subgraph(
     map_start = StartNode(map_start_id, params=[])
     map_start.origin_context = origin_context
     if memory_scope is not None:
-        map_start.memory_scope = replace(memory_scope, boundary=None)
+        map_start.memory_scope = memory_scope
     if execution_scope is not None:
         map_start.execution_scope = replace(execution_scope, boundary=None)
     nodes[map_start_id] = map_start
@@ -547,7 +547,7 @@ def map_subgraph(
     map_end.commit_as = spawner_id
     map_end.origin_context = origin_context
     if memory_scope is not None:
-        map_end.memory_scope = replace(memory_scope, boundary=None)
+        map_end.memory_scope = memory_scope
     if execution_scope is not None:
         map_end.execution_scope = replace(execution_scope, boundary=None)
     nodes[map_end_id] = map_end

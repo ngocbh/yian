@@ -1,7 +1,7 @@
 """Markdown profile memory: one versioned document per memory instance.
 
-``ProfileMemory`` recalls one markdown document into every AGENT under its
-outermost frame and, on backward, asks one model call to rewrite the whole
+``ProfileMemory`` recalls one markdown document into every AGENT whose stack
+holds the instance and, on backward, asks one model call to rewrite the whole
 document from that run's feedback. Commits are compare-and-set writes to a
 ``MarkdownStore`` and never call a model.
 """
@@ -23,8 +23,6 @@ from agent_composer.memory.contracts import (
     JsonObject,
     JsonValue,
     LearnContext,
-    MemoryFrameRef,
-    MemoryFrameSpec,
     MemoryMutation,
     MemoryOperationError,
     RecallContext,
@@ -58,11 +56,6 @@ _SYSTEM = (
 def _sha256(text: str) -> str:
     """Return the hex SHA-256 of one UTF-8 string."""
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-def _is_strict_prefix(prefix: tuple[str, ...], path: tuple[str, ...]) -> bool:
-    """Return whether ``prefix`` is a proper leading part of ``path``."""
-    return len(prefix) < len(path) and path[: len(prefix)] == prefix
 
 
 def _error(stage: str, code: str, message: str, *, retryable: bool = False) -> MemoryOperationError:
@@ -116,12 +109,11 @@ def _parse_reply(reply: object, current_text: str, max_chars: int) -> str:
 
 
 class ProfileMemory:
-    """Policy backend that keeps one markdown profile in a versioned store.
+    """Memory backend that keeps one markdown profile in a versioned store.
 
-    Inject one instance per profile under a host-chosen policy name, for example
-    ``run_flow(flow, inputs, memory={"profile": ProfileMemory(store)})``. Only the
-    outermost frame of that policy recalls and learns; nested frames of the same
-    policy recall nothing, so the document appears once per AGENT prompt.
+    Inject one instance under the memory key the flow declares, for example
+    ``run_flow(flow, inputs, memory={"profile": ProfileMemory(store)})``. Every
+    AGENT whose stack holds this key sees the whole document once.
     """
 
     def __init__(
@@ -167,6 +159,19 @@ class ProfileMemory:
         self._api_key, self._base_url = pop_host_credentials(self._llm_config)
         self.max_chars = max_chars
         self.input_budget_chars = input_budget_chars
+        self._closed = False
+
+    def close(self) -> None:
+        """Reject later use of this backend and its sessions; repeated calls do nothing.
+
+        The store holds no handle, so closing does no I/O.
+        """
+        self._closed = True
+
+    def _ensure_open(self, stage: str) -> None:
+        """Reject use after close."""
+        if self._closed:
+            raise _error(stage, "profile.closed", "memory backend is closed")
 
     def read(self, version: str | None = None) -> tuple[str, str]:
         """Return ``(text, version)`` from the store for host display or editing.
@@ -180,7 +185,9 @@ class ProfileMemory:
 
         Raises:
             `LookupError`: The named version is unknown.
+            `MemoryOperationError`: ``profile.closed`` after close.
         """
+        self._ensure_open("read")
         return self._store.read(version)
 
     def write(self, text: str, *, base_version: str, provenance: JsonObject | None = None) -> str:
@@ -197,15 +204,19 @@ class ProfileMemory:
 
         Raises:
             `MarkdownVersionMismatch`: ``base_version`` is not current.
+            `MemoryOperationError`: ``profile.closed`` after close.
         """
+        self._ensure_open("write")
         return self._store.write(text, base_version=base_version, provenance=provenance)
 
     def reset(self) -> None:
         """Refuse engine resets; delete or rewrite the profile through the store.
 
         Raises:
-            `MemoryOperationError`: Always, with code ``profile.reset_unsupported``.
+            `MemoryOperationError`: Always: ``profile.closed`` after close, else
+                ``profile.reset_unsupported``.
         """
+        self._ensure_open("reset")
         raise _error("reset", "profile.reset_unsupported",
                      "profile memory is reset through its store, not the engine")
 
@@ -220,11 +231,13 @@ class ProfileMemory:
             `_ProfileSession`: Session whose recall uses the pinned document.
 
         Raises:
-            `MemoryOperationError`: ``profile.store_unavailable`` (retryable) when
-                the store cannot be reached, ``profile.store_invalid`` when its
-                document cannot be decoded, or ``profile.snapshot_unavailable``
-                when the recorded version is malformed, unknown, or changed.
+            `MemoryOperationError`: ``profile.closed`` after close,
+                ``profile.store_unavailable`` (retryable) when the store cannot
+                be reached, ``profile.store_invalid`` when its document cannot be
+                decoded, or ``profile.snapshot_unavailable`` when the recorded
+                version is malformed, unknown, or changed.
         """
+        self._ensure_open("open_run")
         if snapshot is None:
             try:
                 text, version = self._store.read(None)
@@ -255,7 +268,6 @@ class _ProfileSession:
         self._memory = memory
         self._text = text
         self._version = version
-        self._frames: dict[MemoryFrameRef, _ProfileFrame] = {}
         self._applied: dict[str, tuple[MemoryMutation, ...]] = {}
         self._lock = Lock()
         self._closed = False
@@ -286,140 +298,35 @@ class _ProfileSession:
         self._closed = True
 
     def _ensure_open(self, stage: str) -> None:
-        """Reject use after close."""
+        """Reject use after this session or its backend closes."""
+        self._memory._ensure_open(stage)
         if self._closed:
-            raise _error(stage, "profile.closed", "profile session is closed")
-
-    def open_frame(self, spec: MemoryFrameSpec) -> _ProfileFrame:
-        """Open one frame; all frames of one policy must share one outermost frame.
-
-        Args:
-            spec (`MemoryFrameSpec`): Frame declared by the compiled layout.
-
-        Returns:
-            `_ProfileFrame`: The opened frame, or the same frame for a repeated spec.
-
-        Raises:
-            `MemoryOperationError`: ``profile.invalid_config`` for non-empty frame
-                config, ``profile.multiple_roots`` for a second unrelated top frame.
-        """
-        with self._lock:
-            self._ensure_open("open_frame")
-            if type(spec) is not MemoryFrameSpec:
-                raise _error("open_frame", "profile.invalid_config", "spec must be a MemoryFrameSpec")
-            existing = self._frames.get(spec.ref)
-            if existing is not None:
-                if existing.spec != spec:
-                    raise _error("open_frame", "profile.invalid_config",
-                                 "frame was already opened with a different spec")
-                return existing
-            if spec.config:
-                raise _error("open_frame", "profile.invalid_config",
-                             "profile frames take no config")
-            path = spec.ref.static_path
-            nested = any(_is_strict_prefix(ref.static_path, path) for ref in self._frames)
-            if self._frames and not nested:
-                raise _error("open_frame", "profile.multiple_roots",
-                             "every frame of one profile policy must sit under one outermost frame")
-            frame = _ProfileFrame(self, spec)
-            self._frames[spec.ref] = frame
-            return frame
-
-    def _is_outermost(self, ref: MemoryFrameRef) -> bool:
-        """Return whether no other opened frame encloses ``ref``."""
-        return not any(_is_strict_prefix(other.static_path, ref.static_path) for other in self._frames)
-
-    def commit(self, commit_id: str, mutations: tuple[MemoryMutation, ...]) -> None:
-        """Write the proposed document with compare-and-set; never call a model.
-
-        Args:
-            commit_id (`str`): Runtime commit id, unique per backward attempt and
-                policy. A repeat within this session is a no-op.
-            mutations (`tuple[MemoryMutation, ...]`): Empty, or the one mutation
-                the outermost frame proposed.
-
-        Raises:
-            `MemoryOperationError`: ``profile.version_mismatch`` (retryable; nothing
-                was written) when the document changed after the learner read it,
-                ``profile.store_unavailable`` when the store failed during the
-                write (it may have landed), ``profile.store_invalid`` when the
-                store rejected it, or ``profile.invalid_batch`` for a malformed or
-                reused batch.
-        """
-        with self._lock:
-            self._ensure_open("commit")
-            if type(commit_id) is not str or not commit_id or type(mutations) is not tuple:
-                raise _error("commit", "profile.invalid_batch", "commit needs an id and a mutation tuple")
-            if commit_id in self._applied:
-                if self._applied[commit_id] != mutations:
-                    raise _error("commit", "profile.invalid_batch", "commit id was reused for another batch")
-                return
-            if not mutations:
-                self._applied[commit_id] = mutations
-                return
-            mutation = mutations[0] if len(mutations) == 1 else None
-            frame = None if mutation is None else self._frames.get(mutation.frame_ref)
-            payload = None if mutation is None else mutation.payload
-            if (frame is None or not self._is_outermost(frame.spec.ref) or type(payload) is not dict
-                    or type(payload.get("text")) is not str or type(payload.get("base_version")) is not str):
-                raise _error("commit", "profile.invalid_batch",
-                             "profile commits take one document mutation from the outermost frame")
-            provenance: JsonObject = {
-                "commit_id": commit_id,
-                "run_id": payload.get("run_id"),
-                "frame": list(frame.spec.ref.static_path),
-                "seen_version": payload.get("seen_version"),
-                "feedback": payload.get("feedback"),
-            }
-            try:
-                self._memory._store.write(payload["text"], base_version=payload["base_version"],
-                                          provenance=provenance)
-            except MarkdownVersionMismatch as exc:
-                raise _error("commit", "profile.version_mismatch",
-                             "profile changed after the learner read it; nothing was written",
-                             retryable=True) from exc
-            except OSError as exc:
-                raise _error("commit", "profile.store_unavailable",
-                             "profile store write failed and may have landed; check the store "
-                             "before retrying") from exc
-            except ValueError as exc:
-                raise _error("commit", "profile.store_invalid",
-                             "profile store rejected the document") from exc
-            self._applied[commit_id] = mutations
-
-
-class _ProfileFrame:
-    """One opened frame; only the outermost frame recalls and learns."""
-
-    def __init__(self, session: _ProfileSession, spec: MemoryFrameSpec) -> None:
-        self._session = session
-        self.spec = spec
+            raise _error(stage, "profile.session_closed", "profile session is closed")
 
     def recall(self, context: RecallContext | None = None) -> str:
-        """Return the pinned document for the outermost frame, else ``""``.
+        """Return the full pinned document.
 
         Args:
             context (`RecallContext | None`, *optional*, defaults to `None`): The
                 AGENT call being prepared. The document does not depend on it.
 
         Returns:
-            `str`: The full pinned document, never truncated, or ``""``.
+            `str`: The full pinned document, never truncated.
         """
-        session = self._session
-        session._ensure_open("recall")
+        self._ensure_open("recall")
         if context is not None and type(context) is not RecallContext:
             raise _error("recall", "profile.invalid_context", "context must be a RecallContext")
-        return session._text if session._is_outermost(self.spec.ref) else ""
+        return self._text
 
     def learn(self, context: LearnContext) -> list[MemoryMutation]:
         """Propose one full-document rewrite from the run's feedback.
 
         Args:
-            context (`LearnContext`): Episodes and feedback for this frame.
+            context (`LearnContext`): Episodes and feedback for this instance.
 
         Returns:
             `list[MemoryMutation]`: One document mutation, or an empty list for
-                inner frames, runs without feedback, and unchanged documents.
+                runs without feedback and unchanged documents.
 
         Raises:
             `MemoryOperationError`: ``profile.invalid_context``,
@@ -427,13 +334,12 @@ class _ProfileFrame:
                 ``profile.model_construction``, ``profile.provider`` (retryable),
                 ``profile.contract``, or ``profile.over_budget``.
         """
-        session = self._session
-        session._ensure_open("learn")
-        if type(context) is not LearnContext or context.frame_ref != self.spec.ref:
-            raise _error("learn", "profile.invalid_context", "learning context belongs to another frame")
-        if not session._is_outermost(self.spec.ref) or not context.feedback:
+        self._ensure_open("learn")
+        if type(context) is not LearnContext:
+            raise _error("learn", "profile.invalid_context", "context must be a LearnContext")
+        if not context.feedback:
             return []
-        memory = session._memory
+        memory = self._memory
         try:
             current_text, current_version = memory._store.read(None)
         except (LookupError, OSError, ValueError) as exc:
@@ -469,11 +375,11 @@ class _ProfileFrame:
         payload: JsonObject = {
             "base_version": current_version,
             "text": text,
-            "seen_version": session._version,
+            "seen_version": self._version,
             "run_id": context.run_id,
             "feedback": feedback,
         }
-        return [MemoryMutation("profile:" + _sha256(text), self.spec.ref, payload)]
+        return [MemoryMutation("profile:" + _sha256(text), payload)]
 
     def _material(self, context: LearnContext, current_text: str, current_version: str) -> str:
         """Return the learner's JSON input with the newest episodes that fit the budget.
@@ -482,7 +388,6 @@ class _ProfileFrame:
         cut to a prefix and a suffix the way ReflectiveMemory trims its material.
         Older episodes are added whole, newest first, until one does not fit.
         """
-        session = self._session
         feedback: list[JsonValue] = []
         for entry in context.feedback:
             if isinstance(entry, dict):
@@ -490,7 +395,7 @@ class _ProfileFrame:
                                  ("channel", "target_name", "value", "owner_static_path")})
             else:
                 feedback.append({"value": entry})
-        budget = session._memory.input_budget_chars
+        budget = self._memory.input_budget_chars
         agent_episodes = [episode for episode in context.episodes if episode.base_system_prompt is not None]
         kept: list[JsonValue] = []
         used = 0
@@ -513,12 +418,68 @@ class _ProfileFrame:
             kept.append(json.loads(encoded))
         kept.reverse()
         material: JsonObject = {
-            "max_chars": session._memory.max_chars,
+            "max_chars": self._memory.max_chars,
             "current_profile": current_text,
             "feedback": feedback,
             "episodes": kept,
             "omitted_episodes": len(agent_episodes) - len(kept),
         }
-        if current_version != session._version:
-            material["seen_profile"] = session._text
+        if current_version != self._version:
+            material["seen_profile"] = self._text
         return json.dumps(material, ensure_ascii=False, indent=2, sort_keys=True)
+
+    def commit(self, commit_id: str, mutations: tuple[MemoryMutation, ...]) -> None:
+        """Write the proposed document with compare-and-set; never call a model.
+
+        Args:
+            commit_id (`str`): Runtime commit id, unique per backward attempt and
+                memory. A repeat within this session is a no-op.
+            mutations (`tuple[MemoryMutation, ...]`): Empty, or the one mutation
+                this session proposed.
+
+        Raises:
+            `MemoryOperationError`: ``profile.version_mismatch`` (retryable; nothing
+                was written) when the document changed after the learner read it,
+                ``profile.store_unavailable`` when the store failed during the
+                write (it may have landed), ``profile.store_invalid`` when the
+                store rejected it, or ``profile.invalid_batch`` for a malformed or
+                reused batch.
+        """
+        with self._lock:
+            self._ensure_open("commit")
+            if type(commit_id) is not str or not commit_id or type(mutations) is not tuple:
+                raise _error("commit", "profile.invalid_batch", "commit needs an id and a mutation tuple")
+            if commit_id in self._applied:
+                if self._applied[commit_id] != mutations:
+                    raise _error("commit", "profile.invalid_batch", "commit id was reused for another batch")
+                return
+            if not mutations:
+                self._applied[commit_id] = mutations
+                return
+            mutation = mutations[0] if len(mutations) == 1 else None
+            payload = None if mutation is None else mutation.payload
+            if (type(payload) is not dict or type(payload.get("text")) is not str
+                    or type(payload.get("base_version")) is not str):
+                raise _error("commit", "profile.invalid_batch",
+                             "profile commits take at most one document mutation")
+            provenance: JsonObject = {
+                "commit_id": commit_id,
+                "run_id": payload.get("run_id"),
+                "seen_version": payload.get("seen_version"),
+                "feedback": payload.get("feedback"),
+            }
+            try:
+                self._memory._store.write(payload["text"], base_version=payload["base_version"],
+                                          provenance=provenance)
+            except MarkdownVersionMismatch as exc:
+                raise _error("commit", "profile.version_mismatch",
+                             "profile changed after the learner read it; nothing was written",
+                             retryable=True) from exc
+            except OSError as exc:
+                raise _error("commit", "profile.store_unavailable",
+                             "profile store write failed and may have landed; check the store "
+                             "before retrying") from exc
+            except ValueError as exc:
+                raise _error("commit", "profile.store_invalid",
+                             "profile store rejected the document") from exc
+            self._applied[commit_id] = mutations

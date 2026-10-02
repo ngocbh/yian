@@ -28,18 +28,6 @@ def _invocation_json(value: c.ConversationInvocation) -> c.JsonObject:
     return {"run_id": value.run_id, "start_sequence": value.start_sequence}
 
 
-def _key_json(value: c.ConversationKey) -> c.JsonObject:
-    ref = value.frame_ref
-    return {
-        "frame_ref": {
-            "root_flow_id": ref.root_flow_id,
-            "static_path": list(ref.static_path),
-            "owner": ref.owner.value,
-        },
-        "consumer_static_path": list(value.consumer_static_path),
-    }
-
-
 def _item_json(value: c.ConversationItem) -> c.JsonObject:
     return {"item_id": value.item_id, "format": value.format, "payload": value.payload}
 
@@ -75,7 +63,6 @@ def _view_json(value: c.ConversationView, *, ledger: bool = True) -> c.JsonObjec
         "namespace": value.namespace,
         "generation": value.generation,
         "revision": value.revision,
-        "key": _key_json(value.key),
         "compatibility": value.compatibility,
         "items": [_item_json(item) for item in value.items],
         # Retain this inert field so message-only snapshot digests stay valid.
@@ -121,19 +108,6 @@ def _array(value: object) -> list:
 
 def _invocation_from_json(value: object) -> c.ConversationInvocation:
     return c.ConversationInvocation(**_object(value, "run_id start_sequence"))
-
-
-def _key_from_json(value: object) -> c.ConversationKey:
-    data = _object(value, "frame_ref consumer_static_path")
-    ref = _object(data["frame_ref"], "root_flow_id static_path owner")
-    return c.ConversationKey(
-        c.MemoryFrameRef(
-            ref["root_flow_id"],
-            tuple(_array(ref["static_path"])),
-            c.MemoryOwner(ref["owner"]),
-        ),
-        tuple(_array(data["consumer_static_path"])),
-    )
 
 
 def _items_from_json(value: object) -> tuple[c.ConversationItem, ...]:
@@ -229,7 +203,7 @@ def conversation_view_from_json(value: c.JsonObject) -> c.ConversationView:
     data = _object(
         _view_wire(value),
         (
-            "namespace generation revision key compatibility items reference effects "
+            "namespace generation revision compatibility items reference effects "
             "closed_invocations applied"
         ),
     )
@@ -238,7 +212,6 @@ def conversation_view_from_json(value: c.JsonObject) -> c.ConversationView:
         data["namespace"],
         data["generation"],
         data["revision"],
-        _key_from_json(data["key"]),
         data["compatibility"],
         _items_from_json(data["items"]),
         tuple(_effect_from_json(item) for item in _array(data["effects"])),
@@ -282,8 +255,6 @@ def conversation_content_digest(view: c.ConversationView) -> str:
 
 def _stamp_json(value: c.ConversationStamp) -> c.JsonObject:
     return {
-        "policy_name": value.policy_name,
-        "key": _key_json(value.key),
         "invocation": _invocation_json(value.invocation),
         "namespace": value.namespace,
         "generation": value.generation,
@@ -331,11 +302,9 @@ def _checkpoint_json(value: c.ConversationCheckpoint) -> c.JsonObject:
 def _stamp_from_json(value: object) -> c.ConversationStamp:
     data = _object(
         value,
-        "policy_name key invocation namespace generation expected_revision ordinal",
+        "invocation namespace generation expected_revision ordinal",
     )
     return c.ConversationStamp(
-        data["policy_name"],
-        _key_from_json(data["key"]),
         _invocation_from_json(data["invocation"]),
         data["namespace"],
         data["generation"],
@@ -440,7 +409,6 @@ def _zero_view(view: c.ConversationView) -> c.ConversationView:
         view.namespace,
         view.generation,
         0,
-        view.key,
         view.compatibility,
         (),
         (),
@@ -565,8 +533,7 @@ def advance_conversation(
     _validate_view(before)
     stamp = checkpoint.stamp
     if (
-        stamp.key != before.key
-        or stamp.namespace != before.namespace
+        stamp.namespace != before.namespace
         or stamp.generation != before.generation
         or stamp.expected_revision != before.revision
     ):
@@ -669,7 +636,6 @@ def advance_conversation(
         before.namespace,
         before.generation,
         before.revision + 1,
-        before.key,
         before.compatibility,
         items,
         effects,
@@ -686,7 +652,6 @@ def advance_conversation(
         after.namespace,
         after.generation,
         after.revision,
-        after.key,
         after.compatibility,
         after.items,
         after.effects,

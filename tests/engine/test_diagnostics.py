@@ -580,6 +580,8 @@ expected = [
     "evaluate_when",
     "load_flow",
     "run_flow",
+    "build_memories",
+    "MemoryRegistry",
 ]
 assert agent_composer.__all__ == expected
 assert set(expected) <= set(dir(agent_composer))

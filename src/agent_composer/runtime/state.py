@@ -11,6 +11,7 @@ execution fields; chronological reducer transitions are the only topology writer
 from __future__ import annotations
 
 import copy
+from bisect import bisect_left
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -36,11 +37,10 @@ from agent_composer.expr import ExpressionError, expr_refs_of
 from agent_composer.expr.lineage import SourceRef
 from agent_composer.memory import (
     EvaluationEvidence,
-    MemoryFrameRef,
-    MemoryFrameSpec,
-    MemoryOccurrenceRef,
     MemoryScope,
     MemorySnapshotEnvelope,
+    MemorySpec,
+    MemoryStack,
 )
 from agent_composer.nodes.base import Grow, Node
 from agent_composer.nodes.contracts import (
@@ -66,10 +66,6 @@ from agent_composer.runtime.log import (
     BackwardStartedRecord,
     BackwardReadyRecord,
     BackwardFinishedRecord,
-    ConversationAdmittedRecord,
-    ConversationEffectRequestedRecord,
-    ConversationEffectObservedRecord,
-    ConversationClosedRecord,
     MemoryCommitFailedRecord,
     MemoryCommitRequestedRecord,
     MemoryCommitSucceededRecord,
@@ -114,11 +110,6 @@ MAX_REF_DEPTH = 5
 GrowBuilder = Callable[[Node, Any], Flow]
 """Injected kind-aware interpreter from a spawner and canonical seed to a fragment."""
 
-_CONVERSATION_RECORD_TYPES = (
-    ConversationAdmittedRecord, ConversationEffectRequestedRecord,
-    ConversationEffectObservedRecord, ConversationClosedRecord,
-)
-
 
 def _node_output_type(node: Node) -> Type | None:
     """Project a whole-value type while validating the closed contract sum."""
@@ -140,12 +131,11 @@ def _canonical_output_value(
 class _MemoryAuthority:
     """Immutable identity roots established by canonical RunStarted decoding."""
 
-    layout: tuple[MemoryFrameSpec, ...] | None
     snapshots: tuple[MemorySnapshotEnvelope, ...] | None
     learnable: bool
-    frame_order: tuple[MemoryFrameRef, ...]
-    policy_order: tuple[str, ...]
-    policy_frame_indices: tuple[tuple[int, ...], ...]
+    memories: tuple[MemorySpec, ...] | None
+    memory_stacks: tuple[MemoryStack, ...] | None
+    memory_order: tuple[str, ...]
 
 
 class _NodeDataError(Exception):
@@ -234,17 +224,15 @@ class RunState:
             Canonical caller-supplied START priming record retained across START's commit.
         effective_llm_by_static_path (`dict[str, dict[str, Any]]`):
             Run-resolved agent configuration keyed by stable static node path.
-        memory_layout (`tuple[MemoryFrameSpec, ...] | None`):
-            Canonical recorded frame inventory, or ``None`` when memory is disabled.
         memory_snapshots (`tuple[MemorySnapshotEnvelope, ...] | None`):
-            Canonical recorded policy snapshots, paired with ``memory_layout``.
+            Canonical recorded snapshots, one per memory key.
         learnable (`bool`):
             Whether accepted eligible outcomes must project durable learning evidence.
         trace (`RetainedTrace | None`):
             Accepted executions, immutable producer entries and private backward
             handlers, enabled by recorded learning independently of memory scopes.
         learning_state (`RuntimeLearningState`):
-            Pure immutable episode and recorded frame/policy inventory.
+            Pure immutable episode inventory in recorded memory-key order.
         backward_state (`RuntimeBackwardState`):
             Immutable accepted backward attempts and irreversible commit facts.
         initial_static_ids (`frozenset[str]`):
@@ -277,19 +265,19 @@ class RunState:
         self.num_workers = 0
         self.input: dict[str, Any] = {}
         self.effective_llm_by_static_path: dict[str, dict[str, Any]] = {}
-        self.memory_layout: tuple[MemoryFrameSpec, ...] | None = None
         self.memory_snapshots: tuple[MemorySnapshotEnvelope, ...] | None = None
+        self.memories: tuple[MemorySpec, ...] | None = None
+        self.memory_stacks: tuple[MemoryStack, ...] | None = None
         self.learnable = False
         self.trace: RetainedTrace | None = None
         self.learning_state = RuntimeLearningState()
         self.backward_state = RuntimeBackwardState()
         self._memory_authority = _MemoryAuthority(
-            layout=None,
             snapshots=None,
             learnable=False,
-            frame_order=self.learning_state.frame_order,
-            policy_order=self.learning_state.policy_order,
-            policy_frame_indices=self.learning_state.policy_frame_indices,
+            memories=None,
+            memory_stacks=None,
+            memory_order=self.learning_state.memory_order,
         )
         self.initial_static_ids = frozenset(flow.nodes)
 
@@ -311,12 +299,14 @@ class RunStartData:
             Complete resolved LLM configuration by stable static path.
         num_workers (`int`):
             Exact non-negative dispatcher worker count.
-        memory_layout (`tuple[MemoryFrameSpec, ...] | None`, *optional*):
-            Canonical static frame inventory, or ``None`` to disable memory.
         memory_snapshots (`tuple[MemorySnapshotEnvelope, ...] | None`, *optional*):
-            Canonical policy snapshots paired with an enabled frame inventory.
+            Canonical snapshots, one per memory key, or ``None`` to disable memory.
         learnable (`bool`, *optional*, defaults to `False`):
             Whether eligible accepted outcomes must carry learning evidence.
+        memories (`tuple[MemorySpec, ...] | None`, *optional*):
+            Sorted memory key table paired with ``memory_snapshots``.
+        memory_stacks (`tuple[MemoryStack, ...] | None`, *optional*):
+            Each scoped target's key stack, sorted by locator.
     """
 
     run_id: str
@@ -325,9 +315,10 @@ class RunStartData:
     start_wiring_override: dict[str, Any]
     effective_llm_by_static_path: dict[str, dict[str, Any]]
     num_workers: int
-    memory_layout: tuple[MemoryFrameSpec, ...] | None = None
     memory_snapshots: tuple[MemorySnapshotEnvelope, ...] | None = None
     learnable: bool = False
+    memories: tuple[MemorySpec, ...] | None = None
+    memory_stacks: tuple[MemoryStack, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -367,8 +358,9 @@ class _RunStartedApply:
     num_workers: int
     input: dict[str, Any]
     effective_llm_by_static_path: dict[str, dict[str, Any]]
-    memory_layout: tuple[MemoryFrameSpec, ...] | None
     memory_snapshots: tuple[MemorySnapshotEnvelope, ...] | None
+    memories: tuple[MemorySpec, ...] | None
+    memory_stacks: tuple[MemoryStack, ...] | None
     learnable: bool
     learning_state: RuntimeLearningState
     backward_state: RuntimeBackwardState
@@ -571,20 +563,6 @@ class _BackwardPlan:
 
 
 @dataclass(frozen=True, slots=True)
-class _LegacyConversationPlan:
-    """Frozen legacy metadata whose only reducer effect is record sequencing."""
-
-    originating_state: RunState
-    originating_flow: CompiledFlow
-    envelope_bytes: bytes
-    start_id: str
-    start_node_identity: int
-    end_id: str
-    end_node_identity: int | None
-    trace_delta: TraceDelta | None = None
-
-
-@dataclass(frozen=True, slots=True)
 class _GrowthDelta:
     """Immutable scalar authority for one flat deterministic expansion."""
 
@@ -681,7 +659,6 @@ class PreparedTransition:
         | _FailurePlan
         | _GrowthPlan
         | _BackwardPlan
-        | _LegacyConversationPlan
     )
     observers: tuple[Any, ...]
 
@@ -799,9 +776,10 @@ def prepare_run_started(
         start_wiring_override=data.start_wiring_override,
         effective_llm_by_static_path=data.effective_llm_by_static_path,
         num_workers=data.num_workers,
-        memory_layout=data.memory_layout,
         memory_snapshots=data.memory_snapshots,
         learnable=data.learnable,
+        memories=data.memories,
+        memory_stacks=data.memory_stacks,
     )
     # The public envelope codec is the sole payload authority.  Decode its canonical
     # bytes immediately so the prepared record is exactly what either log will retain.
@@ -1180,17 +1158,15 @@ def prepare_record(
     """Validate one supported authoritative record against the current frontier.
 
     This is the shared reducer seam for live dispatch and later historical replay.
-    Graph records require an initialized nonterminal state. Legacy conversation
-    metadata belongs to unfinished accepted invocations, independently of learning;
-    it advances only record sequencing, and a failed run permits only observation
-    or close metadata. Backward and memory-commit
-    records require an initialized primary terminal with learning enabled.
+    Graph records require an initialized nonterminal state. Backward and
+    memory-commit records require an initialized primary terminal with learning
+    enabled.
 
     Args:
         state (`RunState`):
             Initialized reducer state immediately before ``record``.
         record (`RunRecord`):
-            One supported graph/frontier, legacy metadata, or backward-attempt record.
+            One supported graph/frontier or backward-attempt record.
         grow_builder (`GrowBuilder | None`, *optional*):
             Required only for ``NodeExpandedRecord`` replay; rebuilds and verifies
             the recorded fragment through the same injected path used live.
@@ -1209,9 +1185,6 @@ def prepare_record(
     """
     if type(state) is not RunState:
         raise TypeError("prepare_record expects a RunState")
-
-    if type(record) in _CONVERSATION_RECORD_TYPES:
-        return _prepare_legacy_conversation_record(state, record, schema=schema)
 
     if isinstance(record, (BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord,
                            MemoryCommitRequestedRecord, MemoryCommitSucceededRecord, MemoryCommitFailedRecord)):
@@ -1681,58 +1654,6 @@ def _prepare_growth_transition(
     )
 
 
-def _prepare_legacy_conversation_record(
-    state: RunState, record: RunRecord, *, schema: int = SCHEMA_VERSION,
-) -> PreparedTransition:
-    """Validate an inert historical wrapper without restoring conversation state."""
-    if type(state) is not RunState or type(record) not in _CONVERSATION_RECORD_TYPES:
-        raise TypeError("conversation preparation requires exact state and record carriers")
-    _require_initialized(state)
-    encoded = encode_record(RecordEnvelope(schema, state.run_id, state.next_sequence, record))
-    envelope = decode_record(encoded)
-    _validate_legacy_conversation_record(state, envelope.record)
-    start_id, end_id = state.flow.start_id, state.flow.end_id
-    plan = _LegacyConversationPlan(
-        state, state.flow, encoded, start_id, id(state.flow.nodes[start_id]),
-        end_id, id(state.flow.nodes[end_id]) if end_id in state.flow.nodes else None,
-        _prepare_record_trace(state, envelope),
-    )
-    return PreparedTransition(envelope.record, envelope.run_id, envelope.seq, plan, ())
-
-
-def _validate_legacy_conversation_record(state: RunState, record: RunRecord) -> None:
-    """Validate lifecycle and durable invocation ownership, without backend state."""
-    checkpoint = record.checkpoint
-    stamp = checkpoint.stamp
-    invocation = stamp.invocation
-    if invocation.run_id != state.run_id:
-        raise ValueError("conversation invocation belongs to another run")
-    if state.backward_state.attempts or isinstance(state.result, RunSucceeded):
-        raise ValueError("conversation checkpoint is after success or backward start")
-    if isinstance(state.result, RunFailed) and type(record) not in (
-        ConversationEffectObservedRecord, ConversationClosedRecord,
-    ):
-        raise ValueError("failed run permits only existing observations and close")
-    node_id = next((node_id for node_id, sequence in state.accepted_starts.items()
-                    if sequence == invocation.start_sequence), None)
-    if node_id is None or node_id not in state.in_flight:
-        raise ValueError("conversation invocation has no unfinished accepted start")
-    frames = tuple(spec for spec in (state.memory_layout or ())
-                   if spec.ref == stamp.key.frame_ref and spec.policy_name == stamp.policy_name)
-    if len(frames) != 1:
-        raise ValueError("conversation frame and policy must be enabled in the recorded layout")
-    node = state.flow.nodes.get(node_id)
-    scope = node.memory_scope if node is not None else None
-    if type(scope) is not MemoryScope:
-        raise ValueError("conversation metadata requires an exact compiled memory scope")
-    MemoryScope(scope.root_flow_id, scope.static_path, scope.frame_stack,
-                scope.occurrence_path, scope.boundary)
-    if (scope.static_path != stamp.key.consumer_static_path
-            or scope.frame_stack != state.learning_state.applicable_frames(scope.root_flow_id, scope.static_path)
-            or stamp.key.frame_ref not in scope.frame_stack):
-        raise ValueError("conversation metadata disagrees with its compiled consumer scope")
-
-
 def _prepare_backward_transition(
     state: RunState, record: RunRecord, *, schema: int = SCHEMA_VERSION,
 ) -> PreparedTransition:
@@ -1793,18 +1714,12 @@ def commit_prepared(
         raise TypeError("commit_prepared expects a PreparedTransition")
     if not isinstance(prepared._plan, (
         _RunStartedPlan, _FrontierPlan, _SuccessPlan, _RoutePlan,
-        _FailurePlan, _GrowthPlan, _BackwardPlan, _LegacyConversationPlan,
+        _FailurePlan, _GrowthPlan, _BackwardPlan,
     )):
         raise TypeError("unsupported prepared transition plan")
     trace_delta = prepared._plan.trace_delta
     if isinstance(prepared._plan, _BackwardPlan):
         _require_postterminal_trace_delta(state, trace_delta)
-    elif isinstance(prepared._plan, _LegacyConversationPlan):
-        if state.trace is None:
-            if trace_delta is not None:
-                raise ValueError("unretained conversation cannot carry a trace delta")
-        else:
-            _require_postterminal_trace_delta(state, trace_delta)
     elif isinstance(prepared._plan, _FrontierPlan):
         _require_frontier_trace_delta(state, prepared)
     if trace_delta is not None:
@@ -1823,8 +1738,6 @@ def commit_prepared(
         observers = _commit_growth(log, state, prepared)
     elif isinstance(prepared._plan, _BackwardPlan):
         observers = _commit_backward(log, state, prepared)
-    elif isinstance(prepared._plan, _LegacyConversationPlan):
-        observers = _commit_legacy_conversation(log, state, prepared)
     else:
         raise TypeError("unsupported prepared transition plan")
     if trace_delta is not None:
@@ -2047,9 +1960,10 @@ def _replay_records(
             start_wiring_override=start.start_wiring_override,
             effective_llm_by_static_path=start.effective_llm_by_static_path,
             num_workers=start.num_workers,
-            memory_layout=start.memory_layout,
             memory_snapshots=start.memory_snapshots,
             learnable=start.learnable,
+            memories=start.memories,
+            memory_stacks=start.memory_stacks,
         ),
         schema=first.schema,
     )
@@ -2383,22 +2297,6 @@ def _commit_backward(log: RunLog, state: RunState, prepared: PreparedTransition)
     return ()
 
 
-def _commit_legacy_conversation(log: RunLog, state: RunState, prepared: PreparedTransition) -> tuple[Any, ...]:
-    """Verify inert legacy metadata, append it, then advance record sequencing."""
-    plan = prepared._plan
-    if type(plan) is not _LegacyConversationPlan or type(prepared.record) not in _CONVERSATION_RECORD_TYPES:
-        raise TypeError("conversation commit requires its exact plan and record")
-    _require_prepared_origin(state, plan)
-    _require_initialized(state)
-    _require_authority_coordinates(log, state, prepared, initialized=True)
-    _require_unchanged_record(prepared, plan.envelope_bytes)
-    envelope = decode_record(plan.envelope_bytes)
-    _validate_legacy_conversation_record(state, envelope.record)
-    _append_and_verify(log, prepared)
-    state.next_sequence = prepared.expected_sequence + 1
-    return ()
-
-
 def _require_prepared_origin(
     state: RunState,
     plan: (
@@ -2409,7 +2307,6 @@ def _require_prepared_origin(
         | _FailurePlan
         | _GrowthPlan
         | _BackwardPlan
-        | _LegacyConversationPlan
     ),
 ) -> None:
     """Require the exact state, adopted flow, and boundary objects from preparation."""
@@ -2566,7 +2463,7 @@ def _require_initialized_nonterminal(state: RunState) -> None:
 
 
 def _require_initialized_terminal_backward(state: RunState) -> None:
-    """Require the accepted retained terminal, independently from memory policies."""
+    """Require the accepted retained terminal, independently from memory declarations."""
     _require_initialized(state)
     if not isinstance(state.result, (RunSucceeded, RunFailed)):
         raise ValueError("backward records require an accepted terminal result")
@@ -2580,20 +2477,13 @@ def _validate_runtime_memory_configuration(state: RunState) -> None:
     if type(authority) is not _MemoryAuthority:
         raise TypeError("run-state memory authority has the wrong type")
     if not (
-        state.memory_layout is authority.layout
-        and state.memory_snapshots is authority.snapshots
+        state.memory_snapshots is authority.snapshots
+        and state.memories is authority.memories
+        and state.memory_stacks is authority.memory_stacks
         and type(state.learnable) is bool
         and state.learnable is authority.learnable
-        and state.learning_state.frame_order is authority.frame_order
-        and state.learning_state.policy_order is authority.policy_order
-        and state.backward_state.layout is authority.layout
-        and state.backward_state.frame_order is authority.frame_order
-        and state.backward_state.policy_order is authority.policy_order
-        and state.backward_state.policy_frame_indices is authority.policy_frame_indices
-        and (
-            state.learning_state.policy_frame_indices
-            is authority.policy_frame_indices
-        )
+        and state.learning_state.memory_order is authority.memory_order
+        and state.backward_state.memory_order is authority.memory_order
     ):
         raise ValueError("run-state memory roots disagree with RunStarted authority")
     if state.learning_state.episode_run_id not in (None, state.run_id):
@@ -3487,6 +3377,14 @@ def _growth_adjacency(
     return incoming, outgoing
 
 
+def _recorded_stack(stacks: tuple[MemoryStack, ...], locator: tuple[str, ...]) -> MemoryStack | None:
+    """Return the recorded stack at ``locator`` by binary search, or ``None``."""
+    index = bisect_left(stacks, locator, key=lambda stack: stack.locator)
+    if index < len(stacks) and stacks[index].locator == locator:
+        return stacks[index]
+    return None
+
+
 def _validate_node_evidence(
     state: RunState,
     node_id: str,
@@ -3505,24 +3403,24 @@ def _validate_node_evidence(
     if scope is not None:
         if type(scope) is not MemoryScope:
             raise ValueError(f"node {node_id!r} has no exact compiled memory scope")
-        MemoryScope(scope.root_flow_id, scope.static_path, scope.frame_stack,
-                    scope.occurrence_path, scope.boundary)
-        expected_stack = state.learning_state.applicable_frames(
-            scope.root_flow_id, scope.static_path,
-        )
-        if scope.frame_stack != expected_stack:
-            raise ValueError(f"node {node_id!r} memory scope must carry its exact recorded frame stack")
-    elif state.memory_layout:
+        MemoryScope(scope.static_path, scope.memories, scope.occurrence_path)
+        if state.memory_stacks is None:
+            expected: tuple[str, ...] = ()
+        else:
+            recorded = _recorded_stack(state.memory_stacks, scope.static_path)
+            if recorded is None:
+                raise ValueError(f"node {node_id!r} has no recorded memory stack")
+            expected = recorded.memories
+        if scope.memories != expected:
+            raise ValueError(f"node {node_id!r} memory scope must carry its exact recorded memory stack")
+    elif state.memories:
         raise ValueError(f"node {node_id!r} has no exact compiled memory scope")
     if evidence is None:
         raise ValueError(f"eligible node {node_id!r} requires evaluation evidence while learning")
     if type(evidence) is not EvaluationEvidence:
         raise TypeError("node evidence must be an EvaluationEvidence or None")
     if evidence.scope != scope:
-        raise ValueError(f"node {node_id!r} evidence scope does not match its layout")
-    if scope is not None:
-        for frame_ref in scope.frame_stack:
-            MemoryOccurrenceRef(frame_ref, scope.occurrence_path)
+        raise ValueError(f"node {node_id!r} evidence scope does not match its compiled scope")
 
 
 def _validate_failure_record(state: RunState, record: NodeFailedRecord) -> None:
@@ -4395,21 +4293,18 @@ def _require_pristine(state: RunState) -> None:
         and state.num_workers == 0
         and not state.input
         and not state.effective_llm_by_static_path
-        and state.memory_layout is None
         and state.memory_snapshots is None
+        and state.memories is None
+        and state.memory_stacks is None
         and state.learnable is False
         and state.trace is None
         and state.learning_state == RuntimeLearningState()
         and state.backward_state == RuntimeBackwardState()
-        and state._memory_authority.layout is None
         and state._memory_authority.snapshots is None
+        and state._memory_authority.memories is None
+        and state._memory_authority.memory_stacks is None
         and state._memory_authority.learnable is False
-        and state._memory_authority.frame_order is state.learning_state.frame_order
-        and state._memory_authority.policy_order is state.learning_state.policy_order
-        and (
-            state._memory_authority.policy_frame_indices
-            is state.learning_state.policy_frame_indices
-        )
+        and state._memory_authority.memory_order is state.learning_state.memory_order
         and state.initial_static_ids == frozenset(state.flow.nodes)
     ):
         raise ValueError("RunStarted requires a pristine RunState at sequence 0")
@@ -4425,7 +4320,6 @@ def _require_originating_flow(
         | _FailurePlan
         | _GrowthPlan
         | _BackwardPlan
-        | _LegacyConversationPlan
     ),
 ) -> None:
     """Reject replacement of the adopted flow object or either boundary identity.
@@ -4486,18 +4380,14 @@ def _materialize_run_started(
     if not isinstance(canonical_input, dict):
         raise TypeError("canonical START input is not a dict")
 
-    learning_state = RuntimeLearningState.for_layout(record.memory_layout)
-    backward_state = RuntimeBackwardState(
-        record.memory_layout, learning_state.frame_order, learning_state.policy_order,
-        learning_state.policy_frame_indices,
-    )
+    learning_state = RuntimeLearningState.for_memories(record.memories)
+    backward_state = RuntimeBackwardState(learning_state.memory_order)
     memory_authority = _MemoryAuthority(
-        layout=record.memory_layout,
         snapshots=record.memory_snapshots,
         learnable=record.learnable,
-        frame_order=learning_state.frame_order,
-        policy_order=learning_state.policy_order,
-        policy_frame_indices=learning_state.policy_frame_indices,
+        memories=record.memories,
+        memory_stacks=record.memory_stacks,
+        memory_order=learning_state.memory_order,
     )
     return _RunStartedApply(
         pool=pool,
@@ -4515,8 +4405,9 @@ def _materialize_run_started(
         num_workers=record.num_workers,
         input=canonical_input,
         effective_llm_by_static_path=canonical_effective,
-        memory_layout=record.memory_layout,
         memory_snapshots=record.memory_snapshots,
+        memories=record.memories,
+        memory_stacks=record.memory_stacks,
         learnable=record.learnable,
         learning_state=learning_state,
         backward_state=backward_state,
@@ -4542,8 +4433,9 @@ def _apply_run_started(state: RunState, apply: _RunStartedApply) -> None:
     state.num_workers = apply.num_workers
     state.input = apply.input
     state.effective_llm_by_static_path = apply.effective_llm_by_static_path
-    state.memory_layout = apply.memory_layout
     state.memory_snapshots = apply.memory_snapshots
+    state.memories = apply.memories
+    state.memory_stacks = apply.memory_stacks
     state.learnable = apply.learnable
     state.learning_state = apply.learning_state
     state.backward_state = apply.backward_state

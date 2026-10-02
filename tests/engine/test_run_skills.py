@@ -63,7 +63,10 @@ output: ${review.output}
 
 SESSION_FLOW = FLOW.replace(
     "name: skills-e2e\n",
-    "name: skills-e2e\nlong_term_memory: session\nllm_config: {provider: openai, model: test-model}\n",
+    "name: skills-e2e\nllm_config: {provider: openai, model: test-model}\n",
+).replace(
+    "    skills: [code-review, release-notes]\n",
+    "    long_term_memory: session\n    skills: [code-review, release-notes]\n",
 )
 
 ALL_FLOW = FLOW.replace("skills: [code-review, release-notes]", "skills: all")

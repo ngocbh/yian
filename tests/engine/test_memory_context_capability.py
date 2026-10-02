@@ -9,7 +9,7 @@ from contextlib import contextmanager
 import pytest
 
 from agent_composer.events import StreamChunk
-from agent_composer.memory import ConversationInvocation, MemoryContext, MemoryFrameRef, MemoryOwner, MemoryScope
+from agent_composer.memory import ConversationInvocation, DeclSite, MemoryContext, MemoryScope, MemorySpec
 from agent_composer.nodes.base import Grow, Node, NodeKind, Output, _HostStop
 from agent_composer.nodes.contracts import Assertion
 from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
@@ -23,8 +23,7 @@ class _Consumer(Node):
 
     def __init__(self, body):
         super().__init__("work")
-        ref = MemoryFrameRef("flow", ("flow",), MemoryOwner.FLOW)
-        self.memory_scope = MemoryScope("flow", ("flow", "work"), (ref,))
+        self.memory_scope = MemoryScope(("work",), ("session",))
         self.body = body
 
     def forward(self, inputs, *, open_memory_context):
@@ -36,6 +35,14 @@ def _evaluate(node, opener, **kwargs):
         node, None, VariablePool(), memory_context_opener=opener,
         memory_invocation=ConversationInvocation("run", 3), **kwargs,
     ).outcome
+
+
+def _open_session_runtime(memory):
+    """Open a runtime whose one AGENT-owned key ``session`` is backed by ``memory``."""
+    from agent_composer.runtime.memory_runtime import MemoryRuntime
+
+    spec = MemorySpec("session", "session", {}, (DeclSite((), ("root",), "work"),), True)
+    return MemoryRuntime.open(memories=(spec,), origins={"session": None}, memory={"session": memory})
 
 
 def _opener(events, turn=None, *, stop=None, cleanup=None):
@@ -73,7 +80,7 @@ def test_lazy_single_entry_binds_detached_identity_and_closes_after_execution():
     assert _evaluate(node, _opener(events, turn)) == Output("done")
     assert [event[0] for event in events] == ["enter", "body", "completed"]
     assert events[0][2].invocation == ConversationInvocation("run", 3)
-    assert events[0][2].recall.consumer_static_path == ("flow", "work")
+    assert events[0][2].recall.consumer_static_path == ("work",)
     assert events[0][2].compatibility == {"format": {"version": 1}}
     with pytest.raises(RuntimeError, match="closed"):
         retained[0]("system", "prompt", {})
@@ -228,14 +235,11 @@ def test_callback_error_retains_conversation_cleanup_notes_without_throwing_into
     runtime = None
     opener = _opener(events, stop=stop, cleanup=cleanup)
     if real_backend:
-        from agent_composer.memory import ConversationClosed, MemoryFrameSpec
+        from agent_composer.memory import ConversationClosed
         from agent_composer.memory import session as backend
-        from agent_composer.runtime.memory_runtime import MemoryRuntime
 
         memory = backend.SessionMemory()
-        ref = node.memory_scope.frame_stack[0]
-        runtime = MemoryRuntime.open(layout=(MemoryFrameSpec(ref, "session", {}),),
-                                     origins={ref: None}, memory={"session": memory})
+        runtime = _open_session_runtime(memory)
         publish = backend._Turn._publish
         def fail_close(turn, checkpoint):
             if isinstance(checkpoint, ConversationClosed):
@@ -312,14 +316,14 @@ def test_scope_and_invocation_are_frozen_before_node_execution():
     events = []
     invocation = ConversationInvocation("original", 7)
     def body(begin):
-        node.memory_scope = MemoryScope("replacement", ("replacement", "other"))
+        node.memory_scope = MemoryScope(("replacement",), ("other",))
         object.__setattr__(invocation, "run_id", "mutated")
         begin("system", "prompt", {})
         return Output(7)
     node = _Consumer(body)
     eval_node(node, None, VariablePool(), memory_context_opener=_opener(events),
               memory_invocation=invocation)
-    assert events[0][1].static_path == ("flow", "work")
+    assert events[0][1].static_path == ("work",)
     assert events[0][2].invocation == ConversationInvocation("original", 7)
 
 
@@ -351,9 +355,7 @@ def test_generator_and_body_errors_close_failed_without_masking_node_failure(str
 
 @pytest.mark.parametrize("failure_stage", ["body", "postassertion", "result"])
 def test_real_turn_rethrow_is_not_reported_as_secondary_cleanup_failure(failure_stage):
-    from agent_composer.memory import MemoryFrameSpec
     from agent_composer.memory.session import SessionMemory
-    from agent_composer.runtime.memory_runtime import MemoryRuntime
 
     error = ValueError("body rejected")
     def body(begin):
@@ -365,24 +367,21 @@ def test_real_turn_rethrow_is_not_reported_as_secondary_cleanup_failure(failure_
     if failure_stage == "postassertion":
         node.post_asserts = [Assertion("false", "must fail")]
     memory = SessionMemory()
-    ref = node.memory_scope.frame_stack[0]
-    runtime = MemoryRuntime.open(layout=(MemoryFrameSpec(ref, "session", {}),),
-                                 origins={ref: None}, memory={"session": memory})
+    runtime = _open_session_runtime(memory)
     try:
         result = _evaluate(node, runtime.open_context)
         assert isinstance(result, EvaluationFailure)
         assert "Memory context cleanup" not in result.failure.traceback
         assert not getattr(error, "__notes__", [])
         with memory.open_run() as opened:
-            assert opened.snapshot["conversations"][0]["closed_invocations"][-1]["status"] == "failed"
+            assert opened.snapshot["conversation"]["closed_invocations"][-1]["status"] == "failed"
     finally:
         runtime.close()
 
 
 def test_real_backend_cleanup_note_survives_node_error_unwrapping(monkeypatch):
-    from agent_composer.memory import ConversationClosed, MemoryFrameSpec
+    from agent_composer.memory import ConversationClosed
     from agent_composer.memory import session as backend
-    from agent_composer.runtime.memory_runtime import MemoryRuntime
 
     error = ValueError("body rejected")
     def body(begin):
@@ -390,9 +389,7 @@ def test_real_backend_cleanup_note_survives_node_error_unwrapping(monkeypatch):
         raise error
     node = _Consumer(body)
     memory = backend.SessionMemory()
-    ref = node.memory_scope.frame_stack[0]
-    runtime = MemoryRuntime.open(layout=(MemoryFrameSpec(ref, "session", {}),),
-                                 origins={ref: None}, memory={"session": memory})
+    runtime = _open_session_runtime(memory)
     publish = backend._Turn._publish
     def fail_close(turn, checkpoint):
         if isinstance(checkpoint, ConversationClosed):
@@ -411,9 +408,7 @@ def test_real_backend_cleanup_note_survives_node_error_unwrapping(monkeypatch):
 
 def _fifo_scenario():
     """Hold a streaming execution open while the next same-leaf turn queues."""
-    from agent_composer.memory import MemoryFrameSpec
     from agent_composer.memory.session import SessionMemory
-    from agent_composer.runtime.memory_runtime import MemoryRuntime
 
     memory = SessionMemory()
     paused, release, second_entered = threading.Event(), threading.Event(), threading.Event()
@@ -428,9 +423,7 @@ def _fifo_scenario():
         second_entered.set()
         return Output(7)
     first, second = _Consumer(first_body), _Consumer(second_body)
-    ref = first.memory_scope.frame_stack[0]
-    runtime = MemoryRuntime.open(layout=(MemoryFrameSpec(ref, "session", {}),),
-                                 origins={ref: None}, memory={"session": memory})
+    runtime = _open_session_runtime(memory)
     def emit(chunk):
         paused.set()
         assert release.wait(3)
@@ -444,7 +437,7 @@ def _fifo_scenario():
                 assert paused.wait(3)
                 b = executor.submit(evaluate, second, "b")
                 with memory._condition:
-                    assert memory._condition.wait_for(lambda: any(memory._queues.values()), timeout=3)
+                    assert memory._condition.wait_for(lambda: memory._queue, timeout=3)
                 assert not second_entered.is_set()
             finally:
                 release.set()

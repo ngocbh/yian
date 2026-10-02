@@ -353,3 +353,60 @@ def test_skills_leaf_imports_no_engine_or_front_end_layer() -> None:
     ):
         violations.extend(_forbidden_imports(PACKAGE_ROOT / "skills", forbidden))
     assert not violations, "skills must stay a leaf:\n" + "\n".join(violations)
+
+
+def _package_root_imports(root: Path) -> list[str]:
+    """Format imports below ``root`` of the ``agent_composer`` package facade itself."""
+    return [
+        f"{path.relative_to(SOURCE_ROOT)}:{line}: {statement} -> {target}"
+        for path in sorted(root.rglob("*.py"))
+        for line, target, statement in _import_targets(path)
+        if target == "agent_composer"
+    ]
+
+
+def test_memory_never_imports_engine_host_or_cli_layers() -> None:
+    """Backends sit below the engine; hosts build them, they never build hosts."""
+    violations = []
+    for forbidden in ("runtime", "compose", "compile", "run", "memory_host", "cli"):
+        violations.extend(
+            _forbidden_imports(PACKAGE_ROOT / "memory", f"agent_composer.{forbidden}")
+        )
+    violations.extend(_package_root_imports(PACKAGE_ROOT / "memory"))
+    assert not violations, (
+        "memory must not import runtime, compose, compile, run, memory_host, cli, "
+        "or the package root:\n" + "\n".join(violations)
+    )
+
+
+def test_runtime_never_imports_memory_host_or_cli() -> None:
+    """Runtime receives built memory; construction and flags stay with hosts."""
+    violations = []
+    for forbidden in ("agent_composer.memory_host", "agent_composer.cli"):
+        violations.extend(_forbidden_imports(PACKAGE_ROOT / "runtime", forbidden))
+    assert not violations, (
+        "runtime must not import memory_host or cli:\n" + "\n".join(violations)
+    )
+
+
+def test_package_root_scan_catches_facade_spellings() -> None:
+    """The facade check sees absolute and relative root imports, not submodules."""
+    for source in (
+        "import agent_composer\n",
+        "from agent_composer import run_flow\n",
+        "from .. import build_memories\n",
+    ):
+        targets = {
+            target
+            for _, target, _ in _parse_import_targets(
+                source, package=("agent_composer", "memory")
+            )
+        }
+        assert "agent_composer" in targets, source
+    targets = {
+        target
+        for _, target, _ in _parse_import_targets(
+            "from ..diagnostics import Failure\n", package=("agent_composer", "memory")
+        )
+    }
+    assert "agent_composer" not in targets

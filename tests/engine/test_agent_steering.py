@@ -55,13 +55,12 @@ def _flow(*, steerable=True, tools=(), memory=False, after="") -> str:
 id: steer
 name: steer
 llm_config: {{provider: anthropic, model: claude-test}}
-{"long_term_memory: session" if memory else ""}
 nodes:
   chat:
     kind: agent
     mode: tool_calling
     steerable: {str(steerable).lower()}
-    tools: [{", ".join(tools)}]
+{"    long_term_memory: session" + chr(10) if memory else ""}    tools: [{", ".join(tools)}]
     prompt: Help the user.
     output: str
 {after}output: ${{{"after" if after else "chat"}.output}}

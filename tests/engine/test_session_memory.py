@@ -15,22 +15,19 @@ from agent_composer.memory.conversation import (
 )
 from tests.engine._session_fakes import append_reply, harness, item, request, snapshot
 
-REF = c.MemoryFrameRef("root", ("root",), c.MemoryOwner.FLOW)
-
-
 def test_turn_publishes_history_without_a_checkpoint_sink():
     memory = SessionMemory()
     with memory.open_run() as session:
-        frame = session.open_frame(c.MemoryFrameSpec(REF, "session", {}))
+        frame = session
         with frame.open_turn(request(), check_stopped=lambda: None) as turn:
             assert turn.view.revision == 1
             ordinal = turn.request("model", {"prompt": "hi"}, items=(item("u", "hi"),))
-            assert snapshot(memory)["conversations"][0]["revision"] == 2
+            assert snapshot(memory)["conversation"]["revision"] == 2
             turn.observe(ordinal, "completed", items=(item("a", "hello"),))
             assert turn.view.effects[0].status == "completed"
         saved = snapshot(memory)
-        assert saved["conversations"][0]["revision"] == 4
-        assert [entry["item_id"] for entry in saved["conversations"][0]["items"]] == [
+        assert saved["conversation"]["revision"] == 4
+        assert [entry["item_id"] for entry in saved["conversation"]["items"]] == [
             "u",
             "a",
         ]
@@ -41,7 +38,7 @@ def test_turn_publishes_history_without_a_checkpoint_sink():
 def test_new_turn_preserves_incomplete_history(restore, closed):
     memory = SessionMemory()
     with memory.open_run() as session:
-        frame = session.open_frame(c.MemoryFrameSpec(REF, "session", {}))
+        frame = session
         turn = frame.open_turn(request("a"), check_stopped=lambda: None)
         turn.__enter__()
         ordinal = turn.request("model", {}, items=(item("a-in", "first"),))
@@ -60,7 +57,7 @@ def test_new_turn_preserves_incomplete_history(restore, closed):
         with memory.open_run(snapshot=prefix) as restored:
             assert restored.snapshot == prefix
     with memory.open_run(snapshot=prefix) as session:
-        frame = session.open_frame(c.MemoryFrameSpec(REF, "session", {}))
+        frame = session
         for name in ("b", "c"):
             with frame.open_turn(request(name), check_stopped=lambda: None) as later:
                 assert later.view.effects[0].status == "pending"
@@ -71,12 +68,12 @@ def test_new_turn_preserves_incomplete_history(restore, closed):
                 append_reply(later, name, name)
         assert session.snapshot == prefix
     final = snapshot(memory)
-    original = prefix["conversations"][0]
+    original = prefix["conversation"]
     assert (
-        final["conversations"][0]["applied"][: original["revision"]]
+        final["conversation"]["applied"][: original["revision"]]
         == original["applied"]
     )
-    assert [effect["status"] for effect in final["conversations"][0]["effects"]] == [
+    assert [effect["status"] for effect in final["conversation"]["effects"]] == [
         "pending",
         "completed",
         "completed",
@@ -87,37 +84,23 @@ def test_new_turn_preserves_incomplete_history(restore, closed):
         turn.observe(ordinal, "completed")
 
 
-def test_session_backend_implements_original_protocol():
+def test_session_backend_implements_the_protocol():
     memory = SessionMemory()
     assert isinstance(memory, c.Memory)
     with memory.open_run() as session:
         assert isinstance(session, c.MemorySession)
-        frame = session.open_frame(c.MemoryFrameSpec(REF, "custom", {}))
-        assert isinstance(frame, c.MemoryFrame)
-        assert isinstance(frame, c.TranscriptSource)
-        assert session.open_frame(c.MemoryFrameSpec(REF, "custom", {})) is frame
-
-
-def test_session_frame_rejects_unknown_config():
-    with SessionMemory().open_run() as session:
-        with pytest.raises(c.MemoryOperationError) as caught:
-            session.open_frame(c.MemoryFrameSpec(REF, "session", {"fork": True}))
-        assert (caught.value.stage, caught.value.code, caught.value.retryable) == (
-            "frame",
-            "session.invalid_config",
-            False,
-        )
+        assert isinstance(session, c.TranscriptSource)
 
 
 def test_snapshot_getter_is_detached():
     with SessionMemory().open_run() as session:
         first = session.snapshot
-        first["conversations"].append({"bad": True})
-        assert session.snapshot["conversations"] == []
+        first["conversation"] = {"bad": True}
+        assert session.snapshot["conversation"] is None
 
 
 def _live(h):
-    return next(iter(h.memory._views.values()))
+    return h.memory._view
 
 
 def _request(run_id="a", sequence=1, consumer=("root", "agent"), compatibility=None):
@@ -129,10 +112,7 @@ def _request(run_id="a", sequence=1, consumer=("root", "agent"), compatibility=N
 
 
 def _reserve(session, request=None):
-    frame = session.open_frame(c.MemoryFrameSpec(REF, "custom", {}))
-    return session._reserve(
-        frame, _request() if request is None else request, lambda: None
-    )
+    return session._reserve(_request() if request is None else request, lambda: None)
 
 
 def test_uncontended_lease_reservation_does_not_change_history():
@@ -142,16 +122,14 @@ def test_uncontended_lease_reservation_does_not_change_history():
         lease = _reserve(session)
         assert lease.active
         assert session.snapshot == pinned
-        assert memory._views == {}
+        assert memory._view is None
         session._release(lease)
 
 
 def test_first_turn_admission_uses_root_and_consumer():
-    with harness(policy="custom") as h:
+    with harness() as h:
         with h.frame.open_turn(request(), check_stopped=lambda: None) as turn:
-            assert turn.view.key == c.ConversationKey(REF, ("root", "agent"))
             assert turn.view.revision == 1
-            assert turn._stamp().policy_name == "custom"
             append_reply(turn, "one", "hello")
         assert _live(h).revision == 4
 
@@ -166,7 +144,7 @@ def test_same_agent_reuses_conversation_across_runs():
             assert turn.view.items == (item("one", "hello"),)
 
 
-def test_distinct_consumer_has_no_history():
+def test_distinct_consumer_sees_the_shared_history():
     with harness() as h:
         with h.frame.open_turn(request(), check_stopped=lambda: None) as turn:
             ordinal = turn.request("model", {})
@@ -179,7 +157,7 @@ def test_distinct_consumer_has_no_history():
             request("b", consumer=("root", "other")),
             check_stopped=lambda: None,
         ) as turn:
-            assert turn.view.items == ()
+            assert turn.view.items == (item("one", "hello"),)
 
 
 def test_open_session_snapshot_stays_pinned():
@@ -188,12 +166,12 @@ def test_open_session_snapshot_stays_pinned():
         with h.frame.open_turn(request(), check_stopped=lambda: None) as turn:
             append_reply(turn, "one", "hello")
         assert h.session.snapshot == pinned
-        assert snapshot(h.memory)["conversations"][0]["revision"] == 4
+        assert snapshot(h.memory)["conversation"]["revision"] == 4
 
 
 def test_admission_reads_live_view_not_open_snapshot():
     with harness() as first, harness(first.memory) as second:
-        assert second.session.snapshot["conversations"] == []
+        assert second.session.snapshot["conversation"] is None
         with first.frame.open_turn(request(), check_stopped=lambda: None) as turn:
             append_reply(turn, "one", "hello")
         with second.frame.open_turn(request("b"), check_stopped=lambda: None) as turn:
@@ -208,8 +186,8 @@ def test_pristine_backend_adopts_snapshot_namespace():
     restored = SessionMemory()
     with restored.open_run(snapshot=exported) as session:
         assert session.snapshot == exported
-        exported["conversations"].clear()
-        assert len(session.snapshot["conversations"]) == 1
+        exported["conversation"] = None
+        assert session.snapshot["conversation"] is not None
 
 
 def test_used_backend_rejects_foreign_snapshot():
@@ -246,11 +224,11 @@ def test_session_recall_contributes_transcript_without_notes():
 def test_session_learn_and_commit_accept_empty_batches():
     with harness() as h:
         before = snapshot(h.memory)
-        assert h.frame.learn(c.LearnContext("a", REF, ())) == []
+        assert h.frame.learn(c.LearnContext("a", "session", ())) == []
         h.session.commit("same", ())
         h.session.commit("same", ())
         with pytest.raises(c.MemoryOperationError):
-            h.session.commit("same", (c.MemoryMutation("m", REF, {}),))
+            h.session.commit("same", (c.MemoryMutation("m", {}),))
         with pytest.raises(TypeError):
             h.session.commit("same", [])
         assert snapshot(h.memory) == before
@@ -354,7 +332,7 @@ def _bounded_scenario(function):
 def _wait_queue(memory, count):
     with memory._condition:
         assert memory._condition.wait_for(
-            lambda: sum(len(queue) for queue in memory._queues.values()) == count,
+            lambda: len(memory._queue) == count,
             timeout=2,
         )
 
@@ -398,7 +376,7 @@ def test_third_ticket_cannot_overtake_second():
 
 
 @_bounded_scenario
-def test_distinct_key_can_enter_while_first_waits():
+def test_second_consumer_waits_for_the_first_turn():
     with harness() as h:
         entered = Event()
         with h.frame.open_turn(request(), check_stopped=lambda: None):
@@ -411,9 +389,10 @@ def test_distinct_key_can_enter_while_first_waits():
                     entered.set()
 
             worker = _Worker(other)
-            assert entered.wait(2)
-            worker.join()
-            assert worker.errors == []
+            assert not entered.wait(0.2)
+        assert entered.wait(2)
+        worker.join()
+        assert worker.errors == []
 
 
 @_bounded_scenario
@@ -480,7 +459,7 @@ def test_reset_rejects_queued_backend_without_mutation():
             assert worker.errors[0].code == "session.stale"
 
 
-def test_idle_reset_clears_all_keys():
+def test_idle_reset_clears_the_conversation():
     with harness() as h:
         for name in ("agent", "other"):
             with h.frame.open_turn(
@@ -492,20 +471,19 @@ def test_idle_reset_clears_all_keys():
         assert snapshot(h.memory) == {
             **before,
             "generation": before["generation"] + 1,
-            "conversations": [],
+            "conversation": None,
         }
 
 
-def test_reset_invalidates_old_session_frame_and_turn():
+def test_reset_invalidates_old_session_and_turn():
     with harness() as h:
         with h.frame.open_turn(request(), check_stopped=lambda: None) as turn:
             pass
         h.memory.reset()
         for call in (
             lambda: h.session.snapshot,
-            lambda: h.session.open_frame(c.MemoryFrameSpec(REF, "session", {})),
             lambda: h.frame.recall(),
-            lambda: h.frame.learn(c.LearnContext("a", REF, ())),
+            lambda: h.frame.learn(c.LearnContext("a", "session", ())),
             lambda: h.session.commit("id", ()),
             lambda: turn.request("model", {}),
             lambda: turn.observe(1, "completed"),
@@ -516,7 +494,7 @@ def test_reset_invalidates_old_session_frame_and_turn():
             with pytest.raises(c.MemoryOperationError) as caught:
                 call()
             assert caught.value.code == "session.stale"
-        assert snapshot(h.memory)["conversations"] == []
+        assert snapshot(h.memory)["conversation"] is None
 
 
 @pytest.mark.parametrize("hostile", [None, "str", "add_note"])
@@ -579,7 +557,7 @@ def test_stop_after_publication_preserves_requested_effect():
     with harness() as h:
 
         def check():
-            if h.memory._views and _live(h).effects:
+            if h.memory._view is not None and _live(h).effects:
                 raise failure
 
         with pytest.raises(RuntimeError) as caught:
@@ -633,18 +611,14 @@ def test_active_invocation_cannot_be_shadowed_by_another_key():
                 ):
                     pass
             assert caught.value.code == "session.conflict"
-            assert len(h.memory._active) == 1
+            assert h.memory._active is not None
 
 
-@pytest.mark.parametrize(
-    "field", ["policy_name", "key", "invocation", "namespace", "generation"]
-)
+@pytest.mark.parametrize("field", ["invocation", "namespace", "generation"])
 def test_publication_requires_owned_stamp(field):
     with harness() as h:
         with h.frame.open_turn(request(), check_stopped=lambda: None) as turn:
             value = {
-                "policy_name": "other",
-                "key": c.ConversationKey(REF, ("root", "other")),
                 "invocation": request("other").invocation,
                 "namespace": "foreign",
                 "generation": 1,
@@ -673,13 +647,13 @@ def test_session_close_retains_active_owner_until_finalization():
                 one.memory.reset()
             assert busy.value.code == "session.busy"
             turn.observe(ordinal, "completed", items=(item("actual", "retained"),))
-            with two.frame.open_turn(
-                request("b", consumer=("root", "other")), check_stopped=lambda: None
-            ):
-                pass
         assert _live(one).effects[0].status == "completed"
         assert _live(one).items == (item("actual", "retained"),)
         assert _live(one).closed_invocations[-1].status == "interrupted"
+        with two.frame.open_turn(
+            request("b", consumer=("root", "other")), check_stopped=lambda: None
+        ):
+            pass
         assert not one.memory._active
 
 
@@ -698,7 +672,7 @@ def test_session_close_removes_own_waiters_without_poisoning_other_owner():
             worker.join()
             assert len(worker.errors) == 1
             assert worker.errors[0].code == "session.stale"
-            assert not one.memory._queues
+            assert not one.memory._queue
             assert one.memory._active
 
 
@@ -756,11 +730,11 @@ def _nested(depth):
     return value
 
 
-def test_snapshot_envelope_depth_is_rejected_before_publication():
+def test_snapshot_envelope_adds_no_nesting_beyond_the_view():
     with harness() as h:
         with h.frame.open_turn(request(), check_stopped=lambda: None) as turn:
             before = turn.view
-            candidate = None
+            rejected = None
             for depth in range(115, 128):
                 checkpoint = c.ConversationEffectRequested(
                     turn._stamp(), "model", _nested(depth), ()
@@ -768,22 +742,21 @@ def test_snapshot_envelope_depth_is_rejected_before_publication():
                 try:
                     after = advance_conversation(before, checkpoint)
                 except ValueError:
-                    continue
-                exported = {
-                    **h.session.snapshot,
-                    "conversations": [conversation_view_to_json(after)],
-                }
-                try:
-                    c._freeze_json_object(exported, "snapshot")
-                except ValueError:
-                    candidate = checkpoint
+                    rejected = checkpoint
                     break
-            assert (
-                candidate is not None
-            ), "expected a view-valid but snapshot-too-deep boundary"
+                # The view wire reserves its admission wrapper, which is as deep
+                # as the snapshot envelope, so every valid view fits a snapshot.
+                c._freeze_json_object(
+                    {
+                        **h.session.snapshot,
+                        "conversation": conversation_view_to_json(after),
+                    },
+                    "snapshot",
+                )
+            assert rejected is not None, "expected a too-deep view boundary"
             exported_before = snapshot(h.memory)
             with pytest.raises(ValueError, match="nesting"):
-                turn.request(candidate.kind, candidate.payload)
+                turn.request(rejected.kind, rejected.payload)
             assert snapshot(h.memory) == exported_before
             assert turn.view == before
             assert turn._lease.active
@@ -824,7 +797,7 @@ def test_snapshot_rejects_invalid_container_or_nonfinite_json(case):
     elif case == "version_bool":
         exported["version"] = True
     elif case == "version_unknown":
-        exported["version"] = 3
+        exported["version"] = 2
     elif case == "generation_bool":
         exported["generation"] = False
     elif case == "generation_negative":
@@ -838,27 +811,27 @@ def test_snapshot_rejects_invalid_container_or_nonfinite_json(case):
     elif case == "missing":
         del exported["version"]
     elif case == "tuple":
-        exported["conversations"] = tuple(exported["conversations"])
+        exported["conversation"] = tuple(exported["conversation"].items())
     elif case == "nan":
         exported["version"] = float("nan")
     elif case == "infinity":
         exported["version"] = float("inf")
     elif case == "cycle":
-        exported["conversations"].append(exported)
+        exported["conversation"]["items"].append(exported)
     elif case == "deep":
-        exported["conversations"] = [_nested(130)]
+        exported["conversation"] = _nested(130)
     elif case == "duplicate":
-        exported["conversations"] *= 2
+        exported["conversation"] = [exported["conversation"]] * 2
     elif case == "foreign_namespace":
-        exported["conversations"][0]["namespace"] = "foreign"
+        exported["conversation"]["namespace"] = "foreign"
     elif case == "foreign_generation":
-        exported["conversations"][0]["generation"] += 1
+        exported["conversation"]["generation"] += 1
     elif case == "bad_digest":
-        exported["conversations"][0]["applied"][0]["after_digest"] = "0" * 64
+        exported["conversation"]["applied"][0]["after_digest"] = "0" * 64
     elif case == "counter_bool":
-        exported["conversations"][0]["revision"] = True
+        exported["conversation"]["revision"] = True
     elif case == "bad_container":
-        exported["conversations"] = {}
+        exported["conversation"] = []
     memory = SessionMemory()
     with pytest.raises(c.MemoryOperationError) as caught:
         memory.open_run(snapshot=exported)
@@ -868,31 +841,14 @@ def test_snapshot_rejects_invalid_container_or_nonfinite_json(case):
         False,
     )
     assert not memory._used
-    assert not memory._views
-
-
-def test_snapshot_order_round_trips_without_reordering():
-    with harness() as h:
-        for name in ("z", "a"):
-            with h.frame.open_turn(
-                request(name, consumer=("root", name)),
-                check_stopped=lambda: None,
-            ):
-                pass
-        exported = snapshot(h.memory)
-    with SessionMemory().open_run(snapshot=exported) as restored:
-        assert restored.snapshot == exported
-        assert [
-            value["key"]["consumer_static_path"]
-            for value in restored.snapshot["conversations"]
-        ] == [["root", "z"], ["root", "a"]]
+    assert memory._view is None
 
 
 def test_stop_checker_cannot_close_session_then_grant_effect_permission():
     with harness() as h:
 
         def check():
-            if h.memory._views and _live(h).effects:
+            if h.memory._view is not None and _live(h).effects:
                 h.session.close()
 
         with pytest.raises(c.MemoryOperationError) as caught:
@@ -926,33 +882,15 @@ def test_observed_stop_cannot_be_caught_to_reenable_new_effects():
         assert not _live(h).effects
 
 
-@pytest.mark.parametrize("owner", [c.MemoryOwner.FLOW, c.MemoryOwner.AGENT])
-def test_frame_ownership_reuses_authored_leaf_and_keeps_qualified_calls_independent(
-    owner,
-):
-    path = ("root",) if owner is c.MemoryOwner.FLOW else ("root", "call_a", "agent")
-    ref = c.MemoryFrameRef("root", path, owner)
-    with harness(ref=ref) as h:
-        for run in ("a", "b"):
+def test_two_call_sites_share_the_instance_conversation():
+    with harness() as h:
+        for run, site in (("a", "call_a"), ("b", "call_b"), ("c", "call_a")):
             with h.frame.open_turn(
-                request(run, consumer=("root", "call_a", "agent")),
+                request(run, consumer=("root", site, "agent")),
                 check_stopped=lambda: None,
             ) as turn:
-                assert len(turn.view.items) == (0 if run == "a" else 1)
+                assert len(turn.view.items) == "abc".index(run)
                 append_reply(turn, run, run)
-        if owner is c.MemoryOwner.FLOW:
-            with h.frame.open_turn(
-                request("c", consumer=("root", "call_b", "agent")),
-                check_stopped=lambda: None,
-            ) as turn:
-                assert not turn.view.items
-        else:
-            with pytest.raises(ValueError):
-                with h.frame.open_turn(
-                    request("c", consumer=("root", "call_b", "agent")),
-                    check_stopped=lambda: None,
-                ):
-                    pass
 
 
 def test_used_backend_rejects_newer_same_namespace_snapshot():
@@ -968,19 +906,6 @@ def test_used_backend_rejects_newer_same_namespace_snapshot():
         restored.open_run(snapshot=newer)
     assert caught.value.code == "session.invalid_snapshot"
     assert snapshot(restored) == initial
-
-
-def test_opening_frame_does_not_change_pinned_or_live_snapshot():
-    memory = SessionMemory()
-    with memory.open_run() as session:
-        before = session.snapshot
-        session.open_frame(c.MemoryFrameSpec(REF, "session", {}))
-        assert session.snapshot == before
-        assert snapshot(memory) == before
-        with pytest.raises(c.MemoryOperationError) as caught:
-            session.open_frame(c.MemoryFrameSpec(REF, "different", {}))
-        assert caught.value.code == "session.invalid_config"
-        assert snapshot(memory) == before
 
 
 def test_invalid_request_wire_publishes_nothing_and_keeps_lease_usable():
@@ -1003,8 +928,8 @@ def test_session_close_at_reserved_admission_boundary_is_typed_stale():
         leases = []
         reserve = h.session._reserve
 
-        def pause_after_reservation(frame, request, check_stopped):
-            lease = reserve(frame, request, check_stopped)
+        def pause_after_reservation(request, check_stopped):
+            lease = reserve(request, check_stopped)
             leases.append(lease)
             reserved.set()
             assert continue_admission.wait(2)
@@ -1035,9 +960,9 @@ def test_session_close_at_reserved_admission_boundary_is_typed_stale():
             "session.stale",
             False,
         )
-        assert not h.memory._views
+        assert h.memory._view is None
         assert not h.memory._active
-        assert not h.memory._queues
+        assert not h.memory._queue
 
 
 @_bounded_scenario
@@ -1073,14 +998,11 @@ def test_session_close_never_overlaps_an_inflight_effect_with_the_next_turn():
             _wait_queue(owner.memory, 1)
             owner.session.close()
             assert not entered_next.is_set()
-            assert len(owner.memory._active) == 1
+            assert owner.memory._active is not None
             with pytest.raises(c.MemoryOperationError) as busy:
                 owner.memory.reset()
             assert busy.value.code == "session.busy"
-            with next_run.frame.open_turn(
-                request("other", consumer=("root", "other")), check_stopped=lambda: None
-            ):
-                assert not entered_next.is_set()
+            assert not entered_next.is_set()
         finally:
             finish_effect.set()
             active_worker.join()
@@ -1145,7 +1067,7 @@ def test_old_opening_snapshot_reads_latest_history_without_rewind(nonempty):
             append_reply(turn, "second", "second")
         latest = _live(source)
         with source.memory.open_run(snapshot=old) as opened:
-            frame = opened.open_frame(c.MemoryFrameSpec(REF, "session", {}))
+            frame = opened
             assert opened.snapshot == old
             with frame.open_turn(request("third"), check_stopped=lambda: None) as turn:
                 assert turn.view.items == latest.items
@@ -1244,3 +1166,27 @@ def test_turn_exposes_only_message_effects_without_native_tracking():
             with pytest.raises(ValueError, match="unsupported"):
                 turn.request("native_session", {})
             assert snapshot(h.memory) == before
+
+
+def test_every_consumer_of_an_instance_shares_one_conversation():
+    with harness() as h:
+        for run, consumer in (("a", ("root", "left")), ("b", ("root", "right"))):
+            with h.frame.open_turn(
+                request(run, consumer=consumer), check_stopped=lambda: None
+            ) as turn:
+                assert len(turn.view.items) == (0 if run == "a" else 1)
+                append_reply(turn, run, run)
+        exported = snapshot(h.memory)
+    assert set(exported) == {
+        "version",
+        "namespace",
+        "generation",
+        "conversation",
+        "notes",
+    }
+    assert exported["version"] == 3
+    assert "key" not in exported["conversation"]
+    assert [entry["item_id"] for entry in exported["conversation"]["items"]] == [
+        "a",
+        "b",
+    ]

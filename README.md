@@ -175,60 +175,66 @@ at the next safe point, including mid-stream, and the node succeeds with its tex
 so far. See [Steering](docs/api.md#steering).
 
 The built-in [`EpisodicMemory`](docs/learning.md#episodic-memory) keeps bounded,
-model-free execution history for later runs. A flow declares
-`long_term_memory: episodic`; its host injects the process-local backend and
-commits retained episodes through explicit backward:
+model-free execution history for later runs. A flow declares a named memory,
+`long_term_memory: {notes: episodic}`; its host builds the declared backends
+with `build_memories` (in RAM unless given storage) and commits retained
+episodes through explicit backward:
 
 ```python
-from agent_composer.memory.episodic import EpisodicMemory
+from agent_composer import build_memories
 
-history = EpisodicMemory()
-result = run_flow(flow, inputs, memory={"episodic": history}, learnable=True)
-result.backward()
+with build_memories(flow) as memory:
+    result = run_flow(flow, inputs, memory=memory, learnable=True)
+    result.backward()
 ```
 
 [`ProfileMemory`](docs/learning.md#profile-memory) keeps one markdown document,
 such as a person's profile, in a versioned file. Every AGENT under the declaring
 flow sees the whole document; backward rewrites it with one model call and a
-compare-and-set write:
+compare-and-set write. Declare `long_term_memory: {about: profile}` and supply
+the backend under its key:
 
 ```python
+from agent_composer import build_memories
 from agent_composer.memory.profile import ProfileMemory
 from agent_composer.memory.storage import FileMarkdownStore
 
 profile = ProfileMemory(FileMarkdownStore("people/ada.md"))
-result = run_flow(flow, inputs, memory={"profile": profile}, learnable=True)
-result.backward("Ada prefers short replies.")
+with build_memories(flow, supplied={"about": profile}) as memory:
+    result = run_flow(flow, inputs, memory=memory, learnable=True)
+    result.backward("Ada prefers short replies.")
 ```
 
 [`SessionMemory`](docs/api.md#sessionmemory-foundation) supplies a structured session
-transcript through the same memory context as notes from other policies. It keeps
+transcript through the same memory context as notes from other memories. It keeps
 conversation history across runs in the same process. Declare
-`long_term_memory: session` and reuse the backend:
+`long_term_memory: {chat: session}` on the AGENT and reuse one registry:
 
 ```python
-from agent_composer.memory.session import SessionMemory
+from agent_composer import build_memories
 
-session = SessionMemory()
-first = run_flow(flow, first_inputs, memory={"session": session})
-second = run_flow(flow, next_inputs, memory={"session": session})
-session.reset()  # Starts fresh; fails while any turn is active or queued.
+with build_memories(flow) as memory:
+    first = run_flow(flow, first_inputs, memory=memory)
+    second = run_flow(flow, next_inputs, memory=memory)
+    memory["chat"].reset()  # Starts fresh; fails while any turn is active or queued.
 ```
 
-History advances automatically, without `learnable=True` or backward. Repeated
-calls to the same authored agent queue in admission order; other authored agents
-keep separate conversations. Explicit backward learning reuses API self-feedback
+History advances automatically, without `learnable=True` or backward. Every call
+site of the declaring AGENT shares its one conversation, and calls queue in
+admission order. Two AGENTs cannot share a session key, so each keeps a separate
+conversation. Explicit backward learning reuses API self-feedback
 as committed notes for future runs, without another model call. API history uses a
 soft 32,000-character context budget and preserves the latest four whole turns;
 older context can be summarized without deleting raw history. Configure these
 defaults on `SessionMemory(history_budget_chars=32_000, recent_turns=4)`.
 Run logs do not reconstruct history. The episodic, reflective, and session
-backends optionally retain their state across restarts with
-`storage="./memory.sqlite"`:
+backends optionally retain their state across restarts in a SQLite file.
+`build_memories` places one memory with `storage={key: path}`, or every memory
+under `root=` (the flow `id:` must be usable as one directory name):
 
 ```python
-with SessionMemory(storage="./session.sqlite") as session:
-    result = run_flow(flow, inputs, memory={"session": session})
+with build_memories(flow, storage={"chat": "./session.sqlite"}) as memory:
+    result = run_flow(flow, inputs, memory=memory)
 ```
 
 An AGENT can also use Claude Code and Codex skills. `skills: [release-notes]` (or
@@ -244,18 +250,21 @@ Idle run handles do not block closing; active work or queued turns do. Omit
 `storage` to keep memory process-local. See [durable memory](docs/api.md#optional-durable-memory)
 for ownership and recovery.
 
-`composer run` automatically activates declared `episodic`, `reflective`, and `session`
-policies. They stay process-local unless a repeatable CLI option selects storage:
+`composer run` builds every declared built-in memory (`episodic`, `reflective`,
+`session`, `profile`). They stay in RAM unless a CLI option places them:
 
 ```bash
-composer run flow.yaml --memory-storage session=./session.sqlite
-composer run flow.yaml --resume ./run.jsonl --memory-storage session=./session.sqlite
+composer run flow.yaml --memory-root ./mem
+composer run flow.yaml --resume ./run.jsonl --memory-root ./mem
 ```
 
-The flow must declare the selected policy. Use the same store on resume; a run
-log is not a memory backup. The CLI does not run backward learning. Custom
-policies still require Python host injection. See
-[CLI memory](docs/cli.md#memory-policies-and-storage) for lifetime and examples.
+`--memory-root DIR` keeps every memory under `DIR/<flow id>/` (the flow `id:`
+must be usable as one directory name), and repeatable `--memory-storage KEY=PATH`
+places one declared memory.
+Use the same storage on resume; a run log is not a memory backup. The CLI does
+not run backward learning. A flow that declares a custom memory type runs from
+Python with `build_memories`; `composer run` exits 1 with a setup error for it.
+See [CLI memory](docs/cli.md#memory-and-storage) for lifetime and examples.
 
 ## Documentation
 

@@ -50,6 +50,8 @@ class BuildContext:
     build position; ``variable_declaration_reader`` does the same for local declarations.
     ``resolve_origin`` presents an origin registered before file finalization.
     Source-free and direct programmatic builds leave these optional seams unset.
+    ``owner`` is the lexical flow path of the flow being assembled; AGENT
+    descriptors stamp it into memory declaration sites.
     """
 
     registry: TypeRegistry  # flow's read_typedefs map
@@ -59,6 +61,7 @@ class BuildContext:
     diagnostics: LoadDiagnostics = field(default_factory=LoadDiagnostics)
     output_contract_reader: Callable[[str, Any], ValueContract | None] | None = None
     variable_declaration_reader: Callable[[str, Any], list[Parameter] | None] | None = None
+    owner: tuple[str, ...] = ("root",)  # lexical flow path that stamps DeclSite.owner
 
 
 @dataclass(frozen=True)

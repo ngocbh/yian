@@ -110,7 +110,7 @@ class ExecutionPosition:
 
 @dataclass(frozen=True, slots=True)
 class ExecutionScope:
-    """An authored execution location independent of memory policy declarations.
+    """An authored execution location independent of memory declarations.
 
     Attributes:
         static_path (`tuple[str, ...]`): Root-relative authored node or flow path.

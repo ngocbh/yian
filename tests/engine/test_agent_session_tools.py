@@ -80,7 +80,7 @@ def test_two_runs_restore_tool_exchanges_without_executing_old_calls(monkeypatch
 
 
 def test_recalled_transcript_and_current_notes_share_one_context(monkeypatch):
-    """A custom frame can contribute a transcript without exposing open_turn."""
+    """A custom session can contribute a transcript without exposing open_turn."""
     from tests.engine._memory_fakes import _Memory
 
     session = SessionMemory()
@@ -90,19 +90,14 @@ def test_recalled_transcript_and_current_notes_share_one_context(monkeypatch):
         def open_run(self, *, snapshot=None):
             opened = session.open_run(snapshot=snapshot)
 
-            def open_frame(spec):
-                frame = opened.open_frame(spec)
+            def recall(context=None):
+                recall_count.append(context)
+                return opened.recall(context)
 
-                def recall(context):
-                    recall_count.append(context)
-                    return frame.recall(context)
-
-                # Only the recall result exposes a transcript source. Runtime
-                # cannot discover it by probing methods on this frame.
-                return SimpleNamespace(recall=recall, learn=frame.learn)
-
+            # Only the recall result exposes a transcript source. Runtime
+            # cannot discover it by probing methods on this session.
             return SimpleNamespace(
-                snapshot=opened.snapshot, open_frame=open_frame,
+                snapshot=opened.snapshot, recall=recall, learn=opened.learn,
                 commit=opened.commit, close=opened.close,
             )
 
@@ -115,7 +110,7 @@ def test_recalled_transcript_and_current_notes_share_one_context(monkeypatch):
     monkeypatch.setitem(tools.TOOL_REGISTRY, "lookup", tool)
     monkeypatch.setattr(llm_clients, "model_from_config", lambda _: chat)
     flow = load_flow(_TOOL_FLOW.replace(
-        "    kind: agent", "    kind: agent\n    long_term_memory: notes"
+        "name: plain_session\n", "name: plain_session\nlong_term_memory: notes\n"
     ))
     memory = {"session": DelegatingMemory(), "notes": notes}
     assert run_flow(flow, {"question": "first"}, memory=memory).output == "first answer"
@@ -344,9 +339,8 @@ def test_session_tool_calls_keep_public_argument_validation(monkeypatch):
 
 
 def test_restored_unclosed_invocation_reports_unknown_completion_without_changing_history():
-    from agent_composer.memory import MemoryFrameSpec
     from agent_composer.nodes.agent.memory import history_messages, invoke_model, invoke_tool_effect
-    from tests.engine._session_fakes import REF, harness, request, snapshot
+    from tests.engine._session_fakes import harness, request, snapshot
     memory, actions = SessionMemory(), []
     with harness(memory) as opened:
         with opened.frame.open_turn(request(run_id="older"), check_stopped=lambda: None) as turn:
@@ -356,10 +350,10 @@ def test_restored_unclosed_invocation_reports_unknown_completion_without_changin
                                name="lookup", arguments={"value": 1}, model_exchange_id="older-model",
                                call_index=0, tool_call_id="reused-provider-id", check_stopped=lambda: None)
             saved = snapshot(memory)
-    assert saved["conversations"][0]["closed_invocations"] == []
+    assert saved["conversation"]["closed_invocations"] == []
     restored = SessionMemory()
     with restored.open_run(snapshot=saved) as session:
-        frame = session.open_frame(MemoryFrameSpec(REF, "session", {}))
+        frame = session
         with frame.open_turn(request(run_id="current"), check_stopped=lambda: None) as turn:
             before = turn.view
             context = history_messages(turn)

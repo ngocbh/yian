@@ -18,7 +18,6 @@ from agent_composer.run import resume_flow, run_flow
 
 _FLOW = """id: plain-session
 name: plain_session
-long_term_memory: session
 llm_config: {provider: openai, model: test-model}
 input:
   question: str
@@ -26,6 +25,7 @@ nodes:
   agent:
     kind: agent
     mode: plain
+    long_term_memory: session
     prompt: ${question}
     input:
       question: ${input.question}
@@ -52,7 +52,7 @@ class _Model:
 def _view(memory):
     from agent_composer.memory.conversation import conversation_view_from_json
     with memory.open_run() as opened:
-        return conversation_view_from_json(opened.snapshot["conversations"][0])
+        return conversation_view_from_json(opened.snapshot["conversation"])
 
 
 def test_two_fresh_plain_runs_retain_actual_history_without_learning(monkeypatch):
@@ -284,7 +284,7 @@ def test_compatible_model_and_prompt_changes_retain_history_with_current_system(
 def test_admission_follows_render_and_recall_and_only_current_recall_is_reused(monkeypatch):
     from agent_composer.memory import MemoryContext, MemorySection
     from agent_composer.nodes.agent import AgentNode
-    from tests.engine._session_fakes import REF, harness, request
+    from tests.engine._session_fakes import harness, request
     memory = SessionMemory()
     model = _Model([AIMessage(content="one"), AIMessage(content="two")])
     events = []
@@ -295,7 +295,7 @@ def test_admission_follows_render_and_recall_and_only_current_recall_is_reused(m
             def open_context(system, prompt, compatibility):
                 assert prompt == f"question {index}"
                 events.append("recall")
-                sections = (MemorySection(REF, note),)
+                sections = (MemorySection("session", note),)
                 events.append("admit")
                 turn = stack.enter_context(opened.frame.open_turn(
                     request(run_id=str(index), compatibility=compatibility), check_stopped=lambda: None,

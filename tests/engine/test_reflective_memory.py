@@ -16,40 +16,24 @@ from agent_composer.memory.contracts import (
     Memory,
     MemoryEpisode,
     MemoryEpisodeStatus,
-    MemoryFrameRef,
-    MemoryFrameSpec,
     MemoryMutation,
-    MemoryOccurrenceRef,
     MemoryOperationError,
-    MemoryOwner,
+    MemorySection,
     RecallContext,
 )
 from agent_composer.memory.reflective import ReflectiveMemory
 import agent_composer.memory.reflective as reflective
 
 
-def _ref(name: str = "agent") -> MemoryFrameRef:
-    return MemoryFrameRef("root", ("root", name), MemoryOwner.AGENT)
-
-
-def _spec(
-    name: str = "agent",
-    config: dict[str, object] | None = None,
-) -> MemoryFrameSpec:
-    return MemoryFrameSpec(_ref(name), "reflective", config or {})
-
-
 def _episode(
-    ref: MemoryFrameRef | None = None,
     *,
     run_id: str = "run-1",
     text: str = "hello",
 ) -> MemoryEpisode:
-    frame_ref = ref or _ref()
     return MemoryEpisode(
         run_id=run_id,
-        occurrence=MemoryOccurrenceRef(frame_ref),
-        owner_static_path=frame_ref.static_path,
+        occurrence_path=(),
+        owner_static_path=("agent",),
         status=MemoryEpisodeStatus.SUCCEEDED,
         inputs={"text": text},
         output={"answer": text.upper()},
@@ -57,29 +41,27 @@ def _episode(
 
 
 def _context(
-    ref: MemoryFrameRef | None = None,
     *,
     run_id: str = "run-1",
     text: str = "hello",
+    memory: str = "reflective",
 ) -> LearnContext:
-    frame_ref = ref or _ref()
     return LearnContext(
         run_id,
-        frame_ref,
-        (_episode(frame_ref, run_id=run_id, text=text),),
+        memory,
+        (_episode(run_id=run_id, text=text),),
     )
 
 
 def test_reflective_episode_material_retains_the_physical_execution_sequence() -> None:
-    episode = MemoryEpisode("run-1", MemoryOccurrenceRef(_ref()), _ref().static_path,
+    episode = MemoryEpisode("run-1", (), ("agent",),
                             MemoryEpisodeStatus.SUCCEEDED, {"text": "hello"}, "HELLO", execution_seq=17)
-    material = json.loads(reflective._bounded_episode_material(LearnContext("run-1", _ref(), (episode,))))
+    material = json.loads(reflective._bounded_episode_material(LearnContext("run-1", "reflective", (episode,))))
     assert material["episodes"][0]["execution_seq"] == 17
-    assert material["episodes"][0]["owner_static_path"] == list(_ref().static_path)
+    assert material["episodes"][0]["owner_static_path"] == ["agent"]
 
 
 def _mutation(
-    ref: MemoryFrameRef,
     mutation_id: str,
     action: str,
     lesson_id: str,
@@ -88,11 +70,11 @@ def _mutation(
     payload: dict[str, object] = {
         "action": action,
         "lesson_id": lesson_id,
-        "source": reflective._source_json("run-1", ref),
+        "source": reflective._source_json("run-1"),
     }
     if text is not None:
         payload["text"] = text
-    return MemoryMutation(mutation_id, ref, payload)
+    return MemoryMutation(mutation_id, payload)
 
 
 class _StructuredModel:
@@ -139,16 +121,15 @@ def _learn_actions(
     memory: ReflectiveMemory,
     actions: list[dict[str, object]],
     *,
-    spec: MemoryFrameSpec | None = None,
     context: LearnContext | None = None,
 ) -> list[MemoryMutation]:
     _install_model(monkeypatch, {"actions": actions})
     with memory.open_run() as session:
-        frame = session.open_frame(spec or _spec())
+        frame = session
         return frame.learn(context or _context())
 
 
-def test_constructor_and_frame_configuration_are_exact() -> None:
+def test_constructor_and_protocol_are_exact() -> None:
     with pytest.raises(TypeError, match="max_items"):
         ReflectiveMemory(max_items=True)  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="recall_limit"):
@@ -169,19 +150,7 @@ def test_constructor_and_frame_configuration_are_exact() -> None:
 
     memory = ReflectiveMemory(max_items=7, recall_limit=3)
     with memory.open_run() as session:
-        frame = session.open_frame(_spec())
-        assert session.open_frame(_spec()) is frame
-        with pytest.raises(MemoryOperationError, match="different"):
-            session.open_frame(_spec(config={"max_items": 7}))
-        with pytest.raises(MemoryOperationError, match="policy") as exc:
-            session.open_frame(MemoryFrameSpec(_ref(), "other", {}))
-        assert exc.value.retryable is False
-        with pytest.raises(MemoryOperationError) as unknown_error:
-            session.open_frame(_spec(config={"unknown": 1}))
-        assert unknown_error.value.code == "reflective.invalid_frame_config"
-        with pytest.raises(MemoryOperationError) as value_error:
-            session.open_frame(_spec(config={"max_items": True}))
-        assert value_error.value.code == "reflective.invalid_frame_config"
+        assert session.snapshot["config"] == {"max_items": 7, "recall_limit": 3}
 
 
 def test_snapshot_contains_only_public_pinned_model_configuration() -> None:
@@ -271,7 +240,7 @@ def test_empty_ambient_model_is_rejected_and_open_session_config_is_pinned(
     monkeypatch.setenv("AGENT_COMPOSER_DEFAULT_PROVIDER", "ollama")
     memory = ReflectiveMemory()
     session = memory.open_run()
-    frame = session.open_frame(_spec())
+    frame = session
     pinned = session.snapshot["llm_config"]
     monkeypatch.setattr(reflective, "resolve_model_config", lambda config: pytest.fail("defaults were reread"))
     _, configs = _install_model(
@@ -286,7 +255,6 @@ def test_empty_ambient_model_is_rejected_and_open_session_config_is_pinned(
 def test_snapshot_is_defensive_and_foreign_restore_is_conservative() -> None:
     memory = ReflectiveMemory({"provider": "ollama", "model": "qwen"})
     with memory.open_run() as session:
-        session.open_frame(_spec(config={"max_items": 4}))
         snapshot = session.snapshot
         snapshot["namespace"] = "changed"
         recorded = session.snapshot
@@ -304,35 +272,50 @@ def test_snapshot_is_defensive_and_foreign_restore_is_conservative() -> None:
         reset.open_run(snapshot=recorded)
 
 
-def test_pristine_restore_keeps_recorded_effective_frame_defaults() -> None:
+def test_pristine_restore_keeps_recorded_limits() -> None:
     original = ReflectiveMemory(
         {"provider": "ollama", "model": "qwen"},
         max_items=4,
         recall_limit=2,
     )
     with original.open_run() as session:
-        session.open_frame(_spec())
         snapshot = session.snapshot
 
-    restored = ReflectiveMemory(max_items=99, recall_limit=88)
+    restored = ReflectiveMemory()
     with restored.open_run(snapshot=snapshot) as session:
-        frame = session.open_frame(_spec())
+        frame = session
         assert frame.recall() == ""
         assert session.snapshot == snapshot
+
+
+def test_unset_limits_adopt_recorded_ones_and_explicit_ones_must_match() -> None:
+    config = {"provider": "ollama", "model": "qwen"}
+    with ReflectiveMemory(config).open_run() as session:
+        assert session.snapshot["config"] == {"max_items": 100, "recall_limit": 20}
+    with ReflectiveMemory(config, max_items=4, recall_limit=2).open_run() as session:
+        recorded = session.snapshot
+    with ReflectiveMemory().open_run(snapshot=recorded) as session:
+        assert session.snapshot == recorded
+    with ReflectiveMemory(max_items=4).open_run(snapshot=recorded) as session:
+        assert session.snapshot == recorded
+    for kwargs in ({"max_items": 5}, {"recall_limit": 3}):
+        with pytest.raises(MemoryOperationError) as exc:
+            ReflectiveMemory(**kwargs).open_run(snapshot=recorded)
+        assert exc.value.code == "reflective.config_conflict"
+        assert exc.value.retryable is False
 
 
 def test_same_object_restore_accepts_recorded_snapshot() -> None:
     memory = ReflectiveMemory({"provider": "ollama", "model": "qwen"})
     with memory.open_run() as session:
-        session.open_frame(_spec())
         session.commit(
             "seed",
-            (_mutation(_ref(), "seed", "add", "one", "first"),),
+            (_mutation("seed", "add", "one", "first"),),
         )
     with memory.open_run() as session:
         snapshot = session.snapshot
     with memory.open_run(snapshot=snapshot) as restored:
-        assert restored.open_frame(_spec()).recall() == "[one] first"
+        assert restored.recall() == "[one] first"
         assert restored.snapshot == snapshot
 
 
@@ -343,10 +326,9 @@ def test_populated_memory_rejects_foreign_snapshot() -> None:
 
     populated = ReflectiveMemory({"provider": "ollama", "model": "qwen"})
     with populated.open_run() as session:
-        session.open_frame(_spec())
         session.commit(
             "populate",
-            (_mutation(_ref(), "populate", "add", "one", "first"),),
+            (_mutation("populate", "add", "one", "first"),),
         )
     with pytest.raises(MemoryOperationError, match="namespace"):
         populated.open_run(snapshot=snapshot)
@@ -406,47 +388,82 @@ def test_snapshot_rejects_excessive_nesting_as_typed_invalid_snapshot() -> None:
 def test_snapshot_rejects_malformed_foreign_and_extra_lesson_sources() -> None:
     memory = ReflectiveMemory({"provider": "ollama", "model": "qwen"})
     with memory.open_run() as session:
-        session.open_frame(_spec())
         session.commit(
             "seed",
-            (_mutation(_ref(), "seed", "add", "one", "first"),),
+            (_mutation("seed", "add", "one", "first"),),
         )
     with memory.open_run() as session:
         base = session.snapshot
 
-    valid_source = reflective._source_json("run-1", _ref())
+    valid_source = reflective._source_json("run-1")
     malformed_sources: list[object] = [
         "not-an-object",
-        {"frame_ref": valid_source["frame_ref"]},
-        reflective._source_json("run-1", _ref("foreign")),
+        {},
+        {"run_id": ""},
+        {**valid_source, "frame_ref": {}},
         {**valid_source, "extra": "source-secret"},
     ]
     for malformed in malformed_sources:
         snapshot = json.loads(json.dumps(base))
-        snapshot["frames"][0]["lessons"][0]["source"] = malformed
+        snapshot["lessons"][0]["source"] = malformed
         with pytest.raises(MemoryOperationError) as exc:
             ReflectiveMemory().open_run(snapshot=snapshot)
         assert exc.value.code == "reflective.invalid_snapshot"
         assert "source-secret" not in str(exc.value)
 
 
-def test_frame_idempotency_and_closed_session_operations() -> None:
+def test_session_idempotency_and_closed_session_operations() -> None:
     memory = ReflectiveMemory()
     session = memory.open_run()
-    frame = session.open_frame(_spec(config={"recall_limit": 2}))
-    assert session.open_frame(_spec(config={"recall_limit": 2})) is frame
-    with pytest.raises(MemoryOperationError, match="different"):
-        session.open_frame(_spec(config={"recall_limit": 3}))
+    frame = session
     session.close()
     session.close()
-    with pytest.raises(MemoryOperationError, match="closed"):
-        session.open_frame(_spec())
     with pytest.raises(MemoryOperationError, match="closed"):
         frame.recall()
     with pytest.raises(MemoryOperationError, match="closed"):
         frame.learn(_context())
     with pytest.raises(MemoryOperationError, match="closed"):
         session.commit("commit", ())
+
+
+def test_sessions_of_one_instance_share_one_lesson_list_and_limit() -> None:
+    memory = ReflectiveMemory(
+        {"provider": "ollama", "model": "qwen"}, max_items=2, recall_limit=1
+    )
+    with memory.open_run() as session:
+        session.commit(
+            "seed",
+            (
+                _mutation("one", "add", "one", "first lesson"),
+                _mutation("two", "add", "two", "second lesson"),
+            ),
+        )
+    with memory.open_run() as session:
+        snapshot = session.snapshot
+        assert snapshot["version"] == 2
+        assert set(snapshot) == {
+            "config",
+            "epoch",
+            "format",
+            "lessons",
+            "llm_config",
+            "namespace",
+            "revision",
+            "version",
+        }
+        assert snapshot["config"] == {"max_items": 2, "recall_limit": 1}
+        assert [lesson["source"] for lesson in snapshot["lessons"]] == [
+            {"run_id": "run-1"},
+            {"run_id": "run-1"},
+        ]
+        recalled = session.recall()
+        assert recalled == "[one] first lesson\n[two] second lesson"
+        with pytest.raises(MemoryOperationError) as exc:
+            session.commit(
+                "overflow",
+                (_mutation("three", "add", "three", "third"),),
+            )
+        assert exc.value.code == "reflective.max_items"
 
 
 def test_recall_all_and_context_ranking_are_deterministic(
@@ -465,11 +482,10 @@ def test_recall_all_and_context_ranking_are_deterministic(
         ],
     )
     with memory.open_run() as session:
-        session.open_frame(_spec())
         session.commit("seed", tuple(mutations))
 
     with memory.open_run() as session:
-        frame = session.open_frame(_spec())
+        frame = session
         assert frame.recall() == "[b] red apple\n[a] blue berry\n[c] red berry"
         recalled = frame.recall(
             RecallContext("", "RED berry", {"tone": "BLUE"}, ("root", "user"))
@@ -492,10 +508,9 @@ def test_subclass_controls_query_rewriting(monkeypatch: pytest.MonkeyPatch) -> N
         ],
     )
     with memory.open_run() as session:
-        session.open_frame(_spec())
         session.commit("seed", tuple(mutations))
     with memory.open_run() as session:
-        frame = session.open_frame(_spec())
+        frame = session
         assert frame.recall(RecallContext("", "berry", {}, ("root",))) == (
             "[apple] green apple"
         )
@@ -510,7 +525,7 @@ def test_query_rewriting_failure_is_sanitized() -> None:
 
     memory = _Memory({"provider": "ollama", "model": "qwen"})
     with memory.open_run() as session:
-        frame = session.open_frame(_spec())
+        frame = session
         with pytest.raises(MemoryOperationError) as exc:
             frame.recall(RecallContext("", "hello", {}, ("root",)))
     assert exc.value.code == "reflective.query"
@@ -532,7 +547,7 @@ def test_learn_uses_pinned_config_and_returns_deterministic_proposals(
     )
     memory = ReflectiveMemory({"provider": "ollama", "model": "qwen"})
     with memory.open_run() as session:
-        frame = session.open_frame(_spec())
+        frame = session
         pinned_config = session.snapshot["llm_config"]
         with pytest.raises(MemoryOperationError, match="no-op"):
             frame.learn(_context())
@@ -545,21 +560,14 @@ def test_learn_uses_pinned_config_and_returns_deterministic_proposals(
         ]
     }
     with memory.open_run() as session:
-        frame = session.open_frame(_spec())
+        frame = session
         first = frame.learn(_context())
         second = frame.learn(_context())
         assert first == second
         assert first[0].payload == {
             "action": "add",
             "lesson_id": "one",
-            "source": {
-                "frame_ref": {
-                    "owner": "agent",
-                    "root_flow_id": "root",
-                    "static_path": ["root", "agent"],
-                },
-                "run_id": "run-1",
-            },
+            "source": {"run_id": "run-1"},
             "text": "Keep it short",
         }
 
@@ -598,7 +606,7 @@ def test_model_construction_failure_is_final_and_sanitized(
     monkeypatch.setattr(reflective, "model_from_config", fail_construction)
     memory = ReflectiveMemory({"provider": "ollama", "model": "qwen"})
     with memory.open_run() as session:
-        frame = session.open_frame(_spec())
+        frame = session
         with pytest.raises(MemoryOperationError) as exc:
             frame.learn(_context())
     assert exc.value.code == "reflective.model_construction"
@@ -621,7 +629,7 @@ def test_structured_binding_failure_is_final_and_sanitized(
     )
     memory = ReflectiveMemory({"provider": "ollama", "model": "qwen"})
     with memory.open_run() as session:
-        frame = session.open_frame(_spec())
+        frame = session
         with pytest.raises(MemoryOperationError) as exc:
             frame.learn(_context())
     assert exc.value.code == "reflective.structured_output"
@@ -637,7 +645,7 @@ def test_learn_provider_failure_is_retryable_and_sanitized(
     failure = RuntimeError("provider-secret")
     _install_model(monkeypatch, error=failure)
     with memory.open_run() as session:
-        frame = session.open_frame(_spec())
+        frame = session
         with pytest.raises(MemoryOperationError) as exc:
             frame.learn(_context())
     assert exc.value.code == "reflective.provider"
@@ -653,7 +661,7 @@ def test_structured_output_parser_failure_is_a_final_contract_error(
     failure = OutputParserException("parser-secret")
     _install_model(monkeypatch, error=failure)
     with memory.open_run() as session:
-        frame = session.open_frame(_spec())
+        frame = session
         with pytest.raises(MemoryOperationError) as exc:
             frame.learn(_context())
     assert exc.value.code == "reflective.contract"
@@ -680,7 +688,7 @@ def test_parsed_response_validation_failure_is_final_and_sanitized(
     )
     memory = ReflectiveMemory({"provider": "ollama", "model": "qwen"})
     with memory.open_run() as session:
-        frame = session.open_frame(_spec())
+        frame = session
         with pytest.raises(MemoryOperationError) as exc:
             frame.learn(_context())
     assert exc.value.code == "reflective.contract"
@@ -700,7 +708,7 @@ def test_episode_material_is_capped_in_one_model_call(
     memory = ReflectiveMemory({"provider": "ollama", "model": "qwen"})
     huge = "x" * (reflective._MAX_EPISODE_MATERIAL_CHARS * 2)
     with memory.open_run() as session:
-        frame = session.open_frame(_spec())
+        frame = session
         result = frame.learn(_context(text=huge))
     assert result == []
     assert configs
@@ -720,12 +728,10 @@ def test_huge_current_lessons_cannot_displace_new_episode_evidence(
     )
     memory = ReflectiveMemory({"provider": "ollama", "model": "qwen"})
     with memory.open_run() as session:
-        session.open_frame(_spec())
         session.commit(
             "large-lesson",
             (
                 _mutation(
-                    _ref(),
                     "large-lesson",
                     "add",
                     "large",
@@ -734,7 +740,7 @@ def test_huge_current_lessons_cannot_displace_new_episode_evidence(
             ),
         )
     with memory.open_run() as session:
-        frame = session.open_frame(_spec())
+        frame = session
         assert frame.learn(_context(text="new-evidence")) == []
 
     assert model.structured.messages is not None
@@ -757,12 +763,11 @@ def test_learning_is_propose_only_and_rejects_a_stale_generation(
         {"actions": [{"action": "add", "lesson_id": "one", "text": "first"}]},
     )
     session = memory.open_run()
-    frame = session.open_frame(_spec())
+    frame = session
     proposals = frame.learn(_context())
     assert frame.recall() == ""
 
     with memory.open_run() as winner:
-        winner.open_frame(_spec())
         winner.commit("winner", tuple(proposals))
     with pytest.raises(MemoryOperationError, match="stale"):
         frame.learn(_context())
@@ -779,18 +784,15 @@ def test_commit_is_atomic_idempotent_and_empty_batches_advance_revision(
         [{"action": "add", "lesson_id": "one", "text": "first"}],
     )
     with memory.open_run() as session:
-        session.open_frame(_spec())
         session.commit("add", tuple(add))
         session.commit("add", tuple(add))
         with pytest.raises(MemoryOperationError, match="collision"):
             session.commit("add", ())
 
     with memory.open_run() as session:
-        session.open_frame(_spec())
         before = session.snapshot["revision"]
         session.commit("empty", ())
     with memory.open_run() as later:
-        later.open_frame(_spec())
         assert later.snapshot["revision"] == before + 1
 
 
@@ -804,7 +806,6 @@ def test_revise_and_remove_are_learned_and_committed(
         [{"action": "add", "lesson_id": "one", "text": "first"}],
     )
     with memory.open_run() as session:
-        session.open_frame(_spec())
         session.commit("add", tuple(add))
 
     revise = _learn_actions(
@@ -813,10 +814,9 @@ def test_revise_and_remove_are_learned_and_committed(
         [{"action": "revise", "lesson_id": "one", "text": "revised"}],
     )
     with memory.open_run() as session:
-        session.open_frame(_spec())
         session.commit("revise", tuple(revise))
     with memory.open_run() as session:
-        assert session.open_frame(_spec()).recall() == "[one] revised"
+        assert session.recall() == "[one] revised"
 
     remove = _learn_actions(
         monkeypatch,
@@ -824,10 +824,9 @@ def test_revise_and_remove_are_learned_and_committed(
         [{"action": "remove", "lesson_id": "one", "text": None}],
     )
     with memory.open_run() as session:
-        session.open_frame(_spec())
         session.commit("remove", tuple(remove))
     with memory.open_run() as session:
-        assert session.open_frame(_spec()).recall() == ""
+        assert session.recall() == ""
 
 
 def test_learn_and_commit_enforce_final_max_items(
@@ -837,10 +836,10 @@ def test_learn_and_commit_enforce_final_max_items(
         {"provider": "ollama", "model": "qwen"}, max_items=1
     )
     with memory.open_run() as session:
-        frame = session.open_frame(_spec())
+        frame = session
         session.commit(
             "seed",
-            (_mutation(_ref(), "seed", "add", "old", "old lesson"),),
+            (_mutation("seed", "add", "old", "old lesson"),),
         )
 
     _install_model(
@@ -853,11 +852,11 @@ def test_learn_and_commit_enforce_final_max_items(
         },
     )
     with memory.open_run() as session:
-        frame = session.open_frame(_spec())
+        frame = session
         replacement = frame.learn(_context())
         session.commit("replace", tuple(replacement))
     with memory.open_run() as session:
-        assert session.open_frame(_spec()).recall() == "[new] new lesson"
+        assert session.recall() == "[new] new lesson"
 
     _install_model(
         monkeypatch,
@@ -872,19 +871,19 @@ def test_learn_and_commit_enforce_final_max_items(
         {"provider": "ollama", "model": "qwen"}, max_items=1
     )
     with empty.open_run() as session:
-        frame = session.open_frame(_spec())
+        frame = session
         with pytest.raises(MemoryOperationError) as learn_error:
             frame.learn(_context())
     assert learn_error.value.code == "reflective.max_items"
 
     with empty.open_run() as session:
-        frame = session.open_frame(_spec())
+        frame = session
         with pytest.raises(MemoryOperationError) as commit_error:
             session.commit(
                 "too-many",
                 (
-                    _mutation(_ref(), "two", "add", "two", "two"),
-                    _mutation(_ref(), "three", "add", "three", "three"),
+                    _mutation("two", "add", "two", "two"),
+                    _mutation("three", "add", "three", "three"),
                 ),
             )
         assert frame.recall() == ""
@@ -892,42 +891,22 @@ def test_learn_and_commit_enforce_final_max_items(
     assert commit_error.value.code == "reflective.max_items"
 
 
-def test_multi_frame_commit_failure_has_no_partial_effect() -> None:
+def test_multi_mutation_commit_failure_has_no_partial_effect() -> None:
     memory = ReflectiveMemory({"provider": "ollama", "model": "qwen"})
-    left_ref = _ref("left")
-    right_ref = _ref("right")
     with memory.open_run() as session:
-        left = session.open_frame(_spec("left"))
-        right = session.open_frame(_spec("right"))
         with pytest.raises(MemoryOperationError) as exc:
             session.commit(
                 "atomic",
                 (
-                    _mutation(left_ref, "left", "add", "one", "first"),
-                    _mutation(right_ref, "right", "revise", "missing", "bad"),
+                    _mutation("left", "add", "one", "first"),
+                    _mutation("right", "revise", "missing", "bad"),
                 ),
             )
-        assert left.recall() == ""
-        assert right.recall() == ""
+        assert session.recall() == ""
         assert session.snapshot["revision"] == 0
     assert exc.value.code == "reflective.invalid_mutation"
     with memory.open_run() as session:
-        assert session.open_frame(_spec("left")).recall() == ""
-        assert session.open_frame(_spec("right")).recall() == ""
-
-
-def test_commit_collision_precedes_unopened_frame_validation() -> None:
-    memory = ReflectiveMemory({"provider": "ollama", "model": "qwen"})
-    original = _mutation(_ref(), "original", "add", "one", "first")
-    with memory.open_run() as session:
-        session.open_frame(_spec())
-        session.commit("same-id", (original,))
-
-    changed = _mutation(_ref("unopened"), "changed", "add", "two", "second")
-    with memory.open_run() as session:
-        with pytest.raises(MemoryOperationError) as exc:
-            session.commit("same-id", (changed,))
-    assert exc.value.code == "reflective.commit_collision"
+        assert session.recall() == ""
 
 
 def test_concurrent_same_generation_commits_have_one_winner(
@@ -946,8 +925,6 @@ def test_concurrent_same_generation_commits_have_one_winner(
     )
     left = memory.open_run()
     right = memory.open_run()
-    left.open_frame(_spec())
-    right.open_frame(_spec())
 
     def commit(session: Any, commit_id: str, batch: list[MemoryMutation]) -> str:
         try:
@@ -978,10 +955,9 @@ def test_reset_preserves_commit_ledger_ordering_and_old_recall(
         [{"action": "add", "lesson_id": "one", "text": "first"}],
     )
     with memory.open_run() as seed:
-        seed.open_frame(_spec())
         seed.commit("applied", tuple(add))
     old = memory.open_run()
-    old_frame = old.open_frame(_spec())
+    old_frame = old
     assert old_frame.recall() == "[one] first"
     memory.reset()
 
@@ -992,7 +968,7 @@ def test_reset_preserves_commit_ledger_ordering_and_old_recall(
     with pytest.raises(MemoryOperationError, match="stale"):
         old.commit("not-applied", tuple(add))
     with memory.open_run() as fresh:
-        assert fresh.open_frame(_spec()).recall() == ""
+        assert fresh.recall() == ""
     old.close()
 
 
@@ -1034,7 +1010,7 @@ def test_old_api_snapshot_keeps_digest_and_api_semantics(monkeypatch):
     with restored.open_run(snapshot=old) as session:
         assert session.snapshot == old
         assert hashlib.sha256(json.dumps(session.snapshot, sort_keys=True, separators=(",", ":")).encode()).hexdigest() == digest
-        frame = session.open_frame(_spec())
+        frame = session
         _, configs = _install_model(monkeypatch, {"actions": [{"action": "noop", "lesson_id": None, "text": None}]})
         assert frame.learn(_context()) == []
     assert configs == [legacy_connection_config(old["llm_config"])]
@@ -1052,3 +1028,33 @@ def test_old_reflective_snapshot_rejects_active_retired_options(field, value):
     old["llm_config"][field] = value
     with pytest.raises(MemoryOperationError):
         ReflectiveMemory().open_run(snapshot=old)
+
+
+def test_session_reflects_under_the_memory_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    model, _ = _install_model(
+        monkeypatch, {"actions": [{"action": "add", "lesson_id": "a", "text": "Cite"}]}
+    )
+    memory = ReflectiveMemory()
+    episode = MemoryEpisode(
+        "run-1",
+        (),
+        ("agent",),
+        MemoryEpisodeStatus.SUCCEEDED,
+        {"text": "hi"},
+        "HI",
+        memory_sections=(MemorySection("notes", "prior"),),
+    )
+    with memory.open_run() as session:
+        assert not hasattr(session, "open_frame")
+        notes = session.learn(LearnContext("run-1", "notes", (episode,)))
+        other = session.learn(LearnContext("run-1", "other", (episode,)))
+        prompt = model.structured.messages[-1].content
+        session.commit("one", tuple(notes))
+    assert prompt.splitlines()[0] == "Memory: other"
+    assert "Frame:" not in prompt
+    material = json.loads(prompt.split("Episodes: ", 1)[1])
+    assert material["episodes"][0]["memory_sections"] == [{"memory": "notes", "text": "prior"}]
+    assert material["episodes"][0]["occurrence_path"] == []
+    assert notes[0].mutation_id != other[0].mutation_id
+    with memory.open_run() as session:
+        assert session.recall() == "[a] Cite"

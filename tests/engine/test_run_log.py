@@ -28,47 +28,34 @@ from agent_composer.runtime.log import (
 _DIGEST = "d" * 64
 
 
-def test_schema_seven_record_keeps_wire_identity():
-    wire = (b'{"kind":"node_started","payload":{"node_id":"work"},'
-            b'"run_id":"legacy","schema":7,"seq":0}')
-    envelope = log_module.decode_record(wire)
-    assert envelope.schema == 7
-    assert encode_record(envelope) == wire
+def test_schema_version_is_nine():
+    assert SCHEMA_VERSION == 9
 
 
-@pytest.mark.parametrize("storage", ["jsonl", "memory"])
-def test_old_prefix_accepts_new_records_without_rewrite(tmp_path, storage):
-    wire = (b'{"kind":"node_started","payload":{"node_id":"work"},'
-            b'"run_id":"legacy","schema":7,"seq":0}')
-    path = tmp_path / "mixed.jsonl"
-    if storage == "jsonl":
-        path.write_bytes(wire + b"\n" + b'{"incomplete":')
-        opened = JsonlRunLog.resume(path)
-        assert path.read_bytes() == wire + b"\n"
-    else:
-        opened = MemoryRunLog._from_records((log_module.decode_record(wire),))
-    with opened:
-        accepted = opened.append(NodeStartedRecord("next"))
-        retained = opened.records()
-        assert accepted.schema == SCHEMA_VERSION == 8
-        assert accepted.run_id == "legacy" and accepted.seq == 1
-        assert encode_record(retained[0]) == wire
-    if storage == "jsonl":
-        assert path.read_bytes() == wire + b"\n" + encode_record(accepted) + b"\n"
-        reopened = JsonlRunLog.resume(path)
-    else:
-        reopened = MemoryRunLog._from_records(retained)
-    with reopened:
-        assert reopened.records() == retained
-        assert [item.schema for item in reopened] == [7, 8]
-        assert reopened.next_sequence == 2
+@pytest.mark.parametrize("schema", [7, 8])
+def test_retired_schema_record_is_rejected_by_name(schema):
+    message = f"run log schema {schema} predates schema 9 and is not supported"
+    with pytest.raises(ValueError, match=message):
+        log_module.decode_record(_wire_line(schema=schema))
+    with pytest.raises(ValueError, match=message):
+        RecordEnvelope(schema, "run", 0, NodeStartedRecord("work"))
 
 
-@pytest.mark.parametrize("schema", [6, 9, True, False, 7.0, 8.0])
-def test_supported_versions_do_not_weaken_validation(schema):
+@pytest.mark.parametrize("schema", [7, 8])
+def test_retired_schema_log_is_rejected_on_resume(tmp_path, schema):
+    path = tmp_path / "retired.jsonl"
+    path.write_bytes(_wire_line(schema=schema))
+    with pytest.raises(ValueError, match=f"run log schema {schema} predates schema 9"):
+        JsonlRunLog.resume(path)
+    assert path.read_bytes() == _wire_line(schema=schema)
+    _assert_lock_available(path)
+
+
+@pytest.mark.parametrize("schema", [6, 7, 8, 10, True, False, 9.0])
+def test_schema_check_does_not_weaken_validation(schema):
     with pytest.raises(ValueError):
         RecordEnvelope(schema, "run", 0, NodeStartedRecord("work"))
-    envelope = RecordEnvelope(8, "run", 0, NodeStartedRecord("work"))
+    envelope = RecordEnvelope(SCHEMA_VERSION, "run", 0, NodeStartedRecord("work"))
     object.__setattr__(envelope, "schema", schema)
     with pytest.raises(ValueError):
         encode_record(envelope)
@@ -76,10 +63,9 @@ def test_supported_versions_do_not_weaken_validation(schema):
         log_module.decode_record(_wire_line(schema=schema))
 
 
-@pytest.mark.parametrize("schema", [7, 8])
 @pytest.mark.parametrize("corruption", ["extra", "node_id", "seq", "kind"])
-def test_supported_versions_do_not_weaken_payload_validation(schema, corruption):
-    wire = json.loads(_wire_line(schema=schema))
+def test_schema_check_does_not_weaken_payload_validation(corruption):
+    wire = json.loads(_wire_line())
     if corruption == "extra":
         wire["payload"]["extra"] = None
     elif corruption == "node_id":
@@ -94,12 +80,12 @@ def test_supported_versions_do_not_weaken_payload_validation(schema, corruption)
 
 @pytest.mark.parametrize("storage", ["jsonl", "memory"])
 @pytest.mark.parametrize("corruption", ["run_id", "gap"])
-def test_supported_versions_do_not_weaken_prefix_identity(tmp_path, storage, corruption):
-    prefix = _wire_line(schema=7)
-    suffix = _wire_line(schema=8, seq=2 if corruption == "gap" else 1,
+def test_prefix_identity_rejects_corruption(tmp_path, storage, corruption):
+    prefix = _wire_line()
+    suffix = _wire_line(seq=2 if corruption == "gap" else 1,
                         run_id="foreign" if corruption == "run_id" else "run")
     if storage == "jsonl":
-        path = tmp_path / "invalid-mixed.jsonl"
+        path = tmp_path / "invalid-prefix.jsonl"
         path.write_bytes(prefix + suffix)
         with pytest.raises(ValueError):
             JsonlRunLog.resume(path)
@@ -111,9 +97,9 @@ def test_supported_versions_do_not_weaken_prefix_identity(tmp_path, storage, cor
             MemoryRunLog._from_records(records)
 
 
-def test_supported_versions_preserve_mixed_append_rollback(tmp_path, monkeypatch):
-    path = tmp_path / "rollback-mixed.jsonl"
-    prefix = _wire_line(schema=7)
+def test_append_rollback_preserves_log(tmp_path, monkeypatch):
+    path = tmp_path / "rollback.jsonl"
+    prefix = _wire_line()
     path.write_bytes(prefix)
     with JsonlRunLog.resume(path) as log:
         log.append(NodeStartedRecord("second"))
@@ -128,7 +114,7 @@ def test_supported_versions_preserve_mixed_append_rollback(tmp_path, monkeypatch
                 log, path, lambda: log.append(NodeStartedRecord("third"))
             )
         assert path.read_bytes().startswith(prefix)
-        assert [item.schema for item in log] == [7, 8]
+        assert [item.schema for item in log] == [SCHEMA_VERSION, SCHEMA_VERSION]
         assert log.append(NodeStartedRecord("third")).seq == 2
 
 
@@ -301,7 +287,7 @@ def test_memory_log_reopening_rejects_invalid_prefix_coordinates(change):
 
 
 @pytest.mark.parametrize("field, value", [
-    ("schema", 6), ("schema", 9), ("schema", float(SCHEMA_VERSION)), ("schema", True),
+    ("schema", 6), ("schema", 8), ("schema", 10), ("schema", float(SCHEMA_VERSION)), ("schema", True),
     ("run_id", ""), ("run_id", 1), ("run_id", "\ud800"),
     ("seq", -1), ("seq", 0.0), ("seq", False),
     ("record", NodeStartedRecord(1)), ("envelope", None),

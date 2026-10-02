@@ -11,7 +11,7 @@ from agent_composer.compile.manifest import expansion_digest, flow_fingerprint, 
 from agent_composer.compile.model import CompiledFlow
 from agent_composer.compose import LoadError, load_flow
 from agent_composer.diagnostics import OriginRef, SourceRange
-from agent_composer.memory import MemoryPolicySpec, MemorySnapshotEnvelope
+from agent_composer.memory import DeclSite, MemoryDecl, MemorySnapshotEnvelope
 from agent_composer.nodes.agent import AgentNode
 
 
@@ -91,11 +91,12 @@ def _full_flow(policy: str) -> str:
         ("long_term_memory: reflective\n", {}, 3),
         (
             "long_term_memory:\n"
-            "  name: reflective\n"
-            "  config:\n"
-            "    max_items: 20\n"
-            "    nested: [true, null, 3.5]\n",
-            {"max_items": 20, "nested": [True, None, 3.5]},
+            "  reflective:\n"
+            "    type: reflective\n"
+            "    config:\n"
+            "      max_items: 20\n"
+            "      recall_limit: 5\n",
+            {"max_items": 20, "recall_limit": 5},
             4,
         ),
     ],
@@ -107,14 +108,15 @@ def test_full_root_retains_flow_owned_policy_with_one_origin(
     line: int,
 ) -> None:
     loaded = load_flow(_full_flow(policy), source_label="memory.yaml")
-    spec = loaded.compiled.memory_policy
-
+    (decl,) = loaded.compiled.memories
     assert loaded.compiled.flow_id == "memory-root"
-    assert type(spec) is MemoryPolicySpec
-    assert spec.name == "reflective"
-    assert spec.config == expected_config
-    assert type(spec.origin) is OriginRef
-    assert loaded.compiled.nodes["echo"].__dict__.get("memory_policy") is None
+    assert type(decl) is MemoryDecl
+    assert (decl.name, decl.type, decl.key) == ("reflective", "reflective", "reflective")
+    assert decl.site == DeclSite((), ("root",), None)
+    assert decl.config == expected_config
+    assert type(decl.origin) is OriginRef
+    assert loaded.compiled.nodes["echo"].__dict__.get("memories") is None
+    spec = decl
     assert loaded.origin_resolver is not None
     frame = loaded.origin_resolver.resolve(spec.origin)
     assert frame is not None
@@ -129,8 +131,7 @@ name: parent
 defs:
   child:
     long_term_memory:
-      name: reflective
-      config: {max_items: 8}
+      reflective: {type: reflective, config: {max_items: 8}}
     nodes:
       answer:
         kind: code
@@ -148,9 +149,9 @@ output: ${invoke.output}
 
     child = loaded.compiled.nodes["invoke"].child
     assert child.flow_id == "child"
-    assert child.memory_policy.name == "reflective"
-    assert child.memory_policy.config == {"max_items": 8}
-    assert child.nodes["answer"].__dict__.get("memory_policy") is None
+    assert child.memories[0].name == "reflective"
+    assert child.memories[0].config == {"max_items": 8}
+    assert child.nodes["answer"].__dict__.get("memories") is None
 
 
 def test_compact_root_projects_policy_to_its_agent() -> None:
@@ -165,10 +166,10 @@ prompt: answer
     )
 
     assert loaded.compiled.flow_id == "compact_agent"
-    assert loaded.compiled.memory_policy is None
+    assert loaded.compiled.memories == ()
     agent = loaded.compiled.nodes["compact_agent"]
     assert type(agent) is AgentNode
-    assert agent.memory_policy.name == "reflective"
+    assert agent.memories[0].name == "reflective"
 
 
 def test_flat_agent_definition_projects_policy_to_its_agent() -> None:
@@ -191,8 +192,52 @@ output: ${invoke.output}
 
     child = loaded.compiled.nodes["invoke"].child
     assert child.flow_id == "child"
-    assert child.memory_policy is None
-    assert child.nodes["child"].memory_policy.name == "reflective"
+    assert child.memories == ()
+    assert child.nodes["child"].memories[0].name == "reflective"
+
+
+def test_compose_stamps_decl_sites_for_root_def_and_inline_owners() -> None:
+    loaded = load_flow(
+        """id: parent
+name: parent
+long_term_memory: outer
+defs:
+  child:
+    kind: agent
+    long_term_memory: inner
+    prompt: answer
+    output: str
+nodes:
+  top:
+    kind: agent
+    long_term_memory: local
+    prompt: answer
+    output: str
+  invoke:
+    kind: call
+    call: child
+  wrapper:
+    kind: call
+    nodes:
+      answer:
+        kind: agent
+        long_term_memory: inline
+        prompt: answer
+        output: str
+    output: ${answer.output}
+output: ${top.output}
+"""
+    )
+    compiled = loaded.compiled
+    assert [d.site for d in compiled.memories] == [DeclSite((), ("root",), None)]
+    assert compiled.nodes["top"].memories[0].site == DeclSite((), ("root",), "top")
+    child = compiled.nodes["invoke"].child
+    assert child.memories == ()
+    assert child.nodes["child"].memories[0].site == DeclSite((), ("def", "child"), "child")
+    inline = compiled.nodes["wrapper"].child
+    assert inline.nodes["answer"].memories[0].site == DeclSite(
+        (), ("root", "node", "wrapper", "inline"), "answer"
+    )
 
 
 @pytest.mark.parametrize(
@@ -231,16 +276,15 @@ def test_non_agent_node_rejects_long_term_memory_at_the_authored_value(source: s
 @pytest.mark.parametrize(
     ("surface", "message"),
     [
-        ("long_term_memory: ''\n", "name must be non-empty"),
-        ("long_term_memory: null\n", "string or a mapping"),
-        ("long_term_memory: {name: 3}\n", "name must be a non-empty string"),
-        ("long_term_memory: {name: reflective, config: []}\n", "config must be a mapping"),
-        ("long_term_memory: {name: reflective, extra: true}\n", "unknown key"),
-        ("long_term_memory: {name: reflective, 1: true}\n", "unknown key"),
-        ("long_term_memory: {config: {}}\n", "requires 'name'"),
+        ("long_term_memory: ''\n", "memory name"),
+        ("long_term_memory: {}\n", "declares no memory"),
+        ("long_term_memory: {name: reflective}\n", "reserved"),
+        ("long_term_memory: {name: reflective, config: {max_items: 3}}\n", "reserved"),
+        ("long_term_memory: {notes: {type: reflective, config: []}}\n", "config must be a mapping"),
+        ("long_term_memory: {notes: {type: reflective, extra: true}}\n", "unknown key"),
     ],
 )
-def test_malformed_flow_policy_is_located_at_its_authored_occurrence(
+def test_malformed_flow_declaration_is_located_at_its_authored_occurrence(
     surface: str,
     message: str,
 ) -> None:
@@ -376,8 +420,8 @@ output: ${wrapper.output}
     )
     loaded = load_flow(allowed)
     child = loaded.compiled.nodes["wrapper"].child
-    assert child.memory_policy is None
-    assert child.nodes["answer"].memory_policy.name == "reflective"
+    assert child.memories == ()
+    assert child.nodes["answer"].memories[0].name == "reflective"
 
 
 def test_python_constructors_default_and_validate_authored_memory_fields() -> None:
@@ -385,12 +429,18 @@ def test_python_constructors_default_and_validate_authored_memory_fields() -> No
     agent = AgentNode("agent")
 
     assert flow.flow_id is None
-    assert flow.memory_policy is None
-    assert agent.memory_policy is None
+    assert flow.memories == ()
+    assert agent.memories == ()
 
-    spec = MemoryPolicySpec("reflective", {})
-    assert CompiledFlow({}, [], flow_id="flow", memory_policy=spec).memory_policy is spec
-    assert AgentNode("agent", memory_policy=spec).memory_policy is spec
+    flow_decl = MemoryDecl("reflective", "reflective", {}, DeclSite((), ("root",), None))
+    agent_decl = MemoryDecl("reflective", "reflective", {}, DeclSite((), ("root",), "agent"))
+    assert CompiledFlow({}, [], flow_id="flow", memories=(flow_decl,)).memories == (flow_decl,)
+    assert CompiledFlow({}, [], memories=(flow_decl,)).memories[0] is flow_decl
+    assert AgentNode("agent", memories=(agent_decl,)).memories[0] is agent_decl
+    with pytest.raises(ValueError, match="flow DeclSites"):
+        CompiledFlow({}, [], memories=(agent_decl,))
+    with pytest.raises(ValueError, match="AGENT DeclSites"):
+        AgentNode("agent", memories=(flow_decl,))
 
     for invalid in ("", 1, True):
         with pytest.raises((TypeError, ValueError)):
@@ -402,52 +452,76 @@ def test_python_constructors_default_and_validate_authored_memory_fields() -> No
     with pytest.raises(TypeError, match="exact string"):
         CompiledFlow({}, [], flow_id=DerivedString("flow"))
 
-    class DerivedPolicy(MemoryPolicySpec):
+    class DerivedDecl(MemoryDecl):
         """Invalid semantic carrier subclass."""
 
-    derived = DerivedPolicy("reflective", {})
-    with pytest.raises(TypeError, match="exact MemoryPolicySpec"):
-        CompiledFlow({}, [], memory_policy=derived)
-    with pytest.raises(TypeError, match="exact MemoryPolicySpec"):
-        AgentNode("agent", memory_policy=derived)
+    derived_flow = DerivedDecl("reflective", "reflective", {}, DeclSite((), ("root",), None))
+    derived_agent = DerivedDecl("reflective", "reflective", {}, DeclSite((), ("root",), "agent"))
+    with pytest.raises(TypeError, match="exact MemoryDecl"):
+        CompiledFlow({}, [], memories=(derived_flow,))
+    with pytest.raises(TypeError, match="exact MemoryDecl"):
+        AgentNode("agent", memories=(derived_agent,))
+    with pytest.raises(TypeError, match="exact MemoryDecl"):
+        CompiledFlow({}, [], memories=[flow_decl])  # type: ignore[arg-type]
 
 
 def test_authored_identity_includes_flow_id_and_policy_but_excludes_origin() -> None:
     plain = CompiledFlow({}, [])
     same_plain = copy.deepcopy(plain)
     flow_named = CompiledFlow({}, [], flow_id="named")
+    root = DeclSite((), ("root",), None)
     flow_policy = CompiledFlow(
         {},
         [],
-        memory_policy=MemoryPolicySpec("reflective", {"max_items": 4}),
+        memories=(MemoryDecl("reflective", "reflective", {"max_items": 4}, root),),
     )
     flow_policy_relocated = CompiledFlow(
         {},
         [],
-        memory_policy=MemoryPolicySpec(
-            "reflective",
-            {"max_items": 4},
-            OriginRef("other/source"),
+        memories=(
+            MemoryDecl(
+                "reflective",
+                "reflective",
+                {"max_items": 4},
+                root,
+                OriginRef("other/source"),
+            ),
         ),
     )
     flow_policy_renamed = CompiledFlow(
         {},
         [],
-        memory_policy=MemoryPolicySpec("episodic", {"max_items": 4}),
+        memories=(MemoryDecl("custom", "custom", {"max_items": 4}, root),),
     )
     flow_policy_reconfigured = CompiledFlow(
         {},
         [],
-        memory_policy=MemoryPolicySpec("reflective", {"max_items": 5}),
+        memories=(MemoryDecl("reflective", "reflective", {"max_items": 5}, root),),
+    )
+    flow_policy_resited = CompiledFlow(
+        {},
+        [],
+        memories=(
+            MemoryDecl(
+                "reflective", "reflective", {"max_items": 4}, DeclSite((), ("def", "x"), None)
+            ),
+        ),
     )
     agent_policy = CompiledFlow(
-        {"agent": AgentNode("agent", memory_policy=MemoryPolicySpec("reflective", {}))},
+        {
+            "agent": AgentNode(
+                "agent",
+                memories=(
+                    MemoryDecl("reflective", "reflective", {}, DeclSite((), ("root",), "agent")),
+                ),
+            )
+        },
         [],
     )
 
     plain_manifest = flow_manifest(plain)
     assert "flow_id" not in plain_manifest
-    assert "memory_policy" not in plain_manifest
+    assert "memories" not in plain_manifest
     assert flow_manifest(same_plain) == plain_manifest
     assert flow_fingerprint(same_plain) == flow_fingerprint(plain)
     assert flow_fingerprint(flow_named) != flow_fingerprint(plain)
@@ -455,8 +529,9 @@ def test_authored_identity_includes_flow_id_and_policy_but_excludes_origin() -> 
     assert flow_fingerprint(flow_policy_relocated) == flow_fingerprint(flow_policy)
     assert flow_fingerprint(flow_policy_renamed) != flow_fingerprint(flow_policy)
     assert flow_fingerprint(flow_policy_reconfigured) != flow_fingerprint(flow_policy)
+    assert flow_fingerprint(flow_policy_resited) != flow_fingerprint(flow_policy)
     assert flow_fingerprint(agent_policy) != flow_fingerprint(plain)
-    assert flow_manifest(flow_policy)["memory_policy"] == {
+    assert flow_manifest(flow_policy)["memories"] == [{
         "config": {
             "entries": [
                 {
@@ -467,26 +542,31 @@ def test_authored_identity_includes_flow_id_and_policy_but_excludes_origin() -> 
             "type": "mapping",
         },
         "name": "reflective",
-    }
-    assert flow_manifest(agent_policy)["nodes"]["agent"]["memory_policy"] == {
+        "site": {"node": None, "owner": ["root"], "scope": []},
+        "type": "reflective",
+    }]
+    assert flow_manifest(agent_policy)["nodes"]["agent"]["memories"] == [{
         "config": {"entries": [], "type": "mapping"},
         "name": "reflective",
-    }
+        "site": {"node": "agent", "owner": ["root"], "scope": []},
+        "type": "reflective",
+    }]
     assert expansion_digest(flow_policy) == expansion_digest(plain)
 
 
 @pytest.mark.parametrize("config", _PRIVATE_CONFIG_CASES)
-def test_policy_config_rejects_host_private_fields(config: dict) -> None:
+def test_decl_config_rejects_host_private_fields(config: dict) -> None:
     with pytest.raises(ValueError, match="forbidden private key"):
-        MemoryPolicySpec("reflective", config)
+        MemoryDecl("notes", "custom", config, DeclSite((), ("root",), None))
 
 
 @pytest.mark.parametrize("config", _PRIVATE_CONFIG_CASES)
 def test_authored_policy_config_rejects_host_private_fields(config: dict) -> None:
     source = _full_flow(
         "long_term_memory:\n"
-        "  name: reflective\n"
-        f"  config: {json.dumps(config)}\n"
+        "  notes:\n"
+        "    type: reflective\n"
+        f"    config: {json.dumps(config)}\n"
     )
 
     with pytest.raises(LoadError, match="forbidden private key"):
@@ -505,11 +585,11 @@ def test_policy_config_keeps_public_behavior_options() -> None:
         "database_query_options": {"timeout": 3},
     }
 
-    policy = MemoryPolicySpec("reflective", config)
+    policy = MemoryDecl("custom", "custom", config, DeclSite((), ("root",), None))
 
     assert policy.config == config
     rendered = json.dumps(
-        flow_manifest(CompiledFlow({}, [], memory_policy=policy)),
+        flow_manifest(CompiledFlow({}, [], memories=(policy,))),
         sort_keys=True,
     )
     assert "semantic-stop-marker" in rendered
@@ -517,8 +597,8 @@ def test_policy_config_keeps_public_behavior_options() -> None:
 
 
 def test_manifest_redaction_remains_defense_in_depth_for_forged_policy() -> None:
-    policy = MemoryPolicySpec("reflective", {})
-    flow = CompiledFlow({}, [], memory_policy=policy)
+    policy = MemoryDecl("reflective", "reflective", {}, DeclSite((), ("root",), None))
+    flow = CompiledFlow({}, [], memories=(policy,))
     private = MemorySnapshotEnvelope(
         "opaque",
         {"nested": {"api_key": "must-not-appear"}},
@@ -536,7 +616,7 @@ def test_manifest_redaction_remains_defense_in_depth_for_forged_policy() -> None
     assert flow_manifest(flow) == first_manifest
 
 
-def test_expansion_digest_excludes_flow_id_and_agent_memory_policy() -> None:
+def test_expansion_digest_excludes_flow_id_and_agent_memory() -> None:
     plain_flow = CompiledFlow({}, [])
     named_flow = CompiledFlow({}, [], flow_id="named")
     plain_agent = CompiledFlow({"agent": AgentNode("agent")}, [])
@@ -544,9 +624,13 @@ def test_expansion_digest_excludes_flow_id_and_agent_memory_policy() -> None:
         {
             "agent": AgentNode(
                 "agent",
-                memory_policy=MemoryPolicySpec(
-                    "reflective",
-                    {"max_items": 4},
+                memories=(
+                    MemoryDecl(
+                        "reflective",
+                        "reflective",
+                        {"max_items": 4},
+                        DeclSite((), ("root",), "agent"),
+                    ),
                 ),
             )
         },

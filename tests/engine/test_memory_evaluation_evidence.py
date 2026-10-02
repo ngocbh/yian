@@ -16,16 +16,16 @@ import agent_composer.llm_clients as llm_clients
 import agent_composer.tools as tools
 from agent_composer.compile.model import END_ID, START_ID, GrowthRejected
 from agent_composer.memory import (
+    DeclSite,
     EvaluationEvidence,
     EvaluationTrace,
     MemoryContext,
-    MemoryFrameRef,
-    MemoryFrameSpec,
     MemoryOccurrenceKind,
     MemoryOccurrenceSegment,
-    MemoryOwner,
     MemoryScope,
     MemorySnapshotEnvelope,
+    MemorySpec,
+    MemoryStack,
     ModelTextInteraction,
     ModelValueInteraction,
     ToolCallInteraction,
@@ -64,60 +64,30 @@ def _scope(
     *,
     occurrence: tuple[MemoryOccurrenceSegment, ...] = (),
 ) -> MemoryScope:
-    """Return one valid flow-plus-agent lexical scope for a test node."""
-    flow_ref = MemoryFrameRef(
-        "root",
-        ("root", "flow"),
-        MemoryOwner.FLOW,
-    )
-    agent_ref = MemoryFrameRef(
-        "root",
-        ("root", "flow", node_id),
-        MemoryOwner.AGENT,
-    )
-    return MemoryScope(
-        root_flow_id="root",
-        static_path=agent_ref.static_path,
-        frame_stack=(flow_ref, agent_ref),
-        occurrence_path=occurrence,
-    )
+    """Return one valid flow-plus-agent key scope for a test node."""
+    return MemoryScope(("flow", node_id), ("outer", "local"), occurrence)
 
 
 def _occurrence(index: int) -> tuple[MemoryOccurrenceSegment, ...]:
-    return (
-        MemoryOccurrenceSegment(
-            MemoryOccurrenceKind.MAP_ITEM,
-            ("root", "flow"),
-            index,
-        ),
-    )
+    return (MemoryOccurrenceSegment(MemoryOccurrenceKind.MAP_ITEM, ("flow",), index),)
 
 
 def _learning_configuration(
     *nodes: Node,
 ) -> tuple[
-    tuple[MemoryFrameSpec, ...],
+    tuple[MemorySpec, ...],
+    tuple[MemoryStack, ...],
     tuple[MemorySnapshotEnvelope, ...],
 ]:
-    """Return one canonical test policy authority for the nodes' frame stacks."""
-    refs = {
-        frame
-        for node in nodes
-        if type(node.memory_scope) is MemoryScope
-        for frame in node.memory_scope.frame_stack
-    }
-    layout = tuple(
-        MemoryFrameSpec(ref, "evidence-test", {})
-        for ref in sorted(
-            refs,
-            key=lambda item: (
-                item.root_flow_id,
-                item.static_path,
-                item.owner.value,
-            ),
-        )
+    """Return one canonical root-owned key table, stacks and snapshots for the nodes' scopes."""
+    scopes = [node.memory_scope for node in nodes if type(node.memory_scope) is MemoryScope]
+    keys = sorted({key for scope in scopes for key in scope.memories})
+    memories = tuple(
+        MemorySpec(key, key, {}, (DeclSite((), ("root",), None),), False) for key in keys
     )
-    return layout, (MemorySnapshotEnvelope("evidence-test", {}),)
+    by_locator = {scope.static_path: MemoryStack(scope.static_path, scope.memories) for scope in scopes}
+    stacks = tuple(by_locator[locator] for locator in sorted(by_locator))
+    return memories, stacks, tuple(MemorySnapshotEnvelope(key, {}) for key in keys)
 
 
 @contextmanager
@@ -404,7 +374,7 @@ def test_actual_render_capture_survives_later_failures_without_fabricating_evide
     }, {}), llm_config={"provider": "test", "model": "chosen"})
     node.params = [Parameter("topic")]
     node.memory_scope = _scope(node.id)
-    section = MemorySection(node.memory_scope.frame_stack[0], "Relevant memory.")
+    section = MemorySection(node.memory_scope.memories[0], "Relevant memory.")
     factory_calls, model_calls, recall_calls = [], [], []
 
     @contextmanager
@@ -428,10 +398,10 @@ def test_actual_render_capture_survives_later_failures_without_fabricating_evide
         return Chat()
 
     monkeypatch.setattr(llm_clients, "model_from_config", factory)
-    layout, snapshots = _learning_configuration(node)
+    memories, stacks, snapshots = _learning_configuration(node)
     engine = _engine(_graph([node], [(START_ID, "work"), ("work", END_ID)],
                             wiring={"work": {"topic": "reefs"}}), learnable=True,
-                     memory_layout=layout, memory_snapshots=snapshots, memory_context_opener=recall)
+                     memories=memories, memory_stacks=stacks, memory_snapshots=snapshots, memory_context_opener=recall)
     list(engine.run())
     record = next(item.record for item in engine.state.trace.occurrences if item.node_id == "work")
     assert type(record) is (NodeSucceededRecord if stage == "success" else NodeFailedRecord)
@@ -1183,10 +1153,10 @@ def _inflight_state(node: Node):
         [node],
         [(START_ID, node.id), (node.id, END_ID)],
     )
-    layout, snapshots = _learning_configuration(node)
+    memories, stacks, snapshots = _learning_configuration(node)
     engine = _engine(
         flow,
-        memory_layout=layout,
+        memories=memories, memory_stacks=stacks,
         memory_snapshots=snapshots,
         learnable=True,
     )
@@ -1284,11 +1254,11 @@ def test_dispatcher_contract_failures_retain_the_same_evidence(arm: str) -> None
             raise GrowthRejected(error) from error
 
     node.memory_scope = _scope(node.id)
-    layout, snapshots = _learning_configuration(node)
+    memories, stacks, snapshots = _learning_configuration(node)
     engine = _engine(
         _graph(nodes, edges),
         grow_builder=grow_builder,
-        memory_layout=layout,
+        memories=memories, memory_stacks=stacks,
         memory_snapshots=snapshots,
         learnable=True,
     )
@@ -1334,11 +1304,11 @@ def test_pooled_dispatch_discards_late_sibling_evidence_with_its_outcome() -> No
             (sibling.id, END_ID),
         ],
     )
-    layout, snapshots = _learning_configuration(failing, sibling)
+    memories, stacks, snapshots = _learning_configuration(failing, sibling)
     engine = _engine(
         flow,
         num_workers=2,
-        memory_layout=layout,
+        memories=memories, memory_stacks=stacks,
         memory_snapshots=snapshots,
         learnable=True,
     )

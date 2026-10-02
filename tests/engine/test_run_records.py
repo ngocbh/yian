@@ -33,19 +33,19 @@ from agent_composer.runtime.log import (
 from agent_composer.typesys import FileRef, ValueKind, VariablePool
 
 
-# Original schema-7 writer output for the source-free causal-route graph.
-_SCHEMA_SEVEN_ROUTE = (
+# Fixed writer output for the source-free causal-route graph.
+_RECORDED_ROUTE = (
     (
         b'{"kind":"run_started","payload":{"effective_llm_by_static_path":{},'
         b'"flow_fingerprint":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",'
         b'"initial_pool":{"start_id":"__start__","store":{"__start__":{"kind":"object","value":{}}},'
         b'"system":{"run_id":{"kind":"str","value":"direct-engine-test"}}},"learnable":true,'
-        b'"memory_layout":null,"memory_snapshots":null,"num_workers":0,"start_wiring_override":{}},'
-        b'"run_id":"direct-engine-test","schema":7,"seq":0}'
+        b'"memories":null,"memory_snapshots":null,"memory_stacks":null,"num_workers":0,"start_wiring_override":{}},'
+        b'"run_id":"direct-engine-test","schema":9,"seq":0}'
     ),
     (
         b'{"kind":"node_started","payload":{"node_id":"__start__"},"run_id":"direct-engine-test",'
-        b'"schema":7,"seq":1}'
+        b'"schema":9,"seq":1}'
     ),
     (
         b'{"kind":"node_succeeded","payload":{"commit_target":"__start__","evidence":null,'
@@ -55,10 +55,10 @@ _SCHEMA_SEVEN_ROUTE = (
         b'"snapshot":null,"source":null,"spans":[],"value_json":null},"scope":{"boundary":"start",'
         b'"flow_path":[],"occurrence_path":[],"static_path":["__start__"]},"variable_names":[]},'
         b'"node_id":"__start__","value":{"kind":"object","value":{}}},"run_id":"direct-engine-test",'
-        b'"schema":7,"seq":2}'
+        b'"schema":9,"seq":2}'
     ),
     (
-        b'{"kind":"node_started","payload":{"node_id":"router"},"run_id":"direct-engine-test","schema":7,'
+        b'{"kind":"node_started","payload":{"node_id":"router"},"run_id":"direct-engine-test","schema":9,'
         b'"seq":3}'
     ),
     (
@@ -69,7 +69,7 @@ _SCHEMA_SEVEN_ROUTE = (
         b'"scope":{"boundary":null,"flow_path":[],"occurrence_path":[],"static_path":["router"]},'
         b'"variable_names":[]},"handle":"go","node_id":"router","terminal_failure":{"cause_type":null,'
         b'"code":"graph.terminal_unreachable","message":"terminal output \'zeta\' skipped",'
-        b'"node_id":"router","trace":[],"traceback":null}},"run_id":"direct-engine-test","schema":7,'
+        b'"node_id":"router","trace":[],"traceback":null}},"run_id":"direct-engine-test","schema":9,'
         b'"seq":4}'
     ),
 )
@@ -89,20 +89,20 @@ def test_historical_frontier_prepares_recorded_schema_bytes(resumed):
     _, state, log, _ = _linear_history()
     state = _replay_records(RunState(deepcopy(state.flow)), tuple(log)[:1], grow_builder=build_grow)
     record = RunResumedRecord((), 0) if resumed else NodeStartedRecord(state.flow.start_id)
-    prepared = prepare_record(state, record, schema=7)
-    assert prepared._plan.envelope_bytes == encode_record(RecordEnvelope(7, state.run_id, 1, record))
+    prepared = prepare_record(state, record, schema=SCHEMA_VERSION)
+    assert prepared._plan.envelope_bytes == encode_record(RecordEnvelope(SCHEMA_VERSION, state.run_id, 1, record))
     assert state.next_sequence == 1
 
 
-@pytest.mark.parametrize("schema", [True, 7.0, "7", 6, 99])
+@pytest.mark.parametrize("schema", [True, 9.0, "9", 6, 7, 8, 99])
 def test_historical_record_requires_an_exact_supported_schema(schema):
     import agent_composer.run as run_module
     from agent_composer.compose import load_flow
     from agent_composer.runtime.state import prepare_record
-    from tests.engine.test_run_recovery_prefixes import _LINEAR, _ReadOnlyLog, _SCHEMA_SEVEN_LINEAR
+    from tests.engine.test_run_recovery_prefixes import _LINEAR, _ReadOnlyLog, _RECORDED_LINEAR
 
     state = run_module._replay_run_log(
-        load_flow(_LINEAR), _ReadOnlyLog((decode_record(_SCHEMA_SEVEN_LINEAR[0]),)),
+        load_flow(_LINEAR), _ReadOnlyLog((decode_record(_RECORDED_LINEAR[0]),)),
     )
     before = (state.next_sequence, tuple(state.ready), dict(state.in_flight))
     with pytest.raises((TypeError, ValueError)):
@@ -117,7 +117,7 @@ def test_prepared_record_tamper_check_uses_frozen_schema(change):
     from tests.engine.test_run_state_initialization import _flow, _snapshot, _start_data
 
     state = RunState(_flow())
-    prepared = prepare_run_started(state, _start_data(state.flow), schema=7)
+    prepared = prepare_run_started(state, _start_data(state.flow), schema=SCHEMA_VERSION)
     before = _snapshot(state)
     _require_unchanged_record(prepared, prepared._plan.envelope_bytes)
     if change == "payload":
@@ -140,14 +140,16 @@ def test_append_result_wrong_schema_is_protocol_fault():
     class WrongSchemaLog(MemoryRunLog):
         def append(self, record):
             accepted = super().append(record)
-            assert accepted.schema == 8
-            return RecordEnvelope(7, accepted.run_id, accepted.seq, accepted.record)
+            assert accepted.schema == SCHEMA_VERSION
+            forged = RecordEnvelope(SCHEMA_VERSION, accepted.run_id, accepted.seq, accepted.record)
+            object.__setattr__(forged, "schema", 8)
+            return forged
 
     state = RunState(_flow())
     prepared = prepare_run_started(state, replace(_start_data(state.flow), learnable=True))
     before = _snapshot(state)
     log = WrongSchemaLog(prepared.expected_run_id)
-    with pytest.raises(ValueError, match="append result"):
+    with pytest.raises(ValueError, match="predates schema 9"):
         commit_prepared(log, state, prepared)
     assert _snapshot(state) == before
     assert state.trace is None
@@ -165,16 +167,16 @@ def test_historical_outcomes_keep_schema_in_trace_bytes(kind):
         RunState, _HistoricalLogCursor, _replay_records, commit_prepared, prepare_record,
     )
     from tests.engine.test_backward_recovery import (
-        _SCHEMA_SEVEN_BACKWARD, _SCHEMA_SEVEN_BACKWARD_FLOW, _SCHEMA_SEVEN_FAILURE,
+        _RECORDED_BACKWARD, _RECORDED_BACKWARD_FLOW, _RECORDED_FAILURE,
     )
     from tests.engine.test_run_recovery_matrix import (
-        _SCHEMA_SEVEN_GROWTH_PREFIX, _schema_seven_growth_flow,
+        _RECORDED_GROWTH_PREFIX, _recorded_growth_flow,
     )
     from tests.engine.test_run_recovery_prefixes import _ReadOnlyLog
     from tests.engine.test_run_state_outcomes import _terminal_skip_route_flow
 
     if kind == "route":
-        wires = _SCHEMA_SEVEN_ROUTE
+        wires = _RECORDED_ROUTE
         flow = _terminal_skip_route_flow()
         apply_execution_layout(flow, resolve_execution_layout(flow))
         state = _replay_records(
@@ -183,20 +185,20 @@ def test_historical_outcomes_keep_schema_in_trace_bytes(kind):
         )
     else:
         if kind == "growth":
-            wires = _SCHEMA_SEVEN_GROWTH_PREFIX[:5]
-            flow = _schema_seven_growth_flow()
+            wires = _RECORDED_GROWTH_PREFIX[:5]
+            flow = _recorded_growth_flow()
         elif kind == "failure":
-            wires = _SCHEMA_SEVEN_FAILURE
-            flow = load_flow(_SCHEMA_SEVEN_BACKWARD_FLOW.replace("return 3", 'return "bad"'))
+            wires = _RECORDED_FAILURE
+            flow = load_flow(_RECORDED_BACKWARD_FLOW.replace("return 3", 'return "bad"'))
         else:
-            wires = _SCHEMA_SEVEN_BACKWARD[:5]
-            flow = load_flow(_SCHEMA_SEVEN_BACKWARD_FLOW)
+            wires = _RECORDED_BACKWARD[:5]
+            flow = load_flow(_RECORDED_BACKWARD_FLOW)
         state = run_module._replay_run_log(
             flow, _ReadOnlyLog(tuple(decode_record(wire) for wire in wires[:-1])),
         )
     expected = decode_record(wires[-1])
     before = state.trace.occurrences
-    prepared = prepare_record(state, expected.record, grow_builder=build_grow, schema=7)
+    prepared = prepare_record(state, expected.record, grow_builder=build_grow, schema=SCHEMA_VERSION)
     assert prepared._plan.envelope_bytes == wires[-1]
     assert state.trace.occurrences == before
     cursor = _HistoricalLogCursor(wires)
@@ -205,26 +207,21 @@ def test_historical_outcomes_keep_schema_in_trace_bytes(kind):
     commit_prepared(cursor, state, prepared)
     assert state.trace.occurrences[:-1] == before
     assert state.trace.occurrences[-1]._record_bytes == wires[-1]
-    assert decode_record(state.trace.occurrences[-1]._record_bytes).schema == 7
+    assert decode_record(state.trace.occurrences[-1]._record_bytes).schema == SCHEMA_VERSION
 
 
 def _records():
     """Return one representative value for every closed run-record variant."""
-    from agent_composer.memory import MemoryFrameRef, MemoryMutation, MemoryOperationFailure, MemoryOwner
+    from agent_composer.memory import MemoryMutation, MemoryOperationFailure
     from agent_composer.runtime.log import (
-        ConversationAdmittedRecord, ConversationEffectRequestedRecord,
-        ConversationEffectObservedRecord, ConversationClosedRecord,
         MemoryCommitFailedRecord, MemoryCommitRequestedRecord, MemoryCommitSucceededRecord,
     )
     from tests.engine.test_backward_records import _backward_records
-    from tests.engine.test_session_records import _conversation_checkpoints
 
     pool = VariablePool(start_id="start")
     pool.set("start", {"name": "Ada"})
-    frame = MemoryFrameRef("root", ("root", "agent"), MemoryOwner.AGENT)
-    mutations = (MemoryMutation("m1", frame, {"text": "Remember."}),)
+    mutations = (MemoryMutation("m1", {"text": "Remember."}),)
     failure = MemoryOperationFailure("backend", "backend.failed", "Failed.", True)
-    admitted, requested, observed, closed = _conversation_checkpoints()
     return [
         RunStartedRecord(
             flow_fingerprint=_FINGERPRINT,
@@ -263,10 +260,6 @@ def _records():
         MemoryCommitSucceededRecord("history", "commit-1", attempt_id=1),
         MemoryCommitFailedRecord("history", "commit-1", failure, attempt_id=1),
         *_backward_records(),
-        ConversationAdmittedRecord(admitted),
-        ConversationEffectRequestedRecord(requested),
-        ConversationEffectObservedRecord(observed),
-        ConversationClosedRecord(closed),
     ]
 
 
@@ -308,6 +301,21 @@ def test_removed_frame_learning_wire_kinds_are_rejected(kind, extra):
         decode_record(json.dumps(wire).encode())
 
 
+@pytest.mark.parametrize("kind", [
+    "conversation_admitted", "conversation_effect_requested",
+    "conversation_effect_observed", "conversation_closed",
+])
+def test_removed_conversation_wire_kinds_are_rejected(kind):
+    import agent_composer.runtime.log as run_log
+
+    wire = {"schema": SCHEMA_VERSION, "run_id": "run", "seq": 0, "kind": kind,
+            "payload": {"checkpoint": {}}}
+    with pytest.raises(ValueError, match=f"run-record kind '{kind}' is unsupported"):
+        decode_record(json.dumps(wire).encode())
+    record_name = "".join(part.title() for part in kind.split("_")) + "Record"
+    assert not hasattr(run_log, record_name)
+
+
 @pytest.mark.parametrize("kind,payload", [
     ("memory_commit_requested", {"mutations": []}),
     ("memory_commit_succeeded", {}),
@@ -317,14 +325,14 @@ def test_removed_frame_learning_wire_kinds_are_rejected(kind, extra):
 ])
 def test_memory_commit_wire_requires_a_positive_attempt(kind, payload):
     wire = {"schema": SCHEMA_VERSION, "run_id": "run", "seq": 0, "kind": kind,
-            "payload": {"policy_name": "history", "commit_id": "commit-1", "attempt_id": None, **payload}}
+            "payload": {"memory": "history", "commit_id": "commit-1", "attempt_id": None, **payload}}
     with pytest.raises(ValueError):
         decode_record(json.dumps(wire).encode())
 
 
 def test_record_encoding_is_canonical_newline_free_and_byte_stable():
     envelope = RecordEnvelope(
-        schema=7,
+        schema=SCHEMA_VERSION,
         run_id="run-canonical",
         seq=0,
         record=NodeStartedRecord(node_id="work"),
@@ -334,7 +342,7 @@ def test_record_encoding_is_canonical_newline_free_and_byte_stable():
 
     assert encoded == (
         b'{"kind":"node_started","payload":{"node_id":"work"},'
-        b'"run_id":"run-canonical","schema":7,"seq":0}'
+        b'"run_id":"run-canonical","schema":9,"seq":0}'
     )
     assert not encoded.endswith(b"\n")
     assert encode_record(decode_record(encoded)) == encoded
@@ -342,7 +350,7 @@ def test_record_encoding_is_canonical_newline_free_and_byte_stable():
 
 def test_node_failure_encoding_nests_one_canonical_failure():
     envelope = RecordEnvelope(
-        schema=7,
+        schema=SCHEMA_VERSION,
         run_id="run-failure",
         seq=7,
         record=NodeFailedRecord(
@@ -360,7 +368,7 @@ def test_node_failure_encoding_nests_one_canonical_failure():
     encoded = encode_record(envelope)
 
     assert json.loads(encoded) == {
-        "schema": 7,
+        "schema": 9,
         "run_id": "run-failure",
         "seq": 7,
         "kind": "node_failed",
@@ -466,42 +474,42 @@ def _json_bytes(value: object) -> bytes:
             "payload": {"node_id": "work"},
         },
         {
-            "schema": 7.0,
+            "schema": 9.0,
             "run_id": "run",
             "seq": 0,
             "kind": "node_started",
             "payload": {"node_id": "work"},
         },
         {
-            "schema": 7,
+            "schema": 9,
             "run_id": "",
             "seq": 0,
             "kind": "node_started",
             "payload": {"node_id": "work"},
         },
         {
-            "schema": 7,
+            "schema": 9,
             "run_id": "run",
             "seq": -1,
             "kind": "node_started",
             "payload": {"node_id": "work"},
         },
         {
-            "schema": 7,
+            "schema": 9,
             "run_id": "run",
             "seq": True,
             "kind": "node_started",
             "payload": {"node_id": "work"},
         },
         {
-            "schema": 7,
+            "schema": 9,
             "run_id": "run",
             "seq": 0,
             "kind": "not_a_record",
             "payload": {},
         },
         {
-            "schema": 7,
+            "schema": 9,
             "run_id": "run",
             "seq": 0,
             "kind": "node_started",
@@ -509,7 +517,7 @@ def _json_bytes(value: object) -> bytes:
             "unexpected": True,
         },
         {
-            "schema": 7,
+            "schema": 9,
             "run_id": "run",
             "seq": 0,
             "kind": "node_started",
@@ -525,28 +533,28 @@ def test_decode_rejects_invalid_envelopes(wire):
     "wire",
     [
         {
-            "schema": 7,
+            "schema": 9,
             "run_id": "run",
             "seq": 0,
             "kind": "node_started",
             "payload": {"node_id": "work", "unexpected": True},
         },
         {
-            "schema": 7,
+            "schema": 9,
             "run_id": "run",
             "seq": 0,
             "kind": "node_started",
             "payload": {},
         },
         {
-            "schema": 7,
+            "schema": 9,
             "run_id": "run",
             "seq": 0,
             "kind": "node_started",
             "payload": {"node_id": 7},
         },
         {
-            "schema": 7,
+            "schema": 9,
             "run_id": "run",
             "seq": 0,
             "kind": "node_succeeded",
@@ -557,7 +565,7 @@ def test_decode_rejects_invalid_envelopes(wire):
             },
         },
         {
-            "schema": 7,
+            "schema": 9,
             "run_id": "run",
             "seq": 0,
             "kind": "node_failed",
@@ -581,9 +589,9 @@ def test_decode_rejects_unknown_missing_and_wrong_payload_fields(wire):
 
 
 def _node_failure_wire() -> dict[str, Any]:
-    """Return one independently mutable valid schema-7 node-failure object."""
+    """Return one independently mutable valid node-failure object."""
     return {
-        "schema": 7,
+        "schema": 9,
         "run_id": "run",
         "seq": 0,
         "kind": "node_failed",
@@ -692,8 +700,8 @@ def test_decode_rejects_malformed_nested_failures(case, mutate):
 
 
 @pytest.mark.parametrize("field", ["locator", "range"])
-def test_schema_7_node_failure_rejects_legacy_location_fields(field):
-    """The schema-7 failure payload has one exact authority: `failure`."""
+def test_node_failure_rejects_legacy_location_fields(field):
+    """The failure payload has one exact authority: `failure`."""
     wire = _node_failure_wire()
     wire["payload"][field] = None
 
@@ -701,7 +709,7 @@ def test_schema_7_node_failure_rejects_legacy_location_fields(field):
         decode_record(_json_bytes(wire))
 
 
-@pytest.mark.parametrize("schema", [1, 2, 3, 4, 5, 6])
+@pytest.mark.parametrize("schema", [1, 2, 3, 4, 5, 6, 7, 8])
 def test_decode_rejects_old_schemas_even_with_a_nested_failure(schema):
     wire = _node_failure_wire()
     wire["schema"] = schema
@@ -727,7 +735,7 @@ def test_decode_rejects_flattened_failure_aliases():
 
 def test_decode_requires_explicit_route_terminal_failure_field():
     wire = {
-        "schema": 7,
+        "schema": 9,
         "run_id": "run",
         "seq": 0,
         "kind": "node_routed",
@@ -740,7 +748,7 @@ def test_decode_requires_explicit_route_terminal_failure_field():
 
 def test_decode_rejects_extra_nested_route_terminal_failure_field():
     wire = {
-        "schema": 7,
+        "schema": 9,
         "run_id": "run",
         "seq": 0,
         "kind": "node_routed",
@@ -766,7 +774,7 @@ def test_decode_rejects_extra_nested_route_terminal_failure_field():
 
 def test_decode_rejects_duplicate_keys_at_any_object_depth():
     duplicate_payload_key = (
-        b'{"schema":7,"run_id":"run","seq":0,"kind":"node_started",'
+        b'{"schema":9,"run_id":"run","seq":0,"kind":"node_started",'
         b'"payload":{"node_id":"first","node_id":"second"}}'
     )
 
@@ -774,7 +782,7 @@ def test_decode_rejects_duplicate_keys_at_any_object_depth():
         decode_record(duplicate_payload_key)
 
     duplicate_origin_key = (
-        b'{"schema":7,"run_id":"run","seq":0,"kind":"node_failed",'
+        b'{"schema":9,"run_id":"run","seq":0,"kind":"node_failed",'
         b'"payload":{"failure":{"code":"node.execute","message":"boom",'
         b'"node_id":"work","trace":[{"key":"one","key":"two"}],'
         b'"cause_type":null,"traceback":null}}}'
@@ -872,7 +880,7 @@ def test_canonical_json_rejects_lone_unicode_surrogates_as_value_errors():
         )
     with pytest.raises(ValueError, match="Unicode surrogate"):
         decode_record(
-            '{"schema":7,"run_id":"run","seq":0,"kind":"node_started",'
+            '{"schema":9,"run_id":"run","seq":0,"kind":"node_started",'
             '"payload":{"node_id":"\\ud800"}}'
         )
 
@@ -891,7 +899,7 @@ def test_canonical_data_rejects_excessive_nesting_as_a_value_error():
 def test_decode_record_rejects_excessive_nesting_as_a_value_error():
     nested = '{"nested":' * 1_500 + "null" + "}" * 1_500
     wire = (
-        '{"schema":7,"run_id":"run","seq":0,"kind":"node_started",'
+        '{"schema":9,"run_id":"run","seq":0,"kind":"node_started",'
         f'"payload":{{"node_id":"work","extra":{nested}}}}}'
     )
 

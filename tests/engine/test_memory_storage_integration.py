@@ -31,7 +31,6 @@ output: ${work.output}
 """
 _AGENT_FLOW = """id: durable-session
 name: durable_session
-long_term_memory: session
 llm_config: {provider: openai, model: storage-test-model}
 input:
   question: str
@@ -39,6 +38,7 @@ nodes:
   agent:
     kind: agent
     mode: plain
+    long_term_memory: session
     prompt: ${question}
     input:
       question: ${input.question}
@@ -153,13 +153,12 @@ def test_explicit_learning_remains_saved_after_reopen(policy, tmp_path, monkeypa
     with _backend(policy, path) as memory:
         result = run_flow(flow, {}, memory={policy: memory}, learnable=True, log=log)
         assert result.status == "succeeded" and result.output == 7
-        assert _snapshot(memory)["frames"] == []
+        field = "episodes" if policy == "episodic" else "lessons"
+        assert _snapshot(memory)[field] == []
         result.backward()
         assert result.learning.status == "succeeded"
         recorded = _snapshot(memory)
-        assert recorded["frames"]
-        field = "episodes" if policy == "episodic" else "lessons"
-        assert recorded["frames"][0][field]
+        assert recorded[field]
     prefix = log.read_bytes()
     with _backend(policy, path) as reopened:
         assert _snapshot(reopened) == recorded
@@ -188,7 +187,7 @@ def test_api_session_history_is_used_after_reopening_storage(tmp_path, monkeypat
             "reply 1",
             "second",
         ]
-        assert len(_snapshot(reopened)["conversations"][0]["items"]) == 6
+        assert len(_snapshot(reopened)["conversation"]["items"]) == 6
 
 
 def test_api_session_learned_notes_survive_storage_reopen(tmp_path, monkeypatch):
@@ -217,11 +216,11 @@ def test_api_session_learned_notes_survive_storage_reopen(tmp_path, monkeypatch)
         first = run_flow(
             flow, {"question": "first"}, memory={"session": memory}, learnable=True
         )
-        raw = deepcopy(_snapshot(memory)["conversations"])
+        raw = deepcopy(_snapshot(memory)["conversation"])
         first.backward("Remember to check the units.")
         assert first.learning.status == "succeeded"
         recorded = _snapshot(memory)
-        assert recorded["conversations"] == raw
+        assert recorded["conversation"] == raw
         assert len(recorded["notes"]) == 1
     with SessionMemory(storage=path) as reopened:
         assert _snapshot(reopened) == recorded
@@ -262,7 +261,7 @@ def test_resume_reopens_latest_saved_history_instead_of_the_old_run_snapshot(
                 flow, {"question": "question"}, memory={"session": memory}, log=log
             )
         saved = _snapshot(memory)
-        assert saved["conversations"][0]["effects"][0]["status"] == "completed"
+        assert saved["conversation"]["effects"][0]["status"] == "completed"
     prefix = log.read_bytes()
     with SessionMemory(storage=path) as reopened:
         assert _snapshot(reopened) == saved
@@ -271,7 +270,7 @@ def test_resume_reopens_latest_saved_history_instead_of_the_old_run_snapshot(
         context = [message.content for message in model.calls[-1]]
         assert "reply saved before cancellation" in context
         assert context.count("question") == 2
-        effects = _snapshot(reopened)["conversations"][0]["effects"]
+        effects = _snapshot(reopened)["conversation"]["effects"]
         assert len(effects) == 2
         assert effects[0]["invocation"] != effects[1]["invocation"]
     assert log.read_bytes().startswith(prefix)
@@ -300,7 +299,7 @@ def test_api_summary_cache_survives_reopen_under_current_budget(tmp_path, monkey
             )
             assert result.output == f"answer {index}"
         assert len(model.calls) == 7
-        raw = _snapshot(memory)["conversations"][0]["items"]
+        raw = _snapshot(memory)["conversation"]["items"]
         assert summary not in json.dumps(raw)
     with SessionMemory(storage=path, history_budget_chars=100_000) as reopened:
         result = run_flow(
@@ -311,7 +310,7 @@ def test_api_summary_cache_survives_reopen_under_current_budget(tmp_path, monkey
         assert any(summary in content for content in context)
         assert "question 0" not in context
         assert all(f"question {index}" in context for index in range(1, 7))
-        assert _snapshot(reopened)["conversations"][0]["items"][: len(raw)] == raw
+        assert _snapshot(reopened)["conversation"]["items"][: len(raw)] == raw
 
 
 def test_more_recent_turns_on_reopen_restores_raw_context(tmp_path, monkeypatch):

@@ -16,7 +16,6 @@ from agent_composer.expr.lineage import (
 )
 from agent_composer.memory.contracts import (
     LearningResult,
-    MemoryFrameRef,
     MemoryMutation,
     MemoryOperationFailure,
     _validate_mutations,
@@ -430,27 +429,25 @@ class AttributedBackwardResult:
 
 
 @dataclass(frozen=True, slots=True)
-class FrameProposal:
-    """Detached ordered mutations proposed for one recorded owning frame.
+class MemoryProposal:
+    """Detached ordered mutations one memory proposed in a backward attempt.
 
     Attributes:
-        frame_ref (`MemoryFrameRef`): Exact ownership identity; policy membership
-            comes from the recorded layout.
-        mutations (`tuple[MemoryMutation, ...]`): Frame-local mutations with unique
-            IDs, retained in proposal order. An empty batch is valid.
+        memory (`str`): The recorded memory key.
+        mutations (`tuple[MemoryMutation, ...]`): Mutations with unique IDs, in
+            proposal order. An empty batch is valid.
     """
 
-    frame_ref: MemoryFrameRef
+    memory: str
     mutations: tuple[MemoryMutation, ...]
 
     def __post_init__(self) -> None:
-        """Validate ownership and retain independent canonical mutation payloads."""
-        if type(self.frame_ref) is not MemoryFrameRef:
-            raise TypeError("frame_ref must be a MemoryFrameRef")
-        object.__setattr__(self, "frame_ref", replace(self.frame_ref))
-        object.__setattr__(
-            self, "mutations", _validate_mutations(self.mutations, frame_ref=self.frame_ref),
-        )
+        """Validate the key and retain independent canonical mutation payloads."""
+        if type(self.memory) is not str:
+            raise TypeError("memory must be a string")
+        if not self.memory:
+            raise ValueError("memory must be non-empty")
+        object.__setattr__(self, "mutations", _validate_mutations(self.mutations))
 
 
 @dataclass(frozen=True, slots=True)
@@ -466,8 +463,7 @@ class BackwardFailure:
         node_id (`str | None`): Executing node's display ID, when applicable.
         node_started_seq (`int | None`): Positive accepted start sequence identifying
             a node occurrence together with its run ID.
-        policy_name (`str | None`): Responsible memory policy, when applicable.
-        frame_ref (`MemoryFrameRef | None`): Responsible owned memory frame, if any.
+        memory (`str | None`): Responsible memory key, when applicable.
         cause (`Failure | MemoryOperationFailure | None`): Underlying source-neutral
             diagnostic, including a backend retryability hint when one exists.
             Failure origins retain only their canonical keys.
@@ -482,8 +478,7 @@ class BackwardFailure:
     run_id: str | None = None
     node_id: str | None = None
     node_started_seq: int | None = None
-    policy_name: str | None = None
-    frame_ref: MemoryFrameRef | None = None
+    memory: str | None = None
     cause: Failure | MemoryOperationFailure | None = None
     cause_type: str | None = None
     traceback: str | None = None
@@ -500,7 +495,7 @@ class BackwardFailure:
         for name, value in (
             ("run_id", self.run_id),
             ("node_id", self.node_id),
-            ("policy_name", self.policy_name),
+            ("memory", self.memory),
             ("cause_type", self.cause_type),
             ("traceback", self.traceback),
         ):
@@ -515,10 +510,6 @@ class BackwardFailure:
             if type(self.scope) is not ExecutionScope:
                 raise TypeError("scope must be an ExecutionScope or None")
             ExecutionScope.__post_init__(self.scope)
-        if self.frame_ref is not None:
-            if type(self.frame_ref) is not MemoryFrameRef:
-                raise TypeError("frame_ref must be a MemoryFrameRef or None")
-            MemoryFrameRef.__post_init__(self.frame_ref)
         if self.cause is not None:
             if type(self.cause) is Failure:
                 Failure.__post_init__(self.cause)
@@ -547,7 +538,7 @@ class BackwardOutcome:
         failure (`BackwardFailure | None`): The failed attempt's diagnostic;
             absent on success.
         learning (`LearningResult | None`): Memory learning disposition, or
-            `None` when no memory policies participate.
+            `None` when no memory participates.
     """
 
     status: Literal["succeeded", "failed"]
@@ -589,5 +580,5 @@ class BackwardOutcome:
 
 __all__ = [
     "AttributedBackwardResult", "BackwardAttribution", "BackwardCapture",
-    "BackwardFailure", "BackwardOutcome", "ForwardCapture", "FrameProposal",
+    "BackwardFailure", "BackwardOutcome", "ForwardCapture", "MemoryProposal",
 ]

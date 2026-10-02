@@ -4,7 +4,7 @@ Runtime executes compiled topology by preparing one record, appending it, and on
 then applying its state transition. Graph-growth construction arrives as an
 injected callable from the run boundary, so runtime interprets no node kind and
 owns no compile-time expansion. Run-scoped memory orchestration consumes only
-source-neutral frame contracts and injected policy sessions; its learning intents
+source-neutral memory contracts and injected memory sessions; its learning intents
 follow the same append-before-apply reducer path. Pooled drives own their workers
 through a full join and signal cooperative stop before that join when dispatch
 exits abnormally.
@@ -21,9 +21,6 @@ The internal reverse fold walks accepted outcomes once without writing state,
 logs, or memory. Trace-owned terminal authority and context reconstruction are
 shared below that fold; durable attribution references values instead of copying
 materialized downstream histories.
-Legacy conversation wrappers remain readable as inert compatibility metadata.
-State validates their unfinished invocation and compiled memory scope, then advances
-record sequencing without retaining conversations, restoring memory, or granting effects.
 
   Knows about:   events, memory contracts and wire codecs, typesys, nodes, tools (the
                  per-run ``ToolSet``), and compile topology/identity/validation contracts.

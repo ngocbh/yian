@@ -16,7 +16,7 @@ from agent_composer.memory.contracts import (
     _thaw_json_object,
 )
 
-_VERSION = 1
+_VERSION = 2
 _SCHEMA = (
     "CREATE TABLE memory_state ("
     "id INTEGER PRIMARY KEY CHECK (id = 1), envelope TEXT NOT NULL)"
@@ -95,6 +95,39 @@ def _decode(raw: object, backend: str) -> JsonObject | None:
         ) from None
 
 
+def check_storage_path(path: str | os.PathLike[str]) -> str:
+    """Return an absolute local file path, rejecting non-file targets without I/O.
+
+    Args:
+        path (`str | PathLike[str]`): Candidate storage file.
+
+    Returns:
+        `str`: The path joined to the current directory if relative, without
+        normalizing ``..``. Symlinks are resolved later, when the file is opened.
+
+    Raises:
+        `MemoryOperationError`: Empty paths, SQLite URIs, in-memory targets,
+            bytes, NUL characters and non-UTF-8 text (`storage.path`).
+    """
+    try:
+        raw_path = os.fspath(path)
+        if (
+            type(raw_path) is not str
+            or not raw_path
+            or raw_path == ":memory:"
+            or raw_path.lower().startswith("file:")
+            or "\x00" in raw_path
+        ):
+            raise ValueError("invalid file path")
+        raw_path.encode("utf-8")
+        if os.path.isabs(raw_path):
+            return raw_path
+        # Collapsing ".." here would skip a symlink the OS follows on open.
+        return os.path.join(os.getcwd(), raw_path)
+    except (TypeError, ValueError):
+        raise _error("path", "Memory storage requires a local file path.") from None
+
+
 class SQLiteStorage:
     """Own one local SQLite file until explicitly closed.
 
@@ -104,13 +137,18 @@ class SQLiteStorage:
     This private adapter does not own backend sessions, queues, or callbacks.
     """
 
-    def __init__(self, path: str | os.PathLike[str], backend: str) -> None:
+    def __init__(
+        self, path: str | os.PathLike[str], backend: str, *, create_parent: bool = False
+    ) -> None:
         """Open or initialize a file and acquire nonblocking lifetime ownership.
 
         Args:
-            path (`str | PathLike[str]`): Local file path with an existing parent.
-                Empty paths, SQLite URIs, bytes, and in-memory targets are invalid.
+            path (`str | PathLike[str]`): Local file path. Its parent must exist
+                unless `create_parent`. Empty paths, SQLite URIs, bytes, and
+                in-memory targets are invalid.
             backend (`str`): Nonempty backend-kind discriminator for this file.
+            create_parent (`bool`, *optional*, defaults to `False`): Create
+                missing parent directories before opening.
 
         Raises:
             `MemoryOperationError`: Invalid settings, an occupied file, an
@@ -122,20 +160,9 @@ class SQLiteStorage:
             raise _error(
                 "backend", "Memory storage requires a nonempty backend kind."
             ) from None
+        checked = check_storage_path(path)
         try:
-            raw_path = os.fspath(path)
-            if (
-                type(raw_path) is not str
-                or not raw_path
-                or raw_path == ":memory:"
-                or raw_path.lower().startswith("file:")
-                or "\x00" in raw_path
-            ):
-                raise ValueError("invalid file path")
-            raw_path.encode("utf-8")
-            self._path = os.path.realpath(raw_path)
-        except (TypeError, ValueError):
-            raise _error("path", "Memory storage requires a local file path.") from None
+            self._path = os.path.realpath(checked)
         except OSError as error:
             raise _io_error(error) from None
         self._pid = os.getpid()
@@ -144,6 +171,8 @@ class SQLiteStorage:
         self._closed = False
         self._poisoned = False
         try:
+            if create_parent:
+                os.makedirs(os.path.dirname(self._path), exist_ok=True)
             try:
                 descriptor = os.open(
                     self._path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600

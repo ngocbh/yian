@@ -17,12 +17,8 @@ from agent_composer.compile.model import START_ID, CompiledFlow, Edge, Flow, Flo
 from agent_composer.compose import load_flow
 from agent_composer.diagnostics import OriginRef
 from agent_composer.memory import (
-    MemoryBoundary,
-    MemoryBoundaryKind,
-    MemoryFrameRef,
     MemoryOccurrenceKind,
     MemoryOccurrenceSegment,
-    MemoryOwner,
     MemoryScope,
 )
 from agent_composer.nodes.agent import AgentNode
@@ -2412,23 +2408,21 @@ def test_node_origin_context_does_not_affect_program_or_expansion_identity():
 def test_memory_scope_is_not_authored_identity_but_is_expansion_topology():
     plain = _fragment()
     stamped = copy.deepcopy(plain)
-    stamped.nodes["body"].memory_scope = MemoryScope(
-        "root",
-        ("root", "body"),
-    )
+    stamped.nodes["body"].memory_scope = MemoryScope(("body",))
 
     assert flow_manifest(stamped) == flow_manifest(plain)
     assert flow_fingerprint(stamped) == flow_fingerprint(plain)
     assert expansion_digest(stamped) != expansion_digest(plain)
 
 
-def test_memory_expansion_projection_omits_root_and_policy_identity():
+def test_memory_expansion_projection_omits_root_id_and_config_but_hashes_keys():
     def compiled(root_id: str, policy: str, limit: int) -> CompiledFlow:
         source = f"""id: {root_id}
 name: memory
 long_term_memory:
-  name: {policy}
-  config: {{limit: {limit}}}
+  {policy}:
+    type: {policy}
+    config: {{limit: {limit}}}
 nodes:
   body:
     kind: code
@@ -2441,68 +2435,47 @@ output: ${{body.output}}
         apply_memory_layout(flow, resolve_memory_layout(flow))
         return flow
 
-    first = compiled("first", "reflective", 3)
-    second = compiled("second", "profile", 99)
+    first = compiled("first", "outer", 3)
+    second = compiled("second", "outer", 99)
+    other_key = compiled("first", "inner", 3)
 
     assert flow_fingerprint(first) != flow_fingerprint(second)
     assert expansion_digest(first) == expansion_digest(second)
+    assert expansion_digest(first) != expansion_digest(other_key)
 
 
-def test_memory_expansion_projection_covers_frame_occurrence_and_boundary_topology():
-    root = "root"
-    scope_path = (root, "nested", "body")
-    frame = MemoryFrameRef(root, (root,), MemoryOwner.FLOW)
+def test_memory_expansion_projection_covers_keys_and_occurrence_topology():
+    scope_path = ("nested", "body")
+    segment = MemoryOccurrenceSegment(MemoryOccurrenceKind.MAP_ITEM, ("nested",), 0)
     baseline = _fragment()
-    baseline.nodes["body"].memory_scope = MemoryScope(
-        root,
-        scope_path,
-    )
+    baseline.nodes["body"].memory_scope = MemoryScope(scope_path)
+    variants = [baseline]
+    for memories, occurrence_path in (
+        (("notes",), ()),
+        (("chat",), ()),
+        (("notes", "chat"), ()),
+        (("chat", "notes"), ()),
+        (("notes",), (segment,)),
+    ):
+        flow = copy.deepcopy(baseline)
+        flow.nodes["body"].memory_scope = MemoryScope(scope_path, memories, occurrence_path)
+        variants.append(flow)
 
-    with_frame = copy.deepcopy(baseline)
-    with_frame.nodes["body"].memory_scope = MemoryScope(
-        root,
-        scope_path,
-        frame_stack=(frame,),
-    )
-    with_other_frame_path = copy.deepcopy(with_frame)
-    other_frame = MemoryFrameRef(root, (root, "nested"), MemoryOwner.FLOW)
-    with_other_frame_path.nodes["body"].memory_scope = MemoryScope(
-        root,
-        scope_path,
-        frame_stack=(other_frame,),
-    )
-    with_occurrence = copy.deepcopy(with_frame)
-    with_occurrence.nodes["body"].memory_scope = MemoryScope(
-        root,
-        scope_path,
-        frame_stack=(frame,),
-        occurrence_path=(
-            MemoryOccurrenceSegment(
-                MemoryOccurrenceKind.MAP_ITEM,
-                (root, "nested"),
-                0,
-            ),
-        ),
-    )
-    with_boundary = copy.deepcopy(with_frame)
-    with_boundary.nodes["body"].memory_scope = MemoryScope(
-        root,
-        scope_path,
-        frame_stack=(frame,),
-        boundary=MemoryBoundary(MemoryBoundaryKind.END, frame),
-    )
+    assert len({expansion_digest(flow) for flow in variants}) == 6
 
-    digests = {
-        expansion_digest(flow)
-        for flow in (
-            baseline,
-            with_frame,
-            with_other_frame_path,
-            with_occurrence,
-            with_boundary,
-        )
+
+def test_memory_expansion_projection_fields():
+    from agent_composer.compile.manifest import _memory_scope_topology
+
+    segment = MemoryOccurrenceSegment(MemoryOccurrenceKind.MAP_ITEM, ("nested",), 1)
+    scope = MemoryScope(("nested", "body"), ("notes",), (segment,))
+    assert _memory_scope_topology(scope, "scope") == {
+        "memories": ["notes"],
+        "occurrence_path": [
+            {"index": 1, "kind": "map_item", "static_path": ["nested"]}
+        ],
+        "static_path": ["nested", "body"],
     }
-    assert len(digests) == 5
 
 
 def test_case_predicate_origins_do_not_affect_program_or_expansion_identity():

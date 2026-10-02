@@ -36,8 +36,8 @@ from agent_composer.runtime.state import (
 from agent_composer.typesys import VariablePool
 
 
-# Original schema-7 writer output; keep these bytes independent of the current codec.
-_SCHEMA_SEVEN_LINEAR = (
+# Fixed writer output; keep these bytes independent of the current codec.
+_RECORDED_LINEAR = (
     (
         b'{"kind":"run_started","payload":{"effective_llm_by_static_path":{},'
         b'"flow_fingerprint":"f9dc393826a54789e40a098e4605a49c79aa199a801ad1b4b7a7ed1295949e74",'
@@ -45,35 +45,35 @@ _SCHEMA_SEVEN_LINEAR = (
         b'"value":{"x":"Ada"}}},"system":{"now":{"kind":"datetime",'
         b'"value":"2026-09-20T01:23:31.293007+00:00"},"run_id":{"kind":"str",'
         b'"value":"historical-linear"},"today":{"kind":"date","value":"2026-09-20"}}},"learnable":false,'
-        b'"memory_layout":null,"memory_snapshots":null,"num_workers":0,'
-        b'"start_wiring_override":{"x":"${input.x}"}},"run_id":"historical-linear","schema":7,"seq":0}'
+        b'"memories":null,"memory_snapshots":null,"memory_stacks":null,"num_workers":0,'
+        b'"start_wiring_override":{"x":"${input.x}"}},"run_id":"historical-linear","schema":9,"seq":0}'
     ),
     (
         b'{"kind":"node_started","payload":{"node_id":"__start__"},"run_id":"historical-linear",'
-        b'"schema":7,"seq":1}'
+        b'"schema":9,"seq":1}'
     ),
     (
         b'{"kind":"node_succeeded","payload":{"commit_target":"__start__","evidence":null,'
         b'"forward_capture":null,"node_id":"__start__","value":{"kind":"object","value":{"x":"Ada"}}},'
-        b'"run_id":"historical-linear","schema":7,"seq":2}'
+        b'"run_id":"historical-linear","schema":9,"seq":2}'
     ),
     (
-        b'{"kind":"node_started","payload":{"node_id":"n"},"run_id":"historical-linear","schema":7,'
+        b'{"kind":"node_started","payload":{"node_id":"n"},"run_id":"historical-linear","schema":9,'
         b'"seq":3}'
     ),
     (
         b'{"kind":"node_succeeded","payload":{"commit_target":"n","evidence":null,"forward_capture":null,'
-        b'"node_id":"n","value":{"kind":"str","value":"Ada"}},"run_id":"historical-linear","schema":7,'
+        b'"node_id":"n","value":{"kind":"str","value":"Ada"}},"run_id":"historical-linear","schema":9,'
         b'"seq":4}'
     ),
     (
-        b'{"kind":"node_started","payload":{"node_id":"__end__"},"run_id":"historical-linear","schema":7,'
+        b'{"kind":"node_started","payload":{"node_id":"__end__"},"run_id":"historical-linear","schema":9,'
         b'"seq":5}'
     ),
     (
         b'{"kind":"node_succeeded","payload":{"commit_target":"__end__","evidence":null,'
         b'"forward_capture":null,"node_id":"__end__","value":{"kind":"str","value":"Ada"}},'
-        b'"run_id":"historical-linear","schema":7,"seq":6}'
+        b'"run_id":"historical-linear","schema":9,"seq":6}'
     ),
 )
 
@@ -374,14 +374,14 @@ def test_replay_applies_logged_llm_map_before_rebuilding_growth(monkeypatch):
 def test_historical_cursor_matches_each_envelopes_schema():
     from agent_composer.runtime.log import decode_record, encode_record
 
-    old_prefix = _SCHEMA_SEVEN_LINEAR[:4]
-    with MemoryRunLog._from_records(tuple(decode_record(wire) for wire in old_prefix)) as log:
-        new_suffix = tuple(
+    recorded_prefix = _RECORDED_LINEAR[:4]
+    with MemoryRunLog._from_records(tuple(decode_record(wire) for wire in recorded_prefix)) as log:
+        appended_suffix = tuple(
             encode_record(log.append(decode_record(wire).record))
-            for wire in _SCHEMA_SEVEN_LINEAR[4:]
+            for wire in _RECORDED_LINEAR[4:]
         )
-    assert all(decode_record(wire).schema == 8 for wire in new_suffix)
-    wires = old_prefix + new_suffix
+    assert all(decode_record(wire).schema == SCHEMA_VERSION for wire in appended_suffix)
+    wires = recorded_prefix + appended_suffix
     cursor = state_module._HistoricalLogCursor(wires)
     for wire in wires:
         expected = decode_record(wire)
@@ -396,12 +396,12 @@ def test_historical_cursor_matches_each_envelopes_schema():
 
 
 @pytest.mark.parametrize("prefix_length", [5, 6])
-def test_schema_seven_public_resume_keeps_completed_code_and_wire(tmp_path, monkeypatch, prefix_length):
+def test_recorded_public_resume_keeps_completed_code_and_wire(tmp_path, monkeypatch, prefix_length):
     from agent_composer.nodes.code import CodeNode
     from agent_composer.runtime.log import JsonlRunLog, decode_record, encode_record
 
     flow = load_flow(_LINEAR)
-    prefix = b"\n".join(_SCHEMA_SEVEN_LINEAR[:prefix_length]) + b"\n"
+    prefix = b"\n".join(_RECORDED_LINEAR[:prefix_length]) + b"\n"
     path = tmp_path / "historical.jsonl"
     path.write_bytes(prefix)
     monkeypatch.setattr(CodeNode, "forward", lambda *args, **kwargs: pytest.fail("accepted CODE reran"))
@@ -415,9 +415,9 @@ def test_schema_seven_public_resume_keeps_completed_code_and_wire(tmp_path, monk
     with JsonlRunLog.resume(path) as log:
         envelopes = tuple(log)
         replayed = run_module._replay_run_log(flow, log)
-    assert tuple(encode_record(item) for item in envelopes[:prefix_length]) == _SCHEMA_SEVEN_LINEAR[:prefix_length]
+    assert tuple(encode_record(item) for item in envelopes[:prefix_length]) == _RECORDED_LINEAR[:prefix_length]
     assert all(item.schema == SCHEMA_VERSION for item in envelopes[prefix_length:])
-    start = decode_record(_SCHEMA_SEVEN_LINEAR[0]).record
+    start = decode_record(_RECORDED_LINEAR[0]).record
     assert replayed.flow_fingerprint == start.flow_fingerprint == flow_fingerprint(flow.compiled)
     assert replayed.effective_llm_by_static_path == start.effective_llm_by_static_path
     assert replayed.num_workers == start.num_workers == 0

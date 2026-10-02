@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 import importlib
 
@@ -11,8 +12,11 @@ from agent_composer.compose import load_flow
 from agent_composer.events import NodeExpanded, NodeStarted, RunStarted
 from agent_composer.memory import (
     ConversationItem,
+    DeclSite,
     MemoryOperationError,
     MemorySetupError,
+    MemorySpec,
+    MemoryStack,
 )
 from agent_composer.memory.session import SessionMemory
 from agent_composer.nodes.code import CodeNode
@@ -26,6 +30,8 @@ from agent_composer.runtime.log import (
     BackwardStartedRecord,
     RunResumedRecord,
     RunStartedRecord,
+    decode_record,
+    encode_record,
 )
 
 from tests.engine._memory_fakes import _Memory
@@ -434,3 +440,38 @@ def test_unfinished_primary_requires_recorded_memory_mapping_on_resume(
     assert resumed.status == "succeeded"
     assert resumed.output == 7
     assert memory.open_snapshots == [None, {"namespace": "test"}]
+
+
+def test_run_started_records_the_resolved_memory_table_and_stacks(tmp_path: Path) -> None:
+    path = tmp_path / "table.jsonl"
+
+    result = run_flow(load_flow(_FLOW), {}, log=path, memory={"test": _Memory()})
+
+    assert result.status == "succeeded"
+    start = _records(path)[0]
+    assert start.memories == (
+        MemorySpec("test", "test", {}, (DeclSite((), ("root",), None),), False),
+    )
+    assert ("work",) in {stack.locator for stack in start.memory_stacks}
+    assert all(stack.memories == ("test",) for stack in start.memory_stacks)
+
+
+def test_resume_rejects_recorded_key_stacks_that_differ_from_the_flow(tmp_path: Path) -> None:
+    path = tmp_path / "tampered.jsonl"
+    memory = _Memory()
+
+    def stop_after_start(event: object) -> None:
+        if isinstance(event, RunStarted):
+            raise RuntimeError("host stop")
+
+    with pytest.raises(RuntimeError, match="host stop"):
+        run_flow(load_flow(_FLOW), {}, log=path, memory={"test": memory}, on_event=stop_after_start)
+
+    lines = path.read_bytes().splitlines()
+    envelope = decode_record(lines[0])
+    emptied = tuple(MemoryStack(stack.locator, ()) for stack in envelope.record.memory_stacks)
+    lines[0] = encode_record(replace(envelope, record=replace(envelope.record, memory_stacks=emptied)))
+    path.write_bytes(b"\n".join(lines) + b"\n")
+
+    with pytest.raises(ValueError, match="memory table or stacks"):
+        resume_flow(load_flow(_FLOW), log=path, memory={"test": memory})

@@ -41,6 +41,8 @@ from agent_composer.memory import (
     MemoryOccurrenceRef,
     MemoryScope,
     MemorySnapshotEnvelope,
+    MemorySpec,
+    MemoryStack,
 )
 from agent_composer.nodes.base import Grow, Node
 from agent_composer.nodes.contracts import (
@@ -133,6 +135,8 @@ class _MemoryAuthority:
 
     layout: tuple[MemoryFrameSpec, ...] | None
     snapshots: tuple[MemorySnapshotEnvelope, ...] | None
+    memories: tuple[MemorySpec, ...] | None
+    memory_stacks: tuple[MemoryStack, ...] | None
     learnable: bool
     frame_order: tuple[MemoryFrameRef, ...]
     policy_order: tuple[str, ...]
@@ -270,6 +274,8 @@ class RunState:
         self.effective_llm_by_static_path: dict[str, dict[str, Any]] = {}
         self.memory_layout: tuple[MemoryFrameSpec, ...] | None = None
         self.memory_snapshots: tuple[MemorySnapshotEnvelope, ...] | None = None
+        self.memories: tuple[MemorySpec, ...] | None = None
+        self.memory_stacks: tuple[MemoryStack, ...] | None = None
         self.learnable = False
         self.trace: RetainedTrace | None = None
         self.learning_state = RuntimeLearningState()
@@ -277,6 +283,8 @@ class RunState:
         self._memory_authority = _MemoryAuthority(
             layout=None,
             snapshots=None,
+            memories=None,
+            memory_stacks=None,
             learnable=False,
             frame_order=self.learning_state.frame_order,
             policy_order=self.learning_state.policy_order,
@@ -308,6 +316,10 @@ class RunStartData:
             Canonical policy snapshots paired with an enabled frame inventory.
         learnable (`bool`, *optional*, defaults to `False`):
             Whether eligible accepted outcomes must carry learning evidence.
+        memories (`tuple[MemorySpec, ...] | None`, *optional*):
+            Sorted memory key table paired with an enabled layout.
+        memory_stacks (`tuple[MemoryStack, ...] | None`, *optional*):
+            Each scoped target's key stack, sorted by locator.
     """
 
     run_id: str
@@ -319,6 +331,8 @@ class RunStartData:
     memory_layout: tuple[MemoryFrameSpec, ...] | None = None
     memory_snapshots: tuple[MemorySnapshotEnvelope, ...] | None = None
     learnable: bool = False
+    memories: tuple[MemorySpec, ...] | None = None
+    memory_stacks: tuple[MemoryStack, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -360,6 +374,8 @@ class _RunStartedApply:
     effective_llm_by_static_path: dict[str, dict[str, Any]]
     memory_layout: tuple[MemoryFrameSpec, ...] | None
     memory_snapshots: tuple[MemorySnapshotEnvelope, ...] | None
+    memories: tuple[MemorySpec, ...] | None
+    memory_stacks: tuple[MemoryStack, ...] | None
     learnable: bool
     learning_state: RuntimeLearningState
     backward_state: RuntimeBackwardState
@@ -778,6 +794,8 @@ def prepare_run_started(
         memory_layout=data.memory_layout,
         memory_snapshots=data.memory_snapshots,
         learnable=data.learnable,
+        memories=data.memories,
+        memory_stacks=data.memory_stacks,
     )
     # The public envelope codec is the sole payload authority.  Decode its canonical
     # bytes immediately so the prepared record is exactly what either log will retain.
@@ -1961,6 +1979,8 @@ def _replay_records(
             memory_layout=start.memory_layout,
             memory_snapshots=start.memory_snapshots,
             learnable=start.learnable,
+            memories=start.memories,
+            memory_stacks=start.memory_stacks,
         ),
         schema=first.schema,
     )
@@ -2476,6 +2496,8 @@ def _validate_runtime_memory_configuration(state: RunState) -> None:
     if not (
         state.memory_layout is authority.layout
         and state.memory_snapshots is authority.snapshots
+        and state.memories is authority.memories
+        and state.memory_stacks is authority.memory_stacks
         and type(state.learnable) is bool
         and state.learnable is authority.learnable
         and state.learning_state.frame_order is authority.frame_order
@@ -4291,12 +4313,16 @@ def _require_pristine(state: RunState) -> None:
         and not state.effective_llm_by_static_path
         and state.memory_layout is None
         and state.memory_snapshots is None
+        and state.memories is None
+        and state.memory_stacks is None
         and state.learnable is False
         and state.trace is None
         and state.learning_state == RuntimeLearningState()
         and state.backward_state == RuntimeBackwardState()
         and state._memory_authority.layout is None
         and state._memory_authority.snapshots is None
+        and state._memory_authority.memories is None
+        and state._memory_authority.memory_stacks is None
         and state._memory_authority.learnable is False
         and state._memory_authority.frame_order is state.learning_state.frame_order
         and state._memory_authority.policy_order is state.learning_state.policy_order
@@ -4387,6 +4413,8 @@ def _materialize_run_started(
     memory_authority = _MemoryAuthority(
         layout=record.memory_layout,
         snapshots=record.memory_snapshots,
+        memories=record.memories,
+        memory_stacks=record.memory_stacks,
         learnable=record.learnable,
         frame_order=learning_state.frame_order,
         policy_order=learning_state.policy_order,
@@ -4410,6 +4438,8 @@ def _materialize_run_started(
         effective_llm_by_static_path=canonical_effective,
         memory_layout=record.memory_layout,
         memory_snapshots=record.memory_snapshots,
+        memories=record.memories,
+        memory_stacks=record.memory_stacks,
         learnable=record.learnable,
         learning_state=learning_state,
         backward_state=backward_state,
@@ -4437,6 +4467,8 @@ def _apply_run_started(state: RunState, apply: _RunStartedApply) -> None:
     state.effective_llm_by_static_path = apply.effective_llm_by_static_path
     state.memory_layout = apply.memory_layout
     state.memory_snapshots = apply.memory_snapshots
+    state.memories = apply.memories
+    state.memory_stacks = apply.memory_stacks
     state.learnable = apply.learnable
     state.learning_state = apply.learning_state
     state.backward_state = apply.backward_state

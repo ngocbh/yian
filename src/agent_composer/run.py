@@ -40,6 +40,7 @@ from agent_composer.compile.manifest import flow_fingerprint
 from agent_composer.compile.memory_layout import (
     apply_memory_layout,
     check_session_compatibility,
+    memory_stacks,
     resolve_memory_layout,
 )
 from agent_composer.compile.model import CompiledFlow
@@ -57,6 +58,8 @@ from agent_composer.memory import (
     MemoryFrameRef,
     MemoryFrameSpec,
     MemorySetupError,
+    MemorySpec,
+    MemoryStack,
 )
 from agent_composer.nodes.base import Steering
 from agent_composer.nodes.binding import coerce_inputs
@@ -223,9 +226,13 @@ class _BackwardHandle:
                     raise MemorySetupError("backward requires this run's enabled memory mapping")
                 program = copy.deepcopy(self.program)
                 apply_effective_llm_map(program, legacy_connection_map(state.effective_llm_by_static_path))
-                layout, origins = _resolve_runtime_memory_layout(program)
+                layout, origins, memories, stacks = _resolve_runtime_memory_layout(program)
                 if layout != state.memory_layout:
                     raise ValueError("recorded memory layout does not match the retained program")
+                _check_recorded_memory_table(
+                    state.memories, state.memory_stacks, memories, stacks,
+                    subject="retained program",
+                )
                 return MemoryRuntime.open(layout=state.memory_layout, origins=origins,
                                           memory=self.memory, snapshots=state.memory_snapshots)
 
@@ -499,9 +506,11 @@ def _run_flow_controlled(
     }
 
     memory_runtime: MemoryRuntime | None = None
+    memory_table: tuple[MemorySpec, ...] | None = None
+    memory_stack_set: tuple[MemoryStack, ...] | None = None
     if memory is not None:
-        memory_layout, memory_origins = _resolve_runtime_memory_layout(
-            private_flow, effective_llm=effective_llm
+        memory_layout, memory_origins, memory_table, memory_stack_set = (
+            _resolve_runtime_memory_layout(private_flow, effective_llm=effective_llm)
         )
         memory_runtime = MemoryRuntime.open(
             layout=memory_layout,
@@ -529,6 +538,8 @@ def _run_flow_controlled(
                     None if memory_runtime is None else memory_runtime.snapshots
                 ),
                 learnable=learnable,
+                memories=memory_table,
+                memory_stacks=memory_stack_set,
             ),
         )
 
@@ -713,13 +724,17 @@ def _resume_flow_controlled(
                 raise MemorySetupError(
                     "resuming this run requires its enabled memory mapping"
                 )
-            memory_layout, memory_origins = _resolve_authored_memory_layout(
-                flow
+            memory_layout, memory_origins, memory_table, memory_stack_set = (
+                _resolve_authored_memory_layout(flow)
             )
             if memory_layout != state.memory_layout:
                 raise ValueError(
                     "recorded memory layout does not match the supplied flow"
                 )
+            _check_recorded_memory_table(
+                state.memories, state.memory_stacks, memory_table, memory_stack_set,
+                subject="supplied flow",
+            )
             memory_runtime = MemoryRuntime.open(
                 layout=state.memory_layout,
                 origins=memory_origins,
@@ -927,11 +942,17 @@ def _replay_compiled_run_log(
     if first.record.learnable:
         apply_execution_layout(private_flow, resolve_execution_layout(private_flow))
     if first.record.memory_layout is not None:
-        replay_layout, _ = _resolve_runtime_memory_layout(private_flow)
+        replay_layout, _, replay_memories, replay_stacks = _resolve_runtime_memory_layout(
+            private_flow
+        )
         if replay_layout != first.record.memory_layout:
             raise ValueError(
                 "recorded memory layout does not match the supplied flow"
             )
+        _check_recorded_memory_table(
+            first.record.memories, first.record.memory_stacks, replay_memories, replay_stacks,
+            subject="supplied flow",
+        )
     state = _replay_records(
         RunState(private_flow),
         tuple(canonical),
@@ -949,6 +970,8 @@ def _resolve_runtime_memory_layout(
 ) -> tuple[
     tuple[MemoryFrameSpec, ...],
     dict[MemoryFrameRef, OriginRef | None],
+    tuple[MemorySpec, ...],
+    tuple[MemoryStack, ...],
 ]:
     """Derive, canonically order, and atomically stamp one private graph.
 
@@ -972,6 +995,8 @@ def _resolve_runtime_memory_layout(
     return (
         tuple(frame.spec for frame in ordered),
         {frame.spec.ref: frame.origin for frame in ordered},
+        tuple(memory.spec for memory in resolved.memories),
+        memory_stacks(resolved),
     )
 
 
@@ -980,11 +1005,28 @@ def _resolve_authored_memory_layout(
 ) -> tuple[
     tuple[MemoryFrameSpec, ...],
     dict[MemoryFrameRef, OriginRef | None],
+    tuple[MemorySpec, ...],
+    tuple[MemoryStack, ...],
 ]:
     """Resolve memory only on a fresh static copy, never replayed growth."""
     if not isinstance(flow, ComposedFlow):
         raise TypeError("memory layout resolution expects a ComposedFlow")
     return _resolve_runtime_memory_layout(copy.deepcopy(flow.compiled))
+
+
+def _check_recorded_memory_table(
+    recorded_memories: tuple[MemorySpec, ...] | None,
+    recorded_stacks: tuple[MemoryStack, ...] | None,
+    memories: tuple[MemorySpec, ...],
+    stacks: tuple[MemoryStack, ...],
+    *,
+    subject: str,
+) -> None:
+    """Reject a recorded key table or stack set that the flow does not resolve."""
+    if recorded_memories is None and recorded_stacks is None:
+        return
+    if recorded_memories != memories or recorded_stacks != stacks:
+        raise ValueError(f"recorded memory table or stacks do not match the {subject}")
 
 
 def _publish_boundary_observers(

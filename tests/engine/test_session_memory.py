@@ -475,7 +475,7 @@ def test_idle_reset_clears_the_conversation():
         }
 
 
-def test_reset_invalidates_old_session_frame_and_turn():
+def test_reset_invalidates_old_session_and_turn():
     with harness() as h:
         with h.frame.open_turn(request(), check_stopped=lambda: None) as turn:
             pass

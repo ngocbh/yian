@@ -21,15 +21,11 @@ from agent_composer.memory import (
     Memory,
     MemoryEpisode,
     MemoryEpisodeStatus,
-    MemoryFrameRef,
-    MemoryFrameSpec,
     MemoryMutation,
     MemoryOccurrenceKind,
-    MemoryOccurrenceRef,
     MemoryOccurrenceSegment,
     MemoryOperationError,
     MemoryOperationFailure,
-    MemoryOwner,
     MemoryPolicySpec,
     MemoryRecallError,
     MemoryScope,
@@ -44,36 +40,19 @@ from agent_composer.memory import (
 from agent_composer.runtime.contracts import BackwardFailure, MemoryProposal
 
 
-def _flow_ref() -> MemoryFrameRef:
-    """Return one stable flow-frame identity for contract tests."""
-    return MemoryFrameRef("root", ("root", "child"), MemoryOwner.FLOW)
-
-
-def _agent_ref() -> MemoryFrameRef:
-    """Return one stable agent-frame identity for contract tests."""
-    return MemoryFrameRef("root", ("root", "child", "agent"), MemoryOwner.AGENT)
+_AGENT_PATH = ("root", "child", "agent")
+"""One authored AGENT locator for episode contract tests."""
 
 
 def test_identity_values_are_frozen_structured_products() -> None:
-    """Static frame identity stays separate from dynamic occurrence identity."""
-    frame = _agent_ref()
-    segment = MemoryOccurrenceSegment(
-        MemoryOccurrenceKind.MAP_ITEM,
-        ("root", "child"),
-        2,
-    )
-    occurrence = MemoryOccurrenceRef(frame, (segment,))
+    """A scope holds its keys and occurrence path as frozen values."""
     scope_segment = MemoryOccurrenceSegment(MemoryOccurrenceKind.MAP_ITEM, ("child",), 2)
     scope = MemoryScope(("child", "agent"), ("outer", "local"), (scope_segment,))
 
-    assert frame == MemoryFrameRef(
-        "root", ("root", "child", "agent"), MemoryOwner.AGENT
-    )
-    assert occurrence == MemoryOccurrenceRef(frame, (segment,))
     assert scope.memories == ("outer", "local")
     assert scope.occurrence_path == (scope_segment,)
     with pytest.raises(FrozenInstanceError):
-        frame.root_flow_id = "other"  # type: ignore[misc]
+        scope.memories = ("other",)  # type: ignore[misc]
 
 
 def test_memory_scope_has_no_boundary() -> None:
@@ -120,17 +99,12 @@ def test_memory_scope_has_no_boundary() -> None:
             "index",
         ),
         (
-            lambda: MemoryFrameRef("", ("root",), MemoryOwner.FLOW),
-            ValueError,
-            "root_flow_id",
-        ),
-        (
-            lambda: MemoryFrameRef("root", ("",), MemoryOwner.FLOW),
+            lambda: MemoryScope(("",)),
             ValueError,
             "static_path",
         ),
         (
-            lambda: MemoryOccurrenceRef(_agent_ref(), []),  # type: ignore[arg-type]
+            lambda: MemoryScope(("root",), (), []),  # type: ignore[arg-type]
             TypeError,
             "occurrence_path",
         ),
@@ -145,18 +119,6 @@ def test_identity_values_reject_ambiguous_paths_and_indices(
     """Identities accept exact immutable paths and non-boolean indices only."""
     with pytest.raises(error, match=message):
         factory()
-
-
-def test_occurrence_references_require_a_comparable_first_static_path() -> None:
-    """A frame occurrence cannot borrow an unrelated dynamic callsite path."""
-    unrelated = MemoryOccurrenceSegment(
-        MemoryOccurrenceKind.MAP_ITEM,
-        ("root", "other"),
-        0,
-    )
-
-    with pytest.raises(ValueError, match="lexically comparable"):
-        MemoryOccurrenceRef(_agent_ref(), (unrelated,))
 
 
 @pytest.mark.parametrize(
@@ -181,22 +143,8 @@ def test_scope_occurrence_path_must_strictly_contain_the_node(
         MemoryScope(("child", "agent"), occurrence_path=(segment,))
 
 
-class _ForgedFrameRef(MemoryFrameRef):
-    """A frame-reference subclass that bypasses base validation."""
-
-    def __post_init__(self) -> None:
-        """Deliberately skip validation for nested-carrier hardening tests."""
-
-
 class _ForgedOccurrenceSegment(MemoryOccurrenceSegment):
     """An occurrence-segment subclass that bypasses base validation."""
-
-    def __post_init__(self) -> None:
-        """Deliberately skip validation for nested-carrier hardening tests."""
-
-
-class _ForgedOccurrenceRef(MemoryOccurrenceRef):
-    """An occurrence-reference subclass that bypasses base validation."""
 
     def __post_init__(self) -> None:
         """Deliberately skip validation for nested-carrier hardening tests."""
@@ -208,7 +156,6 @@ class _ForgedEpisode(MemoryEpisode):
 
 def test_nested_memory_carriers_reject_forged_subclass_values() -> None:
     """Nested memory products accept only exact, already-validated value types."""
-    forged_frame = _ForgedFrameRef("root", (), MemoryOwner.AGENT)
     forged_segment = _ForgedOccurrenceSegment(
         MemoryOccurrenceKind.MAP_ITEM,
         ("root", "mapped"),
@@ -217,12 +164,6 @@ def test_nested_memory_carriers_reject_forged_subclass_values() -> None:
     forged_episode = object.__new__(_ForgedEpisode)
     object.__setattr__(forged_episode, "run_id", "")
 
-    with pytest.raises(TypeError, match="frame_ref"):
-        MemoryOccurrenceRef(forged_frame)
-    with pytest.raises(TypeError, match="occurrence_path"):
-        MemoryOccurrenceRef(_agent_ref(), (forged_segment,))
-    with pytest.raises(TypeError, match="ref"):
-        MemoryFrameSpec(forged_frame, "reflective", {})
     with pytest.raises(TypeError, match="occurrence_path"):
         MemoryScope(("mapped", "x"), occurrence_path=(forged_segment,))
     with pytest.raises(TypeError, match="occurrence_path"):
@@ -457,11 +398,11 @@ def test_episode_status_enforces_output_or_failure_shape() -> None:
 @pytest.mark.parametrize("sequence", [0, 17])
 def test_episode_execution_sequence_is_optional_and_survives_context_copy(sequence) -> None:
     """Physical identity extends the existing positional host constructor."""
-    legacy = MemoryEpisode("run", (), _agent_ref().static_path,
+    legacy = MemoryEpisode("run", (), _AGENT_PATH,
                            MemoryEpisodeStatus.SUCCEEDED, {}, "answer", None, (), None, None, ())
     assert legacy.execution_seq is None
     inputs = {"items": [1]}
-    episode = MemoryEpisode("run", (), _agent_ref().static_path,
+    episode = MemoryEpisode("run", (), _AGENT_PATH,
                             MemoryEpisodeStatus.SUCCEEDED, inputs, "answer", execution_seq=sequence)
     context = LearnContext("run", "notes", (episode,))
     inputs["items"].append(2)
@@ -475,7 +416,7 @@ def test_episode_execution_sequence_is_optional_and_survives_context_copy(sequen
 @pytest.mark.parametrize("sequence", [False, True, -1, 1.0, "1"])
 def test_episode_rejects_nonphysical_execution_sequences(sequence) -> None:
     with pytest.raises((TypeError, ValueError), match="execution_seq"):
-        MemoryEpisode("run", (), _agent_ref().static_path,
+        MemoryEpisode("run", (), _AGENT_PATH,
                       MemoryEpisodeStatus.SUCCEEDED, {}, execution_seq=sequence)
 
 
@@ -484,7 +425,7 @@ def test_episode_rejects_integer_subclass_execution_sequence() -> None:
         pass
 
     with pytest.raises(TypeError, match="execution_seq"):
-        MemoryEpisode("run", (), _agent_ref().static_path,
+        MemoryEpisode("run", (), _AGENT_PATH,
                       MemoryEpisodeStatus.SUCCEEDED, {}, execution_seq=Sequence(1))
 
 
@@ -880,3 +821,22 @@ def test_session_protocol_recalls_and_learns_without_frames() -> None:
     assert isinstance(session, MemorySession)
     assert session.learn(LearnContext("run", "notes", ()))[0].payload == {"memory": "notes"}
     assert "open_frame" not in MemorySession.__dict__
+
+
+def test_frame_types_are_gone() -> None:
+    import agent_composer.memory as memory
+    import agent_composer.memory.contracts as contracts
+    import agent_composer.runtime.contracts as runtime_contracts
+
+    for name in (
+        "MemoryFrame",
+        "MemoryFrameRef",
+        "MemoryFrameSpec",
+        "MemoryOccurrenceRef",
+        "MemoryOwner",
+    ):
+        assert name not in memory.__all__
+        assert not hasattr(memory, name)
+        assert not hasattr(contracts, name)
+    assert not hasattr(runtime_contracts, "FrameProposal")
+    assert "open_frame" not in vars(contracts.MemorySession)

@@ -435,7 +435,7 @@ class RuntimeBackwardState:
 
     @property
     def policy_outcomes(self) -> tuple[PolicyCommitOutcome, ...]:
-        """Project each configured policy from accepted requests and observations."""
+        """Project each configured memory from accepted requests and observations."""
         if self.current is None:
             return tuple(PolicyCommitOutcome(name, "unrequested") for name in self.memory_order)
         return _policy_outcomes(self.memory_order, self.current)
@@ -482,9 +482,9 @@ def _validate_backward_finished(
             raise ValueError("Finished attribution must match accepted Ready")
     if outcome.status == "succeeded":
         if ready is None or any(policy.status != "succeeded" for policy in backward.policy_outcomes):
-            raise ValueError("successful Finished requires Ready and every policy confirmation")
+            raise ValueError("successful Finished requires Ready and every memory confirmation")
         if outcome.learning != _prefix_learning(backward, succeeded=True):
-            raise ValueError("successful Finished learning must match accepted policy confirmations")
+            raise ValueError("successful Finished learning must match accepted memory confirmations")
         return
     failure = outcome.failure
     if failure == _interrupted_failure():
@@ -499,7 +499,7 @@ def _validate_backward_finished(
         expected = BackwardFailure("commit", policy.failure.code, policy.failure.message,
                                    memory=policy.memory, cause=policy.failure)
         if failure != expected or outcome.learning != _prefix_learning(backward):
-            raise ValueError("commit Finished must match the exact accepted failure and policy states")
+            raise ValueError("commit Finished must match the exact accepted failure and memory states")
         return
     if failure.stage == "learn":
         if type(failure.cause) is not MemoryOperationFailure or failure.memory not in backward.memory_order:
@@ -530,7 +530,7 @@ def _validate_backward_finished(
     if failure.node_id != context.node_id or failure.scope != context.scope:
         raise ValueError("backward computation failure must match its recorded invocation")
     if outcome.learning != _prefix_learning(backward):
-        raise ValueError("failed computation learning must retain incomplete unrequested policies")
+        raise ValueError("failed computation learning must retain incomplete unrequested memories")
 
 
 def reduce_backward_record(
@@ -575,7 +575,7 @@ def reduce_backward_record(
         next_attempt = replace(current, finished=record)
     elif type(record) is MemoryCommitRequestedRecord:
         if current.ready is None or any(policy.status in ("unknown", "failed") for policy in backward.policy_outcomes):
-            raise ValueError("backward commit request requires Ready and no pending or failed policy")
+            raise ValueError("backward commit request requires Ready and no pending or failed memory")
         index = len(current.requests)
         if index >= len(backward.memory_order) or record.memory != backward.memory_order[index]:
             raise ValueError("backward request must name the next recorded memory")
@@ -589,10 +589,10 @@ def reduce_backward_record(
             raise ValueError("backward commit result requires a matching pending request")
         request = current.requests[-1]
         if record.memory != request.memory or record.commit_id != request.commit_id:
-            raise ValueError("backward commit result must match its pending policy and identity")
+            raise ValueError("backward commit result must match its pending memory and identity")
         next_attempt = replace(current, observations=(*current.observations, record))
     else:
-        raise ValueError("backward commit requires a completed policy proposal")
+        raise ValueError("backward commit requires a completed memory proposal")
     return replace(backward, attempts=(*backward.attempts[:-1], next_attempt))
 
 

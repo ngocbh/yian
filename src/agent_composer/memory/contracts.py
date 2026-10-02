@@ -505,13 +505,6 @@ class DeclSite:
         return (self.scope, self.owner, self.node is not None, self.node or "")
 
 
-class MemoryOwner(str, Enum):
-    """Closed set of semantic entities that may own a memory frame."""
-
-    FLOW = "flow"
-    AGENT = "agent"
-
-
 class MemoryOccurrenceKind(str, Enum):
     """Closed set of dynamic occurrence segments."""
 
@@ -590,24 +583,6 @@ class MemoryOccurrenceSegment:
             raise ValueError("index must be non-negative")
 
 
-@dataclass(frozen=True, slots=True)
-class MemoryFrameRef:
-    """Stable authored identity of one flow- or AGENT-owned memory frame."""
-
-    root_flow_id: str
-    static_path: tuple[str, ...]
-    owner: MemoryOwner
-
-    def __post_init__(self) -> None:
-        """Validate the root, static path, and closed owner vocabulary."""
-        _require_string(self.root_flow_id, "root_flow_id")
-        _require_path(self.static_path, "static_path")
-        if self.static_path[0] != self.root_flow_id:
-            raise ValueError("static_path must begin with root_flow_id")
-        if type(self.owner) is not MemoryOwner:
-            raise TypeError("owner must be a MemoryOwner")
-
-
 def _require_occurrence_path(value: object) -> tuple[MemoryOccurrenceSegment, ...]:
     """Return one exact, revalidated, lexically nested occurrence path."""
     if type(value) is not tuple:
@@ -640,48 +615,6 @@ def _require_occurrence_contains(
         raise ValueError(
             "the innermost occurrence segment must contain the scoped node"
         )
-
-
-@dataclass(frozen=True, slots=True)
-class MemoryOccurrenceRef:
-    """One dynamic execution occurrence of a stable authored memory frame."""
-
-    frame_ref: MemoryFrameRef
-    occurrence_path: tuple[MemoryOccurrenceSegment, ...] = ()
-
-    def __post_init__(self) -> None:
-        """Validate the frame identity and immutable occurrence path."""
-        if type(self.frame_ref) is not MemoryFrameRef:
-            raise TypeError("frame_ref must be a MemoryFrameRef")
-        MemoryFrameRef(
-            self.frame_ref.root_flow_id,
-            self.frame_ref.static_path,
-            self.frame_ref.owner,
-        )
-        _require_occurrence_path(self.occurrence_path)
-        prior_path: tuple[str, ...] | None = None
-        for segment in self.occurrence_path:
-            MemoryOccurrenceSegment(segment.kind, segment.static_path, segment.index)
-            if segment.static_path[0] != self.frame_ref.root_flow_id:
-                raise ValueError("occurrence segment root must match the frame")
-            if prior_path is None:
-                frame_path = self.frame_ref.static_path
-                comparable = (
-                    frame_path[: len(segment.static_path)] == segment.static_path
-                    or segment.static_path[: len(frame_path)] == frame_path
-                )
-                if not comparable:
-                    raise ValueError(
-                        "frame and first occurrence paths must be lexically comparable"
-                    )
-            if prior_path is not None and (
-                len(segment.static_path) <= len(prior_path)
-                or segment.static_path[: len(prior_path)] != prior_path
-            ):
-                raise ValueError(
-                    "occurrence segments must follow lexical nesting order"
-                )
-            prior_path = segment.static_path
 
 
 @dataclass(frozen=True, slots=True)
@@ -1108,40 +1041,6 @@ class MemoryStack:
         _require_path(self.memories, "memories", allow_empty=True)
         if len(set(self.memories)) != len(self.memories):
             raise ValueError("memories must be unique")
-
-
-@dataclass(frozen=True, slots=True, init=False)
-class MemoryFrameSpec:
-    """Origin-free effective policy configuration for one memory frame."""
-
-    ref: MemoryFrameRef
-    policy_name: str
-    _config: _FrozenJsonObject = field(repr=False)
-
-    def __init__(
-        self,
-        ref: MemoryFrameRef,
-        policy_name: str,
-        config: JsonObject,
-    ) -> None:
-        """Validate and snapshot one effective frame specification."""
-        if type(ref) is not MemoryFrameRef:
-            raise TypeError("ref must be a MemoryFrameRef")
-        MemoryFrameRef(ref.root_flow_id, ref.static_path, ref.owner)
-        object.__setattr__(self, "ref", ref)
-        object.__setattr__(
-            self,
-            "policy_name",
-            _require_string(policy_name, "policy_name"),
-        )
-        frozen = _freeze_json_object(config, "config")
-        _reject_private_memory_keys(frozen, "config")
-        object.__setattr__(self, "_config", frozen)
-
-    @property
-    def config(self) -> JsonObject:
-        """Return a fresh plain-JSON copy of the frame configuration."""
-        return _thaw_json_object(self._config)
 
 
 @dataclass(frozen=True, slots=True, init=False)
@@ -1591,19 +1490,6 @@ class EvaluationTrace(Protocol):
 
     def record_interaction(self, interaction: VisibleInteraction) -> None:
         """Append one exact visible model or tool interaction."""
-        ...
-
-
-@runtime_checkable
-class MemoryFrame(Protocol):
-    """One opened frame through which a policy recalls and proposes learning."""
-
-    def recall(self, context: RecallContext | None = None) -> str | MemoryContent:
-        """Return notes and an optional transcript source for one invocation."""
-        ...
-
-    def learn(self, context: LearnContext) -> list[MemoryMutation]:
-        """Return this frame's exact list of proposed mutations."""
         ...
 
 
@@ -2319,7 +2205,7 @@ class TranscriptSource(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class MemoryContent:
-    """One frame's transient notes and optional structured transcript source.
+    """One memory's transient notes and optional structured transcript source.
 
     Args:
         text (`str`, defaults to `""`): Exact UTF-8 notes; empty text contributes
@@ -2332,8 +2218,8 @@ class MemoryContent:
         `ValueError`: Text is not valid UTF-8.
 
     Example:
-        Return `MemoryContent("Prefer concise answers.")` from a notes frame, or
-        `MemoryContent(transcript=self)` from a frame that owns a session.
+        Return `MemoryContent("Prefer concise answers.")` from a notes memory, or
+        `MemoryContent(transcript=self)` from a memory that owns a conversation.
     """
 
     text: str = ""

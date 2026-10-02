@@ -161,7 +161,7 @@ class RunResult:
         Raises:
             `TypeError`: Feedback has an invalid ordinary-message carrier.
             `ValueError`: Retention is disabled or feedback is invalid.
-            `MemorySetupError`: Enabled policies cannot restore their recorded
+            `MemorySetupError`: Enabled memories cannot restore their recorded
                 snapshots. Host and log faults also propagate while preserving
                 the accepted prefix.
             `RuntimeError`: Another backward call on this result is in progress,
@@ -330,13 +330,13 @@ def run_flow(
             to `resume_flow` or `RunResult.backward`, where those agents
             otherwise fail rather than read the environment.
         memory (`dict[str, Memory] | None`, *optional*, defaults to `None`):
-            Host-injected policy implementations keyed by authored policy name.
-            ``None`` leaves every authored policy dormant. A mapping enables
-            recall and optional conversation history, and records exact per-policy
-            recovery snapshots. Session history advances during forward execution.
+            Host-injected memory implementations keyed by memory key.
+            ``None`` leaves every declared memory dormant. A mapping enables
+            recall and optional conversation history, and records exact
+            per-memory recovery snapshots. Session history advances during forward execution.
         learnable (`bool`, *optional*, defaults to `False`):
             Retain accepted execution for a later explicit `RunResult.backward`
-            call. Forward execution runs no frame learners or learned-mutation
+            call. Forward execution runs no memory learners or learned-mutation
             commits. Memory is optional; an enabled mapping supplies owned learners
             for that call. Automatic session history is independent of retention.
         tools (`Mapping[str, BaseTool | Callable[..., Any] | Sequence[BaseTool | Callable[..., Any]]] | None`, *optional*, defaults to `None`):
@@ -400,7 +400,7 @@ def run_flow(
             or an AGENT grants skills while `skills` is `None` or lacks a
             listed skill.
         `MemorySetupError`:
-            Memory is enabled without a required policy implementation, cannot
+            Memory is enabled without a required memory implementation, cannot
             open an exact run snapshot, or has an invalid configuration.
         `FileExistsError`:
             ``log`` names an existing path.
@@ -613,9 +613,9 @@ def resume_flow(
         on_stream (`Callable[[StreamChunk], None] | None`, *optional*, defaults to `None`):
             Callback for new transient stream chunks, which are never replayed.
         memory (`dict[str, Memory] | None`, *optional*, defaults to `None`):
-            Host-injected policy implementations required when the recorded run
+            Host-injected memory implementations required when the recorded run
             enabled memory and still has unfinished forward execution. Terminal
-            inspection opens no policies; supplied references remain available
+            inspection opens no memories; supplied references remain available
             for later explicit backward calls.
         tools (`Mapping[str, BaseTool | Callable[..., Any] | Sequence[BaseTool | Callable[..., Any]]] | None`, *optional*, defaults to `None`):
             The tools the resumed segment sees, with the same rules as

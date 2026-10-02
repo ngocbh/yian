@@ -168,7 +168,7 @@ def test_recall_learn_and_commit_through_a_public_run(tmp_path, monkeypatch) -> 
     assert last["provenance"]["feedback"] == ["Keep replies brief."]
 
 
-def test_nested_frames_show_and_rewrite_the_document_once(tmp_path, monkeypatch) -> None:
+def test_nested_declarations_of_one_key_show_and_rewrite_the_document_once(tmp_path, monkeypatch) -> None:
     memory = _profile(tmp_path)
     chats = _forward(monkeypatch, "Hello.")
     result = run_flow(load_flow(_NESTED), {"message": "hi"}, learnable=True, memory={"profile": memory})

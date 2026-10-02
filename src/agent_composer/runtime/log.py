@@ -1276,7 +1276,7 @@ class _LearningFailurePayload(_StrictModel):
 
 
 class _PolicyCommitOutcomePayload(_StrictModel):
-    """A policy disposition without inferred attempt completion."""
+    """One memory's commit disposition without inferred attempt completion."""
 
     memory: str = Field(min_length=1)
     status: Literal["unrequested", "unknown", "succeeded", "failed"]
@@ -1285,7 +1285,7 @@ class _PolicyCommitOutcomePayload(_StrictModel):
 
 
 class _LearningResultPayload(_StrictModel):
-    """Ordered failures and policy commit dispositions."""
+    """Ordered failures and per-memory commit dispositions."""
 
     status: Literal["succeeded", "failed", "incomplete"]
     failures: list[_LearningFailurePayload]
@@ -2112,7 +2112,7 @@ def _memory_proposal_from_payload(payload: dict[str, Any]) -> MemoryProposal:
 
 
 def _learning_result_payload(result: LearningResult) -> dict[str, Any]:
-    """Encode independent failure attribution and ordered policy dispositions."""
+    """Encode independent failure attribution and ordered per-memory dispositions."""
     if type(result) is not LearningResult:
         raise TypeError("learning must be an exact LearningResult")
     checked = replace(result)

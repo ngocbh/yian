@@ -70,8 +70,8 @@ class MarkdownStore(Protocol):
         """Replace the current document if ``base_version`` is still current.
 
         ``provenance`` is caller-defined; from `ProfileMemory` it holds ``run_id``, ``commit_id``,
-        ``frame``, ``seen_version``, and ``feedback``. ``commit_id`` is unique per
-        backward attempt and policy, so a store that retries its own transport
+        ``seen_version``, and ``feedback``. ``commit_id`` is unique per
+        backward attempt and memory, so a store that retries its own transport
         may use it to avoid writing twice.
 
         Args:

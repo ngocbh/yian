@@ -1204,7 +1204,7 @@ def test_successful_finished_requires_ready_and_every_enabled_policy_confirmatio
                                                                              learning=LearningResult("succeeded"))))
 
 
-@pytest.mark.parametrize("change", ["root", "attribution", "missing_policy", "policy_order", "commit_id", "attempt"])
+@pytest.mark.parametrize("change", ["root", "attribution", "missing_memory", "memory_order", "commit_id", "attempt"])
 def test_finished_must_preserve_ready_results_and_exact_confirmed_policy_inventory(change):
     from dataclasses import replace
     from agent_composer.memory import LearningResult
@@ -1226,9 +1226,9 @@ def test_finished_must_preserve_ready_results_and_exact_confirmed_policy_invento
     policies = engine.state.backward_state.policy_outcomes
     if change == "root":
         root = BackwardResult({"topic": ("Different.",)})
-    elif change == "missing_policy":
+    elif change == "missing_memory":
         policies = policies[:1]
-    elif change == "policy_order":
+    elif change == "memory_order":
         policies = tuple(reversed(policies))
     elif change == "commit_id":
         policies = (replace(policies[0], commit_id="other"), *policies[1:])

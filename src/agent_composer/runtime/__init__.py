@@ -4,7 +4,7 @@ Runtime executes compiled topology by preparing one record, appending it, and on
 then applying its state transition. Graph-growth construction arrives as an
 injected callable from the run boundary, so runtime interprets no node kind and
 owns no compile-time expansion. Run-scoped memory orchestration consumes only
-source-neutral frame contracts and injected policy sessions; its learning intents
+source-neutral memory contracts and injected memory sessions; its learning intents
 follow the same append-before-apply reducer path. Pooled drives own their workers
 through a full join and signal cooperative stop before that join when dispatch
 exits abnormally.

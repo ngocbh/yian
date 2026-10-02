@@ -199,6 +199,36 @@ def test_setup_errors(memory: str, kwargs: dict, message: str) -> None:
         build_memories(_flow(memory), **kwargs)
 
 
+class _BytesPath:
+    def __fspath__(self) -> bytes:
+        return b"notes.sqlite"
+
+
+@pytest.mark.parametrize(
+    ("memory", "value"),
+    [
+        ("{notes: episodic}", 123),
+        ("{notes: profile}", b"notes.md"),
+        ("{notes: episodic}", _BytesPath()),
+        ("{notes: reflective}", None),
+    ],
+)
+def test_storage_values_must_be_text_paths(memory: str, value: object) -> None:
+    with pytest.raises(MemorySetupError, match=r"storage\['notes'\] must be a str or os.PathLike"):
+        build_memories(_flow(memory), storage={"notes": value})
+
+
+def test_storage_path_errors_show_the_plain_path() -> None:
+    with pytest.raises(MemorySetupError) as caught:
+        build_memories(_flow("{notes: episodic}"), storage={"notes": Path("file:x")})
+    assert "storage 'file:x' is not a local file path" in str(caught.value)
+
+
+def test_flow_must_be_a_composed_flow() -> None:
+    with pytest.raises(TypeError, match="ComposedFlow"):
+        build_memories(object())  # type: ignore[arg-type]
+
+
 def test_setup_errors_carry_the_declaration_origin() -> None:
     flow = _flow("{vec: vector}")
     with pytest.raises(MemorySetupError) as caught:

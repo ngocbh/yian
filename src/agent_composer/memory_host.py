@@ -195,8 +195,10 @@ def build_memories(
         `MemoryRegistry`: Mapping from memory key to backend, plus declared types.
 
     Raises:
+        `TypeError`: ``flow`` is not a `ComposedFlow`.
         `MemorySetupError`: The table is invalid, or a key cannot be built as
-            asked (including a storage path that is not a local file path).
+            asked (including a storage value that is not a str or
+            ``PathLike[str]``, or a path that is not a local file path).
             Anything already built is closed before the error propagates.
     """
     if not isinstance(flow, ComposedFlow):
@@ -225,6 +227,14 @@ def build_memories(
             raise MemorySetupError(
                 f"{name} names memory key(s) {extra} not declared by this flow "
                 f"(declared: {sorted(declared)})"
+            )
+    for key, path in storage.items():
+        # Backends take text paths only. Checked here so other values are not
+        # reported as a config error, and None does not silently mean RAM.
+        if not isinstance(path, (str, PathLike)) or not isinstance(os.fspath(path), str):
+            raise MemorySetupError(
+                f"storage[{key!r}] must be a str or os.PathLike[str] path, "
+                f"not {type(path).__name__}"
             )
     shadowed = sorted(set(factories) & set(BUILTIN_MEMORY_CONFIG_KEYS))
     if shadowed:
@@ -306,7 +316,9 @@ def _build_one(
             create_parent=create_parent,
         )
     except MemoryOperationError as exc:
-        raise _error(memory, f"storage {path!r} is not a local file path") from exc
+        raise _error(
+            memory, f"storage {os.fspath(path)!r} is not a local file path"
+        ) from exc
     except (TypeError, ValueError) as exc:
         raise _error(memory, f"{memory.type} rejected its config: {exc}") from exc
     owned.append(value)

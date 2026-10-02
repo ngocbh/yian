@@ -57,14 +57,6 @@ def _same(left: c.ConversationView, right: c.ConversationView) -> bool:
     )
 
 
-def _frame_json(ref: c.MemoryFrameRef) -> c.JsonObject:
-    return {
-        "root_flow_id": ref.root_flow_id,
-        "static_path": list(ref.static_path),
-        "owner": ref.owner.value,
-    }
-
-
 def _note_id(source: c.JsonObject) -> str:
     return hashlib.sha256(_canonical(source).encode("utf-8")).hexdigest()
 
@@ -78,12 +70,11 @@ def _admitted(
     )
 
 
-def _validate_note(value: object) -> tuple[c.JsonObject, c.MemoryFrameRef]:
-    """Detach a closed note and prove its source identity and lexical ownership."""
+def _validate_note(value: object) -> c.JsonObject:
+    """Detach a closed note and prove its source identity."""
     note = _wire(value)
     if set(note) != {
         "note_id",
-        "frame_ref",
         "consumer_static_path",
         "run_id",
         "execution_seq",
@@ -91,24 +82,9 @@ def _validate_note(value: object) -> tuple[c.JsonObject, c.MemoryFrameRef]:
         "text",
     }:
         raise ValueError("note fields do not match the supported shape")
-    raw_ref = note["frame_ref"]
-    if type(raw_ref) is not dict or set(raw_ref) != {
-        "root_flow_id",
-        "static_path",
-        "owner",
-    }:
-        raise ValueError("invalid note frame identity")
-    if (
-        type(raw_ref["static_path"]) is not list
-        or type(note["consumer_static_path"]) is not list
-    ):
-        raise TypeError("note paths must be arrays")
-    c._require_string(raw_ref["owner"], "owner")
-    ref = c.MemoryFrameRef(
-        raw_ref["root_flow_id"],
-        tuple(raw_ref["static_path"]),
-        c.MemoryOwner(raw_ref["owner"]),
-    )
+    if type(note["consumer_static_path"]) is not list:
+        raise TypeError("note consumer path must be an array")
+    c._require_path(tuple(note["consumer_static_path"]), "consumer_static_path")
     c._require_string(note["run_id"], "run_id")
     c._require_counter(note["execution_seq"], "execution_seq")
     c._require_counter(note["message_index"], "message_index")
@@ -116,7 +92,7 @@ def _validate_note(value: object) -> tuple[c.JsonObject, c.MemoryFrameRef]:
     c._require_string(note["note_id"], "note_id")
     if note["note_id"] != _note_id({k: v for k, v in note.items() if k != "note_id"}):
         raise ValueError("note identity does not match its source")
-    return note, ref
+    return note
 
 
 def _snapshot(
@@ -197,7 +173,7 @@ def _parse_snapshot(
             raise TypeError("notes must be an array")
         notes, ids = [], set()
         for raw in data["notes"]:
-            note, _ = _validate_note(raw)
+            note = _validate_note(raw)
             if note["note_id"] in ids or not _admitted(
                 view, note["run_id"], note["execution_seq"]
             ):
@@ -830,17 +806,18 @@ class _Session:
                         raise ValueError(
                             "mutation must be a closed append-note operation"
                         )
-                    note, ref = _validate_note(payload["note"])
-                    if (
-                        ref != mutation.frame_ref
-                        or note["note_id"] != mutation.mutation_id
-                    ):
+                    note = _validate_note(payload["note"])
+                    if note["note_id"] != mutation.mutation_id:
                         raise ValueError("mutation and note identities must match")
                     additions.append(note)
                     batch.append(
                         {
                             "mutation_id": mutation.mutation_id,
-                            "frame_ref": _frame_json(mutation.frame_ref),
+                            "frame_ref": {
+                                "root_flow_id": mutation.frame_ref.root_flow_id,
+                                "static_path": list(mutation.frame_ref.static_path),
+                                "owner": mutation.frame_ref.owner.value,
+                            },
                             "payload": payload,
                         }
                     )
@@ -931,7 +908,8 @@ class _Frame:
                 history is not rendered as recall text.
 
         Returns:
-            `MemoryContent`: Pinned notes in retained order and this transcript source.
+            `MemoryContent`: Pinned notes of the instance in retained order and the
+                transcript source.
 
         Raises:
             `TypeError`: A supplied context is not an exact recall-context carrier.
@@ -950,15 +928,12 @@ class _Frame:
                 context.consumer_static_path,
             )
             notes = "\n".join(
-                note["text"]
-                for note in self._session._pinned.get("notes", [])
-                if note["frame_ref"] == _frame_json(self._spec.ref)
-                and note["consumer_static_path"] == list(context.consumer_static_path)
+                note["text"] for note in self._session._pinned.get("notes", [])
             )
             return c.MemoryContent(notes, self)
 
     def learn(self, context: c.LearnContext) -> list[c.MemoryMutation]:
-        """Propose notes from self-feedback for this frame's admitted invocations.
+        """Propose notes from self-feedback for the instance's admitted invocations.
 
         Args:
             context (`LearnContext`): Exact validated frame learning context.
@@ -987,12 +962,6 @@ class _Frame:
                 )
                 episodes = {}
                 for episode in context.episodes:
-                    path = episode.owner_static_path
-                    owner = self._spec.ref.static_path
-                    if path[: len(owner)] != owner or (
-                        self._spec.ref.owner is c.MemoryOwner.AGENT and path != owner
-                    ):
-                        raise ValueError("episode is outside its owning frame")
                     if episode.execution_seq is not None:
                         if episode.execution_seq in episodes:
                             raise ValueError(
@@ -1014,25 +983,18 @@ class _Frame:
                     episode = episodes.get(sequence)
                     if episode is None:
                         continue
-                    # Structural flow episodes have no authored leaf conversation.
-                    if (
-                        self._spec.ref.owner is c.MemoryOwner.FLOW
-                        and episode.owner_static_path == self._spec.ref.static_path
-                    ):
-                        continue
                     if not _admitted(
                         self._session._memory._view, context.run_id, sequence
                     ):
                         continue
                     source = {
-                        "frame_ref": _frame_json(self._spec.ref),
                         "consumer_static_path": list(episode.owner_static_path),
                         "run_id": context.run_id,
                         "execution_seq": sequence,
                         "message_index": feedback.get("message_index"),
                         "text": feedback.get("value"),
                     }
-                    note, _ = _validate_note({"note_id": _note_id(source), **source})
+                    note = _validate_note({"note_id": _note_id(source), **source})
                     notes[note["note_id"]] = note
                 return [
                     c.MemoryMutation(

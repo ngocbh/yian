@@ -13,7 +13,6 @@ from tests.engine._session_fakes import REF, harness, request, snapshot
 
 def _note(
     *,
-    ref=REF,
     consumer=("root", "agent"),
     run_id="a",
     sequence=1,
@@ -21,11 +20,6 @@ def _note(
     text="Check units.",
 ):
     value = {
-        "frame_ref": {
-            "root_flow_id": ref.root_flow_id,
-            "static_path": list(ref.static_path),
-            "owner": ref.owner.value,
-        },
         "consumer_static_path": list(consumer),
         "run_id": run_id,
         "execution_seq": sequence,
@@ -70,7 +64,7 @@ def test_snapshot_adopts_detached_notes(text):
         "nontext",
         "nan",
         "notes_object",
-        "frame_extra",
+        "path_type",
     ],
 )
 def test_snapshot_rejects_invalid_or_unadmitted_notes_without_adoption(case):
@@ -100,8 +94,8 @@ def test_snapshot_rejects_invalid_or_unadmitted_notes_without_adoption(case):
         note["text"] = float("nan")
     elif case == "notes_object":
         value["notes"] = {}
-    elif case == "frame_extra":
-        note["frame_ref"]["extra"] = None
+    elif case == "path_type":
+        note["consumer_static_path"] = "root/agent"
     memory = SessionMemory()
     with pytest.raises(c.MemoryOperationError) as caught:
         memory.open_run(snapshot=value)
@@ -273,7 +267,7 @@ def test_commit_publishes_notes_only_to_future_run_recall():
         with harness(h.memory) as later:
             assert _recall(later.frame) == "Check units."
             assert later.frame.recall() == c.MemoryContent(transcript=later.frame)
-            assert _recall(later.frame, ("root", "sibling")) == ""
+            assert _recall(later.frame, ("root", "sibling")) == "Check units."
             other = later.session.open_frame(
                 c.MemoryFrameSpec(
                     c.MemoryFrameRef("root", ("root", "agent"), c.MemoryOwner.AGENT),
@@ -281,7 +275,7 @@ def test_commit_publishes_notes_only_to_future_run_recall():
                     {},
                 )
             )
-            assert _recall(other) == ""
+            assert _recall(other) == "Check units."
 
 
 def test_exact_commit_replay_and_stable_note_ids_are_idempotent():
@@ -308,7 +302,6 @@ def test_exact_commit_replay_and_stable_note_ids_are_idempotent():
         "extra",
         "operation",
         "wrong_id",
-        "wrong_owner",
         "unopened_owner",
         "unadmitted",
         "duplicate",
@@ -332,10 +325,8 @@ def test_invalid_last_mutation_publishes_no_notes_or_commit_tombstone(case):
             )
         elif case == "wrong_id":
             second = c.MemoryMutation("wrong", REF, second.payload)
-        elif case in {"wrong_owner", "unopened_owner"}:
+        elif case == "unopened_owner":
             leaf = c.MemoryFrameRef("root", ("root", "agent"), c.MemoryOwner.AGENT)
-            if case == "wrong_owner":
-                h.session.open_frame(c.MemoryFrameSpec(leaf, "session", {}))
             second = c.MemoryMutation(second.mutation_id, leaf, second.payload)
         elif case == "unadmitted":
             second = _mutation(_note(run_id="missing", index=1))
@@ -501,3 +492,24 @@ def test_reset_keeps_empty_commit_tombstones():
             with pytest.raises(c.MemoryOperationError) as caught:
                 later.session.commit("empty", (_mutation(),))
             assert caught.value.code == "session.commit_collision"
+
+
+def test_notes_belong_to_the_instance_and_reach_every_consumer():
+    with harness() as h:
+        with h.frame.open_turn(request(), check_stopped=lambda: None):
+            pass
+        mutations = tuple(h.frame.learn(_context()))
+        assert set(mutations[0].payload["note"]) == {
+            "note_id",
+            "consumer_static_path",
+            "run_id",
+            "execution_seq",
+            "message_index",
+            "text",
+        }
+        h.session.commit("learn", mutations)
+    with harness(h.memory) as later:
+        leaf = c.MemoryFrameRef("root", ("root", "agent"), c.MemoryOwner.AGENT)
+        other = later.session.open_frame(c.MemoryFrameSpec(leaf, "session", {}))
+        assert _recall(later.frame, ("root", "elsewhere")) == "Check units."
+        assert _recall(other) == "Check units."

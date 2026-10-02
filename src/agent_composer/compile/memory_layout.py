@@ -468,13 +468,16 @@ def _memory_table(
             if decl.type != first.type or _canonical_json(decl.config) != first_config
         ]
         if conflicts:
+            # A def called from several nodes repeats its declaration object;
+            # list each other declaration once.
+            others = list({id(decl): decl for decl in declarations if decl is not first}.values())
             error = _setup_error(
                 f"memory {key!r} is declared with different type or config "
                 f"at {_site_label(first.site)} and {_site_label(conflicts[0].site)}",
                 origin=first.origin,
-                related=tuple(decl.origin for decl in declarations[1:]),
+                related=tuple(decl.origin for decl in others),
             )
-            for decl in declarations[1:]:
+            for decl in others:
                 _note(error, f"also declared at {_site_label(decl.site)}")
             raise error
         by_site: dict[DeclSite, MemoryDecl] = {}

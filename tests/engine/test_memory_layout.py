@@ -542,6 +542,21 @@ def test_config_clash_carries_every_other_site_as_a_related_origin() -> None:
     assert len(caught.value.__notes__) == 2
 
 
+@pytest.mark.parametrize("repeated", ["first", "other"])
+def test_config_clash_lists_a_repeated_declaration_once(repeated) -> None:
+    from agent_composer.compile.memory_layout import _memory_table
+
+    # A def called from two nodes yields its declaration object once per call.
+    in_def = MemoryDecl("notes", "notes", {"limit": 3}, DeclSite((), ("def", "x"), None), OriginRef("a"))
+    in_root = MemoryDecl("notes", "notes", {"limit": 2}, DeclSite((), ("root",), None), OriginRef("b"))
+    twice, once = (in_def, in_root) if repeated == "first" else (in_root, in_def)
+    with pytest.raises(MemorySetupError) as caught:
+        _memory_table([(twice, ("p1",)), (twice, ("p2",)), (once, None)])
+    assert caught.value.origin == OriginRef("a")
+    assert caught.value.related == (OriginRef("b"),)
+    assert caught.value.__notes__ == ["also declared at root"]
+
+
 def test_flow_level_session_in_an_uncalled_def_is_not_an_error() -> None:
     source = (
         "id: spare\nname: spare\ndefs:\n"

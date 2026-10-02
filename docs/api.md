@@ -561,8 +561,10 @@ These are `MemorySetupError`s:
 - a key in `storage` or `supplied` that the flow does not declare;
 - a value that is not a `Memory`;
 - a constructor rejecting its config;
+- a `storage` value that is not a `str` or `os.PathLike[str]` (for example
+  `None`, bytes, or an int); the error names the key;
 - a `storage` value that is not a local file path (`:memory:`, a `file:`
-  URI, an empty string);
+  URI, an empty string), for a profile `.md` path as for a SQLite file;
 - `root` with a flow whose `id:` is not one safe path component.
 
 If a later key fails, everything already built is closed. Construction never
@@ -606,6 +608,10 @@ other commit failure, or an attempt killed mid-commit (commit status `unknown`),
 look for the attempt's `commit_id` in the store's write provenance before
 retrying. If it is missing, compare the current document with the proposed
 `text` in the run log. The snapshot records the pinned version and text hash, never the text.
+`FileMarkdownStore` takes the same local file path rule as SQLite storage.
+`profile.close()` does no I/O; afterwards `open_run`, `reset`, `read`, `write`,
+and its open sessions raise `MemoryOperationError` with code `profile.closed`.
+A registry from `build_memories` closes the profiles it built.
 See [profile memory](learning.md#profile-memory) for recall, learning, and store
 rules.
 

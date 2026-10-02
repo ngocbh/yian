@@ -454,9 +454,12 @@ object wins; else a custom type is built by `factories[type](**config)`; else th
 built-in constructor gets `config` plus `storage[key]`, else
 `<root>/<flow id>/<scope...>/<name>.sqlite` (`.md` for profile, parent created
 on first use), else RAM. Undeclared keys, config on supplied keys, storage for
-supplied or custom keys, factories for built-in types, non-`Memory` values, and
-`root` without a safe flow `id` raise `MemorySetupError`, located at the key's
-declaration when one key is at fault. The returned `MemoryRegistry` maps keys to
+supplied or custom keys, storage paths that are not local files (`""`,
+`:memory:`, `file:` URIs; profile `.md` paths included), factories for built-in
+types, non-`Memory` values, and `root` without a safe flow `id` raise
+`MemorySetupError`, located at the key's declaration when one key is at fault.
+A storage value that is not a `str` or `os.PathLike[str]` (`None`, bytes, an
+int) raises `MemorySetupError` naming the key before any backend is built. The returned `MemoryRegistry` maps keys to
 backends and records their types; closing it closes the backends it built in
 reverse build order, attaches later failures as notes, and leaves supplied
 objects open. A failed build closes what it already built.

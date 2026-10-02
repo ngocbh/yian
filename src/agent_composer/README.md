@@ -968,7 +968,9 @@ injected recall callable.
 
 `run_flow(..., memory=registry)` never constructs memory. Package-root
 `memory_host.build_memories(flow, root=..., storage=..., supplied=..., factories=...)`
-returns a `MemoryRegistry` keyed by memory key. `run_flow` requires every declared
+returns a `MemoryRegistry` keyed by memory key. A `storage` value must be a `str`
+or `os.PathLike[str]` local file path; anything else is a `MemorySetupError` naming
+the key. `run_flow` requires every declared
 key, rejects one object under two keys, and checks a registry's types against the
 table. It opens one run session per key and stores the memory table, every
 placement's `memory_stacks`, and the sessions' exact public snapshots in
@@ -1084,6 +1086,9 @@ document. Commit is a compare-and-set store write that never calls a model. Only
 `profile.version_mismatch` is retryable, because only it guarantees nothing was
 written. An attempt killed during commit stays `unknown`; the store's write
 provenance holds its `commit_id`, so hosts check there before retrying.
+`FileMarkdownStore` rejects the same non-file paths as SQLite storage
+(`storage.path`). `ProfileMemory.close()` does no I/O; afterwards the backend and
+its sessions raise `profile.closed`.
 
 ### Optional backend durability
 

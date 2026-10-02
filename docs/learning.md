@@ -237,9 +237,14 @@ result = run_flow(flow, inputs, memory={"about": profile}, learnable=True)
 - **Host edits.** `profile.read()` returns `(text, version)`, and
   `profile.write(text, base_version=version)` is the same compare-and-set without
   a size limit. `reset()` is refused; delete or rewrite the file through the store.
+- **Close.** `profile.close()` does no I/O. Afterwards `open_run`, `reset`,
+  `read`, `write`, and its open sessions raise `MemoryOperationError` with code
+  `profile.closed`. A registry from `build_memories` closes the profiles it built.
 
-`FileMarkdownStore(path)` keeps the current document as a plain editable file. Next
-to it are content-addressed copies of every version it has handed out
+`FileMarkdownStore(path)` keeps the current document as a plain editable file.
+`path` must be a local file path: empty, `:memory:`, and `file:` URIs raise
+`MemoryOperationError` with code `storage.path`. Next to it are
+content-addressed copies of every version it has handed out
 (`.<name>.versions/`), a lock file, and a write log (`.<name>.writes.jsonl`).
 Each write-log line is JSON with `base_version`, `version`, and `provenance`.
 From `ProfileMemory`, provenance holds `run_id`, `commit_id`, `seen_version`,

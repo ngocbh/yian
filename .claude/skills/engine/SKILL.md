@@ -533,6 +533,9 @@ Most are just the functional model (above) made enforceable:
   is retryable (nothing was written), and it is retried as a new backward
   attempt, never inside the backend. The store has no commit-id replay: a killed
   attempt stays `unknown`, and hosts find its `commit_id` in store provenance.
+  `FileMarkdownStore` takes the same local path rule as SQLite storage.
+  `close()` does no I/O; afterwards the backend and its sessions raise
+  `profile.closed`.
 - **Durable memory belongs to the backend, not runtime** — the episodic,
   reflective, and session backends default to `storage=None` with no I/O. With a
   path, construction only checks its shape and starts PID ownership; storage

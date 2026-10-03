@@ -56,7 +56,7 @@ def test_effect_nodes_drop_scratch_keys():
     assert not hasattr(w, "release_key") and not hasattr(w, "payload_key")
 
 
-def test_wait_event_mode_and_runtime_wide_watchdog_are_gone():
+def test_wait_event_mode_and_the_watchdog_are_gone():
     from agent_composer.nodes.wait.node import WaitNode
 
     wait = WaitNode("wait")
@@ -67,6 +67,8 @@ def test_wait_event_mode_and_runtime_wide_watchdog_are_gone():
         WaitNode("wait", event_spec={"topic": "alerts"})
     with pytest.raises(ModuleNotFoundError):
         importlib.import_module("agent_composer.runtime.watchdog")
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("agent_composer.nodes.code.watchdog")
 
 
 @pytest.mark.parametrize(

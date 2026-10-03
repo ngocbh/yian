@@ -5,7 +5,7 @@
 # one-dict convention a `module:function` callable gets, so a body promotes to a
 # reference by copy-paste. A body must `return` (no-`return` is rejected at load), and
 # the returned value must be JSON-representable. In-process = no isolation (author ==
-# operator): a runaway is logged by a watchdog, not killed.
+# operator): a runaway is not killed; interrupt the run to stop it.
 
 id: inline_code_demo
 name: inline_code_demo

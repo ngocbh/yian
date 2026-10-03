@@ -4,7 +4,6 @@
   both modes run **in-process**. It carries optional whole-code and ordered exact-line
   `OriginRef` provenance, owns identity-safe traceback attribution, and extends the
   node-local origin traversal/rewrite hooks for those declared slots.
-- `watchdog.py` — CODE's soft-budget warning for an in-process body that may be stuck.
 
 CODE currently runs in-process and provides no killable subprocess isolation. This
 package knows only the node contract and typed-value validation; it never imports

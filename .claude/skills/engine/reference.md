@@ -270,10 +270,7 @@ behavior lives in each node's own `forward`; growth construction's sanctioned
 closed kind match lives in `compile.expand.build_grow`, which
 interprets node-produced seeds outside the runtime core. A ratchet test
 (`tests/engine/test_kind_census.py`) holds the core's `NodeKind`/`*Expansion` dispatch count at 0.
-Kind-specific diagnostics stay with their kind. CODE owns
-`nodes/code/watchdog.py`, which wraps only its reference/inline in-process Python
-body and logs one soft-budget warning without killing it. AGENT, HUMAN_INPUT, and
-WAIT are never timed by that watchdog.
+Kind-specific diagnostics stay with their kind.
 
 | Authorable kinds | Internal-only (loader-synthesized) |
 |------------------|------------------------------------|

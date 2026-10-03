@@ -1388,10 +1388,9 @@ branch, a LOOP body, or a plain-mode AGENT. Only the authored names enter the
 fingerprint; group contents are host capabilities, so a resume may pass different
 contents and restarted nodes use them.
 
-CODE's soft-budget watchdog is package-local under `nodes/code/` and times CODE
-only. Pooled drives own their executors through a full join: an abnormal dispatch
-exit signals cooperative stop before joining, so the boundary never releases its
-run-log lock while a worker can still produce an outcome.
+Pooled drives own their executors through a full join: an abnormal dispatch exit
+signals cooperative stop before joining, so the boundary never releases its run-log
+lock while a worker can still produce an outcome.
 
 ## Dynamic growth and stable identity
 

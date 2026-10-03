@@ -310,8 +310,7 @@ Ask, in order:
 2. **Is it the public behavior of a kind/entity?** Put it in that entity's own
    module (e.g. a node kind in `nodes/<kind>/`), and re-export from the package
    `__init__` if callers outside need it. Kind-specific execution support belongs
-   there too: CODE's soft-budget watchdog is `nodes/code/watchdog.py`, not a
-   runtime-wide timer around every node.
+   there too, not in a runtime-wide hook around every node.
 3. **Is it shared *contract* across the entities of a package** — a dataclass, a
    base type, a registry, a `register_*` decorator, an enum the submodules share?
    Put it in `common.py`. Concrete submodules import from `common`; `common`

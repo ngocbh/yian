@@ -28,11 +28,10 @@ author is the operator). That safety argument holds **only** while flow YAML is
 operator-authored: because inline source is `exec`'d in-process with the engine's
 privileges, loading a flow from an untrusted or agent-generated source is remote code
 execution. No opt-in load-time gate exists because there is no untrusted-source loader. The
-current runtime executes inline code **in-process** with no isolation — a runaway body is
-*diagnosed* by CODE's package-local watchdog (it logs an over-budget body) but cannot be killed;
-there is no killable subprocess runtime or security sandbox. A per-node `run()` **deep
-serialize-once check** makes a non-serializable inline return fail *inside CODE*, before the
-dispatcher prepares its durable success record.
+current runtime executes inline code **in-process** with no isolation — a runaway body
+cannot be killed, only interrupted with the run; there is no killable subprocess runtime or
+security sandbox. A per-node `run()` **deep serialize-once check** makes a non-serializable
+inline return fail *inside CODE*, before the dispatcher prepares its durable success record.
 """
 
 import ast
@@ -44,7 +43,6 @@ from typing import Callable, Iterator, Optional, cast
 
 from agent_composer.diagnostics import OriginRef
 from agent_composer.nodes.base import Node, NodeKind, Output
-from agent_composer.nodes.code.watchdog import node_watchdog
 from agent_composer.nodes.contracts import _map_origin, _validate_optional_origin
 from agent_composer.typesys.values import ANY_VALUE_ADAPTER, TypeCheckError, build_value
 
@@ -334,26 +332,23 @@ class CodeNode(Node):
         )
 
     def forward(self, inputs: dict) -> Output:
-        # Only CODE needs the soft-budget diagnostic: its author Python executes in-process
-        # and cannot be killed safely. Expected blocking in other node kinds is not timed.
-        with node_watchdog(self.id):
-            if self._mode == "reference":
-                module_name, _, func_name = self.ref.partition(":")
-                module = importlib.import_module(module_name)
-                func = getattr(module, func_name)
-                result = func(inputs)  # strict: the user fn sees only its bound record
-                return Output(value=result)  # the one value (object/list/scalar), stored whole
-            # inline: run in-process. `main(inputs)` gets the bound record (one dict, like
-            # reference mode). A raise propagates and eval_node funnels it into a clean NodeFailed.
-            # A fresh namespace per run is deliberate, not a missed cache: re-`exec` rebuilds the
-            # `main` function object (cheap — it does NOT re-run the body) into a clean module
-            # scope, so no module-level state carries between invocations. That per-run isolation
-            # keeps each run independent, which is what the engine's determinism wants.
-            ns: dict = {}
-            exec(self._code, ns)  # binds `main`
-            result = ns["main"](inputs)
-            self._assert_serializable(result)
-            return Output(value=result)
+        if self._mode == "reference":
+            module_name, _, func_name = self.ref.partition(":")
+            module = importlib.import_module(module_name)
+            func = getattr(module, func_name)
+            result = func(inputs)  # strict: the user fn sees only its bound record
+            return Output(value=result)  # the one value (object/list/scalar), stored whole
+        # inline: run in-process. `main(inputs)` gets the bound record (one dict, like
+        # reference mode). A raise propagates and eval_node funnels it into a clean NodeFailed.
+        # A fresh namespace per run is deliberate, not a missed cache: re-`exec` rebuilds the
+        # `main` function object (cheap — it does NOT re-run the body) into a clean module
+        # scope, so no module-level state carries between invocations. That per-run isolation
+        # keeps each run independent, which is what the engine's determinism wants.
+        ns: dict = {}
+        exec(self._code, ns)  # binds `main`
+        result = ns["main"](inputs)
+        self._assert_serializable(result)
+        return Output(value=result)
 
     def _assert_serializable(self, value) -> None:
         """Fail *at the node* if an inline return can't survive the typed, serializable pool.

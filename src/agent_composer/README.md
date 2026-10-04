@@ -57,7 +57,7 @@ runtime/      run records/logs, scheduler-state vocabulary, reducer-owned state,
               explicit backward driver and pure learning/context projections
 run.py        public run/recovery boundary and retained RunResult.backward handle
 memory_host.py build_memories/MemoryRegistry: host-side construction of declared memories
-llm_clients/  provider clients, authentication, LLMConfig and model_from_config
+llm_clients/  provider clients, authentication, LLMConfig, model_from_config, model listing
 tools/        tool registry + per-run ToolSet (run tools and the ask_user handler)
 cli/          `composer` commands + main-thread terminal broker
 _settings.py  environment-based default provider/model

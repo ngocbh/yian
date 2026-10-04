@@ -393,6 +393,10 @@ How an AGENT node selects and builds its chat model.
 
 ::: agent_composer.llm_clients.BaseLLMClient
 
+::: agent_composer.llm_clients.list_models
+
+::: agent_composer.llm_clients.ModelListError
+
 The provider/model defaults used when an `LLMConfig` leaves them unset are read
 from the environment.
 

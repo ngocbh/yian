@@ -3,6 +3,10 @@
 Header/body reads share one deadline and cancellation check. TCP connect and TLS
 handshake use stdlib timeouts for their remaining budget; system DNS resolution
 is synchronous and is not interrupted by those socket timeouts.
+
+Failures stay distinguishable for callers that report them: an exhausted deadline
+raises `TimeoutError`, a body over the limit raises `ValueError`, and connection
+failures raise `URLError` or another `OSError`.
 """
 
 from __future__ import annotations
@@ -12,7 +16,7 @@ import io
 import json
 import socket
 import time
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import (
     HTTPHandler,
@@ -22,7 +26,7 @@ from urllib.request import (
     build_opener,
 )
 
-from .common import AuthError, HttpResponse
+from .common import HttpResponse
 
 _BODY_LIMIT = 1024 * 1024
 
@@ -48,7 +52,7 @@ class _Deadline:
             raise _RequestCancelled(error) from None
         remaining = self.end - self.monotonic()
         if remaining <= 0:
-            raise AuthError("OpenAI authentication request timed out")
+            raise TimeoutError("HTTP request timed out")
         return remaining
 
 
@@ -107,8 +111,12 @@ def _request(
     form=None,
     check_stopped=lambda: None,
     monotonic=time.monotonic,
+    body_limit=_BODY_LIMIT,
 ):
-    """Read one response without leaking credentials through redirects or logs."""
+    """Read one response without leaking credentials through redirects or logs.
+
+    ``body_limit`` caps the bytes read from the body, 1 MiB by default.
+    """
     deadline = _Deadline(timeout, monotonic, check_stopped)
 
     class Response(HTTPResponse):
@@ -162,12 +170,17 @@ def _request(
         )
     except HTTPError as error:
         response = error
+    except URLError as error:
+        # urllib wraps connect and send failures, including the deadline's own.
+        if isinstance(error.reason, TimeoutError):
+            raise TimeoutError("HTTP request timed out") from None
+        raise
     with response:
         status = response.code
-        body = response.read(_BODY_LIMIT + 1)
+        body = response.read(body_limit + 1)
         deadline.remaining()
-    if len(body) > _BODY_LIMIT:
-        raise AuthError("OpenAI authentication response is too large")
+    if len(body) > body_limit:
+        raise ValueError("HTTP response is too large")
     try:
         data = json.loads(body)
     except (ValueError, UnicodeError):

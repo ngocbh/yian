@@ -831,3 +831,64 @@ def test_builtin_http_decodes_responses_and_never_follows_redirects(status):
     assert not errors
     assert response.status_code == status
     assert response.data == {"data": [{"id": "gpt-test"}]}
+
+
+def _serve_once(body):
+    """Serve one HTTP response with ``body`` on a loopback port; return (port, thread, errors)."""
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+    server.settimeout(2)
+    errors = []
+
+    def serve():
+        try:
+            connection, _ = server.accept()
+            with connection:
+                connection.settimeout(2)
+                request = bytearray()
+                while b"\r\n\r\n" not in request:
+                    request.extend(connection.recv(4096))
+                connection.sendall(
+                    f"HTTP/1.1 200 OK\r\nContent-Length: {len(body)}\r\n"
+                    "Connection: close\r\n\r\n".encode() + body
+                )
+        except Exception as error:
+            errors.append(error)
+        finally:
+            server.close()
+
+    thread = threading.Thread(target=serve)
+    thread.start()
+    return server.getsockname()[1], thread, errors
+
+
+@pytest.mark.parametrize(("body_limit", "fits"), [(1024, False), (4096, True)])
+def test_builtin_http_body_limit_raises_value_error(body_limit, fits):
+    from agent_composer.llm_clients.auth.http import _request
+
+    body = json.dumps({"pad": "x" * 2048}).encode()
+    port, thread, errors = _serve_once(body)
+    url = f"http://127.0.0.1:{port}"
+    try:
+        if fits:
+            response = _request("GET", url, headers={}, timeout=2, body_limit=body_limit)
+            assert response.data == {"pad": "x" * 2048}
+        else:
+            with pytest.raises(ValueError, match="too large"):
+                _request("GET", url, headers={}, timeout=2, body_limit=body_limit)
+    finally:
+        thread.join(3)
+    assert not errors
+
+
+def test_builtin_http_deadline_during_connect_raises_timeout_error():
+    from agent_composer.llm_clients.auth.http import _request
+
+    # The deadline expires once urllib starts connecting, where it wraps OSErrors.
+    readings = iter([0.0, 0.0])
+    with pytest.raises(TimeoutError):
+        _request(
+            "GET", "http://127.0.0.1:9", headers={}, timeout=1,
+            monotonic=lambda: next(readings, 100.0),
+        )

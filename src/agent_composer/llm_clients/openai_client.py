@@ -7,6 +7,7 @@ from langchain_openai import ChatOpenAI
 from .api_key_env import get_api_key_env
 from .base_client import BaseLLMClient, normalize_content
 from .capabilities import get_capabilities
+from .factory import _PROVIDER_BASE_URL
 from .validators import validate_model
 
 
@@ -158,24 +159,6 @@ _PASSTHROUGH_KWARGS = (
     "timeout", "max_retries", "reasoning_effort", "temperature",
     "api_key", "callbacks", "http_client", "http_async_client",
 )
-
-# Provider base URLs. API-key env vars live in api_key_env.PROVIDER_API_KEY_ENV
-# (one canonical mapping consulted by both this client and the CLI's
-# interactive key-prompt). Dual-region providers (qwen/glm/minimax) keep
-# separate endpoints because international and China accounts cannot share
-# credentials (#758).
-_PROVIDER_BASE_URL = {
-    "xai":        "https://api.x.ai/v1",
-    "deepseek":   "https://api.deepseek.com",
-    "qwen":       "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-    "qwen-cn":    "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    "glm":        "https://api.z.ai/api/paas/v4/",
-    "glm-cn":     "https://open.bigmodel.cn/api/paas/v4/",
-    "minimax":    "https://api.minimax.io/v1",
-    "minimax-cn": "https://api.minimaxi.com/v1",
-    "openrouter": "https://openrouter.ai/api/v1",
-    "vllm":       "http://localhost:8000/v1",
-}
 
 # Self-hosted runtimes whose API key is optional: vLLM runs keyless by default
 # but can be started with `--api-key`. When its env var is unset we send a dummy

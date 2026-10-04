@@ -7,7 +7,7 @@ from .base_client import BaseLLMClient
 
 # Providers that use the OpenAI-compatible chat completions API. Dual-region
 # providers (qwen/glm/minimax) expose separate international and China
-# endpoints — see openai_client._PROVIDER_BASE_URL.
+# endpoints — see _PROVIDER_BASE_URL.
 # Ollama is intentionally NOT here: it routes to its own native client
 # (ollama_client.OllamaClient) so thinking can be disabled — see that module.
 _OPENAI_COMPATIBLE = (
@@ -18,6 +18,25 @@ _OPENAI_COMPATIBLE = (
     "openrouter", "vllm",
 )
 _DEDICATED_PROVIDERS = ("ollama", "anthropic", "google", "azure")
+
+# Default base URLs of the OpenAI-compatible providers other than `openai`, whose
+# SDK default applies. Kept here, beside the routes, so callers that only need the
+# endpoint (the OpenAI client, model listing) do not import an optional extra.
+# API-key env vars live in api_key_env.PROVIDER_API_KEY_ENV. Dual-region
+# providers (qwen/glm/minimax) keep separate endpoints because international and
+# China accounts cannot share credentials (#758).
+_PROVIDER_BASE_URL = {
+    "xai":        "https://api.x.ai/v1",
+    "deepseek":   "https://api.deepseek.com",
+    "qwen":       "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    "qwen-cn":    "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "glm":        "https://api.z.ai/api/paas/v4/",
+    "glm-cn":     "https://open.bigmodel.cn/api/paas/v4/",
+    "minimax":    "https://api.minimax.io/v1",
+    "minimax-cn": "https://api.minimaxi.com/v1",
+    "openrouter": "https://openrouter.ai/api/v1",
+    "vllm":       "http://localhost:8000/v1",
+}
 
 _ROUTED_PROVIDERS = (*_OPENAI_COMPATIBLE, *_DEDICATED_PROVIDERS)
 if (

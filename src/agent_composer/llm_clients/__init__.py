@@ -11,6 +11,8 @@ login, private atomic credential storage, and refresh. `connection` snapshots
 nonsecret selections for the host and resolves pinned credentials for requests.
 OpenAI Responses messages retain their full continuation blocks; presentation
 extracts text without mutating the messages used for the next request.
+`list_models` lists the model ids a provider's host offers, using only the key
+and base URL passed in.
 
 Knows about:   the package env-based defaults (`_settings`), langchain, provider SDKs.
 Never imports: any other agent_composer subpackage — it is a leaf (peer of state /
@@ -23,10 +25,13 @@ from agent_composer.llm_clients.factory import (
     create_llm_client,
     model_from_config,
 )
+from agent_composer.llm_clients.model_list import ModelListError, list_models
 
 __all__ = [
     "BaseLLMClient",
     "LLMConfig",
+    "ModelListError",
     "create_llm_client",
+    "list_models",
     "model_from_config",
 ]

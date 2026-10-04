@@ -188,6 +188,10 @@ connection identity. Keep tokens out of model configuration and history.
 `llm_clients/connection.py` combines saved selections with environment defaults
 and supplies pinned request-time credential callbacks. The run host owns the
 snapshot; compiler resolution stays pure and receives provider-scoped defaults.
+`llm_clients/model_list.py` lists a host's models over httpx with only the key
+passed in. It imports no model SDK, so the OpenAI-compatible default endpoints
+live in `factory.py` beside the routes, where both it and the OpenAI client read
+them.
 
 Compiled-origin traversal follows the same direction. Semantic carriers and
 nodes own their local origin slots and static-child hooks; `diagnostics` owns the

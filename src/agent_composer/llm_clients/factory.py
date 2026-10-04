@@ -24,7 +24,7 @@ _DEDICATED_PROVIDERS = ("ollama", "anthropic", "google", "azure")
 # endpoint (the OpenAI client, model listing) do not import an optional extra.
 # API-key env vars live in api_key_env.PROVIDER_API_KEY_ENV. Dual-region
 # providers (qwen/glm/minimax) keep separate endpoints because international and
-# China accounts cannot share credentials (#758).
+# China accounts cannot share credentials.
 _PROVIDER_BASE_URL = {
     "xai":        "https://api.x.ai/v1",
     "deepseek":   "https://api.deepseek.com",

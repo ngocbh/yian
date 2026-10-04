@@ -183,14 +183,6 @@ effective model map. Request-time callbacks resolve credentials and refresh
 tokens for that identity. Reconnection or a changed environment key fails a
 pinned request rather than changing its account or billing method.
 
-`llm_clients/model_list.py` lists the model ids a provider's host offers
-(`list_models`), for a host's model picker or key check. It sends only the key
-and base URL passed in, reads no environment key or base URL, follows no
-redirect, and shares one timeout across every page. A failure raises
-`ModelListError` with only a status or a short reason and nothing chained, so
-the key, the URL, and the response body never reach its message or traceback.
-Azure has no listing and returns `None`.
-
 The fresh-run host reads environment and saved defaults once. Model defaults
 are provider-scoped, with environment overrides above saved choices; explicit
 authored fields retain their existing per-field precedence. Recovery and

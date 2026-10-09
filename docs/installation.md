@@ -2,9 +2,14 @@
 
 Yian needs **Python 3.10+**.
 
-The current documentation describes the `main` branch. PyPI release `0.0.1`
-contains an older, incompatible package, so install the current version from a
-clone until the next release:
+Install the latest release from PyPI:
+
+```console
+python -m pip install yian
+```
+
+The documentation describes the `main` branch, which can be ahead of the latest
+release. To run `main`, install from a clone:
 
 ```console
 git clone https://github.com/ngocbh/yian.git
@@ -12,17 +17,14 @@ cd yian
 python -m pip install .
 ```
 
-The current source uses distribution name `yian`, import name
-`yian`, and CLI command `yian`.
+The distribution, import name, and CLI command are all `yian`.
 
 ```console
 yian --help
 ```
 
-Earlier builds installed this command as ac, and no alias is kept. On macOS, a
-bare ac now runs the unrelated system tool /usr/sbin/ac. If PHP Composer is also
-installed, activate your virtual environment first so the venv's `yian`
-comes first on `PATH`.
+Earlier builds installed this command as `ac` and then `composer`. No alias is
+kept.
 
 ## Provider extras
 
@@ -30,14 +32,15 @@ The core (engine + `yian` CLI) installs with **no LLM SDK**. Each provider is an
 optional extra — install the one(s) you actually use:
 
 ```console
-python -m pip install ".[anthropic]"   # Claude  (langchain-anthropic)
-python -m pip install ".[openai]"      # GPT     (langchain-openai)
-python -m pip install ".[google]"      # Gemini  (langchain-google-genai)
-python -m pip install ".[ollama]"      # local   (langchain-ollama)
-python -m pip install ".[all]"         # all provider extras
+python -m pip install "yian[anthropic]"   # Claude  (langchain-anthropic)
+python -m pip install "yian[openai]"      # GPT     (langchain-openai)
+python -m pip install "yian[google]"      # Gemini  (langchain-google-genai)
+python -m pip install "yian[ollama]"      # local   (langchain-ollama)
+python -m pip install "yian[all]"         # all provider extras
 ```
 
-Run these commands from the repository root.
+From a clone, run the same commands from the repository root with `.[<extra>]`
+in place of `yian[<extra>]`, for example `python -m pip install ".[all]"`.
 
 Provider SDKs are imported **lazily** — only when a flow actually runs an AGENT node
 against that provider. Importing a provider you haven't installed raises a clear

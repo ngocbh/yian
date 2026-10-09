@@ -55,9 +55,14 @@ with validated defaults and reference them in prompts as `${name}`.
 > **Early stage.** Yian is under active development. The API, YAML
 > surface, and CLI may change quickly.
 
-The current documentation describes the `main` branch. PyPI release `0.0.1`
-contains an older, incompatible package, so install the current version from a
-clone until the next release:
+Install the latest release from PyPI:
+
+```console
+python -m pip install "yian[all]"
+```
+
+The documentation describes the `main` branch, which can be ahead of the latest
+release. To run `main`, install from a clone:
 
 ```console
 git clone https://github.com/ngocbh/yian.git

@@ -55,22 +55,14 @@ with validated defaults and reference them in prompts as `${name}`.
 > **Early stage.** Yian is under active development. The API, YAML
 > surface, and CLI may change quickly.
 
-Install the latest release from PyPI:
+Install from PyPI:
 
 ```console
 python -m pip install "yian[all]"
 ```
 
-The documentation describes the `main` branch, which can be ahead of the latest
-release. To run `main`, install from a clone:
-
-```console
-git clone https://github.com/ngocbh/yian.git
-cd yian
-python -m pip install ".[all]"
-```
-
-For development, use `python -m pip install -e ".[all,dev]"` instead.
+To run the unreleased `main` branch or work on Yian itself, see the
+[development install](docs/installation.md#development-install).
 
 Provider extras can be installed separately: `anthropic`, `openai`, `google`,
 or `ollama`. The core engine and CLI do not require a provider SDK; a flow needs

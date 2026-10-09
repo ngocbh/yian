@@ -2,19 +2,10 @@
 
 Yian needs **Python 3.10+**.
 
-Install the latest release from PyPI:
+Install from PyPI:
 
 ```console
 python -m pip install yian
-```
-
-The documentation describes the `main` branch, which can be ahead of the latest
-release. To run `main`, install from a clone:
-
-```console
-git clone https://github.com/ngocbh/yian.git
-cd yian
-python -m pip install .
 ```
 
 The distribution, import name, and CLI command are all `yian`.
@@ -22,9 +13,6 @@ The distribution, import name, and CLI command are all `yian`.
 ```console
 yian --help
 ```
-
-Earlier builds installed this command as `ac` and then `composer`. No alias is
-kept.
 
 ## Provider extras
 
@@ -38,9 +26,6 @@ python -m pip install "yian[google]"      # Gemini  (langchain-google-genai)
 python -m pip install "yian[ollama]"      # local   (langchain-ollama)
 python -m pip install "yian[all]"         # all provider extras
 ```
-
-From a clone, run the same commands from the repository root with `.[<extra>]`
-in place of `yian[<extra>]`, for example `python -m pip install ".[all]"`.
 
 Provider SDKs are imported **lazily** — only when a flow actually runs an AGENT node
 against that provider. Importing a provider you haven't installed raises a clear
@@ -132,14 +117,26 @@ No API key is needed — point at a running Ollama endpoint:
 export YIAN_DEFAULT_PROVIDER=ollama
 export YIAN_DEFAULT_MODEL=llama3.2:3b
 export OLLAMA_BASE_URL=http://localhost:11434
-yian run examples/hello.yaml --input name=Ada
+yian run hello.yaml --input name=Ada
 ```
 
-The example path exists in the clone; run this command from its repository root.
+`hello.yaml` is any flow file, for example this one-node flow:
+
+```yaml
+id: hello
+name: hello
+input:
+  name: str
+output: str
+kind: agent
+prompt: Write a warm one-sentence greeting to ${name}.
+```
 
 ## Development install
 
-To work on Yian itself, install it editable with the test extras:
+The documentation describes the `main` branch, which can be ahead of the latest
+release. To run `main` or work on Yian itself, install a clone editable with the
+test extras:
 
 ```console
 git clone https://github.com/ngocbh/yian

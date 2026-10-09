@@ -1,8 +1,8 @@
-# Seed gallery — Agent Composer flow syntax
+# Seed gallery — Yian flow syntax
 
-These are **example flows in the `Agent Composer` contract**: a Compose-inspired,
+These are **example flows in the `Yian` contract**: a Compose-inspired,
 edge-free, single-value I/O model. They load and run via the Compose loader
-(`agent_composer.load_flow` / `run_flow`); the CODE nodes call `tests.seeds.fns`.
+(`yian.load_flow` / `run_flow`); the CODE nodes call `tests.seeds.fns`.
 
 > Negative fixtures for failure modes that lack a canonical check live under
 > `_future/errors/`. Supported syntax, including blocking HUMAN_INPUT and WAIT,

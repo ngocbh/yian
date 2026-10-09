@@ -15,11 +15,11 @@ from typing import Any
 
 import pytest
 
-import agent_composer.runtime.engine as engine_module
-import agent_composer.runtime.state as state_module
-from agent_composer.compile.model import CompiledFlow, Edge, END_ID, Flow, START_ID
-from agent_composer.diagnostics import Failure, OriginRef
-from agent_composer.events import (
+import yian.runtime.engine as engine_module
+import yian.runtime.state as state_module
+from yian.compile.model import CompiledFlow, Edge, END_ID, Flow, START_ID
+from yian.diagnostics import Failure, OriginRef
+from yian.events import (
     NodeExpanded,
     NodeFailed,
     NodeRouted,
@@ -29,30 +29,30 @@ from agent_composer.events import (
     RunSucceeded,
     StreamChunk,
 )
-from agent_composer.nodes.base import Grow, Node, NodeKind, Output, Route, _HostStop
-from agent_composer.nodes.contracts import (
+from yian.nodes.base import Grow, Node, NodeKind, Output, Route, _HostStop
+from yian.nodes.contracts import (
     ContractOrigins,
     OutputContract,
     PartialRecordContract,
     ValueContract,
 )
-from agent_composer.nodes.end import EndNode
-from agent_composer.nodes.start import StartNode
-from agent_composer.runtime.engine import FlowEngine
-from agent_composer.runtime.log import (
+from yian.nodes.end import EndNode
+from yian.nodes.start import StartNode
+from yian.runtime.engine import FlowEngine
+from yian.runtime.log import (
     MemoryRunLog,
     NodeExpandedRecord,
     NodeFailedRecord,
     NodeStartedRecord,
     NodeSucceededRecord,
 )
-from agent_composer.runtime.state import (
+from yian.runtime.state import (
     RunStartData,
     RunState,
     commit_prepared,
     prepare_run_started,
 )
-from agent_composer.typesys import Type, ValueKind, VariablePool
+from yian.typesys import Type, ValueKind, VariablePool
 
 
 _RUN_ID = "recorded-dispatch"
@@ -1110,7 +1110,7 @@ def test_legal_kind_malformed_seed_constructs_contract_growth_failure(
     origin_context: tuple[OriginRef, ...],
     expected_trace: tuple[OriginRef, ...],
 ):
-    from agent_composer.compile.expand import build_grow
+    from yian.compile.expand import build_grow
 
     node = _MalformedSeedGrowNode("spawn", origin=origin)
     node.origin_context = origin_context

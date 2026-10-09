@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from agent_composer.expr import infer_expr_type, parse_expr
-from agent_composer.typesys.values import Type, ValueKind
+from yian.expr import infer_expr_type, parse_expr
+from yian.typesys.values import Type, ValueKind
 
 
 def _unexpected_ref(path: str) -> Type | None:

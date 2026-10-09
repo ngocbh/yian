@@ -12,8 +12,8 @@ NOTHING, but each arg VALUE's refs ARE collected. Literals contribute nothing.
 responsible for skipping `item` when minting edges.
 """
 
-from agent_composer.expr.expressions import expr_refs
-from agent_composer.expr.grammar import parse_expr
+from yian.expr.expressions import expr_refs
+from yian.expr.grammar import parse_expr
 
 
 def _refs(text: str) -> list[str]:

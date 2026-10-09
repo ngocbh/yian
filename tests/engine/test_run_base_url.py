@@ -6,15 +6,15 @@ import httpx
 import pytest
 from langchain_core.messages import AIMessage
 
-import agent_composer.llm_clients as clients
-import agent_composer.llm_clients.factory as factory
-from agent_composer.compose import load_flow
-from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.events import NodeStarted
-from agent_composer.memory.profile import ProfileMemory
-from agent_composer.memory.reflective import ReflectiveMemory
-from agent_composer.memory.storage import FileMarkdownStore
-from agent_composer.run import resume_flow, run_flow
+import yian.llm_clients as clients
+import yian.llm_clients.factory as factory
+from yian.compose import load_flow
+from yian.compose.helpers.errors import LoadError
+from yian.events import NodeStarted
+from yian.memory.profile import ProfileMemory
+from yian.memory.reflective import ReflectiveMemory
+from yian.memory.storage import FileMarkdownStore
+from yian.run import resume_flow, run_flow
 from tests.engine.test_run_api_key import (
     _NO_FEEDBACK,
     _assert_hidden,
@@ -42,9 +42,9 @@ _VLLM = {
 
 @pytest.fixture(autouse=True)
 def clean_env(tmp_path, monkeypatch):
-    monkeypatch.setenv("AGENT_COMPOSER_AUTH_FILE", str(tmp_path / "auth.json"))
+    monkeypatch.setenv("YIAN_AUTH_FILE", str(tmp_path / "auth.json"))
     for name in (
-        "AGENT_COMPOSER_DEFAULT_PROVIDER", "AGENT_COMPOSER_DEFAULT_MODEL",
+        "YIAN_DEFAULT_PROVIDER", "YIAN_DEFAULT_MODEL",
         "OPENAI_API_KEY", "OPENAI_BASE_URL", "VLLM_API_KEY", "VLLM_BASE_URL",
         "ANTHROPIC_API_KEY",
     ):

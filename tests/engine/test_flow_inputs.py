@@ -2,13 +2,13 @@
 
 import pytest
 
-from agent_composer.diagnostics import SourceRange
-from agent_composer.nodes.contracts import Parameter, ValueContract
-from agent_composer.typesys.values import ValueKind
-from agent_composer.nodes.binding import apply_defaults, coerce_inputs
-from agent_composer.compose import LoadError
-from agent_composer.compose.helpers.errors import LoadDiagnostics
-from agent_composer.compose.helpers.types import read_flow_inputs
+from yian.diagnostics import SourceRange
+from yian.nodes.contracts import Parameter, ValueContract
+from yian.typesys.values import ValueKind
+from yian.nodes.binding import apply_defaults, coerce_inputs
+from yian.compose import LoadError
+from yian.compose.helpers.errors import LoadDiagnostics
+from yian.compose.helpers.types import read_flow_inputs
 
 
 def _by_name(decls):

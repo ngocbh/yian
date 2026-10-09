@@ -12,10 +12,10 @@ import time
 
 import pytest
 
-import agent_composer.memory.contracts as c
-from agent_composer.memory.episodic import EpisodicMemory
-import agent_composer.memory.episodic as episodic
-from agent_composer.memory.storage import SQLiteStorage
+import yian.memory.contracts as c
+from yian.memory.episodic import EpisodicMemory
+import yian.memory.episodic as episodic
+from yian.memory.storage import SQLiteStorage
 
 
 def _first_open(memory):

@@ -12,9 +12,9 @@ import time
 
 import pytest
 
-import agent_composer.memory.contracts as c
-from agent_composer.memory.session import SessionMemory
-from agent_composer.memory.storage import SQLiteStorage
+import yian.memory.contracts as c
+from yian.memory.session import SessionMemory
+from yian.memory.storage import SQLiteStorage
 from tests.engine._session_fakes import (
     append_reply,
     harness,

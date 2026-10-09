@@ -2,10 +2,10 @@
 
 import pytest
 
-from agent_composer.nodes.base import BackwardContext, BackwardResult, Node, validate_backward_result
-from agent_composer.nodes.contracts import Parameter
-from agent_composer.nodes.end import EndNode
-from agent_composer.nodes.start import StartNode
+from yian.nodes.base import BackwardContext, BackwardResult, Node, validate_backward_result
+from yian.nodes.contracts import Parameter
+from yian.nodes.end import EndNode
+from yian.nodes.start import StartNode
 
 
 def _context(node, inputs, output):
@@ -32,7 +32,7 @@ class _CaptureNode(Node):
         return self.material
 
     def forward(self, inputs):
-        from agent_composer.nodes.base import Output
+        from yian.nodes.base import Output
 
         self.ran = True
         self.params[0] = Parameter("changed_input")
@@ -54,7 +54,7 @@ def test_behavioral_backward_stops_with_empty_channels_and_static_capture():
 
 
 def test_case_backward_inventory_excludes_generated_control_inputs():
-    from agent_composer.nodes.case import CaseNode
+    from yian.nodes.case import CaseNode
 
     node = CaseNode("choose", [])
     node.params = [Parameter(name) for name in ("topic", "__r0", "__on", "__r12", "__remarks")]
@@ -63,8 +63,8 @@ def test_case_backward_inventory_excludes_generated_control_inputs():
 
 @pytest.mark.parametrize("params", [{"topic": Parameter("topic")}, [object()]])
 def test_input_inventory_capture_preserves_canonical_parameter_setup_faults(params):
-    from agent_composer.runtime.eval_node import eval_node
-    from agent_composer.typesys.pool import VariablePool
+    from yian.runtime.eval_node import eval_node
+    from yian.typesys.pool import VariablePool
 
     node = Node("invalid")
     node.params = params
@@ -74,8 +74,8 @@ def test_input_inventory_capture_preserves_canonical_parameter_setup_faults(para
 
 
 def test_start_projects_named_delivered_inputs_including_defaults_but_not_absence():
-    from agent_composer.runtime.eval_node import eval_node
-    from agent_composer.typesys.pool import VariablePool
+    from yian.runtime.eval_node import eval_node
+    from yian.typesys.pool import VariablePool
 
     node = StartNode("start", params=[
         Parameter("topic"), Parameter("limit", has_default=True, default=4), Parameter("omitted"),
@@ -155,8 +155,8 @@ def test_end_backward_uses_captured_layout_after_live_node_fields_change():
 
 
 def test_stopping_loop_projects_all_carried_fields_without_reevaluating_predicate(monkeypatch):
-    import agent_composer.nodes.loop.node as loop_module
-    from agent_composer.nodes.loop import LoopNode
+    import yian.nodes.loop.node as loop_module
+    from yian.nodes.loop import LoopNode
 
     node = LoopNode("loop", flow_id="body", predicate="false", max_iters=2,
                     child_inputs=[Parameter("value")])
@@ -178,7 +178,7 @@ def test_stopping_loop_projects_all_carried_fields_without_reevaluating_predicat
 
 @pytest.mark.parametrize("node", [StartNode("start", params=[Parameter("value")]), EndNode.list_("end", n=1)])
 def test_failed_boundaries_forward_text_only_when_inputs_and_layout_were_captured(node):
-    from agent_composer.diagnostics import Failure
+    from yian.diagnostics import Failure
 
     name, = node.backward_input_names()
     failure = Failure("node.execute", "Failed.", node_id=node.id)
@@ -205,8 +205,8 @@ def test_successful_null_output_is_a_bare_contributor_but_zero_output_has_none()
 
 
 def test_stopped_loop_failure_does_not_route_an_unaccepted_carried_output():
-    from agent_composer.diagnostics import Failure
-    from agent_composer.nodes.loop import LoopNode
+    from yian.diagnostics import Failure
+    from yian.nodes.loop import LoopNode
 
     node = LoopNode("loop", flow_id="body", predicate="false", max_iters=2)
     node.params = [Parameter("value")]
@@ -218,10 +218,10 @@ def test_stopped_loop_failure_does_not_route_an_unaccepted_carried_output():
 
 
 def test_static_backward_capture_and_names_are_detached_for_the_actual_invocation():
-    from agent_composer.nodes.contracts import ExecutionScope
-    from agent_composer.runtime.eval_node import eval_node
-    from agent_composer.runtime.trace import capture_bindings
-    from agent_composer.typesys.pool import VariablePool
+    from yian.nodes.contracts import ExecutionScope
+    from yian.runtime.eval_node import eval_node
+    from yian.runtime.trace import capture_bindings
+    from yian.typesys.pool import VariablePool
 
     node = _CaptureNode()
     scope = ExecutionScope(("authored",))
@@ -242,9 +242,9 @@ def test_static_backward_capture_and_names_are_detached_for_the_actual_invocatio
 
 
 def test_early_binding_failure_keeps_inventories_without_usable_inputs_or_fabricated_layout():
-    from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
-    from agent_composer.runtime.trace import capture_bindings
-    from agent_composer.typesys.pool import VariablePool
+    from yian.runtime.eval_node import EvaluationFailure, eval_node
+    from yian.runtime.trace import capture_bindings
+    from yian.typesys.pool import VariablePool
 
     node = _CaptureNode()
     node.params[0] = Parameter("topic", required=True)
@@ -261,8 +261,8 @@ def test_early_binding_failure_keeps_inventories_without_usable_inputs_or_fabric
 
 @pytest.mark.parametrize("material", [object(), {"bad": object()}, {"bad": float("inf")}, {"bad": "\ud800"}])
 def test_static_capture_serialization_faults_are_host_faults_before_the_body(material):
-    from agent_composer.runtime.eval_node import eval_node
-    from agent_composer.typesys.pool import VariablePool
+    from yian.runtime.eval_node import eval_node
+    from yian.typesys.pool import VariablePool
 
     node = _CaptureNode()
     node.material = material
@@ -272,8 +272,8 @@ def test_static_capture_serialization_faults_are_host_faults_before_the_body(mat
 
 
 def test_static_capture_exception_escapes_unchanged_and_capture_off_calls_no_hook():
-    from agent_composer.runtime.eval_node import eval_node
-    from agent_composer.typesys.pool import VariablePool
+    from yian.runtime.eval_node import eval_node
+    from yian.typesys.pool import VariablePool
 
     expected = ValueError("capture failed")
     node = _CaptureNode()
@@ -302,10 +302,10 @@ def test_structural_output_paths_must_exist_in_the_available_accepted_output(out
 
 
 def test_static_layout_is_captured_before_a_preassert_failure_after_defaults():
-    from agent_composer.nodes.contracts import Assertion
-    from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
-    from agent_composer.runtime.trace import capture_bindings
-    from agent_composer.typesys.pool import VariablePool
+    from yian.nodes.contracts import Assertion
+    from yian.runtime.eval_node import EvaluationFailure, eval_node
+    from yian.runtime.trace import capture_bindings
+    from yian.typesys.pool import VariablePool
 
     node = EndNode.record("end", output_names=["result"])
     node.params = [Parameter("result", has_default=True, default={"items": [1]})]
@@ -328,8 +328,8 @@ def test_static_layout_is_captured_before_a_preassert_failure_after_defaults():
 
 
 def test_custom_run_uses_its_existing_pre_run_capture_boundary():
-    from agent_composer.runtime.eval_node import eval_node
-    from agent_composer.typesys.pool import VariablePool
+    from yian.runtime.eval_node import eval_node
+    from yian.typesys.pool import VariablePool
 
     class CustomRun(_CaptureNode):
         def run(self, inputs, **_caps):
@@ -345,12 +345,12 @@ def test_custom_run_uses_its_existing_pre_run_capture_boundary():
 
 
 def test_agent_capture_keeps_variable_inventory_separate_from_delivered_inputs(monkeypatch):
-    import agent_composer.nodes.agent.node as agent_module
-    from agent_composer.compose.helpers.types import read_variables
-    from agent_composer.nodes.agent import AgentNode
-    from agent_composer.nodes.base import Output
-    from agent_composer.runtime.eval_node import eval_node
-    from agent_composer.typesys.pool import VariablePool
+    import yian.nodes.agent.node as agent_module
+    from yian.compose.helpers.types import read_variables
+    from yian.nodes.agent import AgentNode
+    from yian.nodes.base import Output
+    from yian.runtime.eval_node import eval_node
+    from yian.typesys.pool import VariablePool
 
     node = AgentNode("writer", prompt="${topic}: ${instruction}", variables=read_variables({
         "instruction": "str = Summarize clearly",

@@ -3,9 +3,9 @@ beyond its declared `params` (MAP `over`, WAIT `until`). Load-time only (no pool
 `check_wiring_parity` + MAP validation read it instead of dispatching on `node.kind`.
 """
 
-from agent_composer.nodes.code.node import CodeNode
-from agent_composer.nodes.map.node import MapNode
-from agent_composer.nodes.wait.node import WaitNode
+from yian.nodes.code.node import CodeNode
+from yian.nodes.map.node import MapNode
+from yian.nodes.wait.node import WaitNode
 
 
 def test_reserved_wiring_keys_by_kind():

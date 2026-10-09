@@ -1,6 +1,6 @@
 # Agent
 
-In Agent Composer, an **agent** is a composable transformation from a named,
+In Yian, an **agent** is a composable transformation from a named,
 typed input record to an output. A flow exposes an output value, which may be a
 scalar, list, record, or `None`. A runtime node exposes a node outcome: a value,
 a route, or a request to expand a child flow.
@@ -62,7 +62,7 @@ has ordered messages and may have turn-dependent fields alongside them.
 <figure class="ac-request-visual" aria-labelledby="ac-request-visual-title">
   <figcaption id="ac-request-visual-title">
     <strong>What one model request contains</strong>
-    <span>Only messages have a Composer-defined order.</span>
+    <span>Only messages have a Yian-defined order.</span>
   </figcaption>
 
   <div class="ac-request-frame">
@@ -162,8 +162,8 @@ has ordered messages and may have turn-dependent fields alongside them.
   </p>
 </figure>
 
-Only the messages have a Composer-defined sequence. The provider adapter owns
-the eventual token and control representation, so Agent Composer does not claim
+Only the messages have a Yian-defined sequence. The provider adapter owns
+the eventual token and control representation, so Yian does not claim
 that tool descriptions occur before or after recalled memory in a flattened
 token stream.
 

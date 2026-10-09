@@ -1,4 +1,4 @@
-"""The console script and the Typer app are both named composer."""
+"""The console script and the Typer app are both named yian."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from agent_composer.cli import app
+from yian.cli import app
 
 _ANSI_SGR = re.compile(r"\x1b\[[0-9;]*m")
 _PYPROJECT = Path(__file__).resolve().parents[2] / "pyproject.toml"
@@ -21,13 +21,13 @@ def _console_scripts() -> dict[str, str]:
 
 
 def test_console_script_is_composer():
-    assert _console_scripts() == {"composer": "agent_composer.cli:main"}
+    assert _console_scripts() == {"yian": "yian.cli:main"}
 
 
 def test_help_names_composer():
     r = CliRunner().invoke(app, ["--help"], env={"COLUMNS": "200"})
     assert r.exit_code == 0
-    assert "Usage: composer " in _ANSI_SGR.sub("", r.output)
+    assert "Usage: yian " in _ANSI_SGR.sub("", r.output)
 
 
 _ROOT = _PYPROJECT.parent

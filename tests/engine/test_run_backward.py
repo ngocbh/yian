@@ -11,11 +11,11 @@ import time
 
 import pytest
 
-from agent_composer.compose import load_flow
-from agent_composer.events import RunStarted, RunSucceeded
-from agent_composer.memory import MemoryOperationError, MemorySetupError
-from agent_composer.run import resume_flow, run_flow
-from agent_composer.runtime.log import (
+from yian.compose import load_flow
+from yian.events import RunStarted, RunSucceeded
+from yian.memory import MemoryOperationError, MemorySetupError
+from yian.run import resume_flow, run_flow
+from yian.runtime.log import (
     BackwardFinishedRecord, BackwardReadyRecord, BackwardStartedRecord, JsonlRunLog,
     MemoryCommitRequestedRecord, MemoryCommitSucceededRecord, MemoryRunLog,
 )
@@ -617,11 +617,11 @@ def test_terminal_resume_only_reconstructs_backward_outcome(tmp_path):
 
 @pytest.mark.parametrize("prefix", ["started", "ready", "requested", "confirmed"])
 def test_terminal_resume_inspects_every_unfinished_backward_prefix(tmp_path, prefix):
-    from agent_composer.run import _replay_run_log
-    from agent_composer.runtime.backward import compute_backward
-    from agent_composer.runtime.contracts import MemoryProposal
-    from agent_composer.runtime.learning import memory_commit_id
-    from agent_composer.runtime.state import commit_prepared, prepare_record
+    from yian.run import _replay_run_log
+    from yian.runtime.backward import compute_backward
+    from yian.runtime.contracts import MemoryProposal
+    from yian.runtime.learning import memory_commit_id
+    from yian.runtime.state import commit_prepared, prepare_record
 
     path = tmp_path / "prefix.jsonl"
     flow = load_flow(_WITH_MEMORY)
@@ -655,8 +655,8 @@ def test_terminal_resume_inspects_every_unfinished_backward_prefix(tmp_path, pre
 _KILLED_ATTEMPT = """
 import sys, time
 from pathlib import Path
-from agent_composer.compose import load_flow
-from agent_composer.run import resume_flow
+from yian.compose import load_flow
+from yian.run import resume_flow
 from tests.engine._memory_fakes import _Memory, _Session
 
 log, source, marker, phase = sys.argv[1:]

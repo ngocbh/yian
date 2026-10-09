@@ -1,10 +1,10 @@
 """The `tool` kind handle: parsing records field ranges in the descriptor; build
 returns a runtime ToolNode with `inputs` wiring (the tool's sink surface) and stamped ranges."""
 
-from agent_composer.compose.nodes.base import BuildContext
-from agent_composer.compose.nodes.tool import ToolDescriptor
-from agent_composer.compose.source import SourceDocument
-from agent_composer.diagnostics import SourceRange
+from yian.compose.nodes.base import BuildContext
+from yian.compose.nodes.tool import ToolDescriptor
+from yian.compose.source import SourceDocument
+from yian.diagnostics import SourceRange
 
 
 _FLOW = """\
@@ -41,7 +41,7 @@ def test_tool_build_returns_tool_node_and_wires_inputs():
     result = desc.build(BuildContext({}))
     node, wiring = result.node, result.wiring
 
-    from agent_composer.nodes.tool import ToolNode
+    from yian.nodes.tool import ToolNode
 
     assert isinstance(node, ToolNode)
     assert node.tool_id == "http_get"

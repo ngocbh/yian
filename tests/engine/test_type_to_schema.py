@@ -3,8 +3,8 @@
 import pytest
 from pydantic import ValidationError
 
-from agent_composer.nodes.agent.structured import type_to_schema
-from agent_composer.typesys.values import Type, ValueKind
+from yian.nodes.agent.structured import type_to_schema
+from yian.typesys.values import Type, ValueKind
 
 
 def test_bare_str_returns_none():
@@ -37,7 +37,7 @@ def test_scalar_int_gets_schema():
 def test_bounded_scalar_schema_exposes_and_enforces_inclusive_limits(
     expression, lower, upper, inside, outside,
 ):
-    from agent_composer.typesys.types import type_for
+    from yian.typesys.types import type_for
 
     model = type_to_schema(type_for(expression, {}))
     value_schema = model.model_json_schema()["properties"]["value"]
@@ -49,7 +49,7 @@ def test_bounded_scalar_schema_exposes_and_enforces_inclusive_limits(
 
 
 def test_bounded_numeric_schemas_preserve_nested_lists_records_and_nullable_fields():
-    from agent_composer.typesys.types import read_typedefs, type_for
+    from yian.typesys.types import read_typedefs, type_for
 
     registry = read_typedefs({"Rating": {
         "count": "int[1, 12]", "scores": "list[list[float[0, 1]]]",
@@ -71,7 +71,7 @@ def test_bounded_numeric_schemas_preserve_nested_lists_records_and_nullable_fiel
 
 
 def test_nullable_bounded_scalars_keep_explicit_null_in_schema():
-    from agent_composer.typesys.types import type_for
+    from yian.typesys.types import type_for
 
     model = type_to_schema(type_for("list[Optional[int[1, 12]]]", {}))
     items_schema = model.model_json_schema()["properties"]["items"]["items"]
@@ -86,8 +86,8 @@ def test_nullable_bounded_scalars_keep_explicit_null_in_schema():
     ("float", -(2**53 + 2), -(2**53), -(2**53 + 4)),
 ])
 def test_large_numeric_schema_bounds_match_resolved_type(kind, lower, upper, outside):
-    from agent_composer.typesys.types import type_for
-    from agent_composer.typesys.values import TypeCheckError, build_value_as
+    from yian.typesys.types import type_for
+    from yian.typesys.values import TypeCheckError, build_value_as
 
     typ = type_for(f"{kind}[{lower}, {upper}]", {})
     typ.validate_shape()
@@ -104,7 +104,7 @@ def test_large_numeric_schema_bounds_match_resolved_type(kind, lower, upper, out
 
 
 def test_generic_list_schema_honors_existing_unbounded_element_refinements():
-    from agent_composer.typesys.types import type_for
+    from yian.typesys.types import type_for
 
     model = type_to_schema(type_for("list[list[int]]", {}))
     scalar_schema = model.model_json_schema()["properties"]["items"]["items"]["items"]

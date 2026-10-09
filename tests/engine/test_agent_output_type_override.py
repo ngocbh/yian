@@ -5,10 +5,10 @@ output is a code-built `list[Question]` Type (it has no surface type-string).
 The override lets its canonical contract win over the surface-derived one.
 """
 
-from agent_composer.compose.parse.file import AgentDescriptor
-from agent_composer.compose.nodes.base import BuildContext
-from agent_composer.nodes.contracts import ValueContract
-from agent_composer.nodes.human_input.questions import question_list_type
+from yian.compose.parse.file import AgentDescriptor
+from yian.compose.nodes.base import BuildContext
+from yian.nodes.contracts import ValueContract
+from yian.nodes.human_input.questions import question_list_type
 
 
 def test_contract_override_wins_without_invoking_the_output_reader():

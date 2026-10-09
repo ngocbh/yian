@@ -10,13 +10,13 @@ routing depends on.
 
 import pytest
 
-from agent_composer.expr.expressions import (
+from yian.expr.expressions import (
     ExpressionError,
     RequiredError,
     ResolveMode,
     eval_expr,
 )
-from agent_composer.expr.grammar import parse_expr
+from yian.expr.grammar import parse_expr
 
 
 def _eval(text, resolve=None, item=None, mode=ResolveMode.BINDING_NONE):
@@ -183,7 +183,7 @@ def test_builtin_kwarg():
 
 def test_builtin_call_result_dotted_access(monkeypatch):
     # dotted access on a call result: the builtin returns a dict, `.field` reads it.
-    from agent_composer.expr import builtins as _bi
+    from yian.expr import builtins as _bi
 
     monkeypatch.setitem(_bi.TEMPLATE_FNS, "identity", lambda v: v)
     assert _eval("identity(d).k", _from({"d": {"k": "v"}})) == "v"
@@ -344,7 +344,7 @@ def test_coalesce_nary_all_arms_reachable():
 
 def test_nested_one_level_default_ref():
     # `${x:-${y}}` — one level of nesting is allowed: `x` missing, `y`=9 -> 9.
-    from agent_composer.expr.template import eval_binding
+    from yian.expr.template import eval_binding
 
     assert eval_binding("${x:-${y}}", _from({"y": 9})) == 9
     # Both missing -> None in the binding (BINDING_NONE) mode.
@@ -354,7 +354,7 @@ def test_nested_one_level_default_ref():
 def test_two_level_nested_default_rejected():
     # `${x:-${y:-${z}}}` — two levels of nesting is rejected by the scanner/grammar
     # in the ExpressionError family.
-    from agent_composer.expr.template import scan_template
+    from yian.expr.template import scan_template
 
     with pytest.raises(ExpressionError):
         scan_template("${x:-${y:-${z}}}")

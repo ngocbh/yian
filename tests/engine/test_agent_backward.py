@@ -6,9 +6,9 @@ import json
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 import pytest
 
-import agent_composer.llm_clients as llm_clients
-from agent_composer.nodes.agent import AgentNode
-from agent_composer.nodes.base import BackwardContext, BackwardResult, validate_backward_result
+import yian.llm_clients as llm_clients
+from yian.nodes.agent import AgentNode
+from yian.nodes.base import BackwardContext, BackwardResult, validate_backward_result
 from tests.engine.test_agent import _FakeChat
 
 
@@ -55,9 +55,9 @@ def _reply(**overrides):
 
 
 def _retained_engine(monkeypatch):
-    from agent_composer.compile.model import START_ID, FlowOutput
-    from agent_composer.compose.helpers.types import read_variables
-    from agent_composer.nodes.contracts import Parameter
+    from yian.compile.model import START_ID, FlowOutput
+    from yian.compose.helpers.types import read_variables
+    from yian.nodes.contracts import Parameter
     from tests.engine._graph_builder import _engine, _graph
 
     node = AgentNode("writer", prompt="${topic}: ${tone}", tools=["not-used"],
@@ -75,10 +75,10 @@ def _retained_engine(monkeypatch):
 
 
 def test_backward_context_exposes_only_accepted_evidence_and_replays_without_agent_calls(monkeypatch):
-    import agent_composer.nodes.agent.node as agent_module
-    from agent_composer.compile.expand import build_grow
-    from agent_composer.runtime.log import _evidence_payload
-    from agent_composer.runtime.state import RunState, _replay_records
+    import yian.nodes.agent.node as agent_module
+    from yian.compile.expand import build_grow
+    from yian.runtime.log import _evidence_payload
+    from yian.runtime.state import RunState, _replay_records
 
     engine, node, original = _retained_engine(monkeypatch)
     occurrence = next(item for item in engine.state.trace.occurrences if item.node_id == "writer")
@@ -104,7 +104,7 @@ def test_backward_context_exposes_only_accepted_evidence_and_replays_without_age
 
 
 def test_backward_context_rejects_captured_reserved_evidence_collision():
-    from agent_composer.compile.model import START_ID, FlowOutput
+    from yian.compile.model import START_ID, FlowOutput
     from tests.engine._fakes import FuncNode
     from tests.engine._graph_builder import _engine, _graph
 
@@ -118,8 +118,8 @@ def test_backward_context_rejects_captured_reserved_evidence_collision():
 
 
 def test_backward_context_allows_absent_node_data_without_changing_the_record():
-    from agent_composer.compile.model import START_ID
-    from agent_composer.runtime.state import commit_prepared, prepare_node_started, prepare_node_succeeded
+    from yian.compile.model import START_ID
+    from yian.runtime.state import commit_prepared, prepare_node_started, prepare_node_succeeded
     from tests.engine._graph_builder import _engine, _forward_capture, _graph
 
     engine = _engine(_graph([], []), learnable=True)
@@ -172,8 +172,8 @@ def test_agent_backward_uses_recorded_model_and_no_tools(monkeypatch):
 
 
 def test_agent_backward_keeps_visible_tool_evidence_inert_and_separate(monkeypatch):
-    from agent_composer.memory import EvaluationEvidence, ModelTextInteraction, ToolCallInteraction, ToolResultInteraction
-    from agent_composer.runtime.log import _evidence_payload
+    from yian.memory import EvaluationEvidence, ModelTextInteraction, ToolCallInteraction, ToolResultInteraction
+    from yian.runtime.log import _evidence_payload
 
     evidence = EvaluationEvidence(None, {}, "Recorded base system.", "Recorded mode prompt.", interactions=(
         ToolCallInteraction("search", {"query": "reefs"}), ToolResultInteraction("search", "Found reefs."),
@@ -250,7 +250,7 @@ def test_agent_backward_rejects_malformed_retained_capture(monkeypatch, key, val
 
 
 def test_agent_backward_uses_partial_failure_capture_without_inventing_locals(monkeypatch):
-    from agent_composer.diagnostics import Failure
+    from yian.diagnostics import Failure
 
     data = _context().node_data
     data.update(variables=None, rendered_prompt=None)
@@ -282,7 +282,7 @@ def test_agent_backward_uses_partial_failure_capture_without_inventing_locals(mo
     (ValueError("model failed"), "backward.execute"),
 ])
 def test_agent_backward_failure_is_attributed_without_forward_changes(monkeypatch, response, code):
-    from agent_composer.runtime.backward import _BackwardComputeError, compute_backward
+    from yian.runtime.backward import _BackwardComputeError, compute_backward
 
     engine, node, _original = _retained_engine(monkeypatch)
     before = (tuple(engine.log), engine.state.result, engine.state.trace.occurrences, node.variables[0].default)
@@ -300,10 +300,10 @@ def test_agent_backward_failure_is_attributed_without_forward_changes(monkeypatc
 
 
 def test_agent_backward_reads_no_live_render_model_or_variable_state(monkeypatch):
-    import agent_composer.nodes.agent.node as agent_module
-    import agent_composer.nodes.agent.memory as memory_adapter
-    from agent_composer.runtime.backward import compute_backward
-    from agent_composer.runtime.learning import validate_attributed_backward
+    import yian.nodes.agent.node as agent_module
+    import yian.nodes.agent.memory as memory_adapter
+    from yian.runtime.backward import compute_backward
+    from yian.runtime.learning import validate_attributed_backward
 
     engine, node, _original = _retained_engine(monkeypatch)
     node.prompt = "wrong"
@@ -334,8 +334,8 @@ def test_agent_backward_reads_no_live_render_model_or_variable_state(monkeypatch
 def test_agent_backward_host_controls_preserve_original_identity(monkeypatch, stage, kind):
     from asyncio import CancelledError as AsyncCancelledError
     from concurrent.futures import CancelledError as FutureCancelledError
-    from agent_composer.nodes.base import _CapabilityFault, _HostStop
-    from agent_composer.runtime.backward import compute_backward
+    from yian.nodes.base import _CapabilityFault, _HostStop
+    from yian.runtime.backward import compute_backward
 
     originals = {
         "future_cancel": FutureCancelledError("cancelled"),

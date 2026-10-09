@@ -9,11 +9,11 @@ import pytest
 from langchain_core.messages import HumanMessage
 from pydantic import ValidationError
 
-from agent_composer.llm_clients.auth import AuthStore, OAuthCredentials
-from agent_composer.llm_clients.config import LLMConfig, pop_host_credentials
-from agent_composer.llm_clients.connection import resolve_model_config, split_model_config
-from agent_composer.llm_clients.factory import model_from_config
-from agent_composer.llm_clients.openai_client import OpenAIClient
+from yian.llm_clients.auth import AuthStore, OAuthCredentials
+from yian.llm_clients.config import LLMConfig, pop_host_credentials
+from yian.llm_clients.connection import resolve_model_config, split_model_config
+from yian.llm_clients.factory import model_from_config
+from yian.llm_clients.openai_client import OpenAIClient
 from tests.fixtures.openai_responses import ResponsesServer
 
 SENTINEL = "sk-sentinel-7d1f3b20"
@@ -172,13 +172,13 @@ def test_pop_host_credentials_takes_the_url_only_with_the_layers_key():
 _ENV = (
     "OPENAI_API_KEY", "OPENAI_BASE_URL", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY",
     "VLLM_API_KEY", "VLLM_BASE_URL", "DEEPSEEK_API_KEY", "OPENROUTER_API_KEY",
-    "AGENT_COMPOSER_DEFAULT_PROVIDER", "AGENT_COMPOSER_DEFAULT_MODEL",
+    "YIAN_DEFAULT_PROVIDER", "YIAN_DEFAULT_MODEL",
 )
 
 
 @pytest.fixture
 def clean_env(tmp_path, monkeypatch):
-    monkeypatch.setenv("AGENT_COMPOSER_AUTH_FILE", str(tmp_path / "auth.json"))
+    monkeypatch.setenv("YIAN_AUTH_FILE", str(tmp_path / "auth.json"))
     for name in _ENV:
         monkeypatch.delenv(name, raising=False)
     return monkeypatch

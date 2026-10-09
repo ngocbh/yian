@@ -18,10 +18,10 @@ from pathlib import Path
 
 import pytest
 
-from agent_composer.compose import load_flow
-from agent_composer.events import RunFailed
-from agent_composer.nodes.base import _HostStop
-from agent_composer.run import resume_flow, run_flow
+from yian.compose import load_flow
+from yian.events import RunFailed
+from yian.nodes.base import _HostStop
+from yian.run import resume_flow, run_flow
 
 
 # A child that re-exports a {report, n} record (the Ollama-free CODE child pattern). The

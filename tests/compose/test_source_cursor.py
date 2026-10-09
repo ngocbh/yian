@@ -6,13 +6,13 @@ from datetime import date, datetime, timedelta, timezone, tzinfo
 
 import pytest
 
-from agent_composer.compose.source import document as source_document_module
-from agent_composer.compose.source import (
+from yian.compose.source import document as source_document_module
+from yian.compose.source import (
     SourceAccessError,
     SourceCursor,
     SourceDocument,
 )
-from agent_composer.diagnostics import SourceRange
+from yian.diagnostics import SourceRange
 
 
 def test_document_preserves_constructed_keys_and_effective_collision_ranges():
@@ -1061,7 +1061,7 @@ def test_projected_mutation_cannot_change_overlay():
 
 
 def test_scalar_source_view_is_public_and_immutable():
-    from agent_composer.compose.source import ScalarSource
+    from yian.compose.source import ScalarSource
 
     cursor = SourceDocument.parse("code: |-\n  first\n").root.child("code")
 

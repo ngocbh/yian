@@ -6,8 +6,8 @@ post and checked after the run. No synth node is minted — the call is an ordin
 author-named node in the flow.
 """
 
-from agent_composer.compose import load_flow
-from agent_composer.run import run_flow
+from yian.compose import load_flow
+from yian.run import run_flow
 
 # An in-file `dbl` def (the assert callee): doubles its int input via the `double` CODE fn.
 _DBL_DEF = """

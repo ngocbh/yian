@@ -7,17 +7,17 @@ from typing import Any
 
 import pytest
 
-from agent_composer.compile import (
+from yian.compile import (
     iter_flow_origins,
     rebase_flow_origins,
     rewrite_flow_origins,
 )
-from agent_composer.compile.manifest import (
+from yian.compile.manifest import (
     expansion_digest,
     flow_fingerprint,
     flow_manifest,
 )
-from agent_composer.compile.model import (
+from yian.compile.model import (
     END_ID,
     START_ID,
     CompiledFlow,
@@ -25,19 +25,19 @@ from agent_composer.compile.model import (
     Flow,
     FlowOutput,
 )
-from agent_composer.diagnostics import (
+from yian.diagnostics import (
     DiagnosticFrame,
     OriginRef,
     ResolverTable,
     SourceRange,
 )
-from agent_composer.memory import DeclSite, MemoryDecl
-from agent_composer.nodes.agent import AgentNode
-from agent_composer.nodes.base import Node
-from agent_composer.nodes.call import CallNode
-from agent_composer.nodes.case import Case, CaseNode
-from agent_composer.nodes.code import CodeNode
-from agent_composer.nodes.contracts import (
+from yian.memory import DeclSite, MemoryDecl
+from yian.nodes.agent import AgentNode
+from yian.nodes.base import Node
+from yian.nodes.call import CallNode
+from yian.nodes.case import Case, CaseNode
+from yian.nodes.code import CodeNode
+from yian.nodes.contracts import (
     Assertion,
     Binding,
     ContractOrigins,
@@ -45,11 +45,11 @@ from agent_composer.nodes.contracts import (
     PartialRecordContract,
     ValueContract,
 )
-from agent_composer.nodes.end import EndNode
-from agent_composer.nodes.loop import LoopNode
-from agent_composer.nodes.map import MapNode
-from agent_composer.nodes.start import StartNode
-from agent_composer.typesys import Type, ValueKind
+from yian.nodes.end import EndNode
+from yian.nodes.loop import LoopNode
+from yian.nodes.map import MapNode
+from yian.nodes.start import StartNode
+from yian.typesys import Type, ValueKind
 
 
 def _origin(key: str) -> OriginRef:

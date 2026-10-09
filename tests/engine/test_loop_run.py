@@ -15,11 +15,11 @@ body and (except the origin) itself. The CONTINUE body-END carries NO `commit_as
 next driver by plain wiring.
 """
 
-from agent_composer.compile.expand import build_grow
-from agent_composer.compose.loader import load_flow
-from agent_composer.run import run_flow
-from agent_composer.nodes.contracts import PartialRecordContract
-from agent_composer.typesys import ValueKind
+from yian.compile.expand import build_grow
+from yian.compose.loader import load_flow
+from yian.run import run_flow
+from yian.nodes.contracts import PartialRecordContract
+from yian.typesys import ValueKind
 from tests.engine._graph_builder import _engine
 
 
@@ -566,7 +566,7 @@ def test_loop_budget_exceeded_in_step_fails_run(monkeypatch):
     # failed run, not an uncaught escape. The COUNTER flow adds ~3 body nodes + 1 driver node per
     # iteration off a base of 3, so a budget of 6 lets iteration 0 grow and trips a later iteration
     # inside `_apply_grow` — exercising the grow boundary specifically.
-    import agent_composer.runtime.state as state_module
+    import yian.runtime.state as state_module
 
     monkeypatch.setattr(state_module, "MAX_TOTAL_NODES", 6)
     result = run_flow(load_flow(COUNTER), {})
@@ -677,7 +677,7 @@ output: ${loop.output}
 
 
 def test_long_loop_stays_within_node_budget(monkeypatch):
-    import agent_composer.runtime.state as state_module
+    import yian.runtime.state as state_module
 
     monkeypatch.setattr(state_module, "MAX_TOTAL_NODES", 40)
     engine = _engine(
@@ -686,7 +686,7 @@ def test_long_loop_stays_within_node_budget(monkeypatch):
         grow_builder=build_grow,
     )
     terminal = list(engine.run())[-1]
-    from agent_composer.events import RunSucceeded
+    from yian.events import RunSucceeded
 
     assert isinstance(terminal, RunSucceeded)
     # 20 body runs from n=30 -> n=10, and only ~one iteration resident at the end:
@@ -704,7 +704,7 @@ def test_terminate_leaves_exactly_one_dead_final_body_and_driver():
     For `times: 3` on `n=10` the bodies run at k=0,1,2 and STOP fires on the fresh driver `loop~3`
     reading `loop#2/__end__`. So the residue is EXACTLY: one dead body namespace `loop#2/` AND one
     dead driver clone `loop~3`. The committed origin `loop` stays (legitimate result node)."""
-    from agent_composer.events import RunSucceeded
+    from yian.events import RunSucceeded
     engine = _engine(
         load_flow(TIMES_3).compiled,
         run_inputs={},

@@ -15,8 +15,8 @@ the span refs in source order.
 
 import pytest
 
-from agent_composer.expr.expressions import ExpressionError, ResolveMode
-from agent_composer.expr.template import (
+from yian.expr.expressions import ExpressionError, ResolveMode
+from yian.expr.template import (
     Literal,
     Span,
     eval_template,

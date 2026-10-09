@@ -11,18 +11,18 @@ from pathlib import Path
 
 import pytest
 
-from agent_composer.compile.model import Edge
-from agent_composer.compile.validation import types_compatible
-from agent_composer.nodes.case import DEFAULT_HANDLE
-from agent_composer.compose.nodes.base import BuildContext
-from agent_composer.compose.edges.data import infer_data_edges
-from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.parse.file import parse_file
-from agent_composer.compose.validate.cycles import reject_cycles
-from agent_composer.compose.parse.nodes import parse_nodes
-from agent_composer.compose.source import SourceDocument
-from agent_composer.compose.validate.handles import check_case_handles
-from agent_composer.typesys import Type, ValueKind
+from yian.compile.model import Edge
+from yian.compile.validation import types_compatible
+from yian.nodes.case import DEFAULT_HANDLE
+from yian.compose.nodes.base import BuildContext
+from yian.compose.edges.data import infer_data_edges
+from yian.compose.helpers.errors import LoadError
+from yian.compose.parse.file import parse_file
+from yian.compose.validate.cycles import reject_cycles
+from yian.compose.parse.nodes import parse_nodes
+from yian.compose.source import SourceDocument
+from yian.compose.validate.handles import check_case_handles
+from yian.typesys import Type, ValueKind
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 
@@ -115,7 +115,7 @@ def test_acyclic_seed_passes_cycle_check():
     ("None", "int[0, 3]", False),
 ])
 def test_numeric_domain_compatibility_requires_interval_containment(source, sink, compatible):
-    from agent_composer.typesys.types import type_for
+    from yian.typesys.types import type_for
 
     assert types_compatible(type_for(source, {}), type_for(sink, {})) is compatible
 
@@ -126,7 +126,7 @@ def test_numeric_domain_compatibility_requires_interval_containment(source, sink
     ("list[int[0, 4]]", "list[float[1, 12]]", False),
 ])
 def test_numeric_domain_compatibility_recurses_through_records_and_lists(source, sink, compatible):
-    from agent_composer.typesys.types import type_for
+    from yian.typesys.types import type_for
 
     left = Type(ValueKind.OBJECT, fields={"values": type_for(source, {})},
                 required=frozenset({"values"}))

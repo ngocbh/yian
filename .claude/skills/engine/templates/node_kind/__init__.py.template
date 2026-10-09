@@ -1,5 +1,5 @@
 """XXX node — <one line>."""
 
-from agent_composer.nodes.xxx.node import XxxNode
+from yian.nodes.xxx.node import XxxNode
 
 __all__ = ["XxxNode"]

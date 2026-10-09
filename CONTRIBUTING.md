@@ -1,15 +1,15 @@
 # Contributing
 
-This is the main guide for contributing to Agent Composer. Keep changes small,
+This is the main guide for contributing to Yian. Keep changes small,
 clear, and tied to a GitHub issue.
 
 ## Development setup
 
-Agent Composer supports Python 3.10 or newer.
+Yian supports Python 3.10 or newer.
 
 ```bash
-git clone https://github.com/ngocbh/agent-composer
-cd agent-composer
+git clone https://github.com/ngocbh/yian
+cd yian
 python -m pip install -e ".[all,dev]"
 ```
 
@@ -148,7 +148,7 @@ you ran it.
 
 ## Engine rules
 
-Read [`src/agent_composer/README.md`](src/agent_composer/README.md) before an
+Read [`src/yian/README.md`](src/yian/README.md) before an
 engine change.
 
 - Keep `runtime/` kind-blind.
@@ -168,7 +168,7 @@ Update docs and project skills in the same pull request as the code they explain
 | Change | Update |
 | --- | --- |
 | YAML, expressions, or node authoring | `docs/syntax.md` and the `composing-agents` skill |
-| Engine behavior or rules | `src/agent_composer/README.md` and the `engine` skill |
+| Engine behavior or rules | `src/yian/README.md` and the `engine` skill |
 | Package layout | The package `__init__.py` and the `structure` skill |
 | CLI or public API | `README.md` and rendered docstrings |
 

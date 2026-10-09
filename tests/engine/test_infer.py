@@ -16,16 +16,16 @@ input name). An `${input.X}` read mints a `START_ID->reader` input-producer DATA
 
 from pathlib import Path
 
-from agent_composer.compile.model import END_ID, START_ID
-from agent_composer.compose.nodes.base import BuildContext
-from agent_composer.compose.edges.data import infer_data_edges
-from agent_composer.compose.parse.file import (
+from yian.compile.model import END_ID, START_ID
+from yian.compose.nodes.base import BuildContext
+from yian.compose.edges.data import infer_data_edges
+from yian.compose.parse.file import (
     AgentDescriptor,
     CodeDescriptor,
     parse_file,
 )
-from agent_composer.compose.parse.nodes import parse_nodes
-from agent_composer.compose.source import SourceCursor, SourceDocument
+from yian.compose.parse.nodes import parse_nodes
+from yian.compose.source import SourceCursor, SourceDocument
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 

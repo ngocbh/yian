@@ -4,19 +4,19 @@ from __future__ import annotations
 
 import pytest
 
-from agent_composer.compose import load_flow
-from agent_composer.compose.build.pipeline import (
+from yian.compose import load_flow
+from yian.compose.build.pipeline import (
     _assemble,
     _stamp_node_wiring_origins,
 )
-from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
-from agent_composer.compose.loader import _CallableScope
-from agent_composer.compose.parse.nodes import parse_nodes
-from agent_composer.compose.source import SourceCursor, SourceDocument
-from agent_composer.compose.source.catalog import _SourceCatalogBuilder
-from agent_composer.diagnostics import OriginRef, OriginResolver
-from agent_composer.nodes.base import Node
-from agent_composer.nodes.contracts import Binding, Parameter
+from yian.compose.helpers.errors import LoadDiagnostics, LoadError
+from yian.compose.loader import _CallableScope
+from yian.compose.parse.nodes import parse_nodes
+from yian.compose.source import SourceCursor, SourceDocument
+from yian.compose.source.catalog import _SourceCatalogBuilder
+from yian.diagnostics import OriginRef, OriginResolver
+from yian.nodes.base import Node
+from yian.nodes.contracts import Binding, Parameter
 
 
 def _parameter(node: Node, name: str) -> Parameter:

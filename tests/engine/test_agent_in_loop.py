@@ -12,12 +12,12 @@ import pytest
 from langchain_core.messages import AIMessage
 from pydantic import BaseModel
 
-import agent_composer.llm_clients as llm_clients_mod
-import agent_composer.tools as tools_mod
-from agent_composer.compose.loader import load_flow
-from agent_composer.events import IN_LOOP_EVENTS
-from agent_composer.run import resume_flow, run_flow
-from agent_composer.runtime.log import (
+import yian.llm_clients as llm_clients_mod
+import yian.tools as tools_mod
+from yian.compose.loader import load_flow
+from yian.events import IN_LOOP_EVENTS
+from yian.run import resume_flow, run_flow
+from yian.runtime.log import (
     JsonlRunLog,
     NodeStartedRecord,
     NodeSucceededRecord,

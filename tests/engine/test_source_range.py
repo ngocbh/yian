@@ -2,8 +2,8 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-import agent_composer.events as events
-from agent_composer.diagnostics import SourceRange
+import yian.events as events
+from yian.diagnostics import SourceRange
 
 
 def test_source_range_is_frozen_1based():

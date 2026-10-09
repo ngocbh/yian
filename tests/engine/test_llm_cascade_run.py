@@ -1,8 +1,8 @@
 """`run_flow` applies the CLI cascade layer at run start (fresh-run path)."""
 
-from agent_composer.compose.loader import load_flow
-from agent_composer.run import run_flow
-from agent_composer.llm_clients.connection import resolve_model_config
+from yian.compose.loader import load_flow
+from yian.run import run_flow
+from yian.llm_clients.connection import resolve_model_config
 
 
 def test_run_flow_applies_cli_llm_config(monkeypatch):
@@ -21,7 +21,7 @@ def test_run_flow_applies_cli_llm_config(monkeypatch):
         return _M()
 
     monkeypatch.setattr(
-        "agent_composer.llm_clients.model_from_config", fake_model_from_config
+        "yian.llm_clients.model_from_config", fake_model_from_config
     )
     # mode: plain so the fake model only needs .invoke (the default mode is tool_calling).
     text = (

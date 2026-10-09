@@ -8,12 +8,12 @@ import json
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage, message_to_dict
 import pytest
 
-import agent_composer.llm_clients as llm_clients
-from agent_composer.compose import load_flow
-from agent_composer.memory.episodic import EpisodicMemory
-from agent_composer.memory.reflective import ReflectiveMemory
-from agent_composer.memory.session import SessionMemory
-from agent_composer.run import resume_flow, run_flow
+import yian.llm_clients as llm_clients
+from yian.compose import load_flow
+from yian.memory.episodic import EpisodicMemory
+from yian.memory.reflective import ReflectiveMemory
+from yian.memory.session import SessionMemory
+from yian.run import resume_flow, run_flow
 
 
 _FLOW = """id: plain-session
@@ -50,7 +50,7 @@ class _Model:
 
 
 def _view(memory):
-    from agent_composer.memory.conversation import conversation_view_from_json
+    from yian.memory.conversation import conversation_view_from_json
     with memory.open_run() as opened:
         return conversation_view_from_json(opened.snapshot["conversation"])
 
@@ -101,7 +101,7 @@ def test_no_session_backend_keeps_plain_calls_fresh(monkeypatch, backend, policy
     ToolMessage(content="result", tool_call_id="provider-call", artifact={"value": [1, 2]}, status="success"),
 ])
 def test_message_codec_round_trip_preserves_exact_provider_fields(message):
-    from agent_composer.nodes.agent.memory import decode_message, encode_message
+    from yian.nodes.agent.memory import decode_message, encode_message
     item = encode_message(message, "exchange")
     assert item.payload["exchange_id"] == "exchange"
     assert message_to_dict(decode_message(item)) == message_to_dict(message)
@@ -113,7 +113,7 @@ def test_message_codec_round_trip_preserves_exact_provider_fields(message):
 
 @pytest.mark.parametrize("bad", [float("nan"), float("inf"), object(), {1: "not a JSON key"}])
 def test_message_codec_rejects_non_json_provider_payloads(bad):
-    from agent_composer.nodes.agent.memory import encode_message
+    from yian.nodes.agent.memory import encode_message
     message = AIMessage(content="reply", response_metadata={"bad": bad})
     with pytest.raises((TypeError, ValueError)):
         encode_message(message, "exchange")
@@ -121,8 +121,8 @@ def test_message_codec_rejects_non_json_provider_payloads(bad):
 
 @pytest.mark.parametrize("change", ["format", "exchange", "missing", "role", "coercion"])
 def test_message_codec_rejects_unknown_or_corrupt_stored_format(change):
-    from agent_composer.memory import ConversationItem
-    from agent_composer.nodes.agent.memory import decode_message, encode_message
+    from yian.memory import ConversationItem
+    from yian.nodes.agent.memory import decode_message, encode_message
     original = encode_message(HumanMessage(content="input"), "exchange")
     payload = original.payload
     format = original.format
@@ -146,8 +146,8 @@ def test_message_codec_rejects_unknown_or_corrupt_stored_format(change):
     {"type": "tool", "data": {"content": "old result", "tool_call_id": "provider-call"}},
 ])
 def test_message_codec_accepts_older_payloads_without_optional_defaults(wire):
-    from agent_composer.memory import ConversationItem
-    from agent_composer.nodes.agent.memory import MESSAGE_FORMAT, decode_message
+    from yian.memory import ConversationItem
+    from yian.nodes.agent.memory import MESSAGE_FORMAT, decode_message
     item = ConversationItem("older-item", MESSAGE_FORMAT, {"exchange_id": "older-exchange", "message": wire})
     decoded = message_to_dict(decode_message(item))
     assert decoded["type"] == wire["type"]
@@ -160,8 +160,8 @@ def test_message_codec_accepts_older_payloads_without_optional_defaults(wire):
     ("AIMessageChunk", "tool_call_chunks", {"name": "lookup", "args": '{"id":1}', "id": "call-1", "index": 0}, "tool_call_chunk"),
 ])
 def test_message_codec_accepts_nested_tool_call_discriminator_defaults(role, field, call, discriminator):
-    from agent_composer.memory import ConversationItem
-    from agent_composer.nodes.agent.memory import MESSAGE_FORMAT, decode_message
+    from yian.memory import ConversationItem
+    from yian.nodes.agent.memory import MESSAGE_FORMAT, decode_message
     wire = {"type": role, "data": {"content": "", field: [call]}}
     item = ConversationItem("older-item", MESSAGE_FORMAT, {"exchange_id": "exchange", "message": wire})
     restored = message_to_dict(decode_message(item))["data"][field][0]
@@ -174,8 +174,8 @@ def test_message_codec_accepts_nested_tool_call_discriminator_defaults(role, fie
     "added_content_key", "added_kwargs_key", "decoder_input",
 ])
 def test_message_codec_rejects_nested_data_loss_and_opaque_payload_changes(monkeypatch, change):
-    from agent_composer.memory import ConversationItem
-    from agent_composer.nodes.agent import memory as conversation
+    from yian.memory import ConversationItem
+    from yian.nodes.agent import memory as conversation
     wire = {"type": "ai", "data": {
         "content": [{"type": "text", "text": "reply"}],
         "additional_kwargs": {"reasoning_content": "reasoning"},
@@ -215,8 +215,8 @@ def test_message_codec_rejects_nested_data_loss_and_opaque_payload_changes(monke
 
 
 def test_message_codec_rejects_replaced_supplied_tool_call_discriminator():
-    from agent_composer.memory import ConversationItem
-    from agent_composer.nodes.agent.memory import MESSAGE_FORMAT, decode_message
+    from yian.memory import ConversationItem
+    from yian.nodes.agent.memory import MESSAGE_FORMAT, decode_message
     wire = {"type": "ai", "data": {"content": "", "tool_calls": [
         {"name": "lookup", "args": {"id": 1}, "id": "call-1", "type": "different"},
     ]}}
@@ -227,9 +227,9 @@ def test_message_codec_rejects_replaced_supplied_tool_call_discriminator():
 
 @pytest.mark.parametrize("stage", ["request", "observe", "encode_input", "encode_reply", "history", "view"])
 def test_adapter_memory_faults_are_distinct_from_provider_failures(stage):
-    from agent_composer.memory import ConversationItem
-    from agent_composer.nodes.agent.memory import history_messages, invoke_model
-    from agent_composer.nodes.base import _CapabilityFault
+    from yian.memory import ConversationItem
+    from yian.nodes.agent.memory import history_messages, invoke_model
+    from yian.nodes.base import _CapabilityFault
     calls = []
     expected = ValueError("memory refused write")
     def request(*args, **kwargs):
@@ -282,8 +282,8 @@ def test_compatible_model_and_prompt_changes_retain_history_with_current_system(
 
 
 def test_admission_follows_render_and_recall_and_only_current_recall_is_reused(monkeypatch):
-    from agent_composer.memory import MemoryContext, MemorySection
-    from agent_composer.nodes.agent import AgentNode
+    from yian.memory import MemoryContext, MemorySection
+    from yian.nodes.agent import AgentNode
     from tests.engine._session_fakes import harness, request
     memory = SessionMemory()
     model = _Model([AIMessage(content="one"), AIMessage(content="two")])
@@ -310,7 +310,7 @@ def test_admission_follows_render_and_recall_and_only_current_recall_is_reused(m
 
 
 def test_provider_change_requires_reset_then_starts_fresh(monkeypatch):
-    from agent_composer.memory import MemoryOperationError
+    from yian.memory import MemoryOperationError
     model = _Model([AIMessage(content="one"), AIMessage(content="two")])
     factories = []
     monkeypatch.setattr(llm_clients, "model_from_config", lambda config: factories.append(config) or model)
@@ -326,8 +326,8 @@ def test_provider_change_requires_reset_then_starts_fresh(monkeypatch):
 
 
 def test_compatibility_matches_factory_defaults_and_config_carriers(monkeypatch):
-    from agent_composer.nodes.agent import memory as conversation
-    from agent_composer.llm_clients import LLMConfig
+    from yian.nodes.agent import memory as conversation
+    from yian.llm_clients import LLMConfig
     monkeypatch.setattr(conversation, "default_llm_provider", lambda: "OpenAI")
     expected = {"provider": "openai", "message_format": conversation.MESSAGE_FORMAT}
     assert conversation.compatibility(None) == expected
@@ -362,8 +362,8 @@ def test_request_is_stored_before_provider_and_failed_effect_remains_truthful(mo
 
 @pytest.mark.parametrize("host_stop", [False, True])
 def test_failed_observation_does_not_replace_provider_or_host_error(host_stop):
-    from agent_composer.nodes.agent.memory import invoke_model
-    from agent_composer.nodes.base import _CapabilityFault, _HostStop
+    from yian.nodes.agent.memory import invoke_model
+    from yian.nodes.base import _CapabilityFault, _HostStop
     primary = _HostStop("provider cancelled") if host_stop else ValueError("provider failed")
     seen = []
     def invoke():
@@ -381,8 +381,8 @@ def test_failed_observation_does_not_replace_provider_or_host_error(host_stop):
 
 
 def test_reply_after_stop_is_saved_and_resume_retries_using_latest_history(monkeypatch, tmp_path):
-    from agent_composer.nodes.agent import AgentNode
-    from agent_composer.nodes.base import _HostStop
+    from yian.nodes.agent import AgentNode
+    from yian.nodes.base import _HostStop
     memory = SessionMemory()
     stops = []
     original_ctx = AgentNode._ctx
@@ -417,7 +417,7 @@ def test_reply_after_stop_is_saved_and_resume_retries_using_latest_history(monke
 
 
 def test_postassertion_failure_retains_actual_reply_and_failed_turn(monkeypatch):
-    from agent_composer.nodes.contracts import Assertion
+    from yian.nodes.contracts import Assertion
     model = _Model([AIMessage(content="actual reply")])
     monkeypatch.setattr(llm_clients, "model_from_config", lambda _: model)
     memory = SessionMemory()

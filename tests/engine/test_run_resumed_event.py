@@ -1,4 +1,4 @@
-from agent_composer.events import RunFailed, RunResumed, RunStarted, RunSucceeded
+from yian.events import RunFailed, RunResumed, RunStarted, RunSucceeded
 
 
 def test_run_resumed_constructible_no_required_fields():

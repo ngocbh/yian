@@ -15,26 +15,26 @@ from typing import Any
 
 import pytest
 
-import agent_composer.nodes.wait.node as wait_module
-import agent_composer.run as run_module
-import agent_composer.runtime.engine as engine_module
-from agent_composer.compile.expand import build_grow
-from agent_composer.compile.llm_cascade import resolve_llm_cascade
-from agent_composer.compile.manifest import flow_fingerprint, flow_manifest
-from agent_composer.compile.model import START_ID
-from agent_composer.compose import load_flow
-from agent_composer.events import NodeStarted, NodeSucceeded, RunSucceeded
-from agent_composer.nodes.base import NodeKind, Output
-from agent_composer.runtime.engine import FlowEngine
-from agent_composer.runtime.eval_node import eval_node
-from agent_composer.runtime.log import (
+import yian.nodes.wait.node as wait_module
+import yian.run as run_module
+import yian.runtime.engine as engine_module
+from yian.compile.expand import build_grow
+from yian.compile.llm_cascade import resolve_llm_cascade
+from yian.compile.manifest import flow_fingerprint, flow_manifest
+from yian.compile.model import START_ID
+from yian.compose import load_flow
+from yian.events import NodeStarted, NodeSucceeded, RunSucceeded
+from yian.nodes.base import NodeKind, Output
+from yian.runtime.engine import FlowEngine
+from yian.runtime.eval_node import eval_node
+from yian.runtime.log import (
     MemoryRunLog,
     NodeExpandedRecord,
     NodeStartedRecord,
     RunResumedRecord,
     encode_pool,
 )
-from agent_composer.runtime.state import (
+from yian.runtime.state import (
     RunStartData,
     RunState,
     commit_prepared,
@@ -43,7 +43,7 @@ from agent_composer.runtime.state import (
     prepare_run_resumed,
     prepare_run_started,
 )
-from agent_composer.typesys import VariablePool
+from yian.typesys import VariablePool
 
 
 # Fixed writer output; keep these bytes independent of the current codec.
@@ -58,25 +58,25 @@ _RECORDED_GROWTH_PREFIX = (
         b':["root"],"scope":[]}],"type":"episodic"},{"config":{},"conversation_eligible":false,"key"'
         b':"reflective","owners":[{"node":null,"owner":["def","composite"],"scope":[]}],"type":"refl'
         b'ective"}],"memory_snapshots":[{"memory":"episodic","snapshot":{"config":{"max_episodes":10'
-        b'0,"recall_limit":10},"episodes":[],"epoch":0,"format":"agent_composer.episodic_memory","na'
-        b'mespace":"834f993f7a714c349aba053154642efd","revision":0,"version":2}},{"memory":"reflecti'
-        b've","snapshot":{"config":{"max_items":100,"recall_limit":20},"epoch":0,"format":"agent_com'
-        b'poser.reflective_memory","lessons":[],"llm_config":{"_connection":{"credential_id":null,"e'
-        b'ndpoint":"https://api.openai.com/v1","method":"api_key","source":"missing","store_path":nu'
-        b'll},"anthropic_effort":null,"google_thinking_level":null,"model":"gpt-5.5","openai_reasoni'
-        b'ng_effort":null,"provider":"openai","temperature":null},"namespace":"ae3979a236d4498fa39b6'
-        b'202a11116ba","revision":0,"version":2}}],"memory_stacks":[{"locator":["__end__"],"memories'
-        b'":["episodic"]},{"locator":["__start__"],"memories":["episodic"]},{"locator":["outer"],"me'
-        b'mories":["episodic"]},{"locator":["outer","__end__"],"memories":["episodic","reflective"]}'
-        b',{"locator":["outer","__start__"],"memories":["episodic","reflective"]},{"locator":["outer'
-        b'","mapped"],"memories":["episodic","reflective"]},{"locator":["outer","mapped","__end__"],'
-        b'"memories":["episodic","reflective"]},{"locator":["outer","mapped","__start__"],"memories"'
-        b':["episodic","reflective"]},{"locator":["outer","mapped","echo"],"memories":["episodic","r'
-        b'eflective"]},{"locator":["outer","repeated"],"memories":["episodic","reflective"]},{"locat'
-        b'or":["outer","repeated","__end__"],"memories":["episodic","reflective"]},{"locator":["oute'
-        b'r","repeated","__start__"],"memories":["episodic","reflective"]},{"locator":["outer","repe'
-        b'ated","bump"],"memories":["episodic","reflective"]}],"num_workers":0,"start_wiring_overrid'
-        b'e":{}},"run_id":"historical-growth","schema":9,"seq":0}'
+        b'0,"recall_limit":10},"episodes":[],"epoch":0,"format":"yian.episodic_memory","namespace":"'
+        b'834f993f7a714c349aba053154642efd","revision":0,"version":2}},{"memory":"reflective","snaps'
+        b'hot":{"config":{"max_items":100,"recall_limit":20},"epoch":0,"format":"yian.reflective_mem'
+        b'ory","lessons":[],"llm_config":{"_connection":{"credential_id":null,"endpoint":"https://ap'
+        b'i.openai.com/v1","method":"api_key","source":"missing","store_path":null},"anthropic_effor'
+        b't":null,"google_thinking_level":null,"model":"gpt-5.5","openai_reasoning_effort":null,"pro'
+        b'vider":"openai","temperature":null},"namespace":"ae3979a236d4498fa39b6202a11116ba","revisi'
+        b'on":0,"version":2}}],"memory_stacks":[{"locator":["__end__"],"memories":["episodic"]},{"lo'
+        b'cator":["__start__"],"memories":["episodic"]},{"locator":["outer"],"memories":["episodic"]'
+        b'},{"locator":["outer","__end__"],"memories":["episodic","reflective"]},{"locator":["outer"'
+        b',"__start__"],"memories":["episodic","reflective"]},{"locator":["outer","mapped"],"memorie'
+        b's":["episodic","reflective"]},{"locator":["outer","mapped","__end__"],"memories":["episodi'
+        b'c","reflective"]},{"locator":["outer","mapped","__start__"],"memories":["episodic","reflec'
+        b'tive"]},{"locator":["outer","mapped","echo"],"memories":["episodic","reflective"]},{"locat'
+        b'or":["outer","repeated"],"memories":["episodic","reflective"]},{"locator":["outer","repeat'
+        b'ed","__end__"],"memories":["episodic","reflective"]},{"locator":["outer","repeated","__sta'
+        b'rt__"],"memories":["episodic","reflective"]},{"locator":["outer","repeated","bump"],"memor'
+        b'ies":["episodic","reflective"]}],"num_workers":0,"start_wiring_override":{}},"run_id":"his'
+        b'torical-growth","schema":9,"seq":0}'
     ),
     (
         b'{"kind":"node_started","payload":{"node_id":"__start__"},"run_id":"historical-growth","sch'
@@ -445,10 +445,10 @@ def _recorded_growth_flow():
 
 
 def test_recorded_nested_growth_resumes_with_exact_memory_and_trace(tmp_path, monkeypatch):
-    from agent_composer.memory.episodic import EpisodicMemory
-    from agent_composer.memory.reflective import ReflectiveMemory
-    from agent_composer.nodes.code import CodeNode
-    from agent_composer.runtime.log import JsonlRunLog, SCHEMA_VERSION, decode_record, encode_record
+    from yian.memory.episodic import EpisodicMemory
+    from yian.memory.reflective import ReflectiveMemory
+    from yian.nodes.code import CodeNode
+    from yian.runtime.log import JsonlRunLog, SCHEMA_VERSION, decode_record, encode_record
 
     flow = _recorded_growth_flow()
     path = tmp_path / "historical-growth.jsonl"
@@ -458,7 +458,7 @@ def test_recorded_nested_growth_resumes_with_exact_memory_and_trace(tmp_path, mo
     snapshots = {item.memory: item.snapshot for item in initial.memory_snapshots}
     assert set(snapshots) == {"episodic", "reflective"}
     for name, snapshot in snapshots.items():
-        assert snapshot["format"] == "agent_composer." + name + "_memory"
+        assert snapshot["format"] == "yian." + name + "_memory"
         assert snapshot["version"] == 2
     memory = {"episodic": EpisodicMemory(), "reflective": ReflectiveMemory()}
     restored = {}

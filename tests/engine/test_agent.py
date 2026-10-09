@@ -14,15 +14,15 @@ from langchain_core.messages import AIMessage
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel
 
-import agent_composer.llm_clients as llm_clients_mod
-import agent_composer.tools as tools_mod
-from agent_composer.diagnostics import OriginRef
-from agent_composer.nodes.agent import AgentNode
-from agent_composer.nodes.contracts import ContractOrigins, Parameter, ValueContract
-from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
-from agent_composer.typesys.pool import VariablePool
-from agent_composer.typesys.values import Type, ValueKind
-from agent_composer.llm_clients import LLMConfig
+import yian.llm_clients as llm_clients_mod
+import yian.tools as tools_mod
+from yian.diagnostics import OriginRef
+from yian.nodes.agent import AgentNode
+from yian.nodes.contracts import ContractOrigins, Parameter, ValueContract
+from yian.runtime.eval_node import EvaluationFailure, eval_node
+from yian.typesys.pool import VariablePool
+from yian.typesys.values import Type, ValueKind
+from yian.llm_clients import LLMConfig
 
 
 class _FakeChat:
@@ -463,7 +463,7 @@ def test_tool_calling_cap_trips_when_bounded(monkeypatch):
 
 
 def test_default_no_cap_runs_unbounded(monkeypatch):
-    from agent_composer.nodes.agent.modes.tool_calling import MAX_TOOL_ITERATIONS
+    from yian.nodes.agent.modes.tool_calling import MAX_TOOL_ITERATIONS
 
     # The default cap is the -1 no-cap sentinel: an agent making many tool turns (well past the
     # old default of 100) then answering still finishes, no AgentLoopError.

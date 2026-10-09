@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from agent_composer.compile.expand import call_subgraph
-from agent_composer.compile.model import END_ID, START_ID
-from agent_composer.compose import load_flow
-from agent_composer.compose.build.pipeline import _assemble
-from agent_composer.compose.loader import _CallableScope
-from agent_composer.compose.source import SourceCursor, SourceDocument
-from agent_composer.diagnostics import OriginRef, OriginResolver
-from agent_composer.nodes.contracts import Assertion
+from yian.compile.expand import call_subgraph
+from yian.compile.model import END_ID, START_ID
+from yian.compose import load_flow
+from yian.compose.build.pipeline import _assemble
+from yian.compose.loader import _CallableScope
+from yian.compose.source import SourceCursor, SourceDocument
+from yian.diagnostics import OriginRef, OriginResolver
+from yian.nodes.contracts import Assertion
 
 
 def _assert_assertion_site(

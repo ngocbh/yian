@@ -8,9 +8,9 @@ import importlib
 
 import pytest
 
-from agent_composer.compose import load_flow
-from agent_composer.events import NodeExpanded, NodeStarted, RunStarted
-from agent_composer.memory import (
+from yian.compose import load_flow
+from yian.events import NodeExpanded, NodeStarted, RunStarted
+from yian.memory import (
     ConversationItem,
     DeclSite,
     MemoryOperationError,
@@ -18,11 +18,11 @@ from agent_composer.memory import (
     MemorySpec,
     MemoryStack,
 )
-from agent_composer.memory.session import SessionMemory
-from agent_composer.nodes.agent.node import AgentNode
-from agent_composer.nodes.base import Output
-from agent_composer.run import resume_flow, run_flow
-from agent_composer.runtime.log import (
+from yian.memory.session import SessionMemory
+from yian.nodes.agent.node import AgentNode
+from yian.nodes.base import Output
+from yian.run import resume_flow, run_flow
+from yian.runtime.log import (
     JsonlRunLog,
     MemoryCommitRequestedRecord,
     MemoryCommitSucceededRecord,
@@ -113,7 +113,7 @@ def test_memory_context_opener_uses_same_runtime_on_fresh_and_resume(
     memory = SessionMemory()
     entered = []
     engines = []
-    boundary = importlib.import_module("agent_composer.run")
+    boundary = importlib.import_module("yian.run")
     original_engine = boundary.FlowEngine
 
     def engine(*args, **kwargs):

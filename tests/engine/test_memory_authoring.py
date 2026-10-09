@@ -7,12 +7,12 @@ import json
 
 import pytest
 
-from agent_composer.compile.manifest import expansion_digest, flow_fingerprint, flow_manifest
-from agent_composer.compile.model import CompiledFlow
-from agent_composer.compose import LoadError, load_flow
-from agent_composer.diagnostics import OriginRef, SourceRange
-from agent_composer.memory import DeclSite, MemoryDecl, MemorySnapshotEnvelope
-from agent_composer.nodes.agent import AgentNode
+from yian.compile.manifest import expansion_digest, flow_fingerprint, flow_manifest
+from yian.compile.model import CompiledFlow
+from yian.compose import LoadError, load_flow
+from yian.diagnostics import OriginRef, SourceRange
+from yian.memory import DeclSite, MemoryDecl, MemorySnapshotEnvelope
+from yian.nodes.agent import AgentNode
 
 
 _PLURAL_PRIVATE_CONFIG_CASES = (

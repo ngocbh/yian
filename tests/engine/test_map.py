@@ -8,11 +8,11 @@ CODE-only children via `run_flow`.
 
 import pytest
 
-from agent_composer.compile.expand import build_grow
-from agent_composer.compile.model import START_ID
-from agent_composer.compose import LoadError, load_flow
-from agent_composer.compose.helpers.errors import LoadDiagnostics
-from agent_composer.run import run_flow
+from yian.compile.expand import build_grow
+from yian.compile.model import START_ID
+from yian.compose import LoadError, load_flow
+from yian.compose.helpers.errors import LoadDiagnostics
+from yian.run import run_flow
 from tests.engine._graph_builder import _engine
 
 # topic -> the topic (echo), so MAP results == the over list.
@@ -191,9 +191,9 @@ def test_map_over_with_coalesce_resolves_at_run():
 
 # --- MapNode.run -> seed; compile builder reconstructs the ordered END-list fan-in --- #
 def test_map_run_returns_grow():
-    from agent_composer.nodes.base import Grow
-    from agent_composer.nodes.ids import map_callsite, ns
-    from agent_composer.nodes.map import MapNode
+    from yian.nodes.base import Grow
+    from yian.nodes.ids import map_callsite, ns
+    from yian.nodes.map import MapNode
 
     from tests.engine.test_expand import _child_flow
 
@@ -202,17 +202,17 @@ def test_map_run_returns_grow():
     assert isinstance(out, Grow)
     assert out.seed == [{"x": "A"}, {"x": "B"}]
     subgraph = build_grow(n, out.seed)
-    from agent_composer.compile.model import START_ID
+    from yian.compile.model import START_ID
     assert subgraph.start_id == ns("m", START_ID)
     for i in range(2):
         assert ns(map_callsite("m", i), _child_flow().start_id) in subgraph.nodes
 
 
 def test_map_empty_over_returns_grow_with_lone_list_end():
-    from agent_composer.compile.model import END_ID, START_ID
-    from agent_composer.nodes.base import Grow
-    from agent_composer.nodes.ids import ns
-    from agent_composer.nodes.map import MapNode
+    from yian.compile.model import END_ID, START_ID
+    from yian.nodes.base import Grow
+    from yian.nodes.ids import ns
+    from yian.nodes.map import MapNode
 
     from tests.engine.test_expand import _child_flow
 
@@ -250,7 +250,7 @@ def test_map_n_zero_synthesizes_end_list_emitting_empty(num_workers):
 def test_map_synthesizes_one_end_list_node(num_workers):
     # the MAP fan-in is ONE EndNode.list_ aggregator (replacing COLLECTOR): N=2 inputs e0/e1
     # wired to each element's child END_ID, aliased to the spawner.
-    from agent_composer.nodes.base import NodeKind
+    from yian.nodes.base import NodeKind
 
     flow = load_flow(_map_flow("echo-one", parallel=False),
                      child_resolver=_resolver(**{"echo-one": _ECHO_CHILD}))

@@ -9,21 +9,21 @@ import pytest
 from langchain_core.messages import AIMessage
 from pydantic import BaseModel
 
-import agent_composer.llm_clients as llm_clients_mod
-import agent_composer.tools as tools_mod
-from agent_composer.events import (
+import yian.llm_clients as llm_clients_mod
+import yian.tools as tools_mod
+from yian.events import (
     ModelCallFinished,
     ModelCallStarted,
     TokenUsage,
     ToolCallFinished,
     ToolCallStarted,
 )
-from agent_composer.nodes.agent import MODES, AgentNode
-from agent_composer.nodes.base import Output
-from agent_composer.nodes.contracts import ValueContract
-from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
-from agent_composer.typesys.pool import VariablePool
-from agent_composer.typesys.values import Type, ValueKind
+from yian.nodes.agent import MODES, AgentNode
+from yian.nodes.base import Output
+from yian.nodes.contracts import ValueContract
+from yian.runtime.eval_node import EvaluationFailure, eval_node
+from yian.typesys.pool import VariablePool
+from yian.typesys.values import Type, ValueKind
 from tests.engine._stream_fakes import ScriptedStreamChat, reply, usage
 
 CONFIG = {"provider": "anthropic", "model": "claude-test"}
@@ -126,8 +126,8 @@ def test_event_sink_failure_escapes_as_a_host_fault(monkeypatch):
 
 
 def test_history_summary_call_is_observed_through_the_wrapper():
-    from agent_composer.memory.session import SessionMemory
-    from agent_composer.nodes.agent import memory as conversation
+    from yian.memory.session import SessionMemory
+    from yian.nodes.agent import memory as conversation
     from tests.engine._session_fakes import harness, request
     from tests.engine.test_agent_session import _Model
     from tests.engine.test_agent_session_summaries import _seed
@@ -152,9 +152,9 @@ def test_history_summary_call_is_observed_through_the_wrapper():
 
 
 def test_history_summary_calls_publish_their_own_observers(monkeypatch):
-    from agent_composer.compose import load_flow
-    from agent_composer.memory.session import SessionMemory
-    from agent_composer.run import run_flow
+    from yian.compose import load_flow
+    from yian.memory.session import SessionMemory
+    from yian.run import run_flow
     from tests.engine.test_agent_session import _FLOW
 
     chat = ScriptedStreamChat(
@@ -175,7 +175,7 @@ def test_history_summary_calls_publish_their_own_observers(monkeypatch):
 
 def test_structured_fallback_reports_usage_and_streams_nothing(monkeypatch):
     monkeypatch.setattr(
-        "agent_composer.nodes.agent.structured._supports_native_structured", lambda _c: False
+        "yian.nodes.agent.structured._supports_native_structured", lambda _c: False
     )
     node, chat = _agent(
         monkeypatch, [reply('{"value": 3}', tokens=usage(9, 1))], mode="plain",
@@ -200,7 +200,7 @@ def _native_script():
 @pytest.mark.parametrize("events", [False, True])
 def test_structured_native_retries_the_same_with_or_without_an_event_sink(monkeypatch, events):
     monkeypatch.setattr(
-        "agent_composer.nodes.agent.structured._supports_native_structured", lambda _c: True
+        "yian.nodes.agent.structured._supports_native_structured", lambda _c: True
     )
     node, chat = _agent(
         monkeypatch, _native_script(), mode="plain", output=Type.scalar(ValueKind.INTEGER)
@@ -220,13 +220,13 @@ def test_structured_native_retries_the_same_with_or_without_an_event_sink(monkey
 
 
 def test_structured_native_turn_reports_usage_and_retains_the_raw_reply(monkeypatch):
-    from agent_composer.compose import load_flow
-    from agent_composer.memory.session import SessionMemory
-    from agent_composer.run import run_flow
+    from yian.compose import load_flow
+    from yian.memory.session import SessionMemory
+    from yian.run import run_flow
     from tests.engine.test_agent_session import _FLOW, _view
 
     monkeypatch.setattr(
-        "agent_composer.nodes.agent.structured._supports_native_structured", lambda _c: True
+        "yian.nodes.agent.structured._supports_native_structured", lambda _c: True
     )
     chat = ScriptedStreamChat(script=_native_script()[2:], mode=[])
     monkeypatch.setattr(llm_clients_mod, "model_from_config", lambda _config: chat)

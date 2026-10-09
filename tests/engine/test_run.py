@@ -14,10 +14,10 @@ with `status == "failed"`. The four behaviors pinned:
   to failed); all asserts true -> `"succeeded"`.
 """
 
-from agent_composer.events import NodeSucceeded
-from agent_composer.compose import load_flow
-from agent_composer.nodes.contracts import Binding
-from agent_composer.run import run_flow
+from yian.events import NodeSucceeded
+from yian.compose import load_flow
+from yian.nodes.contracts import Binding
+from yian.run import run_flow
 
 
 # --------------------------------------------------------------------------- #

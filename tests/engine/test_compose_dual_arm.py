@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import pytest
 
-from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.parse.file import parse_file
+from yian.compose.helpers.errors import LoadError
+from yian.compose.parse.file import parse_file
 
 
 def _new_only() -> str:

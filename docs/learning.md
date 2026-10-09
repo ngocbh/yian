@@ -37,8 +37,8 @@ identified by a memory key; the host supplies one backend per key, usually with
 `build_memories(flow)`. Recall and optional session history can be enabled
 without `learnable=True`, and a learnable run can operate without any memory.
 
-`composer run` builds every declared built-in memory automatically, in RAM for
-the process. `composer run --memory-root DIR` (or `--memory-storage KEY=PATH`)
+`yian run` builds every declared built-in memory automatically, in RAM for
+the process. `yian run --memory-root DIR` (or `--memory-storage KEY=PATH`)
 keeps built-in memories on disk. It does not enable learning or call
 `backward()`. Session history still advances during forward, while saving
 episodic or reflective learning requires the explicit Python API. See
@@ -71,7 +71,7 @@ every depth. A failed forward result accepts only a string or `None` because it 
 no successful output shape.
 
 ```python
-from agent_composer import run_flow
+from yian import run_flow
 
 result = run_flow(flow, {"topic": "routing"}, learnable=True)
 forward_output = result.output
@@ -152,7 +152,7 @@ recall order.
 
 `EpisodicMemory` is the built-in deterministic history memory. Declare it, for
 example `long_term_memory: {notes: episodic}`, and `build_memories` constructs
-it; import it from `agent_composer.memory.episodic` to build one yourself. It
+it; import it from `yian.memory.episodic` to build one yourself. It
 proposes one append mutation for every `MemoryEpisode` in its batch, including
 executions without external feedback. Nothing is appended during forward
 execution: `learnable=True` retains the episode, and a successful later
@@ -189,13 +189,13 @@ recovery contract.
 ## Profile memory
 
 `ProfileMemory` keeps one markdown document per instance, for example one per
-person. Import it from `agent_composer.memory.profile`, give it a store, and
+person. Import it from `yian.memory.profile`, give it a store, and
 pass it under the memory key your flow declares. For a flow that declares
 `long_term_memory: {about: profile}`:
 
 ```python
-from agent_composer.memory.profile import ProfileMemory
-from agent_composer.memory.storage import FileMarkdownStore
+from yian.memory.profile import ProfileMemory
+from yian.memory.storage import FileMarkdownStore
 
 profile = ProfileMemory(FileMarkdownStore("people/ada.md"))
 result = run_flow(flow, inputs, memory={"about": profile}, learnable=True)
@@ -298,8 +298,8 @@ Use a JSONL run log when feedback may arrive in a later process:
 
 ```python
 from pathlib import Path
-from agent_composer import run_flow
-from agent_composer.run import resume_flow
+from yian import run_flow
+from yian.run import resume_flow
 
 log = Path("reviewable-run.jsonl")
 result = run_flow(flow, {"topic": "routing"}, log=log, learnable=True)

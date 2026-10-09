@@ -1,7 +1,7 @@
-from agent_composer.compile.model import END_ID, START_ID
-from agent_composer.nodes.end import EndNode
-from agent_composer.nodes.start import StartNode
-from agent_composer.typesys.pool import VariablePool
+from yian.compile.model import END_ID, START_ID
+from yian.nodes.end import EndNode
+from yian.nodes.start import StartNode
+from yian.typesys.pool import VariablePool
 
 
 def test_start_end_ids_are_owned_by_the_node_classes():
@@ -18,8 +18,8 @@ def test_pool_start_id_default_mirrors_startnode_id():
 
 
 def test_compiledflow_start_end_id_accessors():
-    from agent_composer.compile.model import CompiledFlow, Edge, FlowOutput
-    from agent_composer.nodes.code.node import CodeNode
+    from yian.compile.model import CompiledFlow, Edge, FlowOutput
+    from yian.nodes.code.node import CodeNode
 
     n = CodeNode("a", code="tests.engine._compose_codefns:echo")
     flow = CompiledFlow.from_parts({"a": n}, [Edge("s", START_ID, "a"), Edge("t", "a", END_ID)])

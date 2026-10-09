@@ -2,11 +2,11 @@
 
 import pytest
 
-from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
-from agent_composer.compose.loader import load_flow
-from agent_composer.compose.parse.file import parse_file
-from agent_composer.compose.helpers.uses import UsesRef, parse_uses_ref
-from agent_composer.compose.source import SourceDocument
+from yian.compose.helpers.errors import LoadDiagnostics, LoadError
+from yian.compose.loader import load_flow
+from yian.compose.parse.file import parse_file
+from yian.compose.helpers.uses import UsesRef, parse_uses_ref
+from yian.compose.source import SourceDocument
 
 
 # A minimal valid single-node flow; each test appends its own `uses:`/`system:` sections.

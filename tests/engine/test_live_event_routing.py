@@ -6,9 +6,9 @@ yielded observer stream, and supply no sink when the host set no callback.
 
 import pytest
 
-from agent_composer.events import NodeStarted, NodeSucceeded, StreamChunk
-from agent_composer.compile.model import END_ID, START_ID
-from agent_composer.nodes.base import Node, NodeKind, Output
+from yian.events import NodeStarted, NodeSucceeded, StreamChunk
+from yian.compile.model import END_ID, START_ID
+from yian.nodes.base import Node, NodeKind, Output
 from tests.engine._graph_builder import _engine, _graph
 
 

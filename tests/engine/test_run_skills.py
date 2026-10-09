@@ -7,15 +7,15 @@ from pathlib import Path
 from langchain_core.messages import AIMessage
 import pytest
 
-import agent_composer.llm_clients as llm_clients
-from agent_composer.compose import load_flow
-from agent_composer.compose.skills import load_skills
-from agent_composer.memory.session import SessionMemory
-from agent_composer.nodes.agent.modes.common import DEFAULT_SYSTEM
-from agent_composer.run import resume_flow, run_flow
-from agent_composer.runtime.log import JsonlRunLog, NodeStartedRecord, NodeSucceededRecord
-from agent_composer.skills import Skill
-from agent_composer.skills.tool import LOAD_SKILL, system_prompt_with_skills
+import yian.llm_clients as llm_clients
+from yian.compose import load_flow
+from yian.compose.skills import load_skills
+from yian.memory.session import SessionMemory
+from yian.nodes.agent.modes.common import DEFAULT_SYSTEM
+from yian.run import resume_flow, run_flow
+from yian.runtime.log import JsonlRunLog, NodeStartedRecord, NodeSucceededRecord
+from yian.skills import Skill
+from yian.skills.tool import LOAD_SKILL, system_prompt_with_skills
 from tests.engine.test_agent_session import _view
 
 

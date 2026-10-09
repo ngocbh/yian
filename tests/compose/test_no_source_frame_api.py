@@ -12,13 +12,13 @@ import inspect
 import re
 from pathlib import Path
 
-from agent_composer.nodes.call import CallNode
-from agent_composer.nodes.loop import LoopNode
-from agent_composer.nodes.map import MapNode
+from yian.nodes.call import CallNode
+from yian.nodes.loop import LoopNode
+from yian.nodes.map import MapNode
 
 
 _ROOT = Path(__file__).resolve().parents[2]
-_PRODUCTION_ROOT = _ROOT / "src" / "agent_composer"
+_PRODUCTION_ROOT = _ROOT / "src" / "yian"
 _RETIRED_GRAPH_NAMES = ("SourceFrame", "child_source", "top_frame_ranges")
 _RETIRED_GRAPH_PATTERNS = {
     name: re.compile(rf"(?<!\w){re.escape(name)}(?!\w)")
@@ -58,8 +58,8 @@ def test_composite_nodes_have_no_child_source_parameter() -> None:
 
 def test_retired_source_and_cli_apis_are_absent() -> None:
     """The old frame carrier and CLI graph walker are not importable private APIs."""
-    source_helpers = importlib.import_module("agent_composer.compose.helpers.source")
-    cli_run = importlib.import_module("agent_composer.cli.run")
+    source_helpers = importlib.import_module("yian.compose.helpers.source")
+    cli_run = importlib.import_module("yian.cli.run")
 
     assert not hasattr(source_helpers, "SourceFrame")
     assert not hasattr(source_helpers, "top_frame_ranges")

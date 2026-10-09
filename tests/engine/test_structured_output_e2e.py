@@ -6,9 +6,9 @@ engine's structured-generation path; both pass the write boundary
 confirms the text passthrough is untouched.
 """
 
-import agent_composer.llm_clients as llm_clients_mod
-from agent_composer.compose.loader import load_flow
-from agent_composer.run import run_flow
+import yian.llm_clients as llm_clients_mod
+from yian.compose.loader import load_flow
+from yian.run import run_flow
 
 # `rec` declares a record output -> structured generation; `txt` stays a text producer.
 _FLOW = """

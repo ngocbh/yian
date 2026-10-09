@@ -5,10 +5,10 @@
 
 import pytest
 
-from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.nodes.call import CallDescriptor
-from agent_composer.compose.source import SourceDocument
-from agent_composer.diagnostics import SourceRange
+from yian.compose.helpers.errors import LoadError
+from yian.compose.nodes.call import CallDescriptor
+from yian.compose.source import SourceDocument
+from yian.diagnostics import SourceRange
 
 
 _FLOW = """\

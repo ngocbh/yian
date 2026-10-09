@@ -11,8 +11,8 @@ grammar instead uses one shared `NAME` terminal with an optional call-suffix.
 import pytest
 from lark import Token, Tree
 
-from agent_composer.expr.expressions import ExpressionError
-from agent_composer.expr.grammar import parse_expr
+from yian.expr.expressions import ExpressionError
+from yian.expr.grammar import parse_expr
 
 _RESERVED_KEYWORDS = ("and", "or", "not", "in")
 

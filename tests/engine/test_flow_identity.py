@@ -10,38 +10,38 @@ from dataclasses import dataclass, replace
 import pytest
 from pydantic import BaseModel, ConfigDict
 
-import agent_composer.compile.manifest as manifest_module
-from agent_composer.compile.manifest import expansion_digest, flow_fingerprint, flow_manifest
-from agent_composer.compile.memory_layout import apply_memory_layout, resolve_memory_layout
-from agent_composer.compile.model import START_ID, CompiledFlow, Edge, Flow, FlowOutput
-from agent_composer.compose import load_flow
-from agent_composer.diagnostics import OriginRef
-from agent_composer.memory import (
+import yian.compile.manifest as manifest_module
+from yian.compile.manifest import expansion_digest, flow_fingerprint, flow_manifest
+from yian.compile.memory_layout import apply_memory_layout, resolve_memory_layout
+from yian.compile.model import START_ID, CompiledFlow, Edge, Flow, FlowOutput
+from yian.compose import load_flow
+from yian.diagnostics import OriginRef
+from yian.memory import (
     MemoryOccurrenceKind,
     MemoryOccurrenceSegment,
     MemoryScope,
 )
-from agent_composer.nodes.agent import AgentNode
-from agent_composer.nodes.agent.structured import type_to_schema
-from agent_composer.nodes.call import CallNode
-from agent_composer.nodes.case import Case, CaseNode
-from agent_composer.nodes.code import CodeNode
-from agent_composer.nodes.contracts import (
+from yian.nodes.agent import AgentNode
+from yian.nodes.agent.structured import type_to_schema
+from yian.nodes.call import CallNode
+from yian.nodes.case import Case, CaseNode
+from yian.nodes.code import CodeNode
+from yian.nodes.contracts import (
     Assertion,
     Binding,
     ContractOrigins,
     Parameter,
     ValueContract,
 )
-from agent_composer.nodes.end import EndNode
-from agent_composer.nodes.human_input import HumanInputNode
-from agent_composer.nodes.loop import LoopNode
-from agent_composer.nodes.map import MapNode
-from agent_composer.nodes.model import ModelNode
-from agent_composer.nodes.start import StartNode
-from agent_composer.nodes.tool import ToolNode
-from agent_composer.nodes.wait import WaitNode
-from agent_composer.typesys.values import Type, ValueKind
+from yian.nodes.end import EndNode
+from yian.nodes.human_input import HumanInputNode
+from yian.nodes.loop import LoopNode
+from yian.nodes.map import MapNode
+from yian.nodes.model import ModelNode
+from yian.nodes.start import StartNode
+from yian.nodes.tool import ToolNode
+from yian.nodes.wait import WaitNode
+from yian.typesys.values import Type, ValueKind
 
 
 _INLINE_FLOW = """
@@ -2465,7 +2465,7 @@ def test_memory_expansion_projection_covers_keys_and_occurrence_topology():
 
 
 def test_memory_expansion_projection_fields():
-    from agent_composer.compile.manifest import _memory_scope_topology
+    from yian.compile.manifest import _memory_scope_topology
 
     segment = MemoryOccurrenceSegment(MemoryOccurrenceKind.MAP_ITEM, ("nested",), 1)
     scope = MemoryScope(("nested", "body"), ("notes",), (segment,))
@@ -2533,7 +2533,7 @@ def test_numeric_bounds_are_part_of_type_identity_only_when_present():
 
 
 def test_numeric_bounds_remain_in_nested_parameter_contract_identity():
-    from agent_composer.typesys.types import type_for
+    from yian.typesys.types import type_for
 
     first = _fragment()
     first.nodes["body"].params = [Parameter(

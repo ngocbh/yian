@@ -6,11 +6,11 @@ kind: WAIT resolves `until`; MAP declares per-item binding and resolves `over` t
 an ordinary node reserves nothing and binds up front.
 """
 
-from agent_composer.nodes.base import Node, NodeKind
-from agent_composer.nodes.binding import BindingError
-from agent_composer.nodes.map import MapNode
-from agent_composer.nodes.wait.node import WaitNode
-from agent_composer.typesys.pool import VariablePool
+from yian.nodes.base import Node, NodeKind
+from yian.nodes.binding import BindingError
+from yian.nodes.map import MapNode
+from yian.nodes.wait.node import WaitNode
+from yian.typesys.pool import VariablePool
 
 
 class _PlainNode(Node):

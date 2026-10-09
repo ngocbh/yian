@@ -1,4 +1,4 @@
-"""`composer run --provider/--model` build the outermost cascade layer (`llm_config`)."""
+"""`yian run --provider/--model` build the outermost cascade layer (`llm_config`)."""
 
 from pathlib import Path
 
@@ -6,8 +6,8 @@ import pytest
 import typer
 from typer.testing import CliRunner
 
-import agent_composer.cli.run as climod
-from agent_composer.run import RunResult
+import yian.cli.run as climod
+from yian.run import RunResult
 
 _FLOW = "id: f\nname: f\nnodes:\n  a: {kind: agent, prompt: hi}\noutput: ${a.output}\n"
 

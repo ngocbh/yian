@@ -1,4 +1,4 @@
-"""`composer run` supplies Claude Code and Codex skill folders to the run."""
+"""`yian run` supplies Claude Code and Codex skill folders to the run."""
 
 from __future__ import annotations
 
@@ -7,9 +7,9 @@ from pathlib import Path
 from langchain_core.messages import AIMessage
 from typer.testing import CliRunner
 
-import agent_composer.cli.run as run_cli
-import agent_composer.llm_clients as llm_clients
-from agent_composer.cli import app
+import yian.cli.run as run_cli
+import yian.llm_clients as llm_clients
+from yian.cli import app
 
 _FLOW = """\
 id: cli-skills

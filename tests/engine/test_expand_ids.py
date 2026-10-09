@@ -1,4 +1,4 @@
-from agent_composer.nodes.ids import map_callsite, ns
+from yian.nodes.ids import map_callsite, ns
 
 
 def test_ns_joins_callsite_and_child_id():

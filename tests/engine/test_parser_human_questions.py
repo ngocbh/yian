@@ -1,7 +1,7 @@
 import pytest
-from agent_composer.compose.parse.nodes import parse_nodes
-from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.source import SourceCursor
+from yian.compose.parse.nodes import parse_nodes
+from yian.compose.helpers.errors import LoadError
+from yian.compose.source import SourceCursor
 
 
 def _node(body):

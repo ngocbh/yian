@@ -4,12 +4,12 @@ from copy import deepcopy
 
 import pytest
 
-from agent_composer.compile.model import END_ID, START_ID, FlowOutput
-from agent_composer.nodes.base import BackwardResult
-from agent_composer.nodes.contracts import Parameter
-from agent_composer.nodes.end import EndNode
-from agent_composer.nodes.start import StartNode
-from agent_composer.runtime.learning import validate_attributed_backward
+from yian.compile.model import END_ID, START_ID, FlowOutput
+from yian.nodes.base import BackwardResult
+from yian.nodes.contracts import Parameter
+from yian.nodes.end import EndNode
+from yian.nodes.start import StartNode
+from yian.runtime.learning import validate_attributed_backward
 from tests.engine._fakes import FuncNode
 from tests.engine._graph_builder import _engine, _graph
 from tests.engine._backward_fakes import RecordingBackwardNode
@@ -68,7 +68,7 @@ def test_diamond_calls_shared_producer_once_with_two_ordered_messages():
                   outputs=[FlowOutput("left", "${left.output}"), FlowOutput("right", "${right.output}")])
     engine = _engine(flow, {"topic": "reefs"}, learnable=True)
     list(engine.run())
-    from agent_composer.runtime.backward import compute_backward
+    from yian.runtime.backward import compute_backward
 
     root, results = compute_backward(engine.state.trace, {"left": "L", "right": "R"})
     validate_attributed_backward(engine.state.trace, {"left": "L", "right": "R"}, root, results)
@@ -86,7 +86,7 @@ def test_diamond_calls_shared_producer_once_with_two_ordered_messages():
     lambda: BackwardResult({"x": ([None],)}),
 ])
 def test_entire_callback_result_is_validated_before_routing_any_input(bad):
-    from agent_composer.runtime.backward import _BackwardComputeError, compute_backward
+    from yian.runtime.backward import _BackwardComputeError, compute_backward
 
     producer = RecordingBackwardNode("producer", lambda _: [1, 2], lambda *_: pytest.fail("routed partial result"))
     consumer = RecordingBackwardNode("consumer", lambda inputs: inputs["x"], lambda *_: bad(),
@@ -103,7 +103,7 @@ def test_entire_callback_result_is_validated_before_routing_any_input(bad):
 
 @pytest.mark.parametrize("feedback", [None, [None, None]])
 def test_empty_feedback_keeps_complete_history_without_invoking_callbacks(feedback):
-    from agent_composer.runtime.backward import compute_backward
+    from yian.runtime.backward import compute_backward
 
     node = RecordingBackwardNode("work", lambda _: [1, 2], lambda *_: pytest.fail("empty callback"))
     engine = _engine(_graph([node], [(START_ID, "work")], outputs=[FlowOutput("result", "${work.output}")]), learnable=True)
@@ -119,7 +119,7 @@ def test_empty_feedback_keeps_complete_history_without_invoking_callbacks(feedba
 
 
 def test_root_default_feedback_survives_its_literal_route():
-    from agent_composer.runtime.backward import compute_backward
+    from yian.runtime.backward import compute_backward
 
     start = StartNode(START_ID, params=[Parameter("topic", has_default=True, default="reefs"), Parameter("absent", required=False)])
     engine = _engine(_graph([start], [], outputs=[FlowOutput("result", "${input.topic}")]), learnable=True)
@@ -131,7 +131,7 @@ def test_root_default_feedback_survives_its_literal_route():
 
 @pytest.mark.parametrize("early", [False, True])
 def test_accepted_failure_uses_recorded_inputs_and_diagnostics(early):
-    from agent_composer.runtime.backward import compute_backward
+    from yian.runtime.backward import compute_backward
 
     def body(_):
         raise RuntimeError("body broke")
@@ -162,10 +162,10 @@ def test_accepted_failure_uses_recorded_inputs_and_diagnostics(early):
 
 @pytest.mark.parametrize("explicit", [False, True])
 def test_terminal_trace_latches_causal_route_and_later_failure_wins(explicit):
-    from agent_composer.compile.expand import build_grow
-    from agent_composer.nodes.base import Output, Route
-    from agent_composer.runtime.backward import compute_backward
-    from agent_composer.runtime.state import RunState, _replay_records
+    from yian.compile.expand import build_grow
+    from yian.nodes.base import Output, Route
+    from yian.runtime.backward import compute_backward
+    from yian.runtime.state import RunState, _replay_records
     from tests.engine.test_run_state_outcomes import _terminal_skip_route_flow
 
     flow = _terminal_skip_route_flow(sibling=True)
@@ -200,9 +200,9 @@ def test_terminal_trace_latches_causal_route_and_later_failure_wins(explicit):
 
 
 def test_explicitly_synthetic_source_free_failure_keeps_direct_root_text():
-    from agent_composer.diagnostics import Failure
-    from agent_composer.runtime.backward import compute_backward
-    from agent_composer.runtime.trace import RetainedTrace, TraceTerminal
+    from yian.diagnostics import Failure
+    from yian.runtime.backward import compute_backward
+    from yian.runtime.trace import RetainedTrace, TraceTerminal
 
     trace = RetainedTrace("synthetic", START_ID, END_ID)
     trace.terminal = TraceTerminal(False, None, None, Failure("graph.terminal_unreachable", "no executing producer", None))
@@ -214,11 +214,11 @@ def test_explicitly_synthetic_source_free_failure_keeps_direct_root_text():
 
 def test_map_whole_list_context_and_item_order_survive_reversed_completion(monkeypatch):
     import threading
-    from agent_composer.events import NodeSucceeded
-    from agent_composer.nodes.map import MapNode
-    from agent_composer.nodes.code import CodeNode
-    from agent_composer.runtime.backward import compute_backward
-    from agent_composer.runtime.learning import project_owner_contexts
+    from yian.events import NodeSucceeded
+    from yian.nodes.map import MapNode
+    from yian.nodes.code import CodeNode
+    from yian.runtime.backward import compute_backward
+    from yian.runtime.learning import project_owner_contexts
     from tests.engine.test_runtime_memory_learning import _owner_engine
 
     second_done = threading.Event()
@@ -289,8 +289,8 @@ def test_map_whole_list_context_and_item_order_survive_reversed_completion(monke
 
 @pytest.mark.parametrize("transform", [False, True])
 def test_structural_ancestry_requires_exact_metadata_prescribed_transfer(transform):
-    from agent_composer.runtime.backward import compute_backward
-    from agent_composer.runtime.learning import project_owner_contexts
+    from yian.runtime.backward import compute_backward
+    from yian.runtime.learning import project_owner_contexts
     from tests.engine.test_runtime_memory_learning import _owner_engine
 
     producer = RecordingBackwardNode("producer", lambda _: "value", lambda *_: BackwardResult())
@@ -323,11 +323,11 @@ def test_structural_ancestry_requires_exact_metadata_prescribed_transfer(transfo
 
 
 def test_diamond_crossing_call_uses_one_walk_and_preserves_child_default_projection(monkeypatch):
-    from agent_composer.nodes.call import CallNode
-    from agent_composer.nodes.code import CodeNode
-    from agent_composer.runtime.backward import compute_backward
-    from agent_composer.memory import DeclSite, MemoryDecl
-    from agent_composer.runtime.learning import project_owner_contexts
+    from yian.nodes.call import CallNode
+    from yian.nodes.code import CodeNode
+    from yian.runtime.backward import compute_backward
+    from yian.memory import DeclSite, MemoryDecl
+    from yian.runtime.learning import project_owner_contexts
     from tests.engine.test_runtime_memory_learning import _owner_engine
 
     calls = []
@@ -379,14 +379,14 @@ def test_diamond_crossing_call_uses_one_walk_and_preserves_child_default_project
 
 @pytest.mark.parametrize("same_boundary", [False, True])
 def test_preseeded_root_output_does_not_invent_an_executed_producer(same_boundary):
-    from agent_composer.compile.expand import build_grow
-    from agent_composer.compile.model import CompiledFlow
-    from agent_composer.nodes.base import Route
-    from agent_composer.runtime.backward import compute_backward
-    from agent_composer.runtime.engine import FlowEngine
-    from agent_composer.runtime.log import MemoryRunLog
-    from agent_composer.runtime.state import RunStartData, RunState, commit_prepared, prepare_run_started
-    from agent_composer.typesys.pool import VariablePool
+    from yian.compile.expand import build_grow
+    from yian.compile.model import CompiledFlow
+    from yian.nodes.base import Route
+    from yian.runtime.backward import compute_backward
+    from yian.runtime.engine import FlowEngine
+    from yian.runtime.log import MemoryRunLog
+    from yian.runtime.state import RunStartData, RunState, commit_prepared, prepare_run_started
+    from yian.typesys.pool import VariablePool
 
     start = StartNode(START_ID, params=[Parameter("topic"), Parameter("omitted", has_default=True, default="unused")])
     start.forward = lambda _inputs: Route("default")
@@ -412,7 +412,7 @@ def test_preseeded_root_output_does_not_invent_an_executed_producer(same_boundar
 
 
 def test_terminal_trace_append_rejection_leaves_all_indexes_unchanged(monkeypatch):
-    from agent_composer.runtime.state import commit_prepared, prepare_node_started, prepare_node_succeeded
+    from yian.runtime.state import commit_prepared, prepare_node_started, prepare_node_succeeded
     from tests.engine._graph_builder import _forward_capture
     from tests.engine.test_forward_trace import _trace_snapshot
 
@@ -435,9 +435,9 @@ def test_terminal_trace_append_rejection_leaves_all_indexes_unchanged(monkeypatc
 
 
 def test_opaque_expression_stops_are_recoverable_without_rerunning_functions(monkeypatch):
-    from agent_composer.expr.builtins import TEMPLATE_FNS
-    from agent_composer.expr.lineage import route_feedback
-    from agent_composer.runtime.backward import compute_backward
+    from yian.expr.builtins import TEMPLATE_FNS
+    from yian.expr.lineage import route_feedback
+    from yian.runtime.backward import compute_backward
 
     calls = []
     monkeypatch.setitem(TEMPLATE_FNS, "backward_opaque", lambda value: calls.append(value) or value)
@@ -458,8 +458,8 @@ def test_opaque_expression_stops_are_recoverable_without_rerunning_functions(mon
 
 
 def test_case_control_and_unselected_branch_do_not_receive_feedback():
-    from agent_composer.nodes.case import Case, CaseNode
-    from agent_composer.runtime.backward import compute_backward
+    from yian.nodes.case import Case, CaseNode
+    from yian.runtime.backward import compute_backward
 
     control = RecordingBackwardNode("control", lambda _: True, lambda *_: pytest.fail("control feedback"))
     value = RecordingBackwardNode("value", lambda inputs: inputs["x"], lambda _c, f: BackwardResult({"x": f}),
@@ -488,10 +488,10 @@ def test_case_control_and_unselected_branch_do_not_receive_feedback():
 
 
 def test_agent_inventory_is_recorded_and_empty_feedback_does_no_backward_work(monkeypatch):
-    from agent_composer.compose.helpers.types import read_variables
-    from agent_composer.nodes.agent import AgentNode
-    from agent_composer.nodes.base import Output
-    from agent_composer.runtime.backward import compute_backward
+    from yian.compose.helpers.types import read_variables
+    from yian.nodes.agent import AgentNode
+    from yian.nodes.base import Output
+    from yian.runtime.backward import compute_backward
 
     calls = []
     monkeypatch.setattr(AgentNode, "forward", lambda _node, inputs: Output(inputs["topic"]))
@@ -519,8 +519,8 @@ def test_agent_inventory_is_recorded_and_empty_feedback_does_no_backward_work(mo
 
 @pytest.mark.parametrize("kind", ["callback", "host", "cancel", "memory", "infrastructure"])
 def test_callback_failures_are_attributed_without_swallowing_host_faults(kind, monkeypatch):
-    from agent_composer.nodes.base import _CapabilityFault, _HostStop
-    from agent_composer.runtime.backward import _BackwardComputeError, compute_backward
+    from yian.nodes.base import _CapabilityFault, _HostStop
+    from yian.runtime.backward import _BackwardComputeError, compute_backward
 
     original = _HostStop("stop") if kind == "cancel" else MemoryError("memory") if kind == "memory" else RuntimeError("broken")
 
@@ -548,9 +548,9 @@ def test_callback_failures_are_attributed_without_swallowing_host_faults(kind, m
 
 def test_pooled_reverse_walk_uses_outcomes_instead_of_start_sequence(monkeypatch):
     import threading
-    from agent_composer.events import NodeSucceeded
-    from agent_composer.expr.builtins import TEMPLATE_FNS
-    from agent_composer.runtime.backward import compute_backward
+    from yian.events import NodeSucceeded
+    from yian.expr.builtins import TEMPLATE_FNS
+    from yian.runtime.backward import compute_backward
 
     committed = threading.Event()
 
@@ -581,7 +581,7 @@ def test_pooled_reverse_walk_uses_outcomes_instead_of_start_sequence(monkeypatch
 
 
 def test_causal_route_trace_latch_is_installed_only_after_append(monkeypatch):
-    from agent_composer.runtime.state import commit_prepared, prepare_node_started, prepare_node_succeeded, prepare_node_routed
+    from yian.runtime.state import commit_prepared, prepare_node_started, prepare_node_succeeded, prepare_node_routed
     from tests.engine._graph_builder import _forward_capture
     from tests.engine.test_forward_trace import _trace_snapshot
     from tests.engine.test_run_state_outcomes import _terminal_skip_route_flow
@@ -608,8 +608,8 @@ def test_causal_route_trace_latch_is_installed_only_after_append(monkeypatch):
 
 
 def test_failed_end_routes_text_without_fabricating_output_context():
-    from agent_composer.nodes.contracts import Assertion
-    from agent_composer.runtime.backward import compute_backward
+    from yian.nodes.contracts import Assertion
+    from yian.runtime.backward import compute_backward
 
     producer = RecordingBackwardNode("producer", lambda _: [1, 2], lambda *_: BackwardResult())
     engine = _engine(_graph([producer], [(START_ID, "producer")], outputs=[FlowOutput("result", "${producer.output}")]), learnable=True)
@@ -623,10 +623,10 @@ def test_failed_end_routes_text_without_fabricating_output_context():
 
 
 def test_backward_context_is_trace_owned_detached_and_survives_replay(monkeypatch):
-    from agent_composer.compile.expand import build_grow
-    from agent_composer.nodes.base import Node
-    from agent_composer.runtime.backward import compute_backward
-    from agent_composer.runtime.state import RunState, _replay_records
+    from yian.compile.expand import build_grow
+    from yian.nodes.base import Node
+    from yian.runtime.backward import compute_backward
+    from yian.runtime.state import RunState, _replay_records
 
     node = RecordingBackwardNode("work", lambda inputs: inputs["x"], lambda _c, f: BackwardResult({"x": f}), reads={"x": "${input.topic}"})
     engine = _engine(_graph([node], [(START_ID, "work")], outputs=[FlowOutput("result", "${work.output}")]), {"topic": [1, 2]}, learnable=True)
@@ -646,9 +646,9 @@ def test_backward_context_is_trace_owned_detached_and_survives_replay(monkeypatc
 
 
 def test_empty_map_retains_synthetics_without_inventing_item_contributors():
-    from agent_composer.nodes.code import CodeNode
-    from agent_composer.nodes.map import MapNode
-    from agent_composer.runtime.backward import compute_backward
+    from yian.nodes.code import CodeNode
+    from yian.nodes.map import MapNode
+    from yian.runtime.backward import compute_backward
 
     work = CodeNode("work", code="raise AssertionError('empty map ran a child')\nreturn None")
     work.params = [Parameter("x")]
@@ -667,12 +667,12 @@ def test_empty_map_retains_synthetics_without_inventing_item_contributors():
 
 
 def test_loop_carried_routes_use_the_same_fold_after_live_pruning(monkeypatch):
-    from agent_composer.compose import load_flow
-    from agent_composer.nodes.code import CodeNode
-    from agent_composer.runtime.backward import compute_backward
-    from agent_composer.runtime.learning import project_owner_contexts
-    from agent_composer.runtime.state import RunState, _replay_records
-    from agent_composer.compile.expand import build_grow
+    from yian.compose import load_flow
+    from yian.nodes.code import CodeNode
+    from yian.runtime.backward import compute_backward
+    from yian.runtime.learning import project_owner_contexts
+    from yian.runtime.state import RunState, _replay_records
+    from yian.compile.expand import build_grow
     from tests.engine.test_runtime_memory_learning import _owner_engine
 
     calls = []
@@ -738,7 +738,7 @@ output: ${loop.output}
 
 
 def test_callback_message_mutation_does_not_change_root_or_recorded_feedback():
-    from agent_composer.runtime.backward import compute_backward
+    from yian.runtime.backward import compute_backward
 
     def backward(_context, feedback):
         feedback[0][0] = "mutated by callback"
@@ -756,11 +756,11 @@ def test_callback_message_mutation_does_not_change_root_or_recorded_feedback():
 
 @pytest.mark.parametrize("opaque", [False, True])
 def test_canonical_file_input_feedback_keeps_literal_and_opaque_stops(opaque, monkeypatch):
-    from agent_composer.expr.builtins import TEMPLATE_FNS
-    from agent_composer.expr.lineage import route_feedback
-    from agent_composer.runtime.backward import compute_backward
-    from agent_composer.typesys import FileRef
-    from agent_composer.runtime.learning import project_owner_contexts
+    from yian.expr.builtins import TEMPLATE_FNS
+    from yian.expr.lineage import route_feedback
+    from yian.runtime.backward import compute_backward
+    from yian.typesys import FileRef
+    from yian.runtime.learning import project_owner_contexts
     from tests.engine.test_runtime_memory_learning import _owner_engine
 
     value = {"files": [FileRef(uri="file:///tmp/example.txt")]}
@@ -789,12 +789,12 @@ def test_canonical_file_input_feedback_keeps_literal_and_opaque_stops(opaque, mo
 
 @pytest.mark.parametrize("opaque", [False, True])
 def test_map_canonical_item_shape_preserves_its_projected_seed_stop(opaque, monkeypatch):
-    from agent_composer.expr.builtins import TEMPLATE_FNS
-    from agent_composer.expr.lineage import route_feedback
-    from agent_composer.nodes.map import MapNode
-    from agent_composer.runtime.backward import compute_backward
-    from agent_composer.typesys import FileRef
-    from agent_composer.runtime.learning import project_owner_contexts
+    from yian.expr.builtins import TEMPLATE_FNS
+    from yian.expr.lineage import route_feedback
+    from yian.nodes.map import MapNode
+    from yian.runtime.backward import compute_backward
+    from yian.typesys import FileRef
+    from yian.runtime.learning import project_owner_contexts
     from tests.engine.test_runtime_memory_learning import _owner_engine
 
     files = [FileRef(uri="file:///tmp/same.txt"), FileRef(uri="file:///tmp/same.txt")]
@@ -829,11 +829,11 @@ def test_map_canonical_item_shape_preserves_its_projected_seed_stop(opaque, monk
 
 @pytest.mark.parametrize("operator", ["+ []", "* 2"])
 def test_map_bounded_projected_file_lists_compose_before_stopping(operator, monkeypatch):
-    from agent_composer.expr.builtins import TEMPLATE_FNS
-    from agent_composer.expr.lineage import route_feedback
-    from agent_composer.nodes.map import MapNode
-    from agent_composer.runtime.backward import compute_backward
-    from agent_composer.typesys import FileRef
+    from yian.expr.builtins import TEMPLATE_FNS
+    from yian.expr.lineage import route_feedback
+    from yian.nodes.map import MapNode
+    from yian.runtime.backward import compute_backward
+    from yian.typesys import FileRef
 
     raw = {"files": [FileRef(uri="file:///tmp/x")]}
     for _ in range(40):

@@ -6,20 +6,20 @@ import copy
 
 import pytest
 
-from agent_composer.compile.model import START_ID, FlowOutput
-from agent_composer.memory import (
+from yian.compile.model import START_ID, FlowOutput
+from yian.memory import (
     DeclSite, LearnContext, MemoryMutation, MemoryOperationError, MemoryScope,
     MemorySnapshotEnvelope, MemorySpec, MemoryStack,
 )
-from agent_composer.nodes.base import BackwardResult, _CapabilityFault
-import agent_composer.runtime.backward as backward_module
-from agent_composer.runtime.contracts import MemoryProposal
-from agent_composer.runtime.log import (
+from yian.nodes.base import BackwardResult, _CapabilityFault
+import yian.runtime.backward as backward_module
+from yian.runtime.contracts import MemoryProposal
+from yian.runtime.log import (
     BackwardFinishedRecord, BackwardReadyRecord, BackwardStartedRecord,
     MemoryCommitFailedRecord, MemoryCommitRequestedRecord, MemoryCommitSucceededRecord,
 )
-from agent_composer.runtime.memory_runtime import MemoryRuntime
-from agent_composer.runtime.state import commit_prepared, prepare_record
+from yian.runtime.memory_runtime import MemoryRuntime
+from yian.runtime.state import commit_prepared, prepare_record
 from tests.engine._backward_fakes import RecordingBackwardNode
 from tests.engine._graph_builder import _engine, _graph
 from tests.engine._memory_fakes import _Memory, _Session
@@ -485,8 +485,8 @@ def test_host_capability_identity_and_cleanup_error_preserve_primary_exception(m
 
 @pytest.mark.parametrize("prior", ["succeeded", "commit_failed", "requested_unfinished"])
 def test_later_attempt_follows_or_closes_any_prior_attempt_and_recomputes_everything(prior):
-    from agent_composer.runtime.backward import compute_backward
-    from agent_composer.runtime.learning import memory_commit_id
+    from yian.runtime.backward import compute_backward
+    from yian.runtime.learning import memory_commit_id
 
     engine, node = _terminal(("A",))
     if prior == "requested_unfinished":
@@ -547,9 +547,9 @@ def test_cleanup_error_after_finished_preserves_success_and_admits_a_later_attem
 
 
 def test_backward_and_memory_replay_calls_no_callbacks_or_materialization(monkeypatch):
-    from agent_composer.compile.expand import build_grow
-    import agent_composer.runtime.learning as learning_module
-    from agent_composer.runtime.state import RunState, _replay_records
+    from yian.compile.expand import build_grow
+    import yian.runtime.learning as learning_module
+    from yian.runtime.state import RunState, _replay_records
 
     engine, _ = _terminal(("A", "B"))
     original = copy.deepcopy(engine.state.flow)

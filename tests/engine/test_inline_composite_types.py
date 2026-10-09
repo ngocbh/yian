@@ -6,17 +6,17 @@ from copy import deepcopy
 
 import pytest
 
-from agent_composer.compose.build import inline_inputs
-from agent_composer.compose.build.inline_inputs import (
+from yian.compose.build import inline_inputs
+from yian.compose.build.inline_inputs import (
     canonicalize_inline_type,
     infer_inline_binding_type,
     require_proven_type,
 )
-from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
-from agent_composer.diagnostics import SourceRange
-from agent_composer.nodes.contracts import PartialRecordContract, ValueContract
-from agent_composer.typesys import canonical_type_label
-from agent_composer.typesys.values import Type, ValueKind
+from yian.compose.helpers.errors import LoadDiagnostics, LoadError
+from yian.diagnostics import SourceRange
+from yian.nodes.contracts import PartialRecordContract, ValueContract
+from yian.typesys import canonical_type_label
+from yian.typesys.values import Type, ValueKind
 
 
 def _diagnostics() -> LoadDiagnostics:
@@ -958,8 +958,8 @@ def test_canonicalization_normalizes_refined_record_required_none_to_empty():
 
 
 def test_inline_type_copy_preserves_bounded_nested_validation():
-    from agent_composer.typesys.types import type_for
-    from agent_composer.typesys.values import TypeCheckError, build_value_as
+    from yian.typesys.types import type_for
+    from yian.typesys.values import TypeCheckError, build_value_as
 
     declared = Type(ValueKind.OBJECT, fields={
         "scores": type_for("list[Optional[float[-0.5, 1]]]", {}),

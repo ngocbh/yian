@@ -11,8 +11,8 @@ import sys
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-import agent_composer.llm_clients as llm_clients
-from agent_composer import build_memories, load_flow, run_flow
+import yian.llm_clients as llm_clients
+from yian import build_memories, load_flow, run_flow
 
 _ROOT_FLOW = """id: e2e-memory
 name: e2e_memory
@@ -130,9 +130,9 @@ def test_python_api_named_memories_persist_and_stack(tmp_path, monkeypatch):
 _CHILD = """
 import sys
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-import agent_composer.llm_clients as clients
-import agent_composer.cli.run as run_cli
-from agent_composer.cli import main
+import yian.llm_clients as clients
+import yian.cli.run as run_cli
+from yian.cli import main
 
 sys.path.insert(0, sys.argv.pop(1))
 from test_named_memory_e2e import _Model
@@ -164,7 +164,7 @@ def _cli(cwd: Path, *args: str) -> subprocess.CompletedProcess:
 
 
 def _result_line(answer_users: int) -> str:
-    """Return the exact line `composer run` prints for this flow's output."""
+    """Return the exact line `yian run` prints for this flow's output."""
     # The CLI never runs backward, so no episodic memory has anything to recall.
     return (
         f"{{'answer': 'users={answer_users} memories=', "

@@ -9,18 +9,18 @@ import copy
 
 import pytest
 
-from agent_composer.compile.expand import loop_continue_subgraph, map_callsite, ns
-from agent_composer.compile.model import CompiledFlow, Edge, END_ID, Flow, START_ID
-from agent_composer.diagnostics import OriginRef
-from agent_composer.memory import (
+from yian.compile.expand import loop_continue_subgraph, map_callsite, ns
+from yian.compile.model import CompiledFlow, Edge, END_ID, Flow, START_ID
+from yian.diagnostics import OriginRef
+from yian.memory import (
     MemoryOccurrenceKind,
     MemoryOccurrenceSegment,
     MemoryScope,
 )
-from agent_composer.nodes.end import EndNode
-from agent_composer.nodes.contracts import Binding, ChildFlowBoundary, Parameter, SeedConnection
-from agent_composer.nodes.loop import LoopNode
-from agent_composer.nodes.start import StartNode
+from yian.nodes.end import EndNode
+from yian.nodes.contracts import Binding, ChildFlowBoundary, Parameter, SeedConnection
+from yian.nodes.loop import LoopNode
+from yian.nodes.start import StartNode
 
 from tests.engine.test_expand import _child_flow
 

@@ -13,8 +13,8 @@ from unittest.mock import patch
 
 import pytest
 
-from agent_composer.memory.contracts import MemoryOperationError, _MAX_JSON_NESTING
-from agent_composer.memory.storage import SQLiteStorage, check_storage_path
+from yian.memory.contracts import MemoryOperationError, _MAX_JSON_NESTING
+from yian.memory.storage import SQLiteStorage, check_storage_path
 
 
 def _assert_error(error: MemoryOperationError, code: str) -> None:

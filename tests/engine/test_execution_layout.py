@@ -6,13 +6,13 @@ import copy
 
 import pytest
 
-from agent_composer.compile.manifest import flow_fingerprint, flow_manifest
-from agent_composer.compile.model import END_ID, START_ID, CompiledFlow, Flow
-from agent_composer.diagnostics import OriginRef
-from agent_composer.nodes.code import CodeNode
-from agent_composer.nodes.contracts import ExecutionPosition, ExecutionScope
-from agent_composer.nodes.end import EndNode
-from agent_composer.nodes.start import StartNode
+from yian.compile.manifest import flow_fingerprint, flow_manifest
+from yian.compile.model import END_ID, START_ID, CompiledFlow, Flow
+from yian.diagnostics import OriginRef
+from yian.nodes.code import CodeNode
+from yian.nodes.contracts import ExecutionPosition, ExecutionScope
+from yian.nodes.end import EndNode
+from yian.nodes.start import StartNode
 
 
 _REPEATED_DEFINITION = """id: root
@@ -51,7 +51,7 @@ def test_execution_scope_has_an_explicit_manifest_policy():
 
 @pytest.mark.parametrize("flow_type", [Flow, CompiledFlow])
 def test_execution_layout_exists_without_memory_policies(flow_type):
-    from agent_composer.compile.execution_layout import (
+    from yian.compile.execution_layout import (
         apply_execution_layout, resolve_execution_layout,
     )
 
@@ -92,11 +92,11 @@ def test_execution_layout_exists_without_memory_policies(flow_type):
 
 
 def test_callsites_to_one_definition_have_distinct_paths():
-    from agent_composer.compile.execution_layout import (
+    from yian.compile.execution_layout import (
         apply_execution_layout, resolve_execution_layout,
     )
-    from agent_composer.compose import load_flow
-    from agent_composer.compile.llm_cascade import apply_effective_llm_map
+    from yian.compose import load_flow
+    from yian.compile.llm_cascade import apply_effective_llm_map
 
     flow = load_flow(_REPEATED_DEFINITION).compiled
     apply_effective_llm_map(flow, {})
@@ -116,11 +116,11 @@ def test_callsites_to_one_definition_have_distinct_paths():
 
 
 def test_agent_variable_owners_are_authored_callsites_and_survive_call_cloning():
-    from agent_composer.compile.execution_layout import apply_execution_layout, resolve_execution_layout
-    from agent_composer.compile.expand import call_subgraph
-    from agent_composer.compile.llm_cascade import apply_effective_llm_map
-    from agent_composer.compose import load_flow
-    from agent_composer.nodes.agent import AgentNode
+    from yian.compile.execution_layout import apply_execution_layout, resolve_execution_layout
+    from yian.compile.expand import call_subgraph
+    from yian.compile.llm_cascade import apply_effective_llm_map
+    from yian.compose import load_flow
+    from yian.nodes.agent import AgentNode
 
     source = _REPEATED_DEFINITION.replace(
         "kind: code\n        code: |\n          return 1\n        output: int",
@@ -162,12 +162,12 @@ def test_agent_variable_owners_are_authored_callsites_and_survive_call_cloning()
 
 
 def test_map_items_and_loop_iterations_share_the_authored_agent_variable_owner():
-    from agent_composer.compile.execution_layout import apply_execution_layout, resolve_execution_layout
-    from agent_composer.compile.expand import loop_continue_subgraph, map_subgraph
-    from agent_composer.compile.llm_cascade import apply_effective_llm_map
-    from agent_composer.compose import load_flow
-    from agent_composer.nodes.agent import AgentNode
-    from agent_composer.nodes.loop import LoopNode
+    from yian.compile.execution_layout import apply_execution_layout, resolve_execution_layout
+    from yian.compile.expand import loop_continue_subgraph, map_subgraph
+    from yian.compile.llm_cascade import apply_effective_llm_map
+    from yian.compose import load_flow
+    from yian.nodes.agent import AgentNode
+    from yian.nodes.loop import LoopNode
 
     flow = load_flow("""id: variable_owners
 name: variable_owners
@@ -243,10 +243,10 @@ output: ${outer.output}
 
 
 def test_aliased_child_targets_are_rejected_before_any_scope_is_stamped():
-    from agent_composer.compile.execution_layout import (
+    from yian.compile.execution_layout import (
         apply_execution_layout, resolve_execution_layout,
     )
-    from agent_composer.nodes.call import CallNode
+    from yian.nodes.call import CallNode
 
     child = Flow({"answer": CodeNode("answer", code="return 1")}, [])
     flow = CompiledFlow({
@@ -261,14 +261,14 @@ def test_aliased_child_targets_are_rejected_before_any_scope_is_stamped():
 
 @pytest.mark.parametrize("child_policy", [True, False])
 def test_execution_scope_agrees_with_existing_memory_ownership_paths(child_policy):
-    from agent_composer.compile.execution_layout import (
+    from yian.compile.execution_layout import (
         apply_execution_layout, resolve_execution_layout,
     )
-    from agent_composer.compile.llm_cascade import apply_effective_llm_map
-    from agent_composer.compile.memory_layout import (
+    from yian.compile.llm_cascade import apply_effective_llm_map
+    from yian.compile.memory_layout import (
         apply_memory_layout, resolve_memory_layout,
     )
-    from agent_composer.compose import load_flow
+    from yian.compose import load_flow
 
     source = _REPEATED_DEFINITION.replace("name: root\n", "name: root\nlong_term_memory: outer\n")
     source = source.replace(
@@ -304,7 +304,7 @@ def test_execution_scope_agrees_with_existing_memory_ownership_paths(child_polic
 
 
 def _two_node_layout():
-    from agent_composer.compile.execution_layout import resolve_execution_layout
+    from yian.compile.execution_layout import resolve_execution_layout
 
     flow = CompiledFlow({
         "first": CodeNode("first", code="return 1"),
@@ -315,7 +315,7 @@ def _two_node_layout():
 
 @pytest.mark.parametrize("change", ["new-target", "replaced-target", "invalid-key"])
 def test_stale_graph_is_rejected_without_stamping_any_target(change):
-    from agent_composer.compile.execution_layout import apply_execution_layout
+    from yian.compile.execution_layout import apply_execution_layout
 
     flow, layout = _two_node_layout()
     if change == "new-target":
@@ -333,7 +333,7 @@ def test_stale_graph_is_rejected_without_stamping_any_target(change):
 
 @pytest.mark.parametrize("change", ["missing-target", "duplicate-target", "mutable-targets"])
 def test_invalid_layout_is_rejected_without_stamping_any_target(change):
-    from agent_composer.compile.execution_layout import (
+    from yian.compile.execution_layout import (
         ResolvedExecutionLayout, apply_execution_layout,
     )
 
@@ -353,7 +353,7 @@ def test_invalid_layout_is_rejected_without_stamping_any_target(change):
 @pytest.mark.parametrize("location", ["layout", "existing"])
 @pytest.mark.parametrize("change", ["different-path", "path-subclass", "position-index"])
 def test_scope_validation_is_atomic_even_for_forged_frozen_values(location, change):
-    from agent_composer.compile.execution_layout import apply_execution_layout
+    from yian.compile.execution_layout import apply_execution_layout
 
     class StringSubclass(str):
         pass
@@ -381,8 +381,8 @@ def test_scope_validation_is_atomic_even_for_forged_frozen_values(location, chan
 
 
 def test_recursive_static_child_cycle_is_rejected_without_mutation():
-    from agent_composer.compile.execution_layout import resolve_execution_layout
-    from agent_composer.nodes.call import CallNode
+    from yian.compile.execution_layout import resolve_execution_layout
+    from yian.nodes.call import CallNode
 
     flow = Flow({}, [])
     node = CallNode("recurse", flow_id="child", child=flow)
@@ -393,10 +393,10 @@ def test_recursive_static_child_cycle_is_rejected_without_mutation():
 
 
 def test_static_children_are_discovered_through_the_node_owned_hook():
-    from agent_composer.compile.execution_layout import (
+    from yian.compile.execution_layout import (
         apply_execution_layout, resolve_execution_layout,
     )
-    from agent_composer.nodes.base import Node, NodeKind
+    from yian.nodes.base import Node, NodeKind
 
     child = Flow({"leaf": CodeNode("leaf", code="return 1")}, [])
 
@@ -415,7 +415,7 @@ def test_static_children_are_discovered_through_the_node_owned_hook():
 
 
 def test_only_the_containing_flows_actual_boundaries_are_marked():
-    from agent_composer.compile.execution_layout import resolve_execution_layout
+    from yian.compile.execution_layout import resolve_execution_layout
 
     flow = Flow({
         "entry": StartNode("entry", params=[]),
@@ -429,8 +429,8 @@ def test_only_the_containing_flows_actual_boundaries_are_marked():
 
 
 def test_static_loop_scope_starts_at_driver_zero_and_reapplies_atomically():
-    from agent_composer.compile.execution_layout import apply_execution_layout, resolve_execution_layout
-    from agent_composer.nodes.loop import LoopNode
+    from yian.compile.execution_layout import apply_execution_layout, resolve_execution_layout
+    from yian.nodes.loop import LoopNode
 
     node = LoopNode("loop", flow_id="body", times=0, max_iters=0, predicate_kind="times")
     flow = Flow({"first": CodeNode("first", code="return 1"), "loop": node}, [])
@@ -451,8 +451,8 @@ def test_static_loop_scope_starts_at_driver_zero_and_reapplies_atomically():
     (ExecutionPosition("call", ("outer",)), ExecutionPosition("loop_driver", ("loop",), 0)),
 ])
 def test_static_loop_layout_rejects_nonbootstrap_positions_before_stamping(position):
-    from agent_composer.compile.execution_layout import apply_execution_layout, resolve_execution_layout
-    from agent_composer.nodes.loop import LoopNode
+    from yian.compile.execution_layout import apply_execution_layout, resolve_execution_layout
+    from yian.nodes.loop import LoopNode
 
     node = LoopNode("loop", flow_id="body")
     flow = Flow({"first": CodeNode("first", code="return 1"), "loop": node}, [])

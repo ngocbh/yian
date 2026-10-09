@@ -1,6 +1,6 @@
 import pytest
-from agent_composer.compose import load_flow
-from agent_composer.compose.helpers.errors import LoadError
+from yian.compose import load_flow
+from yian.compose.helpers.errors import LoadError
 
 _BAD_LITERAL = """
 id: f

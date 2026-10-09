@@ -5,10 +5,10 @@ import json
 
 import pytest
 
-from agent_composer.expr.lineage import SourceRef, ValueRoute
-from agent_composer.memory import ConversationInvocation, EvaluationEvidence
-from agent_composer.nodes.contracts import ExecutionScope
-from agent_composer.runtime.log import (
+from yian.expr.lineage import SourceRef, ValueRoute
+from yian.memory import ConversationInvocation, EvaluationEvidence
+from yian.nodes.contracts import ExecutionScope
+from yian.runtime.log import (
     SCHEMA_VERSION, NodeSucceededRecord, RecordEnvelope, canonical_typed,
     decode_record, encode_record,
 )
@@ -16,7 +16,7 @@ from agent_composer.runtime.log import (
 
 @pytest.mark.parametrize("schema", [SCHEMA_VERSION])
 def test_forward_capture_round_trips_invocation_names_and_structural_layout(schema):
-    from agent_composer.runtime.contracts import ForwardCapture
+    from yian.runtime.contracts import ForwardCapture
 
     data = {"input_output_paths": {"result": []}}
     capture = ForwardCapture(
@@ -49,7 +49,7 @@ def test_forward_capture_round_trips_invocation_names_and_structural_layout(sche
     ("node_data", {"input_output_paths": {"result": "result"}}),
 ])
 def test_forward_capture_rejects_malformed_invocation_inventory_and_paths(field, value):
-    from agent_composer.runtime.contracts import ForwardCapture
+    from yian.runtime.contracts import ForwardCapture
 
     capture = ForwardCapture({"result": 1}, ValueRoute.record((("result", ValueRoute.literal(1)),)),
                              input_names=("result",), variable_names=("instruction",))
@@ -64,7 +64,7 @@ def test_forward_capture_rejects_malformed_invocation_inventory_and_paths(field,
 
 @pytest.mark.parametrize("field", ["input_names", "variable_names"])
 def test_schema_six_requires_explicit_invocation_inventories(field):
-    from agent_composer.runtime.contracts import ForwardCapture
+    from yian.runtime.contracts import ForwardCapture
 
     capture = ForwardCapture({}, ValueRoute.record(()))
     envelope = RecordEnvelope(SCHEMA_VERSION, "run", 3, NodeSucceededRecord(
@@ -78,14 +78,14 @@ def test_schema_six_requires_explicit_invocation_inventories(field):
 
 def test_accepted_backward_inventories_and_layout_replay_without_recapturing(monkeypatch):
     import copy
-    from agent_composer.compile.expand import build_grow
-    from agent_composer.compile.model import END_ID, START_ID
-    from agent_composer.compose import load_flow
-    from agent_composer.nodes.base import BackwardContext, Node
-    from agent_composer.nodes.code import CodeNode
-    from agent_composer.nodes.end import EndNode
-    from agent_composer.nodes.start import StartNode
-    from agent_composer.runtime.state import RunState, _replay_records
+    from yian.compile.expand import build_grow
+    from yian.compile.model import END_ID, START_ID
+    from yian.compose import load_flow
+    from yian.nodes.base import BackwardContext, Node
+    from yian.nodes.code import CodeNode
+    from yian.nodes.end import EndNode
+    from yian.nodes.start import StartNode
+    from yian.runtime.state import RunState, _replay_records
     from tests.engine._graph_builder import _engine
 
     flow = load_flow("""id: captured_layout
@@ -143,8 +143,8 @@ asserts: ["${work.output} != null"]
 
 
 def test_static_capture_host_fault_does_not_append_a_node_outcome():
-    from agent_composer.compile.model import END_ID, START_ID
-    from agent_composer.runtime.log import NodeStartedRecord
+    from yian.compile.model import END_ID, START_ID
+    from yian.runtime.log import NodeStartedRecord
     from tests.engine._fakes import FuncNode
     from tests.engine._graph_builder import _engine, _graph
 
@@ -166,13 +166,13 @@ def test_static_capture_host_fault_does_not_append_a_node_outcome():
 
 def test_nested_agent_render_capture_uses_authored_model_map_and_replays_without_execution(monkeypatch):
     import copy
-    import agent_composer.nodes.agent.node as agent_module
-    from agent_composer.compile.expand import build_grow
-    from agent_composer.compose import load_flow
-    from agent_composer.events import RunSucceeded
-    from agent_composer.nodes.agent import AgentNode
-    from agent_composer.nodes.base import Output
-    from agent_composer.runtime.state import RunState, _replay_records
+    import yian.nodes.agent.node as agent_module
+    from yian.compile.expand import build_grow
+    from yian.compose import load_flow
+    from yian.events import RunSucceeded
+    from yian.nodes.agent import AgentNode
+    from yian.nodes.base import Output
+    from yian.runtime.state import RunState, _replay_records
     from tests.engine._graph_builder import _engine
 
     flow = load_flow("""id: captured_models
@@ -278,12 +278,12 @@ output: {left: '${left.output}', right: '${right.output}'}
 
 @pytest.mark.parametrize("failure_at", ["capture", "append"])
 def test_agent_render_capture_host_and_append_failures_do_not_install_worker_data(monkeypatch, failure_at):
-    import agent_composer.nodes.agent.node as agent_module
-    import agent_composer.runtime.eval_node as evaluator
-    from agent_composer.compile.model import END_ID, START_ID
-    from agent_composer.nodes.agent import AgentNode
-    from agent_composer.nodes.base import Output
-    from agent_composer.runtime.log import NodeStartedRecord
+    import yian.nodes.agent.node as agent_module
+    import yian.runtime.eval_node as evaluator
+    from yian.compile.model import END_ID, START_ID
+    from yian.nodes.agent import AgentNode
+    from yian.nodes.base import Output
+    from yian.runtime.log import NodeStartedRecord
     from tests.engine._graph_builder import _engine, _graph
 
     expected = OSError("capture or append unavailable")
@@ -320,10 +320,10 @@ def test_agent_render_capture_host_and_append_failures_do_not_install_worker_dat
 
 def test_discarded_agent_worker_keeps_render_capture_out_of_accepted_trace(monkeypatch):
     import threading
-    import agent_composer.nodes.agent.node as agent_module
-    from agent_composer.compile.model import END_ID, START_ID
-    from agent_composer.nodes.agent import AgentNode
-    from agent_composer.nodes.base import Output
+    import yian.nodes.agent.node as agent_module
+    from yian.compile.model import END_ID, START_ID
+    from yian.nodes.agent import AgentNode
+    from yian.nodes.base import Output
     from tests.engine._fakes import FuncNode
     from tests.engine._graph_builder import _engine, _graph
 
@@ -355,7 +355,7 @@ def test_discarded_agent_worker_keeps_render_capture_out_of_accepted_trace(monke
 
 @pytest.mark.parametrize("schema", [SCHEMA_VERSION])
 def test_forward_capture_round_trips_without_memory_scope(schema):
-    from agent_composer.runtime.contracts import ForwardCapture
+    from yian.runtime.contracts import ForwardCapture
 
     inputs = {"value": [1, None]}
     route = ValueRoute.record((("value", ValueRoute(
@@ -403,7 +403,7 @@ def test_forward_capture_round_trips_without_memory_scope(schema):
     ("path", [0]), ("spans", [[0, 1]]),
 ])
 def test_forward_capture_rejects_malformed_nested_route_wire(field, value):
-    from agent_composer.runtime.contracts import ForwardCapture
+    from yian.runtime.contracts import ForwardCapture
 
     capture = ForwardCapture({"x": 1}, ValueRoute.record(((
         "x", ValueRoute("source", source=SourceRef("run", 1)),
@@ -424,7 +424,7 @@ def test_forward_capture_rejects_malformed_nested_route_wire(field, value):
     pytest.param('{"\\ud800":1}', id="surrogate-key"),
 ])
 def test_forward_capture_rejects_noncanonical_embedded_json(value_json):
-    from agent_composer.runtime.contracts import ForwardCapture
+    from yian.runtime.contracts import ForwardCapture
 
     route = ValueRoute("literal", value_json=value_json)
     with pytest.raises((TypeError, ValueError)):
@@ -440,8 +440,8 @@ def test_forward_capture_rejects_noncanonical_embedded_json(value_json):
 
 
 def test_trace_source_is_the_actual_commit_as_producer():
-    from agent_composer.nodes.base import Node, Output
-    from agent_composer.compile.model import START_ID, END_ID
+    from yian.nodes.base import Node, Output
+    from yian.compile.model import START_ID, END_ID
     from tests.engine._fakes import FuncNode
     from tests.engine._graph_builder import _engine, _graph
 
@@ -473,8 +473,8 @@ def test_trace_source_is_the_actual_commit_as_producer():
 
 
 def test_forward_capture_keeps_the_existing_canonical_depth_range():
-    from agent_composer.runtime.contracts import ForwardCapture
-    from agent_composer.runtime.log import canonical_seed
+    from yian.runtime.contracts import ForwardCapture
+    from yian.runtime.log import canonical_seed
 
     value = 1
     for _ in range(140):
@@ -491,9 +491,9 @@ def test_forward_capture_keeps_the_existing_canonical_depth_range():
 
 @pytest.mark.parametrize("stage", ["binding", "body", "output", "route", "grow"])
 def test_failed_binding_and_rejected_outcomes_retain_canonical_failures(stage):
-    from agent_composer.compile.model import START_ID, END_ID
-    from agent_composer.nodes.base import Node, Output, Route, Grow
-    from agent_composer.nodes.contracts import Parameter
+    from yian.compile.model import START_ID, END_ID
+    from yian.nodes.base import Node, Output, Route, Grow
+    from yian.nodes.contracts import Parameter
     from tests.engine._graph_builder import _engine, _graph
 
     class Failing(Node):
@@ -521,8 +521,8 @@ def test_failed_binding_and_rejected_outcomes_retain_canonical_failures(stage):
 
 
 def test_trace_is_applied_only_after_successful_append(monkeypatch):
-    from agent_composer.compile.model import START_ID, END_ID
-    from agent_composer.runtime.state import commit_prepared, prepare_node_started, prepare_node_succeeded
+    from yian.compile.model import START_ID, END_ID
+    from yian.runtime.state import commit_prepared, prepare_node_started, prepare_node_succeeded
     from tests.engine._graph_builder import _engine, _forward_capture, _graph
 
     engine = _engine(_graph([], [(START_ID, END_ID)]), learnable=True)
@@ -552,9 +552,9 @@ def test_trace_is_applied_only_after_successful_append(monkeypatch):
 
 def test_pooled_lookup_keeps_value_and_producer_identity_together(monkeypatch):
     import threading
-    from agent_composer.compile.model import START_ID, END_ID
-    from agent_composer.events import NodeSucceeded
-    from agent_composer.expr.builtins import TEMPLATE_FNS
+    from yian.compile.model import START_ID, END_ID
+    from yian.events import NodeSucceeded
+    from yian.expr.builtins import TEMPLATE_FNS
     from tests.engine._fakes import FuncNode
     from tests.engine._graph_builder import _engine, _graph
 
@@ -602,11 +602,11 @@ def test_pooled_lookup_keeps_value_and_producer_identity_together(monkeypatch):
 
 def test_discarded_pooled_outcomes_are_not_trace_occurrences():
     import threading
-    from agent_composer.compile.model import START_ID, END_ID
-    from agent_composer.runtime.backward import compute_backward
-    from agent_composer.runtime.contracts import BackwardOutcome
-    from agent_composer.runtime.log import BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord
-    from agent_composer.runtime.state import prepare_record, commit_prepared
+    from yian.compile.model import START_ID, END_ID
+    from yian.runtime.backward import compute_backward
+    from yian.runtime.contracts import BackwardOutcome
+    from yian.runtime.log import BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord
+    from yian.runtime.state import prepare_record, commit_prepared
     from tests.engine._fakes import FuncNode
     from tests.engine._graph_builder import _engine, _graph
 
@@ -647,10 +647,10 @@ def test_discarded_pooled_outcomes_are_not_trace_occurrences():
 
 def test_trace_memory_scope_is_detached_and_replayed_without_evidence():
     from copy import deepcopy
-    from agent_composer.compile.expand import build_grow
-    from agent_composer.compile.model import START_ID, FlowOutput
-    from agent_composer.memory import DeclSite, MemoryScope, MemorySnapshotEnvelope, MemorySpec, MemoryStack
-    from agent_composer.runtime.state import RunState, _replay_records
+    from yian.compile.expand import build_grow
+    from yian.compile.model import START_ID, FlowOutput
+    from yian.memory import DeclSite, MemoryScope, MemorySnapshotEnvelope, MemorySpec, MemoryStack
+    from yian.runtime.state import RunState, _replay_records
     from tests.engine._fakes import FuncNode
     from tests.engine._graph_builder import _engine, _graph
 
@@ -682,8 +682,8 @@ def test_trace_memory_scope_is_detached_and_replayed_without_evidence():
 def test_trace_rejects_forged_memory_scope_before_append_and_when_copied(bad):
     from copy import deepcopy
     from dataclasses import replace
-    from agent_composer.memory import MemoryScope
-    from agent_composer.runtime.state import prepare_node_succeeded, commit_prepared
+    from yian.memory import MemoryScope
+    from yian.runtime.state import prepare_node_succeeded, commit_prepared
     from tests.engine._fakes import FuncNode
     from tests.engine._graph_builder import _forward_capture
     from tests.engine.test_runtime_memory_learning import _start_trace_node
@@ -708,11 +708,11 @@ def test_trace_rejects_forged_memory_scope_before_append_and_when_copied(bad):
 def _prepared_scoped_outcome(kind, *, scoped=True):
     """Prepare one physical outcome using the existing direct reducer fixture."""
     from copy import deepcopy
-    from agent_composer.compile.model import END_ID
-    from agent_composer.diagnostics import Failure
-    from agent_composer.memory import MemoryScope
-    from agent_composer.nodes.base import Grow
-    from agent_composer.runtime.state import prepare_expanded, prepare_node_failed, prepare_node_routed, prepare_node_succeeded
+    from yian.compile.model import END_ID
+    from yian.diagnostics import Failure
+    from yian.memory import MemoryScope
+    from yian.nodes.base import Grow
+    from yian.runtime.state import prepare_expanded, prepare_node_failed, prepare_node_routed, prepare_node_succeeded
     from tests.engine._fakes import FuncNode
     from tests.engine._graph_builder import _forward_capture
     from tests.engine.test_runtime_memory_learning import _start_trace_node
@@ -741,8 +741,8 @@ def _prepared_scoped_outcome(kind, *, scoped=True):
 
 def test_terminal_trace_output_must_match_the_prepared_outcome_before_append():
     from dataclasses import replace
-    from agent_composer.runtime.state import commit_prepared
-    from agent_composer.typesys.values import ANY_VALUE_ADAPTER
+    from yian.runtime.state import commit_prepared
+    from yian.typesys.values import ANY_VALUE_ADAPTER
     from tests.engine.test_run_state_outcomes import _state_snapshot
 
     _node, state, log, prepared, _original, _builder = _prepared_scoped_outcome("success")
@@ -764,8 +764,8 @@ def test_terminal_trace_output_must_match_the_prepared_outcome_before_append():
 
 def _prepared_terminal_route(*, sibling=False):
     from copy import deepcopy
-    from agent_composer.compile.model import START_ID
-    from agent_composer.runtime.state import commit_prepared, prepare_node_started, prepare_node_succeeded, prepare_node_routed
+    from yian.compile.model import START_ID
+    from yian.runtime.state import commit_prepared, prepare_node_started, prepare_node_succeeded, prepare_node_routed
     from tests.engine._graph_builder import _engine, _forward_capture
     from tests.engine.test_run_state_outcomes import _terminal_skip_route_flow
 
@@ -786,8 +786,8 @@ def _prepared_terminal_route(*, sibling=False):
 
 def _prepared_trace_frontier(kind):
     from copy import deepcopy
-    from agent_composer.compile.model import START_ID
-    from agent_composer.runtime.state import commit_prepared, prepare_node_started, prepare_node_succeeded, prepare_run_resumed
+    from yian.compile.model import START_ID
+    from yian.runtime.state import commit_prepared, prepare_node_started, prepare_node_succeeded, prepare_run_resumed
     from tests.engine._graph_builder import _engine, _forward_capture
     from tests.engine.test_run_state_outcomes import _terminal_skip_route_flow
 
@@ -807,7 +807,7 @@ def _prepared_trace_frontier(kind):
 
 def test_frontier_trace_cannot_inject_a_causal_terminal_source_before_append():
     from dataclasses import replace
-    from agent_composer.runtime.state import commit_prepared
+    from yian.runtime.state import commit_prepared
     from tests.engine.test_run_state_outcomes import _state_snapshot
 
     state, log, prepared, _original = _prepared_trace_frontier("started")
@@ -825,7 +825,7 @@ def test_frontier_trace_cannot_inject_a_causal_terminal_source_before_append():
 
 def test_outcome_trace_source_must_match_the_physical_accepted_start_before_append():
     from dataclasses import replace
-    from agent_composer.runtime.state import commit_prepared
+    from yian.runtime.state import commit_prepared
     from tests.engine.test_run_state_outcomes import _state_snapshot
 
     _node, state, log, prepared, _original, _builder = _prepared_scoped_outcome("failure")
@@ -850,8 +850,8 @@ def test_outcome_trace_source_must_match_the_physical_accepted_start_before_appe
 ])
 def test_frontier_trace_rejects_inappropriate_fields_before_append(kind, field):
     from dataclasses import replace
-    from agent_composer.runtime.state import commit_prepared
-    from agent_composer.runtime.trace import TraceTerminal
+    from yian.runtime.state import commit_prepared
+    from yian.runtime.trace import TraceTerminal
     from tests.engine.test_run_state_outcomes import _state_snapshot
 
     state, log, prepared, _original = _prepared_trace_frontier(kind)
@@ -893,8 +893,8 @@ def test_frontier_trace_rejects_inappropriate_fields_before_append(kind, field):
 @pytest.mark.parametrize("change", ["node", "sequence", "float_sequence", "tuple_subclass"])
 def test_frontier_trace_started_identity_is_exact(change):
     from dataclasses import replace
-    from agent_composer.compile.model import START_ID
-    from agent_composer.runtime.state import commit_prepared
+    from yian.compile.model import START_ID
+    from yian.runtime.state import commit_prepared
     from tests.engine.test_run_state_outcomes import _state_snapshot
 
     state, log, prepared, _original = _prepared_trace_frontier("started")
@@ -922,8 +922,8 @@ def test_frontier_trace_started_identity_is_exact(change):
 def test_outcome_trace_occurrence_identity_matches_the_canonical_record(kind, method, change):
     from copy import deepcopy
     from dataclasses import replace
-    from agent_composer.compile.model import START_ID
-    from agent_composer.runtime.state import commit_prepared
+    from yian.compile.model import START_ID
+    from yian.runtime.state import commit_prepared
     from tests.engine.test_run_state_outcomes import _state_snapshot
 
     _node, state, log, prepared, _original, _builder = _prepared_scoped_outcome(kind)
@@ -960,7 +960,7 @@ def test_outcome_trace_occurrence_identity_matches_the_canonical_record(kind, me
 @pytest.mark.parametrize("field", ["initialized", "started", "resumed", "sequence"])
 def test_outcome_trace_cannot_override_dispatch_authority(kind, field):
     from dataclasses import replace
-    from agent_composer.runtime.state import commit_prepared
+    from yian.runtime.state import commit_prepared
     from tests.engine.test_run_state_outcomes import _state_snapshot
 
     _node, state, log, prepared, _original, _builder = _prepared_scoped_outcome(kind)
@@ -980,7 +980,7 @@ def test_outcome_trace_cannot_override_dispatch_authority(kind, field):
 @pytest.mark.parametrize("change", ["target", "source", "sequence", "float_sequence", "value", "missing", "tuple"])
 def test_outcome_trace_writer_matches_the_same_accepted_physical_output(change):
     from dataclasses import replace
-    from agent_composer.runtime.state import commit_prepared, prepare_node_succeeded
+    from yian.runtime.state import commit_prepared, prepare_node_succeeded
     from tests.engine._graph_builder import _forward_capture
     from tests.engine.test_run_state_outcomes import _state_snapshot
 
@@ -1007,9 +1007,9 @@ def test_outcome_trace_writer_matches_the_same_accepted_physical_output(change):
 def test_frontier_trace_and_terminal_source_match_live_replay_without_repreparing(kind, monkeypatch):
     from copy import deepcopy
     from dataclasses import replace
-    from agent_composer.compile.expand import build_grow
-    from agent_composer.runtime.backward import compute_backward
-    import agent_composer.runtime.state as state_module
+    from yian.compile.expand import build_grow
+    from yian.runtime.backward import compute_backward
+    import yian.runtime.state as state_module
     from tests.engine._graph_builder import _forward_capture
 
     state, log, prepared, original = _prepared_trace_frontier(kind)
@@ -1040,10 +1040,10 @@ def test_frontier_trace_and_terminal_source_match_live_replay_without_repreparin
 def test_terminal_trace_rejects_forged_fields_before_append(kind, method, change):
     from copy import deepcopy
     from dataclasses import replace
-    from agent_composer.diagnostics import Failure
-    from agent_composer.runtime.state import commit_prepared
-    from agent_composer.runtime.trace import TraceTerminal
-    from agent_composer.typesys.values import ANY_VALUE_ADAPTER
+    from yian.diagnostics import Failure
+    from yian.runtime.state import commit_prepared
+    from yian.runtime.trace import TraceTerminal
+    from yian.typesys.values import ANY_VALUE_ADAPTER
     from tests.engine.test_run_state_outcomes import _state_snapshot
 
     if kind == "route":
@@ -1100,9 +1100,9 @@ def test_terminal_trace_rejects_forged_fields_before_append(kind, method, change
 @pytest.mark.parametrize("field", ["terminal", "root_writer", "causal_route_source", "root_start_source"])
 def test_nonterminal_outcome_rejects_fabricated_terminal_trace_authority(kind, field):
     from dataclasses import replace
-    from agent_composer.diagnostics import Failure
-    from agent_composer.runtime.state import commit_prepared, prepare_node_succeeded
-    from agent_composer.runtime.trace import TraceTerminal
+    from yian.diagnostics import Failure
+    from yian.runtime.state import commit_prepared, prepare_node_succeeded
+    from yian.runtime.trace import TraceTerminal
     from tests.engine._graph_builder import _forward_capture
     from tests.engine.test_run_state_outcomes import _state_snapshot
 
@@ -1131,7 +1131,7 @@ def test_nonterminal_outcome_rejects_fabricated_terminal_trace_authority(kind, f
 @pytest.mark.parametrize("change", ["none", "source", "sequence", "float_sequence", "value"])
 def test_terminal_trace_root_writer_must_be_the_physical_accepted_output(change):
     from dataclasses import replace
-    from agent_composer.runtime.state import commit_prepared
+    from yian.runtime.state import commit_prepared
     from tests.engine.test_run_state_outcomes import _state_snapshot
 
     _node, state, log, prepared, _original, _builder = _prepared_scoped_outcome("success")
@@ -1160,8 +1160,8 @@ def test_terminal_trace_root_writer_must_be_the_physical_accepted_output(change)
 @pytest.mark.parametrize("change", ["none", "sequence", "run", "float_sequence"])
 def test_terminal_trace_root_start_latch_must_match_the_accepted_start(change):
     from dataclasses import replace
-    from agent_composer.compile.model import START_ID, END_ID
-    from agent_composer.runtime.state import commit_prepared, prepare_node_started, prepare_node_succeeded
+    from yian.compile.model import START_ID, END_ID
+    from yian.runtime.state import commit_prepared, prepare_node_started, prepare_node_succeeded
     from tests.engine._graph_builder import _engine, _forward_capture, _graph
     from tests.engine.test_run_state_outcomes import _state_snapshot
 
@@ -1198,8 +1198,8 @@ def test_terminal_trace_root_start_latch_must_match_the_accepted_start(change):
 def test_terminal_trace_accepts_detached_authority_without_repreparing(kind, monkeypatch):
     from copy import deepcopy
     from dataclasses import replace
-    from agent_composer.compile.expand import build_grow
-    import agent_composer.runtime.state as state_module
+    from yian.compile.expand import build_grow
+    import yian.runtime.state as state_module
 
     if kind == "route":
         state, log, prepared, original = _prepared_terminal_route()
@@ -1225,9 +1225,9 @@ def test_terminal_trace_accepts_detached_authority_without_repreparing(kind, mon
 def test_terminal_trace_uses_the_accepted_route_latch_until_an_explicit_failure(explicit_failure):
     from copy import deepcopy
     from dataclasses import replace
-    from agent_composer.compile.expand import build_grow
-    from agent_composer.diagnostics import Failure
-    from agent_composer.runtime.state import RunState, _replay_records, commit_prepared, prepare_node_failed, prepare_node_succeeded
+    from yian.compile.expand import build_grow
+    from yian.diagnostics import Failure
+    from yian.runtime.state import RunState, _replay_records, commit_prepared, prepare_node_failed, prepare_node_succeeded
     from tests.engine._graph_builder import _forward_capture
     from tests.engine.test_run_state_outcomes import _state_snapshot
 
@@ -1274,9 +1274,9 @@ def test_terminal_trace_uses_the_accepted_route_latch_until_an_explicit_failure(
 @pytest.mark.parametrize("change", ["none", "foreign_path", "foreign_memory"])
 def test_outcome_rejects_valid_scope_substitution_before_append(kind, method, change):
     from dataclasses import replace
-    from agent_composer.memory import MemoryScope
-    from agent_composer.runtime.log import encode_pool
-    from agent_composer.runtime.state import commit_prepared
+    from yian.memory import MemoryScope
+    from yian.runtime.log import encode_pool
+    from yian.runtime.state import commit_prepared
 
     node, state, log, prepared, _original, _builder = _prepared_scoped_outcome(kind)
     scope = node.memory_scope
@@ -1305,8 +1305,8 @@ def test_outcome_rejects_valid_scope_substitution_before_append(kind, method, ch
 @pytest.mark.parametrize("change", ["display_node", "delta", "occurrence"])
 def test_outcome_scope_authority_cannot_be_selected_or_omitted_by_trace_delta(kind, change):
     from dataclasses import replace
-    from agent_composer.compile.model import START_ID
-    from agent_composer.runtime.state import commit_prepared
+    from yian.compile.model import START_ID
+    from yian.runtime.state import commit_prepared
 
     _node, state, log, prepared, _original, _builder = _prepared_scoped_outcome(kind)
     delta = prepared._plan.trace_delta
@@ -1328,7 +1328,7 @@ def test_outcome_scope_authority_cannot_be_selected_or_omitted_by_trace_delta(ki
 def test_outcome_accepts_detached_physical_scope_and_replays_it(kind, scoped):
     from copy import deepcopy
     from dataclasses import replace
-    from agent_composer.runtime.state import RunState, _replay_records, commit_prepared
+    from yian.runtime.state import RunState, _replay_records, commit_prepared
 
     node, state, log, prepared, original, builder = _prepared_scoped_outcome(kind, scoped=scoped)
     delta = prepared._plan.trace_delta
@@ -1343,8 +1343,8 @@ def test_outcome_accepts_detached_physical_scope_and_replays_it(kind, scoped):
 
 
 def test_learn_false_omits_backward_capture():
-    from agent_composer.compile.model import START_ID, END_ID
-    from agent_composer.runtime.log import NodeSucceededRecord
+    from yian.compile.model import START_ID, END_ID
+    from yian.runtime.log import NodeSucceededRecord
     from tests.engine._graph_builder import _engine, _graph
 
     flow = _graph([], [(START_ID, END_ID)])
@@ -1366,7 +1366,7 @@ def test_learn_false_omits_backward_capture():
     (" input.x ", None, True, ("x",)), ("input. x", None, False, None),
 ])
 def test_paired_resolver_preserves_pool_namespaces(path, value, present, source_path):
-    from agent_composer.compile.model import START_ID, END_ID
+    from yian.compile.model import START_ID, END_ID
     from tests.engine._graph_builder import _engine, _graph
 
     engine = _engine(_graph([], [(START_ID, END_ID)]), {"x": None, "items": [1]}, learnable=True)
@@ -1379,8 +1379,8 @@ def test_paired_resolver_preserves_pool_namespaces(path, value, present, source_
 
 
 def test_reducer_requires_capture_exactly_when_learning():
-    from agent_composer.compile.model import START_ID, END_ID
-    from agent_composer.runtime.state import commit_prepared, prepare_node_started, prepare_node_succeeded
+    from yian.compile.model import START_ID, END_ID
+    from yian.runtime.state import commit_prepared, prepare_node_started, prepare_node_succeeded
     from tests.engine._graph_builder import _engine, _forward_capture, _graph
 
     for learnable in (False, True):
@@ -1405,11 +1405,11 @@ def _trace_snapshot(trace):
 
 
 def _seed_call_flow(sources=None, extra_nodes=(), *, extra_first=False):
-    from agent_composer.compile.model import START_ID, END_ID, CompiledFlow, Edge
-    from agent_composer.nodes.call import CallNode
-    from agent_composer.nodes.contracts import Parameter
-    from agent_composer.nodes.end import EndNode
-    from agent_composer.nodes.start import StartNode
+    from yian.compile.model import START_ID, END_ID, CompiledFlow, Edge
+    from yian.nodes.call import CallNode
+    from yian.nodes.contracts import Parameter
+    from yian.nodes.end import EndNode
+    from yian.nodes.start import StartNode
     from tests.engine._graph_builder import _graph
 
     sources = {"x": "${input.seed}"} if sources is None else sources
@@ -1428,7 +1428,7 @@ def _seed_call_flow(sources=None, extra_nodes=(), *, extra_first=False):
 
 
 def _nested_growth_flow(kind):
-    from agent_composer.compose import load_flow
+    from yian.compose import load_flow
 
     over = "    over: '${[input.n, input.n]}'\n" if kind == "map" else ""
     seed = "${item}" if kind == "map" else "${input.n}"
@@ -1474,8 +1474,8 @@ output: ${{outer.output}}
 
 @pytest.mark.parametrize("kind", ["call", "map"])
 def test_nested_growth_preserves_authored_paths_and_local_driver_zero(kind):
-    from agent_composer.compile.model import START_ID
-    from agent_composer.nodes.contracts import ExecutionPosition
+    from yian.compile.model import START_ID
+    from yian.nodes.contracts import ExecutionPosition
     from tests.engine._graph_builder import _engine
 
     engine = _engine(_nested_growth_flow(kind), {"n": 9}, learnable=True)
@@ -1514,9 +1514,9 @@ def test_nested_growth_preserves_authored_paths_and_local_driver_zero(kind):
 
 @pytest.mark.parametrize("path", [("absent",), (9, "x")])
 def test_missing_seed_selector_is_an_accepted_growth_failure(path):
-    from agent_composer.compile.expand import build_grow
-    from agent_composer.nodes.contracts import SeedConnection
-    from agent_composer.runtime.log import NodeFailedRecord
+    from yian.compile.expand import build_grow
+    from yian.nodes.contracts import SeedConnection
+    from yian.runtime.log import NodeFailedRecord
     from tests.engine._graph_builder import _engine
 
     def invalid_selector(spawner, seed):
@@ -1538,11 +1538,11 @@ def test_missing_seed_selector_is_an_accepted_growth_failure(path):
 def test_growth_recipe_tampering_fails_replay_before_apply(change):
     import copy
     from dataclasses import replace
-    from agent_composer.compile.expand import build_grow
-    from agent_composer.compile.manifest import expansion_digest
-    from agent_composer.compile.model import START_ID
-    from agent_composer.nodes.contracts import ChildFlowBoundary, SeedConnection
-    from agent_composer.runtime.state import RunState, _replay_records, prepare_record
+    from yian.compile.expand import build_grow
+    from yian.compile.manifest import expansion_digest
+    from yian.compile.model import START_ID
+    from yian.nodes.contracts import ChildFlowBoundary, SeedConnection
+    from yian.runtime.state import RunState, _replay_records, prepare_record
     from tests.engine._graph_builder import _engine
 
     engine = _engine(_seed_call_flow(), {"seed": 7}, learnable=True)
@@ -1579,8 +1579,8 @@ def test_growth_recipe_tampering_fails_replay_before_apply(change):
     ("${peer.output}", 11, True),
 ])
 def test_reference_looking_seed_strings_use_actual_forward_binding(seed, expected, early_peer):
-    from agent_composer.compile.model import START_ID
-    from agent_composer.expr.lineage import route_feedback
+    from yian.compile.model import START_ID
+    from yian.expr.lineage import route_feedback
     from tests.engine._fakes import FuncNode
     from tests.engine._graph_builder import _engine
 
@@ -1609,8 +1609,8 @@ def test_reference_looking_seed_strings_use_actual_forward_binding(seed, expecte
 
 
 def test_incomplete_child_binding_joins_only_safe_captured_fields():
-    from agent_composer.compile.model import START_ID
-    from agent_composer.runtime.log import NodeFailedRecord
+    from yian.compile.model import START_ID
+    from yian.runtime.log import NodeFailedRecord
     from tests.engine._graph_builder import _engine
 
     engine = _engine(_seed_call_flow({"safe": "${input.safe}", "x": "${input.seed}"}),
@@ -1631,9 +1631,9 @@ def test_incomplete_child_binding_joins_only_safe_captured_fields():
 
 
 def test_seed_connections_wait_for_append_and_survive_unfinished_start_retry(monkeypatch):
-    from agent_composer.compile.model import START_ID
-    from agent_composer.runtime.state import commit_prepared, prepare_expanded, prepare_run_resumed
-    from agent_composer.runtime.trace import capture_bindings
+    from yian.compile.model import START_ID
+    from yian.runtime.state import commit_prepared, prepare_expanded, prepare_run_resumed
+    from yian.runtime.trace import capture_bindings
     from tests.engine._graph_builder import _engine
 
     engine = _engine(_seed_call_flow(), {"seed": 7}, learnable=True)
@@ -1675,15 +1675,15 @@ def test_seed_connections_wait_for_append_and_survive_unfinished_start_retry(mon
 @pytest.mark.parametrize("skip_first", [False, True])
 def test_pruned_seed_connections_do_not_leak_into_reused_node_ids(skip_first):
     import copy
-    from agent_composer.compile.expand import call_subgraph, clone_child
-    from agent_composer.compile.model import START_ID, END_ID, Edge, Flow
-    from agent_composer.events import NodeExpanded, RunSucceeded
-    from agent_composer.nodes.base import Grow, Node, NodeKind
-    from agent_composer.nodes.call import CallNode
-    from agent_composer.nodes.case import CaseNode
-    from agent_composer.nodes.contracts import ChildFlowBoundary, Parameter, SeedConnection
-    from agent_composer.nodes.end import EndNode
-    from agent_composer.nodes.start import StartNode
+    from yian.compile.expand import call_subgraph, clone_child
+    from yian.compile.model import START_ID, END_ID, Edge, Flow
+    from yian.events import NodeExpanded, RunSucceeded
+    from yian.nodes.base import Grow, Node, NodeKind
+    from yian.nodes.call import CallNode
+    from yian.nodes.case import CaseNode
+    from yian.nodes.contracts import ChildFlowBoundary, Parameter, SeedConnection
+    from yian.nodes.end import EndNode
+    from yian.nodes.start import StartNode
     from tests.engine._graph_builder import _engine, _graph
 
     shared_start, shared_end = f"shared/{START_ID}", f"shared/{END_ID}"
@@ -1753,10 +1753,10 @@ def test_pruned_seed_connections_do_not_leak_into_reused_node_ids(skip_first):
 
 
 def test_call_seed_routes_survive_materialized_values():
-    from agent_composer.compile.model import START_ID, END_ID
-    from agent_composer.compose import load_flow
-    from agent_composer.expr.lineage import route_feedback
-    from agent_composer.nodes.contracts import ExecutionPosition
+    from yian.compile.model import START_ID, END_ID
+    from yian.compose import load_flow
+    from yian.expr.lineage import route_feedback
+    from yian.nodes.contracts import ExecutionPosition
     from tests.engine._graph_builder import _engine
 
     flow = load_flow("""
@@ -1804,10 +1804,10 @@ output: ${spawn.output}
 
 @pytest.mark.parametrize("kind", ["call", "map"])
 def test_null_materialized_seed_keeps_its_selected_source(kind):
-    from agent_composer.compile.model import START_ID, END_ID
-    from agent_composer.expr.lineage import route_feedback
-    from agent_composer.nodes.contracts import Parameter
-    from agent_composer.nodes.map import MapNode
+    from yian.compile.model import START_ID, END_ID
+    from yian.expr.lineage import route_feedback
+    from yian.nodes.contracts import Parameter
+    from yian.nodes.map import MapNode
     from tests.engine._graph_builder import _engine, _graph
 
     flow = _seed_call_flow()
@@ -1839,10 +1839,10 @@ def test_null_materialized_seed_keeps_its_selected_source(kind):
     ("${input.left}", {"left": []}, []),
 ])
 def test_map_seed_routes_preserve_equal_item_positions(over, inputs, expected):
-    from agent_composer.compile.model import START_ID, END_ID
-    from agent_composer.expr.lineage import route_feedback
-    from agent_composer.nodes.contracts import ExecutionPosition, Parameter
-    from agent_composer.nodes.map import MapNode
+    from yian.compile.model import START_ID, END_ID
+    from yian.expr.lineage import route_feedback
+    from yian.nodes.contracts import ExecutionPosition, Parameter
+    from yian.nodes.map import MapNode
     from tests.engine._graph_builder import _engine, _graph
     from tests.engine.test_expand import _child_flow
 
@@ -1873,10 +1873,10 @@ def test_map_seed_routes_preserve_equal_item_positions(over, inputs, expected):
 
 @pytest.mark.parametrize("times", [0, 3])
 def test_loop_carried_routes_survive_live_pruning(times):
-    from agent_composer.compile.model import START_ID, END_ID
-    from agent_composer.compose import load_flow
-    from agent_composer.expr.lineage import route_feedback
-    from agent_composer.nodes.contracts import ExecutionPosition
+    from yian.compile.model import START_ID, END_ID
+    from yian.compose import load_flow
+    from yian.expr.lineage import route_feedback
+    from yian.nodes.contracts import ExecutionPosition
     from tests.engine._graph_builder import _engine
 
     loop_policy = f"times: {times}" if times else "while: '${n < 0}'\n    max: 3"
@@ -1937,11 +1937,11 @@ output: ${{spawn.output}}
 @pytest.mark.parametrize("kind", ["output", "route", "failure", "call", "map", "loop", "nested-call", "nested-map"])
 def test_trace_replay_matches_live_accepted_prefixes(kind, monkeypatch):
     import copy
-    from agent_composer.compile.expand import build_grow
-    from agent_composer.compile.model import START_ID, END_ID
-    from agent_composer.compose import load_flow
-    from agent_composer.nodes.case import CaseNode
-    from agent_composer.runtime.state import RunState, _replay_records
+    from yian.compile.expand import build_grow
+    from yian.compile.model import START_ID, END_ID
+    from yian.compose import load_flow
+    from yian.nodes.case import CaseNode
+    from yian.runtime.state import RunState, _replay_records
     from tests.engine._fakes import FuncNode
     from tests.engine._graph_builder import _engine, _graph
 
@@ -1993,7 +1993,7 @@ output: ${{spawn.output}}
     list(engine.run())
     assert engine.state.result is not None
     if kind != "failure":
-        from agent_composer.events import RunSucceeded
+        from yian.events import RunSucceeded
         assert isinstance(engine.state.result, RunSucceeded)
     final_trace = engine.state.trace
     for source, handler in final_trace.backward_handlers.items():
@@ -2007,7 +2007,7 @@ output: ${{spawn.output}}
                 assert item.source in final_trace.sources
                 assert item.node_id not in final_trace.current_writers
 
-    from agent_composer.nodes.code import CodeNode
+    from yian.nodes.code import CodeNode
 
     def reject_rerun(*_args, **_kwargs):
         pytest.fail("replay evaluated a node body")
@@ -2021,8 +2021,8 @@ output: ${{spawn.output}}
 
 
 def test_retry_clears_unfinished_start_identity_and_primed_input_is_replaced():
-    from agent_composer.compile.model import START_ID, END_ID
-    from agent_composer.runtime.state import commit_prepared, prepare_node_started, prepare_run_resumed
+    from yian.compile.model import START_ID, END_ID
+    from yian.runtime.state import commit_prepared, prepare_node_started, prepare_run_resumed
     from tests.engine._fakes import FuncNode
     from tests.engine._graph_builder import _engine, _graph
 
@@ -2043,9 +2043,9 @@ def test_retry_clears_unfinished_start_identity_and_primed_input_is_replaced():
 
 
 def test_capture_canonicalizes_supported_binding_objects():
-    from agent_composer.compile.model import START_ID, END_ID
-    from agent_composer.typesys import FileRef
-    from agent_composer.runtime.log import canonical_seed
+    from yian.compile.model import START_ID, END_ID
+    from yian.typesys import FileRef
+    from yian.runtime.log import canonical_seed
     from tests.engine._fakes import FuncNode
     from tests.engine._graph_builder import _engine, _graph
 
@@ -2060,9 +2060,9 @@ def test_capture_canonicalizes_supported_binding_objects():
 def test_a_lookup_retains_its_entry_when_a_new_writer_commits(monkeypatch):
     from concurrent.futures import ThreadPoolExecutor
     import threading
-    from agent_composer.compile.model import START_ID, END_ID
-    from agent_composer.runtime.state import commit_prepared, prepare_node_started, prepare_node_succeeded
-    from agent_composer.runtime.trace import SourceEntry
+    from yian.compile.model import START_ID, END_ID
+    from yian.runtime.state import commit_prepared, prepare_node_started, prepare_node_succeeded
+    from yian.runtime.trace import SourceEntry
     from tests.engine._fakes import FuncNode
     from tests.engine._graph_builder import _engine, _forward_capture, _graph
 
@@ -2104,10 +2104,10 @@ def test_a_lookup_retains_its_entry_when_a_new_writer_commits(monkeypatch):
     "partial: ${partial()}", "score: ${score()}",
 ])
 def test_codec_preserves_evaluated_route_variants(expression, monkeypatch):
-    from agent_composer.expr.builtins import TEMPLATE_FNS
-    from agent_composer.expr.lineage import ResolvedValue
-    from agent_composer.expr.template import eval_binding
-    from agent_composer.runtime.contracts import ForwardCapture
+    from yian.expr.builtins import TEMPLATE_FNS
+    from yian.expr.lineage import ResolvedValue
+    from yian.expr.template import eval_binding
+    from yian.runtime.contracts import ForwardCapture
 
     monkeypatch.setitem(TEMPLATE_FNS, "partial", lambda: {"kept": [1], "lost": object()})
     monkeypatch.setitem(TEMPLATE_FNS, "score", lambda: float("inf"))
@@ -2136,10 +2136,10 @@ _OPAQUE_ARGUMENTS = [
 def test_codec_preserves_opaque_argument_labels(
     arguments, names, args, kwargs, result, monkeypatch,
 ):
-    from agent_composer.expr.builtins import TEMPLATE_FNS
-    from agent_composer.expr.lineage import route_feedback
-    from agent_composer.expr.template import eval_binding
-    from agent_composer.runtime.contracts import ForwardCapture
+    from yian.expr.builtins import TEMPLATE_FNS
+    from yian.expr.lineage import route_feedback
+    from yian.expr.template import eval_binding
+    from yian.runtime.contracts import ForwardCapture
 
     calls = []
 
@@ -2169,9 +2169,9 @@ def test_codec_preserves_opaque_argument_labels(
 def test_learning_retains_opaque_calls_with_arguments(
     arguments, names, args, kwargs, result, monkeypatch,
 ):
-    from agent_composer.compile.model import START_ID, END_ID
-    from agent_composer.events import RunSucceeded
-    from agent_composer.expr.builtins import TEMPLATE_FNS
+    from yian.compile.model import START_ID, END_ID
+    from yian.events import RunSucceeded
+    from yian.expr.builtins import TEMPLATE_FNS
     from tests.engine._fakes import FuncNode
     from tests.engine._graph_builder import _engine, _graph
 
@@ -2205,9 +2205,9 @@ def test_learning_retains_opaque_calls_with_arguments(
     pytest.param({"kept": 1, "lost": {"\ud800": 1}}, id="nested-key"),
 ])
 def test_learning_retains_valid_results_of_noncanonical_unicode_temporaries(temporary, monkeypatch):
-    from agent_composer.compile.model import START_ID, END_ID
-    from agent_composer.events import RunSucceeded
-    from agent_composer.expr.builtins import TEMPLATE_FNS
+    from yian.compile.model import START_ID, END_ID
+    from yian.events import RunSucceeded
+    from yian.expr.builtins import TEMPLATE_FNS
     from tests.engine._fakes import FuncNode
     from tests.engine._graph_builder import _engine, _graph
 
@@ -2242,10 +2242,10 @@ def test_learning_retains_valid_results_of_noncanonical_unicode_temporaries(temp
 def test_learning_retains_noncanonical_partial_temporary_comparisons(
     temporary, has_snapshot, monkeypatch,
 ):
-    from agent_composer.compile.model import START_ID, END_ID
-    from agent_composer.events import RunSucceeded
-    from agent_composer.expr.builtins import TEMPLATE_FNS
-    from agent_composer.expr.lineage import route_feedback
+    from yian.compile.model import START_ID, END_ID
+    from yian.events import RunSucceeded
+    from yian.expr.builtins import TEMPLATE_FNS
+    from yian.expr.lineage import route_feedback
     from tests.engine._fakes import FuncNode
     from tests.engine._graph_builder import _engine, _graph
 
@@ -2282,7 +2282,7 @@ def test_learning_retains_noncanonical_partial_temporary_comparisons(
 
 @pytest.mark.parametrize("names", [[], ["", "", ""], [1, "value"]])
 def test_codec_rejects_misaligned_or_nonstring_opaque_argument_labels(names):
-    from agent_composer.runtime.contracts import ForwardCapture
+    from yian.runtime.contracts import ForwardCapture
 
     route = ValueRoute("opaque", value_json="3", names=("", "value"),
                        children=(ValueRoute.literal(1), ValueRoute.literal(2)))
@@ -2296,7 +2296,7 @@ def test_codec_rejects_misaligned_or_nonstring_opaque_argument_labels(names):
 
 
 def test_forward_capture_rejects_duplicate_record_names():
-    from agent_composer.runtime.contracts import ForwardCapture
+    from yian.runtime.contracts import ForwardCapture
 
     route = ValueRoute.record((("x", ValueRoute.literal(1)), ("x", ValueRoute.literal(2))))
     with pytest.raises(ValueError, match="unique"):
@@ -2305,7 +2305,7 @@ def test_forward_capture_rejects_duplicate_record_names():
 
 @pytest.mark.parametrize("field", ["children", "path", "scope"])
 def test_codec_revalidates_forged_immutable_capture_fields(field):
-    from agent_composer.runtime.contracts import ForwardCapture
+    from yian.runtime.contracts import ForwardCapture
 
     source = SourceRef("run", 0)
     child = ValueRoute("source", source=source)
@@ -2323,7 +2323,7 @@ def test_codec_revalidates_forged_immutable_capture_fields(field):
 
 
 def test_scope_free_evidence_rejects_recalled_sections():
-    from agent_composer.memory import MemorySection
+    from yian.memory import MemorySection
 
     with pytest.raises(ValueError, match="scope.memories"):
         EvaluationEvidence(None, {}, None, None, (MemorySection("outer", "recalled"),))

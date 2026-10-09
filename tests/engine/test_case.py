@@ -25,17 +25,17 @@ from pathlib import Path
 
 import pytest
 
-from agent_composer.expr.expressions import evaluate_when_record
-from agent_composer.nodes.case import DEFAULT_HANDLE, CaseNode
-from agent_composer.nodes.contracts import PartialRecordContract, ValueContract
-from agent_composer.typesys.values import ValueKind, Type
-from agent_composer.compose.nodes.base import BuildContext
-from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
-from agent_composer.compose.parse.file import CaseDescriptor, parse_file
-from agent_composer.compose.parse.nodes import parse_nodes
-from agent_composer.compose.source import SourceDocument
-from agent_composer.compose.validate.case_exhaustive import check_case_exhaustive
-from agent_composer.diagnostics import SourceRange
+from yian.expr.expressions import evaluate_when_record
+from yian.nodes.case import DEFAULT_HANDLE, CaseNode
+from yian.nodes.contracts import PartialRecordContract, ValueContract
+from yian.typesys.values import ValueKind, Type
+from yian.compose.nodes.base import BuildContext
+from yian.compose.helpers.errors import LoadDiagnostics, LoadError
+from yian.compose.parse.file import CaseDescriptor, parse_file
+from yian.compose.parse.nodes import parse_nodes
+from yian.compose.source import SourceDocument
+from yian.compose.validate.case_exhaustive import check_case_exhaustive
+from yian.diagnostics import SourceRange
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 
@@ -426,7 +426,7 @@ def test_build_emits_reconciled_edges_no_provisional_group():
     # seed 02: the case's own build emits the reconciled __r0 data edge + control edges
     # directly — there is no provisional <case>:<n> group to reconcile away (infer_data_edges
     # emits nothing for a case; the case owns its edges).
-    from agent_composer.compose.edges.data import infer_data_edges
+    from yian.compose.edges.data import infer_data_edges
 
     path = _SEEDS / "02-case.yaml"
     document = SourceDocument.parse(path.read_text(), label=str(path))
@@ -456,7 +456,7 @@ def test_build_emits_reconciled_edges_no_provisional_group():
 def test_on_value_with_double_quote_uses_single_quote_and_routes():
     # an on: match value containing " must compile to a parseable when: (single-quoted,
     # since the grammar has no escape support) and route correctly at eval time.
-    from agent_composer.compose.nodes.case import _quote
+    from yian.compose.nodes.case import _quote
 
     expr = '${__on} == ' + _quote('a"b')
     assert evaluate_when_record(expr, {"__on": 'a"b'}) is True
@@ -466,7 +466,7 @@ def test_on_value_with_double_quote_uses_single_quote_and_routes():
 def test_on_value_with_both_quotes_is_loud_load_error():
     # a value containing BOTH ' and " is unrepresentable in the escape-less grammar
     # -> a loud load error, not a route-time crash.
-    from agent_composer.compose.nodes.case import _quote
+    from yian.compose.nodes.case import _quote
 
     with pytest.raises(LoadError):
         _quote("a'b\"c")

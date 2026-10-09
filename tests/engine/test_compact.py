@@ -13,15 +13,15 @@ and the rejections (non-leaf kind, missing id).
 
 import pytest
 
-from agent_composer.compose import LoadError, load_flow
-from agent_composer.run import run_flow
-from agent_composer.compose.parse.file import (
+from yian.compose import LoadError, load_flow
+from yian.run import run_flow
+from yian.compose.parse.file import (
     flow_nodes_cursor,
     parse_file,
     parse_source_document,
 )
-from agent_composer.compose.parse.nodes import parse_nodes
-from agent_composer.diagnostics import SourceRange
+from yian.compose.parse.nodes import parse_nodes
+from yian.diagnostics import SourceRange
 
 
 # --- a compact CODE flow runs end-to-end (auto-wire + output re-export) ------ #

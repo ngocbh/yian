@@ -12,10 +12,10 @@ from langchain_core.messages import AIMessage
 from langchain_core.tools import StructuredTool
 import pytest
 
-import agent_composer.llm_clients as llm_clients
-import agent_composer.tools as tools
-from agent_composer.compile.model import END_ID, START_ID, GrowthRejected
-from agent_composer.memory import (
+import yian.llm_clients as llm_clients
+import yian.tools as tools
+from yian.compile.model import END_ID, START_ID, GrowthRejected
+from yian.memory import (
     DeclSite,
     EvaluationEvidence,
     EvaluationTrace,
@@ -31,26 +31,26 @@ from agent_composer.memory import (
     ToolCallInteraction,
     ToolResultInteraction,
 )
-from agent_composer.nodes.agent import AgentNode
-from agent_composer.nodes.agent.modes.common import DEFAULT_SYSTEM
-from agent_composer.nodes.base import Grow, Node, NodeKind, Output, Route
-from agent_composer.nodes.contracts import Parameter, ValueContract
-from agent_composer.runtime.eval_node import (
+from yian.nodes.agent import AgentNode
+from yian.nodes.agent.modes.common import DEFAULT_SYSTEM
+from yian.nodes.base import Grow, Node, NodeKind, Output, Route
+from yian.nodes.contracts import Parameter, ValueContract
+from yian.runtime.eval_node import (
     EvaluatedOutcome,
     EvaluationFailure,
     eval_node,
 )
-from agent_composer.runtime.log import (
+from yian.runtime.log import (
     NodeFailedRecord,
     NodeSucceededRecord,
 )
-from agent_composer.runtime.state import (
+from yian.runtime.state import (
     commit_prepared,
     prepare_node_started,
     prepare_node_succeeded,
     prepare_record,
 )
-from agent_composer.typesys import Type, ValueKind, VariablePool
+from yian.typesys import Type, ValueKind, VariablePool
 from tests.engine._fakes import FuncNode
 from tests.engine._graph_builder import _forward_capture, _engine, _graph
 
@@ -359,15 +359,15 @@ def test_scope_free_model_evidence_is_accepted_with_forward_capture(monkeypatch)
     assert record.evidence.interactions == (ModelTextInteraction("done"),)
     assert record.forward_capture.bound_inputs == {}
     assert record.forward_capture.scope.static_path == (node.id,)
-    from agent_composer.runtime.learning import project_outcome_episodes
+    from yian.runtime.learning import project_outcome_episodes
 
     assert project_outcome_episodes(engine.state.run_id, record) == ()
 
 
 @pytest.mark.parametrize("stage", ["recall", "factory", "model", "success"])
 def test_actual_render_capture_survives_later_failures_without_fabricating_evidence(monkeypatch, stage):
-    from agent_composer.compose.helpers.types import read_variables
-    from agent_composer.memory import MemoryRecallError, MemorySection
+    from yian.compose.helpers.types import read_variables
+    from yian.memory import MemoryRecallError, MemorySection
 
     node = AgentNode("work", prompt="${instruction}: ${topic}", variables=read_variables({
         "instruction": "str = Summarize clearly",

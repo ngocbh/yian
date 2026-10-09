@@ -1,6 +1,6 @@
 import pytest
 
-from agent_composer.compose import load_flow, LoadError
+from yian.compose import load_flow, LoadError
 
 _HASH = """
 id: f

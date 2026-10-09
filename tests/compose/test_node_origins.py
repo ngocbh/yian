@@ -4,15 +4,15 @@ from copy import deepcopy
 
 import pytest
 
-from agent_composer.compile.model import END_ID, START_ID
-from agent_composer.compose import load_flow
-from agent_composer.compose.build.pipeline import _assemble
-from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.loader import _CallableScope
-from agent_composer.compose.parse.file import flow_nodes_cursor, parse_file
-from agent_composer.compose.source import SourceCursor, SourceDocument
-from agent_composer.diagnostics import OriginRef, OriginResolver
-from agent_composer.nodes.base import Node
+from yian.compile.model import END_ID, START_ID
+from yian.compose import load_flow
+from yian.compose.build.pipeline import _assemble
+from yian.compose.helpers.errors import LoadError
+from yian.compose.loader import _CallableScope
+from yian.compose.parse.file import flow_nodes_cursor, parse_file
+from yian.compose.source import SourceCursor, SourceDocument
+from yian.diagnostics import OriginRef, OriginResolver
+from yian.nodes.base import Node
 
 
 _SHARED_NODE_IDS = """id: shared-origins

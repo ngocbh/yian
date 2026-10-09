@@ -1,8 +1,8 @@
 """_answer_schema derives a lightweight, lossless answer schema from an output Type."""
 
-from agent_composer.compose.nodes.human_input import _answer_schema
-from agent_composer.compose.helpers.types import read_type
-from agent_composer.typesys.types import read_typedefs
+from yian.compose.nodes.human_input import _answer_schema
+from yian.compose.helpers.types import read_type
+from yian.typesys.types import read_typedefs
 
 _REG = read_typedefs({})
 

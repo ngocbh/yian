@@ -2,16 +2,16 @@
 
 import pytest
 
-import agent_composer.nodes.agent.node as agent_module
-from agent_composer.compose.helpers.types import read_variables
-from agent_composer.expr import ExpressionError
-from agent_composer.nodes.agent import AgentNode
-from agent_composer.nodes.base import Node, Output
-from agent_composer.nodes.contracts import Parameter
+import yian.nodes.agent.node as agent_module
+from yian.compose.helpers.types import read_variables
+from yian.expr import ExpressionError
+from yian.nodes.agent import AgentNode
+from yian.nodes.base import Node, Output
+from yian.nodes.contracts import Parameter
 
 
 def _retained_agent(node, inputs=None, **engine_options):
-    from agent_composer.compile.model import START_ID, FlowOutput
+    from yian.compile.model import START_ID, FlowOutput
     from tests.engine._graph_builder import _engine, _graph
 
     supplied = inputs or {}
@@ -91,7 +91,7 @@ def test_retained_render_locals_are_detached_before_render_and_model_callbacks(m
 
 @pytest.mark.parametrize("stage", ["resolve", "render", "empty"])
 def test_retained_agent_distinguishes_partial_and_empty_render_locals(monkeypatch, stage):
-    from agent_composer.runtime.log import NodeFailedRecord
+    from yian.runtime.log import NodeFailedRecord
 
     node = AgentNode("writer", prompt="" if stage == "empty" else "${note}",
                      variables=[] if stage == "empty" else read_variables({"note": "Optional[str] = null"}, {}))
@@ -115,9 +115,9 @@ def test_retained_agent_distinguishes_partial_and_empty_render_locals(monkeypatc
 
 
 def test_retained_agent_canonicalizes_supported_file_variable_without_changing_default(monkeypatch):
-    from agent_composer.nodes.contracts import ValueContract
-    from agent_composer.runtime.log import RecordEnvelope, SCHEMA_VERSION, decode_record, encode_record
-    from agent_composer.typesys import FileRef, Type, ValueKind
+    from yian.nodes.contracts import ValueContract
+    from yian.runtime.log import RecordEnvelope, SCHEMA_VERSION, decode_record, encode_record
+    from yian.typesys import FileRef, Type, ValueKind
 
     file = FileRef(uri="file:///tmp/artifact.txt")
     node = AgentNode("writer", prompt="Inspect the attachment.", variables=[
@@ -136,9 +136,9 @@ def test_retained_agent_canonicalizes_supported_file_variable_without_changing_d
 
 @pytest.mark.parametrize("number", [float("inf"), float("-inf"), float("nan")])
 def test_render_capture_rejects_nonfinite_variable_defaults_without_changing_capture_off(monkeypatch, number):
-    from agent_composer.nodes.contracts import ValueContract
-    from agent_composer.runtime.eval_node import eval_node
-    from agent_composer.typesys import Type, ValueKind, VariablePool
+    from yian.nodes.contracts import ValueContract
+    from yian.runtime.eval_node import eval_node
+    from yian.typesys import Type, ValueKind, VariablePool
 
     node = AgentNode("writer", prompt="ready", variables=[
         Parameter("score", ValueContract(Type(ValueKind.NUMBER)), has_default=True, default=number),
@@ -154,10 +154,10 @@ def test_render_capture_rejects_nonfinite_variable_defaults_without_changing_cap
 @pytest.mark.parametrize("number", [float("inf"), float("-inf"), float("nan")])
 def test_retained_agent_rejects_nonfinite_variable_model_extras_before_acceptance(monkeypatch, number):
     from pydantic import BaseModel, ConfigDict
-    from agent_composer.compile.model import START_ID, END_ID
-    from agent_composer.nodes.contracts import ValueContract
-    from agent_composer.runtime.log import NodeStartedRecord
-    from agent_composer.typesys import Type, ValueKind
+    from yian.compile.model import START_ID, END_ID
+    from yian.nodes.contracts import ValueContract
+    from yian.runtime.log import NodeStartedRecord
+    from yian.typesys import Type, ValueKind
     from tests.engine._graph_builder import _engine, _graph
 
     class Extras(BaseModel):
@@ -180,8 +180,8 @@ def test_retained_agent_rejects_nonfinite_variable_model_extras_before_acceptanc
 
 @pytest.mark.parametrize("phase", ["domains", "copy"])
 def test_render_capture_preparation_faults_escape_with_original_host_identity(monkeypatch, phase):
-    from agent_composer.runtime.eval_node import eval_node
-    from agent_composer.typesys import VariablePool
+    from yian.runtime.eval_node import eval_node
+    from yian.typesys import VariablePool
 
     expected = MemoryError("capture preparation failed")
     node = AgentNode("writer", prompt="${settings}", variables=read_variables({
@@ -210,8 +210,8 @@ def test_render_capture_preparation_faults_escape_with_original_host_identity(mo
 
 
 def test_retained_agent_keeps_early_binding_unavailable_and_capture_off_dormant(monkeypatch):
-    from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
-    from agent_composer.typesys import VariablePool
+    from yian.runtime.eval_node import EvaluationFailure, eval_node
+    from yian.typesys import VariablePool
 
     node = AgentNode("writer", prompt="${topic}", variables=read_variables({"tone": "str = concise"}, {}))
     node.params = [Parameter("topic", required=True)]
@@ -349,9 +349,9 @@ def test_direct_variable_input_overlap_is_rejected_before_render_or_mode(monkeyp
 def test_temperature_variable_renders_independently_of_effective_model_configuration(monkeypatch):
     from langchain_core.messages import AIMessage
 
-    import agent_composer.llm_clients as llm_clients
-    from agent_composer.compose import load_flow
-    from agent_composer.run import run_flow
+    import yian.llm_clients as llm_clients
+    from yian.compose import load_flow
+    from yian.run import run_flow
     from tests.engine.test_agent import _FakeChat
 
     loaded = load_flow("""id: variable_temperature
@@ -400,8 +400,8 @@ output: ${writer.output}
 
 
 def test_ordinary_run_keeps_variables_out_of_wiring_and_pool_and_backward_dormant(monkeypatch):
-    from agent_composer.compile.model import END_ID, START_ID
-    from agent_composer.compose import load_flow
+    from yian.compile.model import END_ID, START_ID
+    from yian.compose import load_flow
     from tests.engine._graph_builder import _engine
 
     flow = load_flow("""id: local_render

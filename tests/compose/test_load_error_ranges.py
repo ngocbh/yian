@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from agent_composer.compose import LoadError, load_flow
-from agent_composer.compose.helpers.errors import LoadDiagnostics
-from agent_composer.compose.source import SourceDocument
+from yian.compose import LoadError, load_flow
+from yian.compose.helpers.errors import LoadDiagnostics
+from yian.compose.source import SourceDocument
 
 
 _ERRORS = Path(__file__).resolve().parents[1] / "seeds" / "errors"

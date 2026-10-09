@@ -6,12 +6,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from agent_composer.compile.manifest import (
+from yian.compile.manifest import (
     expansion_digest,
     flow_fingerprint,
     flow_manifest,
 )
-from agent_composer.compile.model import (
+from yian.compile.model import (
     END_ID,
     START_ID,
     CompiledFlow,
@@ -19,27 +19,27 @@ from agent_composer.compile.model import (
     Flow,
     FlowOutput,
 )
-from agent_composer.compose.build.boundary import synthesize_boundary_graph
-from agent_composer.compose.build.inline_inputs import infer_inline_binding_type
-from agent_composer.compose.nodes.base import BuildContext, BuildResult
-from agent_composer.compose.nodes.call import CallDescriptor
-from agent_composer.compose.nodes.loop import LoopDescriptor
-from agent_composer.compose.nodes.map import MapDescriptor
-from agent_composer.compose.edges.data import infer_data_edges
-from agent_composer.compose.edges.producers import _binding_producers
-from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.helpers.output_contracts import (
+from yian.compose.build.boundary import synthesize_boundary_graph
+from yian.compose.build.inline_inputs import infer_inline_binding_type
+from yian.compose.nodes.base import BuildContext, BuildResult
+from yian.compose.nodes.call import CallDescriptor
+from yian.compose.nodes.loop import LoopDescriptor
+from yian.compose.nodes.map import MapDescriptor
+from yian.compose.edges.data import infer_data_edges
+from yian.compose.edges.producers import _binding_producers
+from yian.compose.helpers.errors import LoadError
+from yian.compose.helpers.output_contracts import (
     resolve_output_binding_contract,
 )
-from agent_composer.compose.nodes.case import _data_edges as case_data_edges
-from agent_composer.compose.nodes.resolver import ChildSignature, child_signature
-from agent_composer.compose.validate.call_types import check_call_map_types
-from agent_composer.compose.validate.loop_types import check_loop_type_contract
-from agent_composer.compose.validate.references import validate_references
-from agent_composer.compose import load_flow
-from agent_composer.diagnostics import OriginRef
-from agent_composer.nodes.base import Node
-from agent_composer.nodes.contracts import (
+from yian.compose.nodes.case import _data_edges as case_data_edges
+from yian.compose.nodes.resolver import ChildSignature, child_signature
+from yian.compose.validate.call_types import check_call_map_types
+from yian.compose.validate.loop_types import check_loop_type_contract
+from yian.compose.validate.references import validate_references
+from yian.compose import load_flow
+from yian.diagnostics import OriginRef
+from yian.nodes.base import Node
+from yian.nodes.contracts import (
     Assertion,
     Binding,
     ContractOrigins,
@@ -47,9 +47,9 @@ from agent_composer.nodes.contracts import (
     PartialRecordContract,
     ValueContract,
 )
-from agent_composer.nodes.end import EndNode
-from agent_composer.nodes.start import StartNode
-from agent_composer.typesys import Type, ValueKind
+from yian.nodes.end import EndNode
+from yian.nodes.start import StartNode
+from yian.typesys import Type, ValueKind
 
 
 def _origin(key: str) -> OriginRef:

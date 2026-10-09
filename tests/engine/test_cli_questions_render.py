@@ -4,7 +4,7 @@
 question's `header`. The `ask` callable is scripted here so the test runs without a TTY.
 """
 
-from agent_composer.cli.run import assemble_question_answers
+from yian.cli.run import assemble_question_answers
 
 
 def test_single_select_assembly():

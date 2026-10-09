@@ -8,8 +8,8 @@ import sys
 
 import pytest
 
-from agent_composer.memory.session import SessionMemory
-from agent_composer.runtime.log import decode_record
+from yian.memory.session import SessionMemory
+from yian.runtime.log import decode_record
 
 _FLOW = """id: cli-session-restart
 name: cli_session_restart
@@ -30,9 +30,9 @@ _CHILD = """
 import os
 import sys
 from langchain_core.messages import AIMessage, HumanMessage
-import agent_composer.llm_clients as clients
-import agent_composer.cli.run as run_cli
-from agent_composer.cli import main
+import yian.llm_clients as clients
+import yian.cli.run as run_cli
+from yian.cli import main
 
 crash = sys.argv.pop(1) == 'crash'
 class Model:

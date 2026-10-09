@@ -8,20 +8,20 @@ from types import SimpleNamespace
 
 import pytest
 
-from agent_composer.compose import LoadError, load_flow
-from agent_composer.compose.helpers.errors import LoadDiagnostics
-from agent_composer.compose.validate.asserts import validate_node_asserts
-from agent_composer.diagnostics import OriginRef, SourceRange
-from agent_composer.nodes.base import Node
-from agent_composer.nodes.contracts import (
+from yian.compose import LoadError, load_flow
+from yian.compose.helpers.errors import LoadDiagnostics
+from yian.compose.validate.asserts import validate_node_asserts
+from yian.diagnostics import OriginRef, SourceRange
+from yian.nodes.base import Node
+from yian.nodes.contracts import (
     Assertion,
     ContractOrigins,
     Parameter,
     PartialRecordContract,
     ValueContract,
 )
-from agent_composer.run import run_flow
-from agent_composer.typesys.values import Type, ValueKind
+from yian.run import run_flow
+from yian.typesys.values import Type, ValueKind
 
 
 def _flow(asserts: list[str], *, input_decl="n: ${input.v}", outputs="int") -> str:

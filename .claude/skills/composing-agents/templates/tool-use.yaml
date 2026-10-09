@@ -2,7 +2,7 @@
 # A `tool` uses `tool_id:` + `input:` (a tool declares no output:). The id must be
 # registered in Python before the flow runs:
 #
-#   from agent_composer.tools import register_tool
+#   from yian.tools import register_tool
 #
 #   @register_tool("get_facts")
 #   def get_facts(query: str, limit: int = 5) -> list[dict]:

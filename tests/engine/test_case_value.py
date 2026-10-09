@@ -17,16 +17,16 @@ position, a condition, or an assert. End-to-end coverage loads and runs CODE bra
 
 import pytest
 
-from agent_composer.compose import LoadError, expand_case_outputs, load_flow
-from agent_composer.compose.helpers.errors import LoadDiagnostics
-from agent_composer.run import run_flow
-from agent_composer.compose.parse.file import (
+from yian.compose import LoadError, expand_case_outputs, load_flow
+from yian.compose.helpers.errors import LoadDiagnostics
+from yian.run import run_flow
+from yian.compose.parse.file import (
     CaseDescriptor,
     CodeDescriptor,
     HumanInputDescriptor,
     LoopDescriptor,
 )
-from agent_composer.diagnostics import SourceRange
+from yian.diagnostics import SourceRange
 
 
 # --------------------------------------------------------------------------- #
@@ -123,7 +123,7 @@ def test_multiple_case_values_in_one_binding_both_expand():
 
 
 def test_case_value_in_tool_inputs_expands():
-    from agent_composer.compose.parse.file import ToolDescriptor
+    from yian.compose.parse.file import ToolDescriptor
 
     descs = {
         "gate": _gate(),

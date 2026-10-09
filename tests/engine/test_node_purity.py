@@ -17,9 +17,9 @@ from pathlib import Path
 
 import pytest
 
-from agent_composer.compile.model import CompiledFlow
-from agent_composer.compose import load_flow
-from agent_composer.nodes.contracts import Binding
+from yian.compile.model import CompiledFlow
+from yian.compose import load_flow
+from yian.nodes.contracts import Binding
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 

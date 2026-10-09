@@ -2,10 +2,10 @@ from pathlib import Path
 
 import pytest
 
-from agent_composer.compile.manifest import flow_manifest
-from agent_composer.compose.loader import load_flow
-from agent_composer.nodes.start.node import StartNode
-from agent_composer.run import resume_flow, run_flow
+from yian.compile.manifest import flow_manifest
+from yian.compose.loader import load_flow
+from yian.nodes.start.node import StartNode
+from yian.run import resume_flow, run_flow
 
 _REMOVED_FIELDS = {
     "range",

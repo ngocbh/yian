@@ -11,8 +11,8 @@ from typing import Any
 
 import pytest
 
-from agent_composer.diagnostics import OriginRef
-from agent_composer.memory import (
+from yian.diagnostics import OriginRef
+from yian.memory import (
     DeclSite,
     EvaluationEvidence,
     JsonObject,
@@ -38,7 +38,7 @@ from agent_composer.memory import (
     RecallContext,
     ToolCallInteraction,
 )
-from agent_composer.runtime.contracts import BackwardFailure, MemoryProposal
+from yian.runtime.contracts import BackwardFailure, MemoryProposal
 
 
 def _decl(config: Any, origin: OriginRef | None = None) -> MemoryDecl:
@@ -63,8 +63,8 @@ def test_identity_values_are_frozen_structured_products() -> None:
 
 def test_memory_scope_has_no_boundary() -> None:
     """START and END are marked by ExecutionScope; memory scopes carry no boundary."""
-    import agent_composer.memory as memory
-    import agent_composer.memory.contracts as contracts
+    import yian.memory as memory
+    import yian.memory.contracts as contracts
 
     assert not hasattr(memory, "MemoryBoundary")
     assert not hasattr(memory, "MemoryBoundaryKind")
@@ -615,18 +615,18 @@ def test_importing_memory_contracts_does_not_load_heavy_backends() -> None:
     script = """
 import sys
 before = set(sys.modules)
-import agent_composer.memory
+import yian.memory
 loaded = set(sys.modules) - before
 for forbidden in (
     'langchain',
     'pydantic',
-    'agent_composer.llm_clients',
-    'agent_composer.nodes',
-    'agent_composer.compile',
-    'agent_composer.compose',
-    'agent_composer.runtime',
-    'agent_composer.run',
-    'agent_composer.cli',
+    'yian.llm_clients',
+    'yian.nodes',
+    'yian.compile',
+    'yian.compose',
+    'yian.runtime',
+    'yian.run',
+    'yian.cli',
 ):
     assert not any(
         name == forbidden or name.startswith(forbidden + '.')
@@ -647,7 +647,7 @@ for forbidden in (
     ("succeeded", "commit-1", False), ("failed", "commit-1", True),
 ])
 def test_policy_commit_outcome_keeps_protocol_identity_and_backend_hints(status, commit_id, has_failure):
-    from agent_composer.memory import PolicyCommitOutcome
+    from yian.memory import PolicyCommitOutcome
 
     failure = MemoryOperationFailure("backend-stage", "retry", "Try later.", True) if has_failure else None
     outcome = PolicyCommitOutcome("history", status, commit_id, failure)
@@ -659,7 +659,7 @@ def test_policy_commit_outcome_keeps_protocol_identity_and_backend_hints(status,
 
 
 def test_learning_completion_is_independent_of_retryability_and_policy_confirmation():
-    from agent_composer.memory import PolicyCommitOutcome
+    from yian.memory import PolicyCommitOutcome
 
     failure = LearningFailure("history", "commit", MemoryOperationFailure("backend", "busy", "Retry.", True))
     succeeded = PolicyCommitOutcome("history", "succeeded", "commit-1")
@@ -684,7 +684,7 @@ def test_learning_completion_is_independent_of_retryability_and_policy_confirmat
     ("failed", None, True), ("failed", "commit-1", False), ("other", None, False),
 ])
 def test_policy_commit_outcome_rejects_inconsistent_optional_fields(status, commit_id, with_failure):
-    from agent_composer.memory import PolicyCommitOutcome
+    from yian.memory import PolicyCommitOutcome
 
     failure = MemoryOperationFailure("backend", "error", "Failed.", False) if with_failure else None
     with pytest.raises(ValueError):
@@ -694,7 +694,7 @@ def test_policy_commit_outcome_rejects_inconsistent_optional_fields(status, comm
 @pytest.mark.parametrize("field", ["memory", "status", "commit_id"])
 @pytest.mark.parametrize("invalid", ["", "\ud800", 1, True])
 def test_policy_commit_outcome_requires_exact_valid_unicode_identities(field, invalid):
-    from agent_composer.memory import PolicyCommitOutcome
+    from yian.memory import PolicyCommitOutcome
 
     values = {"memory": "history", "status": "unknown", "commit_id": "commit-1"}
     values[field] = invalid
@@ -703,7 +703,7 @@ def test_policy_commit_outcome_requires_exact_valid_unicode_identities(field, in
 
 
 def test_learning_result_revalidates_exact_nested_policy_carriers():
-    from agent_composer.memory import PolicyCommitOutcome
+    from yian.memory import PolicyCommitOutcome
 
     first = PolicyCommitOutcome("second", "unknown", "commit-2")
     second = PolicyCommitOutcome("first", "unrequested")
@@ -826,9 +826,9 @@ def test_session_protocol_recalls_and_learns_without_frames() -> None:
 
 
 def test_frame_types_are_gone() -> None:
-    import agent_composer.memory as memory
-    import agent_composer.memory.contracts as contracts
-    import agent_composer.runtime.contracts as runtime_contracts
+    import yian.memory as memory
+    import yian.memory.contracts as contracts
+    import yian.runtime.contracts as runtime_contracts
 
     for name in (
         "MemoryFrame",

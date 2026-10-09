@@ -4,9 +4,9 @@ import copy
 
 import pytest
 
-from agent_composer.llm_clients.config import merge_llm_config
-from agent_composer.compose.loader import load_flow
-from agent_composer.compile.llm_cascade import (
+from yian.llm_clients.config import merge_llm_config
+from yian.compose.loader import load_flow
+from yian.compile.llm_cascade import (
     apply_effective_llm_map,
     resolve_llm_cascade,
 )
@@ -417,18 +417,18 @@ def test_shared_child_is_dealiased_per_parent_provider():
 
 
 def test_effective_map_resolves_environment_defaults_once(monkeypatch):
-    import agent_composer.run as run_mod
-    import agent_composer.llm_clients.factory as factory_mod
+    import yian.run as run_mod
+    import yian.llm_clients.factory as factory_mod
 
-    from agent_composer.llm_clients.connection import connection_snapshot
+    from yian.llm_clients.connection import connection_snapshot
     calls = []
-    monkeypatch.setenv("AGENT_COMPOSER_DEFAULT_PROVIDER", "AZURE")
-    monkeypatch.setenv("AGENT_COMPOSER_DEFAULT_MODEL", "environment-model")
+    monkeypatch.setenv("YIAN_DEFAULT_PROVIDER", "AZURE")
+    monkeypatch.setenv("YIAN_DEFAULT_MODEL", "environment-model")
 
     def snapshot():
         calls.append("snapshot")
         result = connection_snapshot()
-        monkeypatch.setenv("AGENT_COMPOSER_DEFAULT_MODEL", "later-model")
+        monkeypatch.setenv("YIAN_DEFAULT_MODEL", "later-model")
         return result
 
     seen = []
@@ -464,8 +464,8 @@ def test_effective_map_resolves_environment_defaults_once(monkeypatch):
 
 
 def test_replay_uses_logged_map_after_environment_changes(monkeypatch):
-    import agent_composer._settings as settings
-    import agent_composer.compile.llm_cascade as cascade_mod
+    import yian._settings as settings
+    import yian.compile.llm_cascade as cascade_mod
 
     original = load_flow(_SHARED_LEAF_FLOW)
     recorded = resolve_llm_cascade(
@@ -474,8 +474,8 @@ def test_replay_uses_logged_map_after_environment_changes(monkeypatch):
         defaults={"provider": "openai", "model": "recorded-model"},
         provider_models={"anthropic": "recorded-anthropic"},
     )
-    monkeypatch.setenv("AGENT_COMPOSER_DEFAULT_PROVIDER", "anthropic")
-    monkeypatch.setenv("AGENT_COMPOSER_DEFAULT_MODEL", "changed-model")
+    monkeypatch.setenv("YIAN_DEFAULT_PROVIDER", "anthropic")
+    monkeypatch.setenv("YIAN_DEFAULT_MODEL", "changed-model")
 
     def unexpected_settings_read():
         raise AssertionError("replay must not read process LLM defaults")

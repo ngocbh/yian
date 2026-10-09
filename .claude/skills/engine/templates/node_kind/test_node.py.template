@@ -4,8 +4,8 @@ Lives in tests/engine/; run with `PYTHONPATH=src pytest tests/engine/test_xxx.py
 Write the failing test FIRST (per CLAUDE.md: code + at least one test + green).
 """
 
-from agent_composer.nodes.base import Output
-from agent_composer.nodes.xxx import XxxNode
+from yian.nodes.base import Output
+from yian.nodes.xxx import XxxNode
 
 
 def test_xxx_runs_from_bound_record():
@@ -20,8 +20,8 @@ def test_xxx_runs_from_bound_record():
 
 def test_xxx_end_to_end():
     # Load a tiny flow that uses the kind, run it, assert the terminal value.
-    from agent_composer import load_flow
-    from agent_composer.run import run_flow
+    from yian import load_flow
+    from yian.run import run_flow
 
     flow = """
 id: t

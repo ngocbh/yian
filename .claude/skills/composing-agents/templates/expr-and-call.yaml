@@ -16,7 +16,7 @@
 #  A string `:-` default must be quoted: `${x:-"n/a"}`; a bare word reads a variable.)
 #
 # Run it with:
-#   composer run expr-and-call.yaml --input topic="tabs vs spaces" --input bonus=3
+#   yian run expr-and-call.yaml --input topic="tabs vs spaces" --input bonus=3
 
 id: expr-and-call
 name: expr_and_call

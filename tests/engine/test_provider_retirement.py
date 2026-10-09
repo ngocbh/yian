@@ -2,11 +2,11 @@
 
 import pytest
 
-from agent_composer.compose import load_flow
-from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.llm_clients.config import LLMConfig, SUPPORTED_LLM_PROVIDERS
-from agent_composer.llm_clients.factory import create_llm_client
-from agent_composer.nodes.agent import AgentNode
+from yian.compose import load_flow
+from yian.compose.helpers.errors import LoadError
+from yian.llm_clients.config import LLMConfig, SUPPORTED_LLM_PROVIDERS
+from yian.llm_clients.factory import create_llm_client
+from yian.nodes.agent import AgentNode
 
 
 @pytest.mark.parametrize(
@@ -18,7 +18,7 @@ from agent_composer.nodes.agent import AgentNode
     ],
 )
 def test_retired_native_config_points_to_unified_auth(selection):
-    with pytest.raises(ValueError, match="composer auth openai"):
+    with pytest.raises(ValueError, match="yian auth openai"):
         LLMConfig(**selection)
 
 
@@ -29,12 +29,12 @@ def test_codex_is_not_a_separate_provider_route():
 
 
 def test_retired_tool_marker_is_not_an_implicit_tool_grant():
-    with pytest.raises(ValueError, match="grant registered Composer tools explicitly"):
+    with pytest.raises(ValueError, match="grant registered Yian tools explicitly"):
         AgentNode("agent", tools=["builtin_tools"])
 
 
 def test_old_native_yaml_fails_during_loading():
-    with pytest.raises(LoadError, match="composer auth openai"):
+    with pytest.raises(LoadError, match="yian auth openai"):
         load_flow("""id: old
 name: old
 nodes:

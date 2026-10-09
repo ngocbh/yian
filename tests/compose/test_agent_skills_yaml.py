@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from agent_composer.compile.manifest import flow_fingerprint
-from agent_composer.compose import load_flow
-from agent_composer.compose.helpers.errors import LoadError
+from yian.compile.manifest import flow_fingerprint
+from yian.compose import load_flow
+from yian.compose.helpers.errors import LoadError
 
 
 def _flow(skills_line: str, mode: str = "tool_calling") -> str:

@@ -13,12 +13,12 @@ from langchain_core.messages import (
 from langchain_core.tools import tool
 from openai import AuthenticationError
 
-from agent_composer.llm_clients.openai_subscription import (
+from yian.llm_clients.openai_subscription import (
     SubscriptionAccess,
     create_subscription_model,
 )
-from agent_composer.nodes.agent.memory import decode_message, encode_message
-from agent_composer.nodes.agent.modes.utils import text_of
+from yian.nodes.agent.memory import decode_message, encode_message
+from yian.nodes.agent.modes.utils import text_of
 from tests.fixtures.openai_responses import ResponsesServer
 
 
@@ -61,7 +61,7 @@ def test_streamed_tools_and_encrypted_continuation_round_trip(monkeypatch):
         assert str(request.url) == "https://chatgpt.com/backend-api/codex/responses"
         assert request.headers["authorization"] == "Bearer synthetic-access"
         assert request.headers["ChatGPT-Account-Id"] == "synthetic-account"
-        assert request.headers["originator"] == "agent-composer"
+        assert request.headers["originator"] == "yian"
         assert body["stream"] is True and body["store"] is False
         assert body["instructions"] == "Use the supplied tool."
         assert "reasoning.encrypted_content" in body["include"]

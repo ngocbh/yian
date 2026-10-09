@@ -16,9 +16,9 @@ adaptive form monkeypatches `model_from_config` with a fake structured-output ch
 
 from pathlib import Path
 
-import agent_composer.llm_clients as llm_clients_mod
-from agent_composer.compose import load_flow
-from agent_composer.run import run_flow
+import yian.llm_clients as llm_clients_mod
+from yian.compose import load_flow
+from yian.run import run_flow
 
 
 # --- static: a literal questions list in the seed ------------------------------------- #

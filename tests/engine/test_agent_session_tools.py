@@ -5,11 +5,11 @@ from pydantic import BaseModel
 from types import SimpleNamespace
 import pytest
 
-import agent_composer.llm_clients as llm_clients
-import agent_composer.tools as tools
-from agent_composer.compose import load_flow
-from agent_composer.memory.session import SessionMemory
-from agent_composer.run import run_flow
+import yian.llm_clients as llm_clients
+import yian.tools as tools
+from yian.compose import load_flow
+from yian.memory.session import SessionMemory
+from yian.run import run_flow
 from tests.engine.test_agent_session import _FLOW, _Model, _view
 
 
@@ -230,8 +230,8 @@ def test_mismatched_responses_call_blocks_are_inert_history(monkeypatch, change)
 
 @pytest.mark.parametrize("stage", ["before_model", "after_model", "after_tool"])
 def test_stop_boundaries_retain_surfaced_tool_truth_before_unwind(monkeypatch, stage):
-    from agent_composer.nodes.agent import AgentNode
-    from agent_composer.nodes.base import _HostStop
+    from yian.nodes.agent import AgentNode
+    from yian.nodes.base import _HostStop
     stops = []
     original_ctx = AgentNode._ctx
     def capture_ctx(node, *args, **kwargs):
@@ -280,8 +280,8 @@ def test_stop_boundaries_retain_surfaced_tool_truth_before_unwind(monkeypatch, s
 
 @pytest.mark.parametrize("stage", ["request", "observe", "encode"])
 def test_tool_memory_fault_cannot_repeat_external_action(monkeypatch, stage):
-    from agent_composer.nodes.agent import memory as conversation
-    from agent_composer.nodes.base import _CapabilityFault
+    from yian.nodes.agent import memory as conversation
+    from yian.nodes.base import _CapabilityFault
     error, calls, observations = ValueError("memory refused"), [], []
     def request(*args, **kwargs):
         if stage == "request":
@@ -308,8 +308,8 @@ def test_tool_memory_fault_cannot_repeat_external_action(monkeypatch, stage):
 
 @pytest.mark.parametrize("host_stop", [False, True])
 def test_tool_error_identity_survives_failed_observation(host_stop):
-    from agent_composer.nodes.agent.memory import invoke_tool_effect
-    from agent_composer.nodes.base import _CapabilityFault, _HostStop
+    from yian.nodes.agent.memory import invoke_tool_effect
+    from yian.nodes.base import _CapabilityFault, _HostStop
     primary = _HostStop("stopped") if host_stop else ValueError("tool failed")
     seen = []
     def invoke():
@@ -339,7 +339,7 @@ def test_session_tool_calls_keep_public_argument_validation(monkeypatch):
 
 
 def test_restored_unclosed_invocation_reports_unknown_completion_without_changing_history():
-    from agent_composer.nodes.agent.memory import history_messages, invoke_model, invoke_tool_effect
+    from yian.nodes.agent.memory import history_messages, invoke_model, invoke_tool_effect
     from tests.engine._session_fakes import harness, request, snapshot
     memory, actions = SessionMemory(), []
     with harness(memory) as opened:

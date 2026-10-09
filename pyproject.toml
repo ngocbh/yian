@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "agent-composer"
+name = "yian"
 version = "0.0.1"
 description = "Bridging the trust gap between humans and agents — a readable, Docker-Compose-shaped YAML surface where both people and LLMs compose, inspect, and refine agent workflows."
 readme = "README.md"
@@ -52,12 +52,12 @@ dev = [
 docs = ["mkdocs-material>=9.5", "mkdocstrings[python]>=0.26", "black>=24.0"]
 
 [project.scripts]
-composer = "agent_composer.cli:main"
+yian = "yian.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/ngocbh/agent-composer"
-Repository = "https://github.com/ngocbh/agent-composer"
-Documentation = "https://agent-composer.readthedocs.io"
+Homepage = "https://github.com/ngocbh/yian"
+Repository = "https://github.com/ngocbh/yian"
+Documentation = "https://yian.readthedocs.io"
 
 [tool.setuptools.packages.find]
 where = ["src"]

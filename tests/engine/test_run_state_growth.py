@@ -7,10 +7,10 @@ from typing import Any
 
 import pytest
 
-import agent_composer.runtime.state as state_module
-from agent_composer.compile.expand import build_grow
-from agent_composer.compile.manifest import expansion_digest
-from agent_composer.compile.model import (
+import yian.runtime.state as state_module
+from yian.compile.expand import build_grow
+from yian.compile.manifest import expansion_digest
+from yian.compile.model import (
     CompiledFlow,
     Edge,
     END_ID,
@@ -18,24 +18,24 @@ from agent_composer.compile.model import (
     GrowthRejected,
     START_ID,
 )
-from agent_composer.runtime.common import NodeState
-from agent_composer.diagnostics import OriginRef
-from agent_composer.events import NodeExpanded
-from agent_composer.nodes.base import Grow, Node, NodeKind
-from agent_composer.nodes.contracts import (
+from yian.runtime.common import NodeState
+from yian.diagnostics import OriginRef
+from yian.events import NodeExpanded
+from yian.nodes.base import Grow, Node, NodeKind
+from yian.nodes.contracts import (
     Binding,
     ContractOrigins,
     Parameter,
     PartialRecordContract,
     ValueContract,
 )
-from agent_composer.nodes.call import CallNode
-from agent_composer.nodes.end import EndNode
-from agent_composer.nodes.loop import LoopNode
-from agent_composer.nodes.map import MapNode
-from agent_composer.nodes.start import StartNode
-from agent_composer.runtime.log import MemoryRunLog, NodeExpandedRecord
-from agent_composer.runtime.state import (
+from yian.nodes.call import CallNode
+from yian.nodes.end import EndNode
+from yian.nodes.loop import LoopNode
+from yian.nodes.map import MapNode
+from yian.nodes.start import StartNode
+from yian.runtime.log import MemoryRunLog, NodeExpandedRecord
+from yian.runtime.state import (
     RunStartData,
     RunState,
     commit_prepared,
@@ -45,7 +45,7 @@ from agent_composer.runtime.state import (
     prepare_record,
     prepare_run_started,
 )
-from agent_composer.typesys import Type, ValueKind, VariablePool
+from yian.typesys import Type, ValueKind, VariablePool
 
 
 _FINGERPRINT = "d" * 64

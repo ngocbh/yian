@@ -5,7 +5,7 @@ The FAILED path is ``raise`` -> ``EvaluationFailure`` (no failure result variant
 rides ``Route`` (tested in ``test_route.py``).
 """
 
-from agent_composer.nodes.base import Grow, Output
+from yian.nodes.base import Grow, Output
 
 
 def test_output_carries_value():

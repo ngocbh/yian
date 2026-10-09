@@ -1,0 +1,89 @@
+# The default `yian chat` flow — a Yian assistant with flow-op tools.
+# Same LOOP-per-turn shape as examples/chat.yaml; the reply agent is tool_calling.
+# A CASE keeps textual exit flow-owned; the body's output bindings rejoin the
+# typed exit record and normal transcript.
+id: yian-chat
+name: composer_chat
+description: An assistant that can discover, read, validate, run, and author Yian flows.
+
+input:
+  opening: str
+
+defs:
+  turn:
+    input:
+      transcript: str
+      exited: bool
+    nodes:
+      ask:
+        kind: human_input
+        prompt: "You:"
+        output: str
+      route:
+        kind: case
+        on: ${ask.output}
+        cases:
+          - when: /exit
+            then: exit_turn
+          - when: /quit
+            then: exit_turn
+        else: reply
+      exit_turn:
+        kind: code
+        input:
+          transcript: ${input.transcript}
+        output:
+          transcript: str
+          exited: bool
+        code: |
+          return {"transcript": inputs["transcript"], "exited": True}
+      reply:
+        kind: agent
+        mode: tool_calling
+        # The engine default is no cap (-1); bound this interactive agent so a runaway
+        # model can't hang the REPL. 100 fits the 5 flow-op tools' exploratory turns.
+        env:
+          max_tool_iterations: 100
+        tools: [list_flows, read_flow, validate_flow, run_flow, write_flow]
+        input:
+          transcript: ${input.transcript}
+          message:    ${ask.output}
+        output: str
+        prompt: |-
+          You are Yian's assistant. You help the user discover, read,
+          validate, run, and author flows (Compose YAML) using your tools. Prefer
+          validate_flow before write_flow, and read_flow before editing.
+
+          Conversation so far:
+          ${transcript}
+
+          User: ${message}
+      normal_turn:
+        kind: code
+        input:
+          transcript: ${input.transcript}
+          message: ${ask.output}
+          reply: ${reply.output}
+        output: str
+        code: |
+          return (
+              inputs["transcript"]
+              + "\n\nUser: " + inputs["message"]
+              + "\n\nAssistant: " + inputs["reply"]
+          )
+    # Adjacent defaulted spans concatenate as str. Comparing the optional exit
+    # record field with true always yields the carried bool, including on a miss.
+    output:
+      transcript: '${exit_turn.output.transcript:-""}${normal_turn.output:-""}'
+      exited: ${exit_turn.output.exited == true}
+
+nodes:
+  chat:
+    kind: loop
+    call: turn
+    input:
+      transcript: ${input.opening}
+      exited: false
+    while: "not ${exited}"
+    max: 1000
+output: ${chat.output.transcript}

@@ -189,7 +189,7 @@ Import the module and add its descriptor class to the `_DESCRIPTORS` tuple. `KIN
 one entry registers both:
 
 ```python
-from agent_composer.compose.nodes import xxx
+from yian.compose.nodes import xxx
 ...
 _DESCRIPTORS = (
     ...,

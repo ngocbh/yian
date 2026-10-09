@@ -1,6 +1,6 @@
-from agent_composer.nodes.base import NodeKind, Output
-from agent_composer.nodes.contracts import Assertion, Parameter
-from agent_composer.nodes.end import EndNode
+from yian.nodes.base import NodeKind, Output
+from yian.nodes.contracts import Assertion, Parameter
+from yian.nodes.end import EndNode
 
 
 def test_end_kind():
@@ -53,8 +53,8 @@ def test_end_post_asserts_fire_record_scoped_through_eval_node():
     is the production shape after ref lowering (the pool-fallback in eval_node was retired)."""
     from types import SimpleNamespace
 
-    from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
-    from agent_composer.typesys.pool import VariablePool
+    from yian.runtime.eval_node import EvaluationFailure, eval_node
+    from yian.typesys.pool import VariablePool
 
     pool = VariablePool()
     pool.set("emit", {"n": 4})  # the producer value bound into the record via the synth param
@@ -81,8 +81,8 @@ def test_end_post_asserts_resolve_namespaced_cross_node_ref_via_synth_param():
     case and no `node.kind` read (the pool-fallback firing path is gone)."""
     from types import SimpleNamespace
 
-    from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
-    from agent_composer.typesys.pool import VariablePool
+    from yian.runtime.eval_node import EvaluationFailure, eval_node
+    from yian.typesys.pool import VariablePool
 
     pool = VariablePool()
     pool.set("each#0/n", {"score": 7})           # a namespaced child value bound in via the param

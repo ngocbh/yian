@@ -8,15 +8,15 @@ import pytest
 from langchain_core.messages import HumanMessage
 from pydantic import SecretStr, ValidationError
 
-from agent_composer.llm_clients.auth import AuthError, AuthStore, OAuthCredentials
-from agent_composer.llm_clients.config import LLMConfig
-from agent_composer.llm_clients.connection import (
+from yian.llm_clients.auth import AuthError, AuthStore, OAuthCredentials
+from yian.llm_clients.config import LLMConfig
+from yian.llm_clients.connection import (
     connection_credentials,
     resolve_model_config,
     split_model_config,
     validate_connection,
 )
-from agent_composer.llm_clients.factory import model_from_config
+from yian.llm_clients.factory import model_from_config
 from tests.fixtures.openai_responses import ResponsesServer
 
 SENTINEL = "sk-sentinel-3f9c1a7e"
@@ -85,13 +85,13 @@ def test_split_and_resolve_keep_the_key_as_a_secret():
 _ENV_KEYS = (
     "OPENAI_API_KEY", "OPENAI_BASE_URL", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY",
     "AZURE_OPENAI_API_KEY", "VLLM_API_KEY", "VLLM_BASE_URL", "DEEPSEEK_API_KEY",
-    "OPENROUTER_API_KEY", "AGENT_COMPOSER_DEFAULT_PROVIDER", "AGENT_COMPOSER_DEFAULT_MODEL",
+    "OPENROUTER_API_KEY", "YIAN_DEFAULT_PROVIDER", "YIAN_DEFAULT_MODEL",
 )
 
 
 @pytest.fixture
 def clean_env(tmp_path, monkeypatch):
-    monkeypatch.setenv("AGENT_COMPOSER_AUTH_FILE", str(tmp_path / "auth.json"))
+    monkeypatch.setenv("YIAN_AUTH_FILE", str(tmp_path / "auth.json"))
     for name in _ENV_KEYS:
         monkeypatch.delenv(name, raising=False)
     return monkeypatch
@@ -146,7 +146,7 @@ def test_every_keyed_client_prefers_the_config_key(clean_env, provider, model, e
 
 
 def test_openai_compatible_endpoint_receives_the_config_key(clean_env):
-    from agent_composer.llm_clients.openai_client import OpenAIClient
+    from yian.llm_clients.openai_client import OpenAIClient
 
     clean_env.setenv("VLLM_BASE_URL", "http://127.0.0.1:9/v1")
     requests = []
@@ -160,7 +160,7 @@ def test_openai_compatible_endpoint_receives_the_config_key(clean_env):
 
 
 def test_openai_config_key_wins_a_saved_subscription(clean_env):
-    from agent_composer.llm_clients.openai_client import OpenAIClient
+    from yian.llm_clients.openai_client import OpenAIClient
 
     AuthStore().save(
         "openai",
@@ -215,7 +215,7 @@ def _raise_chained(key):
 def test_scrub_key_removes_the_key_and_its_masked_fragments_from_a_chain():
     import traceback
 
-    from agent_composer.llm_clients.redact import scrub_key
+    from yian.llm_clients.redact import scrub_key
 
     key = "sk-sentinel-scrub-zqxw"
     with pytest.raises(KeyError) as caught:
@@ -235,7 +235,7 @@ def test_scrub_key_removes_the_key_and_its_masked_fragments_from_a_chain():
 def test_scrub_key_reaches_exception_group_members_and_notes():
     import traceback
 
-    from agent_composer.llm_clients.redact import scrub_key
+    from yian.llm_clients.redact import scrub_key
 
     key = "sk-sentinel-scrub-zqxw"
     member = RuntimeError(f"member {key}")
@@ -248,7 +248,7 @@ def test_scrub_key_reaches_exception_group_members_and_notes():
 
 
 def test_scrub_key_leaves_unrelated_masks_alone():
-    from agent_composer.llm_clients.redact import redact_key
+    from yian.llm_clients.redact import redact_key
 
     assert redact_key("token ab****yz and **bold**", "sk-sentinel-zqxw") == (
         "token ab****yz and **bold**"
@@ -264,7 +264,7 @@ def test_scrub_key_leaves_unrelated_masks_alone():
 def test_scrub_key_is_linear_on_long_text(text):
     import time
 
-    from agent_composer.llm_clients.redact import redact_key
+    from yian.llm_clients.redact import redact_key
 
     started = time.perf_counter()
     redact_key(text, "sk-sentinel-scrub-zqxw")
@@ -272,7 +272,7 @@ def test_scrub_key_is_linear_on_long_text(text):
 
 
 def test_scrub_key_survives_exceptions_it_cannot_rewrite():
-    from agent_composer.llm_clients.redact import scrub_key
+    from yian.llm_clients.redact import scrub_key
 
     key = "sk-sentinel-scrub-zqxw"
 
@@ -310,7 +310,7 @@ def test_scrub_key_survives_exceptions_it_cannot_rewrite():
 
 
 def test_masked_echoes_need_three_visible_characters():
-    from agent_composer.llm_clients.redact import redact_key
+    from yian.llm_clients.redact import redact_key
 
     key = "sk-sentinel-scrub-zqxz"
     assert redact_key("s**t, **z, and sk**", key) == "s**t, **z, and sk**"
@@ -319,7 +319,7 @@ def test_masked_echoes_need_three_visible_characters():
 
 
 def test_masked_echoes_of_a_key_with_other_characters_are_redacted_whole():
-    from agent_composer.llm_clients.redact import redact_key
+    from yian.llm_clients.redact import redact_key
 
     key = "sk.sentinel+scrub/zq.w"
     for echo in (f"{key[:8]}****{key[-4:]}", f"{key[:9]}...", f"***{key[-5:]}"):
@@ -327,7 +327,7 @@ def test_masked_echoes_of_a_key_with_other_characters_are_redacted_whole():
 
 
 def test_scrub_key_rewrites_a_message_attribute():
-    from agent_composer.llm_clients.redact import scrub_key
+    from yian.llm_clients.redact import scrub_key
 
     key = "sk-sentinel-scrub-zqxw"
 

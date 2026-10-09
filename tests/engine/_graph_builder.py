@@ -15,27 +15,27 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from agent_composer.compile.model import END_ID, START_ID, CompiledFlow, Edge, FlowOutput
-from agent_composer.compile.expand import build_grow
-from agent_composer.compile.execution_layout import apply_execution_layout, resolve_execution_layout
-from agent_composer.compile.llm_cascade import resolve_llm_cascade
-from agent_composer.compile.memory_layout import memory_stacks as _memory_stacks
-from agent_composer.compile.memory_layout import resolve_memory_layout
-from agent_composer.compose.edges.producers import _binding_producers
-from agent_composer.expr import binding_co_skips, expr_refs_of
-from agent_composer.memory import MemorySnapshotEnvelope, MemorySpec, MemoryStack
-from agent_composer.nodes.contracts import Parameter
-from agent_composer.nodes.end import EndNode
-from agent_composer.nodes.start import StartNode
-from agent_composer.runtime.engine import FlowEngine
-from agent_composer.runtime.log import MemoryRunLog
-from agent_composer.runtime.state import (
+from yian.compile.model import END_ID, START_ID, CompiledFlow, Edge, FlowOutput
+from yian.compile.expand import build_grow
+from yian.compile.execution_layout import apply_execution_layout, resolve_execution_layout
+from yian.compile.llm_cascade import resolve_llm_cascade
+from yian.compile.memory_layout import memory_stacks as _memory_stacks
+from yian.compile.memory_layout import resolve_memory_layout
+from yian.compose.edges.producers import _binding_producers
+from yian.expr import binding_co_skips, expr_refs_of
+from yian.memory import MemorySnapshotEnvelope, MemorySpec, MemoryStack
+from yian.nodes.contracts import Parameter
+from yian.nodes.end import EndNode
+from yian.nodes.start import StartNode
+from yian.runtime.engine import FlowEngine
+from yian.runtime.log import MemoryRunLog
+from yian.runtime.state import (
     RunStartData,
     RunState,
     commit_prepared,
     prepare_run_started,
 )
-from agent_composer.typesys.pool import VariablePool
+from yian.typesys.pool import VariablePool
 from tests.engine._fakes import derive_wiring  # the SAME auto-derive test_engine.py:24 imports
 
 
@@ -45,8 +45,8 @@ _TEST_FINGERPRINT = "f" * 64
 
 def _forward_capture(node, inputs):
     """Give directly prepared test outcomes explicit canonical binding data."""
-    from agent_composer.expr.lineage import ValueRoute
-    from agent_composer.runtime.contracts import ForwardCapture
+    from yian.expr.lineage import ValueRoute
+    from yian.runtime.contracts import ForwardCapture
 
     return ForwardCapture(inputs, ValueRoute.record(
         (name, ValueRoute.literal(value)) for name, value in (inputs or {}).items()

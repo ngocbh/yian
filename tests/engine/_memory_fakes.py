@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 from typing import Any
 
-from agent_composer.memory import LearnContext, MemoryMutation, RecallContext
+from yian.memory import LearnContext, MemoryMutation, RecallContext
 
 
 class _Session:

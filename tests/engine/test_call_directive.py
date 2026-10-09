@@ -13,12 +13,12 @@ is asserted on the returned descriptor map with a deterministic minter.
 
 import pytest
 
-from agent_composer.compose import LoadError, desugar_inline_calls, load_flow
-from agent_composer.compose.desugar.inline_bodies import INLINE_FLOW_PREFIX
-from agent_composer.compose.helpers.errors import LoadDiagnostics
-from agent_composer.compose.parse.file import CodeDescriptor
-from agent_composer.diagnostics import OriginRef, SourceRange
-from agent_composer.nodes.contracts import Assertion
+from yian.compose import LoadError, desugar_inline_calls, load_flow
+from yian.compose.desugar.inline_bodies import INLINE_FLOW_PREFIX
+from yian.compose.helpers.errors import LoadDiagnostics
+from yian.compose.parse.file import CodeDescriptor
+from yian.diagnostics import OriginRef, SourceRange
+from yian.nodes.contracts import Assertion
 
 
 def _ids():
@@ -111,7 +111,7 @@ output: ${{use.output}}
         resolved.append((args, kwargs))
         raise AssertionError("the private callee reached child resolution")
 
-    monkeypatch.setattr("agent_composer.compose.nodes.call._resolve_child", resolve)
+    monkeypatch.setattr("yian.compose.nodes.call._resolve_child", resolve)
 
     with pytest.raises(LoadError) as caught:
         load_flow(text)
@@ -147,7 +147,7 @@ output: ${{use.output}}
         resolved.append((args, kwargs))
         raise AssertionError("the private callee reached child resolution")
 
-    monkeypatch.setattr("agent_composer.compose.nodes.call._resolve_child", resolve)
+    monkeypatch.setattr("yian.compose.nodes.call._resolve_child", resolve)
 
     with pytest.raises(LoadError) as caught:
         load_flow(text)

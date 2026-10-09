@@ -9,16 +9,16 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 import pytest
 
-import agent_composer.llm_clients as llm_clients
-import agent_composer.tools as tools_module
-from agent_composer.nodes.agent import AgentNode
-from agent_composer.nodes.base import Output, _HostStop
-from agent_composer.nodes.contracts import Assertion, ValueContract
-from agent_composer.runtime.engine import FlowEngine
-from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
-from agent_composer.tools import ToolSet
-from agent_composer.typesys.pool import VariablePool
-from agent_composer.typesys.values import Type, ValueKind
+import yian.llm_clients as llm_clients
+import yian.tools as tools_module
+from yian.nodes.agent import AgentNode
+from yian.nodes.base import Output, _HostStop
+from yian.nodes.contracts import Assertion, ValueContract
+from yian.runtime.engine import FlowEngine
+from yian.runtime.eval_node import EvaluationFailure, eval_node
+from yian.tools import ToolSet
+from yian.typesys.pool import VariablePool
+from yian.typesys.values import Type, ValueKind
 
 
 class _ScriptedChat:
@@ -463,8 +463,8 @@ def test_post_assert_fires_after_blocking_ask(monkeypatch):
 
 
 def test_agent_has_no_continuation_or_engine_llm_cap_surface():
-    import agent_composer.nodes.agent as agent_package
-    from agent_composer.nodes.base import Node
+    import yian.nodes.agent as agent_package
+    from yian.nodes.base import Node
 
     assert not hasattr(agent_package, "AgentEntry")
     assert not hasattr(agent_package, "Fresh")

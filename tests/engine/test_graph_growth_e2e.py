@@ -28,13 +28,13 @@ from pathlib import Path
 
 import pytest
 
-from agent_composer.compile.expand import build_grow
-from agent_composer.compose import LoadError, load_flow
-from agent_composer.compose.helpers.errors import LoadDiagnostics
-from agent_composer.run import run_flow
-from agent_composer.nodes.base import NodeKind
-from agent_composer.typesys.pool import VariablePool
-from agent_composer.events import RunSucceeded
+from yian.compile.expand import build_grow
+from yian.compose import LoadError, load_flow
+from yian.compose.helpers.errors import LoadDiagnostics
+from yian.run import run_flow
+from yian.nodes.base import NodeKind
+from yian.typesys.pool import VariablePool
+from yian.events import RunSucceeded
 from tests.engine._graph_builder import _engine
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
@@ -111,9 +111,9 @@ def test_scratch_is_eliminated_structurally():
     assert not hasattr(pool, "scratch")
     assert not hasattr(pool, "scratch_set") and not hasattr(pool, "scratch_get")
     with pytest.raises(ModuleNotFoundError):
-        importlib.import_module("agent_composer.nodes.scratch_cap")
+        importlib.import_module("yian.nodes.scratch_cap")
     with pytest.raises(ModuleNotFoundError):
-        importlib.import_module("agent_composer.nodes.agent.scratch")
+        importlib.import_module("yian.nodes.agent.scratch")
 
 
 def test_no_node_attr_or_method_reads_scratch():

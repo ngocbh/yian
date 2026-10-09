@@ -1,4 +1,4 @@
-"""`composer run` per-node progress: ✓ on success, ✗ + error on failure, output when verbose.
+"""`yian run` per-node progress: ✓ on success, ✗ + error on failure, output when verbose.
 
 The reporter is exercised through a non-terminal `Console` (a StringIO sink), which is the
 same path the CLI takes off a TTY: no live spinner, just the final line per node. A thin
@@ -13,12 +13,12 @@ import typer
 from rich.console import Console
 from typer.testing import CliRunner
 
-import agent_composer.cli.run as climod
-from agent_composer.cli.run import _ProgressReporter
-from agent_composer.compile.model import END_ID, START_ID
-from agent_composer.diagnostics import Failure
-from agent_composer.run import RunResult
-from agent_composer.events import NodeFailed, NodeRouted, NodeStarted, NodeSucceeded
+import yian.cli.run as climod
+from yian.cli.run import _ProgressReporter
+from yian.compile.model import END_ID, START_ID
+from yian.diagnostics import Failure
+from yian.run import RunResult
+from yian.events import NodeFailed, NodeRouted, NodeStarted, NodeSucceeded
 
 
 def _sink_reporter(verbose: bool = False) -> tuple[_ProgressReporter, StringIO]:
@@ -114,7 +114,7 @@ def test_expanded_clears_spinner_without_check():
     NodeSucceeded — it has no terminal of its own. The reporter must clear its spinner
     (remove it from `_running`) and NOT print a ✓/✗ line, else the driver clones would
     spin forever in the live region."""
-    from agent_composer.events import NodeExpanded
+    from yian.events import NodeExpanded
 
     reporter, buf = _sink_reporter()
     reporter.handle(NodeStarted("polish~1"))

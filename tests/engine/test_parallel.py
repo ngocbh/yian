@@ -12,12 +12,12 @@ from contextvars import ContextVar
 
 import pytest
 
-from agent_composer.events import NodeRouted, NodeSucceeded, RunFailed, RunSucceeded
-from agent_composer.compile.model import END_ID, START_ID, Edge, CompiledFlow, FlowOutput
-from agent_composer.runtime.common import NodeState
-from agent_composer.nodes.end import EndNode
-from agent_composer.nodes.start import StartNode
-from agent_composer.runtime.log import NodeRoutedRecord
+from yian.events import NodeRouted, NodeSucceeded, RunFailed, RunSucceeded
+from yian.compile.model import END_ID, START_ID, Edge, CompiledFlow, FlowOutput
+from yian.runtime.common import NodeState
+from yian.nodes.end import EndNode
+from yian.nodes.start import StartNode
+from yian.runtime.log import NodeRoutedRecord
 from tests.engine._fakes import (
     BranchNode,
     FailNode,

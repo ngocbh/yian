@@ -7,8 +7,8 @@ import json
 from langchain_core.messages import AIMessage
 import pytest
 
-import agent_composer.memory.profile as profile
-from agent_composer.memory import (
+import yian.memory.profile as profile
+from yian.memory import (
     LearnContext,
     Memory,
     MemoryEpisode,
@@ -20,8 +20,8 @@ from agent_composer.memory import (
     ToolCallInteraction,
     ToolResultInteraction,
 )
-from agent_composer.memory.profile import ProfileMemory
-from agent_composer.memory.storage import FileMarkdownStore, markdown_version
+from yian.memory.profile import ProfileMemory
+from yian.memory.storage import FileMarkdownStore, markdown_version
 
 RECALL = RecallContext("system", "Say hi.", {}, ("chat", "reply"))
 CONFIG = {"provider": "ollama", "model": "local-profiler"}
@@ -151,7 +151,7 @@ def test_snapshot_pins_version_and_hash_without_text(tmp_path) -> None:
     text, version = memory.read()
     with memory.open_run() as session:
         assert session.snapshot == {
-            "format": "agent_composer.profile_memory", "version": 1,
+            "format": "yian.profile_memory", "version": 1,
             "profile_version": version, "text_sha256": profile._sha256(text),
         }
 

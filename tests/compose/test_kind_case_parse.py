@@ -7,19 +7,19 @@ import textwrap
 
 import pytest
 
-from agent_composer.compile.expand import clone_child
-from agent_composer.compile.manifest import flow_fingerprint
-from agent_composer.compose import load_flow
-from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.nodes.base import BuildContext
-from agent_composer.compose.nodes.case import CaseDescriptor
-from agent_composer.compose.source import SourceDocument
-from agent_composer.compose.source.catalog import _scope_origin
-from agent_composer.diagnostics import OriginRef
-from agent_composer.diagnostics import SourceRange
-from agent_composer.nodes.case import CaseNode
-from agent_composer.nodes.contracts import Binding
-from agent_composer.run import run_flow
+from yian.compile.expand import clone_child
+from yian.compile.manifest import flow_fingerprint
+from yian.compose import load_flow
+from yian.compose.helpers.errors import LoadError
+from yian.compose.nodes.base import BuildContext
+from yian.compose.nodes.case import CaseDescriptor
+from yian.compose.source import SourceDocument
+from yian.compose.source.catalog import _scope_origin
+from yian.diagnostics import OriginRef
+from yian.diagnostics import SourceRange
+from yian.nodes.case import CaseNode
+from yian.nodes.contracts import Binding
+from yian.run import run_flow
 
 
 _FLOW = """\

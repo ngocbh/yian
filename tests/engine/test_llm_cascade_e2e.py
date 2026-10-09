@@ -3,10 +3,10 @@ per-agent effective `llm_config` each agent builds its model from must reflect t
 authored ladder (node → flow → parent → CLI), and an `inherit: false` agent must skip
 those authored outer layers while retaining process provider/model defaults."""
 
-import agent_composer.llm_clients as llm_clients_mod
-from agent_composer.compose.loader import load_flow
-from agent_composer.run import run_flow
-from agent_composer.llm_clients.connection import resolve_model_config
+import yian.llm_clients as llm_clients_mod
+from yian.compose.loader import load_flow
+from yian.run import run_flow
+from yian.llm_clients.connection import resolve_model_config
 
 # Top flow sets provider+temperature; calls `sub`. Inside `sub`, `inner` overrides only
 # `model` (so it fills provider/temperature from the flow and the CLI fields), while

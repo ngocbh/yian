@@ -8,15 +8,15 @@ from types import MappingProxyType
 
 import pytest
 
-from agent_composer.compose import load_flow
-from agent_composer.events import RunStarted
-from agent_composer.memory.contracts import MemoryOperationError, MemorySetupError
-from agent_composer.memory.episodic import EpisodicMemory
-from agent_composer.memory.profile import ProfileMemory
-from agent_composer.memory.reflective import ReflectiveMemory
-from agent_composer.memory.session import SessionMemory
-from agent_composer.memory_host import MemoryRegistry, build_memories
-from agent_composer.run import resume_flow, run_flow
+from yian.compose import load_flow
+from yian.events import RunStarted
+from yian.memory.contracts import MemoryOperationError, MemorySetupError
+from yian.memory.episodic import EpisodicMemory
+from yian.memory.profile import ProfileMemory
+from yian.memory.reflective import ReflectiveMemory
+from yian.memory.session import SessionMemory
+from yian.memory_host import MemoryRegistry, build_memories
+from yian.run import resume_flow, run_flow
 from tests.engine._memory_fakes import _Memory
 
 
@@ -418,11 +418,11 @@ def test_open_after_close_is_closed_and_opens_no_file(tmp_path: Path, memory: st
 
 
 def test_package_exports_the_host_builder() -> None:
-    import agent_composer
+    import yian
 
-    assert agent_composer.build_memories is build_memories
-    assert agent_composer.MemoryRegistry is MemoryRegistry
-    assert {"build_memories", "MemoryRegistry"} <= set(agent_composer.__all__)
+    assert yian.build_memories is build_memories
+    assert yian.MemoryRegistry is MemoryRegistry
+    assert {"build_memories", "MemoryRegistry"} <= set(yian.__all__)
 
 
 def test_run_flow_accepts_any_mapping() -> None:

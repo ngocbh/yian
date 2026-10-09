@@ -5,10 +5,10 @@ predicate-reference validation, is exercised end-to-end via the `load_flow` suit
 
 import pytest
 
-from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.nodes.loop import LoopDescriptor
-from agent_composer.compose.source import SourceDocument
-from agent_composer.diagnostics import SourceRange
+from yian.compose.helpers.errors import LoadError
+from yian.compose.nodes.loop import LoopDescriptor
+from yian.compose.source import SourceDocument
+from yian.diagnostics import SourceRange
 
 
 _FLOW = """\

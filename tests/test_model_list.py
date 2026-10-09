@@ -9,10 +9,10 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from agent_composer.llm_clients import model_list
-from agent_composer.llm_clients.auth.common import HttpResponse
-from agent_composer.llm_clients.factory import _OPENAI_COMPATIBLE
-from agent_composer.llm_clients.model_list import ModelListError, list_models
+from yian.llm_clients import model_list
+from yian.llm_clients.auth.common import HttpResponse
+from yian.llm_clients.factory import _OPENAI_COMPATIBLE
+from yian.llm_clients.model_list import ModelListError, list_models
 
 KEY = "sk-test-SENTINEL-0123456789"
 BODY_MARKER = "Incorrect API key provided"

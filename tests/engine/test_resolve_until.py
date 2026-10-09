@@ -6,11 +6,11 @@
 
 import pytest
 
-from agent_composer.compile.model import START_ID
-from agent_composer.diagnostics import OriginRef
-from agent_composer.nodes.contracts import Binding
-from agent_composer.nodes.wait.node import resolve_until
-from agent_composer.typesys.pool import VariablePool
+from yian.compile.model import START_ID
+from yian.diagnostics import OriginRef
+from yian.nodes.contracts import Binding
+from yian.nodes.wait.node import resolve_until
+from yian.typesys.pool import VariablePool
 
 
 def test_literal_iso_passthrough():

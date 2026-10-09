@@ -6,9 +6,9 @@ The parser layer only: `parse_file` -> `ComposeFile` (raw `nodes` dict), then
 populated. Runtime construction is covered by the loop build tests.
 """
 
-from agent_composer.compose.parse.file import parse_file
-from agent_composer.compose.parse.nodes import parse_nodes
-from agent_composer.compose.source import SourceDocument
+from yian.compose.parse.file import parse_file
+from yian.compose.parse.nodes import parse_nodes
+from yian.compose.source import SourceDocument
 
 LOOP_YAML = """
 id: chat

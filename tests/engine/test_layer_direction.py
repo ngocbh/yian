@@ -14,7 +14,7 @@ import sys
 
 
 SOURCE_ROOT = Path(__file__).parents[2] / "src"
-PACKAGE_ROOT = SOURCE_ROOT / "agent_composer"
+PACKAGE_ROOT = SOURCE_ROOT / "yian"
 
 
 def _package_parts(path: Path) -> tuple[str, ...]:
@@ -32,7 +32,7 @@ def _parse_import_targets(
     """Return ``(line, target, source)`` for imports in one module body.
 
     ``ImportFrom`` statements include both their resolved base and each imported
-    name.  That catches equivalent spellings such as ``from agent_composer import
+    name.  That catches equivalent spellings such as ``from yian import
     compile`` and ``from .. import compile`` as well as direct module imports.
     With ``include_from_bases=False``, omit only the synthetic base of a named
     ``ImportFrom``; direct imports and wildcard bases remain actual targets.
@@ -89,7 +89,7 @@ def _forbidden_imports(root: Path, forbidden: str) -> list[str]:
 
 def test_nodes_never_import_compile() -> None:
     """Node implementations return seeds and never depend on their compiler."""
-    violations = _forbidden_imports(PACKAGE_ROOT / "nodes", "agent_composer.compile")
+    violations = _forbidden_imports(PACKAGE_ROOT / "nodes", "yian.compile")
     assert not violations, (
         "nodes must not import compile; return a canonical Grow seed and let the "
         "injected compile-layer builder interpret it:\n" + "\n".join(violations)
@@ -98,7 +98,7 @@ def test_nodes_never_import_compile() -> None:
 
 def test_nodes_never_import_runtime() -> None:
     """Node implementations depend only on lower layers, never their driver."""
-    violations = _forbidden_imports(PACKAGE_ROOT / "nodes", "agent_composer.runtime")
+    violations = _forbidden_imports(PACKAGE_ROOT / "nodes", "yian.runtime")
     assert not violations, (
         "nodes must not import runtime; direct-driver fallbacks belong on a lower seam:\n"
         + "\n".join(violations)
@@ -112,8 +112,8 @@ def test_semantic_contracts_import_only_their_declared_project_leaves() -> None:
         "__future__",
         "dataclasses",
         "typing",
-        "agent_composer.diagnostics",
-        "agent_composer.typesys",
+        "yian.diagnostics",
+        "yian.typesys",
     )
     violations = [
         f"{path.relative_to(SOURCE_ROOT)}:{line}: {statement} -> {target}"
@@ -129,7 +129,7 @@ def test_semantic_contracts_import_only_their_declared_project_leaves() -> None:
 def test_compile_never_imports_front_end_or_runtime() -> None:
     """Compile owns source-neutral graph transforms, not loading or execution."""
     violations = []
-    for forbidden in ("agent_composer.compose", "agent_composer.runtime"):
+    for forbidden in ("yian.compose", "yian.runtime"):
         violations.extend(_forbidden_imports(PACKAGE_ROOT / "compile", forbidden))
     assert not violations, (
         "compile must stay representation-neutral and execution-free:\n"
@@ -145,46 +145,46 @@ def test_checkpoint_era_suspension_package_is_deleted() -> None:
 def test_scanner_normalizes_absolute_and_relative_import_spellings() -> None:
     """Equivalent import syntax resolves to the same forbidden module targets."""
     assert _package_parts(PACKAGE_ROOT / "nodes" / "call" / "node.py") == (
-        "agent_composer",
+        "yian",
         "nodes",
         "call",
     )
     assert _package_parts(PACKAGE_ROOT / "nodes" / "call" / "__init__.py") == (
-        "agent_composer",
+        "yian",
         "nodes",
         "call",
     )
 
     cases = (
         (
-            "import agent_composer.compile.expand\n",
-            ("agent_composer", "nodes", "call"),
-            "agent_composer.compile.expand",
+            "import yian.compile.expand\n",
+            ("yian", "nodes", "call"),
+            "yian.compile.expand",
         ),
         (
-            "from agent_composer import compile\n",
-            ("agent_composer", "nodes", "call"),
-            "agent_composer.compile",
+            "from yian import compile\n",
+            ("yian", "nodes", "call"),
+            "yian.compile",
         ),
         (
-            "from agent_composer.compile import expand\n",
-            ("agent_composer", "nodes", "call"),
-            "agent_composer.compile.expand",
+            "from yian.compile import expand\n",
+            ("yian", "nodes", "call"),
+            "yian.compile.expand",
         ),
         (
             "from ... import compile\n",
-            ("agent_composer", "nodes", "call"),
-            "agent_composer.compile",
+            ("yian", "nodes", "call"),
+            "yian.compile",
         ),
         (
             "from ...compile import expand\n",
-            ("agent_composer", "nodes", "call"),
-            "agent_composer.compile.expand",
+            ("yian", "nodes", "call"),
+            "yian.compile.expand",
         ),
         (
             "from ..compile import expand\n",
-            ("agent_composer", "runtime"),
-            "agent_composer.compile.expand",
+            ("yian", "runtime"),
+            "yian.compile.expand",
         ),
     )
 
@@ -199,7 +199,7 @@ def test_scanner_normalizes_absolute_and_relative_import_spellings() -> None:
 def test_runtime_never_imports_compile_expand() -> None:
     """Runtime accepts growth construction as a seam instead of importing it."""
     violations = _forbidden_imports(
-        PACKAGE_ROOT / "runtime", "agent_composer.compile.expand"
+        PACKAGE_ROOT / "runtime", "yian.compile.expand"
     )
     assert not violations, (
         "runtime must not import compile.expand; the run boundary injects build_grow:\n"
@@ -210,12 +210,12 @@ def test_runtime_never_imports_compile_expand() -> None:
 def _memory_leaf_violations(module: str, source: str) -> list[str]:
     """Check one declared memory leaf through the shared import target scanner."""
     leaf = {
-        "contracts": "agent_composer.diagnostics",
-        "conversation": "agent_composer.memory.contracts",
+        "contracts": "yian.diagnostics",
+        "conversation": "yian.memory.contracts",
     }[module]
     targets = _parse_import_targets(
         source,
-        package=("agent_composer", "memory"),
+        package=("yian", "memory"),
         include_from_bases=False,
     )
     violations = []
@@ -242,15 +242,15 @@ def test_memory_leaf_ratchet_rejects_absolute_and_relative_imports() -> None:
             "llm_clients",
         ):
             for source in (
-                f"import agent_composer.{forbidden}\n",
-                f"from agent_composer import {forbidden}\n",
+                f"import yian.{forbidden}\n",
+                f"from yian import {forbidden}\n",
                 f"from .. import {forbidden}\n",
                 f"from ..{forbidden} import Something\n",
             ):
                 assert _memory_leaf_violations(module, source), source
         for backend in ("episodic", "reflective", "session"):
             for source in (
-                f"import agent_composer.memory.{backend}\n",
+                f"import yian.memory.{backend}\n",
                 f"from . import {backend}\n",
                 f"from .{backend} import Something\n",
             ):
@@ -271,18 +271,18 @@ def test_memory_leaf_ratchet_accepts_only_declared_leaves_and_stdlib() -> None:
         (
             "contracts",
             (
-                "from agent_composer.diagnostics import OriginRef\n",
+                "from yian.diagnostics import OriginRef\n",
                 "from ..diagnostics import OriginRef\n",
-                "from agent_composer import diagnostics\n",
+                "from yian import diagnostics\n",
             ),
         ),
         (
             "conversation",
             (
-                "import agent_composer.memory.contracts as c\n",
+                "import yian.memory.contracts as c\n",
                 "from .contracts import ConversationView\n",
                 "from . import contracts\n",
-                "from agent_composer.memory import contracts\n",
+                "from yian.memory import contracts\n",
             ),
         ),
     ):
@@ -291,8 +291,8 @@ def test_memory_leaf_ratchet_accepts_only_declared_leaves_and_stdlib() -> None:
         assert not _memory_leaf_violations(
             module, "import json\nfrom typing import Callable\n"
         )
-        assert _memory_leaf_violations(module, "import agent_composer\n")
-        assert _memory_leaf_violations(module, "import agent_composer.memory\n")
+        assert _memory_leaf_violations(module, "import yian\n")
+        assert _memory_leaf_violations(module, "import yian.memory\n")
     assert _memory_leaf_violations("conversation", "from . import contracts, session\n")
 
 
@@ -301,10 +301,10 @@ def test_memory_leaf_ratchet_never_exempts_direct_imports_on_a_shared_line() -> 
     cases = (
         (
             "conversation",
-            "import agent_composer.memory, agent_composer.memory.contracts",
+            "import yian.memory, yian.memory.contracts",
         ),
-        ("conversation", "import agent_composer.memory; from . import contracts"),
-        ("contracts", "import agent_composer, agent_composer.diagnostics"),
+        ("conversation", "import yian.memory; from . import contracts"),
+        ("contracts", "import yian, yian.diagnostics"),
     )
     missed = [
         source
@@ -321,7 +321,7 @@ def test_memory_leaf_ratchet_checks_wildcard_import_bases() -> None:
     for module in ("contracts", "conversation"):
         for source in (
             "from . import *",
-            "from agent_composer import *",
+            "from yian import *",
             "from .session import *",
             "from ..runtime import *",
             "from openai import *",
@@ -344,24 +344,24 @@ def test_skills_leaf_imports_no_engine_or_front_end_layer() -> None:
     """Nodes import the skills leaf, so it must never import back up the stack."""
     violations: list[str] = []
     for forbidden in (
-        "agent_composer.nodes",
-        "agent_composer.compile",
-        "agent_composer.compose",
-        "agent_composer.runtime",
-        "agent_composer.run",
-        "agent_composer.cli",
+        "yian.nodes",
+        "yian.compile",
+        "yian.compose",
+        "yian.runtime",
+        "yian.run",
+        "yian.cli",
     ):
         violations.extend(_forbidden_imports(PACKAGE_ROOT / "skills", forbidden))
     assert not violations, "skills must stay a leaf:\n" + "\n".join(violations)
 
 
 def _package_root_imports(root: Path) -> list[str]:
-    """Format imports below ``root`` of the ``agent_composer`` package facade itself."""
+    """Format imports below ``root`` of the ``yian`` package facade itself."""
     return [
         f"{path.relative_to(SOURCE_ROOT)}:{line}: {statement} -> {target}"
         for path in sorted(root.rglob("*.py"))
         for line, target, statement in _import_targets(path)
-        if target == "agent_composer"
+        if target == "yian"
     ]
 
 
@@ -370,7 +370,7 @@ def test_memory_never_imports_engine_host_or_cli_layers() -> None:
     violations = []
     for forbidden in ("runtime", "compose", "compile", "run", "memory_host", "cli"):
         violations.extend(
-            _forbidden_imports(PACKAGE_ROOT / "memory", f"agent_composer.{forbidden}")
+            _forbidden_imports(PACKAGE_ROOT / "memory", f"yian.{forbidden}")
         )
     violations.extend(_package_root_imports(PACKAGE_ROOT / "memory"))
     assert not violations, (
@@ -382,7 +382,7 @@ def test_memory_never_imports_engine_host_or_cli_layers() -> None:
 def test_runtime_never_imports_memory_host_or_cli() -> None:
     """Runtime receives built memory; construction and flags stay with hosts."""
     violations = []
-    for forbidden in ("agent_composer.memory_host", "agent_composer.cli"):
+    for forbidden in ("yian.memory_host", "yian.cli"):
         violations.extend(_forbidden_imports(PACKAGE_ROOT / "runtime", forbidden))
     assert not violations, (
         "runtime must not import memory_host or cli:\n" + "\n".join(violations)
@@ -392,21 +392,21 @@ def test_runtime_never_imports_memory_host_or_cli() -> None:
 def test_package_root_scan_catches_facade_spellings() -> None:
     """The facade check sees absolute and relative root imports, not submodules."""
     for source in (
-        "import agent_composer\n",
-        "from agent_composer import run_flow\n",
+        "import yian\n",
+        "from yian import run_flow\n",
         "from .. import build_memories\n",
     ):
         targets = {
             target
             for _, target, _ in _parse_import_targets(
-                source, package=("agent_composer", "memory")
+                source, package=("yian", "memory")
             )
         }
-        assert "agent_composer" in targets, source
+        assert "yian" in targets, source
     targets = {
         target
         for _, target, _ in _parse_import_targets(
-            "from ..diagnostics import Failure\n", package=("agent_composer", "memory")
+            "from ..diagnostics import Failure\n", package=("yian", "memory")
         )
     }
-    assert "agent_composer" not in targets
+    assert "yian" not in targets

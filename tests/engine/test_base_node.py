@@ -2,13 +2,13 @@
 
 import pytest
 
-from agent_composer.diagnostics import OriginRef
-from agent_composer.events import StreamChunk
-from agent_composer.nodes.base import Node, Output, Route
-from agent_composer.nodes.contracts import ContractOrigins, ValueContract
-from agent_composer.runtime.eval_node import EvaluationFailure
-from agent_composer.typesys.pool import VariablePool
-from agent_composer.typesys.values import Type, ValueKind
+from yian.diagnostics import OriginRef
+from yian.events import StreamChunk
+from yian.nodes.base import Node, Output, Route
+from yian.nodes.contracts import ContractOrigins, ValueContract
+from yian.runtime.eval_node import EvaluationFailure
+from yian.typesys.pool import VariablePool
+from yian.typesys.values import Type, ValueKind
 from tests.engine._fakes import (
     BranchNode,
     FailNode,

@@ -4,11 +4,11 @@ questions config + derived answer_schema, with wiring from `inputs` and stamped 
 
 import pytest
 
-from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.nodes.base import BuildContext
-from agent_composer.compose.nodes.human_input import HumanInputDescriptor
-from agent_composer.compose.source import SourceDocument
-from agent_composer.diagnostics import SourceRange
+from yian.compose.helpers.errors import LoadError
+from yian.compose.nodes.base import BuildContext
+from yian.compose.nodes.human_input import HumanInputDescriptor
+from yian.compose.source import SourceDocument
+from yian.diagnostics import SourceRange
 
 
 _FLOW = """\
@@ -55,7 +55,7 @@ def test_human_input_build_returns_gate_and_wires_inputs():
     result = desc.build(BuildContext({}))
     node, wiring = result.node, result.wiring
 
-    from agent_composer.nodes.human_input import HumanInputNode
+    from yian.nodes.human_input import HumanInputNode
 
     assert isinstance(node, HumanInputNode)
     assert node.prompt == "Approve this?"
@@ -69,8 +69,8 @@ def test_human_input_build_questions_gate_defaults_to_open_object():
     result = desc.build(BuildContext({}))
     node = result.node
 
-    from agent_composer.nodes.human_input import HumanInputNode
-    from agent_composer.typesys.values import ValueKind
+    from yian.nodes.human_input import HumanInputNode
+    from yian.typesys.values import ValueKind
 
     assert isinstance(node, HumanInputNode)
     # A questions gate with no explicit `output:` defaults to a bare open OBJECT.

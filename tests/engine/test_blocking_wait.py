@@ -12,10 +12,10 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from agent_composer.compile.model import END_ID, START_ID
-from agent_composer.events import NodeFailed, NodeStarted, NodeSucceeded, RunFailed
-from agent_composer.nodes.base import Node, NodeKind, Output, _HostStop
-from agent_composer.nodes.wait import WaitNode
+from yian.compile.model import END_ID, START_ID
+from yian.events import NodeFailed, NodeStarted, NodeSucceeded, RunFailed
+from yian.nodes.base import Node, NodeKind, Output, _HostStop
+from yian.nodes.wait import WaitNode
 from tests.engine._graph_builder import _engine, _graph
 
 
@@ -89,7 +89,7 @@ class _ObserverError(RuntimeError):
 
 
 def _patch_now(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("agent_composer.nodes.wait.node._utc_now", lambda: _NOW)
+    monkeypatch.setattr("yian.nodes.wait.node._utc_now", lambda: _NOW)
 
 
 def _run_direct(until: str, monkeypatch: pytest.MonkeyPatch) -> tuple[Output, _FakeEvent]:
@@ -163,7 +163,7 @@ def test_far_future_deadline_waits_in_timeout_max_chunks(
         clock_reads.append(tuple(event.timeouts))
         return next(now_values)
 
-    monkeypatch.setattr("agent_composer.nodes.wait.node._utc_now", utc_now)
+    monkeypatch.setattr("yian.nodes.wait.node._utc_now", utc_now)
     result = WaitNode("wait").run(
         {"until": deadline.isoformat()}, stop_event=event
     )
@@ -180,7 +180,7 @@ def test_host_stop_between_timeout_max_chunks(
     deadline = _NOW + timedelta(seconds=2 * threading.TIMEOUT_MAX + 12.5)
     now_values = iter((_NOW, _NOW + timedelta(seconds=threading.TIMEOUT_MAX)))
     monkeypatch.setattr(
-        "agent_composer.nodes.wait.node._utc_now", lambda: next(now_values)
+        "yian.nodes.wait.node._utc_now", lambda: next(now_values)
     )
 
     with pytest.raises(_HostStop) as caught:

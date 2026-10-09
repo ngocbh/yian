@@ -5,14 +5,14 @@ from dataclasses import replace
 
 import pytest
 
-from agent_composer.compile import iter_flow_origins, rewrite_flow_origins
-from agent_composer.compile.manifest import flow_fingerprint
-from agent_composer.compose import ComposedFlow, load_flow
-from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.loader import _finalize_composed_flow
-from agent_composer.compose.source import SourceCatalog
-from agent_composer.diagnostics import OriginRef, ResolverTable
-from agent_composer.nodes.base import Node
+from yian.compile import iter_flow_origins, rewrite_flow_origins
+from yian.compile.manifest import flow_fingerprint
+from yian.compose import ComposedFlow, load_flow
+from yian.compose.helpers.errors import LoadError
+from yian.compose.loader import _finalize_composed_flow
+from yian.compose.source import SourceCatalog
+from yian.diagnostics import OriginRef, ResolverTable
+from yian.nodes.base import Node
 
 
 _CHILD = """id: child

@@ -1,14 +1,14 @@
-# Agent guide for Agent Composer
+# Agent guide for Yian
 
 ## Project
 
-Agent Composer builds and runs workflows of agents, code, models, and tools. A
+Yian builds and runs workflows of agents, code, models, and tools. A
 flow is written as Docker-Compose-shaped YAML, compiled to a typed form, and run
-by this project’s own scheduler. The main interface is the `composer` CLI.
+by this project’s own scheduler. The main interface is the `yian` CLI.
 
 Use these documents as the source of truth:
 
-- [`src/agent_composer/README.md`](src/agent_composer/README.md) for engine design.
+- [`src/yian/README.md`](src/yian/README.md) for engine design.
 - [`docs/syntax.md`](docs/syntax.md) for flow syntax.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) for the GitHub workflow, tests, docs, and
   code style.
@@ -48,7 +48,7 @@ While working:
 
 ## Engine rules
 
-Read [`src/agent_composer/README.md`](src/agent_composer/README.md) before an
+Read [`src/yian/README.md`](src/yian/README.md) before an
 engine or flow change.
 
 - The author fixes the graph. A running flow does not rewrite itself, and an LLM
@@ -73,11 +73,11 @@ A stale guide or skill is a bug.
 
 ## Environment and tests
 
-Agent Composer supports Python 3.10 or newer. On this host, use the
-`agentcomposer` conda environment; the default Python may be too old.
+Yian supports Python 3.10 or newer. On this host, use the
+`yian` conda environment; the default Python may be too old.
 
 ```bash
-conda activate agentcomposer
+conda activate yian
 python -m pip install -e ".[all,dev]"
 ```
 

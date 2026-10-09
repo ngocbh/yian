@@ -5,8 +5,8 @@ travels on the node/Output/event. This test pins the field's presence and defaul
 on all three homes (the engine wiring is exercised by the expansion/loop/durable tests).
 """
 
-from agent_composer.events import NodeSucceeded
-from agent_composer.nodes.base import Node, NodeKind, Output
+from yian.events import NodeSucceeded
+from yian.nodes.base import Node, NodeKind, Output
 
 
 class _BareNode(Node):

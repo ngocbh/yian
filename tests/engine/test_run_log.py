@@ -13,8 +13,8 @@ from typing import Any, Callable
 
 import pytest
 
-import agent_composer.runtime.log as log_module
-from agent_composer.runtime.log import (
+import yian.runtime.log as log_module
+from yian.runtime.log import (
     SCHEMA_VERSION,
     JsonlRunLog,
     MemoryRunLog,
@@ -401,7 +401,7 @@ def test_jsonl_excludes_a_writer_in_a_separate_process(tmp_path: Path):
 import errno
 from pathlib import Path
 import sys
-from agent_composer.runtime.log import JsonlRunLog
+from yian.runtime.log import JsonlRunLog
 
 try:
     log = JsonlRunLog.resume(Path(sys.argv[1]))

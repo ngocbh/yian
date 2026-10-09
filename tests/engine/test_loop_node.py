@@ -5,18 +5,18 @@ STOP → `Output(carried, commit_as=origin)`; CONTINUE → `Grow(seed=(carried, 
 These test `run`/`respawn` and compile-owned reconstruction directly (no engine); e2e behavior is in
 `test_loop_run.py`.
 """
-from agent_composer.compile.expand import build_grow
-from agent_composer.diagnostics import OriginRef
-from agent_composer.memory import MemoryScope
-from agent_composer.nodes.base import Grow, NodeKind, Output
-from agent_composer.nodes.contracts import (
+from yian.compile.expand import build_grow
+from yian.diagnostics import OriginRef
+from yian.memory import MemoryScope
+from yian.nodes.base import Grow, NodeKind, Output
+from yian.nodes.contracts import (
     Assertion,
     ContractOrigins,
     ValueContract,
 )
-from agent_composer.nodes.ids import map_callsite, ns
-from agent_composer.nodes.loop import LoopNode
-from agent_composer.typesys import Type, ValueKind
+from yian.nodes.ids import map_callsite, ns
+from yian.nodes.loop import LoopNode
+from yian.typesys import Type, ValueKind
 
 from tests.engine.test_expand import _child_flow
 
@@ -229,8 +229,8 @@ def test_later_loop_growth_does_not_duplicate_the_loop_origin():
 def test_runaway_guard_raises_loop_max_exceeded():
     import pytest
 
-    from agent_composer.nodes.base import Grow
-    from agent_composer.nodes.loop.node import LoopMaxExceeded
+    from yian.nodes.base import Grow
+    from yian.nodes.loop.node import LoopMaxExceeded
     child = _child_flow()
     origin = LoopNode("lp", flow_id="f", child=child, predicate_kind="while",
                       predicate="${x}", max_iters=1)     # max: 1 permits exactly ONE body run

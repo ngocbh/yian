@@ -7,14 +7,14 @@ import json
 from langchain_core.messages import AIMessage
 import pytest
 
-import agent_composer.llm_clients as llm_clients
-import agent_composer.memory.profile as profile
-from agent_composer.compose import load_flow
-from agent_composer.memory.profile import ProfileMemory
-from agent_composer.memory.storage import FileMarkdownStore
-from agent_composer.memory.session import SessionMemory
-from agent_composer.run import resume_flow, run_flow
-from agent_composer.runtime.log import JsonlRunLog, MemoryCommitFailedRecord
+import yian.llm_clients as llm_clients
+import yian.memory.profile as profile
+from yian.compose import load_flow
+from yian.memory.profile import ProfileMemory
+from yian.memory.storage import FileMarkdownStore
+from yian.memory.session import SessionMemory
+from yian.run import resume_flow, run_flow
+from yian.runtime.log import JsonlRunLog, MemoryCommitFailedRecord
 from tests.engine.test_agent_backward import _BackwardChat, _reply
 
 _CHAT = """id: chat

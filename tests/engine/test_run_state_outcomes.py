@@ -11,17 +11,17 @@ from typing import Any
 
 import pytest
 
-import agent_composer.runtime.state as state_module
-from agent_composer.compile.model import (
+import yian.runtime.state as state_module
+from yian.compile.model import (
     CompiledFlow,
     Edge,
     END_ID,
     Flow,
     START_ID,
 )
-from agent_composer.runtime.common import NodeState
-from agent_composer.diagnostics import Failure, OriginRef
-from agent_composer.events import (
+from yian.runtime.common import NodeState
+from yian.diagnostics import Failure, OriginRef
+from yian.events import (
     NodeFailed,
     NodeRouted,
     NodeSkipped,
@@ -29,12 +29,12 @@ from agent_composer.events import (
     RunFailed,
     RunSucceeded,
 )
-from agent_composer.nodes.base import Grow, Node, NodeKind
-from agent_composer.nodes.code import CodeNode
-from agent_composer.nodes.contracts import PartialRecordContract, ValueContract
-from agent_composer.nodes.end import EndNode
-from agent_composer.nodes.start import StartNode
-from agent_composer.runtime.log import (
+from yian.nodes.base import Grow, Node, NodeKind
+from yian.nodes.code import CodeNode
+from yian.nodes.contracts import PartialRecordContract, ValueContract
+from yian.nodes.end import EndNode
+from yian.nodes.start import StartNode
+from yian.runtime.log import (
     MemoryRunLog,
     NodeFailedRecord,
     NodeRoutedRecord,
@@ -44,7 +44,7 @@ from agent_composer.runtime.log import (
     decode_pool,
     encode_pool,
 )
-from agent_composer.runtime.state import (
+from yian.runtime.state import (
     RunStartData,
     RunState,
     commit_prepared,
@@ -56,7 +56,7 @@ from agent_composer.runtime.state import (
     prepare_record,
     prepare_run_started,
 )
-from agent_composer.typesys import Type, ValueKind, VariablePool
+from yian.typesys import Type, ValueKind, VariablePool
 from tests.engine._fakes import FuncNode
 from tests.engine._graph_builder import _forward_capture
 
@@ -2439,7 +2439,7 @@ def test_terminal_unreachable_latch_survives_pruning_its_dynamic_cause(learnable
     assert state.terminal_unreachable_failure is failure
 
     if learnable:
-        from agent_composer.runtime.backward import compute_backward
+        from yian.runtime.backward import compute_backward
 
         causal = next(item for item in state.trace.occurrences if item.node_id == router_id)
         assert state.trace.terminal.source == causal.source

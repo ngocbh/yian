@@ -4,13 +4,13 @@ from pathlib import Path
 
 import pytest
 
-from agent_composer.compose import LoadError
-from agent_composer.compose.parse.file import (
+from yian.compose import LoadError
+from yian.compose.parse.file import (
     ComposeFile,
     parse_file,
     parse_source_document,
 )
-from agent_composer.diagnostics import SourceRange
+from yian.diagnostics import SourceRange
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 
@@ -153,12 +153,12 @@ def test_seed_11_anchors_load():
 
 
 def test_composefile_parses_optional_version():
-    from agent_composer.compose import parse_file
+    from yian.compose import parse_file
     f = parse_file("id: x\nname: x\nversion: v1\nnodes:\n  a: {kind: code, code: m:f}\n")
     assert f.version == "v1"
 
 
 def test_composefile_version_defaults_none():
-    from agent_composer.compose import parse_file
+    from yian.compose import parse_file
     f = parse_file("id: x\nname: x\nnodes:\n  a: {kind: code, code: m:f}\n")
     assert f.version is None

@@ -1,4 +1,4 @@
-"""Direct subscription responses use Composer's ordinary tools and SessionMemory."""
+"""Direct subscription responses use Yian's ordinary tools and SessionMemory."""
 
 import subprocess
 
@@ -6,15 +6,15 @@ import httpx
 import pytest
 from langchain_core.tools import tool
 
-import agent_composer.llm_clients as llm_clients
-import agent_composer.tools as tools
-from agent_composer.compose import load_flow
-from agent_composer.llm_clients.openai_subscription import (
+import yian.llm_clients as llm_clients
+import yian.tools as tools
+from yian.compose import load_flow
+from yian.llm_clients.openai_subscription import (
     SubscriptionAccess,
     create_subscription_model,
 )
-from agent_composer.memory.session import SessionMemory
-from agent_composer.run import run_flow
+from yian.memory.session import SessionMemory
+from yian.run import run_flow
 from tests.engine.test_agent_session import _FLOW, _view
 from tests.fixtures.openai_responses import ResponsesServer
 
@@ -106,7 +106,7 @@ def test_partial_stream_fails_before_composer_executes_tool(monkeypatch, termina
 
 @pytest.mark.parametrize("subscription", [False, True])
 def test_rich_responses_summary_keeps_shared_memory_working(monkeypatch, subscription):
-    from agent_composer.llm_clients.openai_client import NormalizedChatOpenAI
+    from yian.llm_clients.openai_client import NormalizedChatOpenAI
     from tests.engine.test_agent_session import _Model
     from tests.engine.test_session_summary_execution import (
         FLOW,

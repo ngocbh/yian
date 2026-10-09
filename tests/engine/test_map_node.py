@@ -8,8 +8,8 @@ attribute and no `${...}` source on the node; the `over` SOURCE rides `flow.wiri
 
 import importlib
 
-from agent_composer.nodes.base import Grow, NodeKind
-from agent_composer.nodes.map import MapNode
+from yian.nodes.base import Grow, NodeKind
+from yian.nodes.map import MapNode
 
 
 def test_map_node_kind_value():
@@ -50,4 +50,4 @@ def test_map_node_run_empty_over_builds_lone_list_end():
 
 def test_map_node_kind_exists_and_package_imports():
     assert hasattr(NodeKind, "MAP")
-    importlib.import_module("agent_composer.nodes.map")
+    importlib.import_module("yian.nodes.map")

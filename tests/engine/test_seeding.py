@@ -2,9 +2,9 @@
 
 from datetime import datetime
 
-from agent_composer.typesys.pool import VariablePool
-from agent_composer.typesys.values import DateValue, DateTimeValue
-from agent_composer.typesys.seeding import (
+from yian.typesys.pool import VariablePool
+from yian.typesys.values import DateValue, DateTimeValue
+from yian.typesys.seeding import (
     default_run_id,
     now_utc,
     seed_system_clock,

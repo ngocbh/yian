@@ -1,5 +1,5 @@
-from agent_composer.compile.model import CompiledFlow, Edge, START_ID, END_ID
-from agent_composer.nodes.contracts import Binding
+from yian.compile.model import CompiledFlow, Edge, START_ID, END_ID
+from yian.nodes.contracts import Binding
 from tests.engine._fakes import FuncNode
 
 

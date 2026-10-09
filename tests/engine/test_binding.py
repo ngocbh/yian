@@ -12,18 +12,18 @@ from collections import namedtuple
 
 import pytest
 
-from agent_composer.diagnostics import OriginRef
-from agent_composer.compile.model import START_ID
-from agent_composer.expr import RequiredError
-from agent_composer.nodes.binding import BindingError, apply_defaults, bind_params
-from agent_composer.nodes.contracts import (
+from yian.diagnostics import OriginRef
+from yian.compile.model import START_ID
+from yian.expr import RequiredError
+from yian.nodes.binding import BindingError, apply_defaults, bind_params
+from yian.nodes.contracts import (
     Binding,
     ContractOrigins,
     Parameter,
     ValueContract,
 )
-from agent_composer.typesys import Type, ValueKind
-from agent_composer.typesys.pool import VariablePool
+from yian.typesys import Type, ValueKind
+from yian.typesys.pool import VariablePool
 
 # Test-local sink: one canonical parameter plus its flow-owned source.
 _Sink = namedtuple(
@@ -100,9 +100,9 @@ def _pool(**system):
 
 
 def test_binding_capture_matches_the_value_actually_delivered(monkeypatch):
-    from agent_composer.expr.builtins import TEMPLATE_FNS
-    from agent_composer.expr.lineage import ResolvedValue, SourceRef, route_feedback
-    from agent_composer.nodes.binding import BindingCollector
+    from yian.expr.builtins import TEMPLATE_FNS
+    from yian.expr.lineage import ResolvedValue, SourceRef, route_feedback
+    from yian.nodes.binding import BindingCollector
 
     original = {"items": ["before"]}
     reads = []
@@ -148,8 +148,8 @@ def test_binding_capture_matches_the_value_actually_delivered(monkeypatch):
 
 
 def test_omitted_default_has_no_upstream_source():
-    from agent_composer.expr.lineage import ResolvedValue, SourceRef, route_feedback
-    from agent_composer.nodes.binding import BindingCollector
+    from yian.expr.lineage import ResolvedValue, SourceRef, route_feedback
+    from yian.nodes.binding import BindingCollector
 
     collector = BindingCollector()
     delivered = bind_params(
@@ -179,11 +179,11 @@ def test_omitted_default_has_no_upstream_source():
 
 @pytest.mark.parametrize("stage", ["ordinary", "reserved", "deferred", "wrapper_default"])
 def test_binding_failure_keeps_partial_context_without_usable_inputs(stage):
-    from agent_composer.compile.model import Flow
-    from agent_composer.nodes.base import Node
-    from agent_composer.nodes.map import MapNode
-    from agent_composer.nodes.wait import WaitNode
-    from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
+    from yian.compile.model import Flow
+    from yian.nodes.base import Node
+    from yian.nodes.map import MapNode
+    from yian.nodes.wait import WaitNode
+    from yian.runtime.eval_node import EvaluationFailure, eval_node
 
     origin = OriginRef("bad-input")
     if stage == "ordinary":
@@ -227,9 +227,9 @@ def test_binding_failure_keeps_partial_context_without_usable_inputs(stage):
 
 
 def test_evaluator_capture_preserves_typed_values_before_node_mutation():
-    from agent_composer.nodes.base import Node, NodeKind, Output
-    from agent_composer.runtime.eval_node import eval_node
-    from agent_composer.typesys import FileRef
+    from yian.nodes.base import Node, NodeKind, Output
+    from yian.runtime.eval_node import eval_node
+    from yian.typesys import FileRef
 
     class MutatingNode(Node):
         kind = NodeKind.CODE
@@ -254,8 +254,8 @@ def test_evaluator_capture_preserves_typed_values_before_node_mutation():
 
 
 def test_capture_includes_materialized_reserved_values_from_node_hooks():
-    from agent_composer.nodes.base import Node, NodeKind, Output
-    from agent_composer.runtime.eval_node import eval_node
+    from yian.nodes.base import Node, NodeKind, Output
+    from yian.runtime.eval_node import eval_node
 
     class ReservedNode(Node):
         kind = NodeKind.CODE
@@ -275,9 +275,9 @@ def test_capture_includes_materialized_reserved_values_from_node_hooks():
 
 @pytest.mark.parametrize("mode", ["return", "mutate", "preassert"])
 def test_per_item_wrapper_capture_includes_defaults_before_body_and_asserts(mode):
-    from agent_composer.nodes.base import Node, NodeKind, Output
-    from agent_composer.nodes.contracts import Assertion
-    from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
+    from yian.nodes.base import Node, NodeKind, Output
+    from yian.nodes.contracts import Assertion
+    from yian.runtime.eval_node import EvaluationFailure, eval_node
 
     class PerItemNode(Node):
         kind = NodeKind.CODE
@@ -306,8 +306,8 @@ def test_per_item_wrapper_capture_includes_defaults_before_body_and_asserts(mode
 
 
 def test_map_wrapper_capture_includes_valid_defaults_and_item_routes():
-    from agent_composer.nodes.map import MapNode
-    from agent_composer.runtime.eval_node import eval_node
+    from yian.nodes.map import MapNode
+    from yian.runtime.eval_node import eval_node
 
     node = MapNode("map", flow_id="child", child=object())
     node.params = [Parameter("fallback", contract=NUMBER, has_default=True, default=30)]

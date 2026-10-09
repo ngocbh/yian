@@ -9,9 +9,9 @@ from langchain_core.tools import BaseTool, StructuredTool
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from pydantic.v1 import BaseModel as BaseModelV1
 
-from agent_composer.nodes.tool import ToolNode
-import agent_composer.tools as tools_package
-from agent_composer.tools import (
+from yian.nodes.tool import ToolNode
+import yian.tools as tools_package
+from yian.tools import (
     TOOL_REGISTRY,
     ToolSet,
     invoke_tool,

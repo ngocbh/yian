@@ -31,7 +31,7 @@ Copy, rename, and edit.
 | [`map-fanout.yaml`](templates/map-fanout.yaml) | `map` a child over a list and collect in source order |
 | [`inline-composites.yaml`](templates/inline-composites.yaml) | provider-free inline CALL, MAP, and LOOP child bodies (no `defs:`) |
 | [`loop.yaml`](templates/loop.yaml) | `loop` a body until a predicate goes false — chat-shaped blocking turn |
-| [`chat.yaml`](templates/chat.yaml) | a conversational REPL — HUMAN_INPUT → exit CASE → AGENT/CODE nodes, with flow-owned exit, the shape `composer chat` runs |
+| [`chat.yaml`](templates/chat.yaml) | a conversational REPL — HUMAN_INPUT → exit CASE → AGENT/CODE nodes, with flow-owned exit, the shape `yian chat` runs |
 | [`llm-config-cascade.yaml`](templates/llm-config-cascade.yaml) | flow-level `llm_config:`, per-node override, `inherit: false` |
 | [`node-env-config.yaml`](templates/node-env-config.yaml) | flow-level `env:` default + per-node override (node wins), e.g. `max_tool_iterations` |
 
@@ -281,7 +281,7 @@ transcript. Output bindings rejoin those branches into the carried 2-field recor
 EOF is normalized by the bundled host. The loop body's `output:` must EQUAL the carried
 record. A lone multi-ref coalesce has no inferable type, so the template uses adjacent
 defaulted spans for the `str` field and compares the optional exit field with `true` to
-prove `bool`. This is the shape `composer chat` runs; see `chat.yaml` (and
+prove `bool`. This is the shape `yian chat` runs; see `chat.yaml` (and
 `examples/chat.yaml` for a runnable copy).
 
 ## Gotchas
@@ -330,8 +330,8 @@ prove `bool`. This is the shape `composer chat` runs; see `chat.yaml` (and
 
 ## Model selection — the `llm_config` cascade
 
-Use `composer auth openai` to select subscription or API-key authentication. Both use
-`provider: openai` and the same Composer execution and memory paths. A flow's
+Use `yian auth openai` to select subscription or API-key authentication. Both use
+`provider: openai` and the same Yian execution and memory paths. A flow's
 `llm_config:` cannot set `api_key` or `base_url`; a Python host passes the key in
 the run's `llm_config` (it needs `provider`) and again to
 `resume_flow`/`result.backward` as `api_key=key`. It is never recorded, and it
@@ -424,10 +424,10 @@ factory, `factories` naming a built-in type, a non-`Memory` value, config on a
 supplied key, `storage` for a supplied or custom key, an undeclared key, a rejected
 config, `root` without a safe flow `id`, and two built-in keys on one storage file.
 
-`composer run` builds every built-in memory in RAM, or with `--memory-root DIR` at
+`yian run` builds every built-in memory in RAM, or with `--memory-root DIR` at
 `DIR/<flow id>/<scope...>/<name>.sqlite` (`.md` for profile), with repeatable
 `--memory-storage KEY=PATH` overriding one key. It refuses a flow with a
-custom type, even on `--resume`. `composer chat` and its `run_flow` tool supply no
+custom type, even on `--resume`. `yian chat` and its `run_flow` tool supply no
 long-term memory, so declared memories stay off and session conversations are not
 kept. Use the same storage on unfinished resume; paths
 never belong in YAML or run logs, and terminal inspection opens no backend. A
@@ -463,10 +463,10 @@ memory but has no backward command and never enables learning implicitly.
 ## Validate
 
 ```bash
-composer run <flow>.yaml --inputs base.json --input k=v
+yian run <flow>.yaml --inputs base.json --input k=v
 ```
 Explicit JSON inputs load first; repeatable `--input` flags override individual
-keys but remain a string/scalar surface. With an interactive stdin (TTY), `composer`
+keys but remain a string/scalar surface. With an interactive stdin (TTY), `yian`
 prompts for declarations still missing and keeps four outcomes distinct: an explicit
 value, `Set null`, omit/use-default when allowed, and cancellation. Nullable
 boolean/`Literal[...]` widgets put `Set null` in their value select. A null-capable

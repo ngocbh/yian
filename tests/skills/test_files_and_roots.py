@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from agent_composer.compose.skills import default_skill_roots
-from agent_composer.skills import Skill, SkillError
-from agent_composer.skills.catalog import MAX_SKILL_FILE_BYTES, read_skill_file
+from yian.compose.skills import default_skill_roots
+from yian.skills import Skill, SkillError
+from yian.skills.catalog import MAX_SKILL_FILE_BYTES, read_skill_file
 
 
 @pytest.fixture
@@ -95,8 +95,8 @@ def test_default_roots_outside_git_use_only_cwd(tmp_path: Path) -> None:
 
 
 def test_compose_facade_exports_the_skill_loaders() -> None:
-    from agent_composer import compose
-    from agent_composer.compose import skills as compose_skills
+    from yian import compose
+    from yian.compose import skills as compose_skills
 
     assert {"load_skills", "default_skill_roots"} <= set(compose.__all__)
     assert compose.default_skill_roots is compose_skills.default_skill_roots

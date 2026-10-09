@@ -5,8 +5,8 @@ sentinel pair, proving the fallback path is reachable on a concrete provider/mod
 a monkeypatch of the gate.
 """
 
-from agent_composer.nodes.agent.structured import generate_structured
-from agent_composer.typesys.values import Type, ValueKind
+from yian.nodes.agent.structured import generate_structured
+from yian.typesys.values import Type, ValueKind
 
 
 def test_no_native_support_uses_prompt_injection():

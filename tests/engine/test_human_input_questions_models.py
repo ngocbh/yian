@@ -1,5 +1,5 @@
 import pytest
-from agent_composer.nodes.human_input.questions import (
+from yian.nodes.human_input.questions import (
     OptionSpec, QuestionSpec, parse_questions, QuestionSpecError,
 )
 

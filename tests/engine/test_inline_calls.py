@@ -17,8 +17,8 @@ import pytest
 # CODE-only children (Ollama-free), resolver-free via in-file `defs:`.
 # --------------------------------------------------------------------------- #
 
-from agent_composer.compose import LoadError, load_flow  # noqa: E402
-from agent_composer.run import run_flow  # noqa: E402
+from yian.compose import LoadError, load_flow  # noqa: E402
+from yian.run import run_flow  # noqa: E402
 
 # An in-file `enrich` def that echoes its `topic` — the callee for the inline calls.
 _ENRICH_DEF = """
@@ -406,8 +406,8 @@ def test_inline_call_seed_21_loads():
 # and runtime failure over a synthesized binding.
 # --------------------------------------------------------------------------- #
 
-from agent_composer.compose import desugar_inline_calls  # noqa: E402
-from agent_composer.compose.parse.file import ToolDescriptor  # noqa: E402
+from yian.compose import desugar_inline_calls  # noqa: E402
+from yian.compose.parse.file import ToolDescriptor  # noqa: E402
 
 
 def test_quoted_interpolated_arg_strips_quotes_like_named_form():

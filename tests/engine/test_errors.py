@@ -22,12 +22,12 @@ from pathlib import Path
 
 import pytest
 
-from agent_composer.compose import LoadError, load_flow
-from agent_composer.compose.helpers.errors import LoadDiagnostics
-from agent_composer.compose.parse.nodes import parse_nodes
-from agent_composer.compose.source import SourceDocument
-from agent_composer.diagnostics import SourceRange
-from agent_composer.run import run_flow
+from yian.compose import LoadError, load_flow
+from yian.compose.helpers.errors import LoadDiagnostics
+from yian.compose.parse.nodes import parse_nodes
+from yian.compose.source import SourceDocument
+from yian.diagnostics import SourceRange
+from yian.run import run_flow
 
 _ERRORS = Path(__file__).resolve().parents[2] / "tests" / "seeds" / "errors"
 

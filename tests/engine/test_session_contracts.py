@@ -10,7 +10,7 @@ from typing import get_args, get_type_hints
 
 import pytest
 
-from agent_composer.memory import contracts as c
+from yian.memory import contracts as c
 from tests.engine._memory_fakes import _Memory
 
 
@@ -359,7 +359,7 @@ def test_conversation_capabilities_are_optional_and_exact():
 
 
 def test_conversation_contracts_are_exported_without_concrete_backend():
-    import agent_composer.memory as memory
+    import yian.memory as memory
 
     names = (
         "ConversationInvocation",
@@ -521,7 +521,7 @@ def test_effect_checkpoints_reject_zero_ordinal_and_list_items():
 
 
 def test_content_digest_excludes_ledger():
-    from agent_composer.memory.conversation import conversation_content_digest
+    from yian.memory.conversation import conversation_content_digest
 
     first = _view(revision=1, applied=(_applied(),))
     second = _view(revision=1, applied=(replace(_applied(), event_digest="d" * 64),))
@@ -533,7 +533,7 @@ def test_content_digest_excludes_ledger():
 
 
 def test_admission_advances_revision_once():
-    from agent_composer.memory.conversation import (
+    from yian.memory.conversation import (
         advance_conversation,
         checkpoint_digest,
         conversation_content_digest,
@@ -559,14 +559,14 @@ def test_admission_advances_revision_once():
 
 
 def _admitted():
-    from agent_composer.memory.conversation import advance_conversation
+    from yian.memory.conversation import advance_conversation
 
     baseline = _view()
     return advance_conversation(baseline, c.ConversationAdmitted(_stamp(), baseline))
 
 
 def test_request_appends_new_items_and_pending_effect():
-    from agent_composer.memory.conversation import advance_conversation
+    from yian.memory.conversation import advance_conversation
 
     before = _admitted()
     item = c.ConversationItem("user-1", "message", {"role": "user", "text": "Hi"})
@@ -590,7 +590,7 @@ def test_request_appends_new_items_and_pending_effect():
 
 
 def _requested():
-    from agent_composer.memory.conversation import advance_conversation
+    from yian.memory.conversation import advance_conversation
 
     return advance_conversation(
         _admitted(), c.ConversationEffectRequested(_stamp(1, 1), "model", {}, ())
@@ -598,7 +598,7 @@ def _requested():
 
 
 def test_observation_changes_only_matching_effect():
-    from agent_composer.memory.conversation import advance_conversation
+    from yian.memory.conversation import advance_conversation
 
     before = advance_conversation(
         _requested(), c.ConversationEffectRequested(_stamp(2, 2), "tool", {}, ())
@@ -625,7 +625,7 @@ def test_observation_changes_only_matching_effect():
 
 @pytest.mark.parametrize("status", ["failed", "interrupted"])
 def test_close_preserves_unresolved_effects(status):
-    from agent_composer.memory.conversation import advance_conversation
+    from yian.memory.conversation import advance_conversation
 
     before = _requested()
     after = advance_conversation(before, c.ConversationClosed(_stamp(2, 2), status))
@@ -641,7 +641,7 @@ def test_close_preserves_unresolved_effects(status):
 
 
 def test_transition_rejects_skipped_ordinal():
-    from agent_composer.memory.conversation import advance_conversation
+    from yian.memory.conversation import advance_conversation
 
     before = _admitted()
     event = c.ConversationEffectRequested(_stamp(2, 1), "model", {}, ())
@@ -654,7 +654,7 @@ def test_transition_rejects_skipped_ordinal():
 
 @pytest.mark.parametrize("status", [None, "pending", "completed", "closed_failed"])
 def test_admission_preserves_unresolved_or_unclosed_effects(status):
-    from agent_composer.memory.conversation import advance_conversation
+    from yian.memory.conversation import advance_conversation
 
     before = _requested()
     if status in ("pending", "completed"):
@@ -682,7 +682,7 @@ def test_admission_preserves_unresolved_or_unclosed_effects(status):
 
 
 def test_admission_can_follow_effect_free_unclosed_invocation():
-    from agent_composer.memory.conversation import advance_conversation
+    from yian.memory.conversation import advance_conversation
 
     before = _admitted()
     event = c.ConversationAdmitted(
@@ -694,7 +694,7 @@ def test_admission_can_follow_effect_free_unclosed_invocation():
 
 
 def _complete_history():
-    from agent_composer.memory.conversation import advance_conversation
+    from yian.memory.conversation import advance_conversation
 
     baseline = _view(compatibility={"provider": "fake", "options": [True, 1, 1.0]})
     events = (
@@ -721,7 +721,7 @@ def _complete_history():
 
 
 def test_conversation_codecs_round_trip_complete_history_and_detach():
-    from agent_composer.memory.conversation import (
+    from yian.memory.conversation import (
         checkpoint_digest,
         conversation_checkpoint_from_json,
         conversation_checkpoint_to_json,
@@ -755,7 +755,7 @@ def test_conversation_codecs_round_trip_complete_history_and_detach():
     "damage", ["missing", "extra", "tuple", "bool", "key"]
 )
 def test_view_codec_rejects_wrong_closed_wire_shape(damage):
-    from agent_composer.memory.conversation import (
+    from yian.memory.conversation import (
         conversation_view_from_json,
         conversation_view_to_json,
     )
@@ -779,7 +779,7 @@ def test_view_codec_rejects_wrong_closed_wire_shape(damage):
     "damage", ["final", "adjacency", "anchor", "ordinal", "length"]
 )
 def test_view_codec_rejects_broken_digest_chain(damage):
-    from agent_composer.memory.conversation import (
+    from yian.memory.conversation import (
         conversation_view_from_json,
         conversation_view_to_json,
     )
@@ -821,7 +821,7 @@ def _changed_view(view, **changes):
 
 
 def _reseal(view):
-    from agent_composer.memory.conversation import conversation_content_digest
+    from yian.memory.conversation import conversation_content_digest
 
     return _changed_view(
         view,
@@ -842,7 +842,7 @@ def _reseal(view):
     ],
 )
 def test_view_codec_rejects_impossible_history_even_with_matching_final_digest(damage):
-    from agent_composer.memory.conversation import conversation_view_to_json
+    from yian.memory.conversation import conversation_view_to_json
 
     views, _ = _complete_history()
     view = views[-1]
@@ -908,7 +908,7 @@ def test_view_codec_rejects_impossible_history_even_with_matching_final_digest(d
     ],
 )
 def test_invalid_transitions_preserve_input_evidence(scenario):
-    from agent_composer.memory.conversation import advance_conversation
+    from yian.memory.conversation import advance_conversation
 
     views, _ = _complete_history()
     before = views[1]
@@ -965,7 +965,7 @@ def test_invalid_transitions_preserve_input_evidence(scenario):
 
 
 def test_later_invocation_reuses_local_ordinals_without_replacing_prior_effects():
-    from agent_composer.memory.conversation import (
+    from yian.memory.conversation import (
         advance_conversation,
         conversation_view_from_json,
         conversation_view_to_json,
@@ -999,7 +999,7 @@ def test_later_invocation_reuses_local_ordinals_without_replacing_prior_effects(
     "damage", ["extra", "missing", "discriminator", "stamp", "bool", "array"]
 )
 def test_checkpoint_codec_rejects_malformed_closed_wire(index, damage):
-    from agent_composer.memory.conversation import (
+    from yian.memory.conversation import (
         conversation_checkpoint_from_json,
         conversation_checkpoint_to_json,
     )
@@ -1024,7 +1024,7 @@ def test_checkpoint_codec_rejects_malformed_closed_wire(index, damage):
 
 @pytest.mark.parametrize("bad", [float("nan"), float("inf"), "\ud800", (), object()])
 def test_codecs_reject_non_json_nested_values(bad):
-    from agent_composer.memory.conversation import (
+    from yian.memory.conversation import (
         conversation_view_from_json,
         conversation_view_to_json,
     )
@@ -1036,7 +1036,7 @@ def test_codecs_reject_non_json_nested_values(bad):
 
 
 def test_codecs_reject_cycles_and_non_string_keys():
-    from agent_composer.memory.conversation import (
+    from yian.memory.conversation import (
         conversation_view_from_json,
         conversation_view_to_json,
     )
@@ -1053,7 +1053,7 @@ def test_codecs_reject_cycles_and_non_string_keys():
 
 @pytest.mark.parametrize("depth", [120, 123, 124, 125, 126, 127, 128])
 def test_wire_nesting_is_checked_before_fold_and_encoder_return(depth):
-    from agent_composer.memory.conversation import (
+    from yian.memory.conversation import (
         advance_conversation,
         conversation_checkpoint_from_json,
         conversation_checkpoint_to_json,
@@ -1089,7 +1089,7 @@ def test_wire_nesting_is_checked_before_fold_and_encoder_return(depth):
 
 @pytest.mark.parametrize("depth", [124, 125])
 def test_publishable_view_can_complete_and_become_the_next_admission_baseline(depth):
-    from agent_composer.memory.conversation import (
+    from yian.memory.conversation import (
         advance_conversation,
         conversation_checkpoint_from_json,
         conversation_checkpoint_to_json,
@@ -1128,7 +1128,7 @@ def test_publishable_view_can_complete_and_become_the_next_admission_baseline(de
 
 @pytest.mark.parametrize("direction", ["encode", "decode"])
 def test_view_codec_reserves_the_next_admission_baseline_wrapper(direction):
-    from agent_composer.memory.conversation import (
+    from yian.memory.conversation import (
         checkpoint_digest,
         conversation_view_from_json,
         conversation_view_to_json,
@@ -1158,7 +1158,7 @@ def test_view_codec_reserves_the_next_admission_baseline_wrapper(direction):
 
 
 def test_checkpoint_digest_includes_complete_admission_ledger():
-    from agent_composer.memory.conversation import checkpoint_digest
+    from yian.memory.conversation import checkpoint_digest
 
     views, _ = _complete_history()
     baseline = views[-1]
@@ -1185,7 +1185,7 @@ def test_checkpoint_digest_includes_complete_admission_ledger():
     ],
 )
 def test_view_codec_rejects_invalid_nested_values(damage):
-    from agent_composer.memory.conversation import (
+    from yian.memory.conversation import (
         conversation_view_from_json,
         conversation_view_to_json,
     )
@@ -1217,7 +1217,7 @@ def test_view_codec_rejects_invalid_nested_values(damage):
 
 
 def test_view_codec_accepts_admission_after_unclosed_effectful_invocation():
-    from agent_composer.memory.conversation import (
+    from yian.memory.conversation import (
         advance_conversation,
         conversation_view_from_json,
         conversation_view_to_json,
@@ -1237,7 +1237,7 @@ def test_view_codec_accepts_admission_after_unclosed_effectful_invocation():
 
 
 def test_fold_and_codecs_revalidate_tampered_exact_carriers():
-    from agent_composer.memory.conversation import (
+    from yian.memory.conversation import (
         advance_conversation,
         conversation_checkpoint_to_json,
         conversation_view_to_json,
@@ -1257,7 +1257,7 @@ def test_fold_and_codecs_revalidate_tampered_exact_carriers():
 
 
 def test_fold_does_not_mask_unexpected_host_fault(monkeypatch):
-    import agent_composer.memory.conversation as conversation
+    import yian.memory.conversation as conversation
 
     before = _admitted()
     checkpoint = c.ConversationEffectRequested(_stamp(1, 1), "model", {}, ())
@@ -1277,7 +1277,7 @@ def test_fold_does_not_mask_unexpected_host_fault(monkeypatch):
 def test_checkpoint_codec_rejects_retired_native_state_without_rewriting(event_index):
     from copy import deepcopy
 
-    from agent_composer.memory.conversation import (
+    from yian.memory.conversation import (
         conversation_checkpoint_from_json,
         conversation_checkpoint_to_json,
     )
@@ -1355,7 +1355,7 @@ def test_memory_content_validates_explicit_transcript_sources():
 
 
 def test_memory_context_carriers_are_contracts_only_exports():
-    import agent_composer.memory as memory
+    import yian.memory as memory
 
     for name in ("MemoryContent", "MemoryContext", "MemoryContextRequest", "TranscriptSource"):
         assert name in memory.__all__
@@ -1365,7 +1365,7 @@ def test_memory_context_carriers_are_contracts_only_exports():
 
 
 def test_conversation_carriers_have_no_owner_key():
-    import agent_composer.memory as memory
+    import yian.memory as memory
 
     assert not hasattr(c, "ConversationKey")
     assert "ConversationKey" not in memory.__all__

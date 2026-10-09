@@ -7,13 +7,13 @@ from langchain_core.exceptions import OutputParserException
 from langchain_core.output_parsers import PydanticOutputParser
 from pydantic import ValidationError, create_model
 
-from agent_composer.nodes.agent.structured import (
+from yian.nodes.agent.structured import (
     _is_contract_path,
     _structured_validation_path,
     generate_structured,
 )
-from agent_composer.nodes.base import _HostStop
-from agent_composer.typesys.values import Type, ValueKind
+from yian.nodes.base import _HostStop
+from yian.typesys.values import Type, ValueKind
 
 
 def test_retry_on_invalid_then_succeeds():

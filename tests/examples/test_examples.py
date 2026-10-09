@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_composer.compose.loader import load_flow
+from yian.compose.loader import load_flow
 
 EXAMPLES = sorted((Path(__file__).resolve().parents[2] / "examples").glob("*.yaml"))
 

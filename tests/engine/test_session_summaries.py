@@ -7,9 +7,9 @@ import traceback
 
 import pytest
 
-from agent_composer.memory.session import SessionMemory
-from agent_composer.memory import MemoryOperationError
-from agent_composer.nodes.base import _HostStop
+from yian.memory.session import SessionMemory
+from yian.memory import MemoryOperationError
+from yian.nodes.base import _HostStop
 from tests.engine._session_fakes import append_reply, harness, request, snapshot
 
 

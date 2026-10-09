@@ -9,14 +9,14 @@ import traceback
 from langchain_core.messages import AIMessage, HumanMessage
 import pytest
 
-import agent_composer.llm_clients as llm_clients
-from agent_composer import load_flow, run_flow
-from agent_composer.memory import MemoryOperationError, MemorySetupError
-from agent_composer.memory.conversation import conversation_view_from_json
-from agent_composer.memory.session import SessionMemory
-from agent_composer.nodes.agent.memory import decode_message
-from agent_composer.nodes.base import _HostStop
-from agent_composer.run import _run_flow_controlled
+import yian.llm_clients as llm_clients
+from yian import load_flow, run_flow
+from yian.memory import MemoryOperationError, MemorySetupError
+from yian.memory.conversation import conversation_view_from_json
+from yian.memory.session import SessionMemory
+from yian.nodes.agent.memory import decode_message
+from yian.nodes.base import _HostStop
+from yian.run import _run_flow_controlled
 from tests.engine._memory_fakes import _Memory
 
 

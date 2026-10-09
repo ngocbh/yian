@@ -12,8 +12,8 @@ from typing import Any
 
 import pytest
 
-from agent_composer.cli.run import assemble_question_answers
-from agent_composer.cli.terminal import (
+from yian.cli.run import assemble_question_answers
+from yian.cli.terminal import (
     ControllerComplete,
     PromptRequest,
     TerminalBroker,
@@ -76,7 +76,7 @@ def _exception(outcome: Queue[tuple[str, Any]]) -> BaseException:
 
 def test_terminal_module_imports_only_the_standard_library() -> None:
     """Keep the broker below Rich, questionary, runtime, and node packages."""
-    import agent_composer.cli.terminal as terminal
+    import yian.cli.terminal as terminal
 
     tree = ast.parse(Path(terminal.__file__).read_text())
     roots = {

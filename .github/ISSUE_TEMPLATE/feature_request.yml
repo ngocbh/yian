@@ -6,11 +6,11 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for the suggestion! Before submitting, please consider Agent Composer's design intent:
+        Thanks for the suggestion! Before submitting, please consider Yian's design intent:
 
-        - **New capability should usually be a node, not an engine branch.** The engine core stays kind-blind; kind-specific logic lives in a node's own `run()`. See [`src/agent_composer/README.md`](https://github.com/ngocbh/agent-composer/blob/main/src/agent_composer/README.md).
+        - **New capability should usually be a node, not an engine branch.** The engine core stays kind-blind; kind-specific logic lives in a node's own `run()`. See [`src/yian/README.md`](https://github.com/ngocbh/yian/blob/main/src/yian/README.md).
         - **Prefer general combinators over one-off features.** The engine privileges no output type and no domain.
-        - **Search [existing issues](https://github.com/ngocbh/agent-composer/issues) and the [backlog](https://github.com/ngocbh/agent-composer/tree/main/docs/backlog)** — it may already be planned.
+        - **Search [existing issues](https://github.com/ngocbh/yian/issues) and the [backlog](https://github.com/ngocbh/yian/tree/main/docs/backlog)** — it may already be planned.
 
   - type: textarea
     id: problem
@@ -46,7 +46,7 @@ body:
       options:
         - New node kind
         - Engine primitive / combinator
-        - CLI improvement (`composer ...`)
+        - CLI improvement (`yian ...`)
         - Compose syntax (`${...}` / YAML surface / typedefs)
         - Typesys (types / variable pool)
         - LLM client / provider

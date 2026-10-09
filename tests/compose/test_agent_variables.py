@@ -2,12 +2,12 @@
 
 import pytest
 
-from agent_composer.compose import LoadError, load_flow
-from agent_composer.compose.nodes.agent import AgentDescriptor
-from agent_composer.compose.nodes.base import BuildContext
-from agent_composer.compose.source import SourceDocument
-from agent_composer.nodes.contracts import Parameter, ValueContract
-from agent_composer.typesys.types import read_typedefs
+from yian.compose import LoadError, load_flow
+from yian.compose.nodes.agent import AgentDescriptor
+from yian.compose.nodes.base import BuildContext
+from yian.compose.source import SourceDocument
+from yian.nodes.contracts import Parameter, ValueContract
+from yian.typesys.types import read_typedefs
 
 
 def test_source_free_agent_build_resolves_typed_variables_without_input_bindings():

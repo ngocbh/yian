@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from agent_composer.compile.model import END_ID, CompiledFlow, FlowOutput
-from agent_composer.compose import load_flow
-from agent_composer.compose.build.pipeline import _assemble
-from agent_composer.compose.loader import _CallableScope
-from agent_composer.compose.source import SourceCursor, SourceDocument
-from agent_composer.diagnostics import OriginRef, OriginResolver
-from agent_composer.nodes.contracts import Binding
+from yian.compile.model import END_ID, CompiledFlow, FlowOutput
+from yian.compose import load_flow
+from yian.compose.build.pipeline import _assemble
+from yian.compose.loader import _CallableScope
+from yian.compose.source import SourceCursor, SourceDocument
+from yian.diagnostics import OriginRef, OriginResolver
+from yian.nodes.contracts import Binding
 
 
 def _output(flow: CompiledFlow, name: str) -> FlowOutput:

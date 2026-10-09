@@ -5,15 +5,15 @@ import importlib
 import pytest
 from typer.testing import CliRunner
 
-from agent_composer.cli import app
-from agent_composer.llm_clients.auth import (
+from yian.cli import app
+from yian.llm_clients.auth import (
     ApiKeyCredentials,
     AuthError,
     AuthStore,
     OAuthCredentials,
 )
 
-auth_cli = importlib.import_module("agent_composer.cli.auth")
+auth_cli = importlib.import_module("yian.cli.auth")
 runner = CliRunner()
 
 
@@ -47,7 +47,7 @@ class Service:
 @pytest.fixture
 def setup_auth(monkeypatch, tmp_path):
     path = tmp_path / "auth" / "auth.json"
-    monkeypatch.setenv("AGENT_COMPOSER_AUTH_FILE", str(path))
+    monkeypatch.setenv("YIAN_AUTH_FILE", str(path))
     monkeypatch.setenv("OPENAI_API_KEY", "private-key")
     service = Service()
     monkeypatch.setattr(auth_cli, "OpenAIAuth", lambda: service)

@@ -19,15 +19,15 @@ __all__ = ["<PublicName>"]
 
 ## Real example (from this repo)
 
-`src/agent_composer/typesys/__init__.py` — the typed value system + variable pool,
+`src/yian/typesys/__init__.py` — the typed value system + variable pool,
 an independent engine leaf (it imports nothing else in the engine; `nodes`,
 `compile`, `compose`, and `runtime` import *it*, never the reverse):
 
 ```python
 """Typed runtime state: the typed value system + the variable pool."""
 
-from agent_composer.typesys.pool import VariablePool
-from agent_composer.typesys.values import TypedValue, build_value
+from yian.typesys.pool import VariablePool
+from yian.typesys.values import TypedValue, build_value
 # … (the full module re-exports the typed value + type surface)
 
 __all__ = ["TypedValue", "VariablePool", "build_value"]
@@ -35,7 +35,7 @@ __all__ = ["TypedValue", "VariablePool", "build_value"]
 
 The worked top-level charter — with the full leaf-to-root layer diagram and the
 "nothing here imports a DB or a server" boundary — is
-`src/agent_composer/__init__.py`. Read it to see the dependency direction written
+`src/yian/__init__.py`. Read it to see the dependency direction written
 down for the whole engine. It is also the deliberate facade exception: a
 standard-library-only lazy export table prevents importing the lower
 `diagnostics` submodule from bootstrapping compile, compose, or runtime while
@@ -91,8 +91,8 @@ to compile it. `compile.expand.build_grow` is the only kind-aware constructor, w
 runtime knows only the injected `(spawner, seed) -> Flow` callable. Package-root
 `run.py` wires them together. This keeps both forbidden edges absent:
 
-- no module under `nodes/` imports `agent_composer.compile`;
-- no module under `runtime/` imports `agent_composer.compile.expand` (imports of
+- no module under `nodes/` imports `yian.compile`;
+- no module under `runtime/` imports `yian.compile.expand` (imports of
   compile's execution contracts remain allowed).
 
 `tests/engine/test_layer_direction.py` parses imports with `ast` and enforces these

@@ -13,11 +13,11 @@ the renderer runs without any model.
 
 import pytest
 
-from agent_composer.compose import LoadError, load_flow
-from agent_composer.expr import ExpressionError, eval_binding, prompt_refs, render_template_record
-from agent_composer.expr import grammar
-from agent_composer.expr.builtins import register_template_fn
-from agent_composer.expr.expressions import ResolveMode, eval_expr
+from yian.compose import LoadError, load_flow
+from yian.expr import ExpressionError, eval_binding, prompt_refs, render_template_record
+from yian.expr import grammar
+from yian.expr.builtins import register_template_fn
+from yian.expr.expressions import ResolveMode, eval_expr
 
 _REC = {"briefs": ["ab", "adf"], "name": "zeta", "sig": {"value": 0.8}}
 

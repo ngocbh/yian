@@ -3,8 +3,8 @@
 from contextlib import contextmanager
 from types import SimpleNamespace
 
-import agent_composer.memory.contracts as c
-from agent_composer.memory.session import SessionMemory
+import yian.memory.contracts as c
+from yian.memory.session import SessionMemory
 
 def request(run_id="a", sequence=1, consumer=("root", "agent"), compatibility=None):
     return c.ConversationRequest(

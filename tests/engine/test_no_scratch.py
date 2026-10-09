@@ -10,7 +10,7 @@ import importlib
 import inspect
 import pkgutil
 
-from agent_composer.typesys.pool import VariablePool
+from yian.typesys.pool import VariablePool
 
 
 def test_pool_has_no_scratch():
@@ -20,8 +20,8 @@ def test_pool_has_no_scratch():
 
 
 def test_scratch_modules_gone():
-    for mod in ("agent_composer.nodes.scratch_cap",
-                "agent_composer.nodes.agent.scratch"):
+    for mod in ("yian.nodes.scratch_cap",
+                "yian.nodes.agent.scratch"):
         try:
             importlib.import_module(mod)
             assert False, f"{mod} still exists"
@@ -31,7 +31,7 @@ def test_scratch_modules_gone():
 
 def test_no_node_source_reads_scratch():
     # walk the nodes package source; no node run/source references 'scratch'
-    import agent_composer.nodes as nodes_pkg
+    import yian.nodes as nodes_pkg
 
     seen = []
     for _, name, _ in pkgutil.walk_packages(nodes_pkg.__path__, nodes_pkg.__name__ + "."):

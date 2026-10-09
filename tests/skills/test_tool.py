@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from agent_composer.skills import Skill, SkillError
-from agent_composer.skills.tool import (
+from yian.skills import Skill, SkillError
+from yian.skills.tool import (
     LOAD_SKILL,
     invoke_load_skill,
     load_skill_tool,

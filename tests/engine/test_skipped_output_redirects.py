@@ -6,20 +6,20 @@ from typing import Any
 
 import pytest
 
-from agent_composer.compile.model import (
+from yian.compile.model import (
     CompiledFlow,
     Edge,
     END_ID,
     START_ID,
 )
-from agent_composer.runtime.common import NodeState
-from agent_composer.events import RunFailed, RunSucceeded
-from agent_composer.nodes.call import CallNode
-from agent_composer.nodes.end import EndNode
-from agent_composer.nodes.loop import LoopNode
-from agent_composer.nodes.map import MapNode
-from agent_composer.nodes.start import StartNode
-from agent_composer.runtime.log import (
+from yian.runtime.common import NodeState
+from yian.events import RunFailed, RunSucceeded
+from yian.nodes.call import CallNode
+from yian.nodes.end import EndNode
+from yian.nodes.loop import LoopNode
+from yian.nodes.map import MapNode
+from yian.nodes.start import StartNode
+from yian.runtime.log import (
     MemoryRunLog,
     NodeRoutedRecord,
     NodeStartedRecord,
@@ -28,7 +28,7 @@ from agent_composer.runtime.log import (
     decode_pool,
     encode_pool,
 )
-from agent_composer.runtime.state import (
+from yian.runtime.state import (
     RunStartData,
     RunState,
     commit_prepared,
@@ -38,7 +38,7 @@ from agent_composer.runtime.state import (
     prepare_record,
     prepare_run_started,
 )
-from agent_composer.typesys import VariablePool
+from yian.typesys import VariablePool
 from tests.engine._fakes import FuncNode
 
 

@@ -1,6 +1,6 @@
-from agent_composer.nodes.human_input.questions import question_list_type
-from agent_composer.typesys.values import ValueKind
-from agent_composer.nodes.agent.structured import type_to_schema
+from yian.nodes.human_input.questions import question_list_type
+from yian.typesys.values import ValueKind
+from yian.nodes.agent.structured import type_to_schema
 
 
 def test_question_list_type_structure():

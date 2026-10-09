@@ -7,8 +7,8 @@ engine-opaque (only a node's own `run()` reads known keys). The merge is `{**flo
 
 import pytest
 
-from agent_composer.compose import load_flow
-from agent_composer.compose.helpers.errors import LoadError
+from yian.compose import load_flow
+from yian.compose.helpers.errors import LoadError
 
 
 def _nodes(text):

@@ -1,4 +1,4 @@
-from agent_composer.nodes.base import NodeKind
+from yian.nodes.base import NodeKind
 
 
 def test_start_end_call_member_values():

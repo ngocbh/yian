@@ -10,11 +10,11 @@ import textwrap
 
 import pytest
 
-from agent_composer.compose import LoadError, load_flow
-from agent_composer.diagnostics import OriginRef
-from agent_composer.run import run_flow
-from agent_composer.nodes.base import Output
-from agent_composer.nodes.code.node import (
+from yian.compose import LoadError, load_flow
+from yian.diagnostics import OriginRef
+from yian.run import run_flow
+from yian.nodes.base import Output
+from yian.nodes.code.node import (
     CodeNode,
     classify_code_source,
     select_inline_code_origin,

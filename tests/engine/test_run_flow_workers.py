@@ -9,9 +9,9 @@ import threading
 
 import pytest
 
-from agent_composer.compose import load_flow
-from agent_composer.run import _run_flow_controlled, run_flow
-from agent_composer.runtime.log import JsonlRunLog
+from yian.compose import load_flow
+from yian.run import _run_flow_controlled, run_flow
+from yian.runtime.log import JsonlRunLog
 
 # topic -> {positive, cautious} in parallel -> a code node fans them in.
 _FANOUT = """

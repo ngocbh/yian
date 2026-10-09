@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import re
 
-from agent_composer.cli.run import err_console, render_diagnostic
-from agent_composer.diagnostics import Diagnostic, DiagnosticFrame, SourceRange
+from yian.cli.run import err_console, render_diagnostic
+from yian.diagnostics import Diagnostic, DiagnosticFrame, SourceRange
 
 _SOURCE = """\
 id: f

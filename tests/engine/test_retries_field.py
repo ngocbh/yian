@@ -1,6 +1,6 @@
 """Authorable `retries:` field — parsed onto the node and threaded into the mode context."""
 
-from agent_composer.compose.loader import load_flow
+from yian.compose.loader import load_flow
 
 
 _FLOW = """

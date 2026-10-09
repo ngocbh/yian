@@ -9,10 +9,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from agent_composer.events import StreamChunk
-from agent_composer.nodes.base import Node, NodeKind, Output
-from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
-from agent_composer.typesys.pool import VariablePool
+from yian.events import StreamChunk
+from yian.nodes.base import Node, NodeKind, Output
+from yian.runtime.eval_node import EvaluationFailure, eval_node
+from yian.typesys.pool import VariablePool
 from tests.engine._fakes import derive_wiring
 
 

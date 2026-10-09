@@ -11,18 +11,18 @@ from __future__ import annotations
 
 import pytest
 
-from agent_composer.compose.validate.asserts import lower_flow_asserts
-from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
-from agent_composer.diagnostics import OriginRef, SourceRange
-from agent_composer.expr import condition_refs
-from agent_composer.nodes.contracts import (
+from yian.compose.validate.asserts import lower_flow_asserts
+from yian.compose.helpers.errors import LoadDiagnostics, LoadError
+from yian.diagnostics import OriginRef, SourceRange
+from yian.expr import condition_refs
+from yian.nodes.contracts import (
     Assertion,
     ContractOrigins,
     Parameter,
     PartialRecordContract,
     ValueContract,
 )
-from agent_composer.typesys.values import Type, ValueKind
+from yian.typesys.values import Type, ValueKind
 
 
 # A small shared environment: two opaque producers + two flow inputs. Opaque
@@ -289,7 +289,7 @@ def test_all_lowered_strings_parse():
 
 def test_ranges_are_not_carried_by_lowered_product():
     """Positional validation ranges do not cross into the lowered semantic product."""
-    from agent_composer.diagnostics import SourceRange
+    from yian.diagnostics import SourceRange
 
     rng_pre = SourceRange(start_line=3, start_col=1, end_line=3, end_col=20)
     rng_post = SourceRange(start_line=4, start_col=1, end_line=4, end_col=20)

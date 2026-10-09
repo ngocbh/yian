@@ -5,13 +5,13 @@ from __future__ import annotations
 import copy
 from pathlib import Path
 
-import agent_composer.llm_clients as llm_clients_mod
+import yian.llm_clients as llm_clients_mod
 import pytest
 
-from agent_composer.compose.loader import load_flow
-from agent_composer.nodes.agent import AgentNode
-from agent_composer.nodes.base import _HostStop
-from agent_composer.run import resume_flow, run_flow
+from yian.compose.loader import load_flow
+from yian.nodes.agent import AgentNode
+from yian.nodes.base import _HostStop
+from yian.run import resume_flow, run_flow
 
 
 _RECURSIVE_FLOW = """

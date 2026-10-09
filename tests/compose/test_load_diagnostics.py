@@ -5,9 +5,9 @@ import pickle
 
 import pytest
 
-from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
-from agent_composer.compose.source import SourceDocument
-from agent_composer.diagnostics import Diagnostic, DiagnosticFrame
+from yian.compose.helpers.errors import LoadDiagnostics, LoadError
+from yian.compose.source import SourceDocument
+from yian.diagnostics import Diagnostic, DiagnosticFrame
 
 
 def test_load_error_preserves_one_canonical_diagnostic() -> None:

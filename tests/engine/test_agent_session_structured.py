@@ -1,6 +1,6 @@
 """Structured session calls retain surfaced raw replies independently of parsing."""
 
-from agent_composer.memory import MemoryContext
+from yian.memory import MemoryContext
 
 from copy import deepcopy
 from asyncio import CancelledError as AsyncCancelledError
@@ -12,10 +12,10 @@ from types import SimpleNamespace
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 import pytest
 
-import agent_composer.llm_clients as llm_clients
-from agent_composer.compose import load_flow
-from agent_composer.memory.session import SessionMemory
-from agent_composer.run import run_flow
+import yian.llm_clients as llm_clients
+from yian.compose import load_flow
+from yian.memory.session import SessionMemory
+from yian.run import run_flow
 from tests.engine.test_agent_session import _FLOW, _Model, _view
 from tests.engine._session_fakes import harness, request
 
@@ -101,8 +101,8 @@ def test_structured_retries_store_raw_replies_and_only_new_correction_deltas(mon
 @pytest.mark.parametrize("native", [False, True])
 def test_structured_exhaustion_retains_schema_error_identity_and_origin(native):
     from pydantic import ValidationError
-    from agent_composer.nodes.agent.structured import _structured_validation_path, generate_structured
-    from agent_composer.typesys.values import Type, ValueKind
+    from yian.nodes.agent.structured import _structured_validation_path, generate_structured
+    from yian.typesys.values import Type, ValueKind
     typ = Type.scalar(ValueKind.INTEGER)
     model = _Native(["bad"]) if native else _Model([AIMessage(content='{"value":"bad"}')])
     memory = SessionMemory()
@@ -122,10 +122,10 @@ def test_structured_exhaustion_retains_schema_error_identity_and_origin(native):
 @pytest.mark.parametrize("native", [False, True])
 @pytest.mark.parametrize("stage", ["request", "observe", "encode"])
 def test_structured_memory_faults_do_not_retry_model(monkeypatch, native, stage):
-    from agent_composer.nodes.agent import memory as conversation
-    from agent_composer.nodes.agent.structured import generate_structured
-    from agent_composer.nodes.base import _CapabilityFault
-    from agent_composer.typesys.values import Type, ValueKind
+    from yian.nodes.agent import memory as conversation
+    from yian.nodes.agent.structured import generate_structured
+    from yian.nodes.base import _CapabilityFault
+    from yian.typesys.values import Type, ValueKind
     model = _Native([1, 2]) if native else _Model([AIMessage(content='{"value":1}'), AIMessage(content='{"value":2}')])
     error = ValueError("memory fault")
     def request(*args, **kwargs):
@@ -151,9 +151,9 @@ def test_structured_memory_faults_do_not_retry_model(monkeypatch, native, stage)
 
 @pytest.mark.parametrize("shape", ["not_dict", "missing_raw", "invalid_raw", "non_json_raw", "missing_parsed", "invalid_error", "invalid_parsed"])
 def test_native_malformed_carriers_fail_without_retry_and_keep_available_raw(shape):
-    from agent_composer.nodes.agent.structured import generate_structured
-    from agent_composer.nodes.base import _CapabilityFault
-    from agent_composer.typesys.values import Type, ValueKind
+    from yian.nodes.agent.structured import generate_structured
+    from yian.nodes.base import _CapabilityFault
+    from yian.typesys.values import Type, ValueKind
     calls = []
     class Model:
         def with_structured_output(self, schema, *, include_raw):
@@ -192,9 +192,9 @@ def test_native_malformed_carriers_fail_without_retry_and_keep_available_raw(sha
                                           for stage in ("before", "after_reply", "after_bad_reply", "after_parse")]
                          + [(True, "after_bind")])
 def test_structured_stop_boundaries_preserve_surfaced_raw(monkeypatch, native, stage):
-    from agent_composer.nodes.agent import structured
-    from agent_composer.nodes.base import _HostStop
-    from agent_composer.typesys.values import Type, ValueKind
+    from yian.nodes.agent import structured
+    from yian.nodes.base import _HostStop
+    from yian.typesys.values import Type, ValueKind
     stopped, primary, memory = Event(), _HostStop("stop structured"), SessionMemory()
     def check():
         if stopped.is_set():
@@ -252,7 +252,7 @@ def test_structured_stop_boundaries_preserve_surfaced_raw(monkeypatch, native, s
 @pytest.mark.parametrize("native", [False, True])
 @pytest.mark.parametrize("error_type", [ValueError, FutureCancelledError])
 def test_provider_error_and_failed_publication_bypass_retry_with_original_public_identity(monkeypatch, native, error_type):
-    from agent_composer.memory.session import _Turn
+    from yian.memory.session import _Turn
     primary, secondary = error_type("provider failed"), RuntimeError("cannot publish failure")
     model = _Model([primary, AIMessage(content='{"value":2}')])
     if native:
@@ -277,7 +277,7 @@ def test_provider_error_and_failed_publication_bypass_retry_with_original_public
 
 @pytest.mark.parametrize("native", [False, True])
 def test_tool_then_structured_purpose_distinguishes_schema_calls_from_real_grants(monkeypatch, native):
-    import agent_composer.tools as tools
+    import yian.tools as tools
     from tests.engine.test_agent_session_tools import _Chat, _Tool, _call
     tool, memory = _Tool(), SessionMemory()
     native_model = _Native([9, 10])
@@ -310,9 +310,9 @@ def test_tool_then_structured_purpose_distinguishes_schema_calls_from_real_grant
 @pytest.mark.parametrize("native", [False, True])
 @pytest.mark.parametrize("error_type", [AsyncCancelledError, FutureCancelledError])
 def test_provider_cancellation_with_failed_publication_is_not_a_structured_retry(native, error_type):
-    from agent_composer.nodes.agent.structured import generate_structured
-    from agent_composer.nodes.base import _CapabilityFault
-    from agent_composer.typesys.values import Type, ValueKind
+    from yian.nodes.agent.structured import generate_structured
+    from yian.nodes.base import _CapabilityFault
+    from yian.typesys.values import Type, ValueKind
     primary = error_type("cancelled provider")
     model = _Model([primary, AIMessage(content='{"value":1}')])
     if native:
@@ -377,8 +377,8 @@ def test_session_provider_corrections_do_not_send_or_store_exception_secrets(mon
 @pytest.mark.parametrize("native", [False, True])
 @pytest.mark.parametrize("error_type", [ValueError, RuntimeError, FutureCancelledError])
 def test_no_session_provider_correction_text_and_retry_behavior_are_unchanged(native, error_type):
-    from agent_composer.nodes.agent.structured import generate_structured
-    from agent_composer.typesys.values import Type, ValueKind
+    from yian.nodes.agent.structured import generate_structured
+    from yian.typesys.values import Type, ValueKind
     primary = error_type("original provider diagnostic")
     model = _RetryProvider(primary)
     assert generate_structured(model, [], Type.scalar(ValueKind.INTEGER), llm_config=_config(native)) == 2
@@ -390,8 +390,8 @@ def test_no_session_provider_correction_text_and_retry_behavior_are_unchanged(na
 
 @pytest.mark.parametrize("native", [False, True])
 def test_session_future_cancellation_with_published_interruption_does_not_retry(native):
-    from agent_composer.nodes.agent.structured import generate_structured
-    from agent_composer.typesys.values import Type, ValueKind
+    from yian.nodes.agent.structured import generate_structured
+    from yian.typesys.values import Type, ValueKind
     primary, memory = FutureCancelledError("provider cancelled"), SessionMemory()
     model = _RetryProvider(primary)
     with pytest.raises(FutureCancelledError) as caught:
@@ -409,8 +409,8 @@ def test_session_future_cancellation_with_published_interruption_does_not_retry(
 @pytest.mark.parametrize("native", [False, True])
 @pytest.mark.parametrize("error_type", [ValueError, RuntimeError])
 def test_sanitized_provider_retry_exhaustion_preserves_original_error(native, error_type):
-    from agent_composer.nodes.agent.structured import generate_structured
-    from agent_composer.typesys.values import Type, ValueKind
+    from yian.nodes.agent.structured import generate_structured
+    from yian.typesys.values import Type, ValueKind
     primary, memory = error_type("api_key=secret-marker"), SessionMemory()
     model = _RetryProvider(primary, failures=2)
     with pytest.raises(error_type) as caught:

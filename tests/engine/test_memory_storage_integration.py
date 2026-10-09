@@ -9,14 +9,14 @@ import sys
 from langchain_core.messages import AIMessage
 import pytest
 
-import agent_composer.llm_clients as llm_clients
-from agent_composer.compose import load_flow
-from agent_composer.memory.contracts import MemoryOperationError
-from agent_composer.memory.episodic import EpisodicMemory
-from agent_composer.memory.reflective import ReflectiveMemory
-import agent_composer.memory.reflective as reflective
-from agent_composer.memory.session import SessionMemory
-from agent_composer.run import resume_flow, run_flow
+import yian.llm_clients as llm_clients
+from yian.compose import load_flow
+from yian.memory.contracts import MemoryOperationError
+from yian.memory.episodic import EpisodicMemory
+from yian.memory.reflective import ReflectiveMemory
+import yian.memory.reflective as reflective
+from yian.memory.session import SessionMemory
+from yian.run import resume_flow, run_flow
 
 _MODEL_CONFIG = {"provider": "openai", "model": "storage-test-model"}
 _CODE_FLOW = """id: durable-learning
@@ -104,9 +104,9 @@ def test_snapshot_identity_survives_a_real_process_restart(policy, tmp_path):
     child = """
 import json
 import sys
-from agent_composer.memory.episodic import EpisodicMemory
-from agent_composer.memory.reflective import ReflectiveMemory
-from agent_composer.memory.session import SessionMemory
+from yian.memory.episodic import EpisodicMemory
+from yian.memory.reflective import ReflectiveMemory
+from yian.memory.session import SessionMemory
 policy, path = sys.argv[1:]
 factory = {'episodic': EpisodicMemory, 'reflective': ReflectiveMemory,
            'session': SessionMemory}[policy]
@@ -233,8 +233,8 @@ def test_api_session_learned_notes_survive_storage_reopen(tmp_path, monkeypatch)
 def test_resume_reopens_latest_saved_history_instead_of_the_old_run_snapshot(
     tmp_path, monkeypatch
 ):
-    from agent_composer.nodes.agent import AgentNode
-    from agent_composer.nodes.base import _HostStop
+    from yian.nodes.agent import AgentNode
+    from yian.nodes.base import _HostStop
     from tests.engine.test_agent_session import _Model
 
     stops = []

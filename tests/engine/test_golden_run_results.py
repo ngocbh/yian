@@ -1,11 +1,11 @@
 from pathlib import Path
 
-from agent_composer.compose import (
+from yian.compose import (
     LoadError,
     load_flow,
 )
-from agent_composer.compose.helpers.errors import LoadDiagnostics
-from agent_composer.run import run_flow
+from yian.compose.helpers.errors import LoadDiagnostics
+from yian.run import run_flow
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 

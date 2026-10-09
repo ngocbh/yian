@@ -5,15 +5,15 @@ from dataclasses import replace
 
 import pytest
 
-import agent_composer.memory.contracts as c
-from agent_composer.compile.model import CompiledFlow, Edge, END_ID, START_ID
-from agent_composer.nodes.end import EndNode
-from agent_composer.nodes.start import StartNode
-from agent_composer.runtime.contracts import ForwardCapture
-from agent_composer.runtime import state as reducer
-from agent_composer.runtime.log import MemoryRunLog
-from agent_composer.expr.lineage import ValueRoute
-from agent_composer.typesys import VariablePool
+import yian.memory.contracts as c
+from yian.compile.model import CompiledFlow, Edge, END_ID, START_ID
+from yian.nodes.end import EndNode
+from yian.nodes.start import StartNode
+from yian.runtime.contracts import ForwardCapture
+from yian.runtime import state as reducer
+from yian.runtime.log import MemoryRunLog
+from yian.expr.lineage import ValueRoute
+from yian.typesys import VariablePool
 from tests.engine._fakes import FuncNode
 
 

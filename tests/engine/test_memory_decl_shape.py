@@ -6,9 +6,9 @@ import math
 
 import pytest
 
-from agent_composer.diagnostics import OriginRef
-import agent_composer.memory as memory_package
-from agent_composer.memory.contracts import (
+from yian.diagnostics import OriginRef
+import yian.memory as memory_package
+from yian.memory.contracts import (
     BUILTIN_MEMORY_CONFIG_KEYS,
     MEMORY_IDENTIFIER_PATTERN,
     DeclSite,

@@ -12,15 +12,15 @@ the list-END and that the synthetic start wires straight to it (so it schedules 
 
 import pytest
 
-from agent_composer.compile.expand import map_callsite, map_subgraph, ns
-from agent_composer.compile.model import END_ID, START_ID, Flow
-from agent_composer.diagnostics import OriginRef
-from agent_composer.memory import (
+from yian.compile.expand import map_callsite, map_subgraph, ns
+from yian.compile.model import END_ID, START_ID, Flow
+from yian.diagnostics import OriginRef
+from yian.memory import (
     MemoryOccurrenceKind,
     MemoryOccurrenceSegment,
     MemoryScope,
 )
-from agent_composer.nodes.contracts import Binding, ChildFlowBoundary, SeedConnection
+from yian.nodes.contracts import Binding, ChildFlowBoundary, SeedConnection
 
 from tests.engine.test_expand import _child_flow
 

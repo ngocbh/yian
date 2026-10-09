@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "yian"
-version = "0.0.1"
+version = "0.0.2"
 description = "Bridging the trust gap between humans and agents — a readable, Docker-Compose-shaped YAML surface where both people and LLMs compose, inspect, and refine agent workflows."
 readme = "README.md"
 requires-python = ">=3.10"

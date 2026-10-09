@@ -2,27 +2,17 @@
 
 Yian needs **Python 3.10+**.
 
-The current documentation describes the `main` branch. PyPI release `0.0.1`
-contains an older, incompatible package, so install the current version from a
-clone until the next release:
+Install from PyPI:
 
 ```console
-git clone https://github.com/ngocbh/yian.git
-cd yian
-python -m pip install .
+python -m pip install yian
 ```
 
-The current source uses distribution name `yian`, import name
-`yian`, and CLI command `yian`.
+The distribution, import name, and CLI command are all `yian`.
 
 ```console
 yian --help
 ```
-
-Earlier builds installed this command as ac, and no alias is kept. On macOS, a
-bare ac now runs the unrelated system tool /usr/sbin/ac. If PHP Composer is also
-installed, activate your virtual environment first so the venv's `yian`
-comes first on `PATH`.
 
 ## Provider extras
 
@@ -30,14 +20,12 @@ The core (engine + `yian` CLI) installs with **no LLM SDK**. Each provider is an
 optional extra — install the one(s) you actually use:
 
 ```console
-python -m pip install ".[anthropic]"   # Claude  (langchain-anthropic)
-python -m pip install ".[openai]"      # GPT     (langchain-openai)
-python -m pip install ".[google]"      # Gemini  (langchain-google-genai)
-python -m pip install ".[ollama]"      # local   (langchain-ollama)
-python -m pip install ".[all]"         # all provider extras
+python -m pip install "yian[anthropic]"   # Claude  (langchain-anthropic)
+python -m pip install "yian[openai]"      # GPT     (langchain-openai)
+python -m pip install "yian[google]"      # Gemini  (langchain-google-genai)
+python -m pip install "yian[ollama]"      # local   (langchain-ollama)
+python -m pip install "yian[all]"         # all provider extras
 ```
-
-Run these commands from the repository root.
 
 Provider SDKs are imported **lazily** — only when a flow actually runs an AGENT node
 against that provider. Importing a provider you haven't installed raises a clear
@@ -129,14 +117,26 @@ No API key is needed — point at a running Ollama endpoint:
 export YIAN_DEFAULT_PROVIDER=ollama
 export YIAN_DEFAULT_MODEL=llama3.2:3b
 export OLLAMA_BASE_URL=http://localhost:11434
-yian run examples/hello.yaml --input name=Ada
+yian run hello.yaml --input name=Ada
 ```
 
-The example path exists in the clone; run this command from its repository root.
+`hello.yaml` is any flow file, for example this one-node flow:
+
+```yaml
+id: hello
+name: hello
+input:
+  name: str
+output: str
+kind: agent
+prompt: Write a warm one-sentence greeting to ${name}.
+```
 
 ## Development install
 
-To work on Yian itself, install it editable with the test extras:
+The documentation describes the `main` branch, which can be ahead of the latest
+release. To run `main` or work on Yian itself, install a clone editable with the
+test extras:
 
 ```console
 git clone https://github.com/ngocbh/yian

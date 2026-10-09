@@ -22,22 +22,22 @@ from pathlib import Path
 
 import pytest
 
-from agent_composer.compose import load_flow
-from agent_composer.diagnostics import OriginRef
-from agent_composer.nodes.agent import AgentNode
-from agent_composer.nodes.contracts import ContractOrigins, ValueContract
-from agent_composer.typesys.values import ValueKind, Type
-from agent_composer.compose.nodes.base import BuildContext, BuildResult
-from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
-from agent_composer.compose.parse.file import (
+from yian.compose import load_flow
+from yian.diagnostics import OriginRef
+from yian.nodes.agent import AgentNode
+from yian.nodes.contracts import ContractOrigins, ValueContract
+from yian.typesys.values import ValueKind, Type
+from yian.compose.nodes.base import BuildContext, BuildResult
+from yian.compose.helpers.errors import LoadDiagnostics, LoadError
+from yian.compose.parse.file import (
     CaseDescriptor,
     parse_file,
 )
-from agent_composer.compose.parse.nodes import parse_nodes
-from agent_composer.compose.helpers.types import read_flow_inputs
-from agent_composer.compose.source import SourceDocument
-from agent_composer.compose.validate.references import validate_references
-from agent_composer.diagnostics import SourceRange
+from yian.compose.parse.nodes import parse_nodes
+from yian.compose.helpers.types import read_flow_inputs
+from yian.compose.source import SourceDocument
+from yian.compose.validate.references import validate_references
+from yian.diagnostics import SourceRange
 from tests.engine._fakes import derive_wiring, stamp_reads
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"

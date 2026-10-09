@@ -228,7 +228,7 @@ existing per-memory learning/commit/recall lifecycle; they do not add runtime
 conversation state. API summary selection and derived cache also belong to
 SessionMemory, with injected adapter/model callbacks. Optional SQLite storage
 belongs to the memory backends, which open it on first use. Hosts build memory
-with `build_memories`; `run_flow` never constructs it. `composer run` uses the
+with `build_memories`; `run_flow` never constructs it. `yian run` uses the
 same builder, in RAM or under `--memory-root`.
 See [SessionMemory foundation](api.md#sessionmemory-foundation).
 

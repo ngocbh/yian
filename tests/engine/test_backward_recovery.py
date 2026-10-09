@@ -9,12 +9,12 @@ from textwrap import indent
 from langchain_core.messages import AIMessage
 import pytest
 
-import agent_composer.llm_clients as llm_clients
-from agent_composer.compose import load_flow
-from agent_composer.memory import MemoryMutation, MemoryOperationError
-from agent_composer.nodes.base import BackwardResult
-from agent_composer.run import resume_flow, run_flow
-from agent_composer.runtime.log import (
+import yian.llm_clients as llm_clients
+from yian.compose import load_flow
+from yian.memory import MemoryMutation, MemoryOperationError
+from yian.nodes.base import BackwardResult
+from yian.run import resume_flow, run_flow
+from yian.runtime.log import (
     BackwardFinishedRecord, BackwardReadyRecord, BackwardStartedRecord,
     JsonlRunLog, MemoryCommitFailedRecord, MemoryCommitRequestedRecord,
     MemoryCommitSucceededRecord,
@@ -255,22 +255,22 @@ _RECORDED_FAILURE = (
         b'{"kind":"node_failed","payload":{"evidence":null,"failure":{"cause_type":"TypeCheckError",'
         b'"code":"contract.output","message":"\'bad\' does not match declared type int","node_id":"wor'
         b'k","trace":[{"key":"/s:root/s:node/s:work/s:output/s:contract/s:root"}],"traceback":"Trace'
-        b'back (most recent call last):\\n  File \\"/Users/ngocbh/workspace/agent-composer/src/agent_c'
+        b'back (most recent call last):\\n  File \\"/Users/ngocbh/workspace/yian/src/agent_c'
         b'omposer/runtime/state.py\\", line 912, in prepare_node_succeeded\\n    value_wire, typed = _'
         b'canonical_output_value(\\n                        ^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \\"/Users'
-        b'/ngocbh/workspace/agent-composer/src/agent_composer/runtime/state.py\\", line 127, in _cano'
+        b'/ngocbh/workspace/yian/src/yian/runtime/state.py\\", line 127, in _cano'
         b'nical_output_value\\n    return canonical_typed(output, declared_type)\\n           ^^^^^^^^'
-        b'^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \\"/Users/ngocbh/workspace/agent-composer/src/agent_'
+        b'^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \\"/Users/ngocbh/workspace/yian/src/agent_'
         b'composer/runtime/log.py\\", line 1433, in canonical_typed\\n    typed = build_value(value) i'
         b'f declared is None else build_value_as(declared, value)\\n                                 '
         b'                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \\"/Users/ngocbh/workspace/a'
-        b'gent-composer/src/agent_composer/typesys/values.py\\", line 649, in build_value_as\\n    ret'
+        b'gent-composer/src/yian/typesys/values.py\\", line 649, in build_value_as\\n    ret'
         b'urn _build_for_type(typ, value)\\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \\"/Users/n'
-        b'gocbh/workspace/agent-composer/src/agent_composer/typesys/values.py\\", line 756, in _build'
+        b'gocbh/workspace/yian/src/yian/typesys/values.py\\", line 756, in _build'
         b'_for_type\\n    return _build_scalar_or_list(typ.kind, value, path=path)\\n           ^^^^^^'
         b'^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \\"/Users/ngocbh/workspace/agent-compos'
-        b'er/src/agent_composer/typesys/values.py\\", line 798, in _build_scalar_or_list\\n    raise T'
-        b"ypeCheckError(\\nagent_composer.typesys.values.TypeCheckError: 'bad' does not match declare"
+        b'er/src/yian/typesys/values.py\\", line 798, in _build_scalar_or_list\\n    raise T'
+        b"ypeCheckError(\\nyian.typesys.values.TypeCheckError: 'bad' does not match declare"
         b'd type int\\n"},"forward_capture":{"bound_inputs":{},"evaluated_keys":[],"input_names":[],"'
         b'items":[],"node_data":{},"route":{"children":[],"content_index":0,"count":0,"expression":"'
         b'{}","kind":"record","names":[],"path":[],"result_type":null,"sizes":[],"snapshot":null,"so'
@@ -333,8 +333,8 @@ def _chain(tmp_path, monkeypatch, *, workers=0, backend=None):
 
 @pytest.mark.parametrize("failed", [False, True], ids=["success", "failure"])
 def test_recorded_terminal_inspection_is_inert(tmp_path, monkeypatch, failed):
-    from agent_composer.nodes.code import CodeNode
-    from agent_composer.runtime.log import decode_record
+    from yian.nodes.code import CodeNode
+    from yian.runtime.log import decode_record
 
     flow = load_flow(_RECORDED_BACKWARD_FLOW.replace("return 3", 'return "bad"') if failed else _RECORDED_BACKWARD_FLOW)
     wires = _RECORDED_FAILURE if failed else _RECORDED_BACKWARD[:7]
@@ -373,8 +373,8 @@ def test_recorded_terminal_inspection_is_inert(tmp_path, monkeypatch, failed):
 def test_recorded_backward_history_admits_a_later_attempt_at_every_boundary(
     tmp_path, monkeypatch, failed_commit, boundary, disposition,
 ):
-    from agent_composer.nodes.code import CodeNode
-    from agent_composer.runtime.log import SCHEMA_VERSION, decode_record
+    from yian.nodes.code import CodeNode
+    from yian.runtime.log import SCHEMA_VERSION, decode_record
 
     flow = load_flow(_RECORDED_BACKWARD_FLOW)
     wires = (_RECORDED_BACKWARD_FAILED if failed_commit else _RECORDED_BACKWARD)[:boundary + 1]

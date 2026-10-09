@@ -1,8 +1,8 @@
 ---
 name: engine
 description: >-
-  Use when implementing, extending, or changing the Agent Composer flow engine —
-  anything under src/agent_composer/ (node kinds, runtime/scheduling, typed state,
+  Use when implementing, extending, or changing the Yian flow engine —
+  anything under src/yian/ (node kinds, runtime/scheduling, typed state,
   run-log recovery, compile/loader, expressions) or its contract. Enforces the
   workflow: design from the functional model (OCaml as reference), fit the engine
   invariants, plan, then implement in small tested steps. Trigger on requests like
@@ -25,7 +25,7 @@ authorable node kind.
 ## The mental model: you're extending a functional language
 
 The engine is a **small functional language for data transformation** (full
-framing + OCaml concept map in [`src/agent_composer/README.md`](../../../src/agent_composer/README.md)).
+framing + OCaml concept map in [`src/yian/README.md`](../../../src/yian/README.md)).
 The public vocabulary lives in [`docs/agent.md`](../../../docs/agent.md). Hold
 this model whenever you design anything:
 
@@ -251,7 +251,7 @@ only for one flow shape, or needs to mutate the pool — stop; that's a smell.
 
 ## 0. Orient
 Read what's relevant to the change:
-- [`src/agent_composer/README.md`](../../../src/agent_composer/README.md) — what the engine is, the layout, + the layer ladder.
+- [`src/yian/README.md`](../../../src/yian/README.md) — what the engine is, the layout, + the layer ladder.
 - [`docs/syntax.md`](../../../docs/syntax.md) — the flow-authoring surface (YAML shape, `${...}` refs, node kinds).
 - GitHub issues (`gh issue list`) — the TODO tracker (keep it current per CLAUDE.md "Zeroth rule").
 
@@ -354,7 +354,7 @@ Most are just the functional model (above) made enforceable:
   of a DB and heavy frameworks; external capabilities enter through **injected
   seams** (plain callables). **Exception (by decision):** the AGENT node is *not*
   SDK-free — it decomposes into a `mode` (the loop, in `nodes/agent/modes/`) +
-  skills (tools), and a mode imports langchain + `agent_composer.llm_clients` and
+  skills (tools), and a mode imports langchain + `yian.llm_clients` and
   builds its own model via `model_from_config`. Prefer seams for *new* external
   deps, but model access in agent modes is a direct call. Host-supplied
   `SKILL.md` skills enter the same way as memory: `run_flow(skills=...)` ->
@@ -514,7 +514,7 @@ Most are just the functional model (above) made enforceable:
   The CLI refuses a flow with a custom type. Never construct memory in runtime,
   enable learning implicitly, or change `memory=None` dormancy.
 - **Episodic memory appends canonical execution history** — import the built-in
-  backend from `agent_composer.memory.episodic`. An episodic memory's config
+  backend from `yian.memory.episodic`. An episodic memory's config
   accepts positive `max_episodes` and `recall_limit`; an unset limit adopts the
   stored value or the built-in default, and an explicit one that differs raises
   `episodic.config_conflict`. Learning deterministically proposes one append per
@@ -526,8 +526,8 @@ Most are just the functional model (above) made enforceable:
   snapshots; stale sessions may recall their pinned view but cannot learn or
   commit. Optional host-only `storage=path` preserves complete private state.
 - **Profile memory rewrites one document** — import `ProfileMemory` from
-  `agent_composer.memory.profile` and a store from
-  `agent_composer.memory.storage`. The snapshot pins `profile_version` and
+  `yian.memory.profile` and a store from
+  `yian.memory.storage`. The snapshot pins `profile_version` and
   `text_sha256`, never the text. Every stack holding the key recalls the whole
   document; config accepts `max_chars` and `input_budget_chars`. Learning is
   one tool-free model call over
@@ -558,7 +558,7 @@ Most are just the functional model (above) made enforceable:
   Check process identity before locks, including cleanup, and preserve primary
   exceptions. No runtime storage branch or new log field is needed.
 - **SessionMemory owns conversation state and FIFO admission** — import
-  `SessionMemory` from `agent_composer.memory.session`, not the contracts-only
+  `SessionMemory` from `yian.memory.session`, not the contracts-only
   facade. `MemorySession.recall()` returns text or `MemoryContent(text, transcript)`;
   SessionMemory supplies its notes and `TranscriptSource` through this same path. API-backed AGENT execution through
   `run_flow` retains conversations when the host supplies the backend.

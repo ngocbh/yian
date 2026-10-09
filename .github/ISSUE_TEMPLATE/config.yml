@@ -1,11 +1,11 @@
 blank_issues_enabled: true
 contact_links:
   - name: 📖 Documentation
-    url: https://github.com/ngocbh/agent-composer/blob/main/README.md
+    url: https://github.com/ngocbh/yian/blob/main/README.md
     about: Check the README, docs/syntax.md, and the package README before opening an issue.
   - name: 🤝 Contributing Guide
-    url: https://github.com/ngocbh/agent-composer/blob/main/CONTRIBUTING.md
+    url: https://github.com/ngocbh/yian/blob/main/CONTRIBUTING.md
     about: Read this before submitting a PR — setup, docstring style, and branching workflow.
   - name: 🗺️ Roadmap / Backlog
-    url: https://github.com/ngocbh/agent-composer/tree/main/docs/backlog
+    url: https://github.com/ngocbh/yian/tree/main/docs/backlog
     about: See what's already planned (TODO / DEFER / FUTURE) before proposing new work.

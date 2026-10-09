@@ -5,18 +5,18 @@ from pathlib import Path
 
 import pytest
 
-from agent_composer.compose import loader as compose_loader
-from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.helpers import types as compose_types
-from agent_composer.compose.parse.file import (
+from yian.compose import loader as compose_loader
+from yian.compose.helpers.errors import LoadError
+from yian.compose.helpers import types as compose_types
+from yian.compose.parse.file import (
     parse_file,
     parse_source_document,
 )
-from agent_composer.compose.source import SourceDocument, parse_yaml_literal
-from agent_composer.compose.source import document as source_document
+from yian.compose.source import SourceDocument, parse_yaml_literal
+from yian.compose.source import document as source_document
 
 
-_PACKAGE_ROOT = Path(__file__).resolve().parents[2] / "src" / "agent_composer"
+_PACKAGE_ROOT = Path(__file__).resolve().parents[2] / "src" / "yian"
 _COMPOSE_ROOT = _PACKAGE_ROOT / "compose"
 _SOURCE_ROOT = _COMPOSE_ROOT / "source"
 
@@ -68,9 +68,9 @@ def test_source_package_has_no_upward_imports():
                 continue
             for module in modules:
                 if (
-                    module == "agent_composer.compose"
-                    or module.startswith("agent_composer.compose.")
-                ) and not module.startswith("agent_composer.compose.source"):
+                    module == "yian.compose"
+                    or module.startswith("yian.compose.")
+                ) and not module.startswith("yian.compose.source"):
                     offenders.append(f"{path.relative_to(_COMPOSE_ROOT)}:{line}:{module}")
     assert offenders == []
 
@@ -158,7 +158,7 @@ def test_parse_file_reuses_supplied_document(monkeypatch):
         raise AssertionError("parse_file must reuse a supplied source document")
 
     monkeypatch.setattr(
-        "agent_composer.compose.source.document._DocumentLoader.__init__",
+        "yian.compose.source.document._DocumentLoader.__init__",
         count_loader,
     )
 

@@ -1,5 +1,5 @@
 # Minimal flow — one AGENT node, text in, text out.
-# Run:  composer run minimal.yaml --input topic=clouds   (needs a model provider configured)
+# Run:  yian run minimal.yaml --input topic=clouds   (needs a model provider configured)
 # Copy this as the starting point for any single-call flow.
 
 id: minimal

@@ -1,11 +1,11 @@
 ---
 name: composing-agents
-description: Use when authoring an Agent Composer flow — writing or editing a flow YAML, building an agent workflow, wiring nodes (agent / code / tool / case / human_input / wait / call / map), or answering "how do I write a flow that …". Trigger on "create an agent", "write a flow", "compose a workflow", "add a node to my flow", "how do I branch / loop / call another flow", or any `composer run` flow-authoring request.
+description: Use when authoring a Yian flow — writing or editing a flow YAML, building an agent workflow, wiring nodes (agent / code / tool / case / human_input / wait / call / map), or answering "how do I write a flow that …". Trigger on "create an agent", "write a flow", "compose a workflow", "add a node to my flow", "how do I branch / loop / call another flow", or any `yian run` flow-authoring request.
 ---
 
 # Composing an agent flow
 
-In Agent Composer, an **agent** is a composable typed transformation represented
+In Yian, an **agent** is a composable typed transformation represented
 by a node, a flow, or a child flow. A **flow is a function**: a typed `input:`, a
 graph of `nodes:`, and a typed `output:`. The concrete **AGENT node**
 (`kind: agent`) is the LLM-backed leaf. `${...}` references infer data edges;
@@ -208,7 +208,7 @@ To give it host-supplied Claude/Codex skills: `skills: [skill-name, ...]` or
 `skills: all` (requires `mode: tool_calling`). The system message lists each
 granted skill's name and description; the model calls the built-in
 `load_skill(name, path=None)` to read `SKILL.md` or a bundled file. `load_skill` is
-reserved: never list it in `tools:`. When a flow grants skills, `composer run` supplies
+reserved: never list it in `tools:`. When a flow grants skills, `yian run` supplies
 `~/.claude/skills`, `~/.agents/skills`, and the project's `.claude/skills`/`.agents/skills`
 (personal wins). A library host
 passes `skills=` (`{}` for none); without it, or with a listed skill missing, the run
@@ -223,14 +223,14 @@ A node may pin its model via `llm_config:`; otherwise the process defaults captu
 once when the run initializes apply. `inherit: false` skips authored flow/parent/CLI
 layers but still receives those provider/model defaults.
 OpenAI subscription and API-key connections both use `provider: openai`;
-select the method and default model with `composer auth openai`.
+select the method and default model with `yian auth openai`.
 Never put `api_key` or `base_url` in a flow's `llm_config:`; loading fails. A
 Python host passes them in `run_flow(..., llm_config={"provider": ...,
 "api_key": key, "base_url": url})`, and the key again to
 `resume_flow`/`result.backward` as `api_key=key`. They reach every AGENT of that
 provider, `inherit: false` ones included.
 OpenAI is the default provider. Environment defaults override saved defaults;
-model defaults apply only to their matching provider. Grant ordinary Composer
+model defaults apply only to their matching provider. Grant ordinary Yian
 tools explicitly; retired `provider: codex`, `sandbox`, `cwd`, and `builtin_tools`
 settings are rejected.
 Tune a node's non-model behavior with a static `env:` block (flow-level default +
@@ -306,10 +306,10 @@ model call; recall is pinned when the run opens. `history_budget_chars` (default
 32_000) and `recent_turns` (default 4) control API summaries of older context; raw
 history and recent whole turns stay intact, even above the soft budget.
 
-`composer run` builds every built-in memory in RAM, or on disk with
+`yian run` builds every built-in memory in RAM, or on disk with
 `--memory-root DIR` (key `lib.notes` lives at `DIR/<flow id>/lib/notes.sqlite`) and
 repeatable `--memory-storage KEY=PATH`. It cannot run a flow that declares a custom
-type, and it never runs backward learning. `composer chat` and its `run_flow` tool
+type, and it never runs backward learning. `yian chat` and its `run_flow` tool
 supply no long-term memory: declared memories stay off (session conversations are
 not kept). Supply the same storage on unfinished
 `--resume`; terminal inspection opens none. A storage file has one owner until its
@@ -350,7 +350,7 @@ news:
 ```
 Register the tool in Python so the id resolves:
 ```python
-from agent_composer.tools import register_tool
+from yian.tools import register_tool
 
 @register_tool("get_facts")
 def get_facts(symbol: str, limit: int = 10) -> list[dict]:
@@ -370,7 +370,7 @@ function (named by `__name__`). The model sees and calls the group's tools by th
 own names. Groups may share the same tool object; the model sees it once. The run
 fails before it starts if a granted group is missing, two different tools share a
 name (or a group tool's name is a top-level key), or a group has a tool named
-`ask_user` or `load_skill`; the handler stays the top-level `ask_user` entry. `composer run`
+`ask_user` or `load_skill`; the handler stays the top-level `ask_user` entry. `yian run`
 fills no groups, so such flows need a Python host. Pass groups again to `resume_flow`;
 restarted nodes use the contents passed there.
 Note `tool` uses `tool_id:` + `input:` (a tool declares no `output:`). (`model` —
@@ -537,7 +537,7 @@ driver: `while:` (pre-check, 0+ runs), `until:` (post-check / do-while, 1+ runs,
 stop when the predicate becomes true), or `times: N` (fixed count). `max:` is
 required for `while:`/`until:` but **redundant and rejected** with `times:`.
 
-#### Conversational REPL — the `loop` shape used by `composer chat`
+#### Conversational REPL — the `loop` shape used by `yian chat`
 A chat is a `loop` whose body blocks each turn at `ask` (`human_input`), then a
 `case` routes exact `/exit` and `/quit` values to an exit record before the
 `reply` AGENT node. The normal branch builds the next transcript; the body's output
@@ -602,15 +602,15 @@ may pass 2-4 short `options`, shown as choices; the human can still type an answ
 *guaranteed* gate use `human_input`; for "ask only if needed" use `ask_user`.
 `ask_user` on an AGENT node returns its answer to the same live tool loop; HUMAN_INPUT and
 WAIT return ordinary node outputs from their live calls. The host passes the handler
-per run: `run_flow(..., tools={"ask_user": handler})`. `composer run` and `composer chat` do
+per run: `run_flow(..., tools={"ask_user": handler})`. `yian run` and `yian chat` do
 this for you. Without a handler, a flow whose AGENT grants `ask_user` fails before the run
 starts, and a `human_input` node fails when it asks. There is no authored
 `entry:`/`controls:` field on an AGENT node or event-mode WAIT.
 
 ## Validate & run
-- **Quick validate** (loads + compiles, no model): `composer run <flow>.yaml` will load
+- **Quick validate** (loads + compiles, no model): `yian run <flow>.yaml` will load
   first; or from Python `load_flow(text, search_paths=[flow_dir])`.
-- **Run:** `composer run <flow>.yaml [--inputs file.json] [--input k=v]...`. JSON inputs
+- **Run:** `yian run <flow>.yaml [--inputs file.json] [--input k=v]...`. JSON inputs
   load first; repeatable `--input` flags override individual keys but remain a
   string/scalar surface. With an interactive stdin (TTY), every declaration still
   missing is prompted. Keep four outcomes distinct: a value, `Set null`,
@@ -647,4 +647,4 @@ starts, and a `human_input` node fails when it asks. There is no authored
 - [ ] `tool` ids are registered or passed per run with `tools=` (AGENT `tools:` may name a host-filled group); a `code` `module:function` is importable (or an inline `code: |` body `return`s a value); `call`/`uses:` targets resolve on the search path.
 - [ ] Every CALL/MAP/LOOP has exactly one child form: named `call:`, or non-empty inline `nodes:` plus an `output:` key; inline parent/item dependencies cross through outer `input:`.
 - [ ] A child-flow call is written `call(f, ...)` as a whole value, never `${flow(args)}`; string `:-` defaults and `:?` messages are quoted.
-- [ ] It loads cleanly (`composer run` / `load_flow`) before you wire a model.
+- [ ] It loads cleanly (`yian run` / `load_flow`) before you wire a model.

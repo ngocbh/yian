@@ -8,8 +8,8 @@ from typing import Any
 
 import pytest
 
-from agent_composer.diagnostics import OriginRef
-from agent_composer.memory import (
+from yian.diagnostics import OriginRef
+from yian.memory import (
     ConversationInvocation,
     DeclSite,
     LearnContext,
@@ -24,9 +24,9 @@ from agent_composer.memory import (
     MemorySpec,
     RecallContext,
 )
-from agent_composer.runtime.contracts import MemoryProposal
-from agent_composer.runtime.log import MemoryCommitRequestedRecord
-from agent_composer.runtime.memory_runtime import MemoryRuntime, _LearningProposalError
+from yian.runtime.contracts import MemoryProposal
+from yian.runtime.log import MemoryCommitRequestedRecord
+from yian.runtime.memory_runtime import MemoryRuntime, _LearningProposalError
 
 
 class _Session:
@@ -478,7 +478,7 @@ def test_transcript_admission_requires_invocation_before_opening_source():
 def test_stop_during_recall_prevents_transcript_source_acquisition():
     from threading import Event
 
-    from agent_composer.nodes.base import _HostStop
+    from yian.nodes.base import _HostStop
 
     alpha, beta = _Memory("alpha", []), _Memory("beta", [])
     runtime = _open({"alpha": alpha, "beta": beta})

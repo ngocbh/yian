@@ -8,8 +8,8 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from agent_composer.diagnostics import OriginRef
-from agent_composer.memory import (
+from yian.diagnostics import OriginRef
+from yian.memory import (
     DeclSite,
     LearningFailure,
     LearningResult,
@@ -20,12 +20,12 @@ from agent_composer.memory import (
     MemoryStack,
     PolicyCommitOutcome,
 )
-from agent_composer.memory.contracts import (
+from yian.memory.contracts import (
     _iter_memory_decl_origins,
     _rewrite_memory_decl_origins,
 )
-from agent_composer.runtime.contracts import BackwardFailure
-from agent_composer.runtime.log import (
+from yian.runtime.contracts import BackwardFailure
+from yian.runtime.log import (
     SCHEMA_VERSION,
     MemoryCommitFailedRecord,
     MemoryCommitRequestedRecord,
@@ -174,7 +174,7 @@ def test_backward_failure_and_commit_records_name_their_memory_key() -> None:
 
 
 def test_package_docstring_and_exports_describe_keyed_memories() -> None:
-    import agent_composer.memory as memory
+    import yian.memory as memory
 
     text = memory.__doc__
     assert re.search(r"\bframes?\b", text, re.IGNORECASE) is None

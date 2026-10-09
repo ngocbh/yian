@@ -4,19 +4,19 @@ import copy
 
 import pytest
 
-import agent_composer.compile.expand as expand_module
-from agent_composer.compile.model import Flow, GrowthRejected
-from agent_composer.diagnostics import OriginRef
-from agent_composer.memory import (
+import yian.compile.expand as expand_module
+from yian.compile.model import Flow, GrowthRejected
+from yian.diagnostics import OriginRef
+from yian.memory import (
     MemoryOccurrenceKind,
     MemoryOccurrenceSegment,
     MemoryScope,
 )
-from agent_composer.nodes.base import Grow, Node, NodeKind
-from agent_composer.nodes.call import CallNode
-from agent_composer.nodes.contracts import Assertion, Parameter
-from agent_composer.nodes.loop import LoopNode
-from agent_composer.nodes.map import MapNode
+from yian.nodes.base import Grow, Node, NodeKind
+from yian.nodes.call import CallNode
+from yian.nodes.contracts import Assertion, Parameter
+from yian.nodes.loop import LoopNode
+from yian.nodes.map import MapNode
 
 from tests.engine.test_expand import _child_flow, _parent_with_spawner
 
@@ -221,7 +221,7 @@ def test_nested_map_then_call_extends_context_only_when_inner_expands():
 
 
 def test_compile_builder_reconstructs_every_growth_kind():
-    from agent_composer.compile.expand import (
+    from yian.compile.expand import (
         build_grow,
         call_subgraph,
         loop_continue_subgraph,
@@ -289,7 +289,7 @@ def test_compile_builder_marks_only_explicit_legal_seed_rejection(
     message: str,
 ):
     """Malformed legal-kind seeds retain their typed rejection in one marker."""
-    from agent_composer.compile.expand import build_grow
+    from yian.compile.expand import build_grow
 
     spawner = _growth_producers()[producer_index][0]
 
@@ -301,7 +301,7 @@ def test_compile_builder_marks_only_explicit_legal_seed_rejection(
 
 def test_compile_builder_keeps_an_unsupported_kind_outside_growth_rejection():
     """A trait/kind compiler mismatch is not node-produced legal-kind seed data."""
-    from agent_composer.compile.expand import build_grow
+    from yian.compile.expand import build_grow
 
     spawner = Node("unsupported")
     spawner.kind = NodeKind.CODE
@@ -316,7 +316,7 @@ def test_compile_builder_preserves_helper_fault_identity_after_seed_validation(
     monkeypatch: pytest.MonkeyPatch,
 ):
     """Only seed validation marks rejection; compiler construction faults stay raw."""
-    from agent_composer.compile.expand import build_grow
+    from yian.compile.expand import build_grow
 
     call = _growth_producers()[0][0]
     expected = TypeError("compiler helper fault")

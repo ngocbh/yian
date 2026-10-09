@@ -5,13 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from agent_composer.compile import iter_flow_origins
-from agent_composer.compile.manifest import flow_fingerprint
-from agent_composer.compose import loader as compose_loader
-from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.loader import load_flow
-from agent_composer.compose.source import SourceDocument
-from agent_composer.run import run_flow
+from yian.compile import iter_flow_origins
+from yian.compile.manifest import flow_fingerprint
+from yian.compose import loader as compose_loader
+from yian.compose.helpers.errors import LoadError
+from yian.compose.loader import load_flow
+from yian.compose.source import SourceDocument
+from yian.run import run_flow
 
 _CODE = "tests.seeds.fns:one_line_summary"
 

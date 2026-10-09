@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import json
 
-from agent_composer import load_flow, run_flow
-from agent_composer.memory.episodic import EpisodicMemory
-from agent_composer.nodes.agent.modes import MODES, AgentRunContext
-from agent_composer.nodes.base import Output
+from yian import load_flow, run_flow
+from yian.memory.episodic import EpisodicMemory
+from yian.nodes.agent.modes import MODES, AgentRunContext
+from yian.nodes.base import Output
 
 _FLOW = """id: episodic-history
 name: episodic_history

@@ -1,8 +1,8 @@
-site_name: The Agent Composer
+site_name: Yian - The Agent Composer
 site_description: Bridging the trust gap between humans and agents — a readable, Docker-Compose-shaped YAML surface where both people and LLMs compose, inspect, and refine agent workflows.
-site_url: https://agent-composer.readthedocs.io
-repo_url: https://github.com/ngocbh/agent-composer
-repo_name: ngocbh/agent-composer
+site_url: https://yian.readthedocs.io
+repo_url: https://github.com/ngocbh/yian
+repo_name: ngocbh/yian
 edit_uri: edit/main/docs/
 
 # This config lives at the repo root; docs sources are in docs/.
@@ -83,7 +83,7 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Installation: installation.md
-  - The composer CLI: cli.md
+  - The yian CLI: cli.md
   - Flow syntax: syntax.md
   - Examples: examples.md
   - Internals:

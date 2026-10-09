@@ -7,8 +7,8 @@ import threading
 
 import pytest
 
-from agent_composer.memory.contracts import MemoryOperationError
-from agent_composer.memory.storage import (
+from yian.memory.contracts import MemoryOperationError
+from yian.memory.storage import (
     FileMarkdownStore,
     InMemoryMarkdownStore,
     MarkdownStore,

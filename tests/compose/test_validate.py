@@ -8,17 +8,17 @@ anchored on the offending field span.
 
 import pytest
 
-from agent_composer.compile.model import Edge
-from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
-from agent_composer.compose.loader import load_flow
-from agent_composer.compose.nodes.agent import AgentDescriptor
-from agent_composer.compose.nodes.base import BuildContext, BuildResult
-from agent_composer.compose.nodes.code import CodeDescriptor
-from agent_composer.compose.parse.nodes import parse_nodes
-from agent_composer.compose.source import SourceDocument
-from agent_composer.compose.validate.cycles import reject_cycles
-from agent_composer.compose.validate.references import validate_references
-from agent_composer.diagnostics import SourceRange
+from yian.compile.model import Edge
+from yian.compose.helpers.errors import LoadDiagnostics, LoadError
+from yian.compose.loader import load_flow
+from yian.compose.nodes.agent import AgentDescriptor
+from yian.compose.nodes.base import BuildContext, BuildResult
+from yian.compose.nodes.code import CodeDescriptor
+from yian.compose.parse.nodes import parse_nodes
+from yian.compose.source import SourceDocument
+from yian.compose.validate.cycles import reject_cycles
+from yian.compose.validate.references import validate_references
+from yian.diagnostics import SourceRange
 
 
 def _nodes_reader(text):
@@ -281,10 +281,10 @@ def test_check_call_map_types_is_owned_by_call_validation():
     # The check lives in `validate.call_types`; the LoadError anchors on the call node's
     # `input:` mapping span (`field_ranges["inputs"]`, the coarsest available binding-site
     # span), and the canonical frame carries that range.
-    from agent_composer.compose.validate.call_types import check_call_map_types
-    from agent_composer.nodes.call import CallNode
-    from agent_composer.nodes.contracts import Parameter, ValueContract
-    from agent_composer.typesys.values import Type, ValueKind
+    from yian.compose.validate.call_types import check_call_map_types
+    from yian.nodes.call import CallNode
+    from yian.nodes.contracts import Parameter, ValueContract
+    from yian.typesys.values import Type, ValueKind
 
     node = CallNode(
         "c",
@@ -325,10 +325,10 @@ def test_check_loop_type_contract_moved():
     # output's same-named field Type is loud. The check lives in `validate.loop_types`; the
     # LoadError anchors on the loop node's `input:` mapping span
     # (`field_ranges["inputs"]`); the canonical frame carries that range.
-    from agent_composer.compose.validate.loop_types import check_loop_type_contract
-    from agent_composer.nodes.contracts import ValueContract
-    from agent_composer.nodes.loop import LoopNode
-    from agent_composer.typesys.values import Type, ValueKind
+    from yian.compose.validate.loop_types import check_loop_type_contract
+    from yian.nodes.contracts import ValueContract
+    from yian.nodes.loop import LoopNode
+    from yian.typesys.values import Type, ValueKind
 
     node = LoopNode("lp", flow_id="body")
     # body returns a record {n: int}; the carried field `n` must be seeded from an int.
@@ -359,9 +359,9 @@ def test_check_loop_type_contract_moved():
 
 def test_type_validators_reject_noncanonical_contract_maps_before_walking():
     """Direct validator calls enforce the same exact-carrier boundary as the pipeline."""
-    from agent_composer.compose.validate.call_types import check_call_map_types
-    from agent_composer.compose.validate.loop_types import check_loop_type_contract
-    from agent_composer.typesys.values import Type, ValueKind
+    from yian.compose.validate.call_types import check_call_map_types
+    from yian.compose.validate.loop_types import check_loop_type_contract
+    from yian.typesys.values import Type, ValueKind
 
     bad = {"unused": Type.scalar(ValueKind.STRING)}
     with pytest.raises(TypeError, match="output producer contracts.*ValueContract"):
@@ -374,7 +374,7 @@ def test_check_wiring_parity_moved():
     # A node whose `flow.wiring` keys don't match its declared params is loud. The check lives
     # in `validate.wiring_parity`; the LoadError anchors on the node's `input:` mapping
     # span (else its Compose-owned node range), and the canonical frame carries that range.
-    from agent_composer.compose.validate.wiring_parity import check_wiring_parity
+    from yian.compose.validate.wiring_parity import check_wiring_parity
 
     node, wiring = _node_wiring(CodeDescriptor(id="n", code="m:f", inputs={"x": "${input.x}"}))
     rng = SourceRange(start_line=3, start_col=5, end_line=4, end_col=20)
@@ -398,10 +398,10 @@ def test_validate_human_questions_diag_has_range():
     # A human_input gate with a structurally-invalid literal `questions:` list is loud. The
     # check lives in `validate.human_questions`; the LoadError anchors on the gate's
     # `questions:` field span, which the canonical frame carries directly.
-    from agent_composer.compose.validate.human_questions import (
+    from yian.compose.validate.human_questions import (
         validate_human_questions,
     )
-    from agent_composer.nodes.human_input.node import HumanInputNode
+    from yian.nodes.human_input.node import HumanInputNode
 
     node = HumanInputNode("ask", questions=[])  # empty -> "expected 1..4 questions, got 0"
     rng = SourceRange(start_line=5, start_col=5, end_line=6, end_col=20)

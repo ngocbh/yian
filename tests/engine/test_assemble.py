@@ -12,32 +12,32 @@ from pathlib import Path
 
 import pytest
 
-from agent_composer.compile.model import END_ID, START_ID
-from agent_composer.diagnostics import SourceRange
-from agent_composer.typesys.types import read_typedefs
-from agent_composer.typesys.values import Type, ValueKind
-from agent_composer.compose import LoadError
-from agent_composer.compose.helpers.errors import LoadDiagnostics
-from agent_composer.compose.nodes.base import BuildContext, BuildResult
-from agent_composer.compose.build.boundary import synthesize_boundary_graph
-from agent_composer.compose.edges.data import infer_data_edges
-from agent_composer.compose.validate.wiring_parity import check_wiring_parity
-from agent_composer.compose.build.pipeline import (
+from yian.compile.model import END_ID, START_ID
+from yian.diagnostics import SourceRange
+from yian.typesys.types import read_typedefs
+from yian.typesys.values import Type, ValueKind
+from yian.compose import LoadError
+from yian.compose.helpers.errors import LoadDiagnostics
+from yian.compose.nodes.base import BuildContext, BuildResult
+from yian.compose.build.boundary import synthesize_boundary_graph
+from yian.compose.edges.data import infer_data_edges
+from yian.compose.validate.wiring_parity import check_wiring_parity
+from yian.compose.build.pipeline import (
     _DescriptorBuildCache,
     _assemble,
     _flow_outputs,
 )
-from agent_composer.compose.parse.file import (
+from yian.compose.parse.file import (
     AgentDescriptor,
     CaseDescriptor,
     CodeDescriptor,
     WaitDescriptor,
     parse_file,
 )
-from agent_composer.compose.parse.nodes import parse_nodes
-from agent_composer.compose.source import SourceCursor, SourceDocument
-from agent_composer.compose.source.catalog import _SourceCatalogBuilder
-from agent_composer.nodes.contracts import Parameter, ValueContract
+from yian.compose.parse.nodes import parse_nodes
+from yian.compose.source import SourceCursor, SourceDocument
+from yian.compose.source.catalog import _SourceCatalogBuilder
+from yian.nodes.contracts import Parameter, ValueContract
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 

@@ -7,16 +7,16 @@ from typing import Any, Iterator
 
 import pytest
 
-import agent_composer.run as run_module
-import agent_composer.runtime.state as state_module
-from agent_composer.compile.expand import build_grow
-from agent_composer.compile.llm_cascade import resolve_llm_cascade
-from agent_composer.compile.manifest import flow_fingerprint, flow_manifest
-from agent_composer.compile.model import END_ID, START_ID
-from agent_composer.compose import load_flow
-from agent_composer.nodes.agent import AgentNode
-from agent_composer.nodes.base import Grow
-from agent_composer.runtime.log import (
+import yian.run as run_module
+import yian.runtime.state as state_module
+from yian.compile.expand import build_grow
+from yian.compile.llm_cascade import resolve_llm_cascade
+from yian.compile.manifest import flow_fingerprint, flow_manifest
+from yian.compile.model import END_ID, START_ID
+from yian.compose import load_flow
+from yian.nodes.agent import AgentNode
+from yian.nodes.base import Grow
+from yian.runtime.log import (
     MemoryRunLog,
     NodeStartedRecord,
     RecordEnvelope,
@@ -24,7 +24,7 @@ from agent_composer.runtime.log import (
     SCHEMA_VERSION,
     encode_pool,
 )
-from agent_composer.runtime.state import (
+from yian.runtime.state import (
     RunStartData,
     RunState,
     commit_prepared,
@@ -33,7 +33,7 @@ from agent_composer.runtime.state import (
     prepare_node_succeeded,
     prepare_run_started,
 )
-from agent_composer.typesys import VariablePool
+from yian.typesys import VariablePool
 
 
 # Fixed writer output; keep these bytes independent of the current codec.
@@ -364,7 +364,7 @@ def test_replay_applies_logged_llm_map_before_rebuilding_growth(monkeypatch):
     assert _state_snapshot(recovered) == _state_snapshot(live)
     assert recovered.effective_llm_by_static_path == effective
     assert isinstance(recovered.flow.nodes["gate/leaf"], AgentNode)
-    from agent_composer.llm_clients.connection import legacy_connection_config
+    from yian.llm_clients.connection import legacy_connection_config
     assert recovered.flow.nodes["gate/leaf"].llm_config == legacy_connection_config(effective["gate/leaf"])
     assert source.append_calls == 0
     assert source.close_calls == 0
@@ -372,7 +372,7 @@ def test_replay_applies_logged_llm_map_before_rebuilding_growth(monkeypatch):
 
 
 def test_historical_cursor_matches_each_envelopes_schema():
-    from agent_composer.runtime.log import decode_record, encode_record
+    from yian.runtime.log import decode_record, encode_record
 
     recorded_prefix = _RECORDED_LINEAR[:4]
     with MemoryRunLog._from_records(tuple(decode_record(wire) for wire in recorded_prefix)) as log:
@@ -397,8 +397,8 @@ def test_historical_cursor_matches_each_envelopes_schema():
 
 @pytest.mark.parametrize("prefix_length", [5, 6])
 def test_recorded_public_resume_keeps_completed_code_and_wire(tmp_path, monkeypatch, prefix_length):
-    from agent_composer.nodes.code import CodeNode
-    from agent_composer.runtime.log import JsonlRunLog, decode_record, encode_record
+    from yian.nodes.code import CodeNode
+    from yian.runtime.log import JsonlRunLog, decode_record, encode_record
 
     flow = load_flow(_LINEAR)
     prefix = b"\n".join(_RECORDED_LINEAR[:prefix_length]) + b"\n"

@@ -1,4 +1,4 @@
-# The Agent Composer
+# Yian - The Agent Composer
 
 **Bridging the trust gap between humans and agents.**
 
@@ -8,7 +8,7 @@ is also the problem: the plan is *opaque*. You don't see the structure the model
 you can't tell whether it has a bug, and the next run might quietly do something else.
 When the stakes are real, "it usually works" isn't trust.
 
-Agent Composer makes the flow a **first-class artifact that both you and the
+Yian makes the flow a **first-class artifact that both you and the
 model can read**. Instead of the agent inventing its plan at runtime, the flow is
 written out as a small Docker-Compose-shaped YAML file — by you, by an LLM, or by the
 two of you together. You can see exactly what runs, inspect it for bugs, and refine it
@@ -72,7 +72,7 @@ other, so a worker pool can run them **in parallel**; `verdict` reads both, so i
 argues both sides before deciding — you can read that guarantee straight off the file.
 
 ```console
-$ composer run debate.yaml --input question="Should a small team adopt a monorepo?" --num-workers 4
+$ yian run debate.yaml --input question="Should a small team adopt a monorepo?" --num-workers 4
 Adopt the monorepo. For a small team the simpler cross-project refactors and single ...
 ```
 
@@ -103,7 +103,7 @@ Adopt the monorepo. For a small team the simpler cross-project refactors and sin
 <div class="grid cards" markdown>
 
 - :material-download: **[Installation](installation.md)** — install the current source, choose provider extras, and pick a model.
-- :material-console: **[The `composer` CLI](cli.md)** — run a flow from the terminal, supply inputs, and serve blocking human requests.
+- :material-console: **[The `yian` CLI](cli.md)** — run a flow from the terminal, supply inputs, and serve blocking human requests.
 - :material-file-code: **[Flow syntax](syntax.md)** — the full Compose-YAML reference: types, `${...}` refs, node kinds, `case`, coalesce, asserts.
 - :material-robot: **[Agent](agent.md)** — the framework's agent model, vocabulary, and YAML representations.
 - :material-lightbulb: **[Examples](examples.md)** — walk through the flows that ship in `examples/`.

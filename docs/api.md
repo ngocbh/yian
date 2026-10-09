@@ -9,7 +9,7 @@ ordinary outputs. For the node/flow/agent distinction, start with
 ```python
 from pathlib import Path
 
-from agent_composer import load_flow, run_flow
+from yian import load_flow, run_flow
 
 flow_path = Path("hello.yaml")
 loaded = load_flow(
@@ -27,7 +27,7 @@ print(result.status, result.output)
 
 ## Public surface
 
-These names are exported from the top-level `agent_composer` package:
+These names are exported from the top-level `yian` package:
 
 | Name | What it is |
 |------|------------|
@@ -44,14 +44,14 @@ These names are exported from the top-level `agent_composer` package:
 | `FlowValidationError` | raised on a failed validation check |
 | `ExpressionError` | raised on a bad `${...}` expression |
 
-Recovery, the result type, and the steering protocol live in `agent_composer.run`:
+Recovery, the result type, and the steering protocol live in `yian.run`:
 
 ```python
-from agent_composer.run import RunResult, Steering, resume_flow
+from yian.run import RunResult, Steering, resume_flow
 ```
 
 The lower-level `FlowEngine`, `RunState`, `RunLog`, `MemoryRunLog`, and
-`JsonlRunLog` interfaces are scoped to `agent_composer.runtime`. A direct engine
+`JsonlRunLog` interfaces are scoped to `yian.runtime`. A direct engine
 caller must first apply a `RunStarted` transition to a matching state/log pair;
 the package-root functions below own that setup for normal callers.
 
@@ -78,7 +78,7 @@ its immutable `.diagnostic` owns the message, notes, and every ordered
 `DiagnosticFrame`, including frames from imported files.
 
 ```python
-from agent_composer import LoadError
+from yian import LoadError
 
 try:
     loaded = load_flow(text, source_label="flow.yaml")
@@ -131,7 +131,7 @@ terminal. Stored defaults are not coerced.
   `ToolCallFinished`), strictly between that node's `NodeStarted` and its outcome.
   In-loop observers are never durable, never members of `RunResult.events`, and
   never replayed on resume; filter them with
-  `isinstance(event, agent_composer.events.IN_LOOP_EVENTS)`. Observers from
+  `isinstance(event, yian.events.IN_LOOP_EVENTS)`. Observers from
   concurrently running nodes interleave (runs are pooled by default); correlate
   them by `node_id` and `exchange_id`. `usage` is the provider's own count
   (`None` when unreported) and `error` is an exception type name only, or
@@ -328,7 +328,7 @@ preserves this result's previously observed outcome and learning objects.
 This complete example needs no model or memory backend:
 
 ```python
-from agent_composer import load_flow, run_flow
+from yian import load_flow, run_flow
 
 flow = load_flow('''
 id: structured-feedback
@@ -349,7 +349,7 @@ assert outcome.feedback.input_feedback == {"items": ([None, "Check this value."]
 assert result.output == {"items": [1, 2], "label": "batch"}
 ```
 
-`BackwardOutcome` is exported from `agent_composer.runtime`. Its `status` is
+`BackwardOutcome` is exported from `yian.runtime`. Its `status` is
 `succeeded` or `failed`; `feedback` is the accepted complete root `BackwardResult`,
 or `None` when the accepted prefix has no completed result. `failure` identifies a backward,
 learner, or commit failure. `learning` is `None` when the run had no memory.
@@ -383,8 +383,8 @@ system message and reads the full instructions on demand through the built-in
 chooses which skills exist for a run:
 
 ```python
-from agent_composer.compose import load_flow, load_skills
-from agent_composer.run import resume_flow, run_flow
+from yian.compose import load_flow, load_skills
+from yian.run import resume_flow, run_flow
 
 flow = load_flow(open("review.yaml").read())   # the AGENT says `skills: all`
 shared = load_skills(["shared/skills"])
@@ -408,10 +408,10 @@ written.
   frontmatter, a missing `description`, a bad name, an unreadable file, a file over
   256 KiB, or two skills with one name in the same root raise one `SkillError` that
   lists every problem; `skip_invalid=True` warns and skips them instead.
-- `default_skill_roots(cwd=None, home=None)` returns the folders `composer run`
+- `default_skill_roots(cwd=None, home=None)` returns the folders `yian run`
   uses: `~/.claude/skills`, `~/.agents/skills`, then `.claude/skills` and
   `.agents/skills` in each directory from `cwd` up to the git root.
-- `agent_composer.skills.Skill(name, description, instructions, directory=None)`
+- `yian.skills.Skill(name, description, instructions, directory=None)`
   builds a skill in code. `directory=None` means it has no bundled files.
 
 A skill's text is read once, when `load_skills` runs, so every node in the run sees
@@ -431,7 +431,7 @@ host inbox while its tool loop runs. The inbox is any object with two methods:
 
 ```python
 import threading
-from agent_composer.run import run_flow
+from yian.run import run_flow
 
 class Inbox:
     """Steers queued per node id, plus interrupt flags, shared with the UI thread."""
@@ -486,7 +486,7 @@ result = run_flow(flow, inputs, log="run.jsonl", steering=inbox)
   that fails or crashes before it finishes is not delivered again when the node
   is retried. Pass the same inbox to `resume_flow(..., steering=inbox)`; finished
   nodes replay without reading it.
-- `agent_composer.run.Steering` is the matching `typing.Protocol`.
+- `yian.run.Steering` is the matching `typing.Protocol`.
 
 ## Injecting agent memory
 
@@ -515,7 +515,7 @@ output: ${answer.output}
 
 The host owns backends, model configuration, credentials, storage, and
 lifetime. `run_flow(..., memory=None)` leaves declarations dormant, and
-`run_flow` never constructs memory. `composer run` builds every declared
+`run_flow` never constructs memory. `yian run` builds every declared
 built-in memory; see [CLI memory](cli.md#memory-and-storage). A Python host
 builds them with `build_memories`, keeps the registry open for as long as it
 wants continuity, including through `backward()`, and closes it:
@@ -523,7 +523,7 @@ wants continuity, including through `backward()`, and closes it:
 ```python
 from pathlib import Path
 
-from agent_composer import build_memories, load_flow, run_flow
+from yian import build_memories, load_flow, run_flow
 
 path = Path("support.yaml")
 flow = load_flow(path.read_text(), search_paths=[path.parent], source_label=path.name)
@@ -552,7 +552,7 @@ To configure one backend yourself, supply it under its key and let
 `build_memories` build the rest:
 
 ```python
-from agent_composer.memory.episodic import EpisodicMemory
+from yian.memory.episodic import EpisodicMemory
 
 episodic = EpisodicMemory(max_episodes=100, recall_limit=10)
 with build_memories(flow, supplied={"notes": episodic}) as memory:
@@ -622,7 +622,7 @@ through `supplied=` or `factories=`. A supplied key takes no YAML `config`, so
 set its limits on the object:
 
 ```python
-from agent_composer.memory.reflective import ReflectiveMemory
+from yian.memory.reflective import ReflectiveMemory
 
 # For a flow that declares `lessons: reflective` (no config) and `vector: {type: vector}`.
 memory = build_memories(
@@ -640,8 +640,8 @@ its key, and rewrites it on backward with a compare-and-set write. For a flow
 that declares `long_term_memory: {about: profile}`:
 
 ```python
-from agent_composer.memory.profile import ProfileMemory
-from agent_composer.memory.storage import FileMarkdownStore
+from yian.memory.profile import ProfileMemory
+from yian.memory.storage import FileMarkdownStore
 
 profile = ProfileMemory(FileMarkdownStore("people/ada.md"), max_chars=32_000)
 result = run_flow(flow, inputs, memory={"about": profile}, learnable=True)
@@ -681,7 +681,7 @@ process at every operation once a path is configured, so a forked child
 cannot use it even if the parent never opened it.
 
 ```python
-from agent_composer.memory.session import SessionMemory
+from yian.memory.session import SessionMemory
 
 # The flow's AGENT declares `long_term_memory: {chat: session}`.
 with SessionMemory(storage="./session.sqlite") as memory:
@@ -728,12 +728,12 @@ using the stored limits clears it; `reset()` keeps the stored limits. Recorded r
 uses the current host `llm_config`. SessionMemory uses the current history
 budget and recent-turn count. Increasing the recent-turn count restores raw
 context for newly protected turns instead of hiding them behind an older
-summary. Storage ownership belongs to the host. `composer run` places files with
+summary. Storage ownership belongs to the host. `yian run` places files with
 `--memory-root DIR` or `--memory-storage KEY=PATH` and passes each memory's YAML
 `config` to its constructor.
 
 Application-specific implementations use the source-neutral `Memory` and
-`MemorySession` protocols exported by `agent_composer.memory`.
+`MemorySession` protocols exported by `yian.memory`.
 `Memory.open_run()` returns a run-scoped `MemorySession` that implements
 snapshots, `recall`, `learn`, and idempotent `commit`. Build a custom type with
 `build_memories(..., factories={"my_type": MyMemory})`.
@@ -803,21 +803,21 @@ the backward outcome retains the completed feedback.
 
 ## SessionMemory foundation
 
-`agent_composer.memory.session.SessionMemory` retains AGENT
+`yian.memory.session.SessionMemory` retains AGENT
 message conversations across calls to `run_flow`.
 The backend owns history updates and
 FIFO admission directly; runtime owns only the optional turn's lifetime and
 authored scope. Explicit backward learning retains self-feedback as notes through
 the same memory lifecycle. Older API context can be summarized without deleting
-raw history. `composer run` builds every declared built-in memory, session included.
+raw history. `yian run` builds every declared built-in memory, session included.
 
 Declare a session memory on the AGENT, for example
 `long_term_memory: {chat: session}`, and pass the same backend under that key to
 each run. A session cannot be declared on a flow. For example:
 
 ```python
-from agent_composer import load_flow, run_flow
-from agent_composer.memory.session import SessionMemory
+from yian import load_flow, run_flow
+from yian.memory.session import SessionMemory
 
 flow = load_flow("""
 id: remembered-chat
@@ -847,12 +847,12 @@ API calls start with the current prompt and any recalled notes.
 
 `SessionMemory` is the concrete backend; the existing `MemorySession` name still
 means the run-scoped protocol returned by a memory backend. The contracts-only
-`agent_composer.memory` facade exports `MemoryContent`, `MemoryContextRequest`,
+`yian.memory` facade exports `MemoryContent`, `MemoryContextRequest`,
 `MemoryContext`, immutable conversation carriers, and the `TranscriptSource` and
 `ConversationTurn` protocols. Existing text-only recall implementations remain valid. Import the concrete backend from its own module:
 
 ```python
-from agent_composer.memory.session import SessionMemory
+from yian.memory.session import SessionMemory
 
 memory = SessionMemory()
 with memory.open_run() as opened:
@@ -1023,7 +1023,7 @@ for the lower-level signatures.
 ## Diagnosing a failed run
 
 ```python
-from agent_composer.diagnostics import Diagnostic
+from yian.diagnostics import Diagnostic
 
 if result.failure is not None:
     diagnostic: Diagnostic = loaded.diagnose(result.failure)
@@ -1041,8 +1041,8 @@ non-empty trace cannot be resolved completely, diagnosis returns no frames and
 the single note `Source presentation was unavailable.` rather than exposing a
 partial source stack or replacing the semantic failure.
 
-`Diagnostic` is defined in `agent_composer.diagnostics`; it is not currently a
-package-root `agent_composer` export. The CLI also calls
+`Diagnostic` is defined in `yian.diagnostics`; it is not currently a
+package-root `yian` export. The CLI also calls
 `loaded.diagnose(result.failure)` and sends that value to the shared renderer;
 library callers use the same method when they need presentation-ready frames.
 
@@ -1101,8 +1101,8 @@ Start a recoverable run by supplying a new log path:
 ```python
 from pathlib import Path
 
-from agent_composer import load_flow, run_flow
-from agent_composer.run import resume_flow
+from yian import load_flow, run_flow
+from yian.run import resume_flow
 
 run_log = Path("run.jsonl")
 loaded = load_flow('''
@@ -1219,23 +1219,23 @@ retry. Log/cleanup faults preserve the primary exception and accepted records.
 ## CLI path policy
 
 The Python API remains path-neutral: `run_flow(..., log=None)` uses memory and a
-caller chooses any durable path explicitly. The `composer` host adds a user-facing
+caller chooses any durable path explicitly. The `yian` host adds a user-facing
 policy on top:
 
-- fresh `composer run FLOW` selects and reports
-  `~/.agent_composer/runs/<run_id>.jsonl` unless `--log PATH` selects another
+- fresh `yian run FLOW` selects and reports
+  `~/.yian/runs/<run_id>.jsonl` unless `--log PATH` selects another
   path; once runtime commits `RunStarted`, that file is authoritative;
-- `composer run FLOW --resume PATH` calls the same recovery boundary without accepting
+- `yian run FLOW --resume PATH` calls the same recovery boundary without accepting
   fresh inputs, a second log path, or provider/model configuration;
 - omitting `-w` on resume preserves the recorded worker count, while an explicit
   value affects the new segment only;
-- `composer run` builds every declared built-in memory with `build_memories` and
+- `yian run` builds every declared built-in memory with `build_memories` and
   closes the registry after execution drains. `--memory-root DIR` keeps files
   under `DIR/<flow id>/`, and repeated `--memory-storage KEY=PATH` places one
   memory; both apply on fresh runs and on resume, and other memories stay in RAM.
   A flow that declares a custom memory type exits 1 with a setup error, also on
   `--resume`. Terminal inspection opens no memory backend;
-- each `composer chat` attempt, including a failed-turn restart, receives a separate
+- each `yian chat` attempt, including a failed-turn restart, receives a separate
   reported default path.
 
 The default CLI directories are mode `0700`; `JsonlRunLog` creates files with
@@ -1250,7 +1250,7 @@ run as `tools={"ask_user": handler}`; the calling node remains active until the
 handler returns or raises:
 
 ```python
-from agent_composer import load_flow, run_flow
+from yian import load_flow, run_flow
 
 approval = load_flow(
     open("examples/human-approval.yaml").read(),
@@ -1318,4 +1318,4 @@ keep their original meaning.
 ## Next
 
 - [Flow syntax](syntax.md) — the YAML these functions load.
-- [The `composer` CLI](cli.md) — run flows from the terminal.
+- [The `yian` CLI](cli.md) — run flows from the terminal.

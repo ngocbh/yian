@@ -10,11 +10,11 @@ import importlib
 
 import pytest
 
-from agent_composer.nodes.base import NodeKind, Output
-from agent_composer.nodes.contracts import Assertion, Parameter
-from agent_composer.nodes.end import EndNode
-from agent_composer.runtime.eval_node import EvaluationFailure
-from agent_composer.typesys.pool import VariablePool
+from yian.nodes.base import NodeKind, Output
+from yian.nodes.contracts import Assertion, Parameter
+from yian.nodes.end import EndNode
+from yian.runtime.eval_node import EvaluationFailure
+from yian.typesys.pool import VariablePool
 from tests.engine._fakes import drive, stamp_reads
 
 
@@ -25,9 +25,9 @@ def test_node_kind_has_no_output_resolver_or_collector():
 
 def test_output_resolver_and_collector_packages_are_gone():
     with pytest.raises(ModuleNotFoundError):
-        importlib.import_module("agent_composer.nodes.output_resolver")
+        importlib.import_module("yian.nodes.output_resolver")
     with pytest.raises(ModuleNotFoundError):
-        importlib.import_module("agent_composer.nodes.collector")
+        importlib.import_module("yian.nodes.collector")
 
 
 def _end_with_tail_assert(node_id="each/__end__"):

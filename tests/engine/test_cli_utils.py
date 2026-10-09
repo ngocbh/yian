@@ -1,4 +1,4 @@
-"""`cli/utils.py` credential/endpoint helpers + `composer run`'s pre-flight key check.
+"""`cli/utils.py` credential/endpoint helpers + `yian run`'s pre-flight key check.
 
 `ensure_api_key` / `confirm_ollama_endpoint` are exercised with a fake `questionary`
 and a monkeypatched `sys.stdin.isatty` so both the interactive-prompt and the
@@ -13,9 +13,9 @@ from types import SimpleNamespace
 
 import pytest
 
-import agent_composer.cli.run as climod
-from agent_composer.cli import utils
-from agent_composer.compose.loader import load_flow
+import yian.cli.run as climod
+from yian.cli import utils
+from yian.compose.loader import load_flow
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 
@@ -149,9 +149,9 @@ def test_ensure_api_key_strips_surrounding_whitespace(monkeypatch):
 
 def test_ensure_api_key_interactive_false_forces_non_interactive(monkeypatch, tmp_path):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.setenv("AGENT_COMPOSER_AUTH_FILE", str(tmp_path / "auth.json"))
+    monkeypatch.setenv("YIAN_AUTH_FILE", str(tmp_path / "auth.json"))
     _tty(monkeypatch, True)  # a TTY is present, but interactive=False overrides
-    with pytest.raises(RuntimeError, match=r"OPENAI_API_KEY.*run 'composer auth openai'"):
+    with pytest.raises(RuntimeError, match=r"OPENAI_API_KEY.*run 'yian auth openai'"):
         utils.ensure_api_key("openai", interactive=False)
 
 
@@ -184,7 +184,7 @@ def _hello_agent():
 
 
 def test_agent_providers_uses_default_when_unset(monkeypatch):
-    monkeypatch.delenv("AGENT_COMPOSER_DEFAULT_PROVIDER", raising=False)
+    monkeypatch.delenv("YIAN_DEFAULT_PROVIDER", raising=False)
     assert climod._agent_providers(_hello_agent(), {}) == ["openai"]
 
 
@@ -194,13 +194,13 @@ def test_agent_providers_cli_override_fills_gap():
 
 
 def test_ensure_provider_keys_ok_when_present(monkeypatch):
-    monkeypatch.delenv("AGENT_COMPOSER_DEFAULT_PROVIDER", raising=False)
+    monkeypatch.delenv("YIAN_DEFAULT_PROVIDER", raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-present")
     climod._ensure_provider_keys(_hello_agent(), {})  # no raise
 
 
 def test_ensure_provider_keys_raises_when_missing(monkeypatch):
-    monkeypatch.delenv("AGENT_COMPOSER_DEFAULT_PROVIDER", raising=False)
+    monkeypatch.delenv("YIAN_DEFAULT_PROVIDER", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     _tty(monkeypatch, False)
     with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):

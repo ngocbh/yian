@@ -8,18 +8,18 @@ from types import SimpleNamespace
 from langchain_core.messages import AIMessage
 import pytest
 
-import agent_composer.llm_clients as llm_clients
-import agent_composer.nodes.agent.modes.tool_calling as tool_calling_module
-from agent_composer.memory.contracts import MemoryContext, ToolCallInteraction, ToolResultInteraction
-from agent_composer.nodes.agent import AgentNode
-from agent_composer.nodes.agent.modes.common import DEFAULT_SYSTEM, MODES
-from agent_composer.nodes.base import Output
-from agent_composer.nodes.contracts import ValueContract
-from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
-from agent_composer.skills import Skill, SkillError
-from agent_composer.skills.tool import LOAD_SKILL, system_prompt_with_skills
-from agent_composer.typesys import VariablePool
-from agent_composer.typesys.values import Type, ValueKind
+import yian.llm_clients as llm_clients
+import yian.nodes.agent.modes.tool_calling as tool_calling_module
+from yian.memory.contracts import MemoryContext, ToolCallInteraction, ToolResultInteraction
+from yian.nodes.agent import AgentNode
+from yian.nodes.agent.modes.common import DEFAULT_SYSTEM, MODES
+from yian.nodes.base import Output
+from yian.nodes.contracts import ValueContract
+from yian.runtime.eval_node import EvaluationFailure, eval_node
+from yian.skills import Skill, SkillError
+from yian.skills.tool import LOAD_SKILL, system_prompt_with_skills
+from yian.typesys import VariablePool
+from yian.typesys.values import Type, ValueKind
 from tests.engine._fakes import FuncNode
 
 

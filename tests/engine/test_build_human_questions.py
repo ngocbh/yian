@@ -1,4 +1,4 @@
-from agent_composer.compose import load_flow
+from yian.compose import load_flow
 
 _STATIC = """
 id: f

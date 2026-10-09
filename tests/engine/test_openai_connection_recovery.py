@@ -6,14 +6,14 @@ import time
 import httpx
 import pytest
 
-from agent_composer.compose import load_flow
-from agent_composer.events import NodeStarted
-from agent_composer.llm_clients.auth import (
+from yian.compose import load_flow
+from yian.events import NodeStarted
+from yian.llm_clients.auth import (
     ApiKeyCredentials,
     AuthStore,
     OAuthCredentials,
 )
-from agent_composer.run import resume_flow, run_flow
+from yian.run import resume_flow, run_flow
 from tests.fixtures.openai_responses import ResponsesServer
 
 _FLOW = """id: pinned-openai
@@ -26,10 +26,10 @@ output: ${agent.output}
 
 @pytest.fixture(autouse=True)
 def isolated_auth(tmp_path, monkeypatch):
-    monkeypatch.setenv("AGENT_COMPOSER_AUTH_FILE", str(tmp_path / "auth.json"))
+    monkeypatch.setenv("YIAN_AUTH_FILE", str(tmp_path / "auth.json"))
     for key in (
-        "AGENT_COMPOSER_DEFAULT_PROVIDER",
-        "AGENT_COMPOSER_DEFAULT_MODEL",
+        "YIAN_DEFAULT_PROVIDER",
+        "YIAN_DEFAULT_MODEL",
         "OPENAI_API_KEY",
         "OPENAI_BASE_URL",
     ):
@@ -84,7 +84,7 @@ def test_old_api_record_resumes_via_api_despite_saved_subscription(
     path.write_text("\n".join(lines) + "\n")
     _connect()
     server = ResponsesServer(tool_first=False)
-    from agent_composer.llm_clients.openai_client import OpenAIClient
+    from yian.llm_clients.openai_client import OpenAIClient
 
     original = OpenAIClient.get_llm
 
@@ -103,7 +103,7 @@ def test_old_api_record_resumes_via_api_despite_saved_subscription(
 
 def test_backward_refuses_changed_selected_connection(tmp_path, monkeypatch):
     _connect()
-    from agent_composer.llm_clients import openai_subscription
+    from yian.llm_clients import openai_subscription
 
     original = openai_subscription.create_subscription_model
     server = ResponsesServer(tool_first=False)
@@ -127,8 +127,8 @@ def test_backward_refuses_changed_selected_connection(tmp_path, monkeypatch):
 
 def test_old_backward_config_gets_api_semantics_before_factory(monkeypatch):
     from langchain_core.messages import AIMessage
-    import agent_composer.llm_clients as clients
-    from agent_composer.nodes.agent.backward import backward_agent
+    import yian.llm_clients as clients
+    from yian.nodes.agent.backward import backward_agent
     from tests.engine.test_agent_backward import _context
 
     data = _context().node_data
@@ -155,13 +155,13 @@ def test_old_backward_config_gets_api_semantics_before_factory(monkeypatch):
 
 def test_old_api_run_resumes_shared_message_history(tmp_path, monkeypatch):
     from langchain_core.messages import AIMessage
-    import agent_composer.run as boundary
-    import agent_composer.llm_clients as clients
-    from agent_composer.llm_clients.connection import (
+    import yian.run as boundary
+    import yian.llm_clients as clients
+    from yian.llm_clients.connection import (
         ConnectionSnapshot,
         connection_snapshot,
     )
-    from agent_composer.memory.session import SessionMemory
+    from yian.memory.session import SessionMemory
 
     flow = load_flow(_FLOW.replace("mode: plain,", "mode: plain, long_term_memory: session,"))
     history = SessionMemory()
@@ -207,14 +207,14 @@ def test_old_api_run_resumes_shared_message_history(tmp_path, monkeypatch):
 
 def test_fresh_connected_run_reuses_pre_cutover_api_message_history(monkeypatch):
     from langchain_core.messages import AIMessage
-    import agent_composer.run as boundary
-    import agent_composer.llm_clients as clients
-    from agent_composer.llm_clients import openai_subscription
-    from agent_composer.llm_clients.connection import (
+    import yian.run as boundary
+    import yian.llm_clients as clients
+    from yian.llm_clients import openai_subscription
+    from yian.llm_clients.connection import (
         ConnectionSnapshot,
         connection_snapshot,
     )
-    from agent_composer.memory.session import SessionMemory
+    from yian.memory.session import SessionMemory
 
     flow = load_flow(_FLOW.replace("mode: plain,", "mode: plain, long_term_memory: session,"))
     history = SessionMemory()

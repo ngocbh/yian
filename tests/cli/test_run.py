@@ -1,4 +1,4 @@
-"""Tests for the `composer run` CLI — exercised through typer's `CliRunner`.
+"""Tests for the `yian run` CLI — exercised through typer's `CliRunner`.
 
 These use CODE-only flows (no AGENT) so the suite never hits a network or needs a
 provider key. They cover: successful runs, flag-supplied inputs, `--inputs` JSON,
@@ -21,9 +21,9 @@ import pytest
 import typer.testing as typer_testing
 from typer.testing import CliRunner
 
-import agent_composer.cli.run as run_cli
-from agent_composer.cli import app
-from agent_composer.tools import TOOL_REGISTRY, register_tool
+import yian.cli.run as run_cli
+from yian.cli import app
+from yian.tools import TOOL_REGISTRY, register_tool
 
 runner = CliRunner()
 
@@ -235,7 +235,7 @@ def test_run_keeps_registered_tools(tmp_path: Path):
 
 
 def test_run_inline_code_in_process(tmp_path: Path):
-    # an inline `code:` node (bare body, run in-process) works end-to-end through `composer run`.
+    # an inline `code:` node (bare body, run in-process) works end-to-end through `yian run`.
     flow = _write_flow(tmp_path, INLINE_FLOW)
     result = runner.invoke(app, ["run", str(flow), "--input", "topic=clouds"])
     assert result.exit_code == 0, result.output
@@ -545,7 +545,7 @@ def test_ctrl_c_mid_run_says_cancelled(tmp_path: Path, monkeypatch):
     """Ctrl+C while nodes are executing (a KeyboardInterrupt out of `run_flow`, not a
     prompt cancel) must surface a "cancelled by user" notice and exit 130 — not die
     silently mid-spinner. Regression for "Ctrl+C kills the run but says nothing"."""
-    import agent_composer.cli.run as run_mod
+    import yian.cli.run as run_mod
 
     flow = _write_flow(tmp_path, ECHO_FLOW)
 
@@ -560,7 +560,7 @@ def test_ctrl_c_mid_run_says_cancelled(tmp_path: Path, monkeypatch):
 
 def test_prompt_request_offers_model_options_as_a_choice(monkeypatch):
     """Options sent with a model ``ask_user`` render as one choice list."""
-    from agent_composer.cli.terminal import PromptRequest
+    from yian.cli.terminal import PromptRequest
 
     seen = []
 

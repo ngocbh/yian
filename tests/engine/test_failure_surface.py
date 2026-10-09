@@ -5,14 +5,14 @@ from __future__ import annotations
 from dataclasses import fields
 import inspect
 
-import agent_composer.events as events
-from agent_composer.diagnostics import Failure
-from agent_composer.events import NodeFailed, RunFailed
-from agent_composer.nodes.base import NodeAssertFailed
-from agent_composer.nodes.binding import BindingError
-from agent_composer.run import RunResult
-from agent_composer.runtime.eval_node import EvaluationFailure
-from agent_composer.runtime.log import NodeFailedRecord
+import yian.events as events
+from yian.diagnostics import Failure
+from yian.events import NodeFailed, RunFailed
+from yian.nodes.base import NodeAssertFailed
+from yian.nodes.binding import BindingError
+from yian.run import RunResult
+from yian.runtime.eval_node import EvaluationFailure
+from yian.runtime.log import NodeFailedRecord
 
 
 def test_source_span_is_absent_from_runtime_events() -> None:

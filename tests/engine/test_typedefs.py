@@ -2,8 +2,8 @@
 
 import pytest
 
-from agent_composer.typesys.values import TypeCheckError, ValueKind
-from agent_composer.typesys.types import (
+from yian.typesys.values import TypeCheckError, ValueKind
+from yian.typesys.types import (
     AliasDef,
     RecordDef,
     RefExpr,
@@ -33,7 +33,7 @@ def test_alias_composes_alias():
 
 
 def test_bounded_aliases_preserve_nullable_and_nested_value_paths():
-    from agent_composer.typesys.values import build_value_as
+    from yian.typesys.values import build_value_as
 
     registry = read_typedefs({
         "Score": "float[0, 1]", "MaybeScore": "Optional[Score]",

@@ -1,9 +1,9 @@
 """Unit tests for the CompiledFlow topology model."""
 
-from agent_composer.compile.model import END_ID, START_ID, Edge, Flow, CompiledFlow
-from agent_composer.nodes.contracts import Binding
-from agent_composer.nodes.end import EndNode
-from agent_composer.nodes.start import StartNode
+from yian.compile.model import END_ID, START_ID, Edge, Flow, CompiledFlow
+from yian.nodes.contracts import Binding
+from yian.nodes.end import EndNode
+from yian.nodes.start import StartNode
 from tests.engine._fakes import FuncNode
 
 
@@ -88,7 +88,7 @@ def test_flow_base_normalizes_wiring_with_boundary_defaults():
 
 
 def test_compiled_flow_is_flow_and_keeps_boundary_and_terminal():
-    from agent_composer.compose import load_flow
+    from yian.compose import load_flow
 
     compiled = load_flow(_OPTIONAL_EDGE_FLOW).compiled
     assert isinstance(compiled, Flow)
@@ -135,7 +135,7 @@ output: ${hard.output}
 
 
 def test_data_edge_optional_reflects_binding_escape():
-    from agent_composer.compose import load_flow
+    from yian.compose import load_flow
 
     flow = load_flow(_OPTIONAL_EDGE_FLOW).compiled
     by_to = {e.to: e for e in flow.edges if e.input_group == "v"}
@@ -178,7 +178,7 @@ output: ${gate.output}
 
 
 def test_case_condition_escape_marks_optional():
-    from agent_composer.compose import load_flow
+    from yian.compose import load_flow
 
     flow = load_flow(_CASE_ESCAPE_FLOW).compiled
     a_to_gate = [e for e in flow.edges if e.from_ == "a" and e.to == "gate"]
@@ -195,9 +195,9 @@ def test_case_condition_escape_marks_optional():
 
 
 def test_item_head_ref_yields_no_edge_but_producer_ref_does():
-    from agent_composer.compose.edges.data import infer_data_edges
-    from agent_composer.compose.parse.nodes import parse_nodes
-    from agent_composer.compose.source import SourceCursor
+    from yian.compose.edges.data import infer_data_edges
+    from yian.compose.parse.nodes import parse_nodes
+    from yian.compose.source import SourceCursor
 
     # A CODE `producer` and a stand-in `mapbody` consumer whose wiring binds both an
     # `${item.foo}` (body-local) and a `${producer.output}` (a real producer ref). We drive
@@ -283,7 +283,7 @@ output: ${bare.output}
 
 
 def test_binding_coskip_sets_edge_optional_per_stance():
-    from agent_composer.compose import load_flow
+    from yian.compose import load_flow
 
     flow = load_flow(_COSKIP_STANCE_FLOW).compiled
     by_to = {e.to: e for e in flow.edges if e.input_group == "v"}

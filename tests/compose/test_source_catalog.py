@@ -4,19 +4,19 @@ from copy import deepcopy
 
 import pytest
 
-from agent_composer.compose.source import (
+from yian.compose.source import (
     SourceCatalog,
     SourceCursor,
     SourceDocument,
 )
-from agent_composer.compose.source import document as source_document_module
-from agent_composer.compose.source.catalog import (
+from yian.compose.source import document as source_document_module
+from yian.compose.source.catalog import (
     _ConstructedLine,
     _SourceCatalogBuilder,
     _SourceSite,
     _scope_origin,
 )
-from agent_composer.diagnostics import DiagnosticFrame, OriginRef, SourceRange
+from yian.diagnostics import DiagnosticFrame, OriginRef, SourceRange
 
 
 def test_site_keys_are_typed_escaped_and_deterministic():

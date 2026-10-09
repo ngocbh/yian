@@ -11,8 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from agent_composer.compose import LoadError
-from agent_composer.compose.parse.file import (
+from yian.compose import LoadError
+from yian.compose.parse.file import (
     AgentDescriptor,
     CallDescriptor,
     CaseDescriptor,
@@ -21,8 +21,8 @@ from agent_composer.compose.parse.file import (
     ToolDescriptor,
     parse_file,
 )
-from agent_composer.compose.parse.nodes import parse_nodes
-from agent_composer.compose.source import SourceDocument
+from yian.compose.parse.nodes import parse_nodes
+from yian.compose.source import SourceDocument
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 

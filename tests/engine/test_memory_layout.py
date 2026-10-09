@@ -6,28 +6,28 @@ import copy
 
 import pytest
 
-from agent_composer.compile.manifest import flow_fingerprint, flow_manifest
-from agent_composer.compile.memory_layout import (
+from yian.compile.manifest import flow_fingerprint, flow_manifest
+from yian.compile.memory_layout import (
     apply_memory_layout,
     check_session_compatibility,
     memory_stacks,
     resolve_memory_layout,
 )
-from agent_composer.compile.model import END_ID, START_ID, CompiledFlow
-from agent_composer.compose import LoadError, load_flow
-from agent_composer.diagnostics import OriginRef
-from agent_composer.memory import (
+from yian.compile.model import END_ID, START_ID, CompiledFlow
+from yian.compose import LoadError, load_flow
+from yian.diagnostics import OriginRef
+from yian.memory import (
     DeclSite,
     MemoryDecl,
     MemoryScope,
     MemorySetupError,
     MemoryStack,
 )
-from agent_composer.nodes.agent import AgentNode
-from agent_composer.nodes.call import CallNode
-from agent_composer.nodes.code import CodeNode
-from agent_composer.nodes.end import EndNode
-from agent_composer.nodes.start import StartNode
+from yian.nodes.agent import AgentNode
+from yian.nodes.call import CallNode
+from yian.nodes.code import CodeNode
+from yian.nodes.end import EndNode
+from yian.nodes.start import StartNode
 
 
 _NESTED = """id: root
@@ -448,7 +448,7 @@ def test_one_key_with_two_configs_is_a_load_error_at_the_first_site() -> None:
 @pytest.mark.parametrize("other", [{"limit": True}, {"limit": 1.0}, {"limit": 2}])
 @pytest.mark.parametrize("same_site", [False, True])
 def test_memory_table_compares_configs_as_canonical_json(other, same_site) -> None:
-    from agent_composer.compile.memory_layout import _memory_table
+    from yian.compile.memory_layout import _memory_table
 
     root = DeclSite((), ("root",), None)
     first = MemoryDecl("notes", "notes", {"limit": 1}, root)
@@ -459,7 +459,7 @@ def test_memory_table_compares_configs_as_canonical_json(other, same_site) -> No
 
 
 def test_memory_table_merges_identical_declarations_at_one_site() -> None:
-    from agent_composer.compile.memory_layout import _memory_table
+    from yian.compile.memory_layout import _memory_table
 
     site = DeclSite((), ("root",), None)
     first = MemoryDecl("notes", "notes", {"limit": 1}, site)
@@ -535,7 +535,7 @@ def test_session_key_with_two_agent_owners_is_a_load_error() -> None:
 
 
 def test_config_clash_carries_every_other_site_as_a_related_origin() -> None:
-    from agent_composer.compile.memory_layout import _memory_table
+    from yian.compile.memory_layout import _memory_table
 
     # DeclSite.sort_key() order: ("def", "x") < ("def", "y") < ("root",).
     first = MemoryDecl("notes", "notes", {"limit": 1}, DeclSite((), ("def", "x"), None), OriginRef("a"))
@@ -551,7 +551,7 @@ def test_config_clash_carries_every_other_site_as_a_related_origin() -> None:
 @pytest.mark.parametrize("copied", [False, True])
 @pytest.mark.parametrize("repeated", ["first", "other"])
 def test_config_clash_lists_a_repeated_declaration_once(repeated, copied) -> None:
-    from agent_composer.compile.memory_layout import _memory_table
+    from yian.compile.memory_layout import _memory_table
 
     # A def called from two nodes yields its declaration once per call: the
     # same object, or an equal copy when run_flow deep-copies the child per call.

@@ -11,8 +11,8 @@
 # All four AGENT nodes use the connected default model.
 #
 # Run it with:
-#   composer auth openai
-#   composer run examples/debate.yaml \
+#   yian auth openai
+#   yian run examples/debate.yaml \
 #     --input question="Should a small team adopt a monorepo?"
 
 id: debate

@@ -1,6 +1,6 @@
 """Co-skip classifier: does a binding co-skip when all its producers are skipped?"""
 
-from agent_composer.expr import binding_co_skips
+from yian.expr import binding_co_skips
 
 
 def test_plain_ref_co_skips():

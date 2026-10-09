@@ -1,8 +1,8 @@
-# The Agent Composer
+# Yian - The Agent Composer
 
-[![Documentation](https://readthedocs.org/projects/agent-composer/badge/?version=latest)](https://agent-composer.readthedocs.io)
+[![Documentation](https://readthedocs.org/projects/yian/badge/?version=latest)](https://yian.readthedocs.io)
 
-Agent Composer is a small language and runtime for readable agent flows. You
+Yian is a small language and runtime for readable agent flows. You
 author a fixed graph in Docker-Compose-shaped YAML; the framework infers data
 dependencies, applies explicit ordering constraints, validates types, and runs
 through an append-only log.
@@ -28,7 +28,7 @@ prompt: Write a warm one-sentence greeting to ${name}.
 ```
 
 ```console
-composer run hello.yaml --input name=Ada --provider ollama --model llama3.2:3b
+yian run hello.yaml --input name=Ada --provider ollama --model llama3.2:3b
 ```
 
 See [Agent](docs/agent.md) for the conceptual model and
@@ -52,7 +52,7 @@ with validated defaults and reference them in prompts as `${name}`.
 
 ## Install
 
-> **Early stage.** Agent Composer is under active development. The API, YAML
+> **Early stage.** Yian is under active development. The API, YAML
 > surface, and CLI may change quickly.
 
 The current documentation describes the `main` branch. PyPI release `0.0.1`
@@ -60,8 +60,8 @@ contains an older, incompatible package, so install the current version from a
 clone until the next release:
 
 ```console
-git clone https://github.com/ngocbh/agent-composer.git
-cd agent-composer
+git clone https://github.com/ngocbh/yian.git
+cd yian
 python -m pip install ".[all]"
 ```
 
@@ -71,16 +71,16 @@ Provider extras can be installed separately: `anthropic`, `openai`, `google`,
 or `ollama`. The core engine and CLI do not require a provider SDK; a flow needs
 one only when it contains an AGENT node.
 
-Connect OpenAI with `composer auth openai`, choose ChatGPT subscription sign-in or an
+Connect OpenAI with `yian auth openai`, choose ChatGPT subscription sign-in or an
 API key, and select a default model. Both methods use `provider: openai` with
-Composer's ordinary tools and memory. OpenAI is the default provider; successful
+Yian's ordinary tools and memory. OpenAI is the default provider; successful
 setup saves your chosen model for subsequent runs. See
 [authentication setup](docs/installation.md#openai-authentication).
 
 ## Run a flow
 
 ```console
-composer run FLOW.yaml [--inputs inputs.json] [--input k=v]... \
+yian run FLOW.yaml [--inputs inputs.json] [--input k=v]... \
   [--provider P] [--model M] [-w N] [--log PATH]
 ```
 
@@ -94,25 +94,25 @@ Resuming without a worker flag preserves the count recorded in the run log.
 
 The CLI reports its selected JSONL path before execution. Once runtime
 initialization commits `RunStarted`, that file is the authoritative log. The
-default is `~/.agent_composer/runs/<run_id>.jsonl`; choose another new path with
+default is `~/.yian/runs/<run_id>.jsonl`; choose another new path with
 `--log`.
 Resume an interrupted run against the same flow:
 
 ```console
-composer run FLOW.yaml --resume PATH
+yian run FLOW.yaml --resume PATH
 ```
 
 Run logs can contain inputs, model/tool/human data, outputs, memory snapshots,
-configuration, and tracebacks. Treat them as sensitive. See [The `composer`
+configuration, and tracebacks. Treat them as sensitive. See [The `yian`
 CLI](docs/cli.md) for input behavior, diagnostics, concurrency, and recovery.
 
 For an interactive flow-backed chat:
 
 ```console
-composer chat [FLOW] [--workspace DIR] [--provider P] [--model M]
+yian chat [FLOW] [--workspace DIR] [--provider P] [--model M]
 ```
 
-The default composer chat can inspect, validate, run, and—after explicit
+The default yian chat can inspect, validate, run, and—after explicit
 approval—write flows inside its workspace. A supplied chat flow owns its own
 typed exit behavior.
 
@@ -121,7 +121,7 @@ typed exit behavior.
 ```python
 from pathlib import Path
 
-from agent_composer import load_flow, run_flow
+from yian import load_flow, run_flow
 
 path = Path("hello.yaml")
 flow = load_flow(
@@ -181,7 +181,7 @@ with `build_memories` (in RAM unless given storage) and commits retained
 episodes through explicit backward:
 
 ```python
-from agent_composer import build_memories
+from yian import build_memories
 
 with build_memories(flow) as memory:
     result = run_flow(flow, inputs, memory=memory, learnable=True)
@@ -195,9 +195,9 @@ compare-and-set write. Declare `long_term_memory: {about: profile}` and supply
 the backend under its key:
 
 ```python
-from agent_composer import build_memories
-from agent_composer.memory.profile import ProfileMemory
-from agent_composer.memory.storage import FileMarkdownStore
+from yian import build_memories
+from yian.memory.profile import ProfileMemory
+from yian.memory.storage import FileMarkdownStore
 
 profile = ProfileMemory(FileMarkdownStore("people/ada.md"))
 with build_memories(flow, supplied={"about": profile}) as memory:
@@ -211,7 +211,7 @@ conversation history across runs in the same process. Declare
 `long_term_memory: {chat: session}` on the AGENT and reuse one registry:
 
 ```python
-from agent_composer import build_memories
+from yian import build_memories
 
 with build_memories(flow) as memory:
     first = run_flow(flow, first_inputs, memory=memory)
@@ -240,22 +240,22 @@ with build_memories(flow, storage={"chat": "./session.sqlite"}) as memory:
 An AGENT can also use Claude Code and Codex skills. `skills: [release-notes]` (or
 `skills: all`) lists each granted skill's name and description in the system
 message, and the model reads a skill's `SKILL.md` or bundled files through the
-built-in `load_skill` tool when it needs them. `composer run` supplies the skills in
+built-in `load_skill` tool when it needs them. `yian run` supplies the skills in
 `~/.claude/skills`, `~/.agents/skills`, and the project's `.claude/skills` and
 `.agents/skills`; a library host passes `skills=load_skills([...])` from
-`agent_composer.compose` (`{}` when a granting flow should get none). See [Skills](docs/api.md#skills).
+`yian.compose` (`{}` when a granting flow should get none). See [Skills](docs/api.md#skills).
 
 Each local SQLite file has one owning backend until `close()` or context exit.
 Idle run handles do not block closing; active work or queued turns do. Omit
 `storage` to keep memory process-local. See [durable memory](docs/api.md#optional-durable-memory)
 for ownership and recovery.
 
-`composer run` builds every declared built-in memory (`episodic`, `reflective`,
+`yian run` builds every declared built-in memory (`episodic`, `reflective`,
 `session`, `profile`). They stay in RAM unless a CLI option places them:
 
 ```bash
-composer run flow.yaml --memory-root ./mem
-composer run flow.yaml --resume ./run.jsonl --memory-root ./mem
+yian run flow.yaml --memory-root ./mem
+yian run flow.yaml --resume ./run.jsonl --memory-root ./mem
 ```
 
 `--memory-root DIR` keeps every memory under `DIR/<flow id>/` (the flow `id:`
@@ -263,7 +263,7 @@ must be usable as one directory name), and repeatable `--memory-storage KEY=PATH
 places one declared memory.
 Use the same storage on resume; a run log is not a memory backup. The CLI does
 not run backward learning. A flow that declares a custom memory type runs from
-Python with `build_memories`; `composer run` exits 1 with a setup error for it.
+Python with `build_memories`; `yian run` exits 1 with a setup error for it.
 See [CLI memory](docs/cli.md#memory-and-storage) for lifetime and examples.
 
 ## Documentation
@@ -277,7 +277,7 @@ See [CLI memory](docs/cli.md#memory-and-storage) for lifetime and examples.
 - [Compose](docs/compose.md) — parsing, lowering, validation, and source origins.
 - [The engine](docs/engine.md) — scheduling, records, recovery, and learning.
 - [Runtime nodes](docs/nodes.md) — the `Node` / `NodeResult` contract.
-- [Engine design](src/agent_composer/README.md) — contributor invariants and
+- [Engine design](src/yian/README.md) — contributor invariants and
   package ownership.
 
 ## Develop and test

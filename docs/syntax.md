@@ -307,7 +307,7 @@ rules that compare declarations (one type and config per key, session
 placement, case collisions, alias names) apply only to declarations reachable
 from the root.
 
-**Supplying memory.** `composer run` builds every built-in memory in RAM, or
+**Supplying memory.** `yian run` builds every built-in memory in RAM, or
 on disk with `--memory-root DIR` / `--memory-storage KEY=PATH` (see
 [CLI memory](cli.md#memory-and-storage)). It does not build custom types; a
 flow that declares one runs from Python. From Python, pass
@@ -379,7 +379,7 @@ it leaves unset from the layer outside it. Precedence, most specific first:
 
 1. the AGENT node's own `llm_config:`
 2. the enclosing flow's `llm_config:`, then each parent flow outward
-3. the CLI `--provider` / `--model` flags (`composer run … --provider anthropic`)
+3. the CLI `--provider` / `--model` flags (`yian run … --provider anthropic`)
 4. process provider/model defaults, read exactly once when the run initializes
 
 Process defaults use environment overrides, then saved authentication choices,
@@ -427,14 +427,14 @@ provider/model defaults; it ignores enclosing flow, parent-flow, and CLI layers:
 
 #### OpenAI authentication
 
-Run `composer auth openai` to select ChatGPT subscription sign-in or an OpenAI API key,
+Run `yian auth openai` to select ChatGPT subscription sign-in or an OpenAI API key,
 then choose the default model. Both use `provider: openai` and the ordinary
-`plain` or `tool_calling` modes, explicit Composer tool grants, typed output,
+`plain` or `tool_calling` modes, explicit Yian tool grants, typed output,
 SessionMemory, and backward learning.
 
 The retired `provider: codex`, `sandbox`, `cwd`, and `builtin_tools` settings
 must be removed when migrating. Native thread references cannot be resumed as
-message histories; use fresh SessionMemory. Composer tools execute on the host.
+message histories; use fresh SessionMemory. Yian tools execute on the host.
 See [authentication setup](installation.md#openai-authentication).
 
 #### Agent-owned variables
@@ -550,7 +550,7 @@ message. It reads a skill when it needs it by calling the built-in tool
   shared flow when each run should see a different set.
 - Omitting `skills:` grants none; the system message is unchanged.
 
-YAML only names skills. The host decides which skills exist for a run: `composer run`
+YAML only names skills. The host decides which skills exist for a run: `yian run`
 reads your Claude Code and Codex skill folders (see [CLI](cli.md#skills)), and
 Python hosts pass `run_flow(..., skills=load_skills([...]))` (see
 [API](api.md#skills)). A flow that grants skills needs a host `skills=` mapping, and
@@ -628,7 +628,7 @@ between runs, and the YAML does not show them. The run fails before it starts wh
 an AGENT grants a name the host did not supply (a missing group or tool), when two
 different tools share a name, or when a group contains a tool named `ask_user` or
 `load_skill`. Groups may share the same tool; the model sees it once.
-`ask_user` stays a separate top-level entry. `composer run` fills no groups, so a
+`ask_user` stays a separate top-level entry. `yian run` fills no groups, so a
 flow that grants one needs a Python host. See [Tool groups](api.md#tool-groups).
 
 A `code` node's `code:` field is one of two shapes:
@@ -1094,8 +1094,8 @@ assistant:
     Otherwise answer directly.
 ```
 
-The model may pass up to four short `options` with its question. `composer run`
-and `composer chat` show them as a choice list with an "Other" answer; the human
+The model may pass up to four short `options` with its question. `yian run`
+and `yian chat` show them as a choice list with an "Other" answer; the human
 can always type their own answer. Prompt for options when the choices are clear,
 for example "call ask_user with the two approaches as options".
 

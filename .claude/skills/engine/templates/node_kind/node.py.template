@@ -10,7 +10,7 @@ returns ONE of the closed `NodeResult` sum `Output | Route | Grow`; a failure
 is a `raise`, not a variant.
 """
 
-from agent_composer.nodes.base import Node, NodeKind, Output
+from yian.nodes.base import Node, NodeKind, Output
 
 
 class XxxNode(Node):

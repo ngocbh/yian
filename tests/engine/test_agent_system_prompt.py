@@ -13,22 +13,22 @@ from types import SimpleNamespace
 from langchain_core.messages import AIMessage, HumanMessage
 import pytest
 
-import agent_composer.llm_clients as llm_clients
-from agent_composer.compose import load_flow
-from agent_composer.compose.helpers.types import read_variables
-from agent_composer.memory import MemoryContext, MemorySection
-from agent_composer.nodes.agent import AgentNode
-from agent_composer.nodes.agent.memory import system_prompt_with_memory
-from agent_composer.nodes.agent.modes.common import DEFAULT_SYSTEM
-from agent_composer.nodes.base import Output
-from agent_composer.nodes.contracts import Parameter, ValueContract
-from agent_composer.run import resume_flow, run_flow
-from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
-from agent_composer.runtime.log import NodeSucceededRecord
-from agent_composer.skills import Skill
-from agent_composer.skills.tool import system_prompt_with_skills
-from agent_composer.tools import ToolSet
-from agent_composer.typesys import Type, ValueKind, VariablePool
+import yian.llm_clients as llm_clients
+from yian.compose import load_flow
+from yian.compose.helpers.types import read_variables
+from yian.memory import MemoryContext, MemorySection
+from yian.nodes.agent import AgentNode
+from yian.nodes.agent.memory import system_prompt_with_memory
+from yian.nodes.agent.modes.common import DEFAULT_SYSTEM
+from yian.nodes.base import Output
+from yian.nodes.contracts import Parameter, ValueContract
+from yian.run import resume_flow, run_flow
+from yian.runtime.eval_node import EvaluationFailure, eval_node
+from yian.runtime.log import NodeSucceededRecord
+from yian.skills import Skill
+from yian.skills.tool import system_prompt_with_skills
+from yian.tools import ToolSet
+from yian.typesys import Type, ValueKind, VariablePool
 from tests.engine.test_agent_memory_recall import _CaptureModel, _keys, _opener, _scope
 from tests.engine.test_run_backward import _records
 

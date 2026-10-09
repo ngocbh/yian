@@ -4,16 +4,16 @@ from __future__ import annotations
 
 import pytest
 
-import agent_composer.llm_clients as llm_clients
-from agent_composer.compile.manifest import flow_fingerprint
-from agent_composer.compose import LoadError, load_flow
-from agent_composer.compose.nodes.base import BuildContext
-from agent_composer.compose.nodes.code import CodeDescriptor
-from agent_composer.compose.source import SourceCursor, SourceDocument
-from agent_composer.diagnostics import OriginRef, OriginResolver
-from agent_composer.nodes.contracts import ContractOrigins, ValueContract
-from agent_composer.run import run_flow
-from agent_composer.typesys.values import ValueKind
+import yian.llm_clients as llm_clients
+from yian.compile.manifest import flow_fingerprint
+from yian.compose import LoadError, load_flow
+from yian.compose.nodes.base import BuildContext
+from yian.compose.nodes.code import CodeDescriptor
+from yian.compose.source import SourceCursor, SourceDocument
+from yian.diagnostics import OriginRef, OriginResolver
+from yian.nodes.contracts import ContractOrigins, ValueContract
+from yian.run import run_flow
+from yian.typesys.values import ValueKind
 
 
 _NESTED_OUTPUT_FLOW = """\

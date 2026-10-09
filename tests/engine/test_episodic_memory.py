@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from agent_composer.memory.contracts import (
+from yian.memory.contracts import (
     LearnContext,
     Memory,
     MemoryEpisode,
@@ -26,8 +26,8 @@ from agent_composer.memory.contracts import (
     ToolCallInteraction,
     ToolResultInteraction,
 )
-from agent_composer.memory.episodic import EpisodicMemory
-import agent_composer.memory.episodic as episodic
+from yian.memory.episodic import EpisodicMemory
+import yian.memory.episodic as episodic
 
 
 def _context(memory: str = "episodic") -> LearnContext:
@@ -135,7 +135,7 @@ def test_snapshot_is_closed_canonical_and_defensive() -> None:
             "revision",
             "version",
         }
-        assert snapshot["format"] == "agent_composer.episodic_memory"
+        assert snapshot["format"] == "yian.episodic_memory"
         assert snapshot["version"] == 2
         assert snapshot["config"] == {"max_episodes": 4, "recall_limit": 2}
         assert snapshot["episodes"] == []
@@ -273,8 +273,8 @@ def test_module_imports_only_stdlib_and_lower_memory_modules() -> None:
         "types",
         "typing",
         "uuid",
-        "agent_composer.memory.contracts",
-        "agent_composer.memory.storage",
+        "yian.memory.contracts",
+        "yian.memory.storage",
     }
 
 

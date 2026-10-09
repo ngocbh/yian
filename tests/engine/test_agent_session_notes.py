@@ -5,9 +5,9 @@ import json
 from langchain_core.messages import AIMessage
 import pytest
 
-import agent_composer.llm_clients as llm_clients
-from agent_composer import load_flow, run_flow
-from agent_composer.memory.session import SessionMemory
+import yian.llm_clients as llm_clients
+from yian import load_flow, run_flow
+from yian.memory.session import SessionMemory
 from tests.engine.test_agent_session import _Model
 
 NOTE = "Check the measurement units before answering."

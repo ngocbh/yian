@@ -12,10 +12,10 @@ import time
 
 import pytest
 
-import agent_composer.memory.contracts as c
-import agent_composer.memory.reflective as reflective
-from agent_composer.memory.reflective import ReflectiveMemory
-from agent_composer.memory.storage import SQLiteStorage
+import yian.memory.contracts as c
+import yian.memory.reflective as reflective
+from yian.memory.reflective import ReflectiveMemory
+from yian.memory.storage import SQLiteStorage
 from tests.engine.test_reflective_memory import (
     _context,
     _install_model,
@@ -138,11 +138,11 @@ def test_first_open_persists_identity_without_resolving_model(monkeypatch, tmp_p
 
 def test_ambient_config_is_current_after_reopen(monkeypatch, tmp_path):
     path = tmp_path / "memory.sqlite"
-    monkeypatch.setenv("AGENT_COMPOSER_DEFAULT_PROVIDER", "ollama")
-    monkeypatch.setenv("AGENT_COMPOSER_DEFAULT_MODEL", "old")
+    monkeypatch.setenv("YIAN_DEFAULT_PROVIDER", "ollama")
+    monkeypatch.setenv("YIAN_DEFAULT_MODEL", "old")
     with ReflectiveMemory(storage=path) as memory:
         saved = _snapshot(memory)
-    monkeypatch.setenv("AGENT_COMPOSER_DEFAULT_MODEL", "new")
+    monkeypatch.setenv("YIAN_DEFAULT_MODEL", "new")
     with ReflectiveMemory(storage=path) as memory:
         with memory.open_run(snapshot=saved) as resumed:
             assert resumed.snapshot == saved

@@ -8,12 +8,12 @@ from contextlib import contextmanager
 
 import pytest
 
-from agent_composer.events import StreamChunk
-from agent_composer.memory import ConversationInvocation, DeclSite, MemoryContext, MemoryScope, MemorySpec
-from agent_composer.nodes.base import Grow, Node, NodeKind, Output, _HostStop
-from agent_composer.nodes.contracts import Assertion
-from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
-from agent_composer.typesys.pool import VariablePool
+from yian.events import StreamChunk
+from yian.memory import ConversationInvocation, DeclSite, MemoryContext, MemoryScope, MemorySpec
+from yian.nodes.base import Grow, Node, NodeKind, Output, _HostStop
+from yian.nodes.contracts import Assertion
+from yian.runtime.eval_node import EvaluationFailure, eval_node
+from yian.typesys.pool import VariablePool
 from tests.engine._fakes import FuncNode
 
 
@@ -39,7 +39,7 @@ def _evaluate(node, opener, **kwargs):
 
 def _open_session_runtime(memory):
     """Open a runtime whose one AGENT-owned key ``session`` is backed by ``memory``."""
-    from agent_composer.runtime.memory_runtime import MemoryRuntime
+    from yian.runtime.memory_runtime import MemoryRuntime
 
     spec = MemorySpec("session", "session", {}, (DeclSite((), ("root",), "work"),), True)
     return MemoryRuntime.open(memories=(spec,), origins={"session": None}, memory={"session": memory})
@@ -235,8 +235,8 @@ def test_callback_error_retains_conversation_cleanup_notes_without_throwing_into
     runtime = None
     opener = _opener(events, stop=stop, cleanup=cleanup)
     if real_backend:
-        from agent_composer.memory import ConversationClosed
-        from agent_composer.memory import session as backend
+        from yian.memory import ConversationClosed
+        from yian.memory import session as backend
 
         memory = backend.SessionMemory()
         runtime = _open_session_runtime(memory)
@@ -280,11 +280,11 @@ def test_broken_cleanup_note_hook_does_not_replace_primary_host_error():
 
 @pytest.mark.parametrize("num_workers", [0, 2])
 def test_dispatch_binds_accepted_identity_before_worker_submission(num_workers, monkeypatch):
-    from agent_composer.compile.model import START_ID, END_ID
-    from agent_composer.compile.expand import build_grow
-    from agent_composer.runtime.engine import FlowEngine
-    from agent_composer.runtime.log import NodeStartedRecord
-    from agent_composer.runtime.state import RunState
+    from yian.compile.model import START_ID, END_ID
+    from yian.compile.expand import build_grow
+    from yian.runtime.engine import FlowEngine
+    from yian.runtime.log import NodeStartedRecord
+    from yian.runtime.state import RunState
     from tests.engine._graph_builder import _engine, _graph
 
     events = []
@@ -355,7 +355,7 @@ def test_generator_and_body_errors_close_failed_without_masking_node_failure(str
 
 @pytest.mark.parametrize("failure_stage", ["body", "postassertion", "result"])
 def test_real_turn_rethrow_is_not_reported_as_secondary_cleanup_failure(failure_stage):
-    from agent_composer.memory.session import SessionMemory
+    from yian.memory.session import SessionMemory
 
     error = ValueError("body rejected")
     def body(begin):
@@ -380,8 +380,8 @@ def test_real_turn_rethrow_is_not_reported_as_secondary_cleanup_failure(failure_
 
 
 def test_real_backend_cleanup_note_survives_node_error_unwrapping(monkeypatch):
-    from agent_composer.memory import ConversationClosed
-    from agent_composer.memory import session as backend
+    from yian.memory import ConversationClosed
+    from yian.memory import session as backend
 
     error = ValueError("body rejected")
     def body(begin):
@@ -408,7 +408,7 @@ def test_real_backend_cleanup_note_survives_node_error_unwrapping(monkeypatch):
 
 def _fifo_scenario():
     """Hold a streaming execution open while the next same-leaf turn queues."""
-    from agent_composer.memory.session import SessionMemory
+    from yian.memory.session import SessionMemory
 
     memory = SessionMemory()
     paused, release, second_entered = threading.Event(), threading.Event(), threading.Event()

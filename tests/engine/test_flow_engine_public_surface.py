@@ -2,7 +2,7 @@
 
 These tests start below the package-root run boundary on purpose.  A direct caller
 must prepare and durably apply ``RunStarted`` first, then lend that exact state/log
-pair to ``agent_composer.runtime.FlowEngine``.  The engine drives only new work,
+pair to ``yian.runtime.FlowEngine``.  The engine drives only new work,
 borrows rather than owns the log, and exposes no checkpoint-era lifecycle methods.
 """
 
@@ -17,15 +17,15 @@ from typing import Any, get_args, get_origin, get_type_hints
 
 import pytest
 
-import agent_composer
-import agent_composer.llm_clients as llm_clients_module
-from agent_composer.compile.expand import build_grow
-from agent_composer.compile.llm_cascade import resolve_llm_cascade
-from agent_composer.compile.manifest import flow_fingerprint
-from agent_composer.compile.model import CompiledFlow, Edge, END_ID, START_ID
-from agent_composer.compose import LoadError, load_flow
-from agent_composer.compose.helpers.errors import LoadDiagnostics
-from agent_composer.events import (
+import yian
+import yian.llm_clients as llm_clients_module
+from yian.compile.expand import build_grow
+from yian.compile.llm_cascade import resolve_llm_cascade
+from yian.compile.manifest import flow_fingerprint
+from yian.compile.model import CompiledFlow, Edge, END_ID, START_ID
+from yian.compose import LoadError, load_flow
+from yian.compose.helpers.errors import LoadDiagnostics
+from yian.events import (
     NodeExpanded,
     NodeStarted,
     NodeSucceeded,
@@ -33,21 +33,21 @@ from agent_composer.events import (
     RunSucceeded,
     StreamChunk,
 )
-from agent_composer.nodes.base import Node, NodeKind, Output
-from agent_composer.nodes.end import EndNode
-from agent_composer.nodes.start import StartNode
-from agent_composer.runtime import FlowEngine
-from agent_composer.runtime.eval_node import MemoryContextOpener
-from agent_composer.runtime.log import MemoryRunLog, NodeStartedRecord, RunLog
-from agent_composer.runtime.state import (
+from yian.nodes.base import Node, NodeKind, Output
+from yian.nodes.end import EndNode
+from yian.nodes.start import StartNode
+from yian.runtime import FlowEngine
+from yian.runtime.eval_node import MemoryContextOpener
+from yian.runtime.log import MemoryRunLog, NodeStartedRecord, RunLog
+from yian.runtime.state import (
     GrowBuilder,
     RunStartData,
     RunState,
     commit_prepared,
     prepare_run_started,
 )
-from agent_composer.tools import ToolSet
-from agent_composer.typesys import VariablePool
+from yian.tools import ToolSet
+from yian.typesys import VariablePool
 
 
 _RUN_ID = "direct-engine-run"
@@ -653,6 +653,6 @@ def test_checkpoint_era_engine_methods_are_absent():
 
 
 def test_flow_engine_is_not_exported_from_the_package_root():
-    """Keep the advanced prepared-state engine scoped to agent_composer.runtime."""
-    assert not hasattr(agent_composer, "FlowEngine")
-    assert "FlowEngine" not in getattr(agent_composer, "__all__", ())
+    """Keep the advanced prepared-state engine scoped to yian.runtime."""
+    assert not hasattr(yian, "FlowEngine")
+    assert "FlowEngine" not in getattr(yian, "__all__", ())

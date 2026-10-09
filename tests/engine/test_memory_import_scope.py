@@ -7,14 +7,14 @@ from pathlib import Path
 
 import pytest
 
-from agent_composer.compile.memory_layout import (
+from yian.compile.memory_layout import (
     resolve_memory_layout,
     scope_memory_declarations,
 )
-from agent_composer.compile.model import CompiledFlow
-from agent_composer.compose import load_flow
-from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.memory.contracts import DeclSite, MemoryDecl, MemorySetupError
+from yian.compile.model import CompiledFlow
+from yian.compose import load_flow
+from yian.compose.helpers.errors import LoadError
+from yian.memory.contracts import DeclSite, MemoryDecl, MemorySetupError
 
 _CODE = "tests.engine._compose_codefns:echo_x"
 
@@ -284,8 +284,8 @@ def test_a_related_note_at_the_primary_location_is_skipped(tmp_path: Path) -> No
 def test_a_related_note_repeating_an_earlier_location_is_skipped() -> None:
     from types import SimpleNamespace
 
-    from agent_composer.compose.loader import _memory_setup_load_error
-    from agent_composer.diagnostics import DiagnosticFrame, OriginRef, SourceRange
+    from yian.compose.loader import _memory_setup_load_error
+    from yian.diagnostics import DiagnosticFrame, OriginRef, SourceRange
 
     lines = {"p": 1, "a": 2, "a2": 2, "b": 3}
 

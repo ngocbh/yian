@@ -6,9 +6,9 @@ declared defaults for omitted args), drive the baked child engine, and re-export
 child's single value. These drive real CODE-only children through `run_flow` (no LLM).
 """
 
-from agent_composer.compose import LoadError, load_flow
-from agent_composer.compose.helpers.errors import LoadDiagnostics
-from agent_composer.run import run_flow
+from yian.compose import LoadError, load_flow
+from yian.compose.helpers.errors import LoadDiagnostics
+from yian.run import run_flow
 
 # A CODE-only child: topic -> {report, n}.
 _CHILD = """
@@ -266,10 +266,10 @@ def test_call_boundary_assert_sees_coerced_present_value():
 
 def test_call_run_expands_not_child_engine():
     # The CallNode returns only a seed; compile reconstructs the child fragment for the engine.
-    from agent_composer.compile.expand import build_grow
-    from agent_composer.nodes.base import Grow
-    from agent_composer.nodes.call import CallNode
-    from agent_composer.nodes.ids import ns
+    from yian.compile.expand import build_grow
+    from yian.nodes.base import Grow
+    from yian.nodes.call import CallNode
+    from yian.nodes.ids import ns
     from tests.engine.test_expand import _child_flow
 
     child = _child_flow()

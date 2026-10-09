@@ -20,15 +20,15 @@ from typing import Any
 
 import pytest
 
-import agent_composer.cli.run as run_cli
-from agent_composer.cli.chat import tools as chat_tools
-from agent_composer.cli.terminal import PromptRequest, TerminalBroker
-from agent_composer.compose import load_flow
-from agent_composer.diagnostics import Failure
-from agent_composer.events import NodeStarted
-from agent_composer.nodes.base import _HostStop
-from agent_composer.run import RunResult
-from agent_composer.tools import TOOL_REGISTRY
+import yian.cli.run as run_cli
+from yian.cli.chat import tools as chat_tools
+from yian.cli.terminal import PromptRequest, TerminalBroker
+from yian.compose import load_flow
+from yian.diagnostics import Failure
+from yian.events import NodeStarted
+from yian.nodes.base import _HostStop
+from yian.run import RunResult
+from yian.tools import TOOL_REGISTRY
 
 
 _TIMEOUT = 2.0

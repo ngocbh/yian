@@ -8,8 +8,8 @@ the runtime bounds (MAX_TOTAL_NODES / MAX_REF_DEPTH). The `eval_node` -> `NodeEx
 
 import pytest
 
-from agent_composer.compile.expand import build_grow
-from agent_composer.nodes.contracts import Binding
+from yian.compile.expand import build_grow
+from yian.nodes.contracts import Binding
 from tests.engine._fakes import stamp_reads
 
 
@@ -17,7 +17,7 @@ from tests.engine._fakes import stamp_reads
 
 
 def test_rens_internal_input_and_output_heads():
-    from agent_composer.compile.expand import _rens_internal
+    from yian.compile.expand import _rens_internal
 
     # ${input.k} -> the namespaced child START_ID's output object; ${x.output} node-first.
     assert _rens_internal(Binding("${input.k}"), "cs") == Binding(
@@ -36,7 +36,7 @@ def test_rens_internal_input_and_output_heads():
 
 def test_rens_internal_computed_whole_span_renamespaces_all_leaves():
     # A whole-span computed expression re-namespaces every reference leaf.
-    from agent_composer.compile.expand import _rens_internal
+    from yian.compile.expand import _rens_internal
 
     assert (
         _rens_internal(Binding("${x.output - y.output}"), "cs")
@@ -51,14 +51,14 @@ def test_rens_internal_computed_whole_span_renamespaces_all_leaves():
 
 # --- live CALL Grow path — clone namespaced, substitute spawner, fire out-edge ----------- #
 
-from agent_composer.events import RunSucceeded
-from agent_composer.compile.model import CompiledFlow, Edge, FlowOutput, START_ID, END_ID
-from agent_composer.runtime.common import NodeState
-from agent_composer.compose.helpers.types import read_type
-from agent_composer.nodes.code import CodeNode
-from agent_composer.nodes.contracts import Parameter, ValueContract
-from agent_composer.nodes.end import EndNode
-from agent_composer.nodes.start import StartNode
+from yian.events import RunSucceeded
+from yian.compile.model import CompiledFlow, Edge, FlowOutput, START_ID, END_ID
+from yian.runtime.common import NodeState
+from yian.compose.helpers.types import read_type
+from yian.nodes.code import CodeNode
+from yian.nodes.contracts import Parameter, ValueContract
+from yian.nodes.end import EndNode
+from yian.nodes.start import StartNode
 from tests.engine._fakes import FuncNode, derive_wiring
 from tests.engine._graph_builder import _engine
 
@@ -83,7 +83,7 @@ def _with_boundary(
     # child START_ID carries params matching the call-arg names the splice seeds;
     # END_ID is RECORD-mode from the declared outputs; the manual `(.., END_ID)` terminal Edge is
     # replaced by the producer edge (input_group = output name) so the engine reads store[END_ID].
-    from agent_composer.compose.edges.producers import _binding_producers
+    from yian.compose.edges.producers import _binding_producers
 
     params = list(parameters)
     nodes = dict(nodes)
@@ -131,7 +131,7 @@ def _parent_with_spawner(child, record):
     # spawner "sp" is a real CALL returning a seed-first Grow; successor "after" reads ${sp.output}.
     # The call-args come from stamped `${input.<k>}` reads for each key in `record`, so the test
     # seeds them via `run_inputs=record`. The parent declares matching parameters.
-    from agent_composer.nodes.call.node import CallNode
+    from yian.nodes.call.node import CallNode
     sp = CallNode("sp", flow_id="child", child=child,
                   child_inputs=child.nodes[child.start_id].params)
     stamp_reads(sp, {k: f"${{input.{k}}}" for k in record})
@@ -173,7 +173,7 @@ def test_call_grow_clones_namespaced_and_substitutes_spawner(num_workers):
 
 # --- runtime bounds (MAX_TOTAL_NODES + MAX_REF_DEPTH) + CALL-inside-MAP nesting proof ------ #
 
-from agent_composer.compose import load_flow
+from yian.compose import load_flow
 
 
 # A CALL-inside-MAP: parent MAP "each" over the elements; the child "mid" contains a CALL
@@ -288,8 +288,8 @@ def _call_chain_flow(depth: int):
 
 @pytest.mark.parametrize("num_workers", [0, 4])
 def test_deep_call_chain_trips_max_ref_depth(num_workers):
-    from agent_composer.events import RunFailed
-    from agent_composer.runtime.state import MAX_REF_DEPTH
+    from yian.events import RunFailed
+    from yian.runtime.state import MAX_REF_DEPTH
 
     # A CALL chain deeper than MAX_REF_DEPTH (a genuine chain,
     # NOT a wide fan-out) -> the depth bound fires before MAX_TOTAL_NODES. The RuntimeError
@@ -336,8 +336,8 @@ def _wide_child(n: int) -> CompiledFlow:
 
 @pytest.mark.parametrize("num_workers", [0, 4])
 def test_over_budget_expansion_trips_max_total_nodes(num_workers):
-    from agent_composer.events import RunFailed
-    from agent_composer.runtime.state import MAX_TOTAL_NODES
+    from yian.events import RunFailed
+    from yian.runtime.state import MAX_TOTAL_NODES
 
     parent = _parent_with_spawner(_wide_child(MAX_TOTAL_NODES + 10), {"x": 0})  # one clone busts it
     events = list(

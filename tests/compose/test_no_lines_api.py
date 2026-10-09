@@ -12,14 +12,14 @@ from pathlib import Path
 
 import pytest
 
-from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.diagnostics import Diagnostic
+from yian.compose.helpers.errors import LoadError
+from yian.diagnostics import Diagnostic
 
 
 _ROOT = Path(__file__).resolve().parents[2]
 _PRODUCTION_PATHS = (
-    _ROOT / "src" / "agent_composer" / "compose",
-    _ROOT / "src" / "agent_composer" / "cli" / "run.py",
+    _ROOT / "src" / "yian" / "compose",
+    _ROOT / "src" / "yian" / "cli" / "run.py",
 )
 _RETIRED_LOCATION_NAMES = (
     "node_lines",
@@ -53,14 +53,14 @@ def test_retired_line_map_names_are_absent_from_production() -> None:
 
 
 def test_lines_api_not_reexported_from_compose():
-    import agent_composer.compose as compose
+    import yian.compose as compose
 
     for name in ("node_lines", "section_lines"):
         assert not hasattr(compose, name), f"{name} should be removed from compose"
     with pytest.raises(ImportError):
-        from agent_composer.compose import node_lines  # noqa: F401
+        from yian.compose import node_lines  # noqa: F401
     with pytest.raises(ImportError):
-        from agent_composer.compose import section_lines  # noqa: F401
+        from yian.compose import section_lines  # noqa: F401
 
 
 def test_load_error_has_no_line_aliases() -> None:
@@ -73,7 +73,7 @@ def test_load_error_has_no_line_aliases() -> None:
 
 
 def test_lines_producers_gone_from_parser():
-    import agent_composer.compose.parse.file as parser
+    import yian.compose.parse.file as parser
 
     for name in (
         "node_lines",

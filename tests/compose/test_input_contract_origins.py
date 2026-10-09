@@ -6,14 +6,14 @@ from textwrap import indent
 
 import pytest
 
-from agent_composer.compile.manifest import flow_fingerprint
-from agent_composer.compile.model import START_ID
-from agent_composer.compose import LoadError, load_flow
-from agent_composer.compose.source import SourceCursor, SourceDocument
-from agent_composer.diagnostics import OriginRef, OriginResolver
-from agent_composer.nodes.agent import AgentNode
-from agent_composer.nodes.contracts import ContractOrigins, Parameter, ValueContract
-from agent_composer.run import run_flow
+from yian.compile.manifest import flow_fingerprint
+from yian.compile.model import START_ID
+from yian.compose import LoadError, load_flow
+from yian.compose.source import SourceCursor, SourceDocument
+from yian.diagnostics import OriginRef, OriginResolver
+from yian.nodes.agent import AgentNode
+from yian.nodes.contracts import ContractOrigins, Parameter, ValueContract
+from yian.run import run_flow
 
 
 _ROOT_FLOW = """\

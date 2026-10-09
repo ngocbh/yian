@@ -9,7 +9,7 @@ __pycache__/
 # Distribution / packaging
 .Python
 /build/
-!src/agent_composer/compose/build/
+!src/yian/compose/build/
 dist/
 *.egg-info/
 *.egg
@@ -35,7 +35,7 @@ htmlcov/
 .DS_Store
 
 # Runtime transcripts
-.agent_composer/
+.yian/
 
 # MkDocs build output
 site/

@@ -7,8 +7,8 @@ import dataclasses
 
 import pytest
 
-from agent_composer.compose.nodes.base import BuildContext, BuildResult
-from agent_composer.diagnostics import SourceRange
+from yian.compose.nodes.base import BuildContext, BuildResult
+from yian.diagnostics import SourceRange
 
 
 def test_build_context_defaults():
@@ -58,8 +58,8 @@ def test_build_result_frozen():
 
 def test_build_context_owner_defaults_to_root_and_is_threaded_by_assemble(monkeypatch) -> None:
     """Each flow's descriptors see that flow's lexical owner path."""
-    from agent_composer.compose import load_flow
-    from agent_composer.compose.nodes.agent import AgentDescriptor
+    from yian.compose import load_flow
+    from yian.compose.nodes.agent import AgentDescriptor
 
     assert BuildContext(registry={}).owner == ("root",)
 

@@ -1,4 +1,4 @@
-"""Tests for the broker-driven ``composer chat`` CLI through Typer's ``CliRunner``.
+"""Tests for the broker-driven ``yian chat`` CLI through Typer's ``CliRunner``.
 
 Covers flow-owned exits, broker EOF normalization, multi-turn ordering, a user flow
 that treats exit text as ordinary input, cwd-local imports, and failed-turn recovery.
@@ -17,15 +17,15 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-import agent_composer.llm_clients as llm_clients_mod
-import agent_composer.tools as tools_module
-from agent_composer.cli import app
-import agent_composer.cli.chat.command as chat_command
-from agent_composer.cli.chat import tools as chat_tools
-import agent_composer.cli.run as run_cli
-from agent_composer.cli.terminal import PromptRequest
-from agent_composer.compose import load_flow
-from agent_composer.nodes.base import _HostStop
+import yian.llm_clients as llm_clients_mod
+import yian.tools as tools_module
+from yian.cli import app
+import yian.cli.chat.command as chat_command
+from yian.cli.chat import tools as chat_tools
+import yian.cli.run as run_cli
+from yian.cli.terminal import PromptRequest
+from yian.compose import load_flow
+from yian.nodes.base import _HostStop
 
 runner = CliRunner()
 
@@ -40,7 +40,7 @@ _ANSI_SGR = re.compile(r"\x1b\[[0-9;]*m")
 
 def _chat_logs() -> list[Path]:
     """Return the durable top-level chat attempt logs in the isolated test home."""
-    return sorted((Path.home() / ".agent_composer" / "runs").glob("*.jsonl"))
+    return sorted((Path.home() / ".yian" / "runs").glob("*.jsonl"))
 
 
 class _FakeModel:
@@ -125,7 +125,7 @@ def test_chat_help():
 
 
 def test_chat_two_turns(tmp_path, monkeypatch):
-    # The AGENT node resolves its model via `agent_composer.llm_clients.model_from_config`
+    # The AGENT node resolves its model via `yian.llm_clients.model_from_config`
     # from its selected mode at call time — patch it to the fake.
     monkeypatch.setattr(llm_clients_mod, "model_from_config", lambda cfg: _FakeModel())
     # `--provider openai` makes `_ensure_provider_keys` pick openai for the flow's agent
@@ -566,8 +566,8 @@ def test_chat_host_does_not_intercept_exit_text_for_user_flow(tmp_path, monkeypa
 
 
 def test_chat_resolves_cwd_local_fold_module(tmp_path, monkeypatch):
-    """`composer chat` must put the cwd on `sys.path` so a chat flow's `code: module:fn` fold
-    ref resolves without the caller exporting PYTHONPATH — mirroring `composer run`.
+    """`yian chat` must put the cwd on `sys.path` so a chat flow's `code: module:fn` fold
+    ref resolves without the caller exporting PYTHONPATH — mirroring `yian run`.
 
     The bundled/example chat flows no longer use a CODE fold (they grow the transcript in
     `output:` template bindings), so this test uses a self-contained legacy-style chat flow
@@ -666,7 +666,7 @@ def test_chat_survives_a_failed_turn(tmp_path, monkeypatch):
     monkeypatch.setattr(llm_clients_mod, "model_from_config", _factory)
     monkeypatch.setenv("OPENAI_API_KEY", "x")
 
-    # The bundled composer chat (tool_calling reply). A workspace with one flow keeps
+    # The bundled yian chat (tool_calling reply). A workspace with one flow keeps
     # list_flows fast and confined.
     (tmp_path / "f.yaml").write_text("id: f\nname: f\ninput: {}\nkind: agent\noutput: str\nprompt: hi\n")
 
@@ -754,7 +754,7 @@ def test_chat_tool_call_through_the_loop(tmp_path, monkeypatch):
     (tmp_path / "a.yaml").write_text(
         "id: a\nname: a\ninput: {}\noutput: int\nkind: code\ncode: tests.seeds.fns:const_one\n"
     )
-    # The bundled composer chat (tool_calling reply). One turn, then flow-owned exit.
+    # The bundled yian chat (tool_calling reply). One turn, then flow-owned exit.
     r = runner.invoke(
         app, ["chat", "--workspace", str(tmp_path), "--provider", "openai"],
         input="list my flows\n/exit\n",
@@ -785,7 +785,7 @@ def test_nested_chat_wait_observes_outer_controller_stop(tmp_path, monkeypatch, 
     monkeypatch.setattr(chat_tools, "_WORKSPACE", tmp_path.resolve())
     outer = load_flow(
         "id: outer\nname: outer\nkind: code\noutput: str\ncode: |\n"
-        "  from agent_composer.cli.chat.tools import _CONTROLLER_STOP, run_flow\n"
+        "  from yian.cli.chat.tools import _CONTROLLER_STOP, run_flow\n"
         # Fail before the unbounded WAIT if the worker lost its cancellation context.
         "  assert _CONTROLLER_STOP.get() is not None\n"
         "  return run_flow('wait.yaml')\n"

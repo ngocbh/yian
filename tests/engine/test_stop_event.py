@@ -7,10 +7,10 @@ import threading
 
 import pytest
 
-from agent_composer.nodes.base import Node, NodeKind, Output, _HostStop
-from agent_composer.run import run_flow
-from agent_composer.runtime.eval_node import eval_node
-from agent_composer.typesys.pool import VariablePool
+from yian.nodes.base import Node, NodeKind, Output, _HostStop
+from yian.run import run_flow
+from yian.runtime.eval_node import eval_node
+from yian.typesys.pool import VariablePool
 
 
 class _CapNode(Node):

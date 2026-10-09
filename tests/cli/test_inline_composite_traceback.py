@@ -7,11 +7,11 @@ from pathlib import Path
 
 from rich.console import Console
 
-import agent_composer.cli.run as climod
-from agent_composer.cli.run import _render_run_error
-from agent_composer.compose.desugar.inline_bodies import INLINE_FLOW_PREFIX
-from agent_composer.compose.loader import load_flow
-from agent_composer.run import run_flow
+import yian.cli.run as climod
+from yian.cli.run import _render_run_error
+from yian.compose.desugar.inline_bodies import INLINE_FLOW_PREFIX
+from yian.compose.loader import load_flow
+from yian.run import run_flow
 
 
 def _sink(monkeypatch) -> StringIO:

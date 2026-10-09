@@ -8,10 +8,10 @@ from __future__ import annotations
 
 import pytest
 
-from agent_composer.compose import load_flow
-from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
-from agent_composer.compose.helpers.memory import parse_memory_declarations
-from agent_composer.memory.contracts import DeclSite
+from yian.compose import load_flow
+from yian.compose.helpers.errors import LoadDiagnostics, LoadError
+from yian.compose.helpers.memory import parse_memory_declarations
+from yian.memory.contracts import DeclSite
 
 _SITE = DeclSite((), ("root",), None)
 

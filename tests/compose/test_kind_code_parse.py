@@ -4,14 +4,14 @@ from dataclasses import replace
 
 import pytest
 
-from agent_composer.compose import load_flow
-from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
-from agent_composer.compose.nodes.base import BuildContext
-from agent_composer.compose.nodes.code import CodeDescriptor
-from agent_composer.compose.source import SourceDocument
-from agent_composer.compose.source.catalog import _SourceCatalogBuilder
-from agent_composer.diagnostics import OriginRef
-from agent_composer.diagnostics import SourceRange
+from yian.compose import load_flow
+from yian.compose.helpers.errors import LoadDiagnostics, LoadError
+from yian.compose.nodes.base import BuildContext
+from yian.compose.nodes.code import CodeDescriptor
+from yian.compose.source import SourceDocument
+from yian.compose.source.catalog import _SourceCatalogBuilder
+from yian.diagnostics import OriginRef
+from yian.diagnostics import SourceRange
 
 
 _FLOW = """\
@@ -54,7 +54,7 @@ def test_code_build_returns_code_node_and_retains_compose_ranges():
     result = desc.build(BuildContext({}, source_file="flow.yaml"))
     node, wiring = result.node, result.wiring
 
-    from agent_composer.nodes.code import CodeNode
+    from yian.nodes.code import CodeNode
 
     assert isinstance(node, CodeNode)
     assert node.output_contract is not None

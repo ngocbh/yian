@@ -7,10 +7,10 @@ the declaring node descriptor's range.
 
 import pytest
 
-from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
-from agent_composer.compose.edges.ordering import infer_ordering_edges
-from agent_composer.compose.parse.nodes import parse_nodes
-from agent_composer.compose.source import SourceDocument
+from yian.compose.helpers.errors import LoadDiagnostics, LoadError
+from yian.compose.edges.ordering import infer_ordering_edges
+from yian.compose.parse.nodes import parse_nodes
+from yian.compose.source import SourceDocument
 
 
 def _nodes_reader(text):

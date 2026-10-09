@@ -11,9 +11,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from agent_composer.events import StreamChunk
-from agent_composer.diagnostics import OriginRef
-from agent_composer.nodes.base import (
+from yian.events import StreamChunk
+from yian.diagnostics import OriginRef
+from yian.nodes.base import (
     Grow,
     Node,
     NodeKind,
@@ -21,13 +21,13 @@ from agent_composer.nodes.base import (
     Route,
     _HostStop,
 )
-from agent_composer.nodes.contracts import Parameter
-from agent_composer.runtime.eval_node import (
+from yian.nodes.contracts import Parameter
+from yian.runtime.eval_node import (
     EvaluatedOutcome,
     EvaluationFailure,
     eval_node,
 )
-from agent_composer.typesys.pool import VariablePool
+from yian.typesys.pool import VariablePool
 from tests.engine._fakes import BranchNode, FailNode, FuncNode, StreamNode, derive_wiring
 
 
@@ -179,7 +179,7 @@ def test_invalid_render_capture_is_a_host_fault(publication, match):
 
 
 def test_render_capture_preserves_original_host_exception_and_closes(monkeypatch):
-    import agent_composer.runtime.eval_node as evaluator
+    import yian.runtime.eval_node as evaluator
 
     expected = MemoryError("capture allocation failed")
     closed = []
@@ -207,9 +207,9 @@ def test_render_capture_preserves_original_host_exception_and_closes(monkeypatch
 
 
 def test_scoped_render_capture_requires_recorded_model_map_entry(monkeypatch):
-    import agent_composer.nodes.agent.node as agent_module
-    from agent_composer.nodes.agent import AgentNode
-    from agent_composer.nodes.contracts import ExecutionScope
+    import yian.nodes.agent.node as agent_module
+    from yian.nodes.agent import AgentNode
+    from yian.nodes.contracts import ExecutionScope
 
     node = AgentNode("a/runtime/id", prompt="hello", llm_config={"model": "ambient"})
     node.execution_scope = ExecutionScope(("authored", "agent"))

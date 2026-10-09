@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from agent_composer.memory import MemoryMutation
+from yian.memory import MemoryMutation
 
 
 @pytest.mark.parametrize("failed,index", [
@@ -13,10 +13,10 @@ from agent_composer.memory import MemoryMutation
     (True, 10), (True, 11),
 ], ids=["started", "ready", "requested", "succeeded", "finished", "failed", "failed-finished"])
 def test_historical_backward_prepares_recorded_schema_bytes(failed, index):
-    import agent_composer.run as run_module
-    from agent_composer.compose import load_flow
-    from agent_composer.runtime.log import decode_record
-    from agent_composer.runtime.state import _HistoricalLogCursor, commit_prepared, prepare_record
+    import yian.run as run_module
+    from yian.compose import load_flow
+    from yian.runtime.log import decode_record
+    from yian.runtime.state import _HistoricalLogCursor, commit_prepared, prepare_record
     from tests.engine.test_backward_recovery import (
         _RECORDED_BACKWARD, _RECORDED_BACKWARD_FAILED, _RECORDED_BACKWARD_FLOW,
     )
@@ -40,7 +40,7 @@ def test_historical_backward_prepares_recorded_schema_bytes(failed, index):
 
 
 def test_memory_proposal_owns_detached_mutations_in_supplied_order():
-    from agent_composer.runtime.contracts import MemoryProposal
+    from yian.runtime.contracts import MemoryProposal
 
     payload = {"values": [1]}
     mutations = (MemoryMutation("second", payload), MemoryMutation("first", {}))
@@ -61,23 +61,23 @@ def test_memory_proposal_owns_detached_mutations_in_supplied_order():
 
 
 def _result():
-    from agent_composer.nodes.base import BackwardResult
+    from yian.nodes.base import BackwardResult
 
     return BackwardResult({"topic": ([None, {"uri": "Review."}],)},
                           self_feedback=("Behavior.",), variable_feedback={"tone": ("Concise.",)})
 
 
 def _attributed():
-    from agent_composer.expr.lineage import SourceRef
-    from agent_composer.runtime.contracts import AttributedBackwardResult, BackwardAttribution
+    from yian.expr.lineage import SourceRef
+    from yian.runtime.contracts import AttributedBackwardResult, BackwardAttribution
 
     return (AttributedBackwardResult(SourceRef("run", 1), ("Review.",),
                                      (BackwardAttribution(None, None, 0, None, ()),), _result(), True),)
 
 
 def test_backward_record_constructors_detach_values_without_reducer_inference():
-    from agent_composer.runtime.contracts import BackwardOutcome, MemoryProposal
-    from agent_composer.runtime.log import BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord
+    from yian.runtime.contracts import BackwardOutcome, MemoryProposal
+    from yian.runtime.log import BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord
 
     feedback = {"parts": [None, "Review."]}
     started = BackwardStartedRecord(1, feedback)
@@ -107,8 +107,8 @@ def test_backward_record_constructors_detach_values_without_reducer_inference():
 
 
 def test_commit_attempt_ids_are_required_keyword_only_positive_integers():
-    from agent_composer.memory import MemoryOperationFailure
-    from agent_composer.runtime.log import MemoryCommitRequestedRecord, MemoryCommitSucceededRecord, MemoryCommitFailedRecord
+    from yian.memory import MemoryOperationFailure
+    from yian.runtime.log import MemoryCommitRequestedRecord, MemoryCommitSucceededRecord, MemoryCommitFailedRecord
 
     failure = MemoryOperationFailure("backend", "failed", "Failed.", True)
     for carrier, args in (
@@ -127,9 +127,9 @@ def test_commit_attempt_ids_are_required_keyword_only_positive_integers():
 
 
 def _backward_records():
-    from agent_composer.memory import LearningResult, PolicyCommitOutcome
-    from agent_composer.runtime.contracts import BackwardOutcome, MemoryProposal
-    from agent_composer.runtime.log import BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord
+    from yian.memory import LearningResult, PolicyCommitOutcome
+    from yian.runtime.contracts import BackwardOutcome, MemoryProposal
+    from yian.runtime.log import BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord
 
     proposal = MemoryProposal("agent", (MemoryMutation("m1", {"notes": ["one"]}),))
     outcome = BackwardOutcome("succeeded", _result(), learning=LearningResult(
@@ -141,7 +141,7 @@ def _backward_records():
 
 
 def _round_trip(record):
-    from agent_composer.runtime.log import SCHEMA_VERSION, RecordEnvelope, decode_record, encode_record
+    from yian.runtime.log import SCHEMA_VERSION, RecordEnvelope, decode_record, encode_record
 
     envelope = RecordEnvelope(SCHEMA_VERSION, "run", 0, record)
     encoded = encode_record(envelope)
@@ -158,8 +158,8 @@ def test_backward_record_wire_round_trip_preserves_all_channels(index):
 
 
 def test_commit_wire_preserves_supplied_attempt_ids():
-    from agent_composer.memory import MemoryOperationFailure
-    from agent_composer.runtime.log import MemoryCommitRequestedRecord, MemoryCommitSucceededRecord, MemoryCommitFailedRecord
+    from yian.memory import MemoryOperationFailure
+    from yian.runtime.log import MemoryCommitRequestedRecord, MemoryCommitSucceededRecord, MemoryCommitFailedRecord
 
     failure = MemoryOperationFailure("backend", "failed", "Failed.", False)
     for attempt_id in (1, 3):
@@ -172,11 +172,11 @@ def test_commit_wire_preserves_supplied_attempt_ids():
 
 
 def _failed_record(cause_kind="memory", *, completed=True, learning_status="failed"):
-    from agent_composer.diagnostics import Failure, OriginRef
-    from agent_composer.memory import LearningFailure, LearningResult, MemoryOperationFailure, PolicyCommitOutcome
-    from agent_composer.nodes.contracts import ExecutionPosition, ExecutionScope
-    from agent_composer.runtime.contracts import BackwardFailure, BackwardOutcome
-    from agent_composer.runtime.log import BackwardFinishedRecord
+    from yian.diagnostics import Failure, OriginRef
+    from yian.memory import LearningFailure, LearningResult, MemoryOperationFailure, PolicyCommitOutcome
+    from yian.nodes.contracts import ExecutionPosition, ExecutionScope
+    from yian.runtime.contracts import BackwardFailure, BackwardOutcome
+    from yian.runtime.log import BackwardFinishedRecord
 
     cause = MemoryOperationFailure("backend-stage", "backend.failed", "Retry later.", True)
     causes = {"none": None, "memory": cause,
@@ -222,10 +222,10 @@ def test_failed_backward_wire_keeps_causes_completed_feedback_and_policy_disposi
 
 
 def test_wire_preserves_transfer_coordinates_unreached_inventory_and_empty_defaults():
-    from agent_composer.expr.lineage import SourceRef
-    from agent_composer.nodes.base import BackwardResult
-    from agent_composer.runtime.contracts import AttributedBackwardResult, BackwardAttribution, BackwardOutcome
-    from agent_composer.runtime.log import BackwardReadyRecord, BackwardFinishedRecord, BackwardStartedRecord
+    from yian.expr.lineage import SourceRef
+    from yian.nodes.base import BackwardResult
+    from yian.runtime.contracts import AttributedBackwardResult, BackwardAttribution, BackwardOutcome
+    from yian.runtime.log import BackwardReadyRecord, BackwardFinishedRecord, BackwardStartedRecord
 
     transfer = BackwardAttribution(SourceRef("run", 9), "topic", 3, 2, (0, 2))
     attributed = (
@@ -241,10 +241,10 @@ def test_wire_preserves_transfer_coordinates_unreached_inventory_and_empty_defau
 
 
 def test_backward_record_feedback_keeps_the_existing_wider_depth_boundary():
-    from agent_composer.expr.lineage import SourceRef
-    from agent_composer.nodes.base import BackwardResult
-    from agent_composer.runtime.contracts import AttributedBackwardResult, BackwardAttribution, BackwardOutcome
-    from agent_composer.runtime.log import BackwardReadyRecord, BackwardFinishedRecord, BackwardStartedRecord
+    from yian.expr.lineage import SourceRef
+    from yian.nodes.base import BackwardResult
+    from yian.runtime.contracts import AttributedBackwardResult, BackwardAttribution, BackwardOutcome
+    from yian.runtime.log import BackwardReadyRecord, BackwardFinishedRecord, BackwardStartedRecord
 
     feedback = "Review."
     for _ in range(140):
@@ -261,7 +261,7 @@ def test_backward_record_feedback_keeps_the_existing_wider_depth_boundary():
 
 
 def test_backward_records_isolate_payload_views_before_and_after_log_round_trip():
-    from agent_composer.runtime.log import MemoryRunLog
+    from yian.runtime.log import MemoryRunLog
 
     ready = _backward_records()[1]
     log = MemoryRunLog("run")
@@ -277,8 +277,8 @@ def test_backward_records_isolate_payload_views_before_and_after_log_round_trip(
 
 
 def test_memory_and_mutation_proposal_order_survives_wire_round_trip():
-    from agent_composer.runtime.contracts import MemoryProposal
-    from agent_composer.runtime.log import BackwardReadyRecord
+    from yian.runtime.contracts import MemoryProposal
+    from yian.runtime.log import BackwardReadyRecord
 
     proposals = tuple(
         MemoryProposal(name, tuple(
@@ -292,7 +292,7 @@ def test_memory_and_mutation_proposal_order_survives_wire_round_trip():
 
 
 def _wire(record):
-    from agent_composer.runtime.log import RecordEnvelope, SCHEMA_VERSION, encode_record
+    from yian.runtime.log import RecordEnvelope, SCHEMA_VERSION, encode_record
 
     return json.loads(encode_record(RecordEnvelope(SCHEMA_VERSION, "run", 0, record)))
 
@@ -326,7 +326,7 @@ def _at_path(value, path):
 ])
 @pytest.mark.parametrize("change", ["extra", "missing"])
 def test_backward_wire_nested_records_have_closed_required_fields(record_kind, path, change):
-    from agent_composer.runtime.log import decode_record
+    from yian.runtime.log import decode_record
 
     records = {"started": _backward_records()[0], "ready": _backward_records()[1],
                "finished": _failed_record()}
@@ -360,7 +360,7 @@ def test_backward_wire_nested_records_have_closed_required_fields(record_kind, p
     ("finished", ("outcome", "learning", "policies", 3, "failure"), None),
 ])
 def test_backward_wire_rejects_malformed_nested_values(record_kind, path, invalid):
-    from agent_composer.runtime.log import decode_record
+    from yian.runtime.log import decode_record
 
     record = _backward_records()[1] if record_kind == "ready" else _failed_record()
     wire = _wire(record)
@@ -370,9 +370,9 @@ def test_backward_wire_rejects_malformed_nested_values(record_kind, path, invali
 
 
 def test_backward_records_reject_subclasses_of_exact_nested_carriers():
-    from agent_composer.nodes.base import BackwardResult
-    from agent_composer.runtime.contracts import AttributedBackwardResult, BackwardOutcome, MemoryProposal
-    from agent_composer.runtime.log import BackwardReadyRecord, BackwardFinishedRecord
+    from yian.nodes.base import BackwardResult
+    from yian.runtime.contracts import AttributedBackwardResult, BackwardOutcome, MemoryProposal
+    from yian.runtime.log import BackwardReadyRecord, BackwardFinishedRecord
 
     class ResultSubclass(BackwardResult):
         pass
@@ -427,7 +427,7 @@ def test_backward_records_reject_subclasses_of_exact_nested_carriers():
     ("finished", ("outcome", "learning", "policies", 0), "commit_id", "unexpected"),
 ])
 def test_backward_codec_revalidates_nested_carriers_forged_after_construction(record_kind, path, field, invalid):
-    from agent_composer.runtime.log import RecordEnvelope, SCHEMA_VERSION, encode_record
+    from yian.runtime.log import RecordEnvelope, SCHEMA_VERSION, encode_record
 
     record = _backward_records()[1] if record_kind == "ready" else _failed_record()
     target = record
@@ -440,7 +440,7 @@ def test_backward_codec_revalidates_nested_carriers_forged_after_construction(re
 
 @pytest.mark.parametrize("carrier", ["ready_root", "ready_occurrence", "finished"])
 def test_backward_codec_rejects_forged_dictionary_subclasses_before_copying(carrier):
-    from agent_composer.runtime.log import RecordEnvelope, SCHEMA_VERSION, encode_record
+    from yian.runtime.log import RecordEnvelope, SCHEMA_VERSION, encode_record
 
     class DictionarySubclass(dict):
         pass
@@ -455,14 +455,14 @@ def test_backward_codec_rejects_forged_dictionary_subclasses_before_copying(carr
 
 @pytest.mark.parametrize("feedback", [1, True, [0], {"field": ()}, {1: "Review."}])
 def test_backward_started_rejects_nonordinary_feedback_before_recording(feedback):
-    from agent_composer.runtime.log import BackwardStartedRecord
+    from yian.runtime.log import BackwardStartedRecord
 
     with pytest.raises((TypeError, ValueError)):
         BackwardStartedRecord(1, feedback)
 
 
 def test_forward_cause_wire_rejects_hybrid_and_extra_origin_fields():
-    from agent_composer.runtime.log import decode_record
+    from yian.runtime.log import decode_record
 
     wire = _wire(_failed_record("forward"))
     cause = wire["payload"]["outcome"]["failure"]["cause"]
@@ -477,9 +477,9 @@ def test_forward_cause_wire_rejects_hybrid_and_extra_origin_fields():
 
 @pytest.mark.parametrize("node_id", [None, "", "agent"])
 def test_backward_failure_cause_round_trips_optional_execution_attribution(node_id):
-    from agent_composer.diagnostics import Failure, OriginRef
-    from agent_composer.runtime.contracts import BackwardFailure, BackwardOutcome
-    from agent_composer.runtime.log import BackwardFinishedRecord
+    from yian.diagnostics import Failure, OriginRef
+    from yian.runtime.contracts import BackwardFailure, BackwardOutcome
+    from yian.runtime.log import BackwardFinishedRecord
 
     cause = Failure("graph.terminal_unreachable", "No executing producer.", node_id,
                     (OriginRef("root.boundary"),))
@@ -494,7 +494,7 @@ def test_backward_failure_cause_round_trips_optional_execution_attribution(node_
 
 @pytest.mark.parametrize("invalid", [1, True, [], {}])
 def test_backward_failure_cause_wire_rejects_nonstring_execution_attribution(invalid):
-    from agent_composer.runtime.log import decode_record
+    from yian.runtime.log import decode_record
 
     wire = _wire(_failed_record("forward"))
     wire["payload"]["outcome"]["failure"]["cause"]["node_id"] = invalid
@@ -505,8 +505,8 @@ def test_backward_failure_cause_wire_rejects_nonstring_execution_attribution(inv
 @pytest.mark.parametrize("record_kind", ["failed", "routed"])
 @pytest.mark.parametrize("node_id", [None, ""])
 def test_node_failure_wire_keeps_required_execution_attribution(record_kind, node_id):
-    from agent_composer.diagnostics import Failure
-    from agent_composer.runtime.log import NodeFailedRecord, NodeRoutedRecord, decode_record
+    from yian.diagnostics import Failure
+    from yian.runtime.log import NodeFailedRecord, NodeRoutedRecord, decode_record
 
     failure = Failure("graph.terminal_unreachable", "Terminal unreachable.", "agent")
     record = (NodeFailedRecord(failure) if record_kind == "failed" else
@@ -519,10 +519,10 @@ def test_node_failure_wire_keeps_required_execution_attribution(record_kind, nod
 
 
 def _retained_backward(*, keys=None, feedback="Review.", topic="reefs"):
-    from agent_composer.compile.model import START_ID, FlowOutput
-    from agent_composer.memory import DeclSite, MemorySnapshotEnvelope, MemorySpec
-    from agent_composer.nodes.base import BackwardResult
-    from agent_composer.runtime.backward import compute_backward
+    from yian.compile.model import START_ID, FlowOutput
+    from yian.memory import DeclSite, MemorySnapshotEnvelope, MemorySpec
+    from yian.nodes.base import BackwardResult
+    from yian.runtime.backward import compute_backward
     from tests.engine._backward_fakes import RecordingBackwardNode
     from tests.engine._graph_builder import _engine, _graph
 
@@ -543,8 +543,8 @@ def _retained_backward(*, keys=None, feedback="Review.", topic="reefs"):
 
 
 def test_attributed_validation_reuses_recorded_transfers_without_callbacks_or_materialization(monkeypatch):
-    import agent_composer.runtime.learning as learning
-    from agent_composer.runtime.learning import validate_attributed_backward
+    import yian.runtime.learning as learning
+    from yian.runtime.learning import validate_attributed_backward
 
     engine, (root, attributed) = _retained_backward()
     monkeypatch.setattr(learning, "_materialize_context", lambda *_: pytest.fail("materialized context"))
@@ -556,9 +556,9 @@ def test_attributed_validation_reuses_recorded_transfers_without_callbacks_or_ma
 
 
 def test_backward_attempt_records_prepare_append_then_reduce_without_forward_effects():
-    from agent_composer.runtime.contracts import BackwardOutcome
-    from agent_composer.runtime.log import BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord, encode_pool
-    from agent_composer.runtime.state import commit_prepared, prepare_record
+    from yian.runtime.contracts import BackwardOutcome
+    from yian.runtime.log import BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord, encode_pool
+    from yian.runtime.state import commit_prepared, prepare_record
 
     engine, (root, attributed) = _retained_backward()
     state, log = engine.state, engine.log
@@ -586,13 +586,13 @@ def test_backward_attempt_records_prepare_append_then_reduce_without_forward_eff
 
 
 def _accept_backward(engine, record):
-    from agent_composer.runtime.state import commit_prepared, prepare_record
+    from yian.runtime.state import commit_prepared, prepare_record
 
     return commit_prepared(engine.log, engine.state, prepare_record(engine.state, record))
 
 
 def _proposal_table():
-    from agent_composer.runtime.contracts import MemoryProposal
+    from yian.runtime.contracts import MemoryProposal
 
     proposals = (
         MemoryProposal("alpha", (
@@ -605,10 +605,10 @@ def _proposal_table():
 
 
 def test_backward_policy_batches_and_unfinished_prefixes_follow_accepted_layout_order():
-    from agent_composer.memory import LearningResult
-    from agent_composer.runtime.contracts import BackwardOutcome
-    from agent_composer.runtime.learning import memory_commit_id
-    from agent_composer.runtime.log import (BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord,
+    from yian.memory import LearningResult
+    from yian.runtime.contracts import BackwardOutcome
+    from yian.runtime.learning import memory_commit_id
+    from yian.runtime.log import (BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord,
         MemoryCommitRequestedRecord, MemoryCommitSucceededRecord)
 
     keys, proposals = _proposal_table()
@@ -641,8 +641,8 @@ def test_backward_policy_batches_and_unfinished_prefixes_follow_accepted_layout_
 
 @pytest.mark.parametrize("ready", [False, True])
 def test_interrupted_attempt_requires_explicit_finish_before_a_fresh_start(ready):
-    from agent_composer.runtime.log import BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord
-    from agent_composer.runtime.state import prepare_record
+    from yian.runtime.log import BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord
+    from yian.runtime.state import prepare_record
 
     engine, (root, attributed) = _retained_backward()
     _accept_backward(engine, BackwardStartedRecord(1, "Review."))
@@ -666,11 +666,11 @@ def test_interrupted_attempt_requires_explicit_finish_before_a_fresh_start(ready
     "message_coordinate", "contribution_coordinate", "parent_coordinate", "unreached", "unknown_input",
     "unknown_variable", "short_list", "root"])
 def test_ready_rejects_inventory_local_contract_transfer_and_root_disagreement_before_append(change):
-    from agent_composer.expr.lineage import SourceRef
-    from agent_composer.nodes.base import BackwardResult
-    from agent_composer.runtime.contracts import AttributedBackwardResult, BackwardAttribution
-    from agent_composer.runtime.log import BackwardStartedRecord, BackwardReadyRecord
-    from agent_composer.runtime.state import prepare_record
+    from yian.expr.lineage import SourceRef
+    from yian.nodes.base import BackwardResult
+    from yian.runtime.contracts import AttributedBackwardResult, BackwardAttribution
+    from yian.runtime.log import BackwardStartedRecord, BackwardReadyRecord
+    from yian.runtime.state import prepare_record
 
     engine, (root, attributed) = _retained_backward(topic=[1, 2])
     _accept_backward(engine, BackwardStartedRecord(1, "Review."))
@@ -717,9 +717,9 @@ def test_ready_rejects_inventory_local_contract_transfer_and_root_disagreement_b
 
 @pytest.mark.parametrize("change", ["missing", "reordered", "duplicate", "foreign"])
 def test_ready_proposals_require_the_complete_table_in_order(change):
-    from agent_composer.runtime.contracts import MemoryProposal
-    from agent_composer.runtime.log import BackwardStartedRecord, BackwardReadyRecord
-    from agent_composer.runtime.state import prepare_record
+    from yian.runtime.contracts import MemoryProposal
+    from yian.runtime.log import BackwardStartedRecord, BackwardReadyRecord
+    from yian.runtime.state import prepare_record
 
     keys, proposals = _proposal_table()
     engine, (root, attributed) = _retained_backward(keys=keys)
@@ -739,8 +739,8 @@ def test_ready_proposals_require_the_complete_table_in_order(change):
 
 
 def test_mutation_ids_may_repeat_across_different_recorded_memories():
-    from agent_composer.runtime.contracts import MemoryProposal
-    from agent_composer.runtime.log import BackwardStartedRecord, BackwardReadyRecord
+    from yian.runtime.contracts import MemoryProposal
+    from yian.runtime.log import BackwardStartedRecord, BackwardReadyRecord
 
     keys, proposals = _proposal_table()
     proposals = (proposals[0], MemoryProposal("beta", (MemoryMutation("second", {}),)))
@@ -753,9 +753,9 @@ def test_mutation_ids_may_repeat_across_different_recorded_memories():
 @pytest.mark.parametrize("retryable", [False, True])
 @pytest.mark.parametrize("code", ["learn.failed", "backward.interrupted"])
 def test_learner_failed_finished_keeps_completed_feedback_and_all_unrequested_policies(retryable, code):
-    from agent_composer.memory import LearningFailure, LearningResult, MemoryOperationFailure
-    from agent_composer.runtime.contracts import BackwardFailure, BackwardOutcome
-    from agent_composer.runtime.log import BackwardStartedRecord, BackwardFinishedRecord
+    from yian.memory import LearningFailure, LearningResult, MemoryOperationFailure
+    from yian.runtime.contracts import BackwardFailure, BackwardOutcome
+    from yian.runtime.log import BackwardStartedRecord, BackwardFinishedRecord
 
     keys, _ = _proposal_table()
     engine, (root, attributed) = _retained_backward(keys=keys)
@@ -777,12 +777,12 @@ def test_learner_failed_finished_keeps_completed_feedback_and_all_unrequested_po
 @pytest.mark.parametrize("retryable", [False, True])
 @pytest.mark.parametrize("code", ["commit.failed", "backward.interrupted"])
 def test_known_commit_failure_stops_later_requests_and_admits_a_later_attempt(retryable, code):
-    from agent_composer.memory import LearningFailure, LearningResult, MemoryOperationFailure
-    from agent_composer.runtime.contracts import BackwardFailure, BackwardOutcome
-    from agent_composer.runtime.learning import memory_commit_id
-    from agent_composer.runtime.log import (BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord,
+    from yian.memory import LearningFailure, LearningResult, MemoryOperationFailure
+    from yian.runtime.contracts import BackwardFailure, BackwardOutcome
+    from yian.runtime.learning import memory_commit_id
+    from yian.runtime.log import (BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord,
         MemoryCommitRequestedRecord, MemoryCommitFailedRecord)
-    from agent_composer.runtime.state import prepare_record
+    from yian.runtime.state import prepare_record
 
     keys, proposals = _proposal_table()
     engine, (root, attributed) = _retained_backward(keys=keys)
@@ -807,13 +807,13 @@ def test_known_commit_failure_stops_later_requests_and_admits_a_later_attempt(re
 
 @pytest.mark.parametrize("closing", ["succeeded", "commit_failed", "interrupted_after_request"])
 def test_any_finished_attempt_admits_a_later_start_with_fresh_proposals(closing):
-    from agent_composer.memory import LearningFailure, LearningResult, MemoryOperationFailure
-    from agent_composer.runtime.backward import compute_backward
-    from agent_composer.runtime.contracts import BackwardFailure, BackwardOutcome
-    from agent_composer.runtime.learning import memory_commit_id
-    from agent_composer.runtime.log import (BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord,
+    from yian.memory import LearningFailure, LearningResult, MemoryOperationFailure
+    from yian.runtime.backward import compute_backward
+    from yian.runtime.contracts import BackwardFailure, BackwardOutcome
+    from yian.runtime.learning import memory_commit_id
+    from yian.runtime.log import (BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord,
         MemoryCommitRequestedRecord, MemoryCommitSucceededRecord, MemoryCommitFailedRecord)
-    from agent_composer.runtime.state import prepare_record
+    from yian.runtime.state import prepare_record
 
     keys, proposals = _proposal_table()
     engine, (root, attributed) = _retained_backward(keys=keys)
@@ -856,13 +856,13 @@ def test_any_finished_attempt_admits_a_later_start_with_fresh_proposals(closing)
 
 
 def test_every_committing_attempt_uses_its_own_attempt_in_the_commit_id():
-    from agent_composer.memory import LearningResult
-    from agent_composer.runtime.backward import compute_backward
-    from agent_composer.runtime.contracts import BackwardOutcome
-    from agent_composer.runtime.learning import memory_commit_id
-    from agent_composer.runtime.log import (BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord,
+    from yian.memory import LearningResult
+    from yian.runtime.backward import compute_backward
+    from yian.runtime.contracts import BackwardOutcome
+    from yian.runtime.learning import memory_commit_id
+    from yian.runtime.log import (BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord,
         MemoryCommitRequestedRecord, MemoryCommitSucceededRecord)
-    from agent_composer.runtime.state import prepare_record
+    from yian.runtime.state import prepare_record
 
     keys, proposals = _proposal_table()
     engine, _ = _retained_backward(keys=keys)
@@ -892,8 +892,8 @@ def test_every_committing_attempt_uses_its_own_attempt_in_the_commit_id():
 
 
 def test_first_committing_attempt_uses_its_own_attempt_id_after_precommit_attempts():
-    from agent_composer.runtime.learning import memory_commit_id
-    from agent_composer.runtime.log import (BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord,
+    from yian.runtime.learning import memory_commit_id
+    from yian.runtime.log import (BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord,
         MemoryCommitRequestedRecord)
 
     keys, proposals = _proposal_table()
@@ -911,9 +911,9 @@ def test_first_committing_attempt_uses_its_own_attempt_id_after_precommit_attemp
 
 @pytest.mark.parametrize("gate", ["pristine", "nonterminal", "learn_false", "missing_terminal"])
 def test_backward_started_requires_initialized_learned_terminal_authority(gate):
-    from agent_composer.compile.model import START_ID, END_ID
-    from agent_composer.runtime.log import BackwardStartedRecord
-    from agent_composer.runtime.state import RunState, prepare_record
+    from yian.compile.model import START_ID, END_ID
+    from yian.runtime.log import BackwardStartedRecord
+    from yian.runtime.state import RunState, prepare_record
     from tests.engine._graph_builder import _engine, _graph
 
     engine = _engine(_graph([], [(START_ID, END_ID)]), learnable=gate != "learn_false")
@@ -929,8 +929,8 @@ def test_backward_started_requires_initialized_learned_terminal_authority(gate):
 
 
 def test_started_feedback_shape_and_attempt_identity_validate_before_acceptance():
-    from agent_composer.runtime.log import BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord
-    from agent_composer.runtime.state import prepare_record
+    from yian.runtime.log import BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord
+    from yian.runtime.state import prepare_record
 
     engine, (root, attributed) = _retained_backward(topic=[1, 2], feedback=[None, None])
     for record in (BackwardStartedRecord(1, [None]), BackwardStartedRecord(2, [None, None])):
@@ -949,9 +949,9 @@ def test_started_feedback_shape_and_attempt_identity_validate_before_acceptance(
 
 @pytest.mark.parametrize("change", ["policy", "batch_order", "batch_content", "identity", "attempt"])
 def test_backward_commit_request_rejects_wrong_order_batch_identity_and_attempt(change):
-    from agent_composer.runtime.learning import memory_commit_id
-    from agent_composer.runtime.log import BackwardStartedRecord, BackwardReadyRecord, MemoryCommitRequestedRecord
-    from agent_composer.runtime.state import prepare_record
+    from yian.runtime.learning import memory_commit_id
+    from yian.runtime.log import BackwardStartedRecord, BackwardReadyRecord, MemoryCommitRequestedRecord
+    from yian.runtime.state import prepare_record
 
     keys, proposals = _proposal_table()
     engine, (root, attributed) = _retained_backward(keys=keys)
@@ -975,9 +975,9 @@ def test_backward_commit_request_rejects_wrong_order_batch_identity_and_attempt(
 
 @pytest.mark.parametrize("change", ["no_request", "policy", "identity", "attempt", "duplicate", "pending_request"])
 def test_backward_commit_observation_requires_the_current_pending_request(change):
-    from agent_composer.runtime.learning import memory_commit_id
-    from agent_composer.runtime.log import BackwardStartedRecord, BackwardReadyRecord, MemoryCommitRequestedRecord, MemoryCommitSucceededRecord
-    from agent_composer.runtime.state import prepare_record
+    from yian.runtime.learning import memory_commit_id
+    from yian.runtime.log import BackwardStartedRecord, BackwardReadyRecord, MemoryCommitRequestedRecord, MemoryCommitSucceededRecord
+    from yian.runtime.state import prepare_record
 
     keys, proposals = _proposal_table()
     engine, (root, attributed) = _retained_backward(keys=keys)
@@ -1000,10 +1000,10 @@ def test_backward_commit_observation_requires_the_current_pending_request(change
 
 @pytest.mark.parametrize("phase", ["started", "ready", "request", "finished"])
 def test_backward_append_failure_does_not_install_attempt_or_irreversible_request(phase, monkeypatch):
-    from agent_composer.runtime.contracts import BackwardOutcome
-    from agent_composer.runtime.learning import memory_commit_id
-    from agent_composer.runtime.log import BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord, MemoryCommitRequestedRecord
-    from agent_composer.runtime.state import prepare_record, commit_prepared
+    from yian.runtime.contracts import BackwardOutcome
+    from yian.runtime.learning import memory_commit_id
+    from yian.runtime.log import BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord, MemoryCommitRequestedRecord
+    from yian.runtime.state import prepare_record, commit_prepared
 
     keys, proposals = _proposal_table() if phase == "request" else (None, ())
     engine, (root, attributed) = _retained_backward(keys=keys)
@@ -1033,8 +1033,8 @@ def test_backward_append_failure_does_not_install_attempt_or_irreversible_reques
 @pytest.mark.parametrize("change", ["stale", "next_state", "trace", "missing_trace", "payload", "origin"])
 def test_backward_prepared_plans_reject_stale_forged_or_mutated_authority_before_append(change):
     from dataclasses import replace
-    from agent_composer.runtime.log import BackwardStartedRecord
-    from agent_composer.runtime.state import prepare_record, commit_prepared
+    from yian.runtime.log import BackwardStartedRecord
+    from yian.runtime.state import prepare_record, commit_prepared
 
     engine, _ = _retained_backward()
     prepared = prepare_record(engine.state, BackwardStartedRecord(1, "Review."))
@@ -1063,8 +1063,8 @@ def test_backward_prepared_plans_reject_stale_forged_or_mutated_authority_before
     "root_writer", "causal_route_source", "terminal", "handler"])
 def test_postterminal_trace_delta_rejects_equal_but_noncanonical_fields_before_append(field):
     from dataclasses import replace
-    from agent_composer.runtime.log import BackwardStartedRecord
-    from agent_composer.runtime.state import prepare_record, commit_prepared
+    from yian.runtime.log import BackwardStartedRecord
+    from yian.runtime.state import prepare_record, commit_prepared
 
     engine, _ = _retained_backward()
     state, log = engine.state, engine.log
@@ -1108,7 +1108,7 @@ def test_postterminal_trace_delta_rejects_equal_but_noncanonical_fields_before_a
 
 def test_postterminal_trace_delta_validation_covers_the_closed_field_inventory():
     from dataclasses import fields
-    from agent_composer.runtime.trace import TraceDelta
+    from yian.runtime.trace import TraceDelta
 
     assert {field.name for field in fields(TraceDelta)} == {
         "originating_trace", "sequence", "initialized", "started", "resumed", "occurrence", "handler",
@@ -1118,8 +1118,8 @@ def test_postterminal_trace_delta_validation_covers_the_closed_field_inventory()
 
 
 def test_failed_backward_computation_has_no_completed_feedback_and_keeps_unrequested_learning():
-    from agent_composer.runtime.contracts import BackwardFailure, BackwardOutcome
-    from agent_composer.runtime.log import BackwardStartedRecord, BackwardFinishedRecord
+    from yian.runtime.contracts import BackwardFailure, BackwardOutcome
+    from yian.runtime.log import BackwardStartedRecord, BackwardFinishedRecord
 
     keys, _ = _proposal_table()
     engine, _ = _retained_backward(keys=keys)
@@ -1140,10 +1140,10 @@ def test_failed_backward_computation_has_no_completed_feedback_and_keeps_unreque
 
 @pytest.mark.parametrize("change", ["source", "node", "scope", "run", "feedback", "partial_inventory"])
 def test_failed_computation_finished_rejects_foreign_context_or_fabricated_results(change):
-    from agent_composer.nodes.contracts import ExecutionScope
-    from agent_composer.runtime.contracts import BackwardFailure, BackwardOutcome
-    from agent_composer.runtime.log import BackwardStartedRecord, BackwardFinishedRecord
-    from agent_composer.runtime.state import prepare_record
+    from yian.nodes.contracts import ExecutionScope
+    from yian.runtime.contracts import BackwardFailure, BackwardOutcome
+    from yian.runtime.log import BackwardStartedRecord, BackwardFinishedRecord
+    from yian.runtime.state import prepare_record
 
     engine, (root, attributed) = _retained_backward()
     _accept_backward(engine, BackwardStartedRecord(1, "Review."))
@@ -1165,9 +1165,9 @@ def test_failed_computation_finished_rejects_foreign_context_or_fabricated_resul
 @pytest.mark.parametrize("feedback,code", [(None, "backward.execute"),
     ([None, None], "backward.result"), ("Review.", "backward.unknown")])
 def test_computation_failure_requires_effective_feedback_and_a_driver_failure_code(feedback, code):
-    from agent_composer.runtime.contracts import BackwardFailure, BackwardOutcome
-    from agent_composer.runtime.log import BackwardStartedRecord, BackwardFinishedRecord
-    from agent_composer.runtime.state import prepare_record
+    from yian.runtime.contracts import BackwardFailure, BackwardOutcome
+    from yian.runtime.log import BackwardStartedRecord, BackwardFinishedRecord
+    from yian.runtime.state import prepare_record
 
     engine, _ = _retained_backward(topic=[1, 2], feedback=feedback)
     _accept_backward(engine, BackwardStartedRecord(1, feedback))
@@ -1181,12 +1181,12 @@ def test_computation_failure_requires_effective_feedback_and_a_driver_failure_co
 
 @pytest.mark.parametrize("phase", ["before_ready", "before_request", "pending", "one_confirmed"])
 def test_successful_finished_requires_ready_and_every_enabled_policy_confirmation(phase):
-    from agent_composer.memory import LearningResult
-    from agent_composer.runtime.contracts import BackwardOutcome
-    from agent_composer.runtime.learning import memory_commit_id
-    from agent_composer.runtime.log import (BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord,
+    from yian.memory import LearningResult
+    from yian.runtime.contracts import BackwardOutcome
+    from yian.runtime.learning import memory_commit_id
+    from yian.runtime.log import (BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord,
         MemoryCommitRequestedRecord, MemoryCommitSucceededRecord)
-    from agent_composer.runtime.state import prepare_record
+    from yian.runtime.state import prepare_record
 
     keys, proposals = _proposal_table()
     engine, (root, attributed) = _retained_backward(keys=keys)
@@ -1207,13 +1207,13 @@ def test_successful_finished_requires_ready_and_every_enabled_policy_confirmatio
 @pytest.mark.parametrize("change", ["root", "attribution", "missing_memory", "memory_order", "commit_id", "attempt"])
 def test_finished_must_preserve_ready_results_and_exact_confirmed_policy_inventory(change):
     from dataclasses import replace
-    from agent_composer.memory import LearningResult
-    from agent_composer.nodes.base import BackwardResult
-    from agent_composer.runtime.contracts import BackwardOutcome
-    from agent_composer.runtime.learning import memory_commit_id
-    from agent_composer.runtime.log import (BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord,
+    from yian.memory import LearningResult
+    from yian.nodes.base import BackwardResult
+    from yian.runtime.contracts import BackwardOutcome
+    from yian.runtime.learning import memory_commit_id
+    from yian.runtime.log import (BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord,
         MemoryCommitRequestedRecord, MemoryCommitSucceededRecord)
-    from agent_composer.runtime.state import prepare_record
+    from yian.runtime.state import prepare_record
 
     keys, proposals = _proposal_table()
     engine, (root, attributed) = _retained_backward(keys=keys)
@@ -1240,8 +1240,8 @@ def test_finished_must_preserve_ready_results_and_exact_confirmed_policy_invento
 
 
 def test_explicit_interruption_keeps_unknown_request_and_ready_attribution_without_resuming():
-    from agent_composer.runtime.learning import memory_commit_id
-    from agent_composer.runtime.log import (BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord,
+    from yian.runtime.learning import memory_commit_id
+    from yian.runtime.log import (BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord,
         MemoryCommitRequestedRecord)
 
     keys, proposals = _proposal_table()
@@ -1264,10 +1264,10 @@ def test_explicit_interruption_keeps_unknown_request_and_ready_attribution_witho
 @pytest.mark.parametrize("change", ["message", "feedback", "learning", "attribution"])
 def test_interrupted_finished_must_exactly_project_the_prefix(change):
     from dataclasses import replace
-    from agent_composer.memory import LearningResult
-    from agent_composer.nodes.base import BackwardResult
-    from agent_composer.runtime.log import BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord
-    from agent_composer.runtime.state import prepare_record
+    from yian.memory import LearningResult
+    from yian.nodes.base import BackwardResult
+    from yian.runtime.log import BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord
+    from yian.runtime.state import prepare_record
 
     keys, proposals = _proposal_table()
     engine, (root, attributed) = _retained_backward(keys=keys)
@@ -1285,10 +1285,10 @@ def test_interrupted_finished_must_exactly_project_the_prefix(change):
 
 
 def test_disabled_memory_ready_and_finished_reject_fabricated_memory_material():
-    from agent_composer.memory import LearningResult
-    from agent_composer.runtime.contracts import BackwardOutcome, MemoryProposal
-    from agent_composer.runtime.log import BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord
-    from agent_composer.runtime.state import prepare_record
+    from yian.memory import LearningResult
+    from yian.runtime.contracts import BackwardOutcome, MemoryProposal
+    from yian.runtime.log import BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord
+    from yian.runtime.state import prepare_record
 
     engine, (root, attributed) = _retained_backward()
     _accept_backward(engine, BackwardStartedRecord(1, "Review."))
@@ -1319,13 +1319,13 @@ def test_backward_state_revalidates_exact_memory_order(change):
 
 def test_backward_replay_matches_every_accepted_prefix_without_callbacks_or_context_formatting(monkeypatch):
     from copy import deepcopy
-    from agent_composer.compile.expand import build_grow
-    from agent_composer.memory import LearningResult
-    from agent_composer.runtime.contracts import BackwardOutcome
-    from agent_composer.runtime.learning import memory_commit_id
-    from agent_composer.runtime.log import (BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord,
+    from yian.compile.expand import build_grow
+    from yian.memory import LearningResult
+    from yian.runtime.contracts import BackwardOutcome
+    from yian.runtime.learning import memory_commit_id
+    from yian.runtime.log import (BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord,
         MemoryCommitRequestedRecord, MemoryCommitSucceededRecord)
-    from agent_composer.runtime.state import RunState, _replay_records
+    from yian.runtime.state import RunState, _replay_records
 
     keys, proposals = _proposal_table()
     engine, (root, attributed) = _retained_backward(keys=keys)
@@ -1334,7 +1334,7 @@ def test_backward_replay_matches_every_accepted_prefix_without_callbacks_or_cont
         node.forward = lambda *_: pytest.fail("replayed forward")
         node.backward = lambda *_: pytest.fail("replayed backward callback")
         node.capture_backward_context = lambda *_: pytest.fail("recaptured backward context")
-    import agent_composer.runtime.learning as learning
+    import yian.runtime.learning as learning
 
     monkeypatch.setattr(learning, "_materialize_context", lambda *_: pytest.fail("materialized context"))
     monkeypatch.setattr(learning, "_output_context", lambda *_: pytest.fail("formatted output context"))

@@ -12,23 +12,23 @@ from dataclasses import replace
 
 import pytest
 
-from agent_composer.compose.desugar.adaptive_questions import desugar_adaptive_questions
-from agent_composer.compose.desugar.case_outputs import expand_case_outputs
-from agent_composer.compose.desugar.case_targets import desugar_case_call_targets
-from agent_composer.compose.desugar.inline_calls import (
+from yian.compose.desugar.adaptive_questions import desugar_adaptive_questions
+from yian.compose.desugar.case_outputs import expand_case_outputs
+from yian.compose.desugar.case_targets import desugar_case_call_targets
+from yian.compose.desugar.inline_calls import (
     _synth_id_gen,
     desugar_inline_calls,
 )
-from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
-from agent_composer.compose.parse.file import (
+from yian.compose.helpers.errors import LoadDiagnostics, LoadError
+from yian.compose.parse.file import (
     CaseDescriptor,
     CodeDescriptor,
     MapDescriptor,
 )
-from agent_composer.compose.parse.nodes import parse_nodes
-from agent_composer.compose.source import SourceDocument
-from agent_composer.diagnostics import OriginRef
-from agent_composer.diagnostics import SourceRange
+from yian.compose.parse.nodes import parse_nodes
+from yian.compose.source import SourceDocument
+from yian.diagnostics import OriginRef
+from yian.diagnostics import SourceRange
 
 
 def _nodes_reader(text):

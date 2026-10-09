@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 from langchain_core.exceptions import OutputParserException
 
-from agent_composer.memory.contracts import (
+from yian.memory.contracts import (
     LearnContext,
     Memory,
     MemoryEpisode,
@@ -21,8 +21,8 @@ from agent_composer.memory.contracts import (
     MemorySection,
     RecallContext,
 )
-from agent_composer.memory.reflective import ReflectiveMemory
-import agent_composer.memory.reflective as reflective
+from yian.memory.reflective import ReflectiveMemory
+import yian.memory.reflective as reflective
 
 
 def _episode(
@@ -181,8 +181,8 @@ def test_defaults_are_read_once_and_recorded_snapshot_never_rereads_them(
 ) -> None:
     calls: list[str] = []
     original = reflective.resolve_model_config
-    monkeypatch.setenv("AGENT_COMPOSER_DEFAULT_PROVIDER", "ollama")
-    monkeypatch.setenv("AGENT_COMPOSER_DEFAULT_MODEL", "qwen")
+    monkeypatch.setenv("YIAN_DEFAULT_PROVIDER", "ollama")
+    monkeypatch.setenv("YIAN_DEFAULT_MODEL", "qwen")
     def resolve(config):
         calls.append("snapshot")
         return original(config)
@@ -211,8 +211,8 @@ def test_empty_ambient_model_is_rejected_and_open_session_config_is_pinned(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     original = reflective.resolve_model_config
-    monkeypatch.setenv("AGENT_COMPOSER_DEFAULT_PROVIDER", "ollama")
-    monkeypatch.setenv("AGENT_COMPOSER_DEFAULT_MODEL", "")
+    monkeypatch.setenv("YIAN_DEFAULT_PROVIDER", "ollama")
+    monkeypatch.setenv("YIAN_DEFAULT_MODEL", "")
     with pytest.raises(MemoryOperationError) as exc:
         ReflectiveMemory().open_run()
     assert exc.value.code == "reflective.config"
@@ -229,15 +229,15 @@ def test_empty_ambient_model_is_rejected_and_open_session_config_is_pinned(
     assert default_error.value.__cause__ is default_failure
 
     monkeypatch.setattr(reflective, "resolve_model_config", original)
-    monkeypatch.setenv("AGENT_COMPOSER_DEFAULT_PROVIDER", "secret-provider-value")
-    monkeypatch.setenv("AGENT_COMPOSER_DEFAULT_MODEL", "qwen")
+    monkeypatch.setenv("YIAN_DEFAULT_PROVIDER", "secret-provider-value")
+    monkeypatch.setenv("YIAN_DEFAULT_MODEL", "qwen")
     with pytest.raises(MemoryOperationError) as config_error:
         ReflectiveMemory().open_run()
     assert config_error.value.code == "reflective.config"
     assert "secret-provider-value" not in str(config_error.value)
     assert config_error.value.__cause__ is not None
 
-    monkeypatch.setenv("AGENT_COMPOSER_DEFAULT_PROVIDER", "ollama")
+    monkeypatch.setenv("YIAN_DEFAULT_PROVIDER", "ollama")
     memory = ReflectiveMemory()
     session = memory.open_run()
     frame = session
@@ -997,7 +997,7 @@ def test_reflective_memory_implements_protocol_and_imports_only_lower_layers() -
 
 def test_old_api_snapshot_keeps_digest_and_api_semantics(monkeypatch):
     import hashlib
-    from agent_composer.llm_clients.connection import legacy_connection_config
+    from yian.llm_clients.connection import legacy_connection_config
     original = ReflectiveMemory({"provider": "openai", "model": "old-model"})
     with original.open_run() as session:
         old = session.snapshot

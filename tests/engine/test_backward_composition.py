@@ -7,15 +7,15 @@ import threading
 from langchain_core.messages import AIMessage
 import pytest
 
-import agent_composer.llm_clients as llm_clients
-from agent_composer.compose import load_flow
-from agent_composer.events import NodeSucceeded
-from agent_composer.expr.builtins import TEMPLATE_FNS
-from agent_composer.memory import MemoryMutation
-from agent_composer.nodes.base import BackwardResult
-from agent_composer.nodes.code import CodeNode
-from agent_composer.run import resume_flow, run_flow
-from agent_composer.runtime.log import (
+import yian.llm_clients as llm_clients
+from yian.compose import load_flow
+from yian.events import NodeSucceeded
+from yian.expr.builtins import TEMPLATE_FNS
+from yian.memory import MemoryMutation
+from yian.nodes.base import BackwardResult
+from yian.nodes.code import CodeNode
+from yian.run import resume_flow, run_flow
+from yian.runtime.log import (
     BackwardFinishedRecord,
     BackwardReadyRecord,
     BackwardStartedRecord,
@@ -211,7 +211,7 @@ output: ${each.output}
 
 
 def test_call_and_map_loop_calls_retain_each_agent_after_pruning_and_terminal_resume(tmp_path, monkeypatch):
-    from agent_composer.run import _replay_run_log
+    from yian.run import _replay_run_log
 
     flow = load_flow("""id: nested-agent-history
 name: nested_agent_history
@@ -555,8 +555,8 @@ output: ${invoke.output | unused.output}
 
 @pytest.mark.parametrize("action", ["noop", "add"])
 def test_two_public_runs_reject_the_stale_reflective_snapshot_after_any_commit(tmp_path, monkeypatch, action):
-    import agent_composer.memory.reflective as reflective
-    from agent_composer.memory.reflective import ReflectiveMemory
+    import yian.memory.reflective as reflective
+    from yian.memory.reflective import ReflectiveMemory
 
     flow = load_flow("""id: reflective-composition
 name: reflective_composition

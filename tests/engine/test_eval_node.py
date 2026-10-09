@@ -7,9 +7,9 @@ belong to ``FlowEngine`` rather than this pure evaluation seam.
 
 import pytest
 
-from agent_composer.compile.model import START_ID
-from agent_composer.diagnostics import OriginRef
-from agent_composer.nodes.base import (
+from yian.compile.model import START_ID
+from yian.diagnostics import OriginRef
+from yian.nodes.base import (
     Grow,
     Node,
     NodeAssertFailed,
@@ -19,22 +19,22 @@ from agent_composer.nodes.base import (
     _AssertionStageError,
     _BindingStageError,
 )
-from agent_composer.nodes.binding import BindingError
-from agent_composer.nodes.call import CallNode
-from agent_composer.nodes.case import Case, CaseNode
-from agent_composer.nodes.contracts import (
+from yian.nodes.binding import BindingError
+from yian.nodes.call import CallNode
+from yian.nodes.case import Case, CaseNode
+from yian.nodes.contracts import (
     Assertion,
     Binding,
     ContractOrigins,
     Parameter,
     ValueContract,
 )
-from agent_composer.nodes.loop import LoopNode
-from agent_composer.nodes.map import MapNode
-from agent_composer.nodes.wait import WaitNode
-from agent_composer.runtime.eval_node import EvaluationFailure
-from agent_composer.typesys.pool import VariablePool
-from agent_composer.typesys.values import Type, ValueKind
+from yian.nodes.loop import LoopNode
+from yian.nodes.map import MapNode
+from yian.nodes.wait import WaitNode
+from yian.runtime.eval_node import EvaluationFailure
+from yian.typesys.pool import VariablePool
+from yian.typesys.values import Type, ValueKind
 from tests.engine._fakes import BranchNode, FailNode, FuncNode, drive, stamp_reads
 from tests.engine.test_golden_baseline import MAP_OVER_NOT_LIST_FMT
 

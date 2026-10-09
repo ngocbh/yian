@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from agent_composer.compose.skills import load_skill_dir, load_skills
-from agent_composer.skills import Skill, SkillError
-from agent_composer.skills.catalog import MAX_SKILL_FILE_BYTES
+from yian.compose.skills import load_skill_dir, load_skills
+from yian.skills import Skill, SkillError
+from yian.skills.catalog import MAX_SKILL_FILE_BYTES
 
 
 def write_skill(root: Path, dirname: str, frontmatter: str, body: str = "Do the thing.\n") -> Path:

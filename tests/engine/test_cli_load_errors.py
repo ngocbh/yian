@@ -1,4 +1,4 @@
-"""`composer run` compile-error rendering: a failed `load_flow` points at the `.yaml`, not the engine.
+"""`yian run` compile-error rendering: a failed `load_flow` points at the `.yaml`, not the engine.
 
 By default a `LoadError` is shown as a boxed source frame — a Rich panel titled `file:line`
 with the `.yaml` source (line numbers, the offending line highlighted) and the message below,
@@ -12,10 +12,10 @@ import typer
 from rich.console import Console
 from typer.testing import CliRunner
 
-import agent_composer.cli.run as climod
-from agent_composer.cli.run import _render_load_error
-from agent_composer.compose.helpers.errors import LoadDiagnostics
-from agent_composer.diagnostics import SourceRange
+import yian.cli.run as climod
+from yian.cli.run import _render_load_error
+from yian.compose.helpers.errors import LoadDiagnostics
+from yian.diagnostics import SourceRange
 
 
 def _sink(monkeypatch) -> StringIO:

@@ -3,7 +3,7 @@
 # `call:` resolves defs-first, else a `uses:` alias. Reference the callee's value
 # downstream as ${one.output} (or ${one.output.field} for a record).
 # Run from this directory so the sibling resolves:
-#   composer run call-child.yaml --input article="<some text>"
+#   yian run call-child.yaml --input article="<some text>"
 
 id: call-child
 name: call_child

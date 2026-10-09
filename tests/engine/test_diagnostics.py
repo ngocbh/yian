@@ -12,8 +12,8 @@ from typing import NamedTuple, get_args
 
 import pytest
 
-import agent_composer.diagnostics as diagnostics
-from agent_composer.diagnostics import (
+import yian.diagnostics as diagnostics
+from yian.diagnostics import (
     Diagnostic,
     DiagnosticFrame,
     FAILURE_CODES,
@@ -481,7 +481,7 @@ def test_resolver_table_rejects_malformed_routes(operation, message: str) -> Non
 
 def test_diagnostics_module_imports_only_the_standard_library() -> None:
     """The diagnostic value spine must remain below every project package."""
-    path = Path(__file__).parents[2] / "src" / "agent_composer" / "diagnostics.py"
+    path = Path(__file__).parents[2] / "src" / "yian" / "diagnostics.py"
     tree = ast.parse(path.read_text(), filename=str(path))
     relative_imports = [
         node for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.level
@@ -507,12 +507,12 @@ def test_public_diagnostics_import_does_not_load_engine_or_yaml_layers() -> None
     source_root = Path(__file__).parents[2] / "src"
     script = """
 import sys
-from agent_composer.diagnostics import Diagnostic, FAILURE_CODES, DiagnosticFrame, Failure, FailureCode, OriginRef, OriginResolver, ResolverTable, SourceRange
+from yian.diagnostics import Diagnostic, FAILURE_CODES, DiagnosticFrame, Failure, FailureCode, OriginRef, OriginResolver, ResolverTable, SourceRange
 
 loaded_project_modules = sorted(
     name
     for name in sys.modules
-    if name.startswith("agent_composer.") and name != "agent_composer.diagnostics"
+    if name.startswith("yian.") and name != "yian.diagnostics"
 )
 loaded_yaml_modules = sorted(
     name for name in sys.modules if name == "yaml" or name.startswith("yaml.")
@@ -537,13 +537,13 @@ def test_root_failure_import_preserves_diagnostic_leaf_isolation() -> None:
     source_root = Path(__file__).parents[2] / "src"
     script = """
 import sys
-from agent_composer import Failure
+from yian import Failure
 
-assert Failure.__module__ == "agent_composer.diagnostics"
+assert Failure.__module__ == "yian.diagnostics"
 loaded_project_modules = sorted(
     name
     for name in sys.modules
-    if name.startswith("agent_composer.") and name != "agent_composer.diagnostics"
+    if name.startswith("yian.") and name != "yian.diagnostics"
 )
 loaded_yaml_modules = sorted(
     name for name in sys.modules if name == "yaml" or name.startswith("yaml.")
@@ -567,7 +567,7 @@ def test_lazy_package_facade_preserves_every_declared_root_export() -> None:
     """Leaf isolation must not remove or rename the established root API."""
     source_root = Path(__file__).parents[2] / "src"
     script = """
-import agent_composer
+import yian
 
 expected = [
     "ExpressionError",
@@ -583,12 +583,12 @@ expected = [
     "build_memories",
     "MemoryRegistry",
 ]
-assert agent_composer.__all__ == expected
-assert set(expected) <= set(dir(agent_composer))
+assert yian.__all__ == expected
+assert set(expected) <= set(dir(yian))
 for name in expected:
-    assert getattr(agent_composer, name) is not None
+    assert getattr(yian, name) is not None
 try:
-    agent_composer.not_a_public_export
+    yian.not_a_public_export
 except AttributeError as error:
     assert error.__cause__ is None
     assert error.__context__ is None

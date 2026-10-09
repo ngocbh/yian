@@ -10,8 +10,8 @@ No OUTPUT_RESOLVER/COLLECTOR kind is reachable from a LOADED (un-run) flow — s
 they only appear at RUNTIME.
 """
 
-from agent_composer.compose import load_flow
-from agent_composer.nodes.base import NodeKind
+from yian.compose import load_flow
+from yian.nodes.base import NodeKind
 from tests.engine.test_map import _ECHO_CHILD, _map_flow
 from tests.engine.test_map import _resolver as _map_resolver
 from tests.engine.test_call_run import _CALL_PARENT, _CHILD, _resolver

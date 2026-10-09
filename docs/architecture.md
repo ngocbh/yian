@@ -6,7 +6,7 @@
 
 ## The lifecycle in one picture
 
-Agent Composer has two main phases: **Compose** builds a reusable program, then
+Yian has two main phases: **Compose** builds a reusable program, then
 the **engine** runs a private instance of that program. One append-only run log
 is the authority for every runtime state change.
 After forward returns, the caller may explicitly start backward on a retained run.
@@ -38,7 +38,7 @@ The ordinary API follows the same boundary:
 ```python
 from pathlib import Path
 
-from agent_composer import load_flow, run_flow
+from yian import load_flow, run_flow
 
 path = Path("flow.yaml")
 flow = load_flow(path.read_text(), source_label=path.name)

@@ -9,17 +9,17 @@ from typing import Callable
 
 import pytest
 
-from agent_composer.memory import episodic as episodic_module
-from agent_composer.memory.contracts import MemoryOperationError
-from agent_composer.memory.episodic import EpisodicMemory
+from yian.memory import episodic as episodic_module
+from yian.memory.contracts import MemoryOperationError
+from yian.memory.episodic import EpisodicMemory
 
 # (module, factory) pairs; C14 and C15 append reflective and session.
 BACKENDS: list[tuple[object, Callable[..., object]]] = [
     (episodic_module, lambda path, **kw: EpisodicMemory(storage=path, **kw)),
 ]
 
-from agent_composer.memory import reflective as reflective_module
-from agent_composer.memory.reflective import ReflectiveMemory
+from yian.memory import reflective as reflective_module
+from yian.memory.reflective import ReflectiveMemory
 
 _REFLECTIVE_LLM = {"provider": "ollama", "model": "current"}
 
@@ -30,8 +30,8 @@ BACKENDS.append(
     )
 )
 
-from agent_composer.memory import session as session_module
-from agent_composer.memory.session import SessionMemory
+from yian.memory import session as session_module
+from yian.memory.session import SessionMemory
 
 BACKENDS.append(
     (session_module, lambda path, **kw: SessionMemory(storage=path, **kw))

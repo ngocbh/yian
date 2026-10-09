@@ -5,10 +5,10 @@ ${input.X} resolves to store[START_ID]. Assertions check the NODES exist + edges
 adjacency, never that the strings are absent (they ARE the node ids).
 """
 
-from agent_composer.compile.model import END_ID, START_ID
-from agent_composer.compose import load_flow
-from agent_composer.run import run_flow
-from agent_composer.nodes.base import NodeKind
+from yian.compile.model import END_ID, START_ID
+from yian.compose import load_flow
+from yian.run import run_flow
+from yian.nodes.base import NodeKind
 from tests.engine._graph_builder import _engine
 
 _FLOW = """
@@ -86,7 +86,7 @@ def test_run_result_is_end_node_value():
 
 
 def test_terminal_helpers_retired():
-    from agent_composer.runtime.engine import FlowEngine
+    from yian.runtime.engine import FlowEngine
     # the three terminal helpers are gone (END_ID commits the value; the disposition handles skip).
     assert not hasattr(FlowEngine, "terminal_output")
     assert not hasattr(FlowEngine, "_emit_terminal")
@@ -104,14 +104,14 @@ def test_terminal_coskip_fails_via_end_disposition():
 
 # --- START_ID seeded at engine init + ${input.X} -> store[START_ID]; inputs namespace retired -- #
 def test_inputs_resolve_to_start_node():
-    from agent_composer.typesys.pool import VariablePool
+    from yian.typesys.pool import VariablePool
     pool = VariablePool()
     pool.set(START_ID, {"x": "ACME"})                 # START_ID commits the bound input record
     assert pool.resolve("input", ["x"]) == "ACME"    # ${input.x} == store[START_ID].x
 
 
 def test_pool_inputs_namespace_retired():
-    from agent_composer.typesys.pool import VariablePool
+    from yian.typesys.pool import VariablePool
     pool = VariablePool()
     assert not hasattr(pool, "add_inputs")
     assert "inputs" not in VariablePool.model_fields   # the `inputs` field is gone
@@ -135,7 +135,7 @@ def test_engine_schedules_start_and_emits_succeeded():
     # run-args, schedules START_ID, and START runs through eval_node — emitting NodeStarted +
     # NodeSucceeded like any node and committing its COERCED bound record. The run succeeds and
     # the value flows from the scheduled START, not a hand-seed bypass.
-    from agent_composer.events import NodeStarted, NodeSucceeded
+    from yian.events import NodeStarted, NodeSucceeded
     loaded = load_flow(_FLOW)
     eng = _engine(loaded.compiled, run_inputs={"x": "ACME"})
     events = list(eng.run())

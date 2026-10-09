@@ -13,7 +13,7 @@
 # `case ... on` with `else`, and a coalesce join.
 #
 # Run it with (the CLI will prompt you for the approval):
-#   composer run examples/human-approval.yaml --input task="Plan a team offsite"
+#   yian run examples/human-approval.yaml --input task="Plan a team offsite"
 
 id: human-approval
 name: human_approval

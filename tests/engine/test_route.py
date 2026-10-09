@@ -4,8 +4,8 @@ A router (CASE) returns `Route(handle)` (no value); the engine's node seam turns
 `NodeRouted` terminal, and the engine dispatches routing on that event (not on node.kind).
 """
 
-from agent_composer.events import NodeRouted
-from agent_composer.nodes.base import NodeResult, Route
+from yian.events import NodeRouted
+from yian.nodes.base import NodeResult, Route
 
 
 def test_route_carries_handle():

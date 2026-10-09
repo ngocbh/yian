@@ -7,10 +7,10 @@ the returned ``Output``.
 
 import pytest
 
-from agent_composer.nodes.base import Output
-from agent_composer.nodes.human_input.node import HumanInputNode
-from agent_composer.nodes.human_input.questions import QuestionSpecError
-from agent_composer.tools import ToolSet
+from yian.nodes.base import Output
+from yian.nodes.human_input.node import HumanInputNode
+from yian.nodes.human_input.questions import QuestionSpecError
+from yian.tools import ToolSet
 
 
 def test_literal_questions_render_and_invoke_host():

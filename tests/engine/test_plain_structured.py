@@ -1,9 +1,9 @@
 """`plain` mode — native structured output for constrained output types."""
 
-import agent_composer.llm_clients as llm_clients
-from agent_composer.nodes.agent.modes.common import AgentRunContext
-from agent_composer.nodes.agent.modes.plain import plain
-from agent_composer.typesys.values import Type, ValueKind
+import yian.llm_clients as llm_clients
+from yian.nodes.agent.modes.common import AgentRunContext
+from yian.nodes.agent.modes.plain import plain
+from yian.typesys.values import Type, ValueKind
 
 
 class _StructuredModel:

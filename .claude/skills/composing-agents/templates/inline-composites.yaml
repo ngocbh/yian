@@ -4,7 +4,7 @@
 # Provider-free: every leaf is inline CODE.
 #
 # Run:
-#   composer run inline-composites.yaml --inputs inputs.json
+#   yian run inline-composites.yaml --inputs inputs.json
 # where inputs.json contains: {"seed": 2, "items": [1, 2, 3]}
 
 id: inline-composites

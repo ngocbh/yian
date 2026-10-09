@@ -32,13 +32,13 @@ def _pause_references(package_name: str) -> list[str]:
 @pytest.mark.parametrize(
     "module_name",
     [
-        "agent_composer.suspension",
-        "agent_composer.suspension.channels",
-        "agent_composer.suspension.checkpoint",
-        "agent_composer.suspension.commands",
-        "agent_composer.suspension.expansions",
-        "agent_composer.suspension.pause",
-        "agent_composer.runtime.state_manager",
+        "yian.suspension",
+        "yian.suspension.channels",
+        "yian.suspension.checkpoint",
+        "yian.suspension.commands",
+        "yian.suspension.expansions",
+        "yian.suspension.pause",
+        "yian.runtime.state_manager",
     ],
 )
 def test_checkpoint_and_suspension_modules_are_gone(module_name):
@@ -47,8 +47,8 @@ def test_checkpoint_and_suspension_modules_are_gone(module_name):
 
 
 def test_effect_nodes_drop_scratch_keys():
-    from agent_composer.nodes.human_input.node import HumanInputNode
-    from agent_composer.nodes.wait.node import WaitNode
+    from yian.nodes.human_input.node import HumanInputNode
+    from yian.nodes.wait.node import WaitNode
 
     hi = HumanInputNode("h", prompt="?")
     assert not hasattr(hi, "answer_key")
@@ -57,7 +57,7 @@ def test_effect_nodes_drop_scratch_keys():
 
 
 def test_wait_event_mode_and_the_watchdog_are_gone():
-    from agent_composer.nodes.wait.node import WaitNode
+    from yian.nodes.wait.node import WaitNode
 
     wait = WaitNode("wait")
     assert not hasattr(wait, "is_timed")
@@ -66,17 +66,17 @@ def test_wait_event_mode_and_the_watchdog_are_gone():
     with pytest.raises(TypeError):
         WaitNode("wait", event_spec={"topic": "alerts"})
     with pytest.raises(ModuleNotFoundError):
-        importlib.import_module("agent_composer.runtime.watchdog")
+        importlib.import_module("yian.runtime.watchdog")
     with pytest.raises(ModuleNotFoundError):
-        importlib.import_module("agent_composer.nodes.code.watchdog")
+        importlib.import_module("yian.nodes.code.watchdog")
 
 
 @pytest.mark.parametrize(
     "package_name",
     [
-        "agent_composer.nodes.agent",
-        "agent_composer.nodes.human_input",
-        "agent_composer.nodes.wait",
+        "yian.nodes.agent",
+        "yian.nodes.human_input",
+        "yian.nodes.wait",
     ],
 )
 def test_shipped_blocking_node_packages_cannot_construct_pause(package_name):
@@ -84,11 +84,11 @@ def test_shipped_blocking_node_packages_cannot_construct_pause(package_name):
 
 
 def test_shipped_blocking_node_bodies_are_typed_to_output():
-    from agent_composer.nodes.agent import AgentNode
-    from agent_composer.nodes.agent.modes import AgentMode
-    from agent_composer.nodes.base import Output
-    from agent_composer.nodes.human_input import HumanInputNode
-    from agent_composer.nodes.wait import WaitNode
+    from yian.nodes.agent import AgentNode
+    from yian.nodes.agent.modes import AgentMode
+    from yian.nodes.base import Output
+    from yian.nodes.human_input import HumanInputNode
+    from yian.nodes.wait import WaitNode
 
     assert get_type_hints(AgentNode.forward)["return"] is Output
     assert get_type_hints(HumanInputNode.forward)["return"] is Output
@@ -98,8 +98,8 @@ def test_shipped_blocking_node_bodies_are_typed_to_output():
 
 @pytest.mark.parametrize("field", ["entry", "controls"])
 def test_retired_agent_authoring_fields_are_rejected(field):
-    from agent_composer.compose import LoadError, load_flow
-    from agent_composer.nodes.agent import AgentNode
+    from yian.compose import LoadError, load_flow
+    from yian.nodes.agent import AgentNode
 
     assert field not in inspect.signature(AgentNode).parameters
     with pytest.raises(TypeError):
@@ -123,7 +123,7 @@ output: ${{agent.output}}
 
 @pytest.mark.parametrize("field", ["event", "event_spec", "poll", "is_timed"])
 def test_retired_wait_authoring_fields_are_rejected(field):
-    from agent_composer.compose import LoadError, load_flow
+    from yian.compose import LoadError, load_flow
 
     text = f"""
 id: retired-wait-{field}
@@ -141,11 +141,11 @@ output: ${{wait.output}}
 
 
 def test_final_log_only_runtime_and_public_surface():
-    import agent_composer
-    import agent_composer.events as events
-    import agent_composer.nodes.base as base
-    import agent_composer.run as run
-    from agent_composer.runtime import FlowEngine
+    import yian
+    import yian.events as events
+    import yian.nodes.base as base
+    import yian.run as run
+    from yian.runtime import FlowEngine
 
     for name in ("PauseRequested", "RunPaused", "RunAborted", "NodeStreamEvent"):
         assert not hasattr(events, name)
@@ -153,8 +153,8 @@ def test_final_log_only_runtime_and_public_surface():
 
     for method in ("snapshot", "restore", "resume", "request_abort"):
         assert not hasattr(FlowEngine, method)
-    assert not hasattr(agent_composer, "FlowEngine")
-    assert "FlowEngine" not in agent_composer.__all__
+    assert not hasattr(yian, "FlowEngine")
+    assert "FlowEngine" not in yian.__all__
 
     assert not hasattr(run, "resume_command")
     assert list(inspect.signature(run.run_flow).parameters) == [
@@ -199,12 +199,12 @@ def test_final_log_only_runtime_and_public_surface():
 
 
 def test_agent_continuation_packages_and_builders_are_gone():
-    agent = importlib.import_module("agent_composer.nodes.agent")
-    expand = importlib.import_module("agent_composer.compile.expand")
-    modes = importlib.import_module("agent_composer.nodes.agent.modes.tool_calling")
-    descriptor = importlib.import_module("agent_composer.compose.nodes.agent")
-    base = importlib.import_module("agent_composer.nodes.base")
-    engine = importlib.import_module("agent_composer.runtime.engine")
+    agent = importlib.import_module("yian.nodes.agent")
+    expand = importlib.import_module("yian.compile.expand")
+    modes = importlib.import_module("yian.nodes.agent.modes.tool_calling")
+    descriptor = importlib.import_module("yian.compose.nodes.agent")
+    base = importlib.import_module("yian.nodes.base")
+    engine = importlib.import_module("yian.runtime.engine")
 
     assert not hasattr(agent, "AgentEntry")
     assert not hasattr(agent, "Fresh")
@@ -220,6 +220,6 @@ def test_agent_continuation_packages_and_builders_are_gone():
     with pytest.raises(ValueError, match="cannot build graph growth"):
         expand.build_grow(agent.AgentNode("agent"), {})
     with pytest.raises(ModuleNotFoundError):
-        importlib.import_module("agent_composer.nodes.agent.controls")
+        importlib.import_module("yian.nodes.agent.controls")
     with pytest.raises(ModuleNotFoundError):
-        importlib.import_module("agent_composer._growth")
+        importlib.import_module("yian._growth")

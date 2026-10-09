@@ -9,10 +9,10 @@ import threading
 
 import pytest
 
-import agent_composer.llm_clients as llm_clients_mod
-import agent_composer.tools as tools_mod
-from agent_composer.compose.loader import load_flow
-from agent_composer.events import (
+import yian.llm_clients as llm_clients_mod
+import yian.tools as tools_mod
+from yian.compose.loader import load_flow
+from yian.events import (
     IN_LOOP_EVENTS,
     ModelCallFinished,
     ModelCallStarted,
@@ -21,8 +21,8 @@ from agent_composer.events import (
     StreamChunk,
     ToolCallFinished,
 )
-from agent_composer.run import run_flow
-from agent_composer.runtime.log import JsonlRunLog
+from yian.run import run_flow
+from yian.runtime.log import JsonlRunLog
 from tests.engine._stream_fakes import ScriptedStreamChat, reply
 from tests.engine.test_live_events_run import FLOW, PAIR, _script, _Tool
 

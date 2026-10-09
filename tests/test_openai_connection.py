@@ -7,28 +7,28 @@ import httpx
 import pytest
 from langchain_core.messages import HumanMessage
 
-from agent_composer.llm_clients.auth import (
+from yian.llm_clients.auth import (
     ApiKeyCredentials,
     AuthStore,
     OAuthCredentials,
 )
-from agent_composer.llm_clients.connection import (
+from yian.llm_clients.connection import (
     connection_snapshot,
     legacy_connection_config,
     resolve_model_config,
 )
-from agent_composer.llm_clients.factory import model_from_config
-from agent_composer.compile.llm_cascade import resolve_llm_cascade
-from agent_composer.compose.loader import load_flow
+from yian.llm_clients.factory import model_from_config
+from yian.compile.llm_cascade import resolve_llm_cascade
+from yian.compose.loader import load_flow
 from tests.fixtures.openai_responses import ResponsesServer
 
 
 @pytest.fixture(autouse=True)
 def isolated_auth(tmp_path, monkeypatch):
-    monkeypatch.setenv("AGENT_COMPOSER_AUTH_FILE", str(tmp_path / "auth.json"))
+    monkeypatch.setenv("YIAN_AUTH_FILE", str(tmp_path / "auth.json"))
     for name in (
-        "AGENT_COMPOSER_DEFAULT_PROVIDER",
-        "AGENT_COMPOSER_DEFAULT_MODEL",
+        "YIAN_DEFAULT_PROVIDER",
+        "YIAN_DEFAULT_MODEL",
         "OPENAI_API_KEY",
         "OPENAI_BASE_URL",
     ):
@@ -114,7 +114,7 @@ def test_missing_identity_does_not_adopt_later_environment_key(monkeypatch):
     config = resolve_model_config({})
     monkeypatch.setenv("OPENAI_API_KEY", "new-secret")
     model = model_from_config(config)
-    with pytest.raises(RuntimeError, match="composer auth openai"):
+    with pytest.raises(RuntimeError, match="yian auth openai"):
         model.invoke([HumanMessage(content="hi")])
 
 
@@ -130,7 +130,7 @@ def test_legacy_openai_cannot_select_subscription(monkeypatch):
 
 
 def test_internal_metadata_is_not_yaml_configuration():
-    from agent_composer.llm_clients.config import LLMConfig
+    from yian.llm_clients.config import LLMConfig
 
     config = resolve_model_config({})
     with pytest.raises(ValueError, match="Extra inputs"):
@@ -142,7 +142,7 @@ def test_internal_metadata_is_not_yaml_configuration():
 
 def test_factory_subscription_supports_structured_output_on_responses(monkeypatch):
     subscription()
-    from agent_composer.llm_clients import openai_subscription
+    from yian.llm_clients import openai_subscription
     from pydantic import BaseModel
     import tests.fixtures.openai_responses as fixture
 
@@ -170,8 +170,8 @@ def test_factory_subscription_supports_structured_output_on_responses(monkeypatc
 
 
 def test_saved_api_key_and_preflight_ignore_incidental_environment(monkeypatch):
-    from agent_composer.cli.utils import ensure_api_key
-    from agent_composer.llm_clients.openai_client import OpenAIClient
+    from yian.cli.utils import ensure_api_key
+    from yian.llm_clients.openai_client import OpenAIClient
 
     AuthStore().save("openai", ApiKeyCredentials("saved-key"), "gpt-5.5")
     monkeypatch.setenv("OPENAI_API_KEY", "incidental-key")
@@ -191,15 +191,15 @@ def test_saved_api_key_and_preflight_ignore_incidental_environment(monkeypatch):
 
 
 def test_subscription_preflight_needs_no_api_key():
-    from agent_composer.cli.utils import ensure_api_key
+    from yian.cli.utils import ensure_api_key
 
     subscription()
     assert ensure_api_key("openai", interactive=False) is None
 
 
 def test_refresh_retains_connection_identity_on_model_requests(monkeypatch):
-    from agent_composer.llm_clients import openai_subscription
-    from agent_composer.llm_clients.auth import OpenAIAuth
+    from yian.llm_clients import openai_subscription
+    from yian.llm_clients.auth import OpenAIAuth
 
     selected = AuthStore().save(
         "openai",

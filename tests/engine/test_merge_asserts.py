@@ -9,8 +9,8 @@ namespace. Boundary coverage includes explicit `input.age` and unqualified `age`
 
 import pytest
 
-from agent_composer.compose import LoadError, load_flow
-from agent_composer.run import run_flow
+from yian.compose import LoadError, load_flow
+from yian.run import run_flow
 
 
 # =========================================================================== #

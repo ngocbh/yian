@@ -1,10 +1,10 @@
 """The `model` kind handle: parsing records field ranges in the descriptor; build
 returns a runtime ModelNode with an output contract, wiring, and stamped ranges."""
 
-from agent_composer.compose.nodes.base import BuildContext
-from agent_composer.compose.nodes.model import ModelDescriptor
-from agent_composer.compose.source import SourceDocument
-from agent_composer.diagnostics import SourceRange
+from yian.compose.nodes.base import BuildContext
+from yian.compose.nodes.model import ModelDescriptor
+from yian.compose.source import SourceDocument
+from yian.diagnostics import SourceRange
 
 
 _FLOW = """\
@@ -43,7 +43,7 @@ def test_model_build_returns_model_node_and_retains_compose_ranges():
     result = desc.build(BuildContext({}))
     node, wiring = result.node, result.wiring
 
-    from agent_composer.nodes.model import ModelNode
+    from yian.nodes.model import ModelNode
 
     assert isinstance(node, ModelNode)
     assert node.model_id == "sentiment-v2"

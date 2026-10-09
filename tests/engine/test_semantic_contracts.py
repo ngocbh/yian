@@ -7,9 +7,9 @@ from typing import Any
 
 import pytest
 
-import agent_composer.nodes as nodes_api
-from agent_composer.diagnostics import OriginRef
-from agent_composer.nodes.contracts import (
+import yian.nodes as nodes_api
+from yian.diagnostics import OriginRef
+from yian.nodes.contracts import (
     Assertion,
     Binding,
     ContractOrigins,
@@ -24,7 +24,7 @@ from agent_composer.nodes.contracts import (
     output_contract_origin,
     validate_output_contract,
 )
-from agent_composer.typesys import Type, ValueKind
+from yian.typesys import Type, ValueKind
 
 
 def _origin(key: str) -> OriginRef:

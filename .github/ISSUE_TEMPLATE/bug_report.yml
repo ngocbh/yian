@@ -9,7 +9,7 @@ body:
         Thanks for reporting a bug! Please fill out the sections below so we can reproduce and fix it quickly.
 
         **Before submitting**, please:
-        - [ ] Search [existing issues](https://github.com/ngocbh/agent-composer/issues) to avoid duplicates
+        - [ ] Search [existing issues](https://github.com/ngocbh/yian/issues) to avoid duplicates
         - [ ] Update to the latest `main` and confirm the bug still exists
         - [ ] If it's a runtime error, try to reduce it to a minimal flow YAML
 
@@ -28,14 +28,14 @@ body:
     attributes:
       label: Minimal Flow / Reproduction
       description: |
-        The smallest flow YAML (or `composer` command) that triggers the bug. The more minimal, the faster we can fix it.
+        The smallest flow YAML (or `yian` command) that triggers the bug. The more minimal, the faster we can fix it.
       placeholder: |
         # flow.yaml
         nodes:
           ask:
             kind: human_input
             ...
-        # then: composer run flow.yaml
+        # then: yian run flow.yaml
       render: yaml
     validations:
       required: true
@@ -61,10 +61,10 @@ body:
     id: component
     attributes:
       label: Affected Component
-      description: Which part of Agent Composer is affected?
+      description: Which part of Yian is affected?
       multiple: true
       options:
-        - CLI (`composer run` / `composer chat`)
+        - CLI (`yian run` / `yian chat`)
         - Engine / runtime (scheduler, run logs, recovery)
         - Compose (YAML parse / typecheck / build / validate)
         - Nodes (agent, code, model, tool, case, call, map, loop, human_input, wait)
@@ -110,7 +110,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: Agent Composer Version / Commit
+      label: Yian Version / Commit
       description: Release version, or the short commit hash if installed from source (`git rev-parse --short HEAD`)
       placeholder: "45beb62"
 

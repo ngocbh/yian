@@ -20,7 +20,7 @@
 # The expected caret is L36, the offending `when:` line.
 # The synthetic name `__r1` must not leak into the author-facing message.
 #
-# Run: `composer run tests/seeds/errors/e38-case-when-ref-locates-node-header.yaml`.
+# Run: `yian run tests/seeds/errors/e38-case-when-ref-locates-node-header.yaml`.
 id: err-case-when-ref-header
 name: err_case_when_ref_header
 nodes:

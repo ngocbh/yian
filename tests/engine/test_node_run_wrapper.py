@@ -14,8 +14,8 @@ from typing import Any
 
 import pytest
 
-from agent_composer.diagnostics import OriginRef
-from agent_composer.nodes.base import (
+from yian.diagnostics import OriginRef
+from yian.nodes.base import (
     BackwardContext,
     BackwardResult,
     Node,
@@ -23,7 +23,7 @@ from agent_composer.nodes.base import (
     NodeKind,
     Output,
 )
-from agent_composer.nodes.contracts import Assertion
+from yian.nodes.contracts import Assertion
 
 
 class _ImplNode(Node):
@@ -151,7 +151,7 @@ def test_duplicate_assertions_retain_first_occurrence_origin():
 def test_wrapper_delegates_to_real_code_node_forward():
     """A real CodeNode (leaf -> Output): its `run` is the INHERITED base wrapper (it no
     longer shadows it), and the wrapper delegates to the kind's `forward`."""
-    from agent_composer.nodes.code import CodeNode
+    from yian.nodes.code import CodeNode
 
     node = CodeNode("c", code="return inputs['v']")
     # The kind defines no `run`, so method resolution selects the base wrapper.
@@ -164,7 +164,7 @@ def test_wrapper_delegates_to_real_code_node_forward():
 
 def test_wrapper_delegates_for_route_kind():
     """A CASE fake (-> Route): `run` is the inherited wrapper and returns the Route from `forward`."""
-    from agent_composer.nodes.base import Route
+    from yian.nodes.base import Route
 
     from tests.engine._fakes import BranchNode
 
@@ -178,8 +178,8 @@ def test_wrapper_delegates_for_route_kind():
 
 def test_wrapper_delegates_for_grow_kind():
     """A spawner (CALL -> Grow): `run` is the inherited wrapper and returns the Grow from `forward`."""
-    from agent_composer.nodes.base import Grow
-    from agent_composer.nodes.call import CallNode
+    from yian.nodes.base import Grow
+    from yian.nodes.call import CallNode
 
     from tests.engine.test_expand import _child_flow
 
@@ -199,7 +199,7 @@ def test_wrapper_delegates_for_grow_kind():
 def test_eval_node_no_longer_has_first_failing_assert():
     """Structural: the pool-fallback firing function is gone from eval_node — asserts are the
     wrapper's job now."""
-    import agent_composer.runtime.eval_node as en
+    import yian.runtime.eval_node as en
 
     assert not hasattr(en, "_first_failing_assert")
 
@@ -246,7 +246,7 @@ def test_eval_node_does_not_fire_when_run_bypasses_firing():
 
 def test_eval_node_fires_via_wrapper_positive_control():
     """The inherited wrapper converts its failed assert to EvaluationFailure."""
-    from agent_composer.runtime.eval_node import EvaluationFailure
+    from yian.runtime.eval_node import EvaluationFailure
 
     from tests.engine._fakes import drive, stamp_reads
 

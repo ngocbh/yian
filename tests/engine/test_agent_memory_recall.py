@@ -10,22 +10,22 @@ from types import SimpleNamespace
 from langchain_core.messages import AIMessage
 import pytest
 
-import agent_composer.llm_clients as llm_clients
-from agent_composer.diagnostics import OriginRef
-from agent_composer.memory import (
+import yian.llm_clients as llm_clients
+from yian.diagnostics import OriginRef
+from yian.memory import (
     MemoryContext,
     MemoryRecallError,
     MemoryScope,
     MemorySection,
     RecallContext,
 )
-from agent_composer.nodes.agent import AgentNode
-from agent_composer.nodes.agent.modes.common import DEFAULT_SYSTEM
-from agent_composer.nodes.base import Output, _HostStop
-from agent_composer.nodes.contracts import Parameter, ValueContract
-from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
-from agent_composer.tools import ToolSet
-from agent_composer.typesys import Type, ValueKind, VariablePool
+from yian.nodes.agent import AgentNode
+from yian.nodes.agent.modes.common import DEFAULT_SYSTEM
+from yian.nodes.base import Output, _HostStop
+from yian.nodes.contracts import Parameter, ValueContract
+from yian.runtime.eval_node import EvaluationFailure, eval_node
+from yian.tools import ToolSet
+from yian.typesys import Type, ValueKind, VariablePool
 
 
 @contextmanager

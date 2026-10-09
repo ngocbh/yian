@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-from agent_composer.compile.manifest import flow_fingerprint
-from agent_composer.compose import load_flow
-from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.nodes.agent import AgentNode
+from yian.compile.manifest import flow_fingerprint
+from yian.compose import load_flow
+from yian.compose.helpers.errors import LoadError
+from yian.nodes.agent import AgentNode
 
 
 def _flow(steerable_line: str, *, mode: str = "tool_calling", output: str = "    output: str") -> str:

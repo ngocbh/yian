@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from agent_composer.compose import load_flow
+from yian.compose import load_flow
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 

@@ -1,0 +1,127 @@
+"""Graph-stage: `human_input` `adaptive_questions:` block desugar — block → synth agent + gate.
+
+A `human_input` node may carry an `adaptive_questions:` nested block instead of a
+static `questions:` list or a free-text `prompt:`. The block IS the spec of an LLM
+that AUTHORS the questions: `{prompt: <LLM brief, required>, mode?, llm_config?,
+retries?}`. This pass lowers that single descriptor into TWO ordinary descriptors:
+
+1. a synth **AgentDescriptor** (id `<gate>__compose`) that composes a
+   `list[Question]` — its codomain is the code-built `question_list_type()` set via
+   the `output_contract_override` seam (no surface type-string), its prompt is the
+   block's brief, and it inherits the gate's context `input:`;
+2. the original **HumanInputDescriptor** gate (same id), rewritten to read its
+   questions from the composer: `questions: "${__questions}"`, with the composer's
+   output wired into the reserved `__questions` input.
+
+WHY a descriptor-level pass (modeled on `desugar_inline_calls`): it runs BEFORE the build
+loop, so the synth agent flows through the kind-blind `desc.build(ctx)` + prompt-scope
+validation + ref wiring exactly like any author-written agent. A brief that references an
+undeclared `${...}` is therefore caught by the same prompt-scope check that guards every agent.
+A post-build pass would skip that validation entirely.
+
+`__questions` is a reserved input name: the wire from the composer's output into the
+gate's questions input. Authors do not write it.
+
+Located parse metadata: the synth composer agent inherits the gate descriptor's
+`range`/`field_ranges` (so its downstream errors locate at the gate); the rewritten
+gate keeps its own ranges via `replace`.
+"""
+
+from __future__ import annotations
+
+from dataclasses import replace
+
+from yian.compose.helpers.errors import LoadDiagnostics
+from yian.compose.parse.file import (
+    AgentDescriptor,
+    HumanInputDescriptor,
+    NodeDescriptor,
+)
+from yian.nodes.contracts import ValueContract
+from yian.nodes.human_input.questions import question_list_type
+
+# Reserved gate input name: the wire from the synth composer's output into the gate's
+# questions input. Authors never write it; the desugar owns the namespace.
+QPARAM = "__questions"
+
+
+def desugar_adaptive_questions(
+    descriptors: dict[str, NodeDescriptor],
+    *,
+    diagnostics: LoadDiagnostics | None = None,
+) -> dict[str, NodeDescriptor]:
+    """Lower each `adaptive_questions:` human_input into a synth agent + rewritten gate.
+
+    Returns a NEW descriptor map. A non-adaptive descriptor passes through untouched;
+    an adaptive `human_input` is replaced IN PLACE by two entries emitted in order —
+    the synth composer agent first (id `<gate>__compose`), then the rewritten gate —
+    so the agent precedes the gate in insertion order (build/edge order).
+
+    Args:
+        descriptors (`dict[str, NodeDescriptor]`):
+            Parsed descriptors keyed by node id in authored graph order.
+
+    Returns:
+        `dict[str, NodeDescriptor]`:
+            New ordered mapping with each adaptive gate lowered to two nodes.
+
+    Raises:
+        `LoadError`:
+            Raised for a synthesized node-id collision or an authored reserved
+            `__questions` input on an adaptive gate.
+    """
+    diagnostics = diagnostics or LoadDiagnostics()
+    new_descriptors: dict[str, NodeDescriptor] = {}
+    for gid, desc in descriptors.items():
+        if not (
+            isinstance(desc, HumanInputDescriptor)
+            and desc.adaptive_questions is not None
+        ):
+            new_descriptors[gid] = desc
+            continue
+
+        auto = desc.adaptive_questions
+        synth_id = f"{gid}__compose"
+        if synth_id in descriptors:
+            raise diagnostics.error(
+                f"node {gid!r} (kind=human_input): synthesized composer id "
+                f"{synth_id!r} collides with an existing node id",
+                range=desc.range,
+            )
+        if QPARAM in desc.inputs:
+            raise diagnostics.error(
+                f"node {gid!r} (kind=human_input): input {QPARAM!r} is reserved "
+                "for adaptive_questions",
+                range=desc.field_ranges.get(("input", QPARAM), desc.range),
+            )
+
+        # The block IS the agent spec. Pass optional fields only when present so the
+        # AgentDescriptor defaults (e.g. retries=2, llm_config={}) apply otherwise. The
+        # synth agent inherits the gate's ranges so its downstream errors locate there.
+        # Its internal contract has no authorable type string.
+        agent_kwargs = {
+            "id": synth_id,
+            "prompt": auto["prompt"],
+            "inputs": dict(
+                desc.inputs
+            ),  # carry the gate's context inputs to the composer
+            "output_contract_override": ValueContract(question_list_type()),
+            "outputs": None,
+            "mode": auto.get("mode", "plain"),
+            "range": desc.range,
+            "field_ranges": dict(desc.field_ranges),
+        }
+        if "llm_config" in auto:
+            agent_kwargs["llm_config"] = auto["llm_config"]
+        if "retries" in auto:
+            agent_kwargs["retries"] = auto["retries"]
+        new_descriptors[synth_id] = AgentDescriptor(**agent_kwargs)
+
+        # Rewrite the gate: read questions from the composer via the reserved wire.
+        new_descriptors[gid] = replace(
+            desc,
+            adaptive_questions=None,
+            questions="${%s}" % QPARAM,
+            inputs={**desc.inputs, QPARAM: "${%s.output}" % synth_id},
+        )
+    return new_descriptors

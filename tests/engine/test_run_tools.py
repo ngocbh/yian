@@ -9,16 +9,16 @@ import pytest
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 
-import agent_composer.llm_clients as llm_clients
-from agent_composer.compile.model import END_ID, START_ID
-from agent_composer.nodes.agent import AgentNode
-from agent_composer.nodes.base import Node, NodeKind, Output
-from agent_composer.nodes.human_input import HumanInputNode
-from agent_composer.nodes.tool.node import ToolNode
-from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
-from agent_composer.tools import TOOL_REGISTRY, ToolSet, register_tool, registered_tools
-from agent_composer.tools import registry
-from agent_composer.typesys.pool import VariablePool
+import yian.llm_clients as llm_clients
+from yian.compile.model import END_ID, START_ID
+from yian.nodes.agent import AgentNode
+from yian.nodes.base import Node, NodeKind, Output
+from yian.nodes.human_input import HumanInputNode
+from yian.nodes.tool.node import ToolNode
+from yian.runtime.eval_node import EvaluationFailure, eval_node
+from yian.tools import TOOL_REGISTRY, ToolSet, register_tool, registered_tools
+from yian.tools import registry
+from yian.typesys.pool import VariablePool
 from tests.engine._graph_builder import _engine, _graph
 
 

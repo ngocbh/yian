@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from agent_composer.nodes.base import Output
-from agent_composer.nodes.human_input import HumanInputNode
-from agent_composer.tools import ToolSet
+from yian.nodes.base import Output
+from yian.nodes.human_input import HumanInputNode
+from yian.tools import ToolSet
 
 
 class _PromptFailed(RuntimeError):

@@ -5,9 +5,9 @@ from dataclasses import FrozenInstanceError
 import pytest
 import yaml
 
-from agent_composer.compose.source import document as document_module
-from agent_composer.compose.source import SourceDocument, SourceSyntaxError
-from agent_composer.diagnostics import SourceRange
+from yian.compose.source import document as document_module
+from yian.compose.source import SourceDocument, SourceSyntaxError
+from yian.diagnostics import SourceRange
 
 
 def test_document_has_private_retained_slots():

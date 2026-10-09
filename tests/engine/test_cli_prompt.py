@@ -1,4 +1,4 @@
-"""`composer run` interactive input prompts and their type-directed value adapters.
+"""`yian run` interactive input prompts and their type-directed value adapters.
 
 At run start the CLI prints a `_flow_banner` (name/description/version); each prompt's
 label carries the input's declared `type`, a required (`*`) / `optional` mark, and any
@@ -23,8 +23,8 @@ import pytest
 from rich.console import Console
 import typer
 
-import agent_composer.cli.run as climod
-from agent_composer.cli.run import (
+import yian.cli.run as climod
+from yian.cli.run import (
     _flow_banner,
     _gather_missing_inputs,
     _input_label,
@@ -32,11 +32,11 @@ from agent_composer.cli.run import (
     _parse_structured_input,
     _render_run_error,
 )
-from agent_composer.compose.loader import load_flow
-from agent_composer.diagnostics import Diagnostic, Failure, OriginRef
-from agent_composer.nodes.contracts import Parameter, ValueContract
-from agent_composer.run import RunResult, run_flow
-from agent_composer.typesys import Type, ValueKind
+from yian.compose.loader import load_flow
+from yian.diagnostics import Diagnostic, Failure, OriginRef
+from yian.nodes.contracts import Parameter, ValueContract
+from yian.run import RunResult, run_flow
+from yian.typesys import Type, ValueKind
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 _ERRORS = _SEEDS / "errors"
@@ -1806,7 +1806,7 @@ def test_ensure_cwd_importable_prepends_cwd(monkeypatch, tmp_path):
     # Without the repo root on sys.path a flow's `code: tests.seeds.fns:fn` fails to import;
     # the CLI prepends the cwd so such refs resolve as `python script.py` would. Run from a
     # dir NOT already on the path and assert it lands at sys.path[0], idempotently.
-    import agent_composer.cli.run as cli
+    import yian.cli.run as cli
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(sys, "path", [p for p in sys.path if p != str(tmp_path)])

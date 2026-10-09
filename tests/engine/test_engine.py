@@ -5,16 +5,16 @@ ordering, fan-out, exact-once diamond join, CASE branch + skip-flood,
 outputs-before-successors, failure, and typed output commits.
 """
 
-from agent_composer.events import (
+from yian.events import (
     RunFailed,
     RunSucceeded,
 )
-from agent_composer.compile.model import END_ID, START_ID, Edge, CompiledFlow, FlowOutput
-from agent_composer.runtime.common import NodeState
-from agent_composer.nodes.contracts import ValueContract
-from agent_composer.nodes.end import EndNode
-from agent_composer.nodes.start import StartNode
-from agent_composer.typesys.values import ValueKind, Type
+from yian.compile.model import END_ID, START_ID, Edge, CompiledFlow, FlowOutput
+from yian.runtime.common import NodeState
+from yian.nodes.contracts import ValueContract
+from yian.nodes.end import EndNode
+from yian.nodes.start import StartNode
+from yian.typesys.values import ValueKind, Type
 from tests.engine._fakes import (
     BranchNode,
     FailNode,
@@ -466,10 +466,10 @@ def test_parallel_module_and_export_are_gone():
     # ParallelFlowEngine is deleted; the only pooled path is FlowEngine(num_workers>=1).
     import importlib
 
-    import agent_composer as ac
+    import yian as ac
 
     assert not hasattr(ac, "ParallelFlowEngine")
     import pytest
 
     with pytest.raises(ModuleNotFoundError):
-        importlib.import_module("agent_composer.runtime.parallel")
+        importlib.import_module("yian.runtime.parallel")

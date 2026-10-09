@@ -9,9 +9,9 @@ from dataclasses import dataclass
 
 import pytest
 
-from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
-from agent_composer.compose.nodes.base import NodeDescriptor
-from agent_composer.compose.source import SourceCursor
+from yian.compose.helpers.errors import LoadDiagnostics, LoadError
+from yian.compose.nodes.base import NodeDescriptor
+from yian.compose.source import SourceCursor
 
 
 def test_allow_unions_with_parent():

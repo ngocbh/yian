@@ -9,7 +9,7 @@ import importlib
 
 import pytest
 
-from agent_composer.nodes.base import NodeKind
+from yian.nodes.base import NodeKind
 
 
 def test_retired_ref_kind_is_absent_and_call_map_are_distinct():
@@ -21,14 +21,14 @@ def test_retired_ref_kind_is_absent_and_call_map_are_distinct():
 
 def test_retired_ref_package_is_absent():
     with pytest.raises(ModuleNotFoundError):
-        importlib.import_module("agent_composer.nodes.ref")
-    importlib.import_module("agent_composer.nodes.call")
-    importlib.import_module("agent_composer.nodes.map")
+        importlib.import_module("yian.nodes.ref")
+    importlib.import_module("yian.nodes.call")
+    importlib.import_module("yian.nodes.map")
 
 
 def test_call_node_excludes_map_fields():
-    from agent_composer.nodes.call import CallNode
-    from agent_composer.nodes.map import MapNode
+    from yian.nodes.call import CallNode
+    from yian.nodes.map import MapNode
     call = CallNode("c", flow_id="child", child=object())
     assert call.kind is NodeKind.CALL
     assert not hasattr(call, "over") and not hasattr(call, "parallel")

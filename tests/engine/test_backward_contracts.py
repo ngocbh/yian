@@ -6,25 +6,25 @@ from dataclasses import FrozenInstanceError, dataclass, field
 
 import pytest
 
-from agent_composer.diagnostics import Failure, OriginRef
-from agent_composer.expr.lineage import has_feedback, validate_feedback
-from agent_composer.memory.contracts import (
+from yian.diagnostics import Failure, OriginRef
+from yian.expr.lineage import has_feedback, validate_feedback
+from yian.memory.contracts import (
     LearningFailure,
     LearningResult,
     MemoryOperationFailure,
 )
-from agent_composer.nodes.base import (
+from yian.nodes.base import (
     BackwardContext,
     BackwardResult,
     validate_backward_result,
 )
-from agent_composer.nodes.contracts import ExecutionPosition, ExecutionScope
-from agent_composer.runtime.contracts import BackwardFailure, BackwardOutcome
+from yian.nodes.contracts import ExecutionPosition, ExecutionScope
+from yian.runtime.contracts import BackwardFailure, BackwardOutcome
 
 
 def test_attributed_backward_result_detaches_messages_and_keeps_reference_coordinates():
-    from agent_composer.expr.lineage import SourceRef
-    from agent_composer.runtime.contracts import AttributedBackwardResult, BackwardAttribution
+    from yian.expr.lineage import SourceRef
+    from yian.runtime.contracts import AttributedBackwardResult, BackwardAttribution
 
     source = SourceRef("run", 1)
     sender = SourceRef("run", 4)
@@ -49,7 +49,7 @@ def test_attributed_backward_result_detaches_messages_and_keeps_reference_coordi
     ("sender", "input", 0, 0, ()),
 ])
 def test_backward_attribution_rejects_malformed_root_coordinates(args):
-    from agent_composer.runtime.contracts import BackwardAttribution
+    from yian.runtime.contracts import BackwardAttribution
 
     with pytest.raises((TypeError, ValueError)):
         BackwardAttribution(*args)
@@ -57,8 +57,8 @@ def test_backward_attribution_rejects_malformed_root_coordinates(args):
 
 @pytest.mark.parametrize("inputs", [{"topic": "reefs"}, None])
 def test_declared_variables_supply_local_backward_targets_without_activating_hooks(inputs):
-    from agent_composer.compose.helpers.types import read_variables
-    from agent_composer.nodes.agent import AgentNode
+    from yian.compose.helpers.types import read_variables
+    from yian.nodes.agent import AgentNode
 
     node = AgentNode("writer", variables=read_variables({"tone": "str = concise"}, {}))
     context = BackwardContext(
@@ -445,7 +445,7 @@ def test_backward_outcome_can_succeed_without_memory() -> None:
 
 def test_backward_outcome_copy_preserves_ordered_policy_dispositions() -> None:
     from dataclasses import replace
-    from agent_composer.memory import PolicyCommitOutcome
+    from yian.memory import PolicyCommitOutcome
 
     policies = (PolicyCommitOutcome("second", "unknown", "commit-2"),
                 PolicyCommitOutcome("first", "unrequested"))

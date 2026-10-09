@@ -1,21 +1,21 @@
 import pytest
 
-from agent_composer.compile.expand import clone_child
-from agent_composer.compile.model import CompiledFlow, Edge, FlowOutput, Flow, START_ID, END_ID
-from agent_composer.compose.helpers.types import read_type
-from agent_composer.diagnostics import OriginRef
-from agent_composer.memory import (
+from yian.compile.expand import clone_child
+from yian.compile.model import CompiledFlow, Edge, FlowOutput, Flow, START_ID, END_ID
+from yian.compose.helpers.types import read_type
+from yian.diagnostics import OriginRef
+from yian.memory import (
     MemoryOccurrenceKind,
     MemoryOccurrenceSegment,
     MemoryScope,
     MemorySetupError,
 )
-from agent_composer.nodes.base import NodeKind, Output
-from agent_composer.nodes.contracts import Assertion, Binding, Parameter, ValueContract
-from agent_composer.nodes.end import EndNode
-from agent_composer.nodes.start import StartNode
-from agent_composer.runtime.eval_node import EvaluationFailure
-from agent_composer.typesys.pool import VariablePool
+from yian.nodes.base import NodeKind, Output
+from yian.nodes.contracts import Assertion, Binding, Parameter, ValueContract
+from yian.nodes.end import EndNode
+from yian.nodes.start import StartNode
+from yian.runtime.eval_node import EvaluationFailure
+from yian.typesys.pool import VariablePool
 from tests.engine._fakes import FuncNode, drive, stamp_reads, derive_wiring
 
 

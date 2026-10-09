@@ -8,7 +8,7 @@ Feature -> contract:
 
 import pytest
 
-from agent_composer.typesys.values import (
+from yian.typesys.values import (
     ANY_VALUE_ADAPTER,
     BooleanValue,
     FileRef,
@@ -186,7 +186,7 @@ def test_file_segment_round_trip():
 
 
 def test_date_segment_build_and_roundtrip():
-    from agent_composer.typesys.values import DateValue
+    from yian.typesys.values import DateValue
 
     seg = build_value_as(ValueKind.DATE, "2026-06-08")
     assert isinstance(seg, DateValue)
@@ -211,7 +211,7 @@ def test_plain_string_not_inferred_as_date():
 
 
 def test_datetime_segment_build_and_roundtrip():
-    from agent_composer.typesys.values import DateTimeValue
+    from yian.typesys.values import DateTimeValue
 
     seg = build_value_as(ValueKind.DATETIME, "2026-06-12T14:30:00+00:00")
     assert isinstance(seg, DateTimeValue)
@@ -246,7 +246,7 @@ def test_plain_string_not_inferred_as_datetime():
 
 
 def test_type_back_compat_kind_accepted():
-    from agent_composer.typesys.values import Type
+    from yian.typesys.values import Type
 
     assert isinstance(build_value_as(Type.scalar(ValueKind.STRING), "x"), StringValue)
     # passing a bare ValueKind still works (back-compat)
@@ -254,7 +254,7 @@ def test_type_back_compat_kind_accepted():
 
 
 def test_type_variant_membership():
-    from agent_composer.typesys.values import Type
+    from yian.typesys.values import Type
 
     action = Type(kind=ValueKind.STRING, tags=frozenset({"Approve", "Reject", "Defer"}))
     assert build_value_as(action, "Approve").value == "Approve"
@@ -263,7 +263,7 @@ def test_type_variant_membership():
 
 
 def test_type_record_fields():
-    from agent_composer.typesys.values import Type
+    from yian.typesys.values import Type
 
     rating = Type(
         kind=ValueKind.OBJECT,
@@ -283,7 +283,7 @@ def test_type_record_fields():
 
 
 def test_type_nullable_field_accepts_none_and_absent():
-    from agent_composer.typesys.values import Type
+    from yian.typesys.values import Type
 
     sig = Type(
         kind=ValueKind.OBJECT,
@@ -305,7 +305,7 @@ def test_type_nullable_field_accepts_none_and_absent():
 
 
 def test_type_list_of_record():
-    from agent_composer.typesys.values import ListObjectValue, Type
+    from yian.typesys.values import ListObjectValue, Type
 
     rating = Type(
         kind=ValueKind.OBJECT,
@@ -338,7 +338,7 @@ def test_type_check_error_adds_only_a_valid_keyword_path() -> None:
 
 def test_nested_type_failure_carries_the_contract_relative_path() -> None:
     """Record and refined-list descent retains actual field names and indices."""
-    from agent_composer.typesys.values import Type
+    from yian.typesys.values import Type
 
     item = Type(
         kind=ValueKind.OBJECT,
@@ -381,7 +381,7 @@ def test_flat_list_failure_carries_the_actual_element_index() -> None:
 
 def test_record_shape_failures_choose_one_deterministic_field_path() -> None:
     """Multi-field shape errors retain their message and select the first name."""
-    from agent_composer.typesys.values import Type
+    from yian.typesys.values import Type
 
     record = Type(
         kind=ValueKind.OBJECT,
@@ -405,7 +405,7 @@ def test_record_shape_failures_choose_one_deterministic_field_path() -> None:
 
 def test_record_non_string_key_keeps_the_record_path() -> None:
     """Integer path segments remain unambiguously reserved for list indices."""
-    from agent_composer.typesys.values import Type
+    from yian.typesys.values import Type
 
     record = Type(
         kind=ValueKind.OBJECT,
@@ -421,7 +421,7 @@ def test_record_non_string_key_keeps_the_record_path() -> None:
 
 def test_record_uses_the_declared_name_for_equal_string_subclass_keys() -> None:
     """A mapping-key subtype cannot introduce an invalid structural segment."""
-    from agent_composer.typesys.values import Type
+    from yian.typesys.values import Type
 
     class FieldName(str):
         """Test-only key subtype equal to one declared field name."""
@@ -440,7 +440,7 @@ def test_record_uses_the_declared_name_for_equal_string_subclass_keys() -> None:
 
 def test_nullable_and_variant_failures_use_the_current_field_path() -> None:
     """Nullable and variant refinements do not invent structural segments."""
-    from agent_composer.typesys.values import Type
+    from yian.typesys.values import Type
 
     record = Type(
         kind=ValueKind.OBJECT,

@@ -1,8 +1,8 @@
 import pytest
 
-from agent_composer.expr.grammar import parse_expr
-from agent_composer.expr.expressions import ExpressionError
-from agent_composer.compose.desugar.case_outputs import _CASE_OUTPUT_INTERIOR
+from yian.expr.grammar import parse_expr
+from yian.expr.expressions import ExpressionError
+from yian.compose.desugar.case_outputs import _CASE_OUTPUT_INTERIOR
 
 
 def test_namespaced_path_parses():

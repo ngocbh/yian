@@ -6,17 +6,17 @@ import sys
 
 import pytest
 
-from agent_composer.expr.builtins import TEMPLATE_FNS
-from agent_composer.expr.expressions import ExpressionError, ResolveMode, eval_expr
-from agent_composer.expr.grammar import parse_expr
-from agent_composer.expr.lineage import (
+from yian.expr.builtins import TEMPLATE_FNS
+from yian.expr.expressions import ExpressionError, ResolveMode, eval_expr
+from yian.expr.grammar import parse_expr
+from yian.expr.lineage import (
     ResolvedValue,
     SourceRef,
     ValueRoute,
     route_feedback,
     validate_feedback,
 )
-from agent_composer.expr.template import eval_binding, eval_template, scan_template
+from yian.expr.template import eval_binding, eval_template, scan_template
 
 
 class Sources:
@@ -124,10 +124,10 @@ def test_noncanonical_unicode_temporary_preserves_comparison_and_partial_snapsho
 
 
 def test_reserved_map_over_uses_the_same_capture_path():
-    from agent_composer.compile.model import Flow
-    from agent_composer.nodes.map import MapNode
-    from agent_composer.runtime.eval_node import eval_node
-    from agent_composer.typesys.pool import VariablePool
+    from yian.compile.model import Flow
+    from yian.nodes.map import MapNode
+    from yian.runtime.eval_node import eval_node
+    from yian.typesys.pool import VariablePool
 
     sources = Sources(items=[])
     node = MapNode("map", flow_id="child", child=Flow(nodes=[], edges=[]))
@@ -145,11 +145,11 @@ def test_reserved_map_over_uses_the_same_capture_path():
 
 
 def test_equal_map_items_get_distinct_recorded_indices():
-    from agent_composer.compile.model import Flow
-    from agent_composer.nodes.contracts import Parameter
-    from agent_composer.nodes.map import MapNode
-    from agent_composer.runtime.eval_node import eval_node
-    from agent_composer.typesys.pool import VariablePool
+    from yian.compile.model import Flow
+    from yian.nodes.contracts import Parameter
+    from yian.nodes.map import MapNode
+    from yian.runtime.eval_node import eval_node
+    from yian.typesys.pool import VariablePool
 
     sources = Sources(left=["same", None], right=["same", None])
     node = MapNode("map", flow_id="child", child=Flow(nodes=[], edges=[]))
@@ -178,9 +178,9 @@ def test_equal_map_items_get_distinct_recorded_indices():
 
 
 def test_wait_capture_retains_the_delivered_iso_value_after_normalization():
-    from agent_composer.nodes.wait import WaitNode
-    from agent_composer.runtime.eval_node import eval_node
-    from agent_composer.typesys.pool import VariablePool
+    from yian.nodes.wait import WaitNode
+    from yian.runtime.eval_node import eval_node
+    from yian.typesys.pool import VariablePool
 
     class Deadline:
         calls = 0

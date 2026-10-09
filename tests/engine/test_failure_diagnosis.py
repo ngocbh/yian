@@ -6,10 +6,10 @@ from typing import cast
 
 import pytest
 
-from agent_composer.compile.model import CompiledFlow
-from agent_composer.compose import ComposedFlow, load_flow
-from agent_composer.compose.source import SourceDocument
-from agent_composer.diagnostics import (
+from yian.compile.model import CompiledFlow
+from yian.compose import ComposedFlow, load_flow
+from yian.compose.source import SourceDocument
+from yian.diagnostics import (
     Diagnostic,
     DiagnosticFrame,
     Failure,
@@ -17,7 +17,7 @@ from agent_composer.diagnostics import (
     OriginResolver,
     SourceRange,
 )
-from agent_composer.run import run_flow
+from yian.run import run_flow
 
 
 _UNAVAILABLE_NOTE = ("Source presentation was unavailable.",)

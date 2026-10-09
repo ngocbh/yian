@@ -17,14 +17,14 @@ from pathlib import Path
 
 import pytest
 
-from agent_composer.compile.model import END_ID, START_ID, CompiledFlow
-from agent_composer.nodes.agent import AgentNode
-from agent_composer.nodes.code import CodeNode
-from agent_composer.nodes.contracts import Binding
-from agent_composer.nodes.case import CaseNode
-from agent_composer.nodes.model import ModelNode
-from agent_composer.typesys.values import ValueKind
-from agent_composer.compose import ComposedFlow, LoadError, load_flow
+from yian.compile.model import END_ID, START_ID, CompiledFlow
+from yian.nodes.agent import AgentNode
+from yian.nodes.code import CodeNode
+from yian.nodes.contracts import Binding
+from yian.nodes.case import CaseNode
+from yian.nodes.model import ModelNode
+from yian.typesys.values import ValueKind
+from yian.compose import ComposedFlow, LoadError, load_flow
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 
@@ -318,7 +318,7 @@ def test_depends_on_seed_emits_ordering_edge():
 
 
 def test_loaded_flow_carries_version():
-    from agent_composer import load_flow
+    from yian import load_flow
     lf = load_flow(
         'id: x\nname: x\nversion: v2\nnodes:\n  a: {kind: code, code: m:f}\n'
         'output: {r: "${a.output}"}\n'
@@ -327,7 +327,7 @@ def test_loaded_flow_carries_version():
 
 
 def test_loaded_flow_version_none_when_absent():
-    from agent_composer import load_flow
+    from yian import load_flow
     lf = load_flow(
         'id: x\nname: x\nnodes:\n  a: {kind: code, code: m:f}\n'
         'output: {r: "${a.output}"}\n'
@@ -336,7 +336,7 @@ def test_loaded_flow_version_none_when_absent():
 
 
 def test_loaded_flow_carries_name_and_description():
-    from agent_composer import load_flow
+    from yian import load_flow
     lf = load_flow(
         'id: x\nname: my_flow\ndescription: Does a thing.\n'
         'nodes:\n  a: {kind: code, code: m:f}\n'
@@ -347,7 +347,7 @@ def test_loaded_flow_carries_name_and_description():
 
 
 def test_loaded_flow_description_none_when_absent():
-    from agent_composer import load_flow
+    from yian import load_flow
     lf = load_flow(
         'id: x\nname: x\nnodes:\n  a: {kind: code, code: m:f}\n'
         'output: {r: "${a.output}"}\n'

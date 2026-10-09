@@ -4,8 +4,8 @@ A node whose ``is_spawner`` trait is true may return ``Grow`` for ``FlowEngine``
 interpret. A non-spawner returning ``Grow`` becomes ``EvaluationFailure``.
 """
 
-from agent_composer.nodes.base import Grow, Node, NodeKind
-from agent_composer.runtime.eval_node import EvaluationFailure
+from yian.nodes.base import Grow, Node, NodeKind
+from yian.runtime.eval_node import EvaluationFailure
 from tests.engine._fakes import drive
 
 

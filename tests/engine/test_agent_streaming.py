@@ -9,21 +9,21 @@ invoked exactly as before.
 import pytest
 from langchain_core.messages import AIMessage
 
-import agent_composer.llm_clients as llm_clients_mod
-import agent_composer.tools as tools_mod
-from agent_composer.compose import load_flow
-from agent_composer.events import (
+import yian.llm_clients as llm_clients_mod
+import yian.tools as tools_mod
+from yian.compose import load_flow
+from yian.events import (
     ModelCallFinished,
     ModelCallStarted,
     StreamChunk,
     TokenUsage,
     ToolCallStarted,
 )
-from agent_composer.memory.session import SessionMemory
-from agent_composer.nodes.agent import AgentNode
-from agent_composer.run import run_flow
-from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
-from agent_composer.typesys.pool import VariablePool
+from yian.memory.session import SessionMemory
+from yian.nodes.agent import AgentNode
+from yian.run import run_flow
+from yian.runtime.eval_node import EvaluationFailure, eval_node
+from yian.typesys.pool import VariablePool
 from tests.engine._stream_fakes import Cut, ScriptedStreamChat, reply, usage
 from tests.engine.test_agent_live_events import CONFIG, _agent, _evaluate, _Tool
 from tests.engine.test_agent_session import _FLOW, _view

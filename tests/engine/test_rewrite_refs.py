@@ -11,8 +11,8 @@ These support call/loop/map inlining and searched-case rebinding across whole-sp
 mixed, and bare expressions.
 """
 
-from agent_composer.expr.expressions import rewrite_condition_refs, rewrite_expr_refs
-from agent_composer.expr.template import rewrite_template_refs
+from yian.expr.expressions import rewrite_condition_refs, rewrite_expr_refs
+from yian.expr.template import rewrite_template_refs
 
 
 # A rename that upper-cases the head segment, e.g. `a.b` -> `A.b`; keeps `keep.*`.

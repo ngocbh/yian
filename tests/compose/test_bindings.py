@@ -4,15 +4,15 @@ Each kind's `BINDING_FIELDS` string values are rewritten by the mapper, non-stri
 are left as-is, and a kind with no binding fields (case/wait) passes through unchanged
 as the same object. HUMAN_INPUT and LOOP expose their ordinary `inputs` mappings."""
 
-from agent_composer.compose.nodes.bindings import map_binding_strings
-from agent_composer.compose.nodes.agent import AgentDescriptor
-from agent_composer.compose.nodes.call import CallDescriptor
-from agent_composer.compose.nodes.case import CaseDescriptor
-from agent_composer.compose.nodes.human_input import HumanInputDescriptor
-from agent_composer.compose.nodes.loop import LoopDescriptor
-from agent_composer.compose.nodes.map import MapDescriptor
-from agent_composer.compose.nodes.tool import ToolDescriptor
-from agent_composer.compose.nodes.wait import WaitDescriptor
+from yian.compose.nodes.bindings import map_binding_strings
+from yian.compose.nodes.agent import AgentDescriptor
+from yian.compose.nodes.call import CallDescriptor
+from yian.compose.nodes.case import CaseDescriptor
+from yian.compose.nodes.human_input import HumanInputDescriptor
+from yian.compose.nodes.loop import LoopDescriptor
+from yian.compose.nodes.map import MapDescriptor
+from yian.compose.nodes.tool import ToolDescriptor
+from yian.compose.nodes.wait import WaitDescriptor
 
 
 def _up(_field, _key, value):

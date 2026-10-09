@@ -1,25 +1,25 @@
-# The `composer` CLI
+# The `yian` CLI
 
-`composer` runs a flow file: it loads the YAML, gathers inputs for a fresh run or
+`yian` runs a flow file: it loads the YAML, gathers inputs for a fresh run or
 recovers them from a durable log, drives the flow to a terminal state, and
 prints the output.
 
 ```console
-composer run FLOW.yaml [--inputs inputs.json] [--input k=v]... [--log PATH] [--memory-root DIR] [--memory-storage KEY=PATH]... [-w N] [--provider NAME] [--model NAME] [--quiet] [--verbose] [--engine-trace]
-composer run FLOW.yaml --resume PATH [--memory-root DIR] [--memory-storage KEY=PATH]... [-w N] [--quiet] [--verbose] [--engine-trace]
+yian run FLOW.yaml [--inputs inputs.json] [--input k=v]... [--log PATH] [--memory-root DIR] [--memory-storage KEY=PATH]... [-w N] [--provider NAME] [--model NAME] [--quiet] [--verbose] [--engine-trace]
+yian run FLOW.yaml --resume PATH [--memory-root DIR] [--memory-storage KEY=PATH]... [-w N] [--quiet] [--verbose] [--engine-trace]
 ```
 
 Commands below that use `examples/...` assume a repository clone and run from
 its root; those files are not installed with the Python package.
 
-Run `composer auth openai` to select subscription sign-in or API-key access and save a
+Run `yian auth openai` to select subscription sign-in or API-key access and save a
 default model. Both methods use the same flow commands and `provider: openai`.
 See [authentication setup](installation.md#openai-authentication).
 
 ## Authentication
 
 ```console
-composer auth openai [--method subscription|api-key] [--login browser|device] [--model MODEL] [--api-key-env NAME]
+yian auth openai [--method subscription|api-key] [--login browser|device] [--model MODEL] [--api-key-env NAME]
 ```
 
 Interactive setup defaults to ChatGPT subscription access and lists models
@@ -40,17 +40,17 @@ including under `--quiet`. The file becomes authoritative once runtime
 initialization durably commits `RunStarted`:
 
 ```console
-# fresh log: ~/.agent_composer/runs/<run_id>.jsonl
-composer run flow.yaml --input topic=climate
+# fresh log: ~/.yian/runs/<run_id>.jsonl
+yian run flow.yaml --input topic=climate
 
 # choose another new path (it must not already exist)
-composer run flow.yaml --input topic=climate --log ./climate.jsonl
+yian run flow.yaml --input topic=climate --log ./climate.jsonl
 
 # recover a terminal or unfinished prefix with the same authored flow
-composer run flow.yaml --resume ./climate.jsonl
+yian run flow.yaml --resume ./climate.jsonl
 ```
 
-The CLI creates `~/.agent_composer` and its `runs/` directory with mode `0700`;
+The CLI creates `~/.yian` and its `runs/` directory with mode `0700`;
 the runtime creates each log exclusively with mode `0600`. A log can retain
 canonical inputs, node outputs (including model, tool, and human data), resolved
 model configuration, and failure tracebacks. Treat it as sensitive data: do not
@@ -71,30 +71,30 @@ Expected host-side failures while creating or recovering a log (for example a
 corrupt, mismatched, or locked log) are reported as concise errors. Pass
 `--engine-trace` when debugging the engine to include the Python traceback.
 
-`composer chat` uses the same default directory and reports one new path for its initial
+`yian chat` uses the same default directory and reports one new path for its initial
 run. If a failed turn restarts the immutable chat flow from the last completed
 transcript, that restart gets a separate log rather than reusing the failed run.
 
-`composer chat` and its `run_flow` tool supply no long-term memory: memories a
+`yian chat` and its `run_flow` tool supply no long-term memory: memories a
 flow declares stay off, and session conversations are not kept.
 
 ## Memory and storage
 
-`composer run` builds every memory the flow declares, using
-`agent_composer.build_memories`. Without flags, each built-in memory
+`yian run` builds every memory the flow declares, using
+`yian.build_memories`. Without flags, each built-in memory
 (`episodic`, `reflective`, `session`, `profile`) lives in RAM for that one
 invocation. A flow without declarations opens no memory.
 
 ```console
 # Keep every memory under ./mem/<flow id>/
-composer run flow.yaml --input question="First question" --memory-root ./mem
-composer run flow.yaml --input question="Follow-up" --memory-root ./mem
+yian run flow.yaml --input question="First question" --memory-root ./mem
+yian run flow.yaml --input question="Follow-up" --memory-root ./mem
 
 # Place one memory explicitly; others still follow --memory-root (or RAM)
-composer run flow.yaml --memory-root ./mem --memory-storage lib.notes=./notes.sqlite
+yian run flow.yaml --memory-root ./mem --memory-storage lib.notes=./notes.sqlite
 
 # Recover an unfinished run with the same storage
-composer run flow.yaml --resume ./run.jsonl --memory-root ./mem
+yian run flow.yaml --resume ./run.jsonl --memory-root ./mem
 ```
 
 - `--memory-root DIR` stores memory key `notes` at
@@ -111,13 +111,13 @@ composer run flow.yaml --resume ./run.jsonl --memory-root ./mem
 - These are bad parameters (exit 2): a malformed option, a repeated key, a key
   the flow does not declare, and a key whose type is custom.
 - A flow that declares a custom memory type cannot run from the CLI.
-  `composer run` exits 1 with a setup error before it asks for inputs or
+  `yian run` exits 1 with a setup error before it asks for inputs or
   writes a log. This also applies to `--resume`, even of a finished run.
   Build such a flow from Python with `build_memories(..., factories=...)` or
   `supplied=...`.
 
 Nothing is opened before the run starts. Each `.sqlite` file has one owner at
-a time: a second `composer run` on the same file fails with `storage.busy`
+a time: a second `yian run` on the same file fails with `storage.busy`
 until the first exits. A profile's `.md` file has no single owner; writers take
 turns through a lock file beside it. The files are unencrypted and can contain
 prompts, replies, and learned notes. Use a local filesystem, not a shared
@@ -129,7 +129,7 @@ an episodic or reflective limit against an existing file fails with
 clears it; a reset keeps the stored limits.
 
 Session history advances automatically during execution. This does not enable
-learning: `composer run` neither sets `learnable=True` nor calls `backward()`.
+learning: `yian run` neither sets `learnable=True` nor calls `backward()`.
 
 Both flags are accepted with `--resume`, and must name the storage the run
 used. A terminal resume only prints the recorded result and opens no memory
@@ -139,7 +139,7 @@ repeated against the latest stored history.
 
 ## Skills
 
-`composer run` supplies the Claude Code and Codex skills installed on your machine. An
+`yian run` supplies the Claude Code and Codex skills installed on your machine. An
 AGENT uses those its `skills:` field grants (see
 [Agent skills](syntax.md#agent-skills-skills)). When any AGENT in the flow grants
 skills, the CLI reads these folders, and the first folder that has a skill name wins:
@@ -148,7 +148,7 @@ skills, the CLI reads these folders, and the first folder that has a skill name 
 2. `~/.agents/skills`
 3. `.claude/skills` and then `.agents/skills` in the current directory, then in
    each parent directory up to the git repository root. These start at the
-   directory you run `composer` in, not at the flow file's directory.
+   directory you run `yian` in, not at the flow file's directory.
 
 Your personal skills win over project skills of the same name, as in Claude Code.
 A skill with a broken or unreadable `SKILL.md` is skipped with a `warning:` line on
@@ -171,23 +171,23 @@ A fresh flow declares typed `input:` fields. Explicit inputs layer in this order
    A default applied by START was already validated at load and is not
    string-coerced.
 
-When stdin is an interactive TTY, `composer` then prompts for each declaration still
+When stdin is an interactive TTY, `yian` then prompts for each declaration still
 missing.
 
 ```console
 # all from flags
-composer run examples/decision-brief.yaml --input question="Adopt a monorepo?" --input audience="execs"
+yian run examples/decision-brief.yaml --input question="Adopt a monorepo?" --input audience="execs"
 
 # from a JSON file, with one override
-composer run flow.yaml --inputs base.json --input audience="execs"
+yian run flow.yaml --inputs base.json --input audience="execs"
 
 # in an interactive terminal, supply nothing and get prompted for each missing input
-composer run examples/hello.yaml
+yian run examples/hello.yaml
 ```
 
 ### The "Running flow" banner
 
-At the start of every run (unless `--quiet`), `composer` prints a boxed banner to
+At the start of every run (unless `--quiet`), `yian` prints a boxed banner to
 **stderr** identifying what it is about to run — the flow's `name:`, its
 `version:` (if set), and its `description:` — so you can confirm you picked the
 right file:
@@ -203,7 +203,7 @@ A flow with no `name`/`description`/`version` prints no banner.
 
 ### The interactive prompt
 
-When stdin is an interactive TTY, `composer` prompts for each declared input still
+When stdin is an interactive TTY, `yian` prompts for each declared input still
 missing. The widget follows its resolved type:
 
 - a required non-nullable `bool` → a yes/no confirm,
@@ -260,7 +260,7 @@ source rather than the prompt's blank path.
     Initial input prompts need a real terminal (TTY). In a non-interactive context
     (a CI job, a piped command, `srun` without a pty), missing optional/defaulted
     declarations stay absent so START applies defaults or retains optional absence.
-    If required declarations are missing, `composer` reports all of them and exits with
+    If required declarations are missing, `yian` reports all of them and exits with
     code `2` before provider or run-log setup. Native list/object values and explicit
     null must be supplied through `--inputs`; ordinary required scalars may use
     `--input` or `--inputs`.
@@ -269,7 +269,7 @@ source rather than the prompt's blank path.
 
 `human_input` and an AGENT node's authored `ask_user` tool are blocking interactions
 inside live node calls. They are separate from initial input gathering and are
-unchanged by its non-TTY omission policy. `composer` runs the flow behind a main-thread
+unchanged by its non-TTY omission policy. `yian` runs the flow behind a main-thread
 terminal broker: the node's worker waits, the broker reads the answer from the
 host input stream, and the answer returns into that same live node call. A
 `human_input` always asks; an AGENT node calls `ask_user` only when its model chooses
@@ -277,7 +277,7 @@ to. When the model passes `options`, the prompt is a choice list with an "Other"
 entry for a typed answer.
 
 ```console
-composer run examples/human-approval.yaml --input task="Plan a team offsite"
+yian run examples/human-approval.yaml --input task="Plan a team offsite"
 #   → draft is written
 #   → CLI asks: "Approve it as-is, or send it back to be revised? (approve / revise)"
 #   → you type: approve
@@ -288,7 +288,7 @@ An authored `wait` also stays in the live run: it occupies one worker until its
 absolute UTC deadline, then returns `None`. It does not ask the terminal for an
 early release or split execution into a later continuation.
 
-In the bundled composer chat, Ctrl-C also reaches a WAIT inside the `run_flow`
+In the bundled yian chat, Ctrl-C also reaches a WAIT inside the `run_flow`
 flow-op tool. The nested run uses a one-way child stop signal: host cancellation
 flows into it, but an ordinary nested failure remains a `FAILED` tool result and
 does not cancel the surrounding conversation.
@@ -318,7 +318,7 @@ size, or `-w 0` to execute ready nodes serially in a deterministic order:
 
 ```console
 # limit the debate flow to four concurrent workers
-composer run examples/debate.yaml \
+yian run examples/debate.yaml \
   --input question="Adopt a monorepo?" --num-workers 4
 ```
 
@@ -352,13 +352,13 @@ log before publishing the progress event that the CLI renders.
 ## Compile errors
 
 When a flow fails to **load/compile** (an unknown reference, a cycle, a bad field,
-a malformed `uses:`), `composer` does not dump an engine Python traceback — it shows
+a malformed `uses:`), `yian` does not dump an engine Python traceback — it shows
 **where in your `.yaml` it broke** as a boxed source frame: the `.yaml` around the
 fault with line numbers, the offending line highlighted (`❱`), the panel titled
 `file:line`, and the message below. (Same shape as a Python traceback's code box.)
 
 ```console
-$ composer run tests/seeds/errors/e01-undeclared-ref.yaml
+$ yian run tests/seeds/errors/e01-undeclared-ref.yaml
 ╭─ e01-undeclared-ref.yaml:19 ─────────────────────────────────────────────────────────────────────╮
 │   14     input:                                                                                  │
 │   15       topic: ${input.topic}                                                                 │
@@ -380,7 +380,7 @@ in the loop) highlights *all* of them, widens the frame to cover both ends, and 
 *which* nodes form the cycle but *which references* create it:
 
 ```console
-$ composer run tests/seeds/errors/e02-cycle.yaml
+$ yian run tests/seeds/errors/e02-cycle.yaml
 ╭─ e02-cycle.yaml:12,18 ───────────────────────────────────────────────────────────────────────────╮
 │    7                                                                                             │
 │    8 input:                                                                                      │
@@ -417,7 +417,7 @@ declaration — not just the node header. So a runtime error reads like a compil
 the flow it broke, not an engine traceback:
 
 ```console
-$ composer run tests/seeds/errors/e07-required-missing.yaml --input topic=climate   # as_of omitted
+$ yian run tests/seeds/errors/e07-required-missing.yaml --input topic=climate   # as_of omitted
 ╭─ e07-required-missing.yaml:23 ───────────────────────────────╮
 │   18 nodes:                                                  │
 │   19   report:                                               │

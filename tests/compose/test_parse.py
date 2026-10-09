@@ -7,10 +7,10 @@ body to its kind's `parse` via `KINDS`, returning located descriptors that carry
 
 import pytest
 
-from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.nodes.agent import AgentDescriptor
-from agent_composer.compose.parse.nodes import parse_nodes
-from agent_composer.compose.source import SourceCursor, SourceDocument
+from yian.compose.helpers.errors import LoadError
+from yian.compose.nodes.agent import AgentDescriptor
+from yian.compose.parse.nodes import parse_nodes
+from yian.compose.source import SourceCursor, SourceDocument
 
 
 def _nodes_reader(text):

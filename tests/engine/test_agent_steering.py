@@ -9,23 +9,23 @@ import threading
 
 import pytest
 
-import agent_composer.llm_clients as llm_clients_mod
+import yian.llm_clients as llm_clients_mod
 from langchain_core.messages import AIMessageChunk, HumanMessage, ToolMessage
 
-from agent_composer.compose import load_flow
-from agent_composer.events import (
+from yian.compose import load_flow
+from yian.events import (
     ModelCallFinished,
     StreamChunk,
     TokenUsage,
     ToolCallFinished,
     ToolCallStarted,
 )
-from agent_composer.memory.session import SessionMemory
-from agent_composer.nodes.agent import MODES, AgentNode
-from agent_composer.nodes.base import Output
-from agent_composer.run import Steering, resume_flow, run_flow
-from agent_composer.runtime.eval_node import eval_node
-from agent_composer.typesys.pool import VariablePool
+from yian.memory.session import SessionMemory
+from yian.nodes.agent import MODES, AgentNode
+from yian.nodes.base import Output
+from yian.run import Steering, resume_flow, run_flow
+from yian.runtime.eval_node import eval_node
+from yian.typesys.pool import VariablePool
 from tests.engine._stream_fakes import ScriptedStreamChat, reply, usage
 from tests.engine.test_agent_in_loop import FLOW as LOOP_FLOW
 from tests.engine.test_agent_live_events import CONFIG

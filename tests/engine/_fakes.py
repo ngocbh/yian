@@ -6,9 +6,9 @@ contract and the runtime scheduling in isolation from LLMs/tools.
 
 from typing import Any, Callable
 
-from agent_composer.events import StreamChunk
-from agent_composer.nodes.base import Node, NodeKind, Output, Route
-from agent_composer.nodes.contracts import Parameter
+from yian.events import StreamChunk
+from yian.nodes.base import Node, NodeKind, Output, Route
+from yian.nodes.contracts import Parameter
 
 
 def stamp_reads(node, reads):
@@ -31,8 +31,8 @@ def drive(node, pool=None, flow=None, *, emit_stream=None, stop_event=None):
     """Drive a node through the engine's `eval_node` seam (binds purely from `params` +
     `flow.wiring`) and return its raw outcome. With no `flow`, derive a stub
     `flow.wiring` from the node's declared `_wiring_src`."""
-    from agent_composer.runtime.eval_node import eval_node
-    from agent_composer.typesys.pool import VariablePool
+    from yian.runtime.eval_node import eval_node
+    from yian.typesys.pool import VariablePool
     from types import SimpleNamespace
 
     if flow is None:

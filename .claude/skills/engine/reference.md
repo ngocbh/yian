@@ -3,7 +3,7 @@
 Lookup companion to [`SKILL.md`](SKILL.md). The skill is the *workflow* (design
 from the functional model → fit invariants → plan → implement); this is the
 quick-reference and the [`templates/`](templates/) index. The canonical design
-text is [`src/agent_composer/README.md`](../../../src/agent_composer/README.md);
+text is [`src/yian/README.md`](../../../src/yian/README.md);
 the conceptual vocabulary is [`docs/agent.md`](../../../docs/agent.md); and the
 authoring surface is [`docs/syntax.md`](../../../docs/syntax.md).
 
@@ -357,7 +357,7 @@ all forward fields unchanged.
 
 ## Session conversation foundation
 
-`SessionMemory` in `agent_composer.memory.session` implements
+`SessionMemory` in `yian.memory.session` implements
 conversation state and direct turn updates for AGENT execution.
 The host supplies the backend to `run_flow` under the session memory's key,
 usually through `build_memories`. The CLI builds declared built-in memories
@@ -365,7 +365,7 @@ through `memory_host.build_memories`; `--memory-root DIR` and repeatable
 `--memory-storage KEY=PATH` select optional durable files.
 Terminal inspection opens no memory backend. The controller
 owns cleanup after execution drains; runtime constructs no backend. The
-`agent_composer.memory` facade remains contracts-only. `MemorySession` still names
+`yian.memory` facade remains contracts-only. `MemorySession` still names
 the mandatory run-handle protocol; optional `TranscriptSource` and
 `ConversationTurn` add conversation capabilities without
 expanding it.

@@ -10,8 +10,8 @@ from typing import Any, Iterator, get_args
 
 import pytest
 
-from agent_composer.diagnostics import Failure, OriginRef
-from agent_composer.runtime.log import (
+from yian.diagnostics import Failure, OriginRef
+from yian.runtime.log import (
     SCHEMA_VERSION,
     NodeExpandedRecord,
     NodeFailedRecord,
@@ -30,7 +30,7 @@ from agent_composer.runtime.log import (
     encode_pool,
     encode_record,
 )
-from agent_composer.typesys import FileRef, ValueKind, VariablePool
+from yian.typesys import FileRef, ValueKind, VariablePool
 
 
 # Fixed writer output for the source-free causal-route graph.
@@ -82,8 +82,8 @@ _TOPOLOGY_DIGEST = "b" * 64
 @pytest.mark.parametrize("resumed", [False, True], ids=["started", "resumed"])
 def test_historical_frontier_prepares_recorded_schema_bytes(resumed):
     from copy import deepcopy
-    from agent_composer.compile.expand import build_grow
-    from agent_composer.runtime.state import RunState, _replay_records, prepare_record
+    from yian.compile.expand import build_grow
+    from yian.runtime.state import RunState, _replay_records, prepare_record
     from tests.engine.test_run_recovery_prefixes import _linear_history
 
     _, state, log, _ = _linear_history()
@@ -96,9 +96,9 @@ def test_historical_frontier_prepares_recorded_schema_bytes(resumed):
 
 @pytest.mark.parametrize("schema", [True, 9.0, "9", 6, 7, 8, 99])
 def test_historical_record_requires_an_exact_supported_schema(schema):
-    import agent_composer.run as run_module
-    from agent_composer.compose import load_flow
-    from agent_composer.runtime.state import prepare_record
+    import yian.run as run_module
+    from yian.compose import load_flow
+    from yian.runtime.state import prepare_record
     from tests.engine.test_run_recovery_prefixes import _LINEAR, _ReadOnlyLog, _RECORDED_LINEAR
 
     state = run_module._replay_run_log(
@@ -113,7 +113,7 @@ def test_historical_record_requires_an_exact_supported_schema(schema):
 @pytest.mark.parametrize("change", ["payload", "run_id", "sequence"])
 def test_prepared_record_tamper_check_uses_frozen_schema(change):
     from dataclasses import replace
-    from agent_composer.runtime.state import _require_unchanged_record, prepare_run_started, RunState
+    from yian.runtime.state import _require_unchanged_record, prepare_run_started, RunState
     from tests.engine.test_run_state_initialization import _flow, _snapshot, _start_data
 
     state = RunState(_flow())
@@ -133,8 +133,8 @@ def test_prepared_record_tamper_check_uses_frozen_schema(change):
 
 def test_append_result_wrong_schema_is_protocol_fault():
     from dataclasses import replace
-    from agent_composer.runtime.log import MemoryRunLog
-    from agent_composer.runtime.state import RunState, commit_prepared, prepare_run_started
+    from yian.runtime.log import MemoryRunLog
+    from yian.runtime.state import RunState, commit_prepared, prepare_run_started
     from tests.engine.test_run_state_initialization import _flow, _snapshot, _start_data
 
     class WrongSchemaLog(MemoryRunLog):
@@ -159,11 +159,11 @@ def test_append_result_wrong_schema_is_protocol_fault():
 
 @pytest.mark.parametrize("kind", ["success", "route", "failure", "growth"])
 def test_historical_outcomes_keep_schema_in_trace_bytes(kind):
-    import agent_composer.run as run_module
-    from agent_composer.compile.execution_layout import apply_execution_layout, resolve_execution_layout
-    from agent_composer.compile.expand import build_grow
-    from agent_composer.compose import load_flow
-    from agent_composer.runtime.state import (
+    import yian.run as run_module
+    from yian.compile.execution_layout import apply_execution_layout, resolve_execution_layout
+    from yian.compile.expand import build_grow
+    from yian.compose import load_flow
+    from yian.runtime.state import (
         RunState, _HistoricalLogCursor, _replay_records, commit_prepared, prepare_record,
     )
     from tests.engine.test_backward_recovery import (
@@ -212,8 +212,8 @@ def test_historical_outcomes_keep_schema_in_trace_bytes(kind):
 
 def _records():
     """Return one representative value for every closed run-record variant."""
-    from agent_composer.memory import MemoryMutation, MemoryOperationFailure
-    from agent_composer.runtime.log import (
+    from yian.memory import MemoryMutation, MemoryOperationFailure
+    from yian.runtime.log import (
         MemoryCommitFailedRecord, MemoryCommitRequestedRecord, MemoryCommitSucceededRecord,
     )
     from tests.engine.test_backward_records import _backward_records
@@ -306,7 +306,7 @@ def test_removed_frame_learning_wire_kinds_are_rejected(kind, extra):
     "conversation_effect_observed", "conversation_closed",
 ])
 def test_removed_conversation_wire_kinds_are_rejected(kind):
-    import agent_composer.runtime.log as run_log
+    import yian.runtime.log as run_log
 
     wire = {"schema": SCHEMA_VERSION, "run_id": "run", "seq": 0, "kind": kind,
             "payload": {"checkpoint": {}}}
@@ -966,7 +966,7 @@ def test_strict_seed_keeps_supported_values_and_independent_canonical_copies():
 @pytest.mark.parametrize("container", ["raw", "dict", "tuple", "model", "dataclass", "typed"])
 def test_strict_seed_rejects_nonfinite_before_json_mode_normalization(number, container):
     from pydantic import BaseModel
-    from agent_composer.typesys.values import ObjectValue
+    from yian.typesys.values import ObjectValue
 
     class Model(BaseModel):
         value: float

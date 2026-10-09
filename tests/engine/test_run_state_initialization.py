@@ -9,12 +9,12 @@ from typing import Any, Callable
 
 import pytest
 
-from agent_composer.compile.model import CompiledFlow, Edge, END_ID, START_ID
-from agent_composer.runtime.common import NodeState
-from agent_composer.events import RunStarted
-from agent_composer.nodes.end import EndNode
-from agent_composer.nodes.start import StartNode
-from agent_composer.runtime.log import (
+from yian.compile.model import CompiledFlow, Edge, END_ID, START_ID
+from yian.runtime.common import NodeState
+from yian.events import RunStarted
+from yian.nodes.end import EndNode
+from yian.nodes.start import StartNode
+from yian.runtime.log import (
     MemoryRunLog,
     NodeStartedRecord,
     RecordEnvelope,
@@ -22,13 +22,13 @@ from agent_composer.runtime.log import (
     SCHEMA_VERSION,
     encode_pool,
 )
-from agent_composer.runtime.state import (
+from yian.runtime.state import (
     RunStartData,
     RunState,
     commit_prepared,
     prepare_run_started,
 )
-from agent_composer.typesys import VariablePool
+from yian.typesys import VariablePool
 from tests.engine._fakes import FuncNode
 
 
@@ -147,7 +147,7 @@ def test_run_state_starts_pristine_around_the_owned_graph():
 
 
 def test_historical_start_prepares_recorded_schema_bytes():
-    from agent_composer.runtime.log import decode_record, encode_record
+    from yian.runtime.log import decode_record, encode_record
 
     state = RunState(_flow())
     before = _snapshot(state)

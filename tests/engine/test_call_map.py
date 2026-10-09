@@ -21,13 +21,13 @@ from pathlib import Path
 
 import pytest
 
-from agent_composer.nodes.call import CallNode   # nodes/call/__init__.py
-from agent_composer.nodes.contracts import Parameter, ValueContract
-from agent_composer.nodes.map import MapNode
-from agent_composer.typesys.values import ValueKind
-from agent_composer.compose import ComposedFlow, LoadError, load_flow
-from agent_composer.compose.helpers.errors import LoadDiagnostics
-from agent_composer.compose.nodes.resolver import ChildSignature, child_signature
+from yian.nodes.call import CallNode   # nodes/call/__init__.py
+from yian.nodes.contracts import Parameter, ValueContract
+from yian.nodes.map import MapNode
+from yian.typesys.values import ValueKind
+from yian.compose import ComposedFlow, LoadError, load_flow
+from yian.compose.helpers.errors import LoadDiagnostics
+from yian.compose.nodes.resolver import ChildSignature, child_signature
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 

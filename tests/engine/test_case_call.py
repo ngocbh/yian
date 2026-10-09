@@ -9,9 +9,9 @@ target is a LoadError.
 
 import pytest
 
-from agent_composer.compose import LoadError, load_flow
-from agent_composer.compose.desugar.inline_bodies import INLINE_FLOW_PREFIX
-from agent_composer.run import run_flow
+from yian.compose import LoadError, load_flow
+from yian.compose.desugar.inline_bodies import INLINE_FLOW_PREFIX
+from yian.run import run_flow
 
 # An in-file `take` def (the branch callable): echoes its stance via the `took` CODE fn.
 _TAKE_DEF = """
@@ -301,7 +301,7 @@ output: ${{gate.output}}
         resolved.append((args, kwargs))
         raise AssertionError("the private callee reached child resolution")
 
-    monkeypatch.setattr("agent_composer.compose.nodes.call._resolve_child", resolve)
+    monkeypatch.setattr("yian.compose.nodes.call._resolve_child", resolve)
 
     with pytest.raises(LoadError) as caught:
         load_flow(text)

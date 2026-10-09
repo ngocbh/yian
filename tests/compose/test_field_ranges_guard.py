@@ -1,8 +1,8 @@
 """Tests for transient Compose-owned range metadata."""
 
-from agent_composer.compose.nodes.base import BuildContext
-from agent_composer.compose.parse.nodes import parse_nodes
-from agent_composer.compose.source import SourceDocument
+from yian.compose.nodes.base import BuildContext
+from yian.compose.parse.nodes import parse_nodes
+from yian.compose.source import SourceDocument
 
 
 _FLOW = """

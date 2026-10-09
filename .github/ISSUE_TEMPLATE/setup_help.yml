@@ -1,5 +1,5 @@
 name: "🔧 Setup / Installation Help"
-description: Having trouble installing or running Agent Composer? Ask here.
+description: Having trouble installing or running Yian? Ask here.
 title: "[Setup]: "
 labels: ["setup"]
 body:
@@ -9,10 +9,10 @@ body:
         Sorry you're having trouble! Please fill out the details below so we can help.
 
         **Quick checks first:**
-        - Install with the extras you need: `pip install -e ".[all,dev]"` (see [CONTRIBUTING](https://github.com/ngocbh/agent-composer/blob/main/CONTRIBUTING.md#development-setup))
+        - Install with the extras you need: `pip install -e ".[all,dev]"` (see [CONTRIBUTING](https://github.com/ngocbh/yian/blob/main/CONTRIBUTING.md#development-setup))
         - The package requires **Python 3.11+** — a 3.9 interpreter cannot import it. Confirm with `python --version`.
         - Run the engine anywhere with `PYTHONPATH=src`.
-        - Check the [README](https://github.com/ngocbh/agent-composer/blob/main/README.md).
+        - Check the [README](https://github.com/ngocbh/yian/blob/main/README.md).
 
   - type: textarea
     id: description
@@ -20,7 +20,7 @@ body:
       label: What's Going Wrong?
       description: Describe what you're trying to do and where it fails.
       placeholder: |
-        I ran `pip install -e ".[all]"` and then `composer run flow.yaml`, but I get...
+        I ran `pip install -e ".[all]"` and then `yian run flow.yaml`, but I get...
     validations:
       required: true
 
@@ -30,9 +30,9 @@ body:
       label: Steps Taken
       description: What did you do? Include the exact commands you ran.
       placeholder: |
-        1. git clone https://github.com/ngocbh/agent-composer
+        1. git clone https://github.com/ngocbh/yian
         2. pip install -e ".[all,dev]"
-        3. composer run examples/....yaml
+        3. yian run examples/....yaml
         4. Error appears: ...
     validations:
       required: true
@@ -69,7 +69,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: Agent Composer Version / Commit
+      label: Yian Version / Commit
       description: Release version, or short commit hash (`git rev-parse --short HEAD`)
       placeholder: "45beb62"
 

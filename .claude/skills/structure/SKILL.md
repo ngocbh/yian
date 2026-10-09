@@ -43,7 +43,7 @@ Never imports: <the higher-level packages that import IT — name them so the
 This is not boilerplate. "Knows / Never imports" is the dependency direction
 written down where it gets read. When you later wonder "can `typesys` import
 `runtime`?", the answer is already in `typesys/__init__.py`. See
-[`src/agent_composer/__init__.py`](../../../src/agent_composer/__init__.py) for the
+[`src/yian/__init__.py`](../../../src/yian/__init__.py) for the
 worked top-level charter with the full layer diagram.
 
 After the docstring, `__init__.py` does **only** re-exports: expose the package's

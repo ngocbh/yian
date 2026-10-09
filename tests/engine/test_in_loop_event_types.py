@@ -4,7 +4,7 @@ import dataclasses
 
 import pytest
 
-from agent_composer.events import (
+from yian.events import (
     IN_LOOP_EVENTS,
     ModelCallFinished,
     ModelCallStarted,

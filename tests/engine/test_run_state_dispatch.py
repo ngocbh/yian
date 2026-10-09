@@ -13,14 +13,14 @@ from typing import Any
 
 import pytest
 
-import agent_composer.runtime.state as state_module
-from agent_composer.compile.model import CompiledFlow, Edge, END_ID, START_ID
-from agent_composer.runtime.common import NodeState
-from agent_composer.diagnostics import Failure
-from agent_composer.events import NodeStarted, RunFailed, RunResumed
-from agent_composer.nodes.end import EndNode
-from agent_composer.nodes.start import StartNode
-from agent_composer.runtime.log import (
+import yian.runtime.state as state_module
+from yian.compile.model import CompiledFlow, Edge, END_ID, START_ID
+from yian.runtime.common import NodeState
+from yian.diagnostics import Failure
+from yian.events import NodeStarted, RunFailed, RunResumed
+from yian.nodes.end import EndNode
+from yian.nodes.start import StartNode
+from yian.runtime.log import (
     MemoryRunLog,
     NodeExpandedRecord,
     NodeStartedRecord,
@@ -29,7 +29,7 @@ from agent_composer.runtime.log import (
     RunStartedRecord,
     SCHEMA_VERSION,
 )
-from agent_composer.runtime.state import (
+from yian.runtime.state import (
     RunStartData,
     RunState,
     commit_prepared,
@@ -39,7 +39,7 @@ from agent_composer.runtime.state import (
     prepare_run_resumed,
     prepare_run_started,
 )
-from agent_composer.typesys import VariablePool
+from yian.typesys import VariablePool
 from tests.engine._fakes import FuncNode
 
 

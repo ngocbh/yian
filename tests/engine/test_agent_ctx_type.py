@@ -1,9 +1,9 @@
 """`AgentNode._ctx` projects the node's semantic output contract for its mode."""
 
-from agent_composer.diagnostics import OriginRef
-from agent_composer.nodes.agent.node import AgentNode
-from agent_composer.nodes.contracts import ContractOrigins, ValueContract
-from agent_composer.typesys.values import Type, ValueKind
+from yian.diagnostics import OriginRef
+from yian.nodes.agent.node import AgentNode
+from yian.nodes.contracts import ContractOrigins, ValueContract
+from yian.typesys.values import Type, ValueKind
 
 
 def test_ctx_carries_the_output_contract_type_only():

@@ -23,13 +23,13 @@ from pathlib import Path
 
 import pytest
 
-from agent_composer.compile.expand import _SYNTH_PREFIX, call_subgraph
-from agent_composer.compose import load_flow
-from agent_composer.diagnostics import OriginRef
-from agent_composer.events import RunFailed
-from agent_composer.nodes.base import _HostStop
-from agent_composer.nodes.contracts import Assertion
-from agent_composer.run import resume_flow, run_flow
+from yian.compile.expand import _SYNTH_PREFIX, call_subgraph
+from yian.compose import load_flow
+from yian.diagnostics import OriginRef
+from yian.events import RunFailed
+from yian.nodes.base import _HostStop
+from yian.nodes.contracts import Assertion
+from yian.run import resume_flow, run_flow
 
 
 # A child that doubles its int input and re-exports it as `${output}` (an int).

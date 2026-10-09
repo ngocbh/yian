@@ -15,15 +15,15 @@ real CODE-only children through `run_flow` (no LLM). Pinned here:
 
 import pytest
 
-from agent_composer.compose import loader as compose_loader
-from agent_composer.compose import LoadError, load_flow
-from agent_composer.compose.source import SourceDocument
-from agent_composer.compose.source import document as source_document
-from agent_composer.diagnostics import SourceRange
-from agent_composer.nodes.contracts import Parameter, ValueContract
-from agent_composer.run import run_flow
-from agent_composer.compose.parse.file import parse_file
-from agent_composer.typesys import Type, ValueKind
+from yian.compose import loader as compose_loader
+from yian.compose import LoadError, load_flow
+from yian.compose.source import SourceDocument
+from yian.compose.source import document as source_document
+from yian.diagnostics import SourceRange
+from yian.nodes.contracts import Parameter, ValueContract
+from yian.run import run_flow
+from yian.compose.parse.file import parse_file
+from yian.typesys import Type, ValueKind
 
 # --------------------------------------------------------------------------- #
 # A multi-node def, called as a plain application (no over:).

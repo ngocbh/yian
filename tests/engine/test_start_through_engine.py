@@ -8,10 +8,10 @@ than raw pre-coercion run arguments.
 
 import pytest
 
-from agent_composer.compile.model import END_ID, START_ID
-from agent_composer.compose import load_flow
-from agent_composer.events import NodeStarted, NodeSucceeded, RunFailed
-from agent_composer.run import run_flow
+from yian.compile.model import END_ID, START_ID
+from yian.compose import load_flow
+from yian.events import NodeStarted, NodeSucceeded, RunFailed
+from yian.run import run_flow
 from tests.engine._graph_builder import _engine
 
 

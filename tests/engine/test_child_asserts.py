@@ -11,8 +11,8 @@ fails the child node and therefore the parent run, exactly as at the top-level b
 
 import pytest
 
-from agent_composer.compose import LoadError, load_flow
-from agent_composer.run import run_flow
+from yian.compose import LoadError, load_flow
+from yian.run import run_flow
 
 # `checked` def: doubles its int input; boundary asserts n>=0, post asserts the output < 100.
 _CHECKED_DEF = """
@@ -121,8 +121,8 @@ def test_map_child_assert_one_violating_element_fails():
 # user-facing guarantee is the failure + message; the ledger attach is normal. Driven via
 # FlowEngine with `run_inputs=` (the parent flow declares `v`/`vs`) so the top-level START is an
 # ordinary scheduled node.
-from agent_composer.events import RunFailed
-from agent_composer.compile.expand import build_grow
+from yian.events import RunFailed
+from yian.compile.expand import build_grow
 from tests.engine._graph_builder import _engine
 
 

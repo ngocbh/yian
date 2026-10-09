@@ -8,8 +8,8 @@ from typing import Any
 
 import pytest
 
-from agent_composer.diagnostics import Failure
-from agent_composer.memory import (
+from yian.diagnostics import Failure
+from yian.memory import (
     DeclSite,
     EvaluationEvidence,
     LearnContext,
@@ -29,9 +29,9 @@ from agent_composer.memory import (
     ToolCallInteraction,
     ToolResultInteraction,
 )
-from agent_composer.memory.reflective import ReflectiveMemory
-import agent_composer.memory.reflective as reflective
-from agent_composer.runtime.log import (
+from yian.memory.reflective import ReflectiveMemory
+import yian.memory.reflective as reflective
+from yian.runtime.log import (
     SCHEMA_VERSION,
     MemoryCommitFailedRecord,
     MemoryCommitRequestedRecord,
@@ -47,9 +47,9 @@ from agent_composer.runtime.log import (
     encode_pool,
     encode_record,
 )
-from agent_composer.nodes.base import BackwardResult
-from agent_composer.runtime.contracts import MemoryProposal
-from agent_composer.typesys import VariablePool
+from yian.nodes.base import BackwardResult
+from yian.runtime.contracts import MemoryProposal
+from yian.typesys import VariablePool
 
 
 _FINGERPRINT = "a" * 64

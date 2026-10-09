@@ -2,9 +2,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from agent_composer.nodes.base import Grow, NodeKind
-from agent_composer.nodes.call import CallNode
-from agent_composer.nodes.map import MapNode
+from yian.nodes.base import Grow, NodeKind
+from yian.nodes.call import CallNode
+from yian.nodes.map import MapNode
 
 
 def _child():

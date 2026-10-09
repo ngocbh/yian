@@ -8,11 +8,11 @@ from typing import Any, Callable
 import pytest
 from typer.testing import CliRunner
 
-from agent_composer import load_flow, run_flow
-from agent_composer.cli import app
-import agent_composer.cli.run as run_cli
-from agent_composer.events import NodeStarted
-from agent_composer.runtime.log import (
+from yian import load_flow, run_flow
+from yian.cli import app
+import yian.cli.run as run_cli
+from yian.events import NodeStarted
+from yian.runtime.log import (
     RecordEnvelope,
     RunRecord,
     RunResumedRecord,
@@ -84,7 +84,7 @@ def test_fresh_run_uses_private_default_path_and_reports_it(
     tmp_path: Path,
 ) -> None:
     """A fresh CLI run gets one owner-only log named by its recorded run id."""
-    state_dir = isolated_cli_home / ".agent_composer"
+    state_dir = isolated_cli_home / ".yian"
     runs_dir = state_dir / "runs"
     state_dir.mkdir(mode=0o755)
     runs_dir.mkdir(mode=0o755)
@@ -123,7 +123,7 @@ def test_fresh_run_uses_exact_explicit_log_path(tmp_path: Path) -> None:
     assert path.is_file()
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
     assert f"Run log: {path}" in _plain(result.stderr)
-    assert not (Path.home() / ".agent_composer").exists()
+    assert not (Path.home() / ".yian").exists()
 
 
 def test_existing_explicit_log_is_rejected_before_input_or_provider_side_effects(
@@ -278,7 +278,7 @@ def test_terminal_resume_is_read_only_and_skips_fresh_side_effects(
     assert log.read_bytes() == before
     assert f"Run log: {log}" in _plain(result.stderr)
     assert "mountains" in result.stdout
-    assert not (Path.home() / ".agent_composer").exists()
+    assert not (Path.home() / ".yian").exists()
 
 
 @pytest.mark.parametrize(
@@ -420,7 +420,7 @@ def test_keyboard_interrupt_leaves_a_reported_unlocked_recoverable_log(
 
     assert interrupted.exit_code == 130
     assert "cancelled by user" in _plain(interrupted.output)
-    logs = list((Path.home() / ".agent_composer" / "runs").glob("*.jsonl"))
+    logs = list((Path.home() / ".yian" / "runs").glob("*.jsonl"))
     assert len(logs) == 1
     log = logs[0]
     assert f"Run log: {log}" in _plain(interrupted.stderr)

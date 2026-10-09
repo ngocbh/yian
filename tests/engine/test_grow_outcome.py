@@ -1,6 +1,6 @@
 """The seed-first Grow outcome and the compile-owned Flow value type."""
-from agent_composer.compile.model import Flow
-from agent_composer.nodes.base import Grow
+from yian.compile.model import Flow
+from yian.nodes.base import Grow
 
 
 def test_flow_holds_fragment_and_start_id():
@@ -21,6 +21,6 @@ def test_grow_carries_seed():
 
 
 def test_grow_is_a_noderesult_member():
-    from agent_composer.nodes.base import NodeResult  # Union includes Grow
+    from yian.nodes.base import NodeResult  # Union includes Grow
     import typing
     assert Grow in typing.get_args(NodeResult)

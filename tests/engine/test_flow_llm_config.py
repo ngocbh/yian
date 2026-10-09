@@ -1,8 +1,8 @@
 """Flow-level `llm_config:` — parsing it onto ComposeFile and threading it onto the
 compiled flow (the cascade's flow layer)."""
 
-from agent_composer.compose.parse.file import parse_file
-from agent_composer.compose.loader import load_flow
+from yian.compose.parse.file import parse_file
+from yian.compose.loader import load_flow
 
 
 def test_flow_level_llm_config_parsed():

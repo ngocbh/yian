@@ -7,26 +7,26 @@ from datetime import date
 
 import pytest
 
-from agent_composer.compile.model import END_ID, START_ID
-from agent_composer.compose import loader as compose_loader
-from agent_composer.compose.build import pipeline as compose_pipeline
-from agent_composer.compose.build.pipeline import _register_inline_bodies
-from agent_composer.compose.desugar import inline_bodies as inline_bodies_module
-from agent_composer.compose.desugar.inline_bodies import (
+from yian.compile.model import END_ID, START_ID
+from yian.compose import loader as compose_loader
+from yian.compose.build import pipeline as compose_pipeline
+from yian.compose.build.pipeline import _register_inline_bodies
+from yian.compose.desugar import inline_bodies as inline_bodies_module
+from yian.compose.desugar.inline_bodies import (
     INLINE_FLOW_PREFIX,
     extract_inline_bodies,
     inline_flow_id,
 )
-from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
-from agent_composer.compose.loader import load_flow
-from agent_composer.compose.nodes.code import CodeDescriptor
-from agent_composer.compose.parse.nodes import parse_nodes
-from agent_composer.compose.source import SourceCursor, SourceDocument
-from agent_composer.diagnostics import SourceRange
-from agent_composer.events import RunFailed
-from agent_composer.nodes.contracts import Parameter, ValueContract
-from agent_composer.run import run_flow
-from agent_composer.typesys.values import Type, ValueKind
+from yian.compose.helpers.errors import LoadDiagnostics, LoadError
+from yian.compose.loader import load_flow
+from yian.compose.nodes.code import CodeDescriptor
+from yian.compose.parse.nodes import parse_nodes
+from yian.compose.source import SourceCursor, SourceDocument
+from yian.diagnostics import SourceRange
+from yian.events import RunFailed
+from yian.nodes.contracts import Parameter, ValueContract
+from yian.run import run_flow
+from yian.typesys.values import Type, ValueKind
 
 
 def _located_root(text: str) -> tuple[SourceCursor, SourceDocument]:

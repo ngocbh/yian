@@ -1,0 +1,37 @@
+"""AGENT package — one authored leaf with shared model/tool execution.
+
+``modes/`` holds the prompting methods. Explicitly granted Yian tools,
+including the run's blocking ``ask_user``, execute through the public
+invocation path inside the live loop. The package owns no durable run state.
+``context`` adapts the shared memory context to provider messages and effects; it
+owns neither retained history nor turn admission. Modes persist actual exchanges
+through this adapter, independently of evaluation evidence.
+The adapter also projects safe historical context and injects the current
+unbound model for memory-owned summary preparation; summary state stays in memory.
+``backward`` builds one tool-free model request from accepted invocation material;
+it neither rerenders the forward prompt nor updates local variables.
+``live`` publishes transient streamed reply text, model/tool call observers, and
+provider token usage to evaluator-supplied sinks; it records and retains nothing.
+``interrupts`` holds the signal a host interrupt raises out of a streamed reply.
+
+Knows about: nodes.base, events, expr, typesys, tools, llm_clients, memory contracts, peer AGENT modules,
+             LangChain, and Pydantic.
+Never imports: compile, compose, runtime, the run boundary, or CLI.
+"""
+
+from yian.nodes.agent.node import AgentNode, DEFAULT_MODE
+from yian.nodes.agent.modes import (
+    MODES,
+    AgentLoopError,
+    AgentRunContext,
+    register_mode,
+)
+
+__all__ = [
+    "AgentNode",
+    "DEFAULT_MODE",
+    "MODES",
+    "AgentLoopError",
+    "AgentRunContext",
+    "register_mode",
+]

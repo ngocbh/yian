@@ -14,10 +14,10 @@ from typing import Any
 
 import pytest
 
-from agent_composer.nodes.base import Node, NodeKind, Output
-from agent_composer.nodes.binding import BindingError
-from agent_composer.nodes.contracts import Assertion, Parameter, ValueContract
-from agent_composer.typesys import Type, ValueKind
+from yian.nodes.base import Node, NodeKind, Output
+from yian.nodes.binding import BindingError
+from yian.nodes.contracts import Assertion, Parameter, ValueContract
+from yian.typesys import Type, ValueKind
 
 
 INTEGER = ValueContract(Type.scalar(ValueKind.INTEGER))
@@ -146,7 +146,7 @@ def test_apply_default_idempotent_no_double_fill():
     a START-like node whose `forward` also runs apply_defaults would default the
     same key twice, but apply_defaults only fills OMITTED keys, so the second call
     is a no-op — the default is filled exactly once, not corrupted."""
-    from agent_composer.nodes.binding import apply_defaults
+    from yian.nodes.binding import apply_defaults
 
     node = _ImplNode("n")
     node.params = [

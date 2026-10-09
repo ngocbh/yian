@@ -29,8 +29,8 @@ is a name-suffix heuristic tied to the codebase convention that every expansion 
 import ast
 from pathlib import Path
 
-from agent_composer.runtime import engine as engine_mod
-from agent_composer.runtime import eval_node as eval_node_mod
+from yian.runtime import engine as engine_mod
+from yian.runtime import eval_node as eval_node_mod
 
 # The two modules that make up the engine core the census guards.
 CORE_MODULES = {

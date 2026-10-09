@@ -2,14 +2,14 @@
 
 import pytest
 
-import agent_composer.llm_clients as llm_clients_mod
-import agent_composer.tools as tools_mod
-from agent_composer.llm_clients import LLMConfig
-from agent_composer.nodes.agent import AgentNode
-from agent_composer.nodes.contracts import ValueContract
-from agent_composer.runtime.eval_node import eval_node
-from agent_composer.typesys.pool import VariablePool
-from agent_composer.typesys.values import Type, ValueKind
+import yian.llm_clients as llm_clients_mod
+import yian.tools as tools_mod
+from yian.llm_clients import LLMConfig
+from yian.nodes.agent import AgentNode
+from yian.nodes.contracts import ValueContract
+from yian.runtime.eval_node import eval_node
+from yian.typesys.pool import VariablePool
+from yian.typesys.values import Type, ValueKind
 
 from langchain_core.messages import AIMessage
 from pydantic import BaseModel

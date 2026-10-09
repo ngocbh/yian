@@ -7,9 +7,9 @@ from functools import wraps
 import multiprocessing
 import traceback
 
-import agent_composer.memory.contracts as c
-from agent_composer.memory.session import SessionMemory
-from agent_composer.memory.conversation import (
+import yian.memory.contracts as c
+from yian.memory.session import SessionMemory
+from yian.memory.conversation import (
     advance_conversation,
     conversation_view_to_json,
 )

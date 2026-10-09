@@ -12,16 +12,16 @@ from dataclasses import replace
 
 import pytest
 
-from agent_composer.compile.expand import call_subgraph, clone_child, map_callsite, map_subgraph, ns
-from agent_composer.compile.manifest import expansion_digest, flow_fingerprint
-from agent_composer.compile.model import END_ID, START_ID, Flow, validate_growth_metadata
-from agent_composer.diagnostics import OriginRef
-from agent_composer.memory import (
+from yian.compile.expand import call_subgraph, clone_child, map_callsite, map_subgraph, ns
+from yian.compile.manifest import expansion_digest, flow_fingerprint
+from yian.compile.model import END_ID, START_ID, Flow, validate_growth_metadata
+from yian.diagnostics import OriginRef
+from yian.memory import (
     MemoryOccurrenceKind,
     MemoryOccurrenceSegment,
     MemoryScope,
 )
-from agent_composer.nodes.contracts import ChildFlowBoundary, ExecutionScope, SeedConnection
+from yian.nodes.contracts import ChildFlowBoundary, ExecutionScope, SeedConnection
 
 from tests.engine.test_expand import _child_flow
 

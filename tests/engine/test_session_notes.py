@@ -6,8 +6,8 @@ import json
 
 import pytest
 
-import agent_composer.memory.contracts as c
-from agent_composer.memory.session import SessionMemory
+import yian.memory.contracts as c
+from yian.memory.session import SessionMemory
 from tests.engine._session_fakes import harness, request, snapshot
 
 
@@ -392,7 +392,7 @@ def test_repeat_source_feedback_in_one_context_proposes_one_note():
 
 
 def test_candidate_failure_keeps_notes_and_commit_identity_unpublished(monkeypatch):
-    import agent_composer.memory.session as implementation
+    import yian.memory.session as implementation
 
     with harness() as h:
         with h.frame.open_turn(request(), check_stopped=lambda: None):

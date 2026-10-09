@@ -11,11 +11,11 @@ import pytest
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 
-import agent_composer.llm_clients as llm_clients
-from agent_composer.compose import load_flow
-from agent_composer.nodes.base import _HostStop
-from agent_composer.run import resume_flow, run_flow
-from agent_composer.tools import TOOL_REGISTRY, register_tool
+import yian.llm_clients as llm_clients
+from yian.compose import load_flow
+from yian.nodes.base import _HostStop
+from yian.run import resume_flow, run_flow
+from yian.tools import TOOL_REGISTRY, register_tool
 
 
 @pytest.fixture(autouse=True)

@@ -12,9 +12,9 @@ coalesces the two, so whichever survived is the terminal value.
 
 import pytest
 
-from agent_composer.compose import LoadError, load_flow
-from agent_composer.run import run_flow
-from agent_composer.events import NodeSucceeded
+from yian.compose import LoadError, load_flow
+from yian.run import run_flow
+from yian.events import NodeSucceeded
 
 _FLOW = """
 id: ordering-e2e

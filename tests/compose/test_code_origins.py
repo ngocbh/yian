@@ -4,16 +4,16 @@ from __future__ import annotations
 
 import pytest
 
-from agent_composer.compile import rewrite_flow_origins
-from agent_composer.compile.expand import clone_child
-from agent_composer.compile.manifest import flow_fingerprint, flow_manifest
-from agent_composer.compose import load_flow
-from agent_composer.compose.nodes.code import CodeDescriptor
-from agent_composer.compose.source import SourceCursor, SourceDocument
-from agent_composer.compose.source.catalog import _SourceCatalogBuilder, _scope_origin
-from agent_composer.diagnostics import OriginRef, SourceRange
-from agent_composer.nodes.code import CodeNode
-from agent_composer.run import run_flow
+from yian.compile import rewrite_flow_origins
+from yian.compile.expand import clone_child
+from yian.compile.manifest import flow_fingerprint, flow_manifest
+from yian.compose import load_flow
+from yian.compose.nodes.code import CodeDescriptor
+from yian.compose.source import SourceCursor, SourceDocument
+from yian.compose.source.catalog import _SourceCatalogBuilder, _scope_origin
+from yian.diagnostics import OriginRef, SourceRange
+from yian.nodes.code import CodeNode
+from yian.run import run_flow
 
 
 _CODE_ORIGIN = OriginRef("/s:root/s:node/s:worker/s:field/s:code")

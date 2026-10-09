@@ -1,4 +1,4 @@
-"""Flow-op tools for `composer chat` — workspace-confined discover/read/validate/run/write."""
+"""Flow-op tools for `yian chat` — workspace-confined discover/read/validate/run/write."""
 from concurrent.futures import CancelledError
 import os
 from pathlib import Path
@@ -6,8 +6,8 @@ import stat
 
 import pytest
 
-from agent_composer.cli.chat import tools as T
-from agent_composer.tools import TOOL_REGISTRY
+from yian.cli.chat import tools as T
+from yian.tools import TOOL_REGISTRY
 
 
 @pytest.fixture

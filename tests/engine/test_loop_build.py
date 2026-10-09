@@ -13,10 +13,10 @@ needed), stamps `output_contract`, and enforces the two halves of the type contr
 
 import pytest
 
-from agent_composer.compose.loader import load_flow
-from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.nodes.base import NodeKind
-from agent_composer.typesys.values import ValueKind
+from yian.compose.loader import load_flow
+from yian.compose.helpers.errors import LoadError
+from yian.nodes.base import NodeKind
+from yian.typesys.values import ValueKind
 
 
 # A good loop: the body `bump` reads a subset of the carried record and returns the

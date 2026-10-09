@@ -5,11 +5,11 @@ from __future__ import annotations
 import threading
 import time
 
-from agent_composer.compile.model import END_ID, START_ID
-from agent_composer.events import RunSucceeded
-from agent_composer.nodes.human_input import HumanInputNode
-from agent_composer.runtime.engine import FlowEngine
-from agent_composer.tools import ToolSet
+from yian.compile.model import END_ID, START_ID
+from yian.events import RunSucceeded
+from yian.nodes.human_input import HumanInputNode
+from yian.runtime.engine import FlowEngine
+from yian.tools import ToolSet
 from tests.engine._fakes import FuncNode
 from tests.engine._graph_builder import _engine, _graph
 

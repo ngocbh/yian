@@ -15,20 +15,20 @@ from pathlib import Path
 
 import pytest
 
-from agent_composer.nodes.agent import AgentNode
-from agent_composer.nodes.code import CodeNode
-from agent_composer.nodes.contracts import Parameter, ValueContract
-from agent_composer.nodes.model import ModelNode
-from agent_composer.nodes.tool import ToolNode
-from agent_composer.llm_clients import LLMConfig
-from agent_composer.typesys.values import ValueKind
-from agent_composer.typesys.types import read_typedefs
-from agent_composer.compose import LoadError
-from agent_composer.compose.helpers.errors import LoadDiagnostics
-from agent_composer.compose.nodes.base import BuildContext
-from agent_composer.compose.parse.file import parse_file
-from agent_composer.compose.parse.nodes import parse_nodes
-from agent_composer.compose.source import SourceCursor, SourceDocument
+from yian.nodes.agent import AgentNode
+from yian.nodes.code import CodeNode
+from yian.nodes.contracts import Parameter, ValueContract
+from yian.nodes.model import ModelNode
+from yian.nodes.tool import ToolNode
+from yian.llm_clients import LLMConfig
+from yian.typesys.values import ValueKind
+from yian.typesys.types import read_typedefs
+from yian.compose import LoadError
+from yian.compose.helpers.errors import LoadDiagnostics
+from yian.compose.nodes.base import BuildContext
+from yian.compose.parse.file import parse_file
+from yian.compose.parse.nodes import parse_nodes
+from yian.compose.source import SourceCursor, SourceDocument
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 
@@ -164,7 +164,7 @@ def test_agent_non_string_mode_is_a_ranged_load_error():
 def test_agent_bad_mode_loaderror_is_located_via_load_flow():
     # The descriptor owns the precise `mode:` range, so the build-time LoadError points
     # directly at that field rather than relying on the conductor's node-header line.
-    from agent_composer.compose.loader import load_flow
+    from yian.compose.loader import load_flow
 
     bad_mode = (
         "id: f\nname: f\n"
@@ -286,7 +286,7 @@ def test_call_loop_descriptors_need_a_resolver():
     # `ctx.resolver`. A leaf-only `BuildContext` (resolver=None, the default) can't resolve
     # the callable, so building one is loud — a `LoadError` naming the unresolvable callable,
     # not a bare `TypeError` leaking from the `None(...)` resolver call.
-    from agent_composer.compose.parse.file import (
+    from yian.compose.parse.file import (
         CallDescriptor,
         MapDescriptor,
         LoopDescriptor,

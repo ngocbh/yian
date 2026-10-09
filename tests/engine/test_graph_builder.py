@@ -1,11 +1,11 @@
-from agent_composer.compile.model import END_ID, START_ID
-from agent_composer.nodes.base import NodeKind
+from yian.compile.model import END_ID, START_ID
+from yian.nodes.base import NodeKind
 
 from tests.engine._graph_builder import _graph
 
 
 def test_graph_injects_real_start_and_end_nodes():
-    from agent_composer.nodes.code.node import CodeNode
+    from yian.nodes.code.node import CodeNode
 
     a = CodeNode("a", code="tests.engine._compose_codefns:echo")
     flow = _graph([a], [(START_ID, "a"), ("a", END_ID)])  # nodes as a LIST (test_engine convention)
@@ -20,7 +20,7 @@ def test_graph_injects_real_start_and_end_nodes():
 
 
 def test_graph_passes_through_extra_nodes_and_handles():
-    from agent_composer.nodes.code.node import CodeNode
+    from yian.nodes.code.node import CodeNode
 
     nodes = [CodeNode(n, code="tests.engine._compose_codefns:echo")
              for n in ("a", "b", "c")]

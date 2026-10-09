@@ -2,7 +2,7 @@
 
 import pytest
 
-from agent_composer.typesys.types import ListExpr, RefExpr, ScalarExpr, parse_type
+from yian.typesys.types import ListExpr, RefExpr, ScalarExpr, parse_type
 
 
 def test_parse_scalars():
@@ -28,14 +28,14 @@ def test_parse_ref():
 
 
 def test_parse_optional():
-    from agent_composer.typesys.types import OptionalExpr
+    from yian.typesys.types import OptionalExpr
 
     assert parse_type("Optional[str]") == OptionalExpr(ScalarExpr("str"))
     assert parse_type("Optional[Rating]") == OptionalExpr(RefExpr("Rating"))
 
 
 def test_resolve_optional_is_nullable():
-    from agent_composer.typesys.types import OptionalExpr, resolve_type
+    from yian.typesys.types import OptionalExpr, resolve_type
 
     sh = resolve_type(OptionalExpr(ScalarExpr("str")), {})
     assert sh.kind == ValueKind.STRING and sh.nullable is True
@@ -63,7 +63,7 @@ def test_parse_python_scalar_names():
 
 
 def test_parse_python_generics():
-    from agent_composer.typesys.types import OptionalExpr
+    from yian.typesys.types import OptionalExpr
 
     assert parse_type("list[str]") == ListExpr(ScalarExpr("str"))
     assert parse_type("List[int]") == ListExpr(ScalarExpr("int"))
@@ -72,7 +72,7 @@ def test_parse_python_generics():
 
 
 def test_parse_literal_quoted_and_unquoted():
-    from agent_composer.typesys.types import EnumExpr
+    from yian.typesys.types import EnumExpr
 
     assert parse_type("Literal[pro, con, mixed]") == EnumExpr(("pro", "con", "mixed"))
     assert parse_type('Literal["pro", "con"]') == EnumExpr(("pro", "con"))
@@ -83,7 +83,7 @@ def test_legacy_engine_names_no_longer_resolve():
     # type unification: the OLD engine vocabulary is gone. A bare `string`/`integer`/
     # `number`/`boolean` is no longer a scalar — it parses as an unknown registry RefExpr
     # and RAISES TypeCheckError on resolution.
-    from agent_composer.typesys.values import TypeCheckError as _SE
+    from yian.typesys.values import TypeCheckError as _SE
 
     for legacy in ("string", "integer", "number", "boolean"):
         assert parse_type(legacy) == RefExpr(legacy)
@@ -96,7 +96,7 @@ def test_legacy_engine_names_no_longer_resolve():
 
 
 def test_parse_union_rejected():
-    from agent_composer.typesys.values import TypeCheckError as _SE
+    from yian.typesys.values import TypeCheckError as _SE
 
     with pytest.raises(_SE) as ei:
         parse_type("Union[int, str]")
@@ -104,7 +104,7 @@ def test_parse_union_rejected():
 
 
 def test_parse_malformed_raises():
-    from agent_composer.typesys.values import TypeCheckError as _SE
+    from yian.typesys.values import TypeCheckError as _SE
 
     with pytest.raises(_SE):
         parse_type("list[")
@@ -113,7 +113,7 @@ def test_parse_malformed_raises():
 
 
 def test_is_shadow_guard():
-    from agent_composer.typesys.types import _is_shadow
+    from yian.typesys.types import _is_shadow
 
     assert _is_shadow("str") and _is_shadow("int") and _is_shadow("Optional")
     assert _is_shadow("Literal") and _is_shadow("Any") and _is_shadow("list")
@@ -123,7 +123,7 @@ def test_is_shadow_guard():
 
 # --- registry + resolve_type ----------------------------------------------- #
 
-from agent_composer.typesys.values import (  # noqa: E402
+from yian.typesys.values import (  # noqa: E402
     ListObjectValue,
     ObjectValue,
     Type,
@@ -131,7 +131,7 @@ from agent_composer.typesys.values import (  # noqa: E402
     ValueKind,
     build_value_as,
 )
-from agent_composer.typesys.types import (  # noqa: E402
+from yian.typesys.types import (  # noqa: E402
     RecordDef,
     VariantDef,
     resolve_type,  # noqa: F401
@@ -232,9 +232,9 @@ def test_numeric_bounds_do_not_combine_with_incompatible_refinements():
 
 
 def test_bounded_type_defaults_preserve_compatible_integer_payloads():
-    from agent_composer.compose.helpers.errors import LoadError
-    from agent_composer.compose.helpers.types import read_flow_inputs
-    from agent_composer.nodes.binding import apply_defaults
+    from yian.compose.helpers.errors import LoadError
+    from yian.compose.helpers.types import read_flow_inputs
+    from yian.nodes.binding import apply_defaults
 
     params = read_flow_inputs({"score": "float[0, 1] = 1"}, {})
     resolved = apply_defaults(params, {})
@@ -245,7 +245,7 @@ def test_bounded_type_defaults_preserve_compatible_integer_payloads():
 
 
 def test_bounded_numeric_labels_include_nested_domains():
-    from agent_composer.typesys.types import canonical_type_label
+    from yian.typesys.types import canonical_type_label
 
     assert canonical_type_label(type_for("int[ -2, +4 ]", {})) == "int[-2,4]"
     assert canonical_type_label(type_for("list[Optional[float[0.0, 1.5]]]", {})) == (
@@ -263,7 +263,7 @@ def test_float_domain_rejects_endpoints_without_lossless_finite_representation(e
 
 
 def test_bounded_typed_write_preserves_the_previous_value_on_nested_rejection():
-    from agent_composer.typesys.pool import VariablePool
+    from yian.typesys.pool import VariablePool
 
     typ = type_for("list[Score]", {
         "Score": RecordDef(fields={"value": "float[0, 1]"}),
@@ -282,7 +282,7 @@ def test_type_for_preserves_its_public_keyword_name():
 
 
 def test_resolve_inline_literal_is_enum():
-    from agent_composer.typesys.types import EnumExpr, resolve_type
+    from yian.typesys.types import EnumExpr, resolve_type
 
     sh = resolve_type(EnumExpr(("pro", "con")), {})
     assert sh.kind == ValueKind.STRING and sh.tags == frozenset({"pro", "con"})
@@ -466,7 +466,7 @@ def test_end_to_end_write_boundary():
 
 
 def test_public_exports():
-    import agent_composer.typesys as state
+    import yian.typesys as state
 
     for name in (
         "Type",

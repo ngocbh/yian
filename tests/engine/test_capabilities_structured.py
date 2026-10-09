@@ -1,6 +1,6 @@
 """`supports_native_structured` — provider+model gate for native structured output."""
 
-from agent_composer.llm_clients.capabilities import supports_native_structured
+from yian.llm_clients.capabilities import supports_native_structured
 
 
 def test_anthropic_openai_google_support_native():

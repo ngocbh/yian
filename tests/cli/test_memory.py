@@ -1,4 +1,4 @@
-"""composer run memory flags, registry lifetime, and run-boundary integration."""
+"""yian run memory flags, registry lifetime, and run-boundary integration."""
 
 from __future__ import annotations
 
@@ -10,19 +10,19 @@ import threading
 import pytest
 from typer.testing import CliRunner
 
-from agent_composer.cli import app
-import agent_composer.cli.run as run_cli
-from agent_composer.cli.memory import (
+from yian.cli import app
+import yian.cli.run as run_cli
+from yian.cli.memory import (
     MemoryOptionError,
     build_cli_memories,
     parse_memory_storage,
 )
-from agent_composer.compose import LoadError, load_flow
-from agent_composer.events import NodeStarted, RunStarted
-from agent_composer.memory.contracts import MemoryOperationError, MemorySetupError
-from agent_composer.memory_host import build_memories
-from agent_composer.run import run_flow
-from agent_composer.runtime.log import RunStartedRecord, decode_record
+from yian.compose import LoadError, load_flow
+from yian.events import NodeStarted, RunStarted
+from yian.memory.contracts import MemoryOperationError, MemorySetupError
+from yian.memory_host import build_memories
+from yian.run import run_flow
+from yian.runtime.log import RunStartedRecord, decode_record
 
 _RUNNER = CliRunner()
 
@@ -54,7 +54,7 @@ output: ${work.output}
 def _offline_model(monkeypatch):
     """Answer every AGENT call locally so session flows run without a provider."""
     from langchain_core.messages import AIMessage
-    import agent_composer.llm_clients as llm_clients
+    import yian.llm_clients as llm_clients
 
     class _Model:
         def invoke(self, messages):
@@ -257,7 +257,7 @@ def test_yaml_config_outside_the_allowlist_fails_at_load(policy, config, detail)
 
 def _wrap_builtins(monkeypatch, wrap):
     """Pass every built-in backend that build_memories constructs to ``wrap(backend, type)``."""
-    import agent_composer.memory_host as host
+    import yian.memory_host as host
 
     real = host._builtin
 
@@ -288,7 +288,7 @@ class _Backend:
 
 
 def test_no_declarations_build_an_empty_registry(monkeypatch):
-    import agent_composer.memory_host as host
+    import yian.memory_host as host
 
     monkeypatch.setattr(host, "_builtin", lambda *a, **k: pytest.fail("built"))
     flow = load_flow(_flow_text(None))
@@ -329,7 +329,7 @@ def test_cli_activates_declared_memory_without_learning(memory_type, durable, tm
 def test_resume_opens_memory_only_when_the_record_needs_it(
     terminal, enabled, tmp_path, monkeypatch
 ):
-    from agent_composer.memory.session import SessionMemory
+    from yian.memory.session import SessionMemory
 
     flow = _session_flow_file(tmp_path)
     log = tmp_path / "run.jsonl"
@@ -431,12 +431,12 @@ def test_first_open_and_cleanup_run_in_controller_after_worker_drain(tmp_path, m
 def test_no_memory_flow_imports_no_concrete_backend():
     script = """
 import sys
-from agent_composer.cli.memory import build_cli_memories
-from agent_composer.compose import load_flow
+from yian.cli.memory import build_cli_memories
+from yian.compose import load_flow
 flow = load_flow('id: no-memory\\nname: no_memory\\nnodes:\\n  work: {kind: code, code: return 7}\\noutput: ${work.output}\\n')
 with build_cli_memories(flow, root=None, storage_options=()) as registry:
     assert len(registry) == 0
-assert not any('agent_composer.memory.' + name in sys.modules
+assert not any('yian.memory.' + name in sys.modules
                for name in ('episodic', 'reflective', 'session', 'profile', 'storage'))
 """
     result = subprocess.run(
@@ -446,7 +446,7 @@ assert not any('agent_composer.memory.' + name in sys.modules
 
 
 def test_open_failure_closes_every_backend_and_creates_no_directory(tmp_path):
-    from agent_composer.memory.episodic import EpisodicMemory
+    from yian.memory.episodic import EpisodicMemory
 
     flow = tmp_path / "flow.yaml"
     flow.write_text(
@@ -474,7 +474,7 @@ def test_open_failure_closes_every_backend_and_creates_no_directory(tmp_path):
 
 
 def test_cli_preserves_primary_when_cleanup_also_fails(tmp_path, monkeypatch):
-    import agent_composer.memory_host as host
+    import yian.memory_host as host
 
     primary = ValueError("initiating failure")
     calls = []
@@ -527,8 +527,8 @@ def test_real_pooled_cancellation_keeps_storage_until_model_callback_drains(
     tmp_path, monkeypatch
 ):
     from langchain_core.messages import AIMessage
-    import agent_composer.llm_clients as llm_clients
-    from agent_composer.memory.session import SessionMemory
+    import yian.llm_clients as llm_clients
+    from yian.memory.session import SessionMemory
 
     flow = _session_flow_file(tmp_path)
     path = tmp_path / "memory.sqlite"
@@ -605,7 +605,7 @@ def test_run_help_describes_memory_flags():
 
 
 def test_cli_module_docstrings_name_the_new_flags():
-    import agent_composer.cli as cli_package
+    import yian.cli as cli_package
 
     for doc in (cli_package.__doc__, run_cli.__doc__):
         assert "--memory-root" in doc

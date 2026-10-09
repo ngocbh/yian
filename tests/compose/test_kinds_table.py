@@ -7,9 +7,9 @@
 
 import pytest
 
-from agent_composer.compose.nodes import KINDS, BINDING_FIELDS
-from agent_composer.compose.nodes.agent import AgentDescriptor
-from agent_composer.compose.nodes.tool import ToolDescriptor
+from yian.compose.nodes import KINDS, BINDING_FIELDS
+from yian.compose.nodes.agent import AgentDescriptor
+from yian.compose.nodes.tool import ToolDescriptor
 
 # The author-written surface kinds (mirrors docs/syntax.md; excludes the synthesized
 # start/end boundaries). Adding a kind here without registering its handle fails below.
@@ -34,7 +34,7 @@ def test_kinds_maps_string_to_descriptor_class():
 
 def test_retired_kindspec_is_not_public():
     with pytest.raises(ImportError):
-        from agent_composer.compose.nodes import KindSpec  # noqa: F401
+        from yian.compose.nodes import KindSpec  # noqa: F401
 
 
 def test_all_authored_kinds_registered():

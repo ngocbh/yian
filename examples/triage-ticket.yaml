@@ -15,7 +15,7 @@
 # local Ollama model — with no extra Python.
 #
 # Run it with:
-#   composer run examples/triage-ticket.yaml --input \
+#   yian run examples/triage-ticket.yaml --input \
 #     message="Hi, I was charged twice for my subscription this month and I'm really frustrated. Please refund the extra charge."
 
 id: triage-ticket

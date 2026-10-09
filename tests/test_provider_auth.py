@@ -16,7 +16,7 @@ from urllib.parse import parse_qs, urlencode, urlparse
 
 import pytest
 
-from agent_composer.llm_clients.auth import (
+from yian.llm_clients.auth import (
     ApiKeyCredentials,
     AuthError,
     AuthStore,
@@ -268,10 +268,10 @@ def test_subscription_catalog_uses_account_routing_and_visibility_order():
         "https://chatgpt.com/backend-api/codex/models?client_version=0.155.1",
     )
     assert http.calls[0][2]["headers"] == {
-        "User-Agent": "agent-composer",
+        "User-Agent": "yian",
         "Authorization": "Bearer access",
         "ChatGPT-Account-Id": "acct",
-        "originator": "agent-composer",
+        "originator": "yian",
         "x-openai-internal-codex-residency": "eu",
     }
 
@@ -523,12 +523,12 @@ def test_changed_connection_prevents_refresh_and_account_switch_prevents_save(tm
 
 
 def test_default_path_uses_composer_environment_only(tmp_path, monkeypatch):
-    monkeypatch.delenv("AGENT_COMPOSER_AUTH_FILE", raising=False)
+    monkeypatch.delenv("YIAN_AUTH_FILE", raising=False)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "native"))
-    assert AuthStore().path == tmp_path / "config" / "agent-composer" / "auth.json"
+    assert AuthStore().path == tmp_path / "config" / "yian" / "auth.json"
     override = tmp_path / "specific" / "tokens.json"
-    monkeypatch.setenv("AGENT_COMPOSER_AUTH_FILE", str(override))
+    monkeypatch.setenv("YIAN_AUTH_FILE", str(override))
     assert AuthStore().path == override
     assert not list(tmp_path.iterdir())
 
@@ -709,8 +709,8 @@ def test_refresh_is_serialized_across_processes(tmp_path):
 def test_http_trickle_respects_deadline_cancellation_and_closes_socket(
     phase, cancel, scheme, monkeypatch
 ):
-    from agent_composer.llm_clients.auth import openai as openai_auth
-    from agent_composer.llm_clients.auth.openai import _request
+    from yian.llm_clients.auth import openai as openai_auth
+    from yian.llm_clients.auth.openai import _request
 
     if scheme == "https":
         # Exercise the HTTPS connection/parser wiring; cryptographic negotiation
@@ -792,7 +792,7 @@ def test_http_trickle_respects_deadline_cancellation_and_closes_socket(
 
 @pytest.mark.parametrize("status", [200, 401, 302])
 def test_builtin_http_decodes_responses_and_never_follows_redirects(status):
-    from agent_composer.llm_clients.auth.http import _request
+    from yian.llm_clients.auth.http import _request
 
     errors = []
     with socket.socket() as server:
@@ -865,7 +865,7 @@ def _serve_once(body):
 
 @pytest.mark.parametrize(("body_limit", "fits"), [(1024, False), (4096, True)])
 def test_builtin_http_body_limit_raises_value_error(body_limit, fits):
-    from agent_composer.llm_clients.auth.http import _request
+    from yian.llm_clients.auth.http import _request
 
     body = json.dumps({"pad": "x" * 2048}).encode()
     port, thread, errors = _serve_once(body)
@@ -883,7 +883,7 @@ def test_builtin_http_body_limit_raises_value_error(body_limit, fits):
 
 
 def test_builtin_http_deadline_during_connect_raises_timeout_error():
-    from agent_composer.llm_clients.auth.http import _request
+    from yian.llm_clients.auth.http import _request
 
     # The deadline expires once urllib starts connecting, where it wraps OSErrors.
     readings = iter([0.0, 0.0])

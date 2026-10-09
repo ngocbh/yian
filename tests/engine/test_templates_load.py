@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_composer.compose.loader import load_flow
+from yian.compose.loader import load_flow
 
 _TEMPLATES = Path(__file__).resolve().parents[2] / ".claude/skills/composing-agents/templates"
 

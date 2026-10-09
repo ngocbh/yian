@@ -1,6 +1,6 @@
 """API history summaries use the current unbound model and safe context only."""
 
-from agent_composer.memory import MemoryContext
+from yian.memory import MemoryContext
 
 from asyncio import CancelledError as AsyncCancelledError
 from concurrent.futures import CancelledError as FutureCancelledError
@@ -17,15 +17,15 @@ from langchain_core.messages import (
     ToolMessage,
 )
 
-import agent_composer.llm_clients as llm_clients
-from agent_composer.memory.session import SessionMemory
-from agent_composer.memory import MemorySection
-from agent_composer.nodes.agent import memory as conversation
-from agent_composer.nodes.agent.modes.common import AgentRunContext
-from agent_composer.nodes.agent.modes.plain import plain
-from agent_composer.nodes.agent.modes.tool_calling import tool_calling
-from agent_composer.nodes.base import _CapabilityFault, _HostStop
-from agent_composer.typesys.values import Type, ValueKind
+import yian.llm_clients as llm_clients
+from yian.memory.session import SessionMemory
+from yian.memory import MemorySection
+from yian.nodes.agent import memory as conversation
+from yian.nodes.agent.modes.common import AgentRunContext
+from yian.nodes.agent.modes.plain import plain
+from yian.nodes.agent.modes.tool_calling import tool_calling
+from yian.nodes.base import _CapabilityFault, _HostStop
+from yian.typesys.values import Type, ValueKind
 from tests.engine._session_fakes import harness, request, snapshot
 from tests.engine.test_agent_session import _Model
 from tests.engine.test_agent_session_structured import _Native, _config
@@ -164,7 +164,7 @@ def test_summary_failure_never_enters_answer_structured_retry(
 def test_tool_then_structured_uses_summary_once_and_safe_current_projection(
     monkeypatch, native
 ):
-    import agent_composer.tools as tools
+    import yian.tools as tools
 
     memory = SessionMemory(history_budget_chars=1, recent_turns=0)
     _seed(memory)
@@ -239,7 +239,7 @@ def test_tool_then_structured_uses_summary_once_and_safe_current_projection(
 
 
 def test_summary_uses_unbound_model_and_current_instructions_and_grants(monkeypatch):
-    import agent_composer.tools as tools
+    import yian.tools as tools
 
     memory = SessionMemory(history_budget_chars=1, recent_turns=0)
     with harness(memory) as opened:

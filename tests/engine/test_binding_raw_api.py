@@ -10,7 +10,7 @@ unified grammar. These tests cover:
 
 import pytest
 
-from agent_composer.expr import RequiredError, eval_binding, expr_refs_of
+from yian.expr import RequiredError, eval_binding, expr_refs_of
 
 
 def _from(mapping):
@@ -94,11 +94,11 @@ def test_expr_refs_of_item_is_collected():
 
 
 def test_capture_marks_actual_template_evaluation_in_materialized_seed(monkeypatch):
-    import agent_composer.expr.template as template
-    from agent_composer.expr.lineage import ResolvedValue
-    from agent_composer.nodes.binding import BindingCollector, bind_params
-    from agent_composer.nodes.contracts import Parameter
-    from agent_composer.typesys.pool import VariablePool
+    import yian.expr.template as template
+    from yian.expr.lineage import ResolvedValue
+    from yian.nodes.binding import BindingCollector, bind_params
+    from yian.nodes.contracts import Parameter
+    from yian.typesys.pool import VariablePool
 
     scanned = []
     parsed = template.grammar.parse_expr

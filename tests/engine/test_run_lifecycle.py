@@ -20,17 +20,17 @@ from typing import Any, Callable
 
 import pytest
 
-import agent_composer._settings as settings_module
-import agent_composer.llm_clients as llm_clients_module
-import agent_composer.nodes.wait.node as wait_module
-import agent_composer.run as run_module
-from agent_composer.compile.llm_cascade import resolve_llm_cascade
-from agent_composer.compile.manifest import flow_fingerprint
-from agent_composer.compile.model import CompiledFlow, Edge, END_ID, START_ID
-from agent_composer.compile.origins import rebase_flow_origins
-from agent_composer.compose import ComposedFlow, load_flow
-from agent_composer.diagnostics import OriginRef
-from agent_composer.events import (
+import yian._settings as settings_module
+import yian.llm_clients as llm_clients_module
+import yian.nodes.wait.node as wait_module
+import yian.run as run_module
+from yian.compile.llm_cascade import resolve_llm_cascade
+from yian.compile.manifest import flow_fingerprint
+from yian.compile.model import CompiledFlow, Edge, END_ID, START_ID
+from yian.compile.origins import rebase_flow_origins
+from yian.compose import ComposedFlow, load_flow
+from yian.diagnostics import OriginRef
+from yian.events import (
     NodeFailed,
     NodeStarted,
     NodeSucceeded,
@@ -39,11 +39,11 @@ from agent_composer.events import (
     RunStarted,
     RunSucceeded,
 )
-from agent_composer.nodes.base import _HostStop
-from agent_composer.nodes.code import CodeNode
-from agent_composer.nodes.end import EndNode
-from agent_composer.nodes.start import StartNode
-from agent_composer.runtime.log import (
+from yian.nodes.base import _HostStop
+from yian.nodes.code import CodeNode
+from yian.nodes.end import EndNode
+from yian.nodes.start import StartNode
+from yian.runtime.log import (
     JsonlRunLog,
     MemoryRunLog,
     NodeFailedRecord,
@@ -53,7 +53,7 @@ from agent_composer.runtime.log import (
     RunResumedRecord,
     RunStartedRecord,
 )
-from agent_composer.runtime.state import (
+from yian.runtime.state import (
     RunStartData,
     RunState,
     commit_prepared,
@@ -61,8 +61,8 @@ from agent_composer.runtime.state import (
     prepare_node_succeeded,
     prepare_run_started,
 )
-from agent_composer.typesys import VariablePool
-from agent_composer.typesys.seeding import seed_system_clock
+from yian.typesys import VariablePool
+from yian.typesys.seeding import seed_system_clock
 
 
 _RUN_ID = "lifecycle-run"
@@ -916,7 +916,7 @@ def test_nonterminal_resume_restores_recorded_llm_without_reading_defaults(
     assert result.status == "succeeded"
     assert result.input == {"topic": "Ada"}
     assert result.output == "recorded reply"
-    from agent_composer.llm_clients.connection import legacy_connection_config
+    from yian.llm_clients.connection import legacy_connection_config
     assert captured == [legacy_connection_config(effective["answer"])]
     assert isinstance(result.events[0], RunResumed)
     assert not any(isinstance(event, RunStarted) for event in result.events)

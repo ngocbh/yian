@@ -1,9 +1,9 @@
 """The ``wait`` kind parses one required absolute ``until`` deadline."""
 
-from agent_composer.compose.nodes.base import BuildContext
-from agent_composer.compose.nodes.wait import WaitDescriptor
-from agent_composer.compose.source import SourceDocument
-from agent_composer.diagnostics import SourceRange
+from yian.compose.nodes.base import BuildContext
+from yian.compose.nodes.wait import WaitDescriptor
+from yian.compose.source import SourceDocument
+from yian.diagnostics import SourceRange
 
 
 _FLOW = """\
@@ -33,7 +33,7 @@ def test_wait_build_returns_blocking_node_with_reserved_until_wiring():
     result = desc.build(BuildContext({}))
     node, wiring = result.node, result.wiring
 
-    from agent_composer.nodes.wait import WaitNode
+    from yian.nodes.wait import WaitNode
 
     assert isinstance(node, WaitNode)
     # The `until` source rides the reserved wiring key; the node carries no author params.

@@ -6,6 +6,14 @@ Yian builds and runs workflows of agents, code, models, and tools. A
 flow is written as Docker-Compose-shaped YAML, compiled to a typed form, and run
 by this project’s own scheduler. The main interface is the `yian` CLI.
 
+Goals:
+
+- Workflows that repeat, must be reliable, and should improve across runs, such as SOPs and
+  trading routines.
+- Not a replacement for interactive agent harnesses (Codex, Claude Code, OpenCode). Judge a
+  feature by whether a repeatable workflow needs it, and don't trade predictable replay for
+  expressiveness.
+
 Use these documents as the source of truth:
 
 - [`src/yian/README.md`](src/yian/README.md) for engine design.

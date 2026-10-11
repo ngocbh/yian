@@ -7,6 +7,13 @@ author a fixed graph in Docker-Compose-shaped YAML; the framework infers data
 dependencies, applies explicit ordering constraints, validates types, and runs
 through an append-only log.
 
+## Goals
+
+- Workflows that repeat, must be reliable, and should improve across runs, such as SOPs and
+  trading routines.
+- Not a replacement for interactive agent harnesses. Flexible or one-off work belongs in
+  Codex, Claude Code, or OpenCode.
+
 In this framework, an **agent** is a composable transformation from a named
 input record to an output value. It can be represented by one node, a flow of
 nodes, or a child flow used inside another flow. The YAML **AGENT node**

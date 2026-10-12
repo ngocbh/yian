@@ -2,11 +2,12 @@
 
 A loader post-build pass (run after `check_call_map_types`). `nodes.loop.build` checked only the
 carried field-NAME sets — it lacks the resolved carried-record Types, which depend on the parent
-producers and flow inputs assembled by the parent build. This pass resolves each carried field's
-contract from its bound seed source (`${<id>.output}`/`${input.X}` over the parent producer +
-flow-input contracts, via `resolve_output_binding_contract`), projects its Type, and checks it
-with `types_compatible` against the body OUTPUT's same-named field Type. The node's canonical
-output contract already retains independently proven body fields when no sound exact aggregate
+producers and flow inputs assembled by the parent build. This pass resolves each returned carried
+field's contract from its bound seed source (`${<id>.output}`/`${input.X}` over the parent
+producer + flow-input contracts, via `resolve_output_binding_contract`), projects its Type, and
+checks it with `types_compatible` against the body OUTPUT's same-named field Type. A field the
+body omits carries over unchanged, so it has nothing to compare. The node's canonical output
+contract already retains independently proven body fields when no sound exact aggregate
 exists. This pass carries a range anchor from
 `BuildResult.field_ranges[("field", "inputs")]` (the coarse `input:` mapping span).
 
@@ -46,15 +47,17 @@ def check_loop_type_contract(
 
     `nodes.loop.build` checked only the field-NAME sets (it lacks the resolved carried-record
     Types because the seed sources' types depend on parent producers and flow inputs).
-    This pass, run after `check_call_map_types`, resolves each carried field's Type
+    This pass, run after `check_call_map_types`, resolves each returned carried field's Type
     from its bound seed source (`${<id>.output}`/`${input.X}` over the parent producer +
     flow-input contracts, exactly as `check_call_map_types` via
     `resolve_output_binding_contract`),
     and checks it with `types_compatible` against the body
     OUTPUT's same-named field Type. A fully proven body reads those fields from the
     aggregate `output_contract`; a partially typed record reads its independently
-    proven field contracts from the same canonical output-contract sum. A literal/
-    coalesce/opaque seed source, or an opaque body output field, stays lenient (skipped).
+    proven field contracts from the same canonical output-contract sum. A field outside
+    the node's `returned_fields` (omitted by the body, so carried over unchanged) is
+    skipped. A literal/coalesce/opaque seed source, or an opaque body output field,
+    stays lenient (skipped).
     Loud + located at the loop node's `input:` mapping range
     (else the Compose-owned node range) on a
     same-names/different-TYPES mismatch."""
@@ -112,7 +115,10 @@ def check_loop_type_contract(
         # nodes.loop.build. With no independently proven fields, nothing remains to compare.
         if not body_fields:
             continue
+        returned = node.returned_fields
         for field_name, src in flow_wiring.get(nid, {}).items():
+            if returned is not None and field_name not in returned:
+                continue  # omitted by the body: carried over, nothing returned to compare
             body_field = body_fields.get(field_name)
             if body_field is None:
                 continue  # name mismatch caught in build; nothing to type-check
@@ -140,6 +146,6 @@ def check_loop_type_contract(
                     f"loop node {nid!r}: carried field {field_name!r} — body output is "
                     f"{canonical_type_label(body_field)!r}, carried source is "
                     f"{canonical_type_label(source)!r} "
-                    "(the body must return the same 'a it reads)",
+                    "(a returned field must keep its carried type)",
                     range=rng,
                 )

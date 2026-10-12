@@ -912,7 +912,9 @@ def test_loop_type_check_projects_known_partial_seed_field() -> None:
         )
     )
     result = BuildResult(
-        node=SimpleNamespace(is_loop=True, output_contract=loop_contract),
+        node=SimpleNamespace(
+            is_loop=True, output_contract=loop_contract, returned_fields=None
+        ),
         wiring={},
     )
 

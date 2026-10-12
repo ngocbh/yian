@@ -750,3 +750,259 @@ def test_loop_without_max_resumes_from_its_log(tmp_path):
     resumed = resume_flow(load_flow(src), log=log)
     assert resumed.status == "succeeded"
     assert resumed.output == first.output
+
+
+# A partial LOOP body returns a subset of the carried record; omitted fields keep the
+# previous iteration's value. This chat-shaped body reads the whole record but returns
+# only `{n, done}`, so `person` and `talking_to` ride through every turn unchanged.
+PARTIAL_CHAT = """
+id: partial-chat
+name: partial_chat
+typedefs:
+  Person:
+    name: str
+input:
+  person: Person
+  talking_to: str
+defs:
+  turn:
+    input:
+      person: Person
+      talking_to: str
+      n: int
+    nodes:
+      step:
+        kind: code
+        code: |
+          assert inputs["person"]["name"] == "Ada"
+          assert inputs["talking_to"] == "Bob"
+          n = inputs["n"] + 1
+          return {"n": n, "done": n >= 3}
+        input:
+          person: ${input.person}
+          talking_to: ${input.talking_to}
+          n: ${input.n}
+        output:
+          n: int
+          done: bool
+    output: ${step.output}
+nodes:
+  loop:
+    kind: loop
+    call: turn
+    input:
+      person: ${input.person}
+      talking_to: ${input.talking_to}
+      n: 0
+      done: false
+    while: not done
+output: ${loop.output}
+"""
+
+PARTIAL_CHAT_INPUTS = {"person": {"name": "Ada"}, "talking_to": "Bob"}
+
+
+def test_partial_body_keeps_omitted_fields_across_turns():
+    result = run_flow(load_flow(PARTIAL_CHAT), PARTIAL_CHAT_INPUTS)
+    assert result.status == "succeeded", result.failure
+    assert result.output == {
+        "person": {"name": "Ada"},
+        "talking_to": "Bob",
+        "n": 3,
+        "done": True,
+    }
+
+
+PARTIAL_NOTE = """
+id: partial-note
+name: partial_note
+input:
+  note0: Optional[str]
+defs:
+  clear_note:
+    input:
+      n: int
+    nodes:
+      step:
+        kind: code
+        code: |
+          return {"n": inputs["n"] + 1, "note": None}
+        input:
+          n: ${input.n}
+        output:
+          n: int
+          note: Optional[str]
+    output: ${step.output}
+  bump_only:
+    input:
+      n: int
+    nodes:
+      step:
+        kind: code
+        code: |
+          return {"n": inputs["n"] + 1}
+        input:
+          n: ${input.n}
+        output:
+          n: int
+    output: ${step.output}
+nodes:
+  loop:
+    kind: loop
+    call: BODY
+    input:
+      n: 0
+      note: ${input.note0}
+    times: 2
+output: ${loop.output}
+"""
+
+
+def test_partial_body_explicit_null_sets_nullable_field():
+    """An explicit null clears a nullable carried field; omitting it keeps the seed."""
+    cleared = run_flow(load_flow(PARTIAL_NOTE.replace("BODY", "clear_note")), {"note0": "seed"})
+    assert cleared.status == "succeeded", cleared.failure
+    assert cleared.output == {"n": 2, "note": None}
+
+    kept = run_flow(load_flow(PARTIAL_NOTE.replace("BODY", "bump_only")), {"note0": "seed"})
+    assert kept.status == "succeeded", kept.failure
+    assert kept.output == {"n": 2, "note": "seed"}
+
+
+def _with_loop_asserts(*asserts: str) -> str:
+    lines = "".join(f'      - "{a}"\n' for a in asserts)
+    return PARTIAL_CHAT.replace(
+        "    while: not done\n", f"    while: not done\n    asserts:\n{lines}"
+    )
+
+
+def test_partial_loop_asserts_see_the_merged_record():
+    post_ok = run_flow(
+        load_flow(_with_loop_asserts("${output.person.name} == 'Ada'")), PARTIAL_CHAT_INPUTS
+    )
+    assert post_ok.status == "succeeded", post_ok.failure
+    assert post_ok.output["person"] == {"name": "Ada"}
+
+    post_bad = run_flow(
+        load_flow(_with_loop_asserts("${output.person.name} == 'Bob'")), PARTIAL_CHAT_INPUTS
+    )
+    assert post_bad.status == "failed"
+    assert post_bad.failure.cause_type == "NodeAssertFailed"
+    assert "post-assert failed" in post_bad.failure.message
+
+    # A PRE assert reads the carried inputs; each respawned driver re-checks it against the
+    # merged record, where the omitted `person` still holds its seed.
+    pre_ok = run_flow(
+        load_flow(_with_loop_asserts("${person.name} == 'Ada'")), PARTIAL_CHAT_INPUTS
+    )
+    assert pre_ok.status == "succeeded", pre_ok.failure
+    assert pre_ok.output["n"] == 3
+    # Respawned drivers do run PRE asserts: one on a returned field fails mid-loop.
+    pre_bad = run_flow(load_flow(_with_loop_asserts("${n} < 2")), PARTIAL_CHAT_INPUTS)
+    assert pre_bad.status == "failed"
+    assert pre_bad.failure.node_id == "loop~2"
+    assert "pre-assert failed" in pre_bad.failure.message
+
+
+def test_partial_loop_zero_iterations_commits_seed():
+    src = PARTIAL_CHAT.replace("      done: false\n", "      done: true\n")
+    result = run_flow(load_flow(src), PARTIAL_CHAT_INPUTS)
+    assert result.status == "succeeded", result.failure
+    assert result.output == {
+        "person": {"name": "Ada"},
+        "talking_to": "Bob",
+        "n": 0,
+        "done": True,
+    }
+
+
+def test_partial_until_and_times_loops():
+    until = run_flow(
+        load_flow(PARTIAL_CHAT.replace("while: not done", "until: done")), PARTIAL_CHAT_INPUTS
+    )
+    assert until.status == "succeeded", until.failure
+    assert until.output == {
+        "person": {"name": "Ada"},
+        "talking_to": "Bob",
+        "n": 3,
+        "done": True,
+    }
+
+    times = run_flow(
+        load_flow(PARTIAL_CHAT.replace("while: not done", "times: 2")), PARTIAL_CHAT_INPUTS
+    )
+    assert times.status == "succeeded", times.failure
+    assert times.output == {
+        "person": {"name": "Ada"},
+        "talking_to": "Bob",
+        "n": 2,
+        "done": False,
+    }
+
+
+PARTIAL_IN_CALL = """
+id: partial-in-call
+name: partial_in_call
+defs:
+  bump:
+    input:
+      n: int
+    nodes:
+      step:
+        kind: code
+        code: |
+          return {"n": inputs["n"] + 1}
+        input:
+          n: ${input.n}
+        output:
+          n: int
+    output: ${step.output}
+  counter:
+    input:
+      tag: str
+    nodes:
+      loop:
+        kind: loop
+        call: bump
+        input:
+          n: 0
+          tag: ${input.tag}
+        times: 2
+    output: ${loop.output}
+nodes:
+  outer:
+    kind: call
+    call: counter
+    input:
+      tag: kept
+  mapped:
+    kind: map
+    call: counter
+    over: ${["a", "b"]}
+    input:
+      tag: ${item}
+output:
+  outer: ${outer.output}
+  mapped: ${mapped.output}
+"""
+
+
+def test_partial_loop_inside_call_body():
+    result = run_flow(load_flow(PARTIAL_IN_CALL), {})
+    assert result.status == "succeeded", result.failure
+    assert result.output == {
+        "outer": {"n": 2, "tag": "kept"},
+        "mapped": [{"n": 2, "tag": "a"}, {"n": 2, "tag": "b"}],
+    }
+
+
+def test_partial_loop_resumes_from_its_log(tmp_path):
+    log = tmp_path / "run.jsonl"
+    first = run_flow(load_flow(PARTIAL_CHAT), PARTIAL_CHAT_INPUTS, log=log)
+    assert first.status == "succeeded", first.failure
+    # Cut the log mid-run so resume replays the recorded drivers and runs the rest live.
+    lines = log.read_text().splitlines(keepends=True)
+    log.write_text("".join(lines[: len(lines) // 2]))
+    resumed = resume_flow(load_flow(PARTIAL_CHAT), log=log)
+    assert resumed.status == "succeeded", resumed.failure
+    assert resumed.output == first.output

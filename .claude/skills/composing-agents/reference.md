@@ -266,12 +266,14 @@ threading a carried record `'a -> 'a` (the body's `output:` shape EQUALS its
 `while: not done` is a PRE-check over the carried record (0+ runs, stop when the
 predicate goes false); `until: done` is a POST-check / do-while (1+ runs, stop
 when the predicate becomes TRUE); `times: N` runs exactly N times with no
-predicate. Predicates use the canonical bare form (no `${}`). `max:` is a required runaway guard
-for `while:`/`until:` — but REDUNDANT and REJECTED with `times:`. A body that blocks
+predicate. Predicates use the canonical bare form (no `${}`). `max:` is an optional runaway guard
+for `while:`/`until:` (without it the loop runs until its predicate ends it) — but
+REDUNDANT and REJECTED with `times:`. A body that blocks
 (a `human_input` leaf) makes the loop a live chat REPL — the same run threads each
-answered turn. A long
-loop stays cheap: each committed iteration is PRUNED from the live graph, so only one
-is resident at a time. See `loop.yaml`.
+answered turn. Each continuing iteration PRUNES the previous iteration's body nodes, so
+a body of leaf nodes keeps about one iteration resident. Nodes grown inside the body by
+a nested CALL, MAP, or LOOP are not pruned; they add up every iteration until the run
+hits the node budget (10,000 live nodes). Set `max:` on such a loop. See `loop.yaml`.
 
 **Conversational REPL (LOOP + human_input).** A chat is a `loop` whose body blocks at
 `ask` (`human_input`), then a CASE routes exact `/exit` and `/quit` values to an exit
@@ -310,9 +312,9 @@ prove `bool`. This is the shape `yian chat` runs; see `chat.yaml` (and
   loop's `input:` (carried record) and read only a subset of its names — checked at
   build (names) and load (types). Give EXACTLY ONE driver: `while:` (pre-check,
   0+ runs), `until:` (post-check / do-while, 1+ runs), or `times: N` (fixed count).
-  `max:` is required for `while:`/`until:` but REDUNDANT+REJECTED with `times:`.
+  `max:` is optional for `while:`/`until:` but REDUNDANT+REJECTED with `times:`.
   Every `while:`/`until:` ref must name a carried field (a typo is rejected at load,
-  not read as falsy), and `max:`/`times:` must be a plain integer `>= 1`.
+  not read as falsy), and `max:` (when given) and `times:` must be a plain integer `>= 1`.
 - **Node-local `asserts:` reading `${output}` are POST checks** — they fire once the
   node's value is committed, and fail the run loudly on a false/raising expr. This
   includes a `call` node: its POST asserts may read `${output}` **and** the call's

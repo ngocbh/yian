@@ -520,7 +520,6 @@ turn:
     messages: []
     exited: false
   while: not ${exited}         # pre-check over the carried record; `not` OUTSIDE ${...}
-  max: 100                     # REQUIRED runaway guard (LoopMaxExceeded)
 ```
 `loop` accepts the same inline `nodes:` + `output:` form instead of `call:`; its
 generated parameters are the carried `input:` fields, so the same `'a -> 'a`
@@ -534,7 +533,7 @@ makes the loop a live chat REPL: the same run threads each answered turn. Pick
 **exactly one**
 driver: `while:` (pre-check, 0+ runs), `until:` (post-check / do-while, 1+ runs,
 stop when the predicate becomes true), or `times: N` (fixed count). `max:` is
-required for `while:`/`until:` but **redundant and rejected** with `times:`.
+optional for `while:`/`until:` but **redundant and rejected** with `times:`.
 
 #### Conversational REPL — the `loop` shape used by `yian chat`
 A chat is a `loop` whose body blocks each turn at `ask` (`human_input`), then a

@@ -976,7 +976,6 @@ turn:
     messages: []
     exited: false
   while: not exited            # pre-check predicate, over the carried record
-  max: 100                     # required runaway guard
 ```
 
 A one-off LOOP body can be inline too:
@@ -1029,13 +1028,13 @@ the LOOP contract `'a -> 'a`.
 *before* each iteration; 0 iterations run if the seed already fails it. It is a
 record-scoped boolean over bare refs — every ref must name a **carried record
 field** (a typo'd name is rejected at load, not silently read as falsy) — written
-in the canonical bare form: `while: not exited`. **`max:` is required.**
+in the canonical bare form: `while: not exited`. `max:` is optional.
 
 **`until:` — post-check / do-while (1+ runs).** Same record-scoped predicate
 syntax as `while:` (bare refs, no `${}`), but checked *after*
 each iteration: the body always runs at least once, and the loop **continues
-while the predicate is FALSE and stops the moment it becomes TRUE**. **`max:` is
-required.**
+while the predicate is FALSE and stops the moment it becomes TRUE**. `max:` is
+optional.
 
 ```yaml
 retry:
@@ -1044,7 +1043,7 @@ retry:
   input:
     ok: false
   until: ok                    # post-check; runs once, then stops when ok is true
-  max: 5                       # required runaway guard
+  max: 5                       # optional runaway guard
 ```
 
 **`times: N` — fixed count.** The body runs exactly `N` times, with no predicate.
@@ -1061,9 +1060,10 @@ poll:
   times: 3                     # exactly 3 runs; do NOT also give max:
 ```
 
-- **`max:`** (for `while:`/`until:`) is a **required** runaway guard — a plain
-  integer `>= 1`: if the loop would run more than `max` iterations the run fails
-  loudly (`LoopMaxExceeded`).
+- **`max:`** (for `while:`/`until:`) is an optional runaway guard. Without it the
+  loop has no iteration limit: it runs until its predicate ends it (or the run is
+  interrupted). When given, it is a plain integer `>= 1`, and a loop that would run
+  more than `max` iterations fails loudly (`LoopMaxExceeded`).
 
 The node's value is the final carried record (committed under the loop node's id
 once the loop stops).
@@ -1072,10 +1072,12 @@ A body may itself block (e.g. a `human_input` leaf): the worker stays inside tha
 live iteration until the host answers, then the same run advances into the next
 iteration. This is the shape a chat REPL takes.
 
-A long loop stays within the engine's node budget: once an iteration commits its
-carried record forward, that iteration's expanded body is **pruned** from the live
-graph, so only one iteration is resident at a time (a thousand-turn loop costs the
-same as a two-turn one).
+Each continuing iteration **prunes** the previous iteration's body nodes from the
+live graph, so a body of leaf nodes keeps about one iteration resident. Nodes grown
+inside the body by a nested CALL, MAP, or LOOP are not pruned. Such a loop adds them
+every iteration and fails once the run reaches the engine's node budget (10,000 live
+nodes, "expansion exceeded node budget"). Set `max:` on such a loop, or keep the
+nested work small.
 
 ## Effects from inside an AGENT node — the `ask_user` tool
 

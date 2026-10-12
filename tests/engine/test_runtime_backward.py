@@ -935,7 +935,10 @@ def test_loop_passthrough_field_routes_feedback_to_its_seed(shape, times, monkey
     engine, _, _ = _owner_engine(flow, {"n": 10, "tag": "red"})
     original = deepcopy(engine.state.flow)
     list(engine.run())
-    assert engine.state.trace.terminal.output == {"n": 10 - times, "tag": "red", **({"seen": "red"} if shape == "chat-shaped" else {})}
+    expected_output = {"n": 10 - times, "tag": "red"}
+    if shape == "chat-shaped":
+        expected_output["seen"] = "red"
+    assert engine.state.trace.terminal.output == expected_output
     root, results = compute_backward(engine.state.trace, feedback)
     validate_attributed_backward(engine.state.trace, feedback, root, results)
     assert root.input_feedback == expected

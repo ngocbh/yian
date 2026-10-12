@@ -178,7 +178,7 @@ class _SeedRoutes:
 def select_seed_route(
     capture: ForwardCapture, connection: SeedConnection, input_route: ValueRoute | None = None,
 ) -> ValueRoute | None:
-    """Select one captured field by explicit item/name metadata, preserving nulls.
+    """Select one seed field route by explicit item/name metadata, preserving nulls.
 
     Args:
         capture: The owner's accepted forward capture.
@@ -521,8 +521,9 @@ def prepare_trace(
         boundary_update = (index, replace(trace._boundaries[index], **{role: source}))
     connections: dict[str, list[tuple[str, ValueRoute]]] = {}
     for connection in sorted(input_connections, key=lambda item: (item.child_start_id, item.input_name)):
-        # An owner that is itself a connection target (a LOOP driver's passthrough
-        # field) forwards its joined route, so lineage survives every iteration.
+        # An owner that is itself a connection target (a LOOP driver whose omitted field
+        # binds a default) forwards its joined route rather than the raw default, so
+        # lineage survives every iteration.
         route = select_seed_route(capture, connection, input_route)
         if route is None:
             raise ValueError("seed connection field or item was not captured")

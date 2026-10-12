@@ -513,8 +513,9 @@ reaches body AGENT nodes. See
 [`templates/inline-composites.yaml`](templates/inline-composites.yaml).
 
 ### `loop` — iterate a body until a predicate goes false (the engine's `while`)
-Threads ONE carried record from each turn into the next: the body maps the carried
-record to the NEXT one (`'a -> 'a`), and the loop re-runs while `while:` holds.
+Threads ONE carried record from each turn into the next: the body reads the carried
+record and returns the fields that change (`'a -> 'a`), and the loop re-runs while
+`while:` holds.
 ```yaml
 turn:
   kind: loop
@@ -527,11 +528,17 @@ turn:
 `loop` accepts the same inline `nodes:` + `output:` form instead of `call:`; its
 generated parameters are the carried `input:` fields, so the same `'a -> 'a`
 contract still applies.
-The body's `output:` shape must **equal** the carried record and read only a
-**subset** of its names (`'a -> 'a`) — names are checked at build, and statically
-proven body/seed field pairs are compared at load. Proven output fields are always
-enforced at runtime and replay. The
-node's value is the final carried record. A body that blocks (a `human_input` leaf)
+The body's `output:` returns a **subset** of the carried record (at least one field);
+each omitted field keeps its previous value, with nothing to declare. A body field
+that is not carried is a load error. The body reads only a **subset** of the carried
+names. Names are checked at build; each returned field must keep its carried type,
+compared at load for proven body/seed pairs and always enforced at runtime and replay.
+Omitting a field keeps it; returning null sets a nullable field to null. A body with
+ONE declared output returns it bare, so `output: {done: ...}` is not a record: to
+return one field, use `output: ${step.output}` where `step` declares
+`output: {done: bool}`. A `while:`/`until:` that reads only fields the body never
+returns cannot change, so without `max:` it runs forever. The
+node's value (and the LOOP node's own `asserts:`) is the merged carried record. A body that blocks (a `human_input` leaf)
 makes the loop a live chat REPL: the same run threads each answered turn. Pick
 **exactly one**
 driver: `while:` (pre-check, 0+ runs), `until:` (post-check / do-while, 1+ runs,
@@ -545,7 +552,8 @@ A chat is a `loop` whose body blocks each turn at `ask` (`human_input`), then a
 bindings rejoin the exit record or normal transcript into the carried
 `{transcript: str, exited: bool}` record. Typed exit is flow-owned — a host must
 not intercept it — while terminal EOF may be normalized to `/exit`. **Gotcha:**
-the body's `output:` must EQUAL the carried record. A lone multi-ref coalesce has
+the body's `output:` may return only some carried fields; the rest keep their values.
+A lone multi-ref coalesce has
 no inferable type; adjacent defaulted spans preserve `str`, and comparing the
 optional exit field with `true` proves the carried `bool`. See
 [`templates/chat.yaml`](templates/chat.yaml).

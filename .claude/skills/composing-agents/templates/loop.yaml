@@ -1,13 +1,13 @@
 # Loop — iterate a body until a predicate goes false (the engine's `while`).
-# The loop threads ONE carried record from each turn into the next: the body maps
-# the carried record to the NEXT carried record ('a -> 'a), and the loop re-runs it
+# The loop threads ONE carried record from each turn into the next: the body reads
+# the carried record and returns the fields that change ('a -> 'a); the loop re-runs it
 # while `while:` holds. Here the body BLOCKS each turn on a human_input leaf, so
 # this is the shape a live chat REPL takes: one run threads answer -> turn -> answer.
 #
-# The contract ('a -> 'a): the body's `output:` shape must EQUAL the carried record
-# (the loop `input:`), and the names the body reads must be a SUBSET of the carried
-# names. Field NAMES are checked at build; statically proven body and seed TYPES
-# are compared at load, and proven output fields are enforced at runtime/replay.
+# The contract ('a -> 'a): the body's `output:` returns a SUBSET of the carried record
+# (the loop `input:`); each omitted field keeps its previous value. The names the body
+# reads must be a SUBSET of the carried names too. Field NAMES are checked at build; each
+# returned field keeps its carried TYPE (load), enforced at runtime/replay.
 #
 # Customize: point `code:` at an importable `module:function` on your PYTHONPATH.
 #   def fold_turn(inputs: dict) -> dict:      # receives its bound input record
@@ -37,7 +37,7 @@ defs:
         input:
           messages: ${input.messages}
           msg: ${ask.output}       # this turn's human message
-        output:                    # MUST equal the carried record shape
+        output:                    # carried fields only; here it returns both
           messages: list[str]
           exited: bool
         code: your_package.chat:fold_turn

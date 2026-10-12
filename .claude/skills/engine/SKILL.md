@@ -237,7 +237,9 @@ this model whenever you design anything:
   Direct whole references and `ChildSignature.output` preserve either output-contract
   arm. Multi-output assembly creates an exact record when possible and otherwise a
   closed `PartialRecordContract`; unknown type evidence is never concrete `None`.
-  CALL/LOOP preserve that carrier, while MAP wraps only an exact child type. Live commit,
+  CALL preserves that carrier; a LOOP's carrier is the merged carried record (returned
+  fields from the body, omitted fields from their seeds); MAP wraps only an exact child
+  type. Live commit,
   replay, validators, and manifests therefore share one authority. A `None` source is
   compatible with any nullable sink, including recursively inside lists, matching
   runtime coercion.
@@ -459,6 +461,12 @@ Most are just the functional model (above) made enforceable:
   capture, keeping the original capture unchanged. `evaluated_keys` wins over a
   parent candidate, including an actual expression that returned null. Consume or
   prune pending connections so reused runtime IDs cannot inherit stale sources.
+  A connection may also target a fragment node's defaulted, unwired input (the next
+  LOOP driver's field the body omits). A spawner selects next-hop seed routes from its
+  effective input route, so an omitted field keeps its lineage across iterations.
+  `LoopNode.respawn(k, carried)` gives that driver a default per omitted field from the
+  canonical seed, and only returned fields are wired, so live growth and replay merge
+  alike; a total loop keeps its identity and digests.
   LOOP templates begin at driver zero; cloning adds outer positions while keeping
   a nested LOOP's initial driver suffix. Continuations replace their own driver
   position. Do not parse runtime IDs or change memory ownership to derive these

@@ -69,8 +69,9 @@ results stay unknown rather than inheriting one referenced operand's type. Each
 declared output retains optional field-local evidence, so an opaque field is never
 encoded as actual `None`, MAP can distinguish an opaque result from no declaration,
 and LOOP still checks proven siblings. A `${null}` source may fill a nullable sink.
-For LOOP, those proven siblings and the complete field-name set remain enforced even
-when `while:` stops before the first body run or a durable run is replayed.
+For LOOP, those proven siblings and the carried field-name set remain enforced even
+when `while:` stops before the first body run or a durable run is replayed. A field
+the LOOP body omits takes its type from its seed binding.
 
 ## The three expression contexts (one grammar)
 
@@ -261,8 +262,9 @@ one-off, keep the CALL/MAP/LOOP node and put its closed `nodes:` + `output:` bod
 there instead; do not create a throwaway `defs:` entry.
 
 **Loop until done.** Use a `loop` node to re-run a body under one of three drivers,
-threading a carried record `'a -> 'a` (the body's `output:` shape EQUALS its
-`input:`). The `input:` is the SEED carried record. Pick EXACTLY ONE driver:
+threading a carried record `'a -> 'a` (the body's `output:` returns a subset of
+the carried fields; each omitted field keeps its value). The `input:` is the SEED
+carried record. Pick EXACTLY ONE driver:
 `while: not done` is a PRE-check over the carried record (0+ runs, stop when the
 predicate goes false); `until: done` is a POST-check / do-while (1+ runs, stop
 when the predicate becomes TRUE); `times: N` runs exactly N times with no
@@ -281,8 +283,8 @@ runaway fails with `LoopMaxExceeded` first. See `loop.yaml`.
 record before `reply` (`agent`). The normal branch appends the message and reply to the
 transcript. Output bindings rejoin those branches into the carried 2-field record
 `{transcript: str, exited: bool}` (`'a -> 'a`). Typed exit is flow-owned; only terminal
-EOF is normalized by the bundled host. The loop body's `output:` must EQUAL the carried
-record. A lone multi-ref coalesce has no inferable type, so the template uses adjacent
+EOF is normalized by the bundled host. The loop body's `output:` may return only the
+fields that change; a field it omits keeps its value. A lone multi-ref coalesce has no inferable type, so the template uses adjacent
 defaulted spans for the `str` field and compares the optional exit field with `true` to
 prove `bool`. This is the shape `yian chat` runs; see `chat.yaml` (and
 `examples/chat.yaml` for a runnable copy).
@@ -309,9 +311,14 @@ prove `bool`. This is the shape `yian chat` runs; see `chat.yaml` (and
   the search path). `alias@v1` adds a version guard.
 - **No `kind: model`** — removed; serve ML inference behind a host tool and call it
   with `kind: tool`. Use `code` for deterministic compute.
-- **`loop` bodies must be `'a -> 'a`.** The body's `output:` shape must EQUAL the
-  loop's `input:` (carried record) and read only a subset of its names — checked at
-  build (names) and load (types). Give EXACTLY ONE driver: `while:` (pre-check,
+- **`loop` bodies return a subset of the carried record.** The body's `output:`
+  returns at least one of the loop's `input:` (carried record) fields, and no others;
+  each omitted field keeps its previous value. The body reads only a subset of the
+  carried names. Names are checked at build; each returned field must keep its carried
+  type (checked at load). Omitted keeps a field; a returned null sets a nullable field
+  to null. A body with ONE declared output returns it bare, so to return one field use
+  `output: ${step.output}` where `step` declares a record output. A predicate that
+  reads only fields the body never returns cannot change; give such a loop `max:`. Give EXACTLY ONE driver: `while:` (pre-check,
   0+ runs), `until:` (post-check / do-while, 1+ runs), or `times: N` (fixed count).
   `max:` is optional for `while:`/`until:` but REDUNDANT+REJECTED with `times:`.
   Every `while:`/`until:` ref must name a carried field (a typo is rejected at load,

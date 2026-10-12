@@ -50,7 +50,7 @@ from yian.nodes.contracts import (
     PartialRecordContract,
     SeedConnection,
     binding_source,
-    missing_output_contract_field,
+    output_contract_field_error,
     output_contract_origin,
     output_contract_type,
     validate_output_contract,
@@ -3117,14 +3117,9 @@ def _validate_growth_wiring_refs(
                 and parts[1] == "output"
                 and parts[0] in producer_contracts
             ):
-                missing = missing_output_contract_field(
-                    producer_contracts[parts[0]], parts[2:]
+                error = output_contract_field_error(
+                    producer_contracts[parts[0]], parts[2:], path
                 )
-                if missing is not None:
-                    error = (
-                        f"reference ${{{path}}} reads unknown field {missing!r} "
-                        "on record"
-                    )
             if error is not None:
                 _raise_growth_rejected(
                     ValueError(

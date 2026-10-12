@@ -61,6 +61,11 @@ evaluator serves the pool, a prompt's local record, and the map-body `item` scop
 2. **arithmetic over that `None` raises** — a missing operand never silently becomes `0`,
 3. an **ordered comparison with `None` is `False`** — so an absent value routes to `default`.
 
+In bindings, CASE conditions, and flow outputs the loader rejects field reads a known
+type can't have (see `syntax.md`), so a `None` there is a null, skipped, or untyped
+value, not a misspelled field. LOOP predicates and some assert reads check only the
+name, so a `None` in a condition can still be a dotted miss.
+
 **`ResolveMode`** — how the caller wants a miss treated:
 
 | Mode | A missing reference… | Used by |

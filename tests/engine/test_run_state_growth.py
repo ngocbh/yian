@@ -1086,6 +1086,22 @@ def _invalid_fragment(case: str) -> Any:
             fragment.end_id,
             input_group="value",
         )
+    elif case == "field-on-scalar":
+        fragment.nodes[fragment.start_id].output_contract = ValueContract(
+            Type.scalar(ValueKind.STRING)
+        )
+        end = EndNode.record(fragment.end_id, output_names=["value"])
+        end.commit_as = "spawn"
+        fragment.nodes[fragment.end_id] = end
+        fragment.wiring[fragment.end_id] = {
+            "value": Binding(f"${{{fragment.start_id}.output.order}}")
+        }
+        fragment.edges[0] = Edge(
+            fragment.edges[0].id,
+            fragment.start_id,
+            fragment.end_id,
+            input_group="value",
+        )
     elif case == "unknown-partial-field":
         fragment.nodes[fragment.start_id].output_contract = PartialRecordContract(
             fields=(
@@ -1144,6 +1160,7 @@ def _invalid_fragment(case: str) -> Any:
         "unknown-system-ambient",
         "unknown-typed-field",
         "unknown-partial-field",
+        "field-on-scalar",
         "unknown-reference",
         "cycle",
     ],
@@ -1163,6 +1180,18 @@ def test_growth_rejects_invalid_fragments_atomically(case: str):
     assert type(caught.value.original) in (TypeError, ValueError)
     assert _snapshot(state) == before
     assert log.next_sequence == 4
+
+
+def test_growth_rejects_a_field_read_on_a_scalar_contract():
+    state, _ = _initialized_spawner()
+    with pytest.raises(GrowthRejected) as caught:
+        prepare_expanded(
+            state,
+            "spawn",
+            Grow(seed={}),
+            lambda spawner, seed: _invalid_fragment("field-on-scalar"),
+        )
+    assert "reads field 'order' on type str, which has no fields" in str(caught.value.original)
 
 
 def test_growth_builder_non_flow_return_is_a_raw_host_fault():

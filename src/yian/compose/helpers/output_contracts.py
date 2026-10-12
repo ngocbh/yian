@@ -25,7 +25,7 @@ from yian.nodes.contracts import (
     PartialRecordContract,
     ValueContract,
     binding_source,
-    missing_output_contract_field,
+    output_contract_field_error,
     output_contract_type,
 )
 from yian.typesys.values import Type, ValueKind
@@ -128,15 +128,13 @@ def output_contract_path_error(
     fields: list[str],
     path: str,
 ) -> str | None:
-    """Return an unknown-field error for a closed output path, else ``None``.
+    """Return the field-read error for an output path, else ``None``.
 
+    The error is an undeclared record field or any field on a scalar or list.
     An opaque field inside a partial record remains lenient below that field,
     while the partial record's closed root name set is still enforced.
     """
-    missing = missing_output_contract_field(contract, fields)
-    if missing is None:
-        return None
-    return f"reference ${{{path}}} reads unknown field {missing!r} on record"
+    return output_contract_field_error(contract, fields, path)
 
 
 def resolve_output_binding_contract(

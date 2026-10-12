@@ -1327,6 +1327,7 @@ def _assemble(
         producers,
         outputs_section,
         flow_wiring,
+        input_contracts=flow_input_contracts,
         outputs_range=outputs_range,
         diagnostics=diagnostics,
     )

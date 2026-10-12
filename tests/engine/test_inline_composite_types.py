@@ -563,6 +563,18 @@ def test_known_partial_producer_field_is_available_to_inline_inference():
     assert inferred == Type.scalar(ValueKind.INTEGER)
 
 
+def test_inline_inference_rejects_a_field_on_a_scalar_producer():
+    with pytest.raises(LoadError, match="reads field 'x' on type int, which has no fields"):
+        infer_inline_binding_type(
+            "${source.output.x}",
+            parent_input_types={},
+            producer_type=lambda _node, _label, _range: ValueContract(
+                Type.scalar(ValueKind.INTEGER)
+            ),
+            binding_label="call.input.value",
+        )
+
+
 @pytest.mark.parametrize("reference", ["${source.output}", "${source.output.note}"])
 def test_opaque_partial_producer_reads_remain_unavailable_to_inline_inference(
     reference: str,

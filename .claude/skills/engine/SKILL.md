@@ -215,8 +215,10 @@ this model whenever you design anything:
   descriptors, child signatures, producer
   maps, and validators retain the contract and project `.type` only inside type
   algorithms. Compose and runtime growth reference validation share the source-neutral
-  closed-field walk from `nodes/contracts.py`. Python-authored nodes pass
-  `output_contract=`; there is no parallel
+  closed-field walk from `nodes/contracts.py` (`output_contract_field_error`): it
+  rejects a provably absent record field and any field on a scalar or list type;
+  an opaque `object` (no declared fields) and `file` stay unchecked. Python-authored
+  nodes pass `output_contract=`; there is no parallel
   output-Type API. Authored `output:` syntax (the descriptor's normalized `outputs` field)
   stays unchanged. Compose injects an optional source-aware reader through `BuildContext`;
   `NodeDescriptor.output_contract()` invokes it

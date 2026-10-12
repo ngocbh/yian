@@ -33,9 +33,8 @@ class LoopDescriptor(NodeDescriptor):
 
     `call` names the body child flow (defs-first, else external — same resolution as
     `call`/`map`). The authored `input:` mapping seeds the carried record at turn 0. Exactly one of
-    `while_`/`until_`/`times` carries the predicate; `max` is the optional iteration limit for
-    while/until (without it the loop has no iteration limit). `while`/`until` are Python keywords,
-    so they land here as `while_`/`until_`.
+    `while_`/`until_`/`times` carries the predicate; `max` optionally limits while/until
+    iterations. `while`/`until` are Python keywords, so they land here as `while_`/`until_`.
 
     Inherits the common descriptor fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` +
     the Compose-only `range`/`field_ranges` parse metadata) and the template `parse` from `NodeDescriptor` (no
@@ -119,9 +118,8 @@ class LoopDescriptor(NodeDescriptor):
         errors: list[str] = []
         # Exactly one of `while:`/`until:`/`times:` selects the loop's
         # driver. `while`/`until` are PREDICATE loops (record-scoped boolean, optional `max:`
-        # iteration limit); `times: N` is a fixed COUNT (no predicate, `max:` redundant since the
-        # count bounds it). Bake `predicate_kind`/`predicate`/`times`/`max_iters` per the present
-        # kind.
+        # limit); `times: N` is a fixed COUNT (no predicate, `max:` redundant since the count
+        # bounds it). Bake `predicate_kind`/`predicate`/`times`/`max_iters` per the present kind.
         present = [
             k
             for k, v in (

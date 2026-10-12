@@ -354,8 +354,8 @@ BAD_MAX = GOOD.replace("    max: 5\n", "    max: 0\n")
 
 
 # A `while:` predicate that references a name NOT in the carried record ({n, exited}) — here a
-# typo `exted` for `exited`. Record-scoped eval would resolve it falsy and spin to `max`, so it
-# must be rejected loudly at build.
+# typo `exted` for `exited`. Record-scoped eval would resolve it falsy and spin the loop (forever
+# without `max:`), so it must be rejected loudly at build.
 BAD_PREDICATE_NAME = GOOD.replace("    while: not ${exited}\n", "    while: not ${exted}\n")
 
 # `max:` must be a plain integer. The descriptor is a bare dataclass (its `Optional[int]`

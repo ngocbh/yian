@@ -345,3 +345,66 @@ def test_untyped_output_reads_still_load():
         "output:\n  o: ${step.output.anything.deeper}\n"
     )
     load_flow(text)
+
+
+_INPUTS = (
+    "input:\n  s: str\n  r:\n    a: str\n  tags: list[str]\n  o: object\n  d: file\n"
+)
+
+
+def _input_flow(ref: str) -> str:
+    return (
+        "id: p\nname: p\n" + _INPUTS + "nodes:\n"
+        "  step:\n"
+        "    kind: code\n"
+        "    input:\n"
+        f"      v: {ref}\n"
+        "    output: str\n"
+        "    code: return 'x'\n"
+        "output: ${step.output}\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "ref, expected",
+    [
+        ("${input.s.first}", "reads field 'first' on type str, which has no fields"),
+        ("${input.tags.first}", "reads field 'first' on type list[str], which has no fields"),
+        ("${input.r.b}", "reads unknown field 'b' on record"),
+        ("${input.r.a.b}", "reads field 'b' on type str, which has no fields"),
+    ],
+)
+def test_flow_input_field_reads_are_checked(ref, expected):
+    msg = _load_error(_input_flow(ref))
+    assert f"node 'step' input 'v' from: reference {ref} {expected}" in msg
+
+
+@pytest.mark.parametrize(
+    "ref", ["${input.r.a}", "${input.o.any.depth}", "${input.s}", "${input.d.uri}"]
+)
+def test_valid_flow_input_reads_still_load(ref):
+    load_flow(_input_flow(ref))
+
+
+def test_inline_body_input_field_reads_are_checked():
+    """A `defs:` body's own typed inputs are checked the same way."""
+    text = (
+        "id: p\nname: p\ninput:\n  s: str\n"
+        "defs:\n"
+        "  child:\n"
+        "    input:\n      s: str\n"
+        "    nodes:\n"
+        "      step:\n"
+        "        kind: code\n"
+        "        input:\n          v: ${input.s.first}\n"
+        "        output: str\n"
+        "        code: return 'x'\n"
+        "    output: ${step.output}\n"
+        "nodes:\n"
+        "  c:\n"
+        "    kind: call\n"
+        "    call: child\n"
+        "    input:\n      s: ${input.s}\n"
+        "output: ${c.output}\n"
+    )
+    assert "reference ${input.s.first} reads field 'first' on type str" in _load_error(text)

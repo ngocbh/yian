@@ -74,6 +74,7 @@ def validate_references(
     outputs: Any,
     flow_wiring: dict[str, dict[str, Any]],
     *,
+    input_contracts: dict[str, ValueContract] | None = None,
     outputs_range: Optional[SourceRange] = None,
     diagnostics: LoadDiagnostics | None = None,
 ) -> None:
@@ -83,11 +84,12 @@ def validate_references(
     `Node`s and desugared `CaseNode`s (their wiring carries the `__rN`/`__on` sources), while
     its range fields retain YAML locations only for this validation phase.
     `flow_inputs` is the `read_flow_inputs(...)` decl names (the `${input.X}` set);
-    `producers` maps node id -> its exact or partial `output_contract`. An absent
-    contract stays lenient. The namespace checker validates the reference head, then
-    the shared output-contract helper checks exact fields or the partial arm's closed
-    root name set without inventing a type for opaque fields. `outputs` is the raw flow
-    `output:` section.
+    `input_contracts` maps those names to their exact contracts, so `${input.X.f}` is
+    field-checked too (`None` checks names only). `producers` maps node id -> its exact or
+    partial `output_contract`. An absent contract stays lenient. The namespace checker
+    validates the reference head, then the shared output-contract helper checks exact fields
+    or the partial arm's closed root name set without inventing a type for opaque fields.
+    `outputs` is the raw flow `output:` section.
 
     Each error anchors on the referencing site's `SourceRange`, resolved from its
     `BuildResult.field_ranges` — the OFFENDING ENTRY where one exists (`("input", name)`, stamped per
@@ -100,6 +102,7 @@ def validate_references(
     verbatim — the per-node walk glue is the only loader-specific code.
     """
     diagnostics = diagnostics or LoadDiagnostics()
+    input_contracts = input_contracts or {}
     valid_targets = set(build_results)
     # Keep exact and partial carriers intact; the Compose projection below checks
     # closed record paths without inventing a Type for opaque fields.
@@ -143,6 +146,15 @@ def validate_references(
             ):
                 err = output_contract_path_error(
                     producers[parts[0]], parts[2:], path
+                )
+            elif (
+                err is None
+                and len(parts) >= 3
+                and parts[0] == "input"
+                and parts[1] in input_contracts
+            ):
+                err = output_contract_path_error(
+                    input_contracts[parts[1]], parts[2:], path
                 )
             if err is not None:
                 errors.append((f"{where}: {err}", rng))

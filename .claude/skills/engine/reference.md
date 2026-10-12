@@ -789,6 +789,8 @@ backward or change `llm_config`.
 Compose and runtime growth reference validation both call the source-neutral closed-field
 walk in `nodes/contracts.py`; exact nested records and partial root name sets therefore
 reject the same provably absent paths without importing Compose into runtime.
+The walk, `output_contract_field_error`, also rejects any field on a scalar or list
+type; `object` and `file` stay unchecked.
 
 Compose output derivation, builders, child signatures, and producer maps retain the
 complete output-contract sum. `ChildSignature.declared_outputs` retains ordered

@@ -61,6 +61,9 @@ evaluator serves the pool, a prompt's local record, and the map-body `item` scop
 2. **arithmetic over that `None` raises** — a missing operand never silently becomes `0`,
 3. an **ordered comparison with `None` is `False`** — so an absent value routes to `default`.
 
+The loader rejects field reads a known type can't have, so a run-time `None` comes from a
+null or opaque value, not a misspelled field.
+
 **`ResolveMode`** — how the caller wants a miss treated:
 
 | Mode | A missing reference… | Used by |

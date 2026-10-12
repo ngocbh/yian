@@ -47,9 +47,10 @@ def _resolve_in_record(path: str, record: dict) -> Any:
     """Resolve a `${path}` against a node's bound input record (dotted walk).
 
     A missing input, dotted miss, or `None` step returns `None`, which gives `when:` its
-    missing-is-falsy behavior. The compile-time strict check rejects undeclared names, so
-    a `None` here is a legitimate empty value rather than an authoring error. Bare
-    local-input refs only.
+    missing-is-falsy behavior. Compose rejects undeclared names, and field reads a known
+    type can't have in bindings, CASE conditions and flow outputs. LOOP predicates and
+    nested node-assert paths still check only the head name, so a `None` here can also be
+    a dotted miss on those. Bare local-input refs only.
     """
     parts = [p.strip() for p in path.strip().split(".")]
     if not parts or any(not p for p in parts):

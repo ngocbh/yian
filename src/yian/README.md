@@ -452,6 +452,8 @@ of the run-record wire. Manifests include the semantic exact/partial contract bu
 origins, so changing or rebasing provenance does not change flow or expansion identity.
 Compose and runtime growth reference validation share the source-neutral closed-field
 walk in `nodes/contracts.py`, so a partial record cannot expose a provably absent field.
+That walk, `output_contract_field_error`, rejects a provably absent record field and any
+field on a scalar or list type; `object` and `file` stay unchecked.
 
 Physical Compose declarations derive exact `ValueContract`s. Output binding derivation,
 builders, child signatures, producer maps, and validators retain the complete

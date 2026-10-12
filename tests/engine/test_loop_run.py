@@ -813,6 +813,39 @@ def test_partial_body_keeps_omitted_fields_across_turns():
     }
 
 
+# A one-field body `output: {count: ...}` returns only `count`; `label` keeps its seed.
+ONE_FIELD_BODY = """
+id: one-field-body
+name: one_field_body
+nodes:
+  loop:
+    kind: loop
+    times: 3
+    input:
+      count: 0
+      label: x
+    nodes:
+      bump:
+        kind: code
+        input:
+          n: ${input.count}
+        output: int
+        code: |
+          return inputs["n"] + 1
+    output:
+      count: ${bump.output}
+output: ${loop.output}
+"""
+
+
+def test_one_field_body_keeps_the_other_carried_fields():
+    loaded = load_flow(ONE_FIELD_BODY)
+    assert loaded.compiled.nodes["loop"].returned_fields == ("count",)
+    result = run_flow(loaded, {})
+    assert result.status == "succeeded", result.failure
+    assert result.output == {"count": 3, "label": "x"}
+
+
 PARTIAL_NOTE = """
 id: partial-note
 name: partial_note

@@ -389,6 +389,84 @@ def test_one_field_body_record_returns_only_that_carried_field():
     assert run_flow(loaded, {}).output == {"n": 0, "state": {"n": 100}}
 
 
+# A value body `output: ${step.output}` over a scalar returns no record, so it returns no
+# carried fields.
+SCALAR_VALUE_BODY = """
+id: loop-scalar-value-body
+name: loop_scalar_value_body
+defs:
+  bump:
+    input:
+      n: int
+    nodes:
+      step:
+        kind: code
+        input:
+          n: ${input.n}
+        output: int
+        code: |
+          return inputs["n"] + 1
+    output: ${step.output}
+nodes:
+  chat_loop:
+    kind: loop
+    call: bump
+    input:
+      n: 0
+    times: 2
+output: ${chat_loop.output}
+"""
+
+
+def test_scalar_value_body_is_rejected():
+    with pytest.raises(LoadError) as e:
+        load_flow(SCALAR_VALUE_BODY)
+    message = str(e.value)
+    assert (
+        "loop node 'chat_loop': body callable 'bump' must return a record whose field names "
+        "are a subset of the carried record ['n']; write `output: {field: ...}` or a whole "
+        "reference to a node with a record output"
+    ) in message
+    assert "returns its value bare" not in message
+
+
+# A value body re-exports the referenced record `{n}`, so it returns the carried `n` even
+# though the carried record also has a field named `result`.
+VALUE_BODY_BESIDE_CARRIED_RESULT = """
+id: loop-value-body-carried-result
+name: loop_value_body_carried_result
+defs:
+  bump:
+    input:
+      n: int
+    nodes:
+      step:
+        kind: code
+        input:
+          n: ${input.n}
+        output:
+          n: int
+        code: |
+          return {"n": inputs["n"] + 1}
+    output: ${step.output}
+nodes:
+  chat_loop:
+    kind: loop
+    call: bump
+    input:
+      result: start
+      n: 0
+    times: 2
+output: ${chat_loop.output}
+"""
+
+
+def test_value_body_returns_the_referenced_record_beside_a_carried_result():
+    loaded = load_flow(VALUE_BODY_BESIDE_CARRIED_RESULT)
+    assert loaded.compiled.nodes["chat_loop"].returned_fields == ("n",)
+    assert run_flow(loaded, {}).output == {"result": "start", "n": 2}
+
+
 def test_total_loop_keeps_body_contract_and_no_returned_fields():
     node = load_flow(GOOD).compiled.nodes["chat_loop"]
     assert node.returned_fields is None

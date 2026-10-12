@@ -2518,7 +2518,7 @@ output: ${repeat.output}
           x: ${input.n}
         output: int
 """,
-            "body inline body of node 'repeat' must declare a record output",
+            "body inline body of node 'repeat' must return a record",
         ),
         (
             """      step:

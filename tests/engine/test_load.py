@@ -101,7 +101,7 @@ def test_seed02_gate_is_case_with_control_edges():
     # coalesce flow-output: BOTH branches reach __end__.
     end_producers = {e.from_ for e in flow.edges if e.to == END_ID}
     assert end_producers == {"positive", "cautious"}
-    # Bare whole-string `output:` -> one FlowOutput (record-mode END returns the bare value).
+    # Bare whole-string `output:` -> one FlowOutput (value-mode END returns the bare value).
     assert len(flow.outputs) == 1
     assert flow.outputs[0].from_ == "${positive.output | cautious.output}"
 

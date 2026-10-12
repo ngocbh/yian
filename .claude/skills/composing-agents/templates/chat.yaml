@@ -69,7 +69,7 @@ defs:
               + "\n\nUser: " + inputs["message"]
               + "\n\nAssistant: " + inputs["reply"]
           )
-    output:                         # both carried fields; one field alone needs a record node
+    output:                         # both carried fields; a body may also return just one
       transcript: '${exit_turn.output.transcript:-""}${normal_turn.output:-""}'
       exited: ${exit_turn.output.exited == true}  # comparison is always bool
 

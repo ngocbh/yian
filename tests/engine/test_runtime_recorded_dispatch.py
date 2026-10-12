@@ -203,7 +203,7 @@ def _flow(nodes: list[Node]) -> CompiledFlow:
     all_nodes = {
         START_ID: StartNode(START_ID),
         **{node.id: node for node in nodes},
-        END_ID: EndNode.record(END_ID, output_names=[]),
+        END_ID: EndNode.value(END_ID, output_name=None),
     }
     edges = [
         Edge(
@@ -233,7 +233,7 @@ def _growth_fragment(spawner_id: str) -> Flow:
     start_id = f"{spawner_id}/child/start"
     end_id = f"{spawner_id}/child/end"
     start = StartNode(start_id, params=[])
-    end = EndNode.record(end_id, output_names=[])
+    end = EndNode.value(end_id, output_name=None)
     end.commit_as = spawner_id
     return Flow(
         nodes={start_id: start, end_id: end},
@@ -904,7 +904,7 @@ def test_route_raw_outcome_is_prepared_committed_and_reduced():
         router.id: router,
         chosen.id: chosen,
         skipped.id: skipped,
-        END_ID: EndNode.record(END_ID, output_names=[]),
+        END_ID: EndNode.value(END_ID, output_name=None),
     }
     flow = CompiledFlow.from_parts(
         nodes=nodes,

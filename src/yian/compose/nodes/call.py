@@ -144,8 +144,8 @@ class CallDescriptor(NodeDescriptor):
             }  # over FIRST (edge order)
             if not sig.output_names:
                 errors.append(
-                    f"map node {self.id!r}: {child_display} must declare exactly one "
-                    f"output value — a mapped call (over:) returns list[U] of that single output"
+                    f"map node {self.id!r}: {child_display} must declare a non-empty `output:`; "
+                    "a mapped call (over:) returns a list of the child's results"
                 )
             elif type(sig.output) is ValueContract:
                 node.output_contract = ValueContract(

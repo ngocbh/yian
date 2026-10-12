@@ -36,8 +36,7 @@ nodes:
       v: ${input.x}
     output: str
     code: tests.engine._fakes:passthrough
-output:
-  result: ${n.output}
+output: ${n.output}
 """
     loaded = load_flow_from_string(source)
     rec = run_flow(loaded, {"x": "hi"})
@@ -154,8 +153,7 @@ nodes:
       tag: str
       val: int
     code: tests.engine._fakes:tagged_neg
-output:
-  result: ${gate.output.tag}
+output: ${gate.output.tag}
 """
     loaded = load_flow_from_string(src)
     rec_pos = run_flow(loaded, {"x": 5})
@@ -236,7 +234,7 @@ def test_end_post_assert_reads_output() -> None:
     def _make_flow(post_assert: str) -> CompiledFlow:
         start = StartNode(START_ID, params=[])
         n = FuncNode("n", lambda p: 5)
-        end = EndNode.record(END_ID, output_names=["result"])
+        end = EndNode.value(END_ID, output_name="result")
         end.post_asserts = [Assertion(post_assert, post_assert)]
         nodes = {START_ID: start, "n": n, END_ID: end}
         edges = [

@@ -25,7 +25,7 @@ def test_terminal_trace_keeps_actual_root_writer_until_quiescence(value):
         observations.append(engine.state.trace.terminal)
         return "last outcome"
 
-    end = EndNode.record(END_ID, output_names=["answer"])
+    end = EndNode.value(END_ID, output_name="answer")
     flow = _graph([end, FuncNode("late", late)],
                   [(START_ID, END_ID), (START_ID, "late")],
                   wiring={END_ID: {"answer": value}, "late": {}})

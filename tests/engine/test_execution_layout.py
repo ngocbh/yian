@@ -61,7 +61,7 @@ def test_execution_layout_exists_without_memory_policies(flow_type):
         {
             node.id: node,
             START_ID: StartNode(START_ID, params=[]),
-            END_ID: EndNode.record(END_ID, output_names=[]),
+            END_ID: EndNode.value(END_ID, output_name=None),
         },
         [],
     )
@@ -419,7 +419,7 @@ def test_only_the_containing_flows_actual_boundaries_are_marked():
 
     flow = Flow({
         "entry": StartNode("entry", params=[]),
-        "result": EndNode.record("result", output_names=[]),
+        "result": EndNode.value("result", output_name=None),
         "helper": StartNode("helper", params=[]),
     }, [], start_id="entry", end_id="result")
     layout = resolve_execution_layout(flow)

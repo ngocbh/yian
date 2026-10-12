@@ -30,4 +30,4 @@ nodes:
       rationale: ${input.rationale}
 
 output:
-  line: ${say.output}          # the callee's single value (the verdict string)
+  line: ${say.output}          # the callee's value: lib_verdict returns its verdict string

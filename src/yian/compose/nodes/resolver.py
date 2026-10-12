@@ -33,6 +33,7 @@ from yian.nodes.contracts import (
     PartialRecordContract,
     ValueContract,
 )
+from yian.nodes.end import EndNode
 
 
 @dataclass(frozen=True)
@@ -43,15 +44,17 @@ class ChildSignature:
     `inputs` are the child's canonical `Parameter`s (the name/arity check reads
     their names + required/default policy). `declared_outputs` retains one
     `(name, optional contract)` pair per terminal declaration, so absent, opaque, and
-    proven results remain distinct without duplicating a names list. `output` is the
-    child's single codomain: one declared output re-exports that binding's exact or
-    partial contract; >=2 produces an exact or partial closed record keyed by name;
-    `None` means no output or no statically known shape. This follows the same arity
-    rule the record-mode EndNode assembles."""
+    proven results remain distinct without duplicating a names list. `returns_record`
+    says whether the child's END is in record mode (`output: {...}`). `output` is the
+    child's single codomain: a record child's is an exact or partial closed record keyed
+    by every declared name (even one or none); a value child's re-exports its one
+    declared output's exact or partial contract; `None` means no output or no
+    statically known shape."""
 
     inputs: list[Parameter]
     output: OutputContract | None
     declared_outputs: tuple[tuple[str, OutputContract | None], ...] = ()
+    returns_record: bool = False
 
     def __post_init__(self) -> None:
         """Reject contradictory declared-output evidence when callers provide it."""
@@ -65,7 +68,7 @@ class ChildSignature:
             )
         if type(self.declared_outputs) is not tuple:
             raise TypeError("declared child outputs must be a tuple")
-        if not self.declared_outputs:
+        if not self.declared_outputs and not self.returns_record:
             return  # preserves the legacy two-argument source-free constructor
         names: set[str] = set()
         for pair in self.declared_outputs:
@@ -88,11 +91,14 @@ class ChildSignature:
                     "PartialRecordContract, or None, got "
                     f"{type(contract).__name__} for {name!r}"
                 )
-        expected = (
-            self.declared_outputs[0][1]
-            if len(self.declared_outputs) == 1
-            else combine_output_contracts(dict(self.declared_outputs))
-        )
+        if self.returns_record:
+            expected = combine_output_contracts(dict(self.declared_outputs))
+        elif len(self.declared_outputs) > 1:
+            raise ValueError(
+                "a child that does not return a record declares at most one output"
+            )
+        else:
+            expected = self.declared_outputs[0][1]
         if self.output != expected:
             raise ValueError(
                 "child output contract contradicts its declared output evidence"
@@ -115,9 +121,24 @@ def child_signature(loaded: Any) -> ChildSignature:
 
     Duck-typed on `loaded.input` (the canonical parameters) + `loaded.compiled`
     so `build` need not import `loader` (which imports `build`). The codomain contract
-    follows the record-mode EndNode's arity rule over the flow outputs: one output re-exports
-    its exact or partial contract; >=2 produces an exact or partial closed record keyed
-    by name."""
+    follows the child's END: a record END gives an exact or partial closed record keyed by
+    every declared name; a value END re-exports its one output's exact or partial contract,
+    or `None` without one.
+
+    Args:
+        loaded (`ComposedFlow`):
+            The resolved child flow.
+
+    Returns:
+        `ChildSignature`: The child's parameters, codomain contract, and declared outputs.
+
+    Raises:
+        TypeError: If the child's END is not an `EndNode`, or a producer contract has an
+            unexpected type.
+    """
+    end = loaded.compiled.nodes.get(EndNode.ID)
+    if not isinstance(end, EndNode):
+        raise TypeError(f"child END must be an EndNode, got {type(end).__name__}")
     producers: dict[str, OutputContract] = {}
     for nid, node in loaded.compiled.nodes.items():
         contract = node.output_contract
@@ -147,16 +168,18 @@ def child_signature(loaded: Any) -> ChildSignature:
         )
         for declared in outs
     )
-    if not declared_outputs:
-        output: OutputContract | None = None
-    elif len(declared_outputs) == 1:
+    output: OutputContract | None
+    if end.returns_record:
+        output = combine_output_contracts(dict(declared_outputs))
+    elif declared_outputs:
         output = declared_outputs[0][1]
     else:
-        output = combine_output_contracts(dict(declared_outputs))
+        output = None
     return ChildSignature(
         inputs=list(loaded.input),
         output=output,
         declared_outputs=declared_outputs,
+        returns_record=end.returns_record,
     )
 
 

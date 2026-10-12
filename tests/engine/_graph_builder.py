@@ -4,10 +4,10 @@ once the __start__/__end__ sentinel guards retire (the boundary becomes ordinary
 
 Mirrors the existing test_engine.py manual-graph convention (Edge per tuple + derive_wiring);
 the additions are the StartNode/EndNode node objects under START_ID/END_ID. When the caller
-declares `outputs`, the END_ID node is built RECORD-mode (one param per output) and its producer
-edges are minted from the output bindings (the loader's emit_for shape) so the engine reads the
-declared-output value as `store[END_ID]` — the manual `(x, END_ID)` tuples are then dropped
-(superseded by the minted producer edges). With no `outputs`, END_ID is output-less (returns None)
+declares `outputs`, the END_ID node takes one param per output (VALUE-mode for one, RECORD-mode
+for two or more) and its producer edges are minted from the output bindings (the loader's
+emit_for shape) so the engine reads the declared-output value as `store[END_ID]` — the manual
+`(x, END_ID)` tuples are then dropped (superseded by the minted producer edges). With no `outputs`, END_ID is output-less (returns None)
 and the manual `(x, END_ID)` tuples stand as bare adjacencies.
 """
 
@@ -163,12 +163,18 @@ def _graph(nodes: list, raw_edges: list[tuple], *,
         node_map[START_ID] = StartNode(
             START_ID, params=_synth_start_parameters(node_map, wiring))
     out_list = list(outputs or [])
-    node_map.setdefault(END_ID, EndNode.record(END_ID, output_names=[o.name for o in out_list]))
+    # These Python-API tests use a single output as a value; two or more form a record.
+    if len(out_list) <= 1:
+        end = EndNode.value(END_ID, output_name=out_list[0].name if out_list else None)
+    else:
+        end = EndNode.record(END_ID, output_names=[o.name for o in out_list])
+    node_map.setdefault(END_ID, end)
 
     if out_list:
-        # END_ID is record-mode: drop the manual `(x, END_ID)` terminal tuples and mint the producer
-        # edges from the output bindings (input_group = output name; optional = not co-skips) so
-        # the engine reads the declared value at store[END_ID] and the terminal disposition fires via END_ID.
+        # END_ID reads the declared outputs: drop the manual `(x, END_ID)` terminal tuples and
+        # mint the producer edges from the output bindings (input_group = output name;
+        # optional = not co-skips) so the engine reads the declared value at store[END_ID] and
+        # the terminal disposition fires via END_ID.
         # Mint an edge only for a producer that EXISTS as a node (a missing ref binds leniently to
         # None — the loader's terminal-resolve semantics; real flows have all producers present).
         raw_edges = [t for t in raw_edges if t[1] != END_ID]

@@ -92,7 +92,7 @@ def _fanout_flow() -> CompiledFlow:
         START_ID: StartNode(START_ID),
         "first": FuncNode("first", lambda inputs: inputs),
         "second": FuncNode("second", lambda inputs: inputs),
-        END_ID: EndNode.record(END_ID, output_names=[]),
+        END_ID: EndNode.value(END_ID, output_name=None),
     }
     return CompiledFlow.from_parts(
         nodes=nodes,
@@ -158,7 +158,7 @@ def _route_flow() -> CompiledFlow:
         "chosen": FuncNode("chosen", lambda inputs: inputs),
         "dead-parent": FuncNode("dead-parent", lambda inputs: inputs),
         "dead-child": FuncNode("dead-child", lambda inputs: inputs),
-        END_ID: EndNode.record(END_ID, output_names=[]),
+        END_ID: EndNode.value(END_ID, output_name=None),
     }
     return CompiledFlow.from_parts(
         nodes=nodes,
@@ -248,7 +248,7 @@ def test_route_takes_every_edge_matching_default_or_named_handle(
         "left": FuncNode("left", lambda inputs: inputs),
         "right": FuncNode("right", lambda inputs: inputs),
         "dead": FuncNode("dead", lambda inputs: inputs),
-        END_ID: EndNode.record(END_ID, output_names=[]),
+        END_ID: EndNode.value(END_ID, output_name=None),
     }
     flow = CompiledFlow.from_parts(
         nodes=nodes,
@@ -295,7 +295,7 @@ def test_route_preserves_dfs_observers_and_existing_fifo_readiness():
         "chosen": FuncNode("chosen", lambda inputs: inputs),
         "dead-b": FuncNode("dead-b", lambda inputs: inputs),
         "ready-b": FuncNode("ready-b", lambda inputs: inputs),
-        END_ID: EndNode.record(END_ID, output_names=[]),
+        END_ID: EndNode.value(END_ID, output_name=None),
     }
     flow = CompiledFlow.from_parts(
         nodes=nodes,
@@ -353,7 +353,7 @@ def test_route_skip_join_matches_control_data_ordering_and_wait_semantics():
     nodes = {
         START_ID: StartNode(START_ID),
         **{node_id: FuncNode(node_id, lambda inputs: inputs) for node_id in node_ids},
-        END_ID: EndNode.record(END_ID, output_names=[]),
+        END_ID: EndNode.value(END_ID, output_name=None),
     }
     flow = CompiledFlow.from_parts(
         nodes=nodes,
@@ -707,7 +707,7 @@ def test_route_scans_each_touched_head_incoming_adjacency_once(
         START_ID: StartNode(START_ID),
         "router": FuncNode("router", lambda inputs: inputs),
         "head": FuncNode("head", lambda inputs: inputs),
-        END_ID: EndNode.record(END_ID, output_names=[]),
+        END_ID: EndNode.value(END_ID, output_name=None),
     }
     edges = [Edge(id="start-router", from_=START_ID, to="router")]
     edges.extend(
@@ -745,7 +745,7 @@ def test_route_skip_flood_is_iterative_for_a_deep_chain():
         START_ID: StartNode(START_ID),
         "router": FuncNode("router", lambda inputs: inputs),
         "chosen": FuncNode("chosen", lambda inputs: inputs),
-        END_ID: EndNode.record(END_ID, output_names=[]),
+        END_ID: EndNode.value(END_ID, output_name=None),
     }
     nodes.update(
         {
@@ -941,7 +941,7 @@ def _joined_fanout_flow() -> CompiledFlow:
         "after-a": FuncNode("after-a", lambda inputs: inputs),
         "after-b": FuncNode("after-b", lambda inputs: inputs),
         "join": FuncNode("join", lambda inputs: inputs),
-        END_ID: EndNode.record(END_ID, output_names=[]),
+        END_ID: EndNode.value(END_ID, output_name=None),
     }
     return CompiledFlow.from_parts(
         nodes=nodes,
@@ -1005,7 +1005,7 @@ def _redirect_flow() -> CompiledFlow:
         ),
         "after-baked": FuncNode("after-baked", lambda inputs: inputs),
         "after-explicit": FuncNode("after-explicit", lambda inputs: inputs),
-        END_ID: EndNode.record(END_ID, output_names=[]),
+        END_ID: EndNode.value(END_ID, output_name=None),
     }
     return CompiledFlow.from_parts(
         nodes=nodes,
@@ -1080,7 +1080,7 @@ def test_success_validates_ordinary_target_against_output_contract_type():
                 output_contract=ValueContract(Type.scalar(ValueKind.NUMBER)),
             ),
             "after": FuncNode("after", lambda inputs: inputs),
-            END_ID: EndNode.record(END_ID, output_names=[]),
+            END_ID: EndNode.value(END_ID, output_name=None),
         },
         edges=[
             Edge(id="start-filler", from_=START_ID, to="filler"),
@@ -1255,7 +1255,7 @@ def _interleaved_successor_flow() -> CompiledFlow:
         "target": FuncNode("target", lambda inputs: inputs),
         "after-a": FuncNode("after-a", lambda inputs: inputs),
         "after-b": FuncNode("after-b", lambda inputs: inputs),
-        END_ID: EndNode.record(END_ID, output_names=[]),
+        END_ID: EndNode.value(END_ID, output_name=None),
     }
     return CompiledFlow.from_parts(
         nodes=nodes,
@@ -1289,7 +1289,7 @@ def _parallel_successor_flow(width: int) -> CompiledFlow:
         "target": FuncNode("target", lambda inputs: inputs),
         "after-a": FuncNode("after-a", lambda inputs: inputs),
         "after-b": FuncNode("after-b", lambda inputs: inputs),
-        END_ID: EndNode.record(END_ID, output_names=[]),
+        END_ID: EndNode.value(END_ID, output_name=None),
     }
     edges = [Edge(id="start-target", from_=START_ID, to="target")]
     for index in range(width):
@@ -1566,7 +1566,7 @@ def _constant_degree_success_state(size: int) -> RunState:
         START_ID: StartNode(START_ID),
         "target": FuncNode("target", lambda inputs: inputs),
         "after": FuncNode("after", lambda inputs: inputs),
-        END_ID: EndNode.record(END_ID, output_names=[]),
+        END_ID: EndNode.value(END_ID, output_name=None),
     }
     nodes.update(
         {
@@ -1655,7 +1655,7 @@ def _end_and_sibling_flow() -> CompiledFlow:
         START_ID: StartNode(START_ID),
         "sibling": FuncNode("sibling", lambda inputs: inputs),
         "queued": FuncNode("queued", lambda inputs: inputs),
-        END_ID: EndNode.record(END_ID, output_names=[]),
+        END_ID: EndNode.value(END_ID, output_name=None),
     }
     return CompiledFlow.from_parts(
         nodes=nodes,
@@ -1685,7 +1685,7 @@ def _end_only_in_flight() -> tuple[RunState, MemoryRunLog]:
     """Return a live run with END as the sole in-flight node and no ready work."""
     nodes = {
         START_ID: StartNode(START_ID),
-        END_ID: EndNode.record(END_ID, output_names=[]),
+        END_ID: EndNode.value(END_ID, output_name=None),
     }
     flow = CompiledFlow.from_parts(
         nodes=nodes,
@@ -1802,7 +1802,7 @@ def _terminal_prune_parent_flow() -> CompiledFlow:
         START_ID: StartNode(START_ID),
         "creator": _OutcomeSpawner("creator"),
         "pruner": _OutcomeSpawner("pruner"),
-        END_ID: EndNode.record(END_ID, output_names=["result"]),
+        END_ID: EndNode.value(END_ID, output_name="result"),
     }
     return CompiledFlow.from_parts(
         nodes=nodes,
@@ -1826,7 +1826,7 @@ def _terminal_router_fragment(spawner_id: str) -> Flow:
     router_id = f"{spawner_id}/child/router"
     dead_id = f"{spawner_id}/child/dead"
     end_id = f"{spawner_id}/child/end"
-    end = EndNode.record(end_id, output_names=["zeta"])
+    end = EndNode.value(end_id, output_name="zeta")
     end.commit_as = spawner_id
     router = CodeNode(router_id, code="return inputs")
     router.origin = OriginRef("dynamic-router-site")
@@ -1869,7 +1869,7 @@ def _terminal_pruner_fragment(spawner_id: str) -> Flow:
     """Return a minimal completion fragment for the unrelated pruner."""
     start_id = f"{spawner_id}/child/start"
     end_id = f"{spawner_id}/child/end"
-    end = EndNode.record(end_id, output_names=[])
+    end = EndNode.value(end_id, output_name=None)
     end.commit_as = spawner_id
     nodes = {start_id: StartNode(start_id), end_id: end}
     return Flow(
@@ -1961,7 +1961,7 @@ def test_newly_ready_successor_prevents_quiescence():
         START_ID: StartNode(START_ID),
         "worker": FuncNode("worker", lambda inputs: inputs),
         "after": FuncNode("after", lambda inputs: inputs),
-        END_ID: EndNode.record(END_ID, output_names=[]),
+        END_ID: EndNode.value(END_ID, output_name=None),
     }
     flow = CompiledFlow.from_parts(
         nodes=nodes,
@@ -2484,7 +2484,7 @@ def test_terminal_derivation_replays_from_causal_records_only(outcome: str):
         replay_flow = CompiledFlow.from_parts(
             nodes={
                 START_ID: StartNode(START_ID),
-                END_ID: EndNode.record(END_ID, output_names=[]),
+                END_ID: EndNode.value(END_ID, output_name=None),
             },
             edges=[Edge(id="start-end", from_=START_ID, to=END_ID)],
         )
@@ -2603,7 +2603,7 @@ def _failure_flow() -> CompiledFlow:
         "failing": FuncNode("failing", lambda inputs: inputs),
         "sibling": FuncNode("sibling", lambda inputs: inputs),
         "queued": FuncNode("queued", lambda inputs: inputs),
-        END_ID: EndNode.record(END_ID, output_names=[]),
+        END_ID: EndNode.value(END_ID, output_name=None),
     }
     return CompiledFlow.from_parts(
         nodes=nodes,

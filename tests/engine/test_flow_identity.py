@@ -2066,7 +2066,7 @@ def _fragment() -> Flow:
         )
     ]
     body.output_contract = ValueContract(Type.scalar(ValueKind.INTEGER))
-    end = EndNode.record("terminal", output_names=["result"])
+    end = EndNode.value("terminal", output_name="result")
     return Flow(
         nodes={"entry": start, "body": body, "terminal": end},
         edges=[
@@ -2895,6 +2895,118 @@ def test_flow_fingerprint_covers_each_end_field(first, second):
     assert flow_fingerprint(_single_node_flow(first)) != flow_fingerprint(
         _single_node_flow(second)
     )
+
+
+def test_value_end_manifest_keeps_the_record_encoding():
+    manifest = flow_manifest(_single_node_flow(EndNode.value("t", output_name="result")))
+
+    assert manifest["nodes"]["t"]["mode"] == "record"
+    assert manifest["nodes"]["t"]["n"] is None
+    assert manifest["nodes"]["t"]["names"] == [{"type": "str", "value": "result"}]
+    assert "keyed" not in manifest["nodes"]["t"]
+
+
+@pytest.mark.parametrize("names", [[], ["result"]], ids=["zero", "one"])
+def test_zero_and_one_name_record_end_manifests_are_keyed(names):
+    value_end = EndNode.value("t", output_name=names[0] if names else None)
+    record_end = EndNode.record("t", output_names=names)
+
+    value_manifest = flow_manifest(_single_node_flow(value_end))["nodes"]["t"]
+    record_manifest = flow_manifest(_single_node_flow(record_end))["nodes"]["t"]
+    assert record_manifest["keyed"] is True
+    assert record_manifest == {**value_manifest, "keyed": True}
+
+
+def test_two_name_record_end_manifest_is_not_keyed():
+    end = EndNode.record("t", output_names=["a", "b"])
+
+    assert "keyed" not in flow_manifest(_single_node_flow(end))["nodes"]["t"]
+
+
+_PIN_FLOW = """
+id: pin
+name: pin
+nodes:
+  step:
+    kind: code
+    output: str
+    code: |
+      return "filled"
+%s"""
+
+_PIN_DEF_FLOW = """
+id: pdef
+name: pdef
+defs:
+  greet:
+    kind: code
+    output: str
+    code: |
+      return "hi"
+nodes:
+  c:
+    kind: call
+    call: greet
+output: ${c.output}
+"""
+
+
+# These pins guard that the value form, an absent output, and multi-field records keep their
+# encoding when END record semantics change; the END-manifest tests above are the primary
+# guard.
+@pytest.mark.parametrize(
+    ("output_section", "expected"),
+    [
+        (
+            "output: ${step.output}\n",
+            "86083b953d7368601eef3283de683f3fc74a56e71d88a8f5cedc85a7df8f0b7c",
+        ),
+        ("", "a8c3106bd5e10a83d0d7e1e740ad3c47327e3631a41660a83e23be82f9041278"),
+        (
+            "output:\n  order: ${step.output}\n  note: ${step.output}\n",
+            "6aaae9f1cab8afbf121830b92d53d4e7272f4e10f67445c38b91208ee3b307ad",
+        ),
+    ],
+    ids=["value", "none", "two-fields"],
+)
+def test_loaded_flow_output_forms_keep_their_fingerprints(output_section, expected):
+    flow = load_flow(_PIN_FLOW % output_section).compiled
+
+    assert flow_fingerprint(flow) == expected
+
+
+def test_loaded_one_field_record_flow_has_its_pinned_fingerprint():
+    flow = load_flow(_PIN_FLOW % "output:\n  order: ${step.output}\n").compiled
+
+    assert flow_fingerprint(flow) == (
+        "dacabe0326df2af4e935cec6b57bdb3abcdc401c93af076e60c900a553c84203"
+    )
+
+
+def test_loaded_zero_and_one_field_records_differ_from_their_value_forms():
+    named = flow_fingerprint(load_flow(_PIN_FLOW % "output:\n  result: ${step.output}\n").compiled)
+    value = flow_fingerprint(load_flow(_PIN_FLOW % "output: ${step.output}\n").compiled)
+    empty = flow_fingerprint(load_flow(_PIN_FLOW % "output: {}\n").compiled)
+    absent = flow_fingerprint(load_flow(_PIN_FLOW % "").compiled)
+
+    assert named != value
+    assert empty != absent
+
+
+def test_call_over_a_single_node_def_keeps_its_fingerprint():
+    flow = load_flow(_PIN_DEF_FLOW).compiled
+
+    assert flow_fingerprint(flow) == (
+        "350227763e763bc56cdfce0b6392ebcd6b408012e816d9e464820705b9b363f5"
+    )
+
+
+def test_loaded_value_output_and_single_node_def_use_a_value_end():
+    flow = load_flow(_PIN_FLOW % "output: ${step.output}\n").compiled
+    assert flow.nodes[flow.end_id].returns_record is False
+
+    call = load_flow(_PIN_DEF_FLOW).compiled.nodes["c"]
+    assert call.child.nodes[call.child.end_id].returns_record is False
 
 
 @pytest.mark.parametrize(

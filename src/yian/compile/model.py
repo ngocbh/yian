@@ -293,8 +293,8 @@ class CompiledFlow(Flow):
 
     Attributes:
         outputs (`list[FlowOutput]`):
-            The declared flow `output:`; empty means the flow falls back to the raw terminal
-            node value.
+            The declared flow `output:` carriers END reads; empty for a flow without
+            `output:` (END returns `None`) or with `output: {}` (END returns `{}`).
         flow_llm_config (`dict[str, Any]`):
             The flow's authored `llm_config:` model-selection defaults (the cascade's flow
             layer); `{}` when absent. `resolve_llm_cascade` gap-fills each AGENT node's
@@ -315,7 +315,7 @@ class CompiledFlow(Flow):
         # The top-level compiled flow always roots at the synthesized START and returns END.
         super().__init__(nodes=nodes, edges=edges, wiring=wiring,
                          start_id=START_ID, end_id=END_ID)
-        self.outputs = outputs or []                    # declared outputs; empty -> fall back to the raw terminal value
+        self.outputs = outputs or []                    # declared outputs END reads
         # The flow's authored llm_config: defaults — the cascade's flow layer; {} when absent.
         self.flow_llm_config: dict = flow_llm_config or {}
         if flow_id is not None:

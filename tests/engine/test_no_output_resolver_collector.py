@@ -33,7 +33,7 @@ def test_output_resolver_and_collector_packages_are_gone():
 def _end_with_tail_assert(node_id="each/__end__"):
     # A spliced child END whose post-assert reads a SYNTH PARAM (`__assert_tail`) bound into the
     # record from `${each/tail.output}` — the production shape after ref lowering.
-    end = EndNode.record(node_id, output_names=["out"])
+    end = EndNode.value(node_id, output_name="out")
     end.post_asserts = [Assertion("${__assert_tail} != ''", "tail must not be empty")]
     end.params.append(Parameter(name="__assert_tail"))
     return stamp_reads(

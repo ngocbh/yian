@@ -1415,7 +1415,7 @@ def _seed_call_flow(sources=None, extra_nodes=(), *, extra_first=False):
     parameters = [Parameter(name) for name in sources]
     child = CompiledFlow({
         START_ID: StartNode(START_ID, params=parameters),
-        END_ID: EndNode.record(END_ID, output_names=[]),
+        END_ID: EndNode.value(END_ID, output_name=None),
     }, [Edge("order", START_ID, END_ID, ordering=True)], wiring={
         START_ID: {name: "${input." + name + "}" for name in sources}, END_ID: {},
     })
@@ -1704,12 +1704,12 @@ def test_pruned_seed_connections_do_not_leak_into_reused_node_ids(skip_first):
         if spawner.id == "prune":
             return call_subgraph(empty_child, "prune", {})
         if spawner.id == "first" and skip_first:
-            finish = EndNode.record("finish", output_names=[])
+            finish = EndNode.value("finish", output_name=None)
             finish.commit_as = "first"
             return Flow({
                 "entry": StartNode("entry", params=[]), "choice": CaseNode("choice", []),
                 shared_start: StartNode(shared_start, params=[Parameter("x")]),
-                shared_end: EndNode.record(shared_end, output_names=[]), "finish": finish,
+                shared_end: EndNode.value(shared_end, output_name=None), "finish": finish,
             }, [
                 Edge("enter", "entry", "choice", ordering=True),
                 Edge("chosen", "choice", "finish", source_handle="default"),

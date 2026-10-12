@@ -16,7 +16,7 @@ def _with_boundary(nodes: dict) -> dict:
     # is the terminal node, the post-flip model).
     nodes = dict(nodes)
     nodes.setdefault(START_ID, StartNode(START_ID, params=[]))
-    nodes.setdefault(END_ID, EndNode.record(END_ID, output_names=[]))
+    nodes.setdefault(END_ID, EndNode.value(END_ID, output_name=None))
     return nodes
 
 

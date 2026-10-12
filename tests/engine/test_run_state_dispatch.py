@@ -54,7 +54,7 @@ def _flow() -> CompiledFlow:
         "first": FuncNode("first", lambda inputs: inputs),
         "second": FuncNode("second", lambda inputs: inputs),
         "ordinary": FuncNode("ordinary", lambda inputs: inputs),
-        END_ID: EndNode.record(END_ID, output_names=[]),
+        END_ID: EndNode.value(END_ID, output_name=None),
     }
     return CompiledFlow.from_parts(
         nodes=nodes,
@@ -363,7 +363,7 @@ def _wide_resume_flow(width: int) -> CompiledFlow:
     nodes = {
         START_ID: StartNode(START_ID),
         "retry": FuncNode("retry", lambda inputs: inputs),
-        END_ID: EndNode.record(END_ID, output_names=[]),
+        END_ID: EndNode.value(END_ID, output_name=None),
     }
     nodes.update(
         {

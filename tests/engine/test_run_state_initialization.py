@@ -45,7 +45,7 @@ def _flow() -> CompiledFlow:
     nodes = {
         START_ID: StartNode(START_ID),
         "work": FuncNode("work", lambda inputs: inputs),
-        END_ID: EndNode.record(END_ID, output_names=[]),
+        END_ID: EndNode.value(END_ID, output_name=None),
     }
     return CompiledFlow.from_parts(
         nodes=nodes,
@@ -447,7 +447,7 @@ def test_commit_prepared_rejects_a_different_pristine_state_before_append():
         lambda state: setattr(state.flow, "start_id", "work"),
         lambda state: state.flow.nodes.__setitem__(START_ID, StartNode(START_ID)),
         lambda state: state.flow.nodes.__setitem__(
-            END_ID, EndNode.record(END_ID, output_names=[])
+            END_ID, EndNode.value(END_ID, output_name=None)
         ),
     ],
     ids=["flow-object", "start-id", "start-node", "end-node"],

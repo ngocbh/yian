@@ -60,7 +60,7 @@ def _origin(key: str) -> OriginRef:
 def _manifest_fragment(value: object, *, key: str = "result") -> Flow:
     """Return a topology-only flow whose terminal wiring contains ``value``."""
     start = StartNode("entry", params=[])
-    end = EndNode.record("terminal", output_names=[key])
+    end = EndNode.value("terminal", output_name=key)
     return Flow(
         nodes={"entry": start, "terminal": end},
         edges=[Edge("entry->terminal", "entry", "terminal", input_group=key)],
@@ -73,7 +73,7 @@ def _manifest_fragment(value: object, *, key: str = "result") -> Flow:
 def _manifest_compiled_output(value: object) -> CompiledFlow:
     """Return a compiled flow whose declared output metadata contains ``value``."""
     start = StartNode(START_ID, params=[])
-    end = EndNode.record(END_ID, output_names=["result"])
+    end = EndNode.value(END_ID, output_name="result")
     return CompiledFlow.from_parts(
         nodes={START_ID: start, END_ID: end},
         edges=[Edge("boundary", START_ID, END_ID, ordering=True)],
@@ -352,6 +352,7 @@ def test_boundary_reads_wrapped_output_but_preserves_it_in_end_wiring() -> None:
         [output],
         {"producer"},
         [],
+        record=False,
     )
 
     assert any(
@@ -706,6 +707,7 @@ def test_child_signature_prefixes_multi_output_contract_origins() -> None:
             nodes={
                 "alpha_node": Node("alpha_node", output_contract=alpha),
                 "beta_node": Node("beta_node", output_contract=beta),
+                EndNode.ID: EndNode.record(EndNode.ID, output_names=["beta", "alpha"]),
             },
             outputs=[
                 FlowOutput("beta", "${beta_node.output}"),
@@ -735,7 +737,10 @@ def test_child_signature_retains_partial_contract_when_one_field_is_opaque() -> 
     loaded = SimpleNamespace(
         input=[],
         compiled=SimpleNamespace(
-            nodes={"step": Node("step", output_contract=integer)},
+            nodes={
+                "step": Node("step", output_contract=integer),
+                EndNode.ID: EndNode.record(EndNode.ID, output_names=["n", "done"]),
+            },
             outputs=[
                 FlowOutput("n", "${step.output + 1}"),
                 FlowOutput("done", "${false}"),
@@ -762,7 +767,10 @@ def test_child_signature_keeps_nested_partial_output_opaque_at_record_field() ->
     loaded = SimpleNamespace(
         input=[],
         compiled=SimpleNamespace(
-            nodes={"inner": Node("inner", output_contract=nested)},
+            nodes={
+                "inner": Node("inner", output_contract=nested),
+                EndNode.ID: EndNode.record(EndNode.ID, output_names=["nested", "done"]),
+            },
             outputs=[
                 FlowOutput("nested", "${inner.output}"),
                 FlowOutput("done", "${false}"),
@@ -807,7 +815,10 @@ def test_composite_builders_preserve_or_deliberately_wrap_child_contract() -> No
     child = SimpleNamespace(
         input=[],
         compiled=SimpleNamespace(
-            nodes={"producer": Node("producer", output_contract=contract)},
+            nodes={
+                "producer": Node("producer", output_contract=contract),
+                EndNode.ID: EndNode.value(EndNode.ID, output_name="result"),
+            },
             outputs=[FlowOutput("result", "${producer.output}")],
         ),
     )

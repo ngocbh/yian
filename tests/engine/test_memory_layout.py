@@ -108,7 +108,7 @@ def test_memory_owning_python_flow_requires_exact_direct_boundaries(
     origin = OriginRef("flow/memories/x")
     nodes = {
         START_ID: StartNode(START_ID, params=[]),
-        END_ID: EndNode.record(END_ID, output_names=[]),
+        END_ID: EndNode.value(END_ID, output_name=None),
     }
     if case == "missing-both":
         nodes = {"body": CodeNode("body", code="return 1")}
@@ -119,7 +119,7 @@ def test_memory_owning_python_flow_requires_exact_direct_boundaries(
     elif case == "wrong-start-id":
         nodes["entry"] = StartNode("entry", params=[])
     elif case == "wrong-end-id":
-        nodes["result"] = EndNode.record("result", output_names=[])
+        nodes["result"] = EndNode.value("result", output_name=None)
     elif case == "wrong-start-class":
         nodes[START_ID] = CodeNode(START_ID, code="return None")
     elif case == "wrong-end-class":

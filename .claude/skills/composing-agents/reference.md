@@ -307,6 +307,10 @@ compares the optional exit field with `true` to prove `bool`. This is the shape
 - **No `edges:` block, no per-node `id:`, no body wrappers.** `${...}` references
   infer data edges; `depends_on:` / `runs_after:` add ordering-only edges. A node
   body is flat.
+- **`output: {...}` always returns a record.** `output: ${x}` returns the value
+  as is; `output: {order: ${x}}` returns `{order: x}` (a caller reads
+  `${child.output.order}`), and `output: {}` returns `{}`. No `output:` returns
+  `None`.
 - **`call:` resolves defs-first, else a `uses:` alias** (a sibling file by name on
   the search path). `alias@v1` adds a version guard.
 - **No `kind: model`** — removed; serve ML inference behind a host tool and call it
@@ -317,10 +321,10 @@ compares the optional exit field with `true` to prove `bool`. This is the shape
   carried names. Names are checked at build; each returned field must keep its carried
   type (checked at load). Omitted keeps a field; a returned null sets a nullable field
   to null. A literal `${null}` is typed `None`, so it does not fit an `Optional[str]`
-  seed; return a nullable-typed producer instead. A body with ONE declared output
-  returns it bare, so to return one field use `output: ${step.output}` where `step`
-  declares a record output. A predicate that reads only fields the body never
-  returns cannot change; give such a loop `max:`.
+  seed; return a nullable-typed producer instead. A body may return one field
+  (`output: {done: ...}`); an empty `output: {}`, or a reference to an empty record,
+  is rejected. A predicate that reads only fields the body never returns cannot
+  change; give such a loop `max:`.
   Give EXACTLY ONE driver: `while:` (pre-check, 0+ runs), `until:` (post-check /
   do-while, 1+ runs), or `times: N` (fixed count). `max:` is optional for
   `while:`/`until:` but REDUNDANT+REJECTED with `times:`.

@@ -21,7 +21,7 @@ def _with_boundary(node_map: dict) -> dict:
     # inject the real START_ID/END_ID boundary NODES so a manual `from_parts` flow runs.
     node_map = dict(node_map)
     node_map.setdefault(START_ID, StartNode(START_ID, params=[]))
-    node_map.setdefault(END_ID, EndNode.record(END_ID, output_names=[]))
+    node_map.setdefault(END_ID, EndNode.value(END_ID, output_name=None))
     return node_map
 
 

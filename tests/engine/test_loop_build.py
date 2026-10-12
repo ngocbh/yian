@@ -19,6 +19,7 @@ from yian.compose.loader import load_flow
 from yian.compose.helpers.errors import LoadError
 from yian.nodes.base import NodeKind
 from yian.nodes.contracts import PartialRecordContract, ValueContract
+from yian.run import run_flow
 from yian.typesys.values import ValueKind
 
 
@@ -320,8 +321,7 @@ def test_body_output_field_outside_carried_record_is_rejected():
     assert e.value.diagnostic.frames[-1].range.start_line is not None
 
 
-# A body with exactly one declared output returns it bare (the terminal arity rule),
-# so `output: {n: ...}` is a scalar, not a one-field record.
+# A body with `output: {n: ...}` returns a one-field record, so it returns the carried `n`.
 SINGLE_OUTPUT_BODY = """
 id: loop-single-output
 name: loop_single_output
@@ -345,15 +345,14 @@ output: ${chat_loop.output}
 """
 
 
-def test_single_output_body_is_rejected_as_non_record():
-    with pytest.raises(LoadError, match="must declare a record output") as e:
-        load_flow(SINGLE_OUTPUT_BODY)
-    assert "a single declared output returns its value bare" in str(e.value)
+def test_one_field_body_record_builds():
+    node = load_flow(SINGLE_OUTPUT_BODY).compiled.nodes["chat_loop"]
+    assert node.returned_fields == ("n",)
+    assert _field_names(node.output_contract) == ("n", "exited")
 
 
-# The one declared output `state` wraps a record `{n}`. The terminal returns it bare, so
-# without a check `{n}` would be read as the returned carried fields and `state` would
-# never change.
+# The one declared output `state` holds a record `{n}`. The body returns the record
+# `{state: {n}}`, so only `state` changes; `{n}` is not read as the returned carried fields.
 SINGLE_OUTPUT_WRAPS_RECORD = """
 id: loop-single-output-record
 name: loop_single_output_record
@@ -384,11 +383,89 @@ output: ${chat_loop.output}
 """
 
 
-def test_single_output_named_after_a_carried_field_is_rejected():
-    with pytest.raises(LoadError, match="declares one output 'state'") as e:
-        load_flow(SINGLE_OUTPUT_WRAPS_RECORD)
-    assert "a single declared output returns its value bare" in str(e.value)
-    assert e.value.diagnostic.frames[-1].range.start_line is not None
+def test_one_field_body_record_returns_only_that_carried_field():
+    loaded = load_flow(SINGLE_OUTPUT_WRAPS_RECORD)
+    assert loaded.compiled.nodes["chat_loop"].returned_fields == ("state",)
+    assert run_flow(loaded, {}).output == {"n": 0, "state": {"n": 100}}
+
+
+# A body must return a record with at least one carried field: a value body over a scalar
+# returns no record, and a record body `output: {}` returns no field.
+REJECTED_BODY = """
+id: loop-rejected-body
+name: loop_rejected_body
+defs:
+  bump:
+    input:
+      n: int
+    nodes:
+      step:
+        kind: code
+        input:
+          n: ${input.n}
+        output: int
+        code: |
+          return inputs["n"] + 1
+    output: <output>
+nodes:
+  chat_loop:
+    kind: loop
+    call: bump
+    input:
+      n: 0
+    times: 2
+output: ${chat_loop.output}
+"""
+
+
+@pytest.mark.parametrize(
+    "output", ["${step.output}", "{}"], ids=["scalar-value", "empty-record"]
+)
+def test_body_returning_no_carried_field_is_rejected(output):
+    with pytest.raises(LoadError) as e:
+        load_flow(REJECTED_BODY.replace("<output>", output))
+    assert (
+        "loop node 'chat_loop': body callable 'bump' must return a record with at least one "
+        "carried field (a subset of the carried record ['n']); write `output: {field: ...}` "
+        "or a whole reference to a node with a record output"
+    ) in str(e.value)
+
+
+# A value body re-exports the referenced record `{n}`, so it returns the carried `n` even
+# though the carried record also has a field named `result`.
+VALUE_BODY_BESIDE_CARRIED_RESULT = """
+id: loop-value-body-carried-result
+name: loop_value_body_carried_result
+defs:
+  bump:
+    input:
+      n: int
+    nodes:
+      step:
+        kind: code
+        input:
+          n: ${input.n}
+        output:
+          n: int
+        code: |
+          return {"n": inputs["n"] + 1}
+    output: ${step.output}
+nodes:
+  chat_loop:
+    kind: loop
+    call: bump
+    input:
+      result: start
+      n: 0
+    times: 2
+output: ${chat_loop.output}
+"""
+
+
+def test_value_body_returns_the_referenced_record_beside_a_carried_result():
+    loaded = load_flow(VALUE_BODY_BESIDE_CARRIED_RESULT)
+    assert loaded.compiled.nodes["chat_loop"].returned_fields == ("n",)
+    assert run_flow(loaded, {}).output == {"result": "start", "n": 2}
 
 
 def test_total_loop_keeps_body_contract_and_no_returned_fields():

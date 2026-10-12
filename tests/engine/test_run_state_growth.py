@@ -80,7 +80,7 @@ def _parent_flow(
     nodes = {
         START_ID: StartNode(START_ID, params=[]),
         spawner.id: spawner,
-        END_ID: EndNode.record(END_ID, output_names=[]),
+        END_ID: EndNode.value(END_ID, output_name=None),
     }
     if sibling:
         nodes["side"] = Node("side")
@@ -145,7 +145,7 @@ def _canonical_child(*, optional_input: bool = False) -> CompiledFlow:
         else []
     )
     start = StartNode(START_ID, params=parameters)
-    end = EndNode.record(END_ID, output_names=[])
+    end = EndNode.value(END_ID, output_name=None)
     return CompiledFlow.from_parts(
         nodes={START_ID: start, END_ID: end},
         edges=[
@@ -170,7 +170,7 @@ def _fragment(spawner_id: str, *, suffix: str = "child") -> Flow:
     start_id = f"{spawner_id}/{suffix}/start"
     end_id = f"{spawner_id}/{suffix}/end"
     start = StartNode(start_id, params=[])
-    end = EndNode.record(end_id, output_names=[])
+    end = EndNode.value(end_id, output_name=None)
     end.commit_as = spawner_id
     return Flow(
         nodes={start_id: start, end_id: end},
@@ -871,7 +871,7 @@ def test_growth_accepts_the_closed_system_ambients(ambient: str):
 
     def system_reference_builder(spawner: Node, seed: Any) -> Flow:
         fragment = _fragment(spawner.id)
-        end = EndNode.record(fragment.end_id, output_names=["value"])
+        end = EndNode.value(fragment.end_id, output_name="value")
         end.commit_as = spawner.id
         fragment.nodes[fragment.end_id] = end
         fragment.wiring[fragment.end_id] = {
@@ -948,7 +948,7 @@ def _missing_required_fragment(spawner_id: str) -> Flow:
             )
         ],
     )
-    end = EndNode.record(end_id, output_names=[])
+    end = EndNode.value(end_id, output_name=None)
     return Flow(
         nodes={start_id: start, end_id: end},
         edges=[Edge("required-edge", start_id, end_id, ordering=True)],
@@ -977,7 +977,7 @@ def _unknown_reference_fragment(spawner_id: str) -> Flow:
     start_id = f"{spawner_id}/ref/start"
     end_id = f"{spawner_id}/ref/end"
     start = StartNode(start_id, params=[])
-    end = EndNode.record(end_id, output_names=["value"])
+    end = EndNode.value(end_id, output_name="value")
     return Flow(
         nodes={start_id: start, end_id: end},
         edges=[Edge("ref-edge", start_id, end_id, input_group="value")],
@@ -1060,7 +1060,7 @@ def _invalid_fragment(case: str) -> Any:
         fragment.nodes[orphan_id] = StartNode(orphan_id, params=[])
         fragment.wiring[orphan_id] = {}
     elif case == "unknown-system-ambient":
-        end = EndNode.record(fragment.end_id, output_names=["value"])
+        end = EndNode.value(fragment.end_id, output_name="value")
         end.commit_as = "spawn"
         fragment.nodes[fragment.end_id] = end
         fragment.wiring[fragment.end_id] = {
@@ -1074,7 +1074,7 @@ def _invalid_fragment(case: str) -> Any:
                 required=frozenset({"known"}),
             )
         )
-        end = EndNode.record(fragment.end_id, output_names=["value"])
+        end = EndNode.value(fragment.end_id, output_name="value")
         end.commit_as = "spawn"
         fragment.nodes[fragment.end_id] = end
         fragment.wiring[fragment.end_id] = {
@@ -1109,7 +1109,7 @@ def _invalid_fragment(case: str) -> Any:
                 ("opaque", None),
             )
         )
-        end = EndNode.record(fragment.end_id, output_names=["value"])
+        end = EndNode.value(fragment.end_id, output_name="value")
         end.commit_as = "spawn"
         fragment.nodes[fragment.end_id] = end
         fragment.wiring[fragment.end_id] = {

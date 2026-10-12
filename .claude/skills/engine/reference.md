@@ -36,7 +36,9 @@ returns empty channels. Structural nodes route from captured invocation layout;
 ordinary forward execution never calls this hook. `backward_input_names()` owns
 the eligible input inventory, while `declared_variables()` owns the local variable
 declarations. Snapshot their names independently from the empty-default
-`capture_backward_context()` payload. END excludes assertion parameters through
+`capture_backward_context()` payload. END has three layouts: a value maps its one
+input to path `[]`, a record maps each field to `[name]`, and a MAP fan-in list maps
+each slot to its index. END excludes assertion parameters through
 its output layout; CASE excludes its generated control inputs in node code.
 
 `runtime.backward.compute_backward(trace, feedback)` gathers messages in one
@@ -581,6 +583,9 @@ model made enforceable.
 - **Stable program and expansion identity** — compile-owned `flow_manifest`
   canonicalizes execution semantics, `flow_fingerprint` hashes it, and
   `expansion_digest` covers an expanded fragment's entry/end ids and topology.
+  The manifest encodes a value END like a record END with the same names, so value,
+  absent and multi-field outputs keep their fingerprints; a zero- or one-field record
+  adds `keyed: true`.
   Assertion expression/display/order/multiplicity and an output contract's semantic
   `Type` affect identity. Every field consulted by an execution-semantic hook must
   likewise be manifest-backed; `skipped_output_target()` currently derives from
@@ -794,11 +799,16 @@ type; an opaque `object` (no declared fields) and `file` stay unchecked.
 
 Compose output derivation, builders, child signatures, and producer maps retain the
 complete output-contract sum. `ChildSignature.declared_outputs` retains ordered
-`(name, optional OutputContract)` evidence and derives `output_names`; its `output`
-follows terminal arity and is exact or partial. Multi-output assembly creates a closed
-`PartialRecordContract` whenever an exact aggregate is unavailable, retaining every
-exact sibling. Reference, assert, CASE, CALL, and LOOP algorithms project an exact
-type only where one is required and use the partial arm's closed name set otherwise.
+`(name, optional OutputContract)` evidence and derives `output_names`.
+`ChildSignature.returns_record` says whether the child's END is a record
+(`output: {...}`) or a value (`output: ${x}`, or no output); `child_signature` shapes
+`output` from it, CALL keeps that `output`, and LOOP takes a record body's field names
+from that `output`. The `output` is exact or partial: a value re-exports the single
+binding's contract, and a record combines every field (even one or none) into a closed
+record. Record assembly creates a closed `PartialRecordContract` whenever an exact
+aggregate is unavailable, retaining every exact sibling. Reference, assert, CASE,
+CALL, and LOOP algorithms project an exact type only where one is required and use
+the partial arm's closed name set otherwise.
 Whole direct references preserve contract identity; nested references rebase exact
 field origins. Python-authored nodes pass
 `output_contract=`; there is no parallel output-Type compatibility API. The authored

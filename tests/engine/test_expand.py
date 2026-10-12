@@ -81,14 +81,18 @@ def _with_boundary(
 ) -> tuple[dict, list, dict]:
     # inject the real START_ID/END_ID boundary NODES so a manual `from_parts` flow runs. The
     # child START_ID carries params matching the call-arg names the splice seeds;
-    # END_ID is RECORD-mode from the declared outputs; the manual `(.., END_ID)` terminal Edge is
+    # END_ID takes its params from the declared outputs; the manual `(.., END_ID)` terminal Edge is
     # replaced by the producer edge (input_group = output name) so the engine reads store[END_ID].
     from yian.compose.edges.producers import _binding_producers
 
     params = list(parameters)
     nodes = dict(nodes)
     nodes.setdefault(START_ID, StartNode(START_ID, params=params))
-    nodes[END_ID] = EndNode.record(END_ID, output_names=[o.name for o in outputs])
+    # These Python-API tests use a single output as a value; two or more form a record.
+    if len(outputs) <= 1:
+        nodes[END_ID] = EndNode.value(END_ID, output_name=outputs[0].name if outputs else None)
+    else:
+        nodes[END_ID] = EndNode.record(END_ID, output_names=[o.name for o in outputs])
     edges = [e for e in edges if e.to != END_ID]
     counts: dict = {}
     for o in outputs:

@@ -44,7 +44,7 @@ def _empty_child():
     return CompiledFlow.from_parts(
         nodes={
             START_ID: StartNode(START_ID, params=[]),
-            END_ID: EndNode.record(END_ID, output_names=[]),
+            END_ID: EndNode.value(END_ID, output_name=None),
         },
         edges=[Edge("boundary", START_ID, END_ID, ordering=True)],
         wiring={START_ID: {}, END_ID: {}},

@@ -1689,12 +1689,19 @@ def _node_manifest(
     if node.kind is NodeKind.START:
         pass
     elif node.kind is NodeKind.END:
-        manifest["mode"] = node._mode
+        # A VALUE terminal keeps the encoding a one-input (or input-free) record END had, so
+        # flows written `output: ${x}` or with no output keep their fingerprints.
+        manifest["mode"] = "list" if node._mode == "list" else "record"
         manifest["names"] = (
             _canonical_sequence(node._names, ctx, f"{path}.names")
-            if node._mode == "record"
+            if node._mode != "list"
             else None
         )
+        if node._mode == "record" and len(node._names) <= 1:
+            # A zero- or one-field record would otherwise encode like a value END with the same
+            # names, though it returns a dict; `keyed` separates them while value and multi-field
+            # ENDs keep their fingerprints.
+            manifest["keyed"] = True
         manifest["n"] = node._n if node._mode == "list" else None
     elif node.kind is NodeKind.AGENT:
         if type(node.variables) is not list:

@@ -207,35 +207,19 @@ class LoopDescriptor(NodeDescriptor):
                 )
 
         # The `'a -> 'a` FIELD-NAME contract (types are the loader pass). The carried record's
-        # keys are the seed input names. The body OUTPUT field NAMES must be a subset of them
-        # (an omitted field carries over); the body INPUT NAMES must be a subset too (it reads
-        # a subset of the carried record). A non-record body output (no fields) — including a
-        # single declared output, which the terminal returns bare — is rejected.
+        # keys are the seed input names. The body returns a record: a record body
+        # (`output: {...}`) returns its declared fields, and a value body (`output: ${x}`)
+        # returns the fields of the record it references. Those field NAMES must be a subset
+        # of the carried keys (an omitted field carries over); the body INPUT NAMES must be a
+        # subset too (it reads a subset of the carried record). A body must return at least
+        # one carried field, so a body returning no record or an empty record is rejected.
         carried = set(self.inputs or {})
-        out_names = _contract_field_names(sig.output)
-        if out_names is None and len(sig.output_names) >= 2:
-            out_names = set(sig.output_names)
-        bare_hint = (
-            "; a single declared output returns its value bare, so to return one field make "
-            "the body `output:` a whole reference to a node with a record output"
-        )
+        out_names = _contract_field_names(sig.output) or None
         if out_names is None:
             errors.append(
-                f"loop node {self.id!r}: body {child_display} must declare a record "
-                f"output whose field names are a subset of the carried record {sorted(carried)}"
-                + (bare_hint if len(sig.output_names) == 1 else "")
-            )
-        elif (
-            len(sig.output_names) == 1
-            and sig.output_names[0] in carried
-            and sig.output_names[0] not in out_names
-        ):
-            # One declared output named after a carried field returns its record value bare,
-            # so that record's fields would silently be read as the returned carried fields.
-            errors.append(
-                f"loop node {self.id!r}: body {child_display} declares one output "
-                f"{sig.output_names[0]!r}, whose record value {sorted(out_names)} would be read "
-                f"as the returned carried fields{bare_hint}"
+                f"loop node {self.id!r}: body {child_display} must return a record with at "
+                f"least one carried field (a subset of the carried record {sorted(carried)}); "
+                "write `output: {field: ...}` or a whole reference to a node with a record output"
             )
         elif out_names - carried:
             errors.append(

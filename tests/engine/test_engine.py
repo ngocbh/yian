@@ -45,7 +45,7 @@ def test_linear_runs_in_order():
 
 def test_end_assembles_declared_output_record():
     # The flow's declared codomain is assembled from the pool: two outputs bound to
-    # the terminal node's value -> an object keyed by output name (>=2 arity rule).
+    # the terminal node's value -> an object keyed by output name (a record-mode END).
     g = _graph(
         [FuncNode("a", lambda p: {}), FuncNode("t", lambda p: {"output": "final", "n": 7})],
         [(START_ID, "a"), ("a", "t"), ("t", END_ID)],
@@ -266,7 +266,7 @@ def test_data_edged_branch_target_does_not_run_when_skipped():
     ]
     node_map = {n.id: n for n in nodes}
     node_map[START_ID] = StartNode(START_ID, params=[])
-    node_map[END_ID] = EndNode.record(END_ID, output_names=[])
+    node_map[END_ID] = EndNode.value(END_ID, output_name=None)
     g = CompiledFlow.from_parts(node_map, edges)
     engine = _engine(g)
     events = _run(engine)

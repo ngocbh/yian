@@ -408,3 +408,55 @@ def test_inline_body_input_field_reads_are_checked():
         "output: ${c.output}\n"
     )
     assert "reference ${input.s.first} reads field 'first' on type str" in _load_error(text)
+
+
+def _map_flow(over_input: str, item_ref: str) -> str:
+    return (
+        "id: p\nname: p\n"
+        "typedefs:\n  Rec: {a: str}\n"
+        f"input:\n  xs: {over_input}\n"
+        "defs:\n"
+        "  each:\n"
+        "    input:\n      v: str\n"
+        "    nodes:\n"
+        "      step:\n"
+        "        kind: code\n"
+        "        input:\n          v: ${input.v}\n"
+        "        output: str\n"
+        "        code: return 'x'\n"
+        "    output: ${step.output}\n"
+        "nodes:\n"
+        "  m:\n"
+        "    kind: map\n"
+        "    call: each\n"
+        "    over: ${input.xs}\n"
+        f"    input:\n      v: {item_ref}\n"
+        "output: ${m.output}\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "over_input, item_ref, expected",
+    [
+        ("list[str]", "${item.a}", "reads field 'a' on type str, which has no fields"),
+        ("list[Rec]", "${item.b}", "reads unknown field 'b' on record"),
+        ("Optional[list[Rec]]", "${item.b}", "reads unknown field 'b' on record"),
+    ],
+)
+def test_map_item_field_reads_are_checked(over_input, item_ref, expected):
+    msg = _load_error(_map_flow(over_input, item_ref))
+    assert f"node 'm' map input 'v' from: reference {item_ref} {expected}" in msg
+
+
+@pytest.mark.parametrize(
+    "over_input, item_ref",
+    [
+        ("list[Rec]", "${item.a}"),
+        ("list[str]", "${item}"),
+        ("list[object]", "${item.anything}"),
+        ("list[Any]", "${item.anything}"),
+        ("object", "${item.anything}"),  # over: not a proven list
+    ],
+)
+def test_map_item_reads_the_type_allows_still_load(over_input, item_ref):
+    load_flow(_map_flow(over_input, item_ref))

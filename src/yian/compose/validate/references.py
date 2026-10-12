@@ -21,7 +21,8 @@ from the transient Compose `BuildResult` (the coarse per-field span — e.g. the
 
 Imports flow down only: `compile.validation` (the leaf namespace checker), `expr` (the
 binding parser), `nodes` (Node/AgentNode behavior and the output-contract
-sum), and `compose.helpers` (closed-path projection and errors).
+sum), `typesys` (`Type`, for a list's element type), and `compose.helpers` (closed-path
+projection, binding-contract resolution, and errors).
 Only the loader (and the compose package facade) import this back.
 """
 
@@ -31,7 +32,10 @@ from typing import Any, Optional
 
 from yian.compile.validation import _classify_path
 from yian.compose.helpers.errors import LoadDiagnostics
-from yian.compose.helpers.output_contracts import output_contract_path_error
+from yian.compose.helpers.output_contracts import (
+    output_contract_path_error,
+    resolve_output_binding_contract,
+)
 from yian.compose.nodes.base import BuildResult
 from yian.diagnostics import SourceRange
 from yian.expr import (
@@ -46,6 +50,7 @@ from yian.nodes.contracts import (
     ValueContract,
     binding_source,
 )
+from yian.typesys import Type
 
 # Heads forbidden in a strict prompt (always trigger the bespoke hint).
 # `input`/`system`/`item` are the pool-style heads; a node-id head (e.g. `${other.output}`)
@@ -65,6 +70,43 @@ def _output_bindings(outputs: Any) -> list[Any]:
     if outputs is None:
         return []
     return [outputs]
+
+
+def _item_contract(
+    over: Any,
+    producers: dict[str, OutputContract],
+    input_contracts: dict[str, ValueContract],
+) -> ValueContract | None:
+    """The element contract of a MAP's `over:` binding when it is a proven list, else `None`.
+
+    Args:
+        over (`Any`):
+            The MAP's raw `over:` binding.
+        producers (`dict[str, OutputContract]`):
+            Exact or partial node output contracts keyed by producer id.
+        input_contracts (`dict[str, ValueContract]`):
+            Exact flow input contracts keyed by input name.
+
+    Returns:
+        `ValueContract | None`:
+            The exact contract of one element, or `None` when `over:` is not a proven list
+            or its element type is unknown (`list[Any]`).
+
+    Raises:
+        `TypeError`:
+            A referenced producer is not an `OutputContract`, or a flow-input contract is
+            not an exact `ValueContract`.
+    """
+    contract = resolve_output_binding_contract(over, producers, input_contracts)
+    if type(contract) is not ValueContract or not contract.type.kind.is_list():
+        return None
+    typ = contract.type
+    if typ.element is not None:
+        return ValueContract(typ.element)
+    element_kind = typ.kind.element_kind
+    if element_kind is None:
+        return None
+    return ValueContract(Type.scalar(element_kind))
 
 
 def validate_references(
@@ -89,7 +131,8 @@ def validate_references(
     partial `output_contract`. An absent contract stays lenient. The namespace checker
     validates the reference head, then the shared output-contract helper checks exact fields
     or the partial arm's closed root name set without inventing a type for opaque fields.
-    `outputs` is the raw flow `output:` section.
+    A MAP's per-element `${item.f}` is field-checked against the element type of `over:`
+    when that is a proven list. `outputs` is the raw flow `output:` section.
 
     Each error anchors on the referencing site's `SourceRange`, resolved from its
     `BuildResult.field_ranges` — the OFFENDING ENTRY where one exists (`("input", name)`, stamped per
@@ -119,12 +162,14 @@ def validate_references(
         where: str,
         rng: Optional[SourceRange],
         extra_heads: tuple = (),
+        item_contract: ValueContract | None = None,
     ) -> None:
         """Name-check every reference a BINDING `from:` reads (coalesce + nested-default
         split by `expr_refs_of`); a non-string source / literal yields no refs.
 
         `extra_heads` is the per-site set of body-local scopes treated as lenient — e.g.
-        a MAP per-element input's `${item}` (valid only inside `map.inputs`, not `over:`)."""
+        a MAP per-element input's `${item}` (valid only inside `map.inputs`, not `over:`);
+        `item_contract` is that `${item}`'s element contract when known, for field checks."""
         from_value = binding_source(from_value)
         if not isinstance(from_value, str):
             return
@@ -156,6 +201,13 @@ def validate_references(
                 err = output_contract_path_error(
                     input_contracts[parts[1]], parts[2:], path
                 )
+            elif (
+                err is None
+                and len(parts) >= 2
+                and parts[0] == "item"
+                and item_contract is not None
+            ):
+                err = output_contract_path_error(item_contract, parts[1:], path)
             if err is not None:
                 errors.append((f"{where}: {err}", rng))
 
@@ -215,6 +267,7 @@ def validate_references(
         # A per-item binder (MAP) reads its iteration source above, then validates each
         # element input with the body-local `${item}` scope enabled.
         if node.binds_per_item:
+            item_contract = _item_contract(nwiring.get("over"), producers, input_contracts)
             for param, src in nwiring.items():
                 if param in reserved:
                     continue
@@ -223,6 +276,7 @@ def validate_references(
                     f"node {node_id!r} map input {param!r} from",
                     franges.get(("input", param)) or input_rng,
                     extra_heads=("item",),
+                    item_contract=item_contract,
                 )
             continue
 

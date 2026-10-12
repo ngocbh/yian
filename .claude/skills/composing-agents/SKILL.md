@@ -76,10 +76,7 @@ no body wrappers — a node body is flat.
 is. `output: {name: ${x}, ...}` always returns a record, even with one field
 (`output: {order: ${x}}` returns `{order: x}`, read by a caller as
 `${child.output.order}`) or none (`output: {}` returns `{}`). No `output:` (or
-`output: null`) returns null. A one-field record no longer returns its bare value;
-write `output: ${x}` for that. Flows with a zero- or one-field record `output:` (and
-flows that embed one) got a new fingerprint, so their older runs can't be resumed or
-replayed.
+`output: null`) returns `None`.
 
 Node IDs are the keys under `nodes:`. They cannot contain `.`, `#`, or `/`:
 `.` separates the node name from `output` and its field path in a reference,
@@ -509,9 +506,10 @@ each:
 
 Use exactly one of `call:` or `nodes:`. The `output:` key is required; CALL may
 set it to null and return `None`, and `output: {...}` returns a record even with one
-field. MAP requires a non-empty `output:`; LOOP requires at least one carried field. The inline child cannot capture the parent pool: pass parent values and
-MAP's item through the outer `input:`, then read generated `${input.X}`
-parameters and child-node outputs inside. Run-global `${system.today}`,
+field. MAP requires a non-empty `output:`; LOOP requires at least one carried field.
+The inline child cannot capture the parent pool: pass parent values and MAP's item
+through the outer `input:`, then read generated `${input.X}` parameters and
+child-node outputs inside. Run-global `${system.today}`,
 `${system.now}`, and `${system.run_id}` remain available. Types are inferred
 strictly from YAML null/bool/int/float/string values, structural containers, or
 direct typed refs; refs preserve structure/nullability, and only a lone

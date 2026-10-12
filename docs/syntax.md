@@ -18,7 +18,7 @@ description: ...           # optional, one line
 typedefs: { ... }          # optional — named/composed types
 input:   { ... }           # parameters — typed
 nodes:   { ... }           # body — a map keyed by node id
-output:  { ... }           # return — one value `${x}`, or a record `{name: ${x}, ...}`
+output:  ${x} | { ... }    # return — one value, or a record
 asserts: [ ... ]           # optional — boolean invariants
 ```
 
@@ -31,13 +31,13 @@ The shape of `output:` sets what the flow returns:
 - `output: {name: ${x}, ...}` returns a record keyed by name. This holds for any
   number of fields: `output: {order: ${x}}` returns `{order: x}`, and `output: {}`
   returns `{}`. A caller reads a field by name, as in `${child.output.order}`.
-- No `output:`, or `output: null`, returns `null`.
+- No `output:`, or `output: null`, returns `None`.
 
-A record with one field used to return its bare value, and `output: {}` used to
-return `null`. If a flow relied on that, write `output: ${x}` instead. A flow whose
-`output:` is a record of zero or one field, or that embeds such a child, now has a
-new fingerprint. Its runs recorded before this change can't be resumed or replayed;
-they fail the fingerprint check.
+Changed: a one-field record used to return its bare value, and `output: {}` used to
+return `None`. For the old result, write `output: ${x}`, or drop `output:` to return
+`None`. Flows whose `output:` is a record of zero or one field, and flows that call
+one, got a new fingerprint. Runs recorded under the old rule fail the fingerprint
+check and can't be resumed or replayed.
 
 Node IDs are the keys under `nodes:`. They cannot contain `.`, `#`, or `/`:
 `.` separates the node name from `output` and its field path in a reference,
@@ -860,9 +860,9 @@ each:
 ```
 
 The `input:` map contains the child's arguments. A `call` re-exports the child's
-output (`None` when the child declares no output value); a `map` requires a
-non-empty child `output:` and returns `list[U]` in `over:` order. A child whose
-`output:` is a record, even of one field, maps to a list of records.
+output (`None` when the child has no `output:`; `{}` for `output: {}`); a `map`
+requires a non-empty child `output:` and returns `list[U]` in `over:` order. If the
+child's `output:` is a record, even of one field, the MAP returns a list of records.
 `parallel:` is accepted but currently inert; MAP concurrency is controlled by
 the run's `num_workers`, while collection order remains the `over:` order.
 
@@ -1062,7 +1062,7 @@ returns the whole carried record.
   field to null. When the seed is typed, the returned field's type must accept it: a
   producer typed `Optional[str]` fits an `Optional[str]` seed. A literal `${null}` is
   typed `None`, and an `Optional[str]` seed does not fit `None`, so that load fails.
-- **A body may return one field:** `output: {done: ...}` returns the record
+- **One field is enough.** `output: {done: ...}` returns the record
   `{done: ...}`. An empty `output: {}`, or a reference to an empty record, returns
   no carried field and is rejected.
 - **Merged views.** The loop's value (`${loop.output.x}` downstream) and the LOOP

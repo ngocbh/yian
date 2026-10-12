@@ -735,8 +735,10 @@ parent fields or list lengths; literals still stop without opaque-stop evidence.
 Structural backward uses the recorded invocation layout: START maps named inputs,
 END follows its layout (a value maps its one input to path `[]`, a record maps each
 field to `[name]`, and a MAP fan-in list maps each slot to its index), and a stopping
-LOOP routes its carried record. `backward_input_names()` supplies each node's
-eligible input inventory: END uses its stored output names or list slots, and
+LOOP routes its carried record. The manifest encodes a value END like a record END
+with the same names, so value, absent and multi-field outputs keep their fingerprints;
+a zero- or one-field record adds `keyed: true`. `backward_input_names()` supplies each
+node's eligible input inventory: END uses its stored output names or list slots, and
 CASE excludes its generated control parameters. Assertion-only parameters do not
 become feedback targets. Behavioral nodes inherit the empty stopping
 implementation until they define their own transformation.

@@ -3,8 +3,8 @@
 A `call`/`map`/`loop` node names a CALLABLE (a `defs:` entry or an external flow). The child
 resolver is the load-time seam: `(flow_id, version) -> ComposedFlow` (the loader composes the
 defs-first resolution). From the resolved child the kind builder derives its `ChildSignature` —
-canonical parameters + the exact-or-partial codomain contract — to stamp a CALL/LOOP's
-`output_contract` and to
+canonical parameters + the exact-or-partial codomain contract — to stamp a CALL's
+`output_contract` (a LOOP's, or the returned fields of its merged carried contract) and to
 name/arity- + type-check the bindings, AND bakes the child's compiled flow onto the node
 (resolve-and-bake — the call graph, incl. nested flows, is fixed at compile). The bake itself
 lives in each kind's own `build` (`call.py`/`loop.py`); this module supplies the shared

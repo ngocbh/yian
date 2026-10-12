@@ -211,9 +211,9 @@ def validate_growth_metadata(flow: Flow) -> None:
     Each (target, input) pair appears at most once.
 
     Raises:
-        TypeError: If a recipe carrier, boundary node, scope, or target parameter
-            list has the wrong type.
-        ValueError: If a boundary or seed connection does not match the fragment.
+        `TypeError`: If a recipe carrier, boundary node, scope, target node, or target
+            parameter list has the wrong type.
+        `ValueError`: If a boundary or seed connection does not match the fragment.
     """
     for name, carrier in (("input_connections", SeedConnection),
                           ("child_boundaries", ChildFlowBoundary)):

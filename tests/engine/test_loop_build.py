@@ -346,8 +346,49 @@ output: ${chat_loop.output}
 
 
 def test_single_output_body_is_rejected_as_non_record():
-    with pytest.raises(LoadError, match="must declare a record output"):
+    with pytest.raises(LoadError, match="must declare a record output") as e:
         load_flow(SINGLE_OUTPUT_BODY)
+    assert "a single declared output returns its value bare" in str(e.value)
+
+
+# The one declared output `state` wraps a record `{n}`. The terminal returns it bare, so
+# without a check `{n}` would be read as the returned carried fields and `state` would
+# never change.
+SINGLE_OUTPUT_WRAPS_RECORD = """
+id: loop-single-output-record
+name: loop_single_output_record
+defs:
+  bump:
+    input:
+      n: int
+    nodes:
+      step:
+        kind: code
+        input:
+          n: ${input.n}
+        output:
+          n: int
+        code: |
+          return {"n": inputs["n"] + 100}
+    output:
+      state: ${step.output}
+nodes:
+  chat_loop:
+    kind: loop
+    call: bump
+    input:
+      n: 0
+      state: init
+    times: 2
+output: ${chat_loop.output}
+"""
+
+
+def test_single_output_named_after_a_carried_field_is_rejected():
+    with pytest.raises(LoadError, match="declares one output 'state'") as e:
+        load_flow(SINGLE_OUTPUT_WRAPS_RECORD)
+    assert "a single declared output returns its value bare" in str(e.value)
+    assert e.value.diagnostic.frames[-1].range.start_line is not None
 
 
 def test_total_loop_keeps_body_contract_and_no_returned_fields():

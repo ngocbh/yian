@@ -181,10 +181,15 @@ def select_seed_route(
     """Select one seed field route by explicit item/name metadata, preserving nulls.
 
     Args:
-        capture: The owner's accepted forward capture.
-        connection: The seed connection naming an item and/or field.
-        input_route: The owner's effective input route; when given, a field-only
-            path selects from it instead of the raw capture route.
+        capture (`ForwardCapture`): The owner's accepted forward capture.
+        connection (`SeedConnection`): The seed connection naming an item and/or field.
+        input_route (`ValueRoute`, *optional*, defaults to `None`): The owner's effective
+            input route; when given, a field-only path selects from it instead of the raw
+            capture route.
+
+    Returns:
+        `ValueRoute | None`: The selected route, or `None` when the item or field was not
+            captured.
     """
     route = capture.route if input_route is None else input_route
     if len(connection.seed_path) == 2:

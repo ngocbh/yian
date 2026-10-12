@@ -215,10 +215,27 @@ class LoopDescriptor(NodeDescriptor):
         out_names = _contract_field_names(sig.output)
         if out_names is None and len(sig.output_names) >= 2:
             out_names = set(sig.output_names)
+        bare_hint = (
+            "; a single declared output returns its value bare, so to return one field make "
+            "the body `output:` a whole reference to a node with a record output"
+        )
         if out_names is None:
             errors.append(
                 f"loop node {self.id!r}: body {child_display} must declare a record "
                 f"output whose field names are a subset of the carried record {sorted(carried)}"
+                + (bare_hint if len(sig.output_names) == 1 else "")
+            )
+        elif (
+            len(sig.output_names) == 1
+            and sig.output_names[0] in carried
+            and sig.output_names[0] not in out_names
+        ):
+            # One declared output named after a carried field returns its record value bare,
+            # so that record's fields would silently be read as the returned carried fields.
+            errors.append(
+                f"loop node {self.id!r}: body {child_display} declares one output "
+                f"{sig.output_names[0]!r}, whose record value {sorted(out_names)} would be read "
+                f"as the returned carried fields{bare_hint}"
             )
         elif out_names - carried:
             errors.append(

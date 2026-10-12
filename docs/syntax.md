@@ -1062,8 +1062,8 @@ poll:
 
 - **`max:`** (for `while:`/`until:`) is an optional runaway guard. Without it (or
   with `max: null`) the loop has no iteration limit: it runs until its predicate ends
-  it (or the run is interrupted). When given, it is a plain integer `>= 1`, and a loop that would run
-  more than `max` iterations fails loudly (`LoopMaxExceeded`).
+  it (or the run is interrupted). When given, it is a plain integer `>= 1`, and a
+  loop that would run more than `max` iterations fails loudly (`LoopMaxExceeded`).
 
 The node's value is the final carried record (committed under the loop node's id
 once the loop stops).
@@ -1074,11 +1074,11 @@ iteration. This is the shape a chat REPL takes.
 
 Each continuing iteration **prunes** the previous iteration's body nodes from the
 live graph, so a body of leaf nodes keeps about one iteration resident. Nodes grown
-inside the body by a nested CALL, MAP, or LOOP are not pruned. Such a loop adds them
-every iteration and fails once the run reaches the engine's node budget (10,000 live
-nodes, "expansion exceeded node budget"). Such a loop cannot run forever: keep the
-nested work small, or give it a `max:` low enough that a runaway fails with
-`LoopMaxExceeded` before it reaches the budget.
+inside the body by a nested CALL, MAP, or LOOP are not pruned, so they pile up every
+iteration: each iteration gets slower, and the run fails once it reaches the engine's
+node budget (10,000 live nodes, "expansion exceeded node budget"). Such a loop cannot
+run forever: keep the nested work small, or give it a `max:` low enough that a runaway
+fails with `LoopMaxExceeded` before it reaches the budget.
 
 ## Effects from inside an AGENT node — the `ask_user` tool
 

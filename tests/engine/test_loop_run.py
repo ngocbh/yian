@@ -735,6 +735,7 @@ def test_while_loop_without_max_runs_until_predicate_ends_it():
 
 def test_until_loop_without_max_runs_until_predicate_ends_it():
     result = run_flow(load_flow(UNTIL_COUNTDOWN.replace("    max: 10\n", "")), {})
+    assert result.status == "succeeded"
     assert result.output == {"n": 0}
 
 

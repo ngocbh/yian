@@ -38,7 +38,7 @@ from yian.nodes.ids import map_callsite, ns
 
 
 class LoopMaxExceeded(RuntimeError):
-    """The while/until runaway guard tripped (the next iteration would reach `max_iters`).
+    """The while/until runaway guard tripped (the loop would start more than `max` body runs).
 
     Raised only when the loop sets `max:`; a while/until loop without one has no limit.
 

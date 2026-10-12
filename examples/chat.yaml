@@ -80,5 +80,4 @@ nodes:
       transcript: ${input.opening}
       exited: false                 # CASE sets true for exact /exit or /quit input
     while: "not ${exited}"          # a carried-field predicate (verified to parse)
-    max: 1000                       # required runaway safety cap
 output: ${chat.output.transcript}

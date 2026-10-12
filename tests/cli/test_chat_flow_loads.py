@@ -19,3 +19,4 @@ def test_chat_flow_loads(path):
     p = Path(path)
     loaded = load_flow(p.read_text())
     assert loaded.name
+    assert loaded.compiled.nodes["chat"].max_iters is None

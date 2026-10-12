@@ -45,8 +45,8 @@ def _validate_llm_config(
     `temparature`). Returns `(config_without_inherit, inherit)`. Raises `LoadError` (not
     pydantic ValidationError) so the surface speaks one error type.
 
-    Module-local to `agent.py`: agent is the only kind with an `llm_config:` field (model has
-    none), so the validator lives next to its sole caller rather than in shared machinery.
+    Module-local to `agent.py`: agent is the only kind with an `llm_config:` field, so the
+    validator lives next to its sole caller rather than in shared machinery.
 
     Args:
         cfg (`Mapping[str, Any] | None`): Authored config, or `None` for defaults.

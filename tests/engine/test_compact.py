@@ -119,6 +119,26 @@ def test_compact_rejects_non_leaf_kind():
     assert exc.value.diagnostic.frames[-1].range.start_line == 6
 
 
+_COMPACT_MODEL = """
+id: rank
+name: rank
+input:
+  topic: str
+output: float
+kind: model
+model_id: x
+"""
+
+
+def test_compact_model_kind_is_removed():
+    # A removed kind names its replacement instead of the non-leaf rejection.
+    with pytest.raises(LoadError, match="kind 'model' was removed") as exc:
+        parse_file(_COMPACT_MODEL)
+
+    assert "not allowed inline" not in str(exc.value)
+    assert exc.value.diagnostic.frames[-1].range.start_line == 7
+
+
 _COMPACT_NO_ID = """
 name: noid
 input:

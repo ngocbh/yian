@@ -26,6 +26,7 @@ from typing import Any, Callable, Optional
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
+from yian.compose.nodes import REMOVED_KINDS
 from yian.compose.source import (
     SourceAccessError,
     SourceCursor,
@@ -34,16 +35,15 @@ from yian.compose.source import (
 )
 from yian.diagnostics import SourceRange
 
-# `AgentDescriptor`/`CodeDescriptor`/`ModelDescriptor`/`ToolDescriptor`/`WaitDescriptor`
-# now live with their parse/build handles in `nodes/<kind>.py`; re-export them here so
-# existing importers keep working. `NodeDescriptor` — the base class every kind descriptor
+# `AgentDescriptor`/`CodeDescriptor`/`ToolDescriptor`/`WaitDescriptor` now live with
+# their parse/build handles in `nodes/<kind>.py`; re-export them here so existing
+# importers keep working. `NodeDescriptor` — the base class every kind descriptor
 # inherits — lives in `compose/nodes/base.py` (the leaf, mirroring the engine's `nodes/base.py`);
 # re-exported here as the descriptor base type for importers that annotate
 # `dict[str, NodeDescriptor]` (build/pipeline).
 from yian.compose.nodes.base import NodeDescriptor  # noqa: F401
 from yian.compose.nodes.agent import AgentDescriptor  # noqa: F401
 from yian.compose.nodes.code import CodeDescriptor  # noqa: F401
-from yian.compose.nodes.model import ModelDescriptor  # noqa: F401
 from yian.compose.nodes.tool import ToolDescriptor  # noqa: F401
 from yian.compose.nodes.wait import WaitDescriptor  # noqa: F401
 from yian.compose.nodes.human_input import HumanInputDescriptor  # noqa: F401
@@ -188,7 +188,7 @@ _COMPACT_FLOW_KEYS = frozenset({"id", "name", "description", "version", "typedef
 # Compact form is restricted to value-producing LEAF kinds. case/call/map reference
 # other nodes or callables that a one-node flow has none of, so they make no sense
 # inline — an author who needs them writes a full `nodes:` map.
-_COMPACT_KINDS = frozenset({"agent", "code", "model", "tool", "human_input"})
+_COMPACT_KINDS = frozenset({"agent", "code", "tool", "human_input"})
 
 
 def _desugar_compact(body: dict, root: SourceCursor) -> dict:
@@ -207,11 +207,16 @@ def _desugar_compact(body: dict, root: SourceCursor) -> dict:
       `llm_config:`/`long_term_memory:`) is the node body.
 
     The returned dict is the canonical compose body (with a `nodes:` map) the strict
-    `ComposeFile` schema then validates unchanged. Raises `LoadError` on a non-leaf
-    kind or a missing flow `id:`.
+    `ComposeFile` schema then validates unchanged. Raises `LoadError` on a removed
+    kind, a non-leaf kind, or a missing flow `id:`.
     """
     diagnostics = LoadDiagnostics.from_cursor(root)
     kind = body["kind"]
+    if kind in REMOVED_KINDS:
+        raise diagnostics.error(
+            f"compact (single-node) flow: kind {kind!r} was removed; {REMOVED_KINDS[kind]}",
+            range=root.range_of("kind"),
+        )
     if kind not in _COMPACT_KINDS:
         raise diagnostics.error(
             f"compact (single-node) flow: kind {kind!r} is not allowed inline "

@@ -103,7 +103,7 @@ class NodeDescriptor:
       without source metadata.
 
     `kw_only=True` (inherited by every subclass) makes all fields keyword-only, so a subclass may
-    declare REQUIRED kind fields (`code`, `model_id`, `call`, ...) after these defaulted commons
+    declare REQUIRED kind fields (`code`, `tool_id`, `call`, ...) after these defaulted commons
     without the "non-default follows default" error. Every construction site is keyword-only.
     """
 

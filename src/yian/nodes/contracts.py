@@ -20,7 +20,9 @@ from yian.typesys import (
     Type,
     TypeCheckError,
     TypedValue,
+    ValueKind,
     build_value_as,
+    canonical_type_label,
 )
 
 
@@ -448,15 +450,39 @@ def output_contract_type(contract: OutputContract | None) -> Type | None:
     )
 
 
-def missing_output_contract_field(
+# Kinds a field read is not checked on: `object` is opaque unless it declares fields, and
+# `file` is the reserved file reference.
+_UNCHECKED_FIELD_KINDS = frozenset({ValueKind.OBJECT, ValueKind.FILE})
+
+
+def output_contract_field_error(
     contract: OutputContract,
     fields: list[str] | tuple[str, ...],
+    path: str,
 ) -> str | None:
-    """Return the first field proven absent by a closed contract path.
+    """Return why a reference reads a field its contract can't have, else `None`.
 
-    An exact record remains closed at every proven nested record. A partial
-    record is closed at its root; traversal below one opaque field is lenient
-    because no nested shape is known.
+    An exact record is closed at every proven nested record, and a partial record is
+    closed at its root; reading below an opaque partial field is not checked. Every type
+    other than `object` and `file` (scalars, `Literal[...]`, lists, and their
+    `Optional[...]` forms) has no fields, so reading one is an error.
+
+    Args:
+        contract (`OutputContract`):
+            The exact or partial contract of the referenced value.
+        fields (`list[str] | tuple[str, ...]`):
+            The field names the reference reads below that value. May be empty.
+        path (`str`):
+            The reference path without `${}`, used in the message.
+
+    Returns:
+        `str | None`:
+            The error message, or `None` when the path can be read.
+
+    Raises:
+        `TypeError`:
+            A field name is not a non-empty string, or `contract` is not an
+            `OutputContract`.
     """
     if not isinstance(fields, (list, tuple)) or any(
         type(field) is not str or not field for field in fields
@@ -469,11 +495,11 @@ def missing_output_contract_field(
         field_name, *remaining = fields
         field_contracts = dict(contract.fields)
         if field_name not in field_contracts:
-            return field_name
+            return f"reference ${{{path}}} reads unknown field {field_name!r} on record"
         field_contract = field_contracts[field_name]
         if field_contract is None:
             return None
-        return missing_output_contract_field(field_contract, remaining)
+        return output_contract_field_error(field_contract, remaining, path)
     if type(contract) is not ValueContract:
         output_contract_type(contract)
         return None  # pragma: no cover - the validator above always raises
@@ -482,9 +508,14 @@ def missing_output_contract_field(
     assert typ is not None
     for field_name in fields:
         if typ.fields is None:
-            return None
+            if typ.kind in _UNCHECKED_FIELD_KINDS:
+                return None
+            return (
+                f"reference ${{{path}}} reads field {field_name!r} on type "
+                f"{canonical_type_label(typ)}, which has no fields"
+            )
         if field_name not in typ.fields:
-            return field_name
+            return f"reference ${{{path}}} reads unknown field {field_name!r} on record"
         typ = typ.fields[field_name]
     return None
 
@@ -780,7 +811,7 @@ __all__ = [
     "ValuePath",
     "as_binding",
     "binding_source",
-    "missing_output_contract_field",
+    "output_contract_field_error",
     "output_contract_origin",
     "output_contract_type",
     "validate_output_contract",

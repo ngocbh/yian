@@ -20,7 +20,7 @@ from yian.nodes.contracts import (
     ValuePath,
     as_binding,
     binding_source,
-    missing_output_contract_field,
+    output_contract_field_error,
     output_contract_origin,
     validate_output_contract,
 )
@@ -250,9 +250,14 @@ def test_partial_record_contract_enforces_closed_shape_and_known_fields() -> Non
 
     validate_output_contract(contract, {"count": 1, "note": object()})
     assert contract.names == ("count", "note")
-    assert missing_output_contract_field(contract, ["count"]) is None
-    assert missing_output_contract_field(contract, ["note", "anything"]) is None
-    assert missing_output_contract_field(contract, ["absent"]) == "absent"
+    assert output_contract_field_error(contract, ["count"], "p.output.count") is None
+    assert output_contract_field_error(contract, ["note", "anything"], "p") is None
+    assert output_contract_field_error(contract, ["absent"], "p.output.absent") == (
+        "reference ${p.output.absent} reads unknown field 'absent' on record"
+    )
+    assert output_contract_field_error(contract, ["count", "x"], "p.output.count.x") == (
+        "reference ${p.output.count.x} reads field 'x' on type int, which has no fields"
+    )
     assert output_contract_origin(contract, ("count",)) is origin
     assert output_contract_origin(contract, ("note",)) is None
 
@@ -265,6 +270,22 @@ def test_partial_record_contract_enforces_closed_shape_and_known_fields() -> Non
             contract,
             {"count": 1, "note": "x", "extra": True},
         )
+
+
+def test_output_contract_field_error_rejects_fields_on_fieldless_types():
+    """Scalars and lists have no fields; opaque `object` and `file` stay unchecked."""
+    def err(typ, *fields):
+        return output_contract_field_error(ValueContract(typ), list(fields), "x")
+
+    assert err(Type.scalar(ValueKind.STRING), "a") == (
+        "reference ${x} reads field 'a' on type str, which has no fields"
+    )
+    assert "on type list[str]" in err(Type.scalar(ValueKind.LIST_STRING), "a")
+    assert "on type Optional[int]" in err(Type(kind=ValueKind.INTEGER, nullable=True), "a")
+    assert "on type None" in err(Type.scalar(ValueKind.NONE), "a")
+    assert err(Type.scalar(ValueKind.OBJECT), "a", "b") is None
+    assert err(Type.scalar(ValueKind.FILE), "uri") is None
+    assert err(Type.scalar(ValueKind.STRING)) is None  # no field read at all
 
 
 def test_partial_record_contract_rejects_ambiguous_representations() -> None:

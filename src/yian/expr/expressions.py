@@ -46,11 +46,12 @@ def resolve_reference(path: str, pool: VariablePool) -> Any:
 def _resolve_in_record(path: str, record: dict) -> Any:
     """Resolve a `${path}` against a node's bound input record (dotted walk).
 
-    A missing input, dotted miss, or `None` step returns `None`, which gives `when:` its
-    missing-is-falsy behavior. Compose rejects undeclared names, and field reads a known
-    type can't have in bindings, CASE conditions and flow outputs. LOOP predicates and
-    nested node-assert paths still check only the head name, so a `None` here can also be
-    a dotted miss on those. Bare local-input refs only.
+    Bare local-input refs only. A missing input, dotted miss, or `None` step returns
+    `None`, which gives `when:` its missing-is-falsy behavior. Compose rejects
+    undeclared names everywhere, and field reads a known type can't have in bindings,
+    CASE conditions, and flow outputs. LOOP predicates and asserts check less (a node
+    assert's reads of its inputs and a flow assert's `${input.X.f}` check only the head
+    name), so there a `None` can also be a misspelled field.
     """
     parts = [p.strip() for p in path.strip().split(".")]
     if not parts or any(not p for p in parts):

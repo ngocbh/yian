@@ -110,16 +110,17 @@ Allowed only for the **leaf kinds** (`agent`, `code`, `tool`, `human_input`) —
 A whole-string `${ref}` resolves to the **typed value**; embedded in surrounding
 text it is **stringified**.
 
+Prompt templates are strict: a missing reference or any span whose final value is
+null raises, including an embedded span. Binding templates stay non-strict—a whole
+null remains typed null and an embedded null contributes empty text.
+
 When the loader knows a value's type, reading a field that type can't have is a load
 error: a field on a scalar (`str`, `int`, `Literal[...]`, ...) or a list, or a field a
 record doesn't declare. This covers `${input.X...}`, `${node.output...}`, and a MAP's
 `${item...}` in bindings, `case` conditions, and flow outputs. Reading a declared field
 through an `Optional[...]` record still gives `null` when the whole value is null, and
-values whose type isn't known at load (`object`, an untyped output) aren't checked.
-
-Prompt templates are strict: a missing reference or any span whose final value is
-null raises, including an embedded span. Binding templates stay non-strict—a whole
-null remains typed null and an embedded null contributes empty text.
+values whose type isn't known at load (`object`, an untyped output, or anything below
+them) aren't checked.
 
 **Operators inside `${...}`** — one expression grammar, everywhere:
 

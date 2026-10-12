@@ -35,8 +35,8 @@ The shape of `output:` sets what the flow returns:
 
 Changed: a one-field record used to return its bare value, and `output: {}` used to
 return `None`. For the old result, write `output: ${x}`, or drop `output:` to return
-`None`. Flows whose `output:` is a record of zero or one field, and flows that call
-one, got a new fingerprint. Runs recorded under the old rule fail the fingerprint
+`None`. Flows whose `output:` is a record of zero or one field, and flows that call,
+map, or loop over one, got a new fingerprint. Runs recorded under the old rule fail the fingerprint
 check and can't be resumed or replayed.
 
 Node IDs are the keys under `nodes:`. They cannot contain `.`, `#`, or `/`:

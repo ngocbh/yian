@@ -322,8 +322,9 @@ compares the optional exit field with `true` to prove `bool`. This is the shape
   type (checked at load). Omitted keeps a field; a returned null sets a nullable field
   to null. A literal `${null}` is typed `None`, so it does not fit an `Optional[str]`
   seed; return a nullable-typed producer instead. A body may return one field
-  (`output: {done: ...}`); an empty `output: {}` is rejected. A predicate that
-  reads only fields the body never returns cannot change; give such a loop `max:`.
+  (`output: {done: ...}`); an empty `output: {}`, or a reference to an empty record,
+  is rejected. A predicate that reads only fields the body never returns cannot
+  change; give such a loop `max:`.
   Give EXACTLY ONE driver: `while:` (pre-check, 0+ runs), `until:` (post-check /
   do-while, 1+ runs), or `times: N` (fixed count). `max:` is optional for
   `while:`/`until:` but REDUNDANT+REJECTED with `times:`.

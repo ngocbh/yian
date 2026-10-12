@@ -151,7 +151,7 @@ def test_map_over_a_one_field_record_def_returns_a_list_of_records():
 
 @pytest.mark.parametrize("def_output", ["", "    output: {}\n"], ids=["absent", "empty-record"])
 def test_map_over_a_def_without_fields_is_rejected(def_output):
-    with pytest.raises(LoadError, match="must declare a non-empty output:"):
+    with pytest.raises(LoadError, match="must declare a non-empty `output:`"):
         load_flow(_map_parent(def_output))
 
 

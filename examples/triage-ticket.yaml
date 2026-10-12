@@ -11,7 +11,7 @@
 #
 # Exercises (the structured-output contract): a record `output:` with a nested
 # `Literal[...]` enum field, and downstream field-access references into the record.
-# Both agents are plain AGENT nodes, so it runs against any provider/model — including a
+# Both agents are tool-free AGENT nodes, so it runs against any provider/model — including a
 # local Ollama model — with no extra Python.
 #
 # Run it with:

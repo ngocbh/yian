@@ -217,7 +217,7 @@ output: ${chat_loop.output}
 
 
 # `until:` is a POST-check (do-while) predicate — same carried-record scope as `while:`,
-# `max:` still required. `times: N` is a fixed count — no predicate, `max:` redundant.
+# `max:` optional. `times: N` is a fixed count — no predicate, `max:` redundant.
 UNTIL_GOOD = GOOD.replace("    while: not ${exited}\n", "    until: ${exited}\n")
 TIMES_GOOD = GOOD.replace("    while: not ${exited}\n    max: 5\n", "    times: 3\n")
 # Exactly one of while:/until:/times: — both-set and neither-set are illegal.
@@ -227,6 +227,32 @@ NEITHER = GOOD.replace("    while: not ${exited}\n", "")
 TIMES_WITH_MAX = GOOD.replace("    while: not ${exited}\n", "    times: 3\n")  # keeps max: 5
 # A fixed count must permit at least one run: `times: 0` is nonsensical.
 TIMES_BAD_COUNT = GOOD.replace("    while: not ${exited}\n    max: 5\n", "    times: 0\n")
+# Without `max:` (or with `max: null`) a predicate loop has no iteration limit.
+NO_MAX = GOOD.replace("    max: 5\n", "")
+UNTIL_NO_MAX = UNTIL_GOOD.replace("    max: 5\n", "")
+NULL_MAX = GOOD.replace("    max: 5\n", "    max: null\n")
+
+
+@pytest.mark.parametrize(
+    "src, kind",
+    [(NO_MAX, "while"), (UNTIL_NO_MAX, "until"), (NULL_MAX, "while")],
+    ids=["while-no-max", "until-no-max", "while-null-max"],
+)
+def test_predicate_loop_without_max_builds_unlimited(src, kind):
+    node = load_flow(src).compiled.nodes["chat_loop"]
+    assert node.predicate_kind == kind
+    assert node.max_iters is None
+
+
+def test_predicate_loop_with_max_keeps_its_limit():
+    assert load_flow(GOOD).compiled.nodes["chat_loop"].max_iters == 5
+
+
+def test_times_with_null_max_builds():
+    node = load_flow(
+        TIMES_GOOD.replace("    times: 3\n", "    times: 3\n    max: null\n")
+    ).compiled.nodes["chat_loop"]
+    assert node.times == 3 and node.max_iters == 3
 
 
 def test_good_loop_bakes_loopnode():

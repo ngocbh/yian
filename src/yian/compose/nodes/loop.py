@@ -33,8 +33,9 @@ class LoopDescriptor(NodeDescriptor):
 
     `call` names the body child flow (defs-first, else external — same resolution as
     `call`/`map`). The authored `input:` mapping seeds the carried record at turn 0. Exactly one of
-    `while_`/`until_`/`times` carries the predicate; `max` is the runaway guard (required for
-    while/until). `while`/`until` are Python keywords, so they land here as `while_`/`until_`.
+    `while_`/`until_`/`times` carries the predicate; `max` is the optional iteration limit for
+    while/until (without it the loop has no iteration limit). `while`/`until` are Python keywords,
+    so they land here as `while_`/`until_`.
 
     Inherits the common descriptor fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` +
     the Compose-only `range`/`field_ranges` parse metadata) and the template `parse` from `NodeDescriptor` (no
@@ -117,9 +118,10 @@ class LoopDescriptor(NodeDescriptor):
 
         errors: list[str] = []
         # Exactly one of `while:`/`until:`/`times:` selects the loop's
-        # driver. `while`/`until` are PREDICATE loops (record-scoped boolean, `max:` runaway
-        # guard); `times: N` is a fixed COUNT (no predicate, `max:` redundant since the count
-        # bounds it). Bake `predicate_kind`/`predicate`/`times`/`max_iters` per the present kind.
+        # driver. `while`/`until` are PREDICATE loops (record-scoped boolean, optional `max:`
+        # iteration limit); `times: N` is a fixed COUNT (no predicate, `max:` redundant since the
+        # count bounds it). Bake `predicate_kind`/`predicate`/`times`/`max_iters` per the present
+        # kind.
         present = [
             k
             for k, v in (
@@ -139,26 +141,24 @@ class LoopDescriptor(NodeDescriptor):
             node.predicate_kind = kind
             node.predicate = self.while_ if kind == "while" else self.until_
             node.max_iters = self.max
-            if self.max is None:
-                errors.append(
-                    f"loop node {self.id!r}: `max:` is required (runaway guard)"
-                )
-            elif not isinstance(self.max, int) or isinstance(self.max, bool):
-                # `max:` bounds the iteration COUNT, so it must be a plain integer. The descriptor
-                # is a bare dataclass (its `Optional[int]` annotation isn't enforced), so a YAML
-                # string/float passes through and would blow up the `< 1` compare or the runtime
-                # guard, and a YAML bool (an int subclass in Python) would silently read as 0/1.
-                # Reject any non-int type.
-                errors.append(
-                    f"loop node {self.id!r}: `max:` must be an integer (got {self.max!r})"
-                )
-            elif self.max < 1:
-                # A runaway guard below 1 is nonsensical: the guard bounds the iteration COUNT, so
-                # it must permit at least one body run. Reject at the boundary rather than letting
-                # `max: 0` run one iteration and then fail with a confusing "exceeded max (0)".
-                errors.append(
-                    f"loop node {self.id!r}: `max:` must be >= 1 (got {self.max})"
-                )
+            if self.max is not None:
+                if not isinstance(self.max, int) or isinstance(self.max, bool):
+                    # `max:` bounds the iteration COUNT, so it must be a plain integer. The
+                    # descriptor is a bare dataclass (its `Optional[int]` annotation isn't
+                    # enforced), so a YAML string/float passes through and would blow up the
+                    # `< 1` compare or the runtime guard, and a YAML bool (an int subclass in
+                    # Python) would silently read as 0/1. Reject any non-int type.
+                    errors.append(
+                        f"loop node {self.id!r}: `max:` must be an integer (got {self.max!r})"
+                    )
+                elif self.max < 1:
+                    # A limit below 1 is nonsensical: `max:` bounds the iteration COUNT, so it
+                    # must permit at least one body run. Reject at the boundary rather than
+                    # letting `max: 0` run one iteration and then fail with a confusing
+                    # "exceeded max (0)".
+                    errors.append(
+                        f"loop node {self.id!r}: `max:` must be >= 1 (got {self.max})"
+                    )
         elif present[0] == "times":
             # `times: N` is a fixed count: exactly N runs, no predicate. `max_iters` doubles as
             # the count N so the runtime guard needs no `times`-special case. Same int/bool/`>= 1`
@@ -208,8 +208,9 @@ class LoopDescriptor(NodeDescriptor):
             )
         # `while:`/`until:` predicate scope: the predicate is evaluated against the carried record
         # (record-scoped `evaluate_when_record`), where the ONLY resolvable names are the carried
-        # keys — an undeclared name silently resolves falsy and spins the loop to `max`. Reject a
-        # predicate whose ref head isn't a carried field at load, so a typo is loud not a runaway.
+        # keys — an undeclared name silently resolves falsy, and without a `max:` the loop would
+        # spin forever. Reject a predicate whose ref head isn't a carried field at load, so a typo
+        # is loud not a runaway.
         # `times:` has no predicate, so skip it.
         predicate_src = self.while_ or self.until_
         if predicate_src:

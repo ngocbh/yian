@@ -214,16 +214,12 @@ class LoopDescriptor(NodeDescriptor):
         # subset too (it reads a subset of the carried record). A body must return at least
         # one carried field, so a body returning no record or an empty record is rejected.
         carried = set(self.inputs or {})
-        out_names = (
-            set(sig.output_names)
-            if sig.returns_record
-            else _contract_field_names(sig.output)
-        ) or None
+        out_names = _contract_field_names(sig.output) or None
         if out_names is None:
             errors.append(
-                f"loop node {self.id!r}: body {child_display} must return a record whose "
-                f"field names are a subset of the carried record {sorted(carried)}; write "
-                "`output: {field: ...}` or a whole reference to a node with a record output"
+                f"loop node {self.id!r}: body {child_display} must return a record with at "
+                f"least one carried field (a subset of the carried record {sorted(carried)}); "
+                "write `output: {field: ...}` or a whole reference to a node with a record output"
             )
         elif out_names - carried:
             errors.append(

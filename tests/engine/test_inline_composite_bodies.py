@@ -2518,7 +2518,8 @@ output: ${repeat.output}
           x: ${input.n}
         output: int
 """,
-            "body inline body of node 'repeat' must return a record",
+            "body inline body of node 'repeat' must return a record with at least one "
+            "carried field",
         ),
         (
             """      step:

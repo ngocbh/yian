@@ -389,11 +389,11 @@ def test_one_field_body_record_returns_only_that_carried_field():
     assert run_flow(loaded, {}).output == {"n": 0, "state": {"n": 100}}
 
 
-# A value body `output: ${step.output}` over a scalar returns no record, so it returns no
-# carried fields.
-SCALAR_VALUE_BODY = """
-id: loop-scalar-value-body
-name: loop_scalar_value_body
+# A body must return a record with at least one carried field: a value body over a scalar
+# returns no record, and a record body `output: {}` returns no field.
+REJECTED_BODY = """
+id: loop-rejected-body
+name: loop_rejected_body
 defs:
   bump:
     input:
@@ -406,7 +406,7 @@ defs:
         output: int
         code: |
           return inputs["n"] + 1
-    output: ${step.output}
+    output: <output>
 nodes:
   chat_loop:
     kind: loop
@@ -418,16 +418,17 @@ output: ${chat_loop.output}
 """
 
 
-def test_scalar_value_body_is_rejected():
+@pytest.mark.parametrize(
+    "output", ["${step.output}", "{}"], ids=["scalar-value", "empty-record"]
+)
+def test_body_returning_no_carried_field_is_rejected(output):
     with pytest.raises(LoadError) as e:
-        load_flow(SCALAR_VALUE_BODY)
-    message = str(e.value)
+        load_flow(REJECTED_BODY.replace("<output>", output))
     assert (
-        "loop node 'chat_loop': body callable 'bump' must return a record whose field names "
-        "are a subset of the carried record ['n']; write `output: {field: ...}` or a whole "
-        "reference to a node with a record output"
-    ) in message
-    assert "returns its value bare" not in message
+        "loop node 'chat_loop': body callable 'bump' must return a record with at least one "
+        "carried field (a subset of the carried record ['n']); write `output: {field: ...}` "
+        "or a whole reference to a node with a record output"
+    ) in str(e.value)
 
 
 # A value body re-exports the referenced record `{n}`, so it returns the carried `n` even

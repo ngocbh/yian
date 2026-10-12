@@ -269,7 +269,7 @@ nodes:
 output: ${lp.output}
 """
     with pytest.raises(
-        LoadError, match="whose field names are a subset of the carried record"
+        LoadError, match="must return a record with at least one carried field"
     ):
         load_flow(text)
 
@@ -301,7 +301,7 @@ nodes:
 output: ${lp.output}
 """
     with pytest.raises(
-        LoadError, match="whose field names are a subset of the carried record"
+        LoadError, match="must return a record with at least one carried field"
     ):
         load_flow(text)
 

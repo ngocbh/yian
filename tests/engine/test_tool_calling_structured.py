@@ -1,4 +1,4 @@
-"""`tool_calling` mode emits the declared `output:` type on its final answer turn."""
+"""An AGENT with tools emits the declared `output:` type on its final answer turn."""
 
 import pytest
 
@@ -118,7 +118,7 @@ def test_tool_calling_final_answer_is_structured(monkeypatch):
     chat = _StructuredFinalChat({"name": "ACME", "score": 9})
     monkeypatch.setattr(llm_clients_mod, "model_from_config", lambda cfg: chat)
 
-    node = AgentNode("n", prompt="hi", tools=["value"], llm_config=LLMConfig(), mode="tool_calling")
+    node = AgentNode("n", prompt="hi", tools=["value"], llm_config=LLMConfig())
     node.output_contract = ValueContract(
         Type(
             kind=ValueKind.OBJECT,
@@ -179,7 +179,6 @@ def test_no_tools_structured_output_skips_discovery_call(
         "n",
         prompt="produce a value",
         llm_config=LLMConfig(provider="anthropic", model="claude-sonnet-4-5"),
-        mode="tool_calling",
     )
     node.output_contract = ValueContract(output_type)
 
@@ -194,7 +193,6 @@ def test_no_tools_structured_fallback_uses_one_schema_prompt(monkeypatch):
         "n",
         prompt="produce a number",
         llm_config=LLMConfig(provider="vllm", model="no-structured-sentinel"),
-        mode="tool_calling",
     )
     node.output_contract = ValueContract(Type.scalar(ValueKind.INTEGER))
 
@@ -209,7 +207,6 @@ def test_no_tools_structured_retry_never_adds_a_discovery_call(monkeypatch):
         "n",
         prompt="produce a number",
         llm_config=LLMConfig(provider="anthropic", model="claude-sonnet-4-5"),
-        mode="tool_calling",
     )
     node.output_contract = ValueContract(Type.scalar(ValueKind.INTEGER))
 
@@ -225,7 +222,6 @@ def test_tool_calling_literal_final_answer_is_structured(monkeypatch):
         "n",
         prompt="classify",
         llm_config=LLMConfig(provider="ollama", model="qwen2.5:72b"),
-        mode="tool_calling",
     )
     node.output_contract = ValueContract(
         Type(
@@ -242,7 +238,7 @@ def test_tool_calling_declared_bare_str_answer_unchanged(monkeypatch):
     chat = _StructuredFinalChat({})
     chat._replies = [AIMessage(content="plain answer")]
     monkeypatch.setattr(llm_clients_mod, "model_from_config", lambda cfg: chat)
-    node = AgentNode("n", prompt="hi", llm_config=LLMConfig(), mode="tool_calling")
+    node = AgentNode("n", prompt="hi", llm_config=LLMConfig())
     node.output_contract = ValueContract(Type.scalar(ValueKind.STRING))
     # An unconstrained string remains text passthrough with no structured emit turn.
     assert _run_node(node).value == "plain answer"

@@ -137,7 +137,6 @@ def _flow(memory: str, *, flow_id: str | None = "host-flow", agent_memory: str |
         lines += [
             "  ask:",
             "    kind: agent",
-            "    mode: plain",
             f"    long_term_memory: {agent_memory}",
             "    prompt: hi",
             "    output: str",

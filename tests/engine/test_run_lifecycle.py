@@ -296,7 +296,6 @@ input:
 nodes:
   answer:
     kind: agent
-    mode: plain
     input:
       topic: ${input.topic}
     prompt: Answer ${topic}

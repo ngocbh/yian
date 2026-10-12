@@ -19,9 +19,15 @@ from tests.fixtures.openai_responses import ResponsesServer
 _FLOW = """id: pinned-openai
 name: pinned_openai
 nodes:
-  agent: {kind: agent, mode: plain, prompt: hi, llm_config: {provider: openai, model: gpt-5.5}}
+  agent: {kind: agent, prompt: hi, llm_config: {provider: openai, model: gpt-5.5}}
 output: ${agent.output}
 """
+
+
+def _session_flow():
+    flow = _FLOW.replace("{kind: agent,", "{kind: agent, long_term_memory: session,")
+    assert flow != _FLOW
+    return flow
 
 
 @pytest.fixture(autouse=True)
@@ -163,7 +169,7 @@ def test_old_api_run_resumes_shared_message_history(tmp_path, monkeypatch):
     )
     from yian.memory.session import SessionMemory
 
-    flow = load_flow(_FLOW.replace("mode: plain,", "mode: plain, long_term_memory: session,"))
+    flow = load_flow(_session_flow())
     history = SessionMemory()
     snapshot = connection_snapshot()
     monkeypatch.setattr(
@@ -176,7 +182,8 @@ def test_old_api_run_resumes_shared_message_history(tmp_path, monkeypatch):
 
     class Model:
         def invoke(self, messages):
-            calls.append(messages)
+            # Snapshot: the AGENT loop appends the reply to this same list after invoke.
+            calls.append(list(messages))
             return AIMessage(content="reply")
 
     def factory(config):
@@ -216,7 +223,7 @@ def test_fresh_connected_run_reuses_pre_cutover_api_message_history(monkeypatch)
     )
     from yian.memory.session import SessionMemory
 
-    flow = load_flow(_FLOW.replace("mode: plain,", "mode: plain, long_term_memory: session,"))
+    flow = load_flow(_session_flow())
     history = SessionMemory()
     snapshot = connection_snapshot()
 

@@ -337,8 +337,9 @@ class NodeDescriptor:
         the asserts-list check), then `_read_common_fields` (the four commons with `env`
         validation). Finally constructs `cls(**kwargs, range=..., field_ranges=...)`.
 
-        A kind customizes only the two hooks; 8 of 10 kinds inherit this untouched. Returns
-        the fully-populated descriptor instance (`cls`, never the abstract base)."""
+        Kinds customize the two hooks and may wrap `parse` itself (agent, human_input, and
+        case do). Returns the fully-populated descriptor instance (`cls`, never the abstract
+        base)."""
         cursor = cls._normalize_cursor(cursor)
         diagnostics = LoadDiagnostics.from_cursor(cursor)
         cls._check_keys(node_id, cursor)

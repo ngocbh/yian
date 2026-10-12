@@ -18,7 +18,7 @@ from yian.llm_clients.openai_subscription import (
     create_subscription_model,
 )
 from yian.nodes.agent.memory import decode_message, encode_message
-from yian.nodes.agent.modes.utils import text_of
+from yian.nodes.agent.text import text_of
 from tests.fixtures.openai_responses import ResponsesServer
 
 

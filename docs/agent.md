@@ -229,19 +229,19 @@ the usage received so far. Each tool call the interrupt skipped is reported as a
 | `system_prompt:` | Renders local `${name}` values into the system instruction, replacing the framework instruction. See [system prompt](syntax.md#system-prompt-system_prompt). |
 | `prompt:` | Renders local `${name}` values into the initial `HumanMessage`. |
 | `long_term_memory:` plus host `memory=build_memories(flow)` | Supplies one memory context: recalled notes become labelled system sections (`{"index", "memory", "text"}`); a session memory contributes structured prior messages. |
-| `tools: [name, ...]` | Resolves the granted ids from the run's tools (registered tools, or the host's `tools=` mapping) and binds their schemas beside the messages in `tool_calling` mode. A name may be a host-filled tool group, which expands to its tools. |
+| `tools: [name, ...]` | Resolves the granted ids from the run's tools (registered tools, or the host's `tools=` mapping) and binds their schemas beside the messages; an AGENT with `tools:` or `skills:` runs the tool loop, and one without them makes one model call. A name may be a host-filled tool group, which expands to its tools. |
 | `skills: [name, ...]` or `skills: all` plus host `skills=` | Lists each granted skill's name and description in the system message and binds the built-in `load_skill` tool, which returns a skill's instructions or a bundled file on demand. See [agent skills](syntax.md#agent-skills-skills). |
 | Structured `output:` | Selects a provider-supported structured-output binding or a fallback schema instruction, then validates the returned value. A bare `str` remains free text. |
-| `steerable: true` plus host `steering=` | In `tool_calling` mode, sends the host's queued steer messages as `HumanMessage`s with the next model request, and stops the loop on a host interrupt; the node succeeds with its text so far. See [steering a running agent](syntax.md#steering-a-running-agent-steerable). |
-| `mode:`, `llm_config:`, `retries:`, `env:` | Controls execution; these values are not additional prompt messages. |
+| `steerable: true` plus host `steering=` | Sends the host's queued steer messages as `HumanMessage`s with the next model request, and stops the node on a host interrupt (a streamed reply is cut); the node succeeds with its text so far. See [steering a running agent](syntax.md#steering-a-running-agent-steerable). |
+| `llm_config:`, `retries:`, `env:` | Controls execution; these values are not additional prompt messages. |
 
 The system instruction is the rendered `system_prompt:` when the node has one,
 and the framework instruction otherwise. An authored prompt replaces the framework
 instruction rather than extending it. The skill listing that granted `skills:` add
-follows it, then recalled memory sections. Every model request of the node, in
-either mode and for structured generation, starts with this same instruction. The
-memory context is opened with the instruction without the listing, so skill grants
-do not change recall. A session transcript keeps past `load_skill` calls and
+follows it, then recalled memory sections. Every model request of the node starts
+with this same instruction: the one model call, each tool-loop round, and
+structured generation. The memory context is opened with the instruction without
+the listing, so skill grants do not change recall. A session transcript keeps past `load_skill` calls and
 results, like any tool call, even if a later run grants no skills.
 
 ### Memory is an outer-to-local stack
@@ -347,7 +347,6 @@ input:
   text: str
 output: Literal[positive, neutral, negative]
 kind: agent
-mode: plain
 prompt: |-
   Classify ${text} as positive, neutral, or negative.
   Return exactly one label.
@@ -368,7 +367,6 @@ input:
 nodes:
   draft:
     kind: agent
-    mode: plain
     input:
       article: ${input.article}
     output: str
@@ -407,7 +405,6 @@ defs:
     nodes:
       reviewer:
         kind: agent
-        mode: plain
         input:
           text: ${input.text}
         output: str

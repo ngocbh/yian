@@ -22,7 +22,6 @@ input:
 nodes:
   note:
     kind: agent
-    mode: tool_calling
     tools: [web_search, nope_tool]     # `nope_tool` is unregistered — not caught at load
     input:
       topic: ${input.topic}

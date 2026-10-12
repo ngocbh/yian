@@ -50,18 +50,17 @@ class _Native:
         return Bound()
 
 
-def _typed_flow(native=True, mode="plain"):
+def _typed_flow(native=True):
     config = "{provider: openai, model: gpt-4o}" if native else "{provider: vllm, model: no-structured-sentinel}"
     return load_flow(_FLOW.replace("{provider: openai, model: test-model}", config)
-                     .replace("mode: plain", f"mode: {mode}").replace("    output: str", "    output: int"))
+                     .replace("    output: str", "    output: int"))
 
 
 @pytest.mark.parametrize("native", [False, True])
-@pytest.mark.parametrize("mode", ["plain", "tool_calling"])
-def test_structured_runs_restore_actual_history_without_schema_tool_execution(monkeypatch, native, mode):
+def test_structured_runs_restore_actual_history_without_schema_tool_execution(monkeypatch, native):
     model = _Native([1, 2]) if native else _Model([AIMessage(content='{"value":1}'), AIMessage(content='{"value":2}')])
     monkeypatch.setattr(llm_clients, "model_from_config", lambda _: model)
-    memory, flow = SessionMemory(), _typed_flow(native, mode)
+    memory, flow = SessionMemory(), _typed_flow(native)
     assert run_flow(flow, {"question": "first"}, memory={"session": memory}).output == 1
     assert run_flow(flow, {"question": "second"}, memory={"session": memory}).output == 2
     assert any(message.content == "first" for message in model.calls[-1])
@@ -292,7 +291,7 @@ def test_tool_then_structured_purpose_distinguishes_schema_calls_from_real_grant
         monkeypatch.setattr(chat, "with_structured_output", native_model.with_structured_output, raising=False)
     monkeypatch.setattr(llm_clients, "model_from_config", lambda _: chat)
     monkeypatch.setitem(tools.TOOL_REGISTRY, "ScalarWrapper", tool)
-    flow = _typed_flow(native, "tool_calling")
+    flow = _typed_flow(native)
     flow.compiled.nodes["agent"].tools = ["ScalarWrapper"]
     assert run_flow(flow, {"question": "first"}, memory={"session": memory}).output == 9
     assert run_flow(flow, {"question": "second"}, memory={"session": memory}).output == 10

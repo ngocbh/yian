@@ -2,7 +2,7 @@
 
 A `human_input` node may carry an `adaptive_questions:` nested block instead of a
 static `questions:` list or a free-text `prompt:`. The block IS the spec of an LLM
-that AUTHORS the questions: `{prompt: <LLM brief, required>, mode?, llm_config?,
+that AUTHORS the questions: `{prompt: <LLM brief, required>, llm_config?,
 retries?}`. This pass lowers that single descriptor into TWO ordinary descriptors:
 
 1. a synth **AgentDescriptor** (id `<gate>__compose`) that composes a
@@ -107,7 +107,6 @@ def desugar_adaptive_questions(
             ),  # carry the gate's context inputs to the composer
             "output_contract_override": ValueContract(question_list_type()),
             "outputs": None,
-            "mode": auto.get("mode", "plain"),
             "range": desc.range,
             "field_ranges": dict(desc.field_ranges),
         }

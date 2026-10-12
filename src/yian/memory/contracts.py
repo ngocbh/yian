@@ -1502,7 +1502,7 @@ class EvaluationTrace(Protocol):
         prompt: str,
         memory_sections: tuple[MemorySection, ...] = (),
     ) -> None:
-        """Record the one visible model prompt established by an AGENT mode."""
+        """Record the one visible model prompt established by an AGENT invocation."""
         ...
 
     def record_interaction(self, interaction: VisibleInteraction) -> None:

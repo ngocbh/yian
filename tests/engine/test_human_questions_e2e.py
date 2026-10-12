@@ -117,11 +117,11 @@ _COMPOSED = [
 
 
 class _ComposeChat:
-    """A fake chat for the synth compose-agent's `plain`/native structured path.
+    """A fake chat for the synth compose-agent's native structured path.
 
     The synth agent declares a top-level `list[Question]` output, which
     `type_to_schema` wraps in a single-field `ListWrapper` model (field `items`).
-    `plain` mode calls `with_structured_output(schema).invoke(...)`, so the bound
+    An agent without tools calls `with_structured_output(schema).invoke(...)`, so the bound
     object must return `schema.model_validate({"items": [...]})` — a ListWrapper, NOT
     a bare list. `bind_tools`/`invoke` cover the plain-text path if it is ever reached.
     """

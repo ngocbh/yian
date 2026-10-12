@@ -26,7 +26,6 @@ input: {question: str}
 nodes:
   ask:
     kind: agent
-    mode: plain
     llm_config: {provider: openai, model: fake-model}
     long_term_memory: {chat: session}
     input: {question: "${input.question}"}
@@ -48,7 +47,6 @@ input: {topic: str}
 nodes:
   summarize:
     kind: agent
-    mode: plain
     llm_config: {provider: openai, model: fake-model}
     input: {topic: "${input.topic}"}
     prompt: Summarize ${topic}.

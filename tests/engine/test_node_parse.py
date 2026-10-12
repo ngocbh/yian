@@ -134,15 +134,13 @@ note:
     assert node.inputs == {"topic": "${input.topic}"}
     assert node.outputs == "str"
     assert node.tools == []
-    assert node.mode == "tool_calling"
     assert node.llm_config == {}
 
 
 def test_agent_knobs_parse():
-    # seed 14 — mode / tools / llm_config + object output
+    # seed 14 — tools / llm_config + object output
     node = _seed_nodes("14-agent-tools.yaml")["reviewer"]
     assert isinstance(node, AgentDescriptor)
-    assert node.mode == "tool_calling"
     assert node.tools == ["get_web_data", "web_search", "ask_user"]
     assert node.llm_config == {
         "provider": "anthropic",

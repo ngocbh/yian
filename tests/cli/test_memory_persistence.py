@@ -18,7 +18,6 @@ input: {question: str}
 nodes:
   answer:
     kind: agent
-    mode: plain
     long_term_memory: session
     input: {question: "${input.question}"}
     prompt: ${question}

@@ -96,7 +96,6 @@ _KIND_FIELDS: dict[NodeKind, frozenset[str]] = {
             "tools",
             "own_llm_config",
             "llm_inherit",
-            "mode",
             "retries",
             "memories",
             "variables",
@@ -1718,7 +1717,6 @@ def _node_manifest(
         manifest.update(
             {
                 "llm_inherit": node.llm_inherit,
-                "mode": node.mode,
                 "prompt": node.prompt,
                 "retries": node.retries,
                 "tools": _canonical_sequence(node.tools, ctx, f"{path}.tools"),

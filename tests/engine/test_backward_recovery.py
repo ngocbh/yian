@@ -290,13 +290,11 @@ input:
 nodes:
   first:
     kind: agent
-    mode: plain
     input:
       topic: ${input.topic}
     prompt: 'Draft ${topic}'
   second:
     kind: agent
-    mode: plain
     long_term_memory: test
     input:
       draft: ${first.output}

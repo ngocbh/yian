@@ -2161,8 +2161,9 @@ def _single_node_flow(node) -> Flow:
 def test_agent_variable_manifest_preserves_the_variable_free_fingerprint():
     flow = _single_node_flow(AgentNode("node", prompt="hi"))
     assert "variables" not in flow_manifest(flow)["nodes"]["node"]
+    # Pinned after `mode` left the AGENT manifest.
     assert flow_fingerprint(flow) == (
-        "5fccfadd2817175c4784246d6678837277247f94762b431086285471cf4e7e16"
+        "4bf7361e46300e1e8c9250fbca0505b9ad985ce4159558c1528ac1bc29bf8bd4"
     )
 
 
@@ -2666,7 +2667,6 @@ def test_flow_fingerprint_preserves_start_parameter_order():
         (CodeNode, {"code": 'return "first"'}, {"code": 'return "second"'}),
         (AgentNode, {"prompt": "first"}, {"prompt": "second"}),
         (AgentNode, {"prompt": "p", "tools": ["first"]}, {"prompt": "p", "tools": ["second"]}),
-        (AgentNode, {"prompt": "p", "mode": "plain"}, {"prompt": "p", "mode": "tool_calling"}),
         (AgentNode, {"prompt": "p", "retries": 1}, {"prompt": "p", "retries": 2}),
         (
             AgentNode,
@@ -2795,7 +2795,6 @@ def test_flow_fingerprint_preserves_start_parameter_order():
         "code-source",
         "agent-prompt",
         "agent-tools",
-        "agent-mode",
         "agent-retries",
         "agent-own-llm-config",
         "agent-llm-inherit",

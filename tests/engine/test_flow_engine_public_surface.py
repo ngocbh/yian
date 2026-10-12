@@ -279,7 +279,6 @@ name: direct_agent
 nodes:
   answer:
     kind: agent
-    mode: plain
     prompt: answer directly
 output: ${answer.output}
 """

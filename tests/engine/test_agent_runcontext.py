@@ -1,6 +1,6 @@
 """`AgentRunContext` carries one local loop's immutable configuration data."""
 
-from yian.nodes.agent.modes.common import AgentRunContext
+from yian.nodes.agent.context import AgentRunContext
 
 
 def test_runcontext_carries_config_no_scratch():

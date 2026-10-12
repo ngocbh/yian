@@ -17,7 +17,7 @@ from pydantic import SecretStr
 import yian.llm_clients as llm_clients
 from yian.llm_clients.connection import legacy_connection_config
 from yian.expr.lineage import FeedbackValue, has_feedback, validate_feedback
-from yian.nodes.agent.modes.utils import text_of
+from yian.nodes.agent.text import text_of
 from yian.nodes.base import BackwardContext, BackwardResult
 
 

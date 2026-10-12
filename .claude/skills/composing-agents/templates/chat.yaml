@@ -10,7 +10,7 @@
 
 id: chat
 name: chat
-description: A turn-by-turn assistant (plain-mode AGENT node, deterministic transcript).
+description: A turn-by-turn assistant (AGENT node without tools, deterministic transcript).
 
 input:
   opening: str            # seed transcript; `yian chat` passes "" (empty)
@@ -45,7 +45,6 @@ defs:
           return {"transcript": inputs["transcript"], "exited": True}
       reply:
         kind: agent
-        mode: plain
         input:
           transcript: ${input.transcript}
           message:    ${ask.output}

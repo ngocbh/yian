@@ -25,7 +25,6 @@ defs:
     nodes:
       answer:
         kind: agent
-        mode: plain
         prompt: call
         llm_config: {model: call-model}
     output: ${answer.output}
@@ -35,7 +34,6 @@ defs:
     nodes:
       inspect:
         kind: agent
-        mode: plain
         prompt: inspect
         llm_config: {model: map-model}
       emit:
@@ -53,7 +51,6 @@ defs:
     nodes:
       inspect:
         kind: agent
-        mode: plain
         prompt: inspect
         llm_config: {model: loop-model}
       step:
@@ -87,7 +84,6 @@ nodes:
     max: 5
   finish:
     kind: agent
-    mode: plain
     depends_on: [call_once, map_each, repeat]
     prompt: finish
     llm_config: {model: finish-model}

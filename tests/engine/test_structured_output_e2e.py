@@ -1,6 +1,6 @@
 """Structured AGENT output end-to-end through `run_flow`.
 
-Plain agents declaring record and `Literal[...]` outputs emit structured values via the
+Tool-free agents declaring record and `Literal[...]` outputs emit structured values via the
 engine's structured-generation path; both pass the write boundary
 (`pool.set(..., declared=output_type)`). A sibling bare-`str` agent in the same flow
 confirms the text passthrough is untouched.
@@ -17,20 +17,17 @@ name: top
 nodes:
   rec:
     kind: agent
-    mode: plain
     prompt: extract a person
     output:
       name: str
       score: int
   txt:
     kind: agent
-    mode: plain
     depends_on: [rec]
     prompt: say hi
     output: str
   sentiment:
     kind: agent
-    mode: plain
     depends_on: [txt]
     prompt: classify the greeting
     output: Literal[positive, neutral, negative]

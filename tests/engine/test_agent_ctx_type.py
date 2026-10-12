@@ -1,4 +1,4 @@
-"""`AgentNode._ctx` projects the node's semantic output contract for its mode."""
+"""`AgentNode._ctx` projects the node's semantic output contract."""
 
 from yian.diagnostics import OriginRef
 from yian.nodes.agent.node import AgentNode

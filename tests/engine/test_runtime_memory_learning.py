@@ -132,7 +132,7 @@ _POLICY = "reflective"
 
 
 class _TraceNode(Node):
-    """Trait-capable node used without invoking an external AGENT mode."""
+    """Trait-capable AGENT-kind node that evaluates without calling a model."""
 
     kind = NodeKind.AGENT
     needs_evaluation_trace = True

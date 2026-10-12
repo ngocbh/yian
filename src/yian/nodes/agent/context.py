@@ -1,9 +1,4 @@
-"""Shared definitions for agent modes — the mode contract.
-
-Common (shared across the mode modules), kept out of `modes/__init__.py` so the
-concrete modes import from here and `__init__` only re-exports + registers — no
-`__init__` <-> submodule cycle. Shared mode helpers live in `utils.py`.
-"""
+"""Process-local context for one AGENT invocation."""
 
 from __future__ import annotations
 
@@ -12,7 +7,7 @@ from threading import Event
 from typing import Any, Callable
 
 from yian.memory.contracts import EvaluationTrace, MemoryContext
-from yian.nodes.base import Output, Steering, _HostStop
+from yian.nodes.base import Steering, _HostStop
 from yian.skills.catalog import Skill
 from yian.tools import ToolSet
 
@@ -24,12 +19,15 @@ DEFAULT_SYSTEM = (
 
 
 class AgentLoopError(RuntimeError):
-    """A mode could not produce a final answer (e.g. hit an iteration cap)."""
+    """The AGENT tool loop could not produce a final answer.
+
+    For example, it hit its iteration cap.
+    """
 
 
 @dataclass
 class AgentRunContext:
-    """What a mode receives to run one AGENT node."""
+    """What the AGENT loop receives to run one invocation."""
 
     node_id: str
     prompt: str  # already rendered (${...} substituted)
@@ -38,7 +36,7 @@ class AgentRunContext:
     output_type: Any = None  # the node's declared output Type; None = text passthrough
     retries: int = 2  # structured-generation self-correction cap (extra attempts)
     max_tool_iterations: int = -1  # model turns before AgentLoopError; -1 = no cap (default)
-    stop_event: Event | None = None  # transient host lifecycle; absent for direct mode tests
+    stop_event: Event | None = None  # transient host lifecycle; absent for direct loop tests
     evaluation_trace: EvaluationTrace | None = None  # write-only visible evidence sink
     memory_context: MemoryContext = field(default_factory=MemoryContext)
     toolset: ToolSet = field(default_factory=ToolSet)  # the run's tools and groups; `tools` grants from it
@@ -61,18 +59,3 @@ class AgentRunContext:
         """Whether the host asked this node to stop its loop and return its text so far."""
         return self.steering is not None and self.steering.interrupted(self.node_id)
 
-
-# A mode is a pure node-body function of its process-local context.
-AgentMode = Callable[[AgentRunContext], Output]
-
-MODES: dict[str, AgentMode] = {}
-
-
-def register_mode(name: str) -> Callable[[AgentMode], AgentMode]:
-    """Register an agent mode under `name` (referenced by AgentBody.mode)."""
-
-    def deco(fn: AgentMode) -> AgentMode:
-        MODES[name] = fn
-        return fn
-
-    return deco

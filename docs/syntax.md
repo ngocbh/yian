@@ -335,6 +335,12 @@ classify:
     Answer with exactly one of: positive, neutral, negative.
 ```
 
+An AGENT with `tools:` or `skills:` runs the tool loop; without them it makes one
+model call (text, or structured for a typed `output:`).
+
+`mode:` was removed. A flow that still sets it fails to load with a message that
+says to delete the line; with `mode: plain` and `tools:`, those tools now run.
+
 An AGENT node's `output:` may be any declared shape. Only a bare, untagged `str`
 keeps the node a **text producer**. A `Literal[...]` enum, record, non-string scalar,
 or list switches the node to **structured generation**: the engine derives a
@@ -428,9 +434,9 @@ provider/model defaults; it ignores enclosing flow, parent-flow, and CLI layers:
 #### OpenAI authentication
 
 Run `yian auth openai` to select ChatGPT subscription sign-in or an OpenAI API key,
-then choose the default model. Both use `provider: openai` and the ordinary
-`plain` or `tool_calling` modes, explicit Yian tool grants, typed output,
-SessionMemory, and backward learning.
+then choose the default model. Both use `provider: openai`, one model call or
+the tool loop, explicit Yian tool grants, typed output, SessionMemory, and
+backward learning.
 
 The retired `provider: codex`, `sandbox`, `cwd`, and `builtin_tools` settings
 must be removed when migrating. Native thread references cannot be resumed as
@@ -510,8 +516,8 @@ output: ${reply.output}
 - Granted [`skills:`](#agent-skills-skills) are listed after it, then recalled
   [`long_term_memory:`](#agent-memory-long_term_memory) sections. Memory recall
   receives the rendered system prompt without the skill listing.
-- Every model request of the node uses it: `plain` and `tool_calling` modes,
-  tool rounds, and structured generation.
+- Every model request of the node uses it: one model call, each tool-loop
+  round, and structured generation.
 - It is part of the flow's identity. Changing it changes the flow fingerprint, so a
   run log cannot be resumed with a different system prompt. With `learnable=True`,
   the rendered text is recorded with the node's evidence, so backward learning
@@ -524,12 +530,11 @@ output: ${reply.output}
 A skill is a folder with a `SKILL.md` file, in the format Claude Code and Codex
 share: YAML frontmatter with `name` and `description`, then Markdown instructions.
 Other files in the folder (`references/`, `scripts/`, ...) come with the skill.
-Grant skills to a `tool_calling` AGENT by name:
+Grant skills to an AGENT by name:
 
 ```yaml
 reviewer:
   kind: agent
-  mode: tool_calling            # the default; skills need this mode
   skills: [code-review, release-notes]
   input:
     diff: ${input.diff}
@@ -554,18 +559,18 @@ YAML only names skills. The host decides which skills exist for a run: `yian run
 reads your Claude Code and Codex skill folders (see [CLI](cli.md#skills)), and
 Python hosts pass `run_flow(..., skills=load_skills([...]))` (see
 [API](api.md#skills)). A flow that grants skills needs a host `skills=` mapping, and
-each listed name must be in it; otherwise the run fails before it starts. Skills need
-`mode: tool_calling`. `load_skill` is a reserved name: never list it in `tools:`.
+each listed name must be in it; otherwise the run fails before it starts. An AGENT
+with `skills:` runs the tool loop. `load_skill` is a reserved name: never list it in
+`tools:`.
 
 #### Steering a running agent — `steerable:`
 
-`steerable: true` lets the host steer or interrupt a `tool_calling` AGENT while
-its loop runs, like pressing Esc or typing a follow-up in a coding-agent chat:
+`steerable: true` lets the host steer or interrupt a running AGENT, like
+pressing Esc or typing a follow-up in a coding-agent chat:
 
 ```yaml
 worker:
   kind: agent
-  mode: tool_calling            # required
   steerable: true               # default false
   tools: [search]
   prompt: Research the question and answer it.
@@ -588,9 +593,12 @@ worker:
   already finished is ignored.
 - Session memory records steers with the model request that carried them, and
   closes an interrupted turn as `interrupted`.
+- An AGENT without `tools:` or `skills:` makes one model call. Steers queued
+  before it go with that request, and an interrupt cuts its streaming text reply
+  at the last chunk shown.
 
-`steerable: true` is a load error on a `plain` AGENT or one with a non-`str`
-output, because a structured value cannot be partial. A model question from
+`steerable: true` is a load error on an AGENT with a non-`str` output, because a
+structured value cannot be partial. A model question from
 `ask_user` is still answered through `ask_user`, not by a steer. Python hosts pass
 the inbox as `run_flow(..., steering=inbox)` (see [API](api.md#steering)); a
 node without `steerable: true` never reads it.
@@ -619,7 +627,6 @@ for each run. The YAML looks the same; only the host knows which names are group
 nodes:
   worker:
     kind: agent
-    mode: tool_calling
     prompt: ${input.task}
     tools: [toolbox, workspace, company, ask_user]
 ```
@@ -784,10 +791,11 @@ ask:
   input: { ctx: ${research.output} }
   adaptive_questions:
     prompt: "Design 1-3 questions with options for: ${ctx}"  # required (LLM brief)
-    mode: plain                  # optional, default plain
     llm_config: { model: ... }   # optional — the composer's provider/model
     retries: 3                   # optional — self-correction attempts
 ```
+
+`adaptive_questions.mode:` was removed; writing it is a load error.
 
 **Upstream questions** — read the list from an author-written upstream node:
 
@@ -1082,7 +1090,7 @@ fails with `LoopMaxExceeded` before it reaches the budget.
 
 ## Effects from inside an AGENT node — the `ask_user` tool
 
-A `tool_calling` AGENT node can be granted the ordinary `ask_user` tool. Unlike
+An AGENT node can be granted the ordinary `ask_user` tool. Unlike
 `human_input` (which always asks), `ask_user` is *model-chosen*: the node calls it
 **only if** it decides it needs a fact it cannot supply. The tool blocks inside
 the same live model/tool loop, then its returned answer is fed back as the tool result.
@@ -1090,8 +1098,7 @@ the same live model/tool loop, then its returned answer is fed back as the tool 
 ```yaml
 assistant:
   kind: agent
-  mode: tool_calling           # the loop — required to call tools
-  tools: [ask_user]            # explicitly grant the capability
+  tools: [ask_user]            # explicitly grant the capability; tools run the loop
   input:
     request: ${input.request}
   output: str

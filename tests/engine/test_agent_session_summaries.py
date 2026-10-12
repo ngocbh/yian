@@ -21,9 +21,8 @@ import yian.llm_clients as llm_clients
 from yian.memory.session import SessionMemory
 from yian.memory import MemorySection
 from yian.nodes.agent import memory as conversation
-from yian.nodes.agent.modes.common import AgentRunContext
-from yian.nodes.agent.modes.plain import plain
-from yian.nodes.agent.modes.tool_calling import tool_calling
+from yian.nodes.agent.context import AgentRunContext
+from yian.nodes.agent.loop import run_agent
 from yian.nodes.base import _CapabilityFault, _HostStop
 from yian.typesys.values import Type, ValueKind
 from tests.engine._session_fakes import harness, request, snapshot
@@ -126,9 +125,8 @@ def test_summary_provider_exception_preserves_identity_outside_capability_bounda
     [RuntimeError, FutureCancelledError, AsyncCancelledError, KeyboardInterrupt],
 )
 @pytest.mark.parametrize("native", [False, True])
-@pytest.mark.parametrize("mode", [plain, tool_calling])
 def test_summary_failure_never_enters_answer_structured_retry(
-    monkeypatch, error_type, native, mode
+    monkeypatch, error_type, native
 ):
     memory = SessionMemory(history_budget_chars=1, recent_turns=0)
     _seed(memory)
@@ -144,7 +142,7 @@ def test_summary_failure_never_enters_answer_structured_retry(
             with opened.frame.open_turn(
                 request("current"), check_stopped=lambda: None
             ) as turn:
-                mode(
+                run_agent(
                     AgentRunContext(
                         node_id="agent",
                         prompt="current question",
@@ -189,7 +187,7 @@ def test_tool_then_structured_uses_summary_once_and_safe_current_projection(
         with opened.frame.open_turn(
             request("current"), check_stopped=lambda: None
         ) as turn:
-            result = tool_calling(
+            result = run_agent(
                 AgentRunContext(
                     node_id="agent",
                     prompt="current question",
@@ -274,7 +272,7 @@ def test_summary_uses_unbound_model_and_current_instructions_and_grants(monkeypa
         with opened.frame.open_turn(
             request("current"), check_stopped=lambda: None
         ) as turn:
-            result = tool_calling(
+            result = run_agent(
                 AgentRunContext(
                     node_id="agent",
                     prompt="new question",
@@ -466,7 +464,7 @@ def test_stop_after_summary_preserves_actual_cache_without_answer(monkeypatch):
             with opened.frame.open_turn(
                 request("current"), check_stopped=check
             ) as turn:
-                plain(
+                run_agent(
                     AgentRunContext(
                         node_id="agent",
                         prompt="current",
@@ -527,7 +525,7 @@ def test_structured_correction_attempts_are_one_whole_recent_turn(monkeypatch, n
             request("structured"), check_stopped=lambda: None
         ) as turn:
             assert (
-                plain(
+                run_agent(
                     AgentRunContext(
                         node_id="agent",
                         prompt="structured question",

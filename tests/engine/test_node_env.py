@@ -26,13 +26,11 @@ env:
 nodes:
   a:
     kind: agent
-    mode: plain
     prompt: hi
     env:
       max_tool_iterations: 300
   b:
     kind: agent
-    mode: plain
     depends_on: [a]
     prompt: hi
 output: ${b.output}
@@ -50,7 +48,7 @@ def test_no_env_is_empty_dict():
 id: f
 name: f
 nodes:
-  a: {kind: agent, mode: plain, prompt: hi}
+  a: {kind: agent, prompt: hi}
 output: ${a.output}
 """
     )
@@ -66,7 +64,6 @@ name: f
 nodes:
   a:
     kind: agent
-    mode: plain
     prompt: hi
     env: [1, 2, 3]
 output: ${a.output}

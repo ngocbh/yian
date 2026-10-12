@@ -19,10 +19,9 @@ llm_config: {provider: anthropic, temperature: 0.2}
 defs:
   sub:
     nodes:
-      inner: {kind: agent, mode: plain, prompt: hi, llm_config: {model: claude-opus-4-8}}
+      inner: {kind: agent, prompt: hi, llm_config: {model: claude-opus-4-8}}
       solo:
         kind: agent
-        mode: plain
         depends_on: [inner]
         prompt: hi
         llm_config: {provider: openai, model: gpt-5.5, inherit: false}

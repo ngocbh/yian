@@ -22,9 +22,10 @@ def test_adaptive_questions_block_ok():
 
 def test_adaptive_questions_block_full_fields():
     d = _node({"input": {"ctx": "${a.output}"},
-               "adaptive_questions": {"prompt": "from ${ctx}", "mode": "plain",
+               "adaptive_questions": {"prompt": "from ${ctx}",
                                   "llm_config": {"model": "claude-opus-4-8"}, "retries": 3}})
-    assert d.adaptive_questions["mode"] == "plain" and d.adaptive_questions["retries"] == 3
+    assert d.adaptive_questions["llm_config"] == {"model": "claude-opus-4-8"}
+    assert d.adaptive_questions["retries"] == 3
 
 
 def test_questions_ref_form_ok():
@@ -44,8 +45,8 @@ def test_rejects_adaptive_and_questions_together():
 
 
 def test_rejects_adaptive_questions_without_prompt():
-    with pytest.raises(LoadError, match="prompt"):
-        _node({"adaptive_questions": {"mode": "plain"}})
+    with pytest.raises(LoadError, match="requires a `prompt:`"):
+        _node({"adaptive_questions": {"retries": 3}})
 
 
 def test_legacy_prompt_only_still_ok():

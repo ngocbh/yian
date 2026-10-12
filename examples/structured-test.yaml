@@ -1,5 +1,5 @@
 # structured-test — exercise structured AGENT output across shapes on a local Ollama model.
-# Four `plain` agents, one per output shape; the flow output bundles all four so a single
+# Four agents without tools, one per output shape; the flow output bundles all four so a single
 # run shows whether structured generation + the write boundary accept each shape.
 #   yian run examples/structured-test.yaml --input text="..."
 
@@ -13,7 +13,6 @@ input:
 nodes:
   person:                                    # record (object) output
     kind: agent
-    mode: plain
     input:
       text: ${input.text}
     output:
@@ -26,7 +25,6 @@ nodes:
 
   wordcount:                                 # scalar int output
     kind: agent
-    mode: plain
     input:
       text: ${input.text}
     output: int
@@ -36,7 +34,6 @@ nodes:
 
   sentiment:                                 # enum (Literal) output
     kind: agent
-    mode: plain
     input:
       text: ${input.text}
     output: Literal[positive, neutral, negative]
@@ -46,7 +43,6 @@ nodes:
 
   keywords:                                  # list output
     kind: agent
-    mode: plain
     input:
       text: ${input.text}
     output: list[str]

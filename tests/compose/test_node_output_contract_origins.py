@@ -143,7 +143,6 @@ name: agent-output-origin
 nodes:
   writer:
     kind: agent
-    mode: plain
     prompt: write a profile
     retries: 0
     llm_config:

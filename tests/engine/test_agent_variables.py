@@ -44,7 +44,7 @@ def test_retained_agent_captures_actual_render_locals_once(monkeypatch):
 
     monkeypatch.setattr(agent_module, "apply_defaults", resolve_once)
     monkeypatch.setattr(agent_module, "render_template_record", render_once)
-    monkeypatch.setitem(agent_module.MODES, "plain", lambda ctx: Output(ctx.prompt))
+    monkeypatch.setattr(agent_module, "run_agent", lambda ctx: Output(ctx.prompt))
     engine, record = _retained_agent(node, {"topic": "reefs"})
     data = record.forward_capture.node_data
     assert data == {
@@ -70,14 +70,14 @@ def test_retained_render_locals_are_detached_before_render_and_model_callbacks(m
         values["settings"]["items"].append("render mutation")
         return render(template, values)
 
-    def mutating_mode(ctx):
+    def mutating_run(ctx):
         node.prompt = "different template"
         node.variables[0].default["items"].append("default mutation")
         ctx.llm_config["model"] = "different model"
         return Output(ctx.prompt)
 
     monkeypatch.setattr(agent_module, "render_template_record", mutating_render)
-    monkeypatch.setitem(agent_module.MODES, "plain", mutating_mode)
+    monkeypatch.setattr(agent_module, "run_agent", mutating_run)
     engine, record = _retained_agent(node)
     data = record.forward_capture.node_data
     assert data["variables"] == {"settings": {"items": ["original"]}}
@@ -96,7 +96,7 @@ def test_retained_agent_distinguishes_partial_and_empty_render_locals(monkeypatc
     node = AgentNode("writer", prompt="" if stage == "empty" else "${note}",
                      variables=[] if stage == "empty" else read_variables({"note": "Optional[str] = null"}, {}))
     calls = []
-    monkeypatch.setitem(agent_module.MODES, "plain", lambda ctx: calls.append(ctx.prompt) or Output(ctx.prompt))
+    monkeypatch.setattr(agent_module, "run_agent", lambda ctx: calls.append(ctx.prompt) or Output(ctx.prompt))
     if stage == "resolve":
         def fail_resolution():
             raise ValueError("variable resolution failed")
@@ -123,7 +123,7 @@ def test_retained_agent_canonicalizes_supported_file_variable_without_changing_d
     node = AgentNode("writer", prompt="Inspect the attachment.", variables=[
         Parameter("artifact", ValueContract(Type(ValueKind.FILE)), has_default=True, default=file),
     ])
-    monkeypatch.setitem(agent_module.MODES, "plain", lambda ctx: Output(ctx.prompt))
+    monkeypatch.setattr(agent_module, "run_agent", lambda ctx: Output(ctx.prompt))
     _, record = _retained_agent(node)
     assert record.forward_capture.node_data["variables"] == {
         "artifact": {"uri": "file:///tmp/artifact.txt", "mime": None, "name": None},
@@ -144,7 +144,7 @@ def test_render_capture_rejects_nonfinite_variable_defaults_without_changing_cap
         Parameter("score", ValueContract(Type(ValueKind.NUMBER)), has_default=True, default=number),
     ])
     calls = []
-    monkeypatch.setitem(agent_module.MODES, "plain", lambda ctx: calls.append(ctx.prompt) or Output(ctx.prompt))
+    monkeypatch.setattr(agent_module, "run_agent", lambda ctx: calls.append(ctx.prompt) or Output(ctx.prompt))
     assert eval_node(node, None, VariablePool()).outcome == Output("ready")
     with pytest.raises(ValueError, match="non-finite"):
         eval_node(node, None, VariablePool(), capture_bindings=True)
@@ -168,7 +168,7 @@ def test_retained_agent_rejects_nonfinite_variable_model_extras_before_acceptanc
                   default={"nested": Extras(child=Extras(lost=number))}),
     ])
     calls = []
-    monkeypatch.setitem(agent_module.MODES, "plain", lambda ctx: calls.append(ctx.prompt) or Output(ctx.prompt))
+    monkeypatch.setattr(agent_module, "run_agent", lambda ctx: calls.append(ctx.prompt) or Output(ctx.prompt))
     assert node.forward({}) == Output("ready")
     engine = _engine(_graph([node], [(START_ID, "writer"), ("writer", END_ID)]), learnable=True)
     with pytest.raises(ValueError, match="non-finite"):
@@ -203,7 +203,7 @@ def test_render_capture_preparation_faults_escape_with_original_host_identity(mo
         monkeypatch.setattr(agent_module, "canonical_type_label", fail_domain)
     else:
         monkeypatch.setattr(agent_module, "deepcopy", copy_or_fail)
-    monkeypatch.setitem(agent_module.MODES, "plain", lambda _ctx: pytest.fail("model ran after capture fault"))
+    monkeypatch.setattr(agent_module, "run_agent", lambda _ctx: pytest.fail("model ran after capture fault"))
     with pytest.raises(MemoryError) as caught:
         eval_node(node, None, VariablePool(), capture_bindings=True)
     assert caught.value is expected
@@ -217,7 +217,7 @@ def test_retained_agent_keeps_early_binding_unavailable_and_capture_off_dormant(
     node.params = [Parameter("topic", required=True)]
     calls = []
     monkeypatch.setattr(node, "_resolve_variables", lambda: calls.append("resolve") or {"tone": "concise"})
-    monkeypatch.setitem(agent_module.MODES, "plain", lambda ctx: Output(ctx.prompt))
+    monkeypatch.setattr(agent_module, "run_agent", lambda ctx: Output(ctx.prompt))
     missing = eval_node(node, None, VariablePool(), capture_bindings=True)
     assert type(missing.outcome) is EvaluationFailure
     assert missing.bindings.bound_inputs is None
@@ -247,7 +247,7 @@ def test_declared_variable_inventory_preserves_canonical_declarations():
 
 def test_agent_renders_inputs_and_variable_defaults_without_execution_or_memory_scope(monkeypatch):
     calls = []
-    monkeypatch.setitem(agent_module.MODES, "plain", lambda ctx: calls.append(ctx) or Output(ctx.prompt))
+    monkeypatch.setattr(agent_module, "run_agent", lambda ctx: calls.append(ctx) or Output(ctx.prompt))
     node = AgentNode("writer", prompt="${instruction}: ${topic}, ${num_sentences} sentences, ${tone}.",
                      variables=read_variables({
                          "num_sentences": "int[1,12] = 4",
@@ -281,7 +281,7 @@ def test_agent_resolves_and_renders_once_with_repeated_literal_default_reference
 
     monkeypatch.setattr(agent_module, "apply_defaults", resolve)
     monkeypatch.setattr(agent_module, "render_template_record", render_once)
-    monkeypatch.setitem(agent_module.MODES, "plain", lambda ctx: Output(ctx.prompt))
+    monkeypatch.setattr(agent_module, "run_agent", lambda ctx: Output(ctx.prompt))
     assert node.forward({}).value == "4/4: ${input.topic}/"
     assert len(resolutions) == len(records) == 1
     assert resolutions[0] == (node.variables, {})
@@ -301,7 +301,7 @@ def test_mutable_variable_defaults_are_detached_between_invocations(monkeypatch)
         return render(prompt, record)
 
     monkeypatch.setattr(agent_module, "render_template_record", capture)
-    monkeypatch.setitem(agent_module.MODES, "plain", lambda ctx: Output(ctx.prompt))
+    monkeypatch.setattr(agent_module, "run_agent", lambda ctx: Output(ctx.prompt))
     first = node.forward({}).value
     records[0]["settings"]["nested"]["items"].append("changed")
     second = node.forward({}).value
@@ -322,7 +322,7 @@ def test_nullable_variable_defaults_follow_existing_strict_prompt_rules(monkeypa
         return render(prompt, record)
 
     monkeypatch.setattr(agent_module, "render_template_record", capture)
-    monkeypatch.setitem(agent_module.MODES, "plain", lambda ctx: calls.append(ctx) or Output(ctx.prompt))
+    monkeypatch.setattr(agent_module, "run_agent", lambda ctx: calls.append(ctx) or Output(ctx.prompt))
     assert node.forward({}).value == "fallback"
     assert records == [{"note": None}]
     for prompt in ("${note}", "${note | 'fallback'}"):
@@ -334,13 +334,13 @@ def test_nullable_variable_defaults_follow_existing_strict_prompt_rules(monkeypa
 
 
 @pytest.mark.parametrize("declared,inputs", [([], {"tone": "input"}), ([Parameter("tone")], {})])
-def test_direct_variable_input_overlap_is_rejected_before_render_or_mode(monkeypatch, declared, inputs):
+def test_direct_variable_input_overlap_is_rejected_before_render_or_run(monkeypatch, declared, inputs):
     node = AgentNode("writer", prompt="${tone}",
                      variables=read_variables({"tone": "str = concise"}, {}))
     node.params = declared
     calls = []
     monkeypatch.setattr(agent_module, "render_template_record", lambda *_args: calls.append("render"))
-    monkeypatch.setitem(agent_module.MODES, "plain", lambda _ctx: calls.append("mode") or Output("bad"))
+    monkeypatch.setattr(agent_module, "run_agent", lambda _ctx: calls.append("run") or Output("bad"))
     with pytest.raises(ValueError, match="variable.*tone.*input"):
         node.forward(inputs)
     assert calls == []
@@ -361,7 +361,6 @@ llm_config: {provider: test, model: test, temperature: 0.8}
 nodes:
   writer:
     kind: agent
-    mode: plain
     input: {topic: '${input.topic}'}
     variables: {temperature: 'float[0,1] = 0.4'}
     prompt: '${topic}: ${temperature}'
@@ -410,7 +409,6 @@ input: {topic: str}
 nodes:
   writer:
     kind: agent
-    mode: plain
     input: {topic: '${input.topic}'}
     variables:
       instruction: str = ${absent.output}
@@ -424,7 +422,7 @@ output: ${writer.output}
         raise AssertionError("ordinary forward run invoked backward")
 
     monkeypatch.setattr(AgentNode, "backward", forbidden_backward)
-    monkeypatch.setitem(agent_module.MODES, "plain", lambda ctx: Output(ctx.prompt))
+    monkeypatch.setattr(agent_module, "run_agent", lambda ctx: Output(ctx.prompt))
     assert set(flow.wiring["writer"]) == {"topic"}
     assert [parameter.name for parameter in flow.nodes["writer"].params] == ["topic"]
     assert all(edge.from_ != "absent" for edge in flow.edges)

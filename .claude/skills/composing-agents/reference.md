@@ -241,7 +241,7 @@ that value is committed as its ordinary node output. See `wait-until.yaml`.
 
 **Ask the human.** For a *guaranteed* gate use a `human_input` node (it blocks its
 worker until the host answers). For "ask only if the model decides it needs to",
-give a tool-calling AGENT node `tools: [ask_user]`. Both calls stay inside their live
+give an AGENT node `tools: [ask_user]`. Both calls stay inside their live
 node execution. A `human_input` gate can present multiple-choice questions
 (static `questions:`), have an LLM compose them
 (`adaptive_questions:`, which desugars to a synthetic composer AGENT node + gate at load), or read

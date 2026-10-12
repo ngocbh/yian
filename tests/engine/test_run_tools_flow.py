@@ -265,7 +265,6 @@ llm_config: {provider: openai, model: test-model}
 nodes:
   agent:
     kind: agent
-    mode: tool_calling
     prompt: go
     tools: [toolbox, workspace, company]
 output: ${agent.output}
@@ -395,7 +394,6 @@ defs:
     nodes:
       agent:
         kind: agent
-        mode: tool_calling
         prompt: go
         tools: [toolbox]
     output: ${agent.output}
@@ -418,7 +416,6 @@ defs:
     nodes:
       agent:
         kind: agent
-        mode: tool_calling
         prompt: go
         tools: [toolbox]
     output: ${agent.output}
@@ -446,7 +443,6 @@ defs:
     nodes:
       agent:
         kind: agent
-        mode: tool_calling
         prompt: go
         tools: [toolbox]
     output:
@@ -493,7 +489,6 @@ llm_config: {provider: openai, model: test-model}
 nodes:
   agent:
     kind: agent
-    mode: tool_calling
     prompt: go
     tools: [lookup, ask_user]
 output: ${agent.output}

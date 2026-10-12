@@ -214,7 +214,7 @@ def test_scoped_render_capture_requires_recorded_model_map_entry(monkeypatch):
     node = AgentNode("a/runtime/id", prompt="hello", llm_config={"model": "ambient"})
     node.execution_scope = ExecutionScope(("authored", "agent"))
     calls = []
-    monkeypatch.setitem(agent_module.MODES, "plain", lambda ctx: calls.append(ctx.prompt) or Output(ctx.prompt))
+    monkeypatch.setattr(agent_module, "run_agent", lambda ctx: calls.append(ctx.prompt) or Output(ctx.prompt))
     with pytest.raises(ValueError, match="missing static path 'authored/agent'"):
         eval_node(node, None, VariablePool(), capture_bindings=True, effective_llm_by_static_path={})
     assert calls == []

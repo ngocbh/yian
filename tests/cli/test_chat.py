@@ -44,7 +44,7 @@ def _chat_logs() -> list[Path]:
 
 
 class _FakeModel:
-    """A stand-in chat model: plain agent mode calls `model.invoke(msgs).content`."""
+    """A stand-in chat model: an agent without tools calls `model.invoke(msgs).content`."""
 
     def bind_tools(self, tools):
         return self
@@ -93,7 +93,7 @@ class _GoodModel:
 
 class _ToolThenAnswer:
     """First `invoke` requests one tool; the second returns a final answer. Proves the
-    `tool_calling` loop wires model -> tool -> model within a single turn. A fresh instance
+    tool loop wires model -> tool -> model within a single turn. A fresh instance
     per turn (the `model_from_config` factory) resets the call counter, so each turn is
     "one tool call, then answer."""
 
@@ -126,13 +126,13 @@ def test_chat_help():
 
 def test_chat_two_turns(tmp_path, monkeypatch):
     # The AGENT node resolves its model via `yian.llm_clients.model_from_config`
-    # from its selected mode at call time — patch it to the fake.
+    # at call time — patch it to the fake.
     monkeypatch.setattr(llm_clients_mod, "model_from_config", lambda cfg: _FakeModel())
     # `--provider openai` makes `_ensure_provider_keys` pick openai for the flow's agent
     # (which sets no provider); satisfy its key check with a dummy env var (no product change).
     monkeypatch.setenv("OPENAI_API_KEY", "x")
 
-    # Use the plain example flow (mode: plain) so no tools/keys are needed for the drive test.
+    # Use the example flow (its agent has no tools) so no tools/keys are needed for the drive test.
     # Its typed CODE branch records keep transcript growth deterministic.
     flow = EXAMPLE_CHAT
     # Two user turns, then the authored CASE routes the textual command to its exit record.
@@ -537,7 +537,6 @@ def test_chat_host_does_not_intercept_exit_text_for_user_flow(tmp_path, monkeypa
         "        output: str\n"
         "      reply:\n"
         "        kind: agent\n"
-        "        mode: plain\n"
         "        input: {message: '${ask.output}'}\n"
         "        output: str\n"
         '        prompt: "Message: ${message}"\n'
@@ -601,7 +600,6 @@ def test_chat_resolves_cwd_local_fold_module(tmp_path, monkeypatch):
         "        output: str\n"
         "      reply:\n"
         "        kind: agent\n"
-        "        mode: plain\n"
         "        input:\n"
         "          transcript: ${input.transcript}\n"
         "          message:    ${ask.output}\n"
@@ -666,7 +664,7 @@ def test_chat_survives_a_failed_turn(tmp_path, monkeypatch):
     monkeypatch.setattr(llm_clients_mod, "model_from_config", _factory)
     monkeypatch.setenv("OPENAI_API_KEY", "x")
 
-    # The bundled yian chat (tool_calling reply). A workspace with one flow keeps
+    # The bundled yian chat (its reply agent has tools). A workspace with one flow keeps
     # list_flows fast and confined.
     (tmp_path / "f.yaml").write_text("id: f\nname: f\ninput: {}\nkind: agent\noutput: str\nprompt: hi\n")
 
@@ -744,7 +742,7 @@ def test_chat_malformed_flow_exits_clean(tmp_path):
 
 
 def test_chat_tool_call_through_the_loop(tmp_path, monkeypatch):
-    """The reply agent (tool_calling) must invoke a flow-op tool THROUGH the loop and then answer —
+    """The reply agent (with tools) must invoke a flow-op tool THROUGH the loop and then answer —
     model -> tool -> model -> reply — not merely echo text. The five flow-op tools are unit-tested
     directly in test_chat_tools.py; this covers the loop wiring, which otherwise only the failure/
     cap path exercises."""
@@ -754,7 +752,7 @@ def test_chat_tool_call_through_the_loop(tmp_path, monkeypatch):
     (tmp_path / "a.yaml").write_text(
         "id: a\nname: a\ninput: {}\noutput: int\nkind: code\ncode: tests.seeds.fns:const_one\n"
     )
-    # The bundled yian chat (tool_calling reply). One turn, then flow-owned exit.
+    # The bundled yian chat (its reply agent has tools). One turn, then flow-owned exit.
     r = runner.invoke(
         app, ["chat", "--workspace", str(tmp_path), "--provider", "openai"],
         input="list my flows\n/exit\n",
@@ -856,7 +854,6 @@ def test_run_flow_tool_reports_an_unknown_tool_grant_as_failed(tmp_path, monkeyp
         "nodes:\n"
         "  agent:\n"
         "    kind: agent\n"
-        "    mode: tool_calling\n"
         "    prompt: go\n"
         "    tools: [chat_missing_tool]\n"
         "output: ${agent.output}\n"

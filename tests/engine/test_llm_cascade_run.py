@@ -23,9 +23,8 @@ def test_run_flow_applies_cli_llm_config(monkeypatch):
     monkeypatch.setattr(
         "yian.llm_clients.model_from_config", fake_model_from_config
     )
-    # mode: plain so the fake model only needs .invoke (the default mode is tool_calling).
     text = (
-        "id: f\nname: f\nnodes:\n  a: {kind: agent, mode: plain, prompt: hi}\n"
+        "id: f\nname: f\nnodes:\n  a: {kind: agent, prompt: hi}\n"
         "output: ${a.output}\n"
     )
     loaded = load_flow(text)

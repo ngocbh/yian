@@ -356,7 +356,7 @@ def test_agent_capture_keeps_variable_inventory_separate_from_delivered_inputs(m
         "instruction": "str = Summarize clearly",
     }, {}))
     node.params = [Parameter("topic")]
-    monkeypatch.setitem(agent_module.MODES, "plain", lambda ctx: Output(ctx.prompt))
+    monkeypatch.setattr(agent_module, "run_agent", lambda ctx: Output(ctx.prompt))
     evaluated = eval_node(node, None, VariablePool(), wiring_override={"topic": "reefs"}, capture_bindings=True)
     assert evaluated.outcome.value == "reefs: Summarize clearly"
     assert evaluated.backward_capture.variable_names == ("instruction",)

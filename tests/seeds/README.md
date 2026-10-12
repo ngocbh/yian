@@ -68,7 +68,7 @@ nodes:
     prompt: "…"                # ← kind field, flat on the node
 ```
 
-Per kind, the flat fields are: **agent** → `prompt` (+ `tools`/`mode`/`llm_config`); **code**
+Per kind, the flat fields are: **agent** → `prompt` (+ `tools`/`llm_config`); **code**
 → `code: module:function`; **call** → `call:` + `input:` (a single application); **map** →
 `call:` + `over:` + `input:` (+ `parallel:`) — `List.map` over the `over:` list, `${item}` per
 element; **case** → `cases:` + `else:` (+ `on:`); **tool** → `tool_id:` + `input:`.
@@ -319,7 +319,7 @@ nodes:
 | `11-reuse-anchors.yaml` | `x-*` extension keys + YAML anchor (`&`/`*`/`<<:`) reuse + `llm_config` |
 | `12-depends-on.yaml` | run-ordering edges — `depends_on` (co-skip) / `runs_after` (pure order); a side-effect node, no data binding, + `bool` output |
 | `13-types-objects.yaml` | the type grammar — Python scalars, `list[X]`, inline/block/nested objects (records), deep dotted access |
-| `14-agent-tools.yaml` | AGENT knobs — `mode` / ordinary `tools` including `ask_user` / `llm_config` + structured output |
+| `14-agent-tools.yaml` | AGENT knobs — ordinary `tools` including `ask_user` / `llm_config` + structured output |
 | `17-effects-human-wait.yaml` | effects — blocking `HUMAN_INPUT` (typed answer) + absolute UTC `WAIT` (`until:`) + `case` on the answer + a `depends_on` side-effect |
 | `18-research-pipeline.yaml` | realistic end-to-end — fan-out reviewers → typed-`View` synth → `case … on` stance → multi-output + `asserts:` |
 | `19-binding-stances.yaml` | every input-binding stance — required (plain, co-skip) / optional (`:-`) / branch-join (`\|`) / fail-loud (`:?`); pins **per-input readiness** |

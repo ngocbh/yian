@@ -31,7 +31,7 @@ from yian.events import (
     ToolCallStarted,
 )
 from yian.nodes.agent.interrupts import ReplyInterrupted
-from yian.nodes.agent.modes.utils import text_of
+from yian.nodes.agent.text import text_of
 from yian.nodes.base import _CapabilityFault, _HostStop
 
 STREAM_KEY = "text"
@@ -49,7 +49,7 @@ class LiveSinks:
 
 
 def live_sinks(ctx: Any) -> Optional[LiveSinks]:
-    """Select the sinks of one mode context; `None` when neither sink exists."""
+    """Select the sinks of one AGENT loop context; `None` when neither sink exists."""
     emit_event = getattr(ctx, "emit_event", None)
     emit_stream = getattr(ctx, "emit_stream", None)
     if emit_event is None and emit_stream is None:

@@ -20,7 +20,7 @@ from yian.memory import (
     RecallContext,
 )
 from yian.nodes.agent import AgentNode
-from yian.nodes.agent.modes.common import DEFAULT_SYSTEM
+from yian.nodes.agent.context import DEFAULT_SYSTEM
 from yian.nodes.base import Output, _HostStop
 from yian.nodes.contracts import Parameter, ValueContract
 from yian.runtime.eval_node import EvaluationFailure, eval_node
@@ -72,9 +72,9 @@ class _CaptureModel:
         return _Bound()
 
 
-def _node(*, mode: str, structured: bool) -> AgentNode:
+def _node(*, structured: bool) -> AgentNode:
     """Build one AGENT whose prompt consumes a bound input."""
-    node = AgentNode("agent", prompt="Answer ${topic}", mode=mode)
+    node = AgentNode("agent", prompt="Answer ${topic}")
     node.params = [Parameter(name="topic", required=True)]
     if structured:
         node.output_contract = ValueContract(Type.scalar(ValueKind.INTEGER))
@@ -93,18 +93,18 @@ def _flow_and_pool() -> tuple[SimpleNamespace, VariablePool]:
     )
 
 
-@pytest.mark.parametrize("mode", ["plain", "tool_calling"])
+@pytest.mark.parametrize("tools", [False, True])
 def test_no_memory_preserves_the_existing_system_prompt_byte_for_byte(
     monkeypatch: pytest.MonkeyPatch,
-    mode: str,
+    tools: bool,
 ) -> None:
     model = _CaptureModel()
     monkeypatch.setattr(llm_clients, "model_from_config", lambda _config: model)
-    if mode == "tool_calling":
+    if tools:
         monkeypatch.setattr(ToolSet, "resolve", lambda _self, _names: [object()])
 
-    node = _node(mode=mode, structured=False)
-    node.tools = ["noop"] if mode == "tool_calling" else []
+    node = _node(structured=False)
+    node.tools = ["noop"] if tools else []
     flow, pool = _flow_and_pool()
     evaluated = eval_node(node, flow, pool)
 
@@ -115,17 +115,16 @@ def test_no_memory_preserves_the_existing_system_prompt_byte_for_byte(
 
 
 @pytest.mark.parametrize(
-    ("mode", "structured"),
+    ("tools", "structured"),
     [
-        ("plain", False),
-        ("plain", True),
-        ("tool_calling", False),
-        ("tool_calling", True),
+        (False, False),
+        (False, True),
+        (True, False),
     ],
 )
 def test_recall_sections_reach_every_agent_path_in_order_with_trace_parity(
     monkeypatch: pytest.MonkeyPatch,
-    mode: str,
+    tools: bool,
     structured: bool,
 ) -> None:
     model = _CaptureModel()
@@ -137,12 +136,12 @@ def test_recall_sections_reach_every_agent_path_in_order_with_trace_parity(
         return model
 
     monkeypatch.setattr(llm_clients, "model_from_config", model_factory)
-    if mode == "tool_calling" and not structured:
+    if tools:
         monkeypatch.setattr(ToolSet, "resolve", lambda _self, _names: [object()])
 
-    node = _node(mode=mode, structured=structured)
+    node = _node(structured=structured)
     node.memory_scope = _scope()
-    node.tools = ["noop"] if mode == "tool_calling" and not structured else []
+    node.tools = ["noop"] if tools else []
     flow, pool = _flow_and_pool()
     flow_key, agent_key = _keys()
     sections = (

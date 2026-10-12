@@ -353,10 +353,11 @@ Most are just the functional model (above) made enforceable:
 - **Dependency-light core (with a deliberate exception)** — keep the engine free
   of a DB and heavy frameworks; external capabilities enter through **injected
   seams** (plain callables). **Exception (by decision):** the AGENT node is *not*
-  SDK-free — it decomposes into a `mode` (the loop, in `nodes/agent/modes/`) +
-  skills (tools), and a mode imports langchain + `yian.llm_clients` and
-  builds its own model via `model_from_config`. Prefer seams for *new* external
-  deps, but model access in agent modes is a direct call. Host-supplied
+  SDK-free — it runs one loop (`run_agent` in `nodes/agent/loop.py`) over its
+  granted tools and skills; with neither, the loop makes one model call. The loop
+  imports langchain + `yian.llm_clients` and builds its own model via
+  `model_from_config`. Prefer seams for *new* external deps, but model access in
+  the AGENT loop is a direct call. Host-supplied
   `SKILL.md` skills enter the same way as memory: `run_flow(skills=...)` ->
   `FlowEngine(skills=...)` -> the evaluator caps only nodes with
   `needs_skills = True`; the AGENT serves `load_skill` like a registered tool
@@ -366,7 +367,7 @@ Most are just the functional model (above) made enforceable:
   A host steering inbox follows the same path: `run_flow(steering=...)` ->
   `FlowEngine(steering=...)` -> the evaluator caps only nodes with
   `needs_steering is True` (an AGENT authored `steerable: true`). The
-  `tool_calling` loop drains steers into `new_messages` at the top of each
+  AGENT loop drains steers into `new_messages` at the top of each
   iteration and checks `interrupted` at safe points; an interrupt ends the node
   with a normal `Output`, so no run-log record kind changes. The host sees it
   only through live observers: a cut stream's `ModelCallFinished` has no error,

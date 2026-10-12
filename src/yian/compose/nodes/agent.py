@@ -1,11 +1,12 @@
 """kind=agent — the LLM-reasoner node's descriptor + parse/build handle.
 
 One of the two-axis `compose/nodes/<kind>.py` modules: it owns the `agent` node's frozen
-`AgentDescriptor`, inheriting the template `parse` from `NodeDescriptor` (which records each
-field's `SourceRange`), and overriding `build` (which constructs the runtime `AgentNode` +
-wiring). `_finish` stamps only the descriptor's opaque origin onto that node and retains
-concrete node/field ranges on the Compose-owned `BuildResult`. Registered into
-`KINDS`/`BINDING_FIELDS` at import so the shared dispatch routes here.
+`AgentDescriptor`, wrapping the template `parse` from `NodeDescriptor` (which records each
+field's `SourceRange`) to reject the removed `mode:` key, and overriding `build` (which
+constructs the runtime `AgentNode` + wiring). `_finish` stamps only the descriptor's opaque
+origin onto that node and retains concrete node/field ranges on the Compose-owned
+`BuildResult`. Registered into `KINDS`/`BINDING_FIELDS` at import so the shared dispatch
+routes here.
 """
 
 from __future__ import annotations
@@ -30,6 +31,12 @@ from yian.skills import SkillError
 
 if TYPE_CHECKING:
     from yian.compose.source.catalog import _SourceCatalogBuilder
+
+# Shared by the AGENT and `adaptive_questions:` errors for the removed `mode:` key.
+MODE_REMOVED_FIX = (
+    "an AGENT with tools runs the tool loop, one without tools makes a single call; "
+    "delete this line"
+)
 
 
 def _validate_llm_config(
@@ -87,16 +94,17 @@ def _validate_llm_config(
 
 @dataclass(frozen=True, kw_only=True)
 class AgentDescriptor(NodeDescriptor):
-    """kind=agent — an LLM reasoner (prompt + optional system prompt + mode + optional tools/llm).
+    """kind=agent — an LLM reasoner (prompt + optional system prompt + optional tools/llm).
 
     Inherits the common descriptor fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` +
     the Compose-only `range`/`field_ranges` parse metadata) from `NodeDescriptor`, along with the `input:`/
-    `output:` node-signature surface and the template `parse`. Its cursor hook rejects the
-    retired memory key before the default allowed/required key check; only the agent-specific
-    fields are declared here, while `inputs`/`outputs` come from the base.
+    `output:` node-signature surface and the template `parse`, which it wraps to reject the
+    removed `mode:` key. Its cursor hook rejects the retired memory key before the default
+    allowed/required key check; only the agent-specific fields are declared here, while
+    `inputs`/`outputs` come from the base.
 
     Class attrs: `kind="agent"`; `allowed` adds normalized `inputs`/`outputs` plus `prompt`/
-    `system_prompt`/`tools`/`variables`/`mode`/`llm_config`/`long_term_memory`/`retries`/`asserts`/
+    `system_prompt`/`tools`/`variables`/`llm_config`/`long_term_memory`/`retries`/`asserts`/
     `steerable` to the commons; `required` is empty (no mandatory flat field);
     `binding_fields=("inputs",)` — the `${...}` refs of `prompt:` and `system_prompt:` are handled
     by template scanning, not the inline-call desugar, so only `inputs` is walked.
@@ -111,7 +119,6 @@ class AgentDescriptor(NodeDescriptor):
         "variables",
         "tools",
         "skills",
-        "mode",
         "llm_config",
         "long_term_memory",
         "retries",
@@ -127,7 +134,6 @@ class AgentDescriptor(NodeDescriptor):
     variables: dict[str, Any] = field(default_factory=dict)
     tools: list[str] = field(default_factory=list)
     skills: list[str] | str = field(default_factory=list)
-    mode: str = "tool_calling"
     llm_config: dict[str, Any] = field(default_factory=dict)
     retries: int = 2
     asserts: list[str] = field(default_factory=list)
@@ -145,6 +151,23 @@ class AgentDescriptor(NodeDescriptor):
             type(decl) is not MemoryDecl for decl in self.memories
         ):
             raise TypeError("agent descriptor memories must be a tuple of exact MemoryDecl values")
+
+    @classmethod
+    def parse(cls, node_id: str, cursor: SourceCursor) -> "AgentDescriptor":
+        """Reject the removed `mode:` key, then parse as usual.
+
+        Raises:
+            `LoadError`: The node authors `mode:`, or the template `parse` rejects it.
+        """
+        if cursor.has("mode"):
+            message = f"node {node_id!r}: `mode:` was removed: {MODE_REMOVED_FIX}"
+            tools = cursor.get("tools")
+            if cursor.get("mode") == "plain" and isinstance(tools, list) and tools:
+                message += " (its `tools:` will now be used)"
+            raise LoadDiagnostics.from_cursor(cursor).error(
+                message, range=cursor.key_range_of("mode")
+            )
+        return super().parse(node_id, cursor)
 
     @classmethod
     def _normalize_cursor(cls, cursor: SourceCursor) -> SourceCursor:
@@ -250,18 +273,7 @@ class AgentDescriptor(NodeDescriptor):
             llm_config_range,
             ctx.diagnostics,
         )
-        mode_range = self.field_ranges.get(("field", "mode")) or self.range
-        if not isinstance(self.mode, str):
-            raise ctx.diagnostics.error(
-                f"node {self.id!r}: mode must be a string",
-                range=mode_range,
-            )
         steerable_range = self.field_ranges.get(("field", "steerable")) or self.range
-        if self.steerable and self.mode != "tool_calling":
-            raise ctx.diagnostics.error(
-                f"node {self.id!r}: steerable needs mode 'tool_calling', not {self.mode!r}",
-                range=steerable_range,
-            )
         variables = self._read_variables(ctx)
         memories = tuple(
             MemoryDecl(decl.name, decl.type, decl.config, DeclSite((), ctx.owner, self.id), decl.origin)
@@ -275,7 +287,6 @@ class AgentDescriptor(NodeDescriptor):
                 tools=list(self.tools),
                 llm_config=own_cfg,
                 llm_inherit=inherit,
-                mode=self.mode,
                 retries=self.retries,
                 title=self.node_name,
                 memories=memories,
@@ -284,12 +295,13 @@ class AgentDescriptor(NodeDescriptor):
                 steerable=self.steerable,
             )
         except ValueError as exc:
-            # AgentNode validates the mode registry and skill grants; surface a
+            # AgentNode validates skill grants and tool names; surface a
             # rejection as the loader's one error type (loud), not a bare ValueError.
             skills_range = self.field_ranges.get(("field", "skills")) or self.range
+            tools_range = self.field_ranges.get(("field", "tools")) or self.range
             raise ctx.diagnostics.error(
                 f"node {self.id!r}: {exc}",
-                range=skills_range if isinstance(exc, SkillError) else mode_range,
+                range=skills_range if isinstance(exc, SkillError) else tools_range,
             ) from exc
 
         override = self.output_contract_override

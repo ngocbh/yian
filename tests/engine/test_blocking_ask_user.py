@@ -54,8 +54,8 @@ def _drive(node: AgentNode, ask_user=None):
     return eval_node(node, None, VariablePool(), tools=tools).outcome
 
 
-def test_mode_resolves_model_factory_at_call_time(monkeypatch):
-    node = AgentNode("agent", prompt="go", mode="plain")
+def test_agent_resolves_model_factory_at_call_time(monkeypatch):
+    node = AgentNode("agent", prompt="go")
     chat = _ScriptedChat([AIMessage(content="late-bound")])
     monkeypatch.setattr(llm_clients, "model_from_config", lambda config: chat)
 
@@ -81,7 +81,6 @@ def test_ask_user_answer_is_a_tool_message_in_the_same_loop(monkeypatch):
         "agent",
         prompt="go",
         tools=["ask_user"],
-        mode="tool_calling",
     )
     monkeypatch.setattr(llm_clients, "model_from_config", lambda config: chat)
     event = _drive(node, answer)
@@ -122,7 +121,7 @@ def test_model_options_reach_the_handler_and_the_answer_returns(monkeypatch):
         prompts.append(request["options"])
         return "Retry"
 
-    node = AgentNode("agent", prompt="go", tools=["ask_user"], mode="tool_calling")
+    node = AgentNode("agent", prompt="go", tools=["ask_user"])
     monkeypatch.setattr(llm_clients, "model_from_config", lambda config: chat)
 
     assert _drive(node, answer) == Output("done")
@@ -142,7 +141,6 @@ def test_two_blocking_questions_keep_one_conversation(monkeypatch):
         "agent",
         prompt="go",
         tools=["ask_user"],
-        mode="tool_calling",
     )
     monkeypatch.setattr(llm_clients, "model_from_config", lambda config: chat)
     answers = iter(["one", "two"])
@@ -217,7 +215,6 @@ def test_model_tool_calls_run_in_exact_returned_order(monkeypatch):
             "agent",
             prompt="go",
             tools=["first", "ask_user", "second"],
-            mode="tool_calling",
         ),
         None,
         VariablePool(),
@@ -266,7 +263,6 @@ def test_stop_during_model_call_prevents_returned_tool_side_effect(monkeypatch):
         "agent",
         prompt="go",
         tools=["mutate_after_stop"],
-        mode="tool_calling",
     )
 
     with pytest.raises(_HostStop):
@@ -302,7 +298,6 @@ def test_stop_during_tool_resolution_prevents_model_binding(monkeypatch):
         "agent",
         prompt="go",
         tools=["tool"],
-        mode="tool_calling",
     )
 
     with pytest.raises(_HostStop):
@@ -339,7 +334,6 @@ def test_stop_during_structured_attempt_prevents_retry(monkeypatch):
     node = AgentNode(
         "agent",
         prompt="go",
-        mode="plain",
         llm_config={"provider": "openai", "model": "gpt-4o"},
     )
     node.output_contract = ValueContract(
@@ -369,7 +363,7 @@ def test_ask_user_requires_an_explicit_authored_grant(monkeypatch):
     handled = []
 
     event = _drive(
-        AgentNode("agent", prompt="go", tools=[], mode="tool_calling"),
+        AgentNode("agent", prompt="go", tools=[]),
         lambda **request: handled.append(request) or "no",
     )
 
@@ -392,7 +386,6 @@ def test_ask_user_exception_propagates_from_the_live_node(monkeypatch):
         "agent",
         prompt="go",
         tools=["ask_user"],
-        mode="tool_calling",
     )
     with pytest.raises(RuntimeError) as caught:
         node.run({}, tools=ToolSet({"ask_user": fail}))
@@ -420,7 +413,6 @@ def test_structured_output_succeeds_after_blocking_ask(monkeypatch):
         "agent",
         prompt="go",
         tools=["ask_user"],
-        mode="tool_calling",
         llm_config={"provider": "openai", "model": "gpt-4o"},
     )
     node.output_contract = ValueContract(
@@ -451,7 +443,6 @@ def test_post_assert_fires_after_blocking_ask(monkeypatch):
         "agent",
         prompt="go",
         tools=["ask_user"],
-        mode="tool_calling",
     )
     node.post_asserts = [Assertion("output == 'GOOD'", "output == 'GOOD'")]
 

@@ -122,7 +122,6 @@ defs:
     nodes:
       leaf:
         kind: agent
-        mode: plain
         prompt: replay me
     output: ${leaf.output}
 nodes:

@@ -436,7 +436,7 @@ def test_agent_binds_and_calls_granted_per_run_tools(monkeypatch):
     monkeypatch.setattr(llm_clients, "model_from_config", lambda config: chat)
     seen: list[dict[str, Any]] = []
     tools = ToolSet({"shout": _upper, "ask_user": _recording_handler(seen)})
-    node = AgentNode("agent", prompt="go", tools=["shout", "ask_user"], mode="tool_calling")
+    node = AgentNode("agent", prompt="go", tools=["shout", "ask_user"])
 
     evaluated = eval_node(node, None, VariablePool(), tools=tools)
 
@@ -451,7 +451,7 @@ def test_agent_binds_and_calls_granted_per_run_tools(monkeypatch):
 def test_agent_cannot_call_a_per_run_tool_the_flow_did_not_grant(monkeypatch):
     chat = _ScriptedChat([_tool_call("shout", {"text": "hi"})])
     monkeypatch.setattr(llm_clients, "model_from_config", lambda config: chat)
-    node = AgentNode("agent", prompt="go", tools=["ask_user"], mode="tool_calling")
+    node = AgentNode("agent", prompt="go", tools=["ask_user"])
     tools = ToolSet({"shout": _upper, "ask_user": lambda **request: "yes"})
 
     evaluated = eval_node(node, None, VariablePool(), tools=tools)
@@ -477,7 +477,7 @@ def test_agent_granted_three_groups_sees_the_union_of_their_tools(monkeypatch):
         }
     )
     node = AgentNode(
-        "agent", prompt="go", tools=["toolbox", "workspace", "company"], mode="tool_calling"
+        "agent", prompt="go", tools=["toolbox", "workspace", "company"]
     )
 
     evaluated = eval_node(node, None, VariablePool(), tools=tools)
@@ -495,7 +495,7 @@ def test_agent_grant_check_sees_expanded_group_names(monkeypatch, name: str):
     chat = _ScriptedChat([_tool_call(name, {"text": "x"})])
     monkeypatch.setattr(llm_clients, "model_from_config", lambda config: chat)
     tools = ToolSet({"toolbox": [_named("a")], "hidden": [_named("e")]})
-    node = AgentNode("agent", prompt="go", tools=["toolbox"], mode="tool_calling")
+    node = AgentNode("agent", prompt="go", tools=["toolbox"])
 
     evaluated = eval_node(node, None, VariablePool(), tools=tools)
 
@@ -511,7 +511,7 @@ def test_agent_binds_a_tool_shared_by_overlapping_groups_once(monkeypatch):
     web = _named("web")
     tools = ToolSet({"toolbox": [web, _named("a")], "company": [web, _named("b")]})
     node = AgentNode(
-        "agent", prompt="go", tools=["toolbox", "company", "toolbox"], mode="tool_calling"
+        "agent", prompt="go", tools=["toolbox", "company", "toolbox"]
     )
 
     evaluated = eval_node(node, None, VariablePool(), tools=tools)
@@ -525,7 +525,7 @@ def test_agent_with_groups_and_ask_user_asks_the_top_level_handler(monkeypatch):
     monkeypatch.setattr(llm_clients, "model_from_config", lambda config: chat)
     seen: list[dict[str, Any]] = []
     tools = ToolSet({"toolbox": [_named("a")], "ask_user": _recording_handler(seen, "B")})
-    node = AgentNode("agent", prompt="go", tools=["toolbox", "ask_user"], mode="tool_calling")
+    node = AgentNode("agent", prompt="go", tools=["toolbox", "ask_user"])
 
     evaluated = eval_node(node, None, VariablePool(), tools=tools)
 

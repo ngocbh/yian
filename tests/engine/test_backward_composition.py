@@ -123,7 +123,6 @@ defs:
         output: bool
       answer:
         kind: agent
-        mode: plain
         depends_on: [gate]
         input:
           value: ${input.value}
@@ -225,7 +224,6 @@ defs:
     nodes:
       author:
         kind: agent
-        mode: plain
         variables:
           tone: str = concise
         input:
@@ -459,7 +457,6 @@ defs:
         output: int
       author:
         kind: agent
-        mode: plain
         long_term_memory: local
         variables:
           tone: str = concise

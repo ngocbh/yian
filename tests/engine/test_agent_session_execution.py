@@ -27,7 +27,6 @@ input: {question: str}
 nodes:
   answer:
     kind: agent
-    mode: plain
     long_term_memory: session
     input: {question: "${input.question}"}
     prompt: ${question}
@@ -186,8 +185,8 @@ def test_two_session_agents_overlap_on_separate_instances():
 name: two_leaves
 llm_config: {provider: openai, model: fake-model}
 nodes:
-  left: {kind: agent, mode: plain, long_term_memory: left_chat, prompt: left, output: str}
-  right: {kind: agent, mode: plain, long_term_memory: right_chat, prompt: right, output: str}
+  left: {kind: agent, long_term_memory: left_chat, prompt: left, output: str}
+  right: {kind: agent, long_term_memory: right_chat, prompt: right, output: str}
 output: ${[left.output, right.output]}
 """)
 
@@ -291,7 +290,6 @@ defs:
     nodes:
       answer:
         kind: agent
-        mode: plain
         long_term_memory: session
         input: {question: "${input.question}"}
         prompt: ${question}
@@ -339,7 +337,6 @@ defs:
     nodes:
       answer:
         kind: agent
-        mode: plain
         long_term_memory: session
         input: {question: "${input.question}"}
         prompt: ${question}
@@ -385,7 +382,6 @@ defs:
     nodes:
       answer:
         kind: agent
-        mode: plain
         long_term_memory: session
         input: {question: "${input.question}"}
         prompt: ${question}
@@ -418,7 +414,6 @@ name: provider_split
 defs:
   ask:
     kind: agent
-    mode: plain
     long_term_memory: session
     prompt: hi
     output: str

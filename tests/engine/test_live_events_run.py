@@ -36,7 +36,6 @@ input:
 nodes:
   writer:
     kind: agent
-    mode: tool_calling
     tools: [lookup]
     input:
       topic: ${input.topic}
@@ -54,7 +53,6 @@ input:
 nodes:
   left:
     kind: agent
-    mode: tool_calling
     tools: [lookup]
     input:
       topic: ${input.topic}
@@ -62,7 +60,6 @@ nodes:
     prompt: "left ${topic}"
   right:
     kind: agent
-    mode: tool_calling
     tools: [lookup]
     input:
       topic: ${input.topic}

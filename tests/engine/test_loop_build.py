@@ -13,13 +13,10 @@ needed), stamps `output_contract`, and enforces the two halves of the type contr
   producers/flow-input types).
 """
 
-from types import SimpleNamespace
-
 import pytest
 
 from yian.compose.loader import load_flow
 from yian.compose.helpers.errors import LoadError
-from yian.compose.nodes.resolver import child_signature
 from yian.nodes.base import NodeKind
 from yian.nodes.contracts import PartialRecordContract, ValueContract
 from yian.typesys.values import ValueKind
@@ -348,7 +345,7 @@ output: ${chat_loop.output}
 """
 
 
-def test_single_output_body_returns_a_bare_value():
+def test_single_output_body_is_rejected_as_non_record():
     with pytest.raises(LoadError, match="must declare a record output"):
         load_flow(SINGLE_OUTPUT_BODY)
 
@@ -356,10 +353,11 @@ def test_single_output_body_returns_a_bare_value():
 def test_total_loop_keeps_body_contract_and_no_returned_fields():
     node = load_flow(GOOD).compiled.nodes["chat_loop"]
     assert node.returned_fields is None
-    sig = child_signature(
-        SimpleNamespace(input=node.child_inputs, compiled=node.child)
-    )
-    assert node.output_contract == sig.output
+    contract = node.output_contract
+    assert type(contract) is ValueContract
+    assert tuple(contract.type.fields) == ("n", "exited")
+    assert contract.type.fields["n"].kind is ValueKind.INTEGER
+    assert contract.type.fields["exited"].kind is ValueKind.BOOLEAN
 
 
 # A chat-shaped loop: the body reads `person`/`talking_to` but returns only
@@ -494,6 +492,59 @@ def test_loop_seeded_from_partial_loop_sees_merged_type():
     assert set(person.type.fields) == {"name", "handle"}
 
 
+# `first` and `second` each omit `keep` and seed it from the other's output, so resolving
+# either merged contract needs the other built first.
+SEED_CYCLE = """
+id: loop-seed-cycle
+name: loop_seed_cycle
+defs:
+  bump:
+    input:
+      n: int
+      exited: bool
+    nodes:
+      step:
+        kind: code
+        code: tests.engine._compose_codefns:loop_bump
+        input:
+          n: ${input.n}
+          exited: ${input.exited}
+        output:
+          n: int
+    output: ${step.output}
+nodes:
+  first:
+    kind: loop
+    call: bump
+    input:
+      n: 0
+      exited: false
+      keep: ${second.output.keep}
+    times: 1
+  second:
+    kind: loop
+    call: bump
+    input:
+      n: 0
+      exited: false
+      keep: ${first.output.keep}
+    times: 1
+output: ${second.output}
+"""
+
+
+def test_omitted_field_seed_cycle_is_located():
+    with pytest.raises(LoadError) as caught:
+        load_flow(SEED_CYCLE)
+    message = str(caught.value)
+    assert "dependency cycle" in message
+    assert "first.input.keep -> second.input.keep" in message
+    # The binding that closes the cycle carries the caret, not the coarse `input:` span.
+    closing_line = SEED_CYCLE.splitlines().index("      keep: ${first.output.keep}") + 1
+    rng = caught.value.diagnostic.frames[-1].range
+    assert (rng.start_line, rng.end_line) == (closing_line, closing_line)
+
+
 PARTIAL_BAD_TYPES = """
 id: loop-partial-bad-types
 name: loop_partial_bad_types
@@ -532,6 +583,7 @@ def test_returned_field_type_mismatch_still_rejected_in_partial_body():
         load_flow(PARTIAL_BAD_TYPES)
 
 
+# `step` declares no `output:`, so `n` projects an untyped producer value.
 PARTIAL_OPAQUE_RETURNED = """
 id: loop-partial-opaque-returned
 name: loop_partial_opaque_returned
@@ -543,9 +595,15 @@ defs:
     input:
       n: int
       note: str
-    nodes: {}
+    nodes:
+      step:
+        kind: code
+        code: tests.engine._compose_codefns:loop_bump
+        input:
+          n: ${input.n}
+          exited: false
     output:
-      n: ${input.note + "!"}
+      n: ${step.output.n}
       note: ${input.note}
 nodes:
   chat_loop:

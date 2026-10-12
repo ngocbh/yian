@@ -35,8 +35,6 @@ from yian.diagnostics import (
     OriginResolver,
     SourceRange,
 )
-from yian.expr import ExpressionError
-from yian.expr.template import scan_template, template_refs
 from yian.nodes.base import Node
 from yian.nodes.contracts import (
     OutputContract,
@@ -44,7 +42,6 @@ from yian.nodes.contracts import (
     PartialRecordContract,
     ValueContract,
     as_binding,
-    binding_source,
 )
 from yian.memory.contracts import DeclSite, MemoryDecl
 from yian.typesys.values import Type
@@ -55,6 +52,7 @@ from yian.compose.build.inline_inputs import (
     infer_inline_binding_type,
 )
 from yian.compose.edges.data import infer_data_edges
+from yian.compose.edges.producers import _binding_producers
 from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from yian.compose.nodes.call import CallDescriptor
 from yian.compose.nodes.loop import LoopDescriptor
@@ -1187,30 +1185,22 @@ def _assemble(
         binding_range: SourceRange | None,
     ) -> OutputContract | None:
         """Resolve one parent binding's contract, building referenced producers on demand."""
-        source = binding_source(binding)
-        refs: list[str] = []
-        if isinstance(source, str):
-            try:
-                refs = template_refs(scan_template(source))
-            except ExpressionError:
-                return None
         cache = descriptor_cache
         if cache is None:
             raise RuntimeError(
                 "descriptor cache was not initialized before binding contract resolution"
             )
         producers: dict[str, OutputContract] = {}
-        for ref in refs:
-            parts = ref.split(".")
-            if len(parts) < 2 or parts[1] != "output" or parts[0] not in descriptors:
+        for producer_id in dict.fromkeys(_binding_producers(binding)):
+            if producer_id not in descriptors:
                 continue
             contract = cache.build_one(
-                parts[0],
+                producer_id,
                 via_label=binding_label,
                 via_range=binding_range,
             ).node.output_contract
             if contract is not None:
-                producers[parts[0]] = contract
+                producers[producer_id] = contract
         return resolve_output_binding_contract(
             binding,
             producers,

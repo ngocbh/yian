@@ -291,7 +291,8 @@ class LoopDescriptor(NodeDescriptor):
         return ctx.binding_contract_reader(
             f"{self.id}.input.{name}",
             self.inputs[name],
-            self.field_ranges.get(("field", "inputs")),
+            self.field_ranges.get(("input", name))
+            or self.field_ranges.get(("field", "inputs")),
         )
 
 

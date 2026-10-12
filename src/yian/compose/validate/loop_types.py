@@ -52,9 +52,10 @@ def check_loop_type_contract(
     flow-input contracts, exactly as `check_call_map_types` via
     `resolve_output_binding_contract`),
     and checks it with `types_compatible` against the body
-    OUTPUT's same-named field Type. A fully proven body reads those fields from the
-    aggregate `output_contract`; a partially typed record reads its independently
-    proven field contracts from the same canonical output-contract sum. A field outside
+    OUTPUT's same-named field Type, read from the node's carried-record `output_contract`
+    (the body's own contract for a total loop, the merged returned-plus-seeded contract
+    for a partial one). An exact record reads those fields from its aggregate type; a
+    partially typed record reads its independently proven field contracts. A field outside
     the node's `returned_fields` (omitted by the body, so carried over unchanged) is
     skipped. A literal/coalesce/opaque seed source, or an opaque body output field,
     stays lenient (skipped).
@@ -86,40 +87,43 @@ def check_loop_type_contract(
         node = result.node
         if not node.is_loop:
             continue
-        body_contract = node.output_contract
-        if body_contract is not None and type(body_contract) not in (
+        # The node's carried-record contract: the body's own contract for a total loop, or
+        # the merged returned-plus-seeded contract for a partial loop.
+        loop_contract = node.output_contract
+        if loop_contract is not None and type(loop_contract) not in (
             ValueContract,
             PartialRecordContract,
         ):
             raise TypeError(
                 f"node {nid!r} output_contract must be an exact ValueContract, "
                 "PartialRecordContract, or None, "
-                f"got {type(body_contract).__name__}"
+                f"got {type(loop_contract).__name__}"
             )
-        body_out = (
-            body_contract.type
-            if type(body_contract) is ValueContract
+        loop_out = (
+            loop_contract.type
+            if type(loop_contract) is ValueContract
             else None
         )
-        if body_out is not None and body_out.fields is not None:
-            body_fields = body_out.fields
-        elif type(body_contract) is PartialRecordContract:
-            body_fields = {
+        if loop_out is not None and loop_out.fields is not None:
+            carried_fields = loop_out.fields
+        elif type(loop_contract) is PartialRecordContract:
+            carried_fields = {
                 field_name: field_contract.type
-                for field_name, field_contract in body_contract.fields
+                for field_name, field_contract in loop_contract.fields
                 if field_contract is not None
             }
         else:
-            body_fields = {}
-        # A non-record / absent body output was already caught by the field-name half in
+            carried_fields = {}
+        # A non-record / absent carried contract was already caught by the field-name half in
         # nodes.loop.build. With no independently proven fields, nothing remains to compare.
-        if not body_fields:
+        if not carried_fields:
             continue
         returned = node.returned_fields
         for field_name, src in flow_wiring.get(nid, {}).items():
             if returned is not None and field_name not in returned:
                 continue  # omitted by the body: carried over, nothing returned to compare
-            body_field = body_fields.get(field_name)
+            # A returned field's carried contract is the body's own field contract.
+            body_field = carried_fields.get(field_name)
             if body_field is None:
                 continue  # name mismatch caught in build; nothing to type-check
             source_contract = resolve_output_binding_contract(

@@ -273,7 +273,8 @@ REDUNDANT and REJECTED with `times:`. A body that blocks
 answered turn. Each continuing iteration PRUNES the previous iteration's body nodes, so
 a body of leaf nodes keeps about one iteration resident. Nodes grown inside the body by
 a nested CALL, MAP, or LOOP are not pruned; they add up every iteration until the run
-hits the node budget (10,000 live nodes). Set `max:` on such a loop. See `loop.yaml`.
+hits the node budget (10,000 live nodes). Such a loop cannot run forever; give it a `max:`
+low enough that a runaway fails with `LoopMaxExceeded` first. See `loop.yaml`.
 
 **Conversational REPL (LOOP + human_input).** A chat is a `loop` whose body blocks at
 `ask` (`human_input`), then a CASE routes exact `/exit` and `/quit` values to an exit

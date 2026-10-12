@@ -1022,10 +1022,10 @@ returns the whole carried record.
   **returned** field against a statically proven seed source at load. A returned
   field must keep its carried type. An omitted field takes its type from its seed
   binding (a literal seed stays untyped). Every proven returned field is enforced at
-  runtime and replay even when its seed was opaque at load. Each output field's type is inferred
-  from its binding shape (see [expressions](expressions.md)): a lone direct ref preserves
-  an exact or partial contract, a known partial-record field is exact, a proven comparison
-  or boolean expression is `bool`, and a
+  runtime and replay even when its seed was opaque at load. Each output field's type
+  is inferred from its binding shape (see [expressions](expressions.md)): a lone
+  direct ref preserves an exact or partial contract, a known partial-record field is
+  exact, a proven comparison or boolean expression is `bool`, and a
   **concatenating template** (literal text around spans) is `str`. Therefore a body may
   write `exited: ${ask.output == "/exit"}` directly, and a carried transcript may grow
   through a plain template binding, without a CODE fold node. If a computed field's
@@ -1033,11 +1033,11 @@ returns the whole carried record.
   opaque never means a concrete `None` value and does not erase type checks for proven
   sibling fields. LOOP enforces the closed field set and every proven sibling on normal
   iterations, zero-iteration `while:` commits, and durable replay. A literal `${null}`
-  is compatible with a nullable carried field, including inside a typed list.
-- **Omitted is not null.** An omitted field keeps its value. A returned null sets a
-  nullable field to null; the body field's static type must be nullable (for
-  example, a producer typed `Optional[str]`). A literal `${null}` is typed `None`,
-  and an `Optional[str]` seed does not fit that type, so the load fails.
+  seed is compatible with a nullable body field, including inside a typed list.
+- **Omitted is not null.** An omitted field keeps its value. A returned null sets the
+  field to null. When the seed is typed, the returned field's type must accept it: a
+  producer typed `Optional[str]` fits an `Optional[str]` seed. A literal `${null}` is
+  typed `None`, and an `Optional[str]` seed does not fit `None`, so that load fails.
 - **One field needs a record node.** A body with exactly one declared output returns
   that value bare, so `output: {done: ...}` alone is not a record and is rejected,
   as is an empty `output: {}`. To return one field, make the body `output:` a whole
@@ -1046,7 +1046,6 @@ returns the whole carried record.
 - **Merged views.** The loop's value (`${loop.output.x}` downstream) and the LOOP
   node's own `asserts:` see the merged carried record. A body def's own flow-level
   `asserts:` see the body's own output (and its inputs through `${input.X}`).
-
 - **Exactly one** of `while:` / `until:` / `times:` per loop node selects the
   driver. Zero or more than one is a load-time error (`exactly one of
   while:/until:/times: is required`).

@@ -284,10 +284,10 @@ record before `reply` (`agent`). The normal branch appends the message and reply
 transcript. Output bindings rejoin those branches into the carried 2-field record
 `{transcript: str, exited: bool}` (`'a -> 'a`). Typed exit is flow-owned; only terminal
 EOF is normalized by the bundled host. The loop body's `output:` may return only the
-fields that change; a field it omits keeps its value. A lone multi-ref coalesce has no inferable type, so the template uses adjacent
-defaulted spans for the `str` field and compares the optional exit field with `true` to
-prove `bool`. This is the shape `yian chat` runs; see `chat.yaml` (and
-`examples/chat.yaml` for a runnable copy).
+fields that change; a field it omits keeps its value. A lone multi-ref coalesce has no
+inferable type, so the template uses adjacent defaulted spans for the `str` field and
+compares the optional exit field with `true` to prove `bool`. This is the shape
+`yian chat` runs; see `chat.yaml` (and `examples/chat.yaml` for a runnable copy).
 
 ## Gotchas
 
@@ -316,11 +316,14 @@ prove `bool`. This is the shape `yian chat` runs; see `chat.yaml` (and
   each omitted field keeps its previous value. The body reads only a subset of the
   carried names. Names are checked at build; each returned field must keep its carried
   type (checked at load). Omitted keeps a field; a returned null sets a nullable field
-  to null. A body with ONE declared output returns it bare, so to return one field use
-  `output: ${step.output}` where `step` declares a record output. A predicate that
-  reads only fields the body never returns cannot change; give such a loop `max:`. Give EXACTLY ONE driver: `while:` (pre-check,
-  0+ runs), `until:` (post-check / do-while, 1+ runs), or `times: N` (fixed count).
-  `max:` is optional for `while:`/`until:` but REDUNDANT+REJECTED with `times:`.
+  to null. A literal `${null}` is typed `None`, so it does not fit an `Optional[str]`
+  seed; return a nullable-typed producer instead. A body with ONE declared output
+  returns it bare, so to return one field use `output: ${step.output}` where `step`
+  declares a record output. A predicate that reads only fields the body never
+  returns cannot change; give such a loop `max:`.
+  Give EXACTLY ONE driver: `while:` (pre-check, 0+ runs), `until:` (post-check /
+  do-while, 1+ runs), or `times: N` (fixed count). `max:` is optional for
+  `while:`/`until:` but REDUNDANT+REJECTED with `times:`.
   Every `while:`/`until:` ref must name a carried field (a typo is rejected at load,
   not read as falsy), and `max:` (when given) and `times:` must be a plain integer `>= 1`.
 - **Node-local `asserts:` reading `${output}` are POST checks** — they fire once the

@@ -463,13 +463,13 @@ Multi-output assembly produces an exact record when every field is exact, otherw
 closed `PartialRecordContract` with the proven siblings. `ChildSignature.output` follows
 the terminal arity rule and CALL preserves it. A LOOP's contract is the merged carried
 record: each field the body returns comes from the body's contract, and each omitted
-field comes from its seed binding (a literal seed stays opaque). MAP derives `list[U]` only from an exact
-child contract because the output-contract sum has no partial-list arm. Strict inline
-input inference remains separate: it accepts literals, direct exact references, and
-proven fields projected from partial records, while rejecting whole or opaque partial
-reads. LOOP uses the same canonical carrier for proven seed checks at load and for every
-zero- or later-iteration commit, replay, origin lookup, and expansion identity; no
-transient field-evidence authority exists.
+field comes from its seed binding (a literal seed stays opaque). MAP derives `list[U]`
+only from an exact child contract because the output-contract sum has no partial-list
+arm. Strict inline input inference remains separate: it accepts literals, direct
+exact references, and proven fields projected from partial records, while rejecting
+whole or opaque partial reads. LOOP uses the same canonical carrier for proven seed
+checks at load and for every zero- or later-iteration commit, replay, origin lookup,
+and expansion identity; no transient field-evidence authority exists.
 There is no parallel output-Type API: Python-authored nodes pass `output_contract=` explicitly.
 For a physical node `output:` declaration, Compose injects a source-aware reader into the
 descriptor's existing per-kind build position. The shared recursive compiler returns the

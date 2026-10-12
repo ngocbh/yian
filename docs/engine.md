@@ -136,9 +136,9 @@ same redirect when output is absent.
 A LOOP continuation instead clones the body without a terminal redirect and
 wires its END to the next driver. This is where the next carried record is merged.
 The body may return a subset of the carried fields. `LoopNode.respawn(k, carried)`
-gives the next driver a parameter default for each omitted field, holding its value
-in the canonical growth seed, and the builder wires only the returned fields from
-the body END. Live growth and durable replay build the same fragment from the same
+gives the next driver a parameter default for each omitted field. The default is that
+field's value in the canonical growth seed. The builder wires only the returned fields
+from the body END. Live growth and durable replay build the same fragment from the same
 seed. A body that returns every field keeps the same compiled identity and expansion
 digests. When the loop stops, that driver returns
 `Output(carried, commit_as=origin_id)`; its `skipped_output_target()` also resolves

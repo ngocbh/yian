@@ -533,14 +533,15 @@ each omitted field keeps its previous value, with nothing to declare. A body fie
 that is not carried is a load error. The body reads only a **subset** of the carried
 names. Names are checked at build; each returned field must keep its carried type,
 compared at load for proven body/seed pairs and always enforced at runtime and replay.
-Omitting a field keeps it; returning null sets a nullable field to null. A body with
-ONE declared output returns it bare, so `output: {done: ...}` is not a record: to
-return one field, use `output: ${step.output}` where `step` declares
+Returning null sets a nullable field to null. A literal `${null}` is typed `None`, so
+it does not fit an `Optional[str]` seed; return a nullable-typed producer instead. A
+body with ONE declared output returns it bare, so `output: {done: ...}` is not a
+record: to return one field, use `output: ${step.output}` where `step` declares
 `output: {done: bool}`. A `while:`/`until:` that reads only fields the body never
-returns cannot change, so without `max:` it runs forever. The
-node's value (and the LOOP node's own `asserts:`) is the merged carried record. A body that blocks (a `human_input` leaf)
-makes the loop a live chat REPL: the same run threads each answered turn. Pick
-**exactly one**
+returns cannot change, so without `max:` it runs forever. The node's value and the
+LOOP node's own `asserts:` see the merged carried record; a body def's own `asserts:`
+see the body's own output. A body that blocks (a `human_input` leaf) makes the loop a
+live chat REPL: the same run threads each answered turn. Pick **exactly one**
 driver: `while:` (pre-check, 0+ runs), `until:` (post-check / do-while, 1+ runs,
 stop when the predicate becomes true), or `times: N` (fixed count). `max:` is
 optional for `while:`/`until:` but **redundant and rejected** with `times:`.
@@ -552,8 +553,8 @@ A chat is a `loop` whose body blocks each turn at `ask` (`human_input`), then a
 bindings rejoin the exit record or normal transcript into the carried
 `{transcript: str, exited: bool}` record. Typed exit is flow-owned — a host must
 not intercept it — while terminal EOF may be normalized to `/exit`. **Gotcha:**
-the body's `output:` may return only some carried fields; the rest keep their values.
-A lone multi-ref coalesce has
+the body may omit carried fields, but a lone field returns bare, so returning only
+`transcript` needs a record node. A lone multi-ref coalesce has
 no inferable type; adjacent defaulted spans preserve `str`, and comparing the
 optional exit field with `true` proves the carried `bool`. See
 [`templates/chat.yaml`](templates/chat.yaml).

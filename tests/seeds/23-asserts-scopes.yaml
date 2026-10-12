@@ -36,12 +36,13 @@ defs:
       window: int
     nodes:
       raw:
-        kind: model
-        model_id: topic-ranker-v1
+        kind: code
         input:
           topic: ${input.topic}
           window: ${input.window}
         output: float
+        code: |
+          return (len(inputs["topic"]) % 21 - 10) / 10
     output: ${raw.output}
     asserts:
       - "input.window >= 5"                       # child BOUNDARY — before the child runs

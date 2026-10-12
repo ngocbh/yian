@@ -36,7 +36,6 @@ _SEEDS_TO_SCAN = [
     "04-call.yaml",
     "05-call-map.yaml",
     "06-case-on.yaml",
-    "07-model-rating.yaml",
     "08-tool-news.yaml",
     "14-agent-tools.yaml",
     "17-effects-human-wait.yaml",  # the ONLY seed with an absolute WAIT + HUMAN_INPUT

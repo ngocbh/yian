@@ -17,7 +17,6 @@ from yian.compose.parse.file import (
     CallDescriptor,
     CaseDescriptor,
     CodeDescriptor,
-    ModelDescriptor,
     ToolDescriptor,
     parse_file,
 )
@@ -165,20 +164,7 @@ def test_code_parses():
     assert node.outputs == "str"
 
 
-# ---------- model / tool ----------
-
-
-def test_model_parses():
-    node = _seed_nodes("07-model-rating.yaml")["predict"]
-    assert isinstance(node, ModelDescriptor)
-    assert node.model_id == "topic-ranker-v1"
-    assert node.weights_uri == "manifold://calpha/models/topic-ranker-v1.pt"
-    assert node.runtime == "torchscript"
-    assert node.inputs == {
-        "topic": "${input.topic}",
-        "features": "${input.features}",
-    }
-    assert node.outputs == {"score": "float", "rank": "int"}
+# ---------- tool ----------
 
 
 def test_model_requires_model_id():

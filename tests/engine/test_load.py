@@ -3,7 +3,7 @@
 `load_flow(text) -> ComposedFlow` assembles the parsed flow into one runnable
 `CompiledFlow` + canonical flow parameters + the boundary/post-terminal assert split. The
 load-test set is the seeds: flat (00/01), case (02/06), the
-arithmetic asserts (10), anchors (11), MODEL (07), AGENT knobs (14), nested records +
+arithmetic asserts (10), anchors (11), AGENT knobs (14), nested records +
 record-typed inputs (13), the rich integration (18), and every-binding-stance (19).
 
 EXCLUDED (recorded reasons):
@@ -22,20 +22,18 @@ from yian.nodes.agent import AgentNode
 from yian.nodes.code import CodeNode
 from yian.nodes.contracts import Binding
 from yian.nodes.case import CaseNode
-from yian.nodes.model import ModelNode
 from yian.typesys.values import ValueKind
 from yian.compose import ComposedFlow, LoadError, load_flow
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 
 # Each loadable seed must load to a ComposedFlow.
-_LOADABLE = ["00", "01", "02", "06", "07", "09", "10", "11", "12", "13", "14", "17", "18", "19", "20", "21", "22", "23", "27", "28", "29", "30"]
+_LOADABLE = ["00", "01", "02", "06", "09", "10", "11", "12", "13", "14", "17", "18", "19", "20", "21", "22", "23", "27", "28", "29", "30"]
 _SEED_FILES = {
     "00": "00-hello-agent.yaml",
     "01": "01-structured-agent.yaml",
     "02": "02-case.yaml",
     "06": "06-case-on.yaml",
-    "07": "07-model-rating.yaml",
     # 09 — ${...} operator forms incl. the ${system.run_id} ambient (now allow-listed).
     "09": "09-interpolation-ops.yaml",
     # 12 — depends_on/runs_after produce ordering edges.
@@ -158,23 +156,6 @@ def test_seed11_anchored_nodes_built():
         assert node.output_contract is not None
         assert node.output_contract.type.kind == ValueKind.STRING  # from the anchor
         assert node.llm_config is not None  # llm_config merged in from the anchor
-
-
-# --------------------------------------------------------------------------- #
-# seed 07 — MODEL fields (model_id / weights_uri / runtime)
-# --------------------------------------------------------------------------- #
-
-
-def test_seed07_model_fields():
-    flow = _load("07").compiled
-    predict = flow.nodes["predict"]
-    assert isinstance(predict, ModelNode)
-    assert predict.model_id == "topic-ranker-v1"
-    assert predict.weights_uri == "manifold://calpha/models/topic-ranker-v1.pt"
-    assert predict.runtime_name == "torchscript"
-    # object output {score, rank}.
-    assert predict.output_contract is not None
-    assert set(predict.output_contract.type.fields) == {"score", "rank"}
 
 
 # --------------------------------------------------------------------------- #

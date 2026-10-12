@@ -14,7 +14,7 @@ from yian.compose.nodes.tool import ToolDescriptor
 # The author-written surface kinds (mirrors docs/syntax.md; excludes the synthesized
 # start/end boundaries). Adding a kind here without registering its handle fails below.
 AUTHORED_KINDS = frozenset(
-    {"agent", "code", "model", "tool", "case", "human_input", "wait", "call", "map", "loop"}
+    {"agent", "code", "tool", "case", "human_input", "wait", "call", "map", "loop"}
 )
 
 

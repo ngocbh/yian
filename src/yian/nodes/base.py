@@ -50,7 +50,6 @@ class NodeKind(str, Enum):
 
     AGENT = "agent"
     CODE = "code"
-    MODEL = "model"
     TOOL = "tool"
     CASE = "case"
     HUMAN_INPUT = "human_input"  # block through the host-owned ask_user tool

@@ -33,7 +33,8 @@ the engine core never sees any of it (kind-blind invariant, `tests/engine/test_k
 
 Both tables are derived **below** from a single `_DESCRIPTORS` tuple — one entry per
 author-written kind, keyed by each class's own `kind`/`binding_fields` ClassVars. Adding a
-kind means adding its import and one entry to that tuple.
+kind means adding its import and one entry to that tuple. `REMOVED_KINDS` maps each
+retired author kind to its replacement, so loading one names what to write instead.
 
 The AGENT, HUMAN_INPUT, and WAIT descriptors build ordinary live leaves: AGENT
 owns its prompt/tool/model surface, HUMAN_INPUT owns its question and answer
@@ -60,7 +61,6 @@ from yian.compose.nodes import (
     code,
     human_input,
     loop,
-    model,
     tool,
     wait,
 )
@@ -72,7 +72,6 @@ from yian.compose.nodes import map as map_kind  # `map` shadows the builtin
 _DESCRIPTORS = (
     agent.AgentDescriptor,
     code.CodeDescriptor,
-    model.ModelDescriptor,
     tool.ToolDescriptor,
     wait.WaitDescriptor,
     human_input.HumanInputDescriptor,
@@ -89,3 +88,12 @@ KINDS: dict[str, type] = {d.kind: d for d in _DESCRIPTORS}
 # Surface `kind:` string -> the descriptor field names that carry `${...}` binding strings.
 # Consumed by the kind-blind walk in `compose/nodes/bindings.py`.
 BINDING_FIELDS: dict[str, tuple[str, ...]] = {d.kind: d.binding_fields for d in _DESCRIPTORS}
+
+# Removed author kinds -> what to write instead. Loading one is a located error that
+# names the replacement rather than the generic "unknown kind".
+REMOVED_KINDS: dict[str, str] = {
+    "model": (
+        "serve the model behind a host tool and call it with kind: tool "
+        "(set tool_id: and input:)"
+    ),
+}

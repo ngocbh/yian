@@ -238,7 +238,7 @@ node_range, field_ranges = result.node_range, result.field_ranges
   locate errors after a descriptor has produced its semantic node. Assembly drops
   both before `CompiledFlow.from_parts`; compile and runtime never receive them.
 
-Leaf kinds (`agent`/`code`/`model`/`tool`) ignore `ctx.resolver`; `call`/`map`/`loop` use
+Leaf kinds (`agent`/`code`/`tool`) ignore `ctx.resolver`; `call`/`map`/`loop` use
 it to resolve the child flow they expand into. CODE alone also reads
 `ctx.source_file` as an opaque Python traceback label and the optional
 `ctx.resolve_origin` callable when presenting a load-time syntax failure. Assembly

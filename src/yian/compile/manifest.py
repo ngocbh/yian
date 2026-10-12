@@ -49,7 +49,6 @@ from yian.nodes.end import EndNode
 from yian.nodes.human_input import HumanInputNode
 from yian.nodes.loop import LoopNode
 from yian.nodes.map import MapNode
-from yian.nodes.model import ModelNode
 from yian.nodes.start import StartNode
 from yian.nodes.tool import ToolNode
 from yian.nodes.wait import WaitNode
@@ -106,7 +105,6 @@ _KIND_FIELDS: dict[NodeKind, frozenset[str]] = {
         }
     ),
     NodeKind.CODE: frozenset({"code"}),
-    NodeKind.MODEL: frozenset({"model_id", "weights_uri", "runtime_name"}),
     NodeKind.TOOL: frozenset({"tool_id"}),
     NodeKind.CASE: frozenset({"cases"}),
     NodeKind.HUMAN_INPUT: frozenset(
@@ -147,7 +145,6 @@ _IGNORED_KIND_FIELDS: dict[NodeKind, frozenset[str]] = {
             "code_line_origins",
         }
     ),
-    NodeKind.MODEL: frozenset(),
     NodeKind.TOOL: frozenset(),
     NodeKind.CASE: frozenset(),
     NodeKind.HUMAN_INPUT: frozenset(),
@@ -163,7 +160,6 @@ _KIND_CLASSES: dict[NodeKind, type[Node]] = {
     NodeKind.END: EndNode,
     NodeKind.AGENT: AgentNode,
     NodeKind.CODE: CodeNode,
-    NodeKind.MODEL: ModelNode,
     NodeKind.TOOL: ToolNode,
     NodeKind.CASE: CaseNode,
     NodeKind.HUMAN_INPUT: HumanInputNode,
@@ -1739,19 +1735,6 @@ def _node_manifest(
             manifest["memories"] = memories
     elif node.kind is NodeKind.CODE:
         manifest["code"] = node.code
-    elif node.kind is NodeKind.MODEL:
-        manifest.update(
-            {
-                "model_id": node.model_id,
-                "runtime": _canonical_value(node.runtime_name, ctx, f"{path}.runtime"),
-                "weights_uri": _canonical_value(
-                    node.weights_uri,
-                    ctx,
-                    f"{path}.weights_uri",
-                    redact_credentials=True,
-                ),
-            }
-        )
     elif node.kind is NodeKind.TOOL:
         manifest["tool_id"] = node.tool_id
     elif node.kind is NodeKind.CASE:

@@ -17,7 +17,6 @@ from yian.compose.parse.file import (
     CallDescriptor,
     CaseDescriptor,
     CodeDescriptor,
-    ModelDescriptor,
     ToolDescriptor,
     parse_file,
 )
@@ -165,33 +164,25 @@ def test_code_parses():
     assert node.outputs == "str"
 
 
-# ---------- model / tool ----------
+# ---------- tool ----------
 
 
-def test_model_parses():
-    node = _seed_nodes("07-model-rating.yaml")["predict"]
-    assert isinstance(node, ModelDescriptor)
-    assert node.model_id == "topic-ranker-v1"
-    assert node.weights_uri == "manifold://calpha/models/topic-ranker-v1.pt"
-    assert node.runtime == "torchscript"
-    assert node.inputs == {
-        "topic": "${input.topic}",
-        "features": "${input.features}",
-    }
-    assert node.outputs == {"score": "float", "rank": "int"}
-
-
-def test_model_requires_model_id():
+def test_model_kind_is_removed_and_points_at_tool():
+    # ML inference is a host capability: `kind: model` is a located load error that
+    # names `kind: tool` as the replacement, not the generic "unknown kind".
     with pytest.raises(LoadError) as exc:
         _nodes(
             """
 predict:
   kind: model
-  output:
-    score: float
+  model_id: x
+  output: float
 """
         )
-    assert "model_id" in str(exc.value)
+    message = str(exc.value)
+    assert "kind 'model' was removed" in message
+    assert "kind: tool" in message
+    assert exc.value.diagnostic.frames[-1].range.start_line == 3
 
 
 def test_tool_parses():

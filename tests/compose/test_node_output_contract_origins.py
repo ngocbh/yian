@@ -780,10 +780,6 @@ nodes:
     kind: code
     code: return "ok"
     output: str
-  model_leaf:
-    kind: model
-    model_id: test-model
-    output: str
   human_leaf:
     kind: human_input
     prompt: continue?
@@ -794,7 +790,7 @@ output: ${code_leaf.output}
     loaded = load_flow(text, source_label="leaves.yaml")
     nodes_cursor = document.root.child("nodes")
 
-    for node_id in ("agent_leaf", "code_leaf", "model_leaf", "human_leaf"):
+    for node_id in ("agent_leaf", "code_leaf", "human_leaf"):
         contract = _contract(loaded, node_id)
         assert contract.origins.entries == ()
         _assert_site(

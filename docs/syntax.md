@@ -76,9 +76,9 @@ Rules:
   output (no explicit `output: ${...}` line).
 - Any other field (`prompt:`, `system_prompt:`, `tools:`, `skills:`, `llm_config:`,
   node-local `asserts:`, …) is the node body.
-- Allowed only for the **value-producing leaf kinds** — `agent`, `code`, `model`,
-  `tool`, `human_input`. `case`/`call`/`map` reference other nodes a one-node flow
-  has none of, so they need the full `nodes:` form.
+- Allowed only for the **value-producing leaf kinds** — `agent`, `code`, `tool`,
+  `human_input`. `case`/`call`/`map` reference other nodes a one-node flow has none
+  of, so they need the full `nodes:` form.
 
 ## References — naming a value
 
@@ -595,13 +595,17 @@ output, because a structured value cannot be partial. A model question from
 the inbox as `run_flow(..., steering=inbox)` (see [API](api.md#steering)); a
 node without `steerable: true` never reads it.
 
-### `code` / `model` / `tool` — the other leaves
+### `code` / `tool` — the other leaves
 
-These are the non-LLM computational leaves — a Python callable, an ML model, or
-a registered tool. CODE and MODEL consume `input:` bindings and may declare a
-typed `output:`. TOOL instead accepts an untyped `input:` map defined by the
-registered tool and rejects `output:`; its return value is still bound as the
-node's `output` for downstream references.
+These are the non-LLM computational leaves — a Python callable or a registered
+tool. CODE consumes `input:` bindings and may declare a typed `output:`. TOOL
+instead accepts an untyped `input:` map defined by the registered tool and rejects
+`output:`; its return value is still bound as the node's `output` for downstream
+references.
+
+Running an ML model is a host capability: the host serves it behind a tool, and
+the flow calls it with `kind: tool`. `kind: model` was removed; loading it is an
+error that says so.
 
 A TOOL node's `tool_id:` and an AGENT node's `tools:` grant name either a tool
 registered with `register_tool` or one the host passes to that run with

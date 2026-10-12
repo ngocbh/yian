@@ -1,6 +1,6 @@
 """Unit tests for the per-kind `descriptor.build(ctx)` — the leaf runtime Node builder.
 
-A leaf descriptor (agent/code/model/tool) + a typedefs registry (via `BuildContext`) build the
+A leaf descriptor (agent/code/tool) + a typedefs registry (via `BuildContext`) build the
 matching runtime `Node`, stamped with:
   - `output_contract = ValueContract(read_type(descriptor.outputs, registry))`
     (None if no authored `output:`),
@@ -18,7 +18,6 @@ import pytest
 from yian.nodes.agent import AgentNode
 from yian.nodes.code import CodeNode
 from yian.nodes.contracts import Parameter, ValueContract
-from yian.nodes.model import ModelNode
 from yian.nodes.tool import ToolNode
 from yian.llm_clients import LLMConfig
 from yian.typesys.values import ValueKind
@@ -235,31 +234,6 @@ def test_code_node_built():
         "rating": "${score.output.rating}",
         "rationale": "${score.output.rationale}",
     }
-
-
-# ---------- model ----------
-
-
-def test_model_node_built():
-    # seed 07 predict — model_id / weights_uri / runtime, object output.
-    desc = _seed_nodes("07-model-rating.yaml")["predict"]
-    node, wiring = _build(desc)
-    assert isinstance(node, ModelNode)
-    assert node.model_id == "topic-ranker-v1"
-    assert node.weights_uri == "manifold://calpha/models/topic-ranker-v1.pt"
-    assert node.runtime_name == "torchscript"
-    assert node.output_contract.type.fields["score"].kind == ValueKind.NUMBER
-    assert node.output_contract.type.fields["rank"].kind == ValueKind.INTEGER
-    assert {p.name for p in node.params} == {"topic", "features"}
-    assert wiring == {"topic": "${input.topic}", "features": "${input.features}"}
-
-
-def test_model_node_run_raises_serving_not_wired():
-    # MODEL still builds, but running it is loud until ML serving is implemented.
-    desc = _seed_nodes("07-model-rating.yaml")["predict"]
-    node, _ = _build(desc)
-    with pytest.raises(NotImplementedError, match="not wired"):
-        node.run({})
 
 
 # ---------- tool ----------

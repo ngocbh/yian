@@ -37,7 +37,6 @@ from yian.nodes.end import EndNode
 from yian.nodes.human_input import HumanInputNode
 from yian.nodes.loop import LoopNode
 from yian.nodes.map import MapNode
-from yian.nodes.model import ModelNode
 from yian.nodes.start import StartNode
 from yian.nodes.tool import ToolNode
 from yian.nodes.wait import WaitNode
@@ -246,15 +245,14 @@ nodes:
 output: ${leaf.output}
 """
     )
-    model = _compiled(
+    tool = _compiled(
         """
 id: kind
 name: Kind
 nodes:
   leaf:
-    kind: model
-    model_id: one
-    output: str
+    kind: tool
+    tool_id: one
 output: ${leaf.output}
 """
     )
@@ -272,7 +270,7 @@ output: ${leaf.output}
 """
     )
 
-    assert flow_fingerprint(code) != flow_fingerprint(model)
+    assert flow_fingerprint(code) != flow_fingerprint(tool)
     assert flow_fingerprint(code) != flow_fingerprint(changed_code)
 
 
@@ -1371,7 +1369,7 @@ def test_flow_fingerprint_keeps_noncredential_uri_semantics(changed_uri):
     assert flow_fingerprint(original) != flow_fingerprint(changed)
 
 
-def test_uri_redaction_is_scoped_away_from_prompts_code_and_model_labels():
+def test_uri_redaction_is_scoped_away_from_prompts_code_and_tool_ids():
     first_uri = "https://first-user:first-secret@example.test/path?token=first-token"
     second_uri = "https://second-user:second-secret@example.test/path?token=second-token"
 
@@ -1379,20 +1377,13 @@ def test_uri_redaction_is_scoped_away_from_prompts_code_and_model_labels():
     second_prompt = _single_node_flow(AgentNode("node", prompt=second_uri))
     first_code = _single_node_flow(CodeNode("node", code=f"return {first_uri!r}"))
     second_code = _single_node_flow(CodeNode("node", code=f"return {second_uri!r}"))
-    first_model_id = _single_node_flow(ModelNode("node", model_id=first_uri))
-    second_model_id = _single_node_flow(ModelNode("node", model_id=second_uri))
-    first_runtime = _single_node_flow(
-        ModelNode("node", model_id="model", runtime=first_uri)
-    )
-    second_runtime = _single_node_flow(
-        ModelNode("node", model_id="model", runtime=second_uri)
-    )
+    first_tool_id = _single_node_flow(ToolNode("node", tool_id=first_uri))
+    second_tool_id = _single_node_flow(ToolNode("node", tool_id=second_uri))
 
     for first, second in (
         (first_prompt, second_prompt),
         (first_code, second_code),
-        (first_model_id, second_model_id),
-        (first_runtime, second_runtime),
+        (first_tool_id, second_tool_id),
     ):
         assert flow_fingerprint(first) != flow_fingerprint(second)
         assert "first-secret" in json.dumps(flow_manifest(first), sort_keys=True)
@@ -1663,37 +1654,6 @@ def test_binding_like_static_credentials_remain_literal():
         manifest_text = json.dumps(flow_manifest(first), sort_keys=True)
         assert "first.secret" not in manifest_text
         assert "__redacted_binding__:" not in manifest_text
-
-
-def test_flow_fingerprint_redacts_model_weights_uri_credentials():
-    first_uri = (
-        "s3://first-user:first-password@models.example/bucket/model.bin"
-        "?X-Amz-Expires=900&X-Amz-Signature=first-signature"
-    )
-    second_uri = (
-        "s3://second-user:second-password@models.example/bucket/model.bin"
-        "?X-Amz-Expires=900&X-Amz-Signature=second-signature"
-    )
-    first = _single_node_flow(
-        ModelNode("node", model_id="model", weights_uri=first_uri, runtime="onnx")
-    )
-    second = _single_node_flow(
-        ModelNode("node", model_id="model", weights_uri=second_uri, runtime="onnx")
-    )
-
-    assert flow_fingerprint(first) == flow_fingerprint(second)
-    manifest_text = json.dumps(flow_manifest(first), sort_keys=True)
-    for credential in ("first-user", "first-password", "first-signature"):
-        assert credential not in manifest_text
-
-    for changed_uri in (
-        second_uri.replace("models.example", "other.example"),
-        second_uri.replace("/bucket/model.bin", "/other/model.bin"),
-    ):
-        changed = _single_node_flow(
-            ModelNode("node", model_id="model", weights_uri=changed_uri, runtime="onnx")
-        )
-        assert flow_fingerprint(first) != flow_fingerprint(changed)
 
 
 def test_wait_fingerprint_and_expansion_digest_cover_absolute_until_wiring():
@@ -2253,12 +2213,10 @@ def _changed_fragment() -> Flow:
 
 def test_flow_manifest_emits_the_literal_node_kind():
     code_manifest = flow_manifest(_single_node_flow(CodeNode("node", code='return "ok"')))
-    model_manifest = flow_manifest(
-        _single_node_flow(ModelNode("node", model_id="model"))
-    )
+    tool_manifest = flow_manifest(_single_node_flow(ToolNode("node", tool_id="t")))
 
     assert code_manifest["nodes"]["node"]["kind"] == "code"
-    assert model_manifest["nodes"]["node"]["kind"] == "model"
+    assert tool_manifest["nodes"]["node"]["kind"] == "tool"
 
 
 @pytest.mark.parametrize(
@@ -2720,17 +2678,6 @@ def test_flow_fingerprint_preserves_start_parameter_order():
             {"prompt": "p", "llm_inherit": True},
             {"prompt": "p", "llm_inherit": False},
         ),
-        (ModelNode, {"model_id": "first"}, {"model_id": "second"}),
-        (
-            ModelNode,
-            {"model_id": "model", "weights_uri": "first"},
-            {"model_id": "model", "weights_uri": "second"},
-        ),
-        (
-            ModelNode,
-            {"model_id": "model", "runtime": "first"},
-            {"model_id": "model", "runtime": "second"},
-        ),
         (ToolNode, {"tool_id": "first"}, {"tool_id": "second"}),
         (
             CaseNode,
@@ -2847,9 +2794,6 @@ def test_flow_fingerprint_preserves_start_parameter_order():
         "agent-retries",
         "agent-own-llm-config",
         "agent-llm-inherit",
-        "model-id",
-        "model-weights-uri",
-        "model-runtime",
         "tool-id",
         "case-handle",
         "case-when",

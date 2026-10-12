@@ -7,14 +7,14 @@
 
 import pytest
 
-from yian.compose.nodes import KINDS, BINDING_FIELDS
+from yian.compose.nodes import KINDS, BINDING_FIELDS, REMOVED_KINDS
 from yian.compose.nodes.agent import AgentDescriptor
 from yian.compose.nodes.tool import ToolDescriptor
 
 # The author-written surface kinds (mirrors docs/syntax.md; excludes the synthesized
 # start/end boundaries). Adding a kind here without registering its handle fails below.
 AUTHORED_KINDS = frozenset(
-    {"agent", "code", "model", "tool", "case", "human_input", "wait", "call", "map", "loop"}
+    {"agent", "code", "tool", "case", "human_input", "wait", "call", "map", "loop"}
 )
 
 
@@ -40,6 +40,12 @@ def test_retired_kindspec_is_not_public():
 def test_all_authored_kinds_registered():
     assert AUTHORED_KINDS <= set(KINDS), sorted(AUTHORED_KINDS - set(KINDS))
     assert AUTHORED_KINDS <= set(BINDING_FIELDS), sorted(AUTHORED_KINDS - set(BINDING_FIELDS))
+
+
+def test_removed_kinds_are_not_registered():
+    # A removed kind is a load error naming its replacement, never a live dispatch entry.
+    assert REMOVED_KINDS.keys() & KINDS.keys() == set()
+    assert "model" in REMOVED_KINDS
 
 
 def test_kinds_and_binding_fields_agree():

@@ -217,6 +217,38 @@ def test_e06_cross_flow_type_mismatch_is_loud():
     assert "str" in msg and "float" in msg       # child expects str, source is float
 
 
+_SINGLE_NODE_DEF_MODEL = """
+id: def-model
+name: def_model
+input:
+  topic: str
+defs:
+  score:
+    kind: model
+    model_id: x
+    input:
+      topic: str
+    output: float
+nodes:
+  rank:
+    kind: call
+    call: score
+    input:
+      topic: ${input.topic}
+output: ${rank.output}
+"""
+
+
+def test_single_node_def_model_kind_is_removed():
+    # The removed-kind error keeps the `defs entry` prefix and lands on the def's `kind:`.
+    with pytest.raises(LoadError) as exc_info:
+        load_flow(_SINGLE_NODE_DEF_MODEL)
+    msg = str(exc_info.value)
+    assert "defs entry 'score'" in msg
+    assert "kind 'model' was removed" in msg
+    assert _error_ranges(exc_info.value)[-1].start_line == 8
+
+
 # --------------------------------------------------------------------------- #
 # The broader negative gallery (e09–e23) — one fixture per engine failure mode.
 # Compile (load_flow raises LoadError) + runtime (run_flow -> status="failed").
@@ -229,6 +261,7 @@ def test_e06_cross_flow_type_mismatch_is_loud():
         ("e09-unknown-top-level-key.yaml", "unknown top-level key 'bogus'", 14),
         # Per-kind parse anchors these at the precise offending field (not the node body):
         ("e10-unknown-node-kind.yaml", "unknown kind 'llm'", 8),  # the `kind:` value
+        ("e42-removed-model-kind.yaml", "kind 'model' was removed", 8),  # the `kind:` line
         ("e11-field-not-allowed.yaml", "field 'prompt' is not allowed", 13),  # the stray field
         ("e12-missing-required-field.yaml", "missing required field 'code'", 8),  # the node body
         ("e13-bad-type-expression.yaml", "bad type expression 'list['", 11),

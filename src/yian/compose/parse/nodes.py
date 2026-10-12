@@ -24,7 +24,7 @@ from typing import Any
 
 from yian.compile.model import END_ID, START_ID
 from yian.compose.helpers.errors import LoadDiagnostics
-from yian.compose.nodes import KINDS
+from yian.compose.nodes import KINDS, REMOVED_KINDS
 from yian.compose.source import SourceAccessError, SourceCursor
 
 # Singular source keys are projected onto the descriptor dataclasses' plural
@@ -77,6 +77,11 @@ def _parse_node(node_id: str, cursor: SourceCursor) -> Any:
         raise diagnostics.error(
             f"node {node_id!r}: missing `kind`",
             range=cursor.range,
+        )
+    if kind in REMOVED_KINDS:
+        raise diagnostics.error(
+            f"node {node_id!r}: kind {kind!r} was removed; {REMOVED_KINDS[kind]}",
+            range=cursor.range_of("kind"),
         )
     cls = KINDS.get(kind)
     if cls is None:

@@ -44,8 +44,8 @@ expr/         one ${...} grammar: parse -> AST -> evaluate / infer type / ref-wa
 memory/       memory contracts, pure conversation fold/codecs, optionally durable backends
 skills/       host-supplied SKILL.md values, confined file reads, load_skill [leaf]
 nodes/        pure Node contract + per-kind implementations; spawners return seeds
-              (start, end, agent, code, model, tool, case, call, map,
-               loop, human_input, wait)
+              (start, end, agent, code, tool, case, call, map, loop,
+               human_input, wait)
 compile/      compiled IR + validation; identity-safe origin traversal/rebasing;
               growth builder; stable identity; static-path LLM config maps
 compose/      Compose-YAML front end: text -> CompiledFlow; source/ owns YAML

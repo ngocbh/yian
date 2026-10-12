@@ -252,7 +252,7 @@ change forward scheduling or the forward result.
 execution independently of memory recall, then the public run boundary returns
 the forward result. `RunResult.backward(feedback)` later calls the explicit
 `runtime.backward` driver against the same record/reducer authority. Ordinary
-CODE/TOOL/MODEL/HUMAN_INPUT/WAIT nodes stop feedback; START, END, and a stopping
+CODE/TOOL/HUMAN_INPUT/WAIT nodes stop feedback; START, END, and a stopping
 LOOP project it mechanically. A reached AGENT uses at most one tool-free model
 call from its accepted prompt, locals, evidence, and effective configuration.
 No default, render, recall, expression function, or forward node is rerun.

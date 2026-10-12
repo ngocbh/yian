@@ -71,8 +71,7 @@ nodes:
 Per kind, the flat fields are: **agent** → `prompt` (+ `tools`/`mode`/`llm_config`); **code**
 → `code: module:function`; **call** → `call:` + `input:` (a single application); **map** →
 `call:` + `over:` + `input:` (+ `parallel:`) — `List.map` over the `over:` list, `${item}` per
-element; **case** → `cases:` + `else:` (+ `on:`); **model** → `model_id:` (+
-`weights_uri:`/`runtime:`); **tool** → `tool_id:` + `input:`.
+element; **case** → `cases:` + `else:` (+ `on:`); **tool** → `tool_id:` + `input:`.
 
 A `call` also has an **inline form** — `call(f, arg=${ref}, k=lit)` written as the whole value of any binding
 (a node input, a TOOL `arg:`, a `map`'s `over:`, a flow output). It is sugar: it desugars
@@ -314,7 +313,6 @@ nodes:
 | `04-call.yaml` | `call` (typed function application) re-exporting a callee's value |
 | `05-call-map.yaml` | a `map` node (`kind: map` + `over:` + `parallel:`) over a list + `${item}` + `:-` default + `asserts:` + `node_name` + multi-output |
 | `06-case-on.yaml` | `case … on` (simple form: value match) + a 3-way n-ary `\|` coalesce join |
-| `07-model-rating.yaml` | `MODEL` kind — `model_id`/`weights_uri`/`runtime`, `int` type, object output |
 | `08-tool-news.yaml` | `TOOL` kind — `tool_id` + untyped `input:`; whole-string (typed) vs embedded (stringified) `${…}` |
 | `09-interpolation-ops.yaml` | the operator forms — `${X:?}` / nested `${X:-…}` / `$$` escape / `${system.X}` |
 | `10-asserts-arithmetic.yaml` | arithmetic + `and`/`or`/`not`/`in` in `when:`/`asserts:` |
@@ -334,7 +332,7 @@ nodes:
 | `29-inline-code.yaml` | inline **`code:`** source — a bare body reading `inputs`, wrapped as `def main(inputs)` and run **in-process** (the alternative to the `module:function` reference form); same one-dict convention as reference mode |
 | `30-reference-code.yaml` | reference **`code:`** source — a `module:function` token imported and called **in-process**; the reference twin of seed 29 (same body as its inline block), showing one computation both ways |
 
-Every node kind (AGENT/CODE/MODEL/TOOL/call/map/case/loop/HUMAN_INPUT/WAIT) and every supported
+Every node kind (AGENT/CODE/TOOL/call/map/case/loop/HUMAN_INPUT/WAIT) and every supported
 convention appears in at least one seed. Seed 17 pins blocking HUMAN_INPUT and WAIT's
 absolute UTC deadline surface. Tagged data is modelled as a discriminant record (a `Literal`
 field) routed by `case … on <field>` — the `kind: match` + payload-union design was dropped.

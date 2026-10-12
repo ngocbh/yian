@@ -67,7 +67,7 @@ body:
         - CLI (`yian run` / `yian chat`)
         - Engine / runtime (scheduler, run logs, recovery)
         - Compose (YAML parse / typecheck / build / validate)
-        - Nodes (agent, code, model, tool, case, call, map, loop, human_input, wait)
+        - Nodes (agent, code, tool, case, call, map, loop, human_input, wait)
         - Expr (`${...}` grammar)
         - Typesys (types / variable pool / serialization)
         - LLM clients / providers

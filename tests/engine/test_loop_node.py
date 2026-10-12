@@ -5,6 +5,8 @@ STOP → `Output(carried, commit_as=origin)`; CONTINUE → `Grow(seed=(carried, 
 These test `run`/`respawn` and compile-owned reconstruction directly (no engine); e2e behavior is in
 `test_loop_run.py`.
 """
+import pytest
+
 from yian.compile.expand import build_grow
 from yian.diagnostics import OriginRef
 from yian.memory import MemoryScope
@@ -249,3 +251,25 @@ def test_should_stop_is_the_max_iters_budget():
     assert node.should_stop(2) is False
     assert node.should_stop(3) is True
     assert node.should_stop(4) is True
+
+
+def test_should_stop_without_max_never_stops():
+    node = LoopNode("lp", flow_id="f", child=object(), predicate_kind="while",
+                    predicate="${x}", max_iters=None)
+    assert node.should_stop(0) is False
+    assert node.should_stop(10**9) is False
+
+
+@pytest.mark.parametrize(("kind", "predicate"), [
+    ("while", "not ${exited}"),
+    ("until", "${exited}"),
+])
+def test_unlimited_driver_far_past_any_cap_still_grows(kind, predicate):
+    child = _child_flow()
+    origin = LoopNode("chat_loop", flow_id="ct", child=child, predicate_kind=kind,
+                      predicate=predicate, max_iters=None)
+    origin.params = child.nodes[child.start_id].params
+    driver = origin.respawn(100_000)
+    assert driver.max_iters is None
+    result = driver.run({"messages": [], "exited": False})
+    assert isinstance(result, Grow) and result.seed[1] == 100_000

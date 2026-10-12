@@ -40,6 +40,8 @@ from yian.nodes.ids import map_callsite, ns
 class LoopMaxExceeded(RuntimeError):
     """The while/until runaway guard tripped (the next iteration would reach `max_iters`).
 
+    Raised only when the loop sets `max:`; a while/until loop without one has no limit.
+
     Raised inside `LoopNode.run` so `eval_node` records a located `Failure` whose
     `cause_type` is `"LoopMaxExceeded"` and whose message names the exceeded limit."""
 
@@ -54,7 +56,8 @@ class LoopNode(Node):
       predicate      the boolean source for `while`/`until`, e.g. "not ${exited}" (bare =
                      carried-record scope); None for `times` (no predicate).
       times          the fixed run count when `predicate_kind == "times"`; None otherwise.
-      max_iters      the runaway guard for `while`/`until`; for `times`, equals the count N.
+      max_iters      the runaway guard for `while`/`until` (None = no limit); for `times`, equals
+                     the count N.
       iteration      THIS driver's iteration index `k` (0 on the compiled `L`, `k` on a clone `L~k`).
       origin_id      the origin loop id `L` (== self.id on the compiled node; == `L` on every clone).
     """
@@ -143,13 +146,15 @@ class LoopNode(Node):
           until  — DO-WHILE: STOP when `k >= 1` AND the predicate is TRUE (`k == 0` always continues).
           times  — STOP when `k >= self.max_iters` (`times N` baked as `max_iters`).
         On STOP: `Output(carried, commit_as=self.origin_id)` — generic commit-and-advance under `L`.
-        On CONTINUE: runaway guard (while/until raise `LoopMaxExceeded` if `should_stop(k+1)`),
-        then a `Grow` splicing body_k + `respawn(k+1)`, pruning body_{k-1} + self (except origin)."""
+        On CONTINUE: runaway guard, only when `max:` is set (while/until raise `LoopMaxExceeded`
+        if `should_stop(k)`), then a `Grow` splicing body_k + `respawn(k+1)`, pruning body_{k-1} +
+        self (except origin)."""
         carried = dict(inputs)
         k = self.iteration
         if self._should_stop_now(carried, k):
             return Output(carried, commit_as=self.origin_id)
-        # CONTINUE: runaway guard for predicate loops (times stops via _should_stop_now above).
+        # CONTINUE: runaway guard for predicate loops, only when `max:` is set (times stops via
+        # _should_stop_now above; `should_stop` is False without a max).
         # Guard on `should_stop(k)` (NOT k+1): driver@k grows body_k, so body_k is the (k+1)-th
         # body. It is within budget iff `k < max_iters`; raise once `k >= max_iters`. This makes
         # `max: M` permit exactly M body runs (the loop build documents "max must permit at
@@ -248,7 +253,9 @@ class LoopNode(Node):
     def should_stop(self, iteration: int) -> bool:
         """The loop's hard iteration budget: True once `iteration` has reached `max_iters`.
 
-        Pure, node-owned budget policy (`iteration >= self.max_iters`); assumes `max_iters` was
-        baked at load (`compose.nodes.loop.build`). `run` consults this both as the `times`
-        stop-count and as the `while`/`until` runaway guard."""
+        Pure, node-owned budget policy (`iteration >= self.max_iters`); always False when there is
+        no max (`max_iters is None`), since then there is no budget. `run` consults this both as
+        the `times` stop-count and as the `while`/`until` runaway guard."""
+        if self.max_iters is None:
+            return False
         return iteration >= self.max_iters

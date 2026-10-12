@@ -151,7 +151,7 @@ def test_map_over_a_one_field_record_def_returns_a_list_of_records():
 
 @pytest.mark.parametrize("def_output", ["", "    output: {}\n"], ids=["absent", "empty-record"])
 def test_map_over_a_def_without_fields_is_rejected(def_output):
-    with pytest.raises(LoadError, match="must declare exactly one output value"):
+    with pytest.raises(LoadError, match="must declare a non-empty output:"):
         load_flow(_map_parent(def_output))
 
 
@@ -240,7 +240,7 @@ def test_reading_a_missing_field_of_a_record_child_is_rejected_at_load(def_outpu
 
 def test_direct_child_signature_must_say_it_returns_a_record():
     text = ValueContract(Type.scalar(ValueKind.STRING))
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="at most one output"):
         ChildSignature(
             inputs=[],
             output=combine_output_contracts({"a": text, "b": text}),
@@ -266,6 +266,38 @@ nodes:
         code: |
           return 1
     output: {}
+output: ${lp.output}
+"""
+    with pytest.raises(
+        LoadError, match="whose field names are a subset of the carried record"
+    ):
+        load_flow(text)
+
+
+def test_loop_value_body_re_exporting_an_empty_record_is_rejected():
+    text = """
+id: l
+name: l
+defs:
+  empty:
+    nodes:
+      step:
+        kind: code
+        output: int
+        code: |
+          return 1
+    output: {}
+nodes:
+  lp:
+    kind: loop
+    times: 2
+    input:
+      count: 0
+    nodes:
+      inner:
+        kind: call
+        call: empty
+    output: ${inner.output}
 output: ${lp.output}
 """
     with pytest.raises(

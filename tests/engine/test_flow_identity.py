@@ -2952,7 +2952,7 @@ output: ${c.output}
 
 
 # These pins guard that the value form, an absent output, and multi-field records keep their
-# encoding when END record semantics change; the END-manifest equality above is the primary
+# encoding when END record semantics change; the END-manifest tests above are the primary
 # guard.
 @pytest.mark.parametrize(
     ("output_section", "expected"),
@@ -2975,20 +2975,22 @@ def test_loaded_flow_output_forms_keep_their_fingerprints(output_section, expect
     assert flow_fingerprint(flow) == expected
 
 
-# The fingerprint a one-field record flow had while END unwrapped it to the bare value.
-_UNWRAPPED_ONE_FIELD_FINGERPRINT = (
-    "f7d8bfad939f19e266020b3b43525c5758711d3035c020390329e609d2dd87bf"
-)
+def test_loaded_one_field_record_flow_has_its_pinned_fingerprint():
+    flow = load_flow(_PIN_FLOW % "output:\n  order: ${step.output}\n").compiled
+
+    assert flow_fingerprint(flow) == (
+        "dacabe0326df2af4e935cec6b57bdb3abcdc401c93af076e60c900a553c84203"
+    )
 
 
-def test_loaded_zero_and_one_field_record_flows_get_new_fingerprints():
-    one = flow_fingerprint(load_flow(_PIN_FLOW % "output:\n  order: ${step.output}\n").compiled)
+def test_loaded_zero_and_one_field_records_differ_from_their_value_forms():
+    named = flow_fingerprint(load_flow(_PIN_FLOW % "output:\n  result: ${step.output}\n").compiled)
+    value = flow_fingerprint(load_flow(_PIN_FLOW % "output: ${step.output}\n").compiled)
     empty = flow_fingerprint(load_flow(_PIN_FLOW % "output: {}\n").compiled)
     absent = flow_fingerprint(load_flow(_PIN_FLOW % "").compiled)
 
-    assert one != _UNWRAPPED_ONE_FIELD_FINGERPRINT
+    assert named != value
     assert empty != absent
-    assert one != empty
 
 
 def test_call_over_a_single_node_def_keeps_its_fingerprint():

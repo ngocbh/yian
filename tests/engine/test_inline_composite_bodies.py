@@ -2982,7 +2982,7 @@ output: ${each.output}
 
     message = str(caught.value)
     assert "map node 'each': inline body of node 'each'" in message
-    assert "must declare exactly one output value" in message
+    assert "must declare a non-empty output:" in message
     assert INLINE_FLOW_PREFIX not in message
 
 

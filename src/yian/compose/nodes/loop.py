@@ -209,12 +209,10 @@ class LoopDescriptor(NodeDescriptor):
         # The `'a -> 'a` FIELD-NAME contract (types are the loader pass). The carried record's
         # keys are the seed input names. The body OUTPUT field NAMES must be a subset of them
         # (an omitted field carries over); the body INPUT NAMES must be a subset too (it reads
-        # a subset of the carried record). A body whose output has no known fields is rejected,
-        # and so is a record body (`output: {}`) that declares none.
+        # a subset of the carried record). A body must return at least one carried field, so an
+        # output with no known fields or an empty record is rejected.
         carried = set(self.inputs or {})
-        out_names = _contract_field_names(sig.output)
-        if sig.returns_record and not out_names:
-            out_names = None
+        out_names = _contract_field_names(sig.output) or None
         bare_hint = (
             "; a single declared output returns its value bare, so to return one field make "
             "the body `output:` a whole reference to a node with a record output"

@@ -1689,10 +1689,12 @@ def _node_manifest(
     if node.kind is NodeKind.START:
         pass
     elif node.kind is NodeKind.END:
-        manifest["mode"] = node._mode
+        # A VALUE terminal keeps the encoding a one-input (or input-free) record END had, so
+        # flows written `output: ${x}` or with no output keep their fingerprints.
+        manifest["mode"] = "list" if node._mode == "list" else "record"
         manifest["names"] = (
             _canonical_sequence(node._names, ctx, f"{path}.names")
-            if node._mode == "record"
+            if node._mode != "list"
             else None
         )
         manifest["n"] = node._n if node._mode == "list" else None

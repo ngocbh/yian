@@ -236,7 +236,7 @@ def test_end_post_assert_reads_output() -> None:
     def _make_flow(post_assert: str) -> CompiledFlow:
         start = StartNode(START_ID, params=[])
         n = FuncNode("n", lambda p: 5)
-        end = EndNode.record(END_ID, output_names=["result"])
+        end = EndNode.value(END_ID, output_name="result")
         end.post_asserts = [Assertion(post_assert, post_assert)]
         nodes = {START_ID: start, "n": n, END_ID: end}
         edges = [

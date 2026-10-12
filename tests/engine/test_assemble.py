@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from yian.compile.model import END_ID, START_ID
+from yian.compile.model import END_ID, START_ID, FlowOutput
 from yian.diagnostics import SourceRange
 from yian.typesys.types import read_typedefs
 from yian.typesys.values import Type, ValueKind
@@ -462,6 +462,27 @@ def test_assembled_edges_have_start_and_end():
     full = edges + boundary_edges
     assert any(e.from_ == START_ID for e in full)
     assert any(e.to == END_ID for e in full)
+
+
+def test_boundary_end_without_record_flag_follows_output_count():
+    two = [FlowOutput("a", "${x.output}"), FlowOutput("b", "${x.output}")]
+    one = [FlowOutput("result", "${x.output}")]
+
+    nodes, _, _ = synthesize_boundary_graph([], two, {"x"}, [])
+    assert nodes[END_ID].returns_record is True
+    nodes, _, _ = synthesize_boundary_graph([], one, {"x"}, [])
+    assert nodes[END_ID].returns_record is False
+    nodes, _, _ = synthesize_boundary_graph([], [], {"x"}, [])
+    assert nodes[END_ID].returns_record is False
+
+
+def test_boundary_end_record_flag_picks_the_mode():
+    one = [FlowOutput("order", "${x.output}")]
+
+    nodes, _, _ = synthesize_boundary_graph([], one, {"x"}, [], record=True)
+    assert nodes[END_ID].returns_record is True
+    nodes, _, _ = synthesize_boundary_graph([], one, {"x"}, [], record=False)
+    assert nodes[END_ID].returns_record is False
 
 
 # --------------------------------------------------------------------------- #

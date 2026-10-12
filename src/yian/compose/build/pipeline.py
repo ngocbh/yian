@@ -90,9 +90,8 @@ from yian.compose.helpers.types import (
 from yian.compose.validate.handles import check_case_handles
 from yian.compose.validate.asserts import validate_node_asserts
 
-# Name for the single output of a bare whole-string `output:` binding. With one
-# `FlowOutput`, the record-mode EndNode returns the bare resolved value, so the name
-# only labels the carrier.
+# Name for the single output of a bare whole-string `output:` binding. The value-mode
+# EndNode returns the bare resolved value, so the name only labels the carrier.
 _SINGLE_OUTPUT_NAME = "result"
 
 _PRESENTATION_UNAVAILABLE_NOTE = "Source presentation was unavailable."
@@ -614,13 +613,12 @@ def _stamp_node_wiring_origins(
 
 
 def _flow_outputs(outputs) -> list[FlowOutput]:
-    """Read the flow `output:` section into carriers for the record-mode EndNode.
+    """Read the flow `output:` section into carriers for the boundary EndNode.
 
-    A name -> binding map becomes one `FlowOutput` per entry
-    (>=2 -> END returns an object keyed by name); a bare whole-string
-    binding (`${note.output}`) is one output named `result` (1 ->
-    END returns the bare value). A `None` section -> no declared outputs
-    (END returns `None`).
+    A name -> binding map becomes one `FlowOutput` per entry (a record-mode
+    END); a bare whole-string binding (`${note.output}`) is one output named
+    `result` (a value-mode END returns the bare value). A `None` section -> no
+    declared outputs (a value-mode END returns `None`).
 
     Args:
         outputs (`dict | str | None`):
@@ -1387,6 +1385,7 @@ def _assemble(
         node_ids,
         structural,
         lowered=lowered,
+        record=isinstance(outputs_section, dict),
     )
     nodes.update(boundary_nodes)
     flow_wiring.update(boundary_wiring)

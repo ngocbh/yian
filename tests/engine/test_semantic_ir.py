@@ -60,7 +60,7 @@ def _origin(key: str) -> OriginRef:
 def _manifest_fragment(value: object, *, key: str = "result") -> Flow:
     """Return a topology-only flow whose terminal wiring contains ``value``."""
     start = StartNode("entry", params=[])
-    end = EndNode.record("terminal", output_names=[key])
+    end = EndNode.value("terminal", output_name=key)
     return Flow(
         nodes={"entry": start, "terminal": end},
         edges=[Edge("entry->terminal", "entry", "terminal", input_group=key)],
@@ -73,7 +73,7 @@ def _manifest_fragment(value: object, *, key: str = "result") -> Flow:
 def _manifest_compiled_output(value: object) -> CompiledFlow:
     """Return a compiled flow whose declared output metadata contains ``value``."""
     start = StartNode(START_ID, params=[])
-    end = EndNode.record(END_ID, output_names=["result"])
+    end = EndNode.value(END_ID, output_name="result")
     return CompiledFlow.from_parts(
         nodes={START_ID: start, END_ID: end},
         edges=[Edge("boundary", START_ID, END_ID, ordering=True)],

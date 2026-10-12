@@ -278,7 +278,7 @@ def test_owner_context_root_default_is_owned_once_by_accepted_start():
     from yian.runtime.backward import compute_backward
 
     start = StartNode(START_ID, params=[Parameter("topic", has_default=True, default="reef")])
-    end = EndNode.record(END_ID, output_names=["answer"])
+    end = EndNode.value(END_ID, output_name="answer")
     engine, memories, stacks = _owner_engine(_graph([start, end], [(START_ID, END_ID)],
                                                   wiring={END_ID: {"answer": "${input.topic}"}}))
     list(engine.run())

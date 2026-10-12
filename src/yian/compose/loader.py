@@ -1242,7 +1242,7 @@ def _load_single_node_def(
                 or _source_child(def_cursor, "inputs")
             ),
             nodes_cursor=nodes_cursor,
-            outputs_section={"result": f"${{{name}.output}}"},  # single value re-export (node-first)
+            outputs_section=f"${{{name}.output}}",  # single value re-export (node-first)
             asserts_section=[],
             registry=registry,
             scope=scope,

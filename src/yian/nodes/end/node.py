@@ -3,8 +3,10 @@
 The loader synthesizes ONE EndNode per flow as its single terminal; the engine's run result is
 END_ID's committed value.
 
-Two modes:
-- RECORD (a flow's `output:`): params one per declared output; `run` uses arity
+Three modes:
+- VALUE (a flow's `output: ${x}`, or no `output:`): at most one param; `run` returns
+  inputs[name], or None without a name.
+- RECORD (a flow's `output: {...}`): params one per declared output; `run` uses arity
   0 -> None, 1 -> bare inputs[name], >=2 -> {name: inputs[name]}.
 - LIST (a MAP fan-in): params e0..e{n-1}, each <- a MAP element's child
   END_ID; `run` -> Output([inputs[ei]...]) in over order (index); n=0 -> [].
@@ -28,9 +30,11 @@ class EndNode(Node):
     """
     The flow's return boundary — internal-only, loader-synthesized.
 
-    One per flow (the single terminal); the run result is this node's committed value. RECORD mode
-    (a flow's `output:`) reproduces arity — 0 inputs -> None, 1 -> the bare value, >=2 -> a keyed
-    dict; LIST mode (a MAP fan-in) joins the element outputs into a list in `over` order. Use the
+    One per flow (the single terminal); the run result is this node's committed value. VALUE mode
+    (a flow's `output: ${x}`, or no `output:`) returns its one input, or `None` without one;
+    RECORD mode (a flow's `output: {...}`) reproduces arity — 0 inputs -> None, 1 -> the bare
+    value, >=2 -> a keyed dict; LIST mode (a MAP fan-in) joins the element outputs into a list in
+    `over` order. Use the [`value`][yian.nodes.end.node.EndNode.value] /
     [`record`][yian.nodes.end.node.EndNode.record] /
     [`list_`][yian.nodes.end.node.EndNode.list_] factories rather than the ctor.
 
@@ -38,14 +42,17 @@ class EndNode(Node):
         node_id (`str`):
             The node's id (`ID` at top level; deep-namespaced in a child).
         output_names (`list[str]`, *optional*, defaults to `None`):
-            RECORD mode: one param per declared output. Mutually exclusive with `n`.
+            RECORD or VALUE mode: one param per declared output. Mutually exclusive with `n`.
         n (`int`, *optional*, defaults to `None`):
             LIST mode: the element count. Mutually exclusive with `output_names`.
         title (`str`, *optional*, defaults to `None`):
             Display title.
+        value (`bool`, *optional*, defaults to `False`):
+            With `output_names`, selects VALUE mode instead of RECORD mode.
 
     Raises:
-        ValueError: If not exactly one of `output_names` / `n` is given.
+        ValueError: If not exactly one of `output_names` / `n` is given, or if `value` is set
+            with more than one output name or without `output_names`.
     """
 
     kind = NodeKind.END
@@ -57,20 +64,42 @@ class EndNode(Node):
     ID = "__end__"
 
     def __init__(self, node_id: str, *, output_names: Optional[list[str]] = None,
-                 n: Optional[int] = None, title: Optional[str] = None) -> None:
-        # Exactly one of `output_names` (record mode) / `n` (list mode). Use the `record`/`list_`
-        # factories rather than this ctor directly.
+                 n: Optional[int] = None, title: Optional[str] = None,
+                 value: bool = False) -> None:
+        # Exactly one of `output_names` (value/record mode) / `n` (list mode). Use the
+        # `value`/`record`/`list_` factories rather than this ctor directly.
         super().__init__(node_id, title=title)
         if (output_names is None) == (n is None):
             raise ValueError("EndNode takes exactly one of output_names= (record) or n= (list)")
+        if value and (output_names is None or len(output_names) > 1):
+            raise ValueError("EndNode value mode takes at most one output name")
         if output_names is not None:
-            self._mode = "record"
+            self._mode = "value" if value else "record"
             self._names = list(output_names)
             self.params = [Parameter(name=name) for name in self._names]
         else:
             self._mode = "list"
             self._n = n
             self.params = [Parameter(name=f"e{i}") for i in range(n)]
+
+    @classmethod
+    def value(cls, node_id: str, *, output_name: Optional[str],
+              title: Optional[str] = None) -> "EndNode":
+        """Build a VALUE-mode terminal that returns its one input as the flow's value.
+
+        Args:
+            node_id (`str`):
+                The node's id.
+            output_name (`str`, *optional*):
+                The one param's name, or `None` for a terminal with no params that returns `None`.
+            title (`str`, *optional*, defaults to `None`):
+                Display title.
+
+        Returns:
+            `EndNode`: The VALUE-mode terminal.
+        """
+        names = [] if output_name is None else [output_name]
+        return cls(node_id, output_names=names, title=title, value=True)
 
     @classmethod
     def record(cls, node_id: str, *, output_names: list[str],
@@ -83,7 +112,14 @@ class EndNode(Node):
         """Build a LIST-mode terminal — `n` params (`e0..e{n-1}`) joined as a MAP fan-in."""
         return cls(node_id, n=n, title=title)
 
+    @property
+    def returns_record(self) -> bool:
+        """Whether this terminal is in RECORD mode (a flow's `output: {...}`)."""
+        return self._mode == "record"
+
     def forward(self, inputs: dict) -> Output:
+        if self._mode == "value":
+            return Output(value=inputs[self._names[0]] if self._names else None)
         if self._mode == "record":
             # terminal arity rule: 0 -> None; 1 -> bare; >=2 -> keyed object.
             if not self._names:
@@ -98,19 +134,20 @@ class EndNode(Node):
         """Return actual output contributors, excluding augmented assertion params.
 
         Returns:
-            `tuple[str, ...]`: Stored record output names, or ordered `e0` through
-                `eN` list slots. Empty output layouts have an empty inventory.
+            `tuple[str, ...]`: Stored value or record output names, or ordered `e0`
+                through `eN` list slots. Empty output layouts have an empty inventory.
         """
-        if self._mode == "record":
+        if self._mode != "list":
             return tuple(self._names)
         return tuple(f"e{index}" for index in range(self._n))
 
     def capture_backward_context(self) -> dict:
-        """Capture record arity or ordered list positions before the body executes.
+        """Capture value, record arity or ordered list positions before the body executes.
 
         Returns:
             `dict`: The `input_output_paths` mapping: no paths for zero outputs,
-                `[]` for one bare value, named paths for multiple record outputs,
+                `[]` for one bare value (a VALUE terminal or a one-name record),
+                named paths for multiple record outputs,
                 or indexed paths for a list. Assertion inputs are excluded.
         """
         names = self.backward_input_names()

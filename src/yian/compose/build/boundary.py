@@ -43,13 +43,16 @@ def synthesize_boundary_graph(
     node_ids: "set[str]",
     body_edges: list[Edge],
     lowered: "Optional[LoweredAsserts]" = None,
+    record: Optional[bool] = None,
 ) -> tuple[dict[str, Node], list[Edge], dict[str, dict[str, Any]]]:
     """Synthesize the `START_ID`/`END_ID` boundary nodes + their edges + wiring.
 
     Every flow becomes `START_ID -> body -> END_ID` with ORDINARY edges (the `__start__`/`__end__`
     sentinels are retired — the strings persist only as the reserved node ids). Returns:
 
-    - `boundary_nodes`: `{START_ID: StartNode, END_ID: EndNode(record)}`.
+    - `boundary_nodes`: `{START_ID: StartNode, END_ID: EndNode}` — a RECORD-mode END when
+      `record` is true, a VALUE-mode END when it is false. `None` picks a record for two or more
+      outputs and a value otherwise.
     - `edges`: the END_ID producer edges (one per producer per declared output, `input_group`
       = the output name, `optional = not binding_co_skips` so a coalesce/`:-`/`:?` output
       never co-skips) + the lowered-assert synth END edges (one per producer per synthesized
@@ -72,9 +75,20 @@ def synthesize_boundary_graph(
     wiring entry and a producer edge — so a cross-node post assert's `${producer.output}`
     dependency is STRUCTURAL (a real END input) and survives child cloning. `None` leaves the
     boundary nodes assert-free (a def / in-memory flow with no flow-level asserts).
+
+    Raises:
+        ValueError: If `record` is false and more than one output is given.
     """
     start = StartNode(START_ID, params=input_parameters)
-    end = EndNode.record(END_ID, output_names=[o.name for o in outputs])
+    names = [o.name for o in outputs]
+    if record is None:
+        record = len(names) >= 2
+    if record:
+        end = EndNode.record(END_ID, output_names=names)
+    else:
+        if len(names) > 1:
+            raise ValueError("a value END takes at most one output")
+        end = EndNode.value(END_ID, output_name=names[0] if names else None)
     boundary_nodes: dict[str, Node] = {START_ID: start, END_ID: end}
 
     # END_ID producer edges — one per producer per output, keyed by the output NAME, with the

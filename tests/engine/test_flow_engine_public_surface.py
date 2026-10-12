@@ -127,7 +127,7 @@ def _prepared(
 def _streaming_flow() -> CompiledFlow:
     """Return a small synthetic graph whose middle node exercises streaming."""
     stream = _StreamingNode("stream")
-    end = EndNode.record(END_ID, output_names=["output"])
+    end = EndNode.value(END_ID, output_name="output")
     return CompiledFlow.from_parts(
         nodes={
             START_ID: StartNode(START_ID),

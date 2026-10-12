@@ -184,7 +184,7 @@ def _rich_flow() -> tuple[CompiledFlow, set[str], OriginRef]:
         output_contract=signature_contract,
         origin=_origin("child/body/node"),
     )
-    child_end = EndNode.record(END_ID, output_names=["result"])
+    child_end = EndNode.value(END_ID, output_name="result")
     child_end.origin = _origin("child/end/node")
     child_output = Binding(
         "${child_body.output}",
@@ -215,7 +215,7 @@ def _rich_flow() -> tuple[CompiledFlow, set[str], OriginRef]:
     loop.origin = _origin("root/loop/node")
 
     start = StartNode(START_ID, params=[])
-    end = EndNode.record(END_ID, output_names=["result"])
+    end = EndNode.value(END_ID, output_name="result")
     root_output = Binding("${body.output}", _origin("root/output"))
     flow = CompiledFlow.from_parts(
         nodes={
@@ -846,7 +846,7 @@ def _manifestable_flow() -> CompiledFlow:
     body.post_asserts = [
         Assertion("${output} >= 0", "output >= 0", _origin("manifest/post"))
     ]
-    end = EndNode.record(END_ID, output_names=["result"])
+    end = EndNode.value(END_ID, output_name="result")
     end.origin = _origin("manifest/end")
     output = Binding("${body.output}", _origin("manifest/output"))
     return CompiledFlow.from_parts(

@@ -49,14 +49,14 @@ _CHILD_END = "call/__end__"
 
 def _call_redirect_flow(*, fallback: bool = False) -> CompiledFlow:
     """Return a CALL-shaped child END redirecting output to its logical parent."""
-    child_end = EndNode.record(_CHILD_END, output_names=[])
+    child_end = EndNode.value(_CHILD_END, output_name=None)
     child_end.commit_as = "call"
     nodes = {
         START_ID: StartNode(START_ID),
         "router": FuncNode("router", lambda inputs: inputs),
         _CHILD_END: child_end,
         "call": CallNode("call", flow_id="child"),
-        END_ID: EndNode.record(END_ID, output_names=[]),
+        END_ID: EndNode.value(END_ID, output_name=None),
     }
     edges = [
         Edge(id="start-router", from_=START_ID, to="router"),
@@ -97,10 +97,10 @@ def _map_redirect_flow() -> CompiledFlow:
         nodes={
             START_ID: StartNode(START_ID),
             "router": FuncNode("router", lambda inputs: inputs),
-            child_end_id: EndNode.record(child_end_id, output_names=[]),
+            child_end_id: EndNode.value(child_end_id, output_name=None),
             collector_id: collector,
             "map": MapNode("map", flow_id="child"),
-            END_ID: EndNode.record(END_ID, output_names=[]),
+            END_ID: EndNode.value(END_ID, output_name=None),
         },
         edges=[
             Edge(id="start-router", from_=START_ID, to="router"),
@@ -134,7 +134,7 @@ def _loop_redirect_flow() -> CompiledFlow:
         nodes={
             START_ID: StartNode(START_ID),
             "router": FuncNode("router", lambda inputs: inputs),
-            body_end_id: EndNode.record(body_end_id, output_names=[]),
+            body_end_id: EndNode.value(body_end_id, output_name=None),
             driver_id: LoopNode(
                 driver_id,
                 flow_id="body",
@@ -152,7 +152,7 @@ def _loop_redirect_flow() -> CompiledFlow:
                 max_iters=2,
                 origin_id="loop",
             ),
-            END_ID: EndNode.record(END_ID, output_names=[]),
+            END_ID: EndNode.value(END_ID, output_name=None),
         },
         edges=[
             Edge(id="start-router", from_=START_ID, to="router"),
@@ -182,9 +182,9 @@ def _nested_call_redirect_flow() -> CompiledFlow:
     """Return two CALL output redirects separated by ordinary child wiring."""
     inner_end_id = "outer/inner/__end__"
     outer_end_id = "outer/__end__"
-    inner_end = EndNode.record(inner_end_id, output_names=[])
+    inner_end = EndNode.value(inner_end_id, output_name=None)
     inner_end.commit_as = "outer/inner"
-    outer_end = EndNode.record(outer_end_id, output_names=[])
+    outer_end = EndNode.value(outer_end_id, output_name=None)
     outer_end.commit_as = "outer"
     return CompiledFlow.from_parts(
         nodes={
@@ -194,7 +194,7 @@ def _nested_call_redirect_flow() -> CompiledFlow:
             "outer/inner": CallNode("outer/inner", flow_id="inner"),
             outer_end_id: outer_end,
             "outer": CallNode("outer", flow_id="outer"),
-            END_ID: EndNode.record(END_ID, output_names=[]),
+            END_ID: EndNode.value(END_ID, output_name=None),
         },
         edges=[
             Edge(id="start-router", from_=START_ID, to="router"),
@@ -379,7 +379,7 @@ def test_multiple_redirect_owners_are_rejected_before_skip() -> None:
             "first": first,
             "second": second,
             "target": FuncNode("target", lambda inputs: inputs),
-            END_ID: EndNode.record(END_ID, output_names=[]),
+            END_ID: EndNode.value(END_ID, output_name=None),
         },
         edges=[
             Edge(id="start-router", from_=START_ID, to="router"),
@@ -424,7 +424,7 @@ def test_live_redirect_target_is_rejected_before_skip() -> None:
             "router": FuncNode("router", lambda inputs: inputs),
             "owner": owner,
             "target": FuncNode("target", lambda inputs: inputs),
-            END_ID: EndNode.record(END_ID, output_names=[]),
+            END_ID: EndNode.value(END_ID, output_name=None),
         },
         edges=[
             Edge(id="start-router", from_=START_ID, to="router"),

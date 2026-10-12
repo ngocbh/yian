@@ -1,3 +1,5 @@
+import pytest
+
 from yian.nodes.base import NodeKind, Output
 from yian.nodes.contracts import Assertion, Parameter
 from yian.nodes.end import EndNode
@@ -27,6 +29,35 @@ def test_end_record_two_outputs_returns_keyed_object():
 def test_end_record_params_are_output_names():
     node = EndNode.record("__end__", output_names=["report", "n"])
     assert [p.name for p in node.params] == ["report", "n"]
+
+
+# --- VALUE mode (a flow's `output: ${x}`, or no output) — returns the one value or None.
+def test_end_value_returns_the_bare_value():
+    node = EndNode.value("__end__", output_name="only")
+    assert [p.name for p in node.params] == ["only"]
+    assert node.returns_record is False
+    assert node.run({"only": 42}).value == 42
+
+
+def test_end_value_without_a_name_has_no_params_and_returns_none():
+    node = EndNode.value("__end__", output_name=None)
+    assert node.params == []
+    assert node.run({}).value is None
+
+
+def test_end_value_captures_the_whole_output_path():
+    node = EndNode.value("__end__", output_name="only")
+    assert node.backward_input_names() == ("only",)
+    assert node.capture_backward_context() == {"input_output_paths": {"only": []}}
+
+
+def test_end_record_returns_record():
+    assert EndNode.record("__end__", output_names=["a", "b"]).returns_record is True
+
+
+def test_end_value_rejects_more_than_one_name():
+    with pytest.raises(ValueError):
+        EndNode("__end__", output_names=["a", "b"], value=True)
 
 
 # --- LIST mode (the MAP fan-in) — replaces COLLECTOR; join in over order (index).

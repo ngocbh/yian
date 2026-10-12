@@ -24,7 +24,7 @@ def _flow(*, sibling=False):
         nodes={
             START_ID: StartNode(START_ID),
             "agent": node,
-            END_ID: EndNode.record(END_ID, output_names=[]),
+            END_ID: EndNode.value(END_ID, output_name=None),
         },
         edges=[
             Edge(id="start-agent", from_=START_ID, to="agent"),

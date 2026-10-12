@@ -36,7 +36,11 @@ def _child(outputs, *, tail_reads=None, inputs=("topic",)) -> CompiledFlow:
                        tail_reads or {"r": "${head.output.r}"})
     parameters = [_parameter(name) for name in inputs]
     start = StartNode(START_ID, params=parameters)
-    end = EndNode.record(END_ID, output_names=[o.name for o in outputs])
+    # These Python-API tests use a single output as a value; two or more form a record.
+    if len(outputs) <= 1:
+        end = EndNode.value(END_ID, output_name=outputs[0].name if outputs else None)
+    else:
+        end = EndNode.record(END_ID, output_names=[o.name for o in outputs])
     nodes = {START_ID: start, "head": head, "tail": tail, END_ID: end}
     edges = [
         Edge(id="__start__->head#0", from_=START_ID, to="head", input_group="topic"),
@@ -311,7 +315,7 @@ def _run_end(end, pool):
 def _tail_assert_end():
     # An END whose post-assert reads a SYNTH PARAM bound into the record from `${each/tail.output}`,
     # modeled on the lowered shape in test_clone_child_lowered_post_asserts_survive_clone above.
-    end = EndNode.record("each/__end__", output_names=["out"])
+    end = EndNode.value("each/__end__", output_name="out")
     end.post_asserts = [
         Assertion("${__assert_tail} != ''", "${each/tail.output} != ''")
     ]

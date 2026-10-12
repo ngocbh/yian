@@ -235,7 +235,7 @@ def _source_free_failure_flow() -> ComposedFlow:
     nodes = {
         START_ID: StartNode(START_ID),
         "fail": CodeNode("fail", code="tests.engine._compose_codefns:boom"),
-        END_ID: EndNode.record(END_ID, output_names=[]),
+        END_ID: EndNode.value(END_ID, output_name=None),
     }
     compiled = CompiledFlow.from_parts(
         nodes,

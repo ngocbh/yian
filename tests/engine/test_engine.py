@@ -266,7 +266,7 @@ def test_data_edged_branch_target_does_not_run_when_skipped():
     ]
     node_map = {n.id: n for n in nodes}
     node_map[START_ID] = StartNode(START_ID, params=[])
-    node_map[END_ID] = EndNode.record(END_ID, output_names=[])
+    node_map[END_ID] = EndNode.value(END_ID, output_name=None)
     g = CompiledFlow.from_parts(node_map, edges)
     engine = _engine(g)
     events = _run(engine)

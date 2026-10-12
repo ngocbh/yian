@@ -105,7 +105,11 @@ def test_start_projects_named_delivered_inputs_including_defaults_but_not_absenc
      {"left": ["left"], "right": ["right"]}),
 ])
 def test_end_projects_its_zero_one_and_many_output_layouts(names, inputs, feedback, expected, paths):
-    node = EndNode.record("end", output_names=names)
+    node = (
+        EndNode.record("end", output_names=names)
+        if len(names) >= 2
+        else EndNode.value("end", output_name=names[0] if names else None)
+    )
     node.params.append(Parameter("assertion_input"))
     delivered = {**inputs, "assertion_input": "diagnostic-only"}
     context = _context(node, delivered, node.forward(delivered).value)
@@ -140,7 +144,7 @@ def test_list_end_keeps_whole_list_text_unchanged_and_records_each_output_positi
 
 
 def test_end_backward_uses_captured_layout_after_live_node_fields_change():
-    node = EndNode.record("end", output_names=["result"])
+    node = EndNode.value("end", output_name="result")
     inputs = {"result": {"nested": "answer"}}
     context = _context(node, inputs, node.forward(inputs).value)
     node._names[:] = ["changed", "fields"]
@@ -196,8 +200,8 @@ def test_failed_boundaries_forward_text_only_when_inputs_and_layout_were_capture
 
 
 def test_successful_null_output_is_a_bare_contributor_but_zero_output_has_none():
-    one = EndNode.record("one", output_names=["result"])
-    zero = EndNode.record("zero", output_names=[])
+    one = EndNode.value("one", output_name="result")
+    zero = EndNode.value("zero", output_name=None)
     assert one.backward(_context(one, {"result": None}, None), ("Review null.",)).input_feedback == {
         "result": ("Review null.",),
     }
@@ -292,7 +296,7 @@ def test_static_capture_exception_escapes_unchanged_and_capture_off_calls_no_hoo
 
 @pytest.mark.parametrize("output,path", [({"actual": 1}, ["missing"]), ({"actual": 1}, [0]), ([1], [1])])
 def test_structural_output_paths_must_exist_in_the_available_accepted_output(output, path):
-    node = EndNode.record("end", output_names=["result"])
+    node = EndNode.value("end", output_name="result")
     context = BackwardContext(
         {"result": 1}, input_names=("result",), output=output,
         node_data={"input_output_paths": {"result": path}},
@@ -307,7 +311,7 @@ def test_static_layout_is_captured_before_a_preassert_failure_after_defaults():
     from yian.runtime.trace import capture_bindings
     from yian.typesys.pool import VariablePool
 
-    node = EndNode.record("end", output_names=["result"])
+    node = EndNode.value("end", output_name="result")
     node.params = [Parameter("result", has_default=True, default={"items": [1]})]
     node.pre_asserts = [Assertion("false", "reject before body")]
     evaluated = eval_node(node, None, VariablePool(), capture_bindings=True)

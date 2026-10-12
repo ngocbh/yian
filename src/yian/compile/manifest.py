@@ -124,6 +124,7 @@ _KIND_FIELDS: dict[NodeKind, frozenset[str]] = {
             "times",
             "max_iters",
             "iteration",
+            "returned_fields",
         }
     ),
 }
@@ -1783,6 +1784,9 @@ def _node_manifest(
                     "times": _canonical_value(node.times, ctx, f"{path}.times"),
                 }
             )
+            # Omitted for a total loop so its fingerprint and expansion digests stay unchanged.
+            if node.returned_fields is not None:
+                manifest["returned_fields"] = list(node.returned_fields)
     else:  # pragma: no cover - _check_node_fields exhausts the closed enum first
         raise ValueError(f"{path}: unsupported node kind {node.kind.value!r}")
 

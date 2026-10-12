@@ -187,9 +187,10 @@ output: ${c.output.order}
 def test_case_then_call_over_a_one_field_record_def_returns_the_record():
     nodes = """  fallback:
     kind: code
-    output: str
+    output:
+      order: str
     code: |
-      return "never"
+      return {"order": "never"}
   route:
     kind: case
     cases:

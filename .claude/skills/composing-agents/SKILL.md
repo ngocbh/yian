@@ -94,8 +94,8 @@ kind: agent
 prompt: "Write a warm one-sentence greeting to ${name}."
 ```
 
-Allowed only for the **leaf kinds** (`agent`, `code`, `model`, `tool`,
-`human_input`) — `case`/`call`/`map`/`loop` need the full `nodes:` form. See
+Allowed only for the **leaf kinds** (`agent`, `code`, `tool`, `human_input`) —
+`case`/`call`/`map`/`loop` need the full `nodes:` form. See
 [`templates/compact.yaml`](templates/compact.yaml).
 
 ## References — how you wire values
@@ -193,7 +193,7 @@ switches it to **structured generation** — the engine derives a schema from
 JSON fallback for providers that lack it), validated at the write boundary and
 retried up to `retries:` times (default 2) on deviation. A root `Literal[...]`
 returns its bare tag to the flow.
-Use a downstream `code`/`model` node only for deterministic post-processing. To give
+Use a downstream `code` node only for deterministic post-processing. To give
 an AGENT node ordinary tools: `tools: [tool_id, ...]` (requires `mode: tool_calling`).
 A `tools:` name may also be a host-filled tool group (see "Tool groups" below).
 To set who the model is: `system_prompt: "You are ${name}, ${title}."`. It
@@ -373,9 +373,8 @@ name (or a group tool's name is a top-level key), or a group has a tool named
 `ask_user` or `load_skill`; the handler stays the top-level `ask_user` entry. `yian run`
 fills no groups, so such flows need a Python host. Pass groups again to `resume_flow`;
 restarted nodes use the contents passed there.
-Note `tool` uses `tool_id:` + `input:` (a tool declares no `output:`). (`model` —
-`kind: model`, `model_id:` — is a parseable kind but the serving seam isn't wired
-yet; running one raises.)
+Note `tool` uses `tool_id:` + `input:` (a tool declares no `output:`). ML inference
+goes through a host tool (`kind: tool`); `kind: model` was removed.
 
 ### `case` — branching (routes only; no `input:`)
 Exactly one branch runs; the others skip (their refs resolve to null). **Join the

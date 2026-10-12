@@ -44,6 +44,7 @@ just what can.
 | `e06-type-mismatch-ref.yaml` | a `float` bound to a called child's `str` input | cross-flow signature compatibility |
 | `e09-unknown-top-level-key.yaml` | an unknown top-level section key (`extra='forbid'`) | strict top-level schema |
 | `e10-unknown-node-kind.yaml` | a node `kind:` outside the closed set | closed `NodeKind` |
+| `e42-removed-model-kind.yaml` | `kind: model`, a removed kind; the error points at `kind: tool` | removed-kind pointer |
 | `e11-field-not-allowed.yaml` | a flat field illegal for the kind (`prompt` on a `code`) | per-kind body shape |
 | `e12-missing-required-field.yaml` | a kind-required field omitted (`code` w/o `code:`) | per-kind body shape |
 | `e13-bad-type-expression.yaml` | a malformed type expression (`output: list[`) | the `ast` type parser |

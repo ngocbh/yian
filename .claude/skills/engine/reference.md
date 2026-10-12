@@ -274,9 +274,7 @@ Kind-specific diagnostics stay with their kind.
 
 | Authorable kinds | Internal-only (loader-synthesized) |
 |------------------|------------------------------------|
-| `AGENT`, `CODE`, `MODEL`*, `TOOL`, `CASE`, `HUMAN_INPUT`, `WAIT`, `CALL`, `MAP`, `LOOP` | `START`, `END` |
-
-\* `MODEL` parses but `run` raises because no ML-serving implementation is wired.
+| `AGENT`, `CODE`, `TOOL`, `CASE`, `HUMAN_INPUT`, `WAIT`, `CALL`, `MAP`, `LOOP` | `START`, `END` |
 
 ## Durable execution contract
 

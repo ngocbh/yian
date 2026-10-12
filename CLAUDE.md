@@ -2,7 +2,7 @@
 
 ## Project
 
-Yian builds and runs workflows of agents, code, models, and tools. A
+Yian builds and runs workflows of agents, code, and tools. A
 flow is written as Docker-Compose-shaped YAML, compiled to a typed form, and run
 by this project’s own scheduler. The main interface is the `yian` CLI.
 

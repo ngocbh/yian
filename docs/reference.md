@@ -315,8 +315,6 @@ and END boundaries synthesized by the loader.
 
 ::: yian.nodes.code.node.CodeNode
 
-::: yian.nodes.model.node.ModelNode
-
 ::: yian.nodes.tool.node.ToolNode
 
 ::: yian.nodes.case.node.CaseNode

@@ -304,8 +304,8 @@ prove `bool`. This is the shape `yian chat` runs; see `chat.yaml` (and
   body is flat.
 - **`call:` resolves defs-first, else a `uses:` alias** (a sibling file by name on
   the search path). `alias@v1` adds a version guard.
-- **MODEL nodes aren't wired** — `kind: model` parses but running one raises. Use
-  `code` for deterministic compute.
+- **No `kind: model`** — removed; serve ML inference behind a host tool and call it
+  with `kind: tool`. Use `code` for deterministic compute.
 - **`loop` bodies must be `'a -> 'a`.** The body's `output:` shape must EQUAL the
   loop's `input:` (carried record) and read only a subset of its names — checked at
   build (names) and load (types). Give EXACTLY ONE driver: `while:` (pre-check,

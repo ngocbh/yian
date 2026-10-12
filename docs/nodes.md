@@ -102,7 +102,7 @@ what `run` returns:
    LEAF  (is_spawner=False)                 SPAWNER  (is_spawner=True)
    run → Output | Route                     run → Grow(seed) | Output
    one unit of work:                        may expand into __start__ → children → __end__
-   agent, code, model, tool, case,           call, map, loop
+   agent, code, tool, case,                  call, map, loop
    human_input, wait, start, end
 ```
 

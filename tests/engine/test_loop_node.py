@@ -229,8 +229,6 @@ def test_later_loop_growth_does_not_duplicate_the_loop_origin():
 
 
 def test_runaway_guard_raises_loop_max_exceeded():
-    import pytest
-
     from yian.nodes.base import Grow
     from yian.nodes.loop.node import LoopMaxExceeded
     child = _child_flow()

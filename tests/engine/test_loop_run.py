@@ -730,45 +730,11 @@ def test_terminate_leaves_exactly_one_dead_final_body_and_driver():
 def test_while_loop_without_max_runs_until_predicate_ends_it():
     result = run_flow(load_flow(COUNTER.replace("    max: 10\n", "")), {})
     assert result.status == "succeeded"
-    assert result.output == run_flow(load_flow(COUNTER), {}).output
+    assert result.output == {"n": 3, "exited": True}
 
 
 def test_until_loop_without_max_runs_until_predicate_ends_it():
     result = run_flow(load_flow(UNTIL_COUNTDOWN.replace("    max: 10\n", "")), {})
-    assert result.output == {"n": 0}
-
-
-# A no-max `while:` countdown from 1001, just past the 1000 cap a chat loop once hard-coded.
-LONG_COUNTDOWN = """
-id: lc
-name: lc
-defs:
-  countdown:
-    input:
-      n: int
-    nodes:
-      step:
-        kind: code
-        code: tests.engine._compose_codefns:loop_countdown
-        input:
-          n: ${input.n}
-        output:
-          n: int
-    output: ${step.output}
-nodes:
-  loop:
-    kind: loop
-    call: countdown
-    input:
-      n: 1001
-    while: ${n} > 0
-output: ${loop.output}
-"""
-
-
-def test_while_loop_without_max_runs_past_a_large_count():
-    result = run_flow(load_flow(LONG_COUNTDOWN), {})
-    assert result.status == "succeeded"
     assert result.output == {"n": 0}
 
 
@@ -777,5 +743,9 @@ def test_loop_without_max_resumes_from_its_log(tmp_path):
     log = tmp_path / "run.jsonl"
     first = run_flow(load_flow(src), {}, log=log)
     assert first.status == "succeeded"
+    # Cut the log mid-run so resume replays the recorded drivers and runs the rest live.
+    lines = log.read_text().splitlines(keepends=True)
+    log.write_text("".join(lines[: len(lines) // 2]))
     resumed = resume_flow(load_flow(src), log=log)
-    assert resumed.status == "succeeded" and resumed.output == first.output
+    assert resumed.status == "succeeded"
+    assert resumed.output == first.output

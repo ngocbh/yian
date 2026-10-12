@@ -32,7 +32,9 @@ x-…:             # optional — extension keys, ignored by the engine
 
 - **`input:`** is the parameter signature (source side — types). **`output:`** is the return
   (sink side — bindings). Because `output:` can bind from several nodes, multi-output flows are
-  natural (the flow returns one object); there is no single-terminal rule.
+  natural (the flow returns one object); there is no single-terminal rule. `output: ${x}`
+  returns that value as is; `output: { … }` returns an object keyed by name, even with one
+  field (`{}` returns `{}`).
 - Flow-input refs are `${input.X}`. The return is never referenced — nothing reads the "output
   node" (there isn't one).
 

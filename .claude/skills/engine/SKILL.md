@@ -237,8 +237,11 @@ this model whenever you design anything:
   of inheriting a reference leaf's type; inline-composite input inference stays
   strict and separate, but may project an exact known field from a partial producer.
   Direct whole references and `ChildSignature.output` preserve either output-contract
-  arm. Multi-output assembly creates an exact record when possible and otherwise a
-  closed `PartialRecordContract`; unknown type evidence is never concrete `None`.
+  arm. END is a value (`output: ${x}`, or no output: one input or `None`), a record
+  (`output: {...}`: always a dict keyed by every name, even one or none), or a MAP
+  fan-in list; `ChildSignature.returns_record` tells CALL/LOOP which. Record assembly
+  creates an exact record when possible and otherwise a closed
+  `PartialRecordContract`; unknown type evidence is never concrete `None`.
   CALL preserves that carrier; a LOOP's carrier is the merged carried record (returned
   fields from the body, omitted fields from their seeds); MAP wraps only an exact child
   type. Live commit,

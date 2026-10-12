@@ -461,7 +461,7 @@ builders, child signatures, producer maps, and validators retain the complete
 shared `compose/helpers/output_contracts.py` preserves exact or partial whole-value
 references, projects independently proven fields, assigns source-free contracts to
 results proven by `expr.infer_expr_type`, and keeps unsupported computations opaque.
-Multi-output assembly produces an exact record when every field is exact, otherwise a
+Record assembly produces an exact record when every field is exact, otherwise a
 closed `PartialRecordContract` with the proven siblings. `ChildSignature.output` follows
 the child's END: a record (`output: {...}`, even with one field or none) gets the record
 contract keyed by every name, a value (`output: ${x}`) re-exports that binding's contract,
@@ -733,7 +733,8 @@ preserves the recorded route and stopping boundary. An opaque projection with
 unavailable parent shape retains its selected feedback and path without inventing
 parent fields or list lengths; literals still stop without opaque-stop evidence.
 Structural backward uses the recorded invocation layout: START maps named inputs,
-END preserves its zero/one/many output arity or ordered list slots, and a stopping
+END follows its layout (a value maps its one input to path `[]`, a record maps each
+field to `[name]`, and a MAP fan-in list maps each slot to its index), and a stopping
 LOOP routes its carried record. `backward_input_names()` supplies each node's
 eligible input inventory: END uses its stored output names or list slots, and
 CASE excludes its generated control parameters. Assertion-only parameters do not

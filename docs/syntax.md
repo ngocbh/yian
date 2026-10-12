@@ -18,12 +18,26 @@ description: ...           # optional, one line
 typedefs: { ... }          # optional — named/composed types
 input:   { ... }           # parameters — typed
 nodes:   { ... }           # body — a map keyed by node id
-output:  { ... }           # return — bindings (one value, or a multi-field object)
+output:  { ... }           # return — one value `${x}`, or a record `{name: ${x}, ...}`
 asserts: [ ... ]           # optional — boolean invariants
 ```
 
 There is **no `edges:` block**, no `__start__`/`__end__`, no per-node `id:`, and
 no body wrappers — a node body is flat.
+
+The shape of `output:` sets what the flow returns:
+
+- `output: ${x}` (one binding string) returns the value of `x` as is.
+- `output: {name: ${x}, ...}` returns a record keyed by name. This holds for any
+  number of fields: `output: {order: ${x}}` returns `{order: x}`, and `output: {}`
+  returns `{}`. A caller reads a field by name, as in `${child.output.order}`.
+- No `output:`, or `output: null`, returns `null`.
+
+A record with one field used to return its bare value, and `output: {}` used to
+return `null`. If a flow relied on that, write `output: ${x}` instead. A flow whose
+`output:` is a record of zero or one field, or that embeds such a child, now has a
+new fingerprint. Its runs recorded before this change can't be resumed or replayed;
+they fail the fingerprint check.
 
 Node IDs are the keys under `nodes:`. They cannot contain `.`, `#`, or `/`:
 `.` separates the node name from `output` and its field path in a reference,
@@ -846,8 +860,9 @@ each:
 ```
 
 The `input:` map contains the child's arguments. A `call` re-exports the child's
-output (`None` when the child declares no output value); a `map` requires one
-child output value and returns `list[U]` in `over:` order.
+output (`None` when the child declares no output value); a `map` requires a
+non-empty child `output:` and returns `list[U]` in `over:` order. A child whose
+`output:` is a record, even of one field, maps to a list of records.
 `parallel:` is accepted but currently inert; MAP concurrency is controlled by
 the run's `num_workers`, while collection order remains the `over:` order.
 
@@ -895,8 +910,9 @@ Inline-body rules:
 - Write **exactly one** of `call:` or `nodes:`. Inline `nodes:` must be a
   non-empty mapping and requires `output:`; `output:` is not valid beside a
   named `call:`. The key itself is required: CALL may use `output: null` and
-  return `None`, while MAP requires one output value and LOOP requires a record
-  of carried fields.
+  return `None`, while MAP requires a non-empty output and LOOP requires at least
+  one carried field. As in any flow, `output: {...}` returns a record, even with
+  one field.
 - The outer composite `input:` is still the argument map. Its keys become the
   anonymous child's typed input parameters, and the body reads them as
   `${input.<key>}`.
@@ -1046,11 +1062,9 @@ returns the whole carried record.
   field to null. When the seed is typed, the returned field's type must accept it: a
   producer typed `Optional[str]` fits an `Optional[str]` seed. A literal `${null}` is
   typed `None`, and an `Optional[str]` seed does not fit `None`, so that load fails.
-- **One field needs a record node.** A body with exactly one declared output returns
-  that value bare, so `output: {done: ...}` alone is not a record and is rejected,
-  as is an empty `output: {}`. To return one field, make the body `output:` a whole
-  reference to a node with a record output, such as `output: ${step.output}` where
-  `step` declares `output: {done: bool}`.
+- **A body may return one field:** `output: {done: ...}` returns the record
+  `{done: ...}`. An empty `output: {}`, or a reference to an empty record, returns
+  no carried field and is rejected.
 - **Merged views.** The loop's value (`${loop.output.x}` downstream) and the LOOP
   node's own `asserts:` see the merged carried record. A body def's own flow-level
   `asserts:` see the body's own output (and its inputs through `${input.X}`).

@@ -63,7 +63,7 @@ nodes:                       # the body — a map keyed by node id (no per-node 
     output: str
     prompt: "Answer: ${question}"
 
-output: ${step_a.output}     # one value, OR a multi-field object (see below)
+output: ${step_a.output}     # one value, OR a record {name: ${x}, ...} (see below)
 
 asserts:                     # optional — boolean invariants
   - step_a.output != ""
@@ -71,6 +71,15 @@ asserts:                     # optional — boolean invariants
 
 There is **no `edges:` block**, no `__start__`/`__end__`, no per-node `id:`, and
 no body wrappers — a node body is flat.
+
+**The `output:` shape sets the return.** `output: ${x}` returns the value of `x` as
+is. `output: {name: ${x}, ...}` always returns a record, even with one field
+(`output: {order: ${x}}` returns `{order: x}`, read by a caller as
+`${child.output.order}`) or none (`output: {}` returns `{}`). No `output:` (or
+`output: null`) returns null. A one-field record no longer returns its bare value;
+write `output: ${x}` for that. Flows with a zero- or one-field record `output:` (and
+flows that embed one) got a new fingerprint, so their older runs can't be resumed or
+replayed.
 
 Node IDs are the keys under `nodes:`. They cannot contain `.`, `#`, or `/`:
 `.` separates the node name from `output` and its field path in a reference,
@@ -499,8 +508,8 @@ each:
 ```
 
 Use exactly one of `call:` or `nodes:`. The `output:` key is required; CALL may
-set it to null and return `None`, while MAP/LOOP require their usual output
-shape. The inline child cannot capture the parent pool: pass parent values and
+set it to null and return `None`, and `output: {...}` returns a record even with one
+field. MAP requires a non-empty `output:`; LOOP requires at least one carried field. The inline child cannot capture the parent pool: pass parent values and
 MAP's item through the outer `input:`, then read generated `${input.X}`
 parameters and child-node outputs inside. Run-global `${system.today}`,
 `${system.now}`, and `${system.run_id}` remain available. Types are inferred
@@ -543,9 +552,8 @@ names. Names are checked at build; each returned field must keep its carried typ
 compared at load for proven body/seed pairs and always enforced at runtime and replay.
 Returning null sets a nullable field to null. A literal `${null}` is typed `None`, so
 it does not fit an `Optional[str]` seed; return a nullable-typed producer instead. A
-body with ONE declared output returns it bare, so `output: {done: ...}` is not a
-record: to return one field, use `output: ${step.output}` where `step` declares
-`output: {done: bool}`. A `while:`/`until:` that reads only fields the body never
+body may return one field: `output: {done: ...}`. An empty `output: {}` returns no
+field and is rejected. A `while:`/`until:` that reads only fields the body never
 returns cannot change, so without `max:` it runs forever. The node's value and the
 LOOP node's own `asserts:` see the merged carried record; a body def's own `asserts:`
 see the body's own output. A body that blocks (a `human_input` leaf) makes the loop a
@@ -561,8 +569,8 @@ A chat is a `loop` whose body blocks each turn at `ask` (`human_input`), then a
 bindings rejoin the exit record or normal transcript into the carried
 `{transcript: str, exited: bool}` record. Typed exit is flow-owned — a host must
 not intercept it — while terminal EOF may be normalized to `/exit`. **Gotcha:**
-the body may omit carried fields, but a lone field returns bare, so returning only
-`transcript` needs a record node. A lone multi-ref coalesce has
+the body may omit carried fields, so it can return only `transcript` with
+`output: {transcript: ...}`. A lone multi-ref coalesce has
 no inferable type; adjacent defaulted spans preserve `str`, and comparing the
 optional exit field with `true` proves the carried `bool`. See
 [`templates/chat.yaml`](templates/chat.yaml).

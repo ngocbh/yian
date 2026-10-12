@@ -43,7 +43,8 @@ One function, `load_flow()`, drives a fixed pipeline. Read it like a compiler:
   ├─ stamp node assertions → validate/classify one originated carrier per list position
   ├─ stamp flow outputs     → source-backed bare/mapped values on final
   │                            FlowOutput bindings (mapping keys stay origin-free)
-  ├─ synthesize boundary    → START/END nodes, edges, and binding-preserving wiring
+  ├─ synthesize boundary    → START/END nodes, edges, and binding-preserving wiring;
+  │                            END is a value or a record by the shape of `output:`
   ├─ reject_cycles          → the graph is a DAG
   ├─ check_case_handles     → every branch has a home
   ├─ discard build locations → no SourceRange enters Node or CompiledFlow
@@ -317,6 +318,13 @@ occurrence, so that generated binding stays origin-free; their authored `output:
 still the physical node-output contract and carries its root/nested origins. These are
 different carriers: `FlowOutput.binding` locates the reexport expression, while
 `Node.output_contract` locates the type declaration.
+
+A bare `output: ${x}` becomes one `FlowOutput` named `result`, and a value-mode END
+returns its value as is. An `output: {...}` mapping becomes one `FlowOutput` per key,
+and a record-mode END returns a dict keyed by every name, even with one key or none.
+The two differ by the YAML shape of `output:`, not by the carrier name: `output:
+{result: ${x}}` still returns `{result: x}`. No `output:` gives a value-mode END with
+no input, which returns `None`.
 
 ---
 

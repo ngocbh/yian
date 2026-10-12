@@ -862,3 +862,82 @@ def test_map_bounded_projected_file_lists_compose_before_stopping(operator, monk
     assert root == BackwardResult() and routed.contributions == ()
     assert [stop.feedback for stop in routed.stopped] == [[{"uri": "Review."}]]
     assert calls == [None]
+
+
+_PASSTHROUGH_FLOWS = {
+    "loop-output": ("""id: passthrough
+name: passthrough
+input: {{n: int, tag: str}}
+defs:
+  body:
+    input: {{n: int}}
+    nodes:
+      work:
+        kind: code
+        input: {{n: '${{input.n}}'}}
+        code: "return {{'n': inputs['n'] - 1}}"
+        output: {{n: int}}
+    output: ${{work.output}}
+nodes:
+  loop:
+    kind: loop
+    call: body
+    times: {times}
+    input: {{n: '${{input.n}}', tag: '${{input.tag}}'}}
+output: ${{loop.output}}
+""", {"tag": "review tag"}, {"tag": ("review tag",)}),
+    "chat-shaped": ("""id: passthrough
+name: passthrough
+input: {{n: int, tag: str}}
+defs:
+  body:
+    input: {{n: int, tag: str}}
+    nodes:
+      work:
+        kind: code
+        input: {{n: '${{input.n}}', tag: '${{input.tag}}'}}
+        code: "return {{'n': inputs['n'] - 1, 'seen': inputs['tag']}}"
+        output: {{n: int, seen: str}}
+    output: ${{work.output}}
+nodes:
+  loop:
+    kind: loop
+    call: body
+    times: {times}
+    input: {{n: '${{input.n}}', tag: '${{input.tag}}', seen: ''}}
+output: ${{loop.output}}
+""", {"seen": "review seen"}, {"tag": ("review seen",)}),
+}
+
+
+@pytest.mark.parametrize("times", [1, 2, 3])
+@pytest.mark.parametrize("shape", sorted(_PASSTHROUGH_FLOWS))
+def test_loop_passthrough_field_routes_feedback_to_its_seed(shape, times, monkeypatch):
+    from yian.compile.expand import build_grow
+    from yian.compose import load_flow
+    from yian.nodes.code import CodeNode
+    from yian.runtime.backward import compute_backward
+    from yian.runtime.state import RunState, _replay_records
+    from tests.engine.test_runtime_memory_learning import _owner_engine
+
+    def backward(_node, _context, feedback):
+        # The body maps its output `seen` back to the `tag` input it echoed.
+        routed = {}
+        for message in feedback:
+            for output, target in (("n", "n"), ("seen", "tag")):
+                if output in message:
+                    routed.setdefault(target, []).append(message[output])
+        return BackwardResult({name: tuple(values) for name, values in routed.items()})
+
+    monkeypatch.setattr(CodeNode, "backward", backward)
+    source, feedback, expected = _PASSTHROUGH_FLOWS[shape]
+    flow = load_flow(source.format(times=times)).compiled
+    engine, _, _ = _owner_engine(flow, {"n": 10, "tag": "red"})
+    original = deepcopy(engine.state.flow)
+    list(engine.run())
+    assert engine.state.trace.terminal.output == {"n": 10 - times, "tag": "red", **({"seen": "red"} if shape == "chat-shaped" else {})}
+    root, results = compute_backward(engine.state.trace, feedback)
+    validate_attributed_backward(engine.state.trace, feedback, root, results)
+    assert root.input_feedback == expected
+    replay = _replay_records(RunState(original), tuple(engine.log), grow_builder=build_grow)
+    assert compute_backward(replay.trace, feedback) == (root, results)

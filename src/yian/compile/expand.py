@@ -586,11 +586,17 @@ def loop_continue_subgraph(
 
     Splices: body_k (`clone_child` at `map_callsite(origin, k)`, NO baked `commit_as` — its
     Output commits under its own id `L#k/END` and feeds the next driver by plain wiring), the
-    driver `L~(k+1)`, the producer edge `body_k.END -> L~(k+1)` (one input_group per carried
+    driver `L~(k+1)`, the producer edge `body_k.END -> L~(k+1)` (one input_group per returned
     field, or one ordering edge for an empty record), and the driver's wiring
     `{field: "${L#k/END.output.field}"}`. The returned `Flow`'s `start_id` is body_k's START
     (the sole seed point) and `end_id` is body_k's END; the driver is scheduled by normal
     readiness when the edge fires.
+
+    This is where the next carried record is merged. A total driver (`returned_fields` is
+    None) wires every carried field from body_k's END. A partial driver wires only its
+    returned fields; each omitted field is bound by the default `respawn` gave the driver
+    from `carried`, and gets a passthrough `SeedConnection` to the same seed field so its
+    route reaches the driver as a seed input.
 
     Unlike `call_subgraph`/`map_subgraph`, the body-END carries NO `commit_as`: the CONTINUE arm
     never commits under the origin (only the STOP arm's `Output(carried, commit_as=origin)` does),
@@ -654,24 +660,31 @@ def loop_continue_subgraph(
     edges = list(cloned.edges)
     wiring = dict(cloned.wiring)
     nodes[driver.id] = driver
-    # Wire the fresh driver's carried params off body_k.END by field name (the carried record is
-    # the body codomain == the driver's params). One producer edge per field.
+    # Wire the fresh driver's returned params off body_k.END by field name, one producer edge
+    # per field. Omitted fields stay unwired so the driver's respawn defaults bind them.
+    returned = driver.returned_fields
+    updated = [name for name in carried if returned is None or name in returned]
     driver_wiring: dict[str, str] = {}
     driver_edges: list[Edge] = []
-    for i, field_name in enumerate(carried.keys()):
+    for i, field_name in enumerate(updated):
         driver_wiring[field_name] = f"${{{body_end}.output.{field_name}}}"
         driver_edges.append(Edge(
             id=f"{body_end}->{driver.id}#{i}",
             from_=body_end, to=driver.id, input_group=field_name))
-    if not carried:
+    # With no returned field to wire, an ordering edge still runs the driver after the body.
+    if not updated:
         driver_edges.append(Edge(
             id=f"{body_end}->{driver.id}#0",
             from_=body_end, to=driver.id, ordering=True))
     wiring[driver.id] = driver_wiring
     edges.extend(driver_edges)
+    passthrough = tuple(
+        SeedConnection(driver.id, name, (name,)) for name in carried if name not in updated
+    )
     return Flow(nodes=nodes, edges=edges, wiring=wiring,
                 start_id=cloned.start_id, end_id=body_end,
-                input_connections=cloned.input_connections, child_boundaries=cloned.child_boundaries)
+                input_connections=cloned.input_connections + passthrough,
+                child_boundaries=cloned.child_boundaries)
 
 
 def _growth_record(seed: Any, *, label: str) -> dict[str, Any]:
@@ -766,7 +779,7 @@ def build_grow(spawner: Node, canonical_seed: Any) -> Flow:
                 spawner.origin_id,
                 dict(carried),
                 iteration,
-                spawner.respawn(iteration + 1),
+                spawner.respawn(iteration + 1, carried),
                 origin_context=spawner.failure_trace(),
                 memory_scope=spawner.memory_scope,
                 execution_scope=spawner.execution_scope,

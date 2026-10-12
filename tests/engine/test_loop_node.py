@@ -5,9 +5,12 @@ STOP → `Output(carried, commit_as=origin)`; CONTINUE → `Grow(seed=(carried, 
 These test `run`/`respawn` and compile-owned reconstruction directly (no engine); e2e behavior is in
 `test_loop_run.py`.
 """
+import json
+
 import pytest
 
 from yian.compile.expand import build_grow
+from yian.compile.manifest import expansion_digest
 from yian.diagnostics import OriginRef
 from yian.memory import MemoryScope
 from yian.nodes.base import Grow, NodeKind, Output
@@ -325,3 +328,23 @@ def test_unlimited_driver_far_past_any_cap_still_grows(kind, predicate):
     assert driver.max_iters is None
     result = driver.run({"messages": [], "exited": False})
     assert isinstance(result, Grow) and result.seed[1] == 100_000
+
+
+def test_build_grow_partial_loop_matches_live_and_replay_digest():
+    """Live and replayed partial-loop growth build one fragment whose next driver keeps omitted fields."""
+    child = _child_flow()
+    origin = LoopNode("lp", flow_id="f", child=child, predicate_kind="while",
+                      predicate="${x}", max_iters=10, returned_fields=("x",))
+    origin.params = [Parameter("x"), Parameter("exited")]
+    carried = {"x": 1, "exited": False}
+    clone = origin.respawn(2, carried)
+
+    live_outcome = clone.run(dict(carried))
+    assert isinstance(live_outcome, Grow)
+    live = build_grow(clone, live_outcome.seed)
+    replay = build_grow(origin, json.loads(json.dumps([carried, 2])))
+
+    assert expansion_digest(live) == expansion_digest(replay)
+    exited = {param.name: param for param in live.nodes["lp~3"].params}["exited"]
+    assert exited.has_default is True
+    assert exited.default == carried["exited"]

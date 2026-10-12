@@ -129,7 +129,10 @@ def test_field_on_str_in_a_case_when_is_a_load_error():
         "output: ${a.output}\n"
     )
     msg = _load_error(_flow("str", rest))
-    assert "reference ${step.output.order} reads field 'order' on type str" in msg
+    assert (
+        "node 'route' cases[0].when from: reference ${step.output.order} reads field 'order' "
+        "on type str"
+    ) in msg
 
 
 def test_field_on_str_in_a_case_on_is_a_load_error():
@@ -144,7 +147,9 @@ def test_field_on_str_in_a_case_on_is_a_load_error():
         "output: ${a.output}\n"
     )
     msg = _load_error(_flow("str", rest))
-    assert "reference ${step.output.kind} reads field 'kind' on type str" in msg
+    assert (
+        "node 'route' on: from: reference ${step.output.kind} reads field 'kind' on type str"
+    ) in msg
 
 
 @pytest.mark.parametrize(
@@ -170,20 +175,22 @@ def test_undeclared_record_field_keeps_its_message():
     assert "reference ${step.output.b} reads unknown field 'b' on record" in msg
 
 
-def test_field_on_str_in_reserved_wiring_is_a_load_error():
-    """MAP `over:` and WAIT `until:` are node bindings too."""
-    map_rest = (
-        "defs:\n"
-        "  each:\n"
-        "    input:\n      v: str\n"
-        "    nodes:\n"
-        "      inner:\n"
-        "        kind: code\n"
-        "        input:\n          v: ${input.v}\n"
-        "        output: str\n"
-        "        code: return 'x'\n"
-        "    output: ${inner.output}\n"
-    )
+_EACH_DEFS = (
+    "defs:\n"
+    "  each:\n"
+    "    input:\n      v: str\n"
+    "    nodes:\n"
+    "      inner:\n"
+    "        kind: code\n"
+    "        input:\n          v: ${input.v}\n"
+    "        output: str\n"
+    "        code: return 'x'\n"
+    "    output: ${inner.output}\n"
+)
+
+
+def test_field_on_str_in_map_over_is_a_load_error():
+    """MAP `over:` is a node binding too."""
     text = _flow(
         "str",
         "  m:\n"
@@ -192,19 +199,27 @@ def test_field_on_str_in_reserved_wiring_is_a_load_error():
         "    over: ${step.output.items}\n"
         "    input:\n      v: ${item}\n"
         "output: ${m.output}\n",
-    ).replace("input:\n  s: str\n", "input:\n  s: str\n" + map_rest, 1)
+        typedefs=_EACH_DEFS,
+    )
     msg = _load_error(text)
-    assert "node 'm' map over: reference ${step.output.items} reads field 'items' on type str" in msg
+    assert (
+        "node 'm' map over: reference ${step.output.items} reads field 'items' on type str"
+    ) in msg
 
-    wait = _flow(
+
+def test_field_on_str_in_wait_until_is_a_load_error():
+    """WAIT `until:` is a node binding too."""
+    text = _flow(
         "str",
         "  settle:\n"
         "    kind: wait\n"
         "    until: ${step.output.at}\n"
         "output: ${step.output}\n",
     )
-    msg = _load_error(wait)
-    assert "reference ${step.output.at} reads field 'at' on type str" in msg
+    msg = _load_error(text)
+    assert (
+        "node 'settle' wait until: reference ${step.output.at} reads field 'at' on type str"
+    ) in msg
 
 
 _BARE_CHILD = (
@@ -254,7 +269,10 @@ def test_field_on_a_map_output_is_a_load_error():
 
 def test_field_on_str_in_a_flow_assert_is_a_load_error():
     text = _flow("str", "asserts:\n  - ${step.output.order == 'x'}\noutput: ${step.output}\n")
-    assert "reference ${step.output.order} reads field 'order' on type str" in _load_error(text)
+    assert (
+        "assert \"${step.output.order == 'x'}\": reference ${step.output.order} reads field "
+        "'order' on type str"
+    ) in _load_error(text)
 
 
 # A child whose output is a partial record: `a` is typed, `b` comes from an untyped CODE node.
@@ -298,7 +316,9 @@ def test_node_assert_on_a_partial_record_output_checks_typed_fields():
         "    input:\n      s: ${input.s}\n",
         "    input:\n      s: ${input.s}\n    asserts:\n      - ${output.a.x} == 1\n",
     ) + "output: ${c.output.a}\n"
-    assert "reads field 'x' on type str" in _load_error(text)
+    assert "node 'c' assert: reference ${output.a.x} reads field 'x' on type str" in _load_error(
+        text
+    )
 
 
 @pytest.mark.parametrize(

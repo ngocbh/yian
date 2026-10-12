@@ -483,6 +483,8 @@ def output_contract_field_error(
         `TypeError`:
             A field name is not a non-empty string, or `contract` is not an
             `OutputContract`.
+        `ValueError`:
+            A contract's type metadata is malformed.
     """
     if not isinstance(fields, (list, tuple)) or any(
         type(field) is not str or not field for field in fields

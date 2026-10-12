@@ -1094,7 +1094,7 @@ def _invalid_fragment(case: str) -> Any:
         end.commit_as = "spawn"
         fragment.nodes[fragment.end_id] = end
         fragment.wiring[fragment.end_id] = {
-            "value": Binding(f"${{{fragment.start_id}.output.absent}}")
+            "value": Binding(f"${{{fragment.start_id}.output.order}}")
         }
         fragment.edges[0] = Edge(
             fragment.edges[0].id,
@@ -1191,7 +1191,7 @@ def test_growth_rejects_a_field_read_on_a_scalar_contract():
             Grow(seed={}),
             lambda spawner, seed: _invalid_fragment("field-on-scalar"),
         )
-    assert "which has no fields" in str(caught.value.original)
+    assert "reads field 'order' on type str, which has no fields" in str(caught.value.original)
 
 
 def test_growth_builder_non_flow_return_is_a_raw_host_fault():

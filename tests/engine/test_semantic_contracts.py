@@ -272,9 +272,10 @@ def test_partial_record_contract_enforces_closed_shape_and_known_fields() -> Non
         )
 
 
-def test_output_contract_field_error_rejects_fields_on_fieldless_types():
+def test_output_contract_field_error_rejects_fields_on_fieldless_types() -> None:
     """Scalars and lists have no fields; opaque `object` and `file` stay unchecked."""
-    def err(typ, *fields):
+
+    def err(typ: Type, *fields: str) -> str | None:
         return output_contract_field_error(ValueContract(typ), list(fields), "x")
 
     assert err(Type.scalar(ValueKind.STRING), "a") == (

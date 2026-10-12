@@ -92,5 +92,8 @@ BINDING_FIELDS: dict[str, tuple[str, ...]] = {d.kind: d.binding_fields for d in 
 # Removed author kinds -> what to write instead. Loading one is a located error that
 # names the replacement rather than the generic "unknown kind".
 REMOVED_KINDS: dict[str, str] = {
-    "model": "serve the model behind a host tool and call it with kind: tool (tool_id: + input:)",
+    "model": (
+        "serve the model behind a host tool and call it with kind: tool "
+        "(set tool_id: and input:)"
+    ),
 }

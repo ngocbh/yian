@@ -42,6 +42,7 @@ defs:
           window: ${input.window}
         output: float
         code: |
+          # A deterministic stand-in score in [-1, 1], so the asserts below hold.
           return (len(inputs["topic"]) % 21 - 10) / 10
     output: ${raw.output}
     asserts:

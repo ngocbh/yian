@@ -171,7 +171,14 @@ def test_model_kind_is_removed_and_points_at_tool():
     # ML inference is a host capability: `kind: model` is a located load error that
     # names `kind: tool` as the replacement, not the generic "unknown kind".
     with pytest.raises(LoadError) as exc:
-        _nodes("\npredict:\n  kind: model\n  model_id: x\n  output: float\n")
+        _nodes(
+            """
+predict:
+  kind: model
+  model_id: x
+  output: float
+"""
+        )
     message = str(exc.value)
     assert "kind 'model' was removed" in message
     assert "kind: tool" in message

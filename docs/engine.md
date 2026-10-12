@@ -154,7 +154,8 @@ fan-out/fan-in boundaries with the same context, and LOOP respawn copies only it
 driver's outer context so the authored loop origin appears once. Runtime only
 splices the resulting fragment and never branches on kind to construct a trace.
 `prune` is growth's generic inverse: a self-respawning loop retires the
-iteration it just finished in the same step, so it grows without leaking. Adding a new
+iteration it just finished in the same step. It retires that iteration's direct body
+nodes; nodes grown inside it by a nested CALL, MAP, or LOOP stay live. Adding a new
 spawner kind means setting traits on its node; the core never gains a branch. Details:
 [Nodes](nodes.md).
 

@@ -17,7 +17,7 @@ next driver by plain wiring.
 
 from yian.compile.expand import build_grow
 from yian.compose.loader import load_flow
-from yian.run import run_flow
+from yian.run import resume_flow, run_flow
 from yian.nodes.contracts import PartialRecordContract
 from yian.typesys import ValueKind
 from tests.engine._graph_builder import _engine
@@ -725,3 +725,28 @@ def test_terminate_leaves_exactly_one_dead_final_body_and_driver():
     driver_clones = {n for n in engine.state.flow.nodes if n.startswith("loop~")}
     assert driver_clones == {"loop~3"}                    # exactly the STOP driver clone
     assert "loop" in engine.state.flow.nodes              # committed origin stays
+
+
+def test_while_loop_without_max_runs_until_predicate_ends_it():
+    result = run_flow(load_flow(COUNTER.replace("    max: 10\n", "")), {})
+    assert result.status == "succeeded"
+    assert result.output == {"n": 3, "exited": True}
+
+
+def test_until_loop_without_max_runs_until_predicate_ends_it():
+    result = run_flow(load_flow(UNTIL_COUNTDOWN.replace("    max: 10\n", "")), {})
+    assert result.status == "succeeded"
+    assert result.output == {"n": 0}
+
+
+def test_loop_without_max_resumes_from_its_log(tmp_path):
+    src = COUNTER.replace("    max: 10\n", "")
+    log = tmp_path / "run.jsonl"
+    first = run_flow(load_flow(src), {}, log=log)
+    assert first.status == "succeeded"
+    # Cut the log mid-run so resume replays the recorded drivers and runs the rest live.
+    lines = log.read_text().splitlines(keepends=True)
+    log.write_text("".join(lines[: len(lines) // 2]))
+    resumed = resume_flow(load_flow(src), log=log)
+    assert resumed.status == "succeeded"
+    assert resumed.output == first.output

@@ -1402,8 +1402,9 @@ remaining kind-blind. During that compile-owned construction, CALL/MAP/LOOP
 prefix child clones with `spawner.failure_trace()`; MAP also stamps its generated
 boundaries, while a LOOP's next driver keeps only the enclosing
 `origin_context`. Expansion digests cover entry/end IDs and topology but exclude
-that diagnostic context, while loop pruning keeps only one dynamic iteration
-resident at a time.
+that diagnostic context, while loop pruning retires each finished iteration's
+direct body nodes (nodes grown inside it by a nested CALL, MAP, or LOOP stay
+live).
 
 Compile also owns stable identity for the static program. `flow_manifest`
 canonicalizes execution semantics, `flow_fingerprint` hashes that manifest, and

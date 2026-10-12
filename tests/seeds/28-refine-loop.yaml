@@ -49,6 +49,6 @@ nodes:
       draft: ${input.seed}
       score: 0.0
     until: score >= 0.8                        # bare form (canonical); the mixed `${score} >= 0.8` and whole-span `${score >= 0.8}` spellings load and evaluate identically
-    max: 5                                     # required runaway guard (LoopMaxExceeded)
+    max: 5                                     # optional runaway guard (LoopMaxExceeded)
 
 output: ${polish.output.draft}                 # the final carried draft

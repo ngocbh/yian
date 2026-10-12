@@ -2782,6 +2782,11 @@ def test_flow_fingerprint_preserves_start_parameter_order():
         ),
         (
             LoopNode,
+            {"flow_id": "child", "child": _fragment(), "max_iters": None},
+            {"flow_id": "child", "child": _fragment(), "max_iters": 5},
+        ),
+        (
+            LoopNode,
             {"flow_id": "child", "child": _fragment(), "iteration": 1},
             {"flow_id": "child", "child": _fragment(), "iteration": 2},
         ),
@@ -2816,6 +2821,7 @@ def test_flow_fingerprint_preserves_start_parameter_order():
         "loop-predicate",
         "loop-times",
         "loop-max-iters",
+        "loop-max-iters-none",
         "loop-iteration",
     ],
 )
@@ -2999,3 +3005,60 @@ def test_flow_manifest_allows_shared_child_aliases_but_rejects_child_cycles():
     cyclic.wiring["call"] = {}
     with pytest.raises(ValueError, match="child-flow cycle"):
         flow_manifest(cyclic)
+
+
+_LOOP_IDENTITY = """
+id: count
+name: count
+nodes:
+  loop:
+    kind: loop
+    input:
+      n: 0
+    %s
+    max: 5
+    nodes:
+      bump:
+        kind: code
+        input:
+          n: ${input.n}
+        output:
+          n: int
+        code: |
+          return {"n": inputs["n"] + 1}
+    output: ${bump.output}
+output: ${loop.output.n}
+"""
+
+
+@pytest.mark.parametrize(
+    ("predicate", "digest"),
+    [
+        (
+            "while: n < 3",
+            "6a791c968ef6c0b1b7d8ea90563cc251c5316a41dbb96f1c1b77fa29bd564b53",
+        ),
+        (
+            "until: n >= 3",
+            "12570531551fa07862337f35d38e2d864095b9393d3fa786a756d2915d0561dd",
+        ),
+    ],
+)
+def test_loop_with_max_keeps_its_fingerprint(predicate, digest):
+    # Pinned before `max:` became optional: a loop that sets `max:` keeps its identity.
+    compiled = load_flow(_LOOP_IDENTITY % predicate).compiled
+    assert flow_fingerprint(compiled) == digest
+
+
+def test_loop_without_max_has_null_max_in_manifest_and_its_own_fingerprint():
+    src_with_max = _LOOP_IDENTITY % "while: n < 3"
+    src_without = src_with_max.replace("    max: 5\n", "")
+    with_max = load_flow(src_with_max).compiled
+    without = load_flow(src_without).compiled
+
+    assert flow_manifest(without)["nodes"]["loop"]["max_iters"] is None
+    assert flow_manifest(with_max)["nodes"]["loop"]["max_iters"] == 5
+    assert flow_fingerprint(without) != flow_fingerprint(with_max)
+    # Loading the same source again gives the same fingerprint.
+    reloaded = load_flow(src_without).compiled
+    assert flow_fingerprint(without) == flow_fingerprint(reloaded)

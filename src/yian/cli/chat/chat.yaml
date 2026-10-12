@@ -85,5 +85,4 @@ nodes:
       transcript: ${input.opening}
       exited: false
     while: "not ${exited}"
-    max: 1000
 output: ${chat.output.transcript}

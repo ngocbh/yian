@@ -6,8 +6,8 @@ END_ID's committed value.
 Three modes:
 - VALUE (a flow's `output: ${x}`, or no `output:`): at most one param; `run` returns
   inputs[name], or None without a name.
-- RECORD (a flow's `output: {...}`): params one per declared output; `run` uses arity
-  0 -> None, 1 -> bare inputs[name], >=2 -> {name: inputs[name]}.
+- RECORD (a flow's `output: {...}`): params one per declared output; `run` returns
+  {name: inputs[name]} for every name, so one field gives a one-key dict and none gives {}.
 - LIST (a MAP fan-in): params e0..e{n-1}, each <- a MAP element's child
   END_ID; `run` -> Output([inputs[ei]...]) in over order (index); n=0 -> [].
 
@@ -32,8 +32,8 @@ class EndNode(Node):
 
     One per flow (the single terminal); the run result is this node's committed value. VALUE mode
     (a flow's `output: ${x}`, or no `output:`) returns its one input, or `None` without one;
-    RECORD mode (a flow's `output: {...}`) reproduces arity — 0 inputs -> None, 1 -> the bare
-    value, >=2 -> a keyed dict; LIST mode (a MAP fan-in) joins the element outputs into a list in
+    RECORD mode (a flow's `output: {...}`) returns a dict keyed by every declared name, even for
+    one name or none; LIST mode (a MAP fan-in) joins the element outputs into a list in
     `over` order. Use the [`value`][yian.nodes.end.node.EndNode.value] /
     [`record`][yian.nodes.end.node.EndNode.record] /
     [`list_`][yian.nodes.end.node.EndNode.list_] factories rather than the ctor.
@@ -123,11 +123,6 @@ class EndNode(Node):
         if self._mode == "value":
             return Output(value=inputs[self._names[0]] if self._names else None)
         if self._mode == "record":
-            # terminal arity rule: 0 -> None; 1 -> bare; >=2 -> keyed object.
-            if not self._names:
-                return Output(value=None)
-            if len(self._names) == 1:
-                return Output(value=inputs[self._names[0]])
             return Output(value={name: inputs[name] for name in self._names})
         # list mode (the MAP fan-in): join in over order (index); n=0 -> [].
         return Output(value=[inputs[f"e{i}"] for i in range(self._n)])
@@ -144,19 +139,20 @@ class EndNode(Node):
         return tuple(f"e{index}" for index in range(self._n))
 
     def capture_backward_context(self) -> dict:
-        """Capture the output layout (value, record arity, or list positions) before the body executes.
+        """Capture the output layout (value, record fields, or list positions) before the body executes.
 
         Returns:
             `dict`: The `input_output_paths` mapping: no paths for zero outputs,
-                `[]` for one bare value (a VALUE terminal or a one-name record),
-                named paths for multiple record outputs,
-                or indexed paths for a list. Assertion inputs are excluded.
+                `[]` for a VALUE terminal's one input, a named path for each record
+                field, or indexed paths for a list. Assertion inputs are excluded.
         """
         names = self.backward_input_names()
         if self._mode == "list":
             paths = {name: [index] for index, name in enumerate(names)}
+        elif self._mode == "record":
+            paths = {name: [name] for name in names}
         else:
-            paths = {name: ([] if len(names) == 1 else [name]) for name in names}
+            paths = {name: [] for name in names}
         return {"input_output_paths": paths}
 
     def backward(

@@ -20,5 +20,4 @@ nodes:
       rating: ${input.rating}
       rationale: ${input.rationale}
 
-output:
-  verdict: ${v.output}
+output: ${v.output}                    # the verdict string itself, not a record

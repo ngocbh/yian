@@ -250,12 +250,13 @@ def test_golden_inputs_defaults_and_multi_output_surface():
     res = run_flow(loaded, {"topic": "ACME"})
     assert res.status == "succeeded"
     assert res.input == {"topic": "ACME"}
-    # >=2 declared outputs -> a record keyed by name (the END_ID record-mode arity).
+    # a name-map `output:` -> a record keyed by name (a record-mode END_ID).
     assert res.output == {"report": "report for ACME", "n": 4}
 
 
-# --- (v) the declared-output arity END_ID(record) must keep byte-identical: 0 -> None,
-#     1 -> bare, >=2 -> record keyed by name. Author-visible outputs/status only — never edge ids.
+# --- (v) the declared-output shapes must keep byte-identical: no `output:` -> None,
+#     `output: ${x}` -> the value, a name map -> a record keyed by name. Author-visible
+#     outputs/status only — never edge ids.
 _ARITY_0 = """
 id: arity0
 name: arity0
@@ -306,21 +307,21 @@ output:
 
 
 def test_golden_output_arity_0():
-    # no `output:` section -> END_ID(record, 0 names) -> None.
+    # no `output:` section -> a value-mode END_ID with no output -> None.
     res = run_flow(load_flow(_ARITY_0), {"x": "ACME"})
     assert res.status == "succeeded"
     assert res.output is None
 
 
 def test_golden_output_arity_1():
-    # bare `output: ${n.output}` -> END_ID(record, 1 name) -> the bare value.
+    # bare `output: ${n.output}` -> a value-mode END_ID -> the bare value.
     res = run_flow(load_flow(_ARITY_1), {"x": "ACME"})
     assert res.status == "succeeded"
     assert res.output == "ACME"
 
 
 def test_golden_output_arity_2():
-    # name-map `output:` -> END_ID(record, >=2 names) -> a record keyed by output name.
+    # name-map `output:` -> a record-mode END_ID -> a record keyed by output name.
     res = run_flow(load_flow(_ARITY_2), {"x": "ACME"})
     assert res.status == "succeeded"
     assert res.output == {"report": "report for ACME", "count": 4}

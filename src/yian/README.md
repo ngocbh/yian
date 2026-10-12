@@ -463,7 +463,9 @@ references, projects independently proven fields, assigns source-free contracts 
 results proven by `expr.infer_expr_type`, and keeps unsupported computations opaque.
 Multi-output assembly produces an exact record when every field is exact, otherwise a
 closed `PartialRecordContract` with the proven siblings. `ChildSignature.output` follows
-the terminal arity rule and CALL preserves it. A LOOP's contract is the merged carried
+the child's END: a record (`output: {...}`, even with one field or none) gets the record
+contract keyed by every name, a value (`output: ${x}`) re-exports that binding's contract,
+and CALL preserves it. A LOOP's contract is the merged carried
 record: each field the body returns comes from the body's contract, and each omitted
 field comes from its seed binding (a literal seed stays opaque). MAP derives `list[U]`
 only from an exact child contract because the output-contract sum has no partial-list

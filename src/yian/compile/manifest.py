@@ -1697,6 +1697,11 @@ def _node_manifest(
             if node._mode != "list"
             else None
         )
+        if node._mode == "record" and len(node._names) <= 1:
+            # A record of zero or one field changed shape (it used to return `None` or the bare
+            # value), so it gets a new fingerprint; the value form and multi-field records keep
+            # theirs.
+            manifest["keyed"] = True
         manifest["n"] = node._n if node._mode == "list" else None
     elif node.kind is NodeKind.AGENT:
         if type(node.variables) is not list:

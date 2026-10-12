@@ -36,8 +36,7 @@ nodes:
       v: ${input.x}
     output: str
     code: tests.engine._fakes:passthrough
-output:
-  result: ${n.output}
+output: ${n.output}
 """
     loaded = load_flow_from_string(source)
     rec = run_flow(loaded, {"x": "hi"})
@@ -154,8 +153,7 @@ nodes:
       tag: str
       val: int
     code: tests.engine._fakes:tagged_neg
-output:
-  result: ${gate.output.tag}
+output: ${gate.output.tag}
 """
     loaded = load_flow_from_string(src)
     rec_pos = run_flow(loaded, {"x": 5})

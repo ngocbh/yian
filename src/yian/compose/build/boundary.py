@@ -59,7 +59,8 @@ def synthesize_boundary_graph(
       END input, same numbering scheme so ids never collide) + the START_ID root edges (a bare
       `START_ID->nid` for every body node with no incoming of any kind, over the FULL set
       incl. the END_ID producer AND synth edges) + a bare `START_ID->END_ID` root edge for a
-      0-output END_ID with no synth edges (so the 0-output END_ID runs and commits `None`).
+      0-output END_ID with no synth edges (so it runs: a value END with no output commits
+      `None`, an `output: {}` record END commits `{}`).
     - `boundary_wiring`: parity-clean wiring for both — `START_ID` keyed by input name
       (provisional `${input.X}` source so `check_wiring_parity` passes; the engine seeds
       START_ID's record directly at runtime), `END_ID` keyed by output name -> the output's

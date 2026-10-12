@@ -616,9 +616,10 @@ def _flow_outputs(outputs) -> list[FlowOutput]:
     """Read the flow `output:` section into carriers for the boundary EndNode.
 
     A name -> binding map becomes one `FlowOutput` per entry (a record-mode
-    END); a bare whole-string binding (`${note.output}`) is one output named
-    `result` (a value-mode END returns the bare value). A `None` section -> no
-    declared outputs (a value-mode END returns `None`).
+    END returns a dict keyed by every name, `{}` for an empty map); a bare
+    whole-string binding (`${note.output}`) is one output named `result` (a
+    value-mode END returns the bare value). A `None` section -> no declared
+    outputs (a value-mode END returns `None`).
 
     Args:
         outputs (`dict | str | None`):

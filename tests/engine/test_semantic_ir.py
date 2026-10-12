@@ -707,6 +707,7 @@ def test_child_signature_prefixes_multi_output_contract_origins() -> None:
             nodes={
                 "alpha_node": Node("alpha_node", output_contract=alpha),
                 "beta_node": Node("beta_node", output_contract=beta),
+                EndNode.ID: EndNode.record(EndNode.ID, output_names=["beta", "alpha"]),
             },
             outputs=[
                 FlowOutput("beta", "${beta_node.output}"),
@@ -736,7 +737,10 @@ def test_child_signature_retains_partial_contract_when_one_field_is_opaque() -> 
     loaded = SimpleNamespace(
         input=[],
         compiled=SimpleNamespace(
-            nodes={"step": Node("step", output_contract=integer)},
+            nodes={
+                "step": Node("step", output_contract=integer),
+                EndNode.ID: EndNode.record(EndNode.ID, output_names=["n", "done"]),
+            },
             outputs=[
                 FlowOutput("n", "${step.output + 1}"),
                 FlowOutput("done", "${false}"),
@@ -763,7 +767,10 @@ def test_child_signature_keeps_nested_partial_output_opaque_at_record_field() ->
     loaded = SimpleNamespace(
         input=[],
         compiled=SimpleNamespace(
-            nodes={"inner": Node("inner", output_contract=nested)},
+            nodes={
+                "inner": Node("inner", output_contract=nested),
+                EndNode.ID: EndNode.record(EndNode.ID, output_names=["nested", "done"]),
+            },
             outputs=[
                 FlowOutput("nested", "${inner.output}"),
                 FlowOutput("done", "${false}"),
@@ -808,7 +815,10 @@ def test_composite_builders_preserve_or_deliberately_wrap_child_contract() -> No
     child = SimpleNamespace(
         input=[],
         compiled=SimpleNamespace(
-            nodes={"producer": Node("producer", output_contract=contract)},
+            nodes={
+                "producer": Node("producer", output_contract=contract),
+                EndNode.ID: EndNode.value(EndNode.ID, output_name="result"),
+            },
             outputs=[FlowOutput("result", "${producer.output}")],
         ),
     )

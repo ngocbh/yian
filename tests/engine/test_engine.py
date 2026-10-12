@@ -45,7 +45,7 @@ def test_linear_runs_in_order():
 
 def test_end_assembles_declared_output_record():
     # The flow's declared codomain is assembled from the pool: two outputs bound to
-    # the terminal node's value -> an object keyed by output name (>=2 arity rule).
+    # the terminal node's value -> an object keyed by output name (a record-mode END).
     g = _graph(
         [FuncNode("a", lambda p: {}), FuncNode("t", lambda p: {"output": "final", "n": 7})],
         [(START_ID, "a"), ("a", "t"), ("t", END_ID)],

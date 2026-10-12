@@ -96,18 +96,24 @@ def test_start_projects_named_delivered_inputs_including_defaults_but_not_absenc
     validate_backward_result(result, context)
 
 
-@pytest.mark.parametrize("names,inputs,feedback,expected,paths", [
-    ([], {}, ("No return value.",), {}, {}),
-    (["result"], {"result": {"items": ["a", "b"]}}, ({"items": [None, "Review."]},),
+@pytest.mark.parametrize("record,names,inputs,feedback,expected,paths", [
+    (False, [], {}, ("No return value.",), {}, {}),
+    (False, ["result"], {"result": {"items": ["a", "b"]}}, ({"items": [None, "Review."]},),
      {"result": ({"items": [None, "Review."]},)}, {"result": []}),
-    (["left", "right"], {"left": 1, "right": 2}, ("Review both.", {"right": "Check."}),
+    (True, [], {}, ("No fields.",), {}, {}),
+    (True, ["only"], {"only": {"items": ["a", "b"]}},
+     ("Review it.", {"only": {"items": [None, "Review."]}}),
+     {"only": ("Review it.", {"items": [None, "Review."]})}, {"only": ["only"]}),
+    (True, ["left", "right"], {"left": 1, "right": 2}, ("Review both.", {"right": "Check."}),
      {"left": ("Review both.",), "right": ("Review both.", "Check.")},
      {"left": ["left"], "right": ["right"]}),
 ])
-def test_end_projects_its_zero_one_and_many_output_layouts(names, inputs, feedback, expected, paths):
+def test_end_projects_its_zero_one_and_many_output_layouts(
+    record, names, inputs, feedback, expected, paths,
+):
     node = (
         EndNode.record("end", output_names=names)
-        if len(names) >= 2
+        if record
         else EndNode.value("end", output_name=names[0] if names else None)
     )
     node.params.append(Parameter("assertion_input"))

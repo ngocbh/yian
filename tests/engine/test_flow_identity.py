@@ -2897,24 +2897,30 @@ def test_flow_fingerprint_covers_each_end_field(first, second):
     )
 
 
-def test_value_end_manifest_matches_a_one_name_record_end():
-    value_end = EndNode.value("t", output_name="result")
-    record_end = EndNode.record("t", output_names=["result"])
+def test_value_end_manifest_keeps_the_record_encoding():
+    manifest = flow_manifest(_single_node_flow(EndNode.value("t", output_name="result")))
 
-    manifest = flow_manifest(_single_node_flow(value_end))
-    assert manifest == flow_manifest(_single_node_flow(record_end))
     assert manifest["nodes"]["t"]["mode"] == "record"
     assert manifest["nodes"]["t"]["n"] is None
     assert manifest["nodes"]["t"]["names"] == [{"type": "str", "value": "result"}]
+    assert "keyed" not in manifest["nodes"]["t"]
 
 
-def test_nameless_value_end_manifest_matches_a_zero_name_record_end():
-    value_end = EndNode.value("t", output_name=None)
-    record_end = EndNode.record("t", output_names=[])
+@pytest.mark.parametrize("names", [[], ["result"]], ids=["zero", "one"])
+def test_zero_and_one_name_record_end_manifests_are_keyed(names):
+    value_end = EndNode.value("t", output_name=names[0] if names else None)
+    record_end = EndNode.record("t", output_names=names)
 
-    assert flow_manifest(_single_node_flow(value_end)) == flow_manifest(
-        _single_node_flow(record_end)
-    )
+    value_manifest = flow_manifest(_single_node_flow(value_end))["nodes"]["t"]
+    record_manifest = flow_manifest(_single_node_flow(record_end))["nodes"]["t"]
+    assert record_manifest["keyed"] is True
+    assert record_manifest == {**value_manifest, "keyed": True}
+
+
+def test_two_name_record_end_manifest_is_not_keyed():
+    end = EndNode.record("t", output_names=["a", "b"])
+
+    assert "keyed" not in flow_manifest(_single_node_flow(end))["nodes"]["t"]
 
 
 _PIN_FLOW = """
@@ -2967,6 +2973,22 @@ def test_loaded_flow_output_forms_keep_their_fingerprints(output_section, expect
     flow = load_flow(_PIN_FLOW % output_section).compiled
 
     assert flow_fingerprint(flow) == expected
+
+
+# The fingerprint a one-field record flow had while END unwrapped it to the bare value.
+_UNWRAPPED_ONE_FIELD_FINGERPRINT = (
+    "f7d8bfad939f19e266020b3b43525c5758711d3035c020390329e609d2dd87bf"
+)
+
+
+def test_loaded_zero_and_one_field_record_flows_get_new_fingerprints():
+    one = flow_fingerprint(load_flow(_PIN_FLOW % "output:\n  order: ${step.output}\n").compiled)
+    empty = flow_fingerprint(load_flow(_PIN_FLOW % "output: {}\n").compiled)
+    absent = flow_fingerprint(load_flow(_PIN_FLOW % "").compiled)
+
+    assert one != _UNWRAPPED_ONE_FIELD_FINGERPRINT
+    assert empty != absent
+    assert one != empty
 
 
 def test_call_over_a_single_node_def_keeps_its_fingerprint():

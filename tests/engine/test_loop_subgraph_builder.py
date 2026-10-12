@@ -157,7 +157,7 @@ def test_continue_wires_only_returned_fields_and_connects_passthrough():
     validate_growth_metadata(sg)
 
 
-def test_continue_total_driver_fragment_is_unchanged():
+def test_continue_total_driver_wires_every_carried_field():
     child = _child_flow()
     carried = {"x": 1, "exited": False}
     driver = _record_origin(None).respawn(1, carried)
@@ -177,6 +177,7 @@ def test_continue_total_driver_fragment_is_unchanged():
     ]
     assert sg.input_connections == (SeedConnection(sg.start_id, "x", ("x",)),)
     assert sg.child_boundaries == (ChildFlowBoundary(sg.start_id, body_end),)
+    validate_growth_metadata(sg)
 
 
 def test_continue_orders_zero_field_body_before_next_driver():

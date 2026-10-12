@@ -21,7 +21,13 @@ from yian.memory import (
     MemoryOccurrenceSegment,
     MemoryScope,
 )
-from yian.nodes.contracts import ChildFlowBoundary, ExecutionScope, Parameter, SeedConnection
+from yian.nodes.contracts import (
+    Binding,
+    ChildFlowBoundary,
+    ExecutionScope,
+    Parameter,
+    SeedConnection,
+)
 
 from tests.engine.test_expand import _child_flow
 
@@ -102,7 +108,7 @@ def _fragment_with_defaulted_input(*, default=True, wired=False):
     node = fragment.nodes[node_id]
     node.params = [*node.params, Parameter("p", has_default=default, default=1 if default else None)]
     if wired:
-        fragment.wiring[node_id] = {**fragment.wiring[node_id], "p": "${input.x}"}
+        fragment.wiring[node_id] = {**fragment.wiring[node_id], "p": Binding("${input.x}")}
     return fragment, node_id
 
 
@@ -113,8 +119,13 @@ def test_growth_metadata_accepts_unwired_defaulted_target():
     validate_growth_metadata(fragment)
 
 
-@pytest.mark.parametrize("case", ["no-default", "wired", "undeclared-input", "unknown-target"])
-def test_growth_metadata_rejects_non_start_target_without_default_or_when_wired(case):
+@pytest.mark.parametrize(("case", "message"), [
+    ("no-default", "must declare a default"),
+    ("wired", "must not be wired"),
+    ("undeclared-input", "target input must be declared"),
+    ("unknown-target", "must name fragment nodes"),
+])
+def test_growth_metadata_rejects_invalid_non_start_target(case, message):
     fragment, node_id = _fragment_with_defaulted_input(
         default=case != "no-default", wired=case == "wired",
     )
@@ -126,7 +137,7 @@ def test_growth_metadata_rejects_non_start_target_without_default_or_when_wired(
     }[case]
     fragment.input_connections += (connection,)
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=message):
         validate_growth_metadata(fragment)
 
 

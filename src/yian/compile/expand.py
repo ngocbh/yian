@@ -582,12 +582,12 @@ def loop_continue_subgraph(
     `origin` is the ORIGIN loop id `L` (NOT the running driver id) — bodies are always keyed
     on the origin so live construction (from `L~k`) and durable construction (from `L`) build the SAME
     `L#k/…` namespace. `k` is THIS iteration's index; `carried` seeds body_k. `driver` is the
-    fresh `L~(k+1)` LoopNode the node minted via `respawn(k+1)`.
+    fresh `L~(k+1)` LoopNode the node minted via `respawn(k+1, carried)`.
 
     Splices: body_k (`clone_child` at `map_callsite(origin, k)`, NO baked `commit_as` — its
     Output commits under its own id `L#k/END` and feeds the next driver by plain wiring), the
     driver `L~(k+1)`, the producer edge `body_k.END -> L~(k+1)` (one input_group per returned
-    field, or one ordering edge for an empty record), and the driver's wiring
+    field, or one ordering edge when no field is wired), and the driver's wiring
     `{field: "${L#k/END.output.field}"}`. The returned `Flow`'s `start_id` is body_k's START
     (the sole seed point) and `end_id` is body_k's END; the driver is scheduled by normal
     readiness when the edge fires.
@@ -607,8 +607,9 @@ def loop_continue_subgraph(
     origin remains local and is appended by `Node.failure_trace`. When ``memory_scope`` is
     present, the body appends this LOOP-iteration occurrence while the next driver retains the
     supplied base occurrence unchanged. Execution positions replace the current driver
-    with body ``k``; the respawned driver already owns driver ``k + 1``. Seed recipes
-    select only carried fields declared by the body START."""
+    with body ``k``; the respawned driver already owns driver ``k + 1``. Body seed recipes
+    select the carried fields declared by the body START; each field a partial body omits
+    gets a passthrough recipe that targets the next driver."""
     if memory_scope is not None:
         _revalidate_memory_scope(memory_scope)
     if driver.memory_scope is not None:

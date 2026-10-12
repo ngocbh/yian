@@ -177,7 +177,8 @@ class Flow:
             The flow's result node id — the node whose value is the flow's output. Defaults to
             `END_ID` (the top-level synthesized END); spliced flows namespace it.
         input_connections (`tuple[SeedConnection, ...]`):
-            Derived child START bindings selected from a parent's materialized seed routes.
+            Derived fragment-input bindings (child START inputs, or defaulted unwired inputs)
+            selected from a parent's materialized seed routes.
         child_boundaries (`tuple[ChildFlowBoundary, ...]`):
             Actual authored child flow boundaries, excluding generated fan nodes.
     """
@@ -256,7 +257,10 @@ def validate_growth_metadata(flow: Flow) -> None:
         if target in targets:
             raise ValueError("seed connections must name unique target inputs")
         targets.add(target)
-        params = flow.nodes[connection.child_start_id].params
+        node = flow.nodes[connection.child_start_id]
+        if not isinstance(node, Node):
+            raise TypeError("seed connection targets must be Node values")
+        params = node.params
         if params is None:
             params = []
         if type(params) is not list or any(type(param) is not Parameter for param in params):
@@ -268,10 +272,11 @@ def validate_growth_metadata(flow: Flow) -> None:
         if connection.child_start_id in starts:
             if not wired:
                 raise ValueError("seed connection child START input must be wired")
-        elif not declared[connection.input_name].has_default or wired:
-            raise ValueError(
-                "seed connection non-START input must have a default and no wiring"
-            )
+        else:
+            if not declared[connection.input_name].has_default:
+                raise ValueError("seed connection non-START input must declare a default")
+            if wired:
+                raise ValueError("seed connection non-START input must not be wired")
 
 
 class CompiledFlow(Flow):

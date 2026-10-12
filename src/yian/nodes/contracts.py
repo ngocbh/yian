@@ -153,6 +153,9 @@ class SeedConnection:
     that is declared with a default and left unwired, such as a field a LOOP body
     omits and the next driver keeps from the carried record.
 
+    ``child_start_id`` names the target node, which is a child START or a node with
+    a defaulted unwired input.
+
     ``seed_path`` is a parameter name, or an explicit item index followed by a
     parameter name. Producer identities are supplied only by accepted runtime
     captures; this recipe contains no seed value or expression.

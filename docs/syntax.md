@@ -887,8 +887,8 @@ Inline-body rules:
 - Write **exactly one** of `call:` or `nodes:`. Inline `nodes:` must be a
   non-empty mapping and requires `output:`; `output:` is not valid beside a
   named `call:`. The key itself is required: CALL may use `output: null` and
-  return `None`, while MAP requires one output value and LOOP requires its
-  carried-record shape.
+  return `None`, while MAP requires one output value and LOOP requires a record
+  of carried fields.
 - The outer composite `input:` is still the argument map. Its keys become the
   anonymous child's typed input parameters, and the body reads them as
   `${input.<key>}`.
@@ -972,9 +972,10 @@ is invalid to combine `call:` and `nodes:` on the same node.
 
 `loop` runs a child flow (the **body**) over and over, threading one **carried
 record** from each iteration into the next. It is the engine's `while`/`do-while`/
-`for`: the body maps the carried record to the *next* carried record (`'a -> 'a`),
-and the loop re-runs it under one of three drivers — a pre-check predicate
-(`while:`), a post-check predicate (`until:`), or a fixed count (`times:`).
+`for`: the body reads the carried record and returns the fields that change for the
+*next* one (`'a -> 'a`), and the loop re-runs it under one of three drivers — a
+pre-check predicate (`while:`), a post-check predicate (`until:`), or a fixed count
+(`times:`).
 
 ```yaml
 turn:
@@ -1006,20 +1007,25 @@ repeat:
   output: ${bump.output}
 ```
 
-Here the generated child signature is `n: int`, and its record output preserves
-the LOOP contract `'a -> 'a`.
+Here the generated child signature is `n: int`, and its record output `{n: int}`
+returns the whole carried record.
 
 - **`input:`** is the seed carried record — its field names and types define `'a`.
 - **`call:` / `nodes:`** names a reusable body or defines a one-off body inline.
-  The body's `output:` must be the **same shape** as
-  the carried record (`'a -> 'a`), and the fields the body reads (`${input.X}`)
-  must be a subset of the carried names. This contract is checked twice: field
-  **names** at build, and each statically proven body field against a statically
-  proven seed source at load. Every proven output field is enforced at runtime and
-  replay even when its seed was opaque at load. Each output field's type is inferred
-  from its binding shape (see [expressions](expressions.md)): a lone direct ref preserves
-  an exact or partial contract, a known partial-record field is exact, a proven comparison
-  or boolean expression is `bool`, and a
+  The body's `output:` returns a **subset** of the carried record: at least one
+  carried field, and any number of them. Each field the body omits keeps its value
+  from the previous iteration; there is nothing to declare. A body output field
+  that is not a carried field is a load error (`body output field(s) [...] are not
+  carried record fields [...]`). The body still reads only its carried record: the
+  fields it reads (`${input.X}`) must be a subset of the carried names. This
+  contract is checked twice: field **names** at build, and each statically proven
+  **returned** field against a statically proven seed source at load. A returned
+  field must keep its carried type. An omitted field takes its type from its seed
+  binding (a literal seed stays untyped). Every proven returned field is enforced at
+  runtime and replay even when its seed was opaque at load. Each output field's type
+  is inferred from its binding shape (see [expressions](expressions.md)): a lone
+  direct ref preserves an exact or partial contract, a known partial-record field is
+  exact, a proven comparison or boolean expression is `bool`, and a
   **concatenating template** (literal text around spans) is `str`. Therefore a body may
   write `exited: ${ask.output == "/exit"}` directly, and a carried transcript may grow
   through a plain template binding, without a CODE fold node. If a computed field's
@@ -1027,10 +1033,57 @@ the LOOP contract `'a -> 'a`.
   opaque never means a concrete `None` value and does not erase type checks for proven
   sibling fields. LOOP enforces the closed field set and every proven sibling on normal
   iterations, zero-iteration `while:` commits, and durable replay. A literal `${null}`
-  is compatible with a nullable carried field, including inside a typed list.
+  seed is compatible with a nullable body field, including inside a typed list.
+- **Omitted is not null.** An omitted field keeps its value. A returned null sets the
+  field to null. When the seed is typed, the returned field's type must accept it: a
+  producer typed `Optional[str]` fits an `Optional[str]` seed. A literal `${null}` is
+  typed `None`, and an `Optional[str]` seed does not fit `None`, so that load fails.
+- **One field needs a record node.** A body with exactly one declared output returns
+  that value bare, so `output: {done: ...}` alone is not a record and is rejected,
+  as is an empty `output: {}`. To return one field, make the body `output:` a whole
+  reference to a node with a record output, such as `output: ${step.output}` where
+  `step` declares `output: {done: bool}`.
+- **Merged views.** The loop's value (`${loop.output.x}` downstream) and the LOOP
+  node's own `asserts:` see the merged carried record. A body def's own flow-level
+  `asserts:` see the body's own output (and its inputs through `${input.X}`).
 - **Exactly one** of `while:` / `until:` / `times:` per loop node selects the
   driver. Zero or more than one is a load-time error (`exactly one of
   while:/until:/times: is required`).
+
+A chat body carries `person` and `talking_to` unchanged every turn and returns only
+what changes:
+
+```yaml
+defs:
+  turn:
+    input:
+      person: str               # reads only what it needs
+    nodes:
+      ask:
+        kind: human_input
+        prompt: "You:"
+        output: str
+      reply:
+        kind: agent
+        input:
+          message: ${ask.output}
+          person: ${input.person}
+        output: str
+        prompt: "You are ${person}. ${message}"
+    output:                     # person and talking_to carry over unchanged
+      exited: ${ask.output == "/exit"}
+      reply: ${reply.output}
+nodes:
+  chat:
+    kind: loop
+    call: turn
+    input:
+      person: ${input.person}
+      talking_to: ${input.talking_to}
+      exited: false
+      reply: ""
+    while: not exited
+```
 
 **`while:` — pre-check (0+ runs).** A predicate evaluated on the carried record
 *before* each iteration; 0 iterations run if the seed already fails it. It is a
@@ -1072,9 +1125,11 @@ poll:
   with `max: null`) the loop has no iteration limit: it runs until its predicate ends
   it (or the run is interrupted). When given, it is a plain integer `>= 1`, and a
   loop that would run more than `max` iterations fails loudly (`LoopMaxExceeded`).
+- A `while:`/`until:` predicate that reads only fields the body never returns cannot
+  change. Without `max:`, such a loop runs forever.
 
-The node's value is the final carried record (committed under the loop node's id
-once the loop stops).
+The node's value is the final merged carried record (committed under the loop
+node's id once the loop stops).
 
 A body may itself block (e.g. a `human_input` leaf): the worker stays inside that
 live iteration until the host answers, then the same run advances into the next

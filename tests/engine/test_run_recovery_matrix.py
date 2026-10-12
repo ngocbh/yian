@@ -606,6 +606,35 @@ nodes:
 output: ${repeated.output}
 """
 
+# The body returns only `{n}`; the omitted `tag` merges in at every LOOP respawn.
+_PARTIAL_LOOP = """
+id: recovery-partial-loop
+name: recovery_partial_loop
+defs:
+  bump:
+    input:
+      n: int
+    nodes:
+      step:
+        kind: code
+        code: |
+          return {"n": inputs["n"] + 1}
+        input:
+          n: ${input.n}
+        output:
+          n: int
+    output: ${step.output}
+nodes:
+  repeated:
+    kind: loop
+    call: bump
+    input:
+      n: 0
+      tag: kept
+    times: 3
+output: ${repeated.output}
+"""
+
 _EFFECT_FLOWS = {
     "agent": """
 id: recovery-agent
@@ -889,6 +918,45 @@ def test_every_loop_body_call_and_map_prefix_replays_to_the_live_state(
         recovered = run_module._replay_run_log(loaded, _prefix_log(log, length))
         assert _state_snapshot(recovered) == expected, (
             f"replayed state diverged after loop-body prefix {length}/{len(records)}"
+        )
+
+
+@pytest.mark.parametrize("num_workers", [0, 2], ids=["serial", "pooled"])
+def test_every_partial_loop_prefix_replays_to_the_live_state(
+    monkeypatch: pytest.MonkeyPatch,
+    num_workers: int,
+) -> None:
+    """A LOOP whose body omits a carried field replays to the live state after every commit."""
+    loaded = load_flow(_PARTIAL_LOOP)
+    state, log = _new_started_run(loaded, num_workers=num_workers)
+    snapshots = [_state_snapshot(state)]
+    original_commit = engine_module.commit_prepared
+
+    def capture_after_commit(cursor, live_state, prepared):
+        observers = original_commit(cursor, live_state, prepared)
+        assert live_state is state
+        snapshots.append(_state_snapshot(live_state))
+        return observers
+
+    monkeypatch.setattr(engine_module, "commit_prepared", capture_after_commit)
+    observers = list(
+        FlowEngine(
+            state,
+            log,
+            grow_builder=build_grow,
+            num_workers=num_workers,
+        ).run()
+    )
+
+    assert isinstance(observers[-1], RunSucceeded)
+    assert observers[-1].output == {"n": 3, "tag": "kept"}
+    records = tuple(log)
+    assert len(snapshots) == len(records)
+
+    for length, expected in enumerate(snapshots, start=1):
+        recovered = run_module._replay_run_log(loaded, _prefix_log(log, length))
+        assert _state_snapshot(recovered) == expected, (
+            f"replayed state diverged after partial-loop prefix {length}/{len(records)}"
         )
 
 

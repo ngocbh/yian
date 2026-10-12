@@ -58,6 +58,10 @@ class LoopNode(Node):
       times          the fixed run count when `predicate_kind == "times"`; None otherwise.
       max_iters      the runaway guard for `while`/`until` (None = no limit); for `times`, equals
                      the count N.
+      returned_fields
+                     the carried fields the body returns, in carried order; None when the body
+                     returns every carried field (a total loop). Each omitted field keeps the
+                     previous iteration's value through `respawn`.
       iteration      THIS driver's iteration index `k` (0 on the compiled `L`, `k` on a clone `L~k`).
       origin_id      the origin loop id `L` (== self.id on the compiled node; == `L` on every clone).
     """
@@ -82,6 +86,7 @@ class LoopNode(Node):
         title: Optional[str] = None,
         iteration: int = 0,
         origin_id: Optional[str] = None,
+        returned_fields: Optional[tuple[str, ...]] = None,
     ) -> None:
         super().__init__(node_id, title=title)
         self.flow_id = flow_id
@@ -92,6 +97,7 @@ class LoopNode(Node):
         self.predicate = predicate
         self.times = times
         self.max_iters = max_iters
+        self.returned_fields = returned_fields
         self.iteration = iteration
         # The compiled `L` sets origin_id == self.id (uniform); a clone `L~k` carries the origin.
         self.origin_id: str = origin_id or node_id
@@ -147,8 +153,8 @@ class LoopNode(Node):
           times  — STOP when `k >= self.max_iters` (`times N` baked as `max_iters`).
         On STOP: `Output(carried, commit_as=self.origin_id)` — generic commit-and-advance under `L`.
         On CONTINUE: runaway guard, only when `max:` is set (while/until raise `LoopMaxExceeded`
-        if `should_stop(k)`), then a `Grow` splicing body_k + `respawn(k+1)`, pruning body_{k-1} +
-        self (except origin)."""
+        if `should_stop(k)`), then a `Grow` splicing body_k + `respawn(k+1, carried)`, pruning
+        body_{k-1} + self (except origin)."""
         carried = dict(inputs)
         k = self.iteration
         if self._should_stop_now(carried, k):
@@ -211,22 +217,49 @@ class LoopNode(Node):
             return BackwardResult()
         return _project_structural_feedback(context, feedback)
 
-    def respawn(self, k: int) -> "LoopNode":
-        """A fresh driver clone for iteration `k` at id `f"{origin}~{k}"`, carrying the SAME baked
-        fields and the ORIGIN id. Pure: no engine state. `origin_id` threads forward so the clone
-        attributes its grow/commit to the compiled loop and self-prunes (`id != origin`).
+    def respawn(self, k: int, carried: Optional[dict[str, Any]] = None) -> "LoopNode":
+        """Return a fresh driver clone for iteration `k` at id `f"{origin}~{k}"`.
+
+        The clone carries the SAME baked fields and the ORIGIN id. Pure: no engine state.
+        `origin_id` threads forward so the clone attributes its grow/commit to the compiled loop
+        and self-prunes (`id != origin`).
 
         `params` must be copied for `eval_node` to bind the clone's carried inputs off the CONTINUE
-        wiring. Generated `origin_context` is copied unchanged while the authored loop origin
-        remains local, so each iteration's failure trace contains that origin once. The complete
-        `output_contract` and asserts are copied for clone self-consistency only — the STOP commit
-        validates against the COMPILED origin `L`'s contract via its commit target, not the clone's."""
+        wiring. For a partial loop (`returned_fields` set), each carried field the body omits gets
+        a `Parameter` default holding its value in `carried`, so the next driver binds the merged
+        record: a returned field (even an explicit null) overrides it, an omitted one keeps the
+        previous value. `carried` is the canonical JSON-decoded growth-seed record, the same values
+        that seed the body's START, so live growth and durable replay merge identically. A total
+        loop shares the origin's `params` unchanged. Generated `origin_context` is copied unchanged
+        while the authored loop origin remains local, so each iteration's failure trace contains
+        that origin once. The complete `output_contract` and asserts are copied for clone
+        self-consistency only — the STOP commit validates against the COMPILED origin `L`'s
+        contract via its commit target, not the clone's.
+
+        Args:
+            k (`int`): The clone's iteration index.
+            carried (`dict[str, Any]`, *optional*, defaults to `None`): The record this iteration's
+                body was seeded with; required when `returned_fields` is set.
+
+        Returns:
+            `LoopNode`: The driver for iteration `k`.
+
+        Raises:
+            `ValueError`: If `returned_fields` is set and `carried` is `None`, or the execution
+                scope does not end in this driver's position.
+            `TypeError`: If the execution scope is not an `ExecutionScope`.
+        """
+        if self.returned_fields is not None and carried is None:
+            raise ValueError(
+                f"loop {self.origin_id!r} returns a subset of its record; "
+                "respawn needs the carried record")
         clone = LoopNode(
             f"{self.origin_id}~{k}", flow_id=self.flow_id, flow_version=self.flow_version,
             child=self.child, child_inputs=self.child_inputs,
             predicate_kind=self.predicate_kind, predicate=self.predicate,
             times=self.times, max_iters=self.max_iters,
-            title=self.title, iteration=k, origin_id=self.origin_id)
+            title=self.title, iteration=k, origin_id=self.origin_id,
+            returned_fields=self.returned_fields)
         clone.origin = self.origin
         # Keep only the enclosing ancestry. ``failure_trace()`` appends this driver's
         # authored loop origin, so copying that origin into the context would duplicate it
@@ -244,7 +277,14 @@ class LoopNode(Node):
             clone.execution_scope = replace(scope, occurrence_path=(
                 *scope.occurrence_path[:-1], ExecutionPosition("loop_driver", scope.static_path, k),
             ))
-        clone.params = self.params
+        if self.returned_fields is None:
+            clone.params = self.params
+        else:
+            clone.params = [
+                replace(param, required=False, has_default=True, default=carried[param.name])
+                if param.name in carried and param.name not in self.returned_fields else param
+                for param in self.params
+            ]
         clone.output_contract = self.output_contract
         clone.pre_asserts = list(self.pre_asserts)
         clone.post_asserts = list(self.post_asserts)

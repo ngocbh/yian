@@ -804,9 +804,12 @@ singular `output:` YAML surface is unchanged; descriptors normalize it to their
 internal `outputs` field.
 
 Compose assembly owns an optional `BuildContext.output_contract_reader` with the
-`(node_id, output_spec) -> ValueContract | None` contract. An authored-output leaf still
-calls `NodeDescriptor.output_contract()` at its established build position; only there
-does the reader compile the normalized physical `output:` cursor. This defers source work
+`(node_id, output_spec) -> ValueContract | None` contract. Compose also injects
+`BuildContext.binding_contract_reader`
+`(label, binding, range) -> OutputContract | None`; LOOP uses it to type each carried
+field the body omits from its seed binding. An authored-output leaf still calls
+`NodeDescriptor.output_contract()` at its established build position; only there does
+the reader compile the normalized physical `output:` cursor. This defers source work
 to the existing semantic step rather than moving it ahead of kind-owned validation,
 preserving error precedence. Direct descriptor builds omit the reader, and a
 missing/virtual site falls back to the ordinary source-free type reader.

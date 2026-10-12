@@ -3,7 +3,9 @@
 One of the two-axis `compose/nodes/<kind>.py` modules: it owns the `loop` node's frozen
 `LoopDescriptor`, inheriting the template `parse` from `NodeDescriptor` (which records each
 field's `SourceRange`), and overriding the resolve-and-bake `build` (termination configuration +
-the `'a -> 'a` field-name contract). `_finish` keeps concrete ranges on the Compose-owned
+the `'a -> 'a` field-name contract: a body returns a subset of the carried record, and each
+omitted field carries over, so the loop's output contract merges the returned body fields with
+the seeds of the omitted ones). `_finish` keeps concrete ranges on the Compose-owned
 `BuildResult` and stamps only the descriptor's opaque origin onto the runtime node. Registered
 into `KINDS`/`BINDING_FIELDS` at import so the shared dispatch routes here.
 """
@@ -19,6 +21,10 @@ from yian.nodes.contracts import (
     PartialRecordContract,
 )
 from yian.nodes.loop import LoopNode
+from yian.compose.helpers.output_contracts import (
+    combine_output_contracts,
+    project_output_contract,
+)
 from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from yian.compose.nodes.resolver import (
     _callable_display,
@@ -32,9 +38,11 @@ class LoopDescriptor(NodeDescriptor):
     """kind=loop — a `('a -> 'a) -> 'a -> 'a` driver over a carried record.
 
     `call` names the body child flow (defs-first, else external — same resolution as
-    `call`/`map`). The authored `input:` mapping seeds the carried record at turn 0. Exactly one of
-    `while_`/`until_`/`times` carries the predicate; `max` optionally limits while/until
-    iterations. `while`/`until` are Python keywords, so they land here as `while_`/`until_`.
+    `call`/`map`). The authored `input:` mapping seeds the carried record at turn 0. The body
+    returns a subset of the carried record; each omitted field keeps its previous value.
+    Exactly one of `while_`/`until_`/`times` carries the predicate; `max` optionally limits
+    while/until iterations. `while`/`until` are Python keywords, so they land here as
+    `while_`/`until_`.
 
     Inherits the common descriptor fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` +
     the Compose-only `range`/`field_ranges` parse metadata) and the template `parse` from `NodeDescriptor` (no
@@ -77,17 +85,37 @@ class LoopDescriptor(NodeDescriptor):
         via `_finish`.
 
         `loop` is a higher-order driver: the body child flow (`call:`) reads a subset of the
-        carried record (`input:`) and returns the WHOLE next carried record. Returns a
-        `BuildResult` (the split): the node carries `params`; the flow owns the carried-record
-        seed sources in `wiring`. Resolves the callable through `ctx.resolver` (required — a loop
-        is higher-order), derives its `ChildSignature`, bakes the compiled child + parameters,
-        stamps `output_contract` (the body codomain, which IS the carried record contract), and enforces
-        the FIELD-NAME half of the contract plus termination configuration legality.
-        The deep TYPE-level half compares every statically proven body field with its
+        carried record (`input:`) and returns a subset of it; each omitted field carries over
+        from the previous iteration. Returns a `BuildResult` (the split): the node carries
+        `params`; the flow owns the carried-record seed sources in `wiring`. Resolves the
+        callable through `ctx.resolver` (required — a loop is higher-order), derives its
+        `ChildSignature`, bakes the compiled child + parameters, and enforces the FIELD-NAME
+        half of the contract plus termination configuration legality.
+
+        A body that returns the whole carried record stamps its codomain as `output_contract`
+        and leaves `returned_fields` unset. A body that returns a subset stamps
+        `returned_fields` (carried order) and a merged `output_contract`: each returned field
+        projected from the body codomain, each omitted field resolved from its seed binding
+        through `ctx.binding_contract_reader` (opaque when the reader is absent or the seed
+        is unproven).
+        The deep TYPE-level half compares every statically proven returned field with its
         statically proven carried seed in the loader pass `check_loop_type_contract`, which
         needs the assembled parent producers/flow-input contracts.
         `ctx.registry` is unused (loop resolves its output contract from the body signature); the
         inline-CODE anchors on `ctx` are read only by the CODE build.
+
+        Args:
+            ctx (`BuildContext`):
+                The immutable build inputs; `resolver` is required.
+
+        Returns:
+            `BuildResult`:
+                The built `LoopNode` with its carried-record seed wiring.
+
+        Raises:
+            `LoadError`:
+                The body, the field-name contract, or the termination configuration is
+                illegal.
         """
         resolver = ctx.resolver
         child = _resolve_child(
@@ -179,23 +207,53 @@ class LoopDescriptor(NodeDescriptor):
                 )
 
         # The `'a -> 'a` FIELD-NAME contract (types are the loader pass). The carried record's
-        # keys are the seed input names. The body OUTPUT field NAMES must equal them (the
-        # whole next state threads back); the body INPUT NAMES must be a subset (it reads a
-        # subset of the carried record). A non-record body output (no fields) can't match a
-        # multi-field carried record — flag it too.
+        # keys are the seed input names. The body OUTPUT field NAMES must be a subset of them
+        # (an omitted field carries over); the body INPUT NAMES must be a subset too (it reads
+        # a subset of the carried record). A non-record body output (no fields) — including a
+        # single declared output, which the terminal returns bare — is rejected.
         carried = set(self.inputs or {})
-        out_names = _contract_field_names(node.output_contract)
+        out_names = _contract_field_names(sig.output)
         if out_names is None and len(sig.output_names) >= 2:
             out_names = set(sig.output_names)
+        bare_hint = (
+            "; a single declared output returns its value bare, so to return one field make "
+            "the body `output:` a whole reference to a node with a record output"
+        )
         if out_names is None:
             errors.append(
                 f"loop node {self.id!r}: body {child_display} must declare a record "
-                f"output whose field names equal the carried record {sorted(carried)}"
+                f"output whose field names are a subset of the carried record {sorted(carried)}"
+                + (bare_hint if len(sig.output_names) == 1 else "")
+            )
+        elif (
+            len(sig.output_names) == 1
+            and sig.output_names[0] in carried
+            and sig.output_names[0] not in out_names
+        ):
+            # One declared output named after a carried field returns its record value bare,
+            # so that record's fields would silently be read as the returned carried fields.
+            errors.append(
+                f"loop node {self.id!r}: body {child_display} declares one output "
+                f"{sig.output_names[0]!r}, whose record value {sorted(out_names)} would be read "
+                f"as the returned carried fields{bare_hint}"
+            )
+        elif out_names - carried:
+            errors.append(
+                f"loop node {self.id!r}: body output field(s) {sorted(out_names - carried)} "
+                f"are not carried record fields {sorted(carried)} "
+                "(a body returns a subset of the carried record)"
             )
         elif out_names != carried:
-            errors.append(
-                f"loop node {self.id!r}: body output fields {sorted(out_names)} must equal the "
-                f"carried record fields {sorted(carried)} (the whole next state threads back)"
+            node.returned_fields = tuple(n for n in self.inputs if n in out_names)
+            node.output_contract = combine_output_contracts(
+                {
+                    name: (
+                        self._returned_field_contract(sig.output, name)
+                        if name in out_names
+                        else self._seed_contract(ctx, name)
+                    )
+                    for name in self.inputs
+                }
             )
         body_inputs = {d.name for d in sig.inputs}
         extra = body_inputs - carried
@@ -232,6 +290,27 @@ class LoopDescriptor(NodeDescriptor):
         if errors:
             raise ctx.diagnostics.error("\n  ".join(errors), range=self.range)
         return self._finish(node, wiring)
+
+    @staticmethod
+    def _returned_field_contract(
+        body_output: OutputContract | None,
+        name: str,
+    ) -> OutputContract | None:
+        """One returned field's contract projected from the body codomain, else `None`."""
+        if body_output is None:
+            return None
+        return project_output_contract(body_output, [name])
+
+    def _seed_contract(self, ctx: BuildContext, name: str) -> OutputContract | None:
+        """One omitted field's contract, resolved from its seed binding, else `None`."""
+        if ctx.binding_contract_reader is None:
+            return None
+        return ctx.binding_contract_reader(
+            f"{self.id}.input.{name}",
+            self.inputs[name],
+            self.field_ranges.get(("input", name))
+            or self.field_ranges.get(("field", "inputs")),
+        )
 
 
 def _contract_field_names(

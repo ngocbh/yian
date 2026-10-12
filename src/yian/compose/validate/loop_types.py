@@ -2,11 +2,12 @@
 
 A loader post-build pass (run after `check_call_map_types`). `nodes.loop.build` checked only the
 carried field-NAME sets — it lacks the resolved carried-record Types, which depend on the parent
-producers and flow inputs assembled by the parent build. This pass resolves each carried field's
-contract from its bound seed source (`${<id>.output}`/`${input.X}` over the parent producer +
-flow-input contracts, via `resolve_output_binding_contract`), projects its Type, and checks it
-with `types_compatible` against the body OUTPUT's same-named field Type. The node's canonical
-output contract already retains independently proven body fields when no sound exact aggregate
+producers and flow inputs assembled by the parent build. This pass resolves each returned carried
+field's contract from its bound seed source (`${<id>.output}`/`${input.X}` over the parent
+producer + flow-input contracts, via `resolve_output_binding_contract`), projects its Type, and
+checks it with `types_compatible` against the body OUTPUT's same-named field Type. A field the
+body omits carries over unchanged, so it has nothing to compare. The node's canonical output
+contract already retains independently proven body fields when no sound exact aggregate
 exists. This pass carries a range anchor from
 `BuildResult.field_ranges[("field", "inputs")]` (the coarse `input:` mapping span).
 
@@ -46,15 +47,18 @@ def check_loop_type_contract(
 
     `nodes.loop.build` checked only the field-NAME sets (it lacks the resolved carried-record
     Types because the seed sources' types depend on parent producers and flow inputs).
-    This pass, run after `check_call_map_types`, resolves each carried field's Type
+    This pass, run after `check_call_map_types`, resolves each returned carried field's Type
     from its bound seed source (`${<id>.output}`/`${input.X}` over the parent producer +
     flow-input contracts, exactly as `check_call_map_types` via
     `resolve_output_binding_contract`),
     and checks it with `types_compatible` against the body
-    OUTPUT's same-named field Type. A fully proven body reads those fields from the
-    aggregate `output_contract`; a partially typed record reads its independently
-    proven field contracts from the same canonical output-contract sum. A literal/
-    coalesce/opaque seed source, or an opaque body output field, stays lenient (skipped).
+    OUTPUT's same-named field Type, read from the node's carried-record `output_contract`
+    (the body's own contract for a total loop, the merged returned-plus-seeded contract
+    for a partial one). An exact record reads those fields from its aggregate type; a
+    partially typed record reads its independently proven field contracts. A field outside
+    the node's `returned_fields` (omitted by the body, so carried over unchanged) is
+    skipped. A literal/coalesce/opaque seed source, or an opaque body output field,
+    stays lenient (skipped).
     Loud + located at the loop node's `input:` mapping range
     (else the Compose-owned node range) on a
     same-names/different-TYPES mismatch."""
@@ -83,37 +87,43 @@ def check_loop_type_contract(
         node = result.node
         if not node.is_loop:
             continue
-        body_contract = node.output_contract
-        if body_contract is not None and type(body_contract) not in (
+        # The node's carried-record contract: the body's own contract for a total loop, or
+        # the merged returned-plus-seeded contract for a partial loop.
+        loop_contract = node.output_contract
+        if loop_contract is not None and type(loop_contract) not in (
             ValueContract,
             PartialRecordContract,
         ):
             raise TypeError(
                 f"node {nid!r} output_contract must be an exact ValueContract, "
                 "PartialRecordContract, or None, "
-                f"got {type(body_contract).__name__}"
+                f"got {type(loop_contract).__name__}"
             )
-        body_out = (
-            body_contract.type
-            if type(body_contract) is ValueContract
+        loop_out = (
+            loop_contract.type
+            if type(loop_contract) is ValueContract
             else None
         )
-        if body_out is not None and body_out.fields is not None:
-            body_fields = body_out.fields
-        elif type(body_contract) is PartialRecordContract:
-            body_fields = {
+        if loop_out is not None and loop_out.fields is not None:
+            carried_fields = loop_out.fields
+        elif type(loop_contract) is PartialRecordContract:
+            carried_fields = {
                 field_name: field_contract.type
-                for field_name, field_contract in body_contract.fields
+                for field_name, field_contract in loop_contract.fields
                 if field_contract is not None
             }
         else:
-            body_fields = {}
-        # A non-record / absent body output was already caught by the field-name half in
+            carried_fields = {}
+        # A non-record / absent carried contract was already caught by the field-name half in
         # nodes.loop.build. With no independently proven fields, nothing remains to compare.
-        if not body_fields:
+        if not carried_fields:
             continue
+        returned = node.returned_fields
         for field_name, src in flow_wiring.get(nid, {}).items():
-            body_field = body_fields.get(field_name)
+            if returned is not None and field_name not in returned:
+                continue  # omitted by the body: carried over, nothing returned to compare
+            # A returned field's carried contract is the body's own field contract.
+            body_field = carried_fields.get(field_name)
             if body_field is None:
                 continue  # name mismatch caught in build; nothing to type-check
             source_contract = resolve_output_binding_contract(
@@ -140,6 +150,6 @@ def check_loop_type_contract(
                     f"loop node {nid!r}: carried field {field_name!r} — body output is "
                     f"{canonical_type_label(body_field)!r}, carried source is "
                     f"{canonical_type_label(source)!r} "
-                    "(the body must return the same 'a it reads)",
+                    "(a returned field must keep its carried type)",
                     range=rng,
                 )

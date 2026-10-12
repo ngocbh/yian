@@ -461,13 +461,15 @@ references, projects independently proven fields, assigns source-free contracts 
 results proven by `expr.infer_expr_type`, and keeps unsupported computations opaque.
 Multi-output assembly produces an exact record when every field is exact, otherwise a
 closed `PartialRecordContract` with the proven siblings. `ChildSignature.output` follows
-the terminal arity rule and CALL/LOOP preserve it. MAP derives `list[U]` only from an exact
-child contract because the output-contract sum has no partial-list arm. Strict inline
-input inference remains separate: it accepts literals, direct exact references, and
-proven fields projected from partial records, while rejecting whole or opaque partial
-reads. LOOP uses the same canonical carrier for proven seed checks at load and for every
-zero- or later-iteration commit, replay, origin lookup, and expansion identity; no
-transient field-evidence authority exists.
+the terminal arity rule and CALL preserves it. A LOOP's contract is the merged carried
+record: each field the body returns comes from the body's contract, and each omitted
+field comes from its seed binding (a literal seed stays opaque). MAP derives `list[U]`
+only from an exact child contract because the output-contract sum has no partial-list
+arm. Strict inline input inference remains separate: it accepts literals, direct
+exact references, and proven fields projected from partial records, while rejecting
+whole or opaque partial reads. LOOP uses the same canonical carrier for proven seed
+checks at load and for every zero- or later-iteration commit, replay, origin lookup,
+and expansion identity; no transient field-evidence authority exists.
 There is no parallel output-Type API: Python-authored nodes pass `output_contract=` explicitly.
 For a physical node `output:` declaration, Compose injects a source-aware reader into the
 descriptor's existing per-kind build position. The shared recursive compiler returns the
@@ -898,8 +900,12 @@ channel matches their prescribed transfer; transformed custom feedback carries
 its own message identity.
 
 Accepted growth installs candidate child-input connections through the same trace
-delta. A child's accepted capture remains unchanged; its effective input route
-joins those candidates only for fields already captured. A field in
+delta. A connection targets a child START input, or a fragment node's input that has
+a default and no wiring, such as the next LOOP driver's field that the body omits.
+A child's accepted capture remains unchanged; its effective input route
+joins those candidates only for fields already captured. A spawner selects its
+next-hop seed routes from that effective input route, so a LOOP field the body omits
+keeps its lineage across iterations. A field in
 `evaluated_keys` keeps its actual second binding route, even when the result is
 literal or null. Failed binding remains incomplete. Consuming or pruning a child
 removes its pending connections, while accepted boundary associations and input
@@ -1403,10 +1409,12 @@ live execution and replay. Runtime validates and splices the fragment genericall
 remaining kind-blind. During that compile-owned construction, CALL/MAP/LOOP
 prefix child clones with `spawner.failure_trace()`; MAP also stamps its generated
 boundaries, while a LOOP's next driver keeps only the enclosing
-`origin_context`. Expansion digests cover entry/end IDs and topology but exclude
-that diagnostic context, while loop pruning retires each finished iteration's
-direct body nodes (nodes grown inside it by a nested CALL, MAP, or LOOP stay
-live).
+`origin_context`. A LOOP merges the next carried record at respawn: the next driver
+gets a parameter default for each field the body omits, from the canonical seed, and
+only returned fields are wired from the body END. Expansion digests cover entry/end
+IDs and topology but exclude that diagnostic context, while loop pruning retires each
+finished iteration's direct body nodes (nodes grown inside it by a nested CALL, MAP,
+or LOOP stay live).
 
 Compile also owns stable identity for the static program. `flow_manifest`
 canonicalizes execution semantics, `flow_fingerprint` hashes that manifest, and

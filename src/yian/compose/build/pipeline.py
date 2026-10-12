@@ -52,6 +52,7 @@ from yian.compose.build.inline_inputs import (
     infer_inline_binding_type,
 )
 from yian.compose.edges.data import infer_data_edges
+from yian.compose.edges.producers import _binding_producers
 from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from yian.compose.nodes.call import CallDescriptor
 from yian.compose.nodes.loop import LoopDescriptor
@@ -63,6 +64,7 @@ from yian.compose.desugar.inline_bodies import (
 from yian.compose.desugar.inline_calls import _synth_id_gen, desugar_inline_calls
 from yian.compose.desugar.case_outputs import expand_case_outputs
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
+from yian.compose.helpers.output_contracts import resolve_output_binding_contract
 from yian.compose.desugar.adaptive_questions import desugar_adaptive_questions
 from yian.compose.desugar.case_targets import desugar_case_call_targets
 from yian.compose.validate.case_exhaustive import check_case_exhaustive
@@ -1177,6 +1179,34 @@ def _assemble(
             flow_id=body.flow_id,
         )
 
+    def read_binding_contract(
+        binding_label: str,
+        binding: Any,
+        binding_range: SourceRange | None,
+    ) -> OutputContract | None:
+        """Resolve one parent binding's contract, building referenced producers on demand."""
+        cache = descriptor_cache
+        if cache is None:
+            raise RuntimeError(
+                "descriptor cache was not initialized before binding contract resolution"
+            )
+        producers: dict[str, OutputContract] = {}
+        for producer_id in dict.fromkeys(_binding_producers(binding)):
+            if producer_id not in descriptors:
+                continue
+            contract = cache.build_one(
+                producer_id,
+                via_label=binding_label,
+                via_range=binding_range,
+            ).node.output_contract
+            if contract is not None:
+                producers[producer_id] = contract
+        return resolve_output_binding_contract(
+            binding,
+            producers,
+            flow_input_contracts,
+        )
+
     descriptors = _register_inline_bodies(
         descriptors,
         inline_bodies,
@@ -1198,6 +1228,7 @@ def _assemble(
         diagnostics=diagnostics,
         output_contract_reader=read_authored_node_output,
         variable_declaration_reader=read_authored_node_variables,
+        binding_contract_reader=read_binding_contract,
         owner=owner,
     )
     descriptor_cache = _DescriptorBuildCache(descriptors, ctx_base)
@@ -1254,9 +1285,9 @@ def _assemble(
         flow_wiring,
         diagnostics=diagnostics,
     )
-    # loop `'a -> 'a` type contract (types): each carried field's seed-source Type vs the
-    # body output's same-named field Type (needs producers, so it runs alongside the
-    # cross-flow call/map type check above).
+    # loop `'a -> 'a` type contract (types): each field the body returns is compared with
+    # its carried seed-source Type (needs producers, so it runs alongside the cross-flow
+    # call/map type check above).
     check_loop_type_contract(
         build_results,
         producers,

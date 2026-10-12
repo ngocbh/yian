@@ -4,9 +4,9 @@
 # only fills the reply; output bindings rejoin the branches into the carried record.
 #
 # Carried record ('a): {transcript: str, exited: bool} — threaded turn to turn ('a -> 'a).
-# The loop body's `output:` MUST equal this record. A raw multi-ref coalesce has no
-# inferable type, so adjacent defaulted spans preserve `str`; comparing the optional
-# exit field with `true` proves `bool` below.
+# The body returns carried fields only; an omitted one keeps its value. A raw
+# multi-ref coalesce has no inferable type, so adjacent defaulted spans preserve `str`;
+# comparing the optional exit field with `true` proves `bool` below.
 
 id: chat
 name: chat
@@ -69,7 +69,7 @@ defs:
               + "\n\nUser: " + inputs["message"]
               + "\n\nAssistant: " + inputs["reply"]
           )
-    output:                         # exact carried record type ('a -> 'a)
+    output:                         # both carried fields; one field alone needs a record node
       transcript: '${exit_turn.output.transcript:-""}${normal_turn.output:-""}'
       exited: ${exit_turn.output.exited == true}  # comparison is always bool
 

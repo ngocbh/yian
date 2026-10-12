@@ -6,9 +6,9 @@
 # by `max:`. The body's bindings reuse the new expression forms: arithmetic
 # (`1.0 - input.score`) and a builtin (`upper(...)`).
 #
-# Contract ('a -> 'a): the body's `output:` shape must EQUAL the carried record
-# (the loop `input:`), and the names the body reads must be a SUBSET of the carried
-# names. Field NAMES are checked at build, field TYPES at load.
+# Contract ('a -> 'a): the body's `output:` returns a SUBSET of the carried record
+# (the loop `input:`); an omitted field keeps its value. The names the body reads are
+# a SUBSET of the carried names. Field NAMES are checked at build, field TYPES at load.
 #
 # Loads resolver-free: the body is an in-file `defs:` callable. Agent nodes need a
 # provider to RUN; this only guarantees it LOADS.

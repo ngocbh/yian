@@ -2212,6 +2212,42 @@ def _changed_fragment() -> Flow:
     return fragment
 
 
+_TOTAL_LOOP_FLOW = """
+id: total-loop
+name: total_loop
+defs:
+  bump:
+    input:
+      n: int
+    nodes:
+      step:
+        kind: code
+        input:
+          n: ${input.n}
+        output:
+          n: int
+        code: |
+          return {"n": inputs["n"] + 1}
+    output: ${step.output}
+nodes:
+  loop:
+    kind: loop
+    call: bump
+    input:
+      n: 0
+    times: 2
+output: ${loop.output}
+"""
+
+
+def test_total_loop_manifest_omits_returned_fields():
+    manifest = flow_manifest(_compiled(_TOTAL_LOOP_FLOW))
+
+    loop_manifest = manifest["nodes"]["loop"]
+    assert loop_manifest["kind"] == "loop"
+    assert "returned_fields" not in loop_manifest
+
+
 def test_flow_manifest_emits_the_literal_node_kind():
     code_manifest = flow_manifest(_single_node_flow(CodeNode("node", code='return "ok"')))
     tool_manifest = flow_manifest(_single_node_flow(ToolNode("node", tool_id="t")))
@@ -2790,6 +2826,11 @@ def test_flow_fingerprint_preserves_start_parameter_order():
             {"flow_id": "child", "child": _fragment(), "iteration": 1},
             {"flow_id": "child", "child": _fragment(), "iteration": 2},
         ),
+        (
+            LoopNode,
+            {"flow_id": "child", "child": _fragment(), "returned_fields": None},
+            {"flow_id": "child", "child": _fragment(), "returned_fields": ("x",)},
+        ),
     ],
     ids=[
         "code-source",
@@ -2822,6 +2863,7 @@ def test_flow_fingerprint_preserves_start_parameter_order():
         "loop-max-iters",
         "loop-max-iters-none",
         "loop-iteration",
+        "loop-returned-fields",
     ],
 )
 def test_flow_fingerprint_covers_each_included_kind_field(

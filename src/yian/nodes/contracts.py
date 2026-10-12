@@ -147,7 +147,14 @@ class ExecutionScope:
 
 @dataclass(frozen=True, slots=True)
 class SeedConnection:
-    """Connect a child START parameter to a materialized parent seed route.
+    """Connect a fragment input to a materialized parent seed route.
+
+    The target is a child START parameter, or an input of another fragment node
+    that is declared with a default and left unwired, such as a field a LOOP body
+    omits and the next driver keeps from the carried record.
+
+    ``child_start_id`` names the target node, which is a child START or a node with
+    a defaulted unwired input.
 
     ``seed_path`` is a parameter name, or an explicit item index followed by a
     parameter name. Producer identities are supplied only by accepted runtime

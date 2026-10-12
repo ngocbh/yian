@@ -10,7 +10,14 @@ import copy
 import pytest
 
 from yian.compile.expand import loop_continue_subgraph, map_callsite, ns
-from yian.compile.model import CompiledFlow, Edge, END_ID, Flow, START_ID
+from yian.compile.model import (
+    CompiledFlow,
+    Edge,
+    END_ID,
+    Flow,
+    START_ID,
+    validate_growth_metadata,
+)
 from yian.diagnostics import OriginRef
 from yian.memory import (
     MemoryOccurrenceKind,
@@ -119,6 +126,58 @@ def test_continue_seeds_only_fields_declared_by_the_body_start():
     }
     assert sg.input_connections == (SeedConnection(sg.start_id, "x", ("x",)),)
     assert sg.child_boundaries == (ChildFlowBoundary(sg.start_id, body_end),)
+
+
+def _record_origin(returned_fields):
+    """Return a compiled LOOP origin carrying ``x`` and loop-only ``exited``."""
+    origin = LoopNode("lp", flow_id="f", child=_child_flow(), predicate_kind="while",
+                      predicate="${x}", max_iters=10, returned_fields=returned_fields)
+    origin.params = [Parameter("x"), Parameter("exited")]
+    return origin
+
+
+def test_continue_wires_only_returned_fields_and_connects_passthrough():
+    """Omitted fields reach the next driver through its default and a passthrough seed recipe."""
+    child = _child_flow()
+    carried = {"x": 1, "exited": False}
+    driver = _record_origin(("x",)).respawn(1, carried)
+
+    sg = loop_continue_subgraph(child, "lp", carried, 0, driver)
+
+    body_end = ns(map_callsite("lp", 0), END_ID)
+    assert sg.wiring[driver.id] == {"x": Binding(f"${{{body_end}.output.x}}")}
+    driver_edges = [e for e in sg.edges if e.from_ == body_end and e.to == driver.id]
+    assert driver_edges == [
+        Edge(id=f"{body_end}->{driver.id}#0", from_=body_end, to=driver.id, input_group="x"),
+    ]
+    assert sg.input_connections == (
+        SeedConnection(sg.start_id, "x", ("x",)),
+        SeedConnection(driver.id, "exited", ("exited",)),
+    )
+    validate_growth_metadata(sg)
+
+
+def test_continue_total_driver_wires_every_carried_field():
+    child = _child_flow()
+    carried = {"x": 1, "exited": False}
+    driver = _record_origin(None).respawn(1, carried)
+
+    sg = loop_continue_subgraph(child, "lp", carried, 0, driver)
+
+    body_end = ns(map_callsite("lp", 0), END_ID)
+    assert sg.wiring[sg.start_id] == {"x": Binding(1)}
+    assert sg.wiring[driver.id] == {
+        "x": Binding(f"${{{body_end}.output.x}}"),
+        "exited": Binding(f"${{{body_end}.output.exited}}"),
+    }
+    assert [e for e in sg.edges if e.to == driver.id] == [
+        Edge(id=f"{body_end}->{driver.id}#0", from_=body_end, to=driver.id, input_group="x"),
+        Edge(id=f"{body_end}->{driver.id}#1", from_=body_end, to=driver.id,
+             input_group="exited"),
+    ]
+    assert sg.input_connections == (SeedConnection(sg.start_id, "x", ("x",)),)
+    assert sg.child_boundaries == (ChildFlowBoundary(sg.start_id, body_end),)
+    validate_growth_metadata(sg)
 
 
 def test_continue_orders_zero_field_body_before_next_driver():

@@ -2530,7 +2530,7 @@ output: ${repeat.output}
         output:
           value: int
 """,
-            "body output fields ['value'] must equal the carried record fields ['n']",
+            "body output field(s) ['value'] are not carried record fields ['n']",
         ),
         (
             """      step:

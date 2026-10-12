@@ -177,7 +177,8 @@ class Flow:
             The flow's result node id — the node whose value is the flow's output. Defaults to
             `END_ID` (the top-level synthesized END); spliced flows namespace it.
         input_connections (`tuple[SeedConnection, ...]`):
-            Derived child START bindings selected from a parent's materialized seed routes.
+            Derived fragment-input bindings (child START inputs, or defaulted unwired inputs)
+            selected from a parent's materialized seed routes.
         child_boundaries (`tuple[ChildFlowBoundary, ...]`):
             Actual authored child flow boundaries, excluding generated fan nodes.
     """
@@ -203,6 +204,16 @@ def validate_growth_metadata(flow: Flow) -> None:
     Both fragment acceptance and topology identity use this source-neutral graph
     check. Execution scopes may be absent on direct graphs; present scopes must
     identify the corresponding actual boundary and containing flow occurrence.
+
+    A seed connection targets either a child START input that is declared and
+    wired, or an input of another fragment node that is declared with a default
+    and left unwired, so the seed route stands in for a value bound by default.
+    Each (target, input) pair appears at most once.
+
+    Raises:
+        `TypeError`: If a recipe carrier, boundary node, scope, target node, or target
+            parameter list has the wrong type.
+        `ValueError`: If a boundary or seed connection does not match the fragment.
     """
     for name, carrier in (("input_connections", SeedConnection),
                           ("child_boundaries", ChildFlowBoundary)):
@@ -241,18 +252,31 @@ def validate_growth_metadata(flow: Flow) -> None:
     for connection in flow.input_connections:
         SeedConnection(connection.child_start_id, connection.input_name, connection.seed_path)
         target = (connection.child_start_id, connection.input_name)
-        if connection.child_start_id not in starts or target in targets:
-            raise ValueError("seed connections must name unique declared child START inputs")
+        if connection.child_start_id not in flow.nodes:
+            raise ValueError("seed connections must name fragment nodes")
+        if target in targets:
+            raise ValueError("seed connections must name unique target inputs")
         targets.add(target)
-        params = flow.nodes[connection.child_start_id].params
+        node = flow.nodes[connection.child_start_id]
+        if not isinstance(node, Node):
+            raise TypeError("seed connection targets must be Node values")
+        params = node.params
         if params is None:
             params = []
         if type(params) is not list or any(type(param) is not Parameter for param in params):
             raise TypeError("seed connection target parameters must be Parameter values")
-        if connection.input_name not in {param.name for param in params}:
+        declared = {param.name: param for param in params}
+        if connection.input_name not in declared:
             raise ValueError("seed connection target input must be declared")
-        if connection.input_name not in flow.wiring.get(connection.child_start_id, {}):
-            raise ValueError("seed connection target input must be wired")
+        wired = connection.input_name in flow.wiring.get(connection.child_start_id, {})
+        if connection.child_start_id in starts:
+            if not wired:
+                raise ValueError("seed connection child START input must be wired")
+        else:
+            if not declared[connection.input_name].has_default:
+                raise ValueError("seed connection non-START input must declare a default")
+            if wired:
+                raise ValueError("seed connection non-START input must not be wired")
 
 
 class CompiledFlow(Flow):

@@ -14,7 +14,7 @@ kind opts into these normalized keys through its own `allowed` set, so kinds wit
 corresponding authored fields continue to reject them.
 
 Like `nodes/base.py`, this base imports only the dependencies its contract needs —
-`typesys` (TypeRegistry), `nodes.contracts` (Parameter/ValueContract),
+`typesys` (TypeRegistry), `nodes.contracts` (OutputContract/Parameter/ValueContract),
 `compose.helpers.types` (read_type), `compose.helpers.errors` (LoadError) and
 `compose.source` (SourceCursor) for parse navigation, `diagnostics` (SourceRange) — all
 earlier layers on the ladder, so it stays a leaf of the nodes package: it never imports any
@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional
 
 from yian.nodes.base import Node
-from yian.nodes.contracts import Parameter, ValueContract
+from yian.nodes.contracts import OutputContract, Parameter, ValueContract
 from yian.typesys.types import TypeRegistry
 from yian.compile.model import Edge
 from yian.compose.helpers.types import read_type
@@ -49,6 +49,9 @@ class BuildContext:
     optionally compiles one authored node-output declaration at its established
     build position; ``variable_declaration_reader`` does the same for local declarations.
     ``resolve_origin`` presents an origin registered before file finalization.
+    ``binding_contract_reader`` resolves one parent binding's output contract from
+    the flow inputs and the producers it references (args: diagnostic label,
+    binding, binding range); LOOP reads it to type a carried field the body omits.
     Source-free and direct programmatic builds leave these optional seams unset.
     ``owner`` is the lexical flow path of the flow being assembled; AGENT
     descriptors stamp it into memory declaration sites.
@@ -61,6 +64,9 @@ class BuildContext:
     diagnostics: LoadDiagnostics = field(default_factory=LoadDiagnostics)
     output_contract_reader: Callable[[str, Any], ValueContract | None] | None = None
     variable_declaration_reader: Callable[[str, Any], list[Parameter] | None] | None = None
+    binding_contract_reader: (
+        Callable[[str, Any, SourceRange | None], OutputContract | None] | None
+    ) = None
     owner: tuple[str, ...] = ("root",)  # lexical flow path that stamps DeclSite.owner
 
 

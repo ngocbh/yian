@@ -4,11 +4,13 @@ A `kind: loop` node bakes a `LoopNode` from a `LoopDescriptor`: it resolves+bake
 body subflow (the `call:` child, a `defs:` callable here so no external resolver is
 needed), stamps `output_contract`, and enforces the two halves of the type contract:
 
-- FIELD-NAME-set (in `LoopDescriptor.build`): body output field NAMES == carried keys,
-  body input NAMES subset of carried keys — a located `LoadError` on a name mismatch.
+- FIELD-NAME-set (in `LoopDescriptor.build`): body output field NAMES subset of carried
+  keys (an omitted field carries over), body input NAMES subset of carried keys — a
+  located `LoadError` on a name mismatch.
 - FULL TYPE equality (in the loader post-build pass `check_loop_type_contract`):
-  body output Type == carried record Type per field — a located `LoadError` on a
-  same-names/different-TYPES mismatch (needs the assembled producers/flow-input types).
+  each returned body output Type == carried record Type per field — a located
+  `LoadError` on a same-names/different-TYPES mismatch (needs the assembled
+  producers/flow-input types).
 """
 
 import pytest
@@ -16,6 +18,7 @@ import pytest
 from yian.compose.loader import load_flow
 from yian.compose.helpers.errors import LoadError
 from yian.nodes.base import NodeKind
+from yian.nodes.contracts import PartialRecordContract, ValueContract
 from yian.typesys.values import ValueKind
 
 
@@ -90,11 +93,11 @@ def test_partial_loop_contract_rejects_unknown_downstream_field_at_load():
         load_flow(PARTIAL_OUTPUT_REFERENCE)
 
 
-# The body output OMITS `exited`, so its output field NAMES ({n}) != the carried keys
-# ({n, exited}) -> caught in `LoopDescriptor.build` (the field-name-set half).
-BAD_FIELDSET = """
-id: loop-bad-fieldset
-name: loop_bad_fieldset
+# The body output OMITS `exited`, so it returns a subset ({n}) of the carried keys
+# ({n, exited}); the omitted `exited` carries over from the previous iteration.
+SUBSET_BODY = """
+id: loop-subset-body
+name: loop_subset_body
 defs:
   bump:
     input:
@@ -266,11 +269,436 @@ def test_good_loop_bakes_loopnode():
     assert set(node.output_contract.type.fields) == {"n", "exited"}
 
 
-def test_body_output_fieldset_must_equal_carried():
+def _field_names(contract):
+    """The ordered field names of an exact or partial record contract."""
+    if type(contract) is PartialRecordContract:
+        return tuple(name for name, _ in contract.fields)
+    return tuple(contract.type.fields)
+
+
+def _field_contract(contract, name):
+    """One field's proven contract (exact type or partial entry), else None."""
+    if type(contract) is PartialRecordContract:
+        return dict(contract.fields)[name]
+    return ValueContract(contract.type.fields[name])
+
+
+def test_body_may_return_a_subset_of_carried_fields():
+    node = load_flow(SUBSET_BODY).compiled.nodes["chat_loop"]
+    assert node.returned_fields == ("n",)
+    assert _field_names(node.output_contract) == ("n", "exited")
+
+
+OUTSIDE_CARRIED = """
+id: loop-outside-carried
+name: loop_outside_carried
+defs:
+  bump:
+    input:
+      n: int
+    nodes: {}
+    output:
+      n: ${input.n}
+      extra: ${input.n}
+nodes:
+  chat_loop:
+    kind: loop
+    call: bump
+    input:
+      n: 0
+      exited: false
+    while: not ${exited}
+    max: 5
+output: ${chat_loop.output}
+"""
+
+
+def test_body_output_field_outside_carried_record_is_rejected():
     with pytest.raises(LoadError) as e:
-        load_flow(BAD_FIELDSET)
-    assert "output" in str(e.value).lower()
+        load_flow(OUTSIDE_CARRIED)
+    assert "body output field(s) ['extra'] are not carried record fields" in str(e.value)
     assert e.value.diagnostic.frames[-1].range.start_line is not None
+
+
+# A body with exactly one declared output returns it bare (the terminal arity rule),
+# so `output: {n: ...}` is a scalar, not a one-field record.
+SINGLE_OUTPUT_BODY = """
+id: loop-single-output
+name: loop_single_output
+defs:
+  bump:
+    input:
+      n: int
+    nodes: {}
+    output:
+      n: ${input.n}
+nodes:
+  chat_loop:
+    kind: loop
+    call: bump
+    input:
+      n: 0
+      exited: false
+    while: not ${exited}
+    max: 5
+output: ${chat_loop.output}
+"""
+
+
+def test_single_output_body_is_rejected_as_non_record():
+    with pytest.raises(LoadError, match="must declare a record output") as e:
+        load_flow(SINGLE_OUTPUT_BODY)
+    assert "a single declared output returns its value bare" in str(e.value)
+
+
+# The one declared output `state` wraps a record `{n}`. The terminal returns it bare, so
+# without a check `{n}` would be read as the returned carried fields and `state` would
+# never change.
+SINGLE_OUTPUT_WRAPS_RECORD = """
+id: loop-single-output-record
+name: loop_single_output_record
+defs:
+  bump:
+    input:
+      n: int
+    nodes:
+      step:
+        kind: code
+        input:
+          n: ${input.n}
+        output:
+          n: int
+        code: |
+          return {"n": inputs["n"] + 100}
+    output:
+      state: ${step.output}
+nodes:
+  chat_loop:
+    kind: loop
+    call: bump
+    input:
+      n: 0
+      state: init
+    times: 2
+output: ${chat_loop.output}
+"""
+
+
+def test_single_output_named_after_a_carried_field_is_rejected():
+    with pytest.raises(LoadError, match="declares one output 'state'") as e:
+        load_flow(SINGLE_OUTPUT_WRAPS_RECORD)
+    assert "a single declared output returns its value bare" in str(e.value)
+    assert e.value.diagnostic.frames[-1].range.start_line is not None
+
+
+def test_total_loop_keeps_body_contract_and_no_returned_fields():
+    node = load_flow(GOOD).compiled.nodes["chat_loop"]
+    assert node.returned_fields is None
+    contract = node.output_contract
+    assert type(contract) is ValueContract
+    assert tuple(contract.type.fields) == ("n", "exited")
+    assert contract.type.fields["n"].kind is ValueKind.INTEGER
+    assert contract.type.fields["exited"].kind is ValueKind.BOOLEAN
+
+
+# A chat-shaped loop: the body reads `person`/`talking_to` but returns only
+# `{exited, reply}`; `person` and `talking_to` carry over and type from their seeds.
+CHAT = """
+id: loop-chat
+name: loop_chat
+typedefs:
+  Person:
+    name: str
+    handle: str
+input:
+  person: Person
+  talking_to: str
+defs:
+  turn:
+    input:
+      person: Person
+      talking_to: str
+      exited: bool
+      reply: str
+    nodes: {}
+    output:
+      exited: ${input.exited}
+      reply: ${input.talking_to}
+nodes:
+  chat:
+    kind: loop
+    call: turn
+    input:
+      person: ${input.person}
+      talking_to: ${input.talking_to}
+      exited: false
+      reply: ""
+    while: not exited
+    max: 3
+  sink:
+    kind: code
+    code: tests.engine._compose_codefns:echo_x
+    input:
+      x: ${chat.output.person.name}
+    output: str
+output: ${sink.output}
+"""
+
+
+def test_merged_contract_types_omitted_field_from_its_seed():
+    loaded = load_flow(CHAT)
+    node = loaded.compiled.nodes["chat"]
+    assert node.returned_fields == ("exited", "reply")
+    contract = node.output_contract
+    assert type(contract) is ValueContract
+    assert tuple(contract.type.fields) == ("person", "talking_to", "exited", "reply")
+    person = contract.type.fields["person"]
+    assert person.kind is ValueKind.OBJECT
+    assert set(person.fields) == {"name", "handle"}
+    assert contract.type.fields["talking_to"].kind is ValueKind.STRING
+    assert contract.type.fields["exited"].kind is ValueKind.BOOLEAN
+
+    with pytest.raises(LoadError, match="unknown field 'missing'"):
+        load_flow(
+            CHAT.replace("${chat.output.person.name}", "${chat.output.person.missing}")
+        )
+
+
+KEEP_LITERAL = SUBSET_BODY.replace(
+    "      exited: false\n    while:", "      exited: false\n      keep: 3\n    while:"
+)
+
+
+def test_merged_contract_keeps_literal_seed_opaque():
+    node = load_flow(KEEP_LITERAL).compiled.nodes["chat_loop"]
+    assert node.returned_fields == ("n",)
+    contract = node.output_contract
+    assert type(contract) is PartialRecordContract
+    assert _field_names(contract) == ("n", "exited", "keep")
+    assert dict(contract.fields)["keep"] is None
+    assert dict(contract.fields)["n"].type.kind is ValueKind.INTEGER
+
+
+# `second` (declared first, so it builds `first` on demand) seeds `person` from
+# `first`'s carried-over `person` and omits it too.
+CHAINED = """
+id: loop-chained
+name: loop_chained
+typedefs:
+  Person:
+    name: str
+    handle: str
+input:
+  person: Person
+  talking_to: str
+defs:
+  turn:
+    input:
+      person: Person
+      talking_to: str
+      exited: bool
+      reply: str
+    nodes: {}
+    output:
+      exited: ${input.exited}
+      reply: ${input.talking_to}
+nodes:
+  second:
+    kind: loop
+    call: turn
+    input:
+      person: ${first.output.person}
+      talking_to: ${first.output.talking_to}
+      exited: false
+      reply: ""
+    times: 1
+  first:
+    kind: loop
+    call: turn
+    input:
+      person: ${input.person}
+      talking_to: ${input.talking_to}
+      exited: false
+      reply: ""
+    times: 1
+output: ${second.output.person.name}
+"""
+
+
+def test_loop_seeded_from_partial_loop_sees_merged_type():
+    node = load_flow(CHAINED).compiled.nodes["second"]
+    person = _field_contract(node.output_contract, "person")
+    assert person is not None
+    assert person.type.kind is ValueKind.OBJECT
+    assert set(person.type.fields) == {"name", "handle"}
+
+
+# `first` and `second` each omit `keep` and seed it from the other's output, so resolving
+# either merged contract needs the other built first.
+SEED_CYCLE = """
+id: loop-seed-cycle
+name: loop_seed_cycle
+defs:
+  bump:
+    input:
+      n: int
+      exited: bool
+    nodes:
+      step:
+        kind: code
+        code: tests.engine._compose_codefns:loop_bump
+        input:
+          n: ${input.n}
+          exited: ${input.exited}
+        output:
+          n: int
+    output: ${step.output}
+nodes:
+  first:
+    kind: loop
+    call: bump
+    input:
+      n: 0
+      exited: false
+      keep: ${second.output.keep}
+    times: 1
+  second:
+    kind: loop
+    call: bump
+    input:
+      n: 0
+      exited: false
+      keep: ${first.output.keep}
+    times: 1
+output: ${second.output}
+"""
+
+
+def test_omitted_field_seed_cycle_is_located():
+    with pytest.raises(LoadError) as caught:
+        load_flow(SEED_CYCLE)
+    message = str(caught.value)
+    assert "dependency cycle" in message
+    assert "first.input.keep -> second.input.keep" in message
+    # The binding that closes the cycle carries the caret, not the coarse `input:` span.
+    closing_line = SEED_CYCLE.splitlines().index("      keep: ${first.output.keep}") + 1
+    rng = caught.value.diagnostic.frames[-1].range
+    assert (rng.start_line, rng.end_line) == (closing_line, closing_line)
+
+
+PARTIAL_BAD_TYPES = """
+id: loop-partial-bad-types
+name: loop_partial_bad_types
+input:
+  n0: int
+defs:
+  bump:
+    input:
+      n: int
+      exited: bool
+    nodes:
+      step:
+        kind: code
+        code: tests.engine._compose_codefns:make_report
+        input:
+          n: ${input.n}
+          exited: ${input.exited}
+        output:
+          n: str
+    output: ${step.output}
+nodes:
+  chat_loop:
+    kind: loop
+    call: bump
+    input:
+      n: ${input.n0}
+      exited: false
+    while: not ${exited}
+    max: 5
+output: ${chat_loop.output}
+"""
+
+
+def test_returned_field_type_mismatch_still_rejected_in_partial_body():
+    with pytest.raises(LoadError, match="carried field 'n'"):
+        load_flow(PARTIAL_BAD_TYPES)
+
+
+# `step` declares no `output:`, so `n` projects an untyped producer value.
+PARTIAL_OPAQUE_RETURNED = """
+id: loop-partial-opaque-returned
+name: loop_partial_opaque_returned
+input:
+  note0: str
+  k0: int
+defs:
+  bump:
+    input:
+      n: int
+      note: str
+    nodes:
+      step:
+        kind: code
+        code: tests.engine._compose_codefns:loop_bump
+        input:
+          n: ${input.n}
+          exited: false
+    output:
+      n: ${step.output.n}
+      note: ${input.note}
+nodes:
+  chat_loop:
+    kind: loop
+    call: bump
+    input:
+      n: 1
+      note: ${input.note0}
+      keep: ${input.k0}
+    times: 1
+output: ${chat_loop.output}
+"""
+
+
+def test_partial_body_with_opaque_returned_field():
+    node = load_flow(PARTIAL_OPAQUE_RETURNED).compiled.nodes["chat_loop"]
+    assert node.returned_fields == ("n", "note")
+    contract = node.output_contract
+    assert type(contract) is PartialRecordContract
+    fields = dict(contract.fields)
+    assert _field_names(contract) == ("n", "note", "keep")
+    assert fields["n"] is None
+    assert fields["note"].type.kind is ValueKind.STRING
+    assert fields["keep"].type.kind is ValueKind.INTEGER
+
+
+INLINE_SUBSET = """
+id: loop-inline-subset
+name: loop_inline_subset
+nodes:
+  repeat:
+    kind: loop
+    times: 2
+    input:
+      n: 0
+      exited: false
+    nodes:
+      bump:
+        kind: code
+        code: tests.engine._compose_codefns:loop_bump
+        input:
+          n: ${input.n}
+          exited: ${input.exited}
+        output:
+          n: int
+    output: ${bump.output}
+output: ${repeat.output}
+"""
+
+
+def test_inline_loop_body_may_return_a_subset():
+    node = load_flow(INLINE_SUBSET).compiled.nodes["repeat"]
+    assert node.returned_fields == ("n",)
+    assert _field_names(node.output_contract) == ("n", "exited")
 
 
 # A loop whose body builds a carried `str` field from a MULTI-SEGMENT template binding

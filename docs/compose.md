@@ -246,6 +246,13 @@ injects the current file catalog builder's registered-site lookup after every CO
 origin is attached. That lookup replays the already-parsed document without freezing;
 the loader remains the single successful-load catalog freeze.
 
+LOOP also reads the optional `ctx.binding_contract_reader`. Given a diagnostic label,
+a binding, and its source range, it returns that binding's resolved output contract
+from the flow inputs and the producers the binding references. The pipeline implements
+it through the lazy descriptor build cache. LOOP uses it to type each carried field the
+body omits from that field's seed binding. When the reader is unset (source-free and
+direct programmatic builds), or the seed is unproven, the omitted field stays untyped.
+
 Each output-authoring leaf calls the descriptor's common output compiler at its established
 position inside `build()`, after any earlier kind-owned validation. For a physical
 declaration, the injected `BuildContext.output_contract_reader` selects the retained,

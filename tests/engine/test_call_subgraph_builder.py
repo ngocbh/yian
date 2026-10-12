@@ -21,7 +21,13 @@ from yian.memory import (
     MemoryOccurrenceSegment,
     MemoryScope,
 )
-from yian.nodes.contracts import ChildFlowBoundary, ExecutionScope, SeedConnection
+from yian.nodes.contracts import (
+    Binding,
+    ChildFlowBoundary,
+    ExecutionScope,
+    Parameter,
+    SeedConnection,
+)
 
 from tests.engine.test_expand import _child_flow
 
@@ -92,6 +98,46 @@ def test_growth_metadata_revalidates_exact_targets_and_nested_fields(malformatio
 
     error = TypeError if malformation == "invalid-parameters" else (TypeError, ValueError)
     with pytest.raises(error):
+        validate_growth_metadata(fragment)
+
+
+def _fragment_with_defaulted_input(*, default=True, wired=False):
+    """Return a CALL fragment whose non-START node declares an extra input ``p``."""
+    fragment = call_subgraph(_child_flow(), "call", {"x": 1})
+    node_id = ns("call", "head")
+    node = fragment.nodes[node_id]
+    node.params = [*node.params, Parameter("p", has_default=default, default=1 if default else None)]
+    if wired:
+        fragment.wiring[node_id] = {**fragment.wiring[node_id], "p": Binding("${input.x}")}
+    return fragment, node_id
+
+
+def test_growth_metadata_accepts_unwired_defaulted_target():
+    fragment, node_id = _fragment_with_defaulted_input()
+    fragment.input_connections += (SeedConnection(node_id, "p", ("p",)),)
+
+    validate_growth_metadata(fragment)
+
+
+@pytest.mark.parametrize(("case", "message"), [
+    ("no-default", "must declare a default"),
+    ("wired", "must not be wired"),
+    ("undeclared-input", "target input must be declared"),
+    ("unknown-target", "must name fragment nodes"),
+])
+def test_growth_metadata_rejects_invalid_non_start_target(case, message):
+    fragment, node_id = _fragment_with_defaulted_input(
+        default=case != "no-default", wired=case == "wired",
+    )
+    connection = {
+        "no-default": SeedConnection(node_id, "p", ("p",)),
+        "wired": SeedConnection(node_id, "p", ("p",)),
+        "undeclared-input": SeedConnection(node_id, "absent", ("p",)),
+        "unknown-target": SeedConnection("absent", "p", ("p",)),
+    }[case]
+    fragment.input_connections += (connection,)
+
+    with pytest.raises(ValueError, match=message):
         validate_growth_metadata(fragment)
 
 

@@ -15,7 +15,7 @@ reject an ill-formed flow before it is compiled:
 - `call_types.py` — `check_call_map_types`: each `call`/`map` binding's source
   Type is compatible with the child input's declared Type.
 - `loop_types.py` — `check_loop_type_contract`: a `loop`'s carried record obeys
-  the `'a -> 'a` type contract by comparing each already-retained proven body field
+  the `'a -> 'a` type contract by comparing each proven field the body returns
   with a statically proven carried source.
 - `asserts.py` — `LoweredAsserts` + `lower_flow_asserts` (flow-level `asserts:`,
   lowered onto the synthesized START/END boundary nodes without replacing the

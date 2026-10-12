@@ -5,15 +5,19 @@ STOP → `Output(carried, commit_as=origin)`; CONTINUE → `Grow(seed=(carried, 
 These test `run`/`respawn` and compile-owned reconstruction directly (no engine); e2e behavior is in
 `test_loop_run.py`.
 """
+import json
+
 import pytest
 
 from yian.compile.expand import build_grow
+from yian.compile.manifest import expansion_digest
 from yian.diagnostics import OriginRef
 from yian.memory import MemoryScope
 from yian.nodes.base import Grow, NodeKind, Output
 from yian.nodes.contracts import (
     Assertion,
     ContractOrigins,
+    Parameter,
     ValueContract,
 )
 from yian.nodes.ids import map_callsite, ns
@@ -146,6 +150,66 @@ def test_respawn_preserves_the_derived_base_memory_scope() -> None:
     assert clone.memory_scope is node.memory_scope
 
 
+def _partial_loop() -> LoopNode:
+    node = LoopNode("lp", flow_id="f", child=_child_flow(), predicate_kind="times",
+                    times=1, max_iters=1, returned_fields=("n",))
+    node.params = [Parameter("n"), Parameter("person")]
+    return node
+
+
+def test_respawn_defaults_omitted_fields_from_the_carried_record():
+    node = _partial_loop()
+    origin_params = node.params
+    origin_snapshot = list(node.params)
+
+    clone = node.respawn(1, {"n": 1, "person": {"name": "A"}})
+
+    by_name = {param.name: param for param in clone.params}
+    assert by_name["person"].has_default is True
+    assert by_name["person"].default == {"name": "A"}
+    assert by_name["person"].required is False
+    assert by_name["n"].has_default is False
+    assert clone.returned_fields == ("n",)
+    assert node.params is origin_params
+    assert node.params == origin_snapshot
+    assert all(param.has_default is False for param in node.params)
+
+
+def test_respawned_driver_binds_merged_record():
+    clone = _partial_loop().respawn(1, {"n": 1, "person": {"name": "A"}})
+
+    merged = clone.run({"n": 2})
+    assert isinstance(merged, Output)
+    assert merged.value == {"n": 2, "person": {"name": "A"}}
+
+    explicit_null = clone.run({"n": 2, "person": None})
+    assert isinstance(explicit_null, Output)
+    assert explicit_null.value == {"n": 2, "person": None}
+
+
+def test_partial_respawn_requires_the_carried_record():
+    with pytest.raises(ValueError, match="carried record"):
+        _partial_loop().respawn(1)
+
+
+def test_respawn_keeps_a_null_omitted_value_as_its_default():
+    clone = _partial_loop().respawn(1, {"n": 1, "person": None})
+    person = next(param for param in clone.params if param.name == "person")
+    assert person.has_default is True
+    assert person.default is None
+
+
+def test_total_respawn_keeps_params():
+    node = LoopNode("lp", flow_id="f", child=_child_flow(), predicate_kind="times",
+                    times=1, max_iters=1)
+    node.params = [Parameter("n"), Parameter("person")]
+
+    clone = node.respawn(1, {"n": 1, "person": {"name": "A"}})
+
+    assert clone.params is node.params
+    assert clone.returned_fields is None
+
+
 def test_until_do_while_continues_on_iteration_zero():
     child = _child_flow()
     node = LoopNode("lp", flow_id="f", child=child, predicate_kind="until",
@@ -271,3 +335,23 @@ def test_unlimited_driver_far_past_any_cap_still_grows(kind, predicate):
     assert driver.max_iters is None
     result = driver.run({"messages": [], "exited": False})
     assert isinstance(result, Grow) and result.seed[1] == 100_000
+
+
+def test_build_grow_partial_loop_matches_live_and_replay_digest():
+    """Live and replayed partial-loop growth build one fragment whose next driver keeps omitted fields."""
+    child = _child_flow()
+    origin = LoopNode("lp", flow_id="f", child=child, predicate_kind="while",
+                      predicate="${x}", max_iters=10, returned_fields=("x",))
+    origin.params = [Parameter("x"), Parameter("exited")]
+    carried = {"x": 1, "exited": False}
+    clone = origin.respawn(2, carried)
+
+    live_outcome = clone.run(dict(carried))
+    assert isinstance(live_outcome, Grow)
+    live = build_grow(clone, live_outcome.seed)
+    replay = build_grow(origin, json.loads(json.dumps([carried, 2])))
+
+    assert expansion_digest(live) == expansion_digest(replay)
+    exited = {param.name: param for param in live.nodes["lp~3"].params}["exited"]
+    assert exited.has_default is True
+    assert exited.default == carried["exited"]

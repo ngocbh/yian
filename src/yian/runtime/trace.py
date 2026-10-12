@@ -175,14 +175,29 @@ class _SeedRoutes:
     fields: tuple[tuple[str, ValueRoute], ...]
 
 
-def select_seed_route(capture: ForwardCapture, connection: SeedConnection) -> ValueRoute | None:
-    """Select one captured field by explicit item/name metadata, preserving nulls."""
-    binding = capture
+def select_seed_route(
+    capture: ForwardCapture, connection: SeedConnection, input_route: ValueRoute | None = None,
+) -> ValueRoute | None:
+    """Select one seed field route by explicit item/name metadata, preserving nulls.
+
+    Args:
+        capture (`ForwardCapture`): The owner's accepted forward capture.
+        connection (`SeedConnection`): The seed connection naming an item and/or field.
+        input_route (`ValueRoute`, *optional*, defaults to `None`): The owner's effective
+            input route; when given, a field-only path selects from it instead of the raw
+            capture route.
+
+    Returns:
+        `ValueRoute | None`: The selected route, or `None` when the item or field was not
+            captured.
+    """
+    route = capture.route if input_route is None else input_route
     if len(connection.seed_path) == 2:
         binding = dict(capture.items).get(connection.seed_path[0])
         if binding is None:
             return None
-    return dict(zip(binding.route.names, binding.route.children)).get(connection.seed_path[-1])
+        route = binding.route
+    return dict(zip(route.names, route.children)).get(connection.seed_path[-1])
 
 
 class RetainedTrace:
@@ -511,7 +526,10 @@ def prepare_trace(
         boundary_update = (index, replace(trace._boundaries[index], **{role: source}))
     connections: dict[str, list[tuple[str, ValueRoute]]] = {}
     for connection in sorted(input_connections, key=lambda item: (item.child_start_id, item.input_name)):
-        route = select_seed_route(capture, connection)
+        # An owner that is itself a connection target (a LOOP driver whose omitted field
+        # binds a default) forwards its joined route rather than the raw default, so
+        # lineage survives every iteration.
+        route = select_seed_route(capture, connection, input_route)
         if route is None:
             raise ValueError("seed connection field or item was not captured")
         connections.setdefault(connection.child_start_id, []).append((connection.input_name, route))

@@ -188,8 +188,15 @@ def test_respawned_driver_binds_merged_record():
 
 
 def test_partial_respawn_requires_the_carried_record():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="carried record"):
         _partial_loop().respawn(1)
+
+
+def test_respawn_keeps_a_null_omitted_value_as_its_default():
+    clone = _partial_loop().respawn(1, {"n": 1, "person": None})
+    person = next(param for param in clone.params if param.name == "person")
+    assert person.has_default is True
+    assert person.default is None
 
 
 def test_total_respawn_keeps_params():

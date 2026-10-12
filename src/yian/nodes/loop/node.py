@@ -58,7 +58,8 @@ class LoopNode(Node):
       times          the fixed run count when `predicate_kind == "times"`; None otherwise.
       max_iters      the runaway guard for `while`/`until` (None = no limit); for `times`, equals
                      the count N.
-      returned_fields the carried fields the body returns, in carried order; None when the body
+      returned_fields
+                     the carried fields the body returns, in carried order; None when the body
                      returns every carried field (a total loop). Each omitted field keeps the
                      previous iteration's value through `respawn`.
       iteration      THIS driver's iteration index `k` (0 on the compiled `L`, `k` on a clone `L~k`).

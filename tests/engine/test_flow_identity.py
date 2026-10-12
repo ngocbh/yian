@@ -2945,9 +2945,9 @@ output: ${c.output}
 """
 
 
-# These pins guard that the value form, an absent output and multi-field records keep the
-# encoding they had before records stopped unwrapping; the END-manifest equality above is the
-# primary guard.
+# These pins guard that the value form, an absent output, and multi-field records keep their
+# encoding when END record semantics change; the END-manifest equality above is the primary
+# guard.
 @pytest.mark.parametrize(
     ("output_section", "expected"),
     [

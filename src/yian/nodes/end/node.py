@@ -70,7 +70,9 @@ class EndNode(Node):
         # `value`/`record`/`list_` factories rather than this ctor directly.
         super().__init__(node_id, title=title)
         if (output_names is None) == (n is None):
-            raise ValueError("EndNode takes exactly one of output_names= (record) or n= (list)")
+            raise ValueError(
+                "EndNode takes exactly one of output_names= (value/record) or n= (list)"
+            )
         if value and (output_names is None or len(output_names) > 1):
             raise ValueError("EndNode value mode takes at most one output name")
         if output_names is not None:
@@ -142,7 +144,7 @@ class EndNode(Node):
         return tuple(f"e{index}" for index in range(self._n))
 
     def capture_backward_context(self) -> dict:
-        """Capture value, record arity or ordered list positions before the body executes.
+        """Capture the output layout (value, record arity, or list positions) before the body executes.
 
         Returns:
             `dict`: The `input_output_paths` mapping: no paths for zero outputs,

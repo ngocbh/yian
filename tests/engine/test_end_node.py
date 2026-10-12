@@ -58,6 +58,8 @@ def test_end_record_returns_record():
 def test_end_value_rejects_more_than_one_name():
     with pytest.raises(ValueError):
         EndNode("__end__", output_names=["a", "b"], value=True)
+    with pytest.raises(ValueError):
+        EndNode("__end__", n=1, value=True)
 
 
 # --- LIST mode (the MAP fan-in) — replaces COLLECTOR; join in over order (index).

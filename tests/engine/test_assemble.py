@@ -314,7 +314,8 @@ def test_resolved_parameters_accept_zero_args_and_wire_empty_start():
 def _end_edges(f, node_ids, edges):
     """Return END_ID producer edges synthesized from flow `output:` bindings."""
     _, all_edges, _ = synthesize_boundary_graph(
-        [], _flow_outputs(f.outputs), node_ids, list(edges)
+        [], _flow_outputs(f.outputs), node_ids, list(edges),
+        record=isinstance(f.outputs, dict),
     )
     return [e for e in all_edges if e.to == END_ID]
 
@@ -354,7 +355,7 @@ def _bare_roots(node_ids, edges):
     carries `input_group`; a control edge carries `source_handle`). Filters the boundary
     edges for `from_ == START_ID and input_group is None and to != END_ID`.
     """
-    _, all_edges, _ = synthesize_boundary_graph([], [], node_ids, list(edges))
+    _, all_edges, _ = synthesize_boundary_graph([], [], node_ids, list(edges), record=False)
     return {
         e.to
         for e in all_edges
@@ -457,23 +458,12 @@ def test_terminal_edge_ids_unique():
 def test_assembled_edges_have_start_and_end():
     node_ids, edges, f = _all_edges("02-case.yaml")
     _, boundary_edges, _ = synthesize_boundary_graph(
-        [], _flow_outputs(f.outputs), node_ids, list(edges)
+        [], _flow_outputs(f.outputs), node_ids, list(edges),
+        record=isinstance(f.outputs, dict),
     )
     full = edges + boundary_edges
     assert any(e.from_ == START_ID for e in full)
     assert any(e.to == END_ID for e in full)
-
-
-def test_boundary_end_without_record_flag_follows_output_count():
-    two = [FlowOutput("a", "${x.output}"), FlowOutput("b", "${x.output}")]
-    one = [FlowOutput("result", "${x.output}")]
-
-    nodes, _, _ = synthesize_boundary_graph([], two, {"x"}, [])
-    assert nodes[END_ID].returns_record is True
-    nodes, _, _ = synthesize_boundary_graph([], one, {"x"}, [])
-    assert nodes[END_ID].returns_record is False
-    nodes, _, _ = synthesize_boundary_graph([], [], {"x"}, [])
-    assert nodes[END_ID].returns_record is False
 
 
 def test_boundary_end_record_flag_picks_the_mode():
@@ -483,6 +473,11 @@ def test_boundary_end_record_flag_picks_the_mode():
     assert nodes[END_ID].returns_record is True
     nodes, _, _ = synthesize_boundary_graph([], one, {"x"}, [], record=False)
     assert nodes[END_ID].returns_record is False
+    nodes, _, _ = synthesize_boundary_graph([], [], {"x"}, [], record=False)
+    assert nodes[END_ID].returns_record is False
+    two = [FlowOutput("a", "${x.output}"), FlowOutput("b", "${x.output}")]
+    with pytest.raises(ValueError):
+        synthesize_boundary_graph([], two, {"x"}, [], record=False)
 
 
 # --------------------------------------------------------------------------- #

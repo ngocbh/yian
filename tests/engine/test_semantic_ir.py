@@ -352,6 +352,7 @@ def test_boundary_reads_wrapped_output_but_preserves_it_in_end_wiring() -> None:
         [output],
         {"producer"},
         [],
+        record=False,
     )
 
     assert any(

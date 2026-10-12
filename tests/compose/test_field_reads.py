@@ -7,11 +7,14 @@ from yian.compose.helpers.errors import LoadError
 from yian.run import run_flow
 
 
-def _flow(step_output: str, rest: str, *, typedefs: str = "") -> str:
-    """A flow with one CODE node `step` typed `step_output`, plus `rest` (YAML tail)."""
+def _flow(step_output: str, rest: str, *, preamble: str = "") -> str:
+    """A flow with one CODE node `step` typed `step_output`, plus `rest` (YAML tail).
+
+    `preamble` holds top-level blocks placed before `input:`, such as `typedefs:` or `defs:`.
+    """
     return (
         "id: p\nname: p\n"
-        + typedefs
+        + preamble
         + "input:\n  s: str\n"
         "nodes:\n"
         "  step:\n"
@@ -34,7 +37,7 @@ def test_optional_record_field_reads_null_when_the_whole_value_is_null():
     text = _flow(
         "Optional[Rec]",
         "output:\n  a: ${step.output.a}\n  note: 'a=${step.output.a}'\n",
-        typedefs="typedefs:\n  Rec: {a: str}\n",
+        preamble="typedefs:\n  Rec: {a: str}\n",
     )
     result = run_flow(load_flow(text), {"s": "x"})
     assert result.status == "succeeded"
@@ -199,7 +202,7 @@ def test_field_on_str_in_map_over_is_a_load_error():
         "    over: ${step.output.items}\n"
         "    input:\n      v: ${item}\n"
         "output: ${m.output}\n",
-        typedefs=_EACH_DEFS,
+        preamble=_EACH_DEFS,
     )
     msg = _load_error(text)
     assert (
@@ -322,7 +325,7 @@ def test_node_assert_on_a_partial_record_output_checks_typed_fields():
 
 
 @pytest.mark.parametrize(
-    "step_output, ref, typedefs",
+    "step_output, ref, preamble",
     [
         ("object", "${step.output.anything.deeper}", ""),          # opaque
         ("Optional[Rec]", "${step.output.a}", "typedefs:\n  Rec: {a: str}\n"),
@@ -330,8 +333,8 @@ def test_node_assert_on_a_partial_record_output_checks_typed_fields():
         ("list[str]", "${step.output}", ""),                     # whole value
     ],
 )
-def test_reads_the_type_allows_still_load(step_output, ref, typedefs):
-    load_flow(_flow(step_output, f"output:\n  o: {ref}\n", typedefs=typedefs))
+def test_reads_the_type_allows_still_load(step_output, ref, preamble):
+    load_flow(_flow(step_output, f"output:\n  o: {ref}\n", preamble=preamble))
 
 
 def test_untyped_output_reads_still_load():
@@ -386,8 +389,8 @@ def test_valid_flow_input_reads_still_load(ref):
     load_flow(_input_flow(ref))
 
 
-def test_inline_body_input_field_reads_are_checked():
-    """A `defs:` body's own typed inputs are checked the same way."""
+def test_defs_body_input_field_reads_are_checked():
+    """A named `defs:` body's own typed inputs are checked."""
     text = (
         "id: p\nname: p\ninput:\n  s: str\n"
         "defs:\n"
@@ -410,22 +413,33 @@ def test_inline_body_input_field_reads_are_checked():
     assert "reference ${input.s.first} reads field 'first' on type str" in _load_error(text)
 
 
+def test_inline_body_input_field_reads_are_checked():
+    """An inline body's inputs, inferred from the call site, are checked."""
+    text = (
+        "id: p\nname: p\ninput:\n  s: str\n"
+        "nodes:\n"
+        "  c:\n"
+        "    kind: call\n"
+        "    input:\n      v: ${input.s}\n"
+        "    nodes:\n"
+        "      inner:\n"
+        "        kind: code\n"
+        "        input:\n          w: ${input.v.z}\n"
+        "        output: str\n"
+        "        code: return 'x'\n"
+        "    output: ${inner.output}\n"
+        "output: ${c.output}\n"
+    )
+    assert "reference ${input.v.z} reads field 'z' on type str" in _load_error(text)
+
+
 def _map_flow(over_input: str, item_ref: str) -> str:
     return (
         "id: p\nname: p\n"
         "typedefs:\n  Rec: {a: str}\n"
         f"input:\n  xs: {over_input}\n"
-        "defs:\n"
-        "  each:\n"
-        "    input:\n      v: str\n"
-        "    nodes:\n"
-        "      step:\n"
-        "        kind: code\n"
-        "        input:\n          v: ${input.v}\n"
-        "        output: str\n"
-        "        code: return 'x'\n"
-        "    output: ${step.output}\n"
-        "nodes:\n"
+        + _EACH_DEFS
+        + "nodes:\n"
         "  m:\n"
         "    kind: map\n"
         "    call: each\n"

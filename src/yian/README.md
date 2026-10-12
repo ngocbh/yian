@@ -397,9 +397,9 @@ distinct owners. This declaration inventory does not itself activate backward.
 
 `AgentNode.system_prompt` is an optional template. When set, AGENT renders it
 from the same inputs-plus-variables record as the prompt, and the result replaces
-`DEFAULT_SYSTEM`; when `None`, the mode receives `DEFAULT_SYSTEM` unchanged. The
+`DEFAULT_SYSTEM`; when `None`, `run_agent` receives `DEFAULT_SYSTEM` unchanged. The
 skill listing and then memory sections append after this effective system prompt,
-and every mode (plain, tool calling, structured generation) sends it. It is recorded
+and every model request (one model call, tool loop, structured generation) sends it. It is recorded
 as `EvaluationEvidence.base_system_prompt`, so backward and recovery read what the
 model saw. The manifest includes the template only when set, so flows without one
 keep their fingerprints.
@@ -947,11 +947,13 @@ is `True`. `AgentNode` reports its authored `steerable:` flag, so runtime stays
 kind-blind. The capability wrapper turns inbox exceptions and wrong return types
 into `_CapabilityFault`, so they escape as host errors, not node failures.
 
-Only the `tool_calling` mode reads the inbox (`steerable:` is rejected elsewhere,
-and on non-`str` output, both at YAML load and in `AgentNode`: the mode in its
-constructor, the output contract in `validate_execution_setup`). At the top of each iteration it checks `interrupted`,
-then drains steers into `messages` and `new_messages` as `HumanMessage`s, so
-`invoke_model` records them with the next model request. It checks `interrupted`
+`run_agent` in `nodes/agent/loop.py` reads the inbox. `steerable:` is rejected on
+non-`str` output, both at YAML load and in `AgentNode.validate_execution_setup`, so
+a steerable AGENT always takes the text path. An AGENT without `tools:` or `skills:`
+runs that path once: one model call, where steers queued before it ride along and an
+interrupt cuts the streaming reply. At the top of each iteration `run_agent` checks
+`interrupted`, then drains steers into `messages` and `new_messages` as
+`HumanMessage`s, so `invoke_model` records them with the next model request. It checks `interrupted`
 again before each tool call, and `stream_reply` checks it as each chunk after the
 first arrives, before showing it. A stream that runs out is never cut, so a
 single-chunk reply, or an interrupt that lands on the last chunk, returns the
@@ -963,7 +965,7 @@ usage on `ModelCallFinished` with no `error`, and `invoke_model` observes the mo
 effect as `interrupted` with the partial reply. `record_skipped_tool` records each
 call not run as an `interrupted` tool effect paired with an error `ToolMessage`,
 and `observe_skipped_tool_call` emits `ToolCallStarted` then
-`ToolCallFinished(error="interrupted")` for it. The mode then calls the turn's
+`ToolCallFinished(error="interrupted")` for it. `run_agent` then calls the turn's
 optional `interrupt()` (the session `_Turn` closes as `interrupted`) and returns
 the latest reply's visible text as a normal `Output`.
 
@@ -1012,7 +1014,7 @@ table; `resume_flow` and delayed backward repeat that type check. It opens one r
 placement's `memory_stacks`, and the sessions' exact public snapshots in
 `RunStartedRecord`. `memory=None` leaves authored declarations dormant. For each
 opted-in AGENT node evaluation, recall returns one source-neutral section per key in
-stack order. The agent mode renders those sections as canonical JSON system
+stack order. `run_agent` renders those sections as canonical JSON system
 material labelled by memory key. The
 encoding prevents memory text from breaking or spoofing the envelope, but the
 text remains model-visible system material and is not isolated from prompt
@@ -1377,14 +1379,14 @@ flattens every group into its tool map, keeps each group's ordered names, and
 rejects a group tool whose name is reserved (`ask_user`, `load_skill`), is a
 top-level key, or names a different tool in another group, so each name calls one
 tool. The same tool object may sit in several groups, since host permission groups
-overlap. An AGENT's `tools:` grant may name a group; the tool-calling mode calls
+overlap. An AGENT's `tools:` grant may name a group; the tool loop calls
 `ToolSet.expand`, which drops repeated names, before binding tools and before its
 grant check, so the model and the check see each tool name once.
 Before any log work, fresh runs and unfinished resumes walk static nodes and their
 `origin_children()` through the kind-blind `Node.granted_tools()` hook (AGENT
 returns its `tools:`) and raise `ValueError` when a grant does not resolve in the
 run's `ToolSet`. The walk covers nodes that may never run, such as an unreached
-branch, a LOOP body, or a plain-mode AGENT. Only the authored names enter the
+branch or a LOOP body. Only the authored names enter the
 fingerprint; group contents are host capabilities, so a resume may pass different
 contents and restarted nodes use them.
 

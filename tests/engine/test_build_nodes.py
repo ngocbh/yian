@@ -80,25 +80,6 @@ def test_agent_node_object_output():
     assert node.output_contract.type.fields["rationale"].kind == ValueKind.STRING
 
 
-def test_agent_unknown_mode_is_loud_loaderror():
-    # An unknown AGENT mode is rejected at build as the loader's one error type
-    # (LoadError, loud) — not a bare ValueError leaking from the node ctor.
-    text = (
-        "id: bad-mode\nname: bad\ninput:\n  topic: str\n"
-        "nodes:\n  note:\n    kind: agent\n    inputs:\n      topic: ${input.topic}\n"
-        '    output: str\n    prompt: "hi ${topic}"\n    mode: react\n'
-        "output: ${note.output}\n"
-    )
-    document = SourceDocument.parse(text)
-    parse_file(document)
-    desc = parse_nodes(document.root.child("nodes"))["note"]
-    with pytest.raises(LoadError, match="unknown mode") as caught:
-        _build(desc, diagnostics=LoadDiagnostics.from_document(document))
-    expected = desc.field_ranges[("field", "mode")]
-    assert caught.value.diagnostic.frames[0].range == expected
-    assert caught.value.diagnostic.frames[0].text == text
-
-
 def test_agent_invalid_llm_config_uses_the_config_field_range():
     text = (
         "id: bad-config\nname: bad\n"
@@ -140,52 +121,11 @@ def test_agent_non_mapping_llm_config_is_a_ranged_load_error(value):
     assert caught.value.diagnostic.frames[0].text == text
 
 
-def test_agent_non_string_mode_is_a_ranged_load_error():
-    text = (
-        "id: bad-mode\nname: bad\n"
-        "nodes:\n  note:\n    kind: agent\n"
-        "    mode: [plain]\n"
-        "    prompt: hi\n"
-        "output: ${note.output}\n"
-    )
-    document = SourceDocument.parse(text)
-    parse_file(document)
-    desc = parse_nodes(document.root.child("nodes"))["note"]
-
-    with pytest.raises(LoadError, match="must be a string") as caught:
-        _build(desc, diagnostics=LoadDiagnostics.from_document(document))
-
-    expected = desc.field_ranges[("field", "mode")]
-    assert caught.value.diagnostic.frames[0].range == expected
-    assert caught.value.diagnostic.frames[0].text == text
-
-
-def test_agent_bad_mode_loaderror_is_located_via_load_flow():
-    # The descriptor owns the precise `mode:` range, so the build-time LoadError points
-    # directly at that field rather than relying on the conductor's node-header line.
-    from yian.compose.loader import load_flow
-
-    bad_mode = (
-        "id: f\nname: f\n"
-        "nodes:\n"  # line 3
-        "  a:\n"  # line 4 — the node
-        "    kind: agent\n"
-        "    prompt: hi\n"
-        "    mode: not_a_real_mode\n"
-        "output: ${a.output}\n"
-    )
-    with pytest.raises(LoadError, match="unknown mode") as ei:
-        load_flow(bad_mode, search_paths=["."])
-    assert ei.value.diagnostic.frames[0].range.start_line == 7
-    assert ei.value.diagnostic.frames[0].text == bad_mode
-
-
 def test_agent_node_knobs():
-    # seed 14 — mode / tools / llm_config carried onto the AgentNode.
+    # seed 14 — tools / llm_config carried onto the AgentNode.
     desc = _seed_nodes("14-agent-tools.yaml")["reviewer"]
     node, _ = _build(desc)
     assert isinstance(node, AgentNode)
-    assert node.mode == "tool_calling"
     assert node.tools == ["get_web_data", "web_search", "ask_user"]
     # llm_config is a plain dict end-to-end.
     assert isinstance(node.llm_config, dict)

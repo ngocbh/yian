@@ -36,7 +36,7 @@ def test_stream_chunk_exchange_id_defaults_to_none():
 
 def test_plain_agent_streams_text_chunks_then_one_final_chunk(monkeypatch):
     node, chat = _agent(
-        monkeypatch, [reply("hello big world", tokens=usage(5, 3))], mode="plain"
+        monkeypatch, [reply("hello big world", tokens=usage(5, 3))]
     )
     outcome, chunks, observed = _evaluate(node)
     assert outcome.value == "hello big world"
@@ -58,7 +58,7 @@ def test_plain_agent_streams_text_chunks_then_one_final_chunk(monkeypatch):
 
 
 def test_stream_sink_alone_streams_without_observers(monkeypatch):
-    node, chat = _agent(monkeypatch, [reply("just text")], mode="plain")
+    node, chat = _agent(monkeypatch, [reply("just text")])
     outcome, chunks, observed = _evaluate(node, events=False)
     assert outcome.value == "just text" and chat.mode == ["stream"] and observed == []
     assert [(c.chunk, c.final) for c in chunks] == [("just", False), (" text", False), ("", True)]
@@ -109,7 +109,7 @@ def test_stream_sink_failure_escapes_as_a_host_fault(monkeypatch):
     def broken(_item):
         raise HostBroken("host")
 
-    node, _ = _agent(monkeypatch, [reply("text")], mode="plain")
+    node, _ = _agent(monkeypatch, [reply("text")])
     with pytest.raises(HostBroken):
         eval_node(node, None, VariablePool(), emit_stream=broken)
 
@@ -123,14 +123,16 @@ def test_duck_typed_client_without_stream_emits_one_chunk(monkeypatch):
             return AIMessage(content="whole reply")
 
     monkeypatch.setattr(llm_clients_mod, "model_from_config", lambda _config: _InvokeOnly())
-    node = AgentNode("writer", prompt="hi", llm_config=dict(CONFIG), mode="plain")
+    node = AgentNode("writer", prompt="hi", llm_config=dict(CONFIG))
     outcome, chunks, _ = _evaluate(node, events=False)
     assert outcome.value == "whole reply"
     assert [(c.chunk, c.final) for c in chunks] == [("whole reply", False), ("", True)]
 
 
 def test_streamed_tool_exchange_is_retained_and_restored_like_an_invoked_one(monkeypatch):
-    flow = load_flow(_FLOW.replace("mode: plain", "mode: tool_calling\n    tools: [lookup]"))
+    tool_flow = _FLOW.replace("    kind: agent\n", "    kind: agent\n    tools: [lookup]\n")
+    assert tool_flow != _FLOW
+    flow = load_flow(tool_flow)
     monkeypatch.setitem(tools_mod.TOOL_REGISTRY, "lookup", _Tool())
     chat = ScriptedStreamChat(
         script=[reply(calls=[("lookup", {"topic": "a"}, "call-1")]), reply("one"), reply("two")],
@@ -156,7 +158,7 @@ def test_streamed_tool_exchange_is_retained_and_restored_like_an_invoked_one(mon
 
 def test_mid_stream_failure_sends_no_final_chunk_and_fails_the_node(monkeypatch):
     node, chat = _agent(
-        monkeypatch, [Cut("partial answer", ConnectionError("reset by sk-hidden"))], mode="plain"
+        monkeypatch, [Cut("partial answer", ConnectionError("reset by sk-hidden"))]
     )
     outcome, chunks, observed = _evaluate(node)
     assert isinstance(outcome, EvaluationFailure) and chat.mode == ["stream"]
@@ -177,7 +179,7 @@ def test_reply_that_fails_normalization_sends_no_final_chunk(monkeypatch):
 
     chat = _Unnormalizable(script=[reply("hello world")], mode=[])
     monkeypatch.setattr(llm_clients_mod, "model_from_config", lambda _config: chat)
-    node = AgentNode("writer", prompt="hi", llm_config=dict(CONFIG), mode="plain")
+    node = AgentNode("writer", prompt="hi", llm_config=dict(CONFIG))
     outcome, chunks, observed = _evaluate(node)
     assert isinstance(outcome, EvaluationFailure)
     assert [(c.chunk, c.final) for c in chunks] == [("hello", False), (" world", False)]

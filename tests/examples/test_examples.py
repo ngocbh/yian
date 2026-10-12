@@ -29,10 +29,9 @@ def test_examples_present():
     assert {"hello.yaml", "summarize.yaml", "classify.yaml"} <= names
 
 
-def test_debate_agents_use_shared_plain_pipeline():
+def test_debate_agents_are_tool_free():
     path = next(path for path in EXAMPLES if path.name == "debate.yaml")
     loaded = load_flow(path.read_text(), search_paths=[path.parent])
     for node_id in ("frame", "for_case", "against_case", "verdict"):
         node = loaded.compiled.nodes[node_id]
-        assert node.mode == "plain"
         assert node.tools == []

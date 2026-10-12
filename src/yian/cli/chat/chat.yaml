@@ -1,5 +1,5 @@
 # The default `yian chat` flow — a Yian assistant with flow-op tools.
-# Same LOOP-per-turn shape as examples/chat.yaml; the reply agent is tool_calling.
+# Same LOOP-per-turn shape as examples/chat.yaml; the reply agent runs a tool loop.
 # A CASE keeps textual exit flow-owned; the body's output bindings rejoin the
 # typed exit record and normal transcript.
 id: yian-chat
@@ -39,7 +39,6 @@ defs:
           return {"transcript": inputs["transcript"], "exited": True}
       reply:
         kind: agent
-        mode: tool_calling
         # The engine default is no cap (-1); bound this interactive agent so a runaway
         # model can't hang the REPL. 100 fits the 5 flow-op tools' exploratory turns.
         env:

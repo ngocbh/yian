@@ -1,4 +1,4 @@
-"""Text extraction and observational trace helpers shared by agent modes."""
+"""Visible-text extraction and observational trace helpers for the AGENT loop."""
 
 from __future__ import annotations
 

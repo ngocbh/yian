@@ -1,12 +1,12 @@
-"""The AGENT node (mode + skills) with a fake langchain model.
+"""The AGENT node with a fake langchain model.
 
 No API keys: `model_from_config` is monkeypatched to return a scripted fake chat
 model that yields canned `AIMessage`s; tool execution goes through `TOOL_REGISTRY`
-(monkeypatched). Covers `plain` mode, `tool_calling` (plain answer, a tool
-round-trip, strict grants, exception propagation, and the iteration cap).
+(monkeypatched). Covers one model call without tools and the tool loop with them
+(a tool round-trip, strict grants, exception propagation, and the iteration cap).
 
 (The AGENT-through-the-loader run path is covered once the Compose-loader agent
-run lands; AGENT-mode compile-time validation moved with the v0 compiler.)
+run lands; AGENT compile-time validation moved with the v0 compiler.)
 """
 
 import pytest
@@ -97,8 +97,8 @@ class _FakeTool:
         return self._fn(args)
 
 
-def _node(tools=None, prompt="hi", mode="tool_calling"):
-    return AgentNode("n", prompt=prompt, tools=tools or [], llm_config=LLMConfig(), mode=mode)
+def _node(tools=None, prompt="hi"):
+    return AgentNode("n", prompt=prompt, tools=tools or [], llm_config=LLMConfig())
 
 
 def _run_node(node, pool=None):
@@ -153,21 +153,12 @@ def test_direct_agent_requires_an_exact_variable_contract():
         AgentNode("writer", variables=[variable])
 
 
-def test_plain_mode_single_call_ignores_tools(monkeypatch):
-    chat = _FakeChat([AIMessage(content="plain answer")])
-    _patch_model(monkeypatch, chat)
-    # tools listed but plain mode must not bind or loop — one call, no tool use
-    assert _run_node(_node(tools=["value"], mode="plain")).value == "plain answer"
-    assert chat.calls == 1
-    assert chat.bound_tools is None
-
-
-def test_tool_calling_returns_plain_text(monkeypatch):
+def test_no_tools_returns_plain_text(monkeypatch):
     _patch_model(monkeypatch, _FakeChat([AIMessage(content="answer")]))
     assert _run_node(_node()).value == "answer"
 
 
-def test_tool_calling_round_trip(monkeypatch):
+def test_tool_loop_round_trip(monkeypatch):
     tool = _FakeTool(lambda a: f"px:{a['topic']}", _TopicToolArgs)
     monkeypatch.setitem(tools_mod.TOOL_REGISTRY, "value", tool)
     chat = _FakeChat([
@@ -180,7 +171,7 @@ def test_tool_calling_round_trip(monkeypatch):
     assert chat.calls == 2                      # ask -> tool -> ask
 
 
-def test_tool_calling_executes_model_calls_in_returned_order(monkeypatch):
+def test_tool_loop_executes_model_calls_in_returned_order(monkeypatch):
     seen = []
 
     def first(value: int) -> str:
@@ -221,7 +212,7 @@ def test_tool_calling_executes_model_calls_in_returned_order(monkeypatch):
     assert seen == [("first", 1), ("second", 2)]
 
 
-def test_tool_calling_rejects_globally_registered_but_ungranted_tool(monkeypatch):
+def test_agent_rejects_globally_registered_but_ungranted_tool(monkeypatch):
     seen = []
 
     def secret() -> str:
@@ -243,7 +234,7 @@ def test_tool_calling_rejects_globally_registered_but_ungranted_tool(monkeypatch
     assert seen == []
 
 
-def test_tool_calling_rejects_model_injected_arguments(monkeypatch):
+def test_tool_loop_rejects_model_injected_arguments(monkeypatch):
     seen = []
 
     def lookup(question: str) -> str:
@@ -267,7 +258,7 @@ def test_tool_calling_rejects_model_injected_arguments(monkeypatch):
     assert seen == []
 
 
-def test_tool_calling_propagates_tool_exception_as_node_failure(monkeypatch):
+def test_tool_loop_propagates_tool_exception_as_node_failure(monkeypatch):
     def explode(topic: str) -> str:
         """Raise the failure the node boundary must report."""
         raise RuntimeError(f"cannot load {topic}")
@@ -318,7 +309,6 @@ def test_structured_failure_selects_exact_or_ancestor_output_origin(
     )
     node = AgentNode(
         "n",
-        mode="plain",
         retries=0,
         llm_config={"provider": "openai", "model": "gpt-4o"},
     )
@@ -356,7 +346,6 @@ def test_structured_scalar_failure_selects_contract_root(monkeypatch, typ, paylo
     """The generated scalar `value` wrapper maps to the output root."""
     node = AgentNode(
         "n",
-        mode="plain",
         retries=0,
         llm_config={"provider": "openai", "model": "gpt-4o"},
     )
@@ -377,7 +366,6 @@ def test_non_validation_structured_failure_keeps_node_origin(monkeypatch):
     """Provider errors outside generated-schema validation keep common fallback."""
     node = AgentNode(
         "n",
-        mode="plain",
         retries=0,
         llm_config={"provider": "openai", "model": "gpt-4o"},
     )
@@ -433,7 +421,6 @@ def test_source_free_structured_failure_keeps_empty_trace(monkeypatch):
     """Generated validation does not invent provenance for Python-authored agents."""
     node = AgentNode(
         "n",
-        mode="plain",
         retries=0,
         llm_config={"provider": "openai", "model": "gpt-4o"},
     )
@@ -446,7 +433,7 @@ def test_source_free_structured_failure_keeps_empty_trace(monkeypatch):
     assert event.failure.trace == ()
 
 
-def test_tool_calling_cap_trips_when_bounded(monkeypatch):
+def test_tool_loop_cap_trips_when_bounded(monkeypatch):
     # A POSITIVE env cap bounds the loop: always-asks-for-a-tool -> never answers -> trips
     # the cap after `cap` turns. The raised AgentLoopError becomes EvaluationFailure at
     # eval_node. (The DEFAULT is -1 / no cap — see the no-cap test below.)
@@ -463,7 +450,7 @@ def test_tool_calling_cap_trips_when_bounded(monkeypatch):
 
 
 def test_default_no_cap_runs_unbounded(monkeypatch):
-    from yian.nodes.agent.modes.tool_calling import MAX_TOOL_ITERATIONS
+    from yian.nodes.agent.loop import MAX_TOOL_ITERATIONS
 
     # The default cap is the -1 no-cap sentinel: an agent making many tool turns (well past the
     # old default of 100) then answering still finishes, no AgentLoopError.
@@ -480,7 +467,7 @@ def test_default_no_cap_runs_unbounded(monkeypatch):
 def test_env_max_tool_iterations_overrides_cap(monkeypatch):
     # A per-node `env: {max_tool_iterations: 2}` bounds the loop: the agent trips the cap after
     # exactly 2 model turns (vs the -1 no-cap default). Proves the env value threads
-    # node.env -> _max_tool_iterations -> AgentRunContext -> the mode loop.
+    # node.env -> _max_tool_iterations -> AgentRunContext -> the tool loop.
     monkeypatch.setitem(tools_mod.TOOL_REGISTRY, "noop", _FakeTool(lambda a: "ok"))
     looping = _FakeChat([_ai_tool_call("noop", {}, str(i)) for i in range(2)])
     _patch_model(monkeypatch, looping)

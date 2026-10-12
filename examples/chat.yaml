@@ -1,4 +1,4 @@
-# chat — a turn-by-turn conversational REPL (plain agent; deterministic transcript).
+# chat — a turn-by-turn conversational REPL (agent without tools; deterministic transcript).
 #
 # The turn boundary is STRUCTURAL: HUMAN_INPUT feeds a CASE; exact exit text builds the
 # exit record, otherwise AGENT + a second CODE node build the normal transcript. The LLM
@@ -6,7 +6,7 @@
 # Run it with:  yian chat examples/chat.yaml
 id: chat
 name: chat
-description: A turn-by-turn conversational assistant (plain agent, no tools).
+description: A turn-by-turn conversational assistant (one model call per turn, no tools).
 
 input:
   opening: str            # seed transcript; the CLI passes "" (empty)
@@ -41,7 +41,6 @@ defs:
           return {"transcript": inputs["transcript"], "exited": True}
       reply:
         kind: agent
-        mode: plain
         input:
           transcript: ${input.transcript}
           message:    ${ask.output}

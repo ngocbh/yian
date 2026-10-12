@@ -17,20 +17,17 @@ name: top
 nodes:
   rec:
     kind: agent
-    mode: plain
     prompt: extract a person
     output:
       name: str
       score: int
   txt:
     kind: agent
-    mode: plain
     depends_on: [rec]
     prompt: say hi
     output: str
   sentiment:
     kind: agent
-    mode: plain
     depends_on: [txt]
     prompt: classify the greeting
     output: Literal[positive, neutral, negative]

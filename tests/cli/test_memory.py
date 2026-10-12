@@ -42,7 +42,6 @@ name: cli_memory
 nodes:
   work:
     kind: agent
-    mode: plain
     long_term_memory: {chat: session}
     prompt: hello
     output: str

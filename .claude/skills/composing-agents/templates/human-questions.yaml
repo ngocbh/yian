@@ -39,7 +39,6 @@ nodes:
       ctx: ${ask_static.output}    # feed the static answers as composing context
     adaptive_questions:
       prompt: "Design 1-3 follow-up questions with options for: ${ctx}"
-      mode: plain                  # optional, default plain
       retries: 3                   # optional — self-correction attempts
 
   # UPSTREAM QUESTIONS: write your own composer node and wire its output

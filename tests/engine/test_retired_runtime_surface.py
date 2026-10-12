@@ -3,7 +3,7 @@ from dataclasses import fields
 import importlib
 import inspect
 from pathlib import Path
-from typing import get_args, get_type_hints
+from typing import get_type_hints
 
 import pytest
 
@@ -85,7 +85,7 @@ def test_shipped_blocking_node_packages_cannot_construct_pause(package_name):
 
 def test_shipped_blocking_node_bodies_are_typed_to_output():
     from yian.nodes.agent import AgentNode
-    from yian.nodes.agent.modes import AgentMode
+    from yian.nodes.agent.loop import run_agent
     from yian.nodes.base import Output
     from yian.nodes.human_input import HumanInputNode
     from yian.nodes.wait import WaitNode
@@ -93,7 +93,7 @@ def test_shipped_blocking_node_bodies_are_typed_to_output():
     assert get_type_hints(AgentNode.forward)["return"] is Output
     assert get_type_hints(HumanInputNode.forward)["return"] is Output
     assert get_type_hints(WaitNode.forward)["return"] is Output
-    assert get_args(AgentMode)[-1] is Output
+    assert get_type_hints(run_agent)["return"] is Output
 
 
 @pytest.mark.parametrize("field", ["entry", "controls"])
@@ -201,7 +201,7 @@ def test_final_log_only_runtime_and_public_surface():
 def test_agent_continuation_packages_and_builders_are_gone():
     agent = importlib.import_module("yian.nodes.agent")
     expand = importlib.import_module("yian.compile.expand")
-    modes = importlib.import_module("yian.nodes.agent.modes.tool_calling")
+    loop = importlib.import_module("yian.nodes.agent.loop")
     descriptor = importlib.import_module("yian.compose.nodes.agent")
     base = importlib.import_module("yian.nodes.base")
     engine = importlib.import_module("yian.runtime.engine")
@@ -212,7 +212,7 @@ def test_agent_continuation_packages_and_builders_are_gone():
     assert not hasattr(expand, "agent_segment_subgraph")
     assert not hasattr(expand, "clone_continuation_pair")
     assert not hasattr(expand, "ask_resume_edge_id")
-    assert not hasattr(modes, "agent_step")
+    assert not hasattr(loop, "agent_step")
     assert not hasattr(base.Node, "grow_restamps_self")
     assert not hasattr(engine.FlowEngine, "_apply_origin_commit_as")
     assert "entry" not in descriptor.AgentDescriptor.__dataclass_fields__

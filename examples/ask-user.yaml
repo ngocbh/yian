@@ -1,6 +1,6 @@
 # ask-user — a model-chosen clarifying question via the blocking ask_user tool.
 #
-# `ask_user` is an ordinary tool granted to a `tool_calling` agent. Granting it only
+# `ask_user` is an ordinary tool granted to an agent. Granting it only
 # ENABLES the capability: the live agent loop blocks to ask the human ONLY when the model
 # decides it needs a fact it can't supply itself, then receives the answer as the tool
 # result. (Contrast with the HUMAN_INPUT node — see human-approval.yaml —
@@ -11,7 +11,7 @@
 # model: a tool-capable model that judges the request ambiguous will call ask_user; a
 # request that is already clear (or a weak model) may just answer outright.
 #
-# Exercises: an AGENT in `tool_calling` mode with an authored `tools:` grant — the
+# Exercises: an AGENT with an authored `tools:` grant, which runs the tool loop — the
 # loop binds ask_user and blocks on the call until the answer arrives.
 #
 # Run it with a deliberately ambiguous request (the CLI will prompt if the agent asks):
@@ -27,7 +27,6 @@ input:
 nodes:
   assistant:
     kind: agent
-    mode: tool_calling                   # the loop — required for the agent to call tools
     tools: [ask_user]                    # explicitly grant the blocking ask_user tool
     input:
       request: ${input.request}

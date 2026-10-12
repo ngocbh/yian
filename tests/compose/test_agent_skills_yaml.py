@@ -9,14 +9,13 @@ from yian.compose import load_flow
 from yian.compose.helpers.errors import LoadError
 
 
-def _flow(skills_line: str, mode: str = "tool_calling") -> str:
+def _flow(skills_line: str) -> str:
     return f"""\
 id: skills
 name: skills
 nodes:
   review:
     kind: agent
-    mode: {mode}
     prompt: Review the change.
 {skills_line}
     output: str
@@ -33,18 +32,17 @@ def test_skills_list_and_all_reach_the_agent_node() -> None:
 
 
 @pytest.mark.parametrize(
-    ("skills_line", "mode", "message"),
+    ("skills_line", "message"),
     [
-        ("    skills: code-review", "tool_calling", "`skills:` must be a list of skill names or `all`"),
-        ("    skills: [1]", "tool_calling", "`skills:` must be a list of skill names or `all`"),
-        ("    skills: [Code_Review]", "tool_calling", "invalid skill name"),
-        ("    skills: [code-review]", "plain", "skills need mode .tool_calling., not .plain."),
+        ("    skills: code-review", "`skills:` must be a list of skill names or `all`"),
+        ("    skills: [1]", "`skills:` must be a list of skill names or `all`"),
+        ("    skills: [Code_Review]", "invalid skill name"),
     ],
 )
-def test_bad_skills_point_at_the_skills_line(skills_line: str, mode: str, message: str) -> None:
+def test_bad_skills_point_at_the_skills_line(skills_line: str, message: str) -> None:
     with pytest.raises(LoadError, match=message) as caught:
-        load_flow(_flow(skills_line, mode))
-    assert caught.value.diagnostic.frames[-1].range.start_line == 8
+        load_flow(_flow(skills_line))
+    assert caught.value.diagnostic.frames[-1].range.start_line == 7
 
 
 def test_skills_are_identity_but_empty_and_order_are_not() -> None:

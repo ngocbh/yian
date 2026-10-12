@@ -10,6 +10,7 @@ import threading
 import pytest
 
 import yian.llm_clients as llm_clients_mod
+import yian.nodes.agent.node as agent_module
 from langchain_core.messages import AIMessageChunk, HumanMessage, ToolMessage
 
 from yian.compose import load_flow
@@ -21,7 +22,7 @@ from yian.events import (
     ToolCallStarted,
 )
 from yian.memory.session import SessionMemory
-from yian.nodes.agent import MODES, AgentNode
+from yian.nodes.agent import AgentNode
 from yian.nodes.base import Output
 from yian.run import Steering, resume_flow, run_flow
 from yian.runtime.eval_node import eval_node
@@ -58,7 +59,6 @@ llm_config: {{provider: anthropic, model: claude-test}}
 nodes:
   chat:
     kind: agent
-    mode: tool_calling
     steerable: {str(steerable).lower()}
 {"    long_term_memory: session" + chr(10) if memory else ""}    tools: [{", ".join(tools)}]
     prompt: Help the user.
@@ -109,17 +109,16 @@ def test_non_steerable_agent_never_calls_the_inbox(monkeypatch):
     assert result.output == "done" and inbox.calls == []
 
 
-def test_mode_context_receives_steering_only_when_steerable(monkeypatch):
+def test_run_context_receives_steering_only_when_steerable(monkeypatch):
     seen = []
 
     def probe(ctx):
         seen.append(ctx.steering is not None)
         return Output(value="ok")
 
-    monkeypatch.setitem(MODES, "tool_calling", probe)
+    monkeypatch.setattr(agent_module, "run_agent", probe)
     for steerable in (True, False):
-        node = AgentNode("chat", prompt="hi", llm_config=dict(CONFIG), mode="tool_calling",
-                         steerable=steerable)
+        node = AgentNode("chat", prompt="hi", llm_config=dict(CONFIG), steerable=steerable)
         eval_node(node, None, VariablePool(), steering=Inbox())
         eval_node(node, None, VariablePool())
     assert seen == [True, False, False, False]
@@ -129,8 +128,7 @@ def test_python_built_steerable_agent_with_structured_output_fails_before_the_mo
     model = _recorder(monkeypatch, [])
     contract = load_flow(_flow().replace("output: str", "output: {answer: int}", 1).replace(
         "steerable: true", "steerable: false")).compiled.nodes["chat"].output_contract
-    node = AgentNode("chat", prompt="hi", llm_config=dict(CONFIG), mode="tool_calling",
-                     steerable=True)
+    node = AgentNode("chat", prompt="hi", llm_config=dict(CONFIG), steerable=True)
     node.output_contract = contract
     with pytest.raises(ValueError, match="steerable needs `str` output"):
         node.run({})
@@ -216,7 +214,7 @@ def test_malformed_inbox_answers_escape_as_host_type_errors(monkeypatch, method,
     inbox = Inbox()
     setattr(inbox, method, lambda node_id: value)
     _chat(monkeypatch, [reply("done")])
-    node = AgentNode("chat", prompt="hi", llm_config=dict(CONFIG), mode="tool_calling", steerable=True)
+    node = AgentNode("chat", prompt="hi", llm_config=dict(CONFIG), steerable=True)
     with pytest.raises(TypeError, match=message):
         eval_node(node, None, VariablePool(), steering=inbox)
 
@@ -356,7 +354,7 @@ def test_malformed_interrupted_answer_escapes_as_a_host_type_error(monkeypatch):
     inbox = Inbox()
     inbox.interrupted = lambda node_id: "yes"
     _chat(monkeypatch, [reply("done")])
-    node = AgentNode("chat", prompt="hi", llm_config=dict(CONFIG), mode="tool_calling", steerable=True)
+    node = AgentNode("chat", prompt="hi", llm_config=dict(CONFIG), steerable=True)
     with pytest.raises(TypeError, match="interrupted must return a bool"):
         eval_node(node, None, VariablePool(), steering=inbox)
 
@@ -585,9 +583,8 @@ def test_interrupted_agent_in_a_loop_lets_the_loop_continue(monkeypatch):
         return reply("partial", calls=[("ping", {}, "p-1")])
 
     _recorder(monkeypatch, [interrupt_this_occurrence, reply("turn2")])
-    flow = LOOP_FLOW.replace(
-        "        mode: tool_calling\n", "        mode: tool_calling\n        steerable: true\n"
-    )
+    flow = LOOP_FLOW.replace("        kind: agent\n", "        kind: agent\n        steerable: true\n")
+    assert flow != LOOP_FLOW
     result = run_flow(load_flow(flow), {"seed": "s"}, steering=inbox, tools={"ping": ping})
     assert result.status == "succeeded" and result.output == "s|partial|turn2"
     # Each LOOP occurrence has its own node id, so the interrupt stayed with the first.

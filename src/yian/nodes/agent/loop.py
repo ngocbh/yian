@@ -1,4 +1,7 @@
-"""Tool-calling mode — drive only newly returned model calls using current grants.
+"""The AGENT loop — drive only newly returned model calls using current grants.
+
+Without tools or skills the loop makes a single model call (structured when the
+output type needs it); with them it runs the tool loop until the model answers.
 
 An optional memory-owned turn retains actual exchanges. Restored provider context
 never drives tool dispatch, and its synthetic missing-result repairs are not saved.
@@ -36,12 +39,8 @@ from yian.nodes.agent.live import (
     observe_skipped_tool_call,
     observe_tool_call,
 )
-from yian.nodes.agent.modes.common import (
-    AgentLoopError,
-    AgentRunContext,
-    register_mode,
-)
-from yian.nodes.agent.modes.utils import (
+from yian.nodes.agent.context import AgentLoopError, AgentRunContext
+from yian.nodes.agent.text import (
     record_model_text,
     record_tool_result,
     text_of,
@@ -54,9 +53,12 @@ from yian.skills.tool import LOAD_SKILL, invoke_load_skill, load_skill_tool
 MAX_TOOL_ITERATIONS = -1
 
 
-@register_mode("tool_calling")
-def tool_calling(ctx: AgentRunContext) -> Output:
-    """Execute model-returned tool calls in order until the model answers."""
+def run_agent(ctx: AgentRunContext) -> Output:
+    """Run one AGENT invocation.
+
+    Makes one model call without tools or skills, otherwise runs the tool loop until the
+    model answers.
+    """
     system_prompt = system_prompt_with_memory(ctx.base_system_prompt, ctx.memory_context.sections)
     messages: list[BaseMessage] = [
         SystemMessage(content=system_prompt),

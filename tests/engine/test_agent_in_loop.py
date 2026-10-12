@@ -95,7 +95,6 @@ defs:
     nodes:
       reply:
         kind: agent
-        mode: tool_calling
         tools: [ping]
         input:
           transcript: ${input.transcript}

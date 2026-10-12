@@ -177,8 +177,7 @@ typedefs:
 ### `agent` — the LLM-backed AGENT node
 ```yaml
 classify:
-  kind: agent
-  mode: plain                  # "plain" = one call; "tool_calling" (default) = a tool loop
+  kind: agent                  # no tools: one model call; tools:/skills: run the tool loop
   input:
     text: ${input.text}        # bindings — these infer the data edges
   output: Literal[positive, neutral, negative]
@@ -193,19 +192,22 @@ switches it to **structured generation** — the engine derives a schema from
 JSON fallback for providers that lack it), validated at the write boundary and
 retried up to `retries:` times (default 2) on deviation. A root `Literal[...]`
 returns its bare tag to the flow.
-Use a downstream `code` node only for deterministic post-processing. To give
-an AGENT node ordinary tools: `tools: [tool_id, ...]` (requires `mode: tool_calling`).
+Use a downstream `code` node only for deterministic post-processing.
+An AGENT with `tools:` or `skills:` runs the tool loop; without them it makes one model
+call (text, or structured for a typed `output:`). `mode:` was removed; writing it is a
+load error.
+To give an AGENT node ordinary tools: `tools: [tool_id, ...]`.
 A `tools:` name may also be a host-filled tool group (see "Tool groups" below).
 To set who the model is: `system_prompt: "You are ${name}, ${title}."`. It
 **replaces** the framework's default system instruction (omit it to keep the default)
 and renders like `prompt:` — bare local inputs and the node's own `variables:`, with
 located load errors for unknown names. Granted skills, then recalled memory, append
-after it. Every model request of the node (plain, tool rounds, structured generation)
+after it. Every model request of the node (one model call, tool rounds, structured generation)
 uses it; it is part of the flow fingerprint, and with `learnable=True` the rendered text
 is recorded for backward. Compact flows accept it at the top level; there is no
 flow-level default.
 To give it host-supplied Claude/Codex skills: `skills: [skill-name, ...]` or
-`skills: all` (requires `mode: tool_calling`). The system message lists each
+`skills: all`. The system message lists each
 granted skill's name and description; the model calls the built-in
 `load_skill(name, path=None)` to read `SKILL.md` or a bundled file. `load_skill` is
 reserved: never list it in `tools:`. When a flow grants skills, `yian run` supplies
@@ -213,8 +215,9 @@ reserved: never list it in `tools:`. When a flow grants skills, `yian run` suppl
 (personal wins). A library host
 passes `skills=` (`{}` for none); without it, or with a listed skill missing, the run
 fails before it starts.
-To let a watching human steer or interrupt the loop, add `steerable: true` (requires
-`mode: tool_calling` and `str` output or no `output:`; anything else is a load error).
+To let a watching human steer or interrupt the agent, add `steerable: true` (requires
+`str` output or no `output:`; anything else is a load error). Without tools, an interrupt
+cuts the streaming text reply.
 The host passes `run_flow(..., steering=inbox)`. Queued steers join as user messages at
 the top of the next iteration; an interrupt ends the loop at the next safe point and the
 node **succeeds** with its text so far, so downstream nodes and loops continue. Leave it
@@ -593,7 +596,7 @@ block, written bare (`${name}`). An AGENT prompt also sees its own `variables:`.
 in the prompt.
 
 ## Effects from inside an AGENT node — `ask_user`
-A `tool_calling` AGENT node granted `tools: [ask_user]` can synchronously ask the human
+An AGENT node granted `tools: [ask_user]` can synchronously ask the human
 **only if the model decides it needs to**. The tool blocks inside the same live
 model/tool loop and its returned answer becomes the ordinary tool result. The model
 may pass 2-4 short `options`, shown as choices; the human can still type an answer. For a

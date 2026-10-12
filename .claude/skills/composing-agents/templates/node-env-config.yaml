@@ -6,7 +6,7 @@
 # flow-local (a called child flow does NOT inherit this flow's env), literals only.
 #
 # Keys in use today:
-#   max_tool_iterations (AGENT node) — tool-calling loop turns before an AgentLoopError
+#   max_tool_iterations (AGENT node) — tool-loop turns before an AgentLoopError
 #                                 (default -1 = no cap; set a positive int to bound it).
 
 id: node-env-config
@@ -19,7 +19,6 @@ env:                              # the flow layer: every node inherits these by
 nodes:
   researcher:                     # overrides the flow default for this node only
     kind: agent
-    mode: tool_calling
     tools: [search]
     prompt: Investigate the topic thoroughly, then summarize.
     env:
@@ -27,7 +26,6 @@ nodes:
 
   grader:                         # no env: of its own — inherits the flow default (50)
     kind: agent
-    mode: plain
     depends_on: [researcher]
     prompt: Grade the research pass/fail.
 

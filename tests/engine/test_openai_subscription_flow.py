@@ -19,8 +19,9 @@ from tests.engine.test_agent_session import _FLOW, _view
 from tests.fixtures.openai_responses import ResponsesServer
 
 _TOOL_FLOW = _FLOW.replace("test-model", "gpt-5.5").replace(
-    "mode: plain", "mode: tool_calling\n    tools: [double]"
+    "    kind: agent\n", "    kind: agent\n    tools: [double]\n"
 )
+assert "tools: [double]" in _TOOL_FLOW
 
 
 def _forbid_process(*args, **kwargs):
@@ -115,7 +116,7 @@ def test_rich_responses_summary_keeps_shared_memory_working(monkeypatch, subscri
         _snapshot,
     )
 
-    flow = load_flow(FLOW.replace("MODE", "plain"))
+    flow = load_flow(FLOW)
     memory = SessionMemory(history_budget_chars=1)
     seed_model = _Model(_replies())
     monkeypatch.setattr(llm_clients, "model_from_config", lambda _: seed_model)

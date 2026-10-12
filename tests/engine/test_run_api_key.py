@@ -24,7 +24,7 @@ SENTINEL = "sk-sentinel-5b2e8d41"
 _FLOW = """id: keyed
 name: keyed
 nodes:
-  agent: {kind: agent, mode: plain, prompt: hi}
+  agent: {kind: agent, prompt: hi}
 output: ${agent.output}
 """
 
@@ -241,7 +241,6 @@ name: other
 nodes:
   agent:
     kind: agent
-    mode: plain
     prompt: hi
     llm_config: {provider: anthropic, model: claude-sonnet-4-5}
 output: ${agent.output}
@@ -358,20 +357,18 @@ name: two
 defs:
   body:
     nodes:
-      nested: {kind: agent, mode: plain, prompt: hi, llm_config: {model: nested-model}}
+      nested: {kind: agent, prompt: hi, llm_config: {model: nested-model}}
     output: ${nested.output}
 nodes:
-  inherits: {kind: agent, mode: plain, prompt: hi}
+  inherits: {kind: agent, prompt: hi}
   child: {kind: call, call: body, depends_on: [inherits]}
   other:
     kind: agent
-    mode: plain
     prompt: hi
     depends_on: [inherits]
     llm_config: {provider: anthropic, model: claude-sonnet-4-5}
   optout:
     kind: agent
-    mode: plain
     prompt: hi
     depends_on: [other]
     llm_config: {inherit: false, provider: vllm, model: other-model}
@@ -435,7 +432,7 @@ defs:
   body:
     llm_config: {{api_key: {SENTINEL}}}
     nodes:
-      nested: {{kind: agent, mode: plain, prompt: hi}}
+      nested: {{kind: agent, prompt: hi}}
     output: ${{nested.output}}
 nodes:
   child: {{kind: call, call: body}}
@@ -597,7 +594,6 @@ defs:
     nodes:
       inner:
         kind: agent
-        mode: plain
         input:
           value: ${input.value}
         prompt: ${value}
@@ -621,7 +617,6 @@ defs:
     nodes:
       inner:
         kind: agent
-        mode: plain
         input:
           text: ${input.text}
         output:

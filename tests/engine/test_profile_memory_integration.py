@@ -25,7 +25,6 @@ input:
 nodes:
   reply:
     kind: agent
-    mode: plain
     input:
       message: ${input.message}
     prompt: ${message}
@@ -46,7 +45,6 @@ defs:
     nodes:
       reply:
         kind: agent
-        mode: plain
         long_term_memory: profile
         input:
           message: ${input.message}
@@ -69,7 +67,6 @@ input:
 nodes:
   first:
     kind: agent
-    mode: plain
     long_term_memory: profile
     input:
       message: ${input.message}
@@ -77,7 +74,6 @@ nodes:
     output: str
   second:
     kind: agent
-    mode: plain
     long_term_memory: profile
     input:
       message: ${input.message}
@@ -94,7 +90,6 @@ input:
 nodes:
   reply:
     kind: agent
-    mode: plain
     long_term_memory: session
     input:
       message: ${input.message}

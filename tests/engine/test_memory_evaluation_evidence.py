@@ -32,7 +32,7 @@ from yian.memory import (
     ToolResultInteraction,
 )
 from yian.nodes.agent import AgentNode
-from yian.nodes.agent.modes.common import DEFAULT_SYSTEM
+from yian.nodes.agent.context import DEFAULT_SYSTEM
 from yian.nodes.base import Grow, Node, NodeKind, Output, Route
 from yian.nodes.contracts import Parameter, ValueContract
 from yian.runtime.eval_node import (
@@ -314,14 +314,12 @@ def _captured_agent(
     monkeypatch: pytest.MonkeyPatch,
     *,
     chat,
-    mode: str = "plain",
     llm_config: dict | None = None,
 ) -> tuple[AgentNode, EvaluatedOutcome]:
     monkeypatch.setattr(llm_clients, "model_from_config", lambda _config: chat)
     node = AgentNode(
         "agent",
         prompt="Answer now",
-        mode=mode,
         llm_config=llm_config or {},
     )
     node.memory_scope = _scope(node.id)
@@ -826,7 +824,7 @@ def test_invalid_unicode_fallback_trace_does_not_consume_a_retry(
     assert evaluated.evidence.interactions == ()
 
 
-def test_tool_mode_records_calls_results_and_final_text_in_visible_order(
+def test_tool_loop_records_calls_results_and_final_text_in_visible_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def lookup(topic: str) -> str:
@@ -846,7 +844,6 @@ def test_tool_mode_records_calls_results_and_final_text_in_visible_order(
     node = AgentNode(
         "agent",
         prompt="lookup",
-        mode="tool_calling",
         tools=["lookup"],
     )
     node.memory_scope = _scope(node.id)
@@ -869,7 +866,7 @@ def test_tool_mode_records_calls_results_and_final_text_in_visible_order(
     assert "private plan" not in repr(evaluated.evidence)
 
 
-def test_tool_mode_records_valid_ungranted_call_before_failure(
+def test_tool_loop_records_valid_ungranted_call_before_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -877,7 +874,7 @@ def test_tool_mode_records_valid_ungranted_call_before_failure(
         "model_from_config",
         lambda _config: _ToolChat(),
     )
-    node = AgentNode("agent", prompt="lookup", mode="tool_calling", tools=[])
+    node = AgentNode("agent", prompt="lookup", tools=[])
     node.memory_scope = _scope(node.id)
 
     evaluated = eval_node(
@@ -915,7 +912,7 @@ def test_recursive_ungranted_tool_arguments_do_not_change_failure_with_capture(
         "model_from_config",
         lambda _config: _RecursiveCallChat(),
     )
-    node = AgentNode("agent", prompt="lookup", mode="tool_calling", tools=[])
+    node = AgentNode("agent", prompt="lookup", tools=[])
     node.memory_scope = _scope(node.id)
 
     capture_off = eval_node(
@@ -963,7 +960,6 @@ def test_tool_name_subclass_has_capture_off_on_behavioral_parity(
     node = AgentNode(
         "agent",
         prompt="lookup",
-        mode="tool_calling",
         tools=["lookup"],
     )
     node.memory_scope = _scope(node.id)
@@ -1031,7 +1027,6 @@ def test_tool_trace_uses_the_same_effective_arguments_as_invocation(
     node = AgentNode(
         "agent",
         prompt="run",
-        mode="tool_calling",
         tools=["noop"],
     )
     node.memory_scope = _scope(node.id)
@@ -1072,7 +1067,6 @@ def test_invalid_unicode_tool_result_is_ignored_by_observational_capture(
     node = AgentNode(
         "agent",
         prompt="lookup",
-        mode="tool_calling",
         tools=["lookup"],
     )
     node.memory_scope = _scope(node.id)
@@ -1112,7 +1106,6 @@ def test_tool_structured_output_retains_discovery_and_generation_order(
     node = AgentNode(
         "agent",
         prompt="lookup then score",
-        mode="tool_calling",
         tools=["lookup"],
         retries=0,
         llm_config=(

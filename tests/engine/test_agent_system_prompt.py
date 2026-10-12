@@ -19,7 +19,7 @@ from yian.compose.helpers.types import read_variables
 from yian.memory import MemoryContext, MemorySection
 from yian.nodes.agent import AgentNode
 from yian.nodes.agent.memory import system_prompt_with_memory
-from yian.nodes.agent.modes.common import DEFAULT_SYSTEM
+from yian.nodes.agent.context import DEFAULT_SYSTEM
 from yian.nodes.base import Output
 from yian.nodes.contracts import Parameter, ValueContract
 from yian.run import resume_flow, run_flow
@@ -36,10 +36,10 @@ TEMPLATE = "You are ${name}, ${title}. Speak as ${name} in the first person."
 RENDERED = "You are Ada, CTO. Speak as Ada in the first person."
 
 
-def _node(*, mode: str = "tool_calling", structured: bool = False, **kwargs) -> AgentNode:
+def _node(*, structured: bool = False, **kwargs) -> AgentNode:
     """Build one AGENT whose system prompt and prompt read bound inputs."""
     kwargs.setdefault("system_prompt", TEMPLATE)
-    node = AgentNode("agent", prompt="Hello from ${name}", mode=mode, **kwargs)
+    node = AgentNode("agent", prompt="Hello from ${name}", **kwargs)
     node.params = [Parameter(name="name", required=True), Parameter(name="title", required=True)]
     if structured:
         node.output_contract = ValueContract(Type.scalar(ValueKind.INTEGER))
@@ -63,20 +63,13 @@ def _model(monkeypatch) -> _CaptureModel:
 
 
 @pytest.mark.parametrize(
-    ("mode", "structured", "tools"),
-    [
-        ("plain", False, False),
-        ("plain", True, False),
-        ("tool_calling", False, False),
-        ("tool_calling", False, True),
-        ("tool_calling", True, False),
-        ("tool_calling", True, True),
-    ],
+    ("structured", "tools"),
+    [(False, False), (True, False), (False, True), (True, True)],
 )
-def test_every_mode_sends_the_rendered_system_prompt(monkeypatch, mode, structured, tools) -> None:
+def test_every_path_sends_the_rendered_system_prompt(monkeypatch, structured, tools) -> None:
     model = _model(monkeypatch)
     monkeypatch.setattr(ToolSet, "resolve", lambda _self, _names: [object()])
-    node = _node(mode=mode, structured=structured, tools=["noop"] if tools else None)
+    node = _node(structured=structured, tools=["noop"] if tools else None)
 
     evaluated = _eval(node, capture_evidence=True)
 
@@ -126,23 +119,24 @@ def test_skills_append_after_the_authored_prompt_and_recall_skips_them(monkeypat
         return MemoryContext()
 
     node = AgentNode(
-        "agent", prompt="p", system_prompt="You review code.", mode="tool_calling", skills=["review"]
+        "agent", prompt="p", system_prompt="You review code.", skills=["review"]
     )
     assert node.forward({}, open_memory_context=open_context, skills={"review": skill}) == Output("done")
     assert seen == ["You review code."]
     assert model.calls[0][0].content == system_prompt_with_skills("You review code.", [skill])
 
 
-@pytest.mark.parametrize("mode", ["plain", "tool_calling"])
-def test_omitted_system_prompt_keeps_default_system(monkeypatch, mode) -> None:
+@pytest.mark.parametrize("tools", [False, True])
+def test_omitted_system_prompt_keeps_default_system(monkeypatch, tools) -> None:
     model = _model(monkeypatch)
+    monkeypatch.setattr(ToolSet, "resolve", lambda _self, _names: [object()])
     seen: list[str] = []
 
     def open_context(system: str, prompt: str, compatibility: dict) -> MemoryContext:
         seen.append(system)
         return MemoryContext()
 
-    node = AgentNode("agent", prompt="p", mode=mode)
+    node = AgentNode("agent", prompt="p", tools=["noop"] if tools else None)
     assert node.forward({}, open_memory_context=open_context) == Output("done")
     assert seen == [DEFAULT_SYSTEM]
     assert model.calls[0][0].content == DEFAULT_SYSTEM

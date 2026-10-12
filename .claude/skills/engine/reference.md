@@ -205,7 +205,7 @@ is a named tool group; the AGENT's tool loop expands granted groups through
 `ToolSet.expand` before binding and the grant check, and the run boundary checks
 every static `Node.granted_tools()` grant against the `ToolSet` before any record.
 The AGENT node is the
-deliberate model-access exception: its mode imports
+deliberate model-access exception: its loop in `nodes/agent/loop.py` imports
 `llm_clients` and calls `model_from_config` directly, while its granted tools resolve
 through the run's `ToolSet`.
 
@@ -603,7 +603,7 @@ model made enforceable.
   remote scheduler.
 - **AGENT node structured output** — only an untagged `str` keeps an AGENT node on the text path.
   `type_to_schema` (`nodes/agent/structured.py`) derives a pydantic schema for supported
-  constrained outputs, the mode generates a conforming value (native
+  constrained outputs, and `generate_structured` produces a conforming value (native
   `with_structured_output`, or a JSON prompt-injection fallback gated by
   `supports_native_structured(provider, model)`), with `retries:`-capped self-correction.
   A root tagged string (`Literal[...]`) uses `ScalarWrapper.value` with a Pydantic

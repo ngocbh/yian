@@ -10,6 +10,7 @@ from langchain_core.messages import AIMessage
 from pydantic import BaseModel
 
 import yian.llm_clients as llm_clients_mod
+import yian.nodes.agent.node as agent_module
 import yian.tools as tools_mod
 from yian.events import (
     ModelCallFinished,
@@ -18,7 +19,7 @@ from yian.events import (
     ToolCallFinished,
     ToolCallStarted,
 )
-from yian.nodes.agent import MODES, AgentNode
+from yian.nodes.agent import AgentNode
 from yian.nodes.base import Output
 from yian.nodes.contracts import ValueContract
 from yian.runtime.eval_node import EvaluationFailure, eval_node
@@ -46,10 +47,10 @@ class _Tool:
         return self.action(args)
 
 
-def _agent(monkeypatch, script, *, mode="tool_calling", tools=(), output=None):
+def _agent(monkeypatch, script, *, tools=(), output=None):
     chat = ScriptedStreamChat(script=list(script), mode=[])
     monkeypatch.setattr(llm_clients_mod, "model_from_config", lambda _config: chat)
-    node = AgentNode("writer", prompt="hi", tools=list(tools), llm_config=dict(CONFIG), mode=mode)
+    node = AgentNode("writer", prompt="hi", tools=list(tools), llm_config=dict(CONFIG))
     if output is not None:
         node.output_contract = ValueContract(type=output)
     return node, chat
@@ -65,23 +66,23 @@ def _evaluate(node, *, stream=True, events=True):
     return outcome, chunks, observed
 
 
-def test_agent_mode_context_receives_only_supplied_sinks(monkeypatch):
+def test_agent_run_context_receives_only_supplied_sinks(monkeypatch):
     seen = []
 
     def probe(ctx):
         seen.append((ctx.emit_stream is not None, ctx.emit_event is not None))
         return Output(value="ok")
 
-    monkeypatch.setitem(MODES, "probe", probe)
+    monkeypatch.setattr(agent_module, "run_agent", probe)
     assert AgentNode.needs_live_events is True
     for stream, event in [(True, True), (False, True), (False, False)]:
-        node = AgentNode("writer", prompt="hi", llm_config=dict(CONFIG), mode="probe")
+        node = AgentNode("writer", prompt="hi", llm_config=dict(CONFIG))
         _evaluate(node, stream=stream, events=event)
     assert seen == [(True, True), (False, True), (False, False)]
 
 
 def test_agent_without_sinks_invokes_exactly_as_before(monkeypatch):
-    node, chat = _agent(monkeypatch, [reply("same answer")], mode="plain")
+    node, chat = _agent(monkeypatch, [reply("same answer")])
     outcome, chunks, observed = _evaluate(node, stream=False, events=False)
     assert outcome.value == "same answer"
     assert chat.mode == ["invoke"]
@@ -90,7 +91,7 @@ def test_agent_without_sinks_invokes_exactly_as_before(monkeypatch):
 
 def test_event_sink_alone_reports_usage_without_streaming(monkeypatch):
     tokens = usage(7, 2, cache_read=4, reasoning=1)
-    node, chat = _agent(monkeypatch, [reply("ok", tokens=tokens)], mode="plain")
+    node, chat = _agent(monkeypatch, [reply("ok", tokens=tokens)])
     outcome, chunks, observed = _evaluate(node, stream=False)
     assert outcome.value == "ok" and chat.mode == ["invoke"] and chunks == []
     assert observed[-1].usage == TokenUsage(
@@ -99,13 +100,13 @@ def test_event_sink_alone_reports_usage_without_streaming(monkeypatch):
 
 
 def test_provider_without_usage_reports_none(monkeypatch):
-    node, _ = _agent(monkeypatch, [reply("ok")], mode="plain")
+    node, _ = _agent(monkeypatch, [reply("ok")])
     _, _, observed = _evaluate(node)
     assert observed[-1].usage is None and observed[-1].error is None
 
 
 def test_model_error_is_reported_by_type_then_fails_the_node(monkeypatch):
-    node, _ = _agent(monkeypatch, [RuntimeError("key=sk-hidden")], mode="plain")
+    node, _ = _agent(monkeypatch, [RuntimeError("key=sk-hidden")])
     outcome, chunks, observed = _evaluate(node)
     assert isinstance(outcome, EvaluationFailure)
     assert chunks == []
@@ -120,7 +121,7 @@ def test_event_sink_failure_escapes_as_a_host_fault(monkeypatch):
     def broken(_item):
         raise HostBroken("host")
 
-    node, _ = _agent(monkeypatch, [reply("text")], mode="plain")
+    node, _ = _agent(monkeypatch, [reply("text")])
     with pytest.raises(HostBroken):
         eval_node(node, None, VariablePool(), emit_event=broken)
 
@@ -178,7 +179,7 @@ def test_structured_fallback_reports_usage_and_streams_nothing(monkeypatch):
         "yian.nodes.agent.structured._supports_native_structured", lambda _c: False
     )
     node, chat = _agent(
-        monkeypatch, [reply('{"value": 3}', tokens=usage(9, 1))], mode="plain",
+        monkeypatch, [reply('{"value": 3}', tokens=usage(9, 1))],
         output=Type.scalar(ValueKind.INTEGER),
     )
     outcome, chunks, observed = _evaluate(node)
@@ -203,7 +204,7 @@ def test_structured_native_retries_the_same_with_or_without_an_event_sink(monkey
         "yian.nodes.agent.structured._supports_native_structured", lambda _c: True
     )
     node, chat = _agent(
-        monkeypatch, _native_script(), mode="plain", output=Type.scalar(ValueKind.INTEGER)
+        monkeypatch, _native_script(), output=Type.scalar(ValueKind.INTEGER)
     )
     outcome, chunks, observed = _evaluate(node, stream=False, events=events)
     assert outcome.value == 4
@@ -247,7 +248,7 @@ def test_structured_native_turn_reports_usage_and_retains_the_raw_reply(monkeypa
     assert replies[0]["data"]["tool_calls"][0]["args"] == {"value": 4}
 
 
-def test_tool_calling_agent_orders_model_and_tool_observers(monkeypatch):
+def test_agent_with_tools_orders_model_and_tool_observers(monkeypatch):
     tool = _Tool()
     monkeypatch.setitem(tools_mod.TOOL_REGISTRY, "lookup", tool)
     node, chat = _agent(

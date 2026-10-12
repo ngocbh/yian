@@ -22,7 +22,6 @@ input:
 nodes:
   extract:
     kind: agent
-    mode: plain
     retries: 3                    # extra self-correction attempts (default 2)
     input:
       text: ${input.text}

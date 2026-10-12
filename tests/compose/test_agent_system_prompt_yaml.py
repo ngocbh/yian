@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from yian.compile.manifest import flow_fingerprint
+from yian.compile.manifest import flow_fingerprint, flow_manifest
 from yian.compose import load_flow
 from yian.compose.helpers.errors import LoadError
 from yian.nodes.agent import AgentNode
@@ -103,12 +103,15 @@ def test_agent_node_rejects_a_non_string_system_prompt() -> None:
 
 
 def test_flow_without_system_prompt_keeps_its_fingerprint() -> None:
-    # Pinned from main before `system_prompt:` existed.
+    # An absent `system_prompt:` adds nothing to identity. Pinned after `mode` left the
+    # AGENT manifest.
+    for compiled in (load_flow(_flow("")).compiled, load_flow(_compact("")).compiled):
+        assert "system_prompt" not in flow_manifest(compiled)["nodes"]["reply"]
     assert flow_fingerprint(load_flow(_flow("")).compiled) == (
-        "069d8e393da745c9fc31a6fbb950756d1cbf3ab2ebb10055a26ebaeeca944730"
+        "fc15ce95efcac79320ef54dad98e219283ab094c8521dbdcd8d6a9f65397e801"
     )
     assert flow_fingerprint(load_flow(_compact("")).compiled) == (
-        "9fda3ce33cb60299b719b0bed54afe9828207023f1a799cf10d3021329950cd1"
+        "a86275835f7f45b1a3eb6f9f4604cec49955a760339c13f0de26d9a539c47312"
     )
 
 

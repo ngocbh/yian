@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 
+import yian.nodes.agent.node as agent_module
 from yian import load_flow, run_flow
 from yian.memory.episodic import EpisodicMemory
-from yian.nodes.agent.modes import MODES, AgentRunContext
+from yian.nodes.agent import AgentRunContext
 from yian.nodes.base import Output
 
 _FLOW = """id: episodic-history
@@ -16,7 +17,6 @@ input:
 nodes:
   answer:
     kind: agent
-    mode: plain
     long_term_memory:
       episodic: {type: episodic, config: {max_episodes: 4, recall_limit: 2}}
     input: {topic: "${input.topic}"}
@@ -36,7 +36,7 @@ def test_backward_commits_episode_recalled_by_a_fresh_run(monkeypatch) -> None:
         )
         return Output("Use a queue to preserve arrival order.")
 
-    monkeypatch.setitem(MODES, "plain", answer)
+    monkeypatch.setattr(agent_module, "run_agent", answer)
     flow = load_flow(_FLOW)
     memory = EpisodicMemory()
 

@@ -60,7 +60,7 @@ def _retained_engine(monkeypatch):
     from yian.nodes.contracts import Parameter
     from tests.engine._graph_builder import _engine, _graph
 
-    node = AgentNode("writer", prompt="${topic}: ${tone}", tools=["not-used"],
+    node = AgentNode("writer", prompt="${topic}: ${tone}",
                      llm_config={"provider": "test", "model": "recorded"},
                      variables=read_variables({"tone": "Literal[concise,detailed] = concise"}, {}))
     node.params = [Parameter("topic"), Parameter("tags")]
@@ -175,7 +175,7 @@ def test_agent_backward_keeps_visible_tool_evidence_inert_and_separate(monkeypat
     from yian.memory import EvaluationEvidence, ModelTextInteraction, ToolCallInteraction, ToolResultInteraction
     from yian.runtime.log import _evidence_payload
 
-    evidence = EvaluationEvidence(None, {}, "Recorded base system.", "Recorded mode prompt.", interactions=(
+    evidence = EvaluationEvidence(None, {}, "Recorded base system.", "Recorded prompt.", interactions=(
         ToolCallInteraction("search", {"query": "reefs"}), ToolResultInteraction("search", "Found reefs."),
         ModelTextInteraction("Recorded visible answer."),
     ))

@@ -18,7 +18,6 @@ input: {question: str}
 nodes:
   answer:
     kind: agent
-    mode: plain
     long_term_memory: session
     input: {question: "${input.question}"}
     prompt: ${question}
@@ -116,14 +115,12 @@ input: {question: str}
 nodes:
   left:
     kind: agent
-    mode: plain
     long_term_memory: left_chat
     input: {question: "${input.question}"}
     prompt: "left: ${question}"
     output: str
   right:
     kind: agent
-    mode: plain
     long_term_memory: right_chat
     input: {question: "${input.question}"}
     prompt: "right: ${question}"

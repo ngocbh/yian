@@ -613,7 +613,6 @@ name: recovery_agent
 nodes:
   effect:
     kind: agent
-    mode: plain
     prompt: this model must never be invoked
     llm_config:
       provider: openai
@@ -657,7 +656,6 @@ nodes:
   agent:
     kind: agent
     depends_on: [release]
-    mode: plain
     prompt: never invoked
     llm_config: {{provider: openai, model: offline-test}}
   human:

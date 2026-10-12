@@ -1,6 +1,8 @@
-"""AGENT node — one authored leaf invoking a model through its selected mode.
+"""AGENT node — one authored leaf invoking a model.
 
-Modes drive their local model/tool loop through the shared provider interface.
+It makes one call without tools or skills, and runs the tool loop with them.
+
+The loop drives local model and tool calls through the shared provider interface.
 An optional memory backend owns
 conversation admission and retained history; the evaluator owns the turn's
 lifetime. Tools, including the run's ``ask_user``, are ordinary
@@ -25,10 +27,10 @@ from yian.memory.contracts import (
     _iter_memory_decl_origins,
     _rewrite_memory_decl_origins,
 )
-from yian.nodes.agent.modes import DEFAULT_SYSTEM, MODES, AgentRunContext
+from yian.nodes.agent.context import DEFAULT_SYSTEM, AgentRunContext
 from yian.nodes.agent.memory import compatibility
 from yian.nodes.agent.backward import backward_agent
-from yian.nodes.agent.modes.tool_calling import MAX_TOOL_ITERATIONS
+from yian.nodes.agent.loop import MAX_TOOL_ITERATIONS, run_agent
 from yian.nodes.agent.structured import _structured_validation_path
 from yian.nodes.base import BackwardContext, BackwardResult, Node, NodeKind, Output, Steering, _CapabilityFault, _HostStop
 from yian.nodes.binding import apply_defaults
@@ -44,8 +46,6 @@ from yian.tools import ToolSet
 from yian.typesys.types import canonical_type_label
 from yian.typesys.values import ValueKind, build_value_as
 
-DEFAULT_MODE = "plain"
-
 
 def is_text_output(contract: Any) -> bool:
     """Whether an AGENT output contract is plain text: none, or an untagged `str`."""
@@ -57,12 +57,12 @@ def is_text_output(contract: Any) -> bool:
 
 
 class AgentNode(Node):
-    """An LLM-backed leaf configured by a prompt, mode, and authored tools.
+    """An LLM-backed leaf configured by a prompt and authored tools.
 
     ``system_prompt`` is an optional template that replaces ``DEFAULT_SYSTEM``;
     it renders against the same local record as ``prompt``.
 
-    Modes normalize ``llm_config`` through the call-time ``model_from_config``
+    The loop normalizes ``llm_config`` through the call-time ``model_from_config``
     seam. ``memories`` holds the AGENT's authored memory declarations; compile
     derives runtime scope. ``variables`` retains typed local declarations with
     mandatory literal defaults, resolved into a fresh prompt record for each
@@ -87,7 +87,6 @@ class AgentNode(Node):
         tools: Optional[list[str]] = None,
         llm_config: Optional[dict[str, Any]] = None,
         llm_inherit: bool = True,
-        mode: str = DEFAULT_MODE,
         retries: int = 2,
         title: Optional[str] = None,
         memories: tuple[MemoryDecl, ...] = (),
@@ -113,7 +112,6 @@ class AgentNode(Node):
         self.own_llm_config: dict[str, Any] = dict(llm_config) if llm_config else {}
         self.llm_config = llm_config
         self.llm_inherit = llm_inherit
-        self.mode = mode or DEFAULT_MODE
         self.retries = retries
         if type(memories) is not tuple or any(
             type(decl) is not MemoryDecl for decl in memories
@@ -123,19 +121,11 @@ class AgentNode(Node):
             raise ValueError("AGENT memories must carry AGENT DeclSites")
         self.memories = memories
         self.variables = [] if variables is None else variables
-        if self.mode not in MODES:
-            raise ValueError(
-                f"AGENT node {node_id!r}: unknown mode {self.mode!r}; known: {sorted(MODES)}"
-            )
         self.skills: list[str] | Literal["all"] = [] if skills is None else skills
         self._validate_skills()
         self._validate_variables()
         if type(steerable) is not bool:
             raise TypeError(f"AGENT node {node_id!r}: steerable must be a bool")
-        if steerable and self.mode != "tool_calling":
-            raise ValueError(
-                f"AGENT node {node_id!r}: steerable needs mode 'tool_calling', not {self.mode!r}"
-            )
         self.steerable = steerable
 
     @property
@@ -155,7 +145,7 @@ class AgentNode(Node):
             raise ValueError(f"AGENT node {self.id!r}: steerable needs `str` output")
 
     def _validate_skills(self) -> None:
-        """Require `all` or unique valid names, in tool-calling mode."""
+        """Require `all` or unique valid names."""
         where = f"AGENT node {self.id!r}"
         if LOAD_SKILL in self.tools:
             raise SkillError(f"{where}: {LOAD_SKILL!r} is a reserved tool name; remove it from tools")
@@ -166,8 +156,6 @@ class AgentNode(Node):
                 check_skill_name(name)
             if len(set(self.skills)) != len(self.skills):
                 raise SkillError(f"{where}: duplicate skill grant in {self.skills}")
-        if self.skills and self.mode != "tool_calling":
-            raise SkillError(f"{where}: skills need mode 'tool_calling', not {self.mode!r}")
 
     def granted_tools(self) -> tuple[str, ...]:
         """Return the authored `tools:` grants, which may name host-filled groups."""
@@ -261,7 +249,7 @@ class AgentNode(Node):
         skills: tuple[Skill, ...] = (),
         steering: Steering | None = None,
     ) -> AgentRunContext:
-        """Build the complete process-local context for one mode invocation."""
+        """Build the complete process-local context for one invocation."""
         output_type = (
             self.output_contract.type
             if type(self.output_contract) is ValueContract
@@ -323,10 +311,10 @@ class AgentNode(Node):
         skills: Mapping[str, Skill] | None = None,
         steering: Steering | None = None,
     ) -> Output:
-        """Render fresh locals once, publish established capture, and run the mode.
+        """Render fresh locals once, publish established capture, and run the loop.
 
         The authored ``system_prompt`` renders against the same inputs and
-        variables as ``prompt``; without one the mode receives ``DEFAULT_SYSTEM``.
+        variables as ``prompt``; without one the loop receives ``DEFAULT_SYSTEM``.
         ``capture_render`` is an optional evaluator-owned sink. It receives the
         actual template, resolved variable values/domains, and rendered prompt
         once, including established partial locals if preparation fails. Unknown
@@ -336,7 +324,7 @@ class AgentNode(Node):
         Args:
             inputs (`dict`): Delivered inputs, kept separate from local variables.
             stop_event (*optional*, defaults to `None`): Cooperative host stop
-                signal checked before recall and mode execution.
+                signal checked before recall and the model call.
             evaluation_trace (`EvaluationTrace | None`, *optional*, defaults to `None`):
                 Write-only visible prompt and interaction collector.
             open_memory_context (`Callable | None`, *optional*, defaults to `None`):
@@ -360,7 +348,7 @@ class AgentNode(Node):
                 tool loop drains steer messages and honors interrupts.
 
         Returns:
-            `Output`: The selected mode's result.
+            `Output`: The model's answer.
 
         Raises:
             `ValueError`: A variable collides with a declared or delivered input.
@@ -423,7 +411,7 @@ class AgentNode(Node):
         if stop_event is not None and stop_event.is_set():
             raise _HostStop(primary=False)
         try:
-            return MODES[self.mode](self._ctx(
+            return run_agent(self._ctx(
                 prompt,
                 stop_event=stop_event,
                 evaluation_trace=evaluation_trace,

@@ -19,7 +19,6 @@ input: {question: str}
 nodes:
   answer:
     kind: agent
-    mode: MODE
     long_term_memory: session
     input: {question: "${input.question}"}
     prompt: ${question}
@@ -46,9 +45,8 @@ def _seed(flow, memory):
         assert result.learning is None
 
 
-@pytest.mark.parametrize("mode", ["plain", "tool_calling"])
-def test_soft_budget_keeps_four_prior_turns_and_all_raw_messages(monkeypatch, mode):
-    flow = load_flow(FLOW.replace("MODE", mode))
+def test_soft_budget_keeps_four_prior_turns_and_all_raw_messages(monkeypatch):
+    flow = load_flow(FLOW)
     memory = SessionMemory(history_budget_chars=1, recent_turns=4)
     model = _Model(
         [*_replies(), AIMessage(content=SUMMARY), AIMessage(content="current answer")]
@@ -85,11 +83,10 @@ def test_soft_budget_keeps_four_prior_turns_and_all_raw_messages(monkeypatch, mo
     assert snapshot["notes"] == []
 
 
-@pytest.mark.parametrize("mode", ["plain", "tool_calling"])
 def test_summary_failure_is_a_node_failure_without_answer_or_history_deletion(
-    monkeypatch, mode
+    monkeypatch,
 ):
-    flow = load_flow(FLOW.replace("MODE", mode))
+    flow = load_flow(FLOW)
     memory = SessionMemory(history_budget_chars=1)
     error = RuntimeError("summary request failed")
     model = _Model([*_replies(), error])
@@ -110,7 +107,7 @@ def test_summary_failure_is_a_node_failure_without_answer_or_history_deletion(
 
 
 def test_new_summary_uses_current_model_without_a_second_model_factory(monkeypatch):
-    flow = load_flow(FLOW.replace("MODE", "plain"))
+    flow = load_flow(FLOW)
     memory = SessionMemory(history_budget_chars=1)
     old = _Model(_replies())
     current = _Model([AIMessage(content=SUMMARY), AIMessage(content="new answer")])
@@ -122,7 +119,7 @@ def test_new_summary_uses_current_model_without_a_second_model_factory(monkeypat
 
     monkeypatch.setattr(llm_clients, "model_from_config", factory)
     _seed(flow, memory)
-    changed = load_flow(FLOW.replace("MODE", "plain").replace("old-model", "new-model"))
+    changed = load_flow(FLOW.replace("old-model", "new-model"))
     result = run_flow(changed, {"question": "new question"}, memory={"session": memory})
 
     assert result.output == "new answer"
@@ -134,7 +131,7 @@ def test_new_summary_uses_current_model_without_a_second_model_factory(monkeypat
 
 
 def test_interrupted_summary_can_resume_against_existing_memory(monkeypatch, tmp_path):
-    flow = load_flow(FLOW.replace("MODE", "plain"))
+    flow = load_flow(FLOW)
     memory = SessionMemory(history_budget_chars=1)
     stopped = KeyboardInterrupt("interrupted summary")
     model = _Model(

@@ -330,8 +330,8 @@ reflection or `NodeKind` dispatch.
 
 `common.py` vs `utils.py` is a real distinction, not a synonym: `common` = shared
 **types/contract**; `utils` = shared **helper functions**. A package may have
-both (e.g. `nodes/agent/modes/common.py` is the mode contract; a `modes/utils.py`
-holds pure helpers).
+both. The same split can use domain names: `nodes/agent/context.py` holds the
+invocation contract and `nodes/agent/text.py` the shared helpers.
 
 ## 4. When to create a new package (folder)
 

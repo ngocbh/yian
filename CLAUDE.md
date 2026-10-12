@@ -70,8 +70,8 @@ engine or flow change.
 - Keep imports acyclic: `diagnostics` sits below `events`; nodes combine the
   `diagnostics`, `typesys`, and `expr` leaves before `compile <- compose`.
 - Prefer general, domain-neutral nodes and combinators over one-off behavior.
-- Put new external dependencies behind small injected callables. Agent modes are
-  the existing exception.
+- Put new external dependencies behind small injected callables. The AGENT node's
+  direct model access is the existing exception.
 
 ## Docs change with code
 

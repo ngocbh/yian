@@ -89,7 +89,6 @@ llm_config: {provider: openai, model: fake-model}
 nodes:
   work:
     kind: agent
-    mode: plain
     long_term_memory: test
     prompt: hi
     output: int

@@ -452,7 +452,7 @@ def test_effective_map_resolves_environment_defaults_once(monkeypatch):
     monkeypatch.setattr(factory_mod, "create_llm_client", fake_create_llm_client)
 
     loaded = load_flow(
-        "id: f\nname: f\nnodes:\n  a: {kind: agent, mode: plain, prompt: hi, "
+        "id: f\nname: f\nnodes:\n  a: {kind: agent, prompt: hi, "
         "llm_config: {inherit: false}}\noutput: ${a.output}\n"
     )
 

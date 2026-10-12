@@ -1,9 +1,10 @@
 """kind=human_input — the blocking human gate's descriptor + parse/build handle.
 
 One of the two-axis `compose/nodes/<kind>.py` modules: it owns the `human_input` node's
-frozen `HumanInputDescriptor`. It inherits the template `parse` from `NodeDescriptor` (which
-records each field's `SourceRange`), overriding only the `_validate_fields` hook to enforce the
-one-of-three question-surface legality, and overriding `build` (which constructs the runtime
+frozen `HumanInputDescriptor`. It wraps the template `parse` from `NodeDescriptor` (which
+records each field's `SourceRange`) to reject the removed `adaptive_questions.mode:` key,
+overrides the `_validate_fields` hook to enforce the one-of-three question-surface legality,
+and overrides `build` (which constructs the runtime
 `HumanInputNode` and derives the answer schema). `_finish` stamps only the descriptor's opaque
 origin onto that node and keeps concrete ranges on the Compose-owned `BuildResult`. Registered
 into `KINDS`/`BINDING_FIELDS` at import so the shared dispatch routes here.
@@ -19,7 +20,9 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from yian.compose.helpers.errors import LoadDiagnostics
+from yian.compose.nodes.agent import MODE_REMOVED_FIX
 from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
+from yian.compose.source import SourceCursor
 from yian.diagnostics import SourceRange
 from yian.expr.template import prompt_refs
 from yian.nodes.contracts import ValueContract
@@ -34,14 +37,15 @@ class HumanInputDescriptor(NodeDescriptor):
     Three author surfaces, exactly one of which carries the question(s):
     - `questions`: static list (`[{question, header, options, multi_select}, ...]`) OR
       a `${...}` ref string to a declared input (the manual-ref form);
-    - `adaptive_questions`: a nested block (dict) `{prompt: <LLM brief>, mode?,
-      llm_config?, retries?}` — the engine asks an LLM to author the questions;
+    - `adaptive_questions`: a nested block (dict) `{prompt: <LLM brief>, llm_config?,
+      retries?}` — the engine asks an LLM to author the questions;
     - `prompt`: the legacy free-text approve/answer surface.
     Legality (exactly-one, adaptive needs its own `prompt:`) is enforced in `_validate_fields`.
 
     Inherits the common descriptor fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` +
     the Compose-only `range`/`field_ranges` parse metadata), the `input:`/`output:` signature surface, and the
-    template `parse` from `NodeDescriptor`. It overrides ONLY the `_validate_fields` hook (the
+    template `parse` from `NodeDescriptor`, which it wraps to reject the removed
+    `adaptive_questions.mode:` key. It overrides the `_validate_fields` hook (the
     one-of-three legality, calling `super()` first for the default asserts-list check); only the
     human_input-specific fields are declared here.
 
@@ -63,6 +67,23 @@ class HumanInputDescriptor(NodeDescriptor):
     questions: Any = None
     adaptive_questions: Optional[dict] = None
     asserts: list[str] = field(default_factory=list)
+
+    @classmethod
+    def parse(cls, node_id: str, cursor: SourceCursor) -> "HumanInputDescriptor":
+        """Reject the removed `adaptive_questions.mode:` key, then parse as usual.
+
+        Raises:
+            `LoadError`: The `adaptive_questions:` block authors `mode:`, or the template
+                `parse` rejects the node.
+        """
+        adaptive = cursor.get("adaptive_questions")
+        if isinstance(adaptive, dict) and "mode" in adaptive:
+            raise LoadDiagnostics.from_cursor(cursor).error(
+                f"node {node_id!r} (kind=human_input): `adaptive_questions.mode:` was removed: "
+                f"{MODE_REMOVED_FIX}",
+                range=cursor.child("adaptive_questions").key_range_of("mode"),
+            )
+        return super().parse(node_id, cursor)
 
     @classmethod
     def _validate_fields(

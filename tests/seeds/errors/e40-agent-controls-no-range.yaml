@@ -10,8 +10,7 @@ input:
 nodes:
   note:
     kind: agent
-    mode: tool_calling
-    controls: [ask_user, nope_control]    # L14 — THE ERROR (the whole field is retired)
+    controls: [ask_user, nope_control]    # L13 — THE ERROR (the whole field is retired)
     input:
       topic: ${input.topic}
     output: str

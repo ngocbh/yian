@@ -68,7 +68,8 @@ class Node:
 - **`caps`** — narrow capabilities a plain input dict cannot carry, such as a mapped
   call's `caps["bind_item"]` or a cooperative `stop_event`. The read boundary supplies
   only traits a node explicitly requests. The AGENT node is the documented exception for
-  model access: its mode builds the configured model directly through `llm_clients`.
+  model access: its loop (`run_agent`) builds the configured model directly through
+  `llm_clients`.
 
 **Why only `forward`?** Default filling and assertion checks are identical for every
 kind — so they are protocol, not kind behavior, and live in the base template. See

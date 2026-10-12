@@ -1,8 +1,8 @@
-"""`plain` mode — native structured output for constrained output types."""
+"""An AGENT without tools: native structured output for constrained output types."""
 
 import yian.llm_clients as llm_clients
-from yian.nodes.agent.modes.common import AgentRunContext
-from yian.nodes.agent.modes.plain import plain
+from yian.nodes.agent.context import AgentRunContext
+from yian.nodes.agent.loop import run_agent
 from yian.typesys.values import Type, ValueKind
 
 
@@ -23,7 +23,7 @@ class _StructuredModel:
         raise AssertionError("should use with_structured_output for a declared type")
 
 
-def test_plain_uses_structured_output_for_record(monkeypatch):
+def test_no_tools_uses_structured_output_for_record(monkeypatch):
     typ = Type(
         kind=ValueKind.OBJECT,
         fields={
@@ -40,11 +40,11 @@ def test_plain_uses_structured_output_for_record(monkeypatch):
         llm_config={"provider": "openai", "model": "gpt-4o"},
         output_type=typ,
     )
-    out = plain(ctx)
+    out = run_agent(ctx)
     assert out.value == {"name": "Ada", "score": 9}  # a plain dict, not a pydantic obj
 
 
-def test_plain_uses_ollama_structured_output_for_literal(monkeypatch):
+def test_no_tools_uses_ollama_structured_output_for_literal(monkeypatch):
     typ = Type(kind=ValueKind.STRING, tags=frozenset({"positive", "neutral"}))
 
     class _LiteralModel:
@@ -72,7 +72,7 @@ def test_plain_uses_ollama_structured_output_for_literal(monkeypatch):
         output_type=typ,
     )
 
-    assert plain(ctx).value == "neutral"
+    assert run_agent(ctx).value == "neutral"
     assert model.structured_called_with is not None
 
 
@@ -84,10 +84,10 @@ class _TextModel:
         return R()
 
 
-def test_plain_bare_str_text_passthrough(monkeypatch):
+def test_no_tools_bare_str_text_passthrough(monkeypatch):
     monkeypatch.setattr(llm_clients, "model_from_config", lambda config: _TextModel())
     ctx = AgentRunContext(
         node_id="a", prompt="x",
         output_type=Type.scalar(ValueKind.STRING),
     )
-    assert plain(ctx).value == "hello"  # unchanged behavior
+    assert run_agent(ctx).value == "hello"  # unchanged behavior

@@ -13,7 +13,8 @@ from yian.run import run_flow
 from tests.engine.test_agent_session import _FLOW, _Model, _view
 
 
-_TOOL_FLOW = _FLOW.replace("mode: plain", "mode: tool_calling\n    tools: [lookup]")
+_TOOL_FLOW = _FLOW.replace("    kind: agent\n", "    kind: agent\n    tools: [lookup]\n")
+assert _TOOL_FLOW != _FLOW
 
 
 class _Arguments(BaseModel):

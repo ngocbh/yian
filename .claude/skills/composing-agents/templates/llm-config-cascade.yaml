@@ -20,14 +20,12 @@ llm_config:                       # the flow layer: every AGENT node inherits th
 nodes:
   drafter:                        # inherits provider+temperature; overrides only model
     kind: agent
-    mode: plain
     prompt: Draft a one-line summary.
     llm_config:
       model: claude-opus-4-8
 
   grader:                         # own selection + process defaults; no flow/CLI layer
     kind: agent
-    mode: plain
     depends_on: [drafter]
     prompt: Grade the draft pass/fail.
     llm_config:

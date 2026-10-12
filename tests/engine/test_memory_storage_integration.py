@@ -37,7 +37,6 @@ input:
 nodes:
   agent:
     kind: agent
-    mode: plain
     long_term_memory: session
     prompt: ${question}
     input:

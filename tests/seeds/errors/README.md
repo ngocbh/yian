@@ -56,7 +56,8 @@ just what can.
 | `e37-synth-node-inherits-host-ranges.yaml` | a bad ref in an inline `call(...)` | directive-owned provenance locates the synthesized binding |
 | `e38-case-when-ref-locates-node-header.yaml` | a bad ref inside a `case`'s `when:` — desugared to a synthetic `__r1` input | predicate-owned provenance locates and names the authored case |
 | `e39-llm-config-no-range.yaml` | a bad `llm_config:` entry (`provider: bogus_provider`) | retained `llm_config` value range, beginning at the invalid `provider:` entry |
-| `e40-agent-controls-no-range.yaml` | retired AGENT `controls:` field | field value (L14) |
+| `e40-agent-controls-no-range.yaml` | retired AGENT `controls:` field | field value (L13) |
+| `e43-agent-mode-removed.yaml` | removed AGENT `mode:` field (`mode: plain` beside `tools:`) | `mode:` key line (L13); the message says the tools will now be used |
 | `e30-inline-syntax-error.yaml` | a malformed inline `code:` body (`return (`) | inline syntax gate → exact literal-line `LoadError` via the CODE origin selector |
 | `e31-inline-no-return.yaml` | an inline `code:` body with no `return` | has-`return` load gate → located `LoadError` |
 | `e32-malformed-code-ref.yaml` | a `code:` value that is neither a valid ref nor inline source (dotted, no colon) | reject bucket → `LoadError` with a "did you mean" hint |

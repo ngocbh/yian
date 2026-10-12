@@ -185,7 +185,7 @@ def test_ollama_drops_unsupported_kwargs():
 def test_openai_responses_preserve_reasoning_for_next_tool_turn():
     import httpx
     from langchain_core.messages import HumanMessage, ToolMessage
-    from yian.nodes.agent.modes.utils import text_of
+    from yian.nodes.agent.text import text_of
     from tests.fixtures.openai_responses import ResponsesServer
 
     server = ResponsesServer()

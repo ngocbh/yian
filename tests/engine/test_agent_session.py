@@ -24,7 +24,6 @@ input:
 nodes:
   agent:
     kind: agent
-    mode: plain
     long_term_memory: session
     prompt: ${question}
     input:
@@ -265,14 +264,16 @@ def test_compatible_model_and_prompt_changes_retain_history_with_current_system(
     configs = []
     monkeypatch.setattr(llm_clients, "model_from_config", lambda config: configs.append(config) or model)
     memory = SessionMemory()
-    system = "    mode: plain\n    system_prompt: {}\n"
-    original = _FLOW.replace("    mode: plain\n", system.format("old system instructions"))
+    system = "    kind: agent\n    system_prompt: {}\n"
+    original = _FLOW.replace("    kind: agent\n", system.format("old system instructions"))
+    assert original != _FLOW
     run_flow(load_flow(original), {"question": "first"}, memory={"session": memory})
     changed = (
         _FLOW.replace("test-model", "different-model")
         .replace("prompt: ${question}", "prompt: changed ${question}")
-        .replace("    mode: plain\n", system.format("current system instructions"))
+        .replace("    kind: agent\n", system.format("current system instructions"))
     )
+    assert "current system instructions" in changed
     run_flow(load_flow(changed), {"question": "second"}, memory={"session": memory})
     assert configs[-1]["model"] == "different-model"
     assert [message.content for message in model.calls[-1]] == [

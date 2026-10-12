@@ -2,10 +2,10 @@
 generate a value that conforms to it.
 
 An AGENT declares `output:` as a typed `Type`. For a bare `str` the agent stays a text
-producer — `type_to_schema` returns `None` and the mode takes the plain-text path. For any
-constrained or richer type (a `Literal[...]` variant, record, scalar
+producer — `type_to_schema` returns `None` and the AGENT loop takes the plain-text path. For
+any constrained or richer type (a `Literal[...]` variant, record, scalar
 `int`/`float`/`bool`, or list) `type_to_schema` builds a `pydantic.BaseModel` the
-mode hands to `with_structured_output`, so the model emits a value that
+AGENT loop hands to `with_structured_output`, so the model emits a value that
 success-record preparation can canonicalize against the effective target's declared
 output type.
 
@@ -38,7 +38,7 @@ from yian.memory.contracts import (
 )
 from yian.nodes.agent.memory import invoke_model
 from yian.nodes.agent.live import LiveSinks, invoke_chat, invoke_structured
-from yian.nodes.agent.modes.utils import record_model_text, text_of
+from yian.nodes.agent.text import record_model_text, text_of
 from yian.nodes.base import _CapabilityFault, _HostStop
 from yian.typesys.values import Type, ValueKind
 

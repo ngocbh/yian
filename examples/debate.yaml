@@ -25,7 +25,6 @@ input:
 nodes:
   frame:
     kind: agent
-    mode: plain
     input:
       question: ${input.question}
     output: str
@@ -33,7 +32,6 @@ nodes:
 
   for_case:
     kind: agent
-    mode: plain
     input:
       brief: ${frame.output}            # edge: frame -> for_case
     output: str
@@ -41,7 +39,6 @@ nodes:
 
   against_case:
     kind: agent
-    mode: plain
     input:
       brief: ${frame.output}            # edge: frame -> against_case (parallel with for_case)
     output: str
@@ -49,7 +46,6 @@ nodes:
 
   verdict:
     kind: agent
-    mode: plain
     input:
       for_case: ${for_case.output}      # fan-in: verdict waits for BOTH sides
       against_case: ${against_case.output}

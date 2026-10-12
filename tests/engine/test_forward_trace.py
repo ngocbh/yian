@@ -184,7 +184,6 @@ defs:
     nodes:
       writer:
         kind: agent
-        mode: plain
         input: {topic: '${input.topic}'}
         prompt: '${topic}: ${instruction}'
         variables: {instruction: 'str = clearly'}
@@ -224,11 +223,11 @@ output: {left: '${left.output}', right: '${right.output}'}
 """).compiled
     rendered = []
 
-    def mode(ctx):
+    def run(ctx):
         rendered.append((ctx.prompt, dict(ctx.llm_config)))
         return Output({"topic": ctx.prompt})
 
-    monkeypatch.setitem(agent_module.MODES, "plain", mode)
+    monkeypatch.setattr(agent_module, "run_agent", run)
     engine = _engine(flow, learnable=True)
     original = copy.deepcopy(engine.state.flow)
     list(engine.run())
@@ -263,7 +262,7 @@ output: {left: '${left.output}', right: '${right.output}'}
     monkeypatch.setattr(AgentNode, "_resolve_variables", forbidden)
     monkeypatch.setattr(AgentNode, "capture_backward_context", forbidden)
     monkeypatch.setattr(agent_module, "render_template_record", forbidden)
-    monkeypatch.setitem(agent_module.MODES, "plain", forbidden)
+    monkeypatch.setattr(agent_module, "run_agent", forbidden)
     replay = _replay_records(RunState(original), tuple(engine.log), grow_builder=build_grow)
     assert replay.trace.occurrences == trace.occurrences
     for occurrence in agents:
@@ -288,8 +287,8 @@ def test_agent_render_capture_host_and_append_failures_do_not_install_worker_dat
 
     expected = OSError("capture or append unavailable")
     node = AgentNode("writer", prompt="actual prompt")
-    modes = []
-    monkeypatch.setitem(agent_module.MODES, "plain", lambda ctx: modes.append(ctx.prompt) or Output(ctx.prompt))
+    runs = []
+    monkeypatch.setattr(agent_module, "run_agent", lambda ctx: runs.append(ctx.prompt) or Output(ctx.prompt))
     engine = _engine(_graph([node], [(START_ID, "writer"), ("writer", END_ID)]), learnable=True)
     canonical, append = evaluator.canonical_seed, engine.log.append
 
@@ -311,7 +310,7 @@ def test_agent_render_capture_host_and_append_failures_do_not_install_worker_dat
     with pytest.raises(OSError) as caught:
         list(engine.run())
     assert caught.value is expected
-    assert modes == ([] if failure_at == "capture" else ["actual prompt"])
+    assert runs == ([] if failure_at == "capture" else ["actual prompt"])
     assert tuple(engine.log)[-1].record == NodeStartedRecord("writer")
     assert all(item.node_id != "writer" for item in engine.state.trace.occurrences)
     assert "writer" not in engine.state.trace.current_writers
@@ -330,7 +329,7 @@ def test_discarded_agent_worker_keeps_render_capture_out_of_accepted_trace(monke
     entered, stop = threading.Event(), threading.Event()
     rendered = []
 
-    def mode(ctx):
+    def run(ctx):
         rendered.append(ctx.prompt)
         entered.set()
         assert stop.wait(5)
@@ -340,7 +339,7 @@ def test_discarded_agent_worker_keeps_render_capture_out_of_accepted_trace(monke
         assert entered.wait(5)
         raise ValueError("sibling failed")
 
-    monkeypatch.setitem(agent_module.MODES, "plain", mode)
+    monkeypatch.setattr(agent_module, "run_agent", run)
     slow = AgentNode("slow", prompt="captured but discarded")
     flow = _graph([slow, FuncNode("bad", fail)], [
         (START_ID, "slow"), (START_ID, "bad"), ("slow", END_ID), ("bad", END_ID),

@@ -455,7 +455,16 @@ def test_agent_controls_field_is_retired_and_located():
     # retired field at its value range and directs authors to the ordinary `tools:` surface.
     err = _load_error("e40-agent-controls-no-range.yaml")
     assert "field 'controls' is not allowed" in str(err)
-    assert _only_error_range(err).start_line == 14
+    assert _only_error_range(err).start_line == 13
+
+
+def test_agent_mode_field_is_removed_and_located():
+    # `mode:` was removed: tools alone decide whether an AGENT loops. A stale `mode: plain`
+    # beside `tools:` is located at its key line and warns that the tools will now be used.
+    err = _load_error("e43-agent-mode-removed.yaml")
+    assert "`mode:` was removed" in str(err)
+    assert "will now be used" in str(err)
+    assert _only_error_range(err).start_line == 13
 
 
 def test_structured_output_origin_is_exact():

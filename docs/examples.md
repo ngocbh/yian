@@ -84,7 +84,7 @@ Run it from the CLI to see the guaranteed blocking gate.
 
 ## `ask-user.yaml` — a model-chosen clarifying question
 
-Exercises the **`ask_user` tool** on a `tool_calling` AGENT node. The node calls the
+Exercises the **`ask_user` tool** on an AGENT node. The node calls the
 blocking tool **only if** it judges the request ambiguous — otherwise it answers
 outright. Whether the call happens depends on the prompt and the model.
 

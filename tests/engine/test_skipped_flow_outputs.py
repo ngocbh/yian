@@ -398,3 +398,92 @@ def test_typed_argument_narrows_a_skipped_child_output_at_runtime():
     result = run_flow(load_flow(text), {"approve": False})
     assert result.status == "failed"
     assert result.failure.code == "binding.type"
+
+
+# A LOOP body that makes a note only when `flip` holds (a CASE with no `else:`).
+_FLIP_BODY = """      gate:
+        kind: case
+        cases:
+          - when: ${input.flip}
+            then: mk
+      mk:
+        kind: code
+        output: str
+        code: |
+          return "made"
+      bump:
+        kind: code
+        input:
+          n: ${input.n}
+        output: int
+        code: |
+          return inputs["n"] + 1
+"""
+
+
+def _inline_loop(note_seed: str, times: int) -> str:
+    """Return a flow whose inline LOOP body returns `note: ${mk.output}`."""
+    nodes = (
+        f"  repeat:\n    kind: loop\n    times: {times}\n    input:\n      n: 0\n"
+        f"      note: {note_seed}\n      flip: ${{input.flip}}\n    nodes:\n"
+        f"{textwrap.indent(_FLIP_BODY, '  ')}"
+        "    output:\n      n: ${bump.output}\n      note: ${mk.output}\n"
+    )
+    return _flow(nodes, " ${repeat.output}", inputs="flip: bool")
+
+
+def test_inline_loop_over_an_untyped_seed_asks_for_its_type():
+    """The body field is `Optional[str]`, so an untyped `"start"` seed must be typed."""
+    with pytest.raises(LoadError, match="declare the seed's type"):
+        load_flow(_inline_loop('"start"', 1))
+
+
+def test_inline_loop_sets_a_skipped_field_to_null():
+    """A skipped body field sets the carried field to null, not its previous value."""
+    text = _inline_loop('str = "start"', 1)
+    assert _run(text, {"flip": False}) == {"n": 1, "note": None, "flip": False}
+
+
+def test_inline_loop_over_a_typed_str_seed_rejects_the_null_next_iteration():
+    """Over a typed `str` seed, the null fails the next iteration's parameter check."""
+    result = run_flow(load_flow(_inline_loop('str = "start"', 2)), {"flip": False})
+    assert result.status == "failed"
+    assert result.failure.code == "contract.input"
+
+
+@pytest.mark.parametrize(("flip", "note"), [(False, None), (True, "made")])
+def test_inline_loop_over_an_optional_seed_carries_the_null(flip, note):
+    """Over an `Optional[str]` seed the null is carried; a taken branch gives its value."""
+    text = _inline_loop('Optional[str] = "start"', 2)
+    assert _run(text, {"flip": flip}) == {"n": 2, "note": note, "flip": flip}
+
+
+def test_named_loop_body_sets_a_skipped_field_to_null():
+    """A `defs:` LOOP body returning a skipped node's output carries null."""
+    defs = (
+        "defs:\n  body:\n    input:\n      n: int\n      note: Optional[str]\n"
+        "      flip: bool\n    nodes:\n"
+        f"{_FLIP_BODY}"
+        "    output:\n      n: ${bump.output}\n      note: ${mk.output}\n"
+    )
+    nodes = (
+        "  repeat:\n    kind: loop\n    call: body\n    times: 2\n    input:\n"
+        '      n: 0\n      note: "start"\n      flip: ${input.flip}\n'
+    )
+    text = _flow(nodes, " ${repeat.output}", inputs="flip: bool", defs=defs)
+    assert _run(text, {"flip": False}) == {"n": 2, "note": None, "flip": False}
+
+
+def test_map_inline_body_returns_null_per_skipped_element():
+    """A MAP over an inline body gives null for each element whose branch was skipped."""
+    nodes = (
+        "  each:\n    kind: map\n    over: [true, false]\n    input:\n      flag: ${item}\n"
+        "    nodes:\n"
+        "      gate:\n        kind: case\n        cases:\n"
+        "          - when: ${input.flag}\n            then: mk\n"
+        "      mk:\n        kind: code\n        output: str\n"
+        '        code: |\n          return "made"\n'
+        "    output: ${mk.output}\n"
+    )
+    text = _flow(nodes, " ${each.output}", inputs="approve: bool")
+    assert _run(text, {"approve": True}) == ["made", None]

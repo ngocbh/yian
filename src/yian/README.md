@@ -1510,7 +1510,8 @@ Compile also owns stable identity for the static program. `flow_manifest`
 canonicalizes execution semantics, `flow_fingerprint` hashes that manifest, and
 assertion identity includes executable and display text in list order while
 remaining origin-neutral. `expansion_digest` applies the same projection to
-dynamic fragments. CODE identity includes its executable `code` text but excludes
+dynamic fragments. CODE identity includes its executable `code` text (for a
+reference, the `module:function` token, not the callable's source) but excludes
 `code_origin`, `code_line_origins`, and the retained compiled/owned-code caches,
 while CASE identity includes predicate handle/expression semantics but excludes
 each predicate origin. Thus source formatting, origin rebasing, and Python object

@@ -1231,6 +1231,15 @@ configuration without reading current process defaults. A run started before the
 AGENT `mode:` field was removed cannot be resumed: the AGENT manifest changed, so
 every AGENT flow has a new fingerprint.
 
+The fingerprint covers the flow as written: its nodes, wiring, types, prompts,
+inline `code:` bodies, granted tool, group, and skill names, and static child flows.
+It does not cover what the host supplies. A reference-mode CODE node
+(`code: pkg.mod:fn`) contributes only its `module:function` text, not the
+function's source, so editing that function between a crash and `resume_flow`
+passes the check and the restarted nodes run the new code. Tool implementations,
+skill contents, and model behavior are likewise outside it. Keep them unchanged
+until the run finishes, or start a fresh run.
+
 If the original run enabled memory and forward execution is unfinished,
 recovery requires backends under the same memory keys. Each session
 must reproduce the exact snapshot stored by `RunStarted`; this prevents a resumed

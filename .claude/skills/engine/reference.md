@@ -601,7 +601,8 @@ model made enforceable.
   `commit_as` or LOOP's `origin_id`. Diagnostic-only `exception_origin` and
   `failure_trace` project node/carrier origins and generated `origin_context`,
   which remain identity-neutral alongside comments and object identity. CODE's
-  executable `code` text affects identity, while its
+  executable `code` text affects identity (a reference contributes its
+  `module:function` token, not the callable's source), while its
   whole-source and exact-line origins are diagnostic-only and do not. CASE handles
   and predicate expressions affect identity, while ordered predicate origins do not.
 - **Closed `NodeKind`; the core is kind-blind** — `NodeKind` stays a closed enum, but the engine

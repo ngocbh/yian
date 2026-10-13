@@ -274,8 +274,10 @@ REDUNDANT and REJECTED with `times:`. A body that blocks
 (a `human_input` leaf) makes the loop a live chat REPL — the same run threads each
 answered turn. Each continuing iteration PRUNES the previous iteration's body nodes and
 the nodes grown under them by a nested CALL, MAP, or LOOP, so the live graph stays about
-one iteration whatever the body; the run log still keeps every iteration. The node budget
-(10,000 live nodes) limits only what one iteration grows at its peak. See `loop.yaml`.
+one iteration, whatever the body, unless a nested node is still unfinished (that subtree
+stays live); the run log still keeps every iteration. The node budget (10,000 live nodes)
+is checked before pruning; it limits one iteration's size, not the iteration count. See
+`loop.yaml`.
 
 **Conversational REPL (LOOP + human_input).** A chat is a `loop` whose body blocks at
 `ask` (`human_input`), then a CASE routes exact `/exit` and `/quit` values to an exit

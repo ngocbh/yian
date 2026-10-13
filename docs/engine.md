@@ -161,9 +161,12 @@ driver's outer context so the authored loop origin appears once. Runtime only
 splices the resulting fragment and never branches on kind to construct a trace.
 `prune` is growth's generic inverse: a self-respawning loop retires the
 iteration it just finished in the same step. Pruning an id also retires the live nodes
-grown under it (by a nested CALL, MAP, or LOOP, transitively) once they are all settled.
-The reducer derives them from accepted growth records (`RunState.growth_owner`); the
-record keeps only the node's requested ids, and replay re-derives the rest. Adding a new
+grown under it (by a nested CALL, MAP, or LOOP, transitively) if all of them are settled
+(taken, skipped, or expanded; none ready or running) at that moment; otherwise that
+subtree stays live under the nearest surviving owner, and a later prune of that owner
+retires it if it has settled. The reducer finds them from accepted growth records
+(`RunState.growth_owner`). `NodeExpandedRecord.prune_ids` keeps only the ids the node
+asked for; replay re-derives the rest. Adding a new
 spawner kind means setting traits on its node; the core never gains a branch. Details:
 [Nodes](nodes.md).
 

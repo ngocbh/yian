@@ -44,16 +44,24 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from yian.compile.model import Edge
 from yian.diagnostics import OriginRef
+from lark import Token, Tree
+
 from yian.expr import (
     ExpressionError,
     binding_co_skips,
     condition_refs,
+    expr_refs,
     expr_refs_of,
+    isinstance_type_names,
+    parse_condition,
+    parse_expr,
     rewrite_condition_refs,
 )
+from yian.expr.expressions import ISINSTANCE
 from yian.nodes.case import DEFAULT_HANDLE, Case, CaseNode
 from yian.nodes.contracts import Binding, Parameter, binding_source
 from yian.compose.helpers.errors import LoadDiagnostics
+from yian.compose.helpers.output_contracts import direct_reference_parts
 from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from yian.compose.source import SourceCursor
 
@@ -476,17 +484,19 @@ def _desugar_on(
     )
 
 
-def _desugar_searched(
+def _searched_locals(
     desc: CaseDescriptor,
     diagnostics: LoadDiagnostics,
-) -> tuple[CaseNode, dict[str, Any], list[Edge], list[Edge], dict, dict[str, str]]:
-    """Searched form -> one `__rN` input per distinct `${...}` ref; `when:` rewritten.
+) -> tuple[dict[str, str], dict[str, int]]:
+    """Allocate one `__rN` local per distinct ref across all searched `when:`s.
 
-    Returns `(node, wiring, data_edges, control_edges, param_ranges, param_labels)` — the last
-    two locate each synth `__rN` at the `cases[N].when` it was first seen in and label it
-    `cases[N].when` (not the synthetic `__rN`)."""
-    # Allocate one local per distinct ref across ALL when:s (first-seen order), remembering the
-    # case index each was first seen in (its caret / label site).
+    Returns `(ref_to_local, local_case_index)`: refs in first-seen order, and the case index
+    each local was first seen in (its caret / label site).
+
+    Raises:
+        `LoadError`:
+            A `when:` is not a string or does not parse.
+    """
     ref_to_local: dict[str, str] = {}
     local_case_index: dict[str, int] = {}
     for ci, c in enumerate(desc.cases):
@@ -516,6 +526,126 @@ def _desugar_searched(
                 local = f"__r{len(ref_to_local)}"
                 ref_to_local[ref] = local
                 local_case_index[local] = ci
+    return ref_to_local, local_case_index
+
+
+IsinstanceCheck = tuple[str, str]
+"""A top-level `isinstance(<base>, <T>)` conjunct: the dotted base path and the type name."""
+
+
+def _isinstance_check(conjunct: Tree | Token) -> Optional[IsinstanceCheck]:
+    """The check a conjunct makes when it is `isinstance(<direct ref>, T)`, else `None`."""
+    if (
+        not isinstance(conjunct, Tree)
+        or conjunct.data != "refcall"
+        or len(conjunct.children) != 2
+        or str(conjunct.children[0]) != ISINSTANCE
+    ):
+        return None
+    call_suffix = conjunct.children[1]
+    if not isinstance(call_suffix, Tree) or call_suffix.data != "call_suffix":
+        return None
+    subject = call_suffix.children[0].children[0]
+    if isinstance(subject, Token) and subject.type == "WRAPPED_REF":
+        # The mixed spelling `isinstance(${d.output}, T)` wraps the reference in braces.
+        try:
+            subject = parse_expr(str(subject)[2:-1])
+        except ExpressionError:
+            return None
+    parts = direct_reference_parts(subject)
+    if parts is None:
+        return None
+    return ".".join(parts), isinstance_type_names(conjunct)[0]
+
+
+def _conjuncts(tree: Tree | Token) -> list[Tree | Token]:
+    """The operands of a top-level `and` chain; a lone operand otherwise."""
+    if isinstance(tree, Tree) and tree.data == "and_expr":
+        return [
+            child
+            for child in tree.children
+            if not (isinstance(child, Token) and child.type == "AND")
+        ]
+    return [tree]
+
+
+def isinstance_conjuncts(when: Any) -> list[IsinstanceCheck]:
+    """Return the `isinstance(<direct ref>, T)` checks among a `when:`'s top-level conjuncts.
+
+    Only top-level `and` operands count: a check under `or` or `not` does not hold
+    whenever the case matches.
+
+    Args:
+        when (`Any`):
+            A searched case's original `when:` value, in any spelling. A non-string or
+            unparsable value makes no checks.
+
+    Returns:
+        `list[IsinstanceCheck]`:
+            `(base path, type name)` pairs in source order.
+
+    Example:
+        `isinstance_conjuncts("isinstance(d.output, Buy) and x > 1")` is
+        `[("d.output", "Buy")]`.
+    """
+    if not isinstance(when, str):
+        return []
+    try:
+        tree = parse_condition(when)
+    except ExpressionError:
+        return []
+    checks = (_isinstance_check(conjunct) for conjunct in _conjuncts(tree))
+    return [check for check in checks if check is not None]
+
+
+def searched_param_guards(desc: CaseDescriptor) -> dict[str, list[tuple[IsinstanceCheck, ...]]]:
+    """Return, per searched-case `__rN` param, the checks guarding each of its occurrences.
+
+    An occurrence of a param's ref inside a top-level `and` operand is guarded by the
+    `isinstance(<direct ref>, T)` operands before it in the same chain: `and`
+    short-circuits, so the read only runs once those checks pass. An occurrence anywhere
+    else has no guards.
+
+    Args:
+        desc (`CaseDescriptor`):
+            A searched case that has already built. An `on:` case has no guards.
+
+    Returns:
+        `dict[str, list[tuple[IsinstanceCheck, ...]]]`:
+            For each local, one tuple of guarding checks per occurrence, across all
+            `when:`s in source order.
+
+    Example:
+        For `isinstance(d.output, Buy) and d.output.qty > 5`, the local of
+        `d.output.qty` maps to `[(("d.output", "Buy"),)]`.
+    """
+    if desc.on is not None:
+        return {}
+    ref_to_local, _ = _searched_locals(desc, LoadDiagnostics())
+    guards: dict[str, list[tuple[IsinstanceCheck, ...]]] = {
+        local: [] for local in ref_to_local.values()
+    }
+    for case in desc.cases:
+        checks: list[IsinstanceCheck] = []
+        for conjunct in _conjuncts(parse_condition(case["when"])):
+            for path in expr_refs(conjunct):
+                guards[ref_to_local[path]].append(tuple(checks))
+            check = _isinstance_check(conjunct)
+            if check is not None:
+                checks.append(check)
+    return guards
+
+
+def _desugar_searched(
+    desc: CaseDescriptor,
+    diagnostics: LoadDiagnostics,
+) -> tuple[CaseNode, dict[str, Any], list[Edge], list[Edge], dict, dict[str, str]]:
+    """Searched form -> one `__rN` input per distinct `${...}` ref; `when:` rewritten.
+
+    Returns `(node, wiring, data_edges, control_edges, param_ranges, param_labels)` — the last
+    two locate each synth `__rN` at the `cases[N].when` it was first seen in and label it
+    `cases[N].when` (not the synthetic `__rN`)."""
+    ref_to_local, local_case_index = _searched_locals(desc, diagnostics)
 
     wiring: dict[str, Any] = {}
     for ref, local in ref_to_local.items():

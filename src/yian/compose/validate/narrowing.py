@@ -3,13 +3,16 @@
 A narrowing fact says which part of a union a value at a base path can be. A base path is
 `<node>.output[.field...]` or `input.<name>[.field...]`. Facts come from CASE branches: an
 `on:` CASE over a tag field of a union gives each `when:` edge the member with that tag and the
-`else:` edge the unlisted members.
+`else:` edge the unlisted members. A searched CASE gives each case's edge the facts of its
+top-level `isinstance(<base>, T)` conjuncts; its `else:` edge carries none.
 
 Facts flow along the graph in topological order. A node's control edges join by union (it ran
 because one of them fired), each required data group joins its producers by union, and every
 contribution (control, required data groups, `depends_on`) meets by intersection. Each node
 then gets a view of the producer and flow-input contracts with its narrowed bases rebuilt, so
-the reference and type checks can read member fields inside a branch.
+the reference and type checks can read member fields inside a branch. A searched CASE's own
+param whose every read follows an `isinstance` conjunct in the same `and` chain gets a view
+narrowed by those checks too.
 
 The pass reads built, desugared CASE descriptors and their edges, so it runs after
 `desugar_case_call_targets` and the node builds.
@@ -33,7 +36,13 @@ from yian.compose.helpers.output_contracts import (
     record_field_origins,
 )
 from yian.compose.nodes.base import NodeDescriptor
-from yian.compose.nodes.case import CaseDescriptor
+from yian.compose.helpers.isinstance_types import resolve_isinstance_type
+from yian.compose.nodes.case import (
+    CaseDescriptor,
+    IsinstanceCheck,
+    isinstance_conjuncts,
+    searched_param_guards,
+)
 from yian.expr import ExpressionError
 from yian.expr.template import Span, scan_template
 from yian.nodes.case import DEFAULT_HANDLE
@@ -42,6 +51,8 @@ from yian.nodes.contracts import (
     PartialRecordContract,
     ValueContract,
 )
+from yian.typesys import TypeCheckError
+from yian.typesys.types import TypeRegistry
 from yian.typesys.values import (
     Type,
     ValueKind,
@@ -499,6 +510,87 @@ def _on_case_facts(
     return facts
 
 
+def _checks_env(
+    checks: Sequence[IsinstanceCheck],
+    producers: Mapping[str, OutputContract],
+    inputs: Mapping[str, ValueContract],
+    registry: TypeRegistry,
+) -> Env:
+    """The facts that hold when every `isinstance` check in `checks` passes.
+
+    Each fact is taken against the base's unnarrowed type, so facts from different
+    CASEs on the same base compare by member. A check whose base is not a node output or
+    flow input, or whose type name does not resolve, gives no fact; the type-table pass
+    reports an unknown name.
+    """
+    facts: list[Env] = []
+    for base, type_name in checks:
+        if _split_base(base) is None:
+            continue
+        try:
+            typ = resolve_isinstance_type(type_name, registry)
+        except TypeCheckError:
+            continue
+        contract = _base_contract(base, producers, inputs)
+        if type(contract) is ValueContract:
+            facts.append({base: isinstance_fact(contract.type, typ)})
+        else:
+            facts.append({base: Exact(typ)})
+    return _intersect_envs(facts)
+
+
+def _searched_case_facts(
+    desc: CaseDescriptor,
+    producers: Mapping[str, OutputContract],
+    inputs: Mapping[str, ValueContract],
+    registry: TypeRegistry,
+) -> dict[str, Env]:
+    """The facts each handle of a searched CASE carries.
+
+    Cases routing to one target join by union. The `else:` handle carries no fact,
+    including when a `then:` target shares its name.
+    """
+    by_handle: dict[str, list[Env]] = {}
+    for case in desc.cases:
+        then = case.get("then")
+        if then is None:
+            continue
+        checks = isinstance_conjuncts(case.get("when"))
+        by_handle.setdefault(then, []).append(
+            _checks_env(checks, producers, inputs, registry)
+        )
+    facts = {handle: _union_envs(envs) for handle, envs in by_handle.items()}
+    facts.pop(DEFAULT_HANDLE, None)
+    return {handle: env for handle, env in facts.items() if env}
+
+
+def _guarded_param_views(
+    desc: CaseDescriptor,
+    env: Env,
+    producers: dict[str, OutputContract],
+    inputs: dict[str, ValueContract],
+    registry: TypeRegistry,
+) -> dict[str, tuple[dict[str, OutputContract], dict[str, ValueContract]]]:
+    """The views of a searched CASE's params that every read guards with `isinstance`.
+
+    A param read under different checks gets the union of their facts, met with the
+    CASE's own environment.
+    """
+    views: dict[str, tuple[dict[str, OutputContract], dict[str, ValueContract]]] = {}
+    for param, occurrences in searched_param_guards(desc).items():
+        if not occurrences or not all(occurrences):
+            continue
+        guard = _union_envs(
+            [_checks_env(checks, producers, inputs, registry) for checks in occurrences]
+        )
+        if not guard:
+            continue
+        view = _build_views(_intersect_envs([env, guard]), producers, inputs)
+        if view[0] is not producers or view[1] is not inputs:
+            views[param] = view
+    return views
+
+
 # --------------------------------------------------------------------------- #
 # Propagation
 # --------------------------------------------------------------------------- #
@@ -517,6 +609,9 @@ class Narrowing:
             Each ordered node's facts, keyed by base path.
         views (`dict[str, tuple[dict[str, OutputContract], dict[str, ValueContract]]]`):
             The narrowed contract maps of nodes that narrow something.
+        param_views (`dict[str, dict[str, tuple[dict[str, OutputContract], dict[str, ValueContract]]]]`):
+            Per searched CASE, the narrowed contract maps of its params whose every read
+            follows an `isinstance` conjunct.
         unordered (`frozenset[str]`):
             Nodes a topological order could not reach, on or after a cycle. They
             get no facts.
@@ -527,6 +622,9 @@ class Narrowing:
     environments: dict[str, Env] = field(default_factory=dict)
     views: dict[
         str, tuple[dict[str, OutputContract], dict[str, ValueContract]]
+    ] = field(default_factory=dict)
+    param_views: dict[
+        str, dict[str, tuple[dict[str, OutputContract], dict[str, ValueContract]]]
     ] = field(default_factory=dict)
     unordered: frozenset[str] = frozenset()
 
@@ -544,6 +642,25 @@ class Narrowing:
                 The producer contracts and the flow-input contracts.
         """
         return self.views.get(node_id, (self.producers, self.inputs))
+
+    def for_param(
+        self, node_id: str, param: str
+    ) -> tuple[dict[str, OutputContract], dict[str, ValueContract]]:
+        """Return the producer and flow-input contracts param `param` of `node_id` reads against.
+
+        Args:
+            node_id (`str`):
+                A node id.
+            param (`str`):
+                One of the node's params. A searched CASE's `isinstance`-guarded param
+                gets its guarded view; any other param gets the node's view.
+
+        Returns:
+            `tuple[dict[str, OutputContract], dict[str, ValueContract]]`:
+                The producer contracts and the flow-input contracts.
+        """
+        guarded = self.param_views.get(node_id, {}).get(param)
+        return guarded if guarded is not None else self.for_node(node_id)
 
     def environment(self, node_id: str) -> Env:
         """Return node `node_id`'s facts by base path; `{}` when it has none."""
@@ -598,6 +715,7 @@ def compute_narrowing(
     producers: dict[str, OutputContract],
     inputs: dict[str, ValueContract],
     *,
+    registry: TypeRegistry | None = None,
     diagnostics: LoadDiagnostics | None = None,
 ) -> Narrowing:
     """Compute each node's narrowing facts and contract views.
@@ -610,6 +728,9 @@ def compute_narrowing(
     - each required data group, giving the union of its producers' environments;
       an optional group gives nothing;
     - each required ordering edge (`depends_on`), giving its source's environment.
+
+    A searched CASE's edge carries the facts of its case's top-level `isinstance`
+    conjuncts, and its `else:` edge none.
 
     Edges and dependencies that name unknown nodes are ignored. Nodes on or after a
     cycle get no facts and are reported in `unordered`.
@@ -625,6 +746,9 @@ def compute_narrowing(
             Each node's output contract by id.
         inputs (`dict[str, ValueContract]`):
             The flow-input contracts by name.
+        registry (`TypeRegistry`, *optional*, defaults to `None`):
+            The flow's `typedefs:` registry, for `isinstance` type names. `None` knows
+            only the builtin names.
         diagnostics (`LoadDiagnostics`, *optional*, defaults to `None`):
             Locates load errors. `None` uses an unlocated default.
 
@@ -641,6 +765,7 @@ def compute_narrowing(
         `buy` to `b`, `compute_narrowing(...).for_node("b")[0]["d"]` is a `Buy` contract.
     """
     diagnostics = diagnostics or LoadDiagnostics()
+    registry = registry or {}
     known = _known_edges(descriptors, edges)
     order = _topological_order(descriptors, known)
     incoming: dict[str, list[Edge]] = {node_id: [] for node_id in descriptors}
@@ -649,6 +774,9 @@ def compute_narrowing(
 
     environments: dict[str, Env] = {}
     views: dict[str, tuple[dict[str, OutputContract], dict[str, ValueContract]]] = {}
+    param_views: dict[
+        str, dict[str, tuple[dict[str, OutputContract], dict[str, ValueContract]]]
+    ] = {}
     handle_facts: dict[str, dict[str, Env]] = {}
     for node_id in order:
         control: list[Env] = []
@@ -688,12 +816,18 @@ def compute_narrowing(
                 inputs,
                 diagnostics,
             )
+        elif isinstance(desc, CaseDescriptor):
+            handle_facts[node_id] = _searched_case_facts(desc, producers, inputs, registry)
+            guarded = _guarded_param_views(desc, env, producers, inputs, registry)
+            if guarded:
+                param_views[node_id] = guarded
 
     return Narrowing(
         producers=producers,
         inputs=inputs,
         environments=environments,
         views=views,
+        param_views=param_views,
         unordered=frozenset(descriptors) - frozenset(order),
     )
 

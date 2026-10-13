@@ -1451,6 +1451,7 @@ def _assemble(
         data_edges + case_edges,
         producers,
         flow_input_contracts,
+        registry=registry,
         diagnostics=diagnostics,
     )
 

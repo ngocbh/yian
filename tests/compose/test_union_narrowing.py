@@ -1,4 +1,4 @@
-"""Union narrowing at load: an `on:` CASE branch reads the members its tag selects."""
+"""Union narrowing at load: a CASE branch reads the members its tag or isinstance check selects."""
 
 import pytest
 
@@ -15,6 +15,10 @@ _TYPEDEFS = (
     "  Decision: Union[Buy, Hold, Sell]\n"
     "  HoldOrSell: Union[Hold, Sell]\n"
     "  Wrap: {decision: Decision}\n"
+    "  BuyOrSell: Union[Buy, Sell]\n"
+    "  Text: {text: str}\n"
+    "  Num: {num: int}\n"
+    "  Reply: Union[Text, Num]\n"
 )
 
 # Fields: `qty` (buy, sell), `limit` and `leg` (buy), `price` (sell), `note` (hold, sell).
@@ -585,3 +589,232 @@ def test_a_non_exhaustive_on_over_a_literal_input_still_loads():
 def test_a_non_exhaustive_on_over_a_union_node_output_still_errors():
     msg = _load_error(_flow(_case("route", _ON, [("buy", "b")]), _code("b")))
     assert "enum tag(s) ['hold', 'sell'] not covered" in msg
+
+
+# --- isinstance in a searched CASE --- #
+
+
+def _searched(*cases: tuple[str, str], else_: str | None = "e") -> str:
+    """A searched CASE `route` over `cases`."""
+    return _case("route", None, list(cases), else_=else_)
+
+
+def test_a_target_under_isinstance_reads_a_member_field():
+    _loads(_flow(
+        _searched(("isinstance(d.output, Buy)", "b")),
+        _code("b", {"q": "${d.output.qty}", "l": "${d.output.limit}"}),
+        _code("e"),
+    ))
+
+
+@pytest.mark.parametrize(
+    "when",
+    [
+        "isinstance(d.output, Buy) and input.s == 'x'",
+        "input.s == 'x' and isinstance(d.output, Buy)",
+        "${isinstance(d.output, Buy) and input.s == 'x'}",
+        "isinstance(${d.output}, Buy) and ${input.s} == 'x'",
+    ],
+)
+def test_an_isinstance_and_conjunct_narrows(when):
+    _loads(_flow(
+        _searched((f'"{when}"', "b")),
+        _code("b", {"l": "${d.output.limit}"}),
+        _code("e"),
+    ))
+
+
+@pytest.mark.parametrize(
+    "when",
+    [
+        "isinstance(d.output, Buy) or input.s == 'x'",
+        "not isinstance(d.output, Hold)",
+        "not (isinstance(d.output, Buy) and input.s == 'x')",
+    ],
+)
+def test_isinstance_under_or_or_not_does_not_narrow(when):
+    msg = _load_error(_flow(
+        _searched((f'"{when}"', "b")),
+        _code("b", {"l": "${d.output.limit}"}),
+        _code("e"),
+    ))
+    assert f"node 'b' input 'l' from: {_LIMIT_ERROR}" in msg
+
+
+def test_overlapping_checks_narrow_each_branch_by_its_own_check():
+    def flow(bs_read: str) -> str:
+        return _flow(
+            _searched(
+                ("isinstance(d.output, Buy)", "b"),
+                ("isinstance(d.output, BuyOrSell)", "bs"),
+            ),
+            _code("b", {"l": "${d.output.limit}"}),
+            _code("bs", {"x": bs_read}),
+            _code("e"),
+        )
+
+    _loads(flow("${d.output.qty}"))
+    msg = _load_error(flow("${d.output.limit}"))
+    assert (
+        "node 'bs' input 'x' from: reference ${d.output.limit} reads field 'limit', which "
+        "only union members with action buy have"
+    ) in msg
+
+
+def test_a_conjunct_after_isinstance_reads_the_narrowed_base():
+    _loads(_flow(
+        _searched(('"isinstance(d.output, Buy) and d.output.limit > 5"', "b")),
+        _code("b"),
+        _code("e"),
+    ))
+
+
+def test_a_conjunct_before_isinstance_is_a_rule_one_error():
+    msg = _load_error(_flow(
+        _searched(('"d.output.limit > 5 and isinstance(d.output, Buy)"', "b")),
+        _code("b"),
+        _code("e"),
+    ))
+    assert f"node 'route' cases[0].when from: {_LIMIT_ERROR}" in msg
+
+
+def test_a_read_guarded_in_one_case_and_unguarded_in_another_is_an_error():
+    msg = _load_error(_flow(
+        _searched(
+            ('"isinstance(d.output, Buy) and d.output.limit > 5"', "b"),
+            ('"d.output.limit > 1"', "b"),
+        ),
+        _code("b"),
+        _code("e"),
+    ))
+    assert f"node 'route' cases[0].when from: {_LIMIT_ERROR}" in msg
+
+
+def test_a_read_guarded_by_different_members_reads_their_shared_fields():
+    def flow(field: str) -> str:
+        return _flow(
+            _searched(
+                (f'"isinstance(d.output, Buy) and d.output.{field} > 5"', "b"),
+                (f'"isinstance(d.output, Sell) and d.output.{field} > 1"', "s"),
+            ),
+            _code("b"),
+            _code("s"),
+            _code("e"),
+        )
+
+    _loads(flow("qty"))
+    msg = _load_error(flow("limit"))
+    assert "reads field 'limit', which only union members with action buy have" in msg
+
+
+def test_isinstance_narrows_an_untagged_union_to_the_member():
+    def flow(*extra: str) -> str:
+        return _flow(
+            _searched(("isinstance(d.output, Text)", "b")),
+            _code("b", {"t": "${d.output.text}"}),
+            _code("e"),
+            *extra,
+            d_type="Reply",
+            output="${d.output}",
+        )
+
+    _loads(flow())
+    msg = _load_error(flow(_code("o", {"t": "${d.output.text}"})))
+    assert (
+        "node 'o' input 't' from: reference ${d.output.text} reads field 'text', which only "
+        "1 of 2 union members have"
+    ) in msg
+    assert "node 'b'" not in msg
+
+
+def test_isinstance_narrows_an_opaque_object_to_the_checked_type():
+    def flow(when: str) -> str:
+        return _flow(
+            _producer("x", "object"),
+            _searched((when, "call(place, order=${x.output})")),
+            _code("e"),
+        )
+
+    _loads(flow("isinstance(x.output, Buy)"))
+    msg = _load_error(flow("isinstance(x.output, Sell)"))
+    assert "binding 'order' — child expects" in msg
+    assert """source is '{"action":Literal["sell"]""" in msg
+
+
+def test_an_opaque_object_outside_isinstance_does_not_fit_a_record():
+    msg = _load_error(_flow(
+        _producer("x", "object"),
+        _searched(("input.s == 'x'", "call(place, order=${x.output})")),
+        _code("e"),
+    ))
+    assert "binding 'order' — child expects" in msg and "source is 'object'" in msg
+
+
+def test_a_target_routed_by_two_isinstance_cases_gets_their_union():
+    def flow(read: str) -> str:
+        return _flow(
+            _searched(("isinstance(d.output, Buy)", "b"), ("isinstance(d.output, Sell)", "b")),
+            _code("b", {"x": read}),
+            _code("e"),
+        )
+
+    _loads(flow("${d.output.qty}"))
+    msg = _load_error(flow("${d.output.limit}"))
+    assert "reads field 'limit', which only union members with action buy have" in msg
+
+
+def test_a_target_routed_by_isinstance_and_a_plain_case_is_not_narrowed():
+    msg = _load_error(_flow(
+        _searched(("isinstance(d.output, Buy)", "b"), ("input.s == 'x'", "b")),
+        _code("b", {"l": "${d.output.limit}"}),
+        _code("e"),
+    ))
+    assert f"node 'b' input 'l' from: {_LIMIT_ERROR}" in msg
+
+
+def test_a_searched_else_is_not_narrowed():
+    msg = _load_error(_flow(
+        _searched(("isinstance(d.output, Buy)", "b")),
+        _code("b"),
+        _code("e", {"n": "${d.output.note}"}),
+    ))
+    assert (
+        "node 'e' input 'n' from: reference ${d.output.note} reads field 'note', which only "
+        "union members with action hold, sell have"
+    ) in msg
+
+
+def test_an_isinstance_branch_narrows_a_nullable_base_to_the_member():
+    _loads(_flow(
+        _searched(("isinstance(d.output, Buy)", "call(place, order=${d.output})")),
+        _code("e"),
+        d_type="Optional[Decision]",
+    ))
+
+
+def test_isinstance_on_a_flow_input_narrows():
+    _loads(_flow(
+        _searched(("isinstance(input.d, Buy)", "b")),
+        _code("b", {"l": "${input.d.limit}"}),
+        _code("e"),
+        inputs="  s: str\n  d: Decision\n",
+    ))
+
+
+def test_isinstance_inside_an_on_branch_composes():
+    _loads(_flow(
+        _case("route", _ON, [("buy", "inner")], else_="e"),
+        _case("inner", None, [("isinstance(d.output.leg, Limit)", "t")], else_="m"),
+        _code("t", {"p": "${d.output.leg.price}"}),
+        _code("m"),
+        _code("e"),
+    ))
+
+
+def test_an_unknown_isinstance_type_keeps_its_own_error():
+    msg = _load_error(_flow(
+        _searched(("isinstance(d.output, Nope)", "b")),
+        _code("b"),
+        _code("e"),
+    ))
+    assert "unknown type 'Nope'" in msg

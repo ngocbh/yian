@@ -8,7 +8,11 @@ from yian.compile.model import Edge
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
 from yian.compose.helpers.types import read_type
 from yian.compose.nodes.base import BuildContext, NodeDescriptor
-from yian.compose.nodes.case import CaseDescriptor
+from yian.compose.nodes.case import (
+    CaseDescriptor,
+    isinstance_conjuncts,
+    searched_param_guards,
+)
 from yian.compose.validate.narrowing import (
     Exact,
     Members,
@@ -102,7 +106,12 @@ def _compute(nodes, edges, producers, inputs=None, *, diagnostics=None):
             desc = item
         descriptors[desc.id] = desc
     return compute_narrowing(
-        descriptors, all_edges, producers, inputs or {}, diagnostics=diagnostics
+        descriptors,
+        all_edges,
+        producers,
+        inputs or {},
+        registry=_REGISTRY,
+        diagnostics=diagnostics,
     )
 
 
@@ -178,6 +187,125 @@ def test_isinstance_fact_against_the_base_union():
     assert isinstance_fact(DECISION, replace(BUY, nullable=True)) == Members(
         (BUY,), nullable=True
     )
+
+
+# --------------------------------------------------------------------------- #
+# isinstance checks in a searched CASE
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    ("when", "checks"),
+    [
+        ("isinstance(d.output, Buy)", [("d.output", "Buy")]),
+        ("x > 1 and isinstance(${d.output.leg}, Limit)", [("d.output.leg", "Limit")]),
+        ("${isinstance(input.d, Buy) and isinstance(e.output, Text)}",
+         [("input.d", "Buy"), ("e.output", "Text")]),
+        ("isinstance(d.output, Buy) or x", []),
+        ("not isinstance(d.output, Buy)", []),
+        ("isinstance(upper(d.output), Buy)", []),
+        ("isinstance(d.output.items[0], Buy)", []),
+        ("isinstance(", []),
+        (3, []),
+    ],
+)
+def test_isinstance_conjuncts_reads_top_level_and_operands(when, checks):
+    assert isinstance_conjuncts(when) == checks
+
+
+def test_searched_param_guards_lists_the_checks_before_each_read():
+    desc, _ = _case(
+        "c",
+        None,
+        [
+            ("isinstance(d.output, Buy) and d.output.qty > 5", "b"),
+            ("d.output.qty > 1 and isinstance(d.output, Sell)", "s"),
+        ],
+    )
+    assert searched_param_guards(desc) == {
+        "__r0": [(), ()],
+        "__r1": [(("d.output", "Buy"),), ()],
+    }
+    on_desc, _ = _case("o", "${d.output.action}", [("buy", "b")])
+    assert searched_param_guards(on_desc) == {}
+
+
+def _searched_view(cases, else_=None, typ: Type = DECISION, target: str = "b") -> Type:
+    """The type `target` sees for `d` under a searched CASE `c` over `cases`."""
+    nodes = [_node("d"), _case("c", None, cases, else_), _node("b"), _node("s")]
+    narrowing = _compute(nodes, [], {"d": ValueContract(typ)})
+    return _view_type(narrowing, target)
+
+
+def test_an_isinstance_case_narrows_its_target_to_the_member_or_sub_union():
+    assert _searched_view([("isinstance(d.output, Buy)", "b")]) == BUY
+    assert _searched_view([("isinstance(d.output, BuyOrSell) and x", "b")]) == BUY_OR_SELL
+
+
+def test_an_isinstance_case_on_a_non_union_base_gives_the_exact_type():
+    obj = Type.scalar(ValueKind.OBJECT)
+    nodes = [_node("d"), _case("c", None, [("isinstance(d.output, Text)", "b")]), _node("b")]
+    narrowing = _compute(nodes, [], {"d": ValueContract(obj)})
+    assert narrowing.environment("b") == {"d.output": Exact(TEXT)}
+    assert _view_type(narrowing, "b") == TEXT
+
+
+def test_isinstance_facts_use_the_original_base_union():
+    """Under an outer `buy` branch, an inner `isinstance(d.output, Buy)` still names a member."""
+    nodes = [
+        _node("d"),
+        _case("o", "${d.output.action}", [("buy", "c")], "h"),
+        _case("c", None, [("isinstance(d.output, Buy)", "b")]),
+        _node("b"),
+        _node("h"),
+    ]
+    narrowing = _compute(nodes, [], {"d": ValueContract(DECISION)})
+    assert narrowing.environment("b") == {"d.output": Members((BUY,))}
+
+
+def test_two_isinstance_cases_into_one_target_join_by_union():
+    cases = [("isinstance(d.output, Buy)", "b"), ("isinstance(d.output, Sell)", "b")]
+    assert _searched_view(cases) == BUY_OR_SELL
+
+
+def test_a_plain_case_or_else_into_the_target_drops_the_fact():
+    nodes = [
+        _node("d"),
+        _case("c", None, [("isinstance(d.output, Buy)", "b"), ("x > 1", "b")], "s"),
+        _node("b"),
+        _node("s"),
+    ]
+    narrowing = _compute(nodes, [], {"d": ValueContract(DECISION)})
+    assert narrowing.environment("b") == {}
+    assert narrowing.environment("s") == {}
+
+
+def test_an_unknown_isinstance_type_gives_no_fact():
+    nodes = [_node("d"), _case("c", None, [("isinstance(d.output, Nope)", "b")]), _node("b")]
+    narrowing = _compute(nodes, [], {"d": ValueContract(DECISION)})
+    assert narrowing.environment("b") == {}
+
+
+def test_a_guarded_case_param_gets_the_checked_view():
+    nodes = [
+        _node("d"),
+        _case(
+            "c",
+            None,
+            [
+                ("isinstance(d.output, Buy) and d.output.qty > 5", "b"),
+                ("isinstance(d.output, Sell) and d.output.qty > 1", "s"),
+                ("d.output.action == 'hold' and isinstance(d.output, Hold)", "s"),
+            ],
+        ),
+        _node("b"),
+        _node("s"),
+    ]
+    narrowing = _compute(nodes, [], {"d": ValueContract(DECISION)})
+    assert narrowing.for_param("c", "__r1")[0]["d"].type == BUY_OR_SELL
+    # `d.output` and `d.output.action` are read unguarded: they see the CASE's own view.
+    assert narrowing.for_param("c", "__r0")[0]["d"].type == DECISION
+    assert narrowing.for_param("c", "__r2")[0]["d"].type == DECISION
 
 
 # --------------------------------------------------------------------------- #

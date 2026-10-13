@@ -30,7 +30,8 @@ reject an ill-formed flow before it is compiled:
   flow-input contracts with each narrowed base rebuilt (`Narrowing.for_node`).
 - `typed_bindings.py` — `check_typed_inputs` / `check_typed_outputs`: a typed node
   input or flow output can fit its declared type (literal text exactly; a reference
-  unless its inferred type is disjoint, leaving a narrower one to the runtime check).
+  unless its inferred type is disjoint, leaving a narrower one to the runtime check);
+  `infer_binding_type` returns the type one binding is proven to produce.
 - `skips.py` — `SkipModel`: which nodes of a flow level the CASE routing may skip, and
   whether a set of them may skip together; `null_skipped_outputs` gives a flow output whose
   producers may all be skipped the explicit null default; `check_skipped_arithmetic` rejects

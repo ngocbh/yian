@@ -53,12 +53,22 @@ output: ${{t.output}}
         ('"x"', 'Literal["x"]'),
         ("[1, 2]", "list[int]"),
         ("float = ${input.n}", "float"),
+        ('""', "str"),
+        ('"$${x}"', 'Literal["${x}"]'),
+        ("1.5", "float[1.5,1.5]"),
+        ("null", "None"),
     ],
 )
 def test_a_proven_input_is_stamped_with_its_inferred_type(binding, label):
     loaded = load_flow(_tool_flow(binding))
 
     assert _labels(loaded.compiled.nodes["t"]) == {"v": label}
+
+
+def test_a_non_finite_number_literal_is_absent():
+    loaded = load_flow(_tool_flow(".inf"))
+
+    assert loaded.compiled.nodes["t"].input_types == {}
 
 
 def test_an_unproven_input_is_absent():

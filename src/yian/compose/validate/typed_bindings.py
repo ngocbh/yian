@@ -15,6 +15,10 @@ runtime check:
 - a lone `${item}` or `${item.field}` read on a node that binds per item (MAP) is
   inferred from the element type of its `over` source, when that is a proven list.
 
+`infer_binding_type` returns the type one binding is proven to produce (a typed
+binding's declared type, a literal's exact type, or a reference's inferred type), for
+passes that record binding types rather than reject them.
+
 Node inputs are checked as soon as producer contracts exist, before the CALL, MAP,
 and LOOP checks that compare the declared type with a child's parameters; flow
 outputs are checked once their contracts are attached. A node input error locates at
@@ -208,9 +212,6 @@ def _literal_type(value: Any) -> Type | None:
         `Type | None`: The literal's type, or `None` for a non-finite number or a
             value with no type.
     """
-    # bool is an int subclass, so it is matched first.
-    if type(value) is bool:
-        return Type.scalar(ValueKind.BOOLEAN)
     if type(value) is int:
         return Type(kind=ValueKind.INTEGER, bounds=(value, value))
     if type(value) is float:
@@ -222,8 +223,6 @@ def _literal_type(value: Any) -> Type | None:
         if not value:
             return Type.scalar(ValueKind.STRING)
         return Type(kind=ValueKind.STRING, tags=frozenset({value}))
-    if value is None:
-        return Type.scalar(ValueKind.NONE)
     try:
         return Type.scalar(build_value(value).kind)
     except TypeCheckError:

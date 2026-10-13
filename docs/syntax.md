@@ -2,7 +2,7 @@
 
 A flow is a **function**: a typed `input:`, a graph of `nodes:`, and a typed
 `output:`. `${...}` references infer data edges; `depends_on:` and `runs_after:`
-add ordering-only edges. The human owns the structure; the LLM only fills the
+(each a list of node ids, e.g. `depends_on: [fetch]`) add ordering-only edges. The human owns the structure; the LLM only fills the
 AGENT node leaves. See [Agent](agent.md) for the conceptual model and terminology;
 this page is the YAML reference.
 

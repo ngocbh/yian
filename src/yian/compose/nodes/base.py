@@ -307,14 +307,18 @@ class NodeDescriptor:
         Reads `node_name`/`depends_on`/`runs_after`/`env` from the cursor's read-only body
         into `kwargs`, recording each present field's `SourceRange` into `ranges`; both dicts
         are mutated IN PLACE (the accumulators the template passes to the descriptor
-        constructor). `env:` is validated to be a mapping with string keys — a bad shape raises
-        a located `LoadError` naming `cls.kind`. The other three are copied through untouched
-        (their per-field shape is checked later by the loader edge pass)."""
+        constructor). `env:` is validated to be a mapping with string keys, and `depends_on:`/
+        `runs_after:` to be lists of strings — a bad shape raises a located `LoadError` naming
+        `cls.kind`. `node_name` is copied through untouched; whether each ordering target names
+        a real node is checked later by the loader edge pass."""
         diagnostics = LoadDiagnostics.from_cursor(cursor)
         body = cursor._value_view()
         for key in ("node_name", "depends_on", "runs_after"):
             if key in body:
-                kwargs[key] = cursor.get(key)
+                value = cursor.get(key)
+                if key != "node_name":
+                    cls._check_ordering_field(node_id, key, value, cursor, diagnostics)
+                kwargs[key] = value
                 rng = cursor.range_of(key)
                 if rng is not None:
                     ranges[("field", key)] = rng
@@ -330,6 +334,35 @@ class NodeDescriptor:
             rng = cursor.range_of("env")
             if rng is not None:
                 ranges[("field", "env")] = rng
+
+    @classmethod
+    def _check_ordering_field(
+        cls,
+        node_id: str,
+        key: str,
+        value: Any,
+        cursor: SourceCursor,
+        diagnostics: LoadDiagnostics,
+    ) -> None:
+        """Raise a located `LoadError` unless a `depends_on:`/`runs_after:` value is a list of
+        strings. A bare string gets a hint to wrap it in a list, the likely intent."""
+        if isinstance(value, list) and all(isinstance(v, str) for v in value):
+            return
+        if isinstance(value, list):
+            got = "a list with a non-string item"
+        elif isinstance(value, dict):
+            got = "a mapping"
+        elif value is None:
+            got = "null"
+        else:
+            got = f"{type(value).__name__} {value!r}"
+        message = (
+            f"node {node_id!r} (kind={cls.kind}): `{key}:` must be a list of node ids "
+            f"(got {got})"
+        )
+        if isinstance(value, str) and value:
+            message += f"; write `{key}: [{value}]`"
+        raise diagnostics.error(message, range=cursor.range_of(key))
 
     @classmethod
     def parse(

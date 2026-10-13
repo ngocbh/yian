@@ -117,7 +117,8 @@ class CaseDescriptor(NodeDescriptor):
     `then_styles` (aligned 1:1 with `cases`), `else_style`, and `has_else` exist so branch
     classification can tell an unquoted node name from quoted text, and `else: null` from no
     `else:` at all. A style is the YAML scalar style of the authored value (non-string scalars
-    report ``"plain"``; mappings, lists, and missing values report None).
+    report ``"plain"``; mappings, lists, missing values, and strings read through a source-free
+    cursor report None). Downstream treats an unknown (None) style as unquoted (plain).
 
     Inherits the common node fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` + the
     `range`/`field_ranges` parse metadata) and delegates common parsing to `NodeDescriptor`.
@@ -127,9 +128,10 @@ class CaseDescriptor(NodeDescriptor):
     legality otherwise uses the default allowed/required-key and asserts-list checks.
     Only the case-specific fields are declared here.
 
-    Class attrs: `kind="case"`; `allowed` adds `cases`/`else`/`on`/`outputs` to the commons; `required`
-    is `{"cases"}`; `binding_fields=()` — a `case` carries CONDITIONS (`on:` + each `when:`),
-    not `${...}` sink bindings, so the kind-blind binding walk in `bindings.py` touches no field.
+    Class attrs: `kind="case"`; `allowed` adds `cases`/`else`/`on`/`outputs` to the commons;
+    `required` is `{"cases"}`; `binding_fields=()` — a `case` carries CONDITIONS (`on:` + each
+    `when:`), not `${...}` sink bindings, so the kind-blind binding walk in `bindings.py` touches
+    no field.
     `keyword_remap` is case-owned (the base's is empty): `else` is a Python keyword, so the
     template `parse` reads the surface `else:` into the `else_` descriptor field.
 
@@ -174,7 +176,8 @@ class CaseDescriptor(NodeDescriptor):
     on_origin: OriginRef | None = field(default=None, compare=False)
 
     def __post_init__(self) -> None:
-        """Reject mutable, misaligned, or non-opaque CASE provenance."""
+        """Derive `has_else` from a constructed `else_`, then reject mutable, misaligned, or
+        non-opaque CASE provenance."""
         super().__post_init__()
         if self.else_ is not None and not self.has_else:
             # Frozen dataclass: a directly constructed `else_=` implies the key was present.
@@ -218,28 +221,26 @@ class CaseDescriptor(NodeDescriptor):
         cursor = cls._normalize_cursor(cursor)
         desc = super().parse(node_id, cursor)
         body = cursor._value_view()
+        has_else = "else" in body
+        updates: dict[str, Any] = {
+            "has_else": has_else,
+            "else_style": cursor.child("else").scalar_style if has_else else None,
+        }
         cases = body.get("cases")
         if isinstance(cases, Sequence) and not isinstance(cases, (str, bytes)):
             when_ranges = cursor.sequence_field_ranges("cases", "when")
             then_ranges = cursor.sequence_field_ranges("cases", "then")
+            if when_ranges or then_ranges:
+                updates["when_ranges"] = when_ranges
+                updates["then_ranges"] = then_ranges
             cases_cursor = cursor.child("cases")
-            then_styles = [
+            updates["then_styles"] = [
                 cases_cursor.child(index).child("then").scalar_style
                 if isinstance(item, Mapping) and "then" in item
                 else None
                 for index, item in enumerate(cases)
             ]
-        else:
-            when_ranges = []
-            then_ranges = []
-            then_styles = []
-        if when_ranges or then_ranges:
-            desc = replace(desc, when_ranges=when_ranges, then_ranges=then_ranges)
-        has_else = "else" in body
-        else_style = cursor.child("else").scalar_style if has_else else None
-        return replace(
-            desc, then_styles=then_styles, else_style=else_style, has_else=has_else
-        )
+        return replace(desc, **updates)
 
     @classmethod
     def _normalize_cursor(cls, cursor: SourceCursor) -> SourceCursor:

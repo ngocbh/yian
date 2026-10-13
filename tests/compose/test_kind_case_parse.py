@@ -578,3 +578,22 @@ def test_case_parse_keeps_then_null_key():
     )
     assert "then" in desc.cases[0]
     assert desc.cases[0]["then"] is None
+    assert desc.then_styles == ["plain"]
+
+
+def test_case_parse_on_form_keeps_output_and_styles():
+    desc = _parse_case(
+        """\
+        kind: case
+        on: ${a.output}
+        output: str
+        cases:
+          - when: x
+            then: "b"
+        else: 'c'
+        """
+    )
+    assert desc.on == "${a.output}"
+    assert desc.outputs == "str"
+    assert desc.then_styles == ["double"]
+    assert desc.else_style == "single"

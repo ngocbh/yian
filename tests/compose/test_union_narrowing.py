@@ -741,6 +741,21 @@ def test_isinstance_narrows_an_opaque_object_to_the_checked_type():
     assert """source is '{"action":Literal["sell"]""" in msg
 
 
+def test_isinstance_cases_on_unrelated_types_into_one_target_do_not_narrow():
+    def flow(*whens: str) -> str:
+        return _flow(
+            _producer("x", "object"),
+            _searched(*((when, "b") for when in whens)),
+            "  b:\n    kind: call\n    call: place\n    input:\n      order: ${x.output}\n",
+            _code("e"),
+        )
+
+    _loads(flow("isinstance(x.output, Buy)"))
+    msg = _load_error(flow("isinstance(x.output, Buy)", "isinstance(x.output, Text)"))
+    assert "call node 'b': binding 'order' — child expects" in msg
+    assert "source is 'object'" in msg
+
+
 def test_an_opaque_object_outside_isinstance_does_not_fit_a_record():
     msg = _load_error(_flow(
         _producer("x", "object"),

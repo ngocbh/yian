@@ -7,7 +7,8 @@ The engine is three layers, all pool-agnostic (they take a `resolve` callable):
   tree against a `resolve`, conservatively infer its static type, and walk its
   reference leaves. Also the `when:`/`asserts:` condition surface
   (`parse_condition`, `evaluate_when`, `first_failing_assert`), the `isinstance` type
-  names a tree uses (`isinstance_type_names`), and pool resolution (`resolve_reference`).
+  names a tree uses (`isinstance_type_names`) and a call's tested expression
+  (`isinstance_subject`), and pool resolution (`resolve_reference`).
 - `template` — the binding/prompt scanner: splits a value into text + `${...}`
   spans, then drives the engine per span (`eval_binding`, `eval_template`,
   `expr_refs_of`, `prompt_refs`, `render_template_record`, `scan_template`).
@@ -35,6 +36,7 @@ from yian.expr.expressions import (
     expr_refs,
     first_failing_assert,
     infer_expr_type,
+    isinstance_subject,
     isinstance_type_names,
     parse_condition,
     resolve_reference,
@@ -69,6 +71,7 @@ __all__ = [
     "first_failing_assert",
     "has_feedback",
     "infer_expr_type",
+    "isinstance_subject",
     "isinstance_type_names",
     "parse_condition",
     "parse_expr",

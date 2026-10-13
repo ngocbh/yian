@@ -105,6 +105,9 @@ Fact: TypeAlias = Members | Exact
 Env: TypeAlias = dict[str, Fact]
 """Facts keyed by dotted base path; an absent base is unconstrained."""
 
+Views: TypeAlias = tuple[Mapping[str, OutputContract], Mapping[str, ValueContract]]
+"""The producer contracts and the flow-input contracts one node or param reads against."""
+
 
 def _contains(members: Sequence[Type], typ: Type) -> bool:
     """Whether `typ` equals one of `members`."""
@@ -366,9 +369,9 @@ def _base_contract(
 
 def _build_views(
     env: Env,
-    producers: dict[str, OutputContract],
-    inputs: dict[str, ValueContract],
-) -> tuple[dict[str, OutputContract], dict[str, ValueContract]]:
+    producers: Mapping[str, OutputContract],
+    inputs: Mapping[str, ValueContract],
+) -> Views:
     """Rebuild each narrowed base in the contract maps, outer bases first."""
     producer_view = producers
     input_view = inputs
@@ -567,16 +570,16 @@ def _searched_case_facts(
 def _guarded_param_views(
     desc: CaseDescriptor,
     env: Env,
-    producers: dict[str, OutputContract],
-    inputs: dict[str, ValueContract],
+    producers: Mapping[str, OutputContract],
+    inputs: Mapping[str, ValueContract],
     registry: TypeRegistry,
-) -> dict[str, tuple[dict[str, OutputContract], dict[str, ValueContract]]]:
+) -> dict[str, Views]:
     """The views of a searched CASE's params that every read guards with `isinstance`.
 
     A param read under different checks gets the union of their facts, met with the
     CASE's own environment.
     """
-    views: dict[str, tuple[dict[str, OutputContract], dict[str, ValueContract]]] = {}
+    views: dict[str, Views] = {}
     for param, occurrences in searched_param_guards(desc).items():
         if not occurrences or not all(occurrences):
             continue
@@ -601,15 +604,15 @@ class Narrowing:
     """Per-node narrowing results for one flow.
 
     Args:
-        producers (`dict[str, OutputContract]`):
+        producers (`Mapping[str, OutputContract]`):
             The unnarrowed producer contracts.
-        inputs (`dict[str, ValueContract]`):
+        inputs (`Mapping[str, ValueContract]`):
             The unnarrowed flow-input contracts.
         environments (`dict[str, Env]`):
             Each ordered node's facts, keyed by base path.
-        views (`dict[str, tuple[dict[str, OutputContract], dict[str, ValueContract]]]`):
+        views (`dict[str, Views]`):
             The narrowed contract maps of nodes that narrow something.
-        param_views (`dict[str, dict[str, tuple[dict[str, OutputContract], dict[str, ValueContract]]]]`):
+        param_views (`dict[str, dict[str, Views]]`):
             Per searched CASE, the narrowed contract maps of its params whose every read
             follows an `isinstance` conjunct.
         unordered (`frozenset[str]`):
@@ -617,20 +620,14 @@ class Narrowing:
             get no facts.
     """
 
-    producers: dict[str, OutputContract]
-    inputs: dict[str, ValueContract]
+    producers: Mapping[str, OutputContract]
+    inputs: Mapping[str, ValueContract]
     environments: dict[str, Env] = field(default_factory=dict)
-    views: dict[
-        str, tuple[dict[str, OutputContract], dict[str, ValueContract]]
-    ] = field(default_factory=dict)
-    param_views: dict[
-        str, dict[str, tuple[dict[str, OutputContract], dict[str, ValueContract]]]
-    ] = field(default_factory=dict)
+    views: dict[str, Views] = field(default_factory=dict)
+    param_views: dict[str, dict[str, Views]] = field(default_factory=dict)
     unordered: frozenset[str] = frozenset()
 
-    def for_node(
-        self, node_id: str
-    ) -> tuple[dict[str, OutputContract], dict[str, ValueContract]]:
+    def for_node(self, node_id: str) -> Views:
         """Return the producer and flow-input contracts node `node_id` sees.
 
         Args:
@@ -638,14 +635,12 @@ class Narrowing:
                 A node id. An unknown or unnarrowed node gets the unchanged maps.
 
         Returns:
-            `tuple[dict[str, OutputContract], dict[str, ValueContract]]`:
+            `Views`:
                 The producer contracts and the flow-input contracts.
         """
         return self.views.get(node_id, (self.producers, self.inputs))
 
-    def for_param(
-        self, node_id: str, param: str
-    ) -> tuple[dict[str, OutputContract], dict[str, ValueContract]]:
+    def for_param(self, node_id: str, param: str) -> Views:
         """Return the producer and flow-input contracts param `param` of `node_id` reads against.
 
         Args:
@@ -656,7 +651,7 @@ class Narrowing:
                 gets its guarded view; any other param gets the node's view.
 
         Returns:
-            `tuple[dict[str, OutputContract], dict[str, ValueContract]]`:
+            `Views`:
                 The producer contracts and the flow-input contracts.
         """
         guarded = self.param_views.get(node_id, {}).get(param)
@@ -712,8 +707,8 @@ def _topological_order(
 def compute_narrowing(
     descriptors: Mapping[str, NodeDescriptor],
     edges: Sequence[Edge],
-    producers: dict[str, OutputContract],
-    inputs: dict[str, ValueContract],
+    producers: Mapping[str, OutputContract],
+    inputs: Mapping[str, ValueContract],
     *,
     registry: TypeRegistry | None = None,
     diagnostics: LoadDiagnostics | None = None,
@@ -742,9 +737,9 @@ def compute_narrowing(
         edges (`Sequence[Edge]`):
             The data edges plus each CASE's own data and control edges. Control edges
             carry the branch target, or `default` for `else:`, as `source_handle`.
-        producers (`dict[str, OutputContract]`):
+        producers (`Mapping[str, OutputContract]`):
             Each node's output contract by id.
-        inputs (`dict[str, ValueContract]`):
+        inputs (`Mapping[str, ValueContract]`):
             The flow-input contracts by name.
         registry (`TypeRegistry`, *optional*, defaults to `None`):
             The flow's `typedefs:` registry, for `isinstance` type names. `None` knows
@@ -773,10 +768,8 @@ def compute_narrowing(
         incoming[edge.to].append(edge)
 
     environments: dict[str, Env] = {}
-    views: dict[str, tuple[dict[str, OutputContract], dict[str, ValueContract]]] = {}
-    param_views: dict[
-        str, dict[str, tuple[dict[str, OutputContract], dict[str, ValueContract]]]
-    ] = {}
+    views: dict[str, Views] = {}
+    param_views: dict[str, dict[str, Views]] = {}
     handle_facts: dict[str, dict[str, Env]] = {}
     for node_id in order:
         control: list[Env] = []
@@ -838,6 +831,7 @@ __all__ = [
     "Fact",
     "Members",
     "Narrowing",
+    "Views",
     "compute_narrowing",
     "intersect_facts",
     "isinstance_fact",

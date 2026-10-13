@@ -958,6 +958,38 @@ def isinstance_type_names(tree: "Tree | Token") -> list[str]:
     return names
 
 
+def isinstance_subject(tree: "Tree | Token") -> "Tree | Token | None":
+    """Return the tested expression `x` of an `isinstance(x, T)` call.
+
+    Args:
+        tree (`Tree | Token`):
+            A parsed expression from [`parse_expr`][yian.expr.grammar.parse_expr] or
+            `parse_condition`, which have already checked each `isinstance` call's shape.
+
+    Returns:
+        `Tree | Token | None`:
+            The first argument's expression when `tree` itself is an `isinstance` call,
+            else `None`.
+
+    Example:
+        ```python
+        isinstance_subject(parse_expr("isinstance(d.output, Buy)"))  # the `d.output` refcall
+        isinstance_subject(parse_expr("isinstance(d.output, Buy) and x"))  # None
+        ```
+    """
+    if (
+        not isinstance(tree, Tree)
+        or tree.data != "refcall"
+        or len(tree.children) != 2
+        or str(tree.children[0]) != ISINSTANCE
+    ):
+        return None
+    call_suffix = tree.children[1]
+    if not isinstance(call_suffix, Tree) or call_suffix.data != "call_suffix":
+        return None
+    return call_suffix.children[0].children[0]
+
+
 def expr_refs(tree: "Tree | Token") -> list[str]:
     """
     Collect every reference-leaf PATH a unified `${...}` expression tree reads.

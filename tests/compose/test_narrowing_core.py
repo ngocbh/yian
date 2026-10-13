@@ -268,6 +268,15 @@ def test_two_isinstance_cases_into_one_target_join_by_union():
     assert _searched_view(cases) == BUY_OR_SELL
 
 
+def test_two_isinstance_cases_on_unrelated_types_into_one_target_drop_the_fact():
+    obj = ValueContract(Type.scalar(ValueKind.OBJECT))
+    cases = [("isinstance(d.output, Text)", "b"), ("isinstance(d.output, Buy)", "b")]
+    nodes = [_node("d"), _case("c", None, cases), _node("b")]
+    narrowing = _compute(nodes, [], {"d": obj})
+    assert narrowing.environment("b") == {}
+    assert narrowing.for_node("b")[0]["d"] is obj
+
+
 def test_a_plain_case_or_else_into_the_target_drops_the_fact():
     nodes = [
         _node("d"),

@@ -19,6 +19,7 @@ from yian.expr.expressions import (
     evaluate_when_record,
     expr_refs,
     infer_expr_type,
+    isinstance_subject,
     rewrite_condition_refs,
     rewrite_expr_refs,
 )
@@ -217,6 +218,25 @@ def test_rewrites_leave_the_type_name_alone():
 
 
 # --- static checks --- #
+
+
+@pytest.mark.parametrize(
+    ("text", "subject"),
+    [
+        ("isinstance(d.output, Buy)", "d.output"),
+        ("isinstance(upper(x), str)", "upper(x)"),
+        ("isinstance(d.output, Buy) and x", None),
+        ("not isinstance(d.output, Buy)", None),
+        ("upper(x)", None),
+        ("x", None),
+    ],
+)
+def test_isinstance_subject_is_the_tested_expression(text, subject):
+    found = isinstance_subject(parse_expr(text))
+    if subject is None:
+        assert found is None
+    else:
+        assert found == parse_expr(subject)
 
 
 def test_infer_expr_type_gives_bool_without_looking_up_the_type_name():
@@ -467,3 +487,51 @@ def _cut_log_after(log, node_id: str) -> list[str]:
     )
     log.write_text("".join(lines[: end + 1]))
     return [record["payload"].get("node_id") for record in records[: end + 1]]
+
+
+GUARDED_FLOW = """
+id: guarded
+name: guarded
+typedefs:
+  Buy: {action: 'Literal[buy]', qty: int, limit: float}
+  Hold: {action: 'Literal[hold]', note: str}
+  Decision: Union[Buy, Hold]
+input:
+  decision: object
+nodes:
+  d:
+    kind: code
+    input:
+      decision: ${input.decision}
+    code: |
+      return inputs["decision"]
+    output: Decision
+  route:
+    kind: case
+    cases:
+      - when: isinstance(d.output, Buy) and d.output.limit > 5
+        then: big
+    else: other
+  big:
+    kind: code
+    code: |
+      return "big"
+  other:
+    kind: code
+    code: |
+      return "other"
+output: ${big.output | other.output}
+"""
+
+
+@pytest.mark.parametrize("decision, expected", [
+    ({"action": "buy", "qty": 1, "limit": 9.0}, "big"),
+    ({"action": "buy", "qty": 1, "limit": 2.0}, "other"),
+    ({"action": "hold", "note": "wait"}, "other"),
+])
+def test_a_read_guarded_by_isinstance_routes_a_non_member_to_else(decision, expected):
+    # The load check reads `d.output.limit` as a `Buy` field; on a `Hold` value the read
+    # gives `None` and the `and` has already short-circuited, so the run routes to `else:`.
+    result = run_flow(load_flow(GUARDED_FLOW), {"decision": decision})
+    assert result.status == "succeeded", result.failure
+    assert result.output == expected

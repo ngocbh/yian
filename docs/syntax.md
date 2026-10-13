@@ -1060,6 +1060,14 @@ none when no `when:` matches and there is no `else:` (see
 [Exhaustiveness](#exhaustiveness)); a flow output that reads a skipped node returns
 null (see [Skipped branches and flow outputs](#skipped-branches-and-flow-outputs)).
 
+Changed: reading `${case.output}` of a `case` that isn't
+[exhaustive](#exhaustiveness) used to load, and returned null when no branch ran; it is
+now a load error. Add an `else:`, or list every tag of a non-nullable `Literal` `on:`.
+An unquoted `then:` or `else:` word that names no node used to fail with a `KeyError`;
+it is now a load error that suggests the nearest node, or quoting. Node ids may no
+longer start with `__value_` or `__case_`. Flows without value branches or a typed
+`case` keep their fingerprints.
+
 Simple form — match a value:
 
 ```yaml

@@ -12,6 +12,7 @@ engine checks against the tool's return value on every call.
 
 from yian.nodes.base import Node, NodeKind, Output
 from yian.tools import ToolSet
+from yian.typesys import Type
 
 
 class ToolNode(Node):
@@ -21,6 +22,10 @@ class ToolNode(Node):
     The node's bound input record is passed to the tool's `.invoke(...)`; the tool sees
     only its own record, never the live pool. When `output_contract` is set (from an
     optional authored `output:`), the engine validates every returned value against it.
+
+    `input_types` maps each input name to the type the loader proved its binding has
+    (a literal's exact type, a typed binding's declared type, or a reference's inferred
+    type); an input whose type is not proven is absent.
 
     Args:
         node_id (`str`):
@@ -37,6 +42,7 @@ class ToolNode(Node):
     def __init__(self, node_id: str, *, tool_id: str, title=None) -> None:
         super().__init__(node_id, title=title)
         self.tool_id = tool_id
+        self.input_types: dict[str, Type] = {}
 
     def forward(self, inputs: dict, *, tools: ToolSet | None = None) -> Output:
         tools = tools if tools is not None else ToolSet()

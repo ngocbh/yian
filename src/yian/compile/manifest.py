@@ -146,7 +146,9 @@ _IGNORED_KIND_FIELDS: dict[NodeKind, frozenset[str]] = {
             "code_line_origins",
         }
     ),
-    NodeKind.TOOL: frozenset(),
+    # input_types is derived from wiring and producer contracts; the run-start tool check
+    # reads it.
+    NodeKind.TOOL: frozenset({"input_types"}),
     NodeKind.CASE: frozenset(),
     NodeKind.HUMAN_INPUT: frozenset(),
     NodeKind.WAIT: frozenset(),

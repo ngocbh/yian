@@ -89,6 +89,7 @@ from yian.compose.validate.skips import (
     check_skipped_arithmetic,
     null_skipped_outputs,
 )
+from yian.compose.validate.tool_inputs import stamp_tool_input_types
 from yian.compose.validate.typed_bindings import check_typed_inputs, check_typed_outputs
 from yian.compose.validate.wiring_parity import check_wiring_parity
 from yian.compose.parse.nodes import (
@@ -1739,6 +1740,14 @@ def _assemble(
         narrowing=narrowing,
         resolve_origin=catalog_builder.resolve_registered,
         diagnostics=diagnostics,
+    )
+    # The run-start tool check compares these with the host tool's declared input types.
+    stamp_tool_input_types(
+        flow_wiring,
+        producers,
+        flow_input_contracts,
+        build_results,
+        narrowing=narrowing,
     )
     # cross-flow type check: each `call` binding's source type vs the callable
     # input type (needs producers, so it runs after all nodes are built).

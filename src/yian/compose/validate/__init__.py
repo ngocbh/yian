@@ -35,6 +35,8 @@ reject an ill-formed flow before it is compiled:
   whether a set of them may skip together; `null_skipped_outputs` gives a flow output whose
   producers may all be skipped the explicit null default; `check_skipped_arithmetic` rejects
   arithmetic over a value that may be null from a skip while its reader runs.
+- `tool_inputs.py` — `stamp_tool_input_types`: each TOOL node records the proven
+  inferred type of each input binding, for the run-start check against its tool.
 
 Post-build passes may consult `BuildResult.node_range` / `field_ranges`, and assertion
 validation may receive a temporary descriptor/callback range. Those coordinates stay in

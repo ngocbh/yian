@@ -29,6 +29,7 @@ diagnostics). Only the loader (and the compose package facade) import this back.
 from __future__ import annotations
 
 import json
+from math import isfinite
 from typing import Any, Callable, Optional
 
 from yian.compile.model import FlowOutput
@@ -44,8 +45,15 @@ from yian.compose.validate.narrowing import Narrowing
 from yian.diagnostics import DiagnosticFrame, OriginRef, SourceRange
 from yian.expr import ExpressionError, eval_binding, scan_template
 from yian.expr.template import Span
-from yian.nodes.contracts import Binding, OutputContract, ValueContract
-from yian.typesys import TypeCheckError, build_value_as, canonical_type_label
+from yian.nodes.contracts import Binding, OutputContract, ValueContract, binding_source
+from yian.typesys import (
+    Type,
+    TypeCheckError,
+    ValueKind,
+    build_value,
+    build_value_as,
+    canonical_type_label,
+)
 
 _NOT_LITERAL = object()
 
@@ -160,6 +168,65 @@ def check_typed_outputs(
                 resolve_origin,
                 diagnostics,
             )
+
+
+def infer_binding_type(
+    binding: Any,
+    producers: dict[str, OutputContract],
+    flow_inputs: dict[str, ValueContract],
+) -> Type | None:
+    """Return the type one binding is proven to produce, else `None`.
+
+    A typed binding has its declared type; a literal has its exact type (a one-tag
+    `Literal[...]` for non-empty text, one-point bounds for a number); a reference or
+    expression has the exact type inferred over the producer and flow-input contracts.
+
+    Args:
+        binding (`Any`): A wiring binding, raw or a `Binding`.
+        producers (`dict[str, OutputContract]`): Node output contracts by producer id.
+        flow_inputs (`dict[str, ValueContract]`): Flow input contracts by name.
+
+    Returns:
+        `Type | None`: The proven type, or `None` when it is unproven or only partial.
+    """
+    if isinstance(binding, Binding) and binding.contract is not None:
+        return binding.contract.type
+    literal = _literal_value(binding_source(binding))
+    if literal is not _NOT_LITERAL:
+        return _literal_type(literal)
+    inferred = resolve_output_binding_contract(binding, producers, flow_inputs)
+    return inferred.type if type(inferred) is ValueContract else None
+
+
+def _literal_type(value: Any) -> Type | None:
+    """Return the exact type of a literal value, else `None`.
+
+    Args:
+        value (`Any`): The bound literal.
+
+    Returns:
+        `Type | None`: The literal's type, or `None` for a value with no type.
+    """
+    # bool is an int subclass, so it is matched first.
+    if type(value) is bool:
+        return Type.scalar(ValueKind.BOOLEAN)
+    if type(value) is int:
+        return Type(kind=ValueKind.INTEGER, bounds=(value, value))
+    if type(value) is float:
+        if not isfinite(value):
+            return None
+        return Type(kind=ValueKind.NUMBER, bounds=(value, value))
+    if type(value) is str:
+        # A tag must be non-empty, so empty text is plain str.
+        if not value:
+            return Type.scalar(ValueKind.STRING)
+        return Type(kind=ValueKind.STRING, tags=frozenset({value}))
+    if value is None:
+        return Type.scalar(ValueKind.NONE)
+    try:
+        return Type.scalar(build_value(value).kind)
+    except TypeCheckError:
+        return None
 
 
 def _located_error(

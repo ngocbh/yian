@@ -121,7 +121,7 @@ def _canonical_output_value(
 ) -> tuple[dict[str, Any], TypedValue]:
     """Canonicalize live or replayed output through the same contract path."""
     if type(contract) is PartialRecordContract:
-        validate_output_contract(contract, output)
+        output = validate_output_contract(contract, output)
     return canonical_typed(output, declared_type)
 
 

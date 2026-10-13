@@ -284,8 +284,8 @@ one plain scalar, so it can't contain `: ` or ` #`, even in quotes after ` = `
 - **Runtime:** the value is validated before the consuming node runs, with no
   conversion (an int bound as `float` stays an int; `"30"` is not an int). A miss
   fails the consumer (END for a flow output) with code `binding.type`, located at
-  the binding. A committed flow output widens a whole `float`/`list[float]` value
-  from int; record fields don't widen.
+  the binding. A committed output widens an int in any typed `float` slot (the
+  whole value, a list item, a record field); an untyped record field stays as given.
 - **Downstream sees the declared type** — this is how an opaque value becomes
   typed. CALL/MAP/LOOP parents see a child's declared output type; a CALL checks a
   typed argument against the child's parameter; an inline body's parameter takes

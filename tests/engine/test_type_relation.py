@@ -81,7 +81,7 @@ def test_fits(inferred: str, declared: str) -> None:
         # both sides may omit the field, so the empty record is shared
         ("AOptStr", "AOpt"),
         ("float", "float[0, 1]"),
-        # a float-typed record field may hold an int, since record fields never widen
+        # a float-typed value may hold an int, since a typed binding never converts
         ("float", "int"),
     ],
 )

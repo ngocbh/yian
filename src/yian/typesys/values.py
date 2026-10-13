@@ -1085,8 +1085,8 @@ def build_value_as(declared: "ValueKind | Type", value: Any) -> TypedValue:
 
     This is the write-boundary check the variable pool uses against each declared
     output type, so a node returning the wrong type fails loudly at the write rather
-    than silently downstream. The only coercion is widening (an `int` fills a `float`
-    slot).
+    than silently downstream. The only coercion is widening: an `int` fills a `float`
+    slot at any depth (a record field, a list item, a union member's field).
 
     Args:
         declared (`ValueKind | Type`):
@@ -1193,15 +1193,20 @@ def _build_for_type(
                 f"record has unknown fields: {ordered_unknown}",
                 path=unknown_path,
             )
-        canonical_names = {name: name for name in typ.fields}
+        # Key by the declared name: an equal `str` subclass key must not leak into
+        # error paths or the stored record.
+        declared_names = {name: name for name in typ.fields}
+        # Store each field's normalized value, so a nested `float` slot widens an int
+        # just as a top-level one does.
+        fields = {}
         for fname, fval in value.items():
-            canonical_name = canonical_names[fname]
-            _build_for_type(
-                typ.fields[fname],
+            name = declared_names[fname]
+            fields[name] = _build_for_type(
+                typ.fields[name],
                 fval,
-                path=path + (canonical_name,),
-            )
-        return ObjectValue(value=value)
+                path=path + (name,),
+            ).to_object()
+        return ObjectValue(value=fields)
 
     # list with a known element typ (incl. List[record])
     if typ.kind.is_list() and typ.element is not None:

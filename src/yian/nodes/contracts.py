@@ -619,17 +619,28 @@ def output_contract_origin(
 def validate_output_contract(
     contract: OutputContract | None,
     value: Any,
-) -> None:
-    """Validate a plain or typed value against either output-contract arm."""
+) -> Any:
+    """Validate a plain or typed value against either output-contract arm.
+
+    Args:
+        contract (`OutputContract | None`): The contract to enforce; `None` checks nothing.
+        value (`Any`): The plain or typed value to check.
+
+    Returns:
+        `Any`: The plain value with each typed part normalized (an int in a `float`
+            slot widened); an untyped part or an unchecked value is returned as given.
+
+    Raises:
+        `TypeCheckError`: The value violates the contract.
+    """
     exact_type = output_contract_type(contract)
     if exact_type is not None:
-        build_value_as(exact_type, value)
-        return
-    if contract is None:
-        return
-    assert type(contract) is PartialRecordContract
+        return build_value_as(exact_type, value).to_object()
     if isinstance(value, TypedValue):
         value = value.to_object()
+    if contract is None:
+        return value
+    assert type(contract) is PartialRecordContract
     if not isinstance(value, dict):
         raise TypeCheckError(
             f"{value!r} is not an object for a partial record contract"
@@ -660,16 +671,18 @@ def validate_output_contract(
             f"record has unknown fields: {ordered_unknown!r}",
             path=path,
         )
+    checked = dict(value)
     for name, field_contract in contract.fields:
         if field_contract is None:
             continue
         try:
-            build_value_as(field_contract.type, value[name])
+            checked[name] = build_value_as(field_contract.type, value[name]).to_object()
         except TypeCheckError as exc:
             raise TypeCheckError(
                 *exc.args,
                 path=(name, *exc.path),
             ) from exc
+    return checked
 
 
 @dataclass(frozen=True)

@@ -73,21 +73,64 @@ output:
 """
 
 
-def test_fully_typed_record_output_keeps_an_int_in_a_float_field():
-    """Only a whole float value widens; a record's field values stay as returned."""
+def test_fully_typed_record_output_widens_an_int_in_a_float_field():
     result = run_flow(load_flow(_record_flow("str = ${m.output}")), {})
 
     assert result.status == "succeeded", result.failure
-    assert result.output == {"a": 30, "b": "m"}
-    assert type(result.output["a"]) is int
+    assert result.output == {"a": 30.0, "b": "m"}
+    assert type(result.output["a"]) is float
 
 
-def test_partly_typed_record_output_keeps_an_int_in_a_float_field():
+def test_partly_typed_record_output_widens_its_typed_float_field():
     result = run_flow(load_flow(_record_flow("${m.output}")), {})
 
     assert result.status == "succeeded", result.failure
-    assert result.output == {"a": 30, "b": "m"}
-    assert type(result.output["a"]) is int
+    assert result.output == {"a": 30.0, "b": "m"}
+    assert type(result.output["a"]) is float
+
+
+def test_partly_typed_record_output_keeps_its_untyped_field_as_given():
+    text = _record_flow("${m.output}").replace('return "m"', "return 7")
+
+    result = run_flow(load_flow(text), {})
+
+    assert result.status == "succeeded", result.failure
+    assert result.output == {"a": 30.0, "b": 7}
+    assert type(result.output["b"]) is int
+
+
+def test_record_node_output_widens_like_a_whole_float_output():
+    text = """
+id: recfloat
+name: recfloat
+typedefs:
+  Score:
+    value: float
+input:
+  n: int
+nodes:
+  top:
+    kind: code
+    input: {n: "${input.n}"}
+    output: float
+    code: |
+      return inputs["n"]
+  rec:
+    kind: code
+    input: {n: "${input.n}"}
+    output: Score
+    code: |
+      return {"value": inputs["n"]}
+output:
+  top: ${top.output}
+  rec: ${rec.output.value}
+"""
+    result = run_flow(load_flow(text), {"n": 1})
+
+    assert result.status == "succeeded", result.failure
+    assert result.output == {"top": 1.0, "rec": 1.0}
+    assert type(result.output["top"]) is float
+    assert type(result.output["rec"]) is float
 
 
 def test_partly_typed_record_output_rejects_a_mistyped_typed_field():

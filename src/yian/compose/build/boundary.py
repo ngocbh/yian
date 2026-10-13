@@ -167,9 +167,9 @@ def _declared_output_contract(
 
     A value END takes its one output's declared contract. A record END with any typed
     output takes an exact record when every output is typed, else a partial record that
-    leaves each untyped field opaque. END commits through it, so a whole `float` value
-    widens an int and a whole `list[float]` value widens its int elements, while record
-    fields never widen (their values, lists included, stay as returned).
+    leaves each untyped field opaque. END commits through it, so an int in any typed
+    `float` slot (the whole value, a list item, a record field) widens to a float, while
+    an untyped field's value stays as returned.
 
     Args:
         outputs (`list[FlowOutput]`): The flow's outputs, typed ones carrying a

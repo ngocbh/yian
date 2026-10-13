@@ -326,7 +326,7 @@ compares the optional exit field with `true` to prove `bool`. This is the shape
   seed; return a nullable-typed producer instead. A body may return one field
   (`output: {done: ...}`); an empty `output: {}`, or a reference to an empty record,
   is rejected. A predicate that reads only fields the body never returns cannot
-  change, so such a loop is a load error unless it has `max:` (it then ends at the cap).
+  change, so such a loop is a load error unless it has `max:` (it then fails at the cap).
   Give EXACTLY ONE driver: `while:` (pre-check, 0+ runs), `until:` (post-check /
   do-while, 1+ runs), or `times: N` (fixed count). `max:` is optional for
   `while:`/`until:` but REDUNDANT+REJECTED with `times:`.

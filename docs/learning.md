@@ -242,6 +242,8 @@ result = run_flow(flow, inputs, memory={"about": profile}, learnable=True)
   `profile.closed`. A registry from `build_memories` closes the profiles it built.
 
 `FileMarkdownStore(path)` keeps the current document as a plain editable file.
+The file holds the text exactly as written, line endings included, so `\r\n`
+reads back as `\r\n` and the version always hashes the text `read` returns.
 `path` must be a local file path: empty, `:memory:`, and `file:` URIs raise
 `MemoryOperationError` with code `storage.path`. Next to it are
 content-addressed copies of every version it has handed out

@@ -150,6 +150,29 @@ def test_direct_file_edit_is_a_new_version_and_breaks_stale_writes(tmp_path) -> 
     assert store.read(version) == ("# Ada\nEdited by hand.\n", version)
 
 
+@pytest.mark.parametrize("kind", ["file", "memory"])
+def test_carriage_returns_round_trip_exactly(tmp_path, kind) -> None:
+    store = FileMarkdownStore(tmp_path / "ada.md") if kind == "file" else InMemoryMarkdownStore()
+    base = store.read()[1]
+    for text in ("# Ada\r\nPrefers email.\r\n", "# Ada\rOld Mac line.\n"):
+        version = store.write(text, base_version=base)
+        assert version == markdown_version(text)
+        assert store.read() == (text, version)
+        base = version
+    first = markdown_version("# Ada\r\nPrefers email.\r\n")
+    assert store.read(first) == ("# Ada\r\nPrefers email.\r\n", first)
+
+
+def test_hand_edited_crlf_file_reads_back_byte_for_byte(tmp_path) -> None:
+    path = tmp_path / "ada.md"
+    path.write_bytes(b"# Ada\r\nEdited on Windows.\r\n")
+    store = FileMarkdownStore(path)
+    text, version = store.read()
+    assert text == "# Ada\r\nEdited on Windows.\r\n" and version == markdown_version(text)
+    path.write_bytes(b"# Ada\n")
+    assert store.read(version) == (text, version)
+
+
 def test_every_write_appends_its_provenance_and_nothing_is_replayed(tmp_path) -> None:
     store = FileMarkdownStore(tmp_path / "ada.md")
     base = store.read()[1]

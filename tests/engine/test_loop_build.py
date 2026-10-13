@@ -944,3 +944,169 @@ def test_non_int_max_is_rejected(bad):
         load_flow(bad)
     assert "max" in str(e.value).lower()
     assert "integer" in str(e.value)
+
+
+# `until: done` reads only `done`, which the body never returns, and there is no `max:`,
+# so the loop can never end.
+NEVER_ENDS = """
+id: loop-never-ends
+name: loop_never_ends
+defs:
+  body:
+    input:
+      done: bool
+      attempts: int
+    nodes: {}
+    output:
+      attempts: ${input.attempts + 1}
+nodes:
+  wait:
+    kind: loop
+    call: body
+    input:
+      done: false
+      attempts: 0
+    until: done
+output: ${wait.output}
+"""
+
+
+def test_loop_whose_condition_reads_only_unreturned_fields_is_a_load_error():
+    with pytest.raises(LoadError) as exc:
+        load_flow(NEVER_ENDS)
+    msg = str(exc.value)
+    assert "this loop can never end" in msg
+    assert "`until: done`" in msg
+    assert "reads `done`" in msg
+    assert "return `done` from the body" in msg
+    assert "add `max:`" in msg
+
+
+def test_while_loop_whose_condition_reads_only_unreturned_fields_is_a_load_error():
+    # SUBSET_BODY returns only `n`; `while: not ${exited}` reads only `exited`.
+    with pytest.raises(LoadError, match=r"this loop can never end: `while: not \$\{exited\}`"):
+        load_flow(SUBSET_BODY.replace("    max: 5\n", ""))
+
+
+def test_never_ending_error_names_every_unreturned_field_read():
+    src = """
+id: loop-never-ends-two
+name: loop_never_ends_two
+defs:
+  body:
+    input:
+      a: bool
+      b: bool
+      n: int
+    nodes: {}
+    output:
+      n: ${input.n + 1}
+nodes:
+  wait:
+    kind: loop
+    call: body
+    input:
+      a: false
+      b: false
+      n: 0
+    until: a or b
+output: ${wait.output}
+"""
+    with pytest.raises(LoadError) as exc:
+        load_flow(src)
+    msg = str(exc.value)
+    assert "reads `a`, `b`" in msg
+    assert "return `a` or `b` from the body" in msg
+
+
+def test_inline_body_loop_whose_condition_never_changes_is_a_load_error():
+    # INLINE_SUBSET's body returns only `n`; `until: exited` reads only `exited`.
+    with pytest.raises(LoadError, match="this loop can never end: `until: exited`"):
+        load_flow(INLINE_SUBSET.replace("    times: 2\n", "    until: exited\n"))
+
+
+@pytest.mark.parametrize(
+    "pred", ["done", "${done}", "${not done}", "not done"],
+)
+def test_never_ending_check_reads_every_condition_spelling(pred):
+    src = NEVER_ENDS.replace("    until: done\n", f'    until: "{pred}"\n')
+    assert src != NEVER_ENDS
+    with pytest.raises(LoadError, match="reads `done`, which the body never updates"):
+        load_flow(src)
+
+
+def test_null_max_still_gets_the_never_ending_error():
+    src = NEVER_ENDS.replace("    until: done\n", "    until: done\n    max: null\n")
+    assert src != NEVER_ENDS
+    with pytest.raises(LoadError, match="this loop can never end"):
+        load_flow(src)
+
+
+def test_dotted_condition_ref_names_the_carried_field():
+    src = NEVER_ENDS.replace("      done: false\n", "      st: {ok: false}\n").replace(
+        "      done: bool\n", "      st: Any\n"
+    ).replace("    until: done\n", "    until: st.ok\n")
+    with pytest.raises(LoadError, match="reads `st`.*return `st` from the body"):
+        load_flow(src)
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        # two drivers: only the driver-count error
+        NEVER_ENDS.replace("    until: done\n", "    until: done\n    while: not done\n"),
+        # times + while: only the driver-count error
+        NEVER_ENDS.replace("    until: done\n", "    times: 2\n    while: not done\n"),
+        # unknown name: only the unknown-name error
+        NEVER_ENDS.replace("    until: done\n", "    until: done or nope\n"),
+        # invalid max: only the max error
+        NEVER_ENDS.replace("    until: done\n", "    until: done\n    max: 0\n"),
+        # parse error: only the parse error (no heads)
+        NEVER_ENDS.replace("    until: done\n", '    until: "done and"\n'),
+    ],
+    ids=["two-drivers", "times-and-while", "unknown-name", "bad-max", "parse-error"],
+)
+def test_never_ending_error_does_not_stack_on_other_loop_errors(src):
+    with pytest.raises(LoadError) as exc:
+        load_flow(src)
+    assert "can never end" not in str(exc.value)
+
+
+def test_never_changing_condition_with_max_loads():
+    node = load_flow(
+        NEVER_ENDS.replace("    until: done\n", "    until: done\n    max: 3\n")
+    ).compiled.nodes["wait"]
+    assert node.max_iters == 3
+    assert node.returned_fields == ("attempts",)
+
+
+def test_condition_reading_one_returned_field_loads():
+    # `done` is never returned, but `attempts` is, so the condition can change.
+    node = load_flow(
+        NEVER_ENDS.replace("    until: done\n", "    until: done or attempts >= 3\n")
+    ).compiled.nodes["wait"]
+    assert node.max_iters is None
+
+
+UNTYPED_BODY = NEVER_ENDS.replace(
+    "    nodes: {}\n    output:\n      attempts: ${input.attempts + 1}\n",
+    "    nodes:\n"
+    "      step:\n"
+    "        kind: code\n"
+    "        input:\n"
+    "          a: ${input.attempts}\n"
+    "        code: |\n"
+    "          return {\"attempts\": inputs[\"a\"] + 1}\n"
+    "    output: ${step.output}\n",
+)
+
+
+def test_unknown_returned_fields_get_only_the_record_error():
+    # A value body over an untyped CODE node: its returned field set is unknown at load,
+    # so only the "must return a record" error applies.
+    assert UNTYPED_BODY != NEVER_ENDS
+    with pytest.raises(LoadError) as exc:
+        load_flow(UNTYPED_BODY)
+    msg = str(exc.value)
+    assert "must return a record" in msg
+    assert "can never end" not in msg

@@ -90,7 +90,9 @@ class LoopDescriptor(NodeDescriptor):
         `params`; the flow owns the carried-record seed sources in `wiring`. Resolves the
         callable through `ctx.resolver` (required — a loop is higher-order), derives its
         `ChildSignature`, bakes the compiled child + parameters, and enforces the FIELD-NAME
-        half of the contract plus termination configuration legality.
+        half of the contract plus termination configuration legality, including that a
+        `while:`/`until:` loop without `max:` whose condition reads carried fields reads at
+        least one field the body returns.
 
         A body that returns the whole carried record stamps its codomain as `output_contract`
         and leaves `returned_fields` unset. A body that returns a subset stamps
@@ -115,7 +117,8 @@ class LoopDescriptor(NodeDescriptor):
         Raises:
             `LoadError`:
                 The body, the field-name contract, or the termination configuration is
-                illegal.
+                illegal, or a `while:`/`until:` loop without `max:` can never end because its
+                condition reads only fields the body never returns.
         """
         resolver = ctx.resolver
         child = _resolve_child(
@@ -270,6 +273,26 @@ class LoopDescriptor(NodeDescriptor):
                 errors.append(
                     f"loop node {self.id!r}: `{pred_kw}:` references unknown name(s) {unknown} — "
                     f"the predicate reads the carried record {sorted(carried)}"
+                )
+            # A body that returns none of the fields the predicate reads can never change it,
+            # so without `max:` the loop never ends. `returned_fields` is set only when the
+            # body returns a known strict subset of the carried record. Skip when a driver,
+            # parse, or unknown-name error already explains the loop.
+            if (
+                len(present) == 1
+                and self.max is None
+                and heads
+                and not unknown
+                and node.returned_fields is not None
+                and heads.isdisjoint(node.returned_fields)
+            ):
+                stuck = sorted(heads)
+                reads = ", ".join(f"`{n}`" for n in stuck)
+                fix = " or ".join(f"`{n}`" for n in stuck)
+                errors.append(
+                    f"loop node {self.id!r}: this loop can never end: `{pred_kw}: "
+                    f"{predicate_src}` reads {reads}, which the body never updates; "
+                    f"return {fix} from the body, or add `max:`"
                 )
         if errors:
             raise ctx.diagnostics.error("\n  ".join(errors), range=self.range)

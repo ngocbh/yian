@@ -1148,7 +1148,10 @@ poll:
   it (or the run is interrupted). When given, it is a plain integer `>= 1`, and a
   loop that would run more than `max` iterations fails loudly (`LoopMaxExceeded`).
 - A `while:`/`until:` predicate that reads only fields the body never returns cannot
-  change. Without `max:`, such a loop runs forever.
+  change. Without `max:`, such a loop could never end, so it is a load error
+  (`` this loop can never end: `until: done` reads `done`, which the body never
+  updates; return `done` from the body, or add `max:` ``). With `max:`, it loads, and
+  fails with `LoopMaxExceeded` if it reaches the cap.
 
 The node's value is the final merged carried record (committed under the loop
 node's id once the loop stops).

@@ -116,11 +116,13 @@ class FileMarkdownStore:
     Each write appends its versions and provenance to ``.<name>.writes.jsonl``.
     Writers on one host serialize through ``.<name>.lock``. Nothing on disk is
     touched until the first read or write. A person may edit ``path`` directly;
-    the next compare-and-set write then reports a mismatch.
+    the next compare-and-set write then reports a mismatch. A symlinked ``path``
+    is resolved when the store is built: writes update the link's target, and
+    the versions, write log, and lock sit next to the target.
     """
 
     def __init__(self, path: str | os.PathLike[str], *, create_parent: bool = False) -> None:
-        """Bind the store to one document path without touching the filesystem.
+        """Bind the store to one document path, resolving symlinks, creating nothing.
 
         Args:
             path (`str | os.PathLike[str]`): Markdown file.
@@ -137,9 +139,9 @@ class FileMarkdownStore:
         """
         if type(create_parent) is not bool:
             raise TypeError("create_parent must be a bool")
-        # Bind a relative path to the current directory now so a later chdir
-        # does not redirect the store; ".." stays for the OS to resolve.
-        self.path = Path(check_storage_path(path))
+        # Resolve now so a later chdir does not redirect the store, and so the
+        # atomic replace updates a symlink's target instead of the link itself.
+        self.path = Path(os.path.realpath(check_storage_path(path)))
         self._create_parent = create_parent
         self._versions = self.path.parent / f".{self.path.name}.versions"
         self._lock_path = self.path.parent / f".{self.path.name}.lock"

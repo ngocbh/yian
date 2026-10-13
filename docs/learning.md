@@ -246,6 +246,8 @@ result = run_flow(flow, inputs, memory={"about": profile}, learnable=True)
 `MemoryOperationError` with code `storage.path`. Next to it are
 content-addressed copies of every version it has handed out
 (`.<name>.versions/`), a lock file, and a write log (`.<name>.writes.jsonl`).
+A symlinked `path` is resolved when the store is built, as SQLite storage does:
+writes update the link's target, and these files sit next to the target.
 Each write-log line is JSON with `base_version`, `version`, and `provenance`.
 From `ProfileMemory`, provenance holds `run_id`, `commit_id`, `seen_version`,
 and the distinct `feedback` values. Provenance that is not a JSON object of

@@ -796,6 +796,40 @@ def _attach_input_contracts(
             wiring[name] = replace(as_binding(wiring[name]), contract=contract)
 
 
+def _check_output_names(
+    outputs_section: dict,
+    outputs_cursor: SourceCursor | None,
+    *,
+    diagnostics: LoadDiagnostics,
+) -> None:
+    """Reject a flow `output:` record whose field name is not a string.
+
+    YAML reads an unquoted `true`, `yes`, `null`, or `1` key as a bool, None, or
+    number; naming the output after its `str()` would rename it, and `1:` beside
+    `'1':` would drop one output.
+
+    Raises:
+        `LoadError`: Raised at the offending key when a field name is not a string.
+    """
+    for key in outputs_section:
+        if isinstance(key, str):
+            continue
+        key_range = None
+        authored = str(key)
+        if outputs_cursor is not None and outputs_cursor.has(key):
+            key_range = outputs_cursor.child(key).key_range
+            document = outputs_cursor.document
+            if key_range is not None and document is not None:
+                if key_range.start_line == key_range.end_line:
+                    line = document.text.splitlines()[key_range.start_line - 1]
+                    authored = line[key_range.start_col - 1 : key_range.end_col - 1]
+        raise diagnostics.error(
+            f"flow output name `{authored}` reads as {key!r} ({type(key).__name__}), "
+            f"not a string; quote the key: `'{authored}':`",
+            range=key_range or (outputs_cursor.range if outputs_cursor else None),
+        )
+
+
 def _split_typed_outputs(
     outputs_section,
     outputs_cursor: SourceCursor | None,
@@ -826,11 +860,13 @@ def _split_typed_outputs(
             and the declared contracts keyed by output name.
 
     Raises:
-        `LoadError`: Raised when a typed output's type or value is malformed, or the
-            retained cursor cannot be traversed.
+        `LoadError`: Raised when a record field name is not a string, a typed output's
+            type or value is malformed, or the retained cursor cannot be traversed.
     """
     if outputs_section is None:
         return None, {}
+    if isinstance(outputs_section, dict):
+        _check_output_names(outputs_section, outputs_cursor, diagnostics=diagnostics)
 
     def split_one(value, cursor, binding_label: str, index: int):
         """Split one output value at its positional catalog site."""

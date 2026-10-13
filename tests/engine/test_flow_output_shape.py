@@ -358,3 +358,50 @@ def test_root_feedback_on_a_one_field_record_reaches_its_producer():
     assert len(producer.calls) == 1
     assert producer.calls[0][1] == ("Review the order.",)
     assert root.input_feedback == {"topic": ("Review the order.",)}
+
+
+@pytest.mark.parametrize(
+    ("section", "key_line", "kind"),
+    [
+        ("output:\n  1: ${step.output}\n", "  1: ${step.output}", "int"),
+        ("output:\n  true: ${step.output}\n", "  true: ${step.output}", "bool"),
+        ("output:\n  yes: ${step.output}\n", "  yes: ${step.output}", "bool"),
+        ("output:\n  null: ${step.output}\n", "  null: ${step.output}", "NoneType"),
+        (
+            "output:\n  '1': ${step.output}\n  1: ${step.output}\n",
+            "  1: ${step.output}",
+            "int",
+        ),
+    ],
+    ids=["int", "true", "yes", "null", "int-beside-quoted"],
+)
+def test_a_non_string_flow_output_name_is_a_load_error_at_its_key(section, key_line, kind):
+    text = _FLOW % section
+    with pytest.raises(LoadError) as info:
+        load_flow(text)
+
+    message = info.value.diagnostic.message
+    assert f"({kind}), not a string" in message
+    authored = key_line.split(":")[0].strip()
+    assert f"quote the key: `'{authored}':`" in message
+    frames = info.value.diagnostic.frames
+    assert frames and frames[0].range.start_line == text.splitlines().index(key_line) + 1
+
+
+def test_a_non_string_output_name_in_a_def_is_a_load_error():
+    text = _parent(
+        "    output:\n      1: ${step.output}\n",
+        "  c:\n    kind: call\n    call: child\n",
+        "${c.output}",
+    )
+    with pytest.raises(LoadError, match="not a string"):
+        load_flow(text)
+
+
+@pytest.mark.parametrize(
+    ("section", "expected"),
+    [("output: 5\n", 5), ("output:\n  x: 5\n  y: ${step.output}\n", {"x": 5, "y": "filled"})],
+    ids=["value", "field"],
+)
+def test_a_literal_flow_output_is_returned_as_written(section, expected):
+    assert _run(_FLOW % section) == expected

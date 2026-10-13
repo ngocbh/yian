@@ -309,10 +309,11 @@ joining branch nodes (`${b.output | s.output}`); flow outputs are never narrowed
 from it (a `wait`, a side-effecting tool), use `depends_on: [a]` (co-skips B if A
 skipped) or `runs_after: [a]` (orders only; B still runs).
 
-**Wait until an absolute deadline.** Give `wait` an ISO `date` or `datetime` via
-`until:`. Dates mean midnight UTC, naive datetimes are UTC, and aware datetimes
-are normalized to UTC. WAIT blocks one worker and returns `None` at the deadline;
-that value is committed as its ordinary node output. See `wait-until.yaml`.
+**Wait until an absolute deadline.** Give `wait` a `date` (`2026-05-21`) or
+`datetime` (`2026-05-21T14:30[:00][Z|+07:00]`) via `until:`. Dates mean midnight
+UTC, naive datetimes are UTC, and aware datetimes are normalized to UTC. WAIT
+blocks one worker and returns `None` at the deadline; that value is committed as its
+ordinary node output. See `wait-until.yaml`.
 
 **Ask the human.** For a *guaranteed* gate use a `human_input` node (it blocks its
 worker until the host answers). For "ask only if the model decides it needs to",

@@ -13,19 +13,20 @@ object — plus a reserved `FILE` placeholder that is never auto-inferred and no
 yet exposed to flow authors (so adding real file handling later is additive,
 not a schema migration).
 
-This module has no package-internal dependencies on purpose; it is the leaf.
+This module's only package-internal dependency is the stdlib-only date/datetime grammar
+in `yian.typesys.temporal`; otherwise it is the leaf.
 """
 
 import json
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
-from datetime import date as _date
-from datetime import datetime as _datetime
 from enum import Enum
 from math import isfinite
 from typing import Annotated, Any, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
+
+from yian.typesys.temporal import parse_date, parse_datetime
 
 
 class TypeCheckError(ValueError):
@@ -77,8 +78,8 @@ class ValueKind(str, Enum):
     STRING = "str"
     INTEGER = "int"
     NUMBER = "float"
-    DATE = "date"  # ISO-8601 calendar date, stored as str; never auto-inferred
-    DATETIME = "datetime"  # ISO-8601 datetime, stored as str; never auto-inferred
+    DATE = "date"  # grammar in yian.typesys.temporal; stored as str; never auto-inferred
+    DATETIME = "datetime"  # grammar in yian.typesys.temporal; stored as str; never auto-inferred
     BOOLEAN = "bool"
     OBJECT = "object"
     FILE = "file"  # reserved: never auto-inferred, not authorable yet
@@ -169,27 +170,23 @@ class NumberValue(TypedValue):
 
 class DateValue(TypedValue):
     kind: Literal[ValueKind.DATE] = ValueKind.DATE
-    value: str  # ISO-8601 "YYYY-MM-DD"
+    value: str  # "YYYY-MM-DD"; see yian.typesys.temporal
 
     @field_validator("value")
     @classmethod
     def _iso(cls, v: str) -> str:
-        _date.fromisoformat(v)  # raises ValueError if not a valid ISO date
+        parse_date(v)
         return v
 
 
 class DateTimeValue(TypedValue):
     kind: Literal[ValueKind.DATETIME] = ValueKind.DATETIME
-    value: str  # ISO-8601 "YYYY-MM-DDTHH:MM:SS[+HH:MM]"
+    value: str  # "YYYY-MM-DD[T| ]HH:MM[:SS[.f]][Z|±HH:MM]"; see yian.typesys.temporal
 
     @field_validator("value")
     @classmethod
     def _iso(cls, v: str) -> str:
-        # A bare date ("2026-06-12") parses as midnight; require a time component so
-        # datetime stays distinct from date.
-        if "T" not in v and " " not in v:
-            raise ValueError("datetime must include a time component")
-        _datetime.fromisoformat(v)  # raises ValueError if not a valid ISO datetime
+        parse_datetime(v)
         return v
 
 
@@ -980,6 +977,29 @@ def _infer_scalar_type(value: Any) -> Optional[ValueKind]:
     return None
 
 
+_TEMPORAL_PARSERS = {ValueKind.DATE: parse_date, ValueKind.DATETIME: parse_datetime}
+
+
+def _temporal_error(declared: ValueKind, value: str) -> Optional[str]:
+    """Return why `value` is not a valid `declared` string, or `None` when it is.
+
+    Args:
+        declared (`ValueKind`):
+            `ValueKind.DATE` or `ValueKind.DATETIME`.
+        value (`str`):
+            The string to check against that kind's grammar.
+
+    Returns:
+        `Optional[str]`:
+            The grammar's error message, or `None` when `value` parses.
+    """
+    try:
+        _TEMPORAL_PARSERS[declared](value)
+    except ValueError as exc:
+        return str(exc)
+    return None
+
+
 def _scalar_matches(declared: ValueKind, value: Any) -> bool:
     if declared == ValueKind.NONE:
         return value is None
@@ -991,25 +1011,8 @@ def _scalar_matches(declared: ValueKind, value: Any) -> bool:
         return isinstance(value, int) and not isinstance(value, bool)
     if declared == ValueKind.NUMBER:
         return isinstance(value, (int, float)) and not isinstance(value, bool)
-    if declared == ValueKind.DATE:
-        if not isinstance(value, str):
-            return False
-        try:
-            _date.fromisoformat(value)
-            return True
-        except ValueError:
-            return False
-    if declared == ValueKind.DATETIME:
-        if not isinstance(value, str):
-            return False
-        # a bare date is not a datetime — require an explicit time component
-        if "T" not in value and " " not in value:
-            return False
-        try:
-            _datetime.fromisoformat(value)
-            return True
-        except ValueError:
-            return False
+    if declared in _TEMPORAL_PARSERS:
+        return isinstance(value, str) and _temporal_error(declared, value) is None
     if declared == ValueKind.OBJECT:
         return isinstance(value, dict)
     if declared == ValueKind.FILE:
@@ -1349,8 +1352,8 @@ def _build_scalar_or_list(
         return _LIST_VALUE_CLASS[declared](value=items)
 
     if not _scalar_matches(declared, value):
-        raise TypeCheckError(
-            f"{value!r} does not match declared type {declared.value}",
-            path=path,
-        )
+        message = f"{value!r} does not match declared type {declared.value}"
+        if declared in _TEMPORAL_PARSERS and isinstance(value, str):
+            message += f": {_temporal_error(declared, value)}"
+        raise TypeCheckError(message, path=path)
     return _SCALAR_VALUE_CLASS[declared](value=_coerce_scalar(declared, value))

@@ -628,8 +628,8 @@ _JSON_TYPE_NAMES: Dict[type, str] = {
 
 
 # Example value for the scalars whose accepted string form isn't self-evident from the
-# type name — the ISO-8601 date/datetime, which the engine parses with
-# `date.fromisoformat` / `datetime.fromisoformat` (a bare date is not a valid datetime).
+# type name — date/datetime, whose accepted grammar is in `yian.typesys.temporal` (a
+# bare date is not a valid datetime).
 _FORMAT_EXAMPLE: Dict[Any, str] = {
     ValueKind.DATE: "2026-05-21",
     ValueKind.DATETIME: "2026-05-21T14:30",
@@ -648,8 +648,8 @@ def _input_label(decl: Any) -> str:
     """The questionary prompt label for one declared input.
 
     Carries the input's name, declared `type`, a required (`*`) / `optional` mark,
-    any default, and — for an ISO-8601 scalar with no default — an example value (a
-    default already shows the format, so the example is dropped there). So an author at
+    any default, and — for a `date`/`datetime` scalar with no default — an example value
+    (a default already shows the format, so the example is dropped there). So an author at
     the prompt sees what is expected without reading the `.yaml`. Examples:
         `topic (str) *`                                      (required)
         `as_of (Optional[date]) [optional] e.g. 2026-05-21`  (date: example shown)

@@ -250,8 +250,9 @@ Any explicit typed answer follows ordinary run-boundary coercion and validation.
 Each prompt's label carries the input's canonical resolved **type**, a required
 (`*`) / `optional` mark, and any **default** — e.g. `topic (str) *`,
 `as_of (Optional[date]) [optional]`, `window (int) [default: 30]`. For the
-ISO-8601 `date` / `datetime` scalars — whose accepted string form isn't obvious —
-a label with no default also shows an **example** value (`e.g. 2026-05-21`,
+`date` / `datetime` scalars — whose accepted string form isn't obvious
+([accepted forms](typing.md#valuekind-the-closed-vocabulary)) — a label with no
+default also shows an **example** value (`e.g. 2026-05-21`,
 `e.g. 2026-05-21T14:30`); when a default is present it already shows the format,
 so the example is dropped. An explicit null default is shown as `[default: None]`.
 

@@ -37,8 +37,24 @@ scalars   None  str  int  float  bool  date  datetime  object  file
 lists     list[Any]  list[str]  list[int]  list[float]  list[bool]  list[object]
 ```
 
-`date`/`datetime` are ISO-8601 strings, never auto-inferred. `file` is a reserved
-placeholder (not yet authorable).
+`date`/`datetime` are strings in one fixed form, never auto-inferred:
+
+| Kind | Form | Example |
+|---|---|---|
+| `date` | `YYYY-MM-DD` | `2026-05-21` |
+| `datetime` | `YYYY-MM-DDTHH:MM[:SS[.fff]][±HH:MM]` | `2026-05-21T14:30:00+07:00` |
+
+A space may replace `T`, `.fff` is 1–6 fraction digits, and the offset may be `Z`,
+which means `+00:00`. The same strings are accepted on every supported Python version.
+Other ISO 8601 forms, such as `20260521` or `2026-W21-4`, are rejected with an error
+that shows the format. The value keeps the text as written.
+
+In a flow file, YAML 1.1 reads an unquoted timestamp first. A WAIT `until:` or a `case`
+value gets its ISO text, so YAML forms such as `2026-05-21 14:30:00 -5` work there; a
+typed default must be quoted (see [syntax](syntax.md#types)), and so must a timestamp
+anywhere else.
+
+`file` is a reserved placeholder (not yet authorable).
 
 ## `TypedValue` — self-describing, losslessly serializable
 

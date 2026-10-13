@@ -99,7 +99,8 @@ def _rens_internal(binding: Binding, callsite: str) -> Binding:
     - `${input.<k>...}`   -> `${<callsite>/<start>.output.<k>...}` (namespaced child
       START_ID's output object read via the node-first head)
     - `${<X>.output...}`  -> `${<callsite>/<X>.output...}` (node-first re-namespaced in place)
-    - `${system.X}` (run-global) and other heads untouched.
+    - `${system.X}` (run-global), `${item...}` (MAP-body-local, even `${item.output}`),
+      and other heads untouched.
 
     Legacy plural heads (`outputs.X` / `inputs.X`) are rejected at parse time.
 
@@ -122,8 +123,9 @@ def _rens_internal(binding: Binding, callsite: str) -> Binding:
             rest = ".".join(parts[2:])
             new = f"{ns(callsite, START_ID)}.output.{key}"
             return new + (f".{rest}" if rest else "")
-        # Node-first: <X>.output[.rest] -> <callsite>/<X>.output[.rest]
-        if len(parts) >= 2 and parts[1] == "output":
+        # Node-first: <X>.output[.rest] -> <callsite>/<X>.output[.rest]. `system` and `item`
+        # are reserved node ids, so `${item.output}` is the item's `output` field.
+        if len(parts) >= 2 and parts[1] == "output" and parts[0] not in ("system", "item"):
             new = f"{ns(callsite, parts[0])}.output"
             return new + ("." + ".".join(parts[2:]) if len(parts) > 2 else "")
         return None  # system.X / any other head untouched
@@ -388,7 +390,7 @@ def _producer_of(src: str) -> Optional[str]:
     if whole is None:
         return None
     parts = whole.split(".")
-    if len(parts) >= 2 and parts[1] == "output":
+    if len(parts) >= 2 and parts[1] == "output" and parts[0] not in ("system", "item"):
         return parts[0]
     return None
 

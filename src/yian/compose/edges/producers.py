@@ -22,11 +22,12 @@ def _ref_producer(path: str) -> Optional[str]:
     - `input.<key>`: produce from the synthesized START_ID, so an `${input.X}`
       reader gets a `START_ID->reader` data edge.
     - `system.<key>` is run-global and produces NO edge; `item` is MAP-body-local.
+      Both are reserved node ids, so `${item.output}` reads the item's `output` field.
     Legacy plural heads (`outputs`/`inputs`) are rejected at parse time."""
     parts = path.split(".")
     if len(parts) >= 2 and parts[0] == "input":
         return START_ID
-    if len(parts) >= 2 and parts[1] == "output":
+    if len(parts) >= 2 and parts[1] == "output" and parts[0] not in ("system", "item"):
         return parts[0]
     return None
 

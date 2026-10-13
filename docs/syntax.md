@@ -36,6 +36,14 @@ The shape of `output:` sets what the flow returns:
   returns `{}`. A caller reads a field by name, as in `${child.output.order}`.
 - No `output:`, or `output: null`, returns `None`.
 
+A record field name must be a string. YAML reads an unquoted `true`, `yes`, `null`,
+or `1` key as a bool, null, or number, so loading fails at that key; quote it
+(`'true': ${x}`). A scalar YAML literal in place of a binding (`output: 5`, or a
+field `x: 5`) is returned as written.
+
+Changed: a non-string field name used to name its output by its Python text (`True`,
+`None`, `1`), and `1:` beside `'1':` dropped one output silently.
+
 Either form may declare its type with a [typed binding](#typed-bindings-name-type-value):
 `output: Size = ${x}`, or a field such as `size: Size = ${x}` under `output:`.
 

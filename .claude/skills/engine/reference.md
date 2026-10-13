@@ -1179,7 +1179,9 @@ never runtime ids, graph topology, or a text heuristic.
   its `failure_trace()` on the causal `NodeRoutedRecord`; recovery structurally
   revalidates the route and restores the recorded value and trace even if the
   current graph's origins were rebased, and an explicit node failure supersedes
-  it. Authored nodes and assertions carry opaque origins, and every
+  it. A flow from `load_flow` never reaches this latch through its outputs, since
+  the loader null-defaults an output whose producers a CASE may skip; the latch
+  remains for hand-built graphs. Authored nodes and assertions carry opaque origins, and every
   flow returned by `load_flow` carries one complete source-neutral resolver (or `None` when
   source-free).
 - **Compose-owned ranges:** `diagnostics.SourceRange` remains the front end's

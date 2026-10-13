@@ -246,6 +246,11 @@ descriptors and edges and hands each node a view of the producer and flow-input 
 the reference, call-type, and exhaustiveness validators read that view, while the
 field-read rule itself stays in `nodes/contracts.py`. Narrowing is load-time only and adds
 nothing to runtime.
+`compose/validate/skips.py` models which nodes of one flow level CASE routing may skip,
+mirroring the runtime join rule over compiled edges (`case_exhaustive.exhaustive_cases`
+says which CASEs always take a branch). `compose/build` uses it to give a flow output
+whose producers may all be skipped the explicit null default and to reject arithmetic
+over a maybe-skipped value; runtime is unchanged.
 For authored node outputs, `compose/build` injects a Compose-owned optional reader through
 `BuildContext`; the base descriptor invokes it only when an output-authoring leaf reaches
 its established contract step. This preserves earlier kind-owned validation order while

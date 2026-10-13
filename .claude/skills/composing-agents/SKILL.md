@@ -158,7 +158,8 @@ name of a reference. A dotted field may use those names (`${record.output.in}`).
 Nesting a ref is allowed: `${a:-${b:-"lit"}}`. The `:-`/`:?` RHS is an
 expression, so a string default must be **quoted** (`${x:-"today"}`; bare `today`
 reads a variable). A child-flow call is the whole-value `call(...)` directive
-(see below), never a `${flow(args)}` span.
+(see below), never a `${flow(args)}` span. Arithmetic on a value that is null when a
+`case` skips its node is a load error; give it a default: `${(o.output.qty :- 0) + 1}`.
 
 For child-flow output contracts, a direct ref preserves its exact or partial contract;
 selecting a known partial-record field yields an exact type. A comparison/membership or
@@ -276,7 +277,8 @@ one plain scalar, so it can't contain `: ` or ` #`, even in quotes after ` = `
   body omits keeps the seed's declared type, and a typed seed checks the starting
   value.
 - **Optional:** an untyped nullable source into a strict child parameter is still a
-  load error; `x: int = ${maybe.output}` accepts it with a runtime check.
+  load error (also a child output that is `Optional` because a `case` may skip its
+  node); `x: int = ${maybe.output}` accepts it with a runtime check.
 - **Replay:** declared types are in the flow fingerprint, so a run can't resume
   after a type changes; recorded flow outputs are re-validated on resume.
 
@@ -489,8 +491,9 @@ Note `tool` uses `tool_id:` + `input:` (a tool declares no `output:`). ML infere
 goes through a host tool (`kind: tool`); `kind: model` was removed.
 
 ### `case` — branching (routes only; no `input:`)
-Exactly one branch runs; the others skip (their refs resolve to null). **Join the
-branches back with a `|` coalesce.**
+It takes one branch, or none when no `when:` matches and there is no `else:`; the
+other targets skip, and so does every node that plainly reads (or `depends_on`) a
+skipped one. **Join the branches back with a `|` coalesce.**
 ```yaml
 route:
   kind: case
@@ -505,6 +508,15 @@ route:
 Searched form (first true `when:` wins, no `on:`): `when: "score.output >= 0.5"`.
 Routing on a `Literal` is **exhaustiveness-checked** — omitting a tag with no
 `else:` is a compile error.
+
+**Skipped branches in a flow output.** An output field that reads only nodes a `case`
+may skip (`${order.output}`, `${a.output | b.output}`, `${a.output :- ${b.output}}`)
+returns `null` when they were skipped, typed `Optional[T]`; the loader reads it as if
+`:- null` were written. This holds in `defs:` children and inline CALL/LOOP/MAP bodies.
+A join over an exhaustive `case` (`else:`, or every tag of a non-nullable `Literal`)
+is never null. A typed `x: str = ${order.output}` loads and fails with `binding.type`
+when skipped. Templates and comparisons are unchanged (embedded null renders as
+empty text). Arithmetic on such a value is a load error asking for `:-`.
 
 **Narrowing a union.** `on: ${d.output.action}` over a union's tag field narrows
 `d.output` in each branch: a `when: buy` target (and nodes chained to it by plain refs or
@@ -655,15 +667,18 @@ keeps its declared type.
 generated parameters are the carried `input:` fields, so the same `'a -> 'a`
 contract still applies. Those parameters are typed from the seeds, and each returned
 field must fit its seed's type, so type a `${null}` seed the body fills:
-`seen: Optional[list[str]] = ${null}`.
+`seen: Optional[list[str]] = ${null}`. A typed `note: str = "start"` seed accepts an
+`Optional[str]` field and rejects a null at the next iteration (`contract.input`); an
+untyped `"start"` seed asks for `note: Optional[str] = "start"`.
 The body's `output:` returns a **subset** of the carried record (at least one field);
 each omitted field keeps its previous value, with nothing to declare. A body field
 that is not carried is a load error. The body reads only a **subset** of the carried
 names. Names are checked at build; each returned field must keep its carried type,
 compared at load for proven body/seed pairs and always enforced at runtime and replay.
-Returning null sets a nullable field to null. A literal `${null}` is typed `None`, so
-it does not fit an `Optional[str]` seed; return a nullable-typed producer instead. A
-body may return one field: `output: {done: ...}`. An empty `output: {}` returns no
+Returning null sets a nullable field to null, and so does a field that reads a node a
+`case` skipped (it does not keep the previous value). A literal `${null}` is typed
+`None`, so it does not fit an `Optional[str]` seed; return a nullable-typed producer
+instead. A body may return one field: `output: {done: ...}`. An empty `output: {}` returns no
 field and is rejected. A `while:`/`until:` that reads only fields the body never
 returns cannot change. Without `max:` it is a load error; with `max:` it fails if it
 reaches the cap. The node's value and the LOOP node's own `asserts:` see the merged

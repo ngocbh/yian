@@ -132,7 +132,9 @@ this model whenever you design anything:
   escape. The first route that skip-floods END latches a causal
   `graph.terminal_unreachable` failure on its `NodeRoutedRecord`; replay
   structurally revalidates the route and restores that recorded value, while an
-  explicit node failure wins immediately.
+  explicit node failure wins immediately. A loaded flow's outputs never trigger it:
+  Compose (`compose/validate/skips.py`) null-defaults an output whose producers a CASE
+  may skip; the runtime path stays for hand-built graphs.
 - `diagnostics.Diagnostic(code, message, frames, notes, node_id, cause_type,
   traceback)` is frozen, resolved presentation-only data. For Compose-authored
   flows, `ComposedFlow.diagnose(failure)` is the sole authoring-front-end failure

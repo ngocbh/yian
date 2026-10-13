@@ -11,11 +11,10 @@ Never imports: nodes, compile, compose, runtime, the run boundary, or CLI.
 
 from __future__ import annotations
 
-import typing
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from math import ceil, floor, isfinite
-from typing import Annotated, Any
+from typing import Annotated, Any, get_type_hints
 
 from langchain_core.tools import BaseTool
 from pydantic import SkipValidation, TypeAdapter
@@ -338,11 +337,12 @@ def tool_types(tool: BaseTool) -> ToolTypes:
             the tool accepts or returns.
     """
     try:
-        inputs, required = _input_types(tool.tool_call_schema)
+        schema = tool.tool_call_schema
     except Exception:
         # Building the schema can fail, for example on an unresolved forward
         # reference; the tool's inputs are then unchecked.
-        inputs, required = None, frozenset()
+        return ToolTypes(inputs=None, required=frozenset(), output=_output_type(tool))
+    inputs, required = _input_types(schema)
     return ToolTypes(inputs=inputs, required=required, output=_output_type(tool))
 
 
@@ -379,40 +379,47 @@ def _input_types(schema: Any) -> tuple[dict[str, Type | None] | None, frozenset[
 
 def _field_type(field: Any) -> Type | None:
     """Return the input type of one pydantic v2 field, or `None` to leave it unchecked."""
+    metadata = list(field.metadata)
+    if any(item is SkipValidation or isinstance(item, SkipValidation) for item in metadata):
+        return None
     try:
-        metadata = list(field.metadata)
-        if any(item is SkipValidation or isinstance(item, SkipValidation) for item in metadata):
-            return None
         # The metadata keeps constraints such as `ge`/`le` that the bare
         # annotation loses.
         hint = Annotated[(field.annotation, *metadata)] if metadata else field.annotation
         adapter = TypeAdapter(hint)
-        if _core_types(adapter.core_schema) & _RAW_INPUT_VALIDATORS:
-            return None
-        return type_from_json_schema(adapter.json_schema(), closed=False)
+        core_schema = adapter.core_schema
+        json_schema = adapter.json_schema()
     except Exception:
         return None
+    if _core_types(core_schema) & _RAW_INPUT_VALIDATORS:
+        return None
+    return type_from_json_schema(json_schema, closed=False)
 
 
 def _output_type(tool: BaseTool) -> Type | None:
     """Return the JSON-like return type of the function `tool` wraps, else `None`."""
     # Any other format splits the function's return value, and invoking the tool
     # gives only part of it.
-    if getattr(tool, "response_format", "content") != "content":
+    if tool.response_format != "content":
         return None
     fn = getattr(tool, "func", None) or getattr(tool, "coroutine", None)
     if not callable(fn):
         return None
     try:
-        hints = typing.get_type_hints(fn)
-        if "return" not in hints or hints["return"] is Any:
-            return None
-        adapter = TypeAdapter(hints["return"])
-        if not _core_types(adapter.core_schema) <= _JSON_LIKE_CORE_TYPES:
-            return None
-        return type_from_json_schema(adapter.json_schema(), closed=True)
+        hints = get_type_hints(fn)
     except Exception:
         return None
+    if "return" not in hints:
+        return None
+    try:
+        adapter = TypeAdapter(hints["return"])
+        core_schema = adapter.core_schema
+        json_schema = adapter.json_schema()
+    except Exception:
+        return None
+    if not _core_types(core_schema) <= _JSON_LIKE_CORE_TYPES:
+        return None
+    return type_from_json_schema(json_schema, closed=True)
 
 
 def _core_types(schema: Any) -> set[str]:

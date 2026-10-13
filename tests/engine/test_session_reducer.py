@@ -97,6 +97,7 @@ def _snapshot(state):
         state.learning_state,
         state.backward_state,
         dict(state.depth),
+        dict(state.growth_owner),
         deepcopy(state.wiring_overrides),
         deepcopy(state.input),
         deepcopy(state.effective_llm_by_static_path),

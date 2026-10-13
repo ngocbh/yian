@@ -212,6 +212,7 @@ def _snapshot(state: RunState) -> dict[str, Any]:
         "accepted_starts": dict(state.accepted_starts),
         "result": state.result,
         "depth": dict(state.depth),
+        "growth_owner": dict(state.growth_owner),
         "wiring_overrides": deepcopy(state.wiring_overrides),
         "run_id": state.run_id,
         "flow_fingerprint": state.flow_fingerprint,
@@ -1867,3 +1868,172 @@ def test_growth_commit_performs_no_builder_codec_graph_or_event_work_after_appen
     assert expected_start in state.flow.nodes
     assert tuple(state.ready)[-1] == expected_start
     assert observers[0].grow.seed == {"nested": {"items": ["stable"]}}
+
+
+def test_growth_records_the_spawner_as_owner_of_its_fragment():
+    state, log = _initialized_spawner()
+    static_ids = set(state.flow.nodes)
+
+    commit_prepared(
+        log,
+        state,
+        prepare_expanded(
+            state, "spawn", Grow(seed={}), lambda node, seed: _fragment(node.id)
+        ),
+    )
+
+    new_ids = set(state.flow.nodes) - static_ids
+    assert new_ids
+    assert state.growth_owner == {node_id: "spawn" for node_id in new_ids}
+
+
+def test_pruning_a_grown_node_retires_its_settled_grown_nodes():
+    state, log = _initialized_spawner()
+    ids = _install_settled_overlay(state, prefix="x")
+    grown = _install_settled_overlay(state, prefix="x/child/start")
+    state.growth_owner = {i: "spawn" for i in ids} | {g: "x/child/start" for g in grown}
+    grown_edge_ids = {
+        edge.id for edge in state.flow.edges if edge.from_ in grown or edge.to in grown
+    }
+
+    prepared = prepare_expanded(
+        state,
+        "spawn",
+        Grow(seed={}, prune=frozenset(ids)),
+        lambda node, seed: _fragment(node.id),
+    )
+    commit_prepared(log, state, prepared)
+
+    assert prepared.record.prune_ids == tuple(sorted(ids))
+    for node_id in grown:
+        assert node_id not in state.flow.nodes
+        assert node_id not in state.flow.wiring
+        assert node_id not in state.node_state
+        assert node_id not in state.pool.store
+        assert node_id not in state.depth
+        assert node_id not in state.wiring_overrides
+        assert node_id not in state.growth_owner
+        assert node_id not in state.flow._incoming
+        assert node_id not in state.flow._outgoing
+    assert not (grown_edge_ids & set(state.edge_state))
+    assert not any(
+        edge.from_ in grown or edge.to in grown for edge in state.flow.edges
+    )
+    assert set(state.growth_owner.values()) == {"spawn"}
+
+
+_NESTED_CALL = """
+id: nested_call
+name: nested_call
+defs:
+  one:
+    input:
+      n: int
+    nodes:
+      step:
+        kind: code
+        input:
+          n: ${input.n}
+        output: int
+        code: |
+          return inputs["n"] + 1
+    output: ${step.output}
+  body:
+    input:
+      n: int
+    nodes:
+      c:
+        kind: call
+        call: one
+        input:
+          n: ${input.n}
+    output:
+      n: ${c.output}
+nodes:
+  loop:
+    kind: loop
+    call: body
+    input:
+      n: 0
+    times: 3
+output: ${loop.output}
+"""
+
+
+def test_self_pruning_spawner_hands_its_fragment_to_its_owner():
+    from tests.engine._graph_builder import _engine
+    from yian.compose.loader import load_flow
+
+    engine = _engine(load_flow(_NESTED_CALL).compiled, run_inputs={})
+    list(engine.run())
+
+    assert set(engine.state.growth_owner.values()) == {"loop", "loop#2/c"}
+    assert engine.state.growth_owner["loop~3"] == "loop"
+
+
+def _grown_under_requested(
+    side_state: NodeState,
+) -> tuple[RunState, MemoryRunLog, tuple[str, ...], str]:
+    """Return a state whose prunable ``x/child/start`` owns settled nodes and ``side``."""
+    state, log = _initialized_spawner()
+    ids = _install_settled_overlay(state, prefix="x")
+    grown = _install_settled_overlay(state, prefix="x/child/start")
+    side = "x/child/start/side"
+    state.flow.add_subgraph({side: _OverlayNode(side)}, [], {side: {}})
+    state.node_state[side] = side_state
+    state.growth_owner = (
+        {i: "spawn" for i in ids} | {g: "x/child/start" for g in (*grown, side)}
+    )
+    return state, log, grown, side
+
+
+def _prune_requested(state: RunState):
+    """Prepare the growth of ``spawn`` that requests pruning ``x/child/start``."""
+    return prepare_expanded(
+        state,
+        "spawn",
+        Grow(seed={}, prune=frozenset({"x/child/start"})),
+        lambda node, seed: _fragment(node.id),
+    )
+
+
+def test_pruning_keeps_a_grown_subtree_with_unsettled_work():
+    state, log, grown, side = _grown_under_requested(NodeState.UNKNOWN)
+
+    prepared = _prune_requested(state)
+    commit_prepared(log, state, prepared)
+
+    assert "x/child/start" not in state.flow.nodes
+    for node_id in (*grown, side):
+        assert node_id in state.flow.nodes
+        assert state.growth_owner[node_id] == "spawn"
+    replay, replay_log, _, _ = _grown_under_requested(NodeState.UNKNOWN)
+    commit_prepared(
+        replay_log,
+        replay,
+        prepare_record(
+            replay,
+            prepared.record,
+            grow_builder=lambda node, seed: _fragment(node.id),
+        ),
+    )
+    assert _snapshot(replay) == _snapshot(state)
+
+
+def test_pruning_retires_a_grown_subtree_once_settled():
+    state, log, grown, side = _grown_under_requested(NodeState.TAKEN)
+
+    prepared = _prune_requested(state)
+    commit_prepared(log, state, prepared)
+
+    assert prepared.record.prune_ids == ("x/child/start",)
+    for node_id in ("x/child/start", *grown, side):
+        assert node_id not in state.flow.nodes
+        assert node_id not in state.flow.wiring
+        assert node_id not in state.node_state
+        assert node_id not in state.pool.store
+        assert node_id not in state.depth
+        assert node_id not in state.wiring_overrides
+        assert node_id not in state.growth_owner
+        assert node_id not in state.flow._incoming
+        assert node_id not in state.flow._outgoing

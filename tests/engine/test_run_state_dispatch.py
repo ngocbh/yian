@@ -127,6 +127,7 @@ def _state_snapshot(state: RunState) -> dict[str, Any]:
         "result": state.result,
         "terminal_unreachable_failure": state.terminal_unreachable_failure,
         "depth": dict(state.depth),
+        "growth_owner": dict(state.growth_owner),
         "depth_identity": id(state.depth),
         "wiring_overrides": deepcopy(state.wiring_overrides),
         "wiring_identity": id(state.wiring_overrides),

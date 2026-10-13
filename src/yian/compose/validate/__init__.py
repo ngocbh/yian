@@ -33,7 +33,8 @@ reject an ill-formed flow before it is compiled:
   unless its inferred type is disjoint, leaving a narrower one to the runtime check).
 - `skips.py` — `SkipModel`: which nodes of a flow level the CASE routing may skip, and
   whether a set of them may skip together; `null_skipped_outputs` gives a flow output whose
-  producers may all be skipped the explicit null default.
+  producers may all be skipped the explicit null default; `check_skipped_arithmetic` rejects
+  arithmetic over a value that may be null from a skip while its reader runs.
 
 Post-build passes may consult `BuildResult.node_range` / `field_ranges`, and assertion
 validation may receive a temporary descriptor/callback range. Those coordinates stay in

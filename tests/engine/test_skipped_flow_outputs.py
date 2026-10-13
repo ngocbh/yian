@@ -535,3 +535,146 @@ def test_replay_returns_the_same_null(tmp_path: Path, monkeypatch: pytest.Monkey
     assert resumed.status == first.status
     assert resumed.output == first.output
     assert seen == []
+
+
+# then: order / else: rejected, where `order` returns a record with an `int` field
+_QTY = (
+    _gate("order", "rejected")
+    + _code("order", '{"qty": 2}', output="\n      qty: int")
+    + _code("rejected", '"no"')
+)
+
+
+def _load_error(text: str) -> LoadError:
+    """Load `text`, which must fail, and return the load error."""
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    return caught.value
+
+
+def _error_lines(error: LoadError, text: str) -> list[int]:
+    """Return the lines of `text` the error's innermost frame covers."""
+    return error.diagnostic.frames[-1].range.covered_lines(text)
+
+
+def test_arithmetic_on_a_skipped_output_is_a_load_error():
+    """`${order.output.qty + 1}` in an output asks for a `:-` default, at the output line."""
+    text = _flow(_QTY, "\n  q: ${order.output.qty + 1}")
+    error = _load_error(text)
+    message = str(error)
+    assert "output 'q'" in message
+    assert "order.output.qty" in message
+    assert ":-" in message
+    line = text.splitlines().index("  q: ${order.output.qty + 1}") + 1
+    assert _error_lines(error, text) == [line]
+
+
+def test_arithmetic_in_a_node_input_that_still_runs_is_a_load_error():
+    """A node that still runs when `order` is skipped can't do arithmetic on its output."""
+    extra = "    input:\n      q: ${order.output.qty * 2}\n"
+    use = _code("use", 'inputs["q"]', output="int", extra=extra)
+    text = _flow(_QTY + use, "\n  u: ${use.output}")
+    error = _load_error(text)
+    assert "node 'use' input 'q'" in str(error)
+    assert "order.output.qty" in str(error)
+    line = text.splitlines().index("      q: ${order.output.qty * 2}") + 1
+    assert _error_lines(error, text) == [line]
+
+
+def test_arithmetic_in_an_embedded_template_is_a_load_error():
+    """Arithmetic inside surrounding text is checked too."""
+    error = _load_error(_flow(_QTY, "\n  t: 'total ${order.output.qty + 1}'"))
+    assert "output 't'" in str(error)
+
+
+def test_arithmetic_in_a_case_on_is_a_load_error():
+    """A CASE `on:` that does arithmetic on a skipped value is rejected, naming `on:`."""
+    nodes = (
+        _QTY
+        + "  route:\n    kind: case\n    on: ${order.output.qty + 1}\n    cases:\n"
+        "      - when: 3\n        then: three\n    else: other\n"
+        + _code("three", '"3"')
+        + _code("other", '"?"')
+    )
+    error = _load_error(_flow(nodes, "\n  v: ${three.output | other.output}"))
+    assert "node 'route' on: ${order.output.qty + 1}" in str(error)
+    assert "order.output.qty" in str(error)
+
+
+@pytest.mark.parametrize("expr", ["-order.output.qty", "order.output.qty ** 2"])
+def test_unary_minus_and_power_on_a_skipped_output_are_load_errors(expr):
+    """Unary minus and `**` are arithmetic too."""
+    error = _load_error(_flow(_QTY, f"\n  q: ${{{expr}}}"))
+    assert "order.output.qty" in str(error)
+
+
+def test_arithmetic_on_a_coalesce_of_routing_only_targets_is_a_load_error():
+    """`${(a.output | b.output) + 1}` is null when the CASE matches nothing."""
+    nodes = (
+        "  gate:\n    kind: case\n    cases:\n"
+        "      - when: ${input.approve}\n        then: a\n"
+        "      - when: ${input.other}\n        then: b\n"
+        + _code("a", "1", output="int")
+        + _code("b", "2", output="int")
+    )
+    text = _flow(nodes, "\n  v: ${(a.output | b.output) + 1}", inputs=_R2_INPUTS)
+    error = _load_error(text)
+    assert "nodes 'a' and 'b'" in str(error)
+
+
+def test_arithmetic_in_a_node_that_co_skips_loads():
+    """A node that also reads `${order.output}` plainly is skipped with it."""
+    extra = "    input:\n      q: ${order.output.qty * 2}\n      o: ${order.output}\n"
+    use = _code("use", 'inputs["q"]', output="int", extra=extra)
+    text = _flow(_QTY + use, "\n  u: ${use.output}")
+    assert _run(text, {"approve": True}) == {"u": 4}
+    assert _run(text, {"approve": False}) == {"u": None}
+
+
+def test_arithmetic_in_a_node_routed_by_a_case_on_the_value_loads():
+    """A node behind a CASE whose `when:` reads `order` never runs when `order` is skipped."""
+    extra = "    input:\n      q: ${order.output.qty * 2}\n"
+    nodes = (
+        _QTY
+        + "  check:\n    kind: case\n    cases:\n"
+        "      - when: ${order.output.qty > 1}\n        then: use\n"
+        + _code("use", 'inputs["q"]', output="int", extra=extra)
+    )
+    text = _flow(nodes, "\n  u: ${use.output}")
+    assert _run(text, {"approve": True}) == {"u": 4}
+    assert _run(text, {"approve": False}) == {"u": None}
+
+
+def test_arithmetic_on_a_defaulted_value_loads():
+    """`(order.output.qty :- 0) + 1` gives an explicit default."""
+    text = _flow(_QTY, "\n  q: ${(order.output.qty :- 0) + 1}")
+    assert _run(text, {"approve": False}) == {"q": 1}
+    assert _run(text, {"approve": True}) == {"q": 3}
+
+
+def test_comparison_on_a_skipped_output_loads():
+    """A comparison is not arithmetic."""
+    load_flow(_flow(_QTY, "\n  c: ${order.output.qty > 1}"))
+
+
+def test_arithmetic_on_an_exhaustive_join_loads():
+    """`(pro.output | caut.output) + 1` over then/else is never null from a skip."""
+    nodes = (
+        _gate("pro", "caut") + _code("pro", "1", output="int") + _code("caut", "2", output="int")
+    )
+    text = _flow(nodes, "\n  v: ${(pro.output | caut.output) + 1}")
+    assert _run(text, {"approve": True}) == {"v": 2}
+    assert _run(text, {"approve": False}) == {"v": 3}
+
+
+def test_arithmetic_on_an_input_loads():
+    """A flow input is never skipped."""
+    text = _flow(_QTY, "\n  v: ${input.x + 1}", inputs="approve: bool\n  x: int")
+    assert _run(text, {"approve": False, "x": 1}) == {"v": 2}
+
+
+def test_arithmetic_on_a_node_that_cannot_be_skipped_runs():
+    """Arithmetic over a root node in a flow with a CASE loads and runs as before."""
+    nodes = _QTY + _code("root", "5", output="int")
+    text = _flow(nodes, "\n  v: ${root.output * 2 + 1}\n  w: ${-root.output}")
+    assert _run(text, {"approve": False}) == {"v": 11, "w": -5}

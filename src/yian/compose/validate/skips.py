@@ -17,25 +17,39 @@ has no skippable nodes here; the cycle check reports the cycle.
 
 `null_skipped_outputs` gives a flow output that reads only nodes that may all be skipped the
 explicit null default, so it returns null instead of leaving END unreachable.
+`check_skipped_arithmetic` rejects arithmetic over a value that may be null because its
+producers were skipped while the reading node (or END) still runs.
 
-Knows about: compiled edges, flow outputs, the CASE default handle, and binding producers.
+Knows about: compiled edges, flow outputs, node wiring, the CASE default handle, binding
+producers, and expression trees.
 Never imports: runtime.
 """
 
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Iterable, Set
+from collections.abc import Iterable, Mapping, Set
 from dataclasses import dataclass, field, replace
+from typing import Any, Optional
+
+from lark import Token, Tree
 
 from yian.compile.model import Edge, FlowOutput
-from yian.compose.edges.producers import _binding_producers
-from yian.compose.helpers.output_contracts import direct_reference_path
-from yian.expr import binding_co_skips
+from yian.compose.edges.producers import _binding_producers, _ref_producer
+from yian.compose.helpers.errors import LoadDiagnostics
+from yian.compose.helpers.output_contracts import direct_reference_parts, direct_reference_path
+from yian.compose.nodes.base import BuildResult
+from yian.compose.validate.typed_bindings import ResolveOrigin, _located_error
+from yian.diagnostics import SourceRange
+from yian.expr import ExpressionError, binding_co_skips, expr_refs, scan_template
+from yian.expr.template import Span
 from yian.nodes.case import DEFAULT_HANDLE
-from yian.nodes.contracts import binding_source
+from yian.nodes.contracts import as_binding, binding_source
 
 _WORLD_LIMIT = 10_000
+
+# The grammar's arithmetic trees: `+ - * / % **` and unary minus.
+_ARITHMETIC = frozenset({"add", "sub", "mul", "div", "mod", "power", "neg"})
 
 
 @dataclass
@@ -343,3 +357,225 @@ def null_skipped_outputs(
             output = replace(output, binding=replace(output.binding, source=new))
         rewritten.append(output)
     return rewritten
+
+
+def check_skipped_arithmetic(
+    flow_wiring: Mapping[str, Mapping[str, Any]],
+    flow_outputs: list[FlowOutput],
+    model: SkipModel,
+    build_results: Mapping[str, BuildResult],
+    *,
+    value_mode: bool = False,
+    outputs_range: Optional[SourceRange] = None,
+    resolve_origin: ResolveOrigin | None = None,
+    diagnostics: LoadDiagnostics | None = None,
+) -> None:
+    """Reject arithmetic over a value that may be null because CASE routing skipped it.
+
+    An operand of `+ - * / % **` or unary `-` is null from a skip when it is a reference to a
+    node's output, or a `|` / `:-` group of them, and every producer of one of its null
+    alternatives is skipped. That is an error when some routing skips them while the binding's
+    node still runs; a flow output's END always runs. Any other operand (a call, a nested
+    operator, a literal) is never null from a skip here.
+
+    Args:
+        flow_wiring (`Mapping[str, Mapping[str, Any]]`):
+            Each node's `param -> source` wiring, a CASE's `on:` and `when:` sources included.
+        flow_outputs (`list[FlowOutput]`):
+            The flow level's outputs, after `null_skipped_outputs`.
+        model (`SkipModel`):
+            The skip model of the same level.
+        build_results (`Mapping[str, BuildResult]`):
+            The level's built nodes keyed by id, for the binding labels and fallback ranges.
+        value_mode (`bool`, *optional*, defaults to `False`):
+            Whether the flow has a single `output:` value, named `output` in errors.
+        outputs_range (`SourceRange | None`, *optional*, defaults to `None`):
+            The authored `output:` range, the fallback location of an output error.
+        resolve_origin (`ResolveOrigin | None`, *optional*, defaults to `None`):
+            Resolves a binding's registered origin to its source frame, the preferred location.
+        diagnostics (`LoadDiagnostics | None`, *optional*, defaults to `None`):
+            Factory for located load errors.
+
+    Raises:
+        `LoadError`:
+            At the first such binding, naming it, the operand and its producers, and asking
+            for a `:-` default.
+    """
+    diagnostics = diagnostics or LoadDiagnostics()
+    known = set(build_results)
+    for node_id, wiring in flow_wiring.items():
+        result = build_results.get(node_id)
+        for param, binding in wiring.items():
+            found = _skipped_operand(binding, model, node_id, known)
+            if found is None:
+                continue
+            label, fallback = f"input {param!r}", None
+            if result is not None:
+                label = result.node.wiring_ref_label(param)
+                fallback = (
+                    result.field_ranges.get(("input", param))
+                    or result.field_ranges.get(("field", "inputs"))
+                    or result.node_range
+                )
+            # A synthetic param's label may already end in a colon (`on:`).
+            raise _located_error(
+                f"node {node_id!r} {label.rstrip(':')}: {_arithmetic_message(binding, *found)}",
+                as_binding(binding),
+                fallback,
+                resolve_origin,
+                diagnostics,
+            )
+    for output in flow_outputs:
+        found = _skipped_operand(output.binding, model, None, known)
+        if found is None:
+            continue
+        label = "output" if value_mode else f"output {output.name!r}"
+        raise _located_error(
+            f"{label}: {_arithmetic_message(output.binding, *found)}",
+            output.binding,
+            outputs_range,
+            resolve_origin,
+            diagnostics,
+        )
+
+
+def _skipped_operand(
+    binding: Any, model: SkipModel, consumer: str | None, known: Set[str]
+) -> tuple[Tree | Token, list[str]] | None:
+    """Return the first arithmetic operand of `binding` that may be null from a skip.
+
+    Args:
+        binding (`Any`):
+            A wiring or output binding; only a string source has expressions.
+        model (`SkipModel`):
+            The level's skip model.
+        consumer (`str | None`):
+            The node that evaluates the binding, or `None` for END.
+        known (`Set[str]`):
+            The level's node ids.
+
+    Returns:
+        `tuple[Tree | Token, list[str]] | None`:
+            The operand and the producers whose skip makes it null (in source order), or
+            `None` when no operand may be null while `consumer` runs.
+    """
+    source = binding_source(binding)
+    if not isinstance(source, str):
+        return None
+    try:
+        segments = scan_template(source)
+    except ExpressionError:
+        return None  # reference validation reports a malformed source
+    for segment in segments:
+        if not isinstance(segment, Span) or not isinstance(segment.tree, Tree):
+            continue  # a lone token has no operator
+        for tree in segment.tree.iter_subtrees_topdown():
+            if tree.data not in _ARITHMETIC:
+                continue
+            for operand in tree.children:
+                for group in _null_groups(operand, known):
+                    if group and model.may_skip_while_running(group, consumer):
+                        producers = (_ref_producer(ref) for ref in expr_refs(operand))
+                        return operand, [p for p in dict.fromkeys(producers) if p in group]
+    return None
+
+
+def _null_groups(operand: Tree | Token, known: Set[str]) -> list[frozenset[str]]:
+    """Return the producer sets whose joint skip makes `operand` null.
+
+    Args:
+        operand (`Tree | Token`):
+            One parsed operand of an arithmetic tree.
+        known (`Set[str]`):
+            The level's node ids; a reference to anything else (an input, `item`, `system`)
+            is never skipped.
+
+    Returns:
+        `list[frozenset[str]]`:
+            The operand is null when every producer of one set is skipped. A `null` literal
+            gives one empty set (always null); an operand that is never null from a skip
+            gives no sets.
+    """
+    if isinstance(operand, Token):
+        if operand.type == "NULL":
+            return [frozenset()]
+        if operand.type == "WRAPPED_REF":
+            return _reference_groups(str(operand)[2:-1].strip(), known)
+        return []
+    if operand.data == "refcall":
+        parts = direct_reference_parts(operand)
+        return _reference_groups(".".join(parts), known) if parts is not None else []
+    if operand.data in ("coalesce", "default_expr"):
+        # Null only when every alternative is null: one set from each, unioned.
+        combined = [frozenset()]
+        for child in operand.children:
+            groups = _null_groups(child, known)
+            combined = list(dict.fromkeys(a | b for a in combined for b in groups))
+        return combined
+    return []
+
+
+def _reference_groups(path: str, known: Set[str]) -> list[frozenset[str]]:
+    """Return `[{producer}]` for a reference to a level node's output, else `[]`.
+
+    Args:
+        path (`str`):
+            A dotted reference path.
+        known (`Set[str]`):
+            The level's node ids.
+
+    Returns:
+        `list[frozenset[str]]`:
+            The one producer set that makes the reference null when skipped, or none.
+    """
+    producer = _ref_producer(path)
+    return [frozenset({producer})] if producer in known else []
+
+
+def _arithmetic_message(
+    binding: Any, operand: Tree | Token, producers: list[str]
+) -> str:
+    """Return the error text for arithmetic on an operand that may be null from a skip.
+
+    Args:
+        binding (`Any`):
+            The binding whose source does the arithmetic.
+        operand (`Tree | Token`):
+            The operand that may be null.
+        producers (`list[str]`):
+            The nodes whose skip makes it null.
+
+    Returns:
+        `str`:
+            The message, without the binding's name.
+    """
+    text = _operand_text(operand)
+    quoted = [repr(p) for p in producers]
+    if len(quoted) == 1:
+        who = f"node {quoted[0]} is"
+    else:
+        who = f"nodes {', '.join(quoted[:-1])} and {quoted[-1]} are"
+    return (
+        f"{binding_source(binding)} does arithmetic on {text}, which is null when {who} "
+        f"skipped; give it a default with :-, e.g. ({text} :- 0)"
+    )
+
+
+def _operand_text(operand: Tree | Token) -> str:
+    """Return source text for an operand that may be null: a reference or a `|`/`:-` group.
+
+    Args:
+        operand (`Tree | Token`):
+            A reference, a wrapped reference, `null`, or a coalesce or default of them.
+
+    Returns:
+        `str`:
+            The operand's text; a group is parenthesized.
+    """
+    if isinstance(operand, Token):
+        return str(operand)
+    parts = direct_reference_parts(operand)
+    if parts is not None:
+        return ".".join(parts)
+    joiner = " | " if operand.data == "coalesce" else " :- "
+    return "(" + joiner.join(_operand_text(child) for child in operand.children) + ")"

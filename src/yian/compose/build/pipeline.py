@@ -77,6 +77,7 @@ from yian.compose.validate.case_exhaustive import check_case_exhaustive
 from yian.compose.validate.cycles import reject_cycles
 from yian.compose.validate.human_questions import validate_human_questions
 from yian.compose.validate.loop_types import check_loop_type_contract
+from yian.compose.validate.narrowing import compute_narrowing
 from yian.compose.edges.ordering import infer_ordering_edges
 from yian.compose.validate.call_types import check_call_map_types
 from yian.compose.validate.references import validate_references
@@ -1413,6 +1414,18 @@ def _assemble(
             )
         producers[nid] = contract
 
+    # Data edges — the projection of flow.wiring (leaf + WAIT + call/map); a case owns its own
+    # data+control edges (`case_edges`, from each `CaseDescriptor.build`), appended below.
+    data_edges = infer_data_edges(descriptors, flow_wiring)
+    # What each node may assume about union values from the CASE branches that route it.
+    narrowing = compute_narrowing(
+        descriptors,
+        data_edges + case_edges,
+        producers,
+        flow_input_contracts,
+        diagnostics=diagnostics,
+    )
+
     # cross-flow type check: each `call` binding's source type vs the callable
     # input type (needs producers, so it runs after all nodes are built).
     check_call_map_types(
@@ -1420,6 +1433,7 @@ def _assemble(
         producers,
         flow_input_contracts,
         flow_wiring,
+        narrowing=narrowing,
         diagnostics=diagnostics,
     )
     # loop `'a -> 'a` type contract (types): each field the body returns is compared with
@@ -1437,6 +1451,7 @@ def _assemble(
     check_case_exhaustive(
         descriptors,
         producers,
+        narrowing=narrowing,
         diagnostics=diagnostics,
     )
 
@@ -1450,9 +1465,6 @@ def _assemble(
         diagnostics=diagnostics,
     )
 
-    # Data edges — the projection of flow.wiring (leaf + WAIT + call/map); a case owns its own
-    # data+control edges (`case_edges`, from each `CaseDescriptor.build`), appended here.
-    data_edges = infer_data_edges(descriptors, flow_wiring)
     reconciled = data_edges + case_edges
 
     # Reference + assert validation over the built flow. Errors locate
@@ -1466,6 +1478,7 @@ def _assemble(
         flow_wiring,
         input_contracts=flow_input_contracts,
         outputs_range=outputs_range,
+        narrowing=narrowing,
         diagnostics=diagnostics,
     )
     # human_input gates: structurally check a literal `questions:` list at load, and

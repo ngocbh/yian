@@ -37,6 +37,7 @@ from yian.compose.helpers.output_contracts import (
     resolve_output_binding_contract,
 )
 from yian.compose.nodes.base import BuildResult
+from yian.compose.validate.narrowing import Narrowing
 from yian.diagnostics import SourceRange
 from yian.expr import (
     ExpressionError,
@@ -118,6 +119,7 @@ def validate_references(
     *,
     input_contracts: dict[str, ValueContract] | None = None,
     outputs_range: Optional[SourceRange] = None,
+    narrowing: Narrowing | None = None,
     diagnostics: LoadDiagnostics | None = None,
 ) -> None:
     """Validate every `${...}` reference site of a built flow.
@@ -140,6 +142,12 @@ def validate_references(
     / `("field", "prompt")`), else the node header. `outputs_range` is the authored output
     value/block range when the caller retains it. The aggregate carries the first retained range.
 
+    With `narrowing`, each node's references (a CASE's own sources included) are checked
+    against that node's view of the producer and flow-input contracts, so a branch can
+    read the fields of the union members that reach it. A node a topological order could
+    not reach skips the member-only field rule, so the later cycle check reports the cycle.
+    The flow outputs are always checked unnarrowed.
+
     Accumulates ALL located errors and raises a single `LoadError`; passes silently
     on a clean flow. Reuses `_classify_path` (head-resolution + dotted walk)
     verbatim — the per-node walk glue is the only loader-specific code.
@@ -156,6 +164,7 @@ def validate_references(
                 f"got {type(contract).__name__} for {node_id!r}"
             )
     errors: list[tuple[str, Optional[SourceRange]]] = []
+    unordered = narrowing.unordered if narrowing is not None else frozenset()
 
     def scan(
         from_value: Any,
@@ -163,6 +172,9 @@ def validate_references(
         rng: Optional[SourceRange],
         extra_heads: tuple = (),
         item_contract: ValueContract | None = None,
+        producers: dict[str, OutputContract] = producers,
+        input_contracts: dict[str, ValueContract] = input_contracts,
+        partial_union_fields: bool = False,
     ) -> None:
         """Name-check every reference a BINDING `from:` reads (coalesce + nested-default
         split by `expr_refs_of`); a non-string source / literal yields no refs.
@@ -190,7 +202,10 @@ def validate_references(
                 and parts[0] in producers
             ):
                 err = output_contract_path_error(
-                    producers[parts[0]], parts[2:], path
+                    producers[parts[0]],
+                    parts[2:],
+                    path,
+                    partial_union_fields=partial_union_fields,
                 )
             elif (
                 err is None
@@ -199,7 +214,10 @@ def validate_references(
                 and parts[1] in input_contracts
             ):
                 err = output_contract_path_error(
-                    input_contracts[parts[1]], parts[2:], path
+                    input_contracts[parts[1]],
+                    parts[2:],
+                    path,
+                    partial_union_fields=partial_union_fields,
                 )
             elif (
                 err is None
@@ -207,7 +225,12 @@ def validate_references(
                 and parts[0] == "item"
                 and item_contract is not None
             ):
-                err = output_contract_path_error(item_contract, parts[1:], path)
+                err = output_contract_path_error(
+                    item_contract,
+                    parts[1:],
+                    path,
+                    partial_union_fields=partial_union_fields,
+                )
             if err is not None:
                 errors.append((f"{where}: {err}", rng))
 
@@ -215,6 +238,16 @@ def validate_references(
         node = result.node
         franges = result.field_ranges
         node_range = result.node_range
+        node_producers, node_inputs = (
+            narrowing.for_node(node_id)
+            if narrowing is not None
+            else (producers, input_contracts)
+        )
+        view = {
+            "producers": node_producers,
+            "input_contracts": node_inputs,
+            "partial_union_fields": node_id in unordered,
+        }
         # Prompt scope: a strict AGENT prompt or system prompt may interpolate ONLY
         # this node's declared inputs and variables as `${name}` (or a builtin-call
         # argument); a pool ref in either is loud, and an unknown builtin / malformed
@@ -262,12 +295,13 @@ def validate_references(
                 nwiring.get(key),
                 f"node {node_id!r} {node.kind.value} {key}",
                 reserved_rng,
+                **view,
             )
 
         # A per-item binder (MAP) reads its iteration source above, then validates each
         # element input with the body-local `${item}` scope enabled.
         if node.binds_per_item:
-            item_contract = _item_contract(nwiring.get("over"), producers, input_contracts)
+            item_contract = _item_contract(nwiring.get("over"), node_producers, node_inputs)
             for param, src in nwiring.items():
                 if param in reserved:
                     continue
@@ -277,6 +311,7 @@ def validate_references(
                     franges.get(("input", param)) or input_rng,
                     extra_heads=("item",),
                     item_contract=item_contract,
+                    **view,
                 )
             continue
 
@@ -294,7 +329,7 @@ def validate_references(
             if param in reserved:
                 continue
             scan(src, f"node {node_id!r} {node.wiring_ref_label(param)} from",
-                 franges.get(("input", param)) or input_rng)
+                 franges.get(("input", param)) or input_rng, **view)
 
     # Flow outputs (the codomain): each binding `from:` is checked like a node input and
     # located at its retained value or block range. No built node owns this source site;

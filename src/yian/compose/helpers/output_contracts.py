@@ -141,15 +141,19 @@ def output_contract_path_error(
     contract: OutputContract,
     fields: list[str],
     path: str,
+    *,
+    partial_union_fields: bool = False,
 ) -> str | None:
     """Return the field-read error for an output path, else ``None``.
 
     The error is an undeclared record field, any field on a scalar or list, or a
-    field only some members of a union have.
+    field only some members of a union have (unless `partial_union_fields`).
     An opaque field inside a partial record remains lenient below that field,
     while the partial record's closed root name set is still enforced.
     """
-    return output_contract_field_error(contract, fields, path)
+    return output_contract_field_error(
+        contract, fields, path, partial_union_fields=partial_union_fields
+    )
 
 
 def resolve_output_binding_contract(

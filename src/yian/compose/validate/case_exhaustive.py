@@ -30,12 +30,14 @@ from yian.nodes.contracts import (
 from yian.typesys.values import Type
 from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.parse.file import CaseDescriptor
+from yian.compose.validate.narrowing import Narrowing
 
 
 def check_case_exhaustive(
     descriptors,
     producers: dict[str, OutputContract],
     *,
+    narrowing: Narrowing | None = None,
     diagnostics: LoadDiagnostics | None = None,
 ):
     """Enum-exhaustiveness over every `case` descriptor's on:-form. Raises LoadError
@@ -43,7 +45,9 @@ def check_case_exhaustive(
 
     `descriptors` is the flow's `{node_id -> NodeDescriptor}`; `producers` maps producer-node
     id -> its exact or partial output contract. A known field projected from either arm
-    can drive enum coverage. The descriptor's own range is authoritative.
+    can drive enum coverage. With `narrowing`, each case resolves its `on:` ref against
+    its own view of the producers, so a case inside a branch covers only the tags that
+    can reach it. The descriptor's own range is authoritative.
     """
     diagnostics = diagnostics or LoadDiagnostics()
     for producer_id, contract in producers.items():
@@ -56,7 +60,10 @@ def check_case_exhaustive(
     for desc in descriptors.values():
         if not isinstance(desc, CaseDescriptor):
             continue
-        _check_exhaustive(desc, _on_covered(desc), producers, diagnostics)
+        case_producers = (
+            narrowing.for_node(desc.id)[0] if narrowing is not None else producers
+        )
+        _check_exhaustive(desc, _on_covered(desc), case_producers, diagnostics)
 
 
 def _on_covered(desc: CaseDescriptor) -> set[str]:

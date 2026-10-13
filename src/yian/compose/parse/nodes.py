@@ -38,7 +38,7 @@ _INPUT_OUTPUT_REMAP = {"input": "inputs", "output": "outputs"}
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _NON_IDENTIFIER_CHAR = re.compile(r"[^A-Za-z0-9_]")
 
-IDENTIFIER_RULE = "letters, digits, and _, not starting with a digit"
+IDENTIFIER_RULE = "ASCII letters, digits, and _, not starting with a digit"
 
 
 def is_identifier(name: object) -> bool:

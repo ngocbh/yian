@@ -153,7 +153,7 @@ _PARSER = Lark(_GRAMMAR, parser="lalr", maybe_placeholders=False)
 _RESERVED_REFERENCE_ROOTS = frozenset({"and", "or", "not", "in"})
 
 # The keyword terminals in `_GRAMMAR` above; none of them can be a reference root.
-EXPRESSION_KEYWORDS = frozenset({"and", "or", "not", "in", "true", "false", "null", "none"})
+EXPRESSION_KEYWORDS = _RESERVED_REFERENCE_ROOTS | {"true", "false", "null", "none"}
 
 
 def _raise_if_reserved_reference_root(path: str) -> None:

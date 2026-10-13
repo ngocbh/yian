@@ -241,8 +241,8 @@ def _desugar_compact(body: dict, root: SourceCursor) -> dict:
     A compact flow carries a node `kind:` at the top level and NO `nodes:` map — the
     flow *is* the node. Mirrors `loader._load_single_node_def` (the `defs:` precedent):
 
-    - the flow `id:` names the single node (one id for both flow and node, so errors
-      reference a meaningful name), so it must be an identifier;
+    - the flow `id:` names the single node, so it must be an identifier (one id for both
+      flow and node, so errors reference a meaningful name);
     - the flow `input:` is the node's SIGNATURE (`name: TYPE`), auto-wired into the node
       by name (`p = ${input.p}`);
     - the flow `output:` is the node's output TYPE (the codomain), re-exported as the

@@ -190,7 +190,9 @@ including when `while:` stops before the first iteration or a run is replayed.
 Python typing vocabulary. Scalars: `str`, `int`, `float`, `bool`, `date`, `datetime`,
 `object`, `None`. Forms: `list[X]`, `Optional[X]`, `Literal[...]` (an enum of tags), named
 **records**, and `Union[A, B, ...]` of records. `Optional[X]` (nullable) and `= default`
-(omission-fill) are orthogonal.
+(omission-fill) are orthogonal. `date` is `YYYY-MM-DD`; `datetime` is
+`YYYY-MM-DDTHH:MM[:SS[.ffffff]][Z|±HH:MM]` (a space instead of `T` also works); other
+forms are rejected.
 
 Use `int[1, 12]` or `float[0.0, 1.0]` for inclusive numeric bounds. Supply two
 ordered literal endpoints. Integer bounds may be arbitrary precision; float
@@ -661,7 +663,8 @@ settle:
   until: ${input.as_of}
   # order a downstream node after it with depends_on: [settle]
 ```
-`until:` resolves to an ISO `date` or `datetime`. Date and naive datetime values
+`until:` resolves to a `date` (`2026-05-21`) or `datetime`
+(`2026-05-21T14:30[:00][Z|+07:00]`). Date and naive datetime values
 are UTC; aware values are normalized to UTC. A past/current deadline returns
 immediately. Otherwise WAIT holds one worker until the remaining wall-clock
 duration elapses, then returns `None` as an ordinary node output.

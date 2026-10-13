@@ -252,8 +252,7 @@ class LoopDescriptor(NodeDescriptor):
         # (record-scoped `evaluate_when_record`), where the ONLY resolvable names are the carried
         # keys — an undeclared name silently resolves falsy, and without a `max:` the loop would
         # spin forever. Reject a predicate whose ref head isn't a carried field at load, so a typo
-        # is loud not a runaway. Likewise reject, absent `max:`, a predicate that reads only
-        # fields the body never returns: it keeps its first value, so the loop never ends.
+        # is loud not a runaway.
         # `times:` has no predicate, so skip it.
         predicate_src = self.while_ or self.until_
         if predicate_src:
@@ -274,18 +273,19 @@ class LoopDescriptor(NodeDescriptor):
                     f"loop node {self.id!r}: `{pred_kw}:` references unknown name(s) {unknown} — "
                     f"the predicate reads the carried record {sorted(carried)}"
                 )
-            # A body that omits every field the predicate reads can never change it, so
-            # without `max:` the loop never ends. `returned_fields` is set only when the body
-            # returns a known strict subset of the carried record.
-            stuck = sorted(heads)
+            # A body that returns none of the fields the predicate reads can never change it,
+            # so without `max:` the loop never ends. `returned_fields` is set only when the
+            # body returns a known strict subset of the carried record. Skip when a driver,
+            # parse, or unknown-name error already explains the loop.
             if (
                 len(present) == 1
                 and self.max is None
-                and stuck
+                and heads
                 and not unknown
                 and node.returned_fields is not None
                 and heads.isdisjoint(node.returned_fields)
             ):
+                stuck = sorted(heads)
                 reads = ", ".join(f"`{n}`" for n in stuck)
                 fix = " or ".join(f"`{n}`" for n in stuck)
                 errors.append(

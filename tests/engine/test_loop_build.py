@@ -946,8 +946,8 @@ def test_non_int_max_is_rejected(bad):
     assert "integer" in str(e.value)
 
 
-# The issue's example: `until: done` reads only `done`, which the body never returns, and
-# there is no `max:`, so the loop can never end.
+# `until: done` reads only `done`, which the body never returns, and there is no `max:`,
+# so the loop can never end.
 NEVER_ENDS = """
 id: loop-never-ends
 name: loop_never_ends
@@ -1102,9 +1102,8 @@ UNTYPED_BODY = NEVER_ENDS.replace(
 
 
 def test_unknown_returned_fields_get_only_the_record_error():
-    # A value body over an untyped CODE node: its returned field set is unknown at load.
-    # A body whose returned field set is unknown is already rejected as "must return a
-    # record"; the never-ends check adds nothing on top.
+    # A value body over an untyped CODE node: its returned field set is unknown at load,
+    # so only the "must return a record" error applies.
     assert UNTYPED_BODY != NEVER_ENDS
     with pytest.raises(LoadError) as exc:
         load_flow(UNTYPED_BODY)

@@ -553,9 +553,8 @@ it does not fit an `Optional[str]` seed; return a nullable-typed producer instea
 body may return one field: `output: {done: ...}`. An empty `output: {}` returns no
 field and is rejected. A `while:`/`until:` that reads only fields the body never
 returns cannot change. Without `max:` it is a load error; with `max:` it fails at the
-cap. The node's value and the
-LOOP node's own `asserts:` see the merged carried record; a body def's own `asserts:`
-see the body's own output. A body that blocks (a `human_input` leaf) makes the loop a
+cap. The node's value and the LOOP node's own `asserts:` see the merged carried
+record; a body def's own `asserts:` see the body's own output. A body that blocks (a `human_input` leaf) makes the loop a
 live chat REPL: the same run threads each answered turn. Pick **exactly one**
 driver: `while:` (pre-check, 0+ runs), `until:` (post-check / do-while, 1+ runs,
 stop when the predicate becomes true), or `times: N` (fixed count). `max:` is

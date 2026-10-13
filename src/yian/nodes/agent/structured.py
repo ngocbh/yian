@@ -9,10 +9,12 @@ AGENT loop hands to `with_structured_output`, so the model emits a value that
 success-record preparation can canonicalize against the effective target's declared
 output type.
 
-Scalars and lists can't be a top-level pydantic model field on their own, so they are wrapped
-in a single-field model (`{"value": <scalar>}` / `{"items": [<element>]}`); `_unwrap` strips
-the wrapper back to the bare value after generation. A record maps one model field per
-declared field and passes through as the dumped dict.
+Scalars, unions and lists can't be a top-level pydantic model field on their own, so they are
+wrapped in a single-field model (`{"value": <scalar>}` / `{"items": [<element>]}`); `_unwrap`
+strips the wrapper back to the bare value after generation. A record maps one model field per
+declared field and passes through as the dumped dict. A union is a plain `Union[...]` of
+member models that reject unknown fields, so its JSON schema is an `anyOf` of `$ref`s with a
+`const` per tag value.
 
 Optional memory-owned turns retain raw API replies before parsing. Provider
 context and newly retained deltas stay separate across self-correction attempts.
@@ -25,11 +27,11 @@ from __future__ import annotations
 
 from concurrent.futures import CancelledError as FutureCancelledError
 import json
-from typing import Annotated, Any, Callable, List, Literal, Optional
+from typing import Annotated, Any, Callable, List, Literal, Optional, Union
 from uuid import uuid4
 
 from langchain_core.messages import HumanMessage
-from pydantic import BaseModel, Field, ValidationError, create_model
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model
 
 from yian.memory.contracts import (
     MemoryContext,
@@ -40,7 +42,7 @@ from yian.nodes.agent.memory import invoke_model
 from yian.nodes.agent.live import LiveSinks, invoke_chat, invoke_structured
 from yian.nodes.agent.text import record_model_text, text_of
 from yian.nodes.base import _CapabilityFault, _HostStop
-from yian.typesys.values import Type, ValueKind
+from yian.typesys.values import Type, ValueKind, union_tag_fields
 
 # ValueKind -> python type for a scalar slot. DATE/DATETIME persist as ISO strings.
 _SCALAR_PY: dict[ValueKind, type] = {
@@ -53,12 +55,28 @@ _SCALAR_PY: dict[ValueKind, type] = {
 }
 
 
-def _py_type(typ: Type) -> Any:
+def _py_type(typ: Type, *, closed: bool = False) -> Any:
     """The python annotation for a value of `typ` as a pydantic field type.
 
     A `STRING` with `tags` is a `Literal[...]` variant; a nested `OBJECT` with `fields`
-    becomes its own submodel; a `LIST_*` becomes `list[<element type>]`. Raises `ValueError`
-    for a type with no structured mapping (`NONE`, `FILE`) so a new ValueKind is loud.
+    becomes its own submodel; a union becomes a plain `Union[...]` of closed member models
+    named `Member1`, `Member2`, ... in member order; a `LIST_*` becomes
+    `list[<element type>]`.
+
+    Args:
+        typ (`Type`):
+            The declared type of the slot.
+        closed (`bool`, *optional*, defaults to `False`):
+            Whether records reject unknown fields. Union members and everything inside
+            them are always closed, so a reply can't match a member by ignoring fields.
+
+    Returns:
+        `Any`:
+            The pydantic annotation.
+
+    Raises:
+        `ValueError`:
+            `typ` has no structured mapping (`NONE`, `FILE`), so a new ValueKind is loud.
     """
     seg = typ.kind
     if seg == ValueKind.STRING and typ.tags:
@@ -69,40 +87,67 @@ def _py_type(typ: Type) -> Any:
             annotation = Annotated[_SCALAR_PY[seg], Field(ge=typ.bounds[0], le=typ.bounds[1])]
             return Optional[annotation] if typ.nullable else annotation
         return _SCALAR_PY[seg]
+    if seg == ValueKind.OBJECT and typ.variants is not None:
+        members = tuple(
+            _record_model(member, name=_member_name(index), closed=True)
+            for index, member in enumerate(typ.variants)
+        )
+        return Union[members]  # type: ignore[valid-type]
     if seg == ValueKind.OBJECT:
-        return _record_model(typ) if typ.fields else dict
+        return _record_model(typ, closed=closed) if typ.fields else dict
     if seg == ValueKind.LIST_ANY and typ.element is None:
         return list
     if seg.is_list():
         elem = typ.element
         if elem is not None:
-            return List[_py_type(elem)]  # type: ignore[misc]
+            return List[_py_type(elem, closed=closed)]  # type: ignore[misc]
         scalar = seg.element_kind
         return List[_SCALAR_PY[scalar]] if scalar in _SCALAR_PY else list  # type: ignore[misc]
     raise ValueError(f"type_to_schema: no structured mapping for segment type {seg!r}")
 
 
-def _record_model(typ: Type) -> type[BaseModel]:
-    """Build a pydantic model from an `OBJECT` Type: one field per `fields` entry, required
-    iff named in `required` (others default to `None`); `nullable` widens a field to Optional."""
+def _member_name(index: int) -> str:
+    """Name the model of the union member at `index`; error locations carry this name."""
+    return f"Member{index + 1}"
+
+
+def _record_model(typ: Type, *, name: str = "Record", closed: bool = False) -> type[BaseModel]:
+    """Build a pydantic model from an `OBJECT` Type.
+
+    Each `fields` entry is a model field, required iff named in `required` (others
+    default to `None`); `nullable` widens a field to Optional.
+
+    Args:
+        typ (`Type`):
+            A record type.
+        name (`str`, *optional*, defaults to `"Record"`):
+            The model name, which is the schema title.
+        closed (`bool`, *optional*, defaults to `False`):
+            Whether the model and the records inside it reject unknown fields.
+
+    Returns:
+        `type[BaseModel]`:
+            The generated model.
+    """
     required = typ.required or frozenset()
     spec: dict[str, Any] = {}
-    for name, sub in (typ.fields or {}).items():
-        ann = _py_type(sub)
-        if name in required and not sub.nullable:
-            spec[name] = (ann, ...)
+    for field_name, sub in (typ.fields or {}).items():
+        ann = _py_type(sub, closed=closed)
+        if field_name in required and not sub.nullable:
+            spec[field_name] = (ann, ...)
         else:
-            spec[name] = (Optional[ann], None)
-    return create_model("Record", **spec)
+            spec[field_name] = (Optional[ann], None)
+    config = ConfigDict(extra="forbid") if closed else None
+    return create_model(name, __config__=config, **spec)
 
 
 def type_to_schema(typ: Type) -> Optional[type[BaseModel]]:
     """Derive a pydantic model for `typ`, or `None` when the agent should stay a text
     producer (a bare, untagged `str`).
 
-    A record (`OBJECT` with `fields`) maps directly to a model. A scalar or a list can't be a
-    standalone model, so it is wrapped in a single-field model (`value` / `items`) that
-    `_unwrap` later strips.
+    A record (`OBJECT` with `fields`) maps directly to a model. A scalar, a union or a list
+    can't be a standalone model, so it is wrapped in a single-field model (`value` /
+    `items`) that `_unwrap` later strips.
     """
     seg = typ.kind
     if seg == ValueKind.STRING and not typ.tags:
@@ -111,13 +156,14 @@ def type_to_schema(typ: Type) -> Optional[type[BaseModel]]:
         return _record_model(typ)
     if seg.is_list() or seg == ValueKind.LIST_ANY:
         return create_model("ListWrapper", items=(_py_type(typ), ...))
-    # any other scalar (int/float/bool/date/datetime) or freeform object -> value wrapper
+    # any other scalar (int/float/bool/date/datetime), union or freeform object -> value wrapper
     return create_model("ScalarWrapper", value=(_py_type(typ), ...))
 
 
 def _unwrap(obj: BaseModel, typ: Type) -> Any:
-    """Strip the single-field wrapper `type_to_schema` adds for a scalar/list, returning the
-    bare value the write boundary expects. A record is returned as its dumped dict."""
+    """Strip the single-field wrapper `type_to_schema` adds for a scalar/union/list, returning
+    the bare value the write boundary expects. A record is returned as its dumped dict, and a
+    union as the matching member's dumped dict."""
     data = obj.model_dump()
     seg = typ.kind
     if seg == ValueKind.OBJECT and typ.fields:
@@ -417,6 +463,8 @@ def _is_contract_path(path: tuple[str | int, ...], typ: Type) -> bool:
     """Whether one normalized Pydantic location is valid for ``typ``."""
     if not path:
         return True
+    if typ.variants is not None:
+        return any(_is_contract_path(path, member) for member in typ.variants)
     head, tail = path[0], path[1:]
     if typ.kind == ValueKind.OBJECT and typ.fields:
         if type(head) is not str or head not in typ.fields:
@@ -465,8 +513,10 @@ def _structured_validation_path(
     validation error as the exhausted error's direct cause; deeper cause chains are not
     followed.
     Record locations already match contract paths; scalar/list wrapper fields
-    are removed. ``()`` identifies the output-contract root, while ``None`` means the
-    exception is not generated structured output.
+    and union member segments are removed, and at a union position the error of the
+    member the reply was meant for is chosen (`_select_member_error`). ``()``
+    identifies the output-contract root, while ``None`` means the exception is not
+    generated structured output.
     """
     validation_error = (
         exception
@@ -508,15 +558,108 @@ def _structured_validation_path(
     details = validation_error.errors()
     if not details:
         return None
-    location = details[0].get("loc")
-    if type(location) is not tuple or any(
-        type(segment) not in (str, int) for segment in location
-    ):
-        return None
-    if not location or wrapper is None:
-        normalized = location
-    elif location[0] == wrapper:
-        normalized = location[1:]
+    errors: list[tuple[tuple[str | int, ...], Any]] = []
+    for detail in details:
+        location = detail.get("loc")
+        if type(location) is not tuple or any(
+            type(segment) not in (str, int) for segment in location
+        ):
+            return None
+        if not location or wrapper is None:
+            normalized = location
+        elif location[0] == wrapper:
+            normalized = location[1:]
+        else:
+            return None
+        errors.append((normalized, detail.get("type")))
+    path, error_type = _select_error(errors, expected_type)
+    if error_type == "extra_forbidden" and path and type(path[-1]) is str:
+        # A closed union member names the unknown field, as the engine's value check does.
+        return path if _is_contract_path(path[:-1], expected_type) else None
+    return path if _is_contract_path(path, expected_type) else None
+
+
+def _select_error(
+    errors: list[tuple[tuple[str | int, ...], Any]],
+    typ: Type,
+) -> tuple[tuple[str | int, ...], Any]:
+    """Pick the error to report and drop the union member segments from its location.
+
+    Outside unions this is the first error. At a union position see `_select_member_error`.
+
+    Args:
+        errors (`list[tuple[tuple[str | int, ...], Any]]`):
+            `(location, error type)` pairs relative to `typ`, in pydantic's order. Must not
+            be empty.
+        typ (`Type`):
+            The type at the errors' common position.
+
+    Returns:
+        `tuple[tuple[str | int, ...], Any]`:
+            The contract-relative location and the error type of the chosen error.
+    """
+    if typ.variants is not None:
+        return _select_member_error(errors, typ)
+    location = errors[0][0]
+    if not location:
+        return errors[0]
+    head = location[0]
+    if typ.kind == ValueKind.OBJECT and typ.fields and type(head) is str and head in typ.fields:
+        child = typ.fields[head]
+    elif (typ.kind == ValueKind.LIST_ANY or typ.kind.is_list()) and type(head) is int:
+        child = typ.element
     else:
-        return None
-    return normalized if _is_contract_path(normalized, expected_type) else None
+        child = None
+    if child is None:
+        return errors[0]
+    inner = [(loc[1:], kind) for loc, kind in errors if loc[:1] == (head,)]
+    path, error_type = _select_error(inner, child)
+    return (head,) + path, error_type
+
+
+def _select_member_error(
+    errors: list[tuple[tuple[str | int, ...], Any]],
+    typ: Type,
+) -> tuple[tuple[str | int, ...], Any]:
+    """Pick the error at a union position, where each location starts with a member name.
+
+    When every member rejects the tag field as `missing` or `literal_error`, the error is
+    the tag field. Otherwise the members whose tag reported `literal_error` are dropped;
+    a single remaining member reports its first error, and several (an untagged union no
+    member matches) report the union's own position. This matches the engine's value check.
+
+    Args:
+        errors (`list[tuple[tuple[str | int, ...], Any]]`):
+            `(location, error type)` pairs relative to the union, in pydantic's order. Must
+            not be empty.
+        typ (`Type`):
+            The union.
+
+    Returns:
+        `tuple[tuple[str | int, ...], Any]`:
+            The contract-relative location and the error type of the chosen error.
+    """
+    members = {_member_name(index): member for index, member in enumerate(typ.variants)}
+    location, error_type = errors[0]
+    if not location or type(location[0]) is not str or location[0] not in members:
+        return errors[0]
+    grouped: dict[str, list[tuple[tuple[str | int, ...], Any]]] = {}
+    for loc, kind in errors:
+        if loc and type(loc[0]) is str and loc[0] in members:
+            grouped.setdefault(loc[0], []).append((loc[1:], kind))
+    remaining = list(grouped)
+    tag_fields = union_tag_fields(typ)
+    if tag_fields:
+        tag = tag_fields[0]
+        tag_errors = {
+            name: next((kind for loc, kind in member_errors if loc == (tag,)), None)
+            for name, member_errors in grouped.items()
+        }
+        if len(grouped) == len(members) and all(
+            kind in ("missing", "literal_error") for kind in tag_errors.values()
+        ):
+            return (tag,), tag_errors[location[0]]
+        remaining = [name for name in grouped if tag_errors[name] != "literal_error"]
+    if len(remaining) != 1:
+        return (), error_type
+    return _select_error(grouped[remaining[0]], members[remaining[0]])

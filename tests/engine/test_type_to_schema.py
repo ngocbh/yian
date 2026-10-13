@@ -143,3 +143,100 @@ def test_list_of_records():
     model = type_to_schema(typ)
     inst = model.model_validate({"items": [{"x": 1}, {"x": 2}]})
     assert [i.x for i in inst.items] == [1, 2]
+
+
+# --------------------------------------------------------------------------- #
+# Unions of records
+# --------------------------------------------------------------------------- #
+
+
+_TRADES = {
+    "Buy": {"action": "Literal[buy]", "qty": "int"},
+    "Sell": {"action": "Literal[sell]", "price": "float"},
+    "Text": {"text": "str"},
+    "Call": {"name": "str", "input": "object"},
+}
+
+
+def _union_arms(schema, arm_schema):
+    """Return the member `$defs` an `anyOf` arm list refers to, in order."""
+    assert "oneOf" not in arm_schema and "discriminator" not in arm_schema
+    refs = [arm["$ref"] for arm in arm_schema["anyOf"] if "$ref" in arm]
+    return [schema["$defs"][ref.rsplit("/", 1)[-1]] for ref in refs]
+
+
+def _assert_member_defs(schema, members, size):
+    assert len(members) == size
+    assert all(member["additionalProperties"] is False for member in members)
+    assert len({member["title"] for member in members}) == size
+    assert "discriminator" not in str(schema) and "oneOf" not in str(schema)
+
+
+def test_tagged_union_schema_is_any_of_closed_members_with_const_tags():
+    from yian.typesys.types import read_typedefs, type_for
+
+    union = type_for("Union[Buy, Sell]", read_typedefs(_TRADES))
+    model = type_to_schema(union)
+    assert model.__name__ == "ScalarWrapper"
+    schema = model.model_json_schema()
+    members = _union_arms(schema, schema["properties"]["value"])
+    _assert_member_defs(schema, members, 2)
+    assert [member["properties"]["action"]["const"] for member in members] == ["buy", "sell"]
+
+
+def test_untagged_union_schema_is_any_of_closed_members():
+    from yian.typesys.types import read_typedefs, type_for
+
+    model = type_to_schema(type_for("Union[Text, Call]", read_typedefs(_TRADES)))
+    schema = model.model_json_schema()
+    members = _union_arms(schema, schema["properties"]["value"])
+    _assert_member_defs(schema, members, 2)
+    assert sorted(sorted(member["properties"]) for member in members) == [
+        ["input", "name"], ["text"],
+    ]
+
+
+def test_record_field_of_union_type_gets_member_schemas():
+    from yian.typesys.types import read_typedefs, type_for
+
+    registry = read_typedefs({**_TRADES, "Order": {"trade": "Union[Buy, Sell]", "note": "str"}})
+    model = type_to_schema(type_for("Order", registry))
+    schema = model.model_json_schema()
+    members = _union_arms(schema, schema["properties"]["trade"])
+    _assert_member_defs(schema, members, 2)
+    assert [member["properties"]["action"]["const"] for member in members] == ["buy", "sell"]
+
+
+def test_list_of_union_schema_gets_member_schemas():
+    from yian.typesys.types import read_typedefs, type_for
+
+    model = type_to_schema(type_for("list[Union[Buy, Sell]]", read_typedefs(_TRADES)))
+    assert model.__name__ == "ListWrapper"
+    schema = model.model_json_schema()
+    members = _union_arms(schema, schema["properties"]["items"]["items"])
+    _assert_member_defs(schema, members, 2)
+
+
+def test_union_members_reject_unknown_fields_and_unwrap_to_the_member_dict():
+    from yian.nodes.agent.structured import _unwrap
+    from yian.typesys.types import read_typedefs, type_for
+
+    union = type_for("Union[Buy, Sell]", read_typedefs(_TRADES))
+    model = type_to_schema(union)
+    reply = model.model_validate({"value": {"action": "sell", "price": 1.5}})
+    assert _unwrap(reply, union) == {"action": "sell", "price": 1.5}
+    with pytest.raises(ValidationError):
+        model.model_validate({"value": {"action": "buy", "qty": 2, "zzz": 1}})
+
+
+def test_records_nested_in_union_members_reject_unknown_fields():
+    from yian.typesys.types import read_typedefs, type_for
+
+    registry = read_typedefs({
+        "Limit": {"px": "float"},
+        "Buy": {"action": "Literal[buy]", "limit": "Limit"},
+        "Sell": {"action": "Literal[sell]"},
+    })
+    model = type_to_schema(type_for("Union[Buy, Sell]", registry))
+    with pytest.raises(ValidationError):
+        model.model_validate({"value": {"action": "buy", "limit": {"px": 1.0, "zzz": 1}}})

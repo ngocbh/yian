@@ -82,6 +82,7 @@ from yian.compose.validate.case_exhaustive import check_case_exhaustive, exhaust
 from yian.compose.validate.cycles import reject_cycles
 from yian.compose.validate.human_questions import validate_human_questions
 from yian.compose.validate.loop_types import check_loop_type_contract
+from yian.compose.validate.case_values import check_case_values
 from yian.compose.validate.narrowing import compute_narrowing
 from yian.compose.edges.ordering import infer_ordering_edges
 from yian.compose.validate.call_types import check_call_map_types
@@ -1748,6 +1749,18 @@ def _assemble(
         producers,
         flow_input_contracts,
         registry=registry,
+        diagnostics=diagnostics,
+    )
+
+    # Branches of a typed case that can never produce its `output:` type. Runs before the
+    # typed-input check so a disjoint branch is reported at the branch, not at the case's
+    # result node.
+    check_case_values(
+        descriptors,
+        case_types,
+        producers,
+        flow_input_contracts,
+        narrowing=narrowing,
         diagnostics=diagnostics,
     )
 

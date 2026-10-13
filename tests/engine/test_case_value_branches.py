@@ -387,7 +387,8 @@ def test_bad_ref_inside_value_is_rejected_at_the_branch():
         "      - when: a\n"
         "        then:\n"
         '          a: "${nope.output}"\n'
-        "    else: reply\n"
+        "    else:\n"
+        '      a: "other"\n'
     )
     with pytest.raises(LoadError) as caught:
         load_flow(text)
@@ -447,7 +448,7 @@ def test_quoted_lone_span_keeps_its_type():
         "    cases:\n"
         "      - when: a\n"
         '        then: "${input.n}"\n'
-        "    else: reply\n",
+        "    else: 0\n",
         inputs="  cmd: str\n  n: int\n",
     )
     result = run_flow(load_flow(text), {"cmd": "a", "n": 7})
@@ -456,21 +457,21 @@ def test_quoted_lone_span_keeps_its_type():
 
 
 @pytest.mark.parametrize(
-    ("output_type", "then_text", "expected"),
+    ("output_type", "then_text", "else_text", "expected"),
     [
-        ("str", '"costs $$5"', "costs $5"),
-        ("object", '\n          a: "costs $$5"', {"a": "costs $5"}),
-        ("object", '\n          a: "costs $$5 ${input.cmd}"', {"a": "costs $5 a"}),
+        ("str", '"costs $$5"', "reply", "costs $5"),
+        ("object", '\n          a: "costs $$5"', "{}", {"a": "costs $5"}),
+        ("object", '\n          a: "costs $$5 ${input.cmd}"', "{}", {"a": "costs $5 a"}),
     ],
 )
-def test_double_dollar_renders_one_dollar(output_type, then_text, expected):
+def test_double_dollar_renders_one_dollar(output_type, then_text, else_text, expected):
     text = _flow(
         "    on: ${input.cmd}\n"
         f"    output: {output_type}\n"
         "    cases:\n"
         "      - when: a\n"
         f"        then: {then_text}\n"
-        "    else: reply\n"
+        f"    else: {else_text}\n"
     )
     result = run_flow(load_flow(text), {"cmd": "a"})
     assert result.status == "succeeded", result.failure
@@ -529,7 +530,9 @@ def test_record_value_with_span():
         "        then:\n"
         "          reply: ${input.text}\n"
         "          exited: true\n"
-        "    else: reply\n",
+        "    else:\n"
+        '      reply: "no"\n'
+        "      exited: false\n",
         inputs="  cmd: str\n  text: str\n",
     )
     result = run_flow(load_flow(text), {"cmd": "a", "text": "hi"})
@@ -548,7 +551,8 @@ def test_nested_list_with_span():
         "          items:\n"
         '            - "${input.a}"\n'
         "            - x\n"
-        "    else: reply\n",
+        "    else:\n"
+        "      items: []\n",
         inputs="  cmd: str\n  a: str\n",
     )
     result = run_flow(load_flow(text), {"cmd": "a", "a": "first"})
@@ -575,22 +579,22 @@ def test_else_null_with_optional_output():
 
 
 @pytest.mark.parametrize(
-    ("output_type", "then_text", "expected"),
+    ("output_type", "then_text", "else_text", "expected"),
     [
-        ("int", "3", 3),
-        ("list[str]", "[]", []),
-        ("int", "${input.n}", 5),
-        ("bool", "false", False),
+        ("int", "3", "0", 3),
+        ("list[str]", "[]", "[x]", []),
+        ("int", "${input.n}", "0", 5),
+        ("bool", "false", "true", False),
     ],
 )
-def test_scalar_and_list_values(output_type, then_text, expected):
+def test_scalar_and_list_values(output_type, then_text, else_text, expected):
     text = _flow(
         "    on: ${input.cmd}\n"
         f"    output: {output_type}\n"
         "    cases:\n"
         "      - when: a\n"
         f"        then: {then_text}\n"
-        "    else: reply\n",
+        f"    else: {else_text}\n",
         inputs="  cmd: str\n  n: int\n",
     )
     result = run_flow(load_flow(text), {"cmd": "a", "n": 5})
@@ -856,11 +860,15 @@ nodes:
     output: Reply
     cases:
       - when: a
-        then:
-          reply: "x"
+        then: partial
     else:
       reply: "y"
       n: 1
+  partial:
+    kind: code
+    code: |
+      return {"reply": "x"}
+    output: object
   use:
     kind: code
     input:
@@ -1143,3 +1151,230 @@ def test_typed_case_without_a_resolvable_branch_is_rejected_even_unread():
     contract = ValueContract(Type.scalar(ValueKind.STRING))
     with pytest.raises(LoadError, match="has no resolvable branch value"):
         expand_case_outputs(descriptors, None, [], case_types={"a": contract})
+
+
+# --------------------------------------------------------------------------- #
+# Branches must fit the CASE's `output:`
+# --------------------------------------------------------------------------- #
+
+
+def _int_node(node_id: str = "num") -> str:
+    """Return a CODE node (indented under `nodes:`) whose output is `int`."""
+    return (
+        f"  {node_id}:\n"
+        "    kind: code\n"
+        "    code: |\n"
+        "      return 3\n"
+        "    output: int\n"
+    )
+
+
+def test_literal_number_into_str_output_is_rejected_with_quote_hint():
+    text = _flow(
+        "    on: ${input.cmd}\n"
+        "    output: str\n"
+        "    cases:\n"
+        "      - when: a\n"
+        "        then: 3\n"
+        "    else: reply\n"
+    )
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    message = str(caught.value)
+    assert "case node 'route' then: the value 3 is not a valid str" in message
+    assert 'quote it to keep it as text: `then: "3"`' in message
+    assert _error_line(caught.value) == _line_of(text, "then: 3")
+
+
+def test_null_into_non_optional_output_is_rejected():
+    text = _flow(
+        "    on: ${input.cmd}\n"
+        "    output: str\n"
+        "    cases:\n"
+        "      - when: a\n"
+        "        then: reply\n"
+        "    else: null\n"
+    )
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    assert (
+        "case node 'route' else: null needs an Optional output; the case declares str "
+        "(write `output: Optional[str]`)"
+    ) in str(caught.value)
+    assert _error_line(caught.value) == _line_of(text, "else: null")
+
+
+def test_unquoted_yes_into_str_output_gets_the_quote_hint():
+    text = _flow(
+        "    on: ${input.cmd}\n"
+        "    output: str\n"
+        "    cases:\n"
+        "      - when: a\n"
+        "        then: reply\n"
+        "    else: yes\n"
+    )
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    message = str(caught.value)
+    assert "case node 'route' else: the value true is not a valid str" in message
+    assert 'quote it to keep it as text: `else: "yes"`' in message
+    assert "YAML reads unquoted yes/no/on/off/true/false as booleans" in message
+    assert _error_line(caught.value) == _line_of(text, "else: yes")
+
+
+def test_record_literal_with_an_unknown_key_is_rejected():
+    text = _flow(
+        "    on: ${input.cmd}\n"
+        "    output:\n"
+        "      reply: str\n"
+        "    cases:\n"
+        "      - when: a\n"
+        "        then:\n"
+        '          reply: "x"\n'
+        "          extra: 1\n"
+        "    else: reply\n"
+    )
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    message = str(caught.value)
+    assert (
+        'case node \'route\' then: the value {"reply": "x", "extra": 1} is not a valid '
+        "{\"reply\":str} (record has unknown fields: ['extra'])"
+    ) in message
+    assert _error_line(caught.value) == _line_of(text, 'reply: "x"')
+
+
+def test_record_literal_missing_a_required_field_is_rejected():
+    text = _flow(
+        "    on: ${input.cmd}\n"
+        "    output:\n"
+        "      reply: str\n"
+        "      n: int\n"
+        "    cases:\n"
+        "      - when: a\n"
+        "        then:\n"
+        '          reply: "y"\n'
+        "          n: 1\n"
+        "    else:\n"
+        '      reply: "x"\n'
+    )
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    message = str(caught.value)
+    assert "case node 'route' else: the value {\"reply\": \"x\"} is not a valid" in message
+    assert "(record missing required fields: ['n'])" in message
+    assert _error_line(caught.value) == _line_of(text, 'reply: "x"')
+
+
+def test_disjoint_node_branch_is_rejected():
+    text = _flow(
+        "    on: ${input.cmd}\n"
+        "    output: str\n"
+        "    cases:\n"
+        "      - when: a\n"
+        "        then: reply\n"
+        "    else: num\n",
+        extra_nodes=_int_node(),
+    )
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    assert (
+        "case node 'route' else: `num` produces int, but the case declares output: str"
+    ) in str(caught.value)
+    assert _error_line(caught.value) == _line_of(text, "else: num")
+
+
+def test_disjoint_call_branch_is_rejected():
+    text = """\
+id: f
+name: f
+input:
+  cmd: str
+defs:
+  child:
+    nodes:
+      c:
+        kind: code
+        code: |
+          return 3
+        output: int
+    output: ${c.output}
+nodes:
+  route:
+    kind: case
+    on: ${input.cmd}
+    output: str
+    cases:
+      - when: a
+        then: call(child)
+    else: "other"
+output: ${route.output}
+"""
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    assert (
+        "case node 'route' then: the call to `child` produces int, but the case declares "
+        "output: str"
+    ) in str(caught.value)
+    assert _error_line(caught.value) == _line_of(text, "then: call(child)")
+
+
+def test_narrower_node_branch_loads():
+    text = _flow(
+        "    on: ${input.cmd}\n"
+        "    output: Literal[a, b]\n"
+        "    cases:\n"
+        "      - when: a\n"
+        '        then: "a"\n'
+        "    else: reply\n"
+    )
+    loaded = load_flow(text)
+    assert run_flow(loaded, {"cmd": "a"}).output == "a"
+
+
+def _case_of_case_flow(inner_output: str, inner_then: str) -> str:
+    """Return a flow whose `outer` (`output: str`) routes `else:` to the case `inner`."""
+    return (
+        "id: f\n"
+        "name: f\n"
+        "input:\n"
+        "  cmd: str\n"
+        "nodes:\n"
+        "  outer:\n"
+        "    kind: case\n"
+        "    on: ${input.cmd}\n"
+        "    output: str\n"
+        "    cases:\n"
+        "      - when: a\n"
+        '        then: "picked a"\n'
+        "    else: inner\n"
+        "  inner:\n"
+        "    kind: case\n"
+        f"{inner_output}"
+        "    cases:\n"
+        "      - when: \"${input.cmd} == 'b'\"\n"
+        f"        then: {inner_then}\n"
+        "    else: num\n"
+        f"{_int_node()}"
+        "output: ${outer.output}\n"
+    )
+
+
+def test_typed_inner_case_disjoint_from_outer_is_rejected():
+    text = _case_of_case_flow("    output: int\n", "4")
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    assert (
+        "case node 'outer' else: case 'inner' produces int, but the case declares output: str"
+    ) in str(caught.value)
+    assert _error_line(caught.value) == _line_of(text, "else: inner")
+
+
+def test_untyped_inner_case_branch_is_checked_against_the_outer_output():
+    text = _case_of_case_flow("", "num")
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    assert (
+        "case node 'inner' then: `num` produces int, but case 'outer' declares output: str"
+    ) in str(caught.value)
+    assert _error_line(caught.value) == _line_of(text, "then: num")

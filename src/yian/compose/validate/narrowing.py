@@ -306,7 +306,7 @@ def _members_type(members: Sequence[Type], nullable: bool) -> Optional[Type]:
     Returns `None` for an empty set that is not nullable: no value fits.
     """
     if not members:
-        return Type(kind=ValueKind.NONE, nullable=True) if nullable else None
+        return Type.scalar(ValueKind.NONE) if nullable else None
     if len(members) == 1:
         return replace(members[0], nullable=nullable)
     return Type(

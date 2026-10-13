@@ -170,18 +170,22 @@ def validate_references(
         from_value: Any,
         where: str,
         rng: Optional[SourceRange],
-        extra_heads: tuple = (),
+        *,
+        site_producers: dict[str, OutputContract],
+        site_inputs: dict[str, ValueContract],
         item_contract: ValueContract | None = None,
-        producers: dict[str, OutputContract] = producers,
-        input_contracts: dict[str, ValueContract] = input_contracts,
+        extra_heads: tuple = (),
         partial_union_fields: bool = False,
     ) -> None:
         """Name-check every reference a BINDING `from:` reads (coalesce + nested-default
         split by `expr_refs_of`); a non-string source / literal yields no refs.
 
+        `site_producers` and `site_inputs` are the producer and flow-input contracts this
+        site sees (a node's narrowed view, or the unnarrowed maps), used for field checks.
         `extra_heads` is the per-site set of body-local scopes treated as lenient — e.g.
         a MAP per-element input's `${item}` (valid only inside `map.inputs`, not `over:`);
-        `item_contract` is that `${item}`'s element contract when known, for field checks."""
+        `item_contract` is that `${item}`'s element contract when known, for field checks.
+        `partial_union_fields` lets a field only some union members have be read."""
         from_value = binding_source(from_value)
         if not isinstance(from_value, str):
             return
@@ -199,10 +203,10 @@ def validate_references(
                 err is None
                 and len(parts) >= 2
                 and parts[1] == "output"
-                and parts[0] in producers
+                and parts[0] in site_producers
             ):
                 err = output_contract_path_error(
-                    producers[parts[0]],
+                    site_producers[parts[0]],
                     parts[2:],
                     path,
                     partial_union_fields=partial_union_fields,
@@ -211,10 +215,10 @@ def validate_references(
                 err is None
                 and len(parts) >= 3
                 and parts[0] == "input"
-                and parts[1] in input_contracts
+                and parts[1] in site_inputs
             ):
                 err = output_contract_path_error(
-                    input_contracts[parts[1]],
+                    site_inputs[parts[1]],
                     parts[2:],
                     path,
                     partial_union_fields=partial_union_fields,
@@ -243,11 +247,7 @@ def validate_references(
             if narrowing is not None
             else (producers, input_contracts)
         )
-        view = {
-            "producers": node_producers,
-            "input_contracts": node_inputs,
-            "partial_union_fields": node_id in unordered,
-        }
+        partial_union_fields = node_id in unordered
         # Prompt scope: a strict AGENT prompt or system prompt may interpolate ONLY
         # this node's declared inputs and variables as `${name}` (or a builtin-call
         # argument); a pool ref in either is loud, and an unknown builtin / malformed
@@ -295,7 +295,9 @@ def validate_references(
                 nwiring.get(key),
                 f"node {node_id!r} {node.kind.value} {key}",
                 reserved_rng,
-                **view,
+                site_producers=node_producers,
+                site_inputs=node_inputs,
+                partial_union_fields=partial_union_fields,
             )
 
         # A per-item binder (MAP) reads its iteration source above, then validates each
@@ -309,9 +311,11 @@ def validate_references(
                     src,
                     f"node {node_id!r} map input {param!r} from",
                     franges.get(("input", param)) or input_rng,
-                    extra_heads=("item",),
+                    site_producers=node_producers,
+                    site_inputs=node_inputs,
                     item_contract=item_contract,
-                    **view,
+                    extra_heads=("item",),
+                    partial_union_fields=partial_union_fields,
                 )
             continue
 
@@ -328,14 +332,26 @@ def validate_references(
         for param, src in nwiring.items():
             if param in reserved:
                 continue
-            scan(src, f"node {node_id!r} {node.wiring_ref_label(param)} from",
-                 franges.get(("input", param)) or input_rng, **view)
+            scan(
+                src,
+                f"node {node_id!r} {node.wiring_ref_label(param)} from",
+                franges.get(("input", param)) or input_rng,
+                site_producers=node_producers,
+                site_inputs=node_inputs,
+                partial_union_fields=partial_union_fields,
+            )
 
     # Flow outputs (the codomain): each binding `from:` is checked like a node input and
     # located at its retained value or block range. No built node owns this source site;
     # source-free callers deliberately remain unlocated.
     for value in _output_bindings(outputs):
-        scan(value, "flow output from", outputs_range)
+        scan(
+            value,
+            "flow output from",
+            outputs_range,
+            site_producers=producers,
+            site_inputs=input_contracts,
+        )
 
     if errors:
         first_range = next(

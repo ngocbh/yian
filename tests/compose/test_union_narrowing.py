@@ -148,7 +148,7 @@ def test_a_buy_branch_reads_a_member_field():
     ))
 
 
-def test_a_hold_branch_reading_qty_is_a_rule_one_error():
+def test_a_hold_branch_reading_qty_reads_an_unknown_field_on_hold():
     msg = _load_error(_flow(
         _case("route", _ON, [("buy", "b"), ("hold", "h")], else_="b"),
         _code("b", {"q": "${d.output.qty}"}),
@@ -520,6 +520,21 @@ def test_a_defensive_else_after_every_tag_loads_and_is_not_narrowed():
     _loads(_flow(*branches, _code("e", {"a": "${d.output.action}"})))
     msg = _load_error(_flow(*branches, _code("e", {"l": "${d.output.limit}"})))
     assert f"node 'e' input 'l' from: {_LIMIT_ERROR}" in msg
+
+
+def test_a_nullable_union_defensive_else_sees_none():
+    msg = _load_error(_flow(
+        _case(
+            "route",
+            _ON,
+            [("buy", "b"), ("sell", "b"), ("hold", "b")],
+            else_="call(place_rest, order=${d.output})",
+        ),
+        _code("b"),
+        d_type="Optional[Decision]",
+    ))
+    assert "binding 'order' — child expects" in msg
+    assert msg.endswith("source is 'None'")
 
 
 def test_a_when_that_is_not_a_tag_is_a_located_error():

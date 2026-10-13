@@ -77,8 +77,10 @@ name, so a `None` in a condition can still be a dotted miss.
 |------|----------------------|---------|
 | `BINDING_NONE` | becomes `None` (coalesce/default may fire) | binding values |
 | `CONDITION_FALSY` | `None`, falsy through comparisons | `when:` / `asserts:` |
-| `STRICT_RAISE` | raises — no silent blank | prompt rendering |
+| `STRICT_RAISE` | raises, naming the path — no silent blank | prompt rendering |
 
+In every mode, `|`, `:-`, and `:?` see a miss on a non-final operand as `None`, so
+`${note :- "none"}` works in a prompt; the fallback (the last `|` operand) stays strict.
 Strictness also applies to the span's final value: a prompt span that evaluates to
 null raises before whole-value return or embedded concatenation. Bindings remain
 non-strict, so an embedded null contributes an empty string.

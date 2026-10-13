@@ -1106,7 +1106,9 @@ boolean/arithmetic, prompt builtin-call) are unified. Three modules, one pipelin
 
 **Three resolve modes** decide what a MISSING reference does, one per context:
 `BINDING_NONE` (a binding → `None`, so `|`/`:-` can coalesce), `CONDITION_FALSY`
-(a `when:` → falsy), `STRICT_RAISE` (a prompt → raise; no silent blank).
+(a `when:` → falsy), `STRICT_RAISE` (a prompt → raise; no silent blank). A miss on
+a non-final operand of `|`, `:-`, or `:?` is `None` in every mode, so the operator
+fires; the fallback stays strict, and the raise names the missed reference path.
 At the template boundary, `STRICT_RAISE` also rejects a span whose final value is
 `None` before whole-value return or embedded concatenation; non-strict binding
 stringification still maps an embedded `None` to empty text.

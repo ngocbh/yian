@@ -325,11 +325,12 @@ def test_nullable_variable_defaults_follow_existing_strict_prompt_rules(monkeypa
     monkeypatch.setattr(agent_module, "run_agent", lambda ctx: calls.append(ctx) or Output(ctx.prompt))
     assert node.forward({}).value == "fallback"
     assert records == [{"note": None}]
-    for prompt in ("${note}", "${note | 'fallback'}"):
-        node.prompt = prompt
-        with pytest.raises(ExpressionError, match="unresolved reference"):
-            node.forward({})
-    assert len(calls) == 1
+    node.prompt = "${note | 'fallback'}"
+    assert node.forward({}).value == "fallback"
+    node.prompt = "${note}"
+    with pytest.raises(ExpressionError, match=r"unresolved reference \$\{note\}"):
+        node.forward({})
+    assert len(calls) == 2
     assert node.variables[0].default is None
 
 

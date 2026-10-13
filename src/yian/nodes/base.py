@@ -44,6 +44,7 @@ from yian.nodes.contracts import (
     _rewrite_origin_carrier,
     _validate_optional_origin,
 )
+from yian.typesys.values import Type
 
 class NodeKind(str, Enum):
     """Closed vocabulary. Dispatch is an explicit `match`, never a registry."""
@@ -635,6 +636,10 @@ class Node(ABC):
             own `forward()` path reads the keys it understands (AGENT:
             `max_tool_iterations`).
             Unknown keys are carried but ignored. `{}` when none is authored.
+        types (`dict[str, Type]`):
+            The type table `isinstance(x, T)` looks `T` up in when this node evaluates its
+            bindings, asserts, and predicates, keyed by type name. Filled at load from the
+            names the node's expressions use; `{}` when none are used.
     """
 
     kind: ClassVar[NodeKind]
@@ -757,6 +762,10 @@ class Node(ABC):
         # (e.g. AGENT reads `max_tool_iterations`); unknown keys are carried but ignored. `{}`
         # for a node that declares no `env:` and inherits no flow default.
         self.env: dict[str, Any] = {}
+        # The type table for `isinstance(x, T)` (see the class docstring). Runtime reads it
+        # generically to evaluate this node's bindings; the node passes it to its own
+        # asserts and predicates.
+        self.types: dict[str, Type] = {}
         # `self.wiring_labels`: wiring param -> author-facing phrase for a reference error, for a
         #   SYNTHESIZED param the author never wrote (a CASE `__rN` from a `when:` ref, `__on` from
         #   `on:`) — e.g. `"cases[1].when"` / `"on:"`. Render-only and absent from run records;
@@ -1178,13 +1187,12 @@ class Node(ABC):
         text, so a message about an authored param is byte-identical to before."""
         return self.wiring_labels.get(param, f"input {param!r}")
 
-    @staticmethod
-    def _assert_holds(expr: str, record: dict) -> bool:
-        """Evaluate a node assert against `record`; a raising assert (ordered/arith over a
-        non-scalar / None `${output}`) is treated as not holding, which the wrapper marks
-        as ``assertion.failed`` at the evaluator boundary."""
+    def _assert_holds(self, expr: str, record: dict) -> bool:
+        """Evaluate a node assert against `record` with this node's type table; a raising
+        assert (ordered/arith over a non-scalar / None `${output}`) is treated as not holding,
+        which the wrapper marks as ``assertion.failed`` at the evaluator boundary."""
         try:
-            return bool(evaluate_when_record(expr, record))
+            return bool(evaluate_when_record(expr, record, self.types))
         except ExpressionError:
             return False
 

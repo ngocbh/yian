@@ -58,8 +58,8 @@ __all__ = ["expansion_digest", "flow_fingerprint", "flow_manifest"]
 
 
 # Fields common to every concrete Node. Most are emitted below; title is emitted only for
-# HUMAN_INPUT because other node kinds use it as display metadata. Keeping both sets explicit is
-# the fail-loud field policy.
+# HUMAN_INPUT because other node kinds use it as display metadata, and types only when non-empty.
+# Keeping both sets explicit is the fail-loud field policy.
 _COMMON_NODE_FIELDS = frozenset(
     {
         "id",
@@ -71,6 +71,7 @@ _COMMON_NODE_FIELDS = frozenset(
         "commit_as",
         "origin_id",
         "env",
+        "types",
     }
 )
 _IGNORED_NODE_FIELDS = frozenset(
@@ -1694,6 +1695,15 @@ def _node_manifest(
             for index, assertion in enumerate(node.pre_asserts)
         ],
     }
+
+    # Emitted only when non-empty so nodes without `isinstance` keep their fingerprints.
+    if type(node.types) is not dict:
+        raise TypeError(f"{path}.types: expected dict, got {type(node.types).__name__}")
+    if node.types:
+        manifest["types"] = [
+            {"name": name, "type": _type_manifest(node.types[name], ctx, f"{path}.types.{name}")}
+            for name in sorted(node.types)
+        ]
 
     if node.kind is NodeKind.START:
         pass

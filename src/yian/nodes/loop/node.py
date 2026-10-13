@@ -181,7 +181,7 @@ class LoopNode(Node):
         """Continue-vs-stop on the carried record at index `k`. Pure. See `run` for the stop rule."""
         if self.predicate_kind == "times":
             return self.should_stop(k)               # k >= N
-        truth = evaluate_when_record(self.predicate, carried)
+        truth = evaluate_when_record(self.predicate, carried, self.types)
         if self.predicate_kind == "while":
             return not truth                         # while: stop on FALSE
         return k >= 1 and truth                      # until (do-while): stop on TRUE, k >= 1
@@ -235,8 +235,9 @@ class LoopNode(Node):
         that seed the body's START, so live growth and durable replay merge identically. A total
         loop shares the origin's `params` unchanged. Generated `origin_context` is copied unchanged
         while the authored loop origin remains local, so each iteration's failure trace contains
-        that origin once. The complete `output_contract` and asserts are copied for clone
-        self-consistency only — the STOP commit validates against the COMPILED origin `L`'s
+        that origin once. The type table is copied so every iteration's predicate and asserts
+        resolve the same `isinstance` types. The complete `output_contract` and asserts are
+        copied for clone self-consistency only — the STOP commit validates against the COMPILED origin `L`'s
         contract via its commit target, not the clone's.
 
         Args:
@@ -291,6 +292,7 @@ class LoopNode(Node):
         clone.output_contract = self.output_contract
         clone.pre_asserts = list(self.pre_asserts)
         clone.post_asserts = list(self.post_asserts)
+        clone.types = self.types
         return clone
 
     def should_stop(self, iteration: int) -> bool:

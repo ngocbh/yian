@@ -156,7 +156,7 @@ class CaseNode(Node):
         # interpolates this node's declared inputs as bare `${name}`, not the pool.
         # Routing-only: returns a Route carrying the chosen case handle (no value).
         for case in self.cases:
-            if evaluate_when_record(case.when, inputs):
+            if evaluate_when_record(case.when, inputs, self.types):
                 return Route(case.handle)
         return Route(DEFAULT_HANDLE)
 

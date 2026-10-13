@@ -6,6 +6,7 @@ bare type name looked up in the node's type table (`types=`), never a reference.
 
 import pytest
 
+from yian.compose.loader import load_flow
 from yian.expr.expressions import (
     ExpressionError,
     condition_refs,
@@ -29,6 +30,9 @@ from yian.expr.template import (
     rewrite_template_refs,
     scan_template,
 )
+from yian.nodes.case import Case, CaseNode
+from yian.nodes.case.node import DEFAULT_HANDLE
+from yian.run import resume_flow, run_flow
 from yian.typesys.pool import VariablePool
 from yian.typesys.values import Type, ValueKind
 
@@ -239,3 +243,178 @@ def test_traced_isinstance_records_one_route_over_the_first_argument():
     child = route.children[0]
     assert child.kind == "source"
     assert child.source == SourceRef("run", 0, ("output",))
+
+
+# --- nodes carry the type table --- #
+
+# Compose fills `Node.types` from the names each node's expressions use; these tests set
+# it by hand on loaded flows and directly built nodes.
+
+ORDER_FLOW = """
+id: orders
+name: orders
+input:
+  order: object
+nodes:
+  d:
+    kind: code
+    input:
+      order: ${input.order}
+    code: |
+      return inputs["order"]
+  check:
+    kind: code
+    input:
+      ok: ${isinstance(d.output, Buy)}
+    code: |
+      return inputs["ok"]
+  route:
+    kind: case
+    cases:
+      - when: isinstance(d.output, Sell)
+        then: s
+    else: b
+  s:
+    kind: code
+    code: |
+      return "sell"
+  b:
+    kind: code
+    code: |
+      return "buy"
+output:
+  ok: ${check.output}
+  side: ${s.output | b.output}
+"""
+
+
+def _orders_flow():
+    flow = load_flow(ORDER_FLOW)
+    flow.compiled.nodes["check"].types = dict(TYPES)
+    flow.compiled.nodes["route"].types = dict(TYPES)
+    return flow
+
+
+def test_a_node_starts_with_an_empty_type_table():
+    assert CaseNode("route", [Case("s", "isinstance(order, Sell)")]).types == {}
+    assert load_flow(ORDER_FLOW).compiled.nodes["check"].types == {}
+
+
+@pytest.mark.parametrize("order, expected", [
+    (A_BUY, {"ok": True, "side": "buy"}),
+    (A_SELL, {"ok": False, "side": "sell"}),
+])
+def test_bindings_and_case_conditions_use_the_node_type_table(order, expected):
+    result = run_flow(_orders_flow(), {"order": order})
+    assert result.status == "succeeded", result.failure
+    assert result.output == expected
+
+
+def test_a_node_without_the_type_name_fails_naming_it():
+    flow = _orders_flow()
+    flow.compiled.nodes["check"].types = {}
+    result = run_flow(flow, {"order": A_BUY})
+    assert result.status == "failed"
+    assert result.failure.node_id == "check"
+    assert "'Buy'" in result.failure.message
+
+
+def test_case_forward_routes_with_its_type_table():
+    node = CaseNode("route", [Case("s", "isinstance(order, Sell)")])
+    node.types = dict(TYPES)
+    assert node.forward({"order": A_SELL}).handle == "s"
+    assert node.forward({"order": A_BUY}).handle == DEFAULT_HANDLE
+
+
+ASSERT_FLOW = """
+id: asserted
+name: asserted
+input:
+  order: object
+nodes:
+  step:
+    kind: code
+    input:
+      order: ${input.order}
+    code: |
+      return inputs["order"]
+    asserts:
+      - isinstance(order, Buy)
+      - isinstance(output, Order)
+output: ${step.output}
+"""
+
+
+@pytest.mark.parametrize("order, status", [(A_BUY, "succeeded"), (A_SELL, "failed")])
+def test_node_asserts_use_the_node_type_table(order, status):
+    flow = load_flow(ASSERT_FLOW)
+    flow.compiled.nodes["step"].types = dict(TYPES)
+    result = run_flow(flow, {"order": order})
+    assert result.status == status, result.failure
+    if status == "failed":
+        assert result.failure.code == "assertion.failed"
+
+
+LOOP_FLOW = """
+id: counter
+name: counter
+defs:
+  bump:
+    input:
+      n: int
+      status: str
+    nodes:
+      step:
+        kind: code
+        input:
+          n: ${input.n}
+          status: ${input.status}
+        code: |
+          n = inputs["n"] + 1
+          return {"n": n, "status": "done" if n >= 4 else "running"}
+        output:
+          n: int
+          status: str
+    output: ${step.output}
+nodes:
+  loop:
+    kind: loop
+    call: bump
+    input:
+      n: 0
+      status: running
+    while: isinstance(status, Running)
+    max: 10
+output: ${loop.output}
+"""
+
+LOOP_TYPES = {"Running": Type(kind=ValueKind.STRING, tags=frozenset({"running"}))}
+
+
+def _loop_flow():
+    flow = load_flow(LOOP_FLOW)
+    flow.compiled.nodes["loop"].types = dict(LOOP_TYPES)
+    return flow
+
+
+def test_loop_respawn_copies_the_type_table():
+    driver = _loop_flow().compiled.nodes["loop"]
+    assert driver.respawn(1).types == LOOP_TYPES
+
+
+def test_loop_while_uses_the_type_table_across_iterations():
+    result = run_flow(_loop_flow(), {})
+    assert result.status == "succeeded", result.failure
+    assert result.output == {"n": 4, "status": "done"}
+
+
+def test_loop_with_a_type_table_resumes_mid_loop(tmp_path):
+    log = tmp_path / "run.jsonl"
+    first = run_flow(_loop_flow(), {}, log=log)
+    assert first.status == "succeeded", first.failure
+    # Cut the log mid-loop so resume replays the recorded drivers and runs the rest live.
+    lines = log.read_text().splitlines(keepends=True)
+    log.write_text("".join(lines[: len(lines) // 2]))
+    resumed = resume_flow(_loop_flow(), log=log)
+    assert resumed.status == "succeeded", resumed.failure
+    assert resumed.output == first.output

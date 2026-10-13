@@ -8,7 +8,8 @@ retries?}`. This pass lowers that single descriptor into TWO ordinary descriptor
 1. a synth **AgentDescriptor** (id `<gate>__compose`) that composes a
    `list[Question]` — its codomain is the code-built `question_list_type()` set via
    the `output_contract_override` seam (no surface type-string), its prompt is the
-   block's brief, and it inherits the gate's context `input:`;
+   block's brief, and it inherits the gate's context `input:` with its declared
+   types;
 2. the original **HumanInputDescriptor** gate (same id), rewritten to read its
    questions from the composer: `questions: "${__questions}"`, with the composer's
    output wired into the reserved `__questions` input.
@@ -102,9 +103,10 @@ def desugar_adaptive_questions(
         agent_kwargs = {
             "id": synth_id,
             "prompt": auto["prompt"],
-            "inputs": dict(
-                desc.inputs
-            ),  # carry the gate's context inputs to the composer
+            # The composer reads the gate's context inputs, so it checks their
+            # declared types too.
+            "inputs": dict(desc.inputs),
+            "input_types": dict(desc.input_types),
             "output_contract_override": ValueContract(question_list_type()),
             "outputs": None,
             "range": desc.range,

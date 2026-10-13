@@ -18,7 +18,7 @@ description: ...           # optional, one line
 typedefs: { ... }          # optional — named/composed types
 input:   { ... }           # parameters — typed
 nodes:   { ... }           # body — a map keyed by node id
-output:  ${x} | { ... }    # return — one value, or a record
+output:  ${x} | { ... }    # return — one value, or a record; bindings, optionally typed
 asserts: [ ... ]           # optional — boolean invariants
 ```
 
@@ -32,6 +32,9 @@ The shape of `output:` sets what the flow returns:
   number of fields: `output: {order: ${x}}` returns `{order: x}`, and `output: {}`
   returns `{}`. A caller reads a field by name, as in `${child.output.order}`.
 - No `output:`, or `output: null`, returns `None`.
+
+Either form may declare its type with a [typed binding](#typed-bindings-name-type-value):
+`output: Size = ${x}`, or a field such as `size: Size = ${x}` under `output:`.
 
 Changed: a one-field record used to return its bare value, and `output: {}` used to
 return `None`. For the old result, write `output: ${x}`, or drop `output:` to return
@@ -87,7 +90,9 @@ Rules:
 - The flow `input:` is the node's signature — each parameter is auto-wired into the
   node by name (`name` → `${input.name}`), so you refer to it bare in the prompt.
 - The flow `output:` is the node's output **type**; the flow returns that node's
-  output (no explicit `output: ${...}` line).
+  output (no explicit `output: ${...}` line). A full flow declares its output type
+  with a [typed binding](#typed-bindings-name-type-value) instead:
+  `output: str = ${greet.output}`.
 - Any other field (`prompt:`, `system_prompt:`, `tools:`, `skills:`, `llm_config:`,
   node-local `asserts:`, …) is the node body.
 - Allowed only for the **value-producing leaf kinds** — `agent`, `code`, `tool`,
@@ -285,8 +290,158 @@ At run time a value with no tag fails with `missing tag field 'action' (expected
 Wiring checks members: a union fills a union input when each of its members fits some
 member of the input's union, and a record fills a union input when it fits a member. A
 union fills an `object` input, but never a record input: narrow it in a `case` branch
-first (see [`case`](#case-branching)). Reading fields of a union is covered under
+first (see [`case`](#case-branching)), or declare the member with a
+[typed binding](#typed-bindings-name-type-value) (`buy: Buy = ${decision.output}`),
+which loads and is checked at runtime. Reading fields of a union is covered under
 [References](#references-naming-a-value).
+
+## Typed bindings — `name: Type = value`
+
+Any binding may declare the type of its value. The form matches a flow-input
+declaration: the type, ` = `, then the value.
+
+```yaml
+id: price
+name: price
+typedefs:
+  Size: Literal[small, medium, large]
+input:
+  text: str
+nodes:
+  size:
+    kind: code
+    input:
+      text: ${input.text}
+    output: str                          # any str, as far as the loader knows
+    code: |
+      return "large" if len(inputs["text"]) > 20 else "small"
+  quote:
+    kind: code
+    input:
+      size: Size = ${size.output}        # narrower than str: checked at runtime
+      discount: float = 0                # a YAML literal: checked at load
+    output: float
+    code: |
+      base = {"small": 1.0, "medium": 2.0, "large": 3.0}[inputs["size"]]
+      return base - inputs["discount"]
+output:
+  size: Size = ${size.output}            # a typed flow output field
+  price: float = ${quote.output}
+```
+
+A single output value takes the same form: `output: Size = ${size.output}`.
+
+### Where
+
+- A node's `input:` bindings, including a LOOP's starting state and HUMAN_INPUT
+  context bindings.
+- A flow's `output:` fields, and a flow's single `output:` value. This gives a
+  full flow a declared output type.
+- Root flows, `defs:`, and inline CALL/MAP/LOOP bodies all accept them.
+
+`call(...)` keyword arguments do not. A compact flow keeps `output: Type`, the
+node's type.
+
+### Quote text that contains ` = `
+
+The YAML scalar style decides whether a value is typed:
+
+- An unquoted value containing ` = ` is always a typed binding. The text before the
+  first ` = ` must be a type: a built-in, a typedef, or a composite such as
+  `Optional[int]` or `list[Signal]`. Otherwise loading fails and suggests quoting:
+
+  ```text
+  `a` in `qty: a = b` is not a type. If you meant the text "a = b", quote it: `qty: "a = b"`
+  ```
+
+  A close miss adds a hint: `qty: imt = 3` ends with ``Did you mean `int`?``.
+- A quoted (`'...'`, `"..."`) or block (`|`, `>`) value is never typed. Its `${...}`
+  spans still evaluate, and a quoted `call(...)` is still a call.
+- So quote any value whose text contains ` = `, including an expression such as
+  `'${input.y:-"a = b"}'` or `"call(f, a = 1)"`.
+- `int=3` (no spaces) is plain text, unlike a flow-input declaration.
+- An unquoted value ending in ` =` with a type on its left is an error: the value
+  is empty.
+- Use block-style mappings. A plain scalar inside `{...}` can't contain `${`, so
+  `input: {qty: int = ${x}}` does not parse.
+
+```yaml
+input:
+  note: "a = b"                     # the text: a = b
+  fallback: '${input.y:-"a = b"}'   # an expression whose text contains " = "
+  qty: int = ${size.output.qty}     # typed
+```
+
+### The value
+
+The value after ` = ` is read in this order:
+
+- A value starting with a quote, `[`, or `{` is read as YAML. A quoted string
+  that contains `${` or starts with `call(` is then a template or call, without
+  its quotes: `v: str = "${input.a} = 2"` binds `1 = 2`. A list or record is a
+  literal, and the strings inside it stay text, so `v: list[str] = ["${x}"]`
+  binds the one-item list `["${x}"]`.
+- Otherwise, a value containing a `${...}` template or expression, or starting
+  with `call(`, stays as written.
+- Anything else is a YAML literal, like an input default: `rounds: int = 0` binds
+  the int `0`, `items: list[str] = []` an empty list, and `x: Optional[int] = null`
+  a null.
+
+Literals are checked against the type at load. YAML 1.1 rules apply, so
+`str = 30`, `str = yes`, and `date = 2026-01-01` fail with a hint to quote the
+value (`str = "30"`).
+
+The whole binding is one plain YAML scalar, so it can't contain `: ` or ` #`
+anywhere, even inside quotes after ` = ` (`msg: str = "Status: ${x}"` does not
+parse; drop the type and quote the whole value instead). A record literal needs
+keys YAML reads as keys without `: `, so write `v: Rec = {"a":1}`, not `{a: 1}`.
+
+### Load check
+
+The loader compares the declared type with the type it infers for the value:
+
+- **Disjoint** types fail at the binding, such as a `str` value declared `int`.
+  Records are closed, so a record with a required field the declared record lacks
+  is disjoint.
+- A **narrower** declared type loads and is checked at runtime: non-Optional over
+  Optional, a `Literal` or bounded subset, a record over `object`, or a union member
+  over the union (explicit narrowing, e.g. `buy: Buy = ${decision.output}`).
+- Unions compare member by member: a member declared as its union fits, and a
+  record that matches no member is disjoint. Inside a narrowing `case` branch the
+  value has the branch's members, so `buy: Buy = ${decision.output}` in the `sell`
+  branch fails at load.
+- A MAP's lone `${item}` or `${item.field}` is inferred from the element type of
+  `over:`, so `t: str = ${item}` over a `list[int]` fails at load.
+- A value whose type can't be inferred (arithmetic, a builtin call, an untyped
+  producer) is checked at runtime only.
+
+### Runtime check
+
+Before the consuming node runs, the value is validated against the declared type.
+Nothing is converted: an int bound as `float` stays an int, and the string `"30"`
+is not an int. A failure fails the consuming node (END for a flow output) with the
+failure code `binding.type`, and the diagnostic points at the binding.
+
+A flow's committed output is stored like any typed node output: a whole-value
+`float` or `list[float]` output is widened from int; record fields are not.
+
+### Downstream
+
+Consumers see the declared type, not the inferred one. This is how an opaque
+value becomes typed.
+
+- A CALL, MAP, or LOOP parent sees a child's declared output type.
+- A CALL checks a typed argument's declared type against the child's parameter.
+- An inline body's parameter takes the declared type, so a value the loader can't
+  type (arithmetic, an empty list) works without a named `defs:` body.
+- A typed LOOP seed checks the starting value. A field the body omits keeps the
+  seed's declared type; a field the body returns follows the body's output type.
+- An untyped nullable source into a strict child parameter is still a load error.
+  A typed binding (`x: int = ${maybe.output}`) accepts the narrowing and checks it
+  at runtime.
+
+Declared types are part of the flow fingerprint, so a run can't resume after a
+type changes. Recorded flow outputs are re-validated on resume.
 
 ## Per-node configuration — `env:`
 
@@ -934,7 +1089,8 @@ The gate's answer is a **record keyed by header** — `{header: label}`, or
 ```yaml
 ask:
   kind: human_input
-  input: { proj: ${input.proj} }
+  input:
+    proj: ${input.proj}
   questions:
     - question: "Which framework for ${proj}?"   # ${proj} renders from input
       header: Framework                          # answer key -> {Framework: <label>}
@@ -956,7 +1112,8 @@ authored on an adaptive gate.
 ```yaml
 ask:
   kind: human_input
-  input: { ctx: ${research.output} }
+  input:
+    ctx: ${research.output}
   adaptive_questions:
     prompt: "Design 1-3 questions with options for: ${ctx}"  # required (LLM brief)
     llm_config: { model: ... }   # optional — the composer's provider/model
@@ -970,7 +1127,8 @@ ask:
 ```yaml
 ask:
   kind: human_input
-  input: { qs: ${composer.output} }   # composer.output is a list[Question]
+  input:
+    qs: ${composer.output}            # composer.output is a list[Question]
   questions: ${qs}
 ```
 
@@ -1071,12 +1229,15 @@ Inline-body rules:
   closed literal records, non-empty homogeneous literal lists, and direct typed
   references (`${input.x}`, `${producer.output.field}`, or MAP `${item.field}`)
   retain their structural type. A nullable record path produces an optional
-  parameter. If a type cannot be proved, loading fails; use a named `defs:` child
-  with an explicit `input:` signature.
-- MAP proves the `over:` element type only when an outer argument is a lone
-  whole-value `${item...}` reference. An opaque `over:` therefore remains legal
-  when the inline body does not need the item. When item typing is requested,
-  `over:` must have an exact proven list element type. That proof retains
+  parameter. If a type cannot be proved, loading fails; declare it with a
+  [typed binding](#typed-bindings-name-type-value) (`n: int = ${input.a + input.b}`),
+  whose declared type becomes the parameter type, or use a named `defs:` child with
+  an explicit `input:` signature.
+- MAP proves the `over:` element type only when an untyped outer argument is a
+  lone whole-value `${item...}` reference. An opaque `over:` therefore remains
+  legal when the inline body does not need the item, or when the item binding is
+  typed (`t: str = ${item}`). When item typing is requested, `over:` must have an
+  exact proven list element type. That proof retains
   element nullability, so an optional element admits actual null items and
   preserves them as `None` in typed storage.
 - Strings nested inside literal lists or mappings stay literal. For example,
@@ -1110,7 +1271,11 @@ HUMAN_INPUT context bindings and LOOP carried-record seeds.
 news: call(enrich, topic=${input.topic})   # inline directive (sugar)
 
 # desugars to:
-__call_0: { kind: call, call: enrich, input: { topic: ${input.topic} } }
+__call_0:
+  kind: call
+  call: enrich
+  input:
+    topic: ${input.topic}
 news: ${__call_0.output}
 ```
 
@@ -1181,6 +1346,8 @@ Here the generated child signature is `n: int`, and its record output `{n: int}`
 returns the whole carried record.
 
 - **`input:`** is the seed carried record — its field names and types define `'a`.
+  A typed seed (`n: int = 0`) checks the starting value. A field the body omits
+  keeps the seed's declared type; a returned field follows the body's output type.
 - **`call:` / `nodes:`** names a reusable body or defines a one-off body inline.
   The body's `output:` returns a **subset** of the carried record: at least one
   carried field, and any number of them. Each field the body omits keeps its value
@@ -1191,7 +1358,8 @@ returns the whole carried record.
   contract is checked twice: field **names** at build, and each statically proven
   **returned** field against a statically proven seed source at load. A returned
   field must keep its carried type. An omitted field takes its type from its seed
-  binding (a literal seed stays untyped). Every proven returned field is enforced at
+  binding: a typed seed gives its declared type, and an untyped literal seed stays
+  untyped. Every proven returned field is enforced at
   runtime and replay even when its seed was opaque at load. Each output field's type
   is inferred from its binding shape (see [expressions](expressions.md)): a lone
   direct ref preserves an exact or partial contract, a known partial-record field is
@@ -1203,7 +1371,11 @@ returns the whole carried record.
   opaque never means a concrete `None` value and does not erase type checks for proven
   sibling fields. LOOP enforces the closed field set and every proven sibling on normal
   iterations, zero-iteration `while:` commits, and durable replay. A literal `${null}`
-  seed is compatible with a nullable body field, including inside a typed list.
+  seed is compatible with a nullable body field, including inside a typed list, when
+  the body is a named `defs:` body or the seed is typed. An inline body's parameters
+  are typed from the seeds, and each returned field must fit its parameter at load,
+  since the next iteration binds it there. An untyped `${null}` seed gives the type
+  `None`, so with an inline body, type the seed: `seen: Optional[list[str]] = ${null}`.
 - **Omitted is not null.** An omitted field keeps its value. A returned null sets the
   field to null. When the seed is typed, the returned field's type must accept it: a
   producer typed `Optional[str]` fits an `Optional[str]` seed. A literal `${null}` is
@@ -1361,6 +1533,9 @@ One `${...}` grammar serves every context — the difference is what each contex
   typed value. Refs, literals, arithmetic (`+ - * / % **`), list literals,
   comparisons, `:-`/`:?`, `\|`, and pure builtins all work. To invoke a child flow
   as a binding's whole value, use the `call(...)` directive — not a `${...}` span.
+  A binding may declare its value's type as `name: Type = value` (see
+  [Typed bindings](#typed-bindings-name-type-value)); quote a value whose text
+  contains ` = `.
 - **`when:` / `asserts:`**: the expression is **tested** as a boolean. Same
   operators. Write conditions in the canonical **bare** form (`a.output > 5`) — no
   `${}`. Braces on a ref (`${a.output} > 5`) or around the whole expression

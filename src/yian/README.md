@@ -129,13 +129,14 @@ results expose only the canonical `Failure`; runtime and load failures both reac
 resolution therefore stays unlocated instead of falling through to runtime-id or
 graph inference.
 
-The closed codes are `binding.evaluate`, `contract.input`, `assertion.failed`,
-`node.execute`, `contract.node_result`, `contract.output`, `contract.route`,
-`contract.growth`, and `graph.terminal_unreachable`. They cover expected
-flow-owned rejection. `EvaluationFailure` owns exactly one `Failure`. The evaluator
-assigns its first five codes by
-operation stage: expression/default/required binding, supplied-input contracts,
-base-wrapper assertions, node execution, and result validation. Each producer
+The closed codes are `binding.evaluate`, `binding.type`, `contract.input`,
+`assertion.failed`, `node.execute`, `contract.node_result`, `contract.output`,
+`contract.route`, `contract.growth`, and `graph.terminal_unreachable`. They cover
+expected flow-owned rejection. `EvaluationFailure` owns exactly one `Failure`. The
+evaluator assigns its first six codes by
+operation stage: expression/default/required binding, typed-binding checks,
+supplied-input contracts, base-wrapper assertions, node execution, and result
+validation. Each producer
 passes its best operation origin, if any, through `Node.failure_trace()`; the
 node origin is the local fallback after any generated ancestry. Host control,
 stream callbacks, unexpected binder faults, and malformed compiled/setup state
@@ -260,7 +261,7 @@ one responsibility:
 
 | Carrier | Meaning |
 | --- | --- |
-| `Binding` | one flow-owned input or output expression/literal |
+| `Binding` | one flow-owned input or output expression/literal, with an optional declared `ValueContract` |
 | `Parameter` | one formal input, its optional contract, and default/coercion policy |
 | `Assertion` | one executable expression plus stable author-facing display text |
 | `ValueContract` | one recursive semantic `Type` plus nested origin selection |
@@ -286,8 +287,12 @@ transforms those slots without inspecting or copying semantic payloads.
 every direct `flow.wiring[node_id][parameter]` value and every
 `FlowOutput.binding` is canonical `Binding`, while raw Python-authored values are
 accepted and wrapped origin-free. Expansion rewrites only `Binding.source` and
-retains `Binding.origin`; pre-IR Compose dictionaries and runtime-only overrides
-remain raw. `FlowOutput.from_` is a temporary read-only source view during the
+retains `Binding.origin` and `Binding.contract`; pre-IR Compose dictionaries and
+runtime-only overrides remain raw. `Binding.contract` is set only for a typed binding
+(`name: Type = value`); its contract origins are traversed and rebased with the
+binding's own origin. Declared binding types are part of the manifest: wiring types
+in a separate `binding_types` map and output types under a `type` key, so untyped
+flows keep their fingerprints. `FlowOutput.from_` is a temporary read-only source view during the
 remaining migration.
 
 `Node.origin` is the same source-neutral provenance shape for an authored node
@@ -367,7 +372,10 @@ required/default presence, and string-coercion policy. Binding validates stored
 defaults without replacing their authored payload, and coerces supplied strings
 only when the parameter opts in. A bound null shadows a default but still passes
 through contract validation, so it is accepted only when the parameter is untyped
-or its contract accepts null (a nullable or `None`-kind type).
+or its contract accepts null (a nullable or `None`-kind type). A present typed
+`Binding` is checked after its source resolves and before the parameter contract:
+`build_value_as` validates the value against `Binding.contract` and the built value
+is discarded, so the payload reaches the node unconverted. A miss is `binding.type`.
 
 Numeric `Type` values may retain an inclusive `bounds` pair for INTEGER or
 NUMBER. Shape validation rejects malformed, reversed, or incompatible
@@ -426,7 +434,9 @@ keep their fingerprints.
 indices. A supplied-value rejection resolves that path through `ContractOrigins`
 (exact, nearest ancestor, then default) before falling back to the parameter
 origin. An invalid authored default remains `binding.evaluate` and uses its
-default origin rather than the value-contract site.
+default origin rather than the value-contract site. A typed binding whose value
+misses its declared type fails `binding.type`, located at the declared type's
+origin for the failing path, then the binding's origin, then the parameter's.
 Parameter/default/contract origins do not affect manifest identity. Compose
 `input:` lowers directly into this same exact carrier shape; `ComposedFlow.input`
 and START reuse the same carriers without a parallel front-end declaration type.
@@ -491,8 +501,9 @@ a located load error. Facts flow in Kahn's order over data, CASE, and `depends_o
 control edges join by union, each required data group joins its producers by union, and
 all contributions meet by intersection. Optional groups and `runs_after` contribute
 nothing; nodes on a cycle get no facts and are left for `reject_cycles`. The call-type and
-CASE-exhaustiveness checks read `Narrowing.for_node(id)`, and the reference check reads
-`for_param`, which falls back to it; flow outputs are checked unnarrowed. Inline child bodies and LOOP seeds are typed while nodes build, before
+CASE-exhaustiveness checks read `Narrowing.for_node(id)`, and the reference and
+typed-input checks read `for_param`, which falls back to it; flow outputs are checked
+unnarrowed. Inline child bodies and LOOP seeds are typed while nodes build, before
 the pass, so they see unnarrowed types. Runtime routing is unchanged.
 
 Physical Compose declarations derive exact `ValueContract`s. Output binding derivation,
@@ -505,7 +516,12 @@ Record assembly produces an exact record when every field is exact, otherwise a
 closed `PartialRecordContract` with the proven siblings. `ChildSignature.output` follows
 the child's END: a record (`output: {...}`, even with one field or none) gets the record
 contract keyed by every name, a value (`output: ${x}`) re-exports that binding's contract,
-and CALL preserves it. A LOOP's contract is the merged carried
+and CALL preserves it. END's `output_contract` comes from declared output types: a
+value END takes its one output's `Binding.contract`, and a record END takes an exact
+record when every output is typed, else a partial record with the untyped fields
+opaque; with no typed output it stays `None`. END commits and replays through it, so
+parents see a child's declared output type and recorded outputs are re-checked on
+resume. A LOOP's contract is the merged carried
 record: each field the body returns comes from the body's contract, and each omitted
 field comes from its seed binding (a literal seed stays opaque). MAP derives `list[U]`
 only from an exact child contract because the output-contract sum has no partial-list
@@ -594,7 +610,9 @@ For an unchanged source-backed string, `SourceCursor.scalar_source` returns immu
 ranges when the scalar is a literal `|` block. The document derives those ranges from
 the real block token during its existing parse. Other scalar styles expose the whole
 range but no exact line tuple; virtual and value-changing cursors expose no scalar
-provenance.
+provenance. `SourceCursor.scalar_style` likewise reports an unchanged scalar's
+authored YAML style (`"plain"`, `"single"`, `"double"`, `"literal"`, or `"folded"`),
+also through projections, and `None` otherwise.
 
 `SourceCatalog` is Compose's immutable document-local `OriginResolver`. Its private
 builder maps typed semantic paths to opaque origins while retaining the physical

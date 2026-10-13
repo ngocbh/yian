@@ -127,7 +127,10 @@ def test_lone_non_scalar_expression_is_rejected(source):
 
     message = str(caught.value)
     assert "call.input.payload" in message
-    assert "explicitly typed named `defs:` body" in message
+    assert (
+        "declare its type with a typed binding (`name: Type = value`) or use an "
+        "explicitly typed named `defs:` body"
+    ) in message
 
 
 def test_mapping_literal_is_a_sorted_closed_record():
@@ -669,7 +672,10 @@ def test_unproven_direct_reference_is_a_located_named_def_error(source):
     error = caught.value
     assert _only_frame(error).range == source_range
     assert "call.input.payload" in str(error)
-    assert "explicitly typed named `defs:` body" in str(error)
+    assert (
+        "declare its type with a typed binding (`name: Type = value`) or use an "
+        "explicitly typed named `defs:` body"
+    ) in str(error)
 
 
 @pytest.mark.parametrize("provider", ["producer", "item"])
@@ -722,7 +728,10 @@ def test_inference_error_preserves_binding_range_line_and_hint():
     error = caught.value
     assert _only_frame(error).range == source_range
     assert "each.input.items" in str(error)
-    assert "explicitly typed named `defs:` body" in str(error)
+    assert (
+        "declare its type with a typed binding (`name: Type = value`) or use an "
+        "explicitly typed named `defs:` body"
+    ) in str(error)
 
 
 def test_template_scan_error_preserves_binding_range_and_line():
@@ -742,7 +751,10 @@ def test_template_scan_error_preserves_binding_range_and_line():
     assert _only_frame(error).range == source_range
     assert "call.input.query" in str(error)
     assert "unbalanced" in str(error)
-    assert "explicitly typed named `defs:` body" in str(error)
+    assert (
+        "declare its type with a typed binding (`name: Type = value`) or use an "
+        "explicitly typed named `defs:` body"
+    ) in str(error)
 
 
 _LIST_VALUE_KINDS = tuple(kind for kind in ValueKind if kind.is_list())
@@ -920,7 +932,10 @@ def test_structural_proof_error_preserves_source_range_line_and_hint():
     error = caught.value
     assert _only_frame(error).range == source_range
     assert "each.input.rows" in str(error)
-    assert "explicitly typed named `defs:` body" in str(error)
+    assert (
+        "declare its type with a typed binding (`name: Type = value`) or use an "
+        "explicitly typed named `defs:` body"
+    ) in str(error)
 
 
 def test_canonicalization_deep_copies_sorts_and_preserves_required_membership():

@@ -144,12 +144,12 @@ none was supplied, to that context. Only an absent local suffix is omitted;
 order and duplicates are preserved. When present, the final item is therefore
 the most precise available local operation, while `node_id` remains runtime
 execution identity. The closed plain-string codes are `binding.evaluate`,
-`contract.input`, `assertion.failed`, `node.execute`, `contract.node_result`,
-`contract.output`, `contract.route`, `contract.growth`, and
-`graph.terminal_unreachable`. Exception names and traceback text are debug data,
+`binding.type`, `contract.input`, `assertion.failed`, `node.execute`,
+`contract.node_result`, `contract.output`, `contract.route`, `contract.growth`,
+and `graph.terminal_unreachable`. Exception names and traceback text are debug data,
 not semantic categories. The contract reserves these codes for expected
 flow-owned rejection. The evaluator structurally assigns `binding.evaluate`,
-`contract.input`, `assertion.failed`, `node.execute`, and
+`binding.type`, `contract.input`, `assertion.failed`, `node.execute`, and
 `contract.node_result`; it never classifies by exception type. `EvaluationFailure`
 owns exactly that single `Failure`. Dispatcher
 classification is structural too:
@@ -587,7 +587,9 @@ model made enforceable.
   absent and multi-field outputs keep their fingerprints; a zero- or one-field record
   adds `keyed: true`.
   Assertion expression/display/order/multiplicity and an output contract's semantic
-  `Type` affect identity. Every field consulted by an execution-semantic hook must
+  `Type` affect identity, as does a typed binding's declared `Type` (wiring types in
+  a separate `binding_types` map, output types under `type`, so untyped flows keep
+  their fingerprints). Every field consulted by an execution-semantic hook must
   likewise be manifest-backed; `skipped_output_target()` currently derives from
   `commit_as` or LOOP's `origin_id`. Diagnostic-only `exception_origin` and
   `failure_trace` project node/carrier origins and generated `origin_context`,
@@ -663,7 +665,8 @@ recursion, and graph-wide rebasing. No node imports the compile walker.
 ### Source-neutral semantic carriers
 
 `nodes/contracts.py` is the dependency-low semantic IR vocabulary. `Binding`
-owns one input source, `Parameter` owns one formal/default policy, `Assertion`
+owns one input source and, for a typed binding (`name: Type = value`), an optional
+declared `ValueContract` whose origins travel with the binding's, `Parameter` owns one formal/default policy, `Assertion`
 owns executable and display text, and `ValueContract` pairs a provenance-free
 `Type` with `ContractOrigins`. Origins are optional and exposed through each
 carrier's `iter_origins()` / pure `map_origins()` methods. Those operations visit
@@ -721,8 +724,11 @@ contract, explicit default-presence bit, and string-coercion policy while the
 flow owns the corresponding `Binding` sources. Parameter/default/contract
 origins are manifest-neutral. A bound null shadows a default but still undergoes
 contract validation, so it is accepted only when the parameter is untyped or its
-contract accepts null (a nullable or `None`-kind type). `TypeCheckError.path` is
-relative to that contract and contains record names plus actual list indices.
+contract accepts null (a nullable or `None`-kind type). A present typed `Binding`
+is checked after its source resolves and before the parameter contract:
+`build_value_as` validates the value against `Binding.contract` and discards the
+built value, so the payload is not converted; a miss is `binding.type`.
+`TypeCheckError.path` is relative to that contract and contains record names plus actual list indices.
 Supplied-value rejection resolves it through `ContractOrigins.at()` (exact,
 nearest ancestor, then default) before the parameter fallback; an invalid
 authored default remains binding evaluation and keeps its default-site origin.
@@ -841,7 +847,11 @@ complete output-contract sum. `ChildSignature.declared_outputs` retains ordered
 `output` from it, CALL keeps that `output`, and LOOP takes a record body's field names
 from that `output`. The `output` is exact or partial: a value re-exports the single
 binding's contract, and a record combines every field (even one or none) into a closed
-record. Record assembly creates a closed `PartialRecordContract` whenever an exact
+record. A typed output binding resolves to its declared contract instead of the
+inferred one. END's `output_contract` comes from the declared output types: a value
+END takes its one `Binding.contract`, a record END an exact record when every output
+is typed, else a partial record; with no typed output it is `None`. END commit and
+replay check it, so recorded flow outputs are re-validated on resume. Record assembly creates a closed `PartialRecordContract` whenever an exact
 aggregate is unavailable, retaining every exact sibling. Reference, assert, CASE,
 CALL, and LOOP algorithms project an exact type only where one is required and use
 the partial arm's closed name set otherwise.
@@ -1137,8 +1147,10 @@ never runtime ids, graph topology, or a text heuristic.
 - **Semantic carrier:** `EvaluationFailure`, `NodeFailedRecord`, `NodeFailed`,
   `RunFailed`, and `RunResult` carry only the canonical `Failure`. Its ordered
   `OriginRef` trace is the complete source-neutral location authority.
-- **Evaluator producers:** `BindingError` carries `binding.evaluate` or
-  `contract.input` plus the best operation origin. Base-wrapper
+- **Evaluator producers:** `BindingError` carries `binding.evaluate`,
+  `binding.type`, or `contract.input` plus the best operation origin. A
+  `binding.type` origin is the declared type's origin at the failing path, then
+  the binding's origin, then the parameter's. Base-wrapper
   `NodeAssertFailed` carries its exact `Assertion` and becomes
   `assertion.failed`; the same class raised by node code remains `node.execute`.
   Body exceptions become `node.execute`, using the node's `exception_origin`

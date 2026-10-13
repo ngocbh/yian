@@ -1273,7 +1273,10 @@ output: ${consumer.output}
     message = str(caught.value)
     assert "consumer.input.value" in message
     assert "producer 'missing' has no available static type" in message
-    assert "explicitly typed named `defs:` body" in message
+    assert (
+        "declare its type with a typed binding (`name: Type = value`) or use an "
+        "explicitly typed named `defs:` body"
+    ) in message
     assert INLINE_FLOW_PREFIX not in message
     assert caught.value.diagnostic.frames[-1].range == expected_range
 
@@ -1313,7 +1316,10 @@ output: ${consumer.output}
     message = str(caught.value)
     assert "consumer.input.value" in message
     assert "producer 'producer' has no available static type" in message
-    assert "explicitly typed named `defs:` body" in message
+    assert (
+        "declare its type with a typed binding (`name: Type = value`) or use an "
+        "explicitly typed named `defs:` body"
+    ) in message
     assert INLINE_FLOW_PREFIX not in message
     assert caught.value.diagnostic.frames[-1].range == expected_range
 
@@ -1891,7 +1897,10 @@ output: ${{each.output}}
 
     message = str(caught.value)
     assert "each.input.row" in message
-    assert "explicitly typed named `defs:` body" in message
+    assert (
+        "declare its type with a typed binding (`name: Type = value`) or use an "
+        "explicitly typed named `defs:` body"
+    ) in message
     assert "only typed inside an outer MAP input" not in message
     assert caught.value.diagnostic.frames[-1].range == expected_range
     assert caught.value.diagnostic.frames[-1].range != over_range

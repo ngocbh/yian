@@ -75,6 +75,10 @@ _SCALAR_KEYWORDS = {
 # Names a typedef must not shadow (typing constructors + the generic builtins).
 _TYPING_CONSTRUCTORS = {"Optional", "Literal", "Union", "List", "Dict", "list", "dict", "Any"}
 
+# Names a type expression may start with besides typedefs, derived from the sets
+# above so they cannot drift. `topics` is a retired alias, so it is not listed.
+BUILTIN_TYPE_NAMES = frozenset(_SCALAR_KEYWORDS | _TYPING_CONSTRUCTORS | {"any"})
+
 
 def parse_type(s: str) -> TypeExpr:
     """Parse a type reference string into a `TypeExpr` AST via Python `ast` (eval mode).

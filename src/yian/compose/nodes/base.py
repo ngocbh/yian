@@ -93,7 +93,7 @@ class NodeDescriptor:
     """The base every `compose/nodes/<kind>.py` descriptor inherits — the fields common to
     all nodes, so no kind redeclares them.
 
-    Three field groups:
+    Four field groups:
     - **Author-surface commons** (`id` + `node_name`/`depends_on`/`runs_after`/`env`): `id` is
       the node's keyed-map key (no default); `node_name` the display title; `depends_on`/
       `runs_after` are RUN-ORDERING edges (no data flows — both gate on the source settling,
@@ -103,6 +103,9 @@ class NodeDescriptor:
       `input:` binding map (`param -> ${source}`); `outputs` stores the authored `output:` shape
       (a `read_type`-able spec, or `None`). Both default empty, and each kind opts into them via
       its own `allowed` set (see the module docstring).
+    - **Declared input types** (`input_types`): `param -> ValueContract` for each typed
+      `input:` binding (`qty: int = ${size.output.qty}`). Compose fills it at load when it
+      splits the type off the binding value; it is not a YAML key, so `parse` never reads it.
     - **Located-parse metadata** (`origin`/`range`/`field_ranges`): the opaque authored node
       identity, node body's `SourceRange`, and each present field's `SourceRange`. `compare=False`
       keeps them out of `==`, so a descriptor still equals an identically-configured one built
@@ -157,6 +160,7 @@ class NodeDescriptor:
     env: dict[str, Any] = field(default_factory=dict)
     inputs: dict[str, Any] = field(default_factory=dict)
     outputs: Any = None
+    input_types: dict[str, ValueContract] = field(default_factory=dict)
     origin: OriginRef | None = field(default=None, compare=False)
     range: Optional[SourceRange] = field(default=None, compare=False)
     # `(kind, key) -> SourceRange` for each authored named site. Stamped here at parse and

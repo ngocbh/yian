@@ -7,7 +7,8 @@ source (an `expr.template` value — a whole `${...}`
 resolved against the pool with type preserved, an embedded `${...}` stringified, or a literal),
 building the `{name: value}` record the engine's `eval_node` hands the node instead of the pool.
 Type-checking consumes an optional resolved `ValueContract`; untyped parameters
-accept any resolved Python value.
+accept any resolved Python value. A typed `Binding` additionally checks its resolved
+value against the binding's own declared contract, without converting it.
 
 A MAP body binds a per-element `item` scope: `${item}` / `${item.path}` resolve from the current
 element passed via the `item=` kwarg (a body-local scope, NOT a pool head). The default (`item`
@@ -32,13 +33,15 @@ from yian.expr import (
 )
 from yian.expr.lineage import ResolvedValue, ValueRoute
 from yian.expr.template import Span, eval_template, scan_template
-from yian.nodes.contracts import Binding, Parameter, binding_source
+from yian.nodes.contracts import Binding, Parameter, ValueContract, binding_source
 from yian.typesys import TypeCheckError, ValueKind, build_value_as
 from yian.typesys.pool import VariablePool
 from yian.typesys.values import Type
 
 
-BindingFailureCode: TypeAlias = Literal["binding.evaluate", "contract.input"]
+BindingFailureCode: TypeAlias = Literal[
+    "binding.evaluate", "binding.type", "contract.input"
+]
 SourceResolver: TypeAlias = Callable[[str], ResolvedValue]
 ReservedBinder: TypeAlias = Callable[[str, Any, Callable[[Any], Any]], Any]
 
@@ -141,9 +144,11 @@ class BindingCollector:
 class BindingError(ValueError):
     """An expected binding operation failed with one semantic stage and origin.
 
-    ``failure_code`` distinguishes expression/default/required evaluation from a
-    supplied value violating its input contract. ``origin`` is the most precise
-    available authored operation and feeds the canonical failure trace.
+    ``failure_code`` distinguishes expression/default/required evaluation
+    (``binding.evaluate``), a value violating its typed binding's declared type
+    (``binding.type``), and a supplied value violating its input contract
+    (``contract.input``). ``origin`` is the most precise available authored
+    operation and feeds the canonical failure trace.
     """
 
     def __init__(
@@ -155,7 +160,7 @@ class BindingError(ValueError):
     ) -> None:
         """Retain one validated binder-owned semantic classification."""
         super().__init__(message)
-        if failure_code not in ("binding.evaluate", "contract.input"):
+        if failure_code not in ("binding.evaluate", "binding.type", "contract.input"):
             raise ValueError(f"invalid binding failure code {failure_code!r}")
         if origin is not None:
             if not isinstance(origin, OriginRef):
@@ -313,6 +318,36 @@ def _resolve_source(
         ) from exc
 
 
+def _check_binding_type(
+    name: str, binding: Binding, contract: ValueContract, value: Any
+) -> None:
+    """Validate a resolved value against its typed binding's declared contract.
+
+    The check runs before any parameter coercion and discards the built value, so
+    the original payload is delivered unchanged (an ``int`` declared ``float`` stays
+    an ``int``) and a string never satisfies a non-string declared type.
+
+    Args:
+        name (`str`): The bound parameter name, used in the failure message.
+        binding (`Binding`): The typed binding, whose origin is the fallback location.
+        contract (`ValueContract`): The binding's declared contract.
+        value (`Any`): The value the binding's source resolved to.
+
+    Raises:
+        BindingError: With ``failure_code="binding.type"`` when the value violates
+            the declared type, located at the nearest contract origin for the
+            rejected path, else the binding's origin.
+    """
+    try:
+        build_value_as(contract.type, value)
+    except TypeCheckError as exc:
+        raise BindingError(
+            f"binding {name!r}: {exc}",
+            failure_code="binding.type",
+            origin=contract.origins.at(exc.path) or binding.origin,
+        ) from exc
+
+
 def bind_params(
     params: list[Parameter],
     wiring: dict[str, Any],
@@ -327,7 +362,9 @@ def bind_params(
     """Resolve each declared `Parameter` into a typed record — the engine's read boundary.
 
     Joins each param to its source from the flow-owned `wiring` dict (`wiring[name] -> source`):
-    coalesce / default / required / type-check / deep-copy / `item` scope. An OMITTED input (no
+    coalesce / default / required / type-check / deep-copy / `item` scope. A present typed
+    `Binding` first checks its resolved value against the binding's declared contract, leaving
+    the value unconverted; the parameter's own contract then runs as usual. An OMITTED input (no
     wiring edge) fills its declared default or fails when required; a caller's explicit null
     SHADOWS the child default (`f(x=None)` semantics).
 
@@ -355,8 +392,9 @@ def bind_params(
         `dict[str, Any]`: The bound `{name: value}` record handed to the node instead of the pool.
 
     Raises:
-        BindingError: On expression/default/required evaluation failure or supplied
-            input contract rejection; ``failure_code`` identifies the stage.
+        BindingError: On expression/default/required evaluation failure, typed binding
+            rejection, or supplied input contract rejection; ``failure_code`` identifies
+            the stage.
     """
     _validate_parameters(params)
     if collector is not None:
@@ -371,6 +409,8 @@ def bind_params(
                 source, pool, item, collector=collector if present else None,
                 name=p.name, source_resolver=source_resolver, types=types,
             )
+            if present and isinstance(source, Binding) and source.contract is not None:
+                _check_binding_type(p.name, source, source.contract, value)
             if value is None:
                 # Distinguish an OMITTED input (no wiring edge) from one BOUND-TO-NULL (an edge that
                 # resolves to None): only an omitted input fills its declared default / fails when

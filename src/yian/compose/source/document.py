@@ -646,6 +646,7 @@ def _build_definitions(
                     block_scalar_tokens.get(node.end_mark.index),
                     value,
                 ),
+                style=(node.style if isinstance(node, yaml.ScalarNode) else None),
             )
         return definition_id
 

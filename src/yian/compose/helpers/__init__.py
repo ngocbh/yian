@@ -19,6 +19,10 @@ Modules:
                   `SourceCursor`; compatibility metadata, never a YAML parser. Assertion
                   origin/range pairs come from one retained item cursor in the build
                   conductor, not a helper-side map.
+  - `typed_bindings` `split_typed_binding`: recognizes plain-style `Type = value`
+                  binding text, resolving the type and reading the value (a literal
+                  value is checked against the type); quoted and block scalars stay
+                  plain text.
   - `types`       one recursive type-shape reader: `read_type`, `read_flow_inputs`,
                   and `read_variables` are source-free; `read_value_contract` and
                   `read_source_parameters` compile retained input/variable cursors into

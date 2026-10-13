@@ -37,7 +37,10 @@ from yian.nodes.contracts import (
 from yian.typesys.values import Type, ValueKind, union_field
 
 
-_EXPLICIT_TYPE_HINT = "use an explicitly typed named `defs:` body"
+_EXPLICIT_TYPE_HINT = (
+    "declare its type with a typed binding (`name: Type = value`) or use an "
+    "explicitly typed named `defs:` body"
+)
 
 ProducerType = Callable[[str, str, SourceRange | None], Type | OutputContract]
 ItemType = Callable[[str, SourceRange | None], Type]

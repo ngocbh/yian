@@ -23,6 +23,9 @@ One function, `load_flow()`, drives a fixed pipeline. Read it like a compiler:
   ├─ parse_nodes           → one frozen DESCRIPTOR per node (per-kind, source-ordered)
   ├─ stamp authored headers → optional Node origins in one document-local catalog
   ├─ stamp kind-owned sites → descriptor hook; CODE scalar/lines + CASE predicates/`on:`
+  ├─ split typed bindings  → each unquoted `name: Type = value` node input and flow
+  │                          output becomes its value + a declared ValueContract
+  │                          (YAML scalar style decides; quoted/block is plain text)
   │
   ├─ desugar_inline_calls        ┐  rewrite author sugar into core nodes and
   │                               │  carrierize flow assertions by source order.
@@ -34,19 +37,28 @@ One function, `load_flow()`, drives a fixed pipeline. Read it like a compiler:
   │                                Compose-only node/field ranges stay on BuildResult
   │                                (physical output contracts compile origins here)
   ├─ stamp node wiring       → ordinary Parameter key origins + ordinary/reserved
-  │                             final Binding value origins
+  │                             final Binding value origins; declared input types
+  │                             land on Binding.contract
   │
   ├─ infer_data_edges       → read every ${...} and add the corresponding data edges;
   │                            append each case's own data+control edges from its build
   ├─ compute_narrowing      → each node's view of union contracts under the CASE
   │                            branches (`on:` tag, `isinstance`) that route it
+  ├─ check typed inputs     → a typed node input whose inferred type (read against
+  │                            its node's narrowed view) is disjoint from its declared
+  │                            type is rejected, before the call/loop type checks
   ├─ infer_ordering_edges   → add authored depends_on/runs_after ordering-only edges
   ├─ validate_references    → every ${...} resolves and type-checks
   ├─ stamp node assertions → validate/classify one originated carrier per list position
   ├─ stamp flow outputs     → source-backed bare/mapped values on final
-  │                            FlowOutput bindings (mapping keys stay origin-free)
+  │                            FlowOutput bindings (mapping keys stay origin-free);
+  │                            declared output types land on Binding.contract
+  ├─ check typed outputs    → a typed flow output whose inferred type is disjoint
+  │                            from its declared type is rejected (narrower or
+  │                            unknown is left to the runtime check)
   ├─ synthesize boundary    → START/END nodes, edges, and binding-preserving wiring;
-  │                            END is a value or a record by the shape of `output:`
+  │                            END is a value or a record by the shape of `output:`;
+  │                            END's output contract comes from declared output types
   ├─ fill type tables       → resolve each node's `isinstance` type names into
   │                            `Node.types` against the flow's `typedefs:`
   ├─ reject_cycles          → the graph is a DAG
@@ -96,6 +108,11 @@ line breaks. Folded, quoted, and plain scalars explicitly provide no exact line 
 consumer can use the whole range instead. Virtual and value-changing projected cursors
 provide no scalar provenance. The ranges come from the real block token during the same
 construction pass; anchors or tags before `|` therefore cannot shift the body mapping.
+
+`SourceCursor.scalar_style` reports the authored YAML style of an unchanged source-backed
+scalar of any type: `"plain"`, `"single"`, `"double"`, `"literal"`, or `"folded"`. An alias
+reports its anchored scalar's style. Projections keep the style while the value still equals
+the authored scalar; mappings, sequences, virtual values, and changed values report `None`.
 
 The public source model is immutable: documents keep parser objects private, virtual and
 projected values are snapshotted, and cursor value reads use a stack-safe iterative copy
@@ -329,6 +346,12 @@ and a record-mode END returns a dict keyed by every name, even with one key or n
 The two differ by the YAML shape of `output:`, not by the carrier name: `output:
 {result: ${x}}` still returns `{result: x}`. No `output:` gives a value-mode END with
 no input, which returns `None`.
+
+A typed output (`output: Size = ${x}`, or a typed field) carries its declared
+`ValueContract` on `FlowOutput.binding.contract`. END's `output_contract` comes from
+those: a value END takes its one declared contract, and a record END takes an exact
+record when every field is typed, else a partial record whose untyped fields stay
+opaque. END's commit and replay check it like any node output.
 
 ---
 

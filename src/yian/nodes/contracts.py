@@ -203,27 +203,37 @@ class ChildFlowBoundary:
 
 @dataclass(frozen=True)
 class Binding:
-    """One flow-owned input expression or literal plus its authored origin.
+    """One flow-owned input expression or literal, its origin, and its declared type.
+
+    The binding owns its declared contract: a typed binding states the type its
+    value must have, independent of the receiving node's parameter contract.
 
     Attributes:
         source (`Any`): Semantic binding payload; retained by identity.
         origin (`OriginRef | None`): Authored binding site, when available.
+        contract (`ValueContract | None`): Declared value contract, when typed.
     """
 
     source: Any
     origin: OriginRef | None = None
+    contract: ValueContract | None = None
 
     def __post_init__(self) -> None:
-        """Reject non-origin provenance values."""
+        """Reject non-origin provenance values and non-contract declared types."""
         _validate_optional_origin(self.origin, "binding origin")
+        if self.contract is not None and type(self.contract) is not ValueContract:
+            raise TypeError("binding contract must be a ValueContract or None")
 
     def map_origins(self, mapper: _OriginMapper) -> Binding:
-        """Return this binding with its present origin transformed by ``mapper``."""
+        """Return this binding with its origin and contract origins transformed by ``mapper``."""
         origin = _map_origin(self.origin, mapper)
-        return Binding(source=self.source, origin=origin)
+        contract = (
+            self.contract.map_origins(mapper) if self.contract is not None else None
+        )
+        return Binding(source=self.source, origin=origin, contract=contract)
 
     def iter_origins(self) -> Iterator[OriginRef]:
-        """Yield this binding's present origin."""
+        """Yield this binding's present origin, then its contract's origins."""
         yield from _iter_origin_carrier(self, set())
 
 
@@ -753,6 +763,8 @@ def _iter_origin_carrier(
         _validate_optional_origin(carrier.origin, "binding origin")
         if carrier.origin is not None:
             yield carrier.origin
+        if carrier.contract is not None:
+            yield from _iter_origin_carrier(carrier.contract, seen)
         return
     if isinstance(carrier, Assertion):
         _validate_optional_origin(carrier.origin, "assertion origin")
@@ -808,6 +820,8 @@ def _rewrite_origin_carrier(
             "origin",
             _map_origin(carrier.origin, mapper),
         )
+        if carrier.contract is not None:
+            _rewrite_origin_carrier(carrier.contract, mapper, seen)
     elif isinstance(carrier, Assertion):
         object.__setattr__(
             carrier,

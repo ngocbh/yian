@@ -1283,3 +1283,144 @@ def test_scalar_source_projection_requires_the_constructed_value_to_be_unchanged
 
 def test_scalar_source_virtual_string_has_no_provenance():
     assert SourceCursor.virtual("first\nsecond").scalar_source is None
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("value: x = 1\n", "plain"),
+        ("value: 'x = 1'\n", "single"),
+        ('value: "x = 1"\n', "double"),
+        ("value: |\n  x = 1\n", "literal"),
+        ("value: >\n  x = 1\n", "folded"),
+        ("value: first\n  second\n", "plain"),
+        ("value: 3\n", "plain"),
+        ("value:\n", "plain"),
+    ],
+    ids=[
+        "plain",
+        "single",
+        "double",
+        "literal",
+        "folded",
+        "multiline-plain",
+        "plain-int",
+        "plain-null",
+    ],
+)
+def test_scalar_style_reports_the_authored_yaml_style(text, expected):
+    cursor = SourceDocument.parse(text).root.child("value")
+
+    assert cursor.scalar_style == expected
+
+
+def test_scalar_style_of_sequence_items_and_aliases():
+    root = SourceDocument.parse(
+        "items: [plain, 'single', \"double\"]\n"
+        "anchored: &a 'x = 1'\n"
+        "alias: *a\n"
+    ).root
+
+    assert [item.scalar_style for item in root.child("items").children()] == [
+        "plain",
+        "single",
+        "double",
+    ]
+    assert root.child("alias").scalar_style == "single"
+
+
+def test_scalar_style_is_none_without_an_unchanged_source_scalar():
+    root = SourceDocument.parse("map: {a: 1}\nseq: [1]\nvalue: x\n").root
+
+    assert root.child("map").scalar_style is None
+    assert root.child("seq").scalar_style is None
+    assert SourceCursor.virtual("x").scalar_style is None
+    assert root.child("value").with_value("other").scalar_style is None
+    assert root.child("value").with_value("x").scalar_style == "plain"
+
+
+def test_scalar_style_survives_node_signature_normalization():
+    from yian.compose.parse.nodes import normalize_node_signature_cursor
+
+    nodes = SourceDocument.parse(
+        "nodes:\n"
+        "  step:\n"
+        "    kind: tool\n"
+        "    input:\n"
+        "      plain: int = 3\n"
+        "      quoted: 'int = 3'\n"
+    ).root.child("nodes")
+
+    inputs = normalize_node_signature_cursor(nodes.child("step")).child("inputs")
+
+    assert inputs.child("plain").scalar_style == "plain"
+    assert inputs.child("quoted").scalar_style == "single"
+
+
+def test_scalar_style_survives_inline_body_masking():
+    from yian.compose.desugar.inline_bodies import extract_inline_bodies
+    from yian.compose.parse.nodes import normalize_node_signature_cursor
+
+    nodes = SourceDocument.parse(
+        "nodes:\n"
+        "  outer:\n"
+        "    kind: call\n"
+        "    input:\n"
+        "      a: x = 1\n"
+        "      b: \"x = 1\"\n"
+        "    nodes:\n"
+        "      inner:\n"
+        "        kind: tool\n"
+        "        input:\n"
+        "          c: y = 2\n"
+        "          d: >\n"
+        "            y = 2\n"
+        "    output: ${inner.out}\n"
+    ).root.child("nodes")
+
+    masked, bodies = extract_inline_bodies(nodes, owner=("flow",))
+
+    outer_inputs = normalize_node_signature_cursor(masked.child("outer")).child(
+        "inputs"
+    )
+    assert outer_inputs.child("a").scalar_style == "plain"
+    assert outer_inputs.child("b").scalar_style == "double"
+    inner_inputs = normalize_node_signature_cursor(
+        bodies["outer"].nodes_cursor.child("inner")
+    ).child("inputs")
+    assert inner_inputs.child("c").scalar_style == "plain"
+    assert inner_inputs.child("d").scalar_style == "folded"
+
+
+def test_scalar_style_of_a_def_node_input():
+    from yian.compose.parse.nodes import normalize_node_signature_cursor
+
+    root = SourceDocument.parse(
+        "defs:\n"
+        "  helper:\n"
+        "    nodes:\n"
+        "      step:\n"
+        "        kind: tool\n"
+        "        input:\n"
+        "          plain: int = 3\n"
+        "          quoted: 'int = 3'\n"
+    ).root
+
+    step = root.child("defs").child("helper").child("nodes").child("step")
+    inputs = normalize_node_signature_cursor(step).child("inputs")
+
+    assert inputs.child("plain").scalar_style == "plain"
+    assert inputs.child("quoted").scalar_style == "single"
+
+
+def test_scalar_style_survives_the_single_node_def_projection():
+    from yian.compose.loader import _single_node_def_cursor
+
+    root = SourceDocument.parse(
+        "kind: llm\n"
+        "inputs: {x: int}\n"
+        "prompt: 'x = 1'\n"
+    ).root
+    node = _single_node_def_cursor("only", root.value, root).child("only")
+
+    assert node.child("prompt").scalar_style == "single"

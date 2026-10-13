@@ -6,16 +6,21 @@ Compose loader (`yian.compose`) reuses them directly:
 - `_reject_cycles` — Kahn's-algorithm cycle check over a bare edge list + node-id set.
 - `_classify_path` — head-resolution for one dotted `${...}` ref. Field reads are
   checked by the shared output-contract walk in `nodes/contracts.py`.
+- `types_compatible` — whether every value of a source type fits a sink type.
+- `type_relation` — how an inferred type relates to a declared one: it fits, is
+  narrower (only some values fit), or is disjoint (no value fits).
 
 `FlowValidationError` is the shared structural-error type the compose loader catches
 and re-raises as a located `LoadError`.
 """
 
+import math
+from typing import Literal
 
 from dataclasses import replace
 
 from yian.compile.model import END_ID, START_ID
-from yian.typesys.values import ValueKind, Type
+from yian.typesys.values import TypeCheckError, ValueKind, Type, build_value_as
 
 _CLOSED_HEADS = ()              # `outputs` is no longer a head; node-first head dispatch
 _SYSTEM_AMBIENTS = ("today", "now", "run_id")  # the ONLY valid ${system.X} ambients
@@ -102,12 +107,8 @@ def types_compatible(source: Type, sink: Type) -> bool:
     if source_is_list or sink_is_list:
         if not (source_is_list and sink_is_list):
             return False
-        source_element = source.element
-        if source_element is None and source.kind.element_kind is not None:
-            source_element = Type.scalar(source.kind.element_kind)
-        sink_element = sink.element
-        if sink_element is None and sink.kind.element_kind is not None:
-            sink_element = Type.scalar(sink.kind.element_kind)
+        source_element = _list_element(source)
+        sink_element = _list_element(sink)
         if sink_element is None:
             return True
         return source_element is not None and types_compatible(
@@ -151,6 +152,229 @@ def types_compatible(source: Type, sink: Type) -> bool:
         if not source.tags <= sink.tags:
             return False
     return True
+
+
+TypeRelation = Literal["fits", "narrower", "disjoint"]
+
+_RELATION_RANK = {"disjoint": 0, "narrower": 1, "fits": 2}
+
+# Date and datetime values are stored as ISO strings, so each fits a `str` slot.
+_STRING_STORED = (ValueKind.DATE, ValueKind.DATETIME)
+
+
+def type_relation(inferred: Type, declared: Type) -> TypeRelation:
+    """Classify how an inferred value type relates to a declared type.
+
+    - ``"fits"``: every value of ``inferred`` is a value of ``declared``; no runtime
+      check is needed.
+    - ``"narrower"``: some values of ``inferred`` are values of ``declared`` and some
+      may not be; the binding is accepted and checked at runtime.
+    - ``"disjoint"``: no non-null value of ``inferred`` is a value of ``declared``;
+      the binding can never succeed. Sharing only `None` does not count as overlap,
+      so ``Optional[str]`` against ``Optional[int]`` is disjoint. This null-only
+      rule applies to the whole value: a record whose differing field both sides
+      may omit (or may both hold `None`) still shares non-null record values, so it
+      is narrower, not disjoint.
+
+    This mirrors `types_compatible` for ``"fits"`` but is stricter where that check
+    is lenient for wiring: a tag-less string into a `Literal` is only narrower, and
+    records are treated as closed, as the write-boundary check treats them (unknown
+    fields are rejected), so a record fits only when its fields are a subset of the
+    declared fields at every level. It is also more permissive in one place: `date`
+    and `datetime` fit `str`, since they are stored as strings. A `Literal` meets
+    `date` or `datetime` only through tags that are valid ISO strings of that kind.
+    Unions are compared member-wise: each inferred member takes its best relation
+    against the declared members, so a union member over the union is narrower and
+    a record matching no member is disjoint.
+
+    Args:
+        inferred (`Type`): Type the producing expression is inferred to have.
+        declared (`Type`): Type the binding declares.
+
+    Returns:
+        `TypeRelation`: ``"fits"``, ``"narrower"``, or ``"disjoint"``.
+    """
+    if inferred.kind is ValueKind.NONE:
+        return "fits" if _accepts_none(declared) else "disjoint"
+    if declared.kind is ValueKind.NONE:
+        return "disjoint"
+    relation = _relate_non_null(inferred, declared)
+    if relation == "fits" and inferred.nullable and not declared.nullable:
+        return "narrower"
+    return relation
+
+
+def _accepts_none(typ: Type) -> bool:
+    """Return whether ``typ`` admits the `None` value."""
+    return typ.kind is ValueKind.NONE or typ.nullable
+
+
+def _weakest(*relations: TypeRelation) -> TypeRelation:
+    """Return the least permissive of ``relations``."""
+    return min(relations, key=_RELATION_RANK.__getitem__)
+
+
+def _list_element(typ: Type) -> "Type | None":
+    """Return a list type's element contract, or `None` for an unrefined list."""
+    if typ.element is not None:
+        return typ.element
+    if typ.kind.element_kind is not None:
+        return Type.scalar(typ.kind.element_kind)
+    return None
+
+
+def _relate_non_null(inferred: Type, declared: Type) -> TypeRelation:
+    """Classify the non-null values of ``inferred`` against ``declared``."""
+    if inferred.variants is not None or declared.variants is not None:
+        return _relate_union(inferred, declared)
+    inferred_is_list = inferred.kind.is_list()
+    declared_is_list = declared.kind.is_list()
+    if inferred_is_list or declared_is_list:
+        if not (inferred_is_list and declared_is_list):
+            return "disjoint"
+        declared_element = _list_element(declared)
+        if declared_element is None:
+            return "fits"
+        inferred_element = _list_element(inferred)
+        if inferred_element is None:
+            return "narrower"
+        # The empty list is shared by every pair of list types; it is not overlap.
+        return type_relation(inferred_element, declared_element)
+
+    relation = _relate_kinds(inferred.kind, declared.kind)
+    if relation == "disjoint":
+        return relation
+    return _weakest(
+        relation,
+        _relate_bounds(inferred, declared),
+        _relate_tags(inferred, declared),
+        _relate_fields(inferred, declared),
+    )
+
+
+def _relate_union(inferred: Type, declared: Type) -> TypeRelation:
+    """Classify the non-null values of ``inferred`` against ``declared`` member-wise.
+
+    Either side may be a union; a non-union side counts as a one-member union.
+    Each inferred member takes its best relation against the declared members,
+    since a value fits the union when it fits any member. The results then
+    combine as alternatives: fits when every member fits, disjoint when every
+    member is disjoint, and narrower otherwise.
+
+    Args:
+        inferred (`Type`): Inferred type; a union or any other type.
+        declared (`Type`): Declared type; a union or any other type.
+
+    Returns:
+        `TypeRelation`: ``"fits"``, ``"narrower"``, or ``"disjoint"``.
+    """
+    inferred_members = inferred.variants or (inferred,)
+    declared_members = declared.variants or (declared,)
+    relations = {
+        max(
+            (_relate_non_null(member, option) for option in declared_members),
+            key=_RELATION_RANK.__getitem__,
+        )
+        for member in inferred_members
+    }
+    if len(relations) == 1:
+        return relations.pop()
+    return "narrower"
+
+
+def _relate_kinds(inferred: ValueKind, declared: ValueKind) -> TypeRelation:
+    """Classify two non-list storage kinds before refinements are compared."""
+    if inferred is declared:
+        return "fits"
+    if inferred is ValueKind.INTEGER and declared is ValueKind.NUMBER:
+        return "fits"
+    if inferred is ValueKind.NUMBER and declared is ValueKind.INTEGER:
+        # A float-typed value can still be an int: a record field is never widened.
+        return "narrower"
+    if inferred in _STRING_STORED and declared is ValueKind.STRING:
+        return "fits"
+    if inferred is ValueKind.STRING and declared in _STRING_STORED:
+        return "narrower"
+    return "disjoint"
+
+
+def _relate_bounds(inferred: Type, declared: Type) -> TypeRelation:
+    """Compare numeric intervals; an absent bound is unbounded."""
+    if declared.bounds is None:
+        return "fits"
+    low, high = inferred.bounds if inferred.bounds is not None else (-math.inf, math.inf)
+    if declared.bounds[0] <= low and high <= declared.bounds[1]:
+        return "fits"
+    shared_low = max(low, declared.bounds[0])
+    shared_high = min(high, declared.bounds[1])
+    if inferred.kind is ValueKind.INTEGER:
+        # An int interval overlaps only if a whole number lies in the shared range.
+        shared_low, shared_high = math.ceil(shared_low), math.floor(shared_high)
+    return "narrower" if shared_low <= shared_high else "disjoint"
+
+
+def _relate_tags(inferred: Type, declared: Type) -> TypeRelation:
+    """Compare `Literal` tag sets; a tag-less source into a `Literal` is narrower.
+
+    A `Literal` against `date` or `datetime` (either way round) overlaps only
+    when some tag is a valid ISO string of that kind.
+    """
+    if inferred.tags is not None and declared.kind in _STRING_STORED:
+        return _tags_meet_kind(inferred.tags, declared.kind)
+    if declared.tags is None:
+        return "fits"
+    if inferred.kind in _STRING_STORED:
+        return _tags_meet_kind(declared.tags, inferred.kind)
+    if inferred.tags is None:
+        return "narrower"
+    if inferred.tags <= declared.tags:
+        return "fits"
+    return "narrower" if inferred.tags & declared.tags else "disjoint"
+
+
+def _tags_meet_kind(tags: frozenset[str], kind: ValueKind) -> TypeRelation:
+    """Return narrower when some tag is a valid ``kind`` string, else disjoint."""
+    for tag in tags:
+        try:
+            build_value_as(kind, tag)
+        except TypeCheckError:
+            continue
+        return "narrower"
+    return "disjoint"
+
+
+def _relate_fields(inferred: Type, declared: Type) -> TypeRelation:
+    """Compare record fields, treating both records as closed."""
+    if declared.fields is None:
+        return "fits"
+    if inferred.fields is None:
+        return "narrower"
+    inferred_required = inferred.required or frozenset()
+    declared_required = declared.required or frozenset()
+    if not inferred_required <= declared.fields.keys():
+        return "disjoint"
+    if not declared_required <= inferred.fields.keys():
+        return "disjoint"
+    relation: TypeRelation = "fits"
+    if not inferred.fields.keys() <= declared.fields.keys():
+        relation = "narrower"
+    if not declared_required <= inferred_required:
+        relation = "narrower"
+    for name, inferred_field in inferred.fields.items():
+        declared_field = declared.fields.get(name)
+        if declared_field is None:
+            continue
+        field_relation = type_relation(inferred_field, declared_field)
+        if field_relation == "disjoint":
+            # Two records still share values when both may omit the field or both
+            # may hold `None` there.
+            both_omit = name not in inferred_required and name not in declared_required
+            both_none = _accepts_none(inferred_field) and _accepts_none(declared_field)
+            if not (both_omit or both_none):
+                return "disjoint"
+            field_relation = "narrower"
+        relation = _weakest(relation, field_relation)
+    return relation
 
 
 def _classify_path(

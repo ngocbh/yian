@@ -24,6 +24,7 @@ from yian.typesys.values import (
     union_tag_fields,
 )
 from yian.typesys.types import (
+    BUILTIN_TYPE_NAMES,
     RecordDef,
     TypeRegistry,
     VariantDef,
@@ -34,6 +35,7 @@ from yian.typesys.types import (
 
 __all__ = [
     "AnyValue",
+    "BUILTIN_TYPE_NAMES",
     "DateValue",
     "DateTimeValue",
     "FieldAbsent",

@@ -467,3 +467,23 @@ def test_seed_11_anchored_nodes_parse():
         assert isinstance(nodes[nid], AgentDescriptor)
         assert nodes[nid].outputs == "str"
         assert nodes[nid].llm_config["provider"] == "anthropic"
+
+
+@pytest.mark.parametrize("key", ["depends_on", "runs_after"])
+@pytest.mark.parametrize("value", ["5", "null", "true", "{fetch: 1}", "[[fetch]]", "[5]", "''"])
+def test_ordering_field_must_be_a_list_of_node_ids(key, value):
+    # A non-list (or a list of non-strings) is a located LoadError at parse time, not a raw
+    # TypeError or a silent iteration over a string's characters / a mapping's keys.
+    text = f"use:\n  kind: code\n  {key}: {value}\n  output: str\n  code: m:f\n"
+    with pytest.raises(LoadError) as exc:
+        _nodes(text)
+    assert f"`{key}:` must be a list of node ids" in str(exc.value)
+    assert exc.value.diagnostic.frames[0].range is not None
+
+
+@pytest.mark.parametrize("key", ["depends_on", "runs_after"])
+def test_ordering_field_bare_string_suggests_list(key):
+    # `depends_on: fetch` is the natural slip; the error names the list spelling to write.
+    with pytest.raises(LoadError) as exc:
+        _nodes(f"use:\n  kind: code\n  {key}: fetch\n  output: str\n  code: m:f\n")
+    assert f"write `{key}: [fetch]`" in str(exc.value)

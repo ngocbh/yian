@@ -1,11 +1,11 @@
-# Branching — classify, route to one of two branches, then JOIN them back.
-# Exactly one branch runs; the other skips (its ref resolves to null). The `|`
-# coalesce in the output picks whichever branch actually produced a value.
+# Branching — classify, route to one of two branches, then read the result.
+# Exactly one branch runs; the other skips (its ref resolves to null).
+# `${route.output}` reads whichever branch actually ran.
 # Run:  yian run branching.yaml --input review="loved it"
 
 id: branching
 name: branching
-description: Classify a review, route to a matching reply, join the branches.
+description: Classify a review, route to a matching reply, return the reply.
 
 typedefs:
   Sentiment: Literal[positive, negative]    # an enum — the AGENT node answers one tag
@@ -48,5 +48,5 @@ nodes:
     output: str
     prompt: "Write an apologetic, helpful reply to: ${review}"
 
-# One branch ran, the other resolved null — coalesce to the live one.
-output: ${thank.output | apologize.output}
+# The output of whichever branch ran.
+output: ${route.output}

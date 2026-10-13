@@ -231,7 +231,11 @@ this model whenever you design anything:
   view of the producer/flow-input contracts under the `on:`/`isinstance` CASE branches
   that route it; the reference, call-type, and exhaustiveness checks read
   `Narrowing.for_node` (the reference check uses `for_param` for `isinstance`-guarded
-  searched-CASE params). Runtime routing does not change. Python-authored
+  searched-CASE params). Runtime routing does not change. A value-producing CASE
+  (`output:`, a value branch, or read as `${case.output}`) must be exhaustive, with a
+  flow-input `on:` resolved for it. Load-time desugar lifts each CASE value branch to a
+  `__value_N` CODE node and gives a typed CASE a `__case_<id>` result node; the runtime
+  is unchanged. Python-authored
   nodes pass `output_contract=`; there is no parallel
   output-Type API. Authored `output:` syntax (the descriptor's normalized `outputs` field)
   stays unchanged. Compose injects an optional source-aware reader through `BuildContext`;

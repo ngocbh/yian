@@ -149,7 +149,7 @@ read it inside a case on ${d.output.action}`. Flow outputs are never narrowed.
 | `${isinstance(x, Buy)}` | type test; `T` is a `typedefs:` name or `str`/`int`/`float`/`bool`/`date`/`datetime`/`object` |
 | `${X:-default}` | value, else `default` if absent |
 | `${X:?"msg"}` | required — fail with the literal `msg` if absent (quote the message) |
-| `${a \| b \| c}` | first present among peers — **the branch-join coalesce** |
+| `${a \| b \| c}` | first present among peers (e.g. the branches of a routing-only `case`) |
 | `$$` | a literal `$` (universal escape — in a prompt `$$` renders a single `$`) |
 
 `and`, `or`, `not`, and `in` are reserved operators, so none can be the root
@@ -504,10 +504,12 @@ restarted nodes use the contents passed there.
 Note `tool` uses `tool_id:` + `input:`, with an optional `output:`. ML inference
 goes through a host tool (`kind: tool`); `kind: model` was removed.
 
-### `case` — branching (routes only; no `input:`)
-It takes one branch, or none when no `when:` matches and there is no `else:`; the
-other targets skip, and so does every node that plainly reads (or `depends_on`) a
-skipped one. **Join the branches back with a `|` coalesce.**
+### `case` — branching (no `input:`)
+It takes one branch; the other targets skip, and so does every node that plainly
+reads (or `depends_on`) a skipped one. Read the taken branch's result with
+`${route.output}` (or `${route.output.field}`). A routing-only `case` (no `output:`,
+no value branch, never read via `${route.output}`) may take none when no `when:`
+matches and there is no `else:`.
 ```yaml
 route:
   kind: case
@@ -517,11 +519,39 @@ route:
       then: go_brief
     - when: no_go
       then: no_go_brief
-  else: more_info_brief        # required unless the Literal cases are exhaustive
+  else: more_info_brief        # runs when no `when:` matches
 ```
 Searched form (first true `when:` wins, no `on:`): `when: "score.output >= 0.5"`.
-Routing on a `Literal` is **exhaustiveness-checked** — omitting a tag with no
-`else:` is a compile error.
+Routing on a `Literal` node output is **exhaustiveness-checked** — omitting a tag
+with no `else:` is a load error.
+
+**Branches.** A `then:`/`else:` is a sibling node (an unquoted word), a child call
+(an unquoted `call(...)` as the whole value), or a **value**. An unquoted word always
+names a node; one that names no node is a load error (``then: `replyy` names no node.
+Did you mean `reply`? If you meant the text "replyy", quote it: `then: "replyy"` ``).
+A quoted branch is always a value: `then: "reply"` is the text, and `"call(f)"` is
+text too. Values are text, numbers, bools, `null`, lists, and block-mapping records,
+with `${...}` spans anywhere inside; nested words are text and `$$` is a `$`.
+```yaml
+route:
+  kind: case
+  on: ${ask.output}
+  output: Turn                 # required with a value branch; readers see Turn
+  cases:
+    - when: /exit
+      then:                    # a value branch: the record itself
+        transcript: ${input.transcript}
+        exited: true
+  else: call(respond, transcript=${input.transcript}, message=${ask.output})
+```
+A value branch needs `output:`. Every branch must fit it: disjoint is a load error,
+narrower is checked at runtime (`binding.type`, at the synthetic result node
+`__case_<id>`), on every run even if unread. `null` needs `Optional[...]`. A CASE
+that produces a value (`output:`, a value branch, or read via `${case.output}`) needs
+`else:` or an `on:` Literal with every tag listed. `${case.output}` works as a whole
+binding or inside text, not in a coalesce, `:-` default, `when:`/`on:`, or assert. A
+span that reads a node that may be skipped needs `:-`; a value may not read its own
+CASE or plainly read another of its branches.
 
 **Skipped branches in a flow output.** An output field that reads only nodes a `case`
 may skip (`${order.output}`, `${a.output | b.output}`, `${a.output :- ${b.output}}`)
@@ -705,15 +735,12 @@ optional for `while:`/`until:` but **redundant and rejected** with `times:`.
 
 #### Conversational REPL — the `loop` shape used by `yian chat`
 A chat is a `loop` whose body blocks each turn at `ask` (`human_input`), then a
-`case` routes exact `/exit` and `/quit` values to an exit record before the
-`reply` AGENT node. The normal branch builds the next transcript; the body's output
-bindings rejoin the exit record or normal transcript into the carried
-`{transcript: str, exited: bool}` record. Typed exit is flow-owned — a host must
-not intercept it — while terminal EOF may be normalized to `/exit`. **Gotcha:**
-the body may omit carried fields, so it can return only `transcript` with
-`output: {transcript: ...}`. A lone multi-ref coalesce has
-no inferable type; adjacent defaulted spans preserve `str`, and comparing the
-optional exit field with `true` proves the carried `bool`. See
+typed `case` (`output: Turn`, the carried `{transcript: str, exited: bool}` record)
+returns the turn's record. Exact `/exit` and `/quit` are value branches that keep the
+transcript and set `exited: true`; `else:` calls a `respond` def whose `reply` AGENT
+node and transcript fold return the same record. The body's output is
+`${route.output}`. Typed exit is flow-owned — a host must not intercept it — while
+terminal EOF may be normalized to `/exit`. See
 [`templates/chat.yaml`](templates/chat.yaml).
 
 ## Run-ordering without data (`depends_on` / `runs_after`)
@@ -815,7 +842,7 @@ starts, and a `human_input` node fails when it asks. There is no authored
 - [ ] Every `prompt:` and `system_prompt:` references local inputs or, for an AGENT, its own declared variables.
 - [ ] Every variable has a typed default and a name distinct from local inputs.
 - [ ] Every `long_term_memory:` declaration is on a full flow or `agent`, uses one of the three forms with only allowlisted built-in config keys (or a custom type a Python host builds), and puts each `session` on exactly one AGENT.
-- [ ] Each `case` has an `else:` (or its `Literal` cases are exhaustive); branches are joined with `|`.
+- [ ] Each `case` whose result is used has an `else:` or lists every tag of a non-nullable `Literal` `on:`; its result is read with `${case.output}`, and a value branch has the CASE's `output:` type.
 - [ ] `tool` ids are registered or passed per run with `tools=` (AGENT `tools:` may name a host-filled group); a `code` `module:function` is importable (or an inline `code: |` body `return`s a value); `call`/`uses:` targets resolve on the search path.
 - [ ] Every CALL/MAP/LOOP has exactly one child form: named `call:`, or non-empty inline `nodes:` plus an `output:` key; inline parent/item dependencies cross through outer `input:`.
 - [ ] A child-flow call is written `call(f, ...)` as a whole value, never `${flow(args)}`; string `:-` defaults and `:?` messages are quoted.

@@ -20,7 +20,7 @@ Copy, rename, and edit.
 | [`pipeline.yaml`](templates/pipeline.yaml) | AGENT node → CODE node (typed record) — deterministic post-processing |
 | [`inline-code.yaml`](templates/inline-code.yaml) | inline `code:` source — a bare body run in-process (no `module:function`) |
 | [`typed_output.yaml`](templates/typed_output.yaml) | AGENT node with a record `output:` — structured generation + `retries:` |
-| [`branching.yaml`](templates/branching.yaml) | classify → `case` route → `\|` join |
+| [`branching.yaml`](templates/branching.yaml) | classify → `case` route → `${route.output}` |
 | [`tool-use.yaml`](templates/tool-use.yaml) | a TOOL node (no LLM) feeding an AGENT node |
 | [`human-in-loop.yaml`](templates/human-in-loop.yaml) | a blocking `human_input` gate (typed approve/revise answer) |
 | [`human-questions.yaml`](templates/human-questions.yaml) | a `human_input` gate with multiple questions — static `questions:` + `adaptive_questions:` |
@@ -31,7 +31,7 @@ Copy, rename, and edit.
 | [`map-fanout.yaml`](templates/map-fanout.yaml) | `map` a child over a list and collect in source order |
 | [`inline-composites.yaml`](templates/inline-composites.yaml) | provider-free inline CALL, MAP, and LOOP child bodies (no `defs:`) |
 | [`loop.yaml`](templates/loop.yaml) | `loop` a body until a predicate goes false — chat-shaped blocking turn |
-| [`chat.yaml`](templates/chat.yaml) | a conversational REPL — HUMAN_INPUT → exit CASE → AGENT/CODE nodes, with flow-owned exit, the shape `yian chat` runs |
+| [`chat.yaml`](templates/chat.yaml) | a conversational REPL — HUMAN_INPUT → typed CASE (exit value branch, else a reply call), with flow-owned exit, the shape `yian chat` runs |
 | [`llm-config-cascade.yaml`](templates/llm-config-cascade.yaml) | flow-level `llm_config:`, per-node override, `inherit: false` |
 | [`node-env-config.yaml`](templates/node-env-config.yaml) | flow-level `env:` default + per-node override (node wins), e.g. `max_tool_iterations` |
 
@@ -50,7 +50,7 @@ One expression grammar, everywhere `${...}` appears:
 | `${[a, b]}`, `${upper(x)}` | list literal / pure builtin call |
 | `${X:-default}` | value, else `default` if absent |
 | `${X:?"msg"}` | required — fail with the literal `msg` if absent (quote the message) |
-| `${a \| b \| c}` | first present among peers — **the branch-join coalesce** |
+| `${a \| b \| c}` | first present among peers (e.g. the branches of a routing-only `case`) |
 | `$$` | a literal `$` (universal escape — in a prompt `$$` renders a single `$`) |
 
 `and`, `or`, `not`, and `in` are reserved operators, so none can be the root
@@ -272,10 +272,13 @@ the model emits a conforming value, retried up to `retries:` times on deviation;
 `typed_output.yaml`). Use a downstream `code` node only when you need deterministic
 post-processing of the value.
 
-**Branch and rejoin.** A `case` takes one branch, or none when nothing matches and
-there is no `else:`; the other targets skip, and so do nodes that plainly read them.
-Always coalesce the branches back with `${a | b | c}` (see `branching.yaml`). Routing
-on a `Literal` is exhaustiveness-checked — cover every tag or add an `else:`. A flow
+**Branch and rejoin.** A `case` takes one branch; the other targets skip, and so do
+nodes that plainly read them. Read the taken branch's result with `${route.output}`
+(see `branching.yaml`). A branch may also be a value (`else: "approve"`, a record, a
+list) when the `case` declares `output:`; quote text, since an unquoted word names a
+node. A `case` whose result is used needs an `else:` or every tag of a non-nullable
+`Literal` `on:`; routing on a `Literal` node output is always exhaustiveness-checked.
+A routing-only `case` takes none when nothing matches and there is no `else:`. A flow
 output field that reads only nodes a `case` may skip returns `null` when they were
 skipped (typed `Optional[T]`, as if `:- null` were written), in root, `defs:`, and
 inline bodies; a join over an exhaustive `case` never does. A LOOP body field like
@@ -339,14 +342,13 @@ is checked before pruning; it limits one iteration's size, not the iteration cou
 `loop.yaml`.
 
 **Conversational REPL (LOOP + human_input).** A chat is a `loop` whose body blocks at
-`ask` (`human_input`), then a CASE routes exact `/exit` and `/quit` values to an exit
-record before `reply` (`agent`). The normal branch appends the message and reply to the
-transcript. Output bindings rejoin those branches into the carried 2-field record
-`{transcript: str, exited: bool}` (`'a -> 'a`). Typed exit is flow-owned; only terminal
-EOF is normalized by the bundled host. The loop body's `output:` may return only the
-fields that change; a field it omits keeps its value. A lone multi-ref coalesce has no
-inferable type, so the template uses adjacent defaulted spans for the `str` field and
-compares the optional exit field with `true` to prove `bool`. This is the shape
+`ask` (`human_input`), then a typed CASE (`output: Turn`) returns the carried 2-field
+record `{transcript: str, exited: bool}` (`'a -> 'a`). Exact `/exit` and `/quit` are
+value branches that keep the transcript and set `exited: true`; `else:` calls a
+`respond` def whose `reply` (`agent`) and fold CODE node append the message and reply.
+The body's output is `${route.output}`. Typed exit is flow-owned; only terminal EOF is
+normalized by the bundled host. The loop body's `output:` may return only the fields
+that change; a field it omits keeps its value. This is the shape
 `yian chat` runs; see `chat.yaml` (and `examples/chat.yaml` for a runnable copy).
 
 ## Gotchas

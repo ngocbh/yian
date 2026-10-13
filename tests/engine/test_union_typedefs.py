@@ -284,10 +284,6 @@ def test_malformed_union_field_is_prefixed():
     assert "typedef 'Order' field 'pick': malformed type expression" in str(caught.value)
 
 
-def test_record_without_union_fields_stays_lazy():
-    registry = read_typedefs({"Order": {"pick": "Nope", "note": "str"}})
-    with pytest.raises(TypeCheckError, match="unknown type 'Nope'"):
-        type_for("Order", registry)
 
 
 def test_alias_cycle_through_union_rejected():
@@ -316,8 +312,9 @@ output: {y: "${a.output}"}
 """
 
 
-def test_load_flow_locates_bad_union_at_typedefs():
-    expected = SourceDocument.parse(_BAD_UNION_FLOW).root.key_range_of("typedefs")
+def test_load_flow_locates_bad_union_at_its_typedef():
+    typedefs = SourceDocument.parse(_BAD_UNION_FLOW).root.child("typedefs")
+    expected = typedefs.key_range_of("Mood")
     with pytest.raises(LoadError) as caught:
         load_flow(_BAD_UNION_FLOW)
     assert "bad typedefs: typedef 'Mood'" in str(caught.value)

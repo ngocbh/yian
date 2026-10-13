@@ -102,6 +102,11 @@ Authors write types as Python-typing strings; `parse_type` parses them via Pytho
 `ast` (so the vocabulary *is* typing: `list[X]`, `Optional[X]`, `Literal[...]`, a bare
 PascalCase registry name, `Union[A, B, ...]`). `read_typedefs` builds the per-flow
 `TypeRegistry`, `resolve_type` resolves a parsed expr against it into a leaf `Type`.
+`read_typedefs` resolves every typedef as it builds the registry, even one nothing uses,
+so an unknown constructor or name, bad bounds, a recursive record, or an alias cycle fails
+there. The error names the typedef and field (`typedef 'Signal' field 'tags': unknown type
+constructor 'lst' in 'lst[str]'`), and its `path` is `(typedef, field)` so the loader can
+point at that field.
 
 `Union[...]` members are records. `resolve_type` flattens nested unions and aliases, drops
 repeated members, and orders the members canonically (by tag, else by
@@ -119,9 +124,9 @@ member is that member. The members must be told apart by the data alone:
   `value matches no member of <label>: <member>: <reason>; ...`.
 
 Otherwise resolution fails: `Union[Buy, Sell]: members 'Buy' and 'Sell' can match the same
-value; add a tag field every member declares as a single-value Literal, ...`. A union
-typedef (or a record field typed with one) resolves eagerly in `read_typedefs`, so a bad
-union fails even when nothing uses it. Compatibility is member by member: a source union
+value; add a tag field every member declares as a single-value Literal, ...`. Like every
+typedef, a union typedef resolves in `read_typedefs`, so a bad union fails even when
+nothing uses it. Compatibility is member by member: a source union
 fits a sink union when each source member fits some sink member, a record fits a union
 when it fits some member, a union fits `object`, and a union never fits a record (load
 can't tell which member arrives). `union_field` describes a field read on a union (every

@@ -16,22 +16,83 @@ _ERRORS = Path(__file__).resolve().parents[1] / "seeds" / "errors"
     ("filename", "section"),
     [
         ("e01-undeclared-ref.yaml", "output"),
-        ("e16-bad-typedef-name.yaml", "typedefs"),
     ],
 )
 def test_root_section_failures_keep_the_authored_range(filename: str, section: str) -> None:
     """Section-level errors use the retained document instead of a line-only map."""
     text = (_ERRORS / filename).read_text()
     root = SourceDocument.parse(text).root
-    expected = (
-        root.child(section).range
-        if section == "output"
-        else root.key_range_of(section)
-    )
+    expected = root.child(section).range
 
     with pytest.raises(LoadError) as caught:
         load_flow(text)
 
+    assert caught.value.diagnostic.frames[-1].range == expected
+
+
+def test_bad_typedef_name_points_at_that_name() -> None:
+    """A typedef-name error is located at the offending key, not the whole block."""
+    text = (_ERRORS / "e16-bad-typedef-name.yaml").read_text()
+    expected = SourceDocument.parse(text).root.child("typedefs").key_range_of("Optional")
+
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+
+    assert caught.value.diagnostic.frames[-1].range == expected
+
+
+_TYPEDEF_FLOW = """\
+id: typedefs
+name: typedefs
+typedefs:
+{typedefs}
+input:
+  n: int
+output: int
+kind: code
+code: |
+  return inputs["n"]
+"""
+
+
+@pytest.mark.parametrize(
+    ("typedefs", "message"),
+    [
+        ("  Bad:\n    x: lst[int]", "typedef 'Bad' field 'x': unknown type constructor 'lst'"),
+        ("  Tree:\n    kids: list[Tree]", "typedef 'Tree' field 'kids': recursive type reference"),
+        ("  Al: Nope", "typedef 'Al': unknown type 'Nope'"),
+    ],
+)
+def test_unused_bad_typedef_fails_to_load(typedefs: str, message: str) -> None:
+    """Every typedef is checked at load, even one nothing uses."""
+    with pytest.raises(LoadError, match="bad typedefs: " + message):
+        load_flow(_TYPEDEF_FLOW.format(typedefs=typedefs))
+
+
+def test_bad_typedef_field_points_at_that_field() -> None:
+    """A used typedef's bad field is reported at the field, not at the use site."""
+    text = """\
+id: signal
+name: signal
+typedefs:
+  Signal:
+    score: float
+    tags: lst[str]
+input:
+  s: Signal
+output: float
+kind: code
+code: |
+  return inputs["s"]["score"]
+"""
+    expected = SourceDocument.parse(text).root.child("typedefs").child("Signal").range_of("tags")
+
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+
+    assert "bad typedefs: typedef 'Signal' field 'tags': unknown type constructor 'lst'" in str(
+        caught.value
+    )
     assert caught.value.diagnostic.frames[-1].range == expected
 
 

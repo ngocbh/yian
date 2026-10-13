@@ -216,6 +216,10 @@ typedefs:
 field name (`"": int`), or a lone surrogate such as `"\uD800"` fails the load, the same
 way wherever the type appears: in `typedefs:`, `input:`, or `output:`.
 
+Every typedef is checked at load, even one nothing uses; a bad field type, an unknown
+name, or a record that contains itself fails at that typedef field
+(`typedef 'Signal' field 'tags': unknown type constructor 'lst' ...`).
+
 A union's members must be told apart by the data: a **tag field** every member declares
 as a single-value `Literal` with distinct values (any name), or shapes that can't
 overlap. Otherwise the typedef fails with `members 'Buy' and 'Sell' can match the same

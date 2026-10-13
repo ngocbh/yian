@@ -699,6 +699,31 @@ def _validate_flow_env(
         )
 
 
+def _typedef_error_range(root: SourceCursor, path: tuple) -> Optional[SourceRange]:
+    """Return the source range of the `typedefs:` entry or field a typedef error names.
+
+    Args:
+        root (`SourceCursor`):
+            The flow document's root cursor.
+        path (`tuple`):
+            The error's `(typedef,)` or `(typedef, field)` path; empty for a block error.
+
+    Returns:
+        `SourceRange | None`:
+            The field's value range, else the typedef's key range, else the `typedefs:`
+            key range; `None` when the flow has no `typedefs:` section.
+    """
+    if not root.has("typedefs"):
+        return None
+    typedefs = root.child("typedefs")
+    if not path or not typedefs.has(path[0]):
+        return root.key_range_of("typedefs")
+    entry = typedefs.child(path[0])
+    if len(path) > 1 and entry.has(path[1]):
+        return entry.range_of(path[1])
+    return typedefs.key_range_of(path[0])
+
+
 def _load_flow(
     document: SourceDocument,
     child_resolver,
@@ -719,11 +744,8 @@ def _load_flow(
     try:
         registry = read_typedefs(f.typedefs)
     except TypeCheckError as exc:
-        # The typesys layer is source-neutral, so the authored section key is the
-        # narrowest source-backed location available at this boundary.
         raise diagnostics.error(
-            f"bad typedefs: {exc}",
-            range=(root.key_range_of("typedefs") if root.has("typedefs") else None),
+            f"bad typedefs: {exc}", range=_typedef_error_range(root, exc.path)
         ) from exc
 
     # `system.paths` is honored only when the file's OWN dir is known (loaded WITH

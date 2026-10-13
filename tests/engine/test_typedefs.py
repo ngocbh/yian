@@ -84,12 +84,62 @@ def test_alias_cycle_rejected_eagerly():
     assert "cycle" in str(ei.value)
 
 
-def test_recursive_record_rejected_lazily():
-    # read_typedefs keeps record field types raw, so the build is fine; the cycle is
-    # caught lazily at resolve via resolve_type's `_seen` guard.
-    reg = read_typedefs({"R": {"x": "R"}})
-    with pytest.raises(TypeCheckError):
-        resolve_type(RefExpr("R"), reg)
+def test_recursive_record_rejected_eagerly():
+    with pytest.raises(TypeCheckError) as ei:
+        read_typedefs({"R": {"x": "R"}})
+    assert "typedef 'R' field 'x': recursive type reference: 'R'" in str(ei.value)
+    assert ei.value.path == ("R", "x")
+
+
+def test_unused_record_with_unknown_constructor_rejected():
+    with pytest.raises(TypeCheckError) as ei:
+        read_typedefs({"Bad": {"x": "lst[int]"}})
+    assert "typedef 'Bad' field 'x': unknown type constructor 'lst'" in str(ei.value)
+    assert ei.value.path == ("Bad", "x")
+
+
+def test_unused_record_with_unknown_name_rejected():
+    with pytest.raises(TypeCheckError) as ei:
+        read_typedefs({"Order": {"pick": "Nope", "note": "str"}})
+    assert "typedef 'Order' field 'pick': unknown type 'Nope'" in str(ei.value)
+
+
+def test_unused_record_with_bad_bounds_rejected():
+    with pytest.raises(TypeCheckError) as ei:
+        read_typedefs({"Order": {"qty": "int[5, 1]"}})
+    assert "typedef 'Order' field 'qty':" in str(ei.value)
+
+
+def test_unused_alias_to_unknown_name_rejected():
+    with pytest.raises(TypeCheckError) as ei:
+        read_typedefs({"Al": "Nope"})
+    assert "typedef 'Al': unknown type 'Nope'" in str(ei.value)
+    assert ei.value.path == ("Al",)
+
+
+def test_mutually_recursive_records_rejected():
+    with pytest.raises(TypeCheckError) as ei:
+        read_typedefs({"A": {"b": "B"}, "B": {"a": "A"}})
+    assert "recursive type reference" in str(ei.value)
+
+
+def test_error_names_the_broken_typedef_not_its_user():
+    # `Wrapper` is listed first and uses `Signal`; the fault is Signal's own field.
+    with pytest.raises(TypeCheckError) as ei:
+        read_typedefs({
+            "Wrapper": {"signal": "Signal"},
+            "Signal": {"score": "float", "tags": "lst[str]"},
+        })
+    assert "typedef 'Signal' field 'tags'" in str(ei.value)
+    assert ei.value.path == ("Signal", "tags")
+
+
+def test_record_resolves_through_other_typedefs():
+    reg = read_typedefs({
+        "Wrapper": {"signal": "Signal", "all": "list[Signal]"},
+        "Signal": {"score": "float", "tags": "list[str]"},
+    })
+    assert type_for("Wrapper", reg).fields["signal"].fields["tags"].kind == ValueKind.LIST_STRING
 
 
 def test_shadow_name_rejected():

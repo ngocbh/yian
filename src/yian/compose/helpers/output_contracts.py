@@ -28,14 +28,18 @@ from yian.nodes.contracts import (
     output_contract_field_error,
     output_contract_type,
 )
-from yian.typesys.values import Type, ValueKind
+from yian.typesys.values import FieldRead, Type, ValueKind, union_field
 
 
 def project_output_contract(
     contract: OutputContract,
     fields: list[str],
 ) -> OutputContract | None:
-    """Project a proven path from an exact or partial record output contract."""
+    """Project a proven path from an exact or partial record output contract.
+
+    A field read on a union projects to the members' shared field type; a field
+    only some members have, or whose types differ, projects to `None`.
+    """
     if type(contract) is PartialRecordContract:
         contract.validate_shape()
         if not fields:
@@ -58,6 +62,14 @@ def project_output_contract(
     typ = contract.type
     path_nullable = typ.nullable
     for field in fields:
+        if typ.variants is not None:
+            read = union_field(typ, field)
+            if not isinstance(read, FieldRead) or read.type is None:
+                return None
+            # The shared type is already nullable when any member's field may be absent.
+            path_nullable = path_nullable or read.type.nullable
+            typ = read.type
+            continue
         if typ.fields is None:
             return None
         field_type = typ.fields.get(field)
@@ -130,7 +142,8 @@ def output_contract_path_error(
 ) -> str | None:
     """Return the field-read error for an output path, else ``None``.
 
-    The error is an undeclared record field or any field on a scalar or list.
+    The error is an undeclared record field, any field on a scalar or list, or a
+    field only some members of a union have.
     An opaque field inside a partial record remains lenient below that field,
     while the partial record's closed root name set is still enforced.
     """

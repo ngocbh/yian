@@ -48,7 +48,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import Callable
 
-from yian.compile.validation import _classify_path, _walk_record_fields
+from yian.compile.validation import _classify_path
 from yian.diagnostics import OriginRef, SourceRange
 from yian.expr import ExpressionError, condition_refs
 from yian.expr.expressions import rewrite_condition_refs
@@ -388,23 +388,19 @@ def validate_node_asserts(
                     reads_output = True
                     if len(segs) > 1:
                         contract = node.output_contract
-                        if type(contract) is PartialRecordContract:
-                            err = output_contract_path_error(
-                                contract, segs[1:], ref
-                            )
-                            if err is not None:
-                                errors.append(
-                                    (f"node {nid!r} assert: {err}", error_range)
-                                )
-                            continue
-                        if contract is not None and type(contract) is not ValueContract:
+                        if contract is not None and type(contract) not in (
+                            ValueContract,
+                            PartialRecordContract,
+                        ):
                             raise TypeError(
                                 f"node {nid!r} output_contract must be an exact "
                                 "ValueContract, PartialRecordContract, or None, "
                                 f"got {type(contract).__name__}"
                             )
-                        sh = contract.type if contract is not None else None
-                        if sh is not None and sh.kind != ValueKind.OBJECT:
+                        if (
+                            type(contract) is ValueContract
+                            and contract.type.kind != ValueKind.OBJECT
+                        ):
                             errors.append(
                                 (
                                     f"node {nid!r} assert: ${{{ref}}} — the node output is "
@@ -413,8 +409,8 @@ def validate_node_asserts(
                                     error_range,
                                 )
                             )
-                        else:
-                            err = _walk_record_fields(sh, segs[1:], ref)
+                        elif contract is not None:
+                            err = output_contract_path_error(contract, segs[1:], ref)
                             if err is not None:
                                 errors.append(
                                     (

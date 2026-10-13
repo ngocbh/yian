@@ -33,7 +33,7 @@ from yian.nodes.contracts import (
     ValueContract,
     binding_source,
 )
-from yian.typesys.values import Type, ValueKind
+from yian.typesys.values import Type, ValueKind, union_field
 
 
 _EXPLICIT_TYPE_HINT = "use an explicitly typed named `defs:` body"
@@ -150,9 +150,10 @@ def require_proven_type(
     """Require every structural refinement in ``typ`` to be statically proven.
 
     A refined record is closed: each declared field must either be required or
-    nullable, and every child type is checked recursively. An unrefined object
-    remains valid as a whole value. Every list storage kind, including
-    ``list[Any]``, requires a recursively proven structural element.
+    nullable, and every child type is checked recursively. A union requires each
+    member to be proven. An unrefined object remains valid as a whole value. Every
+    list storage kind, including ``list[Any]``, requires a recursively proven
+    structural element.
 
     Args:
         typ (`Type`):
@@ -195,6 +196,14 @@ def require_proven_type(
                 binding_range=binding_range,
                 diagnostics=diagnostics,
             )
+
+    for member in typ.variants or ():
+        require_proven_type(
+            member,
+            binding_label=binding_label,
+            binding_range=binding_range,
+            diagnostics=diagnostics,
+        )
 
     if typ.kind.is_list():
         if typ.element is None:
@@ -245,6 +254,12 @@ def canonicalize_inline_type(typ: Type) -> Type:
 
     tags = None if typ.tags is None else frozenset(tag for tag in sorted(typ.tags))
     element = None if typ.element is None else canonicalize_inline_type(typ.element)
+    # Union members are already in canonical order; only their contents are copied.
+    variants = (
+        None
+        if typ.variants is None
+        else tuple(canonicalize_inline_type(member) for member in typ.variants)
+    )
     return Type(
         kind=typ.kind,
         fields=fields,
@@ -253,6 +268,7 @@ def canonicalize_inline_type(typ: Type) -> Type:
         element=element,
         nullable=typ.nullable,
         bounds=typ.bounds,
+        variants=variants,
     )
 
 
@@ -455,10 +471,33 @@ def _walk_record_type(
     binding_range: SourceRange | None,
     diagnostics: LoadDiagnostics,
 ) -> Type:
-    """Walk proven record fields and return a fresh result with path nullability."""
+    """Walk proven record fields and return a fresh result with path nullability.
+
+    A union field is read through the shared output-contract walk, so its rules and
+    messages match every other reference check.
+    """
     current = root
     path_nullable = root.nullable
-    for field in fields:
+    for index, field in enumerate(fields):
+        if current.variants is not None:
+            union_error = output_contract_path_error(
+                ValueContract(current), list(fields[index:]), path
+            )
+            if union_error is not None:
+                raise _inference_error(
+                    binding_label, binding_range, union_error, diagnostics
+                )
+            read_type = union_field(current, field).type
+            if read_type is None:
+                raise _inference_error(
+                    binding_label,
+                    binding_range,
+                    f"reference ${{{path}}} has no statically proven exact type",
+                    diagnostics,
+                )
+            current = read_type
+            path_nullable = path_nullable or current.nullable
+            continue
         if current.fields is None:
             raise _inference_error(
                 binding_label,

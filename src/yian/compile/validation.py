@@ -16,6 +16,7 @@ and re-raises as a located `LoadError`.
 from dataclasses import replace
 
 from yian.compile.model import END_ID, START_ID
+from yian.nodes.contracts import ValueContract, output_contract_field_error
 from yian.typesys.values import ValueKind, Type
 
 _CLOSED_HEADS = ()              # `outputs` is no longer a head; node-first head dispatch
@@ -159,8 +160,11 @@ def _walk_record_fields(typ: "Type | None", fields: list, path: str) -> "str | N
 
     Only a CHECKED record (`typ.fields` is not None) is walked; a scalar / opaque /
     unresolved producer stays lenient (dotted access allowed, unchecked). An absent
-    field on a checked record is a located compile error."""
-    for f in fields:
+    field on a checked record is a located compile error. A union is checked by the
+    shared output-contract walk from there on."""
+    for index, f in enumerate(fields):
+        if typ is not None and typ.variants is not None:
+            return output_contract_field_error(ValueContract(typ), fields[index:], path)
         if typ is None or typ.fields is None:
             return None  # opaque / not a checked record -> lenient
         if f not in typ.fields:

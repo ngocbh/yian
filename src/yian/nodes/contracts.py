@@ -17,12 +17,16 @@ from typing import Any, Callable, Iterator, Literal, TypeAlias, cast
 
 from yian.diagnostics import OriginRef
 from yian.typesys import (
+    FieldAbsent,
+    FieldPartial,
     Type,
     TypeCheckError,
     TypedValue,
     ValueKind,
     build_value_as,
     canonical_type_label,
+    union_field,
+    union_tag_fields,
 )
 
 
@@ -455,17 +459,51 @@ def output_contract_type(contract: OutputContract | None) -> Type | None:
 _UNCHECKED_FIELD_KINDS = frozenset({ValueKind.OBJECT, ValueKind.FILE})
 
 
+def _member_only_field_error(
+    union: Type,
+    having: tuple[Type, ...],
+    field_name: str,
+    path: str,
+    remaining: int,
+) -> str:
+    """Return the error for reading a field only some members of `union` have.
+
+    `remaining` counts the path segments from `field_name` to the end of `path`, so
+    the union's own path is `path` without them.
+    """
+    union_path = ".".join(path.split(".")[:-remaining])
+    tag_fields = union_tag_fields(union)
+    if tag_fields:
+        tag = tag_fields[0]
+        tags = ", ".join(next(iter(member.fields[tag].tags)) for member in having)
+        return (
+            f"reference ${{{path}}} reads field {field_name!r}, which only union members "
+            f"with {tag} {tags} have; read it inside a case on ${{{union_path}.{tag}}}"
+        )
+    return (
+        f"reference ${{{path}}} reads field {field_name!r}, which only {len(having)} of "
+        f"{len(union.variants)} union members have; check the member with "
+        f"isinstance({union_path}, <Type>) in a case first"
+    )
+
+
 def output_contract_field_error(
     contract: OutputContract,
     fields: list[str] | tuple[str, ...],
     path: str,
+    *,
+    partial_union_fields: bool = False,
 ) -> str | None:
     """Return why a reference reads a field its contract can't have, else `None`.
 
     An exact record is closed at every proven nested record, and a partial record is
     closed at its root; reading below an opaque partial field is not checked. Every type
     other than `object` and `file` (scalars, `Literal[...]`, lists, and their
-    `Optional[...]` forms) has no fields, so reading one is an error.
+    `Optional[...]` forms) has no fields, so reading one is an error. On a union, a
+    field every member has can be read, and the walk continues with its shared type
+    (or stops when the members' types differ); a field no member has is an unknown
+    field, and a field only some members have is an error unless
+    `partial_union_fields` allows it.
 
     Args:
         contract (`OutputContract`):
@@ -473,7 +511,11 @@ def output_contract_field_error(
         fields (`list[str] | tuple[str, ...]`):
             The field names the reference reads below that value. May be empty.
         path (`str`):
-            The reference path without `${}`, used in the message.
+            The reference path without `${}`, used in the message. Its last
+            `len(fields)` segments are `fields`.
+        partial_union_fields (`bool`, *optional*, defaults to `False`):
+            Whether a field only some union members have can be read. The read is
+            then not checked further.
 
     Returns:
         `str | None`:
@@ -501,14 +543,33 @@ def output_contract_field_error(
         field_contract = field_contracts[field_name]
         if field_contract is None:
             return None
-        return output_contract_field_error(field_contract, remaining, path)
+        return output_contract_field_error(
+            field_contract,
+            remaining,
+            path,
+            partial_union_fields=partial_union_fields,
+        )
     if type(contract) is not ValueContract:
         output_contract_type(contract)
         return None  # pragma: no cover - the validator above always raises
 
     typ = output_contract_type(contract)
     assert typ is not None
-    for field_name in fields:
+    for index, field_name in enumerate(fields):
+        if typ.variants is not None:
+            read = union_field(typ, field_name)
+            if isinstance(read, FieldAbsent):
+                return f"reference ${{{path}}} reads unknown field {field_name!r} on record"
+            if isinstance(read, FieldPartial):
+                if partial_union_fields:
+                    return None
+                return _member_only_field_error(
+                    typ, read.members, field_name, path, len(fields) - index
+                )
+            if read.type is None:
+                return None
+            typ = read.type
+            continue
         if typ.fields is None:
             if typ.kind in _UNCHECKED_FIELD_KINDS:
                 return None

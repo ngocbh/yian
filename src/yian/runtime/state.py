@@ -3147,8 +3147,14 @@ def _validate_growth_wiring_refs(
                 and parts[1] == "output"
                 and parts[0] in producer_contracts
             ):
+                # Fragments come from flows the loader already checked, where a CASE
+                # branch may narrow a union so that a member-only field read is valid.
+                # That narrowing is not recorded here, so such reads are allowed.
                 error = output_contract_field_error(
-                    producer_contracts[parts[0]], parts[2:], path
+                    producer_contracts[parts[0]],
+                    parts[2:],
+                    path,
+                    partial_union_fields=True,
                 )
             if error is not None:
                 _raise_growth_rejected(

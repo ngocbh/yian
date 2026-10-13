@@ -179,11 +179,12 @@ class CallDescriptor(NodeDescriptor):
 
 def _list_of(element: Type) -> Type:
     """`element` -> a `list[element]` Type (the MAP codomain). Mirrors `resolve_type`'s
-    list-seg rule: a record/variant element -> LIST_OBJECT/LIST_STRING; else by scalar.
+    list-seg rule: a record or union element -> LIST_OBJECT, a `Literal` element ->
+    LIST_STRING; else by scalar.
     """
     if element.tags is not None:
         list_seg = ValueKind.LIST_STRING
-    elif element.fields is not None:
+    elif element.fields is not None or element.variants is not None:
         list_seg = ValueKind.LIST_OBJECT
     else:
         list_seg = _LIST_SEG_FOR_ELEMENT.get(element.kind, ValueKind.LIST_ANY)

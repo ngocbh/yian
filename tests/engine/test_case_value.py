@@ -167,13 +167,13 @@ def test_no_case_fast_path_is_identity():
 
 def test_case_ref_in_coalesce_is_loud():
     descs = {"gate": _gate(), "c": _code("c", v="${gate.output | other.output}")}
-    with pytest.raises(LoadError, match="whole single reference"):
+    with pytest.raises(LoadError, match="a case value can't be read in"):
         expand_case_outputs(descs, None, [])
 
 
 def test_case_ref_in_default_is_loud():
     descs = {"gate": _gate(), "c": _code("c", v="${gate.output:-fallback}")}
-    with pytest.raises(LoadError, match="whole single reference"):
+    with pytest.raises(LoadError, match="a case value can't be read in"):
         expand_case_outputs(descs, None, [])
 
 
@@ -181,7 +181,7 @@ def test_case_ref_in_nested_default_value_is_loud():
     # ${x:-${gate.output}} — a case ref as the nested-default VALUE (inside an enclosing
     # span) must be LOUD, not silently expanded (a regression caught in review).
     descs = {"gate": _gate(), "c": _code("c", v="${x:-${gate.output}}")}
-    with pytest.raises(LoadError, match="whole single reference"):
+    with pytest.raises(LoadError, match="a case value can't be read in"):
         expand_case_outputs(descs, None, [])
 
 
@@ -189,8 +189,16 @@ def test_case_ref_in_required_message_is_loud():
     # ${input.t:?${gate.output}} — the :? message is a full expression,
     # so a case ref in it is a genuine ref and must be LOUD (parallel to the :- default).
     descs = {"gate": _gate(), "c": _code("c", v="${input.t:?${gate.output}}")}
-    with pytest.raises(LoadError, match="whole single reference"):
+    with pytest.raises(LoadError, match="a case value can't be read in"):
         expand_case_outputs(descs, None, [])
+
+
+def test_case_ref_in_expression_is_loud():
+    descs = {"gate": _gate(), "c": _code("c", v="${gate.output + 1}")}
+    with pytest.raises(LoadError, match=r"can't be read in .*an expression") as info:
+        expand_case_outputs(descs, None, [])
+    assert "whole single reference" not in str(info.value)
+    assert "call(...)" not in str(info.value)
 
 
 def test_case_ref_in_assert_is_located():
@@ -491,5 +499,5 @@ nodes:
     output: float
 output: ${gate.output | s.output}
 """
-    with pytest.raises(LoadError, match="whole single reference"):
+    with pytest.raises(LoadError, match="a case value can't be read in"):
         load_flow(text)

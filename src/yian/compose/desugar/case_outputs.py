@@ -459,9 +459,9 @@ def _reject_case_refs(
                 case_id = parts[0]
             if case_id is not None:
                 raise diagnostics.error(
-                    f"{where}: ${{{case_id}.output}} (a case value) is only supported as a "
-                    f"whole single reference in a binding — not in a coalesce / default / "
-                    f"condition / assert (only the `then:/else: call(...)` value form is supported)",
+                    f"{where}: ${{{case_id}.output}} — a case value can't be read in a "
+                    f"coalesce operand, a default, an expression, a condition, or an assert; "
+                    f"read it as a whole binding or inside text",
                     range=range,
                 )
 

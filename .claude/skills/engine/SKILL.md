@@ -753,6 +753,8 @@ Most are just the functional model (above) made enforceable:
   consumes the forward ready frontier and commits its reducer transitions. It records each start before
   submission and each accepted outcome before applying it. A pooled drive owns workers
   until its full join; abnormal dispatch exit must signal cooperative stop before joining.
+  When an outcome fails the run, signal stop and publish its durable NodeFailed/RunFailed
+  before the join, so a host can withdraw a sibling's pending prompt.
 - **Worker defaults belong to the run boundary** — fresh CLI and Python runs use
   eight workers unless overridden. Zero selects serial evaluation. Omitted worker
   counts on resume preserve recorded authority, not the fresh-run default.

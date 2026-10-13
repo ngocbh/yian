@@ -5,7 +5,7 @@ That keeps a run-start check against the result from reporting a binding as
 disjoint when the tool would accept it. A schema with no yian equivalent
 translates to `None`, which means "do not check".
 
-Knows about: typesys, pydantic, langchain-core, and the Python standard library.
+Knows about: typesys and the Python standard library.
 Never imports: nodes, compile, compose, runtime, the run boundary, or CLI.
 """
 
@@ -159,9 +159,9 @@ def _bounds(
 
     def endpoint(keyword: str) -> int | float | None:
         value = schema.get(keyword)
-        if type(value) not in (int, float) or not isfinite(value):
-            return None
-        return value
+        if type(value) is int or (type(value) is float and isfinite(value)):
+            return value
+        return None
 
     low, high = endpoint("minimum"), endpoint("maximum")
     if kind is ValueKind.INTEGER:
@@ -179,7 +179,10 @@ def _bounds(
         if low is None or high is None:
             return None
         # Float bounds must survive a float round trip; dropping them widens.
-        if float(low) != low or float(high) != high:
+        try:
+            if float(low) != low or float(high) != high:
+                return None
+        except OverflowError:
             return None
         bounds = (low, high)
     return bounds if bounds[0] <= bounds[1] else None
@@ -211,7 +214,11 @@ def _object(
     if schema.get("patternProperties"):
         return plain
     required = schema.get("required", [])
-    if not isinstance(required, list) or not set(required) <= properties.keys():
+    if (
+        not isinstance(required, list)
+        or any(type(name) is not str for name in required)
+        or not set(required) <= properties.keys()
+    ):
         # A required key outside `properties` would be rejected by the record.
         return plain
     fields = {}
@@ -245,12 +252,12 @@ def _union(members: list[Type | None]) -> Type | None:
         return Type.scalar(ValueKind.NONE)
     if len(others) == 1:
         return replace(others[0], nullable=nullable)
-    if any(other == Type.scalar(ValueKind.OBJECT) for other in others):
+    if any(other.kind is not ValueKind.OBJECT for other in others):
+        return None
+    if any(other.fields is None for other in others):
         return Type(kind=ValueKind.OBJECT, nullable=nullable)
-    if all(other.fields is not None for other in others):
-        return Type(
-            kind=ValueKind.OBJECT,
-            variants=canonical_union_order(others),
-            nullable=nullable,
-        )
-    return None
+    return Type(
+        kind=ValueKind.OBJECT,
+        variants=canonical_union_order(others),
+        nullable=nullable,
+    )

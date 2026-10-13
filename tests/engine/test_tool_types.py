@@ -6,9 +6,10 @@ tools and MCP tools that only publish a schema.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Union
 
 import pytest
+from pydantic import BaseModel
 
 from yian.compile.validation import type_relation
 from yian.tools.types import type_from_json_schema
@@ -88,6 +89,9 @@ _TAGGED_UNION = {
         ({"type": ["integer", "string"]}, None),
         ({"anyOf": [{"type": "object"}, _BUY]}, "object"),
         ({"anyOf": [{"type": "integer"}, {}]}, None),
+        ({"anyOf": [{"type": "object"}, {"type": "integer"}]}, None),
+        ({"type": ["object", "string"]}, None),
+        ({"anyOf": [_BUY, {"type": "string"}]}, None),
         ({"allOf": [{"type": "integer"}]}, "int"),
         ({"allOf": [{"type": "integer"}, {"minimum": 0}]}, None),
         ({}, None),
@@ -96,6 +100,9 @@ _TAGGED_UNION = {
         ({"minimum": 0}, None),
         ({"type": "integer", "title": "N", "description": "d", "default": 1,
           "examples": [1], "multipleOf": 2}, "int"),
+        ({"type": "string", "minLength": 1, "maxLength": 9}, "str"),
+        ({"anyOf": [_BUY, _SELL], "discriminator": {"propertyName": "action"}},
+         'Union[{"action":Literal["buy"],"qty":int},{"action":Literal["sell"],"price":float}]'),
         ({"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 3,
           "uniqueItems": True}, "list[str]"),
     ],
@@ -242,17 +249,73 @@ def test_an_invalid_shape_has_no_type() -> None:
     assert type_from_json_schema(schema, closed=True) is None
 
 
-def test_open_input_never_reports_extra_fields_as_disjoint() -> None:
-    record = Type(
-        kind=ValueKind.OBJECT,
-        fields={"a": Type.scalar(ValueKind.INTEGER), "b": Type.scalar(ValueKind.INTEGER)},
-        required=frozenset({"a", "b"}),
-    )
-    declared = type_from_json_schema(
-        {"type": "object", "properties": {"a": {"type": "integer"}}}, closed=False
-    )
-    assert declared is not None
-    assert type_relation(record, declared) != "disjoint"
+class _Inner(BaseModel):
+    x: int
+
+
+class _WithUnion(BaseModel):
+    v: Union[_Inner, str]
+
+
+def _field_schema(model: type[BaseModel], name: str) -> dict[str, Any]:
+    """Return one field's pydantic-generated schema, keeping its `$defs`."""
+    schema = model.model_json_schema()
+    return {"$defs": schema.get("$defs", {}), **schema["properties"][name]}
+
+
+_INT = Type.scalar(ValueKind.INTEGER)
+
+
+@pytest.mark.parametrize(
+    ("schema", "closed", "inferred"),
+    [
+        (
+            {"type": "object", "properties": {"a": {"type": "integer"}}},
+            False,
+            Type(
+                kind=ValueKind.OBJECT,
+                fields={"a": _INT, "b": _INT},
+                required=frozenset({"a", "b"}),
+            ),
+        ),
+        ({"anyOf": [{"type": "object"}, {"type": "integer"}]}, False, _INT),
+        ({"anyOf": [{"type": "object"}, {"type": "integer"}]}, True, _INT),
+        ({"type": ["object", "integer"]}, True, _INT),
+        (_field_schema(_WithUnion, "v"), False, Type.scalar(ValueKind.STRING)),
+        (_field_schema(_WithUnion, "v"), True, Type.scalar(ValueKind.STRING)),
+        ({"type": "integer"}, True, Type.scalar(ValueKind.NUMBER)),
+        ({"type": "integer", "minimum": 0, "maximum": 9}, True, Type.scalar(ValueKind.NUMBER)),
+    ],
+)
+def test_translation_never_reports_an_accepted_value_as_disjoint(
+    schema: dict[str, Any], closed: bool, inferred: Type
+) -> None:
+    declared = type_from_json_schema(schema, closed=closed)
+    assert declared is None or type_relation(inferred, declared) != "disjoint"
+
+
+@pytest.mark.parametrize(
+    ("schema", "expected"),
+    [
+        ({"type": "integer", "minimum": 10**400, "maximum": 10**401},
+         f"int[{10**400},{10**401}]"),
+        ({"type": "number", "minimum": 0, "maximum": 10**400}, "float"),
+        ({"type": "integer", "minimum": 0, "exclusiveMaximum": 10**400},
+         f"int[0,{10**400 - 1}]"),
+    ],
+    ids=["integer", "number", "exclusive-integer"],
+)
+def test_huge_bounds_never_raise(schema: dict[str, Any], expected: str) -> None:
+    assert _label(schema) == expected
+
+
+def test_malformed_required_is_plain_object() -> None:
+    schema = {
+        "type": "object",
+        "properties": {"a": {"type": "integer"}},
+        "required": [{"x": 1}],
+    }
+    assert type_from_json_schema(schema, closed=True) == Type.scalar(ValueKind.OBJECT)
 
 
 @pytest.mark.parametrize(

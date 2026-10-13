@@ -7,8 +7,20 @@ identically on any interpreter.
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
+from pydantic import ValidationError
 
+from yian.compose import LoadError, load_flow
+from yian.typesys.seeding import now_utc, today_utc
 from yian.typesys.temporal import parse_date, parse_date_or_datetime, parse_datetime
+from yian.typesys.types import type_for
+from yian.typesys.values import (
+    DateTimeValue,
+    DateValue,
+    TypeCheckError,
+    ValueKind,
+    _scalar_matches,
+    build_value_as,
+)
 
 DATE_MSG = "date must look like 2026-05-21"
 DATETIME_MSG = "datetime must look like 2026-05-21T14:30[:00][Z|+07:00]"
@@ -128,3 +140,87 @@ def test_parse_datetime_rejects_impossible_values(text):
     with pytest.raises(ValueError) as exc:
         parse_datetime(text)
     assert str(exc.value).startswith("not a valid datetime")
+
+
+def test_parse_date_or_datetime_keeps_the_datetime_reason():
+    with pytest.raises(ValueError, match="not a valid datetime"):
+        parse_date_or_datetime("2026-05-21T24:00")
+
+
+def test_parse_datetime_rejects_a_fraction_without_seconds():
+    with pytest.raises(ValueError) as exc:
+        parse_datetime("2026-05-21T14:30.5")
+    assert DATETIME_MSG in str(exc.value)
+
+
+# --- typed values ----------------------------------------------------------------------------- #
+
+
+def test_date_value_keeps_the_text_and_rejects_other_shapes():
+    assert DateValue(value="2026-05-21").value == "2026-05-21"
+    with pytest.raises(ValidationError, match=DATE_MSG):
+        DateValue(value="20200101")
+
+
+@pytest.mark.parametrize("text", ["2020-01-01T00:00:00Z", "2020-01-01T00:00:00.5"])
+def test_datetime_value_keeps_the_text(text):
+    assert DateTimeValue(value=text).value == text
+
+
+@pytest.mark.parametrize("text", ["2026-05-21", "20200101T000000"])
+def test_datetime_value_rejects_other_shapes(text):
+    with pytest.raises(ValidationError) as exc:
+        DateTimeValue(value=text)
+    assert DATETIME_MSG in str(exc.value)
+
+
+def test_seeded_clock_values_fit_the_grammar():
+    assert DateTimeValue(value=now_utc())
+    assert DateValue(value=today_utc())
+
+
+def test_build_value_as_accepts_the_grammar():
+    assert build_value_as(type_for("datetime", {}), "2020-01-01T00:00:00Z").value == "2020-01-01T00:00:00Z"
+
+
+@pytest.mark.parametrize(
+    "type_str, value, message",
+    [
+        (
+            "datetime",
+            "20200101T000000",
+            f"'20200101T000000' does not match declared type datetime: {DATETIME_MSG}",
+        ),
+        ("date", "2020-W01-3", f"'2020-W01-3' does not match declared type date: {DATE_MSG}"),
+        (
+            "date",
+            "2026-02-30",
+            "'2026-02-30' does not match declared type date: "
+            "not a valid date: day is out of range for month",
+        ),
+        ("date", 5, "5 does not match declared type date"),
+    ],
+)
+def test_build_value_as_names_the_format(type_str, value, message):
+    with pytest.raises(TypeCheckError) as exc:
+        build_value_as(type_for(type_str, {}), value)
+    assert str(exc.value) == message
+
+
+@pytest.mark.parametrize(
+    "kind, value, expected",
+    [
+        (ValueKind.DATETIME, "20200101T000000", False),
+        (ValueKind.DATE, "2020-W01-3", False),
+        (ValueKind.DATETIME, "2020-01-01T00:00:00Z", True),
+        (ValueKind.DATETIME, "2026-05-21", False),
+    ],
+)
+def test_scalar_matches_uses_the_grammar(kind, value, expected):
+    assert _scalar_matches(kind, value) is expected
+
+
+def test_flow_default_outside_the_grammar_fails_at_load():
+    with pytest.raises(LoadError) as exc:
+        load_flow('id: f\nname: f\ninput:\n  at: datetime = "20200101T000000"\nnodes: {}\n')
+    assert DATETIME_MSG in str(exc.value)

@@ -1596,20 +1596,22 @@ child's `output:` is a record, even of one field, the MAP returns a list of reco
 `parallel:` is accepted but currently inert; MAP concurrency is controlled by
 the run's `num_workers`, while collection order remains the `over:` order.
 
-Each argument must fit the child's input type, checked at load:
+Each argument must fit the child's input type, checked at load. Nothing is coerced,
+because a `call`/`map` edge is not a flow boundary:
 
 - A reference is compared by its type. A MAP's `${item}` or `${item.field}` is typed
-  from the element type of `over:`. A `str` source does not fit an `int` or `date`
-  input, and an `Optional` source does not fit a strict one.
-- A YAML literal is validated by value, exactly as the child's start validates it.
-  Nothing is coerced, because a `call`/`map` edge is not a flow boundary: `"3"` does
-  not fit an `int` input (write `3`), and an unquoted `2026-01-01`, which YAML reads as
-  a date, does not fit a `date` input (write `"2026-01-01"`). `5` fits a `float` input,
-  `9` does not fit `int[1, 3]`, and `5` does not fit `str`. `null` fits only an
-  `Optional` input.
-- `${x :- fallback}` checks `x` without its null, then the fallback: a literal by
-  value, a reference by its type (`:- null` fits only an `Optional` input).
-  `${x :? message}` checks `x` without its null.
+  from the element type of `over:`; over a literal `over:` list, each element is
+  checked by value. A `str` source does not fit an `int` or `date` input, and an
+  `Optional` source does not fit a strict one.
+- A YAML literal is validated by value: `"3"` does not fit an `int` input (write `3`),
+  `5` fits a `float` input, `9` does not fit `int[1, 3]`, and `5` does not fit `str`.
+  `null` fits only an `Optional` input. An unquoted `2026-01-01` is a date to YAML,
+  not text, so it fits neither a `date` nor a `str` input, alone or inside a list or
+  record: quote it (`"2026-01-01"`), as in a typed binding or a default.
+- `${x :- fallback}` checks `x` without its null, then the fallback: a constant by
+  value, a reference (`input.y` or `${input.y}`) by its type. `:- null` fits only an
+  `Optional` input. `${x :? message}` checks `x` without its null, and `${a | b}`
+  checks every operand, all but the last without its null.
 - A source whose type the loader can't prove is checked, again with no coercion, when
   the child starts: the text `"3"` from an untyped `code` output into an `int` input
   fails with `contract.input`. For a value narrower than the input, such as an
@@ -1622,13 +1624,15 @@ call node 'c': binding 'n' — child expects 'int', but the value "3" does not f
 call node 'c': binding 'day' — child expects 'date', but the value 2026-01-01 does not fit; quote it to keep it as text: "2026-01-01"
 ```
 
-Changed: a `${item}`, literal, or `:-` argument used to be checked only when the child
-started, after the work upstream had run, and the child's start converted text for an
-`int`, `float`, or `bool` input. These used to run and now fail at load:
+Changed: a `${item}`, literal, `:-`, or `|` argument used to be checked only when the
+child started, after the work upstream had run, and the child's start converted text
+for an `int`, `float`, or `bool` input. These used to run and now fail at load:
 
-- a literal or `:-` fallback written as text for a number or bool, such as `n: "3"` or
-  `${input.n :- "3"}` into an `int` input (write `3`);
-- an unquoted date or datetime literal into a `date` or `datetime` input (quote it);
+- a literal, `:-` fallback, or `|` operand written as text for a number or bool, such
+  as `n: "3"`, `${input.n :- "3"}`, or `${input.n | "3"}` into an `int` input (write
+  `3`), and a `${item}` over a literal `over: ["1", "2"]` into an `int` input;
+- an unquoted date or datetime literal, alone or inside a list or record, into any
+  input, `str` included (quote it);
 - a `${item}` over a `list[str]` into a `date` input (type the list `list[date]`), and a
   `${item}` over a `list[Optional[str]]`, or `${x :- null}`, into a strict input (use a
   typed binding).

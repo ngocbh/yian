@@ -375,11 +375,17 @@ def shown_literal(value: Any) -> str:
         value (`Any`): The literal to render.
 
     Returns:
-        `str`: ISO text for a date or datetime, JSON text for a JSON-able value, else
-            its `repr`.
+        `str`: JSON text, with each date or datetime (YAML reads an unquoted one as a
+            date) written as its bare ISO text; `repr` for anything else JSON can't
+            write.
     """
     if isinstance(value, (date, datetime)):
         return value.isoformat()
+    if isinstance(value, list):
+        return "[" + ", ".join(shown_literal(item) for item in value) + "]"
+    if isinstance(value, dict):
+        fields = (f"{shown_literal(key)}: {shown_literal(item)}" for key, item in value.items())
+        return "{" + ", ".join(fields) + "}"
     try:
         return json.dumps(value, ensure_ascii=False)
     except (TypeError, ValueError):

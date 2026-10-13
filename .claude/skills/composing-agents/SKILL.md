@@ -684,15 +684,15 @@ so project element fields in a downstream CODE/MAP step. `parallel:` is accepted
 but currently inert; run-level `num_workers` controls MAP concurrency.
 
 Each argument must fit the child's input type at load: a reference by its type
-(`${item...}` through the `over:` element type), a YAML literal by its value as
-the child's start would (`"2026-01-01"` fits `date`; `9` for `int[1, 3]` does not),
-and `${x :- d}` by `x` without its null plus the fallback `d`. A `call`/`map` edge is
-not a flow boundary, so nothing is coerced across it: `"3"` does not fit `int` (write
-`3`), an unquoted `2026-01-01` does not fit `date` (quote it), and text from an
-untyped source into an `int` input fails at the child's start (`contract.input`). A
-`str` reference does not fit an `int` or `date` input: type the source
-(`list[date]`), or use a typed binding (`t: int = ${input.n}`) for a value narrower
-than the input.
+(`${item...}` through the `over:` element type, or each element of a literal `over:`
+by value), a YAML literal by its value (`"2026-01-01"` fits `date`; `9` for
+`int[1, 3]` does not), `${x :- d}` by `x` without its null plus the fallback `d`, and
+`${a | b}` operand by operand. A `call`/`map` edge is not a flow boundary, so nothing
+is coerced across it: `"3"` does not fit `int` (write `3`), an unquoted `2026-01-01`
+(a YAML date) fits neither `date` nor `str` (quote it), and text from an untyped
+source into an `int` input fails at the child's start (`contract.input`). A `str`
+reference does not fit an `int` or `date` input: type the source (`list[date]`), or
+use a typed binding (`t: int = ${input.n}`) for a value narrower than the input.
 
 For a one-off child, replace `call:` with a non-empty `nodes:` body and add the
 required `output:` key:

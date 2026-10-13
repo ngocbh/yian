@@ -176,3 +176,48 @@ def test_compact_invalid_input_has_value_range():
 
     assert exc.value.diagnostic.frames[-1].range == SourceRange(4, 8, 4, 15)
     assert exc.value.diagnostic.frames[-1].range.start_line == 4
+
+
+_COMPACT_HYPHEN_ID = """
+id: hello-agent
+name: hello
+input: {topic: str}
+output: str
+kind: code
+code: tests.engine._compose_codefns:echo
+"""
+
+
+def test_compact_non_identifier_id_rejected_at_id_key():
+    document = parse_source_document(_COMPACT_HYPHEN_ID, "compact.yaml")
+    with pytest.raises(LoadError) as exc:
+        parse_file(document)
+    message = str(exc.value)
+    assert "compact flow id 'hello-agent' also names its node" in message
+    assert "use 'hello_agent'" in message
+    assert "full `nodes:` form" in message
+    assert exc.value.diagnostic.frames[-1].range == document.root.range_of("id")
+
+
+def test_compact_digit_id_rejected_without_parser_dump():
+    with pytest.raises(LoadError, match=r"compact flow id '2x'.*use '_2x'") as exc:
+        load_flow(_COMPACT_HYPHEN_ID.replace("id: hello-agent", "id: '2x'"))
+    assert "Unexpected token" not in str(exc.value)
+
+
+def test_full_form_flow_id_may_keep_hyphens():
+    flow = load_flow(
+        """
+id: hello-agent
+name: hello
+input: {topic: str}
+nodes:
+  greet:
+    kind: code
+    code: tests.engine._compose_codefns:echo
+    input:
+      topic: ${input.topic}
+output: ${greet.output}
+"""
+    )
+    assert "greet" in flow.compiled.nodes

@@ -63,10 +63,22 @@ errors: `on: ${x.output :- null}` over a `Literal` with a tag missing and no `el
 non-exhaustive, and a named-def LOOP seed written `${x :- null}` into a non-`Optional`
 body field is rejected.
 
-Node IDs are the keys under `nodes:`. They cannot contain `.`, `#`, or `/`:
-`.` separates the node name from `output` and its field path in a reference,
-while `#` and `/` are reserved for generated runtime identities. In compact
-mode, the flow `id` also names its node and follows this rule.
+Node IDs are the keys under `nodes:`. A node id must be an identifier: ASCII
+letters, digits, and `_`, not starting with a digit (`fetch_data`, not `fetch-data`
+or `2x`), so that `${fetch_data.output}` can reference it. The expression keywords
+`and`, `or`, `not`, `in`, `true`, `false`, `null`, and `none` can't be node ids
+either. In compact mode the flow `id:`, and for a single-node `defs:` entry the def
+name, also names the node and must be an identifier; a full-form flow id or a
+multi-node def name may keep hyphens.
+
+Changed: a node id that isn't an identifier, or is an expression keyword, used to load,
+and failed only when a `${...}` referenced it, with an error that didn't name the node
+(for `fetch-data`, split references `${fetch}` and `${data.output}`). It is now a load
+error at the node that suggests a rename. To migrate, rename the node and every
+`${...}`, `then:`, `else:`, `depends_on:`, and `runs_after:` that names it; the renamed
+flow gets a new fingerprint, so its earlier runs can't be resumed or replayed. A compact
+flow or single-node def whose id isn't an identifier never loaded; the error now names
+the id. Other flows load as before, with the same fingerprint.
 
 A mapping can't repeat a key: two nodes with one id, a field written twice, or a
 section written twice is a load error at the second key, such as `duplicate key 'a'

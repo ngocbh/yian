@@ -40,7 +40,8 @@ a hyphenated identifier is unavailable INSIDE an expression. That only matters f
 the whole-value `call(...)` directive, whose flow-id may be hyphenated — but that is a
 loader-side string match (a directive recognizer), NOT this grammar, so it is
 unaffected. `#` and `/` ARE allowed because runtime graph expansion mints segments
-like `node#0` and `def/child`.
+like `node#0` and `def/child`. Node ids are checked to be identifiers where the node
+is defined, so a hyphenated node id fails there rather than at a reference.
 
 ## Keyword priority
 
@@ -150,6 +151,9 @@ NULL.3: /null\b/ | /none\b/
 _PARSER = Lark(_GRAMMAR, parser="lalr", maybe_placeholders=False)
 
 _RESERVED_REFERENCE_ROOTS = frozenset({"and", "or", "not", "in"})
+
+# The keyword terminals in `_GRAMMAR` above; none of them can be a reference root.
+EXPRESSION_KEYWORDS = _RESERVED_REFERENCE_ROOTS | {"true", "false", "null", "none"}
 
 
 def _raise_if_reserved_reference_root(path: str) -> None:

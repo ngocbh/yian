@@ -4,9 +4,9 @@ The first cross-node assembly pass. Consumes a source cursor over the flow's
 `nodes:` mapping and dispatches each node body to its kind's `parse` via the
 `KINDS` table.
 
-Only the generic, kind-independent pre-checks live here (body-is-mapping, reserved node ids,
-the `input:`/`output:` -> plural back-map, `kind:` resolution); each kind's own `parse`
-owns its field legality (allowed/required/asserts/env) and its descriptor-local
+Only the generic, kind-independent pre-checks live here (body-is-mapping, node id shape and
+reserved ids, the `input:`/`output:` -> plural back-map, `kind:` resolution); each kind's own
+`parse` owns its field legality (allowed/required/asserts/env) and its descriptor-local
 `SourceRange` recording (each field tagged `("field", name)`). Two kind-blind enrichments
 run after every kind parse: each `input:` binding's own range is stamped into the
 descriptor's `field_ranges` under `("input", name)`, and each `asserts:` item range is
@@ -19,6 +19,7 @@ duplicate assertions distinct without an aligned range list on the semantic node
 from __future__ import annotations
 
 import dataclasses
+import re
 from collections.abc import Mapping
 from typing import Any
 
@@ -26,10 +27,46 @@ from yian.compile.model import END_ID, START_ID
 from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.nodes import KINDS, REMOVED_KINDS
 from yian.compose.source import SourceAccessError, SourceCursor
+from yian.expr.grammar import EXPRESSION_KEYWORDS
 
 # Singular source keys are projected onto the descriptor dataclasses' plural
 # field names while retaining their original child sources.
 _INPUT_OUTPUT_REMAP = {"input": "inputs", "output": "outputs"}
+
+# Explicit ASCII classes, matching the expression `NAME` terminal: `str.isidentifier`
+# and `\w` also accept non-ASCII letters (`café`), which `${...}` can't reference.
+_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_NON_IDENTIFIER_CHAR = re.compile(r"[^A-Za-z0-9_]")
+
+IDENTIFIER_RULE = "ASCII letters, digits, and _, not starting with a digit"
+
+
+def is_identifier(name: object) -> bool:
+    """Report whether `name` is an identifier a `${...}` reference can name.
+
+    Args:
+        name (`object`): The candidate name; any non-`str` value is not an identifier.
+
+    Returns:
+        `bool`: True when `name` is a `str` matching `[A-Za-z_][A-Za-z0-9_]*`.
+    """
+    return isinstance(name, str) and _IDENTIFIER.fullmatch(name) is not None
+
+
+def identifier_suggestion(name: str) -> str:
+    """Spell `name` as an identifier, for a rename hint.
+
+    Args:
+        name (`str`): The non-identifier name to respell.
+
+    Returns:
+        `str`: `name` with each character outside `[A-Za-z0-9_]` replaced by `_` and a `_`
+        prefixed when it starts with a digit, or `""` for an empty name.
+    """
+    suggestion = _NON_IDENTIFIER_CHAR.sub("_", name)
+    if suggestion[:1].isdigit():
+        suggestion = "_" + suggestion
+    return suggestion
 
 
 def parse_nodes(nodes_cursor: SourceCursor) -> dict[str, Any]:
@@ -120,7 +157,11 @@ def _parse_node(node_id: str, cursor: SourceCursor) -> Any:
 
 
 def _reject_reserved_node_id(node_id: str, cursor: SourceCursor) -> None:
-    """Reject a node id that collides with a reserved separator, boundary, or resolver head.
+    """Reject a node id that isn't a referenceable identifier or collides with a reserved name.
+
+    A node id must be an identifier (`${<node>.output}` names it) that is neither an
+    expression keyword, the synthesized boundary, nor a resolver head; `#`, `/`, and `.`
+    get their own reserved-separator message.
 
     Mirrors the legacy `parser._parse_node` head guards; anchors each error at the node
     body's `SourceRange` (the closest located anchor for a bad node key).
@@ -133,10 +174,24 @@ def _reject_reserved_node_id(node_id: str, cursor: SourceCursor) -> None:
             f"for runtime graph expansion; '.' is reserved for reference paths)",
             range=rng,
         )
+    if not is_identifier(node_id):
+        reference = f" so ${{{node_id}.output}} can reference it" if node_id else ""
+        suggestion = identifier_suggestion(node_id)
+        hint = f"; try {suggestion!r}" if suggestion else ""
+        raise diagnostics.error(
+            f"node id {node_id!r} must be an identifier ({IDENTIFIER_RULE}){reference}{hint}",
+            range=rng,
+        )
     if node_id in (START_ID, END_ID):
         raise diagnostics.error(
             f"node id {node_id!r} is reserved for the synthesized START_ID/END_ID boundary"
             f"; authors write `input:`/`output:`, not a boundary node",
+            range=rng,
+        )
+    if node_id in EXPRESSION_KEYWORDS:
+        raise diagnostics.error(
+            f"node id {node_id!r} is an expression keyword, so ${{{node_id}.output}} "
+            f"can't reference it; pick a different node id",
             range=rng,
         )
     # Reserve the four singular head literals so the node-first ref `${<node>.output.k}` is

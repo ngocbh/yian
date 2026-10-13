@@ -112,6 +112,8 @@ what `run` returns:
   still return `Output`. WAIT returns `None` after its absolute UTC deadline.
 - A **router** (`case`) is a leaf that returns `Route(handle)` — no value, it just selects
   the live out-edge (siblings skip-flood). Still `is_spawner=False`; routing isn't growth.
+  A `depends_on:`/`runs_after:` edge from a router is not a branch: the router settled by
+  routing, so the dependent runs whichever branch was taken.
 - A **spawner** returns `Grow` with a canonical seed describing the requested work.
   Compile-owned `build_grow` turns it into a subgraph with one `__start__` and
   `__end__` (whose output and absence cross this node's boundary via baked

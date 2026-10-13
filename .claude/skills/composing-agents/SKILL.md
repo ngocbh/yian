@@ -757,6 +757,8 @@ Both gate a node on another **settling** even when no value flows. `depends_on:
 [x]` also **co-skips** the dependent if `x` skipped; `runs_after: [x]` orders only
 (the dependent still runs). Use these for `wait`, side-effecting tools, etc.
 Each is a list of node ids: a bare `depends_on: x` is a load error.
+Naming a `case` itself in either is not a branch: the dependent runs whichever branch
+the `case` takes, and is skipped only when the `case` is.
 
 ## The three expression contexts (one grammar)
 One `${...}` grammar; the context decides what happens to the result:

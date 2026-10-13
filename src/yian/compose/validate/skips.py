@@ -3,9 +3,9 @@
 A node is skipped when the runtime join rule marks it dead: it has control edges (from CASEs)
 and every one is skipped, or a required data group has every producer skipped, or a required
 ordering edge (`depends_on`) has its producer skipped. A control edge is skipped when its CASE
-is skipped or picked another branch. A data or ordering edge from a CASE is skipped when the
-CASE is skipped or picked a branch other than `else:` or "no branch". A CASE that runs picks
-one of its branches, or no branch at all unless it is exhaustive. CASE conditions are treated
+is skipped or picked another branch. A data or ordering edge is skipped only when its producer
+is skipped: one from a CASE is not a branch, so it is taken whichever branch the CASE picks. A
+CASE that runs picks one of its branches, or no branch at all unless it is exhaustive. CASE conditions are treated
 as independent, so the model enumerates every combination of the choices of the CASEs that
 can skip an ancestor of the queried nodes. The default side of `:-` is checked as if it always
 runs: `${a.output :- (b.output + 1)}` is rejected even when `b` runs whenever `a` is skipped,
@@ -22,8 +22,8 @@ explicit null default, so it returns null instead of leaving END unreachable.
 `check_skipped_arithmetic` rejects arithmetic over a value that may be null because its
 producers were skipped while the reading node (or END) still runs.
 
-Knows about: compiled edges, flow outputs, node wiring, the CASE default handle, binding
-producers, and expression trees.
+Knows about: compiled edges, flow outputs, node wiring, binding producers, and expression
+trees.
 Never imports: runtime.
 """
 
@@ -45,7 +45,6 @@ from yian.compose.validate.typed_bindings import ResolveOrigin, _located_error
 from yian.diagnostics import SourceRange
 from yian.expr import ExpressionError, binding_co_skips, expr_refs, scan_template
 from yian.expr.template import Span
-from yian.nodes.case import DEFAULT_HANDLE
 from yian.nodes.contracts import as_binding, binding_source
 
 _WORLD_LIMIT = 10_000
@@ -130,14 +129,17 @@ class SkipModel:
             case: (*names, *(() if case in exhaustive else (None,)))
             for case, names in handles.items()
         }
-        # Only these edges can skip a node, so only they decide which CASEs a query branches on.
+        # Only these edges can skip a node, so only they decide which nodes a query must model.
         self._parents = {
             n: self._joins[n].skip_sources() & self._known for n in self._nodes
         }
+        # A CASE's choice matters only to the nodes its control edges reach; its data and
+        # ordering edges are taken on every route.
         self._skip_targets: dict[str, set[str]] = {case: set() for case in self._choices}
-        for node, parents in self._parents.items():
-            for parent in parents & self._choices.keys():
-                self._skip_targets[parent].add(node)
+        for node in self._nodes:
+            for case, _ in self._joins[node].control:
+                if case in self._skip_targets:
+                    self._skip_targets[case].add(node)
         self._order = self._topological_order(graph_parents)
 
     @property
@@ -298,35 +300,14 @@ class SkipModel:
             for case, handle in join.control
         ):
             return True
+        # A data or ordering edge carries no handle, so the runtime takes it on every route of
+        # a CASE that runs; it is skipped only when its producer is.
         if any(
-            not optional and all(self._edge_skipped(p, skipped, choices) for p in producers)
+            not optional and all(p in skipped for p in producers)
             for optional, producers in join.groups.values()
         ):
             return True
-        return any(self._edge_skipped(p, skipped, choices) for p in join.required_order)
-
-    @staticmethod
-    def _edge_skipped(
-        source: str, skipped: set[str], choices: dict[str, str | None]
-    ) -> bool:
-        """Return whether a data or ordering edge from `source` is skipped.
-
-        Args:
-            source (`str`):
-                The edge's producer.
-            skipped (`set[str]`):
-                The skipped nodes so far.
-            choices (`dict[str, str | None]`):
-                The branch each running CASE picked; `None` is no branch.
-
-        Returns:
-            `bool`:
-                Whether `source` is skipped, or it is a CASE that picked a branch other than
-                `else:` or no branch.
-        """
-        # The runtime gives a non-control edge from a CASE the default handle, so it is taken
-        # only when the CASE routes `else:` or matches nothing.
-        return source in skipped or choices.get(source) not in (None, DEFAULT_HANDLE)
+        return any(p in skipped for p in join.required_order)
 
 
 def null_skipped_outputs(

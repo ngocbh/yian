@@ -552,7 +552,8 @@ Returning null sets a nullable field to null. A literal `${null}` is typed `None
 it does not fit an `Optional[str]` seed; return a nullable-typed producer instead. A
 body may return one field: `output: {done: ...}`. An empty `output: {}` returns no
 field and is rejected. A `while:`/`until:` that reads only fields the body never
-returns cannot change, so without `max:` it runs forever. The node's value and the
+returns cannot change, so it is a load error unless the body returns one of those
+fields or the loop has `max:` (then it ends at the cap). The node's value and the
 LOOP node's own `asserts:` see the merged carried record; a body def's own `asserts:`
 see the body's own output. A body that blocks (a `human_input` leaf) makes the loop a
 live chat REPL: the same run threads each answered turn. Pick **exactly one**

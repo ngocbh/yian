@@ -705,3 +705,58 @@ def test_a_node_without_output_runs_any_return_type():
 
     assert result.status == "succeeded", result.failure
     assert result.output == "placed 5"
+
+
+_TWO_STEP_FLOW = """
+id: two_step
+name: two_step
+nodes:
+  first:
+    kind: tool
+    tool_id: first_step
+  place:
+    kind: tool
+    tool_id: place_order
+    depends_on: [first]
+    input:
+      qty: 5
+output: ${place.output}
+"""
+
+
+def interrupt_first() -> str:
+    raise _HostStop()
+
+
+def first_step() -> str:
+    return "ready"
+
+
+def test_resume_checks_tool_types_before_appending(tmp_path: Path):
+    path = tmp_path / "run.jsonl"
+    flow = load_flow(_TWO_STEP_FLOW)
+    with pytest.raises(_HostStop):
+        run_flow(flow, {}, log=path, tools={"first_step": interrupt_first, "place_order": place_int})
+    lines = path.read_text().splitlines()
+
+    with pytest.raises(ValueError, match=re.escape(
+        "TOOL node 'place' input 'qty': tool 'place_order' takes str, but the binding is int[5,5]"
+    )):
+        resume_flow(flow, log=path, tools={"first_step": first_step, "place_order": place_str})
+    assert path.read_text().splitlines() == lines
+
+    resumed = resume_flow(flow, log=path, tools={"first_step": first_step, "place_order": place_int})
+    assert resumed.status == "succeeded", resumed.failure
+    assert resumed.output == "placed 5"
+
+
+def test_a_finished_run_resumes_without_the_tool_type_check(tmp_path: Path):
+    path = tmp_path / "run.jsonl"
+    flow = load_flow(_TWO_STEP_FLOW)
+    finished = run_flow(flow, {}, log=path, tools={"first_step": first_step, "place_order": place_int})
+    assert finished.status == "succeeded", finished.failure
+
+    replayed = resume_flow(flow, log=path, tools={"first_step": first_step, "place_order": place_str})
+
+    assert replayed.status == "succeeded", replayed.failure
+    assert replayed.output == "placed 5"

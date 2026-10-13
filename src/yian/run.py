@@ -410,8 +410,11 @@ def run_flow(
             ``llm_config.api_key`` or is not an allowed URL, a `BaseTool` in
             `tools` is named differently from its key, a group tool's name
             clashes or is reserved, an AGENT grants a tool or group not in the
-            run's tools, or an AGENT grants skills while `skills` is `None` or
-            lacks a listed skill.
+            run's tools, a TOOL node's inputs or `output:` do not match the
+            names and types its tool declares (an input the tool does not take,
+            a missing required input, or a type that can never fit), or an
+            AGENT grants skills while `skills` is `None` or lacks a listed
+            skill.
         `MemorySetupError`:
             Memory is enabled without a required memory implementation, cannot
             open an exact run snapshot, or has an invalid configuration.
@@ -670,7 +673,8 @@ def resume_flow(
             worker count violates its contract, a group tool's name clashes or
             is reserved, an unfinished run's AGENT grants a tool or group
             not in `tools` or grants skills while `skills` is `None` or lacks
-            a listed skill.
+            a listed skill, or an unfinished run's TOOL node's inputs or
+            `output:` do not match the names and types its tool declares.
         `MemorySetupError`:
             The recorded run needs memory but its mapping is absent, incomplete,
             or cannot reproduce the exact recorded snapshots.

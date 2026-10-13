@@ -4,10 +4,11 @@ An inline call is a whole-value `call(<flow-id>, kw=...)` directive that DESUGAR
 load into an anonymous `call` node, with the host binding rewritten to
 `${<synth>.output}` — pure sugar, no new runtime kind. Two layers:
 
-- `compose.calls.desugar_call_directives` (pure string→data recognition) — exercised
-  in `test_call_directive.py`.
-- `compose.calls.desugar_inline_calls` + the loader wiring — exercised end-to-end
-  (load + run, edge inference, defs callee, flow output) in the loader-wiring block below.
+- `compose.desugar.inline_calls.desugar_call_directives` (pure string→data
+  recognition) — exercised in `test_call_directive.py`.
+- `compose.desugar.inline_calls.desugar_inline_calls` + the loader wiring — exercised
+  end-to-end (load + run, edge inference, defs callee, flow output) in the loader-wiring
+  block below.
 - the `${item}`-capture + synth-id-collision guards — the guards block.
 """
 

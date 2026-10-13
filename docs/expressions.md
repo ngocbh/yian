@@ -24,7 +24,7 @@ runtime evaluates. Three stacked layers plus a builtin registry:
                   infer_expr_type) + ref-walk/rewrite                    (expr_refs)
    template.py    the ${...} scanner: split text into literals + spans  (eval_binding,
                   drive the engine per span; strict prompt rendering     render_template_record)
-   builtins.py    TEMPLATE_FNS — the pure formatters a prompt may call
+   builtins.py    TEMPLATE_FNS — the pure builtins any ${...} expression may call
 ```
 
 ## Layer 1 — grammar: parse only

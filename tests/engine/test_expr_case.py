@@ -186,6 +186,11 @@ def test_record_condition_compares_a_miss_as_null():
     assert evaluate_when_record('${x} != "done"', {}) is True
     assert evaluate_when_record('${x} != "done"', {"x": None}) is True
     assert evaluate_when_record("${x}", {}) is False
+    # A None left-hand side of `in` is just a value that isn't in the container; only a
+    # None right-hand side (the container itself) raises.
+    assert evaluate_when_record('${x} in ["a"]', {}) is False
+    with pytest.raises(ExpressionError):
+        evaluate_when_record('"a" in ${x}', {})
 
 
 def test_builtins_evaluate_in_conditions_and_bindings():

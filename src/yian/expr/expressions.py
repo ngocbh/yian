@@ -35,6 +35,7 @@ class RequiredError(ExpressionError):
 # looked up in the node's type table, never a reference, so the evaluator, the reference
 # walkers and rewriters, and type inference treat only its first argument as an expression.
 ISINSTANCE = "isinstance"
+
 _NUMBER_RE = re.compile(r"^-?\d+(\.\d+)?$")
 
 
@@ -258,7 +259,8 @@ def evaluate_when_record(
     `${name}` / `${name.path}` resolve against `record`; a miss -> None, compared as a
     plain value: `==` and ordered comparisons against a non-null value are false, and
     `!=` is true. A bare `${name}` miss is falsy, which gives `when:` its
-    missing-is-falsy behavior. `in`/`not in` with a None operand raises.
+    missing-is-falsy behavior. A None left side of `in`/`not in` is an ordinary value
+    (`${miss} in [...]` is false); a None right side raises, since None is no container.
     Bare local-input refs only; pool namespaces are not in scope (they belong in the
     node's input `from:` bindings).
 

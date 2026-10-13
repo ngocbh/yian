@@ -91,7 +91,8 @@ class LoopDescriptor(NodeDescriptor):
         callable through `ctx.resolver` (required — a loop is higher-order), derives its
         `ChildSignature`, bakes the compiled child + parameters, and enforces the FIELD-NAME
         half of the contract plus termination configuration legality, including that a
-        `while:`/`until:` loop without `max:` reads at least one field the body returns.
+        `while:`/`until:` loop without `max:` whose condition reads carried fields reads at
+        least one field the body returns.
 
         A body that returns the whole carried record stamps its codomain as `output_contract`
         and leaves `returned_fields` unset. A body that returns a subset stamps

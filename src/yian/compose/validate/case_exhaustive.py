@@ -86,17 +86,13 @@ def check_case_exhaustive(
         case_producers, case_inputs = (
             narrowing.for_node(desc.id) if narrowing is not None else (producers, {})
         )
-        covered = _on_covered(desc)
         if desc.id in value_cases:
-            _check_value_exhaustive(
-                desc, covered, case_producers, case_inputs, diagnostics
-            )
-        _check_exhaustive(desc, covered, case_producers, diagnostics)
+            _check_value_exhaustive(desc, case_producers, case_inputs, diagnostics)
+        _check_exhaustive(desc, _on_covered(desc), case_producers, diagnostics)
 
 
 def _check_value_exhaustive(
     desc: CaseDescriptor,
-    covered: set[str],
     producers: dict[str, OutputContract],
     inputs: dict[str, ValueContract],
     diagnostics: LoadDiagnostics,
@@ -105,7 +101,6 @@ def _check_value_exhaustive(
 
     Args:
         desc (`CaseDescriptor`): The value-producing case.
-        covered (`set[str]`): The tags its `when:` values list.
         producers (`dict[str, OutputContract]`): The producer contracts the case sees.
         inputs (`dict[str, ValueContract]`): The flow-input contracts the case sees.
         diagnostics (`LoadDiagnostics`): Source ownership for located errors.
@@ -114,38 +109,31 @@ def _check_value_exhaustive(
         `LoadError`: The case has no `else:` and its `on:` type is unknown, not an enum,
             nullable, or has a tag no `when:` lists (or it is a searched case).
     """
-    if desc.has_else:
+    if case_is_exhaustive(desc, producers, inputs):
         return
-    reason = _not_exhaustive_reason(desc, covered, producers, inputs)
-    if reason is not None:
-        raise diagnostics.error(
-            f"case node {desc.id!r} produces a value, so it must be exhaustive: "
-            f"add an `else:` ({reason})",
-            range=desc.range,
-        )
+    raise diagnostics.error(
+        f"case node {desc.id!r} produces a value, so it must be exhaustive: "
+        f"add an `else:` ({_not_exhaustive_reason(desc, producers, inputs)})",
+        range=desc.range,
+    )
 
 
 def _not_exhaustive_reason(
     desc: CaseDescriptor,
-    covered: set[str],
     producers: dict[str, OutputContract],
     inputs: dict[str, ValueContract],
-) -> Optional[str]:
-    """Return why a case without `else:` may match no branch, or None when it always matches."""
+) -> str:
+    """Return why a case that `case_is_exhaustive` rejected may match no branch."""
     if desc.on is None:
         return "a searched case needs an else:"
-    contract = resolve_output_binding_contract(desc.on, producers, inputs)
-    if type(contract) is not ValueContract:
+    typ = _resolve_on_type(desc.on, producers, inputs)
+    if typ is None:
         return f"the type of on: {desc.on} is not known"
-    typ = contract.type
     if typ.tags is None:
         return f"on: {desc.on} is {canonical_type_label(typ)}, not a Literal"
     if typ.nullable:
         return f"{desc.on} may be null"
-    missing = sorted(typ.tags - covered)
-    if missing:
-        return f"enum tag(s) {missing} not covered"
-    return None
+    return f"enum tag(s) {sorted(typ.tags - _on_covered(desc))} not covered"
 
 
 def case_is_exhaustive(

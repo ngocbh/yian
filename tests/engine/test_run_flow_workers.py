@@ -5,12 +5,16 @@ terminal output must be identical — workers are pure executors, so the result 
 worker-count-independent (only intra-run concurrency changes).
 """
 
+from concurrent.futures import Future
+import gc
 import threading
 
 import pytest
 
 from yian.compose import load_flow
+from yian.events import NodeSucceeded
 from yian.run import _run_flow_controlled, run_flow
+from yian.runtime.eval_node import EvaluatedOutcome
 from yian.runtime.log import JsonlRunLog
 
 # topic -> {positive, cautious} in parallel -> a code node fans them in.
@@ -61,3 +65,52 @@ def test_run_flow_defaults_to_eight_workers(runner, tmp_path):
     assert res.status == "succeeded", res.failure
     with JsonlRunLog.resume(path) as log:
         assert next(iter(log)).record.num_workers == 8
+
+
+_LONG_LOOP = """
+id: counter
+name: counter
+input:
+  k: int
+nodes:
+  l:
+    kind: loop
+    times: 12
+    input:
+      n: 0
+    nodes:
+      bump:
+        kind: code
+        input:
+          n: ${input.n}
+        output:
+          n: int
+        code: |
+          return {"n": inputs["n"] + 1}
+    output: ${bump.output}
+output: ${l.output.n}
+"""
+
+
+def test_pooled_dispatcher_drops_read_results():
+    # A completed Future holds its node's EvaluatedOutcome; the dispatcher must not keep
+    # read ones alive, or memory grows with every evaluation of a long LOOP.
+    loaded = load_flow(_LONG_LOOP)
+    peak = 0
+
+    def on_event(event):
+        nonlocal peak
+        if isinstance(event, NodeSucceeded):
+            gc.collect()
+            held = [
+                obj for obj in gc.get_objects()
+                if isinstance(obj, Future) and obj.done() and not obj.cancelled()
+                and obj.exception() is None and isinstance(obj.result(), EvaluatedOutcome)
+            ]
+            peak = max(peak, len(held))
+
+    res = run_flow(loaded, {"k": 0}, num_workers=2, on_event=on_event)
+    assert res.status == "succeeded", res.failure
+    assert res.output == 12
+    # At most the one being committed plus finished-but-unread starts.
+    assert peak <= 3

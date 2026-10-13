@@ -190,7 +190,8 @@ evaluates with it. `isinstance` works in:
 - `case` `when:` conditions, where a searched `case` also narrows (see
   [Flow syntax → `case`](syntax.md#narrowing-a-union-in-a-branch));
 - node asserts and flow asserts;
-- LOOP `while:` / `until:`;
+- LOOP `while:` / `until:`, where a top-level `and` part also narrows (see
+  [Flow syntax → References](syntax.md#references-naming-a-value));
 - flow outputs.
 
 It is a load error in:

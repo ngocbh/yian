@@ -1318,3 +1318,13 @@ def test_predicate_isinstance_check_on_an_object_field_checks_reads_on_the_type(
         load_flow(src.replace("PRED", "until: isinstance(r, Done) and r.answr == 'ok'"))
     flow = load_flow(src.replace("PRED", "until: isinstance(r, Done) and r.answer == 'ok'"))
     assert run_flow(flow, {}).output == {"n": 3, "r": {"answer": "ok"}}
+
+
+def test_predicate_isinstance_check_with_an_unknown_type_reports_the_type():
+    # A typo in the checked type is reported as that typo, not as an unguarded read.
+    pred = "until: isinstance(r, Dnoe) and r.answer == 'ok'"
+    with pytest.raises(LoadError) as e:
+        load_flow(UNION_STATE.replace("PRED", pred))
+    message = str(e.value)
+    assert "unknown type 'Dnoe'" in message
+    assert "union members" not in message

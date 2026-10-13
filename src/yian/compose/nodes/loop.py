@@ -405,8 +405,9 @@ def _predicate_field_error(
     A check `isinstance(<base>, T)` guarding the read, with `<base>` a strict prefix of
     `ref`, narrows `<base>` to `T` as a searched CASE does, so the fields below it are
     walked on `T`. The value passes every guarding check, so the read is fine when any
-    of them allows it. A check the base's type already satisfies narrows nothing, and
-    one whose type name doesn't resolve is left to the type-table check.
+    of them allows it. A check the base's type already satisfies narrows nothing. A
+    read guarded by a check whose type name doesn't resolve is not checked, so the
+    type-table check reports the unknown name.
     """
     parts = ref.split(".")
     narrowed_errors: list[str | None] = []
@@ -417,7 +418,9 @@ def _predicate_field_error(
         try:
             typ = resolve_isinstance_type(type_name, registry)
         except TypeCheckError:
-            continue
+            # The type-table pass reports the unknown name; an error here would fail the
+            # build first and hide it behind a hint to add the check the author wrote.
+            return None
         base_contract = project_output_contract(contract, base_parts)
         if type(base_contract) is ValueContract and types_compatible(base_contract.type, typ):
             continue

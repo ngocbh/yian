@@ -763,11 +763,18 @@ when the flow loads: an unknown key such as `modle:`, a bad value such as
 is valid only in a node's `llm_config:`. A host `run_flow(..., llm_config=...)`
 layer with an unknown key fails before any node runs.
 
-A flow file cannot set `api_key` or `base_url` at any level; loading such a flow
-fails. A library host passes the provider key, and optionally the endpoint it goes
-to, in `run_flow(..., llm_config={..., "api_key": key, "base_url": url})` instead
-(see [the Python API](api.md)). The key and its `base_url` go to every AGENT of
-that provider, including one with `inherit: false`.
+A flow file cannot set `api_key` at any level, nor `base_url` except beside
+`provider: azure`; loading such a flow fails. A library host passes the provider
+key, and optionally the endpoint it goes to, in
+`run_flow(..., llm_config={..., "api_key": key, "base_url": url})` instead (see
+[the Python API](api.md)). The key and its `base_url` go to every AGENT of that
+provider, including one with `inherit: false`.
+
+For `provider: azure`, `model` is the deployment name and `base_url` the resource
+endpoint, such as `https://<resource>.openai.azure.com/`. Both are ordinary
+`llm_config:` fields there, so a flow can set them at any level; the key stays in
+`AZURE_OPENAI_API_KEY`. An Azure agent whose resolved config has no `base_url`
+fails before the run's first node.
 
 The CLI flags are the *outermost authored* layer — they fill gaps, they do **not**
 override an AGENT node or flow that set the field. The run resolves the complete

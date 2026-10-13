@@ -136,12 +136,13 @@ def _inject_http_client(monkeypatch, client_cls, http_client):
 )
 @pytest.mark.parametrize("env_value", [None, "sk-environment-key"])
 def test_every_keyed_client_prefers_the_config_key(clean_env, provider, model, env, attribute, env_value):
+    config = {"provider": provider, "model": model, "api_key": SENTINEL}
     if provider == "azure":
         clean_env.setenv("OPENAI_API_VERSION", "2024-02-01")
-        clean_env.setenv("AZURE_OPENAI_ENDPOINT", "https://res.openai.azure.com")
+        config["base_url"] = "https://res.openai.azure.com/"
     if env_value is not None:
         clean_env.setenv(env, env_value)
-    chat = model_from_config({"provider": provider, "model": model, "api_key": SENTINEL})
+    chat = model_from_config(config)
     assert getattr(chat, attribute).get_secret_value() == SENTINEL
 
 

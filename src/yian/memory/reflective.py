@@ -599,7 +599,9 @@ class ReflectiveMemory:
                 settings for new sessions, filled from ambient defaults when absent.
                 Recorded sessions retain their exact pinned model configuration.
                 ``api_key`` is rejected, so the learner always authenticates with
-                environment or saved-connection credentials.
+                environment or saved-connection credentials. ``base_url`` is
+                accepted only beside ``provider: azure``, as the resource
+                endpoint.
             max_items (`int | None`, defaults to `None`): Maximum retained
                 lessons. None adopts the stored or snapshot value, else 100.
             recall_limit (`int | None`, defaults to `None`): Maximum lessons

@@ -84,11 +84,31 @@ def test_google_temperature_passthrough():
 def test_azure_temperature_passthrough_and_endpoint_base_stripping(monkeypatch):
     monkeypatch.setenv("AZURE_OPENAI_API_KEY", "x")
     monkeypatch.setenv("OPENAI_API_VERSION", "2024-02-01")
-    # the OpenAI-v1 suffix must be stripped back to the base resource URL
-    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://res.openai.azure.com/openai/v1")
-    m = create_llm_client("azure", "gpt-4o", temperature=0.1).get_llm()
+    # A portal's v1 surface is stripped back to the base resource URL.
+    m = create_llm_client(
+        "azure", "gpt-4o", base_url="https://res.openai.azure.com/openai/v1", temperature=0.1
+    ).get_llm()
     assert m.temperature == 0.1
     assert str(m.azure_endpoint) == "https://res.openai.azure.com"
+
+
+def test_azure_reads_neither_deployment_nor_endpoint_from_the_environment(monkeypatch):
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "x")
+    monkeypatch.setenv("OPENAI_API_VERSION", "2024-02-01")
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://env-resource.openai.azure.com")
+    monkeypatch.setenv("AZURE_OPENAI_DEPLOYMENT_NAME", "env-deployment")
+    for model in ("gpt-5.5", "gpt-4.1"):
+        m = create_llm_client("azure", model, base_url="https://res.openai.azure.com/").get_llm()
+        assert m.deployment_name == model
+        assert str(m.azure_endpoint) == "https://res.openai.azure.com"
+
+
+def test_azure_without_base_url_fails_and_says_to_set_it(monkeypatch):
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "x")
+    monkeypatch.setenv("OPENAI_API_VERSION", "2024-02-01")
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://env-resource.openai.azure.com")
+    with pytest.raises(ValueError, match="llm_config.base_url"):
+        create_llm_client("azure", "gpt-4o").get_llm()
 
 
 # --- factory: dual-region providers ----------------------------------------- #
@@ -206,11 +226,7 @@ def test_openai_responses_preserve_reasoning_for_next_tool_turn():
 
 # --- streaming: normalization, usage, DeepSeek fallback --------------------- #
 
-_AZURE_ENV = {
-    "AZURE_OPENAI_API_KEY": "x",
-    "OPENAI_API_VERSION": "2024-02-01",
-    "AZURE_OPENAI_ENDPOINT": "https://res.openai.azure.com",
-}
+_AZURE_ENV = {"AZURE_OPENAI_API_KEY": "x", "OPENAI_API_VERSION": "2024-02-01"}
 
 
 @pytest.mark.parametrize(
@@ -218,7 +234,7 @@ _AZURE_ENV = {
     [
         ("anthropic", "claude-sonnet-4-6", {"api_key": "x"}, {}),
         ("google", "gemini-2.5-flash", {"api_key": "x"}, {}),
-        ("azure", "gpt-4o", {}, _AZURE_ENV),
+        ("azure", "gpt-4o", {"base_url": "https://res.openai.azure.com/"}, _AZURE_ENV),
         ("vllm", "some-local-model", {}, {}),
     ],
 )

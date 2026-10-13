@@ -422,7 +422,7 @@ def test_effective_map_resolves_environment_defaults_once(monkeypatch):
 
     from yian.llm_clients.connection import connection_snapshot
     calls = []
-    monkeypatch.setenv("YIAN_DEFAULT_PROVIDER", "AZURE")
+    monkeypatch.setenv("YIAN_DEFAULT_PROVIDER", "ANTHROPIC")
     monkeypatch.setenv("YIAN_DEFAULT_MODEL", "environment-model")
 
     def snapshot():
@@ -460,7 +460,7 @@ def test_effective_map_resolves_environment_defaults_once(monkeypatch):
 
     assert result.status == "succeeded"
     assert calls == ["snapshot"]
-    assert seen == [{"provider": "azure", "model": "environment-model"}]
+    assert seen == [{"provider": "anthropic", "model": "environment-model"}]
 
 
 def test_replay_uses_logged_map_after_environment_changes(monkeypatch):

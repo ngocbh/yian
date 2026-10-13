@@ -74,7 +74,8 @@ def _validate_llm_config(
 
     Raises:
         `LoadError`: The config is not a mapping, sets a non-boolean `inherit`, sets
-            `api_key` or `base_url`, or violates `LLMConfig`.
+            `api_key`, sets `base_url` other than beside `provider: azure`, or
+            violates `LLMConfig`.
     """
     diagnostics = diagnostics or LoadDiagnostics()
     if cfg is None:

@@ -17,7 +17,7 @@ from urllib.parse import urlsplit
 
 from yian._settings import DEFAULT_PROVIDER, PROVIDER_DEFAULT_MODELS
 from .auth import ApiKeyCredentials, AuthError, AuthStore, OAuthCredentials, OpenAIAuth
-from .config import LLMConfig, SUPPORTED_LLM_PROVIDERS
+from .config import AZURE_NEEDS_BASE_URL, LLMConfig, SUPPORTED_LLM_PROVIDERS
 
 _API_ENDPOINT = "https://api.openai.com/v1"
 _SUBSCRIPTION_ENDPOINT = "https://chatgpt.com/backend-api/codex"
@@ -252,9 +252,12 @@ def check_model_config(
 
     Raises:
         `AuthError`: The config carries ``HOST_KEY_MARKER`` but no ``api_key``.
-        `ValueError`: A field is invalid, or the connection rejects a set field.
+        `ValueError`: A field is invalid, the connection rejects a set field, or
+            an ``azure`` config has no ``base_url``.
     """
     validated, connection = split_model_config(config)
+    if validated.provider == "azure" and validated.base_url is None:
+        raise ValueError(AZURE_NEEDS_BASE_URL)
     if (
         validated.api_key is None
         and connection is not None

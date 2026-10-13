@@ -10,14 +10,19 @@ from langchain_core.messages import HumanMessage
 from pydantic import ValidationError
 
 from yian.llm_clients.auth import AuthStore, OAuthCredentials
-from yian.llm_clients.config import LLMConfig, pop_host_credentials
-from yian.llm_clients.connection import resolve_model_config, split_model_config
+from yian.llm_clients.config import LLMConfig, host_only_field_error, pop_host_credentials
+from yian.llm_clients.connection import (
+    check_model_config,
+    resolve_model_config,
+    split_model_config,
+)
 from yian.llm_clients.factory import model_from_config
 from yian.llm_clients.openai_client import OpenAIClient
 from tests.fixtures.openai_responses import ResponsesServer
 
 SENTINEL = "sk-sentinel-7d1f3b20"
 AZURE_V1 = "https://res.openai.azure.com/openai/v1/"
+AZURE_RESOURCE = "https://res.openai.azure.com/"
 
 
 def test_a_set_base_url_dumps_and_an_unset_one_adds_nothing():
@@ -142,10 +147,37 @@ def test_base_url_needs_a_key_and_provider_in_the_same_config(fields):
     assert SENTINEL not in str(caught.value)
 
 
-@pytest.mark.parametrize("provider", ["azure", "ollama"])
-def test_dedicated_clients_without_endpoint_support_reject_base_url(provider):
-    with pytest.raises(ValidationError, match=f"provider {provider} does not take"):
-        LLMConfig(provider=provider, base_url=AZURE_V1, api_key=SENTINEL)
+def test_ollama_rejects_base_url():
+    with pytest.raises(ValidationError, match="provider ollama does not take"):
+        LLMConfig(provider="ollama", base_url=AZURE_V1, api_key=SENTINEL)
+
+
+def test_azure_takes_its_resource_endpoint_as_base_url_with_or_without_a_key():
+    config = LLMConfig(provider="azure", model="gpt-4o", base_url=AZURE_RESOURCE)
+    assert config.model_dump(exclude_none=True) == {
+        "provider": "azure", "model": "gpt-4o", "base_url": AZURE_RESOURCE,
+    }
+    assert LLMConfig(provider="azure", base_url=AZURE_RESOURCE, api_key=SENTINEL).base_url == AZURE_RESOURCE
+    with pytest.raises(ValidationError, match="https"):
+        LLMConfig(provider="azure", base_url="http://res.openai.azure.com/")
+
+
+def test_an_authored_layer_may_set_base_url_only_beside_provider_azure():
+    assert host_only_field_error({"provider": "azure", "base_url": AZURE_RESOURCE}) is None
+    for layer in ({"base_url": AZURE_RESOURCE}, {"provider": "openai", "base_url": AZURE_V1}):
+        assert "provider: azure" in host_only_field_error(layer)
+    assert host_only_field_error({"provider": "azure", "api_key": SENTINEL}) is not None
+
+
+def test_azure_config_without_base_url_fails_the_model_check():
+    with pytest.raises(ValueError, match="set llm_config.base_url"):
+        check_model_config({"provider": "azure", "model": "gpt-4o"})
+    with pytest.raises(ValueError, match="set llm_config.base_url"):
+        check_model_config({"provider": "azure", "model": "gpt-4o", "api_key": SENTINEL})
+    validated, _ = check_model_config(
+        {"provider": "azure", "model": "gpt-4o", "base_url": AZURE_RESOURCE}
+    )
+    assert validated.base_url == AZURE_RESOURCE
 
 
 def test_pop_host_credentials_takes_the_url_only_with_the_layers_key():
@@ -159,6 +191,19 @@ def test_pop_host_credentials_takes_the_url_only_with_the_layers_key():
 
     with pytest.raises(ValueError, match="api_key"):
         pop_host_credentials({"provider": "openai", "base_url": AZURE_V1})
+
+    # Without a host key, an Azure endpoint is an ordinary layer setting.
+    layer = {"provider": "azure", "model": "gpt-4o", "base_url": AZURE_RESOURCE}
+    assert pop_host_credentials(layer) == (None, None)
+    assert layer == {"provider": "azure", "model": "gpt-4o", "base_url": AZURE_RESOURCE}
+    # A host Azure key never goes to an endpoint another layer names.
+    with pytest.raises(ValueError, match="base_url") as caught:
+        pop_host_credentials({"provider": "azure", "model": "gpt-4o", "api_key": SENTINEL})
+    assert SENTINEL not in str(caught.value)
+    key, url = pop_host_credentials(
+        {"provider": "azure", "base_url": AZURE_RESOURCE, "api_key": SENTINEL}
+    )
+    assert (key.get_secret_value(), url) == (SENTINEL, AZURE_RESOURCE)
 
     unsafe = {"provider": "openai", "base_url": "http://gateway.example.com", "api_key": SENTINEL}
     with pytest.raises(ValueError, match="https") as caught:

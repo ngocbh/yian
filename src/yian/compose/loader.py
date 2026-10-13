@@ -666,8 +666,8 @@ def _validate_authored_llm_config(
 ) -> None:
     """Check a flow- or def-level ``llm_config`` the way an AGENT node's own is checked.
 
-    The layer must be a mapping of `LLMConfig` fields without ``api_key`` or
-    ``base_url``, which only the host sets.
+    The layer must be a mapping of `LLMConfig` fields without ``api_key``, or
+    ``base_url`` other than beside ``provider: azure``, which only the host sets.
     """
     if llm_config is None:
         return

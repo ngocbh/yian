@@ -33,6 +33,7 @@ def isolated_auth(tmp_path, monkeypatch):
         "YIAN_DEFAULT_MODEL",
         "OPENAI_API_KEY",
         "OPENAI_BASE_URL",
+        "AZURE_OPENAI_DEPLOYMENT_NAME",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -55,6 +56,14 @@ def test_default_openai_and_provider_scoped_models():
     )
     with pytest.raises(ValueError, match="explicit model"):
         resolve_model_config({"provider": "google"})
+
+
+def test_azure_deployment_environment_is_not_a_model_default(monkeypatch):
+    # The Azure deployment is always llm_config.model; no environment default fills it.
+    monkeypatch.setenv("AZURE_OPENAI_DEPLOYMENT_NAME", "env-deployment")
+    assert "azure" not in connection_snapshot().provider_models
+    with pytest.raises(ValueError, match="explicit model"):
+        resolve_model_config({"provider": "azure"})
 
 
 def test_saved_selection_wins_incidental_key_and_is_nonsecret(monkeypatch):

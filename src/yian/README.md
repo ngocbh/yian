@@ -219,15 +219,15 @@ layer, so a typo never reaches the recorded map.
 to a `base_url` from an authored layer. This covers authored layers only: when the
 host passes a key without `base_url`, the provider's default endpoint or its
 environment variables (`OPENAI_BASE_URL`, `VLLM_BASE_URL`, `ANTHROPIC_BASE_URL`,
-`AZURE_OPENAI_ENDPOINT`, and so on) pick the endpoint, as before, and some clients
+and so on) pick the endpoint, as before, and some clients
 read them on every call, including on resume. A host that wants a fixed endpoint
 passes `base_url` with the key. `LLMConfig` accepts it only beside `api_key` and
 `provider`, requires `https` (`http` only for local hosts) with no credentials,
 query, or fragment, checks the exact string it stores (`validate_base_url` rejects
 whitespace, control and non-ASCII characters, bad ports, and over-long URLs rather
-than normalising them), never echoes it in errors, and rejects it for `azure` and
-`ollama`. The `anthropic` and `google` clients, whose key headers httpx re-sends
-on a cross-origin redirect, do not follow redirects from a `base_url`. An unset
+than normalising them), never echoes it in errors, and rejects it for `ollama`.
+The `anthropic` and `google` clients, whose key headers httpx re-sends on a
+cross-origin redirect, do not follow redirects from a `base_url`. An unset
 `base_url` is dropped from dumps, so existing records and snapshots are unchanged.
 `run_flow` pops it with the key (`pop_host_credentials`) and
 `ConnectionSnapshot.bind(host_base_url=...)` writes it into the recorded effective
@@ -239,7 +239,21 @@ whose `base_url` lacks the `_host_key` marker, so a Python-built or mutated flow
 cannot redirect the key. It also re-checks a recorded `base_url` with
 `validate_base_url`, so an edited log fails when resume starts. Resume and
 backward reuse the recorded `base_url` with the re-supplied key; `ProfileMemory`
-takes one beside its own key; `ReflectiveMemory` rejects it.
+takes one beside its own key; `ReflectiveMemory` rejects it, except an Azure
+endpoint.
+
+`provider: azure` is the one exception. Its `base_url` is the resource endpoint and
+its `model` the deployment name, and the client reads neither from the environment
+(`AZURE_OPENAI_ENDPOINT` and `AZURE_OPENAI_DEPLOYMENT_NAME` are ignored). Any layer,
+including a flow file, may set `base_url` beside `provider: azure` without a key
+(`host_only_field_error` allows it, and `pop_host_credentials` leaves it in a keyless
+host layer), because the environment key it goes to is already readable by flow code.
+The cascade bakes it into the recorded effective map, so resume reuses it, and
+`check_model_config` fails an Azure config without one before the first node runs.
+A host Azure `api_key` still needs its own `base_url` (`pop_host_credentials`), which
+`bind` records over any authored one, so a host key never goes to an authored
+endpoint. `ProfileMemory` and `ReflectiveMemory` take a keyless Azure `base_url` in
+their own `llm_config`.
 
 The transport requires a completed Responses event before returning a model
 reply. Early EOF and incomplete replies raise rather than exposing tool calls

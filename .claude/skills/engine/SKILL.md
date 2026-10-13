@@ -717,7 +717,7 @@ Most are just the functional model (above) made enforceable:
   accepted only beside `api_key` and `provider` (`pop_host_credentials`), must be
   `https` (`http` only for local hosts), is checked as the exact stored string
   (`validate_base_url`: printable ASCII, valid port, ≤2048 chars), and is
-  rejected for `azure`/`ollama`. The `anthropic`/`google` clients don't follow
+  rejected for `ollama`. The `anthropic`/`google` clients don't follow
   redirects from it (httpx would re-send their key headers cross-origin).
   `bind(host_base_url=)` records it on the marked agents' effective configs
   (OpenAI `host` connection endpoint too); resume/backward reuse the recorded
@@ -727,6 +727,11 @@ Most are just the functional model (above) made enforceable:
   its host connection endpoint. An unset `base_url` is dropped from dumps.
   The guarantee is about authored layers: a host key without `base_url` still
   goes to the provider's default or env endpoint (`OPENAI_BASE_URL`, etc.).
+  Exception: `provider: azure` takes `base_url` (the resource endpoint) from
+  any layer without a key, records it in the effective map, and fails at run
+  start without one (`check_model_config`); `model` is the deployment. Env
+  `AZURE_OPENAI_ENDPOINT`/`AZURE_OPENAI_DEPLOYMENT_NAME` are not read. A host
+  Azure key must bring its own `base_url` (`pop_host_credentials`).
 - **One attempt barrier precedes commits** — accept Started, complete backward
   results and all memory proposals, then accept Ready. Commit each memory key
   once in sorted key order, even with an empty batch, accepting its positive-attempt

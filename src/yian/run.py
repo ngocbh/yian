@@ -344,8 +344,10 @@ def run_flow(
             otherwise fail rather than read the environment. A ``base_url``
             entry, accepted only beside ``api_key`` in this layer, is the
             endpoint those agents send the key to. The log records it on them,
-            so a resume or backward call sends the key there too. Flow files
-            cannot set ``api_key`` or ``base_url``.
+            so a resume or backward call sends the key there too. An ``azure``
+            key needs a ``base_url``. Flow files cannot set ``api_key``, nor
+            ``base_url`` except beside ``provider: azure``, where it is the
+            resource endpoint and needs no key.
         memory (`Mapping[str, Memory] | None`, *optional*, defaults to `None`):
             Backend for each declared memory key, typically a `MemoryRegistry`
             from `build_memories`. Extra keys are ignored. ``None`` leaves every
@@ -414,7 +416,9 @@ def run_flow(
             model configuration, or prepared run state violates its contract,
             ``llm_config.api_key`` lacks ``llm_config.provider``,
             ``llm_config.base_url`` lacks
-            ``llm_config.api_key`` or is not an allowed URL, a `BaseTool` in
+            ``llm_config.api_key`` or is not an allowed URL, an ``azure``
+            ``api_key`` lacks ``base_url``, an ``azure`` agent has no
+            ``base_url``, a `BaseTool` in
             `tools` is named differently from its key, a group tool's name
             clashes or is reserved, an AGENT grants a tool or group not in the
             run's tools, a TOOL node's inputs or `output:` do not match the

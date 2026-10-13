@@ -181,11 +181,12 @@ created.
 
   A `base_url` decides where the key is sent, so it is accepted only beside
   `api_key` (and `provider`) in this run layer. Flow files cannot set it at any
-  level, and a flow built in Python fails at run start if any layer has one, so an
-  edited flow cannot send the host key elsewhere. That guarantee covers authored
+  level, and a flow built in Python fails at run start if any layer has one, so
+  an edited flow cannot send the host key elsewhere (an Azure endpoint, below, is
+  the exception). That guarantee covers authored
   layers only. When the host passes `api_key` without `base_url`, the provider's
   default endpoint or its environment variables (such as `OPENAI_BASE_URL`,
-  `VLLM_BASE_URL`, `ANTHROPIC_BASE_URL`, or `AZURE_OPENAI_ENDPOINT`) pick where the
+  `VLLM_BASE_URL`, or `ANTHROPIC_BASE_URL`) pick where the
   key goes, as before; some clients read them on every call, so a resume follows
   the environment at that time. A host that wants a fixed endpoint should pass
   `base_url` with the key. It must be a lowercase `https://`
@@ -194,7 +195,10 @@ created.
   whitespace, control characters, non-ASCII characters (write an international
   host in its `xn--` form), a port outside 1–65535, and URLs over 2048 characters
   are rejected, not normalised. The OpenAI-compatible providers, `anthropic`,
-  and `google` take it; `azure` and `ollama` reject it. A redirect from it does not
+  and `google` take it; `ollama` rejects it. For `provider: azure` it is the
+  required resource endpoint: a flow file or this layer may set it beside
+  `provider: azure` without a key, and an Azure `api_key` here needs one beside it,
+  so a host key never goes to an endpoint a flow names. A redirect from it does not
   carry the key on: the `anthropic` and `google` clients do not follow redirects
   from a `base_url`, and the OpenAI-compatible clients drop their `Authorization`
   header on a redirect to another origin. It is not secret: the log
@@ -202,7 +206,8 @@ created.
   connection uses it as its endpoint. `resume_flow` and `result.backward` send the
   re-supplied key to that recorded URL; neither the provider's endpoint variable
   nor `OPENAI_BASE_URL` changes it. `ProfileMemory` takes one beside its own key;
-  `ReflectiveMemory` rejects it.
+  `ReflectiveMemory` rejects one except an Azure endpoint beside
+  `provider: azure`. Both memories take an Azure endpoint without a key.
 - `memory` — one backend per declared memory key, normally the
   `MemoryRegistry` from `build_memories(flow)`. `None` leaves all declarations
   dormant. A missing key, or one object under two keys, fails setup; extra keys

@@ -361,7 +361,9 @@ Node, `defs:`, and flow `llm_config:` are all checked at load against the same
 fields; `inherit:` is node-only.
 OpenAI subscription and API-key connections both use `provider: openai`;
 select the method and default model with `yian auth openai`.
-Never put `api_key` or `base_url` in a flow's `llm_config:`; loading fails. A
+Never put `api_key` in a flow's `llm_config:`, nor `base_url` except beside
+`provider: azure` (there it is the resource endpoint, required, and `model` is
+the deployment name); loading fails. A
 Python host passes them in `run_flow(..., llm_config={"provider": ...,
 "api_key": key, "base_url": url})`, and the key again to
 `resume_flow`/`result.backward` as `api_key=key`. They reach every AGENT of that

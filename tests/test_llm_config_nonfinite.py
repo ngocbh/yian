@@ -29,7 +29,7 @@ def clean_env(tmp_path, monkeypatch):
     "temperature", [math.nan, math.inf, "inf"], ids=["nan", "inf", "inf-string"]
 )
 def test_llm_config_rejects_a_nonfinite_temperature(temperature):
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="finite"):
         LLMConfig(temperature=temperature)
 
 
@@ -75,14 +75,19 @@ output: ${k.output}
 
 
 @pytest.mark.parametrize(
-    "source",
-    [_AGENT_LLM_CONFIG, _FLOW_LLM_CONFIG, _DEF_LLM_CONFIG],
+    ("source", "where"),
+    [
+        (_AGENT_LLM_CONFIG, "node 'writer': llm_config:"),
+        (_FLOW_LLM_CONFIG, "flow: llm_config:"),
+        (_DEF_LLM_CONFIG, "defs entry 'body': llm_config:"),
+    ],
     ids=["agent", "flow", "def"],
 )
-def test_a_nonfinite_authored_temperature_is_a_load_error(source):
+def test_a_nonfinite_authored_temperature_is_a_load_error(source, where):
     with pytest.raises(LoadError) as caught:
         load_flow(source)
 
+    assert where in str(caught.value)
     assert "temperature" in str(caught.value)
     assert "finite" in str(caught.value)
 

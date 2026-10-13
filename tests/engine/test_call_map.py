@@ -153,7 +153,7 @@ def test_seed05_map_loads_with_list_output_and_parallel():
     assert {name: binding.source for name, binding in wiring.items()} == {
         "over": "${input.topics}",
         "topic": "${item}",
-        "as_of": '${input.as_of:-"today"}',
+        "as_of": '${input.as_of:-"2026-01-01"}',
     }
     assert wiring["over"].origin is not None
     assert wiring["topic"].origin is not None

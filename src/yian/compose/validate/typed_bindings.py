@@ -27,7 +27,8 @@ range; a flow output error at its registered origin, else the `output:` range.
 
 Imports flow down only: `compile.validation` (the type relation), `expr` (template
 scanning), `typesys`, and `compose.helpers` (output-contract inference and load
-diagnostics). Only the loader (and the compose package facade) import this back.
+diagnostics). The loader, the compose package facade, and the CALL/MAP check
+(`call_types`, for its literal and `${item}` helpers) import this back.
 """
 
 from __future__ import annotations
@@ -59,7 +60,7 @@ from yian.typesys import (
     canonical_type_label,
 )
 
-_NOT_LITERAL = object()
+NOT_LITERAL = object()
 
 ResolveOrigin = Callable[[OriginRef], DiagnosticFrame | None]
 
@@ -104,7 +105,7 @@ def check_typed_inputs(
         node_producers, node_inputs = (
             narrowing.for_node(node_id) if narrowing is not None else (producers, flow_inputs)
         )
-        item = _item_contract(result, wiring, node_producers, node_inputs)
+        item = item_contract(result, wiring, node_producers, node_inputs)
         for name, binding in wiring.items():
             param_producers, param_inputs = (
                 narrowing.for_param(node_id, name)
@@ -195,8 +196,8 @@ def infer_binding_type(
     """
     if isinstance(binding, Binding) and binding.contract is not None:
         return binding.contract.type
-    literal = _literal_value(binding_source(binding))
-    if literal is not _NOT_LITERAL:
+    literal = literal_value(binding_source(binding))
+    if literal is not NOT_LITERAL:
         return _literal_type(literal)
     inferred = resolve_output_binding_contract(binding, producers, flow_inputs)
     return inferred.type if type(inferred) is ValueContract else None
@@ -260,7 +261,7 @@ def _located_error(
     return diagnostics.error(message, range=fallback)
 
 
-def _item_contract(
+def item_contract(
     result: BuildResult | None,
     wiring: dict[str, Any],
     producers: dict[str, OutputContract],
@@ -316,12 +317,12 @@ def _binding_error(
         return None
     declared = binding.contract.type
     label = canonical_type_label(declared)
-    literal = _literal_value(binding.source)
-    if literal is not _NOT_LITERAL:
+    literal = literal_value(binding.source)
+    if literal is not NOT_LITERAL:
         try:
             build_value_as(declared, literal)
         except TypeCheckError as exc:
-            message = f"declared {label}, but the value {_shown(literal)} does not fit"
+            message = f"declared {label}, but the value {shown_literal(literal)} does not fit"
             if exc.path:
                 message += f" ({exc})"
             return message
@@ -366,7 +367,7 @@ def _item_reference_contract(
     return project_output_contract(item, fields)
 
 
-def _shown(value: Any) -> str:
+def shown_literal(value: Any) -> str:
     """Render a literal as YAML would write it (`true`, `null`, `"text"`).
 
     Args:
@@ -381,8 +382,8 @@ def _shown(value: Any) -> str:
         return repr(value)
 
 
-def _literal_value(source: Any) -> Any:
-    """Return the value a literal source binds, or `_NOT_LITERAL` for a template.
+def literal_value(source: Any) -> Any:
+    """Return the value a literal source binds, or `NOT_LITERAL` for a template.
 
     A non-string is bound as is; a string with no `${...}` span binds its text after
     `$$` unescaping, exactly as the binder evaluates it.
@@ -391,14 +392,14 @@ def _literal_value(source: Any) -> Any:
         source (`Any`): The binding's raw source.
 
     Returns:
-        `Any`: The bound literal value, or `_NOT_LITERAL`.
+        `Any`: The bound literal value, or `NOT_LITERAL`.
     """
     if not isinstance(source, str):
         return source
     try:
         segments = scan_template(source)
         if any(isinstance(segment, Span) for segment in segments):
-            return _NOT_LITERAL
+            return NOT_LITERAL
         return eval_binding(source, lambda path: None)
     except ExpressionError:
-        return _NOT_LITERAL  # malformed text is reported by reference validation
+        return NOT_LITERAL  # malformed text is reported by reference validation

@@ -859,6 +859,7 @@ def test_call_type_error_is_identical_for_raw_and_wrapped_sources() -> None:
     )
     node = SimpleNamespace(
         is_loop=False,
+        item_source_key=None,
         child_inputs=[child_input],
     )
     result = BuildResult(node=node, wiring={})
@@ -889,7 +890,9 @@ def test_call_type_check_projects_known_partial_producer_field() -> None:
         coerce_strings=True,
     )
     result = BuildResult(
-        node=SimpleNamespace(is_loop=False, child_inputs=[child_input]),
+        node=SimpleNamespace(
+            is_loop=False, item_source_key=None, child_inputs=[child_input]
+        ),
         wiring={},
     )
     partial = PartialRecordContract(

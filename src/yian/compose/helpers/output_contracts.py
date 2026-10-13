@@ -101,12 +101,26 @@ def project_output_contract(
     )
 
 
-def _reference_contract(
+def reference_contract(
     path: str,
     producers: dict[str, OutputContract],
     flow_inputs: dict[str, ValueContract],
 ) -> OutputContract | None:
-    """Resolve one supported reference path to its exact or projected contract."""
+    """Resolve one `input.X...` or `<id>.output...` path to its exact or projected contract.
+
+    Args:
+        path (`str`): The dotted reference path.
+        producers (`dict[str, OutputContract]`): Node output contracts by producer id.
+        flow_inputs (`dict[str, ValueContract]`): Flow input contracts by name.
+
+    Returns:
+        `OutputContract | None`: The projected contract, or `None` for an unknown or
+            unsupported path.
+
+    Raises:
+        `TypeError`: A referenced producer is not an `OutputContract`, or a flow-input
+            contract is not an exact `ValueContract`.
+    """
     parts = path.split(".")
     head = parts[0]
     if head == "input" and len(parts) >= 2:
@@ -208,7 +222,7 @@ def resolve_output_binding_contract(
         return None
     refs = template_refs(segments)
     reference_contracts = {
-        path: _reference_contract(path, producers, flow_inputs) for path in refs
+        path: reference_contract(path, producers, flow_inputs) for path in refs
     }
     if not (len(segments) == 1 and isinstance(segments[0], Span)):
         return ValueContract(Type.scalar(ValueKind.STRING))
@@ -226,7 +240,7 @@ def resolve_output_binding_contract(
         """Project one referenced contract to the type requested by ``expr``."""
         contract = reference_contracts.get(path)
         if path not in reference_contracts:
-            contract = _reference_contract(path, producers, flow_inputs)
+            contract = reference_contract(path, producers, flow_inputs)
         return output_contract_type(contract)
 
     inferred = infer_expr_type(expression, reference_type)
@@ -469,5 +483,6 @@ __all__ = [
     "output_contract_path_error",
     "project_output_contract",
     "record_field_origins",
+    "reference_contract",
     "resolve_output_binding_contract",
 ]

@@ -156,12 +156,19 @@ _TAKE = """defs:
 
 
 def test_then_call_target_is_null():
-    """A `then: call(...)` target of a CASE that may match nothing gives null."""
-    nodes = '  gate:\n    kind: case\n    cases:\n      - when: ${input.approve}\n' \
-        '        then: call(take, stance="pro")\n'
-    text = _flow(nodes, "\n  v: ${gate.output}", defs=_TAKE)
-    assert _run(text, {"approve": False}) == {"v": None}
-    assert _run(text, {"approve": True}) == {"v": "pro"}
+    """A `then: call(...)` target gives null when an outer CASE skips its CASE."""
+    # Reading `${inner.output}` makes `inner` produce a value, so it must be exhaustive;
+    # the skip comes from the routing-only `outer`, which may match nothing.
+    nodes = (
+        _gate("inner", name="outer")
+        + _gate('call(take, stance="pro")', 'call(take, stance="con")', name="inner", when="inner")
+    )
+    text = _flow(
+        nodes, "\n  v: ${inner.output}", inputs="approve: bool\n  inner: bool", defs=_TAKE
+    )
+    assert _run(text, {"approve": False, "inner": True}) == {"v": None}
+    assert _run(text, {"approve": True, "inner": True}) == {"v": "pro"}
+    assert _run(text, {"approve": True, "inner": False}) == {"v": "con"}
 
 
 def test_call_node_target_is_null():

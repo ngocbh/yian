@@ -73,7 +73,7 @@ def _normalize_section_keys(
     `inputs`/`outputs` field names (Python collection fields stay plural).
     The body-level back-map (`_back_map_to_plural`) translates the new singular
     keys to the dataclass field names. This helper's rejection scope is the top-level
-    mapping passed to it.
+    mapping passed to it; `_reject_nested_legacy_keys` checks node and def bodies.
     """
     diagnostics = diagnostics or LoadDiagnostics()
     if not isinstance(body, dict):
@@ -96,6 +96,49 @@ def _normalize_section_keys(
             ),
         )
     return body
+
+
+_NESTED_SECTIONS = (("nodes", "node", "nodes"), ("defs", "defs entry", "defs"))
+
+
+def _reject_nested_legacy_keys(cursor: SourceCursor, diagnostics: LoadDiagnostics) -> None:
+    """Reject retired `inputs:`/`outputs:` in every authored node and def body.
+
+    Walks the same `nodes:`/`defs:` nesting that `_back_map_to_plural` projects. The
+    check reads the authored source because the projection would merge `inputs:` with
+    a renamed `input:` and keep only one of them.
+
+    Args:
+        cursor (`SourceCursor`):
+            Authored flow, node, or def body mapping whose nested sections are checked.
+        diagnostics (`LoadDiagnostics`):
+            Builder for the located `LoadError`.
+
+    Raises:
+        `LoadError`:
+            Raised at the first `inputs:` or `outputs:` key in a nested body.
+        `SourceAccessError`:
+            Raised when a nested section cannot be traversed.
+    """
+    for section, noun, plural_noun in _NESTED_SECTIONS:
+        if not cursor.has(section):
+            continue
+        section_cursor = cursor.child(section)
+        entries = section_cursor._value_view()
+        if not isinstance(entries, Mapping):
+            continue
+        for name, entry in entries.items():
+            if not isinstance(entry, Mapping):
+                continue
+            entry_cursor = section_cursor.child(name)
+            for legacy, new in (("inputs", "input"), ("outputs", "output")):
+                if legacy in entry:
+                    raise diagnostics.error(
+                        f"{noun} {name!r}: unknown key {legacy!r} — {plural_noun} use "
+                        f"`{new}:` (rename the key)",
+                        range=entry_cursor.key_range_of(legacy),
+                    )
+            _reject_nested_legacy_keys(entry_cursor, diagnostics)
 
 
 def _back_map_to_plural(body: Any) -> Any:
@@ -360,7 +403,8 @@ def parse_file(source: str | SourceDocument) -> ComposeFile:
     """Parse a source document into a strict `ComposeFile`.
 
     Raises `LoadError` on malformed YAML, a non-mapping document, an unknown
-    top-level key (after stripping `x-*`), or any schema violation.
+    top-level key (after stripping `x-*`), a retired `inputs:`/`outputs:` key in a
+    node or def body, or any schema violation.
     """
     document = (
         parse_source_document(source, "<flow>") if isinstance(source, str) else source
@@ -380,6 +424,10 @@ def parse_file(source: str | SourceDocument) -> ComposeFile:
         diagnostics=diagnostics,
         range_for_key=root.key_range_of,
     )
+    try:
+        _reject_nested_legacy_keys(root, diagnostics)
+    except SourceAccessError as exc:
+        raise diagnostics.error(str(exc), range=exc.range) from exc
 
     # Compact (single-node) flow: a top-level node `kind:` with no `nodes:` map. Desugar
     # to the canonical one-node form BEFORE the strict-schema checks below, since `nodes:`

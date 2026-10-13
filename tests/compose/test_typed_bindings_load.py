@@ -467,34 +467,16 @@ nodes:
 output: ${host.output}
 """
 
-_QUOTED_INPUTS_SPELLING = """
-id: quoted_inputs
-name: quoted_inputs
-nodes:
-  use:
-    kind: code
-    code: tests.engine._compose_codefns:echo
-    inputs:
-      note: "a = b"
-    output: str
-output: ${use.output}
-"""
-
 
 @pytest.mark.parametrize(
-    ("text", "in_child"),
-    [
-        (_QUOTED_INLINE_CALL, True),
-        (_QUOTED_INLINE_LOOP, True),
-        (_QUOTED_DEF, True),
-        (_QUOTED_INPUTS_SPELLING, False),
-    ],
-    ids=["inline-call", "inline-loop", "multi-node-def", "inputs-spelling"],
+    "text",
+    [_QUOTED_INLINE_CALL, _QUOTED_INLINE_LOOP, _QUOTED_DEF],
+    ids=["inline-call", "inline-loop", "multi-node-def"],
 )
-def test_quoted_input_stays_plain_wherever_it_is_written(text, in_child):
+def test_quoted_input_stays_plain_wherever_it_is_written(text):
     loaded = load_flow(text)
 
-    compiled = _child(loaded.compiled, "host") if in_child else loaded.compiled
+    compiled = _child(loaded.compiled, "host")
     binding = _binding(compiled, "use", "note")
     assert binding.source == "a = b"
     assert binding.contract is None

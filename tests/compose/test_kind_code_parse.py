@@ -128,7 +128,7 @@ def test_nonliteral_syntax_error_uses_whole_code_scalar(code_field):
         "nodes:\n"
         "  broken:\n"
         "    kind: code\n"
-        "    outputs: string\n"
+        "    output: string\n"
         f"{code_field}"
         "output: ${broken.output}\n"
     )

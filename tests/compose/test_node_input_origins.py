@@ -304,39 +304,6 @@ def test_virtual_input_entries_remain_originless():
     assert binding.origin is None
 
 
-def test_input_origin_uses_the_same_normalized_occurrence_as_parsing():
-    text = """id: normalized-input-origin
-name: normalized-input-origin
-nodes:
-  worker:
-    kind: code
-    code: tests.engine._compose_codefns:echo_x
-    input:
-      x: singular
-    inputs:
-      x: plural
-    output: str
-output: ${worker.output}
-"""
-    document = SourceDocument.parse(text)
-    loaded = load_flow(text)
-    selected = (
-        document.root.child("nodes")
-        .child("worker")
-        .child("inputs")
-        .child("x")
-    )
-
-    _assert_input_site(
-        loaded.origin_resolver,
-        loaded.compiled.nodes["worker"],
-        loaded.compiled.wiring["worker"]["x"],
-        "x",
-        selected,
-        source="plural",
-    )
-
-
 def test_adaptive_generated_inputs_remain_originless():
     text = """id: adaptive-input-origins
 name: adaptive-input-origins
@@ -411,7 +378,7 @@ input:
   deadline: str
 defs:
   echo:
-    inputs:
+    input:
       x: str
     nodes:
       worker:
@@ -420,7 +387,7 @@ defs:
         input:
           x: ${input.x}
         output: str
-    outputs: ${worker.output}
+    output: ${worker.output}
 nodes:
   mapping:
     kind: map

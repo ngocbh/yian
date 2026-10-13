@@ -25,6 +25,9 @@ asserts: [ ... ]           # optional — boolean invariants
 There is **no `edges:` block**, no `__start__`/`__end__`, no per-node `id:`, and
 no body wrappers — a node body is flat.
 
+Flows, nodes, and `defs:` entries all spell their signature `input:` and `output:`.
+The old plural `inputs:`/`outputs:` keys are a load error at any level.
+
 The shape of `output:` sets what the flow returns:
 
 - `output: ${x}` (one binding string) returns the value of `x` as is.

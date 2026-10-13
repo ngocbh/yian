@@ -110,7 +110,7 @@ class CallDescriptor(NodeDescriptor):
             # the reserved wiring key — an `input:` parameter named `over` would collide.
             raise ctx.diagnostics.error(
                 f"map node {self.id!r}: input name 'over' is reserved (the iteration "
-                f"source); rename the `inputs:` entry",
+                f"source); rename the `input:` entry",
                 range=self.field_ranges.get(("input", "over")) or self.range,
             )
         child = _resolve_child(

@@ -71,7 +71,8 @@ asserts:                     # optional — boolean invariants
 ```
 
 There is **no `edges:` block**, no `__start__`/`__end__`, no per-node `id:`, and
-no body wrappers — a node body is flat.
+no body wrappers — a node body is flat. Flows, nodes, and `defs:` entries all write
+`input:`/`output:`; the old plural `inputs:`/`outputs:` is a load error.
 
 **The `output:` shape sets the return.** `output: ${x}` returns the value of `x` as
 is. `output: {name: ${x}, ...}` always returns a record, even with one field

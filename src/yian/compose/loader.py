@@ -198,6 +198,10 @@ def _single_node_def_cursor(
 _DEF_ALLOWED = frozenset(
     {"inputs", "nodes", "outputs", "asserts", "llm_config", "long_term_memory"}
 )
+# The authored spellings of `_DEF_ALLOWED`, for error messages.
+_DEF_SURFACE_KEYS = frozenset(
+    {"inputs": "input", "outputs": "output"}.get(key, key) for key in _DEF_ALLOWED
+)
 
 
 def _validate_system(
@@ -1130,7 +1134,7 @@ def _load_def(
             )
         raise diagnostics.error(
             f"defs entry {name!r}: a child flow needs a `nodes:` body "
-            f"(inputs?/nodes/outputs?) OR a single-node `kind:` form",
+            f"(input?/nodes/output?) OR a single-node `kind:` form",
             range=(def_cursor.range if def_cursor is not None else None),
         )
     if "memory_policy" in body:
@@ -1147,7 +1151,7 @@ def _load_def(
     if extra:
         raise diagnostics.error(
             f"defs entry {name!r}: unknown field(s) {extra} "
-            f"(allowed: {', '.join(sorted(_DEF_ALLOWED))})",
+            f"(allowed: {', '.join(sorted(_DEF_SURFACE_KEYS))})",
             range=(
                 def_cursor.key_range_of(extra[0])
                 if def_cursor is not None
@@ -1235,7 +1239,7 @@ def _load_single_node_def(
             def_cursor, "inputs"
         )
         raise diagnostics.error(
-            f"defs entry {name!r}: single-node `inputs:` must be a param map (name: TYPE)",
+            f"defs entry {name!r}: single-node `input:` must be a param map (name: TYPE)",
             range=(
                 input_cursor.range
                 if input_cursor is not None

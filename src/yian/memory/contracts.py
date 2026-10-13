@@ -494,7 +494,41 @@ BUILTIN_MEMORY_CONFIG_KEYS: Mapping[str, frozenset[str]] = MappingProxyType(
         "profile": frozenset({"max_chars", "input_budget_chars"}),
     }
 )
-"""Config keys each built-in memory type accepts from YAML; values are checked later."""
+"""Config keys each built-in memory type accepts from YAML."""
+
+_BUILTIN_MEMORY_CONFIG_RULES: Mapping[str, Mapping[str, tuple[int, bool]]] = MappingProxyType(
+    {
+        "episodic": {"max_episodes": (1, True), "recall_limit": (1, True)},
+        "reflective": {"max_items": (1, True), "recall_limit": (1, True)},
+        "session": {"history_budget_chars": (1, False), "recent_turns": (0, False)},
+        "profile": {"max_chars": (1, False), "input_budget_chars": (1, False)},
+    }
+)
+"""Per built-in key: the least exact integer allowed and whether null is allowed.
+
+These mirror the backend constructors so a bad value fails at load, not first at
+``build_memories``; null leaves an episodic or reflective limit to the stored or
+default value.
+"""
+
+
+def _check_builtin_config_values(type_name: str, config: Mapping[str, object]) -> None:
+    """Raise when a built-in type's config value breaks its backend's rule."""
+    for key, (minimum, nullable) in _BUILTIN_MEMORY_CONFIG_RULES[type_name].items():
+        if key not in config or (nullable and config[key] is None):
+            continue
+        value = config[key]
+        if type(value) is not int:
+            expected = "an integer or null" if nullable else "an integer"
+            raise TypeError(
+                f"{type_name} memory config {key} must be {expected}, "
+                f"got {json.dumps(value)}"
+            )
+        if value < minimum:
+            raise ValueError(
+                f"{type_name} memory config {key} must be an integer of at least "
+                f"{minimum}, got {value}"
+            )
 
 
 def _require_memory_identifier(value: object, what: str) -> str:
@@ -507,14 +541,15 @@ def _require_memory_identifier(value: object, what: str) -> str:
 
 
 def check_memory_declaration(name: object, type_name: object, config: object) -> None:
-    """Check one declaration's name, type and config shape without building it.
+    """Check one declaration's name, type and config without building it.
 
     Args:
         name (`object`): Memory name; must match `MEMORY_IDENTIFIER_PATTERN`.
         type_name (`object`): Memory type; same grammar.
         config (`object`): Finite JSON object. It may not hold private keys or
             storage locations, and a built-in type allows only the keys in
-            `BUILTIN_MEMORY_CONFIG_KEYS`.
+            `BUILTIN_MEMORY_CONFIG_KEYS`, each an exact integer in its
+            backend's range (episodic and reflective limits may be null).
 
     Raises:
         `TypeError`: A value has the wrong Python type.
@@ -538,6 +573,7 @@ def check_memory_declaration(name: object, type_name: object, config: object) ->
                 f"{type_name} memory config has unknown key(s) {extra} "
                 f"(allowed: {', '.join(sorted(allowed))})"
             )
+        _check_builtin_config_values(type_name, config)
 
 
 @dataclass(frozen=True, slots=True)

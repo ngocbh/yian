@@ -536,14 +536,15 @@ The retired `{name: X, config: ...}` form is also an error; `name`, `type`,
 and `config` are reserved and cannot be memory names. Names and type names match
 `[A-Za-z_][A-Za-z0-9_-]*`.
 
-Built-in types and the config keys they accept:
+Built-in types, the config keys they accept, and the values allowed. Each value
+is an integer; a wrong key or value is a load error.
 
-| Type | Config keys |
-|---|---|
-| `episodic` | `max_episodes`, `recall_limit` |
-| `reflective` | `max_items`, `recall_limit` |
-| `session` | `history_budget_chars`, `recent_turns` |
-| `profile` | `max_chars`, `input_budget_chars` |
+| Type | Config keys | Values |
+|---|---|---|
+| `episodic` | `max_episodes`, `recall_limit` | at least 1, or `null` for the stored or default limit |
+| `reflective` | `max_items`, `recall_limit` | at least 1, or `null` for the stored or default limit |
+| `session` | `history_budget_chars`, `recent_turns` | `history_budget_chars` at least 1, `recent_turns` at least 0 |
+| `profile` | `max_chars`, `input_budget_chars` | at least 1 |
 
 Any other type name is a custom type that the Python host builds (see
 [building memories](api.md#building-memories-with-build_memories)). In any

@@ -393,7 +393,9 @@ imports. Three forms:
 memory names. Built-in types and their config keys: `episodic` (`max_episodes`,
 `recall_limit`), `reflective` (`max_items`, `recall_limit`), `session`
 (`history_budget_chars`, `recent_turns`), `profile` (`max_chars`,
-`input_budget_chars`). Any other type is custom and needs a Python host. `storage`,
+`input_budget_chars`). Values are integers of at least 1 (`recent_turns` at least
+0); episodic and reflective limits may also be `null`. A bad key or value fails at
+load. Any other type is custom and needs a Python host. `storage`,
 `store`, `path`, and `api_key` are rejected in config.
 
 A memory's key is its name prefixed by the `uses:` aliases it was imported

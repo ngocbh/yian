@@ -9,6 +9,7 @@ import pytest
 from yian.diagnostics import OriginRef
 import yian.memory as memory_package
 from yian.memory.contracts import (
+    _BUILTIN_MEMORY_CONFIG_RULES,
     BUILTIN_MEMORY_CONFIG_KEYS,
     MEMORY_IDENTIFIER_PATTERN,
     DeclSite,
@@ -16,6 +17,7 @@ from yian.memory.contracts import (
     MemorySetupError,
     check_memory_declaration,
 )
+from yian.memory_host import _builtin
 
 _SITE = DeclSite((), ("root",), None)
 
@@ -66,6 +68,68 @@ def test_builtin_types_accept_only_allowlisted_keys() -> None:
         MemoryDecl("notes", "episodic", {"max_items": 5}, _SITE)
     with pytest.raises(ValueError, match="allowed: history_budget_chars, recent_turns"):
         MemoryDecl("chat", "session", {"budget": 1}, _SITE)
+
+
+@pytest.mark.parametrize(
+    ("type_name", "config", "error", "message"),
+    [
+        ("episodic", {"max_episodes": 0}, ValueError, "max_episodes must be an integer of at least 1"),
+        ("episodic", {"recall_limit": -3}, ValueError, "recall_limit must be an integer of at least 1"),
+        ("reflective", {"max_items": "ten"}, TypeError, "max_items must be an integer or null"),
+        ("reflective", {"max_items": 1.5}, TypeError, "max_items must be an integer or null"),
+        ("reflective", {"recall_limit": True}, TypeError, "recall_limit must be an integer or null"),
+        ("session", {"recent_turns": -1}, ValueError, "recent_turns must be an integer of at least 0"),
+        ("session", {"history_budget_chars": 0}, ValueError, "at least 1"),
+        ("session", {"recent_turns": None}, TypeError, "recent_turns must be an integer, got null"),
+        ("profile", {"max_chars": 0}, ValueError, "max_chars must be an integer of at least 1"),
+        ("profile", {"input_budget_chars": None}, TypeError, "input_budget_chars must be an integer"),
+    ],
+)
+def test_builtin_config_values_are_checked(
+    type_name: str, config: dict, error: type[Exception], message: str
+) -> None:
+    with pytest.raises(error, match=message):
+        check_memory_declaration("notes", type_name, config)
+
+
+@pytest.mark.parametrize(
+    ("type_name", "config"),
+    [
+        ("episodic", {"max_episodes": 1, "recall_limit": None}),
+        ("reflective", {"max_items": None, "recall_limit": 1}),
+        ("session", {"history_budget_chars": 1, "recent_turns": 0}),
+        ("profile", {"max_chars": 1, "input_budget_chars": 1}),
+    ],
+)
+def test_builtin_config_values_at_their_limits_load_and_build(
+    type_name: str, config: dict
+) -> None:
+    check_memory_declaration("notes", type_name, config)
+    _builtin(type_name, config, None, create_parent=False).close()
+
+
+@pytest.mark.parametrize(
+    ("type_name", "key", "minimum", "nullable"),
+    [
+        (type_name, key, minimum, nullable)
+        for type_name, rules in _BUILTIN_MEMORY_CONFIG_RULES.items()
+        for key, (minimum, nullable) in rules.items()
+    ],
+)
+def test_builtin_config_rules_match_the_backends(
+    type_name: str, key: str, minimum: int, nullable: bool
+) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        _builtin(type_name, {key: minimum - 1}, None, create_parent=False)
+    if not nullable:
+        with pytest.raises((TypeError, ValueError)):
+            _builtin(type_name, {key: None}, None, create_parent=False)
+
+
+def test_builtin_config_rules_cover_the_allowlist() -> None:
+    assert {k: set(v) for k, v in _BUILTIN_MEMORY_CONFIG_RULES.items()} == {
+        k: set(v) for k, v in BUILTIN_MEMORY_CONFIG_KEYS.items()
+    }
 
 
 def test_custom_types_accept_any_public_config() -> None:

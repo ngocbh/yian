@@ -282,6 +282,10 @@ def test_non_agent_node_rejects_long_term_memory_at_the_authored_value(source: s
         ("long_term_memory: {name: reflective, config: {max_items: 3}}\n", "reserved"),
         ("long_term_memory: {notes: {type: reflective, config: []}}\n", "config must be a mapping"),
         ("long_term_memory: {notes: {type: reflective, extra: true}}\n", "unknown key"),
+        (
+            "long_term_memory: {notes: {type: reflective, config: {max_items: 0}}}\n",
+            "max_items must be an integer of at least 1",
+        ),
     ],
 )
 def test_malformed_flow_declaration_is_located_at_its_authored_occurrence(

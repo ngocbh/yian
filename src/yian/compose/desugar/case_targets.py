@@ -9,9 +9,8 @@ whole-value `call(...)` directive — a route target resolves to exactly one nod
 any other text starting with `call(` is a located LoadError naming the problem. Value
 branches (quoted text, `${...}` templates, non-string values) were already lifted to synth
 `__value_<n>` nodes by `desugar_case_values`, so this pass sees node ids, those synth ids,
-and unquoted
-calls. Sound because the case-route veto skip-floods the non-chosen synth branch even when its
-call args carry data edges.
+and unquoted calls. Sound because the case-route veto skip-floods the non-chosen synth
+branch even when its call args carry data edges.
 
 Runs in `_assemble` AFTER `desugar_inline_calls` (sharing its `next_id` minter — else
 the ids collide) and BEFORE `expand_case_outputs`, so the synth call's args (which may

@@ -399,7 +399,7 @@ def desugar_call_directives(value: str, mint: Callable[[], str]) -> tuple:
         if not name or any(ch.isspace() for ch in name):
             raise ExpressionError(
                 f"call({flow_id}, ...) argument {pair.strip()!r} needs one name before "
-                "`=`; add the missing comma"
+                f"`=`; {'add the missing comma' if name else 'write the keyword name'}"
             )
         arg_value = "=".join(parts[1:])
         if _looks_like_two_keywords(parts[1:]):

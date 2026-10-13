@@ -210,10 +210,12 @@ class RunState:
             Graph-growth nesting depth keyed by live dynamic node ID.
         growth_owner (`dict[str, str]`):
             Live dynamic node ID to the live node whose accepted growth owns it.
-            Pruning a node also retires the nodes it owns, transitively, when all
-            of them are settled.  Otherwise they move to the nearest surviving
-            owner and are retired only if a later prune of that owner finds them
-            settled; under a top-level LOOP they stay for the rest of the run.
+            Pruning a node also retires the nodes it owns, transitively, once it
+            and all of them are settled.  A self-pruning LOOP driver's unsettled
+            nodes move to its nearest surviving owner.
+        deferred_prune (`frozenset[str]`):
+            Live node IDs a growth asked to prune while they or their grown nodes
+            were unfinished; each later growth retires those that have settled.
         wiring_overrides (`dict[str, dict[str, Any]]`):
             Per-run wiring keyed by node ID, beginning with START's narrowed inputs.
         run_id (`str | None`):
@@ -261,6 +263,7 @@ class RunState:
         self.terminal_unreachable_failure: Failure | None = None
         self.depth: dict[str, int] = {}
         self.growth_owner: dict[str, str] = {}
+        self.deferred_prune: frozenset[str] = frozenset()
         self.wiring_overrides: dict[str, dict[str, Any]] = {}
         self.run_id: str | None = None
         self.flow_fingerprint: str | None = None
@@ -587,6 +590,7 @@ class _GrowthTopology:
     accepted_starts: tuple[tuple[str, int], ...]
     depth: tuple[tuple[str, int], ...]
     growth_owner: tuple[tuple[str, str], ...]
+    deferred_prune: frozenset[str]
     wiring_overrides: tuple[tuple[str, dict[str, Any]], ...]
 
 
@@ -607,6 +611,7 @@ class _GrowthApply:
     accepted_starts: dict[str, int]
     depth: dict[str, int]
     growth_owner: dict[str, str]
+    deferred_prune: frozenset[str]
     wiring_overrides: dict[str, dict[str, Any]]
     observers: tuple[Any, ...]
 
@@ -2174,6 +2179,7 @@ def _commit_growth(
     state.accepted_starts = apply.accepted_starts
     state.depth = apply.depth
     state.growth_owner = apply.growth_owner
+    state.deferred_prune = apply.deferred_prune
     state.wiring_overrides = apply.wiring_overrides
     state.next_sequence = prepared.expected_sequence + 1
     return apply.observers
@@ -2353,6 +2359,7 @@ def _require_initialized(state: RunState) -> None:
         and type(state.accepted_starts) is dict
         and type(state.depth) is dict
         and type(state.growth_owner) is dict
+        and type(state.deferred_prune) is frozenset
         and type(state.wiring_overrides) is dict
         and type(state.input) is dict
         and type(state.effective_llm_by_static_path) is dict
@@ -2596,12 +2603,14 @@ def _prepare_growth_topology(
             )
         )
     derived_depth = _validated_growth_depth(state, record.spawner_id)
-    retired_ids = _retired_ids(state, frozenset(record.prune_ids))
     _validate_growth_prune(
         state,
         record.spawner_id,
-        retired_ids,
+        frozenset(record.prune_ids),
         frozenset(new_node_ids),
+    )
+    retired_ids, deferred_prune = _retired_ids(
+        state, record.spawner_id, frozenset(record.prune_ids)
     )
     _validate_prune_dependencies(state, fragment, retired_ids)
 
@@ -2716,6 +2725,7 @@ def _prepare_growth_topology(
         accepted_starts=tuple((node_id, state.accepted_starts[node_id]) for node_id in in_flight),
         depth=tuple(depth.items()),
         growth_owner=tuple(growth_owner.items()),
+        deferred_prune=deferred_prune,
         wiring_overrides=tuple(wiring_overrides.items()),
     )
     return delta, topology
@@ -3154,48 +3164,106 @@ def _validated_growth_depth(state: RunState, spawner_id: str) -> int | None:
     return depth
 
 
-def _retired_ids(state: RunState, prune_ids: frozenset[str]) -> frozenset[str]:
-    """Return ``prune_ids`` plus each one's grown nodes when all of those are settled.
+def _retired_ids(
+    state: RunState,
+    spawner_id: str,
+    prune_ids: frozenset[str],
+) -> tuple[frozenset[str], frozenset[str]]:
+    """Split the requested and deferred prune ids into those retired now and those kept.
 
-    A grown node still ready, running, or waiting keeps its owner's whole grown
-    subtree live, so retiring never removes work that has not finished.  A kept
-    subtree moves to the nearest surviving owner and is retired only if a later
-    prune of that owner finds it settled; under a top-level LOOP it stays for the
-    rest of the run.  This assumes no node outside an owner's grown subtree
-    references a node inside it; a growth that broke that would fail the usual
-    prune checks, not corrupt state.
+    Each candidate is a requested prune id or one an earlier growth deferred.  It
+    is retired with its whole grown subtree when every node in it is settled
+    (taken, skipped, or expanded; none ready or running).  Otherwise it stays live
+    with that subtree and is deferred, so a later growth retires it once settled;
+    a kept node also keeps every candidate it reads.  A spawner that asks to prune
+    itself is always retired; its grown nodes go with it only if all are settled,
+    else they move to the nearest surviving owner.
 
     Args:
         state (`RunState`):
             Pre-transition state whose ``growth_owner`` names each node's owner.
+        spawner_id (`str`):
+            Spawner whose growth record asks for ``prune_ids``.
         prune_ids (`frozenset[str]`):
             Node IDs the growth record asks to prune.
 
     Returns:
-        `frozenset[str]`:
-            ``prune_ids`` plus the settled grown nodes retired with them.
+        `tuple[frozenset[str], frozenset[str]]`:
+            The node IDs retired by this growth, and the candidates kept live and
+            deferred to a later growth.
     """
     owned: dict[str, list[str]] = {}
     for node_id, owner in state.growth_owner.items():
         owned.setdefault(owner, []).append(node_id)
     settled = (NodeState.TAKEN, NodeState.SKIPPED, NodeState.EXPANDED)
     ready_ids = set(state.ready)
-    retired = set(prune_ids)
-    for prune_id in prune_ids:
-        grown: list[str] = []
-        pending = [prune_id]
-        while pending:
-            for node_id in owned.get(pending.pop(), ()):
-                grown.append(node_id)
-                pending.append(node_id)
-        if all(
+
+    def is_settled(node_id: str) -> bool:
+        return (
             state.node_state.get(node_id) in settled
             and node_id not in state.in_flight
             and node_id not in ready_ids
-            for node_id in grown
-        ):
-            retired.update(grown)
-    return frozenset(retired)
+        )
+
+    units: dict[str, list[str]] = {}
+    for candidate in prune_ids | state.deferred_prune:
+        unit = [candidate]
+        pending = [candidate]
+        while pending:
+            for node_id in owned.get(pending.pop(), ()):
+                unit.append(node_id)
+                pending.append(node_id)
+        units[candidate] = unit
+
+    retired: set[str] = set()
+    # A deferred spawner growing now is unsettled and kept like any other candidate.
+    spawner_unit = units.pop(spawner_id) if spawner_id in prune_ids else None
+    if spawner_unit is not None:
+        retired.add(spawner_id)
+        if all(is_settled(node_id) for node_id in spawner_unit[1:]):
+            retired.update(spawner_unit[1:])
+    kept = {
+        candidate for candidate, unit in units.items()
+        if not all(is_settled(node_id) for node_id in unit)
+    }
+    # A settled node that kept work still reads must stay with it.  Units overlap
+    # when a deferred id lies under another candidate, so a node can be in several.
+    units_of: dict[str, list[str]] = {}
+    for candidate, unit in units.items():
+        for node_id in unit:
+            units_of.setdefault(node_id, []).append(candidate)
+    pending = [node_id for candidate in kept for node_id in units[candidate]]
+    while pending:
+        for read in _read_ids(state, pending.pop()):
+            for candidate in units_of.get(read, ()):
+                if candidate not in kept:
+                    kept.add(candidate)
+                    pending.extend(units[candidate])
+    for candidate, unit in units.items():
+        if candidate not in kept:
+            retired.update(unit)
+    return frozenset(retired), frozenset(kept - retired)
+
+
+def _read_ids(state: RunState, node_id: str) -> set[str]:
+    """Return the node IDs a live node reads through edges, wiring, or output targets."""
+    node = state.flow.nodes[node_id]
+    reads = {edge.from_ for edge in state.flow.incoming(node_id)}
+    reads.update(
+        target
+        for target in (node.commit_as, node.origin_id, node.skipped_output_target())
+        if type(target) is str
+    )
+    for source in state.flow.wiring.get(node_id, {}).values():
+        source = binding_source(source)
+        if not isinstance(source, str):
+            continue
+        try:
+            paths = expr_refs_of(source)
+        except ExpressionError:
+            continue  # the prune dependency check reports invalid wiring
+        reads.update(path.split(".", 1)[0] for path in paths)
+    return reads
 
 
 def _validate_growth_prune(
@@ -3204,7 +3272,7 @@ def _validate_growth_prune(
     prune_ids: frozenset[str],
     new_node_ids: frozenset[str],
 ) -> None:
-    """Validate explicit node-requested prune safety constraints."""
+    """Validate the IDs a growth record asks to prune."""
     _validate_growth_prune_data(
         state,
         spawner_id,
@@ -3219,8 +3287,10 @@ def _validate_growth_prune_data(
     prune_ids: frozenset[str],
     new_node_ids: frozenset[str],
 ) -> None:
-    """Enforce the exact settled dynamic-overlay prune safety matrix."""
-    ready_ids = set(state.ready)
+    """Reject requested prune IDs that are not dynamic overlay or a self-prunable LOOP clone.
+
+    Unsettled requested IDs are not errors: ``_retired_ids`` keeps them live.
+    """
     spawner = state.flow.nodes[spawner_id]
     for node_id in prune_ids:
         if node_id not in state.flow.nodes:
@@ -3239,18 +3309,7 @@ def _validate_growth_prune_data(
             _raise_growth_rejected(
                 ValueError(f"growth cannot prune initial static node {node_id!r}")
             )
-        if node_id in ready_ids:
-            _raise_growth_rejected(
-                ValueError(f"growth cannot prune ready node {node_id!r}")
-            )
-        if node_id in state.in_flight:
-            if node_id != spawner_id:
-                _raise_growth_rejected(
-                    ValueError(
-                        "growth cannot prune unrelated in-flight node "
-                        f"{node_id!r}"
-                    )
-                )
+        if node_id == spawner_id:
             origin_id = spawner.origin_id
             if not (
                 spawner.is_loop is True
@@ -3266,17 +3325,6 @@ def _validate_growth_prune_data(
                         "self-prunable LOOP clone"
                     )
                 )
-            continue
-        if state.node_state.get(node_id) not in (
-            NodeState.TAKEN,
-            NodeState.SKIPPED,
-            NodeState.EXPANDED,
-        ):
-            _raise_growth_rejected(
-                ValueError(
-                    f"growth prune node {node_id!r} must be settled dynamic overlay"
-                )
-            )
 
 
 def _validate_prune_dependencies(
@@ -4265,6 +4313,7 @@ def _require_pristine(state: RunState) -> None:
         and type(state.accepted_starts) is dict
         and type(state.depth) is dict
         and type(state.growth_owner) is dict
+        and type(state.deferred_prune) is frozenset
         and type(state.wiring_overrides) is dict
         and type(state.input) is dict
         and type(state.effective_llm_by_static_path) is dict
@@ -4290,6 +4339,7 @@ def _require_pristine(state: RunState) -> None:
         and state.terminal_unreachable_failure is None
         and not state.depth
         and not state.growth_owner
+        and not state.deferred_prune
         and not state.wiring_overrides
         and state.run_id is None
         and state.flow_fingerprint is None
@@ -4578,6 +4628,7 @@ def _materialize_growth(plan: _GrowthPlan) -> _GrowthApply:
         accepted_starts=dict(topology.accepted_starts),
         depth=dict(topology.depth),
         growth_owner=dict(topology.growth_owner),
+        deferred_prune=topology.deferred_prune,
         wiring_overrides={
             node_id: copy.deepcopy(wiring)
             for node_id, wiring in topology.wiring_overrides

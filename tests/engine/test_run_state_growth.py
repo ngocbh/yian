@@ -213,6 +213,7 @@ def _snapshot(state: RunState) -> dict[str, Any]:
         "result": state.result,
         "depth": dict(state.depth),
         "growth_owner": dict(state.growth_owner),
+        "deferred_prune": state.deferred_prune,
         "wiring_overrides": deepcopy(state.wiring_overrides),
         "run_id": state.run_id,
         "flow_fingerprint": state.flow_fingerprint,
@@ -1553,9 +1554,6 @@ def test_growth_rejects_live_node_collision_even_when_the_id_is_pruned():
         "top-start",
         "top-end",
         "initial-static",
-        "ready",
-        "unrelated-in-flight",
-        "unsettled",
         "non-loop-self",
         "loop-missing-origin",
         "loop-pruned-origin",
@@ -1581,17 +1579,6 @@ def test_growth_rejects_unsafe_pruning_matrix_atomically(case: str):
         prune_ids = frozenset({END_ID})
     elif case == "initial-static":
         prune_ids = frozenset({"spawn"})
-    elif case == "ready":
-        state.ready.append(old_id)
-        prune_ids = frozenset({old_id})
-    elif case == "unrelated-in-flight":
-        state.node_state[old_id] = NodeState.UNKNOWN
-        state.ready.appendleft(old_id)
-        commit_prepared(log, state, prepare_node_started(state, old_id))
-        prune_ids = frozenset({old_id})
-    elif case == "unsettled":
-        state.node_state[old_id] = NodeState.UNKNOWN
-        prune_ids = frozenset({old_id})
     elif case == "non-loop-self":
         clone = _Spawner("clone")
         state.flow.add_subgraph({"clone": clone}, [], {"clone": {}})
@@ -1950,10 +1937,11 @@ def test_pruning_keeps_a_grown_subtree_with_unsettled_work():
     prepared = _prune_requested(state)
     commit_prepared(log, state, prepared)
 
-    assert "x/child/start" not in state.flow.nodes
+    assert state.deferred_prune == {"x/child/start"}
+    assert state.growth_owner["x/child/start"] == "spawn"
     for node_id in (*grown, side):
         assert node_id in state.flow.nodes
-        assert state.growth_owner[node_id] == "spawn"
+        assert state.growth_owner[node_id] == "x/child/start"
     _assert_replays_equal(state, prepared, NodeState.UNKNOWN)
 
 
@@ -1967,3 +1955,80 @@ def test_pruning_retires_a_grown_subtree_once_settled():
     _assert_retired(state, ("x/child/start", *grown, side))
     assert set(state.growth_owner.values()) == {"spawn"}
     _assert_replays_equal(state, prepared, NodeState.TAKEN)
+
+
+def _unsettle(state: RunState, log: MemoryRunLog, node_id: str, how: str) -> None:
+    """Make settled overlay ``node_id`` waiting, ready, or running."""
+    state.node_state[node_id] = NodeState.UNKNOWN
+    if how in ("ready", "in-flight"):
+        state.ready.appendleft(node_id)
+    if how == "in-flight":
+        commit_prepared(log, state, prepare_node_started(state, node_id))
+
+
+@pytest.mark.parametrize("how", ["waiting", "ready", "in-flight"])
+def test_growth_keeps_an_unsettled_prune_id_live_and_deferred(how):
+    state, log = _initialized_spawner()
+    old_id = _install_settled_overlay(state)[0]
+    _unsettle(state, log, old_id, how)
+    prune = frozenset({old_id})
+
+    prepared = prepare_expanded(
+        state, "spawn", Grow(seed={}, prune=prune), lambda node, seed: _fragment(node.id)
+    )
+    commit_prepared(log, state, prepared)
+
+    assert prepared.record.prune_ids == (old_id,)
+    assert old_id in state.flow.nodes
+    assert state.deferred_prune == {old_id}
+    assert (old_id in state.in_flight) == (how == "in-flight")
+
+
+def _side_chain(state: RunState) -> tuple[str, str]:
+    """Install settled overlay nodes ``a -> b`` whose ``b`` reads ``a`` by edge and wiring."""
+    edge = Edge("a->b", "a", "b", ordering=True)
+    state.flow.add_subgraph(
+        {"a": _OverlayNode("a"), "b": _OverlayNode("b")},
+        [edge],
+        {"a": {}, "b": {"value": Binding("${a.output}")}},
+    )
+    state.node_state.update(a=NodeState.TAKEN, b=NodeState.TAKEN)
+    state.edge_state[edge.id] = NodeState.TAKEN
+    return "a", "b"
+
+
+def _prune_side_chain(state: RunState, log: MemoryRunLog) -> None:
+    """Commit the growth of ``spawn`` that requests pruning ``a`` and ``b``."""
+    commit_prepared(
+        log,
+        state,
+        prepare_expanded(
+            state,
+            "spawn",
+            Grow(seed={}, prune=frozenset({"a", "b"})),
+            lambda node, seed: _fragment(node.id),
+        ),
+    )
+
+
+def test_growth_keeps_a_settled_prune_id_that_kept_work_reads():
+    state, log = _initialized_spawner()
+    a, b = _side_chain(state)
+    _unsettle(state, log, b, "waiting")
+
+    _prune_side_chain(state, log)
+
+    assert {a, b} <= set(state.flow.nodes)
+    assert state.deferred_prune == {a, b}
+
+
+def test_growth_retires_a_settled_prune_id_the_kept_work_does_not_read():
+    state, log = _initialized_spawner()
+    a, b = _side_chain(state)
+    _unsettle(state, log, a, "waiting")
+    state.node_state[b] = NodeState.SKIPPED
+
+    _prune_side_chain(state, log)
+
+    _assert_retired(state, (b,))
+    assert state.deferred_prune == {a}

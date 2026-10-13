@@ -1372,18 +1372,163 @@ defs:
 
 @pytest.mark.parametrize("num_workers", [0, 3], ids=["serial", "pooled"])
 def test_loop_keeps_a_nested_subtree_with_unfinished_work(num_workers):
-    """A nested node still waiting when its iteration is retired keeps its subtree alive."""
+    """A nested node still waiting when its iteration is pruned keeps its subtree alive
+    until a later growth finds it settled."""
     from yian.events import RunSucceeded
     engine = _engine(load_flow(_DANGLING_SIDE).compiled, run_inputs={},
                      grow_builder=build_grow, num_workers=num_workers)
     terminal = list(engine.run())[-1]
     assert isinstance(terminal, RunSucceeded), terminal
     assert terminal.output == {"n": 4}
-    # Every owner entry names live nodes; the unfinished first-iteration subtree stays.
+    # Every owner entry names live nodes.
     owners = engine.state.growth_owner
     assert all(k in engine.state.flow.nodes and v in engine.state.flow.nodes
                for k, v in owners.items())
-    # Pooled scheduling order varies, so only the serial run pins which subtree is kept.
+    # Serially, each iteration's side chain is still waiting when the next driver prunes
+    # it; later drivers retire it, so only the last iteration stays. Pooled order varies.
     if num_workers == 0:
-        assert "loop#0/c/side4" in engine.state.flow.nodes
-        assert owners["loop#0/c/__start__"] == "loop"
+        assert {n.split("/")[0] for n in engine.state.flow.nodes} == {
+            "__start__", "__end__", "loop", "loop#3", "loop~4"}
+        assert engine.state.deferred_prune == frozenset()
+
+
+# The body output reads only `bump`, so the next driver can start while the side chain
+# still runs; `side2` also reads `bump`, which must then stay live with it.
+_DIRECT_SIDE = """
+id: direct_side
+name: direct_side
+defs:
+  body:
+    input:
+      n: int
+    nodes:
+      bump:
+        kind: code
+        input:
+          n: ${input.n}
+        output: int
+        code: |
+          return inputs["n"] + 1
+      side:
+        kind: code
+        input:
+          n: ${input.n}
+        output: int
+        code: |
+          import time
+          time.sleep(SLEEP)
+          return inputs["n"]
+      side2:
+        kind: code
+        input:
+          n: ${side.output}
+          m: ${bump.output}
+        output: int
+        code: |
+          return inputs["n"] + inputs["m"]
+    output:
+      n: ${bump.output}
+""" + _LOOP.replace("TIMES", "4")
+
+
+@pytest.mark.parametrize("sleep", ["0", "0.3"])
+@pytest.mark.parametrize("num_workers", [0, 1, 4])
+def test_loop_keeps_an_unfinished_body_node_live(num_workers, sleep):
+    """A body node the output doesn't read may finish after the next driver starts."""
+    result = run_flow(load_flow(_DIRECT_SIDE.replace("SLEEP", sleep)), {},
+                      num_workers=num_workers)
+    assert result.status == "succeeded", result.failure
+    assert result.output == {"n": 4}
+
+
+def test_loop_retires_a_kept_body_node_once_settled(monkeypatch):
+    """A body node kept while unfinished is retired by a later prune once it has settled."""
+    from yian.events import RunSucceeded
+    import yian.runtime.state as state_module
+
+    def finish(times):
+        source = _DIRECT_SIDE.replace("SLEEP", "0.05").replace("times: 4", f"times: {times}")
+        engine = _engine(load_flow(source).compiled, run_inputs={},
+                         grow_builder=build_grow, num_workers=4)
+        terminal = list(engine.run())[-1]
+        assert isinstance(terminal, RunSucceeded), terminal
+        assert terminal.output == {"n": times}
+        return engine
+
+    resident = len(finish(3).state.flow.nodes)
+    # A few iterations' side chains may linger at once; leaking every one would add ~80.
+    monkeypatch.setattr(state_module, "MAX_TOTAL_NODES", resident + 40)
+    engine = finish(20)
+    assert len(engine.state.flow.nodes) <= resident + 40
+
+
+def test_loop_with_a_kept_body_node_resumes_from_a_cut_log(tmp_path):
+    """Replay re-derives which body nodes were kept, so a resumed run finishes."""
+    import yian.run as run_module
+    from yian.runtime.log import JsonlRunLog
+    flow = load_flow(_DIRECT_SIDE.replace("SLEEP", "0.2"))
+    path = tmp_path / "run.jsonl"
+    first = run_flow(flow, {}, log=path, num_workers=4)
+    assert first.status == "succeeded", first.failure
+    with JsonlRunLog.resume(path) as log:
+        assert run_module._replay_run_log(flow, log).deferred_prune
+    lines = path.read_text().splitlines(keepends=True)
+    path.write_text("".join(lines[: len(lines) // 2]))
+    resumed = resume_flow(flow, log=path, num_workers=4)
+    assert resumed.status == "succeeded", resumed.failure
+    assert resumed.output == first.output
+
+
+# The unread `note` CALL is still waiting on `slow` when the next driver prunes its
+# iteration, then grows its own child while deferred.
+_DEFERRED_CALL = """
+id: deferred_call
+name: deferred_call
+defs:
+  echo:
+    input:
+      n: int
+    nodes:
+      step:
+        kind: code
+        input:
+          n: ${input.n}
+        output: int
+        code: |
+          return inputs["n"]
+    output: ${step.output}
+  body:
+    input:
+      n: int
+    nodes:
+      bump:
+        kind: code
+        input:
+          n: ${input.n}
+        output: int
+        code: |
+          return inputs["n"] + 1
+      slow:
+        kind: code
+        input:
+          n: ${input.n}
+        output: int
+        code: |
+          import time
+          time.sleep(0.2)
+          return inputs["n"]
+      note:
+        kind: call
+        call: echo
+        input:
+          n: ${slow.output}
+    output:
+      n: ${bump.output}
+""" + _LOOP.replace("TIMES", "3")
+
+
+def test_loop_body_call_grows_after_its_iteration_was_pruned():
+    """A kept body CALL can still expand its child after the next driver started."""
+    result = run_flow(load_flow(_DEFERRED_CALL), {}, num_workers=4)
+    assert result.status == "succeeded", result.failure
+    assert result.output == {"n": 3}

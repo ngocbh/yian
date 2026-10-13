@@ -809,6 +809,7 @@ def _state_snapshot(state: RunState) -> dict[str, Any]:
         "in_flight": tuple(state.in_flight),
         "depth": dict(state.depth),
         "growth_owner": dict(state.growth_owner),
+        "deferred_prune": state.deferred_prune,
         "wiring_overrides": copy.deepcopy(state.wiring_overrides),
         "effective_llm_by_static_path": copy.deepcopy(
             state.effective_llm_by_static_path

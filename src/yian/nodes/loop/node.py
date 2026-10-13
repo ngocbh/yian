@@ -14,8 +14,8 @@ Per-iteration (driver@k = `L` when k==0 else `L~k`, run on the carried record):
   STOP → `Output(carried, commit_as=origin)` — generic commit-and-advance under `L`.
   CONT → `Grow(seed=(carried, k),
          prune={body_{k-1} ids} ∪ ({self.id} if self.id != origin))`.
-  The reducer also retires each body_{k-1} node's whole grown subtree (nested CALL/MAP/LOOP)
-  when every node in it is settled.
+  The reducer retires each body_{k-1} node with its whole grown subtree (nested CALL/MAP/LOOP)
+  once every node in it is settled; an unfinished side step stays live until a later growth.
 
 The compile-owned injected builder constructs body/driver at the ORIGIN callsite
 (`self.origin_id`), never `self.id`, so live and durable-replay windows are byte-identical.
@@ -156,8 +156,8 @@ class LoopNode(Node):
         On STOP: `Output(carried, commit_as=self.origin_id)` — generic commit-and-advance under `L`.
         On CONTINUE: runaway guard, only when `max:` is set (while/until raise `LoopMaxExceeded`
         if `should_stop(k)`), then a `Grow` splicing body_k + `respawn(k+1, carried)`, pruning
-        body_{k-1} + self (except origin). The reducer also retires each body_{k-1} node's
-        whole grown subtree (nested CALL/MAP/LOOP) when every node in it is settled."""
+        body_{k-1} + self (except origin). The reducer retires each body_{k-1} node with its
+        whole grown subtree (nested CALL/MAP/LOOP) once every node in it is settled."""
         carried = dict(inputs)
         k = self.iteration
         if self._should_stop_now(carried, k):

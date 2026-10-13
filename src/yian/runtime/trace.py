@@ -464,7 +464,7 @@ def prepare_trace(
 ) -> TraceDelta | None:
     """Validate capture authority and prepare a detached accepted-record delta.
 
-    ``retired_ids`` are the record's prune IDs plus the settled nodes grown under them.
+    ``retired_ids`` are the settled prune IDs, earlier deferred ones, and the nodes grown under them.
     """
     record = envelope.record
     if type(record) is RunStartedRecord:

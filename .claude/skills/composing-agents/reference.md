@@ -337,9 +337,10 @@ REDUNDANT and REJECTED with `times:`. A body that blocks
 (a `human_input` leaf) makes the loop a live chat REPL — the same run threads each
 answered turn. Each continuing iteration PRUNES the previous iteration's body nodes and
 the nodes grown under them by a nested CALL, MAP, or LOOP, so the live graph stays about
-one iteration, whatever the body, unless a nested node is still unfinished (that subtree
-stays live and, in a top-level loop, adds up each iteration, so give such a loop a `max:`);
-the run log still keeps every iteration. The node budget (10,000 live nodes)
+one iteration, whatever the body; the run log still keeps every iteration. The next
+iteration starts once the body output is ready, so a body node the output doesn't read
+(a log/notify/save step) can overlap it; it stays live until it finishes, a later
+iteration prunes it, and the run waits for it before it ends. The node budget (10,000 live nodes)
 is checked before pruning; it limits one iteration's size, not the iteration count. See
 `loop.yaml`.
 

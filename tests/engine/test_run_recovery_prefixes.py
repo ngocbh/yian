@@ -232,6 +232,7 @@ def _state_snapshot(state: RunState) -> dict[str, Any]:
         "terminal_unreachable_failure": state.terminal_unreachable_failure,
         "depth": dict(state.depth),
         "growth_owner": dict(state.growth_owner),
+        "deferred_prune": state.deferred_prune,
         "wiring_overrides": copy.deepcopy(state.wiring_overrides),
         "run_id": state.run_id,
         "flow_fingerprint": state.flow_fingerprint,

@@ -16,10 +16,11 @@ them apart, so every branch is classified first:
 A value branch needs the case's `output:` type. Each value lifts to one synth CODE node
 `__value_<n>` whose inline code returns the value, and the branch is rewritten to that id
 (recorded in `CaseDescriptor.value_branches`). Each string holding `${` becomes one input
-binding `vN`, so the binder evaluates it exactly like a node input; everything else is a
-Python literal in the generated code, so a quoted text never reaches the inline-call
-desugar. A malformed span, a span that reads the case itself, a `call(...)` nested inside
-a mapping or list, a non-finite number, and a value that contains itself are load errors.
+binding `vN` (in `value_spans` order), so the binder evaluates it exactly like a node
+input; everything else is a Python literal in the generated code (`prepared_literal`), so
+a quoted text never reaches the inline-call desugar. A malformed span, a span that reads
+the case itself, a `call(...)` nested inside a mapping or list, a non-finite number, and a
+value that contains itself are load errors.
 
 Runs in `_assemble` after the typed-binding splits and BEFORE `desugar_inline_calls`, so
 the synth node's input bindings are walked by the inline-call and `${case.output}` passes
@@ -32,8 +33,8 @@ falling back to the case node's own range.
 
 Imports flow down/peer only: `compose.parse.file` (descriptors), `compose.desugar.inline_calls`
 (the `call(...)` recognizer, the reserved `__call_` prefix), `compose.helpers` (errors, YAML
-quoting), `expr`, `diagnostics`. Only the loader pipeline and the `yian.compose` re-export import
-this back.
+quoting), `expr`, `diagnostics`. Only the loader pipeline, the `yian.compose` re-export, and
+`compose.validate.case_values` (the shared value walk) import this back.
 """
 
 from __future__ import annotations
@@ -361,9 +362,10 @@ def _value_node(
         `_value_node("__value_0", {"t": "${input.t}", "done": True}, ...)` has
         `inputs == {"v0": "${input.t}"}` and code `return {'t': inputs['v0'], 'done': True}`.
     """
+    names = {span.path: span.name for span in value_spans(value)}
     inputs: dict[str, str] = {}
     site = _Site(host=host, label=label, range=range, diagnostics=diagnostics)
-    expr = _literal(value, inputs, nested=False, site=site, containers=set())
+    expr = _literal(value, names, inputs, path=(), site=site, containers=set())
     return CodeDescriptor(
         id=synth_id,
         node_name=node_name,
@@ -373,6 +375,81 @@ def _value_node(
         range=range,
         field_ranges={("input", name): range for name in inputs} if range else {},
     )
+
+
+ValuePath = tuple[Any, ...]
+"""Mapping keys and list indices from a branch value's root to one of its parts."""
+
+
+@dataclass(frozen=True)
+class ValueSpan:
+    """One string holding `${` in a branch value, bound to an input of its value node.
+
+    Attributes:
+        path (`ValuePath`): Where the string sits in the value; `()` for the whole value.
+        name (`str`): The value node's input that binds it (`v0`, `v1`, ...).
+        text (`str`): The string as authored.
+    """
+
+    path: ValuePath
+    name: str
+    text: str
+
+
+def value_spans(value: Any) -> list[ValueSpan]:
+    """Return the strings holding `${` in a branch value, in input order.
+
+    The walk visits mapping values and list items in order; the value node's inputs are
+    named `v0`, `v1`, ... in this order. A mapping or list that contains itself is not
+    entered again (lifting it is a load error).
+
+    Args:
+        value (`Any`): An authored branch value.
+
+    Returns:
+        `list[ValueSpan]`: One entry per span-bearing string, in input order.
+    """
+    spans: list[ValueSpan] = []
+    active: set[int] = set()
+
+    def walk(item: Any, path: ValuePath) -> None:
+        if isinstance(item, str):
+            if "${" in item:
+                spans.append(ValueSpan(path=path, name=f"v{len(spans)}", text=item))
+            return
+        if not isinstance(item, (dict, list)) or id(item) in active:
+            return
+        active.add(id(item))
+        children = item.items() if isinstance(item, dict) else enumerate(item)
+        for key, child in children:
+            walk(child, path + (key,))
+        active.discard(id(item))
+
+    walk(value, ())
+    return spans
+
+
+def prepared_literal(value: Any) -> Any:
+    """Return a span-free branch value as its value node produces it.
+
+    A string is `$$`-unescaped, as the binder does for span-free text, and a date or
+    datetime becomes its ISO text; mappings and lists are prepared item by item.
+
+    Args:
+        value (`Any`): A span-free branch value or a part of one.
+
+    Returns:
+        `Any`: The value the lifted code returns for it.
+    """
+    if isinstance(value, str):
+        return eval_binding(value, lambda path: None)
+    if isinstance(value, (datetime.date, datetime.datetime)):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {key: prepared_literal(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [prepared_literal(item) for item in value]
+    return value
 
 
 @dataclass(frozen=True)
@@ -387,9 +464,10 @@ class _Site:
 
 def _literal(
     value: Any,
+    names: dict[ValuePath, str],
     inputs: dict[str, str],
     *,
-    nested: bool,
+    path: ValuePath,
     site: _Site,
     containers: set[int],
 ) -> str:
@@ -397,8 +475,10 @@ def _literal(
 
     Args:
         value (`Any`): A branch value or a part of one.
-        inputs (`dict[str, str]`): Collects input name -> template string, in walk order.
-        nested (`bool`): Whether `value` sits inside a mapping or list.
+        names (`dict[ValuePath, str]`): The input name of each span-bearing string, by
+            path (from `value_spans`).
+        inputs (`dict[str, str]`): Collects input name -> template string.
+        path (`ValuePath`): Where `value` sits in the branch value; `()` for the whole.
         site (`_Site`): Where the branch sits, for located errors.
         containers (`set[int]`): `id()`s of the mappings and lists enclosing `value`, so a
             YAML alias that contains itself is caught instead of recursing forever.
@@ -412,7 +492,7 @@ def _literal(
             has no literal form.
     """
     if isinstance(value, str):
-        if nested and _CALL_HEAD.match(value.strip()):
+        if path and _CALL_HEAD.match(value.strip()):
             raise site.diagnostics.error(
                 f"{site.host} a `call(...)` nested in a value is not supported; write the "
                 f"call as the branch (`{site.label} call(...)`) or in a node, or reword the "
@@ -424,11 +504,10 @@ def _literal(
                 expr_refs_of(value)
             except ExpressionError as exc:
                 raise site.diagnostics.error(f"{site.host} {exc}", range=site.range) from exc
-            name = f"v{len(inputs)}"
+            name = names[path]
             inputs[name] = value
             return f"inputs[{name!r}]"
-        # The binder unescapes `$$` in a span-free string; the literal must match it.
-        return repr(eval_binding(value, lambda path: None))
+        return repr(prepared_literal(value))
     if value is None or isinstance(value, (bool, int)):
         return repr(value)
     if isinstance(value, float):
@@ -439,7 +518,7 @@ def _literal(
             )
         return repr(value)
     if isinstance(value, (datetime.date, datetime.datetime)):
-        return repr(value.isoformat())
+        return repr(prepared_literal(value))
     if isinstance(value, (dict, list)):
         if id(value) in containers:
             raise site.diagnostics.error(
@@ -455,14 +534,26 @@ def _literal(
                         range=site.range,
                     )
                 item_expr = _literal(
-                    item, inputs, nested=True, site=site, containers=containers
+                    item,
+                    names,
+                    inputs,
+                    path=path + (key,),
+                    site=site,
+                    containers=containers,
                 )
                 parts.append(f"{key!r}: {item_expr}")
             expr = "{" + ", ".join(parts) + "}"
         else:
             items = [
-                _literal(item, inputs, nested=True, site=site, containers=containers)
-                for item in value
+                _literal(
+                    item,
+                    names,
+                    inputs,
+                    path=path + (index,),
+                    site=site,
+                    containers=containers,
+                )
+                for index, item in enumerate(value)
             ]
             expr = "[" + ", ".join(items) + "]"
         containers.discard(id(value))

@@ -1487,17 +1487,54 @@ output: ${route.output}
     assert _error_line(caught.value) == _line_of(text, "then: call(child)")
 
 
-def test_narrower_node_branch_loads():
+def test_narrower_node_branch_loads_and_is_checked_at_runtime():
     text = _flow(
         "    on: ${input.cmd}\n"
         "    output: Literal[a, b]\n"
         "    cases:\n"
         "      - when: a\n"
         '        then: "a"\n'
-        "    else: reply\n"
+        "    else: pick\n",
+        inputs="  cmd: str\n  s: str\n",
+        extra_nodes=(
+            "  pick:\n"
+            "    kind: code\n"
+            "    input:\n"
+            "      s: ${input.s}\n"
+            "    code: |\n"
+            '      return inputs["s"]\n'
+            "    output: str\n"
+        ),
     )
     loaded = load_flow(text)
-    assert run_flow(loaded, {"cmd": "a"}).output == "a"
+    assert run_flow(loaded, {"cmd": "a", "s": "x"}).output == "a"
+    bad = run_flow(loaded, {"cmd": "b", "s": "c"})
+    assert bad.status == "failed"
+    assert bad.failure.code == "binding.type"
+    assert bad.failure.node_id == "__case_route"
+    good = run_flow(loaded, {"cmd": "b", "s": "b"})
+    assert good.status == "succeeded", good.failure
+    assert good.output == "b"
+
+
+def test_node_branch_with_an_unproven_output_loads():
+    text = _flow(
+        "    on: ${input.cmd}\n"
+        "    output: str\n"
+        "    cases:\n"
+        "      - when: a\n"
+        '        then: "a"\n'
+        "    else: loose\n",
+        extra_nodes=(
+            "  loose:\n"
+            "    kind: code\n"
+            "    code: |\n"
+            '      return "free"\n'
+        ),
+    )
+    result = run_flow(load_flow(text), {"cmd": "b"})
+    assert result.status == "succeeded", result.failure
+    assert result.output == "free"
 
 
 def _case_of_case_flow(inner_output: str, inner_then: str) -> str:
@@ -1536,6 +1573,51 @@ def test_typed_inner_case_disjoint_from_outer_is_rejected():
         "case node 'outer' else: case 'inner' produces int, but the case declares output: str"
     ) in str(caught.value)
     assert _error_line(caught.value) == _line_of(text, "else: inner")
+
+
+def test_typed_inner_case_narrower_than_outer_loads():
+    text = _case_of_case_flow("    output: Literal[x, y]\n", '"x"').replace(
+        "    else: num\n", '    else: "y"\n'
+    )
+    loaded = load_flow(text)
+    assert run_flow(loaded, {"cmd": "b"}).output == "x"
+    assert run_flow(loaded, {"cmd": "c"}).output == "y"
+    assert run_flow(loaded, {"cmd": "a"}).output == "picked a"
+
+
+def test_two_typed_cases_routing_to_each_other_is_a_cycle_error():
+    text = """\
+id: f
+name: f
+input:
+  cmd: str
+nodes:
+  a:
+    kind: case
+    on: ${input.cmd}
+    output: str
+    cases:
+      - when: x
+        then: b
+    else: "a-else"
+  b:
+    kind: case
+    on: ${input.cmd}
+    output: str
+    cases:
+      - when: y
+        then: "b-then"
+    else: a
+output: ${a.output}
+"""
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    assert (
+        "flow has a cycle involving ['__case_a', '__case_b', 'a', 'b']; flows must be acyclic"
+    ) in str(caught.value)
+    lines = [frame.range.start_line for frame in caught.value.diagnostic.frames]
+    assert _line_of(text, "  a:") in lines
+    assert _line_of(text, "  b:") in lines
 
 
 def test_untyped_inner_case_branch_is_checked_against_the_outer_output():
@@ -1605,7 +1687,8 @@ def test_record_value_field_disjoint_from_output_names_the_field():
     with pytest.raises(LoadError) as caught:
         load_flow(text)
     assert (
-        "case node 'route' then: declared str, but the value at .reply is int"
+        "case node 'route' then: the value at .reply is int, but the output expects str "
+        "there"
     ) in str(caught.value)
     assert _error_line(caught.value) == _line_of(text, "reply: ${input.n}")
 
@@ -1627,12 +1710,12 @@ def test_record_value_field_disjoint_from_output_names_the_field():
         (
             "\n      items: list[int]",
             "\n          items:\n            - ${input.s}",
-            "declared int, but the value at .items[0] is str",
+            "the value at .items[0] is str, but the output expects int there",
         ),
         (
             "\n      items: list[int]",
             "\n          items:\n            - ${input.n}\n            - x",
-            'the value "x" at .items[1] is not a valid int',
+            'the value at .items[1] is "x", but the output expects int there',
         ),
         ("str", "\n          - ${input.s}", "declared str, but the value is a list"),
     ],
@@ -1752,6 +1835,62 @@ def test_value_reading_a_sibling_branch_is_rejected():
         "which never runs when this branch does"
     ) in str(caught.value)
     assert _error_line(caught.value) == _line_of(text, "then: \"got ${reply.output}\"")
+
+
+@pytest.mark.parametrize(
+    "then_text", ['"${reply.output}"', "\n          r: ${reply.output}"]
+)
+def test_lone_sibling_branch_read_is_rejected(then_text):
+    text = _flow(
+        "    on: ${input.cmd}\n"
+        "    output: object\n"
+        "    cases:\n"
+        "      - when: a\n"
+        f"        then: {then_text}\n"
+        "    else: reply\n"
+    )
+    with pytest.raises(LoadError, match="the value reads `reply`, another branch"):
+        load_flow(text)
+
+
+def test_value_reading_a_sibling_branch_in_a_coalesce_loads():
+    text = _flow(
+        "    on: ${input.cmd}\n"
+        "    output: str\n"
+        "    cases:\n"
+        "      - when: a\n"
+        '        then: "${reply.output | input.cmd}"\n'
+        "    else: reply\n"
+    )
+    loaded = load_flow(text)
+    result = run_flow(loaded, {"cmd": "a"})
+    assert result.status == "succeeded", result.failure
+    assert result.output == "a"
+
+
+def test_span_into_a_tagged_union_whose_tag_picks_the_wrong_member_is_rejected():
+    text = (
+        "typedefs:\n"
+        "  Buy:\n    action: Literal[buy]\n    qty: int\n"
+        "  Sell:\n    action: Literal[sell]\n    price: float\n"
+    ) + _flow(
+        "    on: ${input.cmd}\n"
+        "    output: Union[Buy, Sell]\n"
+        "    cases:\n"
+        "      - when: a\n"
+        "        then:\n"
+        "          action: sell\n"
+        "          qty: ${input.n}\n"
+        "    else:\n"
+        "      action: buy\n"
+        "      qty: 1\n",
+        inputs="  cmd: str\n  n: int\n",
+    )
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    assert "case node 'route' then: declared Union[" in str(caught.value)
+    assert "but the value fits no member" in str(caught.value)
+    assert _error_line(caught.value) == _line_of(text, "action: sell")
 
 
 def test_value_reading_a_sibling_branch_with_a_default_loads():

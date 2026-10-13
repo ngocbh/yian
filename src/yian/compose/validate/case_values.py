@@ -15,8 +15,9 @@ pass that check, located at the branch itself rather than at the result node:
   its union narrowing) and rejected only when disjoint from the expected type; a mapping
   needs a record (its keys known and complete), an opaque `object`, or a union member that
   takes it; a list needs a list type, checked by element; a span-free part is checked
-  exactly. A value whose span plainly reads another branch target of the same case (no
-  `:-` default) is rejected, since that branch never runs when this one does;
+  exactly. A value whose span plainly reads another branch target of the same case is
+  rejected, since that branch never runs when this one does; a read that tolerates the
+  branch's absence (inside a coalesce or under a `:-` default) loads;
 - a node or `call(...)` branch is rejected when its producer contract is proven and
   disjoint from T (`type_relation`); a narrower, partial, or unproven one loads and is
   left to the runtime check;
@@ -29,31 +30,37 @@ disjoint branch is reported here and not at the result node's typed input. A bra
 locates at its `then:`/`else:` range, falling back to the case node's range.
 
 Imports flow down only: `compile.validation` (the type relation), `typesys`, `expr`,
-`compose.helpers` (load diagnostics, YAML quoting), `compose.parse.file` (descriptors), and
-`compose.validate.narrowing`. Only the loader pipeline imports this back.
+`compose.helpers` (load diagnostics, YAML quoting, output-contract inference),
+`compose.parse.file` (descriptors), `compose.desugar.case_values` (the value walk and
+literal preparation the lifter uses), `compose.desugar.inline_calls` (the synth call
+prefix), and `compose.validate.narrowing`. Only the loader pipeline imports this back.
 """
 
 from __future__ import annotations
 
-import datetime
 import json
+from collections import Counter
 from dataclasses import dataclass, replace
 from typing import Any, Mapping, Optional
 
 from yian.compile.validation import type_relation
-from yian.compose.helpers.errors import LoadDiagnostics
+from yian.compose.desugar.case_values import ValuePath, prepared_literal, value_spans
+from yian.compose.desugar.inline_calls import _SYNTH_PREFIX
+from yian.compose.helpers.errors import LoadDiagnostics, LoadError
 from yian.compose.helpers.output_contracts import resolve_output_binding_contract
 from yian.compose.helpers.typed_bindings import yaml_quoted
 from yian.compose.parse.file import CallDescriptor, CaseDescriptor
 from yian.compose.validate.narrowing import Narrowing
 from yian.diagnostics import SourceRange
-from yian.expr import ExpressionError, eval_binding, expr_refs, scan_template
+from yian.expr import ExpressionError, expr_refs, scan_template
 from yian.expr.template import Span
 from yian.nodes.contracts import OutputContract, ValueContract, binding_source
 from yian.typesys import TypeCheckError, build_value_as, canonical_type_label
 from yian.typesys.values import Type, ValueKind
 
-_Path = tuple[str | int, ...]
+# Expression nodes whose operands may be absent: a coalesce takes the first present one,
+# and a `:-` default supplies a fallback.
+_ABSENCE_TOLERANT = frozenset({"coalesce", "default_expr"})
 
 
 @dataclass(frozen=True)
@@ -63,13 +70,13 @@ class _Branch:
     Attributes:
         case_id (`str`): The case that owns the branch.
         label (`str`): `"then:"` or `"else:"`.
-        target (`Any`): The branch target: a node id, a synth value or call id.
+        target (`str`): The branch target: a node id, a synth value or call id.
         range (`Optional[SourceRange]`): The branch's range, else the case's range.
     """
 
     case_id: str
     label: str
-    target: Any
+    target: str
     range: Optional[SourceRange]
 
     @property
@@ -84,7 +91,7 @@ def check_case_values(
     producers: Mapping[str, OutputContract],
     flow_input_contracts: Mapping[str, ValueContract],
     *,
-    narrowing: Optional[Narrowing] = None,
+    narrowing: Narrowing,
     diagnostics: Optional[LoadDiagnostics] = None,
 ) -> None:
     """Reject every branch of a typed `case` that can never produce the case's type.
@@ -98,9 +105,7 @@ def check_case_values(
             node id.
         flow_input_contracts (`Mapping[str, ValueContract]`): Flow input contracts, keyed
             by input name.
-        narrowing (`Optional[Narrowing]`, *optional*, defaults to `None`): The union
-            narrowing each node reads against; `None` reads every node against the
-            unchanged maps.
+        narrowing (`Narrowing`): The union narrowing each value node reads against.
         diagnostics (`Optional[LoadDiagnostics]`, *optional*, defaults to `None`): Source
             ownership for located errors.
 
@@ -108,6 +113,7 @@ def check_case_values(
         `LoadError`: A literal value does not fit the case's type; a value with spans has
             a part that can never fit it, or plainly reads another branch of its case; a
             node, call, or typed inner case branch is disjoint from it.
+        `ValueError`: A value node does not bind a span its lifted value holds.
     """
     diagnostics = diagnostics or LoadDiagnostics()
     checker = _Checker(
@@ -144,7 +150,7 @@ class _Checker:
     case_types: Mapping[str, ValueContract]
     producers: Mapping[str, OutputContract]
     flow_inputs: Mapping[str, ValueContract]
-    narrowing: Optional[Narrowing]
+    narrowing: Narrowing
     diagnostics: LoadDiagnostics
 
     def check_case(
@@ -213,21 +219,16 @@ class _Checker:
                 branch of the case.
         """
         value = desc.value_branches[branch.target]
-        value_node = self.descriptors.get(branch.target)
-        sources = _span_sources(value, getattr(value_node, "inputs", None) or {})
+        sources = self._span_sources(branch.target, value)
         if sources:
             self._check_sibling_reads(branch, desc, sources)
-            producers, inputs = (
-                self.narrowing.for_node(branch.target)
-                if self.narrowing is not None
-                else (self.producers, self.flow_inputs)
-            )
+            producers, inputs = self.narrowing.for_node(branch.target)
             message = _shape_error(value, expected, (), sources, producers, inputs)
             if message is not None:
                 raise self._error(branch, message)
             return
         try:
-            build_value_as(expected, _prepared(value))
+            build_value_as(expected, prepared_literal(value))
         except TypeCheckError as exc:
             if value is None:
                 raise self._error(
@@ -244,24 +245,54 @@ class _Checker:
             message += self._quote_hint(branch, value, expected)
             raise self._error(branch, message) from None
 
+    def _span_sources(self, synth_id: str, value: Any) -> dict[ValuePath, tuple[str, Any]]:
+        """Map each span string of a value to its text as authored and as desugared.
+
+        The desugared text (with `${case.output}` and inline calls rewritten) is the value
+        node's input that the lifter bound the string to.
+
+        Args:
+            synth_id (`str`): The value node id.
+            value (`Any`): The authored value.
+
+        Returns:
+            `dict[ValuePath, tuple[str, Any]]`: Path -> (authored text, desugared binding
+            source).
+
+        Raises:
+            `ValueError`: The value node does not bind a span the lifter names.
+        """
+        inputs = getattr(self.descriptors.get(synth_id), "inputs", None) or {}
+        sources: dict[ValuePath, tuple[str, Any]] = {}
+        for span in value_spans(value):
+            if span.name not in inputs:
+                raise ValueError(
+                    f"value node {synth_id!r} has no input {span.name!r} for the span "
+                    f"{span.text!r}"
+                )
+            sources[span.path] = (span.text, binding_source(inputs[span.name]))
+        return sources
+
     def _check_sibling_reads(
         self,
         branch: _Branch,
         desc: CaseDescriptor,
-        sources: dict[_Path, tuple[str, Any]],
+        sources: dict[ValuePath, tuple[str, Any]],
     ) -> None:
         """Reject a span that plainly reads another branch target of the same case.
 
-        A read under a `:-` default loads: it stands for "absent unless that branch ran".
+        A read inside a coalesce or under a `:-` default loads: it tolerates that branch
+        not running.
 
         Args:
             branch (`_Branch`): The value branch.
             desc (`CaseDescriptor`): The case that owns it.
-            sources (`dict[_Path, tuple[str, Any]]`): The value's span strings by path,
-                as authored and as desugared.
+            sources (`dict[ValuePath, tuple[str, Any]]`): The value's span strings by
+                path, as authored and as desugared.
 
         Raises:
-            `LoadError`: A span without a `:-` default reads a sibling branch target.
+            `LoadError`: A span reads a sibling branch target outside a coalesce or a
+                `:-` default.
         """
         siblings = {
             other.target
@@ -274,9 +305,9 @@ class _Checker:
             except ExpressionError:
                 continue  # malformed spans are rejected when the value is lifted
             for segment in segments:
-                if not isinstance(segment, Span) or _has_default(segment.tree):
+                if not isinstance(segment, Span):
                     continue
-                for ref in expr_refs(segment.tree):
+                for ref in _plain_reads(segment.tree):
                     head = ref.split(".", 1)[0]
                     if head in siblings:
                         raise self._error(
@@ -318,7 +349,7 @@ class _Checker:
             return None
         return lines[rng.start_line - 1][rng.start_col - 1 : rng.end_col - 1].strip() or None
 
-    def _error(self, branch: _Branch, message: str):
+    def _error(self, branch: _Branch, message: str) -> LoadError:
         """Build the load error for `branch`, located at its range."""
         return self.diagnostics.error(f"{branch.host} {message}", range=branch.range)
 
@@ -326,8 +357,8 @@ class _Checker:
 def _shape_error(
     value: Any,
     expected: Type,
-    path: _Path,
-    sources: dict[_Path, tuple[str, Any]],
+    path: ValuePath,
+    sources: dict[ValuePath, tuple[str, Any]],
     producers: Mapping[str, OutputContract],
     flow_inputs: Mapping[str, ValueContract],
 ) -> Optional[str]:
@@ -336,8 +367,8 @@ def _shape_error(
     Args:
         value (`Any`): The authored value, or a part of it.
         expected (`Type`): The type expected at `path`.
-        path (`_Path`): The record fields and list indices from the value's root.
-        sources (`dict[_Path, tuple[str, Any]]`): The value's span strings by path, as
+        path (`ValuePath`): The record fields and list indices from the value's root.
+        sources (`dict[ValuePath, tuple[str, Any]]`): The value's span strings by path, as
             authored and as desugared.
         producers (`Mapping[str, OutputContract]`): Producer contracts as the value node
             sees them.
@@ -348,13 +379,11 @@ def _shape_error(
         `Optional[str]`: The error message without the branch prefix, or `None` when the
         value may fit (a narrower or unproven span is left to the runtime check).
     """
-    at = f" at {_path_text(path)}" if path else ""
-    label = canonical_type_label(expected)
-    if not _has_span(value):
+    if not any(span_path[: len(path)] == path for span_path in sources):
         try:
-            build_value_as(expected, _prepared(value))
+            build_value_as(expected, prepared_literal(value))
         except TypeCheckError as exc:
-            message = f"the value {_shown(value)}{at} is not a valid {label}"
+            message = _mismatch(path, f"is {_shown(value)}", expected)
             return message + f" ({exc})" if exc.path else message
         return None
     if isinstance(value, str):
@@ -365,7 +394,7 @@ def _shape_error(
             return None
         if type_relation(inferred.type, expected) != "disjoint":
             return None
-        return f"declared {label}, but the value{at} is {canonical_type_label(inferred.type)}"
+        return _mismatch(path, f"is {canonical_type_label(inferred.type)}", expected)
     # The value itself is not null, so only the non-null part of the type can take it.
     base = replace(expected, nullable=False) if expected.nullable else expected
     if isinstance(value, dict):
@@ -375,17 +404,14 @@ def _shape_error(
                 for member in base.variants
             ):
                 return None
-            return f"declared {label}, but the value{at} fits no member"
+            return _mismatch(path, "fits no member", expected)
         if base.fields is not None:
             missing = sorted((base.required or frozenset()) - value.keys())
             if missing:
-                return (
-                    f"declared {label}, but the value{at} is missing required field "
-                    f"{missing[0]!r}"
-                )
+                return _mismatch(path, f"is missing required field {missing[0]!r}", expected)
             unknown = [key for key in value if key not in base.fields]
             if unknown:
-                return f"declared {label}, but the value{at} has unknown field {unknown[0]!r}"
+                return _mismatch(path, f"has unknown field {unknown[0]!r}", expected)
             for key, item in value.items():
                 message = _shape_error(
                     item, base.fields[key], path + (key,), sources, producers, flow_inputs
@@ -395,10 +421,10 @@ def _shape_error(
             return None
         if base.kind is ValueKind.OBJECT:
             return None
-        return f"declared {label}, but the value{at} is a record"
+        return _mismatch(path, "is a record", expected)
     if isinstance(value, list):
         if not base.kind.is_list():
-            return f"declared {label}, but the value{at} is a list"
+            return _mismatch(path, "is a list", expected)
         element = base.element
         if element is None and base.kind.element_kind is not None:
             element = Type.scalar(base.kind.element_kind)
@@ -413,54 +439,70 @@ def _shape_error(
     return None
 
 
-def _span_sources(value: Any, inputs: Mapping[str, Any]) -> dict[_Path, tuple[str, Any]]:
-    """Map each span string in `value` to its text as authored and as desugared.
-
-    The lifter binds the span strings to the value node's inputs `v0`, `v1`, ... in walk
-    order (mapping values in order, list items in order); this walks the same way, so the
-    desugared text (with `${case.output}` and inline calls rewritten) is the input's.
+def _mismatch(path: ValuePath, found: str, expected: Type) -> str:
+    """Say that the value at `path` does not fit the type expected there.
 
     Args:
-        value (`Any`): The authored value.
-        inputs (`Mapping[str, Any]`): The value node's desugared input bindings.
+        path (`ValuePath`): Where the part sits; `()` for the whole value.
+        found (`str`): What the part is, such as `"is int"` or `"is a record"`.
+        expected (`Type`): The type expected at `path`.
 
     Returns:
-        `dict[_Path, tuple[str, Any]]`: Path -> (authored text, desugared binding source).
+        `str`: `"declared T, but the value <found>"` for the whole value, else
+        `"the value at <path> <found>, but the output expects T there"`.
     """
-    found: dict[_Path, tuple[str, Any]] = {}
+    label = canonical_type_label(expected)
+    if not path:
+        return f"declared {label}, but the value {found}"
+    return f"the value at {_path_text(path)} {found}, but the output expects {label} there"
 
-    def walk(item: Any, path: _Path) -> None:
-        if isinstance(item, str):
-            if "${" in item:
-                name = f"v{len(found)}"
-                found[path] = (item, binding_source(inputs.get(name, item)))
-        elif isinstance(item, dict):
-            for key, child in item.items():
-                walk(child, path + (key,))
-        elif isinstance(item, list):
-            for index, child in enumerate(item):
-                walk(child, path + (index,))
 
-    walk(value, ())
+def _plain_reads(tree: Any) -> list[str]:
+    """Return the refs a parsed span reads outside every absence-tolerant operand.
+
+    Args:
+        tree (`Any`): A parsed span (a lark `Tree`, or a `Token` for a lone atom).
+
+    Returns:
+        `list[str]`: The refs of `tree` minus those inside a coalesce or a `:-` default.
+    """
+    tolerated: Counter[str] = Counter()
+    for subtree in _tolerates_absence(tree):
+        tolerated.update(expr_refs(subtree))
+    return list((Counter(expr_refs(tree)) - tolerated).elements())
+
+
+def _tolerates_absence(tree: Any) -> list[Any]:
+    """Return the outermost coalesce and `:-` default subtrees of a parsed span.
+
+    A ref inside one of them may read a node that never ran: the coalesce takes the
+    next operand, and the default supplies its fallback.
+
+    Args:
+        tree (`Any`): A parsed span (a lark `Tree`, or a `Token` for a lone atom).
+
+    Returns:
+        `list[Any]`: The outermost absence-tolerant subtrees, in source order.
+    """
+    data = getattr(tree, "data", None)
+    if data is None:
+        return []  # a lone token
+    if data in _ABSENCE_TOLERANT:
+        return [tree]
+    found: list[Any] = []
+    for child in tree.children:
+        found.extend(_tolerates_absence(child))
     return found
 
 
-def _has_default(tree: Any) -> bool:
-    """Whether a parsed span holds a `:-` default anywhere."""
-    iter_subtrees = getattr(tree, "iter_subtrees", None)
-    if iter_subtrees is None:
-        return False  # a lone token
-    return any(subtree.data == "default_expr" for subtree in iter_subtrees())
-
-
-def _path_text(path: _Path) -> str:
+def _path_text(path: ValuePath) -> str:
     """Render a value path as `.reply.items[0]`."""
     return "".join(f"[{part}]" if isinstance(part, int) else f".{part}" for part in path)
 
 
 def _target_name(target: str, desc: Any) -> str:
     """Name a node or synth call branch target for a message."""
-    if isinstance(desc, CallDescriptor) and target.startswith("__call_"):
+    if isinstance(desc, CallDescriptor) and target.startswith(_SYNTH_PREFIX):
         return f"the call to `{desc.call}`"
     return f"`{target}`"
 
@@ -472,36 +514,9 @@ def _authored_type(desc: CaseDescriptor, expected: Type) -> str:
     return canonical_type_label(expected)
 
 
-def _has_span(value: Any) -> bool:
-    """Whether any string in `value` (recursively) holds a `${` span."""
-    if isinstance(value, str):
-        return "${" in value
-    if isinstance(value, dict):
-        return any(_has_span(item) for item in value.values())
-    if isinstance(value, list):
-        return any(_has_span(item) for item in value)
-    return False
-
-
-def _prepared(value: Any) -> Any:
-    """Return a span-free value as its lifted code produces it.
-
-    A date becomes its ISO text and a string is `$$`-unescaped, as the binder does.
-    """
-    if isinstance(value, str):
-        return eval_binding(value, lambda path: None)
-    if isinstance(value, (datetime.date, datetime.datetime)):
-        return value.isoformat()
-    if isinstance(value, dict):
-        return {key: _prepared(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_prepared(item) for item in value]
-    return value
-
-
 def _shown(value: Any) -> str:
     """Render a value as JSON (`true`, `null`, `"text"`), else its `repr`."""
     try:
-        return json.dumps(_prepared(value), ensure_ascii=False)
+        return json.dumps(prepared_literal(value), ensure_ascii=False)
     except (TypeError, ValueError):
         return repr(value)

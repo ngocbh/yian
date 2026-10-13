@@ -79,10 +79,10 @@ from yian.compose.desugar.adaptive_questions import desugar_adaptive_questions
 from yian.compose.desugar.case_targets import desugar_case_call_targets
 from yian.compose.desugar.case_values import desugar_case_values
 from yian.compose.validate.case_exhaustive import check_case_exhaustive, exhaustive_cases
+from yian.compose.validate.case_values import check_case_values
 from yian.compose.validate.cycles import reject_cycles
 from yian.compose.validate.human_questions import validate_human_questions
 from yian.compose.validate.loop_types import check_loop_type_contract
-from yian.compose.validate.case_values import check_case_values
 from yian.compose.validate.narrowing import compute_narrowing
 from yian.compose.edges.ordering import infer_ordering_edges
 from yian.compose.validate.call_types import check_call_map_types

@@ -1863,7 +1863,7 @@ def _assemble(
     skip_model = SkipModel(
         set(descriptors),
         structural,
-        exhaustive_cases(descriptors, producers, narrowing=narrowing),
+        exhaustive_cases(descriptors, producers, flow_input_contracts, narrowing=narrowing),
     )
     flow_outputs = null_skipped_outputs(flow_outputs, skip_model)
     value_mode = outputs_section is not None and not isinstance(outputs_section, dict)

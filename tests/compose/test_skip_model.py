@@ -258,3 +258,23 @@ def test_nodes_and_has_cases():
     assert m.nodes == frozenset({"c", "a", "b"})
     assert m.has_cases
     assert not model("a b", [data("a", "b")]).has_cases
+
+
+def _on_input(on: str = "${input.k}") -> CaseDescriptor:
+    """An `on:` CASE over a flow input, listing tags `a` and `b`."""
+    return CaseDescriptor(
+        id="route", on=on, cases=[{"when": "a", "then": "na"}, {"when": "b", "then": "nb"}]
+    )
+
+
+def test_case_over_a_literal_input_is_exhaustive():
+    """`on: ${input.k}` over a fully listed non-nullable Literal input always takes a branch."""
+    nullable = Type(kind=ValueKind.STRING, tags=frozenset({"a", "b"}), nullable=True)
+    abc = Type(kind=ValueKind.STRING, tags=frozenset({"a", "b", "c"}))
+    record = Type(kind=ValueKind.OBJECT, fields={"kind": _AB}, required=frozenset({"kind"}))
+    assert case_is_exhaustive(_on_input(), {}, {"k": ValueContract(_AB)})
+    assert case_is_exhaustive(_on_input("${input.r.kind}"), {}, {"r": ValueContract(record)})
+    assert not case_is_exhaustive(_on_input(), {}, {"k": ValueContract(nullable)})
+    assert not case_is_exhaustive(_on_input(), {}, {"k": ValueContract(abc)})
+    assert not case_is_exhaustive(_on_input(), {})
+    assert exhaustive_cases({"route": _on_input()}, {}, {"k": ValueContract(_AB)}) == {"route"}

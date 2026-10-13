@@ -15,7 +15,8 @@ END_ID carries the flow's POST asserts (${X.output}); the ordinary node wrapper 
 after END builds its output. A required terminal output co-skipped is a normal
 required-data-group co-skip derived by the runtime reducer's edge dispositions — END_ID has
 no special co-skip logic. The loader gives an output whose producers a CASE may skip the
-explicit null default, so a loaded flow never co-skips END through an output. Hidden from authors: a reserved __-prefixed id, never parseable.
+explicit null default, so a loaded flow never co-skips END through an output. Hidden from
+authors: a reserved __-prefixed id, never parseable.
 """
 
 from typing import Optional

@@ -47,7 +47,10 @@ Changed: a flow output that reads a node a `case` skipped used to fail the run w
 [Skipped branches and flow outputs](#skipped-branches-and-flow-outputs)). Flows with such
 an output got a new fingerprint, as did flows that call, map, or loop over one or over a
 child whose output is written `${x :- null}`. Runs recorded before can't be resumed or
-replayed.
+replayed. An explicit `${x :- null}` is now typed `Optional[...]`, which adds two load
+errors: `on: ${x.output :- null}` over a `Literal` with a tag missing and no `else:` is
+non-exhaustive, and a named-def LOOP seed written `${x :- null}` into a non-`Optional`
+body field is rejected.
 
 Node IDs are the keys under `nodes:`. They cannot contain `.`, `#`, or `/`:
 `.` separates the node name from `output` and its field path in a reference,
@@ -1046,7 +1049,8 @@ output:
 - **May be skipped:** a `case` target, or a node that plainly reads one (or names it
   in `depends_on`), under some combination of `case` choices. A `case` that runs takes
   one branch, or none unless it is exhaustive: it has `else:`, or its `on:` is a
-  non-nullable `Literal` with every tag listed (a null `on:` value matches nothing).
+  non-nullable `Literal` node output or flow input with every tag listed (a null `on:`
+  value matches nothing).
   So a join over an exhaustive `case`'s branches (`${bullish.output | cautious.output}`
   above, or `${gate.output}`) is never null. Conditions of different `case`s are
   treated as independent.
@@ -1072,6 +1076,8 @@ output:
   arithmetic loads. Arithmetic in flow-level `asserts:` is not checked. The default
   side of `:-` is checked as if it always runs: `${a.output :- (b.output + 1)}` is an
   error even when `b` runs whenever `a` is skipped, since `a` might be null while it runs.
+  A null guard is reported too: `${a.output != null and a.output.n + 1 > 1}` is an
+  error though `and` stops at the guard; write `${(a.output.n :- 0) + 1 > 1}` instead.
 - In a LOOP body the null sets the carried field (see [`loop`](#loop-re-run-a-body-under-a-predicate-or-a-fixed-count));
   a MAP returns null for each element whose branch was skipped.
 

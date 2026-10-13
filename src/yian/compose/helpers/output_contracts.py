@@ -278,7 +278,18 @@ def _direct_value_contract(
     operand: Any,
     reference_contracts: dict[str, OutputContract | None],
 ) -> ValueContract | None:
-    """Return the exact contract of an operand that is one direct reference, else `None`."""
+    """Return the exact contract of an operand that is one direct reference.
+
+    Args:
+        operand (`Any`): One parsed operand of a span's expression tree.
+        reference_contracts (`dict[str, OutputContract | None]`):
+            The resolved contract of every reference path the span reads.
+
+    Returns:
+        `ValueContract | None`:
+            The referenced exact contract, or ``None`` when the operand is not a lone
+            reference or its contract is partial or unknown.
+    """
     if not _is_direct_reference(operand):
         return None
     contract = reference_contracts.get(expr_refs(operand)[0])

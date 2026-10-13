@@ -747,3 +747,75 @@ def test_arithmetic_in_a_default_is_checked_as_if_it_always_runs():
     nodes = _gate("a", "b") + _code("a", "1", output="int") + _code("b", "2", output="int")
     error = _load_error(_flow(nodes, "\n  v: ${a.output :- (b.output + 1)}"))
     assert "does arithmetic on b.output" in str(error)
+
+
+def _on_input(tags: str = "x y") -> str:
+    """Return a CASE routing on `input.k` to `a`/`b` for each tag in `tags`."""
+    cases = "".join(
+        f"      - when: {tag}\n        then: {target}\n" for tag, target in zip(tags.split(), "ab")
+    )
+    return (
+        "  sw:\n    kind: case\n    on: ${input.k}\n    cases:\n"
+        + cases
+        + _code("a", "1", output="int")
+        + _code("b", "2", output="int")
+    )
+
+
+@pytest.mark.parametrize(
+    ("tags", "inputs", "source", "expected"),
+    [
+        ("x y", "k: Literal[x, y]", "${a.output | b.output}", "${a.output | b.output}"),
+        ("x", "k: Literal[x, y]", "${a.output}", "${a.output:-null}"),
+        (
+            "x y",
+            "k: Optional[Literal[x, y]]",
+            "${a.output | b.output}",
+            "${(a.output | b.output) :- null}",
+        ),
+    ],
+)
+def test_on_over_a_literal_input(tags, inputs, source, expected):
+    """A fully listed non-nullable Literal input always takes a branch; otherwise null."""
+    text = _flow(_on_input(tags), f"\n  v: {source}", inputs=inputs)
+    assert _sources(text) == [expected]
+    assert _run(text, {"k": "x"}) == {"v": 1}
+
+
+def test_arithmetic_on_a_join_over_a_literal_input_loads():
+    """The join of a fully listed Literal input is never null from a skip."""
+    text = _flow(_on_input(), "\n  v: ${(a.output | b.output) + 1}", inputs="k: Literal[x, y]")
+    assert _run(text, {"k": "y"}) == {"v": 3}
+
+
+def test_child_routing_on_a_literal_input_passes_to_a_str_input():
+    """A child whose output is `${sw.output}` over a Literal input returns `str` to its parent."""
+    nodes = (
+        "  sw:\n    kind: case\n    on: ${input.k}\n    cases:\n"
+        "      - when: x\n        then: a\n      - when: y\n        then: b\n"
+        + _code("a", '"A"')
+        + _code("b", '"B"')
+    )
+    defs = _child_defs(nodes, " ${sw.output}", inputs="k: Literal[x, y]") + _USE_STR
+    calls = (
+        "  c1:\n    kind: call\n    call: child\n    input:\n      k: y\n"
+        "  c2:\n    kind: call\n    call: use\n    input:\n      s: ${c1.output}\n"
+    )
+    assert _run(_flow(calls, " ${c2.output}", defs=defs), {"approve": True}) == "B"
+
+
+def test_map_body_routing_on_a_literal_item_is_not_rewritten():
+    """A MAP body routing on a Literal element always takes a branch, so its join stays."""
+    body = textwrap.indent(_on_input(), "    ")
+
+    def each(output: str) -> str:
+        return _flow(
+            "  each:\n    kind: map\n    over: ${input.ks}\n    input:\n      k: ${item}\n"
+            f"    nodes:\n{body}    output: {output}\n",
+            " ${each.output}",
+            inputs="ks: list[Literal[x, y]]",
+        )
+
+    child = load_flow(each("${a.output | b.output}")).compiled.nodes["each"].child
+    assert [output.from_ for output in child.outputs] == ["${a.output | b.output}"]
+    assert _run(each("${(a.output | b.output) + 1}"), {"ks": ["x", "y"]}) == [2, 3]

@@ -34,7 +34,6 @@ Never imports: `nodes`, `compile`, `runtime`, or `typesys` at runtime (pool-agno
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Optional, Union
 
@@ -59,7 +58,7 @@ if TYPE_CHECKING:  # annotation-only imports
 
 # --------------------------------------------------------------------------- #
 # Shared call-parsing helpers — reused by the whole-value `call(...)` directive
-# (`compose.calls`) and the prompt-span parser further down.
+# (`compose.desugar.inline_calls`).
 #
 # `InlineCall` is the plain-data record a desugared call produces (the directive
 # path builds one per call); `_split_kv` / `_arg_source` / `_default_literal` /
@@ -406,160 +405,15 @@ def _operand_co_skips(node: "Tree | Token") -> bool:
 
 # --------------------------------------------------------------------------- #
 # Strict prompt rendering — an AGENT/HUMAN_INPUT prompt against its bound input
-# record. A `${...}` span is EITHER a plain dotted reference (`${name.path}`) OR a
-# builtin call (`${ fn(${ref}, lit).path }`). Unlike a binding, a prompt is not on the
-# graph: it reads inputs already bound to this node, mints no edge, and (the call form)
-# evaluates a read-only `TEMPLATE_FNS` formatter at render time — a bounded bend of the
-# "all computation is a node" law documented in `docs/expressions.md`. The
-# renderer (`render_template_record`) and the compile-time scope check
-# (`prompt_refs` -> `compose.validate`) share ONE span parser so they cannot drift.
+# record. Each `${...}` span is scanned by `scan_template` and evaluated by
+# `eval_template` in `STRICT_RAISE` mode, so a prompt span takes the same grammar as a
+# binding span. Unlike a binding, a prompt is not on the graph: it reads inputs already
+# bound to this node, mints no edge, and may evaluate a read-only `TEMPLATE_FNS`
+# formatter at render time — a bounded bend of the "all computation is a node" law
+# documented in `docs/expressions.md`. The renderer (`render_template_record`) and the
+# compile-time scope check (`prompt_refs` -> `compose.validate`) share the same scanner
+# so they cannot drift.
 # --------------------------------------------------------------------------- #
-
-
-@dataclass(frozen=True)
-class _PromptRef:
-    """A plain `${name.path}` prompt span — a dotted record reference."""
-
-    path: str
-
-
-@dataclass(frozen=True)
-class _PromptArg:
-    """One builtin-call argument. `name` is the keyword (None -> positional). Exactly one
-    of `ref` (a `${...}`-wrapped dotted record path) / `literal` is meaningful, per `is_ref`."""
-
-    name: Optional[str]
-    ref: Optional[str]
-    literal: Any
-    is_ref: bool
-
-
-@dataclass(frozen=True)
-class _PromptCall:
-    """A `${ callee(args).trailing }` prompt span: a `TEMPLATE_FNS` builtin call with
-    ordered `args` and optional dotted access `trailing` on the result."""
-
-    callee: str
-    args: tuple  # tuple[_PromptArg, ...]
-    trailing: tuple  # tuple[str, ...] — dotted steps after the close paren
-
-
-def _check_prompt_path(path: str) -> None:
-    """A prompt reference path must split into non-empty dotted segments (the charset is
-    left permissive — same lenient check the regex renderer used)."""
-    parts = [p.strip() for p in path.split(".")]
-    if not parts or any(not p for p in parts):
-        raise ExpressionError(f"malformed reference ${{{path}}} in prompt")
-
-
-def _parse_prompt_span(interior: str) -> Union[_PromptRef, _PromptCall]:
-    """Parse one `${...}` interior into a plain ref or a builtin call. Raises on a
-    malformed span (empty / unbalanced parens / bad dotted access / non-ref non-literal
-    arg). Does NOT check the builtin exists or resolve refs — that is the caller's job."""
-    s = interior.strip()
-    if not s:
-        raise ExpressionError("empty ${} span in prompt")
-    m = re.match(r"([A-Za-z_][A-Za-z0-9_]*)\s*\(", s)
-    if m is None:  # no call syntax -> a plain dotted reference
-        _check_prompt_path(s)
-        return _PromptRef(s)
-    callee = m.group(1)
-    open_idx = m.end() - 1
-    close_idx = _find_paren_end(s, open_idx + 1)
-    if close_idx is None:
-        raise ExpressionError(f"unbalanced '(' in prompt call {s!r}")
-    args = tuple(
-        _parse_prompt_arg(raw)
-        for raw in _split_calls_aware(s[open_idx + 1 : close_idx], ",")
-        if raw.strip()  # skip `f()` / a trailing comma
-    )
-    trailing_str = s[close_idx + 1 :].strip()
-    trailing: tuple = ()
-    if trailing_str:
-        if not trailing_str.startswith("."):
-            raise ExpressionError(f"unexpected {trailing_str!r} after call in prompt {s!r}")
-        steps = [p.strip() for p in trailing_str[1:].split(".")]
-        if not steps or any(not p for p in steps):
-            raise ExpressionError(f"malformed dotted access {trailing_str!r} in prompt {s!r}")
-        trailing = tuple(steps)
-    return _PromptCall(callee, args, trailing)
-
-
-def _parse_prompt_arg(raw: str) -> _PromptArg:
-    """One builtin-call arg `[(name=)]value` -> a `_PromptArg`. A top-level `=` with a
-    bare-identifier LHS is a keyword; the value is either ONE whole `${ref}` (a record
-    reference) or a literal (number/bool/null/quoted) — a bare unwrapped word is rejected
-    (record refs MUST be `${...}`-wrapped)."""
-    name: Optional[str] = None
-    value = raw
-    eq_parts = _split_calls_aware(raw, "=")
-    if len(eq_parts) >= 2 and re.fullmatch(r"\s*[A-Za-z_][A-Za-z0-9_]*\s*", eq_parts[0]):
-        name = eq_parts[0].strip()
-        value = "=".join(eq_parts[1:])
-    v = value.strip()
-    if v.startswith("${"):  # a record reference — must be exactly one whole span
-        end = _find_span_end(v, 2)
-        if end == len(v) - 1:
-            ref = v[2:end].strip()
-            _check_prompt_path(ref)
-            return _PromptArg(name=name, ref=ref, literal=None, is_ref=True)
-    try:
-        lit = _parse_literal(v)
-    except ExpressionError:
-        raise ExpressionError(
-            f"prompt call arg {v!r} must be a `${{ref}}` or a literal "
-            f"(number/bool/null/quoted string)"
-        ) from None
-    return _PromptArg(name=name, ref=None, literal=lit, is_ref=False)
-
-
-def _resolve_record_strict(path: str, record: dict) -> Any:
-    """Resolve a dotted `path` against a node's bound input `record`, raising on an
-    unknown head, a dotted-walk miss, or a None value (the strict prompt floor)."""
-    parts = [p.strip() for p in path.split(".")]
-    if not parts or any(not p for p in parts):
-        raise ExpressionError(f"malformed reference ${{{path}}} in prompt")
-    if parts[0] not in record:
-        raise ExpressionError(f"unresolved input reference ${{{path}}} in prompt")
-    value: Any = record[parts[0]]
-    for step in parts[1:]:
-        value = value.get(step) if isinstance(value, dict) else None
-        if value is None:
-            raise ExpressionError(f"unresolved input reference ${{{path}}} in prompt")
-    if value is None:
-        raise ExpressionError(f"unresolved input reference ${{{path}}} in prompt")
-    return value
-
-
-def _eval_prompt_span(interior: str, record: dict) -> Any:
-    """Evaluate one `${...}` prompt span to its typed value (the caller stringifies)."""
-    node = _parse_prompt_span(interior)
-    if isinstance(node, _PromptRef):
-        return _resolve_record_strict(node.path, record)
-    fn = TEMPLATE_FNS.get(node.callee)
-    if fn is None:
-        raise ExpressionError(f"unknown prompt function {node.callee!r}")
-    pos: list = []
-    kw: dict = {}
-    for a in node.args:
-        val = _resolve_record_strict(a.ref, record) if a.is_ref else a.literal
-        if a.name is None:
-            pos.append(val)
-        else:
-            kw[a.name] = val
-    try:
-        value = fn(*pos, **kw)
-    except ExpressionError:
-        raise
-    except Exception as exc:  # a builtin blew up (bad arity, wrong type) — surface loudly
-        raise ExpressionError(f"prompt function {node.callee!r} failed: {exc}") from exc
-    for step in node.trailing:
-        value = value.get(step) if isinstance(value, dict) else None
-        if value is None:
-            raise ExpressionError(
-                f"unresolved dotted access .{step} on {node.callee!r}() result in prompt"
-            )
-    return value
 
 
 def _resolve_record_strict_or_none(path: str, record: dict) -> Any:

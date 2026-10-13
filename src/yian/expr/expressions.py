@@ -36,7 +36,6 @@ class RequiredError(ExpressionError):
 # walkers and rewriters, and type inference treat only its first argument as an expression.
 ISINSTANCE = "isinstance"
 
-_VAR_RE = re.compile(r"\$\{([^}]+)\}")
 _NUMBER_RE = re.compile(r"^-?\d+(\.\d+)?$")
 
 
@@ -68,26 +67,6 @@ def _resolve_in_record(path: str, record: dict) -> Any:
     return value
 
 
-def render_template(text: str, pool: VariablePool) -> str:
-    """Substitute every `${ref}` in `text` with its resolved value (str), against
-    the whole pool (`node`/`system` namespaces).
-
-    `render_template_record` handles node-local AGENT and HUMAN_INPUT prompts. This
-    helper remains the pool-scoped rendering path for templates that read node or
-    system namespaces. An unresolved reference (one that resolves to `None`) raises
-    `ExpressionError` rather than silently rendering an empty string.
-    """
-
-    def _sub(match: "re.Match[str]") -> str:
-        ref = match.group(1)
-        value = resolve_reference(ref, pool)
-        if value is None:
-            raise ExpressionError(f"unresolved reference ${{{ref}}} in template")
-        return str(value)
-
-    return _VAR_RE.sub(_sub, text)
-
-
 def _parse_literal(token: str) -> Any:
     t = token.strip()
     if not t:
@@ -104,28 +83,6 @@ def _parse_literal(token: str) -> Any:
     if (t.startswith('"') and t.endswith('"')) or (t.startswith("'") and t.endswith("'")):
         return t[1:-1]
     raise ExpressionError(f"cannot parse literal {token!r}")
-
-
-def _arith(op: str, lhs: Any, rhs: Any) -> Any:
-    """A binary arithmetic op over NUMBERS ONLY. A non-numeric operand —
-    string/bool/null/None — is a loud `ExpressionError` (bool is excluded: it is
-    `type bool`, not `int`)."""
-    if type(lhs) not in (int, float) or type(rhs) not in (int, float):
-        raise ExpressionError(f"arithmetic `{op}` requires numbers, got {lhs!r} {op} {rhs!r}")
-    try:
-        if op == "+":
-            return lhs + rhs
-        if op == "-":
-            return lhs - rhs
-        if op == "*":
-            return lhs * rhs
-        if op == "/":
-            return lhs / rhs
-        if op == "%":
-            return lhs % rhs
-    except ZeroDivisionError as exc:
-        raise ExpressionError(f"division by zero: {lhs!r} {op} {rhs!r}") from exc
-    raise ExpressionError(f"unsupported arithmetic operator: {op!r}")
 
 
 def _eval_comparison(op: str, lhs: Any, rhs: Any) -> bool:
@@ -299,9 +256,11 @@ def evaluate_when_record(
 ) -> bool:
     """Evaluate a strict-CASE `when:` against the node's bound input record.
 
-    `${name}` / `${name.path}` resolve against `record`; a miss -> None, which is falsy
-    through ==/!=/ordered comparisons, preserving `when:` missing-is-falsy behavior.
-    Note: `in`/`not in` with a None operand still raises (unchanged from the pool path).
+    `${name}` / `${name.path}` resolve against `record`; a miss -> None, compared as a
+    plain value: `==` and ordered comparisons against a non-null value are false, and
+    `!=` is true. A bare `${name}` miss is falsy, which gives `when:` its
+    missing-is-falsy behavior. A None left side of `in`/`not in` is an ordinary value
+    (`${miss} in [...]` is false); a None right side raises, since None is no container.
     Bare local-input refs only; pool namespaces are not in scope (they belong in the
     node's input `from:` bindings).
 
@@ -352,9 +311,9 @@ _MISSING = _Missing()
 
 
 def _value_add(lhs: Any, rhs: Any) -> Any:
-    """`+` on resolved VALUES (NOT the number-only `_arith` gate): so `str+str`
-    concatenates and `list+list` extends. Arithmetic over `None` (a missing ref in a
-    non-strict mode) propagates Python's `TypeError`, wrapped by the caller."""
+    """`+` on resolved VALUES: `str+str` concatenates and `list+list` extends.
+    Arithmetic over `None` (a missing ref in a non-strict mode) propagates Python's
+    `TypeError`, wrapped by the caller."""
     return lhs + rhs
 
 
@@ -710,7 +669,7 @@ class _EvalExpr:
         lhs, _op, rhs = node.children
         return _eval_comparison("not in", self._as_value(self._walk(lhs)), self._as_value(self._walk(rhs)))
 
-    # --- arithmetic — Python operators on VALUES (NOT the number-only `_arith`) --- #
+    # --- arithmetic — Python operators on resolved VALUES --- #
     def _binop(self, node: Tree, op: Callable[[Any, Any], Any], symbol: str) -> Any:
         lhs = self._as_value(self._walk(node.children[0]))
         rhs = self._as_value(self._walk(node.children[1]))

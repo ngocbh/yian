@@ -414,12 +414,14 @@ def _value_mismatch(
         )
         if exc.path:
             message += f" ({exc})"
-        suggestion = _literal_hint(value, decl, text) if hint else None
+        suggestion = _literal_hint(value, decl, text, yaml=what != "default") if hint else None
         return message if suggestion is None else f"{message}; {suggestion}"
     return None
 
 
-def _literal_hint(value: Any, decl: Parameter, text: str | None) -> str | None:
+def _literal_hint(
+    value: Any, decl: Parameter, text: str | None, *, yaml: bool
+) -> str | None:
     """Suggest how to rewrite a literal that doesn't fit `decl`, else `None`.
 
     Text that a run boundary would convert to a finite number or a bool is written
@@ -430,6 +432,8 @@ def _literal_hint(value: Any, decl: Parameter, text: str | None) -> str | None:
         value (`Any`): The literal that failed.
         decl (`Parameter`): The child input, with a declared contract.
         text (`str | None`): The literal as written, if known.
+        yaml (`bool`): Whether YAML read the literal, rather than the `${...}`
+            expression syntax, which reads only `true`/`false` as booleans.
 
     Returns:
         `str | None`: The hint, or `None` when rewriting the literal can't help.
@@ -447,6 +451,8 @@ def _literal_hint(value: Any, decl: Parameter, text: str | None) -> str | None:
     if isinstance(value, bool):
         if not _fits(child_type, "true"):
             return None
+        if not yaml:
+            return "quote it to keep it as text"
         return (
             "quote it to keep it as text "
             "(YAML reads unquoted yes/no/on/off/true/false as booleans)"

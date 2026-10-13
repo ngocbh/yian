@@ -1631,8 +1631,11 @@ for an `int`, `float`, or `bool` input. These used to run and now fail at load:
 - a literal, `:-` fallback, or `|` operand written as text for a number or bool, such
   as `n: "3"`, `${input.n :- "3"}`, or `${input.n | "3"}` into an `int` input (write
   `3`), and a `${item}` over a literal `over: ["1", "2"]` into an `int` input;
-- an unquoted date or datetime literal, alone or inside a list or record, into any
-  input, `str` included (quote it);
+- an unquoted date or datetime literal, alone or inside a list or record, or as an
+  element of a literal `over:` list, into any input, `str` included (quote it);
+- a `:-` or `|` whose reference doesn't fit the input, which used to run whenever the
+  reference was null, such as `${input.m :- 3}` or `${input.m | 3}` into an `int` input
+  with `m: Optional[str]` (fix the reference's type);
 - a `${item}` over a `list[str]` into a `date` input (type the list `list[date]`), and a
   `${item}` over a `list[Optional[str]]`, or `${x :- null}`, into a strict input (use a
   typed binding).

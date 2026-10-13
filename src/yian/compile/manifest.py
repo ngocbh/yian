@@ -52,7 +52,7 @@ from yian.nodes.map import MapNode
 from yian.nodes.start import StartNode
 from yian.nodes.tool import ToolNode
 from yian.nodes.wait import WaitNode
-from yian.typesys.values import Type
+from yian.typesys.values import Type, canonical_union_order
 
 __all__ = ["expansion_digest", "flow_fingerprint", "flow_manifest"]
 
@@ -185,7 +185,9 @@ _VALUE_CONTRACT_CANONICAL_FIELDS = frozenset({"type"})
 _VALUE_CONTRACT_IGNORED_FIELDS = frozenset({"origins"})
 _PARTIAL_RECORD_CONTRACT_FIELDS = frozenset({"fields"})
 _CONTRACT_ORIGINS_IGNORED_FIELDS = frozenset({"default", "entries"})
-_TYPE_FIELDS = frozenset({"kind", "fields", "required", "tags", "element", "nullable", "bounds"})
+_TYPE_FIELDS = frozenset(
+    {"kind", "fields", "required", "tags", "element", "nullable", "bounds", "variants"}
+)
 _CASE_CANONICAL_FIELDS = frozenset({"handle", "when"})
 _CASE_IGNORED_FIELDS = frozenset({"origin"})
 _MEMORY_DECL_CANONICAL_FIELDS = frozenset({"name", "type", "_config", "site"})
@@ -1375,7 +1377,7 @@ def _canonical_value(
 
 
 def _type_manifest(value: Type | None, ctx: _ManifestContext, path: str) -> Any:
-    """Canonicalize one resolved structural Type, including nested fields/elements."""
+    """Canonicalize one resolved structural Type, including nested fields/elements/members."""
     if value is None:
         return None
     _check_fields(value, _TYPE_FIELDS, path)
@@ -1404,6 +1406,13 @@ def _type_manifest(value: Type | None, ctx: _ManifestContext, path: str) -> Any:
         if value.bounds is not None:
             value.validate_shape()
             manifest["bounds"] = list(value.bounds)
+        if value.variants is not None:
+            # Members are emitted in canonical order so authored order is not identity.
+            value.validate_shape()
+            manifest["union"] = [
+                _type_manifest(member, ctx, f"{path}.union[{index}]")
+                for index, member in enumerate(canonical_union_order(value.variants))
+            ]
         return manifest
     finally:
         ctx.types.remove(object_id)

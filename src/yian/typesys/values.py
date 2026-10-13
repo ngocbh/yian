@@ -16,7 +16,9 @@ not a schema migration).
 This module has no package-internal dependencies on purpose; it is the leaf.
 """
 
-from dataclasses import dataclass
+import json
+from collections.abc import Iterable
+from dataclasses import dataclass, replace
 from datetime import date as _date
 from datetime import datetime as _datetime
 from enum import Enum
@@ -314,9 +316,12 @@ class Type:
       - variant: kind=STRING,   tags={labels}
       - list:    kind=LIST_*,   element=<element Type>
       - number:  kind=INTEGER/NUMBER, bounds=(inclusive minimum, maximum)
+      - union:   kind=OBJECT,   variants=(record member, ...)
     A refined specialized list uses the element's matching storage tag;
     `LIST_ANY` is the generic carrier and may refine any element type.
     A plain scalar / flat list uses only `kind` (see `Type.scalar`).
+    Union members are non-nullable records; a nullable union sets `nullable` on
+    the union itself.
     """
 
     kind: ValueKind
@@ -326,6 +331,7 @@ class Type:
     element: Optional["Type"] = None
     nullable: bool = False  # an Optional[X] slot — accepts None (present-None or absent)
     bounds: tuple[int | float, int | float] | None = None
+    variants: Optional[tuple["Type", ...]] = None
 
     @classmethod
     def scalar(cls, seg: ValueKind) -> "Type":
@@ -435,8 +441,24 @@ def _validate_type_shape(
                     f"element type; expected {expected_kind.value!r}"
                 )
 
+        variants = typ.variants
+        if variants is not None:
+            if type(variants) is not tuple:
+                raise TypeError("type variants must be a tuple or None")
+            if typ.kind is not ValueKind.OBJECT:
+                raise ValueError("only object types may declare union variants")
+            if len(variants) < 2:
+                raise ValueError("a union needs at least two members")
+            for member in variants:
+                _validate_type_shape(member, active=active, validated=validated)
+                if member.fields is None:
+                    raise ValueError("every union member must be a record type")
+                if member.nullable:
+                    raise ValueError("union members must not be nullable")
+
         refinements = sum(
-            value is not None for value in (fields, tags, element, typ.bounds)
+            value is not None
+            for value in (fields, tags, element, typ.bounds, variants)
         )
         if refinements > 1:
             raise ValueError("a type may declare only one structural refinement")
@@ -481,7 +503,7 @@ def _list_kind_for_element(element: Type) -> ValueKind:
     semantic_kind = element.kind
     if element.tags is not None:
         semantic_kind = ValueKind.STRING
-    elif element.fields is not None:
+    elif element.fields is not None or element.variants is not None:
         semantic_kind = ValueKind.OBJECT
     return next(
         (
@@ -491,6 +513,410 @@ def _list_kind_for_element(element: Type) -> ValueKind:
         ),
         ValueKind.LIST_ANY,
     )
+
+
+# --------------------------------------------------------------------------- #
+# Type labels
+# --------------------------------------------------------------------------- #
+
+
+def canonical_type_label(typ: Type) -> str:
+    """Render one deterministic, unambiguous label for a structural type.
+
+    Record keys and variant tags use compact JSON quoting. Structurally refined
+    lists render from their element; a valid flat-list type falls back to its
+    storage-kind spelling. A union lists its members in canonical order.
+
+    Args:
+        typ (`Type`): The resolved structural type to label.
+
+    Returns:
+        `str`: A compact canonical type expression.
+
+    """
+    label = _canonical_nonnullable_label(typ)
+    return f"Optional[{label}]" if typ.nullable else label
+
+
+def _canonical_nonnullable_label(typ: Type) -> str:
+    """Render ``typ`` without applying its outer nullable wrapper."""
+    if typ.variants is not None:
+        members = canonical_union_order(typ.variants)
+        return "Union[" + ",".join(canonical_type_label(member) for member in members) + "]"
+
+    if typ.fields is not None:
+        fields = (
+            f"{_json_string(name)}:{canonical_type_label(typ.fields[name])}"
+            for name in sorted(typ.fields)
+        )
+        return "{" + ",".join(fields) + "}"
+
+    if typ.tags is not None:
+        return "Literal[" + ",".join(
+            _json_string(tag) for tag in sorted(typ.tags)
+        ) + "]"
+
+    if typ.kind.is_list():
+        if typ.element is None:
+            return typ.kind.value
+        return f"list[{canonical_type_label(typ.element)}]"
+
+    if typ.bounds is not None:
+        _validate_numeric_bounds(typ.kind, typ.bounds)
+        endpoints = ",".join(json.dumps(value, allow_nan=False) for value in typ.bounds)
+        return f"{typ.kind.value}[{endpoints}]"
+
+    return typ.kind.value
+
+
+def _json_string(value: str) -> str:
+    """Encode one record key or variant tag as compact canonical JSON."""
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+# --------------------------------------------------------------------------- #
+# Unions of records
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class FieldRead:
+    """Every union member has the field; `type` is what a read gives.
+
+    Args:
+        type (`Type | None`):
+            The field's type across the members, or `None` when the members'
+            types differ and the read is untyped.
+    """
+
+    type: Optional[Type]
+
+
+@dataclass(frozen=True)
+class FieldPartial:
+    """Only some union members have the field.
+
+    Args:
+        members (`tuple[Type, ...]`):
+            The members that declare the field, in the union's member order.
+    """
+
+    members: tuple[Type, ...]
+
+
+@dataclass(frozen=True)
+class FieldAbsent:
+    """No union member has the field."""
+
+
+def _single_tag(typ: Type) -> Optional[str]:
+    """Return the one value of a single-value `Literal`, else `None`."""
+    if typ.tags is None or len(typ.tags) != 1:
+        return None
+    return next(iter(typ.tags))
+
+
+def _members_tag_fields(members: tuple[Type, ...]) -> tuple[str, ...]:
+    """Return the tag fields shared by `members`, sorted by name."""
+    if not members or any(member.fields is None for member in members):
+        return ()
+    qualifying = []
+    for name in sorted(members[0].fields):
+        values = []
+        for member in members:
+            field_type = member.fields.get(name)
+            if (
+                field_type is None
+                or name not in (member.required or frozenset())
+                or field_type.nullable
+                or _single_tag(field_type) is None
+            ):
+                break
+            values.append(_single_tag(field_type))
+        else:
+            if len(set(values)) == len(members):
+                qualifying.append(name)
+    return tuple(qualifying)
+
+
+def union_tag_fields(typ: Type) -> tuple[str, ...]:
+    """Return the fields that tell a union's members apart, sorted by name.
+
+    A field is a tag when every member declares it as required, not nullable, and
+    a single-value `Literal`, and the values are pairwise distinct. Any tag field
+    selects the same member.
+
+    Args:
+        typ (`Type`):
+            The type to inspect. A type that is not a union has no tag fields.
+
+    Returns:
+        `tuple[str, ...]`:
+            The tag field names, or `()` for an untagged union or a non-union.
+
+    Example:
+        A union of `{action: Literal[buy], qty: int}` and
+        `{action: Literal[sell], price: float}` gives `("action",)`.
+    """
+    if typ.variants is None:
+        return ()
+    return _members_tag_fields(typ.variants)
+
+
+def canonical_union_order(members: Iterable[Type]) -> tuple[Type, ...]:
+    """Return union members in canonical order.
+
+    Members with a tag field sort by the value of the first tag field by name;
+    otherwise they sort by `canonical_type_label`.
+
+    Args:
+        members (`Iterable[Type]`):
+            The record members of one union.
+
+    Returns:
+        `tuple[Type, ...]`:
+            The same members, reordered.
+    """
+    members = tuple(members)
+    tag_fields = _members_tag_fields(members)
+    if tag_fields:
+        field = tag_fields[0]
+        return tuple(sorted(members, key=lambda member: _single_tag(member.fields[field])))
+    return tuple(sorted(members, key=canonical_type_label))
+
+
+def _member_tag(member: Type, field: str) -> str:
+    """Return a member's value for one tag field."""
+    tag = _single_tag(member.fields[field])
+    assert tag is not None
+    return tag
+
+
+def _tag_field(typ: Type, field: Optional[str]) -> str:
+    """Pick a union's tag field: `field` when given, else the first by name."""
+    tag_fields = union_tag_fields(typ)
+    if not tag_fields:
+        raise ValueError("the type is not a tagged union")
+    if field is None:
+        return tag_fields[0]
+    if field not in tag_fields:
+        raise ValueError(f"{field!r} is not a tag field of the union")
+    return field
+
+
+def union_member_for_tag(
+    typ: Type,
+    tag: Any,
+    *,
+    field: Optional[str] = None,
+) -> Optional[Type]:
+    """Return the member of a tagged union whose tag field equals `tag`.
+
+    Args:
+        typ (`Type`):
+            A tagged union.
+        tag (`Any`):
+            The tag value to look up. A value that is not one of the tags,
+            including a non-string, finds no member.
+        field (`str`, *optional*, defaults to `None`):
+            The tag field to match on. `None` uses the first tag field by name.
+
+    Returns:
+        `Type | None`:
+            The matching member, or `None` when no member has that tag.
+
+    Raises:
+        `ValueError`:
+            `typ` is not a tagged union, or `field` is not one of its tag fields.
+    """
+    field = _tag_field(typ, field)
+    if type(tag) is not str:
+        return None
+    return next(
+        (member for member in typ.variants if _member_tag(member, field) == tag),
+        None,
+    )
+
+
+def restrict_union(
+    typ: Type,
+    keep: Iterable[str | Type],
+    *,
+    field: Optional[str] = None,
+) -> Type:
+    """Return the part of a union that `keep` selects, keeping its nullability.
+
+    One selected member gives that member record; several give a smaller union
+    in the original member order.
+
+    Args:
+        typ (`Type`):
+            The union to restrict.
+        keep (`Iterable[str | Type]`):
+            The members to keep, each named by its tag value (tagged unions only)
+            or given as a member `Type`. Must not be empty.
+        field (`str`, *optional*, defaults to `None`):
+            The tag field that tag values refer to. `None` uses the first tag field
+            by name.
+
+    Returns:
+        `Type`:
+            The selected member, or a union of the selected members. Either is
+            nullable when `typ` is.
+
+    Raises:
+        `ValueError`:
+            `typ` is not a union, `keep` is empty, or an item is neither a tag
+            nor a member of `typ`.
+
+    Example:
+        Restricting `Union[Buy, Hold, Sell]` to `{"buy", "sell"}` gives
+        `Union[Buy, Sell]`.
+    """
+    if typ.variants is None:
+        raise ValueError("only a union can be restricted")
+    selected: list[Type] = []
+    for item in keep:
+        if isinstance(item, Type):
+            member = next((candidate for candidate in typ.variants if candidate == item), None)
+            if member is None:
+                raise ValueError("restrict_union got a type that is not a union member")
+        else:
+            member = union_member_for_tag(typ, item, field=field)
+            if member is None:
+                raise ValueError(f"{item!r} is not a tag of the union")
+        if not any(member == chosen for chosen in selected):
+            selected.append(member)
+    if not selected:
+        raise ValueError("restrict_union needs at least one member")
+    ordered = tuple(member for member in typ.variants if any(member == s for s in selected))
+    if len(ordered) == 1:
+        return replace(ordered[0], nullable=typ.nullable)
+    return Type(kind=ValueKind.OBJECT, variants=ordered, nullable=typ.nullable)
+
+
+def union_field(typ: Type, name: str) -> FieldRead | FieldPartial | FieldAbsent:
+    """Describe reading field `name` on a value of union type `typ`.
+
+    When every member has the field, the read's type is the members' type if they
+    are equal ignoring `nullable`, the merged `Literal` if they are all string
+    `Literal`s, and untyped otherwise. It is nullable when any member's field is
+    `Optional` or not required.
+
+    Args:
+        typ (`Type`):
+            A union.
+        name (`str`):
+            The field name to read.
+
+    Returns:
+        `FieldRead | FieldPartial | FieldAbsent`:
+            `FieldRead` when every member has the field, `FieldPartial` with the
+            members that have it when only some do, and `FieldAbsent` when none do.
+
+    Raises:
+        `ValueError`:
+            `typ` is not a union.
+    """
+    if typ.variants is None:
+        raise ValueError("union_field needs a union type")
+    having = tuple(member for member in typ.variants if name in member.fields)
+    if not having:
+        return FieldAbsent()
+    if len(having) < len(typ.variants):
+        return FieldPartial(having)
+    field_types = [member.fields[name] for member in having]
+    nullable = any(
+        field_type.nullable or name not in (member.required or frozenset())
+        for member, field_type in zip(having, field_types)
+    )
+    strict = [replace(field_type, nullable=False) for field_type in field_types]
+    if all(field_type == strict[0] for field_type in strict):
+        return FieldRead(replace(strict[0], nullable=nullable))
+    if all(field_type.kind is ValueKind.STRING and field_type.tags is not None for field_type in strict):
+        merged = frozenset().union(*(field_type.tags for field_type in strict))
+        return FieldRead(Type(kind=ValueKind.STRING, tags=merged, nullable=nullable))
+    return FieldRead(None)
+
+
+def _admits_none(typ: Type) -> bool:
+    """Whether `None` satisfies `typ`."""
+    return typ.nullable or typ.kind is ValueKind.NONE
+
+
+def _is_plain_object(typ: Type) -> bool:
+    """Whether `typ` is `object` with no record or union refinement."""
+    return typ.kind is ValueKind.OBJECT and typ.fields is None and typ.variants is None
+
+
+def _records_overlap(a: Type, b: Type) -> bool:
+    """Whether two closed records can match the same value."""
+    a_required = a.required or frozenset()
+    b_required = b.required or frozenset()
+    if not a_required <= b.fields.keys() or not b_required <= a.fields.keys():
+        return False
+    return all(types_overlap(a.fields[name], b.fields[name]) for name in a_required | b_required)
+
+
+def _bounds_intersect(a: Type, b: Type) -> bool:
+    """Whether two numeric types' inclusive intervals share a point."""
+    a_low, a_high = a.bounds if a.bounds is not None else (float("-inf"), float("inf"))
+    b_low, b_high = b.bounds if b.bounds is not None else (float("-inf"), float("inf"))
+    return max(a_low, b_low) <= min(a_high, b_high)
+
+
+_TEXT_KINDS = frozenset({ValueKind.STRING, ValueKind.DATE, ValueKind.DATETIME})
+_NUMERIC_KINDS = frozenset({ValueKind.INTEGER, ValueKind.NUMBER})
+
+
+def types_overlap(a: Type, b: Type) -> bool:
+    """Whether some value could satisfy both `a` and `b`.
+
+    The check is conservative: it may say two types overlap when no value
+    satisfies both, but never the reverse. It decides whether an untagged union's
+    members can be told apart from the data alone.
+
+    Args:
+        a (`Type`):
+            One type.
+        b (`Type`):
+            The other type.
+
+    Returns:
+        `bool`:
+            `True` when the two types may share a value.
+
+    Example:
+        `{action: Literal[buy], qty: int}` and `{action: Literal[sell], price: float}`
+        do not overlap; `{conviction: float}` overlaps itself.
+    """
+    if _admits_none(a) and _admits_none(b):
+        return True
+    if a.variants is not None:
+        return any(types_overlap(member, b) for member in a.variants)
+    if b.variants is not None:
+        return any(types_overlap(a, member) for member in b.variants)
+    if a.fields is not None and b.fields is not None:
+        return _records_overlap(a, b)
+    if a.kind is ValueKind.OBJECT and b.kind is ValueKind.OBJECT:
+        # Only plain `object` remains on at least one side, and it accepts any record.
+        return _is_plain_object(a) or _is_plain_object(b)
+    if a.kind.is_list() and b.kind.is_list():
+        return True
+    if a.tags is not None and b.tags is not None:
+        return bool(a.tags & b.tags)
+    if a.tags is not None or b.tags is not None:
+        literal, other = (a, b) if a.tags is not None else (b, a)
+        if other.kind is ValueKind.STRING:
+            return True
+        if other.kind in (ValueKind.DATE, ValueKind.DATETIME):
+            return any(_scalar_matches(other.kind, tag) for tag in literal.tags)
+        return False
+    if a.kind in _NUMERIC_KINDS and b.kind in _NUMERIC_KINDS:
+        return _bounds_intersect(a, b)
+    if a.kind in _TEXT_KINDS and b.kind in _TEXT_KINDS:
+        return a.kind is b.kind or ValueKind.STRING in (a.kind, b.kind)
+    return a.kind is b.kind
 
 
 # --------------------------------------------------------------------------- #
@@ -628,7 +1054,8 @@ def build_value_as(declared: "ValueKind | Type", value: Any) -> TypedValue:
     Args:
         declared (`ValueKind | Type`):
             The target type. A bare `ValueKind` is a scalar or flat list; a structural
-            `Type` additionally checks records, variants, typed lists, and numeric bounds.
+            `Type` additionally checks records, unions, variants, typed lists, and
+            numeric bounds.
         value (`Any`):
             The raw Python value to validate and wrap, or an already-wrapped
             `TypedValue` (unwrapped to its plain value first).
@@ -641,7 +1068,8 @@ def build_value_as(declared: "ValueKind | Type", value: Any) -> TypedValue:
         `TypeCheckError`:
             The value does not satisfy `declared` — wrong scalar type, a non-member
             variant tag, an out-of-bounds number, a record with missing/unknown fields,
-            or a bad list element.
+            a union value with a missing/unknown tag or matching no member, or a bad
+            list element.
     """
     typ = Type.scalar(declared) if isinstance(declared, ValueKind) else declared
     if isinstance(value, TypedValue):
@@ -681,6 +1109,9 @@ def _build_for_type(
     # nullable (Optional[X]) — a None value is accepted as NoneValue
     if value is None and typ.nullable:
         return NoneValue()
+
+    if typ.variants is not None:
+        return _build_for_union(typ, value, path=path)
 
     # variant — a tag-constrained string
     if typ.tags is not None:
@@ -754,6 +1185,59 @@ def _build_for_type(
 
     # plain scalar / flat list — the original behavior
     return _build_scalar_or_list(typ.kind, value, path=path)
+
+
+def _build_for_union(
+    typ: Type,
+    value: Any,
+    *,
+    path: tuple[str | int, ...],
+) -> TypedValue:
+    """Validate one value against the union member it belongs to.
+
+    A tagged union selects the member by its first tag field; an untagged union
+    takes the first member the value satisfies.
+
+    Args:
+        typ (`Type`): Union type enforced at ``path``.
+        value (`Any`): Plain, non-`None` value at ``path``.
+        path (`tuple[str | int, ...]`): Field/index path from the contract root.
+
+    Returns:
+        `TypedValue`: The value stored as an object.
+
+    Raises:
+        `TypeCheckError`: The value is not an object, its tag is missing or
+            unknown, or it fails the selected member (or every member).
+    """
+    if not isinstance(value, dict):
+        raise TypeCheckError(f"{value!r} is not an object for a union type", path=path)
+    tag_fields = union_tag_fields(typ)
+    if tag_fields:
+        field = tag_fields[0]
+        expected = sorted(_member_tag(member, field) for member in typ.variants)
+        if field not in value:
+            raise TypeCheckError(
+                f"missing tag field {field!r} (expected one of {expected})",
+                path=path + (field,),
+            )
+        member = union_member_for_tag(typ, value[field], field=field)
+        if member is None:
+            raise TypeCheckError(
+                f"{value[field]!r} is not a tag of the union (expected one of {expected})",
+                path=path + (field,),
+            )
+        return _build_for_type(member, value, path=path)
+    reasons = []
+    for member in typ.variants:
+        try:
+            return _build_for_type(member, value, path=path)
+        except TypeCheckError as exc:
+            reasons.append(f"{canonical_type_label(member)}: {exc}")
+    raise TypeCheckError(
+        f"value matches no member of {canonical_type_label(typ)}: " + "; ".join(reasons),
+        path=path,
+    )
 
 
 def _build_scalar_or_list(

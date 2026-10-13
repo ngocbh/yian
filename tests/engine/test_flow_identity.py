@@ -2597,6 +2597,50 @@ def test_parameter_manifest_rejects_noncanonical_containers(params):
         flow_manifest(flow)
 
 
+def _member(tag: str, **fields: ValueKind) -> Type:
+    """Build a closed record tagged by a single-value `action` Literal."""
+    record_fields = {"action": Type(kind=ValueKind.STRING, tags=frozenset({tag}))}
+    record_fields.update({name: Type.scalar(kind) for name, kind in fields.items()})
+    return Type(
+        kind=ValueKind.OBJECT,
+        fields=record_fields,
+        required=frozenset(record_fields),
+    )
+
+
+def _union(*members: Type) -> Type:
+    return Type(kind=ValueKind.OBJECT, variants=members)
+
+
+def test_union_free_manifest_has_no_union_key_and_keeps_its_fingerprint():
+    fragment = _fragment()
+    fragment.nodes["body"].output_contract = ValueContract(_member("buy", qty=ValueKind.INTEGER))
+    output_type = flow_manifest(fragment)["nodes"]["body"]["output_type"]
+
+    assert "union" not in output_type
+    assert all("union" not in field["type"] for field in output_type["fields"])
+    assert flow_fingerprint(_fragment()) == (
+        "16d1ca51cfd1c4730aea134054211d87708d8aa08bc8f592b41df96c74982d00"
+    )
+
+
+def test_union_manifest_orders_members_canonically():
+    buy = _member("buy", qty=ValueKind.INTEGER)
+    sell = _member("sell", price=ValueKind.NUMBER)
+    first = _fragment()
+    second = copy.deepcopy(first)
+    first.nodes["body"].output_contract = ValueContract(_union(buy, sell))
+    second.nodes["body"].output_contract = ValueContract(_union(sell, buy))
+
+    union_manifest = flow_manifest(second)["nodes"]["body"]["output_type"]["union"]
+    assert [member["fields"][0]["type"]["tags"] for member in union_manifest] == [
+        ["buy"],
+        ["sell"],
+    ]
+    assert flow_fingerprint(first) == flow_fingerprint(second)
+    assert expansion_digest(first) == expansion_digest(second)
+
+
 @pytest.mark.parametrize(
     ("first_type", "second_type"),
     [
@@ -2629,8 +2673,30 @@ def test_parameter_manifest_rejects_noncanonical_containers(params):
             Type(kind=ValueKind.STRING, nullable=False),
             Type(kind=ValueKind.STRING, nullable=True),
         ),
+        (
+            _union(_member("buy", qty=ValueKind.INTEGER), _member("sell")),
+            _union(_member("buy", qty=ValueKind.NUMBER), _member("sell")),
+        ),
+        (
+            _union(_member("buy"), _member("sell")),
+            _union(_member("buy"), _member("short")),
+        ),
+        (
+            _union(_member("buy"), _member("sell")),
+            _union(_member("buy"), _member("sell"), _member("hold")),
+        ),
     ],
-    ids=["kind", "fields", "required", "tags", "element", "nullable"],
+    ids=[
+        "kind",
+        "fields",
+        "required",
+        "tags",
+        "element",
+        "nullable",
+        "variants-member-field",
+        "variants-tag",
+        "variants-member-added",
+    ],
 )
 def test_flow_fingerprint_covers_each_structural_type_field(first_type, second_type):
     first = _fragment()

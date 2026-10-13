@@ -75,7 +75,7 @@ def test_all_bare_tags_sequence_rejected_e05():
 def test_payload_union_sequence_rejected():
     with pytest.raises(TypeCheckError) as ei:
         read_typedefs({"Choice": ["defer", {"approve": {"count": "int"}}]})
-    assert "discriminated record" in str(ei.value) or "case" in str(ei.value)
+    assert "Choice: Union[" in str(ei.value)
 
 
 def test_alias_cycle_rejected_eagerly():

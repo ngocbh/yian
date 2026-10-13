@@ -125,10 +125,15 @@ typedefs:
   Bundle: list[Topic]                 #   aliases compose -> list[str]
   Amount: float
   Category: Literal[pro, con, mixed]  # enum
-  Choice:                             # tagged (payload) union: a sequence of bare-tag | {tag: payload}
-    - defer
-    - approve: { count: int }
-    - reject: RejectInfo
+  Choice: Union[Defer, Approve, Reject] # union of records, told apart by the `decision` tag
+  Defer:
+    decision: Literal[defer]
+  Approve:
+    decision: Literal[approve]
+    count: int
+  Reject:
+    decision: Literal[reject]
+    info: RejectInfo
   RejectInfo:                         # MAP = record (a dataclass — field: annotation)
     count: int
     limit: Amount
@@ -146,15 +151,17 @@ named record is **type-checked at compile time** (`${analyze.output.rating.categ
 
 - **Scalars** are Python: `str`/`int`/`float`/`bool`, plus `date`; opaque = `Any`. **Generics**:
   `list[X]`, `Optional[X]`, `dict[K, V]`.
-- **Enums** are `Literal[a, b, c]` (tag-only) — routed by `case … on`. Model tagged choices as a
-  discriminated record with a `Literal` field, then route on that field. `Union[...]`, payload-union
+- **Enums** are `Literal[a, b, c]` (tag-only) — routed by `case … on`.
+- **Unions** are `Union[A, B, ...]` of records. Members are told apart by a tag field every member
+  declares as a single-value `Literal` with distinct values, or by shapes that can't overlap;
+  otherwise the typedef is a load error. Route on the tag with `case … on`. `A | B`, payload-union
   sequences, and the retired `kind: match` form are not supported.
 - **Names**: PascalCase; must not shadow a scalar (`str`/`int`/…/`date`) **or** a typing constructor
   (`Any`/`Optional`/`Literal`/`Union`/`List`/`Dict`).
 - **Equivalence** across call/map boundaries is **structural** and recursive through records and
   lists; recursive or alias-cycle definitions are rejected.
 - *Status:* the Compose loader resolves scalars, `list[X]`, `Optional[X]`, records, `Literal` enums,
-  and aliases. `dict[K, V]` currently resolves to a lenient object placeholder; structural key/value
+  `Union[...]` of records, and aliases. `dict[K, V]` currently resolves to a lenient object placeholder; structural key/value
   checking remains unsupported.
 
 ## References & interpolation
@@ -336,8 +343,9 @@ nodes:
 
 Every node kind (AGENT/CODE/TOOL/call/map/case/loop/HUMAN_INPUT/WAIT) and every supported
 convention appears in at least one seed. Seed 17 pins blocking HUMAN_INPUT and WAIT's
-absolute UTC deadline surface. Tagged data is modelled as a discriminant record (a `Literal`
-field) routed by `case … on <field>` — the `kind: match` + payload-union design was dropped.
+absolute UTC deadline surface. Tagged data is modelled as records with a `Literal` tag field, alone
+or in a `Union[...]`, routed by `case … on <field>` — the `kind: match` + payload-union sequence
+design was dropped.
 
 ## Negative gallery — `errors/`
 

@@ -100,6 +100,9 @@ needs a reason recorded in its issue.
 12. **Stable once relied on.** A breaking change comes with a migration path and an
     error that says what to change.
 13. **Errors teach.** A load error names the location and, where possible, the fix.
+14. **Plain YAML.** A flow file is ordinary YAML that reads naturally to anyone who knows
+    YAML. yian adds meaning inside strings (`${...}`, conditions) and through YAML's own
+    tags; it never changes YAML's syntax or makes a value mean something YAML says it doesn't.
 
 ## Docs change with code
 

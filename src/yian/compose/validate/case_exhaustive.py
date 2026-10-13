@@ -66,6 +66,33 @@ def check_case_exhaustive(
         _check_exhaustive(desc, _on_covered(desc), case_producers, diagnostics)
 
 
+def case_on_exhaustive(
+    desc: CaseDescriptor, producers: dict[str, OutputContract]
+) -> bool:
+    """Return whether a `case` always takes a branch when it runs.
+
+    Args:
+        desc (`CaseDescriptor`):
+            The `case` descriptor.
+        producers (`dict[str, OutputContract]`):
+            Producer node id -> output contract, as the case sees them.
+
+    Returns:
+        `bool`:
+            True when the case has an `else:`, or it is the `on:` form over a non-nullable
+            `Literal` whose every tag is a `when:` value. A searched case without `else:`
+            is never exhaustive.
+    """
+    if desc.else_ is not None:
+        return True
+    if desc.on is None:
+        return False
+    typ = _resolve_on_type(desc.on, producers)
+    if typ is None or typ.tags is None or typ.nullable:
+        return False
+    return typ.tags <= _on_covered(desc)
+
+
 def _on_covered(desc: CaseDescriptor) -> set[str]:
     """The set of enum tags an on:-form case explicitly matches (its `when:` values)."""
     if desc.on is None:

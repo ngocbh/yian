@@ -31,6 +31,8 @@ reject an ill-formed flow before it is compiled:
 - `typed_bindings.py` — `check_typed_inputs` / `check_typed_outputs`: a typed node
   input or flow output can fit its declared type (literal text exactly; a reference
   unless its inferred type is disjoint, leaving a narrower one to the runtime check).
+- `skips.py` — `SkipModel` + `exhaustive_cases`: which nodes of a flow level the CASE
+  routing may skip, and whether a set of them may skip together.
 
 Post-build passes may consult `BuildResult.node_range` / `field_ranges`, and assertion
 validation may receive a temporary descriptor/callback range. Those coordinates stay in

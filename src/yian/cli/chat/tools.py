@@ -484,7 +484,7 @@ def validate_flow(
     try:
         loaded = load_flow(
             text,
-            search_paths=[_WORKSPACE],
+            search_paths=[source.parent],
             source_label=source.name,
         )
     except LoadError as err:
@@ -515,7 +515,7 @@ def run_flow(
     try:
         loaded = load_flow(
             text,
-            search_paths=[_WORKSPACE],
+            search_paths=[source.parent],
             source_label=source.name,
         )
     except LoadError as err:
@@ -565,7 +565,7 @@ def write_flow(
     try:
         load_flow(
             content,
-            search_paths=[_WORKSPACE],
+            search_paths=[dest.parent],
             source_label=dest.name,
         )
     except LoadError as err:

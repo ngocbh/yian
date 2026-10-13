@@ -59,6 +59,49 @@ def test_run_flow_tool_defaults_inputs(tmp_path):
     assert "OUTPUT: 1" in T.run_flow("n.yaml")
 
 
+_USES_HELPER = (
+    "id: main\nname: main\nnodes:\n  invoke:\n    kind: call\n    call: helper\n"
+    "output: ${invoke.output}\nuses:\n  helper: helper\n"
+)
+
+
+def _helper(label: str) -> str:
+    return (
+        f"id: helper\nname: helper\nnodes:\n  w:\n    kind: code\n"
+        f"    code: return {label!r}\n    output: str\noutput: ${{w.output}}\n"
+    )
+
+
+def test_flow_tools_resolve_uses_from_the_flow_directory(tmp_path, approval_tty):
+    # A nested flow resolves `uses:` against its own directory, as `yian run` does,
+    # so a same-named flow at the workspace root never stands in for the sibling.
+    T.set_workspace(tmp_path)
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "main.yaml").write_text(_USES_HELPER)
+    (tmp_path / "sub" / "helper.yaml").write_text(_helper("sibling"))
+    (tmp_path / "helper.yaml").write_text(_helper("root"))
+
+    assert T.validate_flow("sub/main.yaml") == "OK: main; inputs: (none)"
+    assert T.run_flow("sub/main.yaml") == "OUTPUT: sibling"
+    with T._bind_ask_user(lambda **_: {"Decision": "Approve"}):
+        assert T.write_flow("sub/copy.yaml", _USES_HELPER) == "WROTE: sub/copy.yaml"
+
+
+def test_flow_tools_do_not_resolve_uses_from_the_workspace_root(tmp_path, approval_tty):
+    # A nested flow whose helper sits only at the workspace root fails, as under `yian run`.
+    T.set_workspace(tmp_path)
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "main.yaml").write_text(_USES_HELPER)
+    (tmp_path / "helper.yaml").write_text(_helper("root"))
+
+    assert T.validate_flow("sub/main.yaml").startswith("INVALID: flow 'helper' not found")
+    assert T.run_flow("sub/main.yaml").startswith("ERROR: flow 'helper' not found")
+    assert T.write_flow("sub/copy.yaml", _USES_HELPER).startswith(
+        "INVALID (not written): flow 'helper' not found"
+    )
+    assert not (tmp_path / "sub" / "copy.yaml").exists()
+
+
 def test_write_flow_approved_create_shows_target_and_content(tmp_path, approval_tty):
     requests = []
 

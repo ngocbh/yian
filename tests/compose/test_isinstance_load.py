@@ -621,6 +621,7 @@ def test_an_unknown_type_name_is_a_located_load_error(site):
     error = _load_error(text)
     assert f"unknown type {name!r}" in str(error)
     assert "typedefs" in str(error)
+    assert ":: " not in str(error)
     assert _error_line(error) == _line_of(text, marker)
 
 

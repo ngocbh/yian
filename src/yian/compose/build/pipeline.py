@@ -35,8 +35,9 @@ from yian.diagnostics import (
     OriginResolver,
     SourceRange,
 )
-from yian.nodes.base import Node
+from yian.nodes.base import Node, NodeKind
 from yian.nodes.contracts import (
+    Assertion,
     OutputContract,
     Parameter,
     PartialRecordContract,
@@ -46,6 +47,7 @@ from yian.nodes.contracts import (
 from yian.expr import ExpressionError
 from yian.memory.contracts import DeclSite, MemoryDecl
 from yian.typesys import TypeCheckError
+from yian.typesys.types import TypeRegistry
 from yian.typesys.values import Type
 from yian.compose.validate.asserts import lower_flow_asserts
 from yian.compose.build.boundary import synthesize_boundary_graph
@@ -721,16 +723,46 @@ def _stamp_flow_output_origins(
     return stamped
 
 
+def _site_range(
+    item: SourceRange | None,
+    field_ranges: dict[tuple[str, str], SourceRange],
+    field: str,
+    node_range: SourceRange | None,
+) -> SourceRange | None:
+    """Return a site's own range, else its node field's range, else the node's range.
+
+    Args:
+        item (`SourceRange | None`):
+            The site's own range, `None` when it has none.
+        field_ranges (`dict[tuple[str, str], SourceRange]`):
+            The node's field ranges, keyed like `BuildResult.field_ranges`.
+        field (`str`):
+            The node field holding the site, e.g. `"asserts"`.
+        node_range (`SourceRange | None`):
+            The node's range.
+
+    Returns:
+        `SourceRange | None`:
+            The narrowest range available.
+    """
+    return item or field_ranges.get(("field", field)) or node_range
+
+
+def _nth_range(ranges: list[SourceRange | None], index: int) -> SourceRange | None:
+    """Return `ranges[index]`, or `None` past the end."""
+    return ranges[index] if index < len(ranges) else None
+
+
 def _fill_type_tables(
     nodes: dict[str, Node],
     flow_wiring: dict[str, dict[str, Any]],
     build_results: dict[str, BuildResult],
     descriptors: dict[str, NodeDescriptor],
-    flow_asserts: list,
+    flow_asserts: list[Assertion],
     flow_assertion_ranges: list[SourceRange | None],
     outputs_cursor: SourceCursor | None,
     outputs_range: SourceRange | None,
-    registry,
+    registry: TypeRegistry,
     diagnostics: LoadDiagnostics,
 ) -> None:
     """Set each node's `types` to the `isinstance` type names its expressions use.
@@ -747,7 +779,7 @@ def _fill_type_tables(
             The body nodes' build results, for their field ranges.
         descriptors (`dict[str, NodeDescriptor]`):
             The body nodes' descriptors, for their authored asserts and ranges.
-        flow_asserts (`list`):
+        flow_asserts (`list[Assertion]`):
             The flow's authored `asserts:` carriers, aligned with `flow_assertion_ranges`.
         flow_assertion_ranges (`list[SourceRange | None]`):
             Each flow assert's range.
@@ -757,6 +789,8 @@ def _fill_type_tables(
             The whole `output:` range, used when an output has no range of its own.
         registry (`TypeRegistry`):
             The flow's `typedefs:` registry.
+        diagnostics (`LoadDiagnostics`):
+            The flow document's diagnostic factory, for located errors.
 
     Raises:
         `LoadError`:
@@ -806,16 +840,14 @@ def _fill_type_tables(
         types: dict[str, Type] = {}
         reserved = node.reserved_wiring_keys()
         for param, source in flow_wiring.get(nid, {}).items():
-            if result is None:  # START/END; END's wiring carries the flow outputs
+            if node.kind is NodeKind.END:  # END's wiring carries the flow outputs
                 where = f"flow output {param!r}"
                 rng = output_range(param)
             else:
-                where = f"node {nid!r} {node.wiring_ref_label(param)}"
-                rng = (
-                    franges.get(("field", param) if param in reserved else ("input", param))
-                    or franges.get(("field", "inputs"))
-                    or node_range
-                )
+                # A synthesized param's label may end in ':' (`on:`); the message adds one.
+                where = f"node {nid!r} {node.wiring_ref_label(param).removesuffix(':')}"
+                key = ("field", param) if param in reserved else ("input", param)
+                rng = _site_range(franges.get(key), franges, "inputs", node_range)
             names = names_in(source)
             if names and param in reserved:
                 raise diagnostics.error(
@@ -828,11 +860,9 @@ def _fill_type_tables(
         assert_ranges = list(getattr(desc, "assert_ranges", None) or [])
         for index, expression in enumerate(authored):
             where = f"node {nid!r} assert {expression!r}"
-            rng = (
-                assert_ranges[index] if index < len(assert_ranges) else None
-            ) or franges.get(("field", "asserts")) or node_range
+            rng = _site_range(_nth_range(assert_ranges, index), franges, "asserts", node_range)
             types.update(table(names_in(expression, condition=True), where, rng))
-        if desc is None:
+        if node.kind in (NodeKind.START, NodeKind.END):
             # START/END evaluate the lowered flow asserts, whose names were located above.
             for assertion in [*node.pre_asserts, *node.post_asserts]:
                 names = names_in(assertion.expression, condition=True)
@@ -840,15 +870,13 @@ def _fill_type_tables(
         when_ranges = list(getattr(desc, "when_ranges", None) or [])
         for index, case in enumerate(getattr(node, "cases", None) or ()):
             where = f"case node {nid!r} cases[{index}].when"
-            rng = (
-                when_ranges[index] if index < len(when_ranges) else None
-            ) or franges.get(("field", "cases")) or node_range
+            rng = _site_range(_nth_range(when_ranges, index), franges, "cases", node_range)
             types.update(table(names_in(case.when, condition=True), where, rng))
         predicate = getattr(node, "predicate", None)
         if isinstance(predicate, str):
             keyword = getattr(node, "predicate_kind", "while")
-            where = f"loop node {nid!r} {keyword}:"
-            rng = franges.get(("field", keyword)) or node_range
+            where = f"loop node {nid!r} {keyword}"
+            rng = _site_range(None, franges, keyword, node_range)
             types.update(table(names_in(predicate, condition=True), where, rng))
         node.types = types
 

@@ -667,6 +667,29 @@ def test_jsonl_resume_rejects_identity_mismatches_and_releases_lock(
     _assert_lock_available(path)
 
 
+@pytest.mark.parametrize(
+    "contents",
+    [
+        b"id: echo\nname: echo",
+        b'{"a": 1}',
+        _wire_line(schema=2) + b'{"partial":',
+        _wire_line() + b"{not-json}\n" + b'{"partial":',
+    ],
+    ids=["not-a-log", "no-complete-line", "retired-schema", "corrupt-line"],
+)
+def test_jsonl_resume_leaves_a_rejected_file_unchanged(
+    tmp_path: Path, contents: bytes
+):
+    path = tmp_path / "run.jsonl"
+    path.write_bytes(contents)
+
+    with pytest.raises(ValueError):
+        JsonlRunLog.resume(path)
+
+    assert path.read_bytes() == contents
+    _assert_lock_available(path)
+
+
 def test_jsonl_resume_rejects_an_empty_file_and_releases_lock(tmp_path: Path):
     path = tmp_path / "empty.jsonl"
     path.touch()

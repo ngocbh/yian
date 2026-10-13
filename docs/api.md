@@ -1221,11 +1221,13 @@ the agents the log marks for it, at the `base_url` the log recorded for them if 
 run had one, is never recorded, and stays with the returned result for `backward`.
 A log that marks no agent ignores it.
 
-Recovery locks the existing file before reading it, durably truncates any bytes
-after its final newline, validates the complete record prefix, and checks that the
-supplied flow has the recorded fingerprint. A log another writer still holds
-raises `BlockingIOError` naming the path; a damaged record raises `ValueError`
-naming the path, its 1-based line, and the expected seq. It reconstructs the typed pool,
+Recovery locks the existing file before reading it and validates the complete
+record prefix; a file whose complete lines are not a valid run log is rejected and
+left unchanged. Only then does it durably truncate any bytes after its final
+newline, and it checks that the supplied flow has the recorded fingerprint. A log
+another writer still holds raises `BlockingIOError` naming the path; a damaged
+record raises `ValueError` naming the path, its 1-based line, and the expected seq.
+It reconstructs the typed pool,
 dynamic expansions, original input, run identity, diagnostics, and snapshotted LLM
 configuration without reading current process defaults. A run started before the
 AGENT `mode:` field was removed cannot be resumed: the AGENT manifest changed, so

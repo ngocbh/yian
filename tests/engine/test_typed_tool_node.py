@@ -235,7 +235,7 @@ def _reset_calls():
     _calls.clear()
 
 
-def _one_tool_flow(input_block: str, *, output: str = "") -> str:
+def _one_tool_flow(input_block: str) -> str:
     return f"""
 id: placing
 name: placing
@@ -245,7 +245,6 @@ nodes:
     tool_id: place_order
     input:
 {input_block}
-{output}
 output: ${{place.output}}
 """
 
@@ -255,7 +254,7 @@ def test_an_input_the_tool_does_not_take_fails_at_run_start(tmp_path: Path):
     flow = load_flow(_one_tool_flow("      qtty: 5\n      sym: X"))
 
     with pytest.raises(ValueError, match=re.escape(
-        "TOOL node 'place' input 'qtty': tool 'place_order' takes no input 'qtty'; "
+        "TOOL node 'place' input 'qtty': tool 'place_order' takes no such input; "
         "it takes ['qty', 'sym']"
     )):
         run_flow(flow, {}, log=path, tools={"place_order": place_order})
@@ -273,6 +272,19 @@ def test_a_missing_required_input_fails_at_run_start(tmp_path: Path):
         run_flow(flow, {}, log=path, tools={"place_order": place_order})
     assert not path.exists()
     assert _calls == []
+
+
+def place_three(qty: int, sym: str, side: str) -> str:
+    return f"{side} {qty} {sym}"
+
+
+def test_every_missing_required_input_is_named(tmp_path: Path):
+    flow = load_flow(_one_tool_flow("      qty: 5"))
+
+    with pytest.raises(ValueError, match=re.escape(
+        "TOOL node 'place' is missing inputs ['side', 'sym'] that tool 'place_order' requires"
+    )):
+        run_flow(flow, {}, tools={"place_order": place_three})
 
 
 def test_an_omitted_optional_input_runs():
@@ -392,7 +404,7 @@ def test_tool_nodes_that_may_never_run_are_checked(tmp_path: Path, source: str, 
     path = tmp_path / "run.jsonl"
 
     with pytest.raises(ValueError, match=re.escape(
-        f"TOOL node {node_path!r} input 'qtty': tool 'place_order' takes no input 'qtty'"
+        f"TOOL node {node_path!r} input 'qtty': tool 'place_order' takes no such input"
     )):
         run_flow(load_flow(source), {}, log=path, tools={"place_order": place_order})
     assert not path.exists()
@@ -508,9 +520,7 @@ def test_a_long_string_literal_is_truncated_in_the_message():
 
 
 def test_an_int_literal_into_a_str_fails_at_run_start_and_shows_its_value():
-    with pytest.raises(ValueError, match=re.escape(
-        "TOOL node 'place' input 'qty': tool 'place_order' takes str, but the binding is 5 (int)"
-    )):
+    with pytest.raises(ValueError, match=r"input 'qty'.*takes str, but the binding is 5 \(int\)$"):
         run_flow(load_flow(_typed_flow("5")), {}, tools={"place_order": place_str})
 
 
@@ -549,9 +559,7 @@ def test_a_typed_binding_over_an_unproven_source_is_checked_by_its_declared_type
 """
     flow = load_flow(_typed_flow("int = ${c.output}", extra_nodes=code))
 
-    with pytest.raises(ValueError, match=re.escape(
-        "TOOL node 'place' input 'qty': tool 'place_order' takes str, but the binding is int"
-    )):
+    with pytest.raises(ValueError, match=r"input 'qty'.*takes str, but the binding is int$"):
         run_flow(flow, {}, tools={"place_order": place_str})
 
 
@@ -582,8 +590,7 @@ def test_a_record_with_an_extra_field_into_a_default_model_runs():
 
 def test_a_record_with_an_extra_field_into_a_closed_model_fails_at_run_start():
     with pytest.raises(ValueError, match=re.escape(
-        "TOOL node 'place' input 'order': tool 'place_order' takes {\"qty\":int}, "
-        'but the binding is {"note":str,"qty":int}'
+        'takes {"qty":int}, but the binding is {"note":str,"qty":int}'
     )):
         run_flow(
             load_flow(_RECORD_FLOW), {"order": {"qty": 2, "note": "n"}},
@@ -594,9 +601,7 @@ def test_a_record_with_an_extra_field_into_a_closed_model_fails_at_run_start():
 def test_a_json_schema_tool_with_a_disjoint_binding_fails_at_run_start():
     flow = load_flow(_typed_flow("${input.s}", flow_inputs="input:\n  s: str"))
 
-    with pytest.raises(ValueError, match=re.escape(
-        "TOOL node 'place' input 'qty': tool 'place_order' takes int, but the binding is str"
-    )):
+    with pytest.raises(ValueError, match=r"input 'qty'.*takes int, but the binding is str$"):
         run_flow(flow, {"s": "x"}, tools={"place_order": _JsonSchemaTool()})
 
 
@@ -681,12 +686,11 @@ def test_a_union_return_matching_the_declared_union_runs():
 def test_a_union_return_with_no_shared_tag_fails_at_run_start():
     assert _declared_output(place_refused) is not None
 
-    with pytest.raises(ValueError, match=re.escape(
-        "TOOL node 'place' output: declared "
-    )) as excinfo:
+    with pytest.raises(ValueError, match=(
+        r"output: declared Union\[.*\], but tool 'place_order' returns "
+        r'Union\[\{"type":Literal\["cancelled"\]\},\{"reason":str,"type":Literal\["rejected"\]\}\]$'
+    )):
         run_flow(load_flow(_ORDERS_FLOW), {}, tools={"place_order": place_refused})
-    returns = str(excinfo.value).split("but tool 'place_order' returns ")[1]
-    assert 'Literal["rejected"]' in returns and 'Literal["cancelled"]' in returns
 
 
 _RECORD_OUTPUT_FLOW = """
@@ -763,7 +767,10 @@ def test_an_unread_return_type_skips_the_check_and_the_gate_still_applies(tool):
 
 
 def test_a_node_without_output_runs_any_return_type():
-    result = run_flow(load_flow(_typed_flow("5")), {}, tools={"place_order": place_int})
+    assert _declared_output(place_int) is not None
+    flow = load_flow(_INT_FLOW.replace("    output: int\n", ""))
+
+    result = run_flow(flow, {}, tools={"place_order": place_int})
 
     assert result.status == "succeeded", result.failure
     assert result.output == "placed 5"
@@ -801,9 +808,7 @@ def test_resume_checks_tool_types_before_appending(tmp_path: Path):
         run_flow(flow, {}, log=path, tools={"first_step": interrupt_first, "place_order": place_int})
     lines = path.read_text().splitlines()
 
-    with pytest.raises(ValueError, match=re.escape(
-        "TOOL node 'place' input 'qty': tool 'place_order' takes str, but the binding is 5 (int)"
-    )):
+    with pytest.raises(ValueError, match=r"input 'qty'.*takes str, but the binding is 5 \(int\)$"):
         resume_flow(flow, log=path, tools={"first_step": first_step, "place_order": place_str})
     assert path.read_text().splitlines() == lines
 

@@ -848,16 +848,8 @@ def _check_tool_types(flow: CompiledFlow, tools: ToolSet) -> None:
         declared = tool_types(tool)
         if declared.inputs is not None:
             _check_tool_inputs(node_id, call, declared.inputs, declared.required)
-        if (
-            declared.output is not None
-            and call.output_type is not None
-            and type_relation(declared.output, call.output_type) == "disjoint"
-        ):
-            raise ValueError(
-                f"TOOL node {node_id!r} output: declared "
-                f"{canonical_type_label(call.output_type)}, but tool {call.tool_id!r} "
-                f"returns {canonical_type_label(declared.output)}"
-            )
+        if declared.output is not None:
+            _check_tool_output(node_id, call, declared.output)
 
 
 def _check_tool_inputs(
@@ -881,19 +873,20 @@ def _check_tool_inputs(
     Raises:
         `ValueError`:
             An input is not one the tool takes, a required input is missing, or an
-            input's binding type is disjoint from the tool's.
+            input's binding type is disjoint from the tool's. Missing inputs are
+            all named at once.
     """
     for name in call.inputs:
         if name not in inputs:
             raise ValueError(
                 f"TOOL node {node_id!r} input {name!r}: tool {call.tool_id!r} takes no "
-                f"input {name!r}; it takes {sorted(inputs)}"
+                f"such input; it takes {sorted(inputs)}"
             )
     missing = sorted(required - set(call.inputs))
     if missing:
+        named = f"input {missing[0]!r}" if len(missing) == 1 else f"inputs {missing}"
         raise ValueError(
-            f"TOOL node {node_id!r} is missing input {missing[0]!r} that tool "
-            f"{call.tool_id!r} requires"
+            f"TOOL node {node_id!r} is missing {named} that tool {call.tool_id!r} requires"
         )
     for name, inferred in call.input_types.items():
         expected = inputs.get(name)
@@ -905,6 +898,31 @@ def _check_tool_inputs(
                 f"{canonical_type_label(expected)}, but the binding is "
                 f"{_binding_label(inferred)}"
             )
+
+
+def _check_tool_output(node_id: str, call: HostToolCall, declared_output: Type) -> None:
+    """Prove one TOOL node's declared output can hold a value its tool returns.
+
+    Args:
+        node_id (`str`):
+            The node's path, for the error message.
+        call (`HostToolCall`):
+            The node's tool call; a call with no output type is not checked.
+        declared_output (`Type`):
+            The tool's declared return type.
+
+    Raises:
+        `ValueError`:
+            The tool's return type is disjoint from the node's output type.
+    """
+    if call.output_type is None:
+        return
+    if type_relation(declared_output, call.output_type) == "disjoint":
+        raise ValueError(
+            f"TOOL node {node_id!r} output: declared "
+            f"{canonical_type_label(call.output_type)}, but tool {call.tool_id!r} "
+            f"returns {canonical_type_label(declared_output)}"
+        )
 
 
 _LITERAL_LABEL_WIDTH = 40

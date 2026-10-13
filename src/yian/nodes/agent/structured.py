@@ -60,8 +60,9 @@ def _py_type(typ: Type, *, closed: bool = False, position: str = "") -> Any:
 
     A `STRING` with `tags` is a `Literal[...]` variant; a nested `OBJECT` with `fields`
     becomes its own submodel; a union becomes a plain `Union[...]` of closed member models
-    in member order; a `LIST_*` becomes `list[<element type>]`. Nested models are named
-    after their position (see `_member_names`), so every `$defs` key stays readable.
+    in member order; a `LIST_*` becomes `list[<element type>]`. A nullable `typ` is
+    `Optional[...]` wherever it appears. Nested models are named after their position
+    (see `_member_names`), so every `$defs` key stays readable.
 
     Args:
         typ (`Type`):
@@ -80,14 +81,19 @@ def _py_type(typ: Type, *, closed: bool = False, position: str = "") -> Any:
         `ValueError`:
             `typ` has no structured mapping (`NONE`, `FILE`), so a new ValueKind is loud.
     """
+    annotation = _non_null_py_type(typ, closed=closed, position=position)
+    return Optional[annotation] if typ.nullable else annotation
+
+
+def _non_null_py_type(typ: Type, *, closed: bool, position: str) -> Any:
+    """`_py_type` without the nullable widening."""
     seg = typ.kind
     if seg == ValueKind.STRING and typ.tags:
         return Literal[tuple(sorted(typ.tags))]  # type: ignore[valid-type]
     if seg in _SCALAR_PY:
         if typ.bounds is not None:
             typ.validate_shape()
-            annotation = Annotated[_SCALAR_PY[seg], Field(ge=typ.bounds[0], le=typ.bounds[1])]
-            return Optional[annotation] if typ.nullable else annotation
+            return Annotated[_SCALAR_PY[seg], Field(ge=typ.bounds[0], le=typ.bounds[1])]
         return _SCALAR_PY[seg]
     if seg == ValueKind.OBJECT and typ.variants is not None:
         members = tuple(
@@ -173,18 +179,23 @@ def _record_model(typ: Type, *, position: str = "", closed: bool = False) -> typ
     return create_model(position or "Record", __config__=config, **spec)
 
 
+def _is_bare_record(typ: Type) -> bool:
+    """Whether `typ` is a non-nullable record, which maps to an unwrapped model."""
+    return typ.kind == ValueKind.OBJECT and bool(typ.fields) and not typ.nullable
+
+
 def type_to_schema(typ: Type) -> Optional[type[BaseModel]]:
     """Derive a pydantic model for `typ`, or `None` when the agent should stay a text
     producer (a bare, untagged `str`).
 
-    A record (`OBJECT` with `fields`) maps directly to a model. A scalar, a union or a list
-    can't be a standalone model, so it is wrapped in a single-field model (`value` /
-    `items`) that `_unwrap` later strips.
+    A non-nullable record (`OBJECT` with `fields`) maps directly to a model. A scalar, a
+    union, a list, or a nullable record can't be a standalone model, so it is wrapped in a
+    single-field model (`value` / `items`) that `_unwrap` later strips.
     """
     seg = typ.kind
     if seg == ValueKind.STRING and not typ.tags:
         return None  # unconstrained text stays on the ordinary generation path
-    if seg == ValueKind.OBJECT and typ.fields:
+    if _is_bare_record(typ):
         return _record_model(typ)
     if seg.is_list() or seg == ValueKind.LIST_ANY:
         return create_model("ListWrapper", items=(_py_type(typ), ...))
@@ -198,7 +209,7 @@ def _unwrap(obj: BaseModel, typ: Type) -> Any:
     union as the matching member's dumped dict."""
     data = obj.model_dump()
     seg = typ.kind
-    if seg == ValueKind.OBJECT and typ.fields:
+    if _is_bare_record(typ):
         return data
     if seg.is_list() or seg == ValueKind.LIST_ANY:
         return data["items"]
@@ -544,7 +555,7 @@ def _structured_validation_path(
     validation frame for the generated schema. A native parser may preserve that
     validation error as the exhausted error's direct cause; deeper cause chains are not
     followed.
-    Record locations already match contract paths; scalar/list wrapper fields
+    Bare record locations already match contract paths; wrapper fields
     and union member segments are removed, and at a union position the error of the
     member the reply was meant for is chosen (`_select_member_error`). ``()``
     identifies the output-contract root, while ``None`` means the exception is not
@@ -584,7 +595,7 @@ def _structured_validation_path(
     if schema is None or not _validated_by_schema(validation_error, schema):
         return None
 
-    is_record = expected_type.kind == ValueKind.OBJECT and bool(expected_type.fields)
+    is_record = _is_bare_record(expected_type)
     is_list = expected_type.kind == ValueKind.LIST_ANY or expected_type.kind.is_list()
     wrapper = None if is_record else "items" if is_list else "value"
     details = validation_error.errors()

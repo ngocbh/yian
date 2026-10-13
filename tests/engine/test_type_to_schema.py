@@ -283,3 +283,59 @@ def test_records_nested_in_union_members_reject_unknown_fields():
     model = type_to_schema(type_for("Union[Buy, Sell]", registry))
     with pytest.raises(ValidationError):
         model.model_validate({"value": {"action": "buy", "limit": {"px": 1.0, "zzz": 1}}})
+
+
+@pytest.mark.parametrize("expression,value", [
+    ("Optional[int]", 4),
+    ("Optional[bool]", True),
+    ("Optional[Literal[a, b]]", "a"),
+    ("Optional[object]", {"k": 1}),
+    ("Optional[list[int]]", [1]),
+])
+def test_nullable_root_schema_accepts_null(expression, value):
+    from yian.nodes.agent.structured import _unwrap
+    from yian.typesys.types import type_for
+
+    typ = type_for(expression, {})
+    model = type_to_schema(typ)
+    field = "items" if typ.kind.is_list() else "value"
+    assert _unwrap(model.model_validate({field: None}), typ) is None
+    assert _unwrap(model.model_validate({field: value}), typ) == value
+
+
+def test_non_nullable_root_schema_rejects_null():
+    from yian.typesys.types import type_for
+
+    for expression in ("int", "Literal[a, b]", "list[int]"):
+        typ = type_for(expression, {})
+        field = "items" if typ.kind.is_list() else "value"
+        with pytest.raises(ValidationError):
+            type_to_schema(typ).model_validate({field: None})
+
+
+def test_nullable_list_elements_accept_null_items():
+    from yian.typesys.types import read_typedefs, type_for
+
+    registry = read_typedefs({"Point": {"x": "int"}})
+    for expression, items in (
+        ("list[Optional[int]]", [1, None]),
+        ("list[Optional[Literal[a, b]]]", ["a", None]),
+        ("list[Optional[Point]]", [{"x": 1}, None]),
+    ):
+        model = type_to_schema(type_for(expression, registry))
+        assert model.model_validate({"items": items}).model_dump()["items"] == items
+    with pytest.raises(ValidationError):
+        type_to_schema(type_for("list[int]", {})).model_validate({"items": [1, None]})
+
+
+def test_nullable_record_root_is_wrapped_so_it_can_be_null():
+    from yian.nodes.agent.structured import _unwrap
+    from yian.typesys.types import read_typedefs, type_for
+
+    registry = read_typedefs({"Point": {"x": "int"}})
+    typ = type_for("Optional[Point]", registry)
+    model = type_to_schema(typ)
+    assert _unwrap(model.model_validate({"value": None}), typ) is None
+    assert _unwrap(model.model_validate({"value": {"x": 1}}), typ) == {"x": 1}
+    strict = type_to_schema(type_for("Point", registry))
+    assert _unwrap(strict.model_validate({"x": 1}), type_for("Point", registry)) == {"x": 1}

@@ -13,6 +13,8 @@ and re-raises as a located `LoadError`.
 """
 
 
+from dataclasses import replace
+
 from yian.compile.model import END_ID, START_ID
 from yian.typesys.values import ValueKind, Type
 
@@ -81,6 +83,9 @@ def types_compatible(source: Type, sink: Type) -> bool:
     sink's accepted tags); list elements recurse, treating a bare specialized list as its
     non-null scalar element contract; a nullable source cannot fill a non-nullable sink.
     A bounded numeric sink requires a source interval contained within its bounds.
+    A source union fits a sink union when each of its members fits some sink member; a
+    record fits a union when it fits some member; a union fits `object` but never a
+    record, and `object` never fits a union.
 
     Args:
         source (`Type`): Type guaranteed by the producer.
@@ -119,6 +124,18 @@ def types_compatible(source: Type, sink: Type) -> bool:
         or source.bounds[1] > sink.bounds[1]
     ):
         return False
+    if sink.variants is not None:
+        if source.variants is not None:
+            members = source.variants
+        elif source.fields is not None:
+            # Members are non-nullable; the union's own nullability was checked above.
+            members = (replace(source, nullable=False),)
+        else:
+            return False
+        return all(
+            any(types_compatible(member, option) for option in sink.variants)
+            for member in members
+        )
     if sink.fields is not None:
         if source.fields is None:
             return False

@@ -780,7 +780,7 @@ def _load_flow(
         registry=registry,
         scope=callable_scope,
         owner=("root",),
-        uses_aliases=set(f.uses),
+        uses_aliases=tuple(f.uses),
         version=f.version,
         name=f.name,
         description=f.description,

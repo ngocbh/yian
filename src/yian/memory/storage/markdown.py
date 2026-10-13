@@ -111,6 +111,7 @@ class FileMarkdownStore:
     """Markdown store backed by one editable file.
 
     The current document is ``path``; a missing file reads as an empty document.
+    Text is stored and read back exactly, line endings included.
     Every version this store returns or writes is kept under
     ``.<name>.versions/`` next to it, so recorded runs can reopen it later.
     Each write appends its versions and provenance to ``.<name>.writes.jsonl``.
@@ -176,7 +177,7 @@ class FileMarkdownStore:
             kept = self._version_path(version)
             if kept is None or not kept.is_file():
                 raise LookupError(f"unknown document version {version!r}")
-            return kept.read_text(encoding="utf-8"), version
+            return self._read_exact(kept), version
 
     def write(
         self,
@@ -251,9 +252,17 @@ class FileMarkdownStore:
     def _current(self) -> str:
         """Return the current file text, or an empty document when missing."""
         try:
-            return self.path.read_text(encoding="utf-8")
+            return self._read_exact(self.path)
         except FileNotFoundError:
             return ""
+
+    @staticmethod
+    def _read_exact(source: Path) -> str:
+        """Return the UTF-8 text of ``source`` with its line endings untouched."""
+        # Universal newlines would turn "\r\n" and "\r" into "\n", so the text
+        # read back would not hash to the version that was written.
+        with source.open(encoding="utf-8", newline="") as handle:
+            return handle.read()
 
     def _version_path(self, version: str) -> Path | None:
         """Return the kept-copy path for a well-formed version, else `None`."""
@@ -274,7 +283,7 @@ class FileMarkdownStore:
         """Write ``text`` to ``target`` through a synced temporary file."""
         fd, temporary = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.")
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
                 handle.write(text)
                 handle.flush()
                 os.fsync(handle.fileno())

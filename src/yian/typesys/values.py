@@ -25,7 +25,7 @@ from enum import Enum
 from math import isfinite
 from typing import Annotated, Any, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field, RootModel, TypeAdapter, field_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
 
 from yian.typesys.temporal import parse_date, parse_datetime
 
@@ -62,83 +62,13 @@ class TypeCheckError(ValueError):
         self.path = path
 
 
-def find_nonfinite(value: Any) -> tuple[tuple[str | int, ...], float] | None:
-    """Find the first NaN or infinity inside a value, depth-first and in order.
-
-    Descends into `dict` values, `list`/`tuple` items, `TypedValue` payloads,
-    pydantic models (declared fields, then extras; a `RootModel` contributes its
-    root without a segment), and dataclass instances. A container already on the
-    current descent path is skipped rather than reported: the canonical codecs
-    run `_reject_unordered_containers` first, and that owns the cycle error.
-
-    Args:
-        value (`Any`):
-            The value to search.
-
-    Returns:
-        `tuple[tuple[str | int, ...], float] | None`:
-            The field/index path to the first non-finite float and the float
-            itself, or `None` when every number is finite.
-    """
-    return _find_nonfinite(value, (), set())
-
-
-def _find_nonfinite(
-    value: Any,
-    path: tuple[str | int, ...],
-    active: set[int],
-) -> tuple[tuple[str | int, ...], float] | None:
-    if isinstance(value, float):
-        return None if isfinite(value) else (path, value)
-    is_container = (
-        isinstance(value, (BaseModel, dict, list, tuple))
-        or (is_dataclass(value) and not isinstance(value, type))
-    )
-    if not is_container or id(value) in active:
-        return None
-    active.add(id(value))
-    try:
-        for child, child_path in _nonfinite_children(value, path):
-            found = _find_nonfinite(child, child_path, active)
-            if found is not None:
-                return found
-        return None
-    finally:
-        active.discard(id(value))
-
-
-def _nonfinite_children(
-    value: Any,
-    path: tuple[str | int, ...],
-) -> Iterable[tuple[Any, tuple[str | int, ...]]]:
-    # `TypedValue` subclasses `BaseModel`; unwrap it first so paths gain no `value` segment.
-    if isinstance(value, TypedValue):
-        yield value.to_object(), path
-    elif isinstance(value, RootModel):
-        yield value.root, path
-    elif isinstance(value, BaseModel):
-        for name in type(value).model_fields:
-            yield getattr(value, name), path + (name,)
-        for key, item in (value.model_extra or {}).items():
-            yield item, path + (_path_key(key),)
-    elif isinstance(value, dict):
-        for key, item in value.items():
-            yield item, path + (_path_key(key),)
-    elif isinstance(value, (list, tuple)):
-        for index, item in enumerate(value):
-            yield item, path + (index,)
-    else:
-        for field in _dataclass_fields(value):
-            yield getattr(value, field.name), path + (field.name,)
-
-
-def _path_key(key: Any) -> str:
-    # `TypeCheckError` paths hold exact `str` segments, so a `str` subclass key is unwrapped.
-    return str.__str__(key) if isinstance(key, str) else repr(key)
-
-
 def reject_nonfinite(value: Any, where: str) -> None:
     """Raise if a value contains a NaN or infinity at any depth.
+
+    Walks `dict` values, `list`/`tuple` items, `TypedValue` payloads, pydantic
+    models, and dataclass instances, depth-first and in order. It walks declared
+    fields and extras only; a non-str key renders as its repr. A container
+    already on the current path is skipped; the canonical codecs reject cycles.
 
     Args:
         value (`Any`):
@@ -151,7 +81,7 @@ def reject_nonfinite(value: Any, where: str) -> None:
             A non-finite float was found; ``path`` locates it and the message reads
             ``<where>[ at <path>]: non-finite number <repr> is not a yian value``.
     """
-    found = find_nonfinite(value)
+    found = _find_nonfinite(value, (), set())
     if found is None:
         return
     path, number = found
@@ -160,6 +90,48 @@ def reject_nonfinite(value: Any, where: str) -> None:
         f"{location}: non-finite number {number!r} is not a yian value",
         path=path,
     )
+
+
+def _find_nonfinite(
+    value: Any,
+    path: tuple[str | int, ...],
+    active: set[int],
+) -> tuple[tuple[str | int, ...], float] | None:
+    """Return the path to and value of the first non-finite float, or `None`."""
+    if isinstance(value, float):
+        return None if isfinite(value) else (path, value)
+    if id(value) in active:
+        return None
+    # `TypedValue` subclasses `BaseModel`; unwrap it first so paths gain no `value` segment.
+    if isinstance(value, TypedValue):
+        children = [(value.to_object(), path)]
+    elif isinstance(value, BaseModel):
+        children = [(getattr(value, name), path + (name,)) for name in type(value).model_fields]
+        children.append((value.model_extra or {}, path))
+    elif isinstance(value, dict):
+        # `TypeCheckError` paths hold exact `str` segments, so a `str` subclass key is unwrapped.
+        children = [
+            (item, path + (str.__str__(key) if isinstance(key, str) else repr(key),))
+            for key, item in value.items()
+        ]
+    elif isinstance(value, (list, tuple)):
+        children = [(item, path + (index,)) for index, item in enumerate(value)]
+    elif is_dataclass(value) and not isinstance(value, type):
+        children = [
+            (getattr(value, field.name), path + (field.name,))
+            for field in _dataclass_fields(value)
+        ]
+    else:
+        return None
+    active.add(id(value))
+    try:
+        for child, child_path in children:
+            found = _find_nonfinite(child, child_path, active)
+            if found is not None:
+                return found
+        return None
+    finally:
+        active.discard(id(value))
 
 
 def _render_value_path(path: tuple[str | int, ...]) -> str:
@@ -1135,25 +1107,14 @@ def _scalar_matches(declared: ValueKind, value: Any) -> bool:
 
 
 def _coerce_scalar(declared: ValueKind, value: Any, path: tuple[str | int, ...]) -> Any:
-    # Only widening: an int may fill a NUMBER slot as a float.
+    """Widen an int filling a `float` slot; return any other value unchanged."""
     if declared == ValueKind.NUMBER and isinstance(value, int) and not isinstance(value, bool):
         return _widen_int(value, path)
     return value
 
 
 def _widen_int(value: int, path: tuple[str | int, ...]) -> float:
-    """Widen an int to a float, failing where it would overflow to infinity.
-
-    Args:
-        value (`int`): The int to widen.
-        path (`tuple[str | int, ...]`): Field/index path to ``value``.
-
-    Returns:
-        `float`: ``value`` as a float.
-
-    Raises:
-        `TypeCheckError`: ``value`` is beyond float's range.
-    """
+    """Widen an int to a float, raising `TypeCheckError` at `path` on overflow."""
     try:
         return float(value)
     except OverflowError:

@@ -212,7 +212,6 @@ def test_factories_build_custom_types_with_config() -> None:
         ("{about: profile}", {"storage": {"about": "file:about.md"}}, "not a local file path"),
         ("{notes: episodic}", {"supplied": {"notes": object()}}, "not a Memory"),
         ("{vec: vector}", {"factories": {"vector": lambda **_: object()}}, "not a Memory"),
-        ("{notes: {type: episodic, config: {max_episodes: 0}}}", {}, "rejected its config"),
         ("{vec: {type: vector, config: {bad: 1}}}",
          {"factories": {"vector": lambda: _Custom()}}, "rejected its config"),
     ],

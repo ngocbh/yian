@@ -500,7 +500,8 @@ omission. Names and types match `[A-Za-z_][A-Za-z0-9_-]*`; `name`, `type`, and
 `config` are reserved. Built-in config keys: `episodic` `max_episodes`,
 `recall_limit`; `reflective` `max_items`, `recall_limit`; `session`
 `history_budget_chars`, `recent_turns`; `profile` `max_chars`,
-`input_budget_chars`. Other types are custom and built by a Python host. The YAML
+`input_budget_chars`. Values are integers of at least 1 (`recent_turns` at least
+0), checked at load; episodic and reflective limits may be `null`. Other types are custom and built by a Python host. The YAML
 contains no credentials, storage locations, or Python imports.
 
 A memory's key is its name prefixed by the `uses:` aliases on its import path

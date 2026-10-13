@@ -515,10 +515,9 @@ def test_yaml_config_reaches_the_built_in_constructor(policy, config, expected):
         ("session", "{recent_turns: -1}", "recent_turns", ValueError),
     ],
 )
-def test_rejected_yaml_config_is_a_setup_error_naming_the_key(policy, config, detail, cause):
-    flow = load_flow(_configured(policy, config))
-    with pytest.raises(MemorySetupError, match=rf"memory {policy!r}.*{detail}") as caught:
-        build_cli_memories(flow, root=None, storage_options=())
+def test_rejected_yaml_config_is_a_load_error_naming_the_key(policy, config, detail, cause):
+    with pytest.raises(LoadError, match=rf"long_term_memory {policy!r}.*{detail}") as caught:
+        load_flow(_configured(policy, config))
     assert type(caught.value.__cause__) is cause
 
 

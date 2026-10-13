@@ -161,3 +161,65 @@ output: ${repeat.output}
     result = run_flow(flow, {})
     assert result.status == "succeeded"
     assert result.output == {"note": None, "n": 2}
+
+
+def _note_loop(seed: str, body_output: str, body_value: str) -> str:
+    """Return a flow whose inline LOOP body returns `note` from one CODE node.
+
+    Args:
+        seed (`str`): The LOOP's `note:` seed binding, e.g. `str = "start"`.
+        body_output (`str`): The body CODE node's declared output type.
+        body_value (`str`): The Python expression the body node returns.
+    """
+    return f"""
+id: note
+name: note
+nodes:
+  repeat:
+    kind: loop
+    times: 2
+    input:
+      note: {seed}
+    nodes:
+      mk:
+        kind: code
+        input:
+          note: ${{input.note}}
+        output: {body_output}
+        code: |
+          return {body_value}
+    output:
+      note: ${{mk.output}}
+output: ${{repeat.output}}
+"""
+
+
+def test_typed_seed_with_an_optional_body_field_loads() -> None:
+    flow = load_flow(_note_loop('str = "start"', "Optional[str]", 'inputs["note"] + "!"'))
+    result = run_flow(flow, {})
+    assert result.status == "succeeded", result.failure
+    assert result.output == {"note": "start!!"}
+
+
+def test_typed_seed_with_a_returned_null_fails_the_next_iteration() -> None:
+    flow = load_flow(_note_loop('str = "start"', "Optional[str]", "None"))
+    result = run_flow(flow, {})
+    assert result.status == "failed"
+    assert result.failure.code == "contract.input"
+
+
+def test_untyped_seed_with_an_optional_body_field_is_rejected_with_a_hint() -> None:
+    with pytest.raises(LoadError) as excinfo:
+        load_flow(_note_loop('"start"', "Optional[str]", 'inputs["note"] + "!"'))
+    message = str(excinfo.value)
+    assert (
+        "the body returns 'note' as Optional[str], but the carried field is typed str "
+        "from its seed; declare the seed's type: `note: Optional[str] = \"start\"`"
+    ) in message
+
+
+def test_typed_str_seed_with_an_int_body_field_is_rejected() -> None:
+    with pytest.raises(LoadError) as excinfo:
+        load_flow(_note_loop('str = "start"', "int", "1"))
+    message = str(excinfo.value)
+    assert "'note'" in message and "int" in message and "str" in message

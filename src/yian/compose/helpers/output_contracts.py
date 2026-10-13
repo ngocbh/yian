@@ -19,7 +19,7 @@ from typing import Any, Iterable
 
 from lark import Token, Tree
 
-from yian.expr import ExpressionError, infer_expr_type
+from yian.expr import ExpressionError, expr_refs, infer_expr_type
 from yian.expr.template import Span, scan_template, template_refs
 from yian.nodes.contracts import (
     Binding,
@@ -167,10 +167,12 @@ def resolve_output_binding_contract(
     A typed binding (a ``Binding`` whose ``contract`` is set) resolves to its
     declared contract, since that type is what the binding guarantees at runtime.
     Otherwise a direct whole-value reference retains the referenced contract, including
-    provenance.  A computed whole-value expression receives a new source-free
-    contract only when the expression engine proves its result type.  Embedded
-    or multiple template spans always produce ``str``; malformed, literal-text,
-    and unsupported computed bindings remain untyped.
+    provenance.  An explicit null default ``${ref :- null}`` over such a reference retains
+    it as ``Optional``; ``${(a | b) :- null}`` over references of one exact type receives a
+    source-free ``Optional`` contract.  A computed whole-value expression receives a new
+    source-free contract only when the expression engine proves its result type.  Embedded
+    or multiple template spans always produce ``str``; malformed, literal-text, and
+    unsupported computed bindings remain untyped.
 
     Args:
         binding (`Any`):
@@ -216,6 +218,9 @@ def resolve_output_binding_contract(
         if len(refs) != 1:
             return None
         return reference_contracts[refs[0]]
+    null_default = _null_default_contract(expression, reference_contracts)
+    if null_default is not None:
+        return null_default
 
     def reference_type(path: str) -> Type | None:
         """Project one referenced contract to the type requested by ``expr``."""
@@ -226,6 +231,69 @@ def resolve_output_binding_contract(
 
     inferred = infer_expr_type(expression, reference_type)
     return None if inferred is None else ValueContract(inferred)
+
+
+def _null_default_contract(
+    expression: Any,
+    reference_contracts: dict[str, OutputContract | None],
+) -> ValueContract | None:
+    """Type `head :- null` as Optional when `head` is a reference or a coalesce of them.
+
+    Args:
+        expression (`Any`): The parsed tree of a template's single span.
+        reference_contracts (`dict[str, OutputContract | None]`):
+            The resolved contract of every reference path the span reads.
+
+    Returns:
+        `ValueContract | None`:
+            The head reference's exact contract made nullable with its origins, a
+            source-free nullable contract for a coalesce of references of one exact
+            type, or ``None`` for any other expression.
+    """
+    if not (
+        getattr(expression, "data", None) == "default_expr"
+        and len(expression.children) == 2
+        and getattr(expression.children[1], "type", None) == "NULL"
+    ):
+        return None
+    head = expression.children[0]
+    if getattr(head, "data", None) == "coalesce":
+        operands = [
+            _direct_value_contract(operand, reference_contracts)
+            for operand in head.children
+        ]
+        if any(operand is None for operand in operands):
+            return None
+        types = [replace(operand.type, nullable=False) for operand in operands]
+        if any(typ != types[0] for typ in types[1:]):
+            return None
+        return ValueContract(replace(types[0], nullable=True))
+    contract = _direct_value_contract(head, reference_contracts)
+    if contract is None:
+        return None
+    return replace(contract, type=replace(contract.type, nullable=True))
+
+
+def _direct_value_contract(
+    operand: Any,
+    reference_contracts: dict[str, OutputContract | None],
+) -> ValueContract | None:
+    """Return the exact contract of an operand that is one direct reference.
+
+    Args:
+        operand (`Any`): One parsed operand of a span's expression tree.
+        reference_contracts (`dict[str, OutputContract | None]`):
+            The resolved contract of every reference path the span reads.
+
+    Returns:
+        `ValueContract | None`:
+            The referenced exact contract, or ``None`` when the operand is not a lone
+            reference or its contract is partial or unknown.
+    """
+    if not _is_direct_reference(operand):
+        return None
+    contract = reference_contracts.get(expr_refs(operand)[0])
+    return contract if type(contract) is ValueContract else None
 
 
 def direct_reference_path(binding: Any) -> str | None:

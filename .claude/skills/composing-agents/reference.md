@@ -60,7 +60,10 @@ Nesting a ref is allowed: `${a:-${b:-"lit"}}`. The `:-`/`:?` RHS is an
 expression, so a string default must be **quoted** (`${x:-"today"}`; bare `today`
 reads a variable). A whole-string `${ref}` resolves to the **typed value**;
 embedded in surrounding text it is **stringified**. A child-flow call is the
-whole-value `call(...)` directive (below), never a `${flow(args)}` span.
+whole-value `call(...)` directive (below), never a `${flow(args)}` span. Arithmetic on
+a value that is null when a `case` skips its node is a load error at that binding
+(`output 'q': ${order.output.qty + 1} does arithmetic on order.output.qty, which is null
+when node 'order' is skipped; give it a default with :-, e.g. (order.output.qty :- <default>)`).
 
 Child-flow output typing retains an exact or partial direct-reference contract, projects
 known partial-record fields exactly, and proves comparisons, membership, and
@@ -269,10 +272,15 @@ the model emits a conforming value, retried up to `retries:` times on deviation;
 `typed_output.yaml`). Use a downstream `code` node only when you need deterministic
 post-processing of the value.
 
-**Branch and rejoin.** A `case` runs exactly one branch; the others skip and their
-refs resolve to null. Always coalesce the branches back with `${a | b | c}` (see
-`branching.yaml`). Routing on a `Literal` is exhaustiveness-checked — cover every
-tag or add an `else:`.
+**Branch and rejoin.** A `case` takes one branch, or none when nothing matches and
+there is no `else:`; the other targets skip, and so do nodes that plainly read them.
+Always coalesce the branches back with `${a | b | c}` (see `branching.yaml`). Routing
+on a `Literal` is exhaustiveness-checked — cover every tag or add an `else:`. A flow
+output field that reads only nodes a `case` may skip returns `null` when they were
+skipped (typed `Optional[T]`, as if `:- null` were written), in root, `defs:`, and
+inline bodies; a join over an exhaustive `case` never does. A LOOP body field like
+that sets the carried field to null. Templates and comparisons keep their null
+behavior; arithmetic needs a `:-` default.
 
 **Branch on a union.** Route with `on: ${d.output.action}` (the tag field). Each
 `when:` target, and nodes chained to it by plain refs or `depends_on`, reads its member's

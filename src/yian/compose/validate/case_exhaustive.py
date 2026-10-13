@@ -29,7 +29,7 @@ from yian.nodes.contracts import (
 )
 from yian.typesys.values import Type
 from yian.compose.helpers.errors import LoadDiagnostics
-from yian.compose.parse.file import CaseDescriptor
+from yian.compose.parse.file import CaseDescriptor, NodeDescriptor
 from yian.compose.validate.narrowing import Narrowing
 
 
@@ -66,6 +66,71 @@ def check_case_exhaustive(
         _check_exhaustive(desc, _on_covered(desc), case_producers, diagnostics)
 
 
+def case_is_exhaustive(
+    desc: CaseDescriptor,
+    producers: dict[str, OutputContract],
+    flow_inputs: dict[str, ValueContract] | None = None,
+) -> bool:
+    """Return whether a `case` always takes a branch when it runs.
+
+    Args:
+        desc (`CaseDescriptor`):
+            The `case` descriptor.
+        producers (`dict[str, OutputContract]`):
+            Producer node id -> output contract, as the case sees them.
+        flow_inputs (`dict[str, ValueContract] | None`, *optional*, defaults to `None`):
+            Flow input name -> contract, as the case sees them. Without them an `on:` over
+            a flow input is never exhaustive.
+
+    Returns:
+        `bool`:
+            True when the case has an `else:`, or it is the `on:` form over a non-nullable
+            `Literal` node output or flow input whose every tag is a `when:` value. A
+            searched case without `else:` is never exhaustive.
+    """
+    if desc.else_ is not None:
+        return True
+    if desc.on is None:
+        return False
+    typ = _resolve_on_type(desc.on, producers, flow_inputs or {})
+    if typ is None or typ.tags is None or typ.nullable:
+        return False
+    return typ.tags <= _on_covered(desc)
+
+
+def exhaustive_cases(
+    descriptors: dict[str, NodeDescriptor],
+    producers: dict[str, OutputContract],
+    flow_inputs: dict[str, ValueContract] | None = None,
+    *,
+    narrowing: Narrowing | None = None,
+) -> set[str]:
+    """Return the ids of the CASE descriptors that always take a branch when they run.
+
+    Args:
+        descriptors (`dict[str, NodeDescriptor]`):
+            The level's node id -> descriptor. Non-CASE descriptors are ignored.
+        producers (`dict[str, OutputContract]`):
+            Producer node id -> output contract.
+        flow_inputs (`dict[str, ValueContract] | None`, *optional*, defaults to `None`):
+            Flow input name -> contract.
+        narrowing (`Narrowing | None`, *optional*, defaults to `None`):
+            Per-node narrowed views; each CASE resolves its `on:` against its own view.
+
+    Returns:
+        `set[str]`:
+            The exhaustive CASE ids (see `case_is_exhaustive`).
+    """
+    exhaustive = set()
+    for desc in descriptors.values():
+        if not isinstance(desc, CaseDescriptor):
+            continue
+        views = narrowing.for_node(desc.id) if narrowing is not None else (producers, flow_inputs)
+        if case_is_exhaustive(desc, *views):
+            exhaustive.add(desc.id)
+    return exhaustive
+
+
 def _on_covered(desc: CaseDescriptor) -> set[str]:
     """The set of enum tags an on:-form case explicitly matches (its `when:` values)."""
     if desc.on is None:
@@ -76,13 +141,26 @@ def _on_covered(desc: CaseDescriptor) -> set[str]:
 def _resolve_on_type(
     on_ref: str,
     producers: dict[str, OutputContract],
+    flow_inputs: dict[str, ValueContract] | None = None,
 ) -> Optional[Type]:
-    """The `Type` an `on: ${<id>.output[.<field>…]}` ref resolves to, else None.
+    """Return the `Type` an `on:` ref resolves to, else None.
 
     Resolves the binding through the shared output-contract projector, so an exact
-    contract or a known field of a partial record can supply the enum Type. A
-    non-node-first head, opaque result, or non-record step returns ``None`` (lenient:
-    no exhaustiveness check).
+    contract or a known field of a partial record can supply the enum Type.
+
+    Args:
+        on_ref (`str`):
+            The case's `on:` template.
+        producers (`dict[str, OutputContract]`):
+            Producer node id -> output contract.
+        flow_inputs (`dict[str, ValueContract] | None`, *optional*, defaults to `None`):
+            Flow input name -> contract. With them an `${input.<name>[.<field>…]}` ref
+            resolves too; without them only `${<id>.output[.<field>…]}` does.
+
+    Returns:
+        `Optional[Type]`:
+            The resolved type, or ``None`` for an unsupported head, an opaque result, or a
+            non-record step (lenient: no exhaustiveness check).
     """
     try:
         refs = expr_refs_of(on_ref)
@@ -91,10 +169,11 @@ def _resolve_on_type(
     if len(refs) != 1:
         return None
     parts = refs[0].split(".")
-    # Singular only: `<id>.output[.<field>…]`.
-    if len(parts) < 2 or parts[1] != "output":
+    node_output = len(parts) >= 2 and parts[1] == "output"
+    flow_input = flow_inputs is not None and len(parts) >= 2 and parts[0] == "input"
+    if not (node_output or flow_input):
         return None
-    contract = resolve_output_binding_contract(on_ref, producers, {})
+    contract = resolve_output_binding_contract(on_ref, producers, flow_inputs or {})
     return contract.type if type(contract) is ValueContract else None
 
 

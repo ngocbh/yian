@@ -226,7 +226,9 @@ output. The first such route latches `graph.terminal_unreachable` with the causa
 router and its complete `failure_trace()`, even when unrelated pooled work drains
 later, and persists that failure on the causal `NodeRoutedRecord`. Replay
 structurally revalidates the route before restoring the recorded failure; a later
-explicit node failure still wins immediately.
+explicit node failure still wins immediately. A flow from `load_flow` doesn't reach
+this through its outputs: the loader gives an output whose producers a `case` may skip
+the explicit null default, so END still runs. Hand-built graphs can still reach it.
 
 SessionMemory owns saved conversation state. Runtime does not reconstruct
 conversations or restore memory from the log. An AGENT that declares a session

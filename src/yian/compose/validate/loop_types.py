@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Collection
+from dataclasses import replace
 from typing import Any, Optional
 
 from yian.compile.validation import types_compatible
@@ -197,6 +198,9 @@ def _check_inline_returned_fields(
 ) -> None:
     """Require each returned field of an inline loop body to fit its generated parameter.
 
+    Over a typed seed, a nullable returned field whose non-null type fits the declared
+    parameter is accepted; a null it returns fails the next iteration's input check.
+
     Args:
         result (`BuildResult`): The built loop node and its source ranges.
         carried_fields (`dict[str, Type]`): The statically proven carried field types;
@@ -225,6 +229,9 @@ def _check_inline_returned_fields(
         if types_compatible(body_field, parameter.type):
             continue
         typed = isinstance(seed, Binding) and seed.contract is not None
+        # The next iteration's input check rejects a null.
+        if typed and types_compatible(replace(body_field, nullable=False), parameter.type):
+            continue
         returned_label = canonical_type_label(body_field)
         raise diagnostics.error(
             f"loop node {node.id!r}: the body returns {field_name!r} as {returned_label}, "

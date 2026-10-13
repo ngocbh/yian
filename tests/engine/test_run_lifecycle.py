@@ -772,9 +772,14 @@ def test_terminal_resume_preserves_source_free_failure(tmp_path: Path) -> None:
 
 
 def test_terminal_resume_preserves_recorded_trace_across_origin_rebase(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Replay uses causal-record provenance, not the newly loaded graph's origins."""
+    # A loaded flow no longer skips its END; rebuild the old graph shape to keep the
+    # latched terminal failure's replay covered.
+    monkeypatch.setattr(
+        "yian.compose.build.pipeline.null_skipped_outputs", lambda outputs, model: outputs
+    )
     path = tmp_path / "terminal-origin-rebase.jsonl"
     loaded = load_flow(_TERMINAL_SKIP_FLOW)
     fresh = run_module.run_flow(

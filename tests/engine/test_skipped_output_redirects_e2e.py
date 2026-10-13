@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from yian.compile.expand import build_grow
 from yian.compile.model import END_ID
 from yian.runtime.common import NodeState
@@ -9,6 +11,18 @@ from yian.compose import load_flow
 from yian.events import RunFailed
 from yian.runtime.log import NodeExpandedRecord, NodeRoutedRecord
 from tests.engine._graph_builder import _engine
+
+
+@pytest.fixture(autouse=True)
+def _keep_skipped_end(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Load flows without the null rewrite of skipped outputs.
+
+    A loaded flow no longer skips its END, so the old graph shape is rebuilt to keep the
+    runtime redirect of a skipped child END covered.
+    """
+    monkeypatch.setattr(
+        "yian.compose.build.pipeline.null_skipped_outputs", lambda outputs, model: outputs
+    )
 
 
 _CALL = """

@@ -53,6 +53,10 @@ One function, `load_flow()`, drives a fixed pipeline. Read it like a compiler:
   ├─ stamp flow outputs     → source-backed bare/mapped values on final
   │                            FlowOutput bindings (mapping keys stay origin-free);
   │                            declared output types land on Binding.contract
+  ├─ null skipped outputs   → a flow output whose producers a case may all skip gets
+  │                            the explicit null default (`${x.output:-null}`)
+  ├─ check skipped arithmetic → arithmetic over a value a skip may null is rejected,
+  │                            asking for a `:-` default
   ├─ check typed outputs    → a typed flow output whose inferred type is disjoint
   │                            from its declared type is rejected (narrower or
   │                            unknown is left to the runtime check)

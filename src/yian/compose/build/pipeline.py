@@ -76,7 +76,7 @@ from yian.compose.helpers.output_contracts import resolve_output_binding_contrac
 from yian.compose.helpers.typed_bindings import split_typed_binding
 from yian.compose.desugar.adaptive_questions import desugar_adaptive_questions
 from yian.compose.desugar.case_targets import desugar_case_call_targets
-from yian.compose.validate.case_exhaustive import check_case_exhaustive
+from yian.compose.validate.case_exhaustive import check_case_exhaustive, exhaustive_cases
 from yian.compose.validate.cycles import reject_cycles
 from yian.compose.validate.human_questions import validate_human_questions
 from yian.compose.validate.loop_types import check_loop_type_contract
@@ -84,6 +84,11 @@ from yian.compose.validate.narrowing import compute_narrowing
 from yian.compose.edges.ordering import infer_ordering_edges
 from yian.compose.validate.call_types import check_call_map_types
 from yian.compose.validate.references import validate_references
+from yian.compose.validate.skips import (
+    SkipModel,
+    check_skipped_arithmetic,
+    null_skipped_outputs,
+)
 from yian.compose.validate.typed_bindings import check_typed_inputs, check_typed_outputs
 from yian.compose.validate.wiring_parity import check_wiring_parity
 from yian.compose.parse.nodes import (
@@ -1852,18 +1857,38 @@ def _assemble(
         else output
         for output in flow_outputs
     ]
+    # An output that reads only nodes CASE routing may skip would leave END unreachable;
+    # the explicit null default makes its END edge optional, so the run returns null.
+    structural = reconciled + ordering_edges
+    skip_model = SkipModel(
+        set(descriptors),
+        structural,
+        exhaustive_cases(descriptors, producers, flow_input_contracts, narrowing=narrowing),
+    )
+    flow_outputs = null_skipped_outputs(flow_outputs, skip_model)
+    value_mode = outputs_section is not None and not isinstance(outputs_section, dict)
+    # Arithmetic on such a value would fail at runtime with null; ask for a `:-` default.
+    check_skipped_arithmetic(
+        flow_wiring,
+        flow_outputs,
+        skip_model,
+        build_results,
+        value_mode=value_mode,
+        outputs_range=outputs_range,
+        resolve_origin=catalog_builder.resolve_registered,
+        diagnostics=diagnostics,
+    )
     # Typed flow outputs that can never fit their declared type (needs the output
     # contracts attached above).
     check_typed_outputs(
         flow_outputs,
         producers,
         flow_input_contracts,
-        value_mode=outputs_section is not None and not isinstance(outputs_section, dict),
+        value_mode=value_mode,
         outputs_range=outputs_range,
         resolve_origin=catalog_builder.resolve_registered,
         diagnostics=diagnostics,
     )
-    structural = reconciled + ordering_edges
     boundary_nodes, boundary_edges, boundary_wiring = synthesize_boundary_graph(
         inputs,
         flow_outputs,

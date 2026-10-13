@@ -42,6 +42,16 @@ return `None`. For the old result, write `output: ${x}`, or drop `output:` to re
 map, or loop over one, got a new fingerprint. Runs recorded under the old rule fail the fingerprint
 check and can't be resumed or replayed.
 
+Changed: a flow output that reads a node a `case` skipped used to fail the run with
+`graph.terminal_unreachable`; it now returns `null` (see
+[Skipped branches and flow outputs](#skipped-branches-and-flow-outputs)). Flows with such
+an output got a new fingerprint, as did flows that call, map, or loop over one or over a
+child whose output is written `${x :- null}`. Runs recorded before can't be resumed or
+replayed. An explicit `${x :- null}` is now typed `Optional[...]`, which adds two load
+errors: `on: ${x.output :- null}` over a `Literal` with a tag missing and no `else:` is
+non-exhaustive, and a named-def LOOP seed written `${x :- null}` into a non-`Optional`
+body field is rejected.
+
 Node IDs are the keys under `nodes:`. They cannot contain `.`, `#`, or `/`:
 `.` separates the node name from `output` and its field path in a reference,
 while `#` and `/` are reserved for generated runtime identities. In compact
@@ -116,7 +126,8 @@ text it is stringified.
 Prompt templates are strict: a missing reference or any span whose final value is
 null raises, even when the span is embedded in text. Binding templates retain their
 non-strict behavior—a whole null remains a typed null, while an embedded null
-contributes empty text.
+contributes empty text. A flow output that reads a node a `case` skipped is null too
+(see [Skipped branches and flow outputs](#skipped-branches-and-flow-outputs)).
 
 When the loader knows a value's type, reading a field that type can't have is a load
 error: a field on a scalar (`str`, `int`, `Literal[...]`, ...) or a list, or a field a
@@ -176,6 +187,10 @@ The `:-` default and `:?` message RHS are themselves expressions, so a **string*
 default must be quoted: `${input.as_of:-"today"}`, not `:-today` (bare `today`
 would read a *variable* named `today`). Nesting a ref is allowed:
 `${a:-${b:-"lit"}}`.
+
+Arithmetic on a value that is null when a `case` skips its node is a load error that
+asks for a `:-` default, such as `${(order.output.qty :- 0) + 1}` (see
+[Skipped branches and flow outputs](#skipped-branches-and-flow-outputs)).
 
 A whole-string `${expr}` resolves to the **typed value** (a number stays a
 number, a list a list); embedded in surrounding text it is stringified.
@@ -406,6 +421,9 @@ The loader compares the declared type with the type it infers for the value:
 - A **narrower** declared type loads and is checked at runtime: non-Optional over
   Optional, a `Literal` or bounded subset, a record over `object`, or a union member
   over the union (explicit narrowing, e.g. `buy: Buy = ${decision.output}`).
+  A flow output over a node a `case` may skip is `Optional`, so
+  `order: str = ${order.output}` loads and fails with `binding.type` when `order`
+  is skipped.
 - Unions compare member by member: a member declared as its union fits, and a
   record that matches no member is disjoint. Inside a narrowing `case` branch the
   value has the branch's members, so `buy: Buy = ${decision.output}` in the `sell`
@@ -436,7 +454,8 @@ value becomes typed.
   type (arithmetic, an empty list) works without a named `defs:` body.
 - A typed LOOP seed checks the starting value. A field the body omits keeps the
   seed's declared type; a field the body returns follows the body's output type.
-- An untyped nullable source into a strict child parameter is still a load error.
+- An untyped nullable source into a strict child parameter is still a load error,
+  including a child output that is `Optional` because a `case` may skip its node.
   A typed binding (`x: int = ${maybe.output}`) accepts the narrowing and checks it
   at runtime.
 
@@ -954,9 +973,11 @@ Inline notes:
 
 ### `case` — branching
 
-A `case` node **routes only** — it has no `input:`. Exactly one branch runs; the
-others are skipped (their references resolve to null). Join the branches back
-with a coalesce.
+A `case` node **routes only** — it has no `input:`. It takes one branch, or none
+when no `when:` matches and there is no `else:`. The other targets are skipped, and
+so is every node that plainly reads a skipped node or names it in `depends_on`.
+Join the branches back with a coalesce; a flow output that reads a skipped node
+returns null (see [Skipped branches and flow outputs](#skipped-branches-and-flow-outputs)).
 
 Simple form — match a value:
 
@@ -987,8 +1008,78 @@ Routing on a `Literal` is **exhaustiveness-checked**: omitting a tag with no
 `else:` is a compile error. Join the branches:
 
 ```yaml
-output: ${bullish.output | cautious.output}
+output: ${bullish.output | cautious.output}   # never null: the case takes one of them
 ```
+
+#### Skipped branches and flow outputs
+
+A flow output field that reads only nodes a `case` may skip returns `null` when they
+were skipped. This covers a reference (`${order.output}`, `${order.output.qty}`), a
+coalesce (`${a.output | b.output}`), and a default chain (`${a.output :- ${b.output}}`),
+in a root flow, a `defs:` child, and an inline CALL/LOOP/MAP body. The loader reads it
+as if `:- null` were written: `${order.output}` becomes `${order.output:-null}`.
+
+```yaml
+id: orders
+name: orders
+input:
+  approve: bool
+nodes:
+  gate:
+    kind: case
+    cases:
+      - when: ${input.approve}
+        then: order
+    else: rejected
+  order:
+    kind: code
+    output:
+      qty: int
+    code: |
+      return {"qty": 2}
+  rejected:
+    kind: code
+    output: str
+    code: |
+      return "no"
+output:
+  order: ${order.output}       # {order: null} when approve is false
+```
+
+- **May be skipped:** a `case` target, or a node that plainly reads one (or names it
+  in `depends_on`), under some combination of `case` choices. A `case` that runs takes
+  one branch, or none unless it is exhaustive: it has `else:`, or its `on:` is a
+  non-nullable `Literal` node output or flow input with every tag listed (a null `on:`
+  value matches nothing).
+  So a join over an exhaustive `case`'s branches (`${bullish.output | cautious.output}`
+  above, or `${gate.output}`) is never null. Conditions of different `case`s are
+  treated as independent.
+- **Type:** the field is `Optional[T]` when its reference has type `T`, or when every
+  reference of its coalesce has type `T`, and untyped otherwise. An explicit `${x :- null}` is `Optional[T]`
+  too. A typed `qty: int = ${order.output.qty}` loads and fails with `binding.type`
+  when `order` is skipped; `qty: Optional[int] = ...` returns null. A parent that
+  passes such a child output untyped to a non-`Optional` input fails to load; narrow
+  it with a typed binding (`qty: int = ${c1.output.qty}`) or give it a default.
+- **Templates and comparisons** are unchanged:
+  `'${order.output.qty} and ${rejected.output}'` renders ` and no`, and
+  `${order.output.qty == 2}` is `false`.
+- **Arithmetic** (`+ - * / % **`, unary minus) on such a value is a load error at the
+  binding: in a flow output, and in a node binding (including a `case`'s `on:`) whose
+  node still runs when the value's node is skipped:
+
+  ```
+  output 'q': ${order.output.qty + 1} does arithmetic on order.output.qty, which is null
+  when node 'order' is skipped; give it a default with :-, e.g. (order.output.qty :- <default>)
+  ```
+
+  A node that also plainly reads `${order.output}` is skipped with it, so its
+  arithmetic loads. Arithmetic in flow-level `asserts:` is not checked. The default
+  side of `:-` is checked as if it always runs: `${a.output :- (b.output + 1)}` is an
+  error even when `b` runs whenever `a` is skipped, since `a` might be null while it runs.
+  A null guard is reported too: `${a.output != null and a.output.n + 1 > 1}` is an
+  error though `and` stops at the guard; write `${(a.output.n :- 0) + 1 > 1}` instead.
+- In a LOOP body the null sets the carried field (see [`loop`](#loop-re-run-a-body-under-a-predicate-or-a-fixed-count));
+  a MAP returns null for each element whose branch was skipped.
 
 #### Narrowing a union in a branch
 
@@ -1376,8 +1467,14 @@ returns the whole carried record.
   are typed from the seeds, and each returned field must fit its parameter at load,
   since the next iteration binds it there. An untyped `${null}` seed gives the type
   `None`, so with an inline body, type the seed: `seen: Optional[list[str]] = ${null}`.
+  Over a typed seed (`note: str = "start"`), a returned field typed `Optional[str]`
+  loads, and the next iteration's input check rejects a null (`contract.input`). Over
+  an untyped seed (`note: "start"`) the same field is a load error that asks you to
+  declare `note: Optional[str] = "start"`.
 - **Omitted is not null.** An omitted field keeps its value. A returned null sets the
-  field to null. When the seed is typed, the returned field's type must accept it: a
+  field to null, and so does a field that reads a node a `case` skipped (see
+  [Skipped branches and flow outputs](#skipped-branches-and-flow-outputs)). When the
+  seed is typed, the returned field's type must accept it: a
   producer typed `Optional[str]` fits an `Optional[str]` seed. A literal `${null}` is
   typed `None`, and an `Optional[str]` seed does not fit `None`, so that load fails.
 - **One field is enough.** `output: {done: ...}` returns the record
@@ -1568,7 +1665,8 @@ must not deadlock the run when its producer sits behind an untaken `case` branch
 So a producer that is **skipped** resolves to `null` for the assert: a check like
 `${maybe.output} == null` **silently passes** when `maybe` is skipped, rather than
 failing. Assert on a value you know is produced, or gate the check behind the same
-branch as its producer.
+branch as its producer. Arithmetic on such a producer in a flow-level assert is not
+checked at load.
 
 ```yaml
 asserts:

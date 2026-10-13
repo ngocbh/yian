@@ -165,7 +165,10 @@ skip-floods END latches
 `NodeRoutedRecord` persists the derived failure; replay structurally revalidates
 the route and restores the recorded value, including its complete trace, even if
 the supplied graph now carries rebased origins. No additional terminal record
-is added, and an explicit node failure still supersedes the latch.
+is added, and an explicit node failure still supersedes the latch. A flow from
+`load_flow` never reaches this latch through its outputs: the loader gives an output
+whose producers a CASE may skip the explicit null default (`${x.output:-null}`), so its
+END edge is optional. The runtime path remains for hand-built graphs.
 
 ### OpenAI model transport
 

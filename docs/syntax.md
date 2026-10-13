@@ -121,6 +121,23 @@ through an `Optional[...]` record still gives `null` when the whole value is nul
 values whose type isn't known at load (`object`, an untyped output, or anything below
 them) aren't checked.
 
+On a [union](#unions-of-records-union), a field every member has can be read anywhere.
+Its type is the members' type when they agree, the merged `Literal` for a tag field, and
+untyped when they differ; it is nullable when any member's field is `Optional` or not
+required. A field only some members have is a load error outside a `case` branch that
+narrows the value (see [`case`](#case-branching)):
+
+```
+reference ${d.output.qty} reads field 'qty', which only union members with action buy,
+sell have; read it inside a case on ${d.output.action}
+```
+
+An untagged union says `which only 1 of 2 union members have; check the member with
+isinstance(d.output, <Type>) in a case first`. A field no member has is an unknown field.
+The rule also covers asserts (a node's `${output...}` included), MAP `${item...}`, and
+flow outputs, which are never narrowed: to return a member field, read it in a branch
+node and join the branches.
+
 !!! important "Prompt names are local"
     Inside a `prompt:` or an AGENT `system_prompt:` use names from the node's own
     `input:` block, written bare, like `${name}`. An AGENT prompt also sees its own
@@ -209,6 +226,65 @@ flow loads. Stored defaults are never string-coerced: write `int = 30`, not
 `date = "2026-01-01"`. Compatible payloads retain their authored representation,
 so `float = 30` remains the integer `30`. String coercion applies only to values
 supplied at a flow boundary.
+
+### Unions of records — `Union[...]`
+
+`Union[A, B, ...]` is a value that is one of several records:
+
+```yaml
+typedefs:
+  Buy:
+    action: Literal[buy]
+    qty: int
+  Sell:
+    action: Literal[sell]
+    qty: int
+    price: float
+  Hold:
+    action: Literal[hold]
+    note: str
+  Decision: Union[Buy, Sell, Hold]
+```
+
+Every member is a record. Nested unions and aliases flatten, repeated members drop, and
+member order doesn't matter. The loader must be able to tell the members apart from the
+data alone, in one of two ways:
+
+- **A tag field.** Every member declares the same field as a single-value `Literal`, with
+  a different value in each. Any field name works (`action`, `kind`, `type`). A value is
+  checked against the member its tag names; the tag must be present.
+- **Shapes that can't overlap.** For example `{text: str}` and `{num: int}`. A value is
+  checked against the one member it satisfies.
+
+Otherwise the union fails to load, at its typedef even when nothing uses it:
+
+```
+Union[Buy, Sell]: members 'Buy' and 'Sell' can match the same value; add a tag field
+every member declares as a single-value Literal, with a different value in each member,
+e.g. kind: Literal[buy]
+```
+
+Other load errors:
+
+| Write | Error |
+|-------|-------|
+| `Buy \| Sell` | `use Union[Buy, Sell] (\| is not a type operator)` |
+| `Union[Buy, None]` | `None is not a union member ...; use Optional[Union[...]]` |
+| `Union[Buy, Optional[Sell]]` | `member 'Optional[Sell]' is nullable; use Optional[Union[...]] instead` |
+| `Union[Buy, str]` | `member 'str' is not a record` |
+
+For a nullable union write `Optional[Decision]` or `Optional[Union[Buy, Sell]]`.
+
+At run time a value with no tag fails with `missing tag field 'action' (expected one of
+['buy', 'hold', 'sell'])`, and an unknown tag with `'wait' is not a tag of the union
+(expected one of [...])`. An untagged union that matches no member fails with
+`value matches no member of ...`, listing each member's reason. Nothing is coerced.
+
+Wiring checks members: a union fills a union input when each of its members fits some
+member of the input's union, and a record fills a union input when it fits a member. A
+union fills an `object` input, but never a record input: narrow it in a `case` branch
+first (see [`case`](#case-branching)). Reading fields of a union is covered under
+[References](#references-naming-a-value).
 
 ## Per-node configuration — `env:`
 
@@ -364,14 +440,20 @@ model call (text, or structured for a typed `output:`).
 says to delete the line; with `mode: plain` and `tools:`, those tools now run.
 
 An AGENT node's `output:` may be any declared shape. Only a bare, untagged `str`
-keeps the node a **text producer**. A `Literal[...]` enum, record, non-string scalar,
-or list switches the node to **structured generation**: the engine derives a
+keeps the node a **text producer**. A `Literal[...]` enum, record, union, non-string
+scalar, or list switches the node to **structured generation**: the engine derives a
 schema from the declared `output:` and asks the model to emit a conforming value
 (via the provider's native structured output, or a JSON prompt-injection fallback
 for providers that lack it). A root `Literal[...]` is constrained internally as a
 single `value` field and returned to the flow as the bare tag. The result is
 validated while its canonical success record is prepared, like every other node
 output.
+
+A [union](#unions-of-records-union) `output:` asks for one of the members: each member's
+schema forbids unknown fields and pins its tag with a `const`. The node returns the
+matching member's record. A bad reply's retry error points at a field of the member the
+tag selects, at the tag field when the tag is missing or unknown, or at the union itself
+when an untagged union matches no member.
 
 ```yaml
 extract:
@@ -749,6 +831,66 @@ Routing on a `Literal` is **exhaustiveness-checked**: omitting a tag with no
 
 ```yaml
 output: ${bullish.output | cautious.output}
+```
+
+#### Narrowing a union in a branch
+
+A `case` branch can read fields only some [union](#unions-of-records-union) members have.
+An `on:` over the union's tag field narrows the value in each branch:
+
+```yaml
+route:
+  kind: case
+  on: ${decide.output.action}  # decide.output is a Decision
+  cases:
+    - when: buy
+      then: place_buy          # sees decide.output as Buy
+    - when: sell
+      then: place_sell         # sees decide.output as Sell
+  else: log_hold               # sees the unlisted members: Hold
+place_buy:
+  kind: code
+  input:
+    qty: ${decide.output.qty}  # a Buy field; a load error outside the branch
+  code: ...
+```
+
+- Two `when:`s with one `then:` give that target the union of both members. `else:`
+  gives the members no `when:` lists, keeping an `Optional[...]` union's null; after
+  every tag is listed it narrows nothing.
+- `on:` must be one direct reference to a tag field: `${node.output[.field...].tag}` or
+  `${input.x[.field...].tag}`. A coalesce or embedded text doesn't narrow.
+- A `when:` that isn't a tag is a load error: `when: buyy is not a tag of the union at
+  ${decide.output.action} (tags: buy, hold, sell)`. Without `else:` every tag needs a
+  `when:` (`enum tag(s) ['hold'] not covered`).
+- Narrowing follows the branch target's chain: a node that reads it through a plain
+  reference, or names it in `depends_on`, sees the same members. A join
+  `${b.output | s.output}` of a `buy` and a `sell` branch sees `Buy` or `Sell`.
+  Narrowing doesn't pass through an optional read (`${b.output:-0}`) or `runs_after`,
+  and a node that a second `case` also routes isn't narrowed.
+- A nested `on:` over a field of the narrowed member narrows again, and its exhaustiveness
+  counts only that member's tags.
+- A `call` target can pass the narrowed value to a child whose input is the member
+  (`order: Buy`). An inline child body's inputs are typed before narrowing, so a member
+  field bound there fails with `cannot infer type for inline binding`. A nested
+  `call(...)` in a target's arguments is its own unrouted node, so it isn't narrowed
+  either. Read the field in a branch node first.
+
+A searched `case` narrows with [`isinstance`](expressions.md#isinstance-the-type-test): each
+top-level `and` part `isinstance(<ref>, T)` of a `when:` narrows that reference to `T`
+in that branch and its chain. `T` may be a member, a union of members, or any other type.
+First true `when:` still wins, and checks may overlap. The searched form's `else:`
+narrows nothing. A later `and` part of the same `when:` may already read `T`'s fields:
+
+```yaml
+gate:
+  kind: case
+  cases:
+    - when: isinstance(decide.output, Buy) and decide.output.qty > 5
+      then: big_buy            # sees decide.output as Buy
+    - when: isinstance(decide.output, Sell)
+      then: place_sell
+  else: log_other
 ```
 
 ### `human_input` — a deterministic human gate
@@ -1223,7 +1365,8 @@ One `${...}` grammar serves every context — the difference is what each contex
   form used throughout the docs and seeds.
 - **Prompts**: free text with embedded `${...}` spans (each stringified into the
   text); spans may use the full grammar, but reference only the node's own declared
-  inputs.
+  inputs. `isinstance` is the exception: compute it in an input binding (see
+  [Expressions → `isinstance`](expressions.md#isinstance-the-type-test)).
 
 > Bindings wire, conditions test, nodes compute.
 
@@ -1272,7 +1415,8 @@ This holds for a `call` node too: its POST `asserts:` fire when the call's value
 is committed, and may read `${output}` **and** the call's declared inputs
 (`${name}`), matching leaf-node semantics. (`map` nodes still reject node-local
 `asserts:` at load time — assert a `map`'s result with a flow-level or downstream
-check instead.)
+check instead.) A `call` or `loop` node's own asserts can't use `isinstance`; assert
+inside the child flow.
 
 ## Next
 

@@ -774,6 +774,23 @@ generated numeric schemas carry `minimum`/`maximum` recursively through lists
 and records. Canonical labels and manifests include present bounds; absent bounds
 remain omitted from manifests to preserve unbounded identities.
 
+`Type.variants` refines OBJECT into a union: a tuple of two or more non-nullable record
+members, in canonical order (by tag, else by `canonical_type_label`) and deduplicated by
+`==`, never `set()`, since `Type` holds dicts. `Optional[Union[...]]` sets `nullable` on the
+union. Tag fields are derived by `union_tag_fields` (a field every member requires as a
+non-nullable single-value `Literal`, with pairwise distinct values); nothing stores them.
+`resolve_type` rejects a union whose members neither have a tag field nor fail
+`types_overlap` pairwise, and `read_typedefs` resolves every typedef union eagerly. Value
+checks pick the member by the first tag field (or the one untagged member the value
+satisfies) and keep `TypeCheckError.path`. `types_compatible` is member by member: a
+union never fits a record sink, a union fits `object`, and `object` never fits a union.
+Structured generation maps a union to a plain pydantic `Union[...]` of `extra='forbid'`
+member models inside the `value` wrapper (`anyOf` + `const` tags, no `discriminator`), and
+maps a validation error at a union position to the member its tag selects. Manifests emit
+`"union": [...]` in canonical order only when present. `union_field` (read a field:
+shared, partial, or absent) and `restrict_union` (keep some members) serve the load-time
+checks.
+
 AGENT's local `variables` field uses an ordered `list[Parameter]`, with an exact
 `ValueContract` and mandatory typed default for every entry. Compose reuses its
 semantic/default readers and injects source-aware declaration compilation at
@@ -795,7 +812,25 @@ Compose and runtime growth reference validation both call the source-neutral clo
 walk in `nodes/contracts.py`; exact nested records and partial root name sets therefore
 reject the same provably absent paths without importing Compose into runtime.
 The walk, `output_contract_field_error`, also rejects any field on a scalar or list
-type; an opaque `object` (no declared fields) and `file` stay unchecked.
+type; an opaque `object` (no declared fields) and `file` stay unchecked. On a union it
+continues with a shared field's type and rejects a field only some members have (naming
+the tag to `case` on, or `isinstance` for an untagged union). Runtime growth passes
+`partial_union_fields=True`: fragments come from flows the loader already checked under
+narrowing, which the fragment does not record. Node asserts use the same walk.
+
+Compose's narrowing pass (`compose/validate/narrowing.py`) runs after the CASE desugar
+and node builds. A fact for a base path (`<node>.output[.path]`, `input.<name>[.path]`)
+is `Members(S)` (members of the base's own union, with nullability) or `Exact(T)`. An `on:`
+CASE over a union tag gives each `when:` handle its members and `else:` the unlisted ones;
+a searched CASE's top-level `isinstance(<direct ref>, T)` conjunct gives its handle a fact.
+Facts propagate in Kahn's order over data, CASE, and `depends_on` edges: control edges
+union, each required data group unions its producers, and contributions intersect
+(`union_facts`/`intersect_facts`; losing information is always sound). Optional groups
+and `runs_after` contribute nothing; unordered (cycle) nodes get no facts so
+`reject_cycles` reports the cycle. `Narrowing.for_node(id)` returns the node's view, which
+the reference, call-type, and exhaustiveness checks read; flow outputs use the unnarrowed
+maps. Build-time seams (inline child input inference, LOOP seeds) run before the pass and
+see unnarrowed types.
 
 Compose output derivation, builders, child signatures, and producer maps retain the
 complete output-contract sum. `ChildSignature.declared_outputs` retains ordered
@@ -1030,7 +1065,9 @@ boolean/arithmetic, prompt builtin-call) are unified. Three modules, one pipelin
   (arithmetic `+ - * / % **`, comparisons, `and`/`or`/`not`, `in`/`not in`, list
   literals, pure builtin calls with dotted access, `:-` default / `:?` required /
   `|` coalesce). A post-parse guard reserves those four operator words as exact
-  reference roots while allowing them as dotted fields. No evaluation happens
+  reference roots while allowing them as dotted fields, and requires every
+  `isinstance` call to be exactly `isinstance(<expr>, <bare NAME>)` with no field read
+  on the result. No evaluation happens
   here. The evaluator walks this **restricted AST** — there is no Python `eval`;
   a builtin call resolves only against the
   `TEMPLATE_FNS` whitelist, so a span can compute but cannot reach arbitrary code.
@@ -1038,7 +1075,10 @@ boolean/arithmetic, prompt builtin-call) are unified. Three modules, one pipelin
   over a value resolver; `infer_expr_type` conservatively proves fixed result types
   through an injected reference-type resolver; and `expr_refs` collects the paths a
   span reads (for edge inference + scope checks). `evaluate_when` is the `when:`
-  boolean. `RequiredError` (a `${x:?"msg"}` over an unbound ref) lives here, its
+  boolean. `isinstance(x, T)` is a special form: `T` is looked up in the `types` table
+  every entry point takes (`types=None`), the check is `build_value_as`, and ref walks,
+  rewrites, and inference (`bool`) skip `T`; the traced path records one opaque route over
+  `x`. `RequiredError` (a `${x:?"msg"}` over an unbound ref) lives here, its
   natural home now that the evaluator raises it.
 - **`template.py` — the string surface.** `scan_template` splits literal text from
   `${...}` spans; `eval_binding` renders a binding value; `render_template_record`
@@ -1071,7 +1111,8 @@ entire trimmed value, never embedded in a span): a binding's whole value, and a
 (`__call_N`) and the host is rewritten to `${<synth>.output}`. A flow call inside
 a span (`${flow(args)}`) is a hard `LoadError` — hoist an embedded call to a named
 node; a coalesce-of-calls (`${a() | b()}`) is likewise rejected. Pure builtins
-(`${upper(x)}`) stay legal inside `${}`.
+(`${upper(x)}`) and `isinstance` stay legal inside `${}`. A prompt rejects
+`isinstance` (`isinstance is not a prompt function; compute it in an input binding`).
 
 **Raw-string public API** (what callers outside `expr` use, re-exported from the
 `expr` package `__init__`): `eval_binding` (render a binding), `expr_refs_of` (its

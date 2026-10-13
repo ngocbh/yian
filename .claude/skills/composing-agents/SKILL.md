@@ -128,6 +128,12 @@ through an `Optional[...]` record still gives `null` when the whole value is nul
 values whose type isn't known at load (`object`, an untyped output, or anything below
 them) aren't checked.
 
+On a `Union[...]`, a field every member has reads anywhere (one type if the members
+agree, the merged `Literal` for the tag, else untyped). A field only some members have
+is a load error outside a narrowing `case` branch (see `case` below): `reference
+${d.output.qty} reads field 'qty', which only union members with action buy, sell have;
+read it inside a case on ${d.output.action}`. Flow outputs are never narrowed.
+
 **Operators inside `${...}`** — one expression grammar, everywhere:
 
 | Form | Meaning |
@@ -135,6 +141,7 @@ them) aren't checked.
 | `${a + b}`, `${a * b + 1}` | arithmetic — `+ - * / % **`, unary minus |
 | `${a == b}`, `${x in [1, 2]}` | comparisons / membership / `and`/`or`/`not` |
 | `${[a, b]}`, `${upper(x)}` | list literal / pure builtin call |
+| `${isinstance(x, Buy)}` | type test; `T` is a `typedefs:` name or `str`/`int`/`float`/`bool`/`date`/`datetime`/`object` |
 | `${X:-default}` | value, else `default` if absent |
 | `${X:?"msg"}` | required — fail with the literal `msg` if absent (quote the message) |
 | `${a \| b \| c}` | first present among peers — **the branch-join coalesce** |
@@ -160,7 +167,7 @@ including when `while:` stops before the first iteration or a run is replayed.
 
 Python typing vocabulary. Scalars: `str`, `int`, `float`, `bool`, `date`,
 `datetime`, `object`, `None`. Forms: `list[X]`, `Optional[X]`, `Literal[...]` (an
-enum of tags), and named **records**. `Optional[X]` (nullable) and `= default`
+enum of tags), named **records**, and `Union[A, B, ...]` of records. `Optional[X]` (nullable) and `= default`
 (omission-fill) are orthogonal.
 
 Use `int[1, 12]` or `float[0.0, 1.0]` for inclusive numeric bounds. Supply two
@@ -184,7 +191,22 @@ typedefs:
   Signal:                              # record — fields recurse
     score: float
     note: Optional[str]
+  Buy:                                 # union members: records with a tag field
+    action: Literal[buy]
+    qty: int
+  Sell:
+    action: Literal[sell]
+    price: float
+  Order: Union[Buy, Sell]              # one of the members
 ```
+
+A union's members must be told apart by the data: a **tag field** every member declares
+as a single-value `Literal` with distinct values (any name), or shapes that can't
+overlap. Otherwise the typedef fails with `members 'Buy' and 'Sell' can match the same
+value; add a tag field ...`. Write `Union[...]`, never `A | B` (load error with a hint);
+a nullable union is `Optional[Union[...]]` or `Optional[Order]`, not `Union[A, None]`.
+A union fills a union or `object` input member by member, never a record input: narrow
+it in a `case` first.
 
 ## Node kinds (the closed set — you compose these, you don't define new ones)
 
@@ -200,12 +222,13 @@ classify:
     Answer with exactly one of: positive, neutral, negative.
 ```
 **An AGENT node's `output:` may be any shape.** Only a bare, untagged `str` keeps the
-node a text producer. A `Literal[...]` enum, record, non-string scalar, or list
+node a text producer. A `Literal[...]` enum, record, union, non-string scalar, or list
 switches it to **structured generation** — the engine derives a schema from
 `output:` and the model emits a conforming value (native structured output, or a
 JSON fallback for providers that lack it), validated at the write boundary and
 retried up to `retries:` times (default 2) on deviation. A root `Literal[...]`
-returns its bare tag to the flow.
+returns its bare tag to the flow. A union returns the matching member's record; each
+member's schema pins its tag and rejects unknown fields.
 Use a downstream `code` node only for deterministic post-processing.
 An AGENT with `tools:` or `skills:` runs the tool loop; without them it makes one model
 call (text, or structured for a typed `output:`). `mode:` was removed; writing it is a
@@ -411,6 +434,16 @@ Searched form (first true `when:` wins, no `on:`): `when: "score.output >= 0.5"`
 Routing on a `Literal` is **exhaustiveness-checked** — omitting a tag with no
 `else:` is a compile error.
 
+**Narrowing a union.** `on: ${d.output.action}` over a union's tag field narrows
+`d.output` in each branch: a `when: buy` target (and nodes chained to it by plain refs or
+`depends_on`) can read `Buy`-only fields; `else:` sees the unlisted members. A join
+`${b.output | s.output}` of `buy` and `sell` branches sees both. `on:` must be one direct
+ref to the tag (not a coalesce); a `when:` that isn't a tag is a load error (`when: buyy
+is not a tag of the union at ${d.output.action} (tags: buy, sell)`). A searched `case`
+narrows with a top-level `and` part `isinstance(<ref>, T)`:
+`when: isinstance(d.output, Buy) and d.output.qty > 5`. Its `else:` doesn't narrow. Inline
+child bodies are typed before narrowing; read member fields in a branch node.
+
 ### `human_input` — a guaranteed human gate
 **Always** calls the run's `ask_user` handler and blocks its worker until the
 host returns a typed answer (validated against `output:`). It stays inside the
@@ -594,6 +627,10 @@ One `${...}` grammar; the context decides what happens to the result:
   `${system.X}` is **not** allowed there (it is ambient; a `system` ref is a
   LoadError — move the check into a body node).
 - **Prompts**: free text with embedded `${...}` spans (each stringified).
+
+`isinstance(x, T)` works in bindings, `when:`, node/flow asserts, LOOP `while:`/`until:`,
+and flow outputs. It is a load error in prompts and `questions:`, WAIT `until:`, MAP
+`over:`, and a `call`/`loop` node's own asserts.
 
 > Bindings wire, conditions test, nodes compute.
 

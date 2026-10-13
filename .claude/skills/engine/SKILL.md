@@ -217,7 +217,13 @@ this model whenever you design anything:
   algorithms. Compose and runtime growth reference validation share the source-neutral
   closed-field walk from `nodes/contracts.py` (`output_contract_field_error`): it
   rejects a provably absent record field and any field on a scalar or list type;
-  an opaque `object` (no declared fields) and `file` stay unchecked. Python-authored
+  an opaque `object` (no declared fields) and `file` stay unchecked. On a union it
+  reads a field every member has and rejects a member-only field; runtime growth passes
+  `partial_union_fields=True` because loader-time narrowing is not recorded on the
+  fragment. Compose's narrowing pass (`compose/validate/narrowing.py`) gives each node a
+  view of the producer/flow-input contracts under the `on:`/`isinstance` CASE branches
+  that route it; the reference, call-type, and exhaustiveness checks read
+  `Narrowing.for_node`. Runtime routing does not change. Python-authored
   nodes pass `output_contract=`; there is no parallel
   output-Type API. Authored `output:` syntax (the descriptor's normalized `outputs` field)
   stays unchanged. Compose injects an optional source-aware reader through `BuildContext`;
@@ -230,6 +236,14 @@ this model whenever you design anything:
   and generated contracts without an
   authorable type occurrence keep empty origins, while derived child contracts preserve
   their carriers and external alias views use ordinary lexical rebasing.
+- `isinstance(x, T)` is an evaluator special form, not a `TEMPLATE_FNS` builtin: `T` is
+  a bare type name looked up in the evaluating node's `Node.types` table, never a
+  reference. Ref walks, rewrites, inference (`bool`), and flow-callee detection skip
+  `T`. Every evaluation entry point takes `types=None`; node sites pass `self.types`,
+  and `LoopNode.respawn` copies it. Compose fills the tables after the boundary is
+  synthesized; the manifest emits `types` only when non-empty. Prompts reject it (no
+  type table), as do reserved wiring (WAIT `until:`, MAP `over:`) and spawner asserts,
+  which lower onto the child's END.
 - Static expression typing is source-neutral: `expr.infer_expr_type` mirrors only
   result types the evaluator proves (literal/direct-ref and fixed boolean roots).
   Compose's `helpers/output_contracts.py` alone adds template shape, reference
@@ -338,7 +352,12 @@ Most are just the functional model (above) made enforceable:
   still reject it, while existing `LIST_ANY` and explicit `None`-element semantics
   remain unchanged. The specialized `LIST_*` discriminator and carrier preserve
   `None` through canonical round-trips. Cross-flow compatibility recursively
-  applies the nullable-source-to-strict-sink rule to list elements.
+  applies the nullable-source-to-strict-sink rule to list elements. A union is
+  `Type(kind=OBJECT, variants=(record, ...))`: non-nullable record members in
+  canonical order, compared by `==` (a `Type` is unhashable), told apart by a derived
+  tag field (`union_tag_fields`) or by non-overlapping shapes (`types_overlap`). Every
+  `Type` walker (value check, compatibility, labels, schemas, manifests, inline copies)
+  must handle the `variants` arm; a new walker that ignores it is a bug.
 - **Append-only durable authority** — a fresh run records complete initialization,
   then every node start and accepted outcome. A transition is validated and prepared,
   appended to its `RunLog`, and only then applied to `RunState`; observers become

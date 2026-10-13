@@ -378,6 +378,24 @@ integer-to-number widening. Inline type copying, nested generated schemas, and
 canonical labels preserve bounds. Manifests include bounds only when present,
 preserving the identity of unbounded declarations.
 
+A union is `Type(kind=OBJECT, variants=(member, ...))`: two or more non-nullable record
+members in canonical order (by tag, else by canonical label), deduplicated by equality
+because `Type` holds dicts and is unhashable. `Optional[Union[...]]` sets `nullable` on
+the union, never on a member. Tag fields are derived (`union_tag_fields`), not stored. A
+tagged union's value check picks the member by the first tag field; an untagged one, whose
+members `types_overlap` proved disjoint at resolution, checks the one member the value
+satisfies. Compatibility, labels, inline type copying, structured-output schemas, and
+manifests (`"union": [...]`, only when present) all walk the arm. `union_field` and
+`restrict_union` are the read and narrowing helpers.
+
+`Node.types` is the node's `isinstance` type table, `dict[str, Type]`, empty by default.
+Compose fills it after the START/END boundary is synthesized, from the names the node's
+wiring sources, asserts, CASE `when:`s, and LOOP predicate use, resolved against the
+owning flow's `typedefs:`. Every evaluation entry point takes `types=None`; `eval_node`
+(binding), node asserts, CASE routing, and the LOOP predicate pass `self.types`, and
+`LoopNode.respawn` copies it. Manifests emit `types` only when non-empty, so nodes
+without `isinstance` keep their fingerprints.
+
 `AgentNode.variables` is an ordered list of the same `Parameter` carriers, each
 with an exact `ValueContract` and an explicit typed default. Variable names are
 local and cannot overlap inputs. Compose compiles their declaration-key, type,
@@ -454,6 +472,27 @@ Compose and runtime growth reference validation share the source-neutral closed-
 walk in `nodes/contracts.py`, so a partial record cannot expose a provably absent field.
 That walk, `output_contract_field_error`, also rejects any field on a scalar or list type;
 an opaque `object` (no declared fields) and `file` stay unchecked.
+On a union it reads a field every member has with the shared type (or untyped when the
+members' types differ) and rejects a field only some members have, naming the tag to
+`case` on or suggesting `isinstance`. Runtime growth passes `partial_union_fields=True`:
+grown fragments come from flows the loader already checked under narrowing, and that
+narrowing is not recorded, so member-only reads are allowed there.
+
+Compose's narrowing pass (`compose/validate/narrowing.py`, `compute_narrowing`) gives each
+node a view of the producer and flow-input contracts with narrowed union bases rebuilt. A
+fact for a base path (`<node>.output[.path]` or `input.<name>[.path]`) is `Members(S)` (a
+subset of the base's own union members, with nullability) or `Exact(T)`. An `on:` CASE over
+a union tag field gives each `when:` handle its tagged members and `else:` the unlisted
+ones, and a searched CASE's top-level `isinstance(<ref>, T)` conjunct gives its handle a
+fact (its `else:` carries none), and a later conjunct of the same `and` chain is checked
+against the narrowed base. A `when:` that is not a tag is a located load error. Facts flow in Kahn's order over
+data, CASE, and `depends_on` edges: control edges join by union, each required data group
+joins its producers by union, and all contributions meet by intersection. Optional groups
+and `runs_after` contribute nothing; nodes on a cycle get no facts and are left for
+`reject_cycles`. The reference, call-type, and CASE-exhaustiveness checks read
+`Narrowing.for_node(id)`; flow outputs are checked unnarrowed. Inline child bodies and
+LOOP seeds are typed while nodes build, before the pass, so they see unnarrowed types.
+Runtime routing is unchanged.
 
 Physical Compose declarations derive exact `ValueContract`s. Output binding derivation,
 builders, child signatures, producer maps, and validators retain the complete

@@ -16,6 +16,10 @@ REGISTRY = read_typedefs(
         "Count": {"n": "int"},
         "Score": {"n": "float"},
         "Mark": {"flag": "bool"},
+        "SmallBuy": {"action": "Literal[buy]", "qty": "int[0, 10]"},
+        "LooseBuy": {"action": "str", "qty": "int"},
+        "Order": {"trade": "Union[Buy, Sell]"},
+        "WideOrder": {"trade": "Union[Buy, Sell, Hold]"},
     }
 )
 
@@ -108,3 +112,27 @@ def test_untagged_union_member_fits_by_widening():
 def test_untagged_member_record_fits_union():
     assert types_compatible(_t("Count"), _t("Union[Note, Count]"))
     assert not types_compatible(_t("Mark"), _t("Union[Note, Count]"))
+
+
+def test_member_record_does_not_fit_bounded_member():
+    assert not types_compatible(_t("Buy"), _t("Union[SmallBuy, Sell]"))
+
+
+def test_strict_union_fits_wider_optional_union():
+    assert types_compatible(_t("Union[Buy, Sell]"), _t("Optional[Union[Buy, Sell, Hold]]"))
+
+
+def test_list_of_optional_unions_does_not_fit_list_of_unions():
+    assert not types_compatible(
+        _t("list[Optional[Union[Buy, Sell]]]"), _t("list[Union[Buy, Sell]]")
+    )
+
+
+def test_union_field_follows_members():
+    assert types_compatible(_t("Order"), _t("WideOrder"))
+    assert not types_compatible(_t("WideOrder"), _t("Order"))
+
+
+def test_plain_str_tag_fits_union():
+    # The existing scalar rule lets a plain str fill a Literal, so this record fits Buy.
+    assert types_compatible(_t("LooseBuy"), _t("Union[Buy, Sell]"))

@@ -137,6 +137,9 @@ def types_compatible(source: Type, sink: Type) -> bool:
             for member in members
         )
     if sink.fields is not None:
+        # A union may hold a member other than this record, and load can't tell which.
+        if source.variants is not None:
+            return False
         if source.fields is None:
             return False
         for fname in (sink.required or frozenset()):

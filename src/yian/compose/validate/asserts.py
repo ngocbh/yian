@@ -54,8 +54,9 @@ from yian.expr import ExpressionError, condition_refs
 from yian.expr.expressions import rewrite_condition_refs
 from yian.expr.template import flow_call_callees_in_spans
 from yian.compose.desugar.inline_calls import desugar_call_directives
+from yian.compose.helpers.isinstance_types import collect_isinstance_names
 from yian.compose.helpers.output_contracts import output_contract_path_error
-from yian.nodes.base import Node
+from yian.nodes.base import Node, NodeKind
 from yian.nodes.contracts import (
     Assertion,
     OutputContract,
@@ -70,6 +71,9 @@ from yian.compose.helpers.errors import LoadDiagnostics
 # Reserved prefix for the END params synthesized from a lowered post-assert. Authors
 # cannot write `__`-prefixed ids, so a synth name never collides with an author id.
 _SYNTH_PREFIX = "__assert_"
+
+# Kinds whose node asserts move onto the spawned child flow's END.
+_SPAWNER_KINDS = frozenset({NodeKind.CALL, NodeKind.MAP, NodeKind.LOOP})
 
 
 @dataclass(frozen=True)
@@ -369,6 +373,23 @@ def validate_node_asserts(
                     )
                 )
                 continue
+            # A spawner's asserts are lowered onto the child's END, which resolves
+            # `isinstance` types in the child flow, not here.
+            kind = getattr(node, "kind", None)
+            if kind in _SPAWNER_KINDS:
+                try:
+                    type_test = bool(collect_isinstance_names(a, condition=True))
+                except ExpressionError:
+                    type_test = False
+                if type_test:
+                    errors.append(
+                        (
+                            f"node {nid!r} assert {a!r}: isinstance in a {kind.value} "
+                            f"node's asserts is not supported; assert inside the child flow",
+                            error_range,
+                        )
+                    )
+                    continue
             # parse-check + collect refs on the ONE unified condition walk (any spelling).
             try:
                 refs = condition_refs(a)

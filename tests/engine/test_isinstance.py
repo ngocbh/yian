@@ -272,12 +272,16 @@ def test_traced_isinstance_records_one_route_over_the_first_argument():
 
 # --- nodes carry the type table --- #
 
-# Compose fills `Node.types` from the names each node's expressions use; these tests set
-# it by hand on loaded flows and directly built nodes.
+# Compose fills `Node.types` from the names each node's expressions use; these tests also
+# set it by hand on loaded flows and directly built nodes.
 
 ORDER_FLOW = """
 id: orders
 name: orders
+typedefs:
+  Buy: {action: 'Literal[buy]', qty: int}
+  Sell: {action: 'Literal[sell]', price: float}
+  Order: Union[Buy, Sell]
 input:
   order: object
 nodes:
@@ -322,7 +326,7 @@ def _orders_flow():
 
 def test_a_node_starts_with_an_empty_type_table():
     assert CaseNode("route", [Case("s", "isinstance(order, Sell)")]).types == {}
-    assert load_flow(ORDER_FLOW).compiled.nodes["check"].types == {}
+    assert load_flow(ORDER_FLOW).compiled.nodes["d"].types == {}
 
 
 @pytest.mark.parametrize("order, expected", [
@@ -354,6 +358,10 @@ def test_case_forward_routes_with_its_type_table():
 ASSERT_FLOW = """
 id: asserted
 name: asserted
+typedefs:
+  Buy: {action: 'Literal[buy]', qty: int}
+  Sell: {action: 'Literal[sell]', price: float}
+  Order: Union[Buy, Sell]
 input:
   order: object
 nodes:
@@ -383,6 +391,8 @@ def test_node_asserts_use_the_node_type_table(order, status):
 LOOP_FLOW = """
 id: counter
 name: counter
+typedefs:
+  Running: Literal[running]
 defs:
   bump:
     input:

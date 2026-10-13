@@ -248,7 +248,9 @@ content-addressed copies of every version it has handed out
 (`.<name>.versions/`), a lock file, and a write log (`.<name>.writes.jsonl`).
 Each write-log line is JSON with `base_version`, `version`, and `provenance`.
 From `ProfileMemory`, provenance holds `run_id`, `commit_id`, `seen_version`,
-and the distinct `feedback` values. A crash while appending can
+and the distinct `feedback` values. Provenance that is not a JSON object of
+finite JSON values raises `TypeError` or `ValueError` before anything is
+written. A crash while appending can
 leave a partial last line; readers should skip lines that are not valid JSON.
 Locking is single-host. Other storage implements the `MarkdownStore` protocol:
 `read(version=None) -> (text, version)` and

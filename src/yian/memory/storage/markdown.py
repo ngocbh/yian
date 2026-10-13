@@ -17,7 +17,7 @@ import tempfile
 from threading import Lock
 from typing import Iterator, Protocol, runtime_checkable
 
-from yian.memory.contracts import JsonObject
+from yian.memory.contracts import JsonObject, _freeze_json_object, _thaw_json_object
 from yian.memory.storage.sqlite import check_storage_path
 
 
@@ -195,15 +195,29 @@ class FileMarkdownStore:
             `str`: The version of the stored document.
 
         Raises:
-            `TypeError`: ``text`` or ``base_version`` is not a string.
-            `ValueError`: The current file is not valid UTF-8.
+            `TypeError`: ``text`` or ``base_version`` is not a string, or
+                ``provenance`` is not `None` or an exact JSON object. Nothing
+                was written.
+            `ValueError`: The current file is not valid UTF-8, or
+                ``provenance`` holds a non-finite number, a circular value, or
+                nesting too deep. Nothing was written.
             `MarkdownVersionMismatch`: ``base_version`` is not current.
             `FileNotFoundError`: The parent directory does not exist and
                 `create_parent` is off.
         """
         if type(text) is not str or type(base_version) is not str:
             raise TypeError("text and base_version must be strings")
+        if provenance is not None:
+            provenance = _thaw_json_object(_freeze_json_object(provenance, "provenance"))
         new_version = markdown_version(text)
+        # Encode the log line before touching the document so a bad value
+        # cannot leave a replaced document without its log entry.
+        line = json.dumps(
+            {"base_version": base_version, "version": new_version,
+             "provenance": provenance},
+            allow_nan=False,
+            sort_keys=True,
+        ) + "\n"
         with self._locked():
             current = markdown_version(self._current())
             if current != base_version:
@@ -211,11 +225,7 @@ class FileMarkdownStore:
             self._keep(new_version, text)
             self._replace(self.path, text)
             with self._writes.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(
-                    {"base_version": base_version, "version": new_version,
-                     "provenance": provenance},
-                    sort_keys=True,
-                ) + "\n")
+                handle.write(line)
                 handle.flush()
                 os.fsync(handle.fileno())
             return new_version

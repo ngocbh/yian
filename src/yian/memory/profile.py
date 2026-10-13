@@ -204,6 +204,8 @@ class ProfileMemory:
 
         Raises:
             `MarkdownVersionMismatch`: ``base_version`` is not current.
+            `TypeError` or `ValueError`: The store rejected ``provenance`` as
+                not JSON; `FileMarkdownStore` does so before writing anything.
             `MemoryOperationError`: ``profile.closed`` after close.
         """
         self._ensure_open("write")

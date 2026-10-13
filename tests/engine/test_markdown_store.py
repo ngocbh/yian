@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import datetime
 import json
+import math
 import threading
 
 import pytest
@@ -120,6 +122,31 @@ def test_every_write_appends_its_provenance_and_nothing_is_replayed(tmp_path) ->
     log = [json.loads(line) for line in (tmp_path / ".ada.md.writes.jsonl").read_text().splitlines()]
     assert [entry["provenance"]["commit_id"] for entry in log] == ["c1", "c2"]
     assert (log[0]["base_version"], log[0]["version"]) == (base, first)
+
+
+@pytest.mark.parametrize(
+    ("provenance", "error"),
+    [
+        ({"at": datetime.datetime(2026, 10, 13)}, TypeError),
+        ({"score": math.nan}, ValueError),
+        ({"tags": ("a",)}, TypeError),
+        ({1: "x"}, TypeError),
+        ([], TypeError),
+    ],
+)
+def test_non_json_provenance_is_rejected_before_anything_is_written(
+    tmp_path, provenance, error
+) -> None:
+    path = tmp_path / "ada.md"
+    store = FileMarkdownStore(path)
+    base = store.write("# Ada\n", base_version=store.read()[1], provenance={"commit_id": "c1"})
+    log = tmp_path / ".ada.md.writes.jsonl"
+    before = log.read_text()
+    with pytest.raises(error, match="provenance"):
+        store.write("# Ada\nEdited.\n", base_version=base, provenance=provenance)
+    assert path.read_text() == "# Ada\n"
+    assert log.read_text() == before
+    assert not (tmp_path / ".ada.md.versions" / (markdown_version("# Ada\nEdited.\n")[7:] + ".md")).exists()
 
 
 def test_concurrent_writers_from_one_base_have_exactly_one_winner(tmp_path) -> None:

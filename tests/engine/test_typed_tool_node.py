@@ -327,11 +327,66 @@ nodes:
 output: ${a.output}
 """
 
+_MAP_BODY_FLOW = """
+id: batch
+name: batch
+nodes:
+  each:
+    kind: map
+    over: [1, 2]
+    input:
+      x: ${item}
+    nodes:
+      place:
+        kind: tool
+        tool_id: place_order
+        input:
+          qtty: ${input.x}
+          sym: X
+    output: ${place.output}
+output: ${each.output}
+"""
+
+_LOOP_BODY_FLOW = """
+id: looping
+name: looping
+defs:
+  turn:
+    input:
+      count: int
+      last: str
+    nodes:
+      place:
+        kind: tool
+        tool_id: place_order
+        input:
+          qtty: ${input.count}
+          sym: X
+    output:
+      count: ${input.count + 1}
+      last: ${place.output}
+nodes:
+  again:
+    kind: loop
+    call: turn
+    input:
+      count: 0
+      last: ""
+    while: ${count} < 1
+    max: 3
+output: ${again.output}
+"""
+
 
 @pytest.mark.parametrize(
     ("source", "node_path"),
-    [(_UNREACHED_BRANCH_FLOW, "place"), (_DEFS_CHILD_FLOW, "a/place")],
-    ids=["unreached-branch", "defs-child"],
+    [
+        (_UNREACHED_BRANCH_FLOW, "place"),
+        (_DEFS_CHILD_FLOW, "a/place"),
+        (_MAP_BODY_FLOW, "each/place"),
+        (_LOOP_BODY_FLOW, "again/place"),
+    ],
+    ids=["unreached-branch", "defs-child", "map-body", "loop-body"],
 )
 def test_tool_nodes_that_may_never_run_are_checked(tmp_path: Path, source: str, node_path: str):
     path = tmp_path / "run.jsonl"
@@ -450,6 +505,13 @@ def test_a_long_string_literal_is_truncated_in_the_message():
     message = str(excinfo.value)
     assert "x" * 60 not in message
     assert message.endswith('..." (str)')
+
+
+def test_an_int_literal_into_a_str_fails_at_run_start_and_shows_its_value():
+    with pytest.raises(ValueError, match=re.escape(
+        "TOOL node 'place' input 'qty': tool 'place_order' takes str, but the binding is 5 (int)"
+    )):
+        run_flow(load_flow(_typed_flow("5")), {}, tools={"place_order": place_str})
 
 
 def test_an_int_literal_into_an_int_runs():
@@ -740,7 +802,7 @@ def test_resume_checks_tool_types_before_appending(tmp_path: Path):
     lines = path.read_text().splitlines()
 
     with pytest.raises(ValueError, match=re.escape(
-        "TOOL node 'place' input 'qty': tool 'place_order' takes str, but the binding is int[5,5]"
+        "TOOL node 'place' input 'qty': tool 'place_order' takes str, but the binding is 5 (int)"
     )):
         resume_flow(flow, log=path, tools={"first_step": first_step, "place_order": place_str})
     assert path.read_text().splitlines() == lines

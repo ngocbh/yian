@@ -10,6 +10,8 @@ public schema. An optional `output:` declaration sets the node's output contract
 engine checks against the tool's return value on every call.
 """
 
+from types import MappingProxyType
+
 from yian.nodes.base import Node, NodeKind, Output
 from yian.nodes.contracts import HostToolCall, output_contract_type
 from yian.tools import ToolSet
@@ -50,7 +52,7 @@ class ToolNode(Node):
         return HostToolCall(
             tool_id=self.tool_id,
             inputs=tuple(parameter.name for parameter in self.params or ()),
-            input_types=self.input_types,
+            input_types=MappingProxyType(self.input_types),
             output_type=output_contract_type(self.output_contract),
         )
 

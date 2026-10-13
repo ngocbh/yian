@@ -906,11 +906,19 @@ def _check_tool_inputs(
                 f"{_binding_label(inferred)}"
             )
 
+
 _LITERAL_LABEL_WIDTH = 40
 
 
 def _binding_label(typ: Type) -> str:
-    """Return a binding type's label, showing a one-value string by its value."""
+    """Return a binding type's label, showing a one-value string or int by its value."""
+    if (
+        typ.kind is ValueKind.INTEGER
+        and typ.bounds is not None
+        and typ.bounds[0] == typ.bounds[1]
+        and not typ.nullable
+    ):
+        return f"{typ.bounds[0]} (int)"
     if (
         typ.kind is ValueKind.STRING
         and typ.tags is not None

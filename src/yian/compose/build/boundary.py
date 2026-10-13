@@ -14,10 +14,11 @@ from typing import Any, Optional
 from yian.compile.model import END_ID, START_ID, Edge, FlowOutput
 from yian.expr import binding_co_skips
 from yian.nodes.base import Node
-from yian.nodes.contracts import Parameter, binding_source
+from yian.nodes.contracts import OutputContract, Parameter, binding_source
 from yian.nodes.end import EndNode
 from yian.nodes.start import StartNode
 from yian.compose.edges.producers import _binding_producers
+from yian.compose.helpers.output_contracts import combine_output_contracts
 # Forward edge only: `validate/asserts.py` (and its own deps) never import this module,
 # so importing the lowered-asserts carrier here adds no import cycle.
 from yian.compose.validate.asserts import LoweredAsserts
@@ -69,6 +70,10 @@ def synthesize_boundary_graph(
     The START_ID-side `${input.X}`-producer DATA edges + the demote-input-reader-from-root
     rule live here too (every input read resolves through the START_ID namespace).
 
+    END's `output_contract` comes from the outputs' declared types (`name: Type = value`),
+    so a commit and a replay of END's value both re-check them; see
+    `_declared_output_contract`.
+
     `lowered` (optional) is the flow's `asserts:` lowered into node-local `LoweredAsserts`.
     When given, its PRE (boundary) asserts are stamped on START's ordinary
     `post_asserts` (they read `${output.X}` — START's coerced output), its POST asserts on END
@@ -79,6 +84,7 @@ def synthesize_boundary_graph(
     """
     start = StartNode(START_ID, params=input_parameters)
     end = EndNode(END_ID, output_names=[o.name for o in outputs], value=not record)
+    end.output_contract = _declared_output_contract(outputs, record=record)
     boundary_nodes: dict[str, Node] = {START_ID: start, END_ID: end}
 
     # END_ID producer edges — one per producer per output, keyed by the output NAME, with the
@@ -150,3 +156,32 @@ def synthesize_boundary_graph(
     if lowered is not None:
         boundary_wiring[END_ID].update(lowered.synth_wiring)
     return boundary_nodes, end_edges + root_edges, boundary_wiring
+
+
+def _declared_output_contract(
+    outputs: list[FlowOutput],
+    *,
+    record: bool,
+) -> OutputContract | None:
+    """Return END's output contract from the outputs' declared types.
+
+    A value END takes its one output's declared contract. A record END with any typed
+    output takes an exact record when every output is typed, else a partial record that
+    leaves each untyped field opaque. END commits through it, so a whole `float` value
+    widens an int and a whole `list[float]` value widens its int elements, while record
+    fields never widen (their values, lists included, stay as returned).
+
+    Args:
+        outputs (`list[FlowOutput]`): The flow's outputs, typed ones carrying a
+            `Binding.contract`.
+        record (`bool`): Whether END returns a record keyed by output name.
+
+    Returns:
+        `OutputContract | None`: The declared contract, or `None` when no output is typed.
+    """
+    declared = {o.name: o.binding.contract for o in outputs}
+    if not record:
+        return next(iter(declared.values()), None)
+    if all(contract is None for contract in declared.values()):
+        return None
+    return combine_output_contracts(declared)

@@ -22,6 +22,7 @@ from lark import Token, Tree
 from yian.expr import ExpressionError, infer_expr_type
 from yian.expr.template import Span, scan_template, template_refs
 from yian.nodes.contracts import (
+    Binding,
     ContractOrigins,
     OutputContract,
     PartialRecordContract,
@@ -163,7 +164,9 @@ def resolve_output_binding_contract(
 ) -> OutputContract | None:
     """Resolve one Compose output binding to its canonical value contract.
 
-    A direct whole-value reference retains the referenced contract, including
+    A typed binding (a ``Binding`` whose ``contract`` is set) resolves to its
+    declared contract, since that type is what the binding guarantees at runtime.
+    Otherwise a direct whole-value reference retains the referenced contract, including
     provenance.  A computed whole-value expression receives a new source-free
     contract only when the expression engine proves its result type.  Embedded
     or multiple template spans always produce ``str``; malformed, literal-text,
@@ -171,7 +174,8 @@ def resolve_output_binding_contract(
 
     Args:
         binding (`Any`):
-            A raw binding value or exact semantic ``Binding`` carrier.
+            A raw binding value or exact semantic ``Binding`` carrier, possibly
+            carrying a declared contract.
         producers (`dict[str, OutputContract]`):
             Exact or partial node output contracts keyed by producer id. A
             proven field of a partial record remains projectable.
@@ -188,6 +192,8 @@ def resolve_output_binding_contract(
             A referenced producer is not an ``OutputContract``, or a flow-input
             contract is not an exact ``ValueContract``.
     """
+    if isinstance(binding, Binding) and binding.contract is not None:
+        return binding.contract
     source = binding_source(binding)
     if not isinstance(source, str):
         return None
@@ -206,14 +212,7 @@ def resolve_output_binding_contract(
         return ValueContract(Type.scalar(ValueKind.STRING))
 
     expression = segments[0].tree
-    is_direct_reference = getattr(expression, "type", None) == "WRAPPED_REF" or (
-        getattr(expression, "data", None) == "refcall"
-        and not any(
-            getattr(child, "data", None) == "call_suffix"
-            for child in getattr(expression, "children", ())
-        )
-    )
-    if is_direct_reference:
+    if _is_direct_reference(expression):
         if len(refs) != 1:
             return None
         return reference_contracts[refs[0]]
@@ -227,6 +226,50 @@ def resolve_output_binding_contract(
 
     inferred = infer_expr_type(expression, reference_type)
     return None if inferred is None else ValueContract(inferred)
+
+
+def direct_reference_path(binding: Any) -> str | None:
+    """Return the path a binding reads when it is one lone whole-value reference.
+
+    Args:
+        binding (`Any`): A raw binding value or semantic ``Binding`` carrier.
+
+    Returns:
+        `str | None`: The dotted reference path (``item``, ``item.name``,
+            ``a.output``), or ``None`` for a literal, an embedded or computed
+            template, a call, or malformed text.
+    """
+    source = binding_source(binding)
+    if not isinstance(source, str):
+        return None
+    try:
+        segments = scan_template(source)
+    except ExpressionError:
+        return None
+    if not (len(segments) == 1 and isinstance(segments[0], Span)):
+        return None
+    if not _is_direct_reference(segments[0].tree):
+        return None
+    refs = template_refs(segments)
+    return refs[0] if len(refs) == 1 else None
+
+
+def _is_direct_reference(expression: Any) -> bool:
+    """Return whether a whole-value span is a bare reference, not a call or operator.
+
+    Args:
+        expression (`Any`): The parsed tree of a template's single span.
+
+    Returns:
+        `bool`: ``True`` for a wrapped or dotted reference with no call suffix.
+    """
+    return getattr(expression, "type", None) == "WRAPPED_REF" or (
+        getattr(expression, "data", None) == "refcall"
+        and not any(
+            getattr(child, "data", None) == "call_suffix"
+            for child in getattr(expression, "children", ())
+        )
+    )
 
 
 def _origin_path_sort_key(

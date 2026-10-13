@@ -10,6 +10,8 @@ body omits carries over unchanged, so it has nothing to compare. The node's cano
 contract already retains independently proven body fields when no sound exact aggregate
 exists. This pass carries a range anchor from
 `BuildResult.field_ranges[("field", "inputs")]` (the coarse `input:` mapping span).
+For an inline body, whose parameters are generated from the seeds, each proven returned
+field must also fit its generated parameter; that error points at the seed binding.
 
 Imports flow down only: `compile.validation` (the type comparator) and
 `compose.helpers` (shared output-contract inference and load diagnostics). Only
@@ -18,6 +20,8 @@ the loader (and the compose package facade) import this back.
 
 from __future__ import annotations
 
+import json
+from collections.abc import Collection
 from typing import Any, Optional
 
 from yian.compile.validation import types_compatible
@@ -28,11 +32,14 @@ from yian.compose.helpers.output_contracts import (
 from yian.compose.nodes.base import BuildResult
 from yian.diagnostics import SourceRange
 from yian.nodes.contracts import (
+    Binding,
     OutputContract,
     PartialRecordContract,
     ValueContract,
+    binding_source,
 )
 from yian.typesys import canonical_type_label
+from yian.typesys.values import Type
 
 
 def check_loop_type_contract(
@@ -41,6 +48,7 @@ def check_loop_type_contract(
     flow_inputs: dict[str, ValueContract],
     flow_wiring: dict[str, dict[str, Any]],
     *,
+    inline_loops: Collection[str] = (),
     diagnostics: LoadDiagnostics | None = None,
 ) -> None:
     """The TYPE-level half of a `loop`'s `'a -> 'a` contract (a loader post-build pass).
@@ -61,7 +69,26 @@ def check_loop_type_contract(
     stays lenient (skipped).
     Loud + located at the loop node's `input:` mapping range
     (else the Compose-owned node range) on a
-    same-names/different-TYPES mismatch."""
+    same-names/different-TYPES mismatch.
+
+    An inline body's parameters are generated from the seeds, and each returned field is
+    bound to its parameter again on the next iteration, so for a loop in `inline_loops`
+    every statically proven returned field must also fit its generated parameter.
+
+    Args:
+        build_results (`dict[str, BuildResult]`): The built nodes keyed by node id.
+        producers (`dict[str, OutputContract]`): Each producer node's output contract.
+        flow_inputs (`dict[str, ValueContract]`): The flow's declared input contracts.
+        flow_wiring (`dict[str, dict[str, Any]]`): Each node's `param -> source` bindings.
+        inline_loops (`Collection[str]`, *optional*, defaults to `()`): The ids of loop
+            nodes whose body is written inline.
+        diagnostics (`LoadDiagnostics | None`, *optional*, defaults to `None`): Factory
+            for located load errors.
+
+    Raises:
+        `LoadError`: A returned field does not keep its carried type, or an inline body
+            returns a field that cannot fit its generated parameter.
+        `TypeError`: A producer, flow input, or loop contract has an unexpected type."""
     diagnostics = diagnostics or LoadDiagnostics()
     for label, contracts in (
         ("output producer", producers),
@@ -153,3 +180,78 @@ def check_loop_type_contract(
                     "(a returned field must keep its carried type)",
                     range=rng,
                 )
+        if nid in inline_loops:
+            _check_inline_returned_fields(
+                result,
+                carried_fields,
+                flow_wiring.get(nid, {}),
+                diagnostics,
+            )
+
+
+def _check_inline_returned_fields(
+    result: BuildResult,
+    carried_fields: dict[str, Type],
+    wiring: dict[str, Any],
+    diagnostics: LoadDiagnostics,
+) -> None:
+    """Require each returned field of an inline loop body to fit its generated parameter.
+
+    Args:
+        result (`BuildResult`): The built loop node and its source ranges.
+        carried_fields (`dict[str, Type]`): The statically proven carried field types;
+            a returned field's entry is the body's own field type.
+        wiring (`dict[str, Any]`): The loop's seed bindings keyed by carried field.
+        diagnostics (`LoadDiagnostics`): Factory for located load errors.
+
+    Raises:
+        `LoadError`: A returned field's type cannot fit the parameter generated from its
+            seed; the error names both types and suggests typing the seed.
+    """
+    node = result.node
+    returned = node.returned_fields
+    parameters = {
+        parameter.name: parameter.contract
+        for parameter in node.child_inputs
+        if parameter.contract is not None
+    }
+    for field_name, seed in wiring.items():
+        if returned is not None and field_name not in returned:
+            continue  # omitted by the body: never bound to its parameter again
+        body_field = carried_fields.get(field_name)
+        parameter = parameters.get(field_name)
+        if body_field is None or parameter is None:
+            continue  # an opaque returned field has nothing proven to compare
+        if types_compatible(body_field, parameter.type):
+            continue
+        typed = isinstance(seed, Binding) and seed.contract is not None
+        returned_label = canonical_type_label(body_field)
+        raise diagnostics.error(
+            f"loop node {node.id!r}: the body returns {field_name!r} as {returned_label}, "
+            "but the carried field is "
+            + (
+                f"declared {canonical_type_label(parameter.type)}"
+                if typed
+                else f"typed {canonical_type_label(parameter.type)} from its seed"
+            )
+            + "; declare the seed's type: "
+            f"`{field_name}: {returned_label} = {_seed_text(binding_source(seed))}`",
+            range=result.field_ranges.get(("input", field_name))
+            or result.field_ranges.get(("field", "inputs"))
+            or result.node_range,
+        )
+
+
+def _seed_text(value: Any) -> str:
+    """Render a seed value as the right side of a typed binding.
+
+    Args:
+        value (`Any`): The seed's binding value: template or directive text, or a literal.
+
+    Returns:
+        `str`: Template and directive text as written; a literal in YAML flow style.
+    """
+    if isinstance(value, str) and ("${" in value or value.startswith("call(")):
+        return value
+    # JSON is YAML flow style, and a quoted string stays literal text.
+    return json.dumps(value, default=str)

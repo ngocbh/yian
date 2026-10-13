@@ -181,6 +181,8 @@ YAML parse; other scalar forms retain a whole-value fallback.
 
 ::: yian.compose.source.SourceCursor.scalar_source
 
+::: yian.compose.source.SourceCursor.scalar_style
+
 ::: yian.compose.source.ScalarSource
 
 ## Runtime authority

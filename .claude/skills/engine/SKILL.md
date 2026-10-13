@@ -41,7 +41,9 @@ this model whenever you design anything:
   Grow`; the engine records and applies that outcome. Only `Output` binds a value.
 - Source-neutral semantic operations live in `nodes/contracts.py`: `Binding`,
   `Parameter`, `Assertion`, `ValueContract`, and `PartialRecordContract` carry
-  optional opaque origins;
+  optional opaque origins; `Binding` also carries an optional declared
+  `ValueContract` for a typed binding (`name: Type = value`), whose origins travel
+  with the binding's and whose type is manifest-backed;
   `iter_origins()` and `map_origins()` touch only declared provenance slots, and
   `typesys.Type` remains provenance-free while arbitrary payloads stay opaque.
 - Numeric `Type.bounds` is one optional inclusive pair on INTEGER/NUMBER.
@@ -103,12 +105,12 @@ this model whenever you design anything:
 - `diagnostics.Failure` is the frozen source-neutral semantic failure product:
   stable code/message, optional execution node, ordered outer-to-inner opaque
   origins, and optional exception-name/traceback debug data. Its exact closed
-  codes are `binding.evaluate`, `contract.input`, `assertion.failed`,
-  `node.execute`, `contract.node_result`, `contract.output`, `contract.route`,
-  `contract.growth`, and `graph.terminal_unreachable`. Exception classes and
-  traceback text must never decide behavior. The evaluator assigns
-  `binding.evaluate`, `contract.input`, `assertion.failed`, `node.execute`, and
-  `contract.node_result` by operation stage. The dispatcher assigns
+  codes are `binding.evaluate`, `binding.type`, `contract.input`,
+  `assertion.failed`, `node.execute`, `contract.node_result`, `contract.output`,
+  `contract.route`, `contract.growth`, and `graph.terminal_unreachable`. Exception
+  classes and traceback text must never decide behavior. The evaluator assigns
+  `binding.evaluate`, `binding.type`, `contract.input`, `assertion.failed`,
+  `node.execute`, and `contract.node_result` by operation stage. The dispatcher assigns
   `contract.output`, `contract.route`, and `contract.growth` from the closed
   `Output`, `Route`, and `Grow` arms, never from an exception class. A
   `TypeCheckError.path` is a contract-relative tuple of record names and actual
@@ -204,6 +206,9 @@ this model whenever you design anything:
   formal parameter. CASE's kind-owned lowering stamps each generated searched
   `Binding` with the first predicate origin that introduced the reference, or stamps
   `__on` from `on:`; its generated `Parameter` carriers remain source-free.
+  A present typed `Binding` is checked after its source resolves and before the
+  parameter contract: `build_value_as` against `Binding.contract`, discarding the
+  built value so the payload is not converted; a miss is `binding.type`.
   Supplied contract failures select
   `Parameter.contract.origins.at(TypeCheckError.path)` before the parameter
   fallback; default failures keep default-site ownership. Never add a parallel
@@ -257,7 +262,9 @@ this model whenever you design anything:
   name, even one or none), or list (a MAP fan-in). `ChildSignature.returns_record`
   says whether the child's END is a record; `child_signature` shapes `output` from
   it, CALL keeps that `output`, and LOOP takes a record body's field names from that
-  `output`. Record assembly creates an exact record when possible and otherwise a
+  `output`. A typed output binding resolves to its declared contract, and END's own
+  `output_contract` comes from those declared output types (exact record when every
+  field is typed, else partial; `None` when none is), so commit and replay check them. Record assembly creates an exact record when possible and otherwise a
   closed `PartialRecordContract`; unknown type evidence is never concrete `None`.
   CALL preserves that carrier; a LOOP's carrier is the merged carried record (returned
   fields from the body, omitted fields from their seeds); MAP wraps only an exact child

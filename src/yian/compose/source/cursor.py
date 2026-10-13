@@ -32,6 +32,15 @@ if TYPE_CHECKING:
 
 _NO_FILTER = object()
 
+# PyYAML ``ScalarNode.style`` values; ``None`` is a plain scalar.
+_SCALAR_STYLES = {
+    None: "plain",
+    "'": "single",
+    '"': "double",
+    "|": "literal",
+    ">": "folded",
+}
+
 
 @dataclass(frozen=True, slots=True, eq=False)
 class _ProjectedEntry:
@@ -210,6 +219,36 @@ class SourceCursor:
             range=definition.range,
             constructed_line_ranges=definition.constructed_line_ranges,
         )
+
+    @property
+    def scalar_style(self) -> str | None:
+        """Return the authored YAML style of an unchanged source scalar.
+
+        Projections and overlays keep the style while their value still equals
+        the retained scalar.
+
+        Examples:
+            >>> from yian.compose.source import SourceDocument
+            >>> SourceDocument.parse("a: 'x = 1'\\n").root.child("a").scalar_style
+            'single'
+
+        Returns:
+            `str | None`:
+                ``"plain"``, ``"single"``, ``"double"``, ``"literal"``, or
+                ``"folded"``. Mappings, sequences, virtual values, and cursors
+                whose value differs from the retained scalar return ``None``.
+        """
+
+        definition = self._source_scalar_definition()
+        if (
+            definition is None
+            or definition.raw is None
+            or type(self._value) is not type(definition.value)
+            # The identity check keeps an unchanged NaN scalar.
+            or (self._value is not definition.value and self._value != definition.value)
+        ):
+            return None
+        return _SCALAR_STYLES.get(definition.style)
 
     @property
     def key_range(self) -> SourceRange | None:
@@ -1189,7 +1228,8 @@ class SourceCursor:
         """Expose a value snapshot while retaining compatible source metadata.
 
         Mapping keys and sequence indices that still exist are aligned with
-        their physical child cursors. New nested values remain source-free.
+        their retained child sources, whether physical or projected. New nested
+        values remain source-free.
 
         Args:
             value (`Any`):
@@ -1212,7 +1252,13 @@ class SourceCursor:
             entries: list[_ProjectedEntry] = []
             for key in snapshot:
                 source = None
-                if (
+                if self._projected_entries is not None:
+                    # Reuse the retained child source, not its projected overlay:
+                    # a projection may display a placeholder value that would no
+                    # longer align with this replacement's nested children.
+                    entry = self._projected_entry(key)
+                    source = entry.source if entry is not None else None
+                elif (
                     self._document is not None
                     and not self._cycle_cut
                     and type(self._value) is dict

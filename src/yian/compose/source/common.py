@@ -155,12 +155,17 @@ class _KeyIndex:
 
 @dataclass(frozen=True, slots=True)
 class _ScalarDef:
-    """One scalar-shaped YAML definition."""
+    """One scalar-shaped YAML definition.
+
+    ``style`` is the PyYAML scalar style: ``None`` for plain, ``"'"``, ``'"'``,
+    ``"|"``, or ``">"``; it is ``None`` as well when ``raw`` is ``None``.
+    """
 
     value: Any = field(repr=False, compare=False)
     range: SourceRange | None
     raw: str | None
     constructed_line_ranges: tuple[SourceRange, ...] | None
+    style: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

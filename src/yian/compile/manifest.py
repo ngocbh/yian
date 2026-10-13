@@ -174,7 +174,7 @@ _EDGE_FIELDS = frozenset(
     {"id", "from_", "to", "source_handle", "input_group", "optional", "ordering"}
 )
 _FLOW_OUTPUT_FIELDS = frozenset({"name", "binding"})
-_BINDING_CANONICAL_FIELDS = frozenset({"source"})
+_BINDING_CANONICAL_FIELDS = frozenset({"source", "contract"})
 _BINDING_IGNORED_FIELDS = frozenset({"origin"})
 _ASSERTION_CANONICAL_FIELDS = frozenset({"expression", "display"})
 _ASSERTION_IGNORED_FIELDS = frozenset({"origin"})
@@ -374,7 +374,11 @@ def _check_fields(value: Any, expected: frozenset[str], path: str) -> None:
 
 
 def _binding_manifest_source(value: Any, path: str) -> Any:
-    """Project one canonical binding to identity-bearing source data only."""
+    """Project one canonical binding to its identity-bearing source data.
+
+    The declared contract is canonical too, but callers project it separately
+    so an untyped binding keeps its source-only encoding.
+    """
     if not isinstance(value, Binding):
         raise TypeError(f"{path}: expected Binding, got {type(value).__name__}")
     _check_fields(
@@ -383,6 +387,17 @@ def _binding_manifest_source(value: Any, path: str) -> Any:
         path,
     )
     return value.source
+
+
+def _binding_type_manifest(
+    value: Binding,
+    ctx: "_ManifestContext",
+    path: str,
+) -> Any:
+    """Return a binding's canonical declared type, or ``_MISSING`` when untyped."""
+    if value.contract is None:
+        return _MISSING
+    return _value_contract_manifest(value.contract, ctx, f"{path}.contract")["type"]
 
 
 def _binding_manifest_mapping(value: dict, path: str) -> dict:
@@ -1870,10 +1885,15 @@ def _output_manifest(output: FlowOutput, ctx: _ManifestContext, path: str) -> di
         raise TypeError(f"{path}: expected FlowOutput, got {type(output).__name__}")
     _check_fields(output, _FLOW_OUTPUT_FIELDS, path)
     source = _binding_manifest_source(output.binding, f"{path}.binding")
-    return {
+    manifest = {
         "from": _canonical_value(source, ctx, f"{path}.binding.source"),
         "name": output.name,
     }
+    # Only a typed output adds a key, so untyped outputs keep their identity.
+    output_type = _binding_type_manifest(output.binding, ctx, f"{path}.binding")
+    if output_type is not _MISSING:
+        manifest["type"] = output_type
+    return manifest
 
 
 def _flow_manifest(
@@ -1934,6 +1954,7 @@ def _flow_manifest(
             )
 
         wiring: dict[str, Any] = {}
+        binding_types: dict[str, dict[str, Any]] = {}
         bad_wiring_id = next(
             (node_id for node_id in flow.wiring if not isinstance(node_id, str)), _MISSING
         )
@@ -1958,6 +1979,17 @@ def _flow_manifest(
                 redact_credentials=True,
                 preserve_binding_identity=True,
             )
+            node_types = {}
+            for param in sorted(node_wiring):
+                param_type = _binding_type_manifest(
+                    node_wiring[param],
+                    ctx,
+                    f"{path}.wiring.{node_id}.{param}",
+                )
+                if param_type is not _MISSING:
+                    node_types[param] = param_type
+            if node_types:
+                binding_types[node_id] = node_types
 
         manifest: dict[str, Any] = {
             "edges": [
@@ -1969,6 +2001,10 @@ def _flow_manifest(
             "start_id": flow.start_id,
             "wiring": wiring,
         }
+        # Declared binding types live beside the wiring rather than inside it, so
+        # every untyped flow keeps its existing manifest byte for byte.
+        if binding_types:
+            manifest["binding_types"] = binding_types
         if topology_only and flow.input_connections:
             manifest["input_connections"] = [
                 {"child_start_id": connection.child_start_id, "input_name": connection.input_name,

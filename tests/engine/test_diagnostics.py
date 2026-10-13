@@ -29,6 +29,7 @@ from yian.diagnostics import (
 EXPECTED_FAILURE_CODES = frozenset(
     {
         "binding.evaluate",
+        "binding.type",
         "contract.input",
         "assertion.failed",
         "node.execute",

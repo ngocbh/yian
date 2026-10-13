@@ -14,6 +14,7 @@ from typing import Final, Iterable, Literal, Mapping, Protocol, TypeAlias
 
 FailureCode: TypeAlias = Literal[
     "binding.evaluate",
+    "binding.type",
     "contract.input",
     "assertion.failed",
     "node.execute",
@@ -29,6 +30,7 @@ FailureCode: TypeAlias = Literal[
 FAILURE_CODES: Final[frozenset[str]] = frozenset(
     {
         "binding.evaluate",
+        "binding.type",
         "contract.input",
         "assertion.failed",
         "node.execute",

@@ -124,6 +124,10 @@ sink, including recursively inside lists, matching runtime coercion. This lets a
 compute a carried boolean directly, for example
 `exited: ${ask.output == "/exit"}`.
 
+A [typed binding](syntax.md#typed-bindings-name-type-value) (`name: Type = value`)
+replaces the inferred type with its declared one. The loader rejects it only when
+the two are disjoint; the binder checks the value at runtime.
+
 A **prompt** is the strict context: it reads local inputs as bare `${name}`;
 AGENT prompts also read their own declared variables. It renders in
 `STRICT_RAISE` mode and may call a builtin.

@@ -44,7 +44,7 @@ def test_carriers_have_exact_final_fields() -> None:
     ):
         assert carrier.__dataclass_params__.frozen is True
 
-    assert [field.name for field in fields(Binding)] == ["source", "origin"]
+    assert [field.name for field in fields(Binding)] == ["source", "origin", "contract"]
     assert [field.name for field in fields(Assertion)] == [
         "expression",
         "display",

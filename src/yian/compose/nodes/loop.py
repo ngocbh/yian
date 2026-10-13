@@ -97,9 +97,10 @@ class LoopDescriptor(NodeDescriptor):
         A body that returns the whole carried record stamps its codomain as `output_contract`
         and leaves `returned_fields` unset. A body that returns a subset stamps
         `returned_fields` (carried order) and a merged `output_contract`: each returned field
-        projected from the body codomain, each omitted field resolved from its seed binding
-        through `ctx.binding_contract_reader` (opaque when the reader is absent or the seed
-        is unproven).
+        projected from the body codomain, each omitted field resolved from its seed binding:
+        the seed's declared type when the binding is typed, else through
+        `ctx.binding_contract_reader` (opaque when the reader is absent or the seed is
+        unproven).
         The deep TYPE-level half compares every statically proven returned field with its
         statically proven carried seed in the loader pass `check_loop_type_contract`, which
         needs the assembled parent producers/flow-input contracts.
@@ -309,7 +310,24 @@ class LoopDescriptor(NodeDescriptor):
         return project_output_contract(body_output, [name])
 
     def _seed_contract(self, ctx: BuildContext, name: str) -> OutputContract | None:
-        """One omitted field's contract, resolved from its seed binding, else `None`."""
+        """One omitted field's contract, resolved from its seed binding, else `None`.
+
+        A typed seed (`name: Type = value`) carries its declared type, which the driver
+        checks when it binds the seed; an untyped seed's contract is read from its value.
+
+        Args:
+            ctx (`BuildContext`):
+                The immutable build inputs; supplies `binding_contract_reader`.
+            name (`str`):
+                The omitted carried field.
+
+        Returns:
+            `OutputContract | None`:
+                The seed's declared or inferred contract, or `None` when unproven.
+        """
+        declared = self.input_types.get(name)
+        if declared is not None:
+            return declared
         if ctx.binding_contract_reader is None:
             return None
         return ctx.binding_contract_reader(

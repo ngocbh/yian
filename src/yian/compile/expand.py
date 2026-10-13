@@ -92,7 +92,7 @@ def _rens_internal(binding: Binding, callsite: str) -> Binding:
     """Re-namespace one canonical source while retaining its authored origin.
 
     Exactly one ``Binding`` layer is semantic IR: its source is rewritten and a
-    new carrier retains the same origin. A nested carrier is an opaque payload
+    new carrier retains the same origin and declared contract. A nested carrier is an opaque payload
     and is not recursively unwrapped.
 
     Singular only:
@@ -112,7 +112,7 @@ def _rens_internal(binding: Binding, callsite: str) -> Binding:
         )
     source = binding.source
     if not isinstance(source, str):
-        return Binding(source, binding.origin)
+        return replace(binding)
 
     def _rename(path: str) -> "str | None":
         parts = path.split(".")
@@ -129,7 +129,7 @@ def _rens_internal(binding: Binding, callsite: str) -> Binding:
         return None  # system.X / any other head untouched
 
     rewritten = rewrite_template_refs(source, _rename)
-    return Binding(rewritten, binding.origin)
+    return replace(binding, source=rewritten)
 
 
 def _lower_spawner_post_asserts(

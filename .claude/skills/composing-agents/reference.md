@@ -73,13 +73,17 @@ For LOOP, those proven siblings and the carried field-name set remain enforced e
 when `while:` stops before the first body run or a durable run is replayed. A field
 the LOOP body omits takes its type from its seed binding.
 
+A typed binding (`name: Type = value`) replaces the inferred type with its declared
+one: a parent sees a child's declared output type, an inline parameter or omitted
+LOOP field takes the declared type, and the binder checks the value at runtime.
+
 ## The three expression contexts (one grammar)
 
 One `${...}` grammar; the context decides what happens to the result:
 
 | Context | Where | What it does |
 |---------|-------|--------------|
-| **Bindings** | `input:` / `output:` values | **evaluated** to a typed value — refs, literals, arithmetic, lists, `:-` / `:?` / `\|`, pure builtins. Child-flow call = `call(...)` directive. |
+| **Bindings** | `input:` / `output:` values | **evaluated** to a typed value — refs, literals, arithmetic, lists, `:-` / `:?` / `\|`, pure builtins. Child-flow call = `call(...)` directive. `name: Type = value` declares the type. |
 | **Conditions** | `when:` / `asserts:` | **tested** as a boolean: `== != < <= > >=`, `in`/`not in`, `and`/`or`/`not`, parens, arithmetic operands. Canonical **bare** form (no `${}`); `${...}`-wrapped spellings load and evaluate identically. |
 | **Prompts** | `prompt:` text | free text with embedded `${...}` spans (each stringified) |
 
@@ -148,7 +152,10 @@ Contract:
   Cross-flow bindings accept strict-to-nullable elements but reject the reverse.
   Unsupported whole-value computations, empty/heterogeneous lists, producers
   without an available static output type, or incomplete list element types fail
-  at the authored binding; use a typed named `defs:` body as the escape hatch.
+  at the authored binding. Declare the type with a typed binding
+  (`n: int = ${input.a + input.b}`, `tags: list[str] = []`): the parameter takes
+  the declared type and the binder checks the value at runtime. A typed named
+  `defs:` body also works.
 - MAP's `${item...}` provider is demand-driven. If no outer argument is a lone
   whole-value item reference, `over:` need not be statically inspectable. The
   first such item read proves `over:` is a list with an exact element type;
@@ -178,6 +185,7 @@ Python typing vocabulary. Scalars: `str`, `int`, `float`, `bool`, `date`,
 | list | `list[str]` | |
 | nullable | `Optional[str]` | may be `null` |
 | default-fill | `lookback: int = 30` | filled when the input is omitted |
+| typed binding | `qty: int = ${size.output.qty}` | a node input or flow output declaring its value's type (see below) |
 | enum | `Literal[go, no_go, wait]` | one of these tags |
 | bounded integer | `int[1, 12]` | inclusive integer endpoints |
 | bounded float | `float[0.0, 1.0]` | inclusive finite float endpoints |
@@ -220,6 +228,22 @@ typedefs:
 
 `Buy | Sell` and `Union[Buy, None]` are load errors with hints (`use Union[Buy, Sell]`,
 `use Optional[Union[...]]`). A bad union fails at its typedef even if nothing uses it.
+
+**Typed bindings.** `name: Type = value` works on node `input:` bindings (LOOP
+seeds and HUMAN_INPUT context too), flow `output:` fields, and a single
+`output: Type = ${x}`, including `defs:` and inline bodies; not in `call(...)`
+keyword arguments. An unquoted value containing ` = ` is always typed and the left
+side must be a type, else a load error suggests quoting; quoted and block values are
+never typed (their `${...}` still evaluates). `int=3` without spaces is plain text.
+A right side starting with a quote, `[`, or `{` is read as YAML first: a quoted
+`${...}`/`call(...)` drops its quotes and stays a template or call, and strings
+inside a list or record stay text. Otherwise the right side is a
+`${...}`/`call(...)` kept as written, or a YAML 1.1 literal checked at load
+(`str = 30` fails; write `str = "30"`). The whole binding is one plain scalar, so it
+can't contain `: ` or ` #` (write a record literal as `{"a":1}`). Load rejects a value whose
+inferred type is disjoint from the declared one; narrower or unknown types are
+checked at runtime, without conversion, failing the consumer (END for a flow output)
+with `binding.type`. Declared types are in the flow fingerprint.
 
 Bounds require two ordered numeric literals and exclude booleans. Integer bounds
 retain arbitrary precision. Float bounds must be finite; integer endpoints used
@@ -319,6 +343,11 @@ compares the optional exit field with `true` to prove `bool`. This is the shape
 
 ## Gotchas
 
+- **Text containing ` = ` must be quoted.** An unquoted binding value with ` = ` is
+  a typed binding, and the left side must be a type: `qty: a = b` fails to load
+  (`` `a` ... is not a type ... quote it: `qty: "a = b"` ``). Quote it:
+  `note: "a = b"`, `fallback: '${input.y:-"a = b"}'`, `x: "call(f, a = 1)"`. Typed
+  bindings need block-style mappings.
 - **Inline `{ ... }` maps + `${...}` need quotes.** In an inline flow mapping the
   `}` in `${input.x}` closes the map early. Either quote the value
   (`input: {x: "${input.x}"}`) or use block form (preferred):

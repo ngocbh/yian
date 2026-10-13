@@ -1887,90 +1887,6 @@ def test_growth_records_the_spawner_as_owner_of_its_fragment():
     assert state.growth_owner == {node_id: "spawn" for node_id in new_ids}
 
 
-def test_pruning_a_grown_node_retires_its_settled_grown_nodes():
-    state, log = _initialized_spawner()
-    ids = _install_settled_overlay(state, prefix="x")
-    grown = _install_settled_overlay(state, prefix="x/child/start")
-    state.growth_owner = {i: "spawn" for i in ids} | {g: "x/child/start" for g in grown}
-    grown_edge_ids = {
-        edge.id for edge in state.flow.edges if edge.from_ in grown or edge.to in grown
-    }
-
-    prepared = prepare_expanded(
-        state,
-        "spawn",
-        Grow(seed={}, prune=frozenset(ids)),
-        lambda node, seed: _fragment(node.id),
-    )
-    commit_prepared(log, state, prepared)
-
-    assert prepared.record.prune_ids == tuple(sorted(ids))
-    for node_id in grown:
-        assert node_id not in state.flow.nodes
-        assert node_id not in state.flow.wiring
-        assert node_id not in state.node_state
-        assert node_id not in state.pool.store
-        assert node_id not in state.depth
-        assert node_id not in state.wiring_overrides
-        assert node_id not in state.growth_owner
-        assert node_id not in state.flow._incoming
-        assert node_id not in state.flow._outgoing
-    assert not (grown_edge_ids & set(state.edge_state))
-    assert not any(
-        edge.from_ in grown or edge.to in grown for edge in state.flow.edges
-    )
-    assert set(state.growth_owner.values()) == {"spawn"}
-
-
-_NESTED_CALL = """
-id: nested_call
-name: nested_call
-defs:
-  one:
-    input:
-      n: int
-    nodes:
-      step:
-        kind: code
-        input:
-          n: ${input.n}
-        output: int
-        code: |
-          return inputs["n"] + 1
-    output: ${step.output}
-  body:
-    input:
-      n: int
-    nodes:
-      c:
-        kind: call
-        call: one
-        input:
-          n: ${input.n}
-    output:
-      n: ${c.output}
-nodes:
-  loop:
-    kind: loop
-    call: body
-    input:
-      n: 0
-    times: 3
-output: ${loop.output}
-"""
-
-
-def test_self_pruning_spawner_hands_its_fragment_to_its_owner():
-    from tests.engine._graph_builder import _engine
-    from yian.compose.loader import load_flow
-
-    engine = _engine(load_flow(_NESTED_CALL).compiled, run_inputs={})
-    list(engine.run())
-
-    assert set(engine.state.growth_owner.values()) == {"loop", "loop#2/c"}
-    assert engine.state.growth_owner["loop~3"] == "loop"
-
-
 def _grown_under_requested(
     side_state: NodeState,
 ) -> tuple[RunState, MemoryRunLog, tuple[str, ...], str]:
@@ -1997,17 +1913,9 @@ def _prune_requested(state: RunState):
     )
 
 
-def test_pruning_keeps_a_grown_subtree_with_unsettled_work():
-    state, log, grown, side = _grown_under_requested(NodeState.UNKNOWN)
-
-    prepared = _prune_requested(state)
-    commit_prepared(log, state, prepared)
-
-    assert "x/child/start" not in state.flow.nodes
-    for node_id in (*grown, side):
-        assert node_id in state.flow.nodes
-        assert state.growth_owner[node_id] == "spawn"
-    replay, replay_log, _, _ = _grown_under_requested(NodeState.UNKNOWN)
+def _assert_replays_equal(state: RunState, prepared, side_state: NodeState) -> None:
+    """Replay ``prepared.record`` on a fresh copy of the setup and compare snapshots."""
+    replay, replay_log, _, _ = _grown_under_requested(side_state)
     commit_prepared(
         replay_log,
         replay,
@@ -2020,14 +1928,9 @@ def test_pruning_keeps_a_grown_subtree_with_unsettled_work():
     assert _snapshot(replay) == _snapshot(state)
 
 
-def test_pruning_retires_a_grown_subtree_once_settled():
-    state, log, grown, side = _grown_under_requested(NodeState.TAKEN)
-
-    prepared = _prune_requested(state)
-    commit_prepared(log, state, prepared)
-
-    assert prepared.record.prune_ids == ("x/child/start",)
-    for node_id in ("x/child/start", *grown, side):
+def _assert_retired(state: RunState, ids: tuple[str, ...]) -> None:
+    """Assert ``ids`` are gone from every topology and reducer container."""
+    for node_id in ids:
         assert node_id not in state.flow.nodes
         assert node_id not in state.flow.wiring
         assert node_id not in state.node_state
@@ -2037,3 +1940,30 @@ def test_pruning_retires_a_grown_subtree_once_settled():
         assert node_id not in state.growth_owner
         assert node_id not in state.flow._incoming
         assert node_id not in state.flow._outgoing
+    assert not any(edge.from_ in ids or edge.to in ids for edge in state.flow.edges)
+    assert set(state.edge_state) == {edge.id for edge in state.flow.edges}
+
+
+def test_pruning_keeps_a_grown_subtree_with_unsettled_work():
+    state, log, grown, side = _grown_under_requested(NodeState.UNKNOWN)
+
+    prepared = _prune_requested(state)
+    commit_prepared(log, state, prepared)
+
+    assert "x/child/start" not in state.flow.nodes
+    for node_id in (*grown, side):
+        assert node_id in state.flow.nodes
+        assert state.growth_owner[node_id] == "spawn"
+    _assert_replays_equal(state, prepared, NodeState.UNKNOWN)
+
+
+def test_pruning_retires_a_grown_subtree_once_settled():
+    state, log, grown, side = _grown_under_requested(NodeState.TAKEN)
+
+    prepared = _prune_requested(state)
+    commit_prepared(log, state, prepared)
+
+    assert prepared.record.prune_ids == ("x/child/start",)
+    _assert_retired(state, ("x/child/start", *grown, side))
+    assert set(state.growth_owner.values()) == {"spawn"}
+    _assert_replays_equal(state, prepared, NodeState.TAKEN)

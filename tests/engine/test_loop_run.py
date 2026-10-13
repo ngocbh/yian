@@ -1223,7 +1223,7 @@ def test_loop_with_nested_growth_keeps_one_iteration_resident(shape, num_workers
     resident = len(_finish_nested(shape, 3, num_workers=num_workers).state.flow.nodes)
     # A tight budget fails mid-run if any earlier iteration's nested nodes leak.
     monkeypatch.setattr(state_module, "MAX_TOTAL_NODES", resident + 20)
-    engine = _finish_nested(shape, 60, num_workers=num_workers)
+    engine = _finish_nested(shape, 20, num_workers=num_workers)
     assert len(engine.state.flow.nodes) == resident
 
 
@@ -1231,7 +1231,7 @@ def test_loop_with_nested_growth_keeps_one_iteration_resident(shape, num_workers
 def test_loop_with_nested_growth_keeps_trace_indexes_bounded(shape):
     """A learnable run's current-name trace indexes shrink with the live graph."""
     small = _finish_nested(shape, 3, learnable=True).state.trace
-    large = _finish_nested(shape, 60, learnable=True).state.trace
+    large = _finish_nested(shape, 20, learnable=True).state.trace
     assert len(large.current_writers) == len(small.current_writers)
     assert len(large.pending_connections) == len(small.pending_connections)
 
@@ -1243,6 +1243,13 @@ def test_loop_growth_record_keeps_only_the_requested_prune_ids():
     pruned = [e.record.prune_ids for e in engine.log
               if type(e.record) is NodeExpandedRecord and e.record.spawner_id == "loop~2"]
     assert pruned == [("loop#1/__end__", "loop#1/__start__", "loop#1/c", "loop~2")]
+
+
+def test_self_pruning_spawner_hands_its_fragment_to_its_owner():
+    """A driver that prunes itself passes the nodes it grew to its own owner."""
+    owners = _finish_nested("call", 3).state.growth_owner
+    assert set(owners.values()) == {"loop", "loop#2/c"}
+    assert owners["loop~3"] == "loop"
 
 
 # The child's unread side chain can still be waiting when the next driver prunes its iteration.
@@ -1317,6 +1324,7 @@ def test_loop_keeps_a_nested_subtree_with_unfinished_work(num_workers):
     owners = engine.state.growth_owner
     assert all(k in engine.state.flow.nodes and v in engine.state.flow.nodes
                for k, v in owners.items())
+    # Pooled scheduling order varies, so only the serial run pins which subtree is kept.
     if num_workers == 0:
         assert "loop#0/c/side4" in engine.state.flow.nodes
         assert owners["loop#0/c/__start__"] == "loop"

@@ -213,7 +213,9 @@ class RunState:
         growth_owner (`dict[str, str]`):
             Live dynamic node ID to the live node whose accepted growth owns it.
             Pruning a node also retires the nodes it owns, transitively, when all
-            of them are settled.
+            of them are settled.  Otherwise they move to the nearest surviving
+            owner and are retired only if a later prune of that owner finds them
+            settled; under a top-level LOOP they stay for the rest of the run.
         wiring_overrides (`dict[str, dict[str, Any]]`):
             Per-run wiring keyed by node ID, beginning with START's narrowed inputs.
         run_id (`str | None`):
@@ -1657,7 +1659,7 @@ def _prepare_growth_transition(
         expected_sequence=canonical_envelope.seq,
         _plan=replace(plan, trace_delta=_prepare_record_trace(
             state, canonical_envelope, input_connections=fragment.input_connections,
-            child_boundaries=fragment.child_boundaries, prune_ids=delta.retired_ids,
+            child_boundaries=fragment.child_boundaries, retired_ids=delta.retired_ids,
         )),
         observers=(_growth_observer(canonical_record),),
     )
@@ -1758,7 +1760,7 @@ def _prepare_record_trace(
     state: RunState, envelope: RecordEnvelope, *,
     input_connections: tuple[SeedConnection, ...] = (),
     child_boundaries: tuple[ChildFlowBoundary, ...] = (),
-    prune_ids: tuple[str, ...] = (),
+    retired_ids: tuple[str, ...] = (),
     terminal_succeeded: bool | None = None,
     terminal_output_bytes: bytes | None = None,
     terminal_failure: Failure | None = None,
@@ -1768,7 +1770,7 @@ def _prepare_record_trace(
     node_id = _outcome_node_id(record)
     return prepare_trace(state.trace, envelope, state.flow.nodes.get(node_id),
                          input_connections=input_connections, child_boundaries=child_boundaries,
-                         prune_ids=prune_ids,
+                         retired_ids=retired_ids,
                          root_end_id=state.flow.end_id if isinstance(record, RunStartedRecord) else None,
                          root_input_names=(
                              state.flow.nodes[state.flow.start_id].backward_input_names()
@@ -3221,9 +3223,12 @@ def _retired_ids(state: RunState, prune_ids: frozenset[str]) -> frozenset[str]:
     """Return ``prune_ids`` plus each one's grown nodes when all of those are settled.
 
     A grown node still ready, running, or waiting keeps its owner's whole grown
-    subtree live, so retiring never removes work that has not finished.  This
-    assumes no node outside an owner's grown subtree references a node inside it;
-    a growth that broke that would fail the usual prune checks, not corrupt state.
+    subtree live, so retiring never removes work that has not finished.  A kept
+    subtree moves to the nearest surviving owner and is retired only if a later
+    prune of that owner finds it settled; under a top-level LOOP it stays for the
+    rest of the run.  This assumes no node outside an owner's grown subtree
+    references a node inside it; a growth that broke that would fail the usual
+    prune checks, not corrupt state.
 
     Args:
         state (`RunState`):

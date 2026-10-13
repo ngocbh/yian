@@ -455,7 +455,7 @@ def prepare_trace(
     *,
     input_connections: tuple[SeedConnection, ...] = (),
     child_boundaries: tuple[ChildFlowBoundary, ...] = (),
-    prune_ids: tuple[str, ...] = (),
+    retired_ids: tuple[str, ...] = (),
     root_end_id: str | None = None,
     root_input_names: tuple[str, ...] | None = None,
     terminal_succeeded: bool | None = None,
@@ -464,8 +464,7 @@ def prepare_trace(
 ) -> TraceDelta | None:
     """Validate capture authority and prepare a detached accepted-record delta.
 
-    ``prune_ids`` are the live node IDs an accepted growth retires: the record's
-    prune IDs plus the settled nodes grown under them.
+    ``retired_ids`` are the record's prune IDs plus the settled nodes grown under them.
     """
     record = envelope.record
     if type(record) is RunStartedRecord:
@@ -583,7 +582,7 @@ def prepare_trace(
         )
     return TraceDelta(
         trace, envelope.seq, occurrence=occurrence, handler=handler, writer=writer,
-        prune_ids=prune_ids if type(record) is NodeExpandedRecord else (),
+        prune_ids=retired_ids if type(record) is NodeExpandedRecord else (),
         connections=tuple((node_id, _SeedRoutes(source, tuple(fields)))
                           for node_id, fields in connections.items()),
         consumed_connection=None if candidates is None else (node.id, candidates),

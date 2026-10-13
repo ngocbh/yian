@@ -7,7 +7,7 @@ a strict `CaseNode` plus control + data edges (its `BuildResult.edges`), with NO
   ref across the `when:`s -> one `CaseNode` input `__rN`
   (`source=<original ref>`); the `when:` is rewritten with each ref replaced by its
   local `__rN` (preserving the original spelling — bare stays bare); control
-  edges `gate->then(source_handle=then)` + `gate->else(source_handle="default")`;
+  edges `gate->then(source_handle=then)` + `gate->else(source_handle=ELSE_HANDLE)`;
   the data edges carry the `__rN` `input_group`.
 - **`on:`** (`on: ${ref}`, `cases: [{when: <value>, then: <t>}]`): one input
   `__on = ${ref}`; each `when: <value>` -> `${__on} == "<value>"`.
@@ -26,7 +26,7 @@ from pathlib import Path
 import pytest
 
 from yian.expr.expressions import evaluate_when_record
-from yian.nodes.case import DEFAULT_HANDLE, CaseNode
+from yian.nodes.case import ELSE_HANDLE, CaseNode
 from yian.nodes.contracts import PartialRecordContract, ValueContract
 from yian.typesys.values import ValueKind, Type
 from yian.compose.nodes.base import BuildContext
@@ -95,7 +95,7 @@ def test_searched_control_edges():
     _, control_edges = _split(_build_case(desc))
     ctl = {(e.from_, e.to, e.source_handle) for e in control_edges}
     assert ("gate", "positive", "positive") in ctl
-    assert ("gate", "cautious", DEFAULT_HANDLE) in ctl
+    assert ("gate", "cautious", ELSE_HANDLE) in ctl
 
 
 def test_searched_data_edge_reconciled_to_input_group():
@@ -186,8 +186,8 @@ def test_on_control_edges():
     assert ("route", "pro_note", "pro_note") in ctl
     assert ("route", "con_note", "con_note") in ctl
     assert ("route", "choppy_note", "choppy_note") in ctl
-    # else: choppy_note -> the default handle (a distinct edge to the same target).
-    assert ("route", "choppy_note", DEFAULT_HANDLE) in ctl
+    # else: choppy_note -> the else handle (a distinct edge to the same target).
+    assert ("route", "choppy_note", ELSE_HANDLE) in ctl
 
 
 def test_on_data_edge_reconciled():
@@ -413,7 +413,7 @@ def test_handles_align_with_control_edges():
     # every case handle has an outgoing edge.
     assert case_handles <= edge_handles
     # every edge handle is a case handle or the default.
-    assert edge_handles <= case_handles | {DEFAULT_HANDLE}
+    assert edge_handles <= case_handles | {ELSE_HANDLE}
 
 
 # --------------------------------------------------------------------------- #
@@ -450,7 +450,7 @@ def test_build_emits_reconciled_edges_no_provisional_group():
     # the control edges are present.
     ctl = {(e.from_, e.to, e.source_handle) for e in result.edges if e.source_handle}
     assert ("gate", "positive", "positive") in ctl
-    assert ("gate", "cautious", DEFAULT_HANDLE) in ctl
+    assert ("gate", "cautious", ELSE_HANDLE) in ctl
 
 
 def test_on_value_with_double_quote_uses_single_quote_and_routes():

@@ -35,8 +35,7 @@ from yian.expr.template import (
     rewrite_template_refs,
     scan_template,
 )
-from yian.nodes.case import Case, CaseNode
-from yian.nodes.case.node import DEFAULT_HANDLE
+from yian.nodes.case import ELSE_HANDLE, Case, CaseNode
 from yian.run import resume_flow, run_flow
 from yian.typesys.pool import VariablePool
 from yian.typesys.values import Type, ValueKind
@@ -373,7 +372,7 @@ def test_case_forward_routes_with_its_type_table():
     node = CaseNode("route", [Case("s", "isinstance(order, Sell)")])
     node.types = dict(TYPES)
     assert node.forward({"order": A_SELL}).handle == "s"
-    assert node.forward({"order": A_BUY}).handle == DEFAULT_HANDLE
+    assert node.forward({"order": A_BUY}).handle == ELSE_HANDLE
 
 
 ASSERT_FLOW = """

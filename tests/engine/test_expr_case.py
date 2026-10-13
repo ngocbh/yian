@@ -10,7 +10,7 @@ from yian.expr.expressions import (
 )
 from yian.compile.model import END_ID, START_ID, Edge, CompiledFlow
 from yian.nodes.end import EndNode
-from yian.nodes.case import Case, CaseNode
+from yian.nodes.case import ELSE_HANDLE, Case, CaseNode
 from yian.nodes.start import StartNode
 from yian.typesys.pool import VariablePool
 from tests.engine._fakes import FuncNode, RecordNode, derive_wiring, stamp_reads
@@ -289,7 +289,7 @@ def _branch_graph(cases):
         Edge("e0", START_ID, "score"),
         Edge("e1", "score", "cond"),
         Edge("e2", "cond", "high", "is_high"),
-        Edge("e3", "cond", "low", "default"),
+        Edge("e3", "cond", "low", ELSE_HANDLE),
         Edge("e4", "high", END_ID),
         Edge("e5", "low", END_ID),
     ]
@@ -325,7 +325,7 @@ def test_case_string_equality_routes():
         Edge("e0", START_ID, "label"),
         Edge("e1", "label", "cond"),
         Edge("e2", "cond", "high", "is_high"),
-        Edge("e3", "cond", "low", "default"),
+        Edge("e3", "cond", "low", ELSE_HANDLE),
         Edge("e4", "high", END_ID),
         Edge("e5", "low", END_ID),
     ]

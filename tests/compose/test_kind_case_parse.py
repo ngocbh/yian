@@ -18,7 +18,7 @@ from yian.compose.source import SourceDocument
 from yian.compose.source.catalog import _scope_origin
 from yian.diagnostics import OriginRef
 from yian.diagnostics import SourceRange
-from yian.nodes.case import CaseNode
+from yian.nodes.case import ELSE_HANDLE, CaseNode
 from yian.nodes.contracts import Binding
 from yian.run import run_flow
 
@@ -184,7 +184,7 @@ def test_case_build_lowers_to_case_node_with_edges():
     assert ("score", "route", "__on") in {(e.from_, e.to, e.input_group) for e in data}
     ctl = {(e.from_, e.to, e.source_handle) for e in control}
     assert ("route", "hot", "hot") in ctl
-    assert ("route", "cold", "default") in ctl
+    assert ("route", "cold", ELSE_HANDLE) in ctl
     # YAML coordinates remain on the Compose-only build product.
     assert isinstance(result.node_range, SourceRange)
 

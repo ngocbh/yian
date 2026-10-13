@@ -7,7 +7,7 @@ Routing is purely deterministic: the engine makes no LLM decision here. To branc
 on a judgment, an upstream node produces a variable (e.g. a classifier AGENT
 writing a label, or a CODE node a number) which the CASE binds as an input and
 the case compares. Cases are tried in order; the first truthy one wins. If none
-match, the reserved `"default"` handle is taken.
+match, the reserved else handle (`ELSE_HANDLE`) is taken.
 
 The node writes no state — it returns the selected handle on its result, and the
 engine's `_branch` does the skip-flood.
@@ -19,10 +19,8 @@ from typing import Callable, Iterator, Optional
 
 from yian.diagnostics import OriginRef
 from yian.expr.expressions import evaluate_when_record
-from yian.nodes.base import Node, NodeKind, Route
+from yian.nodes.base import ELSE_HANDLE, Node, NodeKind, Route
 from yian.nodes.contracts import _map_origin, _validate_optional_origin
-
-DEFAULT_HANDLE = "default"
 
 
 @dataclass
@@ -48,7 +46,7 @@ class CaseNode(Node):
 
     Cases are tried in order; the first whose `when:` is truthy (evaluated against the bound
     input record) wins and its handle is returned on the result. If none match, the reserved
-    `"default"` handle is taken. The node writes no value — the engine's `_branch` does the
+    else handle (`ELSE_HANDLE`) is taken. The node writes no value — the engine's `_branch` does the
     skip-flood off the chosen handle.
 
     Args:
@@ -158,7 +156,7 @@ class CaseNode(Node):
         for case in self.cases:
             if evaluate_when_record(case.when, inputs, self.types):
                 return Route(case.handle)
-        return Route(DEFAULT_HANDLE)
+        return Route(ELSE_HANDLE)
 
     def backward_input_names(self) -> tuple[str, ...]:
         """Exclude lowered CASE controls from ordinary declared input targets.

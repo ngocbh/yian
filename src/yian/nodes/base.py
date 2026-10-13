@@ -91,6 +91,11 @@ class Route:
     handle: str
 
 
+# The handle a router takes when no labeled branch matches. Unlike any other handle it may
+# have no outgoing edge.
+ELSE_HANDLE = "default"
+
+
 @dataclass(frozen=True)
 class Grow:
     """A spawner describes one deterministic graph expansion for the runtime to record.

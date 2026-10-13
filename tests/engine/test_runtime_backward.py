@@ -381,7 +381,7 @@ def test_diamond_crossing_call_uses_one_walk_and_preserves_child_default_project
 def test_preseeded_root_output_does_not_invent_an_executed_producer(same_boundary):
     from yian.compile.expand import build_grow
     from yian.compile.model import CompiledFlow
-    from yian.nodes.base import Route
+    from yian.nodes.base import ELSE_HANDLE, Route
     from yian.runtime.backward import compute_backward
     from yian.runtime.engine import FlowEngine
     from yian.runtime.log import MemoryRunLog
@@ -389,7 +389,7 @@ def test_preseeded_root_output_does_not_invent_an_executed_producer(same_boundar
     from yian.typesys.pool import VariablePool
 
     start = StartNode(START_ID, params=[Parameter("topic"), Parameter("omitted", has_default=True, default="unused")])
-    start.forward = lambda _inputs: Route("default")
+    start.forward = lambda _inputs: Route(ELSE_HANDLE)
     end_id = START_ID if same_boundary else END_ID
     flow = CompiledFlow({START_ID: start}, [])
     flow.end_id = end_id
@@ -458,7 +458,7 @@ def test_opaque_expression_stops_are_recoverable_without_rerunning_functions(mon
 
 
 def test_case_control_and_unselected_branch_do_not_receive_feedback():
-    from yian.nodes.case import Case, CaseNode
+    from yian.nodes.case import ELSE_HANDLE, Case, CaseNode
     from yian.runtime.backward import compute_backward
 
     control = RecordingBackwardNode("control", lambda _: True, lambda *_: pytest.fail("control feedback"))
@@ -471,7 +471,7 @@ def test_case_control_and_unselected_branch_do_not_receive_feedback():
     unused = RecordingBackwardNode("unused", lambda _: pytest.fail("unselected forward"), lambda *_: pytest.fail("unselected backward"))
     flow = _graph([control, value, case, selected, unused],
                   [(START_ID, "control"), (START_ID, "value"), ("control", "case"),
-                   ("case", "selected", "go"), ("case", "unused", "default"), ("value", "selected")],
+                   ("case", "selected", "go"), ("case", "unused", ELSE_HANDLE), ("value", "selected")],
                   outputs=[FlowOutput("result", "${selected.output | unused.output}")],
                   wiring={"value": {"x": "${input.topic}"}, "case": {"__r0": "${control.output}"},
                           "selected": {"x": "${value.output}"}})

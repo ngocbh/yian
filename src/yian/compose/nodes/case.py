@@ -16,7 +16,7 @@ no new node kind. Two surface forms:
 - **searched** (`cases: [{when: "<bool>", then: <t>}]`, `else: <e>`): scan each `when:` for its
   distinct `${...}` refs -> allocate one `CaseNode` input `__rN` per distinct ref -> rewrite the
   `when:` to the bare local `${__rN}`. Each case routes to its `then:` (the edge handle); `else:`
-  routes to the shipped internal `default` handle.
+  routes to the internal else handle (`ELSE_HANDLE`).
 
 - **`on:`** (`on: ${ref}`, `cases: [{when: <value>, then: <t>}]`): one input `__on = ${ref}`;
   each `when: <value>` becomes `${__on} == "<value>"`.
@@ -58,7 +58,7 @@ from yian.expr import (
     parse_expr,
     rewrite_condition_refs,
 )
-from yian.nodes.case import DEFAULT_HANDLE, Case, CaseNode
+from yian.nodes.case import ELSE_HANDLE, Case, CaseNode
 from yian.nodes.contracts import Binding, Parameter, binding_source
 from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.helpers.output_contracts import direct_reference_parts
@@ -449,7 +449,7 @@ def _data_edges(node_id: str, wiring: dict[str, Any]) -> list[Edge]:
 
 
 def _control_edges(node_id: str, handle_targets: list[tuple[str, str]]) -> list[Edge]:
-    """`gate -> target` edges, each carrying its `source_handle` (case id or default).
+    """`gate -> target` edges, each carrying its `source_handle` (case id or the else handle).
 
     Each edge sets `source_handle=handle` and leaves `input_group=None` — the invariant that
     keeps the flat `BuildResult.edges` split back into data-vs-control by attribute (paired with
@@ -509,7 +509,7 @@ def _desugar_on(
         )
         handle_targets.append((then, then))
     if desc.else_ is not None:
-        handle_targets.append((DEFAULT_HANDLE, desc.else_))
+        handle_targets.append((ELSE_HANDLE, desc.else_))
     node = CaseNode(desc.id, cases, title=desc.node_name)
     node.params = [Parameter(name="__on")]
     wiring = {
@@ -762,7 +762,7 @@ def _desugar_searched(
         )
         handle_targets.append((then, then))
     if desc.else_ is not None:
-        handle_targets.append((DEFAULT_HANDLE, desc.else_))
+        handle_targets.append((ELSE_HANDLE, desc.else_))
 
     node = CaseNode(desc.id, cases, title=desc.node_name)
     node.params = [Parameter(name=local) for local in ref_to_local.values()]

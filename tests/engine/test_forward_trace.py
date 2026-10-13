@@ -1687,7 +1687,7 @@ def test_pruned_seed_connections_do_not_leak_into_reused_node_ids(skip_first):
     from yian.events import NodeExpanded, RunSucceeded
     from yian.nodes.base import Grow, Node, NodeKind
     from yian.nodes.call import CallNode
-    from yian.nodes.case import CaseNode
+    from yian.nodes.case import ELSE_HANDLE, CaseNode
     from yian.nodes.contracts import ChildFlowBoundary, Parameter, SeedConnection
     from yian.nodes.end import EndNode
     from yian.nodes.start import StartNode
@@ -1720,7 +1720,7 @@ def test_pruned_seed_connections_do_not_leak_into_reused_node_ids(skip_first):
                 shared_end: EndNode.value(shared_end, output_name=None), "finish": finish,
             }, [
                 Edge("enter", "entry", "choice", ordering=True),
-                Edge("chosen", "choice", "finish", source_handle="default"),
+                Edge("chosen", "choice", "finish", source_handle=ELSE_HANDLE),
                 Edge("skipped", "choice", shared_start, source_handle="other"),
                 Edge("child", shared_start, shared_end, ordering=True),
             ], wiring={"entry": {}, "choice": {}, shared_start: {"x": seed["x"]},
@@ -1947,7 +1947,7 @@ def test_trace_replay_matches_live_accepted_prefixes(kind, monkeypatch):
     from yian.compile.expand import build_grow
     from yian.compile.model import START_ID, END_ID
     from yian.compose import load_flow
-    from yian.nodes.case import CaseNode
+    from yian.nodes.case import ELSE_HANDLE, CaseNode
     from yian.runtime.state import RunState, _replay_records
     from tests.engine._fakes import FuncNode
     from tests.engine._graph_builder import _engine, _graph
@@ -1979,7 +1979,7 @@ nodes:
 output: ${{spawn.output}}
 """).compiled
     elif kind == "route":
-        flow = _graph([CaseNode("choice", [])], [(START_ID, "choice"), ("choice", END_ID, "default")])
+        flow = _graph([CaseNode("choice", [])], [(START_ID, "choice"), ("choice", END_ID, ELSE_HANDLE)])
     else:
         def work(_):
             if kind == "failure":

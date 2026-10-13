@@ -21,7 +21,7 @@ from yian.compile.model import END_ID, START_ID, CompiledFlow
 from yian.nodes.agent import AgentNode
 from yian.nodes.code import CodeNode
 from yian.nodes.contracts import Binding
-from yian.nodes.case import CaseNode
+from yian.nodes.case import ELSE_HANDLE, CaseNode
 from yian.typesys.values import ValueKind
 from yian.compose import ComposedFlow, LoadError, load_flow
 
@@ -97,7 +97,7 @@ def test_seed02_gate_is_case_with_control_edges():
     # gate -> positive / gate -> cautious control edges (the then/else targets).
     out = {(e.to, e.source_handle) for e in flow.outgoing("gate")}
     assert ("positive", "positive") in out
-    assert ("cautious", "default") in out  # else: -> the internal default handle
+    assert ("cautious", ELSE_HANDLE) in out  # else: -> the internal else handle
     # coalesce flow-output: BOTH branches reach __end__.
     end_producers = {e.from_ for e in flow.edges if e.to == END_ID}
     assert end_producers == {"positive", "cautious"}
@@ -203,7 +203,7 @@ def test_seed18_route_desugars_case_on_with_else():
     out = {(e.to, e.source_handle) for e in flow.outgoing("route")}
     assert ("pro_note", "pro_note") in out
     assert ("con_note", "con_note") in out
-    assert ("neutral_note", "default") in out  # else: -> default handle
+    assert ("neutral_note", ELSE_HANDLE) in out  # else: -> else handle
 
 
 def test_seed18_multi_output_with_coalesce():

@@ -47,7 +47,7 @@ from yian.compose.nodes.case import (
 )
 from yian.expr import ExpressionError
 from yian.expr.template import Span, scan_template
-from yian.nodes.case import DEFAULT_HANDLE
+from yian.nodes.case import ELSE_HANDLE
 from yian.nodes.contracts import (
     OutputContract,
     PartialRecordContract,
@@ -505,16 +505,16 @@ def _on_case_facts(
         handle: {base: _members_fact(reference, members, False)}
         for handle, members in by_handle.items()
     }
-    if any(case.get("then") == DEFAULT_HANDLE for case in desc.cases):
+    if any(case.get("then") == ELSE_HANDLE for case in desc.cases):
         # A `then:` node named like the else handle shares its edges: routing to it, or
         # matching nothing, fires every edge with that handle, so it carries no fact.
-        facts.pop(DEFAULT_HANDLE, None)
+        facts.pop(ELSE_HANDLE, None)
         return facts
     if desc.else_ is not None:
         unlisted = [
             member for member in union.variants if not member.fields[tag_field].tags & listed
         ]
-        facts[DEFAULT_HANDLE] = {base: _members_fact(reference, unlisted, union.nullable)}
+        facts[ELSE_HANDLE] = {base: _members_fact(reference, unlisted, union.nullable)}
     return facts
 
 
@@ -570,7 +570,7 @@ def _searched_case_facts(
             _checks_env(checks, producers, inputs, registry)
         )
     facts = {handle: _union_envs(envs) for handle, envs in by_handle.items()}
-    facts.pop(DEFAULT_HANDLE, None)
+    facts.pop(ELSE_HANDLE, None)
     return {handle: env for handle, env in facts.items() if env}
 
 
@@ -788,7 +788,7 @@ def compute_narrowing(
             `depends_on`/`runs_after` give ordering edges.
         edges (`Sequence[Edge]`):
             The data edges plus each CASE's own data and control edges. Control edges
-            carry the branch target, or `default` for `else:`, as `source_handle`.
+            carry the branch target, or the else handle for `else:`, as `source_handle`.
         producers (`Mapping[str, OutputContract]`):
             Each node's output contract by id.
         inputs (`Mapping[str, ValueContract]`):

@@ -398,6 +398,21 @@ or its contract accepts null (a nullable or `None`-kind type). A present typed
 `build_value_as` validates the value against `Binding.contract` and the built value
 is discarded, so the payload reaches the node unconverted. A miss is `binding.type`.
 
+NaN and infinity are not yian values; `typesys.values.reject_nonfinite(value, where)`
+finds one at any depth and raises `TypeCheckError` with its path. The first boundary
+that sees one rejects it. The binder checks each resolved value, filled default, and
+coerced string, and fails `binding.evaluate` at the binding or default origin
+(`input 'y' at a[1]: non-finite number inf is not a yian value`); temporaries inside
+an expression are not checked. MAP checks its `over` list the same way, and an AGENT
+variable default fails `node.execute` at the default. `run_flow` raises `ValueError` for
+a run input before the log exists. `LLMConfig` rejects a non-finite value, so authored
+config is a load error and host config fails before the run starts. Every run-log codec
+(`canonical_typed`, `canonical_seed`, `encode_pool`) rejects one with a path; there is
+no opt-in. So a node output fails `contract.output` at the field path (`output at
+stats.a: ...`), selecting the declared field's origin, and a growth seed fails as a
+growth rejection (`contract.growth`). Nothing is recorded as null in its place. An int
+too large for a float in a `float` slot fails the type check at its path.
+
 Numeric `Type` values may retain an inclusive `bounds` pair for INTEGER or
 NUMBER. Shape validation rejects malformed, reversed, or incompatible
 refinements; integer endpoints remain arbitrary precision, and NUMBER endpoints
@@ -918,8 +933,8 @@ and `effective_llm_config`. Locals established before a later failure remain
 available; unresolved variables or an unrendered prompt are explicitly `None`,
 distinct from an empty record/string. The evaluator immediately detaches the
 snapshot, rejects repeated or post-close writes, and keeps capture faults as host
-faults. Supported values use canonical seed conversion with strict nonfinite
-rejection; static capture validation is unchanged. Model configuration comes
+faults. Supported values use canonical seed conversion, which rejects NaN and
+infinity like every codec; static capture validation is unchanged. Model configuration comes
 only from the accepted RunStarted map entry selected by the authored execution
 path, never a dynamic ID or mutable ambient/node config. No default or prompt is
 evaluated a second time to capture it.

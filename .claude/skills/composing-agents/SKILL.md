@@ -201,6 +201,10 @@ without rounding. Booleans are invalid.
 Bounds compose with lists, records, aliases, and nullable types. Defaults and
 supplied values are checked; cross-flow sources must fit the destination domain.
 
+A `float` is finite: a binding whose value is NaN or infinity (say an overflowing
+`${x * 10}`) fails its node with `binding.evaluate`, so keep the value in range
+(a `case` guard or a `code` clamp) or return null explicitly.
+
 An explicit `Optional[int] = null` is a present default, distinct from no `=`;
 null is invalid for a non-nullable type, and an empty `=` is invalid. The default
 RHS is a YAML literal validated at load and never string-coerced: write

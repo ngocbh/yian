@@ -75,6 +75,10 @@ log path, plus the line and seq of a damaged record. Pass
 `yian chat` uses the same default directory and reports one new path for its initial
 run. If a failed turn restarts the immutable chat flow from the last completed
 transcript, that restart gets a separate log rather than reusing the failed run.
+A restart happens only when the failed attempt answered at least one prompt with
+a typed line. An attempt that fails before that (for example, a flow whose first
+step fails, or a failure after terminal EOF) ends the session: `yian chat` prints
+`chat failed: <reason>` to stderr and exits 1.
 
 `yian chat` and its `run_flow` tool supply no long-term memory: memories a
 flow declares stay off, and session conversations are not kept.

@@ -694,6 +694,70 @@ def test_chat_survives_a_failed_turn(tmp_path, monkeypatch):
     assert "ask_user" not in tools_module.TOOL_REGISTRY
 
 
+def test_chat_stops_when_an_attempt_fails_before_any_prompt(tmp_path):
+    """A flow that fails before it asks anything ends the session with exit 1.
+
+    Restarting it would fail the same way forever, writing one run log per pass.
+    """
+    (tmp_path / "failchat.yaml").write_text(
+        "id: failchat\n"
+        "name: failchat\n"
+        "input:\n"
+        "  opening: str\n"
+        "nodes:\n"
+        "  boom:\n"
+        "    kind: code\n"
+        "    input:\n"
+        "      o: ${input.opening}\n"
+        "    output: str\n"
+        "    code: |\n"
+        "      raise RuntimeError('provider down')\n"
+        "      return 'x'\n"
+        "output: ${boom.output}\n"
+    )
+    r = runner.invoke(app, ["chat", str(tmp_path / "failchat.yaml")], input="")
+    assert r.exit_code == 1
+    assert "provider down" in r.stderr
+    assert "continuing" not in r.output
+    assert "session ended" not in r.output
+    assert len(_chat_logs()) == 1
+
+
+def test_chat_stops_when_a_restart_fails_without_an_answered_prompt(tmp_path):
+    """A failed turn restarts once; a restart that reaches only terminal EOF and fails ends it.
+
+    The first attempt answers a prompt, so its failure restarts the flow. The restart
+    reads EOF (normalized to ``/exit``) and fails again without any answered prompt,
+    so the session exits 1 instead of looping on EOF.
+    """
+    (tmp_path / "askfail.yaml").write_text(
+        "id: askfail\n"
+        "name: askfail\n"
+        "input:\n"
+        "  opening: str\n"
+        "nodes:\n"
+        "  ask:\n"
+        "    kind: human_input\n"
+        "    prompt: 'You:'\n"
+        "    output: str\n"
+        "  boom:\n"
+        "    kind: code\n"
+        "    input:\n"
+        "      line: ${ask.output}\n"
+        "    output: str\n"
+        "    code: |\n"
+        "      raise RuntimeError('failed on ' + inputs['line'])\n"
+        "      return 'x'\n"
+        "output: ${boom.output}\n"
+    )
+    r = runner.invoke(app, ["chat", str(tmp_path / "askfail.yaml")], input="hello\n")
+    assert r.exit_code == 1
+    assert "turn failed" in r.output and "failed on hello" in r.output
+    assert "continuing" in r.output
+    assert "failed on /exit" in r.stderr
+    assert len(_chat_logs()) == 2
+
+
 def test_chat_missing_key_no_tty_exits_clean(monkeypatch):
     """A key-requiring provider with no key and no TTY must exit cleanly (red on stderr, exit 1),
     not dump a raw traceback. The exception must be a clean `typer.Exit` (surfacing as

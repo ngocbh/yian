@@ -11,6 +11,11 @@ or hitting its tool-iteration cap), which terminates the underlying flow *run* a
 (`__end__`) output, the loop surfaces the error and RESTARTS the flow seeded with the
 accumulated transcript, so the conversation continues from where it left off. Every
 initial run and failed-turn restart gets its own reported durable log.
+
+A restart needs a failed *turn*: the attempt must have answered at least one prompt
+with a typed line. An attempt that fails before that (a failing opening step, or a
+failure after terminal EOF) would fail the same way on every restart, so it ends the
+session with the error and exit 1 instead of looping.
 """
 
 from __future__ import annotations
@@ -186,6 +191,15 @@ def chat(
     # The last completed turn is the restart seed after a reply failure. A failed
     # in-progress turn never reaches its body END, so it cannot alter this mirror.
     state: dict[str, Any] = {"transcript": ""}
+    # Prompts answered with a typed line in the current attempt. EOF and cancellation
+    # raise out of the handler, so they never count as progress.
+    answered = {"count": 0}
+
+    def prompt_and_count(request) -> Any:
+        """Serve one chat prompt and count it when it returns a typed answer."""
+        answer = _prompt_chat_request(request)
+        answered["count"] += 1
+        return answer
 
     try:
         while True:
@@ -197,6 +211,7 @@ def chat(
                 search_paths=search,
                 source_label=path.name,
             )
+            answered["count"] = 0
             run_id = default_run_id()
             log = _default_run_log_path(run_id)
             _report_run_log(log)
@@ -236,13 +251,18 @@ def chat(
 
             result = _run_with_terminal_controller(
                 controller,
-                prompt_handler=_prompt_chat_request,
+                prompt_handler=prompt_and_count,
                 reporter=None,
                 eof_value="/exit",
             )
             if result.status != "failed":
                 break
             detail = result.failure.message if result.failure is not None else "(no detail)"
+            if answered["count"] == 0:
+                message = Text("chat failed: ", style="red bold")
+                message.append(detail, style="red")
+                err_console.print(message)
+                raise typer.Exit(code=1)
             console.print(f"[red]turn failed:[/red] {detail}")
             console.print("[dim]continuing — your conversation so far is preserved.[/dim]")
     except KeyboardInterrupt:

@@ -168,7 +168,7 @@ def test_map_input_named_over_is_reserved():
     text = (
         "id: bad-over\nname: bad\ninput:\n  xs: list[str]\n"
         "nodes:\n  m:\n    kind: map\n    call: child\n    over: ${input.xs}\n"
-        "    inputs:\n      over: ${item}\n"
+        "    input:\n      over: ${item}\n"
         "output: ${m.output}\n"
     )
     with pytest.raises(LoadError, match="'over' is reserved"):

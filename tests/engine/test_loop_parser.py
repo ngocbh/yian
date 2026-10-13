@@ -21,7 +21,7 @@ nodes:
   chat_loop:
     kind: loop
     call: chat_turn
-    inputs:
+    input:
       messages: ${input.history}
       exited: false
     while: not ${exited}
@@ -56,7 +56,7 @@ nodes:
   L:
     kind: loop
     call: body
-    inputs:
+    input:
       n: 3
     until: ${n} <= 0
     max: 5

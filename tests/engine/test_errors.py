@@ -165,7 +165,7 @@ _E04_WITH_ELSE = _E04_NONEXHAUSTIVE.replace(
     "  pro_note:",
     "  flat_note:\n"
     "    kind: agent\n"
-    "    inputs:\n"
+    "    input:\n"
     "      topic: ${input.topic}\n"
     "    output: str\n"
     '    prompt: "Flat note for ${topic}."\n'

@@ -28,7 +28,7 @@ name: code-origins
 nodes:
   worker:
     kind: code
-    outputs: int
+    output: int
     code: |-
       value = 1
       return value
@@ -41,7 +41,7 @@ name: code-origin-failure
 nodes:
   worker:
     kind: code
-    outputs: int
+    output: int
     code: |-
       marker = 1
       raise RuntimeError("boom")
@@ -57,7 +57,7 @@ defs:
     nodes:
       worker:
         kind: code
-        outputs: int
+        output: int
         code: |-
           marker = 1
           raise RuntimeError("boom")
@@ -79,7 +79,7 @@ nodes:
     nodes:
       worker:
         kind: code
-        outputs: int
+        output: int
         code: |-
           marker = 1
           raise RuntimeError("boom")
@@ -281,7 +281,7 @@ def test_nonliteral_code_carries_only_whole_scalar_fallback(code_source):
         "nodes:\n"
         "  worker:\n"
         "    kind: code\n"
-        "    outputs: int\n"
+        "    output: int\n"
         f"{code_source}"
         "output: ${worker.output}\n"
     )
@@ -416,7 +416,7 @@ defs:
     nodes:
       worker:
         kind: code
-        outputs: int
+        output: int
         code: |-
           value = 1
           return value
@@ -455,7 +455,7 @@ name: flat-def-code-origins
 defs:
   child:
     kind: code
-    outputs: int
+    output: int
     code: |-
       value = 1
       return value
@@ -490,7 +490,7 @@ nodes:
     nodes:
       worker:
         kind: code
-        outputs: int
+        output: int
         code: |-
           value = 1
           return value
@@ -600,7 +600,7 @@ name: code-origins
 nodes:
   worker:
     kind: code
-    outputs: int
+    output: int
     # Another formatting-only comment.
     code: |-
       value = 1

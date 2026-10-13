@@ -5,7 +5,8 @@ mapped-call `over:`) and the flow `output:` bindings, and rewrites each top-leve
 case-output span `${<case>.output[.path]}`, whole or embedded in text:
 
 - an untyped case: to a coalesce `${t1.output[.path] | t2.output… }` over the case's LEAF
-  (non-case) branch targets;
+  branch targets (an untyped inner case is flattened to its own leaves; a typed inner
+  case is one leaf, its result node);
 - a typed case (one that declares `output: T`): to `${__case_<case>.output[.path]}`. The
   pass adds that synth CODE result node once per typed case, read or not. Its one input,
   named after the case id, binds the leaf coalesce with T as its declared contract, so
@@ -96,7 +97,7 @@ def expand_case_outputs(
     if not case_ids:
         return descriptors, outputs_section  # fast path
     case_types = {cid: t for cid, t in (case_types or {}).items() if cid in case_ids}
-    targets = _case_leaf_targets(descriptors, case_ids)
+    targets = _case_leaf_targets(descriptors, case_ids, case_types)
     results = {
         cid: _result_node(cid, descriptors[cid], targets[cid], contract, diagnostics)
         for cid, contract in case_types.items()
@@ -208,14 +209,14 @@ def _when_range(descriptor: Any, index: int) -> Optional[SourceRange]:
 def _expander(
     case_ids: set,
     targets: dict,
-    typed: dict,
+    case_types: dict,
     host: str,
     *,
     range: Optional[SourceRange] = None,
     diagnostics: LoadDiagnostics,
 ):
     """A `value -> value` binding transform: expand each clean case-output span to the
-    typed case's result-node ref (cases in `typed`) or the untyped case's branch coalesce;
+    typed case's result-node ref (cases in `case_types`) or the untyped case's branch coalesce;
     reject a case ref in any non-clean position. Scans TOP-LEVEL
     `${…}` spans only — a case ref NESTED inside an enclosing span (e.g. a `:-` default
     value `${x:-${gate.output}}`) is caught as a non-clean ref of that span, and a `:?`
@@ -242,7 +243,7 @@ def _expander(
                         value[i + 2 : j],
                         case_ids,
                         targets,
-                        typed,
+                        case_types,
                         host,
                         range=range,
                         diagnostics=diagnostics,
@@ -261,7 +262,7 @@ def _expand_span(
     interior: str,
     case_ids: set,
     targets: dict,
-    typed: dict,
+    case_types: dict,
     host: str,
     *,
     range: Optional[SourceRange] = None,
@@ -269,7 +270,7 @@ def _expand_span(
 ) -> str:
     """One TOP-LEVEL `${…}` span (its interior) -> the replacement `${…}` text.
 
-    A clean case-output interior `<case>.output[.path]` of a typed case (`<case>` in `typed`)
+    A clean case-output interior `<case>.output[.path]` of a typed case (`<case>` in `case_types`)
     -> `${__case_<case>.output[.path]}`; of an untyped case -> the branch coalesce over the
     case's LEAF (non-case) targets (the path suffix re-applied per branch; a case-of-case is
     flattened by `_case_leaf_targets`). Any OTHER interior that reads a case value (via a nested
@@ -280,7 +281,7 @@ def _expand_span(
         # Singular only: group 1 = <case>, group 2 = dotted suffix.
         cid = m.group(1)
         suffix = m.group(2) or ""
-        if cid in typed:
+        if cid in case_types:
             return "${" + f"{CASE_PREFIX}{cid}.output{suffix}" + "}"
         if cid in case_ids:
             leaves = targets[cid]
@@ -334,6 +335,11 @@ def _result_node(
             range=case.range,
         )
     output_range = (case.field_ranges or {}).get(("field", "outputs")) or case.range
+    field_ranges = (
+        {("input", case_id): output_range, ("field", "outputs"): output_range}
+        if output_range
+        else {}
+    )
     return CodeDescriptor(
         id=f"{CASE_PREFIX}{case_id}",
         node_name=f"{case_id} result",
@@ -342,7 +348,7 @@ def _result_node(
         input_types={case_id: contract},
         outputs=case.outputs,
         range=case.range,
-        field_ranges={("input", case_id): output_range} if output_range else {},
+        field_ranges=field_ranges,
     )
 
 
@@ -401,14 +407,17 @@ def _reject_case_refs(
                 )
 
 
-def _case_leaf_targets(descriptors: dict, case_ids: set) -> dict:
+def _case_leaf_targets(descriptors: dict, case_ids: set, case_types: dict) -> dict:
     """case id -> its branch targets, flattened to LEAF (non-case) node ids.
 
-    Direct targets are each `then:` (case order) then the `else:`; a target that is itself a
-    `case` is flattened to ITS leaf targets (recursive, cycle-guarded — a case-target cycle
-    drops that arm and surfaces as an empty-leaves `LoadError` here, or a graph cycle at DAG
-    validation). Duplicates removed preserving order. Sound via the case-route veto: the nested gate
-    skip-floods when the outer branch loses, so only the taken leaf is non-null in the coalesce.
+    Direct targets are each `then:` (case order) then the `else:`; a target that is itself an
+    untyped `case` is flattened to ITS leaf targets (recursive, cycle-guarded — a case-target
+    cycle drops that arm and surfaces as an empty-leaves `LoadError` here, or a graph cycle at
+    DAG validation). A target that is a typed `case` (in `case_types`) is its result node
+    `__case_<id>`, so an enclosing case reads the inner value only after it passed the inner
+    type check. Duplicates removed preserving order. Sound via the case-route veto: the nested
+    gate skip-floods when the outer branch loses, so only the taken leaf is non-null in the
+    coalesce.
     """
     raw: dict = {}
     for nid, d in descriptors.items():
@@ -422,7 +431,11 @@ def _case_leaf_targets(descriptors: dict, case_ids: set) -> dict:
         out: list = []
         for t in raw.get(cid, []):
             if t in case_ids:
-                if t not in seen:
+                if t in seen:
+                    continue
+                if t in case_types:
+                    out.append(f"{CASE_PREFIX}{t}")
+                else:
                     out.extend(leaves(t, seen | {t}))
             else:
                 out.append(t)

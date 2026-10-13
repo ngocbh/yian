@@ -691,6 +691,166 @@ output: ${loop.output}
 # --------------------------------------------------------------------------- #
 
 
+def test_two_typed_cases_inside_inline_loop_body_read_by_field():
+    text = """\
+id: f
+name: f
+nodes:
+  loop:
+    kind: loop
+    input:
+      n: 0
+      exited: false
+      note: start
+    while: not ${exited}
+    max: 10
+    nodes:
+      bump:
+        kind: code
+        code: tests.engine._compose_codefns:loop_bump
+        input:
+          n: ${input.n}
+        output:
+          n: int
+          exited: bool
+      route:
+        kind: case
+        output:
+          n: int
+          exited: bool
+        cases:
+          - when: "${bump.output.n} >= 2"
+            then:
+              n: ${bump.output.n}
+              exited: true
+        else:
+          n: ${bump.output.n}
+          exited: false
+      label:
+        kind: case
+        output: str
+        cases:
+          - when: "${bump.output.n} >= 2"
+            then: "done"
+        else: 'more'
+    output:
+      n: ${route.output.n}
+      exited: ${route.output.exited}
+      note: ${label.output}
+output: ${loop.output}
+"""
+    result = run_flow(load_flow(text), {})
+    assert result.status == "succeeded", result.failure
+    assert result.output == {"n": 2, "exited": True, "note": "done"}
+
+
+def test_outer_case_reads_a_typed_inner_case_through_its_result_node():
+    text = """\
+id: f
+name: f
+input:
+  cmd: str
+nodes:
+  outer:
+    kind: case
+    on: ${input.cmd}
+    cases:
+      - when: a
+        then: inner
+    else: other
+  inner:
+    kind: case
+    output: Literal[x]
+    cases:
+      - when: "${input.cmd} == 'never'"
+        then: "x"
+    else: bad
+  bad:
+    kind: code
+    code: |
+      return "nope"
+    output: str
+  other:
+    kind: code
+    code: |
+      return "x"
+    output: str
+  reader:
+    kind: code
+    input:
+      v: ${outer.output}
+    code: |
+      return inputs["v"]
+    output: str
+output: ${reader.output}
+"""
+    loaded = load_flow(text)
+    result = run_flow(loaded, {"cmd": "a"})
+    assert result.status == "failed"
+    assert result.failure.code == "binding.type"
+    assert result.failure.node_id == "__case_inner"
+    assert "reader" not in _started(result)
+    good = run_flow(loaded, {"cmd": "b"})
+    assert good.status == "succeeded", good.failure
+    assert good.output == "x"
+
+
+def test_typed_outer_case_reads_a_typed_inner_case_through_its_result_node():
+    from yian.compose import expand_case_outputs
+    from yian.compose.parse.file import CaseDescriptor, CodeDescriptor
+    from yian.nodes.contracts import ValueContract
+    from yian.typesys.values import Type, ValueKind
+
+    contract = ValueContract(Type.scalar(ValueKind.STRING))
+    descriptors = {
+        "outer": CaseDescriptor(
+            id="outer",
+            cases=[{"when": "${x}", "then": "inner"}],
+            else_="mid",
+            outputs="str",
+        ),
+        "mid": CaseDescriptor(id="mid", cases=[{"when": "${x}", "then": "p"}], else_="q"),
+        "inner": CaseDescriptor(
+            id="inner", cases=[{"when": "${x}", "then": "r"}], else_="s", outputs="str"
+        ),
+        "c": CodeDescriptor(id="c", code="m:f", inputs={"v": "${outer.output}"}),
+    }
+    new, _ = expand_case_outputs(
+        descriptors, None, [], case_types={"outer": contract, "inner": contract}
+    )
+    assert new["__case_outer"].inputs == {
+        "outer": "${__case_inner.output | p.output | q.output}"
+    }
+    assert new["__case_inner"].inputs == {"inner": "${r.output | s.output}"}
+
+
+def test_result_node_locates_its_output_at_the_case_output():
+    from yian.compose import expand_case_outputs
+    from yian.compose.parse.file import CaseDescriptor
+    from yian.diagnostics import SourceRange
+    from yian.nodes.contracts import ValueContract
+    from yian.typesys.values import Type, ValueKind
+
+    case_range = SourceRange(start_line=2, start_col=1, end_line=6, end_col=1)
+    output_range = SourceRange(start_line=3, start_col=5, end_line=3, end_col=16)
+    descriptors = {
+        "gate": CaseDescriptor(
+            id="gate",
+            cases=[{"when": "${x}", "then": "a"}],
+            else_="b",
+            outputs="str",
+            range=case_range,
+            field_ranges={("field", "outputs"): output_range},
+        ),
+    }
+    contract = ValueContract(Type.scalar(ValueKind.STRING))
+    new, _ = expand_case_outputs(descriptors, None, [], case_types={"gate": contract})
+    assert new["__case_gate"].field_ranges == {
+        ("input", "gate"): output_range,
+        ("field", "outputs"): output_range,
+    }
+
+
 def _literal_flow(output: str = "${route.output}", extra_nodes: str = "") -> str:
     """Return a flow whose `Literal[yes, no]` case routes `else:` to a CODE node that
     returns `"maybe"`."""
@@ -929,7 +1089,10 @@ def test_typed_case_field_read_runs():
 def test_typed_case_unknown_field_read_is_a_load_error():
     with pytest.raises(LoadError) as exc:
         load_flow(_record_case_flow("${route.output.nope}"))
-    assert "reads unknown field 'nope' on record" in str(exc.value)
+    assert (
+        "reference ${__case_route.output.nope} reads unknown field 'nope' on record"
+        in str(exc.value)
+    )
 
 
 def test_typed_case_feeds_loop_seed_inline_call_and_map():

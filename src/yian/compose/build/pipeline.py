@@ -67,7 +67,7 @@ from yian.compose.desugar.inline_bodies import (
     extract_inline_bodies,
 )
 from yian.compose.desugar.inline_calls import _synth_id_gen, desugar_inline_calls
-from yian.compose.desugar.case_outputs import expand_case_outputs
+from yian.compose.desugar.case_outputs import case_output_reads, expand_case_outputs
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
 from yian.compose.helpers.isinstance_types import (
     collect_isinstance_names,
@@ -1126,6 +1126,37 @@ def _fill_type_tables(
         node.types = types
 
 
+def _value_cases(descriptors: dict, read: frozenset[str]) -> frozenset[str]:
+    """Return the ids of the cases that produce a value.
+
+    A case produces a value when it declares `output:` or is in `read`; a case that is a
+    `then:`/`else:` target of a value-producing case produces one too.
+
+    Args:
+        descriptors (`dict`): Node descriptors keyed by node id.
+        read (`frozenset[str]`): The case ids some binding reads as `${<case>.output}`.
+
+    Returns:
+        `frozenset[str]`: The value-producing case ids.
+    """
+    cases = {
+        nid: d for nid, d in descriptors.items() if isinstance(d, CaseDescriptor)
+    }
+    pending = [
+        nid for nid, d in cases.items() if d.outputs is not None or nid in read
+    ]
+    found: set[str] = set()
+    while pending:
+        nid = pending.pop()
+        if nid in found:
+            continue
+        found.add(nid)
+        case = cases[nid]
+        targets = [c.get("then") for c in case.cases] + [case.else_]
+        pending.extend(t for t in targets if isinstance(t, str) and t in cases)
+    return frozenset(found)
+
+
 def _assemble(
     *,
     inputs_section: Optional[dict] = None,
@@ -1500,6 +1531,12 @@ def _assemble(
         diagnostics=diagnostics,
     )
 
+    # The cases whose value is used, taken before the expansion below rewrites the reads;
+    # each must be exhaustive (checked once producer types are known).
+    value_cases = _value_cases(
+        descriptors, case_output_reads(descriptors, outputs_section)
+    )
+
     # Expand `${<case>.output}` value refs to a coalesce over the case's branch targets.
     # Runs after the inline-call desugar (so synth-node bindings are covered too)
     # and before the build loop — downstream sees only ordinary branch-target refs.
@@ -1817,6 +1854,7 @@ def _assemble(
         descriptors,
         producers,
         narrowing=narrowing,
+        value_cases=value_cases,
         diagnostics=diagnostics,
     )
 

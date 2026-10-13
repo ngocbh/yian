@@ -1906,3 +1906,264 @@ def test_value_reading_a_sibling_branch_with_a_default_loads():
     result = run_flow(loaded, {"cmd": "a"})
     assert result.status == "succeeded", result.failure
     assert result.output == "none"
+
+
+# --------------------------------------------------------------------------- #
+# A CASE that produces a value must be exhaustive
+# --------------------------------------------------------------------------- #
+
+_EXHAUSTIVE = "case node {case!r} produces a value, so it must be exhaustive: add an `else:`"
+
+
+def _gate_flow(
+    gate: str,
+    *,
+    inputs: str = "  x: str\n",
+    output: str = "${gate.output}",
+    extra_nodes: str = "",
+) -> str:
+    """Return a flow with a `gate` case (indented body), CODE nodes `pa`/`pb`, and `output`."""
+    return (
+        "id: f\n"
+        "name: f\n"
+        "input:\n"
+        f"{inputs}"
+        "nodes:\n"
+        "  gate:\n"
+        "    kind: case\n"
+        f"{gate}"
+        "  pa:\n"
+        "    kind: code\n"
+        "    code: |\n"
+        '      return "A"\n'
+        "    output: str\n"
+        "  pb:\n"
+        "    kind: code\n"
+        "    code: |\n"
+        '      return "B"\n'
+        "    output: str\n"
+        f"{extra_nodes}"
+        f"output: {output}\n"
+    )
+
+
+def _routes(*tags: str) -> str:
+    """Return `cases:` routing each tag to the CODE node `p<tag>`."""
+    return "    cases:\n" + "".join(
+        f"      - when: {tag}\n        then: p{tag}\n" for tag in tags
+    )
+
+
+def _values(*tags: str) -> str:
+    """Return `cases:` mapping each tag to the text value of its upper-case form."""
+    return "    cases:\n" + "".join(
+        f'      - when: {tag}\n        then: "{tag.upper()}"\n' for tag in tags
+    )
+
+
+def test_read_case_over_a_str_without_else_is_rejected():
+    text = _gate_flow("    on: ${input.x}\n" + _routes("a", "b"))
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    assert (
+        _EXHAUSTIVE.format(case="gate") + " (on: ${input.x} is str, not a Literal)"
+    ) in str(caught.value)
+    assert _error_line(caught.value) == _line_of(text, "  gate:")
+
+
+def test_typed_searched_case_without_else_is_rejected():
+    text = _gate_flow(
+        "    output: str\n"
+        "    cases:\n"
+        "      - when: \"${input.x} == 'a'\"\n"
+        '        then: "A"\n'
+    )
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    assert (_EXHAUSTIVE.format(case="gate") + " (a searched case needs an else:)") in str(
+        caught.value
+    )
+    assert _error_line(caught.value) == _line_of(text, "  gate:")
+
+
+_PICK = (
+    "  pick:\n"
+    "    kind: code\n"
+    "    input:\n"
+    "      x: ${input.x}\n"
+    "    code: |\n"
+    '      return inputs["x"]\n'
+    "    output: Literal[a, b]\n"
+)
+
+
+def test_typed_case_over_a_literal_node_output_listing_every_tag_runs():
+    text = _gate_flow(
+        "    on: ${pick.output}\n    output: str\n" + _values("a", "b"),
+        extra_nodes=_PICK,
+    )
+    loaded = load_flow(text)
+    assert run_flow(loaded, {"x": "a"}).output == "A"
+    assert run_flow(loaded, {"x": "b"}).output == "B"
+
+
+def test_typed_case_over_a_literal_node_output_missing_a_tag_is_rejected():
+    text = _gate_flow(
+        "    on: ${pick.output}\n    output: str\n" + _values("a"),
+        extra_nodes=_PICK,
+    )
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    assert (
+        _EXHAUSTIVE.format(case="gate") + " (enum tag(s) ['b'] not covered)"
+    ) in str(caught.value)
+    assert _error_line(caught.value) == _line_of(text, "  gate:")
+
+
+def test_typed_case_over_a_literal_input_listing_every_tag_runs():
+    text = _gate_flow(
+        "    on: ${input.choice}\n    output: str\n" + _values("a", "b"),
+        inputs="  choice: Literal[a, b]\n",
+    )
+    loaded = load_flow(text)
+    assert run_flow(loaded, {"choice": "a"}).output == "A"
+    assert run_flow(loaded, {"choice": "b"}).output == "B"
+
+
+def test_typed_case_over_a_literal_input_missing_a_tag_is_rejected():
+    text = _gate_flow(
+        "    on: ${input.choice}\n    output: str\n" + _values("a"),
+        inputs="  choice: Literal[a, b]\n",
+    )
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    assert (
+        _EXHAUSTIVE.format(case="gate") + " (enum tag(s) ['b'] not covered)"
+    ) in str(caught.value)
+
+
+def test_typed_case_over_an_optional_literal_input_is_rejected():
+    text = _gate_flow(
+        "    on: ${input.choice}\n    output: str\n" + _values("a", "b"),
+        inputs="  choice: Optional[Literal[a, b]]\n",
+    )
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    assert (
+        _EXHAUSTIVE.format(case="gate") + " (${input.choice} may be null)"
+    ) in str(caught.value)
+
+
+def test_routing_only_case_over_a_str_without_else_still_skips_on_no_match():
+    text = _gate_flow(
+        "    on: ${input.x}\n" + _routes("a", "b"),
+        output="${pa.output | pb.output:-'none'}",
+    )
+    loaded = load_flow(text)
+    assert run_flow(loaded, {"x": "a"}).output == "A"
+    result = run_flow(loaded, {"x": "c"})
+    assert result.status == "succeeded", result.failure
+    assert result.output == "none"
+    assert {"pa", "pb"} <= _skipped(result)
+    assert not {"pa", "pb"} & _started(result)
+
+
+def test_routing_only_case_over_a_literal_input_missing_a_tag_still_loads():
+    text = _gate_flow(
+        "    on: ${input.choice}\n" + _routes("a"),
+        inputs="  choice: Literal[a, b]\n",
+        output="${input.choice}",
+    )
+    assert run_flow(load_flow(text), {"choice": "b"}).output == "b"
+
+
+def test_inner_case_of_a_value_producing_case_must_be_exhaustive():
+    text = _gate_flow(
+        "    on: ${input.x}\n"
+        "    cases:\n"
+        "      - when: a\n"
+        "        then: pa\n"
+        "    else: inner\n",
+        extra_nodes=(
+            "  inner:\n"
+            "    kind: case\n"
+            "    on: ${input.x}\n"
+            "    cases:\n"
+            "      - when: b\n"
+            "        then: pb\n"
+        ),
+    )
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    assert (
+        _EXHAUSTIVE.format(case="inner") + " (on: ${input.x} is str, not a Literal)"
+    ) in str(caught.value)
+    assert _error_line(caught.value) == _line_of(text, "  inner:")
+
+
+def test_case_read_inside_text_must_be_exhaustive():
+    text = _gate_flow(
+        "    on: ${input.x}\n" + _routes("a", "b"), output="got ${gate.output}"
+    )
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    assert (
+        _EXHAUSTIVE.format(case="gate") + " (on: ${input.x} is str, not a Literal)"
+    ) in str(caught.value)
+
+
+def _narrowed_flow(inner_tag: str) -> str:
+    """Return a flow whose `route` sends `buy` to `inner`, a typed case on the same tag."""
+    return (
+        "id: f\n"
+        "name: f\n"
+        "typedefs:\n"
+        "  Buy:\n"
+        "    action: Literal[buy]\n"
+        "    qty: int\n"
+        "  Sell:\n"
+        "    action: Literal[sell]\n"
+        "    price: float\n"
+        "input:\n"
+        "  kind: str\n"
+        "nodes:\n"
+        "  d:\n"
+        "    kind: code\n"
+        "    input:\n"
+        "      kind: ${input.kind}\n"
+        "    code: |\n"
+        '      if inputs["kind"] == "buy":\n'
+        '          return {"action": "buy", "qty": 3}\n'
+        '      return {"action": "sell", "price": 1.5}\n'
+        "    output: Union[Buy, Sell]\n"
+        "  route:\n"
+        "    kind: case\n"
+        "    on: ${d.output.action}\n"
+        "    cases:\n"
+        "      - when: buy\n"
+        "        then: inner\n"
+        '    else: "sold"\n'
+        "    output: str\n"
+        "  inner:\n"
+        "    kind: case\n"
+        "    on: ${d.output.action}\n"
+        "    output: str\n"
+        "    cases:\n"
+        f"      - when: {inner_tag}\n"
+        '        then: "bought ${d.output.qty}"\n'
+        "output: ${route.output}\n"
+    )
+
+
+def test_narrowed_value_case_counts_only_the_tags_that_reach_it():
+    loaded = load_flow(_narrowed_flow("buy"))
+    assert run_flow(loaded, {"kind": "buy"}).output == "bought 3"
+    assert run_flow(loaded, {"kind": "sell"}).output == "sold"
+
+
+def test_narrowed_value_case_missing_its_reachable_tag_is_rejected():
+    text = _narrowed_flow("sell")
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    assert _EXHAUSTIVE.format(case="inner") in str(caught.value)
+    assert "enum tag(s) ['buy'] not covered" in str(caught.value)

@@ -13,6 +13,9 @@ case-output span `${<case>.output[.path]}`, whole or embedded in text:
   the binder checks every taken branch against T (`binding.type`), and its `output:` is T,
   so readers see T through the ordinary producer contract.
 
+`case_output_reads` lists the cases those same bindings read, before the rewrite, so the
+validate phase can require every value-producing case to be exhaustive.
+
 A case-value ref nested in a coalesce or default operand, or in a `case` condition
 (`on:`/`when:`) or an `assert`, is a located `LoadError` — those are not bindings.
 
@@ -174,6 +177,62 @@ def expand_case_outputs(
         )
 
     return new_descriptors, new_outputs
+
+
+def case_output_reads(descriptors: dict, outputs_section: Any) -> frozenset[str]:
+    """Return the ids of the cases read as `${<case>.output[.path]}` in a binding.
+
+    Walks the same binding fields as `expand_case_outputs` (every node's binding fields and
+    the flow `output:` bindings), so it must run before that pass rewrites the refs. A read
+    counts whole, dotted, or embedded in text; a malformed span is skipped (the binding
+    parser reports it later).
+
+    Args:
+        descriptors (`dict`): Node descriptors keyed by node id.
+        outputs_section (`Any`): The flow `output:` bindings.
+
+    Returns:
+        `frozenset[str]`: The case ids whose `output` some binding reads.
+    """
+    case_ids = {nid for nid, d in descriptors.items() if isinstance(d, CaseDescriptor)}
+    if not case_ids:
+        return frozenset()
+    read: set[str] = set()
+
+    def collect(value: str) -> str:
+        for span in _top_level_spans(value):
+            try:
+                refs = expr_refs_of(span)
+            except ExpressionError:
+                continue
+            for ref in refs:
+                parts = ref.split(".")
+                if len(parts) >= 2 and parts[1] == "output" and parts[0] in case_ids:
+                    read.add(parts[0])
+        return value
+
+    for descriptor in descriptors.values():
+        map_binding_strings(descriptor, lambda _field, _key, value: collect(value))
+    map_outputs_strings(outputs_section, collect)
+    return frozenset(read)
+
+
+def _top_level_spans(value: str) -> list[str]:
+    """Return each balanced top-level `${...}` span of `value`, `$$` escapes skipped."""
+    spans: list[str] = []
+    i, n = 0, len(value)
+    while i < n:
+        if value[i] == "$" and value[i + 1 : i + 2] == "$":
+            i += 2
+        elif value[i] == "$" and value[i + 1 : i + 2] == "{":
+            j = _span_end(value, i + 2)
+            if j is None:
+                break
+            spans.append(value[i : j + 1])
+            i = j + 1
+        else:
+            i += 1
+    return spans
 
 
 def _binding_range(

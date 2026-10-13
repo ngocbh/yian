@@ -455,25 +455,39 @@ verdict:
 
 ### `tool` — a registered tool (no LLM)
 ```yaml
-news:
-  kind: tool
-  tool_id: get_facts           # a registered or per-run tool id
-  input:                       # untyped — each value is a ${...} ref or a literal
-    symbol: ${input.topic}
-    limit: 10
+typedefs:
+  Fact: {text: str, source: str}
+nodes:
+  news:
+    kind: tool
+    tool_id: get_facts         # a registered or per-run tool id
+    input:                     # the tool's own argument names; a ${...} ref or a literal
+      symbol: ${input.topic}
+      limit: 10
+    output: list[Fact]         # optional; every returned value is checked against it
 ```
 Register the tool in Python so the id resolves:
 ```python
+from typing_extensions import TypedDict   # typing.TypedDict fails in pydantic on 3.10/3.11
 from yian.tools import register_tool
 
+class Fact(TypedDict):
+    text: str
+    source: str
+
 @register_tool("get_facts")
-def get_facts(symbol: str, limit: int = 10) -> list[dict]:
+def get_facts(symbol: str, limit: int = 10) -> list[Fact]:
     "Fetch recent facts for a symbol."   # docstring = the description the model sees
     ...
 ```
 Or give it to one run only: `run_flow(flow, inputs, tools={"get_facts": get_facts})`.
 That mapping is the run's whole tool set: registered tools are hidden. To keep
 them, pass `tools={**registered_tools(), "get_facts": get_facts}`.
+
+**Typed TOOL nodes.** Every returned value must fit `output:`; model expected outcomes
+as union variants (`Union[Filled, Interrupted]`) and route them with `case`. At run
+start, unknown or missing inputs and input or output types that can never fit raise
+`ValueError`, with no coercion (`qty: "10"` into `int` fails). See `docs/syntax.md`.
 
 **Tool groups.** When the tools an AGENT may use change between runs (for example,
 tools a permission system grants), grant a group name and let the host fill it:
@@ -487,7 +501,7 @@ name (or a group tool's name is a top-level key), or a group has a tool named
 `ask_user` or `load_skill`; the handler stays the top-level `ask_user` entry. `yian run`
 fills no groups, so such flows need a Python host. Pass groups again to `resume_flow`;
 restarted nodes use the contents passed there.
-Note `tool` uses `tool_id:` + `input:` (a tool declares no `output:`). ML inference
+Note `tool` uses `tool_id:` + `input:`, with an optional `output:`. ML inference
 goes through a host tool (`kind: tool`); `kind: model` was removed.
 
 ### `case` — branching (routes only; no `input:`)

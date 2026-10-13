@@ -320,7 +320,7 @@ nodes:
 | `04-call.yaml` | `call` (typed function application) re-exporting a callee's value |
 | `05-call-map.yaml` | a `map` node (`kind: map` + `over:` + `parallel:`) over a list + `${item}` + `:-` default + `asserts:` + `node_name` + multi-output |
 | `06-case-on.yaml` | `case … on` (simple form: value match) + a 3-way n-ary `\|` coalesce join |
-| `08-tool-news.yaml` | `TOOL` kind — `tool_id` + untyped `input:`; whole-string (typed) vs embedded (stringified) `${…}` |
+| `08-tool-news.yaml` | `TOOL` kind — `tool_id` + `input:` (no `output:`); whole-string (typed) vs embedded (stringified) `${…}` |
 | `09-interpolation-ops.yaml` | the operator forms — `${X:?}` / nested `${X:-…}` / `$$` escape / `${system.X}` |
 | `10-asserts-arithmetic.yaml` | arithmetic + `and`/`or`/`not`/`in` in `when:`/`asserts:` |
 | `11-reuse-anchors.yaml` | `x-*` extension keys + YAML anchor (`&`/`*`/`<<:`) reuse + `llm_config` |

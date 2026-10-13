@@ -45,6 +45,7 @@ from yian.compile.memory_layout import (
     resolve_memory_layout,
 )
 from yian.compile.model import CompiledFlow
+from yian.compile.validation import type_relation
 from yian.compose.loader import ComposedFlow
 from yian.diagnostics import Failure, OriginRef
 from yian.events import (
@@ -63,6 +64,7 @@ from yian.memory import (
 from yian.memory_host import MemoryRegistry
 from yian.nodes.base import Steering
 from yian.nodes.binding import coerce_inputs
+from yian.nodes.contracts import HostToolCall
 from yian.runtime.engine import FlowEngine
 from yian.runtime.eval_node import require_steering
 from yian.runtime.backward import drive_backward
@@ -87,6 +89,8 @@ from yian.runtime.state import (
 from yian.runtime.memory_runtime import MemoryRuntime
 from yian.skills import Skill
 from yian.tools import ToolSet
+from yian.tools.types import tool_types
+from yian.typesys import Type, ValueKind, canonical_type_label
 from yian.typesys.pool import VariablePool
 from yian.typesys.seeding import default_run_id, seed_system_clock
 
@@ -406,8 +410,11 @@ def run_flow(
             ``llm_config.api_key`` or is not an allowed URL, a `BaseTool` in
             `tools` is named differently from its key, a group tool's name
             clashes or is reserved, an AGENT grants a tool or group not in the
-            run's tools, or an AGENT grants skills while `skills` is `None` or
-            lacks a listed skill.
+            run's tools, a TOOL node's inputs or `output:` do not match the
+            names and types its tool declares (an input the tool does not take,
+            a missing required input, or a type that can never fit), or an
+            AGENT grants skills while `skills` is `None` or lacks a listed
+            skill.
         `MemorySetupError`:
             Memory is enabled without a required memory implementation, cannot
             open an exact run snapshot, or has an invalid configuration.
@@ -463,6 +470,7 @@ def _run_flow_controlled(
         raise TypeError("learnable must be a bool")
     run_tools = ToolSet(tools)
     _check_tool_grants(flow.compiled, run_tools)
+    _check_tool_types(flow.compiled, run_tools)
     skills = _check_skills(flow.compiled, skills)
     require_steering(steering)
 
@@ -665,7 +673,8 @@ def resume_flow(
             worker count violates its contract, a group tool's name clashes or
             is reserved, an unfinished run's AGENT grants a tool or group
             not in `tools` or grants skills while `skills` is `None` or lacks
-            a listed skill.
+            a listed skill, or an unfinished run's TOOL node's inputs or
+            `output:` do not match the names and types its tool declares.
         `MemorySetupError`:
             The recorded run needs memory but its mapping is absent, incomplete,
             or cannot reproduce the exact recorded snapshots.
@@ -722,6 +731,7 @@ def _resume_flow_controlled(
                                       handle=_retained_handle(retained_program, state, authority, memory,
                                                               locator=retained_locator, api_key=api_key))
         _check_tool_grants(flow.compiled, run_tools)
+        _check_tool_types(flow.compiled, run_tools)
         skills = _check_skills(flow.compiled, skills)
 
         if state.memories is not None:
@@ -806,6 +816,139 @@ def _check_tool_grants(flow: CompiledFlow, tools: ToolSet) -> None:
                         f"{list(tools.groups)}"
                     )
                 raise ValueError(f"AGENT node {node_id!r} grants {reason}") from None
+
+
+def _check_tool_types(flow: CompiledFlow, tools: ToolSet) -> None:
+    """Prove every static TOOL node's inputs and output agree with its tool's types.
+
+    Runs before any record is written and covers every static node, including
+    nodes that may never run. A node whose tool this run cannot resolve is
+    skipped; it fails when it runs.
+
+    Args:
+        flow (`CompiledFlow`):
+            The flow whose static nodes are checked.
+        tools (`ToolSet`):
+            The run's tools.
+
+    Raises:
+        `ValueError`:
+            A TOOL node passes an input its tool does not take, omits one the
+            tool requires, binds an input whose type can never fit the tool's, or
+            declares an output the tool can never return.
+    """
+    for node_id, node in _static_nodes(flow):
+        call = node.host_tool_call()
+        if call is None:
+            continue
+        try:
+            tool = tools.resolve([call.tool_id])[0]
+        except ValueError:
+            continue
+        declared = tool_types(tool)
+        if declared.inputs is not None:
+            _check_tool_inputs(node_id, call, declared.inputs, declared.required)
+        if declared.output is not None:
+            _check_tool_output(node_id, call, declared.output)
+
+
+def _check_tool_inputs(
+    node_id: str,
+    call: HostToolCall,
+    inputs: Mapping[str, Type | None],
+    required: frozenset[str],
+) -> None:
+    """Prove one TOOL node's inputs match the names and types its tool declares.
+
+    Args:
+        node_id (`str`):
+            The node's path, for the error message.
+        call (`HostToolCall`):
+            The node's tool call.
+        inputs (`Mapping[str, Type | None]`):
+            The tool's declared input types by name; `None` leaves an input unchecked.
+        required (`frozenset[str]`):
+            The names of the inputs the tool requires.
+
+    Raises:
+        `ValueError`:
+            An input is not one the tool takes, a required input is missing, or an
+            input's binding type is disjoint from the tool's. Missing inputs are
+            all named at once.
+    """
+    for name in call.inputs:
+        if name not in inputs:
+            raise ValueError(
+                f"TOOL node {node_id!r} input {name!r}: tool {call.tool_id!r} takes no "
+                f"such input; it takes {sorted(inputs)}"
+            )
+    missing = sorted(required - set(call.inputs))
+    if missing:
+        named = f"input {missing[0]!r}" if len(missing) == 1 else f"inputs {missing}"
+        raise ValueError(
+            f"TOOL node {node_id!r} is missing {named} that tool {call.tool_id!r} requires"
+        )
+    for name, inferred in call.input_types.items():
+        expected = inputs.get(name)
+        # Disjoint is yian's non-coercing relation, so a binding pydantic would
+        # coerce (a string of digits into an int) is rejected too.
+        if expected is not None and type_relation(inferred, expected) == "disjoint":
+            raise ValueError(
+                f"TOOL node {node_id!r} input {name!r}: tool {call.tool_id!r} takes "
+                f"{canonical_type_label(expected)}, but the binding is "
+                f"{_binding_label(inferred)}"
+            )
+
+
+def _check_tool_output(node_id: str, call: HostToolCall, declared_output: Type) -> None:
+    """Prove one TOOL node's declared output can hold a value its tool returns.
+
+    Args:
+        node_id (`str`):
+            The node's path, for the error message.
+        call (`HostToolCall`):
+            The node's tool call; a call with no output type is not checked.
+        declared_output (`Type`):
+            The tool's declared return type.
+
+    Raises:
+        `ValueError`:
+            The tool's return type is disjoint from the node's output type.
+    """
+    if call.output_type is None:
+        return
+    if type_relation(declared_output, call.output_type) == "disjoint":
+        raise ValueError(
+            f"TOOL node {node_id!r} output: declared "
+            f"{canonical_type_label(call.output_type)}, but tool {call.tool_id!r} "
+            f"returns {canonical_type_label(declared_output)}"
+        )
+
+
+_LITERAL_LABEL_WIDTH = 40
+
+
+def _binding_label(typ: Type) -> str:
+    """Return a binding type's label, showing a one-value string or int by its value."""
+    if (
+        typ.kind is ValueKind.INTEGER
+        and typ.bounds is not None
+        and typ.bounds[0] == typ.bounds[1]
+        and not typ.nullable
+    ):
+        return f"{typ.bounds[0]} (int)"
+    if (
+        typ.kind is ValueKind.STRING
+        and typ.tags is not None
+        and len(typ.tags) == 1
+        and typ.variants is None
+        and not typ.nullable
+    ):
+        (value,) = typ.tags
+        if len(value) > _LITERAL_LABEL_WIDTH:
+            value = value[: _LITERAL_LABEL_WIDTH - 3] + "..."
+        return f'"{value}" (str)'
+    return canonical_type_label(typ)
 
 
 def _check_skills(

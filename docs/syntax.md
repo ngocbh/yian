@@ -869,8 +869,9 @@ place_buy:
 - Narrowing follows the branch target's chain: a node that reads it through a plain
   reference, or names it in `depends_on`, sees the same members. A join
   `${b.output | s.output}` of a `buy` and a `sell` branch sees `Buy` or `Sell`.
-  Narrowing doesn't pass through an optional read (`${b.output:-0}`) or `runs_after`,
-  and a node that a second `case` also routes isn't narrowed.
+  Narrowing doesn't pass through an optional read (`${b.output:-0}`) or `runs_after`.
+  A node that several `case`s route is narrowed only when every one of them narrows the
+  same value, and then sees the members any of them allows.
 - A nested `on:` over a field of the narrowed member narrows again, and its exhaustiveness
   counts only that member's tags.
 - A `call` target can pass the narrowed value to a child whose input is the member
@@ -881,8 +882,8 @@ place_buy:
 
 A searched `case` narrows with [`isinstance`](expressions.md#isinstance-the-type-test): each
 top-level `and` part `isinstance(<ref>, T)` of a `when:` narrows that reference to `T`
-in that branch and its chain. `T` may be a member, a union of members, or any other type.
-First true `when:` still wins, and checks may overlap. The searched form's `else:`
+in that branch and its chain. `T` may be a member, a union of members, or any other type;
+a `T` the reference's type already fits, such as `object`, doesn't narrow. First true `when:` still wins, and checks may overlap. The searched form's `else:`
 narrows nothing. A later `and` part of the same `when:` may already read `T`'s fields:
 
 ```yaml

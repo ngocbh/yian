@@ -332,16 +332,20 @@ def validate_references(
         for param, src in nwiring.items():
             if param in reserved:
                 continue
-            # A searched CASE's param read only after an `isinstance` check has its own view.
-            param_producers, param_inputs = (
-                narrowing.for_param(node_id, param)
-                if narrowing is not None
-                else (node_producers, node_inputs)
-            )
+            label = node.wiring_ref_label(param)
+            param_rng = franges.get(("input", param)) or input_rng
+            param_producers, param_inputs = node_producers, node_inputs
+            if narrowing is not None:
+                # A searched CASE's param read only after an `isinstance` check has its own
+                # view; one read guarded first and unguarded later reports at the later read.
+                param_producers, param_inputs = narrowing.for_param(node_id, param)
+                site = narrowing.param_site(node_id, param)
+                if site is not None:
+                    label, param_rng = site[0], site[1] or param_rng
             scan(
                 src,
-                f"node {node_id!r} {node.wiring_ref_label(param)} from",
-                franges.get(("input", param)) or input_rng,
+                f"node {node_id!r} {label} from",
+                param_rng,
                 site_producers=param_producers,
                 site_inputs=param_inputs,
                 partial_union_fields=partial_union_fields,

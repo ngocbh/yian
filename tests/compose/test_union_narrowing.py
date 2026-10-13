@@ -687,7 +687,47 @@ def test_a_read_guarded_in_one_case_and_unguarded_in_another_is_an_error():
         _code("b"),
         _code("e"),
     ))
+    # The guarded read in cases[0] is fine; the unguarded one in cases[1] is the error.
+    assert f"node 'route' cases[1].when from: {_LIMIT_ERROR}" in msg
+
+
+def test_an_unguarded_read_error_points_at_its_own_when():
+    text = _flow(
+        _searched(
+            ('"isinstance(d.output, Buy) and d.output.limit > 5"', "b"),
+            ("input.s == 'x'", "b"),
+            ('"d.output.limit > 1"', "b"),
+        ),
+        _code("b"),
+        _code("e"),
+    )
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    assert f"node 'route' cases[2].when from: {_LIMIT_ERROR}" in str(caught.value)
+    line = next(n for n, row in enumerate(text.splitlines(), 1) if "d.output.limit > 1" in row)
+    assert caught.value.diagnostic.frames[-1].range.start_line == line
+
+
+def test_a_read_unguarded_first_points_at_the_first_when():
+    msg = _load_error(_flow(
+        _searched(
+            ('"d.output.limit > 1"', "b"),
+            ('"isinstance(d.output, Buy) and d.output.limit > 5"', "b"),
+        ),
+        _code("b"),
+        _code("e"),
+    ))
     assert f"node 'route' cases[0].when from: {_LIMIT_ERROR}" in msg
+
+
+@pytest.mark.parametrize("type_name", ["object", "Decision"])
+def test_isinstance_of_a_type_the_base_already_fits_does_not_narrow(type_name):
+    msg = _load_error(_flow(
+        _searched((f"isinstance(d.output, {type_name})", "b")),
+        _code("b", {"q": "${d.output.qty}"}),
+        _code("e"),
+    ))
+    assert f"node 'b' input 'q' from: {_QTY_ERROR}" in msg
 
 
 def test_a_read_guarded_by_different_members_reads_their_shared_fields():

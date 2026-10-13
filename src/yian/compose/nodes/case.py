@@ -491,6 +491,10 @@ def _isinstance_check(conjunct: Tree | Token) -> Optional[IsinstanceCheck]:
     return ".".join(parts), isinstance_type_names(conjunct)[0]
 
 
+GuardedRead = tuple[int, tuple[IsinstanceCheck, ...]]
+"""One read of a searched-case param: its case index and the checks guarding it."""
+
+
 def _conjuncts(tree: Tree | Token) -> list[Tree | Token]:
     """The operands of a top-level `and` chain; a lone operand otherwise."""
     if isinstance(tree, Tree) and tree.data == "and_expr":
@@ -511,13 +515,13 @@ class _SearchedParams:
             Each distinct ref path and its local, in first-seen order.
         local_case_index (`dict[str, int]`):
             The case index each local was first seen in (its caret / label site).
-        guards (`dict[str, list[tuple[IsinstanceCheck, ...]]]`):
-            For each local, the checks guarding each of its occurrences.
+        guards (`dict[str, list[GuardedRead]]`):
+            For each local, the case index of each occurrence and the checks guarding it.
     """
 
     ref_to_local: dict[str, str]
     local_case_index: dict[str, int]
-    guards: dict[str, list[tuple[IsinstanceCheck, ...]]]
+    guards: dict[str, list[GuardedRead]]
 
 
 def _searched_params(desc: CaseDescriptor, diagnostics: LoadDiagnostics) -> _SearchedParams:
@@ -533,7 +537,7 @@ def _searched_params(desc: CaseDescriptor, diagnostics: LoadDiagnostics) -> _Sea
     """
     ref_to_local: dict[str, str] = {}
     local_case_index: dict[str, int] = {}
-    guards: dict[str, list[tuple[IsinstanceCheck, ...]]] = {}
+    guards: dict[str, list[GuardedRead]] = {}
     for ci, c in enumerate(desc.cases):
         when = c.get("when")
         when_range = (
@@ -563,7 +567,7 @@ def _searched_params(desc: CaseDescriptor, diagnostics: LoadDiagnostics) -> _Sea
         checks: list[IsinstanceCheck] = []
         for conjunct in _conjuncts(tree):
             for ref in expr_refs(conjunct):
-                guards[ref_to_local[ref]].append(tuple(checks))
+                guards[ref_to_local[ref]].append((ci, tuple(checks)))
             check = _isinstance_check(conjunct)
             if check is not None:
                 checks.append(check)
@@ -599,8 +603,8 @@ def isinstance_conjuncts(when: Any) -> list[IsinstanceCheck]:
     return [check for check in checks if check is not None]
 
 
-def searched_param_guards(desc: CaseDescriptor) -> dict[str, list[tuple[IsinstanceCheck, ...]]]:
-    """Return, per searched-case `__rN` param, the checks guarding each of its occurrences.
+def searched_param_guards(desc: CaseDescriptor) -> dict[str, list[GuardedRead]]:
+    """Return, per searched-case `__rN` param, each occurrence's case and guarding checks.
 
     An occurrence of a param's ref inside a top-level `and` operand is guarded by the
     `isinstance(<direct ref>, T)` operands before it in the same chain: `and`
@@ -612,9 +616,9 @@ def searched_param_guards(desc: CaseDescriptor) -> dict[str, list[tuple[Isinstan
             A searched case that has already built. An `on:` case has no guards.
 
     Returns:
-        `dict[str, list[tuple[IsinstanceCheck, ...]]]`:
-            For each local, one tuple of guarding checks per occurrence, across all
-            `when:`s in source order.
+        `dict[str, list[GuardedRead]]`:
+            For each local, one `(case index, guarding checks)` pair per occurrence,
+            across all `when:`s in source order.
 
     Raises:
         `LoadError`:
@@ -622,8 +626,8 @@ def searched_param_guards(desc: CaseDescriptor) -> dict[str, list[tuple[Isinstan
             the build succeeded, so the error is unlocated.
 
     Example:
-        For `isinstance(d.output, Buy) and d.output.qty > 5`, the local of
-        `d.output.qty` maps to `[(("d.output", "Buy"),)]`.
+        For a first case `isinstance(d.output, Buy) and d.output.qty > 5`, the local
+        of `d.output.qty` maps to `[(0, (("d.output", "Buy"),))]`.
     """
     if desc.on is not None:
         return {}

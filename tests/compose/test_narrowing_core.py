@@ -183,7 +183,11 @@ def test_isinstance_fact_against_the_base_union():
     assert isinstance_fact(DECISION, BUY) == Members((BUY,))
     assert isinstance_fact(DECISION, BUY_OR_SELL) == Members((BUY, SELL))
     assert isinstance_fact(DECISION, TEXT) == Exact(TEXT)
-    assert isinstance_fact(TEXT, TEXT) == Exact(TEXT)
+    assert isinstance_fact(TEXT, TEXT) is None
+    assert isinstance_fact(DECISION, Type.scalar(ValueKind.OBJECT)) is None
+    assert isinstance_fact(DECISION, DECISION) is None
+    assert isinstance_fact(replace(DECISION, nullable=True), BUY) == Members((BUY,))
+    assert isinstance_fact(Type.scalar(ValueKind.OBJECT), TEXT) == Exact(TEXT)
     assert isinstance_fact(DECISION, replace(BUY, nullable=True)) == Members(
         (BUY,), nullable=True
     )
@@ -223,8 +227,8 @@ def test_searched_param_guards_lists_the_checks_before_each_read():
         ],
     )
     assert searched_param_guards(desc) == {
-        "__r0": [(), ()],
-        "__r1": [(("d.output", "Buy"),), ()],
+        "__r0": [(0, ()), (1, ())],
+        "__r1": [(0, (("d.output", "Buy"),)), (1, ())],
     }
     on_desc, _ = _case("o", "${d.output.action}", [("buy", "b")])
     assert searched_param_guards(on_desc) == {}
@@ -258,6 +262,16 @@ def test_isinstance_facts_use_the_original_base_union():
         _case("c", None, [("isinstance(d.output, Buy)", "b")]),
         _node("b"),
         _node("h"),
+    ]
+    narrowing = _compute(nodes, [], {"d": ValueContract(DECISION)})
+    assert narrowing.environment("b") == {"d.output": Members((BUY,))}
+
+
+def test_an_isinstance_of_a_type_the_base_fits_gives_no_fact():
+    nodes = [
+        _node("d"),
+        _case("c", None, [("isinstance(d.output, Decision) and isinstance(d.output, Buy)", "b")]),
+        _node("b"),
     ]
     narrowing = _compute(nodes, [], {"d": ValueContract(DECISION)})
     assert narrowing.environment("b") == {"d.output": Members((BUY,))}

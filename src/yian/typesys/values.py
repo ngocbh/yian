@@ -313,15 +313,16 @@ class Type:
     `kind` is the storage tag (what the value persists as). The optional fields
     refine validation beyond the bare tag:
       - record:  kind=OBJECT,   fields={name: Type}, required={names}
-      - variant: kind=STRING,   tags={labels}
+      - variant: kind=STRING,   tags={labels}   (a `Literal[...]` of strings)
       - list:    kind=LIST_*,   element=<element Type>
       - number:  kind=INTEGER/NUMBER, bounds=(inclusive minimum, maximum)
-      - union:   kind=OBJECT,   variants=(record member, ...)
+      - union:   kind=OBJECT,   variants=(record member, ...)   (a `Union[...]` of records)
     A refined specialized list uses the element's matching storage tag;
     `LIST_ANY` is the generic carrier and may refine any element type.
     A plain scalar / flat list uses only `kind` (see `Type.scalar`).
-    Union members are non-nullable records; a nullable union sets `nullable` on
-    the union itself.
+    Despite the name, `variants` holds union members, not the string tags of a
+    "variant" above. Members are non-nullable records; a nullable union sets
+    `nullable` on the union itself.
     """
 
     kind: ValueKind
@@ -541,8 +542,8 @@ def canonical_type_label(typ: Type) -> str:
 def _canonical_nonnullable_label(typ: Type) -> str:
     """Render ``typ`` without applying its outer nullable wrapper."""
     if typ.variants is not None:
-        members = canonical_union_order(typ.variants)
-        return "Union[" + ",".join(canonical_type_label(member) for member in members) + "]"
+        labelled = _ordered_member_labels(typ.variants)
+        return "Union[" + ",".join(label for _, label in labelled) + "]"
 
     if typ.fields is not None:
         fields = (
@@ -680,16 +681,24 @@ def canonical_union_order(members: Iterable[Type]) -> tuple[Type, ...]:
     members = tuple(members)
     tag_fields = _members_tag_fields(members)
     if tag_fields:
+        # Tag order reads best in labels and manifests, and needs no member labels.
         field = tag_fields[0]
         return tuple(sorted(members, key=lambda member: _single_tag(member.fields[field])))
-    return tuple(sorted(members, key=canonical_type_label))
+    return tuple(member for member, _ in _ordered_member_labels(members))
 
 
-def _member_tag(member: Type, field: str) -> str:
-    """Return a member's value for one tag field."""
-    tag = _single_tag(member.fields[field])
-    assert tag is not None
-    return tag
+def _ordered_member_labels(members: tuple[Type, ...]) -> list[tuple[Type, str]]:
+    """Return `(member, label)` pairs in canonical order, labelling each member once.
+
+    Labelling once keeps nested untagged unions linear: their order depends on the
+    labels, so ordering and rendering share them.
+    """
+    labelled = [(member, canonical_type_label(member)) for member in members]
+    tag_fields = _members_tag_fields(members)
+    if tag_fields:
+        field = tag_fields[0]
+        return sorted(labelled, key=lambda pair: _single_tag(pair[0].fields[field]))
+    return sorted(labelled, key=lambda pair: pair[1])
 
 
 def _tag_field(typ: Type, field: Optional[str]) -> str:
@@ -729,11 +738,21 @@ def union_member_for_tag(
         `ValueError`:
             `typ` is not a tagged union, or `field` is not one of its tag fields.
     """
-    field = _tag_field(typ, field)
+    return _member_with_tag(typ.variants, _tag_field(typ, field), tag)
+
+
+def _member_with_tag(members: tuple[Type, ...], field: str, tag: Any) -> Optional[Type]:
+    """Return the member whose single-value tag field `field` equals `tag`."""
+    index = _tag_index(members, field, tag)
+    return None if index is None else members[index]
+
+
+def _tag_index(members: tuple[Type, ...], field: str, tag: Any) -> Optional[int]:
+    """Return the index of the member whose tag field `field` equals `tag`."""
     if type(tag) is not str:
         return None
     return next(
-        (member for member in typ.variants if _member_tag(member, field) == tag),
+        (index for index, member in enumerate(members) if tag in member.fields[field].tags),
         None,
     )
 
@@ -747,7 +766,7 @@ def restrict_union(
     """Return the part of a union that `keep` selects, keeping its nullability.
 
     One selected member gives that member record; several give a smaller union
-    in the original member order.
+    with its members in canonical order.
 
     Args:
         typ (`Type`):
@@ -765,6 +784,8 @@ def restrict_union(
             nullable when `typ` is.
 
     Raises:
+        `TypeError`:
+            `keep` is a bare string rather than a collection of tags.
         `ValueError`:
             `typ` is not a union, `keep` is empty, or an item is neither a tag
             nor a member of `typ`.
@@ -773,26 +794,31 @@ def restrict_union(
         Restricting `Union[Buy, Hold, Sell]` to `{"buy", "sell"}` gives
         `Union[Buy, Sell]`.
     """
+    if isinstance(keep, str):
+        raise TypeError("restrict_union keeps a collection of tags, not a bare string")
     if typ.variants is None:
         raise ValueError("only a union can be restricted")
-    selected: list[Type] = []
+    members = typ.variants
+    tag_field: Optional[str] = None
+    selected: set[int] = set()
     for item in keep:
         if isinstance(item, Type):
-            member = next((candidate for candidate in typ.variants if candidate == item), None)
-            if member is None:
+            index = next((i for i, member in enumerate(members) if member == item), None)
+            if index is None:
                 raise ValueError("restrict_union got a type that is not a union member")
         else:
-            member = union_member_for_tag(typ, item, field=field)
-            if member is None:
+            if tag_field is None:
+                tag_field = _tag_field(typ, field)
+            index = _tag_index(members, tag_field, item)
+            if index is None:
                 raise ValueError(f"{item!r} is not a tag of the union")
-        if not any(member == chosen for chosen in selected):
-            selected.append(member)
+        selected.add(index)
     if not selected:
         raise ValueError("restrict_union needs at least one member")
-    ordered = tuple(member for member in typ.variants if any(member == s for s in selected))
-    if len(ordered) == 1:
-        return replace(ordered[0], nullable=typ.nullable)
-    return Type(kind=ValueKind.OBJECT, variants=ordered, nullable=typ.nullable)
+    if len(selected) == 1:
+        return replace(members[selected.pop()], nullable=typ.nullable)
+    kept = canonical_union_order(members[index] for index in sorted(selected))
+    return Type(kind=ValueKind.OBJECT, variants=kept, nullable=typ.nullable)
 
 
 def union_field(typ: Type, name: str) -> FieldRead | FieldPartial | FieldAbsent:
@@ -833,7 +859,7 @@ def union_field(typ: Type, name: str) -> FieldRead | FieldPartial | FieldAbsent:
     strict = [replace(field_type, nullable=False) for field_type in field_types]
     if all(field_type == strict[0] for field_type in strict):
         return FieldRead(replace(strict[0], nullable=nullable))
-    if all(field_type.kind is ValueKind.STRING and field_type.tags is not None for field_type in strict):
+    if all(field_type.tags is not None for field_type in strict):
         merged = frozenset().union(*(field_type.tags for field_type in strict))
         return FieldRead(Type(kind=ValueKind.STRING, tags=merged, nullable=nullable))
     return FieldRead(None)
@@ -1212,32 +1238,60 @@ def _build_for_union(
     """
     if not isinstance(value, dict):
         raise TypeCheckError(f"{value!r} is not an object for a union type", path=path)
-    tag_fields = union_tag_fields(typ)
+    members = typ.variants
+    tag_fields = _members_tag_fields(members)
     if tag_fields:
         field = tag_fields[0]
-        expected = sorted(_member_tag(member, field) for member in typ.variants)
         if field not in value:
             raise TypeCheckError(
-                f"missing tag field {field!r} (expected one of {expected})",
+                f"missing tag field {field!r} (expected one of {_tag_values(members, field)})",
                 path=path + (field,),
             )
-        member = union_member_for_tag(typ, value[field], field=field)
+        member = _member_with_tag(members, field, value[field])
         if member is None:
             raise TypeCheckError(
-                f"{value[field]!r} is not a tag of the union (expected one of {expected})",
+                f"{value[field]!r} is not a tag of the union "
+                f"(expected one of {_tag_values(members, field)})",
                 path=path + (field,),
             )
         return _build_for_type(member, value, path=path)
     reasons = []
-    for member in typ.variants:
+    for member in members:
         try:
             return _build_for_type(member, value, path=path)
+        except _NoUnionMember as exc:
+            # A nested union contributes its summary, so the message stays bounded.
+            reasons.append(f"{canonical_type_label(member)}: {exc.summary}")
         except TypeCheckError as exc:
             reasons.append(f"{canonical_type_label(member)}: {exc}")
-    raise TypeCheckError(
-        f"value matches no member of {canonical_type_label(typ)}: " + "; ".join(reasons),
-        path=path,
-    )
+    summary = f"value matches no member of {canonical_type_label(typ)}"
+    raise _NoUnionMember(summary + ": " + "; ".join(reasons), summary=summary, path=path)
+
+
+def _tag_values(members: tuple[Type, ...], field: str) -> list[str]:
+    """Return the sorted values of one tag field across union members."""
+    return sorted(_single_tag(member.fields[field]) for member in members)
+
+
+class _NoUnionMember(TypeCheckError):
+    """A value matches no member of an untagged union.
+
+    Args:
+        *args (`object`): Positional arguments retained by ``ValueError``.
+        summary (`str`): The message without the per-member reasons.
+        path (`tuple[str | int, ...]`, *optional*, defaults to ``()``):
+            Path to the rejected value.
+    """
+
+    def __init__(
+        self,
+        *args: object,
+        summary: str,
+        path: tuple[str | int, ...] = (),
+    ) -> None:
+        """Keep the summary beside the full message."""
+        super().__init__(*args, path=path)
+        self.summary = summary
 
 
 def _build_scalar_or_list(

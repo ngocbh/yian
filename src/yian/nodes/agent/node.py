@@ -43,8 +43,7 @@ from yian.nodes.contracts import (
 from yian.skills.catalog import Skill, SkillError, check_skill_name
 from yian.skills.tool import LOAD_SKILL, system_prompt_with_skills
 from yian.tools import ToolSet
-from yian.typesys.types import canonical_type_label
-from yian.typesys.values import ValueKind, build_value_as
+from yian.typesys.values import ValueKind, build_value_as, canonical_type_label
 
 
 def is_text_output(contract: Any) -> bool:

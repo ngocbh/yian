@@ -22,10 +22,6 @@ from yian.typesys.values import (
     _validate_numeric_bounds,
 )
 
-# The label lives in the values leaf so union value errors can use it; callers keep
-# importing it from here.
-from yian.typesys.values import canonical_type_label  # noqa: F401
-
 
 # ---------- TypeExpr AST ----------
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import re
+import time
 from dataclasses import dataclass, replace
 
 import pytest
@@ -2639,6 +2640,23 @@ def test_union_manifest_orders_members_canonically():
     ]
     assert flow_fingerprint(first) == flow_fingerprint(second)
     assert expansion_digest(first) == expansion_digest(second)
+
+
+def test_deep_untagged_union_manifests_quickly():
+    def record(**fields: Type) -> Type:
+        return Type(kind=ValueKind.OBJECT, fields=fields, required=frozenset(fields))
+
+    typ = _union(
+        record(a=Type.scalar(ValueKind.STRING)), record(b=Type.scalar(ValueKind.INTEGER))
+    )
+    for level in range(30):
+        typ = _union(record(inner=typ), record(**{f"leaf{level}": Type.scalar(ValueKind.INTEGER)}))
+    fragment = _fragment()
+    fragment.nodes["body"].output_contract = ValueContract(typ)
+
+    started = time.perf_counter()
+    flow_fingerprint(fragment)
+    assert time.perf_counter() - started < 2.0
 
 
 @pytest.mark.parametrize(

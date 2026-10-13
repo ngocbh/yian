@@ -245,7 +245,7 @@ def test_bounded_type_defaults_preserve_compatible_integer_payloads():
 
 
 def test_bounded_numeric_labels_include_nested_domains():
-    from yian.typesys.types import canonical_type_label
+    from yian.typesys.values import canonical_type_label
 
     assert canonical_type_label(type_for("int[ -2, +4 ]", {})) == "int[-2,4]"
     assert canonical_type_label(type_for("list[Optional[float[0.0, 1.5]]]", {})) == (

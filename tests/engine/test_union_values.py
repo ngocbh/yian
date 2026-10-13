@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import replace
 
 import pytest
@@ -200,6 +201,11 @@ def test_union_tag_fields_excludes_equal_values():
         (rec(a=INT), rec(b=INT), False),
         (rec(a=INT), rec(a=STR), False),
         (rec(a=INT), rec(a=FLOAT), True),
+        (
+            rec(a=INT),
+            Type(kind=ValueKind.OBJECT, fields={"a": STR}, required=frozenset()),
+            False,
+        ),
         # a union against anything
         (U, buy, True),
         (hold, U, False),
@@ -246,7 +252,7 @@ def test_tagged_union_unknown_tag():
     assert caught.value.path == ("action",)
 
 
-def test_tagged_union_unhashable_tag_value_is_not_a_tag():
+def test_tagged_union_non_string_tag_value_is_not_a_tag():
     with pytest.raises(TypeCheckError) as caught:
         build_value_as(U, {"action": ["buy"]})
     assert caught.value.path == ("action",)
@@ -299,6 +305,38 @@ def test_untagged_union_matching_no_member():
     assert caught.value.path == ()
 
 
+def test_untagged_no_match_message_does_not_nest_member_messages():
+    inner = union(rec(a=STR), rec(b=INT))
+    outer = union(rec(wrap=inner), rec(c=BOOL))
+    with pytest.raises(TypeCheckError) as caught:
+        build_value_as(outer, {"wrap": {"a": 1}})
+    wrap_label = canonical_type_label(rec(wrap=inner))
+    c_label = canonical_type_label(rec(c=BOOL))
+    assert str(caught.value) == (
+        f"value matches no member of {canonical_type_label(outer)}: "
+        f"{wrap_label}: value matches no member of {canonical_type_label(inner)}; "
+        f"{c_label}: record missing required fields: ['c']"
+    )
+    assert caught.value.path == ()
+
+
+def _deep_untagged_union(depth: int) -> Type:
+    typ = union(rec(a=STR), rec(b=INT))
+    for level in range(depth):
+        typ = union(rec(inner=typ), rec(**{f"leaf{level}": INT}))
+    return typ
+
+
+def test_deep_untagged_union_labels_and_checks_in_linear_work():
+    typ = _deep_untagged_union(30)
+    started = time.perf_counter()
+    label = canonical_type_label(typ)
+    with pytest.raises(TypeCheckError, match="^value matches no member of "):
+        build_value_as(typ, {"inner": 3})
+    assert time.perf_counter() - started < 2.0
+    assert label.count("Union[") == 31
+
+
 def test_list_of_union():
     typ = Type(kind=ValueKind.LIST_OBJECT, element=U)
     stored = build_value_as(
@@ -335,6 +373,26 @@ def test_union_member_for_tag_on_another_tag_field():
     assert union_member_for_tag(both, "s", field="side") == second
     with pytest.raises(ValueError):
         union_member_for_tag(both, "buy", field="qty")
+
+
+def test_restrict_union_on_another_tag_field():
+    first = rec(side=lit("b"), action=lit("buy"), qty=INT)
+    second = rec(side=lit("s"), action=lit("sell"), price=FLOAT)
+    third = rec(side=lit("h"), action=lit("hold"))
+    three = union(first, second, third)
+    assert restrict_union(three, {"s"}, field="side") == second
+    assert restrict_union(three, {"s", "b"}, field="side") == union(first, second)
+    with pytest.raises(ValueError):
+        restrict_union(three, {"sell"}, field="side")
+
+
+def test_restrict_union_returns_members_in_canonical_order():
+    assert restrict_union(union(sell, hold, buy), {"sell", "buy"}) == union(buy, sell)
+
+
+def test_restrict_union_rejects_a_bare_string():
+    with pytest.raises(TypeError):
+        restrict_union(U, "buy")
 
 
 def test_union_member_for_tag_needs_a_tagged_union():

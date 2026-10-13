@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -207,3 +208,141 @@ def test_a_host_stop_leaves_the_run_resumable(tmp_path: Path):
 
     assert resumed.status == "succeeded", resumed.failure
     assert resumed.output == 7
+
+
+# --- Run-start checks against the tool's declared types ---------------------------------
+
+_calls: list[dict] = []
+
+
+def place_order(qty: int, sym: str) -> str:
+    _calls.append({"qty": qty, "sym": sym})
+    return f"{qty} {sym}"
+
+
+def place_order_default_sym(qty: int, sym: str = "AAPL") -> str:
+    _calls.append({"qty": qty, "sym": sym})
+    return f"{qty} {sym}"
+
+
+@pytest.fixture(autouse=True)
+def _reset_calls():
+    _calls.clear()
+
+
+def _one_tool_flow(input_block: str, *, output: str = "") -> str:
+    return f"""
+id: placing
+name: placing
+nodes:
+  place:
+    kind: tool
+    tool_id: place_order
+    input:
+{input_block}
+{output}
+output: ${{place.output}}
+"""
+
+
+def test_an_input_the_tool_does_not_take_fails_at_run_start(tmp_path: Path):
+    path = tmp_path / "run.jsonl"
+    flow = load_flow(_one_tool_flow("      qtty: 5\n      sym: X"))
+
+    with pytest.raises(ValueError, match=re.escape(
+        "TOOL node 'place' input 'qtty': tool 'place_order' takes no input 'qtty'; "
+        "it takes ['qty', 'sym']"
+    )):
+        run_flow(flow, {}, log=path, tools={"place_order": place_order})
+    assert not path.exists()
+    assert _calls == []
+
+
+def test_a_missing_required_input_fails_at_run_start(tmp_path: Path):
+    path = tmp_path / "run.jsonl"
+    flow = load_flow(_one_tool_flow("      sym: X"))
+
+    with pytest.raises(ValueError, match=re.escape(
+        "TOOL node 'place' is missing input 'qty' that tool 'place_order' requires"
+    )):
+        run_flow(flow, {}, log=path, tools={"place_order": place_order})
+    assert not path.exists()
+    assert _calls == []
+
+
+def test_an_omitted_optional_input_runs():
+    flow = load_flow(_one_tool_flow("      qty: 5"))
+
+    result = run_flow(flow, {}, tools={"place_order": place_order_default_sym})
+
+    assert result.status == "succeeded", result.failure
+    assert result.output == "5 AAPL"
+
+
+_UNREACHED_BRANCH_FLOW = """
+id: branching
+name: branching
+nodes:
+  route:
+    kind: case
+    cases:
+      - when: 'true'
+        then: fine
+    else: place
+  fine:
+    kind: code
+    code: 'return "ok"'
+    output: str
+  place:
+    kind: tool
+    tool_id: place_order
+    input:
+      qtty: 5
+      sym: X
+output: ${fine.output | place.output}
+"""
+
+_DEFS_CHILD_FLOW = """
+id: nested
+name: nested
+defs:
+  inner:
+    nodes:
+      place:
+        kind: tool
+        tool_id: place_order
+        input:
+          qtty: 5
+          sym: X
+    output: ${place.output}
+nodes:
+  a:
+    kind: call
+    call: inner
+output: ${a.output}
+"""
+
+
+@pytest.mark.parametrize(
+    ("source", "node_path"),
+    [(_UNREACHED_BRANCH_FLOW, "place"), (_DEFS_CHILD_FLOW, "a/place")],
+    ids=["unreached-branch", "defs-child"],
+)
+def test_tool_nodes_that_may_never_run_are_checked(tmp_path: Path, source: str, node_path: str):
+    path = tmp_path / "run.jsonl"
+
+    with pytest.raises(ValueError, match=re.escape(
+        f"TOOL node {node_path!r} input 'qtty': tool 'place_order' takes no input 'qtty'"
+    )):
+        run_flow(load_flow(source), {}, log=path, tools={"place_order": place_order})
+    assert not path.exists()
+
+
+def test_an_unknown_tool_id_still_fails_the_node():
+    flow = load_flow(_one_tool_flow("      qty: 5"))
+
+    result = run_flow(flow, {}, tools={"other": place_order})
+
+    assert result.status == "failed"
+    assert result.failure.node_id == "place"
+    assert "unknown tool id" in result.failure.message

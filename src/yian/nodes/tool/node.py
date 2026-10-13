@@ -11,6 +11,7 @@ engine checks against the tool's return value on every call.
 """
 
 from yian.nodes.base import Node, NodeKind, Output
+from yian.nodes.contracts import HostToolCall, output_contract_type
 from yian.tools import ToolSet
 from yian.typesys import Type
 
@@ -43,6 +44,15 @@ class ToolNode(Node):
         super().__init__(node_id, title=title)
         self.tool_id = tool_id
         self.input_types: dict[str, Type] = {}
+
+    def host_tool_call(self) -> HostToolCall:
+        """Return this node's tool id, input names, proven input types, and output type."""
+        return HostToolCall(
+            tool_id=self.tool_id,
+            inputs=tuple(parameter.name for parameter in self.params or ()),
+            input_types=self.input_types,
+            output_type=output_contract_type(self.output_contract),
+        )
 
     def forward(self, inputs: dict, *, tools: ToolSet | None = None) -> Output:
         tools = tools if tools is not None else ToolSet()

@@ -87,6 +87,7 @@ from yian.runtime.state import (
 from yian.runtime.memory_runtime import MemoryRuntime
 from yian.skills import Skill
 from yian.tools import ToolSet
+from yian.tools.types import tool_types
 from yian.typesys.pool import VariablePool
 from yian.typesys.seeding import default_run_id, seed_system_clock
 
@@ -463,6 +464,7 @@ def _run_flow_controlled(
         raise TypeError("learnable must be a bool")
     run_tools = ToolSet(tools)
     _check_tool_grants(flow.compiled, run_tools)
+    _check_tool_types(flow.compiled, run_tools)
     skills = _check_skills(flow.compiled, skills)
     require_steering(steering)
 
@@ -722,6 +724,7 @@ def _resume_flow_controlled(
                                       handle=_retained_handle(retained_program, state, authority, memory,
                                                               locator=retained_locator, api_key=api_key))
         _check_tool_grants(flow.compiled, run_tools)
+        _check_tool_types(flow.compiled, run_tools)
         skills = _check_skills(flow.compiled, skills)
 
         if state.memories is not None:
@@ -806,6 +809,49 @@ def _check_tool_grants(flow: CompiledFlow, tools: ToolSet) -> None:
                         f"{list(tools.groups)}"
                     )
                 raise ValueError(f"AGENT node {node_id!r} grants {reason}") from None
+
+
+def _check_tool_types(flow: CompiledFlow, tools: ToolSet) -> None:
+    """Prove every static TOOL node's inputs can reach the tool it invokes.
+
+    Runs before any record is written and covers every static node, including
+    nodes that may never run. A node whose tool this run cannot resolve is
+    skipped; it fails when it runs.
+
+    Args:
+        flow (`CompiledFlow`):
+            The flow whose static nodes are checked.
+        tools (`ToolSet`):
+            The run's tools.
+
+    Raises:
+        `ValueError`:
+            A TOOL node passes an input its tool does not take, or omits one
+            the tool requires.
+    """
+    for node_id, node in _static_nodes(flow):
+        call = node.host_tool_call()
+        if call is None:
+            continue
+        try:
+            tool = tools.resolve([call.tool_id])[0]
+        except ValueError:
+            continue
+        declared = tool_types(tool)
+        if declared.inputs is None:
+            continue
+        for name in call.inputs:
+            if name not in declared.inputs:
+                raise ValueError(
+                    f"TOOL node {node_id!r} input {name!r}: tool {call.tool_id!r} takes no "
+                    f"input {name!r}; it takes {sorted(declared.inputs)}"
+                )
+        missing = sorted(declared.required - set(call.inputs))
+        if missing:
+            raise ValueError(
+                f"TOOL node {node_id!r} is missing input {missing[0]!r} that tool "
+                f"{call.tool_id!r} requires"
+            )
 
 
 def _check_skills(

@@ -35,6 +35,7 @@ from yian.nodes.binding import BindingError, ReservedBinder, _validate_parameter
 from yian.nodes.contracts import (
     Assertion,
     ExecutionScope,
+    HostToolCall,
     OutputContract,
     Parameter,
     PartialRecordContract,
@@ -1097,6 +1098,14 @@ class Node(ABC):
         written. The base node grants none.
         """
         return ()
+
+    def host_tool_call(self) -> HostToolCall | None:
+        """Return the tool call this node makes directly, without a model.
+
+        The run boundary checks it against the run's tools before any record is
+        written. The base node makes none.
+        """
+        return None
 
     def backward_input_names(self) -> tuple[str, ...]:
         """Return declared inputs eligible for feedback in this node's contract.

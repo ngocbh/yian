@@ -13,7 +13,7 @@ types only inside type algorithms.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterator, Literal, TypeAlias, cast
+from typing import Any, Callable, Iterator, Literal, Mapping, TypeAlias, cast
 
 from yian.diagnostics import OriginRef
 from yian.typesys import (
@@ -670,6 +670,28 @@ def validate_output_contract(
                 *exc.args,
                 path=(name, *exc.path),
             ) from exc
+
+
+@dataclass(frozen=True)
+class HostToolCall:
+    """One direct tool call a node makes, as the run boundary checks it.
+
+    Args:
+        tool_id (`str`):
+            The id of the tool the node invokes.
+        inputs (`tuple[str, ...]`):
+            The names of the inputs the node passes, in declaration order.
+        input_types (`Mapping[str, Type]`):
+            The proven type of each input's binding; an input whose type is not
+            proven is absent.
+        output_type (`Type | None`):
+            The node's declared whole-value output type, or `None` when it has none.
+    """
+
+    tool_id: str
+    inputs: tuple[str, ...]
+    input_types: Mapping[str, Type]
+    output_type: Type | None
 
 
 @dataclass(frozen=True)

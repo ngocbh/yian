@@ -124,8 +124,9 @@ class CaseDescriptor(NodeDescriptor):
     `range`/`field_ranges` parse metadata) and delegates common parsing to `NodeDescriptor`.
     Its `parse` wrapper captures positional predicate/target ranges; `_normalize_cursor`
     undoes the `on:`->`True` YAML coercion before key legality runs; and
-    `with_source_origins` attaches indexed predicate and optional `on:` origins. Field
-    legality otherwise uses the default allowed/required-key and asserts-list checks.
+    `with_source_origins` attaches indexed predicate and optional `on:` origins. Its parse
+    wrapper also checks the `cases:` shape; field legality otherwise uses the default
+    allowed/required-key and asserts-list checks.
     Only the case-specific fields are declared here.
 
     Class attrs: `kind="case"`; `allowed` adds `cases`/`else`/`on`/`outputs` to the commons;
@@ -219,31 +220,54 @@ class CaseDescriptor(NodeDescriptor):
         to give a synth CASE param / call target its own caret.
 
         It also records each `then:` value's YAML scalar style (aligned with `cases`), the
-        `else:` value's style, and whether `else:` was written at all. Malformed shapes skip
-        style capture and reach the existing errors unchanged."""
+        `else:` value's style, and whether `else:` was written at all. A `cases:` that is not a
+        list of mappings is a located load error before any of this runs."""
         cursor = cls._normalize_cursor(cursor)
         desc = super().parse(node_id, cursor)
+        cls._check_cases_shape(desc, cursor)
         body = cursor._value_view()
         has_else = "else" in body
         updates: dict[str, Any] = {
             "has_else": has_else,
             "else_style": cursor.child("else").scalar_style if has_else else None,
         }
-        cases = body.get("cases")
-        if isinstance(cases, Sequence) and not isinstance(cases, (str, bytes)):
-            when_ranges = cursor.sequence_field_ranges("cases", "when")
-            then_ranges = cursor.sequence_field_ranges("cases", "then")
-            if when_ranges or then_ranges:
-                updates["when_ranges"] = when_ranges
-                updates["then_ranges"] = then_ranges
-            cases_cursor = cursor.child("cases")
-            updates["then_styles"] = [
-                cases_cursor.child(index).child("then").scalar_style
-                if isinstance(item, Mapping) and "then" in item
-                else None
-                for index, item in enumerate(cases)
-            ]
+        when_ranges = cursor.sequence_field_ranges("cases", "when")
+        then_ranges = cursor.sequence_field_ranges("cases", "then")
+        if when_ranges or then_ranges:
+            updates["when_ranges"] = when_ranges
+            updates["then_ranges"] = then_ranges
+        cases_cursor = cursor.child("cases")
+        updates["then_styles"] = [
+            cases_cursor.child(index).child("then").scalar_style
+            if "then" in item
+            else None
+            for index, item in enumerate(desc.cases)
+        ]
         return replace(desc, **updates)
+
+    @staticmethod
+    def _check_cases_shape(desc: "CaseDescriptor", cursor: SourceCursor) -> None:
+        """Reject a `cases:` that is not a list of mappings, at the offending field or item.
+
+        Later passes index `cases:` as a list of mappings, so a malformed shape would
+        otherwise surface as a bare Python error with no location."""
+        diagnostics = LoadDiagnostics.from_cursor(cursor)
+        where = f"case node {desc.id!r}"
+        if not isinstance(desc.cases, list):
+            hint = "; start each case with `- `" if isinstance(desc.cases, Mapping) else ""
+            raise diagnostics.error(
+                f"{where}: `cases:` must be a list of {{when:, then:}} mappings "
+                f"(got {desc.cases!r}){hint}",
+                range=desc.field_ranges.get(("field", "cases")) or desc.range,
+            )
+        cases_cursor = cursor.child("cases")
+        for index, item in enumerate(desc.cases):
+            if not isinstance(item, Mapping):
+                raise diagnostics.error(
+                    f"{where}: `cases[{index}]` must be a {{when:, then:}} mapping "
+                    f"(got {item!r})",
+                    range=cases_cursor.child(index).range or desc.range,
+                )
 
     @classmethod
     def _normalize_cursor(cls, cursor: SourceCursor) -> SourceCursor:

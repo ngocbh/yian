@@ -13,8 +13,9 @@ into `KINDS`/`BINDING_FIELDS` at import so the shared dispatch routes here.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
+from yian.diagnostics import SourceRange
 from yian.expr import ExpressionError, condition_refs
 from yian.nodes.contracts import (
     OutputContract,
@@ -25,6 +26,7 @@ from yian.compose.helpers.output_contracts import (
     combine_output_contracts,
     project_output_contract,
 )
+from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from yian.compose.nodes.resolver import (
     _callable_display,
@@ -45,9 +47,9 @@ class LoopDescriptor(NodeDescriptor):
     `while_`/`until_`.
 
     Inherits the common descriptor fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` +
-    the Compose-only `range`/`field_ranges` parse metadata) and the template `parse` from `NodeDescriptor` (no
-    custom parse hook — loop's field legality is the default allowed/required key check + the
-    asserts-list check; all its deeper legality lives in `build`). Only the loop-specific fields
+    the Compose-only `range`/`field_ranges` parse metadata) and the template `parse` from `NodeDescriptor`.
+    Its `_validate_fields` hook rejects a non-string `while:`/`until:` and runs the base
+    asserts-list check; all its deeper legality lives in `build`. Only the loop-specific fields
     are declared here; the normalized `inputs` field comes from the base, and a loop has no
     authored `output:` field.
     `child_label` is compiler-owned diagnostic metadata for an anonymous inline child. It is
@@ -78,6 +80,29 @@ class LoopDescriptor(NodeDescriptor):
     times: Optional[int] = None
     max: Optional[int] = None
     asserts: list[str] = field(default_factory=list)
+
+    @classmethod
+    def _validate_fields(
+        cls,
+        node_id: str,
+        kwargs: dict[str, Any],
+        ranges: dict[tuple[str, str], SourceRange],
+        own_range: Optional[SourceRange],
+        diagnostics: LoadDiagnostics,
+    ) -> None:
+        """Reject a non-string `while:`/`until:`, then run the base asserts-list check.
+
+        A YAML bool, number, or list would otherwise crash the predicate ref check, or, when
+        falsy (`while: false`), skip it and fail only at runtime."""
+        for key, example in (("while", "while: not done"), ("until", "until: done")):
+            value = kwargs.get(cls.keyword_remap[key])
+            if value is not None and not isinstance(value, str):
+                raise diagnostics.error(
+                    f"loop node {node_id!r}: `{key}:` must be an expression string over the "
+                    f"carried record, such as `{example}` (got {value!r})",
+                    range=ranges.get(("field", key)) or own_range,
+                )
+        super()._validate_fields(node_id, kwargs, ranges, own_range, diagnostics)
 
     def build(self, ctx: BuildContext) -> BuildResult:
         """Construct the runtime `LoopNode` (+ wiring) for this `LoopDescriptor` — a
@@ -256,9 +281,9 @@ class LoopDescriptor(NodeDescriptor):
         # spin forever. Reject a predicate whose ref head isn't a carried field at load, so a typo
         # is loud not a runaway.
         # `times:` has no predicate, so skip it.
-        predicate_src = self.while_ or self.until_
-        if predicate_src:
-            pred_kw = "while" if self.while_ else "until"
+        predicate_src = self.while_ if self.while_ is not None else self.until_
+        if predicate_src is not None:
+            pred_kw = "while" if self.while_ is not None else "until"
             # The unified condition ref-walk: works for any spelling (bare `score >= 0.8`,
             # mixed `${score} >= 0.8`, whole `${score >= 0.8}`), unlike a flat `${...}` regex
             # which read a whole-span predicate as one bogus head and a bare one as no heads.

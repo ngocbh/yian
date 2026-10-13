@@ -1704,7 +1704,7 @@ Rules:
   `call(` in the *middle* of a value, or inside a `${...}` span, is literal text.
 - **Keyword args only** — `call(f, x=1, note=${a.output})`. Each arg value is a
   `${...}` expression or a literal (`window=30` binds the int `30`). A positional
-  arg is a load error.
+  arg, or a keyword given twice (`call(f, x=1, x=2)`), is a load error.
 - **Nesting is allowed** — `call(outer, x=call(inner, y=1))`.
 - **A flow call inside `${...}` is retired.** The old `${flow(args)}` form (a flow
   call *inside* braces) is a load error that points at the `call(...)` directive.

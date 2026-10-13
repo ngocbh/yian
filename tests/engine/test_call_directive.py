@@ -73,6 +73,18 @@ def test_positional_arg_after_flow_id_is_loud():
         desugar_inline_calls(descriptors, None, next_id=_ids())
 
 
+def test_repeated_keyword_is_loud():
+    descriptors = {"use": _code("use", {"topic": "call(f, a=1, a=2)"})}
+    with pytest.raises(LoadError, match="'a' more than once"):
+        desugar_inline_calls(descriptors, None, next_id=_ids())
+
+
+def test_repeated_keyword_in_nested_directive_is_loud():
+    descriptors = {"use": _code("use", {"topic": "call(f, x=call(g, b=1, b=2))"})}
+    with pytest.raises(LoadError, match="'b' more than once"):
+        desugar_inline_calls(descriptors, None, next_id=_ids())
+
+
 def test_directive_capturing_item_is_loud():
     descriptors = {"use": _code("use", {"topic": "call(wrap, t=${item})"})}
     with pytest.raises(LoadError) as exc:

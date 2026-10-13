@@ -812,8 +812,8 @@ and flow outputs. It is a load error in prompts and `questions:`, WAIT `until:`,
 `call(f, arg=${ref}, k=lit)` written as a binding's **whole value** (or a `case`
 `then:`/`else:` target) desugars at load into an anonymous `call` node; the host
 becomes `${<synth>.output}`. Every authored node `input:` mapping participates,
-including HUMAN_INPUT context and LOOP carried-record seeds. Keyword args only;
-nesting is allowed (`call(a, x=call(b, y=1))`). It is recognized **only** as the
+including HUMAN_INPUT context and LOOP carried-record seeds. Keyword args only, each at
+most once; nesting is allowed (`call(a, x=call(b, y=1))`). It is recognized **only** as the
 entire trimmed value — a `call(` mid-value or inside `${...}` is literal text. The old
 `${flow(args)}` form (a flow call *inside* braces) is a **load error**: hoist an
 embedded flow call to a named `call` node, and split a coalesce-of-calls

@@ -306,7 +306,8 @@ def desugar_call_directives(value: str, mint: Callable[[], str]) -> tuple:
     its enclosing one, inner-first). If `value` is NOT a whole-value directive, returns
     `(value, [])` unchanged (the caller then checks the value for a retired span
     flow-call). Raises `ExpressionError` on a positional arg after the flow
-    id (message mentions "keyword") or a malformed `name=value` keyword."""
+    id (message mentions "keyword"), a malformed `name=value` keyword, or a
+    keyword passed more than once."""
     match = _match_directive(value)
     if match is None:
         return value, []
@@ -323,6 +324,10 @@ def desugar_call_directives(value: str, mint: Callable[[], str]) -> tuple:
             arg_value, mint
         )  # inner-first recursion
         calls.extend(inner)
+        if name in args:
+            raise ExpressionError(
+                f"call({flow_id}, ...) passes keyword {name!r} more than once"
+            )
         args[name] = _arg_source(new_value)
     cid = mint()
     calls.append(InlineCall(id=cid, callee=flow_id, args=args))

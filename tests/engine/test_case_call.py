@@ -176,6 +176,35 @@ output: ${{gate.output}}
         load_flow(text)
 
 
+@pytest.mark.parametrize(
+    "target, message",
+    [
+        ('call(take, stance="a", stance="b")', "'stance' more than once"),
+        ("call(take, 30)", "keyword"),
+    ],
+)
+def test_malformed_then_call_directive_args_are_located_load_errors(target, message):
+    # a bad directive argument in a route target is a LoadError naming the CASE node.
+    text = f"""
+id: bad
+name: bad
+input:
+  score: float
+{_TAKE_DEF}
+nodes:
+  gate:
+    kind: case
+    cases:
+      - when: "${{input.score}} >= 0.5"
+        then: '{target}'
+    else: nope
+output: ${{gate.output}}
+"""
+    with pytest.raises(LoadError, match=message) as caught:
+        load_flow(text)
+    assert "case node 'gate' then:" in str(caught.value)
+
+
 def test_inline_binding_and_then_call_directive_share_minter_no_collision():
     # an inline-binding call(...) AND a then: call(...) in one flow -> DISTINCT synth ids.
     text = f"""

@@ -33,6 +33,7 @@ from dataclasses import replace
 from typing import Any, Callable, Optional
 
 from yian.diagnostics import SourceRange
+from yian.expr import ExpressionError
 from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.parse.file import CaseDescriptor
 from yian.compose.desugar.inline_calls import (
@@ -124,7 +125,10 @@ def _lift_case_target(
     stripped = target.strip()
     # A whole-value `call(...)` directive: recognized BEFORE the plain-id passthrough,
     # since a directive carries no `${` and would otherwise look like a bare node id.
-    new_value, calls = desugar_call_directives(target, mint)
+    try:
+        new_value, calls = desugar_call_directives(target, mint)
+    except ExpressionError as exc:
+        raise diagnostics.error(f"{host}: {exc}", range=range) from exc
     if calls:  # inner-first: the OUTER call is calls[-1] and names the branch target
         outer = calls[-1]
         if new_value.strip() == f"${{{outer.id}.output}}":

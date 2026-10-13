@@ -183,6 +183,9 @@ def type_relation(inferred: Type, declared: Type) -> TypeRelation:
     declared fields at every level. It is also more permissive in one place: `date`
     and `datetime` fit `str`, since they are stored as strings. A `Literal` meets
     `date` or `datetime` only through tags that are valid ISO strings of that kind.
+    Unions are compared member-wise: each inferred member takes its best relation
+    against the declared members, so a union member over the union is narrower and
+    a record matching no member is disjoint.
 
     Args:
         inferred (`Type`): Type the producing expression is inferred to have.
@@ -191,8 +194,6 @@ def type_relation(inferred: Type, declared: Type) -> TypeRelation:
     Returns:
         `TypeRelation`: ``"fits"``, ``"narrower"``, or ``"disjoint"``.
     """
-    # A union arm belongs here once sum types exist: fits when every member fits,
-    # disjoint when every member is disjoint.
     if inferred.kind is ValueKind.NONE:
         return "fits" if _accepts_none(declared) else "disjoint"
     if declared.kind is ValueKind.NONE:
@@ -224,6 +225,8 @@ def _list_element(typ: Type) -> "Type | None":
 
 def _relate_non_null(inferred: Type, declared: Type) -> TypeRelation:
     """Classify the non-null values of ``inferred`` against ``declared``."""
+    if inferred.variants is not None or declared.variants is not None:
+        return _relate_union(inferred, declared)
     inferred_is_list = inferred.kind.is_list()
     declared_is_list = declared.kind.is_list()
     if inferred_is_list or declared_is_list:
@@ -247,6 +250,36 @@ def _relate_non_null(inferred: Type, declared: Type) -> TypeRelation:
         _relate_tags(inferred, declared),
         _relate_fields(inferred, declared),
     )
+
+
+def _relate_union(inferred: Type, declared: Type) -> TypeRelation:
+    """Classify the non-null values of ``inferred`` against ``declared`` member-wise.
+
+    Either side may be a union; a non-union side counts as a one-member union.
+    Each inferred member takes its best relation against the declared members,
+    since a value fits the union when it fits any member. The results then
+    combine as alternatives: fits when every member fits, disjoint when every
+    member is disjoint, and narrower otherwise.
+
+    Args:
+        inferred (`Type`): Inferred type; a union or any other type.
+        declared (`Type`): Declared type; a union or any other type.
+
+    Returns:
+        `TypeRelation`: ``"fits"``, ``"narrower"``, or ``"disjoint"``.
+    """
+    inferred_members = inferred.variants or (inferred,)
+    declared_members = declared.variants or (declared,)
+    relations = {
+        max(
+            (_relate_non_null(member, option) for option in declared_members),
+            key=_RELATION_RANK.__getitem__,
+        )
+        for member in inferred_members
+    }
+    if len(relations) == 1:
+        return relations.pop()
+    return "narrower"
 
 
 def _relate_kinds(inferred: ValueKind, declared: ValueKind) -> TypeRelation:

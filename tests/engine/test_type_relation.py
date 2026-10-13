@@ -17,6 +17,11 @@ _REGISTRY = read_typedefs({
     "ALit": {"a": "Literal[x, y]"},
     "Nested": {"inner": "AB"},
     "NestedA": {"inner": "A"},
+    "Buy": {"action": "Literal[buy]", "qty": "int"},
+    "Sell": {"action": "Literal[sell]", "qty": "int"},
+    "Hold": {"action": "Literal[hold]"},
+    "Decision": "Union[Buy, Sell, Hold]",
+    "X": {"x": "int"},
 })
 
 
@@ -137,3 +142,30 @@ def test_record_field_both_sides_may_hold_none_is_narrower() -> None:
         required=frozenset({"a"}),
     )
     assert type_relation(inferred, _t("AOpt")) == "narrower"
+
+
+@pytest.mark.parametrize(
+    ("inferred", "declared", "expected"),
+    [
+        # a union member over the union is explicit narrowing
+        ("Decision", "Buy", "narrower"),
+        ("Buy", "Decision", "fits"),
+        ("Decision", "Decision", "fits"),
+        ("Union[Buy, Sell]", "Decision", "fits"),
+        ("Decision", "Union[Buy, Sell]", "narrower"),
+        ("Decision", "int", "disjoint"),
+        ("Decision", "list[Buy]", "disjoint"),
+        ("Decision", "object", "fits"),
+        ("object", "Decision", "narrower"),
+        ("Optional[Decision]", "Decision", "narrower"),
+        ("Decision", "Optional[Decision]", "fits"),
+        # records are closed, so a record matching no member shares no value
+        ("X", "Decision", "disjoint"),
+        ("Union[Buy, Sell]", "Hold", "disjoint"),
+        ("Union[Buy, Sell]", "Union[Sell, Hold]", "narrower"),
+        ("list[Buy]", "list[Decision]", "fits"),
+        ("list[Decision]", "list[Buy]", "narrower"),
+    ],
+)
+def test_union(inferred: str, declared: str, expected: str) -> None:
+    assert type_relation(_t(inferred), _t(declared)) == expected

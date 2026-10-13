@@ -258,13 +258,14 @@ output:
 ```
 
 **Quote text that contains ` = `.** YAML style decides: an **unquoted** value
-containing ` = ` is **always** typed, and the text before the first ` = ` must be a
+containing ` = ` is typed (unless it starts with `call(`: that is a directive, so
+`call(f, a = 1)` needs no quotes), and the text before the first ` = ` must be a
 type (built-in, typedef, or composite like `Optional[int]`), else loading fails
 with a suggestion to quote it (`` `a` in `qty: a = b` is not a type ... quote it:
 `qty: "a = b"` ``, plus ``Did you mean `int`?`` for a close miss). A quoted
 (`'...'`/`"..."`) or block (`|`/`>`) value is never typed; its `${...}` spans still
-evaluate and a quoted `call(...)` is still a call. So write `'${input.y:-"a = b"}'` and
-`"call(f, a = 1)"` quoted. `int=3` (no spaces) is plain text. An unquoted value
+evaluate, and a quoted `call(...)` is text, not a call. So write `'${input.y:-"a = b"}'`
+quoted. `int=3` (no spaces) is plain text. An unquoted value
 ending in ` =` after a type is an error (empty value). Use block-style mappings: a
 plain scalar inside `{...}` can't contain `${`.
 
@@ -812,9 +813,15 @@ and flow outputs. It is a load error in prompts and `questions:`, WAIT `until:`,
 `call(f, arg=${ref}, k=lit)` written as a binding's **whole value** (or a `case`
 `then:`/`else:` target) desugars at load into an anonymous `call` node; the host
 becomes `${<synth>.output}`. Every authored node `input:` mapping participates,
-including HUMAN_INPUT context and LOOP carried-record seeds. Keyword args only;
-nesting is allowed (`call(a, x=call(b, y=1))`). It is recognized **only** as the
-entire trimmed value — a `call(` mid-value or inside `${...}` is literal text. The old
+including HUMAN_INPUT context and LOOP carried-record seeds. Keyword args only, each at
+most once; nesting is allowed (`call(a, x=call(b, y=1))`). An **unquoted** value whose
+trimmed text starts with `call(` must be **exactly one** well-formed directive, else a load
+error names the problem (unbalanced parens, trailing text after `)`, flow id not a bare name
+/ missing comma, positional or repeated keyword, a keyword value that reads as two keywords
+like `a=1 b=2`). A **quoted** value (`"call(f) tail"`, or a quoted arg `x="call(g)"`) is
+text — the escape for literal `call(` text; a quoted call holding `${...}` is a load error.
+A `call(` mid-value or inside `${...}` is literal text. A flow `asserts:` item follows the
+rule quoted or not (an assert is an expression, never text). The old
 `${flow(args)}` form (a flow call *inside* braces) is a **load error**: hoist an
 embedded flow call to a named `call` node, and split a coalesce-of-calls
 (`${a() | b()}`) into per-node outputs. Pure builtins (`${upper(x)}`) stay legal

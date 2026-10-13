@@ -5,7 +5,7 @@ them apart, so every branch is classified first:
 
 - an unquoted (plain, or source-free) string is a node name unless it is a `call(...)`
   (a whole-value directive is left for `desugar_case_call_targets`; any other text starting
-  with `call(` is a load error), holds ` = ` (a load error: the case's `output:`
+  with `call(` is a load error naming the problem), holds ` = ` (a load error: the case's `output:`
   gives the type, so `then: int = ${x}` is a mistake; quoting keeps the text), or holds a
   `${...}` span (a template value). A bare word that names no node is a load error that
   suggests the nearest node name and the quoted form;
@@ -46,9 +46,9 @@ import re
 from dataclasses import dataclass, replace
 from typing import Any, Optional
 
-from yian.compose.desugar.inline_calls import _SYNTH_PREFIX, _match_directive
+from yian.compose.desugar.inline_calls import _SYNTH_PREFIX, desugar_call_directives
 from yian.compose.helpers.errors import LoadDiagnostics
-from yian.compose.helpers.typed_bindings import yaml_quoted
+from yian.compose.helpers.typed_bindings import CALL_HEAD, QUOTED_STYLES, yaml_quoted
 from yian.compose.parse.file import CaseDescriptor, CodeDescriptor
 from yian.diagnostics import SourceRange
 from yian.expr import ExpressionError, eval_binding, expr_refs_of
@@ -56,8 +56,6 @@ from yian.expr import ExpressionError, eval_binding, expr_refs_of
 VALUE_PREFIX = "__value_"
 CASE_PREFIX = "__case_"
 _RESERVED_PREFIXES = (VALUE_PREFIX, CASE_PREFIX)
-_QUOTED_STYLES = frozenset({"single", "double", "literal", "folded"})
-_CALL_HEAD = re.compile(r"call\s*\(")
 _CLOSE_MATCH_CUTOFF = 0.6
 # A word YAML 1.1 reads as text although Python reads it as a number (`1e3`, `2.5E-4`).
 _EXPONENT_WORD = re.compile(r"([+-]?\d+(?:\.\d*)?)[eE]([+-]?)(\d+)")
@@ -272,16 +270,15 @@ def _is_value(
         `bool`: Whether the branch is a value to lift.
 
     Raises:
-        `LoadError`: An unquoted branch is a `call(...)` that is not one whole directive,
-            holds ` = `, or names no node; a quoted `call(...)` holds a span.
+        `LoadError`: An unquoted branch starts with `call(` but is not exactly one
+            well-formed directive, holds ` = `, or names no node; a quoted `call(...)`
+            holds a span.
     """
     if not isinstance(value, str):
         return True
     stripped = value.strip()
-    # Matches every whole-value directive the call recognizer accepts, and the rejected
-    # call shapes (a coalesce of calls, trailing text) it declines.
-    is_call = _CALL_HEAD.match(stripped) is not None
-    if style in _QUOTED_STYLES:
+    is_call = CALL_HEAD.match(stripped) is not None
+    if style in QUOTED_STYLES:
         if is_call and "${" in value:
             raise diagnostics.error(
                 f"{host} a quoted `call(...)` is text, so it can't hold `${{...}}` here; "
@@ -290,13 +287,20 @@ def _is_value(
             )
         return True
     if is_call:
-        if _match_directive(value) is None:
-            raise diagnostics.error(
-                f"{host} a branch target must be a node id or a single call "
-                f"(got {value!r}) — not a coalesce / embedded text / dotted call",
-                range=rng,
+        # Checked here, where the style is known; lifted by `desugar_case_call_targets`.
+        try:
+            desugar_call_directives(value, lambda: "__check")
+        except ExpressionError as exc:
+            # Quoting a call that holds a span is its own error, so no quoting fix then.
+            hint = (
+                f". If you meant the text, quote it: `{label} {yaml_quoted(stripped)}`"
+                if "${" not in value
+                else ""
             )
-        # Lifted by `desugar_case_call_targets`.
+            raise diagnostics.error(
+                f"{host} a branch target must be a node id or a single call: {exc}{hint}",
+                range=rng,
+            ) from exc
         return False
     if " = " in value or value.endswith(" ="):
         raise diagnostics.error(
@@ -492,7 +496,7 @@ def _literal(
             has no literal form.
     """
     if isinstance(value, str):
-        if path and _CALL_HEAD.match(value.strip()):
+        if path and CALL_HEAD.match(value.strip()):
             raise site.diagnostics.error(
                 f"{site.host} a `call(...)` nested in a value is not supported; write the "
                 f"call as the branch (`{site.label} call(...)`) or in a node, or reword the "

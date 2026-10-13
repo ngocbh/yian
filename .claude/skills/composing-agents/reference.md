@@ -97,10 +97,15 @@ One `${...}` grammar; the context decides what happens to the result:
 
 A child-flow call written as a binding's **whole value** (or a `case`
 `then:`/`else:` target) — `call(f, arg=${ref}, k=lit)` — desugars at load into an
-anonymous `call` node; the host becomes `${<synth>.output}`. Keyword args only;
+anonymous `call` node; the host becomes `${<synth>.output}`. Keyword args only,
+each at most once;
 every authored node `input:` mapping participates, including HUMAN_INPUT context
 and LOOP carried-record seeds. Nesting is allowed (`call(a, x=call(b, y=1))`).
-It is recognized **only** as the entire trimmed value. The old `${flow(args)}`
+An **unquoted** value starting with `call(` must be exactly one well-formed
+directive, else a load error names the problem (unbalanced parens, trailing text,
+missing comma, positional or repeated keyword, a keyword without a name). A
+**quoted** value is text, so `"call(...)"` is the escape for literal text; a quoted
+call holding `${...}` is a load error. The old `${flow(args)}`
 (a flow call inside braces) is a load error: hoist an embedded flow call to a named
 node; split a coalesce-of-calls into
 per-node outputs. Pure builtins (`${upper(x)}`) stay legal inside `${}`.
@@ -235,15 +240,17 @@ typedefs:
 **Typed bindings.** `name: Type = value` works on node `input:` bindings (LOOP
 seeds and HUMAN_INPUT context too), flow `output:` fields, and a single
 `output: Type = ${x}`, including `defs:` and inline bodies; not in `call(...)`
-keyword arguments. An unquoted value containing ` = ` is always typed and the left
-side must be a type, else a load error suggests quoting; quoted and block values are
-never typed (their `${...}` still evaluates). `int=3` without spaces is plain text.
+keyword arguments. An unquoted value containing ` = ` is typed (unless it starts
+with `call(`, a directive) and the left side must be a type, else a load error
+suggests quoting; quoted and block values are never typed (their `${...}` still
+evaluates). `int=3` without spaces is plain text.
 A right side starting with a quote, `[`, or `{` is read as YAML first: a quoted
-`${...}`/`call(...)` drops its quotes and stays a template or call, and strings
-inside a list or record stay text. Otherwise the right side is a
-`${...}`/`call(...)` kept as written, or a YAML 1.1 literal checked at load
-(`str = 30` fails; write `str = "30"`). The whole binding is one plain scalar, so it
-can't contain `: ` or ` #` (write a record literal as `{"a":1}`). Load rejects a value whose
+`${...}`/`call(...)` drops its quotes and stays a template or call (unlike a quoted
+whole value, which is text), and strings inside a list or record stay text.
+Otherwise the right side is a `${...}`/`call(...)` kept as written, or a YAML 1.1
+literal checked at load (`str = 30` fails; write `str = "30"`). The whole binding
+is one plain scalar, so it can't contain `: ` or ` #` (write a record literal as
+`{"a":1}`). Load rejects a value whose
 inferred type is disjoint from the declared one; narrower or unknown types are
 checked at runtime, without conversion, failing the consumer (END for a flow output)
 with `binding.type`. Declared types are in the flow fingerprint.
@@ -362,8 +369,9 @@ that change; a field it omits keeps its value. This is the shape
 - **Text containing ` = ` must be quoted.** An unquoted binding value with ` = ` is
   a typed binding, and the left side must be a type: `qty: a = b` fails to load
   (`` `a` ... is not a type ... quote it: `qty: "a = b"` ``). Quote it:
-  `note: "a = b"`, `fallback: '${input.y:-"a = b"}'`, `x: "call(f, a = 1)"`. Typed
-  bindings need block-style mappings.
+  `note: "a = b"`, `fallback: '${input.y:-"a = b"}'`. A value starting with `call(`
+  is a directive, not a typed binding, so `x: call(f, a = 1)` needs no quotes (quoted,
+  it is text). Typed bindings need block-style mappings.
 - **Inline `{ ... }` maps + `${...}` need quotes.** In an inline flow mapping the
   `}` in `${input.x}` closes the map early. Either quote the value
   (`input: {x: "${input.x}"}`) or use block form (preferred):

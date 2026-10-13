@@ -420,9 +420,12 @@ node's type.
 
 The YAML scalar style decides whether a value is typed:
 
-- An unquoted value containing ` = ` is always a typed binding. The text before the
-  first ` = ` must be a type: a built-in, a typedef, or a composite such as
-  `Optional[int]` or `list[Signal]`. Otherwise loading fails and suggests quoting:
+- An unquoted value containing ` = ` is a typed binding, unless it starts with
+  `call(`: then it is a
+  [`call(...)` directive](#inline-call-a-flow-call-as-a-bindings-whole-value), so
+  `call(f, a = 1)` needs no quotes. The text before the first ` = ` must be a type:
+  a built-in, a typedef, or a composite such as `Optional[int]` or `list[Signal]`.
+  Otherwise loading fails and suggests quoting:
 
   ```text
   `a` in `qty: a = b` is not a type. If you meant the text "a = b", quote it: `qty: "a = b"`
@@ -430,9 +433,10 @@ The YAML scalar style decides whether a value is typed:
 
   A close miss adds a hint: `qty: imt = 3` ends with ``Did you mean `int`?``.
 - A quoted (`'...'`, `"..."`) or block (`|`, `>`) value is never typed. Its `${...}`
-  spans still evaluate, and a quoted `call(...)` is still a call.
+  spans still evaluate. A quoted whole value starting with `call(` is text, not a
+  call.
 - So quote any value whose text contains ` = `, including an expression such as
-  `'${input.y:-"a = b"}'` or `"call(f, a = 1)"`.
+  `'${input.y:-"a = b"}'`.
 - `int=3` (no spaces) is plain text, unlike a flow-input declaration.
 - An unquoted value ending in ` =` with a type on its left is an error: the value
   is empty.
@@ -452,7 +456,8 @@ The value after ` = ` is read in this order:
 
 - A value starting with a quote, `[`, or `{` is read as YAML. A quoted string
   that contains `${` or starts with `call(` is then a template or call, without
-  its quotes: `v: str = "${input.a} = 2"` binds `1 = 2`. A list or record is a
+  its quotes: `v: str = "${input.a} = 2"` binds `1 = 2`. (Here the quotes belong to
+  the value after ` = `; a quoted *whole* binding value is text.) A list or record is a
   literal, and the strings inside it stay text, so `v: list[str] = ["${x}"]`
   binds the one-item list `["${x}"]`.
 - Otherwise, a value containing a `${...}` template or expression, or starting
@@ -1699,13 +1704,25 @@ news: ${__call_0.output}
 
 Rules:
 
-- **Whole-value only.** `call(...)` is recognized only when it is the *entire*
-  trimmed value (a binding value or a `case` `then:`/`else:` route target). A
-  `call(` in the *middle* of a value, or inside a `${...}` span, is literal text.
+- **Whole-value only.** An unquoted value (a binding value or a `case`
+  `then:`/`else:` route target) whose trimmed text starts with `call(` must be
+  exactly one well-formed directive. Anything else is a load error that names the
+  problem: unbalanced parentheses, text after the closing `)` (`call(f) tail`), a
+  first argument that is not a bare flow id (`call(f x=1)`), a positional argument,
+  a keyword given twice, a keyword without one name before its `=`, or a keyword
+  value that reads as two keywords (a missing comma, `call(f, a=1 b=2)`; `==`,
+  `>=`, and a glued `a=b` stay part of the value).
+- **Quote it for text.** A quoted value (`'...'`, `"..."`, or a block `|`/`>`) is
+  text, never a call: `note: "call(f) tail"` is the text `call(f) tail`. A quoted
+  `call(...)` that holds `${...}` is a load error; drop the quotes to call the flow.
+  A `call(` in the *middle* of a value, or inside a `${...}` span, is also text.
 - **Keyword args only** — `call(f, x=1, note=${a.output})`. Each arg value is a
-  `${...}` expression or a literal (`window=30` binds the int `30`). A positional
-  arg is a load error.
-- **Nesting is allowed** — `call(outer, x=call(inner, y=1))`.
+  `${...}` expression or a literal (`window=30` binds the int `30`); a quoted arg
+  (`x="call(g)"`) is text. Each keyword appears at most once.
+- **Nesting is allowed** — `call(outer, x=call(inner, y=1))`. An unquoted arg that
+  starts with `call(` follows the same whole-value rule.
+- **In a flow `asserts:` item** a value starting with `call(` follows the same rule,
+  quoted or not: an assert is an expression, so quoting it does not make it text.
 - **A flow call inside `${...}` is retired.** The old `${flow(args)}` form (a flow
   call *inside* braces) is a load error that points at the `call(...)` directive.
   An **embedded** flow call (`pe=${relevance(t=${x})}` — a call inside surrounding

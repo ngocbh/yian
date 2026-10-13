@@ -1,9 +1,9 @@
 """The whole-value `call(<flow-id>, kw=...)` compile-time directive.
 
-The loader recognizes a whole-value `call(...)` directive ALONGSIDE the legacy inline
-`${flow(args)}` form — both coexist. A directive is recognized IFF the WHOLE trimmed
-field value is exactly `call( … )`: the first arg is the POSITIONAL flow id (bare, may
-be hyphenated), the rest are `name=value` keywords. It desugars — through the SAME
+An unquoted value whose trimmed text starts with `call(` must be exactly one directive
+`call( … )`, else it is a load error naming the problem; a quoted value is text. The first
+arg is the POSITIONAL flow id (bare, may be hyphenated), the rest are `name=value`
+keywords. It desugars — through the SAME
 `desugar_inline_calls` traversal + SHARED minter — into a synth `CallDescriptor(over=None)`,
 the host binding rewritten to `${<synth>.output}`. Nesting is legal and desugars inner-first.
 
@@ -19,6 +19,7 @@ from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.parse.file import CodeDescriptor
 from yian.diagnostics import OriginRef, SourceRange
 from yian.nodes.contracts import Assertion
+from yian.run import run_flow
 
 
 def _ids():
@@ -52,12 +53,84 @@ def test_mid_value_call_is_literal_not_directive():
     assert not any(nid.startswith("__call_") for nid in new_descriptors)
 
 
-def test_trailing_content_after_close_paren_is_literal():
-    # not whole-value (content after the close paren) -> left literal, no synth node.
-    descriptors = {"use": _code("use", {"topic": "call(f) tail"})}
-    new_descriptors, _, _ = desugar_inline_calls(descriptors, None, next_id=_ids())
-    assert new_descriptors["use"].inputs["topic"] == "call(f) tail"
+@pytest.mark.parametrize(
+    "value, problem",
+    [
+        ("call(f) tail", "text follows the closing `)`: 'tail'"),
+        ("call(f, x=1", "`call(` is never closed"),
+        ('call(f, x="a)', "`call(` is never closed"),
+        ("call(f x=1)", "must start with a flow id (a bare name) and a comma, got 'f x=1'"),
+        ("call(f.g)", "must start with a flow id (a bare name) and a comma, got 'f.g'"),
+        ("call()", "must start with a flow id (a bare name) and a comma, got ''"),
+        ("call(f, 30)", "passes a positional argument '30'"),
+        ("call(f, a=1 b=2)", "keyword 'a' value '1 b=2' looks like two keywords"),
+        ("call(f, x=call(g) tail)", "text follows the closing `)`: 'tail'"),
+        ("call(f, x=call(g, 1))", "call(g, ...) passes a positional argument '1'"),
+    ],
+)
+def test_malformed_directive_is_a_load_error_with_the_quote_escape(value, problem):
+    # an unquoted value starting with `call(` must be exactly one well-formed directive.
+    descriptors = {"use": _code("use", {"topic": value})}
+    with pytest.raises(LoadError) as caught:
+        desugar_inline_calls(descriptors, None, next_id=_ids())
+    message = str(caught.value)
+    assert message.startswith("use: ")
+    assert problem in message
+    assert "If you meant the text, quote the whole value:" in message
+
+
+def test_quoted_directive_is_text():
+    # a quoted binding is text, so quoting is the escape for a literal `call(...)`.
+    descriptors = {
+        "use": _code("use", {"topic": "call(f, x=1", "note": "call(f, x=1)"})
+    }
+    new_descriptors, _, _ = desugar_inline_calls(
+        descriptors,
+        None,
+        binding_style_at=lambda node_id, field, key: "single",
+        next_id=_ids(),
+    )
+    assert new_descriptors["use"].inputs == {"topic": "call(f, x=1", "note": "call(f, x=1)"}
     assert not any(nid.startswith("__call_") for nid in new_descriptors)
+
+
+def test_quoted_directive_holding_a_span_is_loud():
+    # quoting makes a `call(...)` text, which can't be what a span-bearing call meant.
+    descriptors = {"use": _code("use", {"topic": "call(f, x=${input.x})"})}
+    with pytest.raises(LoadError, match="a quoted `call\\(...\\)` is text"):
+        desugar_inline_calls(
+            descriptors,
+            None,
+            binding_style_at=lambda node_id, field, key: "double",
+            next_id=_ids(),
+        )
+
+
+def test_quoted_nested_arg_is_text():
+    descriptors = {"use": _code("use", {"topic": 'call(f, x="call(g", y=\'call(h)\')'})}
+    new_descriptors, _, _ = desugar_inline_calls(descriptors, None, next_id=_ids())
+    assert new_descriptors["__call_0"].inputs == {"x": "call(g", "y": "call(h)"}
+
+
+def test_quoted_flow_output_is_text_and_unquoted_is_strict():
+    _, new_outputs, _ = desugar_inline_calls(
+        {},
+        {"a": "call(f", "b": "call(g)"},
+        output_style_at=lambda key: "double" if key == "a" else None,
+        next_id=_ids(),
+    )
+    assert new_outputs == {"a": "call(f", "b": "${__call_0.output}"}
+    with pytest.raises(LoadError, match="flow outputs: `call\\(` is never closed"):
+        desugar_inline_calls({}, "call(f", next_id=_ids())
+
+
+def test_malformed_directive_in_assert_is_loud_without_a_quote_hint():
+    # an assert is an expression; quoting it does not make it text, so no quote hint.
+    with pytest.raises(LoadError) as caught:
+        desugar_inline_calls({}, None, asserts_section=["call(f) tail"], next_id=_ids())
+    message = str(caught.value)
+    assert "assert: text follows the closing `)`: 'tail'" in message
+    assert "quote" not in message
 
 
 def test_bare_id_with_hyphen_recognized():
@@ -70,6 +143,18 @@ def test_bare_id_with_hyphen_recognized():
 def test_positional_arg_after_flow_id_is_loud():
     descriptors = {"use": _code("use", {"topic": "call(f, 30)"})}
     with pytest.raises(LoadError, match="keyword"):
+        desugar_inline_calls(descriptors, None, next_id=_ids())
+
+
+def test_repeated_keyword_is_loud():
+    descriptors = {"use": _code("use", {"topic": "call(f, a=1, a=2)"})}
+    with pytest.raises(LoadError, match="'a' more than once"):
+        desugar_inline_calls(descriptors, None, next_id=_ids())
+
+
+def test_repeated_keyword_in_nested_directive_is_loud():
+    descriptors = {"use": _code("use", {"topic": "call(f, x=call(g, b=1, b=2))"})}
+    with pytest.raises(LoadError, match="'b' more than once"):
         desugar_inline_calls(descriptors, None, next_id=_ids())
 
 
@@ -258,14 +343,6 @@ def test_bare_bool_word_arg_stays_string():
     assert new_descriptors["__call_0"].inputs == {"flag": "yes"}
 
 
-def test_unbalanced_directive_parens_left_literal():
-    # a `call(` with no matching close paren is NOT a whole-value directive — left literal.
-    descriptors = {"use": _code("use", {"topic": "call(f, x=1"})}
-    new_descriptors, _, _ = desugar_inline_calls(descriptors, None, next_id=_ids())
-    assert new_descriptors["use"].inputs["topic"] == "call(f, x=1"
-    assert not any(nid.startswith("__call_") for nid in new_descriptors)
-
-
 def test_directive_in_outputs_and_asserts_is_desugared():
     # a directive placed in the flow `output:` map and in a flow-level assert both
     # desugar on the shared traversal.
@@ -354,3 +431,151 @@ def test_pure_builtin_in_span_still_allowed():
     new_descriptors, _, _ = desugar_inline_calls(descriptors, None, next_id=_ids())
     assert new_descriptors["use"].inputs["topic"] == "${upper(${input.t})}"
     assert not any(nid.startswith("__call_") for nid in new_descriptors)
+
+
+def _echo_flow(binding: str, output: str = "${use.output}") -> str:
+    """A flow whose CODE node `use` echoes its `topic` binding."""
+    return f"""id: echo
+name: echo
+nodes:
+  use:
+    kind: code
+    code: tests.engine._compose_codefns:echo
+    input:
+      topic: {binding}
+    output: str
+output: {output}
+"""
+
+
+@pytest.mark.parametrize(
+    "binding, text",
+    [
+        ("'call(f, x=1'", "call(f, x=1"),
+        ('"call(f) tail"', "call(f) tail"),
+        ('"call(f, x=1)"', "call(f, x=1)"),
+        ("|\n        call(f", "call(f\n"),
+    ],
+)
+def test_quoted_binding_runs_as_text(binding, text):
+    out = run_flow(load_flow(_echo_flow(binding)), {})
+    assert out.status == "succeeded"
+    assert out.output == text
+
+
+@pytest.mark.parametrize(
+    "binding, problem",
+    [
+        ("call(f, x=1", "`call(` is never closed"),
+        ("call(f) tail", "text follows the closing `)`: 'tail'"),
+    ],
+)
+def test_unquoted_malformed_binding_is_a_located_load_error(binding, problem):
+    text = _echo_flow(binding)
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    message = str(caught.value)
+    assert f"use: {problem}" in message
+    assert "If you meant the text, quote the whole value: `\"call(f" in message
+    assert caught.value.diagnostic.frames[-1].range.start_line == 8
+
+
+def test_quoted_flow_output_runs_as_text():
+    out = run_flow(load_flow(_echo_flow("hi", output="'call(f'")), {})
+    assert out.status == "succeeded"
+    assert out.output == "call(f"
+
+
+def test_unquoted_malformed_flow_output_is_loud():
+    with pytest.raises(LoadError, match="flow outputs: text follows the closing"):
+        load_flow(_echo_flow("hi", output="call(f) tail"))
+
+
+def test_unquoted_malformed_map_over_is_loud():
+    text = """id: m
+name: m
+nodes:
+  many:
+    kind: map
+    call: f
+    over: call(g
+    input:
+      topic: ${item}
+output: ${many.output}
+"""
+    with pytest.raises(LoadError, match="many: `call\\(` is never closed") as caught:
+        load_flow(text)
+    assert caught.value.diagnostic.frames[-1].range.start_line == 7
+
+
+def test_unquoted_directive_holding_a_separator_is_a_call_not_a_typed_binding():
+    text = """id: spaced
+name: spaced
+defs:
+  f:
+    input:
+      topic: str
+    nodes:
+      e:
+        kind: code
+        code: tests.engine._compose_codefns:echo
+        input:
+          topic: ${input.topic}
+        output: str
+    output: ${e.output}
+nodes:
+  use:
+    kind: code
+    code: tests.engine._compose_codefns:echo
+    input:
+      topic: call(f, topic = "a = b")
+    output: str
+output: ${use.output}
+"""
+    out = run_flow(load_flow(text), {})
+    assert out.status == "succeeded"
+    assert out.output == "a = b"
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        ("call(f, t=${input.x} == X)", "${input.x} == X"),
+        ("call(f, t=a>=b, u=a<=b, v=a!=b)", "a>=b"),
+        ("call(f, t=a=b)", "a=b"),
+        ("call(f, note=a = b)", "a = b"),
+    ],
+)
+def test_comparison_and_glued_equals_in_a_keyword_value_stay_text(value, expected):
+    descriptors = {"use": _code("use", {"topic": value})}
+    new_descriptors, _, _ = desugar_inline_calls(descriptors, None, next_id=_ids())
+    assert new_descriptors["__call_0"].inputs["t" if "t=" in value else "note"] == expected
+
+
+@pytest.mark.parametrize(
+    "value, problem",
+    [
+        ("call(f, a=${x} b=${y})", "keyword 'a' value '${x} b=${y}' looks like two keywords"),
+        ("call(f, =1)", "argument '=1' needs one name before `=`"),
+        ("call(f, a b=1)", "argument 'a b=1' needs one name before `=`"),
+    ],
+)
+def test_missing_comma_or_name_in_keywords_is_loud(value, problem):
+    descriptors = {"use": _code("use", {"topic": value})}
+    with pytest.raises(LoadError) as caught:
+        desugar_inline_calls(descriptors, None, next_id=_ids())
+    assert problem in str(caught.value)
+
+
+def test_no_quote_hint_when_quoting_would_not_give_text():
+    # quoting a span-bearing call is its own error, and quoting a typed binding drops the type.
+    span = {"use": _code("use", {"topic": "call(f, topic=${input.x}"})}
+    with pytest.raises(LoadError) as caught:
+        desugar_inline_calls(span, None, next_id=_ids())
+    assert "If you meant the text" not in str(caught.value)
+    with pytest.raises(LoadError) as caught:
+        load_flow(_echo_flow("str = call(f"))
+    assert "If you meant the text" not in str(caught.value)
+    with pytest.raises(LoadError) as caught:
+        load_flow(_echo_flow("hi", output="str = call(f"))
+    assert "If you meant the text" not in str(caught.value)

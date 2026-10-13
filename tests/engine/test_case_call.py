@@ -176,6 +176,76 @@ output: ${{gate.output}}
         load_flow(text)
 
 
+@pytest.mark.parametrize("label", ["then", "else"])
+@pytest.mark.parametrize(
+    "target, problem",
+    [
+        ('call(take, stance="a", stance="b")', "keyword 'stance' more than once"),
+        ("call(take, 30)", "passes a positional argument '30'"),
+        ("call(take", "`call(` is never closed"),
+        ('call(take, stance="a") tail', "text follows the closing `)`: 'tail'"),
+        ('call(take stance="a")', "must start with a flow id (a bare name) and a comma"),
+    ],
+)
+def test_malformed_branch_call_directive_is_a_located_load_error(label, target, problem):
+    # an unquoted then:/else: starting with `call(` must be exactly one directive.
+    then_target, else_target = (target, "nope") if label == "then" else ("nope", target)
+    text = f"""
+id: bad
+name: bad
+input:
+  score: float
+{_TAKE_DEF}
+nodes:
+  gate:
+    kind: case
+    cases:
+      - when: "${{input.score}} >= 0.5"
+        then: {then_target}
+    else: {else_target}
+  nope:
+    kind: code
+    code: tests.engine._compose_codefns:took
+    input:
+      stance: x
+    output: str
+output: ${{gate.output}}
+"""
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    message = str(caught.value)
+    assert f"case node 'gate' {label}:" in message
+    assert problem in message
+    assert "If you meant the text, quote it:" in message
+    line = next(
+        number
+        for number, source in enumerate(text.splitlines(), start=1)
+        if f"{label}: call(" in source
+    )
+    assert caught.value.diagnostic.frames[-1].range.start_line == line
+
+
+def test_quoted_malformed_branch_call_is_a_text_value():
+    text = f"""
+id: ok
+name: ok
+input:
+  score: float
+nodes:
+  gate:
+    kind: case
+    output: str
+    cases:
+      - when: "${{input.score}} >= 0.5"
+        then: 'call(take'
+    else: "call(take) tail"
+output: ${{gate.output}}
+"""
+    flow = load_flow(text)
+    assert run_flow(flow, {"score": 0.9}).output == "call(take"
+    assert run_flow(flow, {"score": 0.1}).output == "call(take) tail"
+
+
 def test_inline_binding_and_then_call_directive_share_minter_no_collision():
     # an inline-binding call(...) AND a then: call(...) in one flow -> DISTINCT synth ids.
     text = f"""
@@ -343,3 +413,28 @@ output: ${{gate.output}}
 """
     with pytest.raises(LoadError, match=_SPAN_FLOW_CALL):
         load_flow(text)
+
+
+def test_malformed_branch_call_holding_a_span_offers_no_quoting_fix():
+    # quoting a span-bearing call is its own load error, so the message does not suggest it.
+    text = f"""
+id: bad
+name: bad
+input:
+  score: float
+{_TAKE_DEF}
+nodes:
+  gate:
+    kind: case
+    cases:
+      - when: "${{input.score}} >= 0.5"
+        then: call(take, stance=${{input.score}}
+    else: call(take, stance="c")
+output: ${{gate.output}}
+"""
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    message = str(caught.value)
+    assert "case node 'gate' then: a branch target must be a node id or a single call" in message
+    assert "`call(` is never closed" in message
+    assert "If you meant the text" not in message

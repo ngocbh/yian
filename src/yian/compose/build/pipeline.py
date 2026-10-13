@@ -764,6 +764,76 @@ def _split_typed_inputs(
     return split
 
 
+def _binding_style(
+    nodes_cursor: SourceCursor,
+    node_id: str,
+    field: str,
+    key: str,
+    *,
+    diagnostics: LoadDiagnostics,
+) -> str | None:
+    """Return the authored YAML scalar style of one node binding.
+
+    Args:
+        nodes_cursor (`SourceCursor`): Retained view of the flow's node mapping.
+        node_id (`str`): The node that owns the binding.
+        field (`str`): The binding field (`inputs`, or a scalar field such as `over`).
+        key (`str`): The binding name in a mapping field; equals `field` for a scalar one.
+        diagnostics (`LoadDiagnostics`): Factory for located load errors.
+
+    Returns:
+        `str | None`: The style, or `None` for a synthesized node or binding.
+
+    Raises:
+        `LoadError`: Raised when the retained cursor cannot be traversed.
+    """
+    try:
+        if not nodes_cursor.has(node_id):
+            return None
+        cursor = normalize_node_signature_cursor(nodes_cursor.child(node_id))
+        if not cursor.has(field):
+            return None
+        cursor = cursor.child(field)
+        if key != field:
+            if not cursor.has(key):
+                return None
+            cursor = cursor.child(key)
+        return cursor.scalar_style
+    except SourceAccessError as exc:
+        raise diagnostics.error(str(exc), range=exc.range) from exc
+
+
+def _output_style(
+    outputs_cursor: SourceCursor | None,
+    key: Any,
+    *,
+    diagnostics: LoadDiagnostics,
+) -> str | None:
+    """Return the authored YAML scalar style of one flow output binding.
+
+    Args:
+        outputs_cursor (`SourceCursor | None`): Retained authored `output:` value.
+        key (`Any`): The output's record field name, or `None` for a single output.
+        diagnostics (`LoadDiagnostics`): Factory for located load errors.
+
+    Returns:
+        `str | None`: The style, or `None` for a generated section.
+
+    Raises:
+        `LoadError`: Raised when the retained cursor cannot be traversed.
+    """
+    if outputs_cursor is None:
+        return None
+    try:
+        if key is None:
+            return outputs_cursor.scalar_style
+        if not outputs_cursor.has(key):
+            return None
+        return outputs_cursor.child(key).scalar_style
+    except SourceAccessError as exc:
+        raise diagnostics.error(str(exc), range=exc.range) from exc
+
+
 def _attach_input_contracts(
     descriptors: dict[str, NodeDescriptor],
     flow_wiring: dict[str, dict],
@@ -1546,6 +1616,17 @@ def _assemble(
         outputs_range=outputs_range,
         assertion_range_at=flow_assertion_range_at,
         assertion_origin_at=flow_assertion_origin_at,
+        binding_style_at=lambda node_id, field, key: _binding_style(
+            nodes_cursor, node_id, field, key, diagnostics=diagnostics
+        ),
+        output_style_at=lambda key: _output_style(
+            outputs_cursor, key, diagnostics=diagnostics
+        ),
+        typed_outputs=(
+            set(output_types) if isinstance(outputs_section, dict) else {None}
+        )
+        if output_types
+        else (),
         next_id=mint,
         diagnostics=diagnostics,
     )

@@ -168,7 +168,8 @@ A fresh flow declares typed `input:` fields. Explicit inputs layer in this order
    the non-interactive surface for native list/object values and explicit null.
 2. **`--input k=v`** — one input, repeatable. This is a string/scalar surface:
    values arrive as strings and are coerced, where supported, against scalar input
-   types at the run boundary. It does not parse list/object JSON or explicit null.
+   types at the run boundary (see [syntax.md](syntax.md) for the accepted `bool`
+   spellings). It does not parse list/object JSON or explicit null.
    A default applied by START was already validated at load and is not
    string-coerced.
 

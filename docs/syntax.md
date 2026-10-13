@@ -261,6 +261,12 @@ flow loads. Stored defaults are never string-coerced: write `int = 30`, not
 so `float = 30` remains the integer `30`. String coercion applies only to values
 supplied at a flow boundary.
 
+A supplied string coerces to `int` or `float` when it parses as one. For `bool`,
+`1`, `true`, `yes`, `y`, and `on` become true and `0`, `false`, `no`, `n`, and
+`off` become false, ignoring case and surrounding whitespace. Any other string
+is left as text, so the declared type rejects it: `--input approved=ture` fails
+with `input 'approved': 'ture' does not match declared type bool`.
+
 ### Unions of records — `Union[...]`
 
 `Union[A, B, ...]` is a value that is one of several records:

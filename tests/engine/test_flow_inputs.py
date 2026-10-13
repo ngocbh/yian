@@ -176,10 +176,23 @@ def test_reader_returns_only_exact_parameter_carriers():
     assert all(d.contract.origins.default is None for d in decls)
 
 
-def test_bool_coercion_truthy_and_falsy():
+@pytest.mark.parametrize("raw", ["1", "true", "TRUE", "yes", "y", "on", " True "])
+def test_bool_coercion_true_spellings(raw):
     decls = read_flow_inputs({"flag": "bool"}, {})
-    assert coerce_inputs(decls, {"flag": "yes"})["flag"] is True  # truthy set
-    assert coerce_inputs(decls, {"flag": "off"})["flag"] is False  # outside the set
+    assert coerce_inputs(decls, {"flag": raw})["flag"] is True
+
+
+@pytest.mark.parametrize("raw", ["0", "false", "FALSE", "no", "n", "off", " False "])
+def test_bool_coercion_false_spellings(raw):
+    decls = read_flow_inputs({"flag": "bool"}, {})
+    assert coerce_inputs(decls, {"flag": raw})["flag"] is False
+
+
+@pytest.mark.parametrize("raw", ["maybe", "ture", "approve", "No thanks", ""])
+def test_bool_coercion_passes_unrecognized_text_through(raw):
+    # Like a bad number, an unrecognized spelling stays a string so the contract rejects it.
+    decls = read_flow_inputs({"flag": "bool"}, {})
+    assert coerce_inputs(decls, {"flag": raw})["flag"] == raw
 
 
 def test_bad_number_passes_through_unchanged():

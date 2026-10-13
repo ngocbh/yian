@@ -189,6 +189,10 @@ def _validate_parameters(params: list[Parameter]) -> None:
             )
 
 
+_TRUE_SPELLINGS = frozenset({"1", "true", "yes", "y", "on"})
+_FALSE_SPELLINGS = frozenset({"0", "false", "no", "n", "off"})
+
+
 def coerce_param(parameter: Parameter, value: Any) -> Any:
     """Coerce a supplied string under one parameter's explicit scalar policy."""
     if type(parameter) is not Parameter:
@@ -211,7 +215,13 @@ def coerce_param(parameter: Parameter, value: Any) -> Any:
         if parameter.contract.type.kind is ValueKind.NUMBER:
             return float(raw)
         if parameter.contract.type.kind is ValueKind.BOOLEAN:
-            return raw.lower() in ("1", "true", "yes", "y", "on")
+            spelling = raw.lower()
+            if spelling in _TRUE_SPELLINGS:
+                return True
+            if spelling in _FALSE_SPELLINGS:
+                return False
+            # Any other text stays a string so the bool contract rejects it.
+            return value
     except ValueError:
         return value
     return value

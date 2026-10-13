@@ -2302,7 +2302,8 @@ def _commit_backward(log: RunLog, state: RunState, prepared: PreparedTransition)
     expected = reduce_backward_record(state.trace, state.backward_state, envelope.record)
     if type(plan.next_backward_state) is not RuntimeBackwardState:
         raise TypeError("backward plan requires an exact next state")
-    RuntimeBackwardState.__post_init__(plan.next_backward_state)
+    # The reducer just validated ``expected``, and only ``expected`` is kept, so
+    # equality is enough; checking all history here would cost O(N) per record.
     if expected != plan.next_backward_state:
         raise ValueError("backward plan state disagrees with its canonical record")
     _append_and_verify(log, prepared)

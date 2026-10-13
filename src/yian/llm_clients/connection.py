@@ -17,7 +17,7 @@ from urllib.parse import urlsplit
 
 from yian._settings import DEFAULT_PROVIDER, PROVIDER_DEFAULT_MODELS
 from .auth import ApiKeyCredentials, AuthError, AuthStore, OAuthCredentials, OpenAIAuth
-from .config import LLMConfig
+from .config import LLMConfig, SUPPORTED_LLM_PROVIDERS
 
 _API_ENDPOINT = "https://api.openai.com/v1"
 _SUBSCRIPTION_ENDPOINT = "https://chatgpt.com/backend-api/codex"
@@ -106,6 +106,12 @@ def connection_snapshot() -> ConnectionSnapshot:
         or state.default_provider
         or DEFAULT_PROVIDER
     ).lower()
+    if provider not in SUPPORTED_LLM_PROVIDERS:
+        # Only the environment can name an unknown provider; the store validates its own.
+        raise ValueError(
+            f"YIAN_DEFAULT_PROVIDER={environment['YIAN_DEFAULT_PROVIDER']!r} is not a "
+            f"supported provider; set it to one of: {', '.join(SUPPORTED_LLM_PROVIDERS)}"
+        )
     models = dict(PROVIDER_DEFAULT_MODELS)
     connections = {}
     for selection in state.selections:
@@ -233,6 +239,33 @@ def split_model_config(
             # A base_url serves only the host key; it must match the pinned route.
             raise ValueError("llm_config.base_url must match its host connection endpoint")
     return validated, metadata
+
+
+def check_model_config(
+    config: dict[str, Any] | LLMConfig,
+) -> tuple[LLMConfig, dict[str, Any] | None]:
+    """Validate a resolved config as `model_from_config` does, without building a model.
+
+    Returns:
+        `tuple[LLMConfig, dict[str, Any] | None]`: The validated public fields and
+            the pinned connection metadata, if any.
+
+    Raises:
+        `AuthError`: The config carries ``HOST_KEY_MARKER`` but no ``api_key``.
+        `ValueError`: A field is invalid, or the connection rejects a set field.
+    """
+    validated, connection = split_model_config(config)
+    if (
+        validated.api_key is None
+        and connection is not None
+        and connection["method"] == "subscription"
+        and validated.temperature is not None
+    ):
+        raise ValueError(
+            "OpenAI subscription connections do not accept temperature; remove "
+            "temperature from the llm_config that sets it (flow, def, node, or host)"
+        )
+    return validated, connection
 
 
 def resolve_model_config(

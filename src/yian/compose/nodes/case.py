@@ -625,14 +625,38 @@ def _searched_params(desc: CaseDescriptor, diagnostics: LoadDiagnostics) -> _Sea
                 ref_to_local[ref] = local
                 local_case_index[local] = ci
                 guards[local] = []
-        checks: list[IsinstanceCheck] = []
-        for conjunct in _conjuncts(tree):
-            for ref in expr_refs(conjunct):
-                guards[ref_to_local[ref]].append((ci, tuple(checks)))
-            check = _isinstance_check(conjunct)
-            if check is not None:
-                checks.append(check)
+        for ref, checks in guarded_refs(tree):
+            guards[ref_to_local[ref]].append((ci, checks))
     return _SearchedParams(ref_to_local, local_case_index, guards)
+
+
+def guarded_refs(tree: Tree | Token) -> list[tuple[str, tuple[IsinstanceCheck, ...]]]:
+    """Return each reference occurrence in a parsed condition with the checks guarding it.
+
+    An occurrence inside a top-level `and` operand is guarded by the
+    `isinstance(<direct ref>, T)` operands before it: `and` short-circuits, so the read
+    only runs once those checks pass. Any other occurrence has no guards.
+
+    Args:
+        tree (`Tree | Token`):
+            A condition parsed with `parse_condition`, in any spelling.
+
+    Returns:
+        `list[tuple[str, tuple[IsinstanceCheck, ...]]]`:
+            One `(ref path, guarding checks)` pair per occurrence, in source order.
+
+    Example:
+        For `isinstance(r, Done) and r.answer == 'ok'`, the pairs are
+        `("r", ())` and `("r.answer", (("r", "Done"),))`.
+    """
+    reads: list[tuple[str, tuple[IsinstanceCheck, ...]]] = []
+    checks: list[IsinstanceCheck] = []
+    for conjunct in _conjuncts(tree):
+        reads.extend((ref, tuple(checks)) for ref in expr_refs(conjunct))
+        check = _isinstance_check(conjunct)
+        if check is not None:
+            checks.append(check)
+    return reads
 
 
 def isinstance_conjuncts(when: Any) -> list[IsinstanceCheck]:

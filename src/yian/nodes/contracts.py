@@ -475,24 +475,25 @@ def _member_only_field_error(
     field_name: str,
     path: str,
     union_path: str,
+    isinstance_hint: bool,
 ) -> str:
     """Return the error for reading a field only some members of `union` have.
 
     `path` is the whole reference path and `union_path` the path of the union value.
+    `isinstance_hint` points the fix at an `isinstance` conjunct instead of a case.
     """
     tag_fields = union_tag_fields(union)
     if tag_fields:
         tag = tag_fields[0]
         tags = ", ".join(next(iter(member.fields[tag].tags)) for member in having)
-        return (
-            f"reference ${{{path}}} reads field {field_name!r}, which only union members "
-            f"with {tag} {tags} have; read it inside a case on ${{{union_path}.{tag}}}"
-        )
-    return (
-        f"reference ${{{path}}} reads field {field_name!r}, which only {len(having)} of "
-        f"{len(union.variants)} union members have; check the member with "
-        f"isinstance({union_path}, <Type>) in a case first"
-    )
+        which = f"only union members with {tag} {tags} have"
+        fix = f"read it inside a case on ${{{union_path}.{tag}}}"
+    else:
+        which = f"only {len(having)} of {len(union.variants)} union members have"
+        fix = f"check the member with isinstance({union_path}, <Type>) in a case first"
+    if isinstance_hint:
+        fix = f"check the member first with `isinstance({union_path}, <Type>) and ...`"
+    return f"reference ${{{path}}} reads field {field_name!r}, which {which}; {fix}"
 
 
 def output_contract_field_error(
@@ -501,6 +502,7 @@ def output_contract_field_error(
     path: str,
     *,
     partial_union_fields: bool = False,
+    isinstance_hint: bool = False,
 ) -> str | None:
     """Return why a reference reads a field its contract can't have, else `None`.
 
@@ -524,6 +526,10 @@ def output_contract_field_error(
         partial_union_fields (`bool`, *optional*, defaults to `False`):
             Whether a field only some union members have can be read. The read is
             then not checked further.
+        isinstance_hint (`bool`, *optional*, defaults to `False`):
+            Whether a member-only field error tells the author to check the member
+            with an `isinstance(..., T) and ...` conjunct before the read rather than
+            in a case, for a condition no case can route (a LOOP predicate).
 
     Returns:
         `str | None`:
@@ -556,6 +562,7 @@ def output_contract_field_error(
             remaining,
             path,
             partial_union_fields=partial_union_fields,
+            isinstance_hint=isinstance_hint,
         )
     if type(contract) is not ValueContract:
         output_contract_type(contract)
@@ -574,7 +581,7 @@ def output_contract_field_error(
                 if partial_union_fields:
                     return None
                 return _member_only_field_error(
-                    typ, read.members, field_name, path, ".".join(walked)
+                    typ, read.members, field_name, path, ".".join(walked), isinstance_hint
                 )
             if read.type is None:
                 return None

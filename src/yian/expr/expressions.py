@@ -54,7 +54,7 @@ def _resolve_in_record(path: str, record: dict) -> Any:
     Bare local-input refs only. A missing input, dotted miss, or `None` step returns
     `None`, which gives `when:` its missing-is-falsy behavior. Compose rejects
     undeclared names everywhere, and field reads a known type can't have in bindings,
-    CASE conditions, and flow outputs. LOOP predicates and asserts check less (a node
+    CASE conditions, LOOP predicates, and flow outputs. Asserts check less (a node
     assert's reads of its inputs and a flow assert's `${input.X.f}` check only the head
     name), so there a `None` can also be a misspelled field.
     """

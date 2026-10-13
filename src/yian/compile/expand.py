@@ -12,11 +12,12 @@ This module holds the
 
 The pure cloner (`clone_child`) splices the child's own
 `START_ID..END_ID` (every flow is `START_ID -> body -> END_ID`) into a `Flow`: the child `START_ID`
-is the alias-seed point — SEEDED WITH THE CALL-ARGS AS EDGES (no `_rens` literal-baking) — and the
-child `END_ID` is the alias filler. A child node reading `${input.X}` is re-pointed to the namespaced
-child START_ID's output object (`${<callsite>/<start>.output.X}`). Transition preparation
-validates the fragment and records its canonical seed/digest; the reducer then splices it,
-initializes its dispositions, and queues its START node.
+is the alias-seed point — SEEDED WITH THE CALL-ARGS AS CONSTANTS (resolved values are data, never
+re-evaluated as templates) — and the child `END_ID` is the alias filler. A child node reading
+`${input.X}` is re-pointed to the namespaced child START_ID's output object
+(`${<callsite>/<start>.output.X}`). Transition preparation validates the fragment and records
+its canonical seed/digest; the reducer then splices it, initializes its dispositions, and queues
+its START node.
 Builders preserve seed-route selectors and actual child boundary pairs independently
 of the materialized values, and instantiate execution scopes from authored locations.
 
@@ -28,7 +29,7 @@ from __future__ import annotations
 
 import copy
 from dataclasses import replace
-from typing import Any, Optional
+from typing import Any
 
 from yian.compile.model import (
     END_ID,
@@ -76,16 +77,6 @@ _SYNTH_PREFIX = "__assert_"
 # --------------------------------------------------------------------------- #
 # clone_child — the pure deep-flatten + partial-eval + arity cloner
 # --------------------------------------------------------------------------- #
-
-
-def _whole_span(src: str) -> Optional[str]:
-    """If `src` is EXACTLY one `${...}` span, return its interior; else None."""
-    if not isinstance(src, str) or not (src.startswith("${") and src.endswith("}")):
-        return None
-    interior = src[2:-1]
-    if "${" in interior or "}" in interior:  # embedded / nested — not a single bare span
-        return None
-    return interior
 
 
 def _rens_internal(binding: Binding, callsite: str) -> Binding:
@@ -232,8 +223,8 @@ def clone_child(child, callsite: str, record: dict, *,
                 input_names: "set[str] | None" = None) -> Flow:
     """Splice a child `CompiledFlow`'s `START_ID..END_ID` at `callsite`. Every child node
     (incl. its `START_ID`/`END_ID`) is cloned deep-namespaced; the child `START_ID` is SEEDED with the
-    call-args as edges (no baking); the child `END_ID` is the alias filler. Pure — the growth
-    reducer applies the returned fragment and updates its dispositions/frontier.
+    call-args as constants (resolved values, never re-evaluated as templates); the child `END_ID` is
+    the alias filler. Pure — the growth reducer applies the returned fragment and updates its dispositions/frontier.
 
     Returns a `Flow` whose `start_id` is the namespaced child START (the sole seed point) and whose
     `end_id` is the namespaced child END (the alias filler for a call / one map element).
@@ -324,23 +315,16 @@ def clone_child(child, callsite: str, record: dict, *,
             ordering=e.ordering,
         ))
 
-    # Seed the child START_ID with the call-args AS EDGES: a ${...} forward-ref value mints
-    # a producer->START_ID edge; a literal is a constant seed with no edge. The child START_ID is the
-    # sole seed point (it OVERRIDES the provisional ${input.X} wiring the loader left on it).
+    # Seed the child START_ID with the call-args as constants. The spawner bound them before
+    # growing, so every value is data: a string's `$` is escaped to `$$` (the scanner's universal
+    # escape) so START's binder hands it over verbatim instead of evaluating a `${...}` inside it.
+    # The child START_ID is the sole seed point (it OVERRIDES the provisional ${input.X} wiring the
+    # loader left on it).
     start_ns = ns(callsite, child.start_id)
     start_wiring = wiring.setdefault(start_ns, {})
     start_wiring.clear()                       # drop the provisional `{name: ${input.name}}`
     for param, value in record.items():
-        start_wiring[param] = value
-        if isinstance(value, str) and "${" in value:
-            producer = _producer_of(value)
-            if producer is not None:
-                edges.append(Edge(
-                    id=f"{producer}->{start_ns}#0",
-                    from_=producer,
-                    to=start_ns,
-                    input_group=param,
-                ))
+        start_wiring[param] = value.replace("$", "$$") if isinstance(value, str) else value
 
     # The child END_ID is the alias filler (its producer->END_ID edges are already re-keyed above).
     out_id = ns(callsite, child.end_id)
@@ -381,18 +365,6 @@ def clone_child(child, callsite: str, record: dict, *,
     )
     return Flow(nodes=nodes, edges=edges, wiring=wiring, start_id=start_ns, end_id=out_id,
                 input_connections=connections, child_boundaries=boundaries)
-
-
-def _producer_of(src: str) -> Optional[str]:
-    """The producer node id of a forward-ref record value, else None.
-    Singular only: `${<producer>.output[.…]}`."""
-    whole = _whole_span(src)
-    if whole is None:
-        return None
-    parts = whole.split(".")
-    if len(parts) >= 2 and parts[1] == "output" and parts[0] not in ("system", "item"):
-        return parts[0]
-    return None
 
 
 def call_subgraph(child, callsite: str, record: dict, *,

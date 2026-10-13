@@ -195,13 +195,12 @@ def test_clone_child_does_not_rewrite_a_nested_binding_payload():
     assert rewritten.source is inner
 
 
-def test_clone_child_seeds_start_with_call_args_as_edges():
-    # a ${...} record value: the child START_ID's wiring carries it + a forward-ref edge is minted
-    # (no baking into each/head).
+def test_clone_child_seeds_start_with_call_args_as_constants():
+    # a record value is resolved data: a ${...} inside it is escaped, not a forward ref, so the
+    # child START_ID reads the exact text and no producer edge is minted.
     cloned = clone_child(_single(), callsite="each", record={"topic": "${upstream.output}"})
-    assert cloned.wiring["each/__start__"]["topic"] == Binding("${upstream.output}")
-    assert any(e.from_ == "upstream" and e.to == "each/__start__" and e.input_group == "topic"
-               for e in cloned.edges)
+    assert cloned.wiring["each/__start__"]["topic"] == Binding("$${upstream.output}")
+    assert not any(e.to == "each/__start__" for e in cloned.edges)
     # each/head's ${input.topic} is re-pointed to the namespaced START_ID — NOT baked to a literal.
     cloned2 = clone_child(_single(), callsite="each", record={"topic": "ACME"})
     # a literal call-arg lands on the child START_ID's wiring as a constant seed (no edge).

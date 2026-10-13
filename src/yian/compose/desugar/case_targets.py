@@ -6,9 +6,10 @@ A `case` branch may route to a FRESH owned call instead of a placed node id:
 target is rewritten to that synth id (which is then both the CaseNode handle and
 the control-edge target, exactly like a plain `then: id`). Accepted grammar: a
 whole-value `call(...)` directive — a route target resolves to exactly one node id, so
-any other text starting with `call(` is a located LoadError naming the problem. Value branches (quoted
-text, `${...}` templates, non-string values) were already lifted to synth `__value_<n>`
-nodes by `desugar_case_values`, so this pass sees node ids, those synth ids, and unquoted
+any other text starting with `call(` is a located LoadError naming the problem. Value
+branches (quoted text, `${...}` templates, non-string values) were already lifted to synth
+`__value_<n>` nodes by `desugar_case_values`, so this pass sees node ids, those synth ids,
+and unquoted
 calls. Sound because the case-route veto skip-floods the non-chosen synth branch even when its
 call args carry data edges.
 
@@ -124,6 +125,8 @@ def _lift_case_target(
         return target  # None (handled by the caller) or a native literal
     # A whole-value `call(...)` directive: recognized BEFORE the plain-id passthrough,
     # since a directive carries no `${` and would otherwise look like a bare node id.
+    # The loader's `desugar_case_values` rejects a malformed branch call first, with its
+    # quoting fix; this keeps a direct caller's error located too.
     try:
         new_value, calls = desugar_call_directives(target, mint)
     except ExpressionError as exc:

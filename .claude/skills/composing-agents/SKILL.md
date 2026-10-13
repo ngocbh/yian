@@ -816,12 +816,12 @@ becomes `${<synth>.output}`. Every authored node `input:` mapping participates,
 including HUMAN_INPUT context and LOOP carried-record seeds. Keyword args only, each at
 most once; nesting is allowed (`call(a, x=call(b, y=1))`). An **unquoted** value whose
 trimmed text starts with `call(` must be **exactly one** well-formed directive, else a load
-error names the problem (unbalanced parens, trailing text after `)`, flow id not a bare
-name / missing comma, positional or repeated keyword, an unquoted `=` inside a keyword
-value). A **quoted** value (`"call(f) tail"`, or a quoted arg `x="call(g)"`) is text — the
-escape for literal `call(` text; a quoted call holding `${...}` is a load error. A `call(`
-mid-value or inside `${...}` is literal text. A flow `asserts:` item follows the rule
-quoted or not (an assert is an expression, never text). The old
+error names the problem (unbalanced parens, trailing text after `)`, flow id not a bare name
+/ missing comma, positional or repeated keyword, a keyword value that reads as two keywords
+like `a=1 b=2`). A **quoted** value (`"call(f) tail"`, or a quoted arg `x="call(g)"`) is
+text — the escape for literal `call(` text; a quoted call holding `${...}` is a load error.
+A `call(` mid-value or inside `${...}` is literal text. A flow `asserts:` item follows the
+rule quoted or not (an assert is an expression, never text). The old
 `${flow(args)}` form (a flow call *inside* braces) is a **load error**: hoist an
 embedded flow call to a named `call` node, and split a coalesce-of-calls
 (`${a() | b()}`) into per-node outputs. Pure builtins (`${upper(x)}`) stay legal

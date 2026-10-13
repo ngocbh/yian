@@ -46,8 +46,9 @@ directive rather than a host input that shares its param name. The flow `output:
 sections have no descriptor, so their inline calls use a supplied section/item range.
 
 Imports flow DOWN/peer only: `compose.parse.file` (descriptors), `compose.nodes.bindings` (the
-kind-blind binding-field walk) + `compose.helpers` (errors, YAML quoting; peers), `expr` (the ref-walk + the
-span flow-call detector), `diagnostics` (SourceRange). Only the loader imports this back.
+kind-blind binding-field walk) + `compose.helpers` (errors, YAML style and quoting; peers),
+`expr` (the ref-walk + the span flow-call detector), `diagnostics` (SourceRange). Only the
+loader imports this back.
 """
 
 from __future__ import annotations
@@ -55,7 +56,7 @@ from __future__ import annotations
 import itertools
 import re
 from dataclasses import replace
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Collection, Optional
 
 from yian.diagnostics import OriginRef, SourceRange
 from yian.nodes.contracts import Assertion
@@ -83,6 +84,8 @@ from yian.compose.parse.file import (
 # flow/def keeps them unique; the collision guard reserves the namespace from users.
 _SYNTH_PREFIX = "__call_"
 _FLOW_ID = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
+# Text before a lone `=` that ends in a separate word: `1 b` in `a=1 b=2`, a missing comma.
+_WORD_BEFORE_EQUALS = re.compile(r"\s[A-Za-z_][A-Za-z0-9_-]*\s*$")
 
 
 def _synth_id_gen() -> Callable[[], str]:
@@ -101,6 +104,7 @@ def desugar_inline_calls(
     assertion_origin_at: Optional[Callable[[int], OriginRef | None]] = None,
     binding_style_at: Optional[Callable[[str, str, str], Optional[str]]] = None,
     output_style_at: Optional[Callable[[Any], Optional[str]]] = None,
+    typed_outputs: Collection[Any] = (),
     next_id: Optional[Callable[[], str]] = None,
     diagnostics: LoadDiagnostics | None = None,
 ) -> tuple:
@@ -122,7 +126,9 @@ def desugar_inline_calls(
     ``binding_style_at(node_id, field, key)`` and ``output_style_at(key)`` (`None` for a
     single output) return a binding's YAML scalar style; a quoted value is text, so it is
     never a directive. A missing lookup or a `None` style reads as plain. An assert is an
-    expression, so its quoting never makes it text.
+    expression, so its quoting never makes it text. ``typed_outputs`` names the outputs
+    written `Type = value` (`None` for a single output); like a typed node input, a
+    malformed directive there gets no quoting fix, since quoting would drop the type.
 
     Raises `LoadError` on a malformed inline call (any unquoted value starting with
     `call(` that is not exactly one directive), a quoted `call(...)` holding a span, a
@@ -175,6 +181,7 @@ def desugar_inline_calls(
         mint,
         range=outputs_range,
         style_at=output_style_at,
+        typed=typed_outputs,
         diagnostics=diagnostics,
     )
     for call in out_calls:
@@ -215,10 +222,16 @@ def desugar_inline_calls(
 def map_outputs_strings(outputs: Any, fn: Callable[[str], Any]) -> Any:
     """Apply `fn` to each STRING binding in the flow `output:` section (a name→binding
     map, a bare binding string, or `None`)."""
+    return map_output_bindings(outputs, lambda _key, value: fn(value))
+
+
+def map_output_bindings(outputs: Any, fn: Callable[[Any, str], Any]) -> Any:
+    """Apply `fn(key, value)` to each STRING binding in the flow `output:` section; `key`
+    is the record field name, or `None` for a bare single output."""
     if isinstance(outputs, dict):
-        return {k: (fn(v) if isinstance(v, str) else v) for k, v in outputs.items()}
+        return {k: (fn(k, v) if isinstance(v, str) else v) for k, v in outputs.items()}
     if isinstance(outputs, str):
-        return fn(outputs)
+        return fn(None, outputs)
     return outputs
 
 
@@ -270,6 +283,8 @@ def _desugar_descriptor(
             host,
             range=origin,
             style=style_at(field, key) if style_at is not None else None,
+            # Quoting a typed binding would drop its type, so no quoting fix is offered.
+            quotable=not (field == "inputs" and key in desc.input_types),
             diagnostics=diagnostics,
         )
         for c in calls[before:]:
@@ -289,6 +304,7 @@ def _desugar_value(
     range: Optional[SourceRange] = None,
     style: Optional[str] = None,
     quotable: bool = True,
+    expression: bool = False,
     diagnostics: LoadDiagnostics | None = None,
 ) -> str:
     """Desugar one binding string. A WHOLE-VALUE `call(<flow-id>, kw=...)` directive lifts
@@ -299,11 +315,13 @@ def _desugar_value(
 
     ``style`` is the value's YAML scalar style. A quoted value is text: it is never a
     directive, and a quoted `call(...)` holding a span is a load error (its author most
-    likely meant the call). ``quotable`` is False for an assert, whose quoting does not
-    make it text, so its errors offer no quoting fix. Maps `ExpressionError` (a malformed
-    directive or an unparseable span) to a located `LoadError` at ``range``."""
+    likely meant the call). ``expression`` is True for an assert, whose quoting does not
+    make it text. A malformed directive's error suggests quoting only when that gives
+    the text: not for an assert, a span-bearing value, or a ``quotable=False`` (typed)
+    binding. Maps `ExpressionError` (a malformed directive or an unparseable span) to a
+    located `LoadError` at ``range``."""
     diagnostics = diagnostics or LoadDiagnostics()
-    quoted = quotable and style in QUOTED_STYLES
+    quoted = not expression and style in QUOTED_STYLES
     is_call = CALL_HEAD.match(value.strip()) is not None
     if quoted and is_call and "${" in value:
         raise diagnostics.error(
@@ -318,7 +336,7 @@ def _desugar_value(
             hint = (
                 f". If you meant the text, quote the whole value: "
                 f"`{yaml_quoted(value.strip())}`"
-                if quotable
+                if quotable and not expression and "${" not in value
                 else ""
             )
             raise diagnostics.error(f"{host}: {exc}{hint}", range=range) from exc
@@ -378,13 +396,19 @@ def desugar_call_directives(value: str, mint: Callable[[], str]) -> tuple:
                 "every argument after the flow id must be a keyword (name=value)"
             )
         name = parts[0].strip()
-        if len(parts) > 2:
+        if not name or any(ch.isspace() for ch in name):
             raise ExpressionError(
-                f"call({flow_id}, ...) keyword {name!r} has an unquoted `=` in its value "
-                f"{'='.join(parts[1:]).strip()!r}; add the missing comma, or quote the value"
+                f"call({flow_id}, ...) argument {pair.strip()!r} needs one name before "
+                "`=`; add the missing comma"
+            )
+        arg_value = "=".join(parts[1:])
+        if _looks_like_two_keywords(parts[1:]):
+            raise ExpressionError(
+                f"call({flow_id}, ...) keyword {name!r} value {arg_value.strip()!r} looks "
+                "like two keywords; add the missing comma, or quote the value"
             )
         new_value, inner = desugar_call_directives(
-            parts[1], mint
+            arg_value, mint
         )  # inner-first recursion
         calls.extend(inner)
         if name in args:
@@ -395,6 +419,26 @@ def desugar_call_directives(value: str, mint: Callable[[], str]) -> tuple:
     cid = mint()
     calls.append(InlineCall(id=cid, callee=flow_id, args=args))
     return "${" + cid + ".output}", calls
+
+
+def _looks_like_two_keywords(parts: list[str]) -> bool:
+    """Whether a keyword value, split on its top-level `=`, holds `... name=...`.
+
+    Only a lone `=` after a separate word counts (`1 b=2`); `==`, `!=`, `<=`, `>=`, and a
+    glued `a=b` stay part of the value's text.
+
+    Args:
+        parts (`list[str]`): The value split on each top-level `=`.
+
+    Returns:
+        `bool`: True when some lone `=` follows a whitespace-separated word.
+    """
+    for left, right in zip(parts, parts[1:]):
+        if not left or not right or left[-1] in "!<>":
+            continue
+        if _WORD_BEFORE_EQUALS.search(left):
+            return True
+    return False
 
 
 def _match_directive(value: str) -> Optional[tuple]:
@@ -442,32 +486,27 @@ def _desugar_outputs(
     *,
     range: Optional[SourceRange] = None,
     style_at: Optional[Callable[[Any], Optional[str]]] = None,
+    typed: Collection[Any] = (),
     diagnostics: LoadDiagnostics,
 ) -> tuple:
     """Desugar the flow `output:` section, returning `(new_outputs, inline_calls)`.
     ``range`` is the `output:` section source range; ``style_at(key)`` gives an output's
-    YAML scalar style (`key` is None for a single output; plain when absent)."""
+    YAML scalar style (`key` is None for a single output; plain when absent), and
+    ``typed`` names the outputs written `Type = value`."""
     calls: list = []
-
-    def desugar(value: str, key: Any) -> str:
-        return _desugar_value(
+    new_outputs = map_output_bindings(
+        outputs,
+        lambda key, value: _desugar_value(
             value,
             mint,
             calls,
             "flow outputs",
             range=range,
             style=style_at(key) if style_at is not None else None,
+            quotable=key not in typed,
             diagnostics=diagnostics,
-        )
-
-    if isinstance(outputs, dict):
-        new_outputs = {
-            k: (desugar(v, k) if isinstance(v, str) else v) for k, v in outputs.items()
-        }
-    elif isinstance(outputs, str):
-        new_outputs = desugar(outputs, None)
-    else:
-        new_outputs = outputs
+        ),
+    )
     return new_outputs, calls
 
 
@@ -526,7 +565,7 @@ def _desugar_asserts(
             calls,
             "assert",
             range=assertion_range,
-            quotable=False,
+            expression=True,
             diagnostics=diagnostics,
         )
         for call in calls[before:]:

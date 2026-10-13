@@ -413,3 +413,28 @@ output: ${{gate.output}}
 """
     with pytest.raises(LoadError, match=_SPAN_FLOW_CALL):
         load_flow(text)
+
+
+def test_malformed_branch_call_holding_a_span_offers_no_quoting_fix():
+    # quoting a span-bearing call is its own load error, so the message does not suggest it.
+    text = f"""
+id: bad
+name: bad
+input:
+  score: float
+{_TAKE_DEF}
+nodes:
+  gate:
+    kind: case
+    cases:
+      - when: "${{input.score}} >= 0.5"
+        then: call(take, stance=${{input.score}}
+    else: call(take, stance="c")
+output: ${{gate.output}}
+"""
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    message = str(caught.value)
+    assert "case node 'gate' then: a branch target must be a node id or a single call" in message
+    assert "`call(` is never closed" in message
+    assert "If you meant the text" not in message

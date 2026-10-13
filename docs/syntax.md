@@ -421,9 +421,11 @@ node's type.
 The YAML scalar style decides whether a value is typed:
 
 - An unquoted value containing ` = ` is a typed binding, unless it starts with
-  `call(` (then it is a [`call(...)` directive](#inline-call-a-flow-call-as-a-bindings-whole-value),
-  so `call(f, a = 1)` needs no quotes). The text before the first ` = ` must be a type: a built-in, a typedef, or a composite such as
-  `Optional[int]` or `list[Signal]`. Otherwise loading fails and suggests quoting:
+  `call(`: then it is a
+  [`call(...)` directive](#inline-call-a-flow-call-as-a-bindings-whole-value), so
+  `call(f, a = 1)` needs no quotes. The text before the first ` = ` must be a type:
+  a built-in, a typedef, or a composite such as `Optional[int]` or `list[Signal]`.
+  Otherwise loading fails and suggests quoting:
 
   ```text
   `a` in `qty: a = b` is not a type. If you meant the text "a = b", quote it: `qty: "a = b"`
@@ -431,7 +433,8 @@ The YAML scalar style decides whether a value is typed:
 
   A close miss adds a hint: `qty: imt = 3` ends with ``Did you mean `int`?``.
 - A quoted (`'...'`, `"..."`) or block (`|`, `>`) value is never typed. Its `${...}`
-  spans still evaluate. A quoted `call(...)` is text, not a call.
+  spans still evaluate. A quoted whole value starting with `call(` is text, not a
+  call.
 - So quote any value whose text contains ` = `, including an expression such as
   `'${input.y:-"a = b"}'`.
 - `int=3` (no spaces) is plain text, unlike a flow-input declaration.
@@ -453,7 +456,8 @@ The value after ` = ` is read in this order:
 
 - A value starting with a quote, `[`, or `{` is read as YAML. A quoted string
   that contains `${` or starts with `call(` is then a template or call, without
-  its quotes: `v: str = "${input.a} = 2"` binds `1 = 2`. A list or record is a
+  its quotes: `v: str = "${input.a} = 2"` binds `1 = 2`. (Here the quotes belong to
+  the value after ` = `; a quoted *whole* binding value is text.) A list or record is a
   literal, and the strings inside it stay text, so `v: list[str] = ["${x}"]`
   binds the one-item list `["${x}"]`.
 - Otherwise, a value containing a `${...}` template or expression, or starting
@@ -1705,8 +1709,9 @@ Rules:
   exactly one well-formed directive. Anything else is a load error that names the
   problem: unbalanced parentheses, text after the closing `)` (`call(f) tail`), a
   first argument that is not a bare flow id (`call(f x=1)`), a positional argument,
-  a keyword given twice, or an unquoted `=` inside a keyword's value (a missing
-  comma, `call(f, a=1 b=2)`).
+  a keyword given twice, a keyword without one name before its `=`, or a keyword
+  value that reads as two keywords (a missing comma, `call(f, a=1 b=2)`; `==`,
+  `>=`, and a glued `a=b` stay part of the value).
 - **Quote it for text.** A quoted value (`'...'`, `"..."`, or a block `|`/`>`) is
   text, never a call: `note: "call(f) tail"` is the text `call(f) tail`. A quoted
   `call(...)` that holds `${...}` is a load error; drop the quotes to call the flow.

@@ -71,13 +71,13 @@ def split_typed_binding(
     """Split a binding value into its declared type and value when it is typed.
 
     The value is typed when it is a string of plain or unknown style containing
-    ` = ` (or ending in ` =`) that does not start with `call(`. A right side that starts with a quote or a bracket
-    is read as YAML first: a quoted string containing `${` or starting with
-    `call(` is then a template or directive, and a collection is a literal whose
-    nested strings stay text. Any other right side containing `${` or starting
-    with `call(` is kept as written, and the rest is read as YAML. The right side
-    is checked against the type when it is a literal; a template, expression, or
-    directive is checked later, once its sources are known.
+    ` = ` (or ending in ` =`) that does not start with `call(`. A right side that
+    starts with a quote or a bracket is read as YAML first: a quoted string
+    containing `${` or starting with `call(` is then a template or directive, and a
+    collection is a literal whose nested strings stay text. Any other right side
+    containing `${` or starting with `call(` is kept as written, and the rest is
+    read as YAML. The right side is checked against the type when it is a literal; a
+    template, expression, or directive is checked later, once its sources are known.
 
     Args:
         value (`Any`): The authored binding value.

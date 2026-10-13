@@ -63,7 +63,7 @@ def test_mid_value_call_is_literal_not_directive():
         ("call(f.g)", "must start with a flow id (a bare name) and a comma, got 'f.g'"),
         ("call()", "must start with a flow id (a bare name) and a comma, got ''"),
         ("call(f, 30)", "passes a positional argument '30'"),
-        ("call(f, a=1 b=2)", "keyword 'a' has an unquoted `=` in its value '1 b=2'"),
+        ("call(f, a=1 b=2)", "keyword 'a' value '1 b=2' looks like two keywords"),
         ("call(f, x=call(g) tail)", "text follows the closing `)`: 'tail'"),
         ("call(f, x=call(g, 1))", "call(g, ...) passes a positional argument '1'"),
     ],
@@ -468,7 +468,6 @@ def test_quoted_binding_runs_as_text(binding, text):
     [
         ("call(f, x=1", "`call(` is never closed"),
         ("call(f) tail", "text follows the closing `)`: 'tail'"),
-        ("str = call(f) tail", "text follows the closing `)`: 'tail'"),
     ],
 )
 def test_unquoted_malformed_binding_is_a_located_load_error(binding, problem):
@@ -536,3 +535,47 @@ output: ${use.output}
     out = run_flow(load_flow(text), {})
     assert out.status == "succeeded"
     assert out.output == "a = b"
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        ("call(f, t=${input.x} == X)", "${input.x} == X"),
+        ("call(f, t=a>=b, u=a<=b, v=a!=b)", "a>=b"),
+        ("call(f, t=a=b)", "a=b"),
+        ("call(f, note=a = b)", "a = b"),
+    ],
+)
+def test_comparison_and_glued_equals_in_a_keyword_value_stay_text(value, expected):
+    descriptors = {"use": _code("use", {"topic": value})}
+    new_descriptors, _, _ = desugar_inline_calls(descriptors, None, next_id=_ids())
+    assert new_descriptors["__call_0"].inputs["t" if "t=" in value else "note"] == expected
+
+
+@pytest.mark.parametrize(
+    "value, problem",
+    [
+        ("call(f, a=${x} b=${y})", "keyword 'a' value '${x} b=${y}' looks like two keywords"),
+        ("call(f, =1)", "argument '=1' needs one name before `=`"),
+        ("call(f, a b=1)", "argument 'a b=1' needs one name before `=`"),
+    ],
+)
+def test_missing_comma_or_name_in_keywords_is_loud(value, problem):
+    descriptors = {"use": _code("use", {"topic": value})}
+    with pytest.raises(LoadError) as caught:
+        desugar_inline_calls(descriptors, None, next_id=_ids())
+    assert problem in str(caught.value)
+
+
+def test_no_quote_hint_when_quoting_would_not_give_text():
+    # quoting a span-bearing call is its own error, and quoting a typed binding drops the type.
+    span = {"use": _code("use", {"topic": "call(f, topic=${input.x}"})}
+    with pytest.raises(LoadError) as caught:
+        desugar_inline_calls(span, None, next_id=_ids())
+    assert "If you meant the text" not in str(caught.value)
+    with pytest.raises(LoadError) as caught:
+        load_flow(_echo_flow("str = call(f"))
+    assert "If you meant the text" not in str(caught.value)
+    with pytest.raises(LoadError) as caught:
+        load_flow(_echo_flow("hi", output="str = call(f"))
+    assert "If you meant the text" not in str(caught.value)

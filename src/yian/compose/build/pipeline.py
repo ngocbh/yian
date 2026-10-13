@@ -779,6 +779,7 @@ def _binding_style(
         node_id (`str`): The node that owns the binding.
         field (`str`): The binding field (`inputs`, or a scalar field such as `over`).
         key (`str`): The binding name in a mapping field; equals `field` for a scalar one.
+        diagnostics (`LoadDiagnostics`): Factory for located load errors.
 
     Returns:
         `str | None`: The style, or `None` for a synthesized node or binding.
@@ -813,6 +814,7 @@ def _output_style(
     Args:
         outputs_cursor (`SourceCursor | None`): Retained authored `output:` value.
         key (`Any`): The output's record field name, or `None` for a single output.
+        diagnostics (`LoadDiagnostics`): Factory for located load errors.
 
     Returns:
         `str | None`: The style, or `None` for a generated section.
@@ -1620,6 +1622,11 @@ def _assemble(
         output_style_at=lambda key: _output_style(
             outputs_cursor, key, diagnostics=diagnostics
         ),
+        typed_outputs=(
+            set(output_types) if isinstance(outputs_section, dict) else {None}
+        )
+        if output_types
+        else (),
         next_id=mint,
         diagnostics=diagnostics,
     )

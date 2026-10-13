@@ -291,9 +291,14 @@ def _is_value(
         try:
             desugar_call_directives(value, lambda: "__check")
         except ExpressionError as exc:
+            # Quoting a call that holds a span is its own error, so no quoting fix then.
+            hint = (
+                f". If you meant the text, quote it: `{label} {yaml_quoted(stripped)}`"
+                if "${" not in value
+                else ""
+            )
             raise diagnostics.error(
-                f"{host} a branch target must be a node id or a single call: {exc}. "
-                f"If you meant the text, quote it: `{label} {yaml_quoted(stripped)}`",
+                f"{host} a branch target must be a node id or a single call: {exc}{hint}",
                 range=rng,
             ) from exc
         return False

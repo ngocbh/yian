@@ -181,10 +181,12 @@ class LoopNode(Node):
         """Continue-vs-stop on the carried record at index `k`. Pure. See `run` for the stop rule."""
         if self.predicate_kind == "times":
             return self.should_stop(k)               # k >= N
+        if self.predicate_kind == "until" and k == 0:
+            return False                             # do-while: never test the seed
         truth = evaluate_when_record(self.predicate, carried, self.types)
         if self.predicate_kind == "while":
             return not truth                         # while: stop on FALSE
-        return k >= 1 and truth                      # until (do-while): stop on TRUE, k >= 1
+        return truth                                 # until (do-while): stop on TRUE, k >= 1
 
     def capture_backward_context(self) -> dict:
         """Capture every carried input, including fields the body does not consume.

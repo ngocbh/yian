@@ -45,10 +45,10 @@ def is_identifier(name: object) -> bool:
     """Report whether `name` is an identifier a `${...}` reference can name.
 
     Args:
-        name: The candidate name; any non-`str` value is not an identifier.
+        name (`object`): The candidate name; any non-`str` value is not an identifier.
 
     Returns:
-        True when `name` is a `str` matching `[A-Za-z_][A-Za-z0-9_]*`.
+        `bool`: True when `name` is a `str` matching `[A-Za-z_][A-Za-z0-9_]*`.
     """
     return isinstance(name, str) and _IDENTIFIER.fullmatch(name) is not None
 
@@ -57,10 +57,10 @@ def identifier_suggestion(name: str) -> str:
     """Spell `name` as an identifier, for a rename hint.
 
     Args:
-        name: The non-identifier name to respell.
+        name (`str`): The non-identifier name to respell.
 
     Returns:
-        `name` with each character outside `[A-Za-z0-9_]` replaced by `_` and a `_`
+        `str`: `name` with each character outside `[A-Za-z0-9_]` replaced by `_` and a `_`
         prefixed when it starts with a digit, or `""` for an empty name.
     """
     suggestion = _NON_IDENTIFIER_CHAR.sub("_", name)

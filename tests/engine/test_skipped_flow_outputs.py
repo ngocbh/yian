@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 import textwrap
 
 import pytest
 
+import tests.engine._compose_codefns as codefns
 from yian.compose import LoadError, load_flow
-from yian.run import run_flow
+from yian.run import resume_flow, run_flow
 from yian.typesys.values import ValueKind
 
 
@@ -487,3 +489,39 @@ def test_map_inline_body_returns_null_per_skipped_element():
     )
     text = _flow(nodes, " ${each.output}", inputs="approve: bool")
     assert _run(text, {"approve": True}) == ["made", None]
+
+
+_REPLAY_R1 = _gate("order", "rejected") + "".join(
+    f"  {node}:\n    kind: code\n    output: str\n"
+    f"    code: tests.engine._compose_codefns:skipped_{node}\n"
+    for node in ("order", "rejected")
+)
+
+
+def test_replay_returns_the_same_null(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Resuming a finished run that returned a skipped null replays it without running code."""
+    seen: list[str] = []
+
+    def skipped_order(inputs: dict) -> str:
+        seen.append("order")
+        return "filled"
+
+    def skipped_rejected(inputs: dict) -> str:
+        seen.append("rejected")
+        return "no"
+
+    for fn in (skipped_order, skipped_rejected):
+        monkeypatch.setattr(codefns, fn.__name__, fn, raising=False)
+    text = _flow(_REPLAY_R1, "\n  order: ${order.output}")
+    path = tmp_path / "r.jsonl"
+
+    first = run_flow(load_flow(text), {"approve": False}, log=path)
+    assert first.status == "succeeded", first.failure
+    assert first.output == {"order": None}
+    assert seen == ["rejected"]
+
+    seen.clear()
+    resumed = resume_flow(load_flow(text), log=path)
+    assert resumed.status == first.status
+    assert resumed.output == first.output
+    assert seen == []

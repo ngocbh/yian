@@ -583,12 +583,25 @@ def _parse_kv(pairs: List[str]) -> Dict[str, Any]:
 def _read_inputs_json(path: Path) -> Dict[str, Any]:
     """Read the `--inputs` file as one JSON object of input names to values.
 
+    Args:
+        path (`Path`):
+            The `--inputs` file. It must be UTF-8 text holding one JSON object.
+
+    Returns:
+        `Dict[str, Any]`:
+            The decoded object, keyed by input name.
+
     Raises:
         `typer.BadParameter`:
-            The file is not valid JSON, or its top-level value is not an object.
+            Raised when the file is not UTF-8 text, is not valid JSON, or its
+            top-level value is not an object.
     """
     try:
-        parsed = json.loads(path.read_text())
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        raise typer.BadParameter("is not UTF-8 text", param_hint="--inputs") from None
+    try:
+        parsed = json.loads(text)
     except json.JSONDecodeError as exc:
         raise typer.BadParameter(
             f"invalid JSON at line {exc.lineno}, column {exc.colno}: {exc.msg}",

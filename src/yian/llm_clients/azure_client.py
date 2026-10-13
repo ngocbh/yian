@@ -1,9 +1,9 @@
-import os
 from typing import Any, Optional
 
 from langchain_openai import AzureChatOpenAI
 
 from .base_client import BaseLLMClient, normalize_content
+from .config import AZURE_NEEDS_BASE_URL
 from .validators import validate_model
 
 _PASSTHROUGH_KWARGS = (
@@ -42,32 +42,35 @@ class NormalizedAzureChatOpenAI(AzureChatOpenAI):
 class AzureOpenAIClient(BaseLLMClient):
     """Client for Azure OpenAI deployments.
 
-    Requires environment variables:
-        AZURE_OPENAI_API_KEY: API key
-        AZURE_OPENAI_ENDPOINT: Endpoint URL (e.g. https://<resource>.openai.azure.com/)
-        AZURE_OPENAI_DEPLOYMENT_NAME: Deployment name
-        OPENAI_API_VERSION: API version (e.g. 2025-03-01-preview)
+    ``model`` is the Azure deployment name and ``base_url`` the resource endpoint
+    (e.g. ``https://<resource>.openai.azure.com/``; an ``/openai`` or
+    ``/openai/v1`` suffix is stripped). Both come from ``llm_config``, so a run
+    records them; ``AZURE_OPENAI_DEPLOYMENT_NAME`` and ``AZURE_OPENAI_ENDPOINT``
+    are not read.
 
-    It reads its endpoint only from the environment, so ``LLMConfig`` rejects a
-    ``base_url`` for ``provider: azure``. To reach a resource's v1 surface with a
-    host key, use ``provider: openai`` with
-    ``base_url: https://<resource>.openai.azure.com/openai/v1/`` instead.
+    Reads from the environment:
+        AZURE_OPENAI_API_KEY: API key, unless the config passes ``api_key``
+        OPENAI_API_VERSION: API version (e.g. 2025-03-01-preview)
     """
 
     def __init__(self, model: str, base_url: Optional[str] = None, **kwargs):
         super().__init__(model, base_url, **kwargs)
 
     def get_llm(self) -> Any:
-        """Return configured AzureChatOpenAI instance."""
+        """Return configured AzureChatOpenAI instance.
+
+        Raises:
+            `ValueError`: No ``base_url`` was given.
+        """
+        if not self.base_url:
+            raise ValueError(AZURE_NEEDS_BASE_URL)
         self.warn_if_unknown_model()
 
         llm_kwargs: dict[str, Any] = {
             "model": self.model,
-            "azure_deployment": os.environ.get("AZURE_OPENAI_DEPLOYMENT_NAME", self.model),
+            "azure_deployment": self.model,
+            "azure_endpoint": _base_endpoint(self.base_url),
         }
-        endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT")
-        if endpoint:
-            llm_kwargs["azure_endpoint"] = _base_endpoint(endpoint)
 
         for key in _PASSTHROUGH_KWARGS:
             if key in self.kwargs:

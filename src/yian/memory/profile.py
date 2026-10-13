@@ -134,7 +134,8 @@ class ProfileMemory:
                 backward attempt learns. An ``api_key`` entry needs ``provider``;
                 it authenticates the learner, is kept as a `SecretStr`, and is
                 never recorded. A ``base_url`` entry needs ``api_key`` and is
-                where the learner sends it.
+                where the learner sends it; for ``provider: azure`` it is the
+                required resource endpoint and needs no key.
             max_chars (`int`, *optional*, defaults to `32_000`): Largest document
                 the learner may write (about 8k tokens). Host writes are not bounded.
             input_budget_chars (`int`, *optional*, defaults to `24_000`): Character
@@ -144,8 +145,9 @@ class ProfileMemory:
             `TypeError`: ``store`` lacks ``read``/``write`` or ``llm_config`` is not
                 a dict.
             `ValueError`: A budget is not a positive integer, ``api_key`` is
-                empty or lacks ``provider``, or ``base_url`` lacks ``api_key``
-                or is not an allowed URL.
+                empty or lacks ``provider``, a non-Azure ``base_url`` lacks
+                ``api_key``, an Azure ``api_key`` lacks ``base_url``, or
+                ``base_url`` is not an allowed URL.
         """
         if not isinstance(store, MarkdownStore):
             raise TypeError("store must provide read() and write()")

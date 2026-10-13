@@ -254,15 +254,19 @@ def _require_concrete_selection(config: dict[str, Any], *, path: str) -> None:
     if config.get(HOST_KEY_MARKER, True) is not True:
         raise ValueError(f"effective LLM config for {path!r} has an invalid host key marker")
     if "base_url" in config:
-        if HOST_KEY_MARKER not in config:
-            raise ValueError(f"effective LLM config for {path!r} has a base_url without a host key")
+        # An Azure base_url is its resource endpoint; any other serves only a host key.
+        if HOST_KEY_MARKER not in config and config.get("provider") != "azure":
+            raise ValueError(
+                f"effective LLM config for {path!r} has a base_url without a host key; "
+                "only provider azure takes a base_url from a flow file"
+            )
         # A recorded map is replayed on resume; check its URL before any node runs.
         try:
             validate_base_url(config["base_url"])
         except ValueError as exc:
             raise ValueError(f"effective LLM config for {path!r}: {exc}") from None
     # Only a resolved map carries the marker and the host key's base_url;
-    # authored layers may not.
+    # authored layers may not (except an Azure endpoint, checked above).
     _validate_layer({
         key: value for key, value in config.items() if key not in (HOST_KEY_MARKER, "base_url")
     })

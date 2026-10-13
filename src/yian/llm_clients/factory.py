@@ -154,7 +154,8 @@ def model_from_config(config) -> BaseChatModel:
 
     A config `api_key` authenticates the request in place of the provider's key
     environment variable and any saved OpenAI connection. A config `base_url`,
-    which needs that key, replaces the provider's default endpoint.
+    which needs that key, replaces the provider's default endpoint. For `azure`,
+    `base_url` is the required resource endpoint and `model` the deployment name.
 
     Provider-specific reasoning knobs apply only to the selected provider. The
     returned model supports ordinary tool binding, structured output, and invocation.
@@ -213,12 +214,13 @@ def model_from_config(config) -> BaseChatModel:
         kwargs["api_key"] = config.api_key
         if connection is not None and connection["method"] == "api_key":
             kwargs["base_url"] = connection["endpoint"]
-        if config.base_url is not None:
-            # Validation ties base_url to this key, so it is the key's endpoint.
-            kwargs["base_url"] = config.base_url
     elif connection is not None:
         # The SDK calls this per request, so re-login cannot redirect an existing
         # model instance to a different account between tool iterations.
         kwargs["api_key"] = lambda: connection_credentials(connection).api_key
         kwargs["base_url"] = connection["endpoint"]
+    if config.base_url is not None:
+        # Validation ties a base_url to the config's key, or makes it the Azure
+        # resource endpoint, so it is where this request goes.
+        kwargs["base_url"] = config.base_url
     return create_llm_client(provider=provider, model=model, **kwargs).get_llm()

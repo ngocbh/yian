@@ -157,7 +157,8 @@ environment variable, add it to the run's config, as in
 the key is never recorded or echoed, so pass it again to `resume_flow(...,
 api_key=key)` or `result.backward(..., api_key=key)`. A `base_url` beside the key,
 such as an Azure OpenAI resource's `https://<resource>.openai.azure.com/openai/v1/`
-with `"provider": "openai"`, is where that key is sent; flow files cannot set it.
+with `"provider": "openai"`, is where that key is sent; flow files cannot set it,
+except as the resource endpoint beside `provider: azure`.
 Without one, the provider's default or environment endpoint applies.
 Passing `learnable=True`
 retains accepted execution for a later explicit `result.backward(feedback)` call,

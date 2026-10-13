@@ -442,7 +442,9 @@ that change; a field it omits keeps its value. This is the shape
 
 Use `yian auth openai` to select subscription or API-key authentication. Both use
 `provider: openai` and the same Yian execution and memory paths. A flow's
-`llm_config:` cannot set `api_key` or `base_url`; a Python host passes the key in
+`llm_config:` cannot set `api_key`, nor `base_url` except beside `provider: azure`
+(the required Azure resource endpoint; `model` is the deployment name, and no
+Azure endpoint or deployment environment variable is read); a Python host passes the key in
 the run's `llm_config` (it needs `provider`) and again to
 `resume_flow`/`result.backward` as `api_key=key`. It is never recorded, and it
 reaches every AGENT of that provider, `inherit: false` ones included. A

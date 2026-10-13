@@ -257,6 +257,138 @@ def test_a_lower_layer_base_url_cannot_redirect_the_host_key(monkeypatch, layer)
     assert seen == {}
 
 
+# --- provider azure: the endpoint is llm_config.base_url ---------------------- #
+
+AZURE_RESOURCE = "https://res.openai.azure.com/"
+_AZURE_FLOW = f"""id: az
+name: az
+llm_config: {{provider: azure, base_url: "{AZURE_RESOURCE}"}}
+nodes:
+  agent: {{kind: agent, prompt: hi, llm_config: {{model: deploy-a}}}}
+output: ${{agent.output}}
+"""
+
+
+@pytest.fixture
+def azure_env(monkeypatch):
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "sk-azure-environment")
+    monkeypatch.setenv("OPENAI_API_VERSION", "2024-02-01")
+    # Neither variable is read: the deployment is the model, the endpoint the base_url.
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", ELSEWHERE)
+    monkeypatch.setenv("AZURE_OPENAI_DEPLOYMENT_NAME", "env-deployment")
+
+
+def test_a_flow_file_sets_the_azure_endpoint_and_the_run_records_it(tmp_path, monkeypatch, azure_env):
+    built = _fake_clients(monkeypatch, "ok")
+    path = tmp_path / "run.jsonl"
+    result = run_flow(load_flow(_AZURE_FLOW), {}, log=path)
+    assert result.status == "succeeded", result.failure
+    assert built == [("azure", "deploy-a", AZURE_RESOURCE, None)]
+    assert _effective(path) == {
+        "agent": {"provider": "azure", "model": "deploy-a", "base_url": AZURE_RESOURCE},
+    }
+
+
+def test_azure_resume_uses_the_recorded_endpoint(tmp_path, monkeypatch, azure_env):
+    built = _fake_clients(monkeypatch, "ok")
+    path = tmp_path / "run.jsonl"
+    with pytest.raises(RuntimeError, match="host stopped"):
+        run_flow(load_flow(_AZURE_FLOW), {}, log=path, on_event=_stop_before_model)
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://moved.openai.azure.com/")
+    result = resume_flow(load_flow(_AZURE_FLOW), log=path)
+    assert result.status == "succeeded", result.failure
+    assert built == [("azure", "deploy-a", AZURE_RESOURCE, None)]
+
+
+@pytest.mark.parametrize(
+    "source, llm_config",
+    [
+        (_FLOW.replace("prompt: hi}", "prompt: hi, llm_config: {provider: azure, model: d}}"), None),
+        (_FLOW, {"provider": "azure", "model": "d"}),
+    ],
+    ids=["flow", "host"],
+)
+def test_an_azure_run_without_base_url_fails_before_any_request(monkeypatch, azure_env, source, llm_config):
+    built = _fake_clients(monkeypatch, "ok")
+    with pytest.raises(ValueError, match="Agent 'agent'.*set llm_config.base_url"):
+        run_flow(load_flow(source), {}, llm_config=llm_config)
+    assert built == []
+
+
+def test_a_host_layer_can_give_the_azure_endpoint_without_a_key(tmp_path, monkeypatch, azure_env):
+    built = _fake_clients(monkeypatch, "ok")
+    path = tmp_path / "run.jsonl"
+    result = run_flow(load_flow(_FLOW), {}, log=path, llm_config={
+        "provider": "azure", "model": "d", "base_url": AZURE_RESOURCE,
+    })
+    assert result.status == "succeeded", result.failure
+    assert built == [("azure", "d", AZURE_RESOURCE, None)]
+    assert _effective(path)["agent"]["base_url"] == AZURE_RESOURCE
+
+
+def test_a_host_azure_key_needs_its_own_base_url(monkeypatch, azure_env):
+    # The flow names an endpoint, but a host key never goes to an authored one.
+    built = _fake_clients(monkeypatch, "ok")
+    with pytest.raises(ValueError, match="base_url") as caught:
+        run_flow(load_flow(_AZURE_FLOW), {}, llm_config={"provider": "azure", "api_key": SENTINEL})
+    assert SENTINEL not in str(caught.value)
+    assert built == []
+
+
+def test_a_host_azure_key_goes_to_the_host_base_url(tmp_path, monkeypatch, azure_env):
+    built = _fake_clients(monkeypatch, "ok")
+    path = tmp_path / "run.jsonl"
+    host_url = "https://host.openai.azure.com/"
+    result = run_flow(load_flow(_AZURE_FLOW), {}, log=path, llm_config={
+        "provider": "azure", "api_key": SENTINEL, "base_url": host_url,
+    })
+    assert result.status == "succeeded", result.failure
+    assert built == [("azure", "deploy-a", host_url, SENTINEL)]
+    assert _effective(path) == {"agent": {
+        "provider": "azure", "model": "deploy-a", "base_url": host_url, "_host_key": True,
+    }}
+
+
+def test_an_inherited_azure_endpoint_does_not_reach_another_provider(monkeypatch, azure_env):
+    built = _fake_clients(monkeypatch, "ok")
+    flow = load_flow(_AZURE_FLOW.replace("{model: deploy-a}", "{provider: openai, model: m}"))
+    with pytest.raises(ValueError, match="base_url"):
+        run_flow(flow, {})
+    assert built == []
+
+
+@pytest.mark.parametrize("provider", ["openai", "vllm"])
+def test_an_inherited_azure_endpoint_never_carries_another_providers_host_key(
+    monkeypatch, azure_env, provider
+):
+    built = _fake_clients(monkeypatch, "ok")
+    flow = load_flow(_AZURE_FLOW.replace("{model: deploy-a}", f"{{provider: {provider}, model: m}}"))
+    with pytest.raises(ValueError, match="base_url") as caught:
+        run_flow(flow, {}, llm_config={"provider": provider, "api_key": SENTINEL})
+    assert SENTINEL not in str(caught.value)
+    assert built == []
+
+
+def test_a_def_level_azure_endpoint_reaches_its_body(tmp_path, monkeypatch, azure_env):
+    built = _fake_clients(monkeypatch, "ok")
+    path = tmp_path / "run.jsonl"
+    flow = load_flow(_CHILD.replace(
+        "  body:\n", f'  body:\n    llm_config: {{provider: azure, model: d, base_url: "{AZURE_RESOURCE}"}}\n'
+    ))
+    result = run_flow(flow, {}, log=path)
+    assert result.status == "succeeded", result.failure
+    assert built == [("azure", "d", AZURE_RESOURCE, None)]
+    assert _effective(path)["child/nested"]["base_url"] == AZURE_RESOURCE
+
+
+def test_memories_take_a_keyless_azure_endpoint(tmp_path):
+    config = {"provider": "azure", "model": "d", "base_url": AZURE_RESOURCE}
+    assert ReflectiveMemory(dict(config))._llm_config == config
+    profile = ProfileMemory(FileMarkdownStore(tmp_path / "ada.md"), llm_config=dict(config))
+    assert profile._llm_config == config
+    assert (profile._api_key, profile._base_url) == (None, None)
+
+
 # --- resume and backward reuse the recorded base_url ------------------------- #
 
 

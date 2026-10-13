@@ -113,6 +113,28 @@ Migrate native flows to `provider: openai` and remove `sandbox`, `cwd`, and
 for old native sessions; ordinary message histories remain supported. Historical
 native execution requires the prior Yian version to resume.
 
+### Azure OpenAI
+
+`provider: azure` takes everything that picks the deployment from `llm_config`:
+`model` is the deployment name and `base_url` is the resource endpoint. Neither has
+a default, and the run records both when it starts, so a resume calls the same
+deployment at the same endpoint:
+
+```yaml
+llm_config:
+  provider: azure
+  model: gpt-5.4                                  # the deployment name
+  base_url: https://<resource>.openai.azure.com/  # the resource endpoint
+```
+
+A flow file may set `base_url` only beside `provider: azure`. An `/openai` or
+`/openai/v1` suffix is stripped. An Azure agent without a `base_url` fails before the
+run's first node, saying to set it. The key and API version stay in the environment
+(`AZURE_OPENAI_API_KEY`, `OPENAI_API_VERSION`); a Python host can pass the key as
+`api_key` instead, and then must pass `base_url` beside it. `AZURE_OPENAI_ENDPOINT`
+and `AZURE_OPENAI_DEPLOYMENT_NAME` are not read: move their values into `base_url`
+and `model`.
+
 ### Local models with Ollama
 
 No API key is needed — point at a running Ollama endpoint:

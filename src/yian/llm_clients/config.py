@@ -47,18 +47,19 @@ SUPPORTED_LLM_PROVIDERS: tuple[str, ...] = (
 # from the tuple keeps Pydantic's enum validation/schema and the factory gate in lockstep.
 LLMProvider = Literal[SUPPORTED_LLM_PROVIDERS]  # type: ignore[valid-type]
 
-# Dedicated clients that cannot take a host base_url: Azure builds its endpoint from
-# AZURE_OPENAI_ENDPOINT and an API version, and the native Ollama client sends no key.
+# Dedicated clients that cannot take a host base_url: the native Ollama client sends
+# no key.
 _NO_BASE_URL_PROVIDERS = {
-    "azure": (
-        "provider azure does not take llm_config.base_url; for an Azure OpenAI "
-        "resource's /openai/v1/ endpoint use provider openai with that base_url"
-    ),
     "ollama": (
         "provider ollama does not take llm_config.base_url; it sends no api_key, so "
         "set OLLAMA_BASE_URL instead"
     ),
 }
+AZURE_NEEDS_BASE_URL = (
+    "provider azure needs llm_config.base_url, the Azure OpenAI resource endpoint "
+    "(https://<resource>.openai.azure.com/); set llm_config.base_url beside "
+    "provider: azure. AZURE_OPENAI_ENDPOINT is not read"
+)
 _LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
 _MAX_BASE_URL_LENGTH = 2048
 # RFC 3986 characters minus "?" and "#", since a query or fragment is refused anyway.
@@ -114,8 +115,12 @@ class LLMConfig(BaseModel):
             checked and stored as written, so whitespace, control characters,
             non-ASCII characters (use a host's `xn--` form), a bad port, or more than
             2048 characters are rejected rather than normalised (see
-            `validate_base_url`). The `azure` and `ollama` providers reject it.
-            Unlike the key, it appears in `model_dump` when set.
+            `validate_base_url`). The `ollama` provider rejects it. For
+            `provider="azure"` it is the Azure OpenAI resource endpoint, such as
+            `https://<resource>.openai.azure.com/`, and is required when the model
+            is called; it needs no `api_key`, since the key may come from
+            `AZURE_OPENAI_API_KEY`, and a flow file may set it beside
+            `provider: azure`. Unlike the key, it appears in `model_dump` when set.
 
     Example:
         ```python
@@ -180,8 +185,11 @@ class LLMConfig(BaseModel):
 
     @model_validator(mode="after")
     def _bind_base_url_to_key(self) -> "LLMConfig":
-        """Require a base_url to travel with the key and provider it serves."""
-        if self.base_url is None:
+        """Require a base_url to travel with the key and provider it serves.
+
+        An Azure base_url is the resource endpoint and may come without a key.
+        """
+        if self.base_url is None or self.provider == "azure":
             return self
         if self.api_key is None or self.provider is None:
             raise ValueError(
@@ -261,13 +269,19 @@ _HOST_ONLY_FIELDS = {
     ),
     "base_url": (
         "llm_config.base_url decides where the host's api_key is sent; pass it with "
-        "that key in the run's llm_config, not in a flow file"
+        "that key in the run's llm_config, not in a flow file. A flow file sets "
+        "base_url only beside provider: azure, as the Azure resource endpoint"
     ),
 }
 
 
 def host_only_field_error(config: Any) -> Optional[str]:
     """Return why an authored ``llm_config`` layer may not be used, or `None`.
+
+    A ``base_url`` beside ``provider: azure`` is allowed: it is the Azure resource
+    endpoint, and the Azure key comes from the environment, which flow code can
+    already read, while a host ``api_key`` for Azure must bring its own ``base_url``
+    (see `pop_host_credentials`).
 
     Args:
         config (`Any`): One authored layer; a non-mapping has no host-only field.
@@ -278,6 +292,8 @@ def host_only_field_error(config: Any) -> Optional[str]:
     if not isinstance(config, Mapping):
         return None
     for field, message in _HOST_ONLY_FIELDS.items():
+        if field == "base_url" and config.get("provider") == "azure":
+            continue
         if field in config:
             return message
     return None
@@ -317,7 +333,10 @@ def pop_host_credentials(
 
     Popping both from the same layer is what binds the URL to the key: a base_url
     decides where the key is sent, so it is accepted only beside that key and the
-    layer's ``provider``. Errors never echo the URL or the key.
+    layer's ``provider``. For ``provider: azure`` without a key, ``base_url`` is the
+    resource endpoint the environment key goes to; it stays in the layer as an
+    ordinary setting. An Azure key needs a ``base_url`` beside it, so it is never sent
+    to an endpoint another layer names. Errors never echo the URL or the key.
 
     Args:
         config (`dict[str, Any]`): A mutable ``llm_config`` layer; ``api_key`` and
@@ -329,12 +348,23 @@ def pop_host_credentials(
 
     Raises:
         `ValueError`: The key is invalid or lacks ``provider`` (see `pop_api_key`),
-            the layer has a ``base_url`` but no ``api_key``, the URL is not allowed
-            (see `validate_base_url`), or the provider does not take a base_url.
+            the layer has a non-Azure ``base_url`` but no ``api_key``, an Azure key
+            has no ``base_url``, the URL is not allowed (see `validate_base_url`),
+            or the provider does not take a base_url.
     """
     api_key = pop_api_key(config)
+    azure = config.get("provider") == "azure"
+    if api_key is None and azure:
+        if config.get("base_url") is not None:
+            validate_base_url(config["base_url"])
+        return None, None
     raw = config.pop("base_url", None)
     if raw is None:
+        if azure:
+            raise ValueError(
+                "llm_config.api_key for provider azure needs llm_config.base_url in "
+                "the same config, since it decides where that key is sent"
+            )
         return api_key, None
     return api_key, LLMConfig(provider=config.get("provider"), base_url=raw, api_key=api_key).base_url
 

@@ -210,6 +210,12 @@ class RunState:
             retained independently of later frontier and topology changes.
         depth (`dict[str, int]`):
             Graph-growth nesting depth keyed by live dynamic node ID.
+        growth_owner (`dict[str, str]`):
+            Live dynamic node ID to the live node whose accepted growth owns it.
+            Pruning a node also retires the nodes it owns, transitively, when all
+            of them are settled.  Otherwise they move to the nearest surviving
+            owner and are retired only if a later prune of that owner finds them
+            settled; under a top-level LOOP they stay for the rest of the run.
         wiring_overrides (`dict[str, dict[str, Any]]`):
             Per-run wiring keyed by node ID, beginning with START's narrowed inputs.
         run_id (`str | None`):
@@ -258,6 +264,7 @@ class RunState:
         self.result: RunSucceeded | RunFailed | None = None
         self.terminal_unreachable_failure: Failure | None = None
         self.depth: dict[str, int] = {}
+        self.growth_owner: dict[str, str] = {}
         self.wiring_overrides: dict[str, dict[str, Any]] = {}
         self.run_id: str | None = None
         self.flow_fingerprint: str | None = None
@@ -351,6 +358,7 @@ class _RunStartedApply:
     accepted_starts: dict[str, int]
     terminal_unreachable_failure: Failure | None
     depth: dict[str, int]
+    growth_owner: dict[str, str]
     wiring_overrides: dict[str, dict[str, Any]]
     run_id: str
     flow_fingerprint: str
@@ -568,6 +576,7 @@ class _GrowthDelta:
 
     spawner_id: str
     prune_ids: tuple[str, ...]
+    retired_ids: tuple[str, ...]
     topology_digest: str
     fragment_start_id: str
     fragment_end_id: str
@@ -592,6 +601,7 @@ class _GrowthTopology:
     in_flight: tuple[str, ...]
     accepted_starts: tuple[tuple[str, int], ...]
     depth: tuple[tuple[str, int], ...]
+    growth_owner: tuple[tuple[str, str], ...]
     wiring_overrides: tuple[tuple[str, dict[str, Any]], ...]
 
 
@@ -611,6 +621,7 @@ class _GrowthApply:
     in_flight: dict[str, None]
     accepted_starts: dict[str, int]
     depth: dict[str, int]
+    growth_owner: dict[str, str]
     wiring_overrides: dict[str, dict[str, Any]]
     observers: tuple[Any, ...]
 
@@ -1648,7 +1659,7 @@ def _prepare_growth_transition(
         expected_sequence=canonical_envelope.seq,
         _plan=replace(plan, trace_delta=_prepare_record_trace(
             state, canonical_envelope, input_connections=fragment.input_connections,
-            child_boundaries=fragment.child_boundaries,
+            child_boundaries=fragment.child_boundaries, retired_ids=delta.retired_ids,
         )),
         observers=(_growth_observer(canonical_record),),
     )
@@ -1749,6 +1760,7 @@ def _prepare_record_trace(
     state: RunState, envelope: RecordEnvelope, *,
     input_connections: tuple[SeedConnection, ...] = (),
     child_boundaries: tuple[ChildFlowBoundary, ...] = (),
+    retired_ids: tuple[str, ...] = (),
     terminal_succeeded: bool | None = None,
     terminal_output_bytes: bytes | None = None,
     terminal_failure: Failure | None = None,
@@ -1758,6 +1770,7 @@ def _prepare_record_trace(
     node_id = _outcome_node_id(record)
     return prepare_trace(state.trace, envelope, state.flow.nodes.get(node_id),
                          input_connections=input_connections, child_boundaries=child_boundaries,
+                         retired_ids=retired_ids,
                          root_end_id=state.flow.end_id if isinstance(record, RunStartedRecord) else None,
                          root_input_names=(
                              state.flow.nodes[state.flow.start_id].backward_input_names()
@@ -2217,6 +2230,7 @@ def _commit_growth(
     state.in_flight = apply.in_flight
     state.accepted_starts = apply.accepted_starts
     state.depth = apply.depth
+    state.growth_owner = apply.growth_owner
     state.wiring_overrides = apply.wiring_overrides
     state.learning_state = plan.next_learning_state
     state.next_sequence = prepared.expected_sequence + 1
@@ -2405,6 +2419,7 @@ def _require_initialized(state: RunState) -> None:
         and type(state.in_flight) is dict
         and type(state.accepted_starts) is dict
         and type(state.depth) is dict
+        and type(state.growth_owner) is dict
         and type(state.wiring_overrides) is dict
         and type(state.input) is dict
         and type(state.effective_llm_by_static_path) is dict
@@ -2652,14 +2667,14 @@ def _prepare_growth_topology(
             )
         )
     derived_depth = _validated_growth_depth(state, record.spawner_id)
-    prune_ids = frozenset(record.prune_ids)
+    retired_ids = _retired_ids(state, frozenset(record.prune_ids))
     _validate_growth_prune(
         state,
         record.spawner_id,
-        prune_ids,
+        retired_ids,
         frozenset(new_node_ids),
     )
-    _validate_prune_dependencies(state, fragment, prune_ids)
+    _validate_prune_dependencies(state, fragment, retired_ids)
 
     combined_nodes = dict(state.flow.nodes)
     combined_nodes.update(fragment.nodes)
@@ -2670,24 +2685,24 @@ def _prepare_growth_topology(
     final_nodes = {
         node_id: node
         for node_id, node in combined_nodes.items()
-        if node_id not in prune_ids
+        if node_id not in retired_ids
     }
     final_edges = [
         edge
         for edge in combined_edges
-        if edge.from_ not in prune_ids and edge.to not in prune_ids
+        if edge.from_ not in retired_ids and edge.to not in retired_ids
     ]
     final_wiring = {
         node_id: wiring
         for node_id, wiring in combined_wiring.items()
-        if node_id not in prune_ids
+        if node_id not in retired_ids
     }
     incoming, outgoing = _growth_adjacency(final_nodes, final_edges)
 
     node_state = dict(state.node_state)
     node_state.update((node_id, NodeState.UNKNOWN) for node_id in new_node_ids)
     node_state[record.spawner_id] = NodeState.EXPANDED
-    for node_id in prune_ids:
+    for node_id in retired_ids:
         node_state.pop(node_id, None)
 
     edge_state = dict(state.edge_state)
@@ -2702,7 +2717,7 @@ def _prepare_growth_topology(
     pool_store = dict(state.pool.store)
     depth = dict(state.depth)
     wiring_overrides = copy.deepcopy(state.wiring_overrides)
-    for node_id in prune_ids:
+    for node_id in retired_ids:
         pool_store.pop(node_id, None)
         depth.pop(node_id, None)
         wiring_overrides.pop(node_id, None)
@@ -2710,14 +2725,27 @@ def _prepare_growth_topology(
         for node_id, node in fragment.nodes.items():
             if node.is_spawner is True or node.commit_as == record.spawner_id:
                 depth[node_id] = derived_depth
+    growth_owner = dict(state.growth_owner)
+    growth_owner.update((node_id, record.spawner_id) for node_id in new_node_ids)
+    for node_id, owner in growth_owner.items():
+        # A self-pruning spawner's new nodes, and a kept subtree under a retired node,
+        # move to the nearest owner that survives this transition.
+        while owner in retired_ids:
+            owner = state.growth_owner.get(owner)
+        growth_owner[node_id] = owner
+    growth_owner = {
+        node_id: owner
+        for node_id, owner in growth_owner.items()
+        if node_id not in retired_ids and owner is not None
+    }
 
     ready = tuple(
-        node_id for node_id in state.ready if node_id not in prune_ids
+        node_id for node_id in state.ready if node_id not in retired_ids
     ) + (fragment.start_id,)
     in_flight = tuple(
         node_id
         for node_id in state.in_flight
-        if node_id != record.spawner_id and node_id not in prune_ids
+        if node_id != record.spawner_id and node_id not in retired_ids
     )
     _validate_final_redirects(
         nodes=final_nodes,
@@ -2733,6 +2761,7 @@ def _prepare_growth_topology(
     delta = _GrowthDelta(
         spawner_id=record.spawner_id,
         prune_ids=record.prune_ids,
+        retired_ids=tuple(sorted(retired_ids)),
         topology_digest=record.topology_digest,
         fragment_start_id=fragment.start_id,
         fragment_end_id=fragment.end_id,
@@ -2757,6 +2786,7 @@ def _prepare_growth_topology(
         in_flight=in_flight,
         accepted_starts=tuple((node_id, state.accepted_starts[node_id]) for node_id in in_flight),
         depth=tuple(depth.items()),
+        growth_owner=tuple(growth_owner.items()),
         wiring_overrides=tuple(wiring_overrides.items()),
     )
     return delta, topology
@@ -3187,6 +3217,50 @@ def _validated_growth_depth(state: RunState, spawner_id: str) -> int | None:
             )
         )
     return depth
+
+
+def _retired_ids(state: RunState, prune_ids: frozenset[str]) -> frozenset[str]:
+    """Return ``prune_ids`` plus each one's grown nodes when all of those are settled.
+
+    A grown node still ready, running, or waiting keeps its owner's whole grown
+    subtree live, so retiring never removes work that has not finished.  A kept
+    subtree moves to the nearest surviving owner and is retired only if a later
+    prune of that owner finds it settled; under a top-level LOOP it stays for the
+    rest of the run.  This assumes no node outside an owner's grown subtree
+    references a node inside it; a growth that broke that would fail the usual
+    prune checks, not corrupt state.
+
+    Args:
+        state (`RunState`):
+            Pre-transition state whose ``growth_owner`` names each node's owner.
+        prune_ids (`frozenset[str]`):
+            Node IDs the growth record asks to prune.
+
+    Returns:
+        `frozenset[str]`:
+            ``prune_ids`` plus the settled grown nodes retired with them.
+    """
+    owned: dict[str, list[str]] = {}
+    for node_id, owner in state.growth_owner.items():
+        owned.setdefault(owner, []).append(node_id)
+    settled = (NodeState.TAKEN, NodeState.SKIPPED, NodeState.EXPANDED)
+    ready_ids = set(state.ready)
+    retired = set(prune_ids)
+    for prune_id in prune_ids:
+        grown: list[str] = []
+        pending = [prune_id]
+        while pending:
+            for node_id in owned.get(pending.pop(), ()):
+                grown.append(node_id)
+                pending.append(node_id)
+        if all(
+            state.node_state.get(node_id) in settled
+            and node_id not in state.in_flight
+            and node_id not in ready_ids
+            for node_id in grown
+        ):
+            retired.update(grown)
+    return frozenset(retired)
 
 
 def _validate_growth_prune(
@@ -4254,6 +4328,7 @@ def _require_pristine(state: RunState) -> None:
         and type(state.in_flight) is dict
         and type(state.accepted_starts) is dict
         and type(state.depth) is dict
+        and type(state.growth_owner) is dict
         and type(state.wiring_overrides) is dict
         and type(state.input) is dict
         and type(state.effective_llm_by_static_path) is dict
@@ -4279,6 +4354,7 @@ def _require_pristine(state: RunState) -> None:
         and state.result is None
         and state.terminal_unreachable_failure is None
         and not state.depth
+        and not state.growth_owner
         and not state.wiring_overrides
         and state.run_id is None
         and state.flow_fingerprint is None
@@ -4393,6 +4469,7 @@ def _materialize_run_started(
         accepted_starts={},
         terminal_unreachable_failure=None,
         depth={},
+        growth_owner={},
         wiring_overrides={start_id: canonical_wiring},
         run_id=envelope.run_id,
         flow_fingerprint=record.flow_fingerprint,
@@ -4422,6 +4499,7 @@ def _apply_run_started(state: RunState, apply: _RunStartedApply) -> None:
     state.result = None
     state.terminal_unreachable_failure = apply.terminal_unreachable_failure
     state.depth = apply.depth
+    state.growth_owner = apply.growth_owner
     state.wiring_overrides = apply.wiring_overrides
     state.run_id = apply.run_id
     state.flow_fingerprint = apply.flow_fingerprint
@@ -4566,6 +4644,7 @@ def _materialize_growth(plan: _GrowthPlan) -> _GrowthApply:
         in_flight={node_id: None for node_id in topology.in_flight},
         accepted_starts=dict(topology.accepted_starts),
         depth=dict(topology.depth),
+        growth_owner=dict(topology.growth_owner),
         wiring_overrides={
             node_id: copy.deepcopy(wiring)
             for node_id, wiring in topology.wiring_overrides

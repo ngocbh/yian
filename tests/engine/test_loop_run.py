@@ -15,6 +15,10 @@ body and (except the origin) itself. The CONTINUE body-END carries NO `commit_as
 next driver by plain wiring.
 """
 
+from collections.abc import Callable
+
+import pytest
+
 from yian.compile.expand import build_grow
 from yian.compose.loader import load_flow
 from yian.run import resume_flow, run_flow
@@ -1039,3 +1043,307 @@ def test_partial_loop_resumes_from_its_log(tmp_path):
     resumed = resume_flow(load_flow(PARTIAL_CHAT), log=log)
     assert resumed.status == "succeeded", resumed.failure
     assert resumed.output == first.output
+
+
+_ONE = """
+  one:
+    input:
+      n: int
+    nodes:
+      step:
+        kind: code
+        input:
+          n: ${input.n}
+        output: int
+        code: |
+          return inputs["n"] + 1
+    output: ${step.output}
+"""
+
+_LOOP = """
+nodes:
+  loop:
+    kind: loop
+    call: body
+    input:
+      n: 0
+    times: TIMES
+output: ${loop.output}
+"""
+
+_CALL_BODY = """
+id: nested_call
+name: nested_call
+defs:""" + _ONE + """
+  body:
+    input:
+      n: int
+    nodes:
+      c:
+        kind: call
+        call: one
+        input:
+          n: ${input.n}
+    output:
+      n: ${c.output}
+""" + _LOOP
+
+_MAP_BODY = """
+id: nested_map
+name: nested_map
+defs:""" + _ONE + """
+  body:
+    input:
+      n: int
+    nodes:
+      m:
+        kind: map
+        call: one
+        over: ${[input.n, input.n]}
+        input:
+          n: ${item}
+      pick:
+        kind: code
+        input:
+          xs: ${m.output}
+        output: int
+        code: |
+          return inputs["xs"][0]
+    output:
+      n: ${pick.output}
+""" + _LOOP
+
+_LOOP_BODY = """
+id: nested_loop
+name: nested_loop
+defs:""" + _ONE + """
+  inc:
+    input:
+      n: int
+    nodes:
+      c:
+        kind: call
+        call: one
+        input:
+          n: ${input.n}
+    output:
+      n: ${c.output}
+  body:
+    input:
+      n: int
+    nodes:
+      inner:
+        kind: loop
+        call: inc
+        input:
+          n: ${input.n}
+        times: 3
+    output:
+      n: ${inner.output.n}
+""" + _LOOP
+
+_CASE_BODY = """
+id: nested_case
+name: nested_case
+defs:
+  up:
+    input:
+      n: int
+    nodes:
+      step:
+        kind: code
+        input:
+          n: ${input.n}
+        output: int
+        code: |
+          return inputs["n"] + 1
+    output: ${step.output}
+  up2:
+    input:
+      n: int
+    nodes:
+      step:
+        kind: code
+        input:
+          n: ${input.n}
+        output: int
+        code: |
+          return inputs["n"] + 2
+    output: ${step.output}
+  body:
+    input:
+      n: int
+    nodes:
+      pick:
+        kind: case
+        cases:
+          - when: "input.n % 2 == 0"
+            then: call(up, n=${input.n})
+        else: call(up2, n=${input.n})
+    output:
+      n: ${pick.output}
+""" + _LOOP
+
+
+def _case_total(times: int) -> int:
+    """Return the CASE body's carried value after ``times`` iterations from zero."""
+    n = 0
+    for _ in range(times):
+        n += 1 if n % 2 == 0 else 2
+    return n
+
+
+# Each body grows nodes inside its iteration, so pruning only the direct body ids leaks them.
+_NESTED_BODIES: dict[str, tuple[str, Callable[[int], int]]] = {
+    "call": (_CALL_BODY, lambda times: times),
+    "map": (_MAP_BODY, lambda times: times),
+    "nested": (_LOOP_BODY, lambda times: 3 * times),
+    "case": (_CASE_BODY, _case_total),
+}
+
+
+def _finish_nested(shape, times, **engine_kwargs):
+    """Run one nested-growth body ``times`` iterations and return the finished engine."""
+    from yian.events import RunSucceeded
+    source, expected = _NESTED_BODIES[shape]
+    engine = _engine(load_flow(source.replace("TIMES", str(times))).compiled,
+                     run_inputs={}, grow_builder=build_grow, **engine_kwargs)
+    terminal = list(engine.run())[-1]
+    assert isinstance(terminal, RunSucceeded), terminal
+    assert terminal.output == {"n": expected(times)}
+    return engine
+
+
+@pytest.mark.parametrize("num_workers", [0, 2], ids=["serial", "pooled"])
+@pytest.mark.parametrize("shape", sorted(_NESTED_BODIES))
+def test_loop_with_nested_growth_keeps_one_iteration_resident(shape, num_workers, monkeypatch):
+    """Pruning an iteration also retires the nodes its nested CALL/MAP/LOOP grew."""
+    import yian.runtime.state as state_module
+
+    resident = len(_finish_nested(shape, 3, num_workers=num_workers).state.flow.nodes)
+    # A tight budget fails mid-run if any earlier iteration's nested nodes leak.
+    monkeypatch.setattr(state_module, "MAX_TOTAL_NODES", resident + 20)
+    engine = _finish_nested(shape, 20, num_workers=num_workers)
+    assert len(engine.state.flow.nodes) == resident
+
+
+@pytest.mark.parametrize("shape", sorted(_NESTED_BODIES))
+def test_loop_with_nested_growth_keeps_trace_indexes_bounded(shape):
+    """A learnable run's current-name trace indexes shrink with the live graph."""
+    small = _finish_nested(shape, 3, learnable=True).state.trace
+    large = _finish_nested(shape, 20, learnable=True).state.trace
+    assert len(large.current_writers) == len(small.current_writers)
+    assert len(large.pending_connections) == len(small.pending_connections)
+
+
+def test_nested_growth_loop_resumes_from_a_cut_log(tmp_path):
+    """A resumed nested-growth LOOP finishes, and its log replays to one resident iteration."""
+    import yian.run as run_module
+    from yian.runtime.log import JsonlRunLog
+    src = _NESTED_BODIES["nested"][0].replace("TIMES", "6")
+    path = tmp_path / "run.jsonl"
+    first = run_flow(load_flow(src), {}, log=path)
+    assert first.status == "succeeded", first.failure
+    # Cut the log mid-run so resume replays the recorded growth and runs the rest live.
+    lines = path.read_text().splitlines(keepends=True)
+    path.write_text("".join(lines[: len(lines) // 2]))
+    resumed = resume_flow(load_flow(src), log=path)
+    assert resumed.status == "succeeded", resumed.failure
+    assert resumed.output == first.output
+    with JsonlRunLog.resume(path) as log:
+        state = run_module._replay_run_log(load_flow(src), log)
+    assert len(state.flow.nodes) == len(_finish_nested("nested", 2).state.flow.nodes)
+
+
+def test_loop_growth_record_keeps_only_the_requested_prune_ids():
+    """The log records the body's direct ids and the driver; nested ids are derived."""
+    from yian.runtime.log import NodeExpandedRecord
+    engine = _finish_nested("call", 3)
+    pruned = [e.record.prune_ids for e in engine.log
+              if type(e.record) is NodeExpandedRecord and e.record.spawner_id == "loop~2"]
+    assert pruned == [("loop#1/__end__", "loop#1/__start__", "loop#1/c", "loop~2")]
+
+
+def test_self_pruning_spawner_hands_its_fragment_to_its_owner():
+    """A driver that prunes itself passes the nodes it grew to its own owner."""
+    owners = _finish_nested("call", 3).state.growth_owner
+    assert set(owners.values()) == {"loop", "loop#2/c"}
+    assert owners["loop~3"] == "loop"
+
+
+# The child's unread side chain can still be waiting when the next driver prunes its iteration.
+_DANGLING_SIDE = """
+id: dangling_side
+name: dangling_side
+defs:
+  one:
+    input:
+      n: int
+    nodes:
+      step:
+        kind: code
+        input:
+          n: ${input.n}
+        output: int
+        code: |
+          return inputs["n"] + 1
+      side:
+        kind: code
+        input:
+          n: ${input.n}
+        output: int
+        code: |
+          return inputs["n"] * 2
+      side2:
+        kind: code
+        input:
+          n: ${side.output}
+        output: int
+        code: |
+          return inputs["n"] * 2
+      side3:
+        kind: code
+        input:
+          n: ${side2.output}
+        output: int
+        code: |
+          return inputs["n"] * 2
+      side4:
+        kind: code
+        input:
+          n: ${side3.output}
+        output: int
+        code: |
+          return inputs["n"] * 2
+    output: ${step.output}
+  body:
+    input:
+      n: int
+    nodes:
+      c:
+        kind: call
+        call: one
+        input:
+          n: ${input.n}
+    output:
+      n: ${c.output}
+""" + _LOOP.replace("TIMES", "4")
+
+
+@pytest.mark.parametrize("num_workers", [0, 3], ids=["serial", "pooled"])
+def test_loop_keeps_a_nested_subtree_with_unfinished_work(num_workers):
+    """A nested node still waiting when its iteration is retired keeps its subtree alive."""
+    from yian.events import RunSucceeded
+    engine = _engine(load_flow(_DANGLING_SIDE).compiled, run_inputs={},
+                     grow_builder=build_grow, num_workers=num_workers)
+    terminal = list(engine.run())[-1]
+    assert isinstance(terminal, RunSucceeded), terminal
+    assert terminal.output == {"n": 4}
+    # Every owner entry names live nodes; the unfinished first-iteration subtree stays.
+    owners = engine.state.growth_owner
+    assert all(k in engine.state.flow.nodes and v in engine.state.flow.nodes
+               for k, v in owners.items())
+    # Pooled scheduling order varies, so only the serial run pins which subtree is kept.
+    if num_workers == 0:
+        assert "loop#0/c/side4" in engine.state.flow.nodes
+        assert owners["loop#0/c/__start__"] == "loop"

@@ -1420,8 +1420,12 @@ boundaries, while a LOOP's next driver keeps only the enclosing
 gets a parameter default for each field the body omits, from the canonical seed, and
 only returned fields are wired from the body END. Expansion digests cover entry/end
 IDs and topology but exclude that diagnostic context, while loop pruning retires each
-finished iteration's direct body nodes (nodes grown inside it by a nested CALL, MAP,
-or LOOP stay live).
+finished iteration's body nodes. Pruning an id also retires the live nodes grown under
+it if all of them are settled (taken, skipped, or expanded; none ready or running) at
+that moment; otherwise that subtree stays live under the nearest surviving owner, and a
+later prune of that owner retires it if it has settled. The reducer finds them from
+accepted growth records (`RunState.growth_owner`). `NodeExpandedRecord.prune_ids` keeps
+only the ids the node asked for; replay re-derives the rest.
 
 Compile also owns stable identity for the static program. `flow_manifest`
 canonicalizes execution semantics, `flow_fingerprint` hashes that manifest, and

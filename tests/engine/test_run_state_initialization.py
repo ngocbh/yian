@@ -110,6 +110,7 @@ def _snapshot(state: RunState) -> dict[str, Any]:
         "accepted_starts": dict(state.accepted_starts),
         "result": state.result,
         "depth": dict(state.depth),
+        "growth_owner": dict(state.growth_owner),
         "wiring_overrides": deepcopy(state.wiring_overrides),
         "run_id": state.run_id,
         "flow_fingerprint": state.flow_fingerprint,
@@ -479,6 +480,7 @@ def test_commit_prepared_rejects_flow_or_boundary_replacement_before_append(
         lambda state: state.edge_state.__setitem__("start-work", NodeState.TAKEN),
         lambda state: state.wiring_overrides.__setitem__("work", {}),
         lambda state: state.pool.add_system("stale", True),
+        lambda state: state.growth_owner.__setitem__("work", "start"),
     ],
     ids=[
         "ready-frontier",
@@ -490,6 +492,7 @@ def test_commit_prepared_rejects_flow_or_boundary_replacement_before_append(
         "edge-disposition",
         "wiring",
         "pool",
+        "growth-owner",
     ],
 )
 def test_commit_prepared_rejects_every_stale_state_mutation_before_append(

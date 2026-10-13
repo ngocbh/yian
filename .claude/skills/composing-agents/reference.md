@@ -272,11 +272,13 @@ predicate. Predicates use the canonical bare form (no `${}`). `max:` is an optio
 for `while:`/`until:` (without it the loop runs until its predicate ends it) — but
 REDUNDANT and REJECTED with `times:`. A body that blocks
 (a `human_input` leaf) makes the loop a live chat REPL — the same run threads each
-answered turn. Each continuing iteration PRUNES the previous iteration's body nodes, so
-a body of leaf nodes keeps about one iteration resident. Nodes grown inside the body by
-a nested CALL, MAP, or LOOP are not pruned; they add up every iteration until the run
-fails at the node budget (10,000 live nodes), so give such a loop a `max:` low enough that a
-runaway fails with `LoopMaxExceeded` first. See `loop.yaml`.
+answered turn. Each continuing iteration PRUNES the previous iteration's body nodes and
+the nodes grown under them by a nested CALL, MAP, or LOOP, so the live graph stays about
+one iteration, whatever the body, unless a nested node is still unfinished (that subtree
+stays live and, in a top-level loop, adds up each iteration, so give such a loop a `max:`);
+the run log still keeps every iteration. The node budget (10,000 live nodes)
+is checked before pruning; it limits one iteration's size, not the iteration count. See
+`loop.yaml`.
 
 **Conversational REPL (LOOP + human_input).** A chat is a `loop` whose body blocks at
 `ask` (`human_input`), then a CASE routes exact `/exit` and `/quit` values to an exit

@@ -99,7 +99,8 @@ class Grow:
         The same canonical value is persisted so durable replay rebuilds identical topology without
         re-running the node that produced it.
       - `prune`: ids to retire in the same step (∅ for call/map; a self-respawn loop's finished
-        iteration ids). Defaults to ∅.
+        iteration ids). Defaults to ∅. The reducer also retires a pruned id's whole grown
+        subtree when every node in it is settled.
     """
 
     seed: Any

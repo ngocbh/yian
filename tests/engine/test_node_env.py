@@ -69,3 +69,60 @@ nodes:
 output: ${a.output}
 """
         )
+
+
+_DEF_ENV_FLOW = """
+id: f
+name: f
+env:
+  shared: from_parent
+  parent_only: yes_parent
+defs:
+  child:
+    env:
+      shared: from_def
+      max_tool_iterations: 7
+    nodes:
+      a:
+        kind: agent
+        prompt: hi
+      b:
+        kind: agent
+        depends_on: [a]
+        prompt: hi
+        env:
+          max_tool_iterations: 9
+    output: ${b.output}
+nodes:
+  go:
+    kind: call
+    call: child
+output: ${go.output}
+"""
+
+
+def test_def_child_has_its_own_flow_env():
+    child_nodes = load_flow(_DEF_ENV_FLOW).compiled.nodes["go"].child.nodes
+    # the def's env is the default for its nodes; the parent's env does not reach them
+    assert child_nodes["a"].env == {"shared": "from_def", "max_tool_iterations": 7}
+    # a def node's own env still wins on its key
+    assert child_nodes["b"].env == {"shared": "from_def", "max_tool_iterations": 9}
+
+
+def test_def_env_must_be_string_keyed_mapping():
+    with pytest.raises(LoadError, match=r"defs entry 'child': `env:` must be a mapping"):
+        load_flow(
+            """
+id: f
+name: f
+defs:
+  child:
+    env: [1, 2, 3]
+    nodes:
+      a: {kind: agent, prompt: hi}
+    output: ${a.output}
+nodes:
+  go: {kind: call, call: child}
+output: ${go.output}
+"""
+        )

@@ -196,8 +196,10 @@ def _single_node_def_cursor(
 # `id`/`name`/`typedefs` themselves.
 # `asserts:` are allowed: the call/map child seam enforces a def's two-phase asserts
 # against the child pool (boundary before the child runs, post after it terminates).
+# `env:` is the def's own flow-level default for its nodes; a parent's `env:` does not
+# reach a called child.
 _DEF_ALLOWED = frozenset(
-    {"inputs", "nodes", "outputs", "asserts", "llm_config", "long_term_memory"}
+    {"inputs", "nodes", "outputs", "asserts", "llm_config", "env", "long_term_memory"}
 )
 # The authored spellings of `_DEF_ALLOWED`, for error messages.
 _DEF_SURFACE_KEYS = frozenset(
@@ -586,8 +588,7 @@ def make_file_resolver(search_paths, ctx: "_LoadCtx") -> ChildResolver:
             _check_version(child, path, version)
             return child
         raise _UNLOCATED_DIAGNOSTICS.error(
-            f"flow {rel!r} not found on search path {[str(d) for d in search_paths]}; "
-            f"marketplace resolution needs a server — not available yet"
+            f"flow {rel!r} not found on search path {[str(d) for d in search_paths]}"
         )
 
     return resolve
@@ -605,9 +606,8 @@ def load_flow(
 
     Parses, compiles, and validates the flow in one pass. A `call:` resolves
     **defs-first** (an in-file `defs:` child flow), then a **`uses:` alias** (external,
-    with the ref's `@<version>`), then a legacy bare name. With neither `search_paths`
-    nor `child_resolver`, a `call:`/`uses:` to a non-def child flow raises — external
-    resolution is additive. The loader derives each child flow's signature for binding
+    with the ref's `@<version>`); any other name raises. With neither `search_paths`
+    nor `child_resolver`, a `uses:` alias raises — external resolution is additive. The loader derives each child flow's signature for binding
     checks and bakes its compiled graph onto the built `CallNode` so `run` drives it.
 
     Args:
@@ -615,8 +615,8 @@ def load_flow(
             The Compose-shaped YAML source of the flow.
         child_resolver (`ChildResolver`, *optional*, defaults to `None`):
             An explicit `(flow_id, version) -> ComposedFlow` resolver for external flows
-            (a fake, or a future marketplace). Mutually preferred over `search_paths`
-            when both are given.
+            (a fake, or a future marketplace). When given, it replaces the local file
+            resolver: `search_paths` and the flow's `system: paths:` are not searched.
         search_paths (`list[str | Path]`, *optional*, defaults to `None`):
             Directories the default local file resolver searches for `uses:` targets
             (`<dir>/<path>.yaml`). Pass the flow file's own directory so relative
@@ -1175,6 +1175,14 @@ def _load_def(
     _validate_authored_llm_config(
         body.get("llm_config"), f"defs entry {name!r}", diagnostics=diagnostics, cursor=def_cursor
     )
+    def_env = body.get("env")
+    if def_env is not None and (
+        not isinstance(def_env, Mapping) or not all(isinstance(k, str) for k in def_env)
+    ):
+        raise diagnostics.error(
+            f"defs entry {name!r}: `env:` must be a mapping with string keys",
+            range=(def_cursor.range_of("env") if def_cursor is not None else None),
+        )
     nodes_cursor = _def_assembly_cursor(def_cursor, body["nodes"])
     try:
         def_memories = (
@@ -1204,7 +1212,7 @@ def _load_def(
             scope=scope,
             owner=("def", name),
             flow_llm_config=body.get("llm_config") or {},
-            flow_env=body.get("env") or {},
+            flow_env=def_env or {},
             boundary_field_ranges=(
                 _boundary_field_ranges(def_cursor)
                 if def_cursor is not None

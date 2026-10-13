@@ -171,18 +171,15 @@ def model_from_config(config) -> BaseChatModel:
         ValueError: If the provider is unsupported.
         ImportError: If the resolved provider's optional dependency extra is not installed.
     """
-    from .connection import connection_credentials, resolve_model_config, split_model_config
+    from .connection import check_model_config, connection_credentials, resolve_model_config
 
-    resolved = resolve_model_config(config)
-    config, connection = split_model_config(resolved)
+    config, connection = check_model_config(resolve_model_config(config))
     provider, model = config.provider, config.model
     if (
         config.api_key is None
         and connection is not None
         and connection["method"] == "subscription"
     ):
-        if config.temperature is not None:
-            raise ValueError("OpenAI subscription connections do not accept temperature; remove that setting")
         try:
             from .openai_subscription import SubscriptionAccess, create_subscription_model
         except ImportError as exc:

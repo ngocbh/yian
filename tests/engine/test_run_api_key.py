@@ -331,24 +331,25 @@ def test_backward_without_the_key_fails_clearly(tmp_path, monkeypatch):
     _assert_hidden(path, events, recovered, outcome)
 
 
-def test_invalid_config_with_a_key_fails_without_echoing_it(tmp_path):
+def test_invalid_config_with_a_key_fails_before_the_run_without_echoing_it(tmp_path):
     events = []
     path = tmp_path / "run.jsonl"
-    result = run_flow(
-        load_flow(_FLOW),
-        {},
-        log=path,
-        on_event=events.append,
-        llm_config={
-            "provider": "vllm",
-            "model": "served-model",
-            "api_key": SENTINEL,
-            "temperature": "hot",
-        },
-    )
-    assert result.status == "failed"
-    assert "temperature" in result.failure.message
-    _assert_hidden(path, events, result)
+    with pytest.raises(ValueError, match="temperature") as caught:
+        run_flow(
+            load_flow(_FLOW),
+            {},
+            log=path,
+            on_event=events.append,
+            llm_config={
+                "provider": "vllm",
+                "model": "served-model",
+                "api_key": SENTINEL,
+                "temperature": "hot",
+            },
+        )
+    assert events == []
+    assert not path.exists()
+    _assert_hidden(None, str(caught.value), repr(caught.value.__cause__))
 
 
 def test_key_goes_only_to_agents_of_its_provider(tmp_path, monkeypatch):

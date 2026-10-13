@@ -43,6 +43,9 @@ export YIAN_DEFAULT_MODEL=claude-sonnet-4-5
 export ANTHROPIC_API_KEY=...                            # the provider's own key var
 ```
 
+A `YIAN_DEFAULT_PROVIDER` that names no supported provider fails the run before
+its first node, naming the variable.
+
 A Python host can instead pass the key in `run_flow(..., llm_config={"provider": ...,
 "api_key": key})`, which takes precedence over the variable and is never recorded.
 Pass it again to `resume_flow` and `RunResult.backward` with `api_key=key`; agents
@@ -78,7 +81,8 @@ OpenAI API key, then select a model. Successful setup saves the method and model
 as the default together. Cancelled or failed setup leaves the previous selection
 intact. The `openai` extra supports both methods.
 Subscription-backed nodes must omit `llm_config.temperature`, which that
-transport does not accept.
+transport does not accept; a run that sets it for any such agent fails before
+its first node, naming the agent.
 
 For SSH, select device login. Flags can supply choices without interactive
 menus; subscription login still requires completing sign-in in a browser:

@@ -27,7 +27,12 @@ from langchain_core.tools import BaseTool
 from pydantic import SecretStr
 
 from yian.llm_clients.config import LLMConfig, pop_host_credentials
-from yian.llm_clients.connection import connection_snapshot, legacy_connection_map
+from yian.llm_clients.connection import (
+    HOST_KEY_MARKER,
+    check_model_config,
+    connection_snapshot,
+    legacy_connection_map,
+)
 from yian.compile.execution_layout import apply_execution_layout, resolve_execution_layout
 from yian.compile.expand import build_grow
 from yian.compile.llm_cascade import (
@@ -446,6 +451,19 @@ def _secret_key(raw: str | SecretStr) -> SecretStr:
     return LLMConfig(api_key=raw).api_key
 
 
+def _check_effective_llm(
+    effective_llm: Mapping[str, dict[str, Any]], api_key: str | None,
+) -> None:
+    """Reject any agent config its model call would reject, before the run starts."""
+    for path, config in effective_llm.items():
+        # The host key stays out of the map; supply it where the marker expects it.
+        probe = {**config, "api_key": api_key} if HOST_KEY_MARKER in config else config
+        try:
+            check_model_config(probe)
+        except ValueError as exc:
+            raise ValueError(f"Agent {path!r}: {exc}") from exc
+
+
 def _run_flow_controlled(
     flow: ComposedFlow,
     inputs: dict[str, Any],
@@ -503,6 +521,7 @@ def _run_flow_controlled(
         api_key = None
     if api_key is not None:
         bind_api_key(private_flow, api_key)
+    _check_effective_llm(effective_llm, api_key)
 
     if learnable:
         apply_execution_layout(private_flow, resolve_execution_layout(private_flow))

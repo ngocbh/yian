@@ -13,6 +13,7 @@ from yian.llm_clients.auth import (
     OAuthCredentials,
 )
 from yian.llm_clients.connection import (
+    check_model_config,
     connection_snapshot,
     legacy_connection_config,
     resolve_model_config,
@@ -20,6 +21,7 @@ from yian.llm_clients.connection import (
 from yian.llm_clients.factory import model_from_config
 from yian.compile.llm_cascade import resolve_llm_cascade
 from yian.compose.loader import load_flow
+from yian.run import run_flow
 from tests.fixtures.openai_responses import ResponsesServer
 
 
@@ -243,3 +245,61 @@ def test_endpoint_metadata_cannot_record_embedded_secrets(monkeypatch):
     with pytest.raises(ValueError, match="without credentials") as failure:
         connection_snapshot()
     assert "hidden-secret" not in str(failure.value)
+
+
+_SLOW_THEN_AGENT = """
+id: test
+name: test
+input:
+  topic: str
+output: ${w.output}
+{extra}nodes:
+  first:
+    kind: code
+    input:
+      topic: ${input.topic}
+    output: str
+    code: |
+      return inputs["topic"]
+  w:
+    kind: agent
+    input:
+      text: ${first.output}
+    output: str
+    prompt: Write about ${text}.
+"""
+
+
+def test_unsupported_default_provider_environment_is_named(monkeypatch):
+    monkeypatch.setenv("YIAN_DEFAULT_PROVIDER", "claude")
+    with pytest.raises(ValueError, match=r"YIAN_DEFAULT_PROVIDER='claude'.*anthropic"):
+        connection_snapshot()
+
+
+def test_run_rejects_unsupported_default_provider_before_any_node(monkeypatch):
+    monkeypatch.setenv("YIAN_DEFAULT_PROVIDER", "claude")
+    monkeypatch.setenv("YIAN_DEFAULT_MODEL", "claude-sonnet-4-5")
+    events = []
+    with pytest.raises(ValueError, match="YIAN_DEFAULT_PROVIDER"):
+        run_flow(
+            load_flow(_SLOW_THEN_AGENT.replace("{extra}", "")), {"topic": "x"},
+            on_event=events.append,
+        )
+    assert events == []
+
+
+def test_check_model_config_rejects_subscription_temperature():
+    subscription()
+    with pytest.raises(ValueError, match="subscription connections do not accept temperature"):
+        check_model_config(resolve_model_config({"temperature": 0.2}))
+    with pytest.raises(ValueError, match="subscription connections do not accept temperature"):
+        model_from_config(resolve_model_config({"temperature": 0.2}))
+
+
+def test_run_rejects_subscription_temperature_before_any_node():
+    subscription()
+    events = []
+    flow = load_flow(_SLOW_THEN_AGENT.replace("{extra}", "llm_config:\n  temperature: 0.2\n"))
+    with pytest.raises(ValueError, match=r"Agent 'w'.*do not accept temperature"):
+        run_flow(flow, {"topic": "x"}, on_event=events.append)
+    assert events == []

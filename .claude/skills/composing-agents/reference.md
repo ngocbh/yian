@@ -570,7 +570,9 @@ memory but has no backward command and never enables learning implicitly.
 ```bash
 yian run <flow>.yaml --inputs base.json --input k=v
 ```
-Explicit JSON inputs load first; repeatable `--input` flags override individual
+The `--inputs` file must be UTF-8 text holding one JSON object; a file that is not
+UTF-8, not valid JSON, or not an object fails with exit code `2`. Explicit JSON
+inputs load first; repeatable `--input` flags override individual
 keys but remain a string/scalar surface. With an interactive stdin (TTY), `yian`
 prompts for declarations still missing and keeps four outcomes distinct: an explicit
 value, `Set null`, omit/use-default when allowed, and cancellation. Nullable

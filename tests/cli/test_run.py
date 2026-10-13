@@ -2,9 +2,10 @@
 
 These use CODE-only flows (no AGENT) so the suite never hits a network or needs a
 provider key. They cover: successful runs, flag-supplied inputs, `--inputs` JSON,
-interactive typed JSON, interactive `Set null` shadowing a declared default,
-non-interactive structured null, flag-over-JSON precedence, non-TTY missing-input policy
-and setup ordering, a failing run's non-zero exit, and the `k=v` parse error.
+non-UTF-8, malformed, or non-object `--inputs` files, interactive typed JSON,
+interactive `Set null` shadowing a declared default, non-interactive structured null,
+flag-over-JSON precedence, non-TTY missing-input policy and setup ordering, a failing
+run's non-zero exit, and the `k=v` parse error.
 """
 
 from __future__ import annotations
@@ -249,6 +250,41 @@ def test_run_reads_inputs_json(tmp_path: Path):
     result = runner.invoke(app, ["run", str(flow), "--inputs", str(inputs)])
     assert result.exit_code == 0, result.output
     assert "rivers" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("text", "message"),
+    [
+        ("{bad", "invalid JSON at line 1, column 2"),
+        ("null", "must contain a JSON object, got null"),
+        ("[1, 2]", "must contain a JSON object, got array"),
+        ('[["topic", "rivers"]]', "must contain a JSON object, got array"),
+        ('"rivers"', "must contain a JSON object, got string"),
+    ],
+)
+def test_inputs_json_must_be_an_object(tmp_path: Path, text: str, message: str):
+    # malformed or non-object `--inputs` is a bad parameter (exit 2), not a traceback;
+    # an array of pairs is not quietly read as an object.
+    flow = _write_flow(tmp_path, ECHO_FLOW)
+    inputs = tmp_path / "in.json"
+    inputs.write_text(text)
+    result = runner.invoke(app, ["run", str(flow), "--inputs", str(inputs)])
+    assert result.exit_code == 2, result.output
+    output = " ".join(_plain(result.output).split())
+    assert "--inputs" in output
+    assert message in output
+
+
+def test_inputs_file_must_be_utf8(tmp_path: Path):
+    # a UTF-16 export is a bad parameter (exit 2), not a UnicodeDecodeError traceback.
+    flow = _write_flow(tmp_path, ECHO_FLOW)
+    inputs = tmp_path / "in.json"
+    inputs.write_bytes(b"\xff\xfe" + '{"topic": "rivers"}'.encode("utf-16-le"))
+    result = runner.invoke(app, ["run", str(flow), "--inputs", str(inputs)])
+    assert result.exit_code == 2, result.output
+    output = " ".join(_plain(result.output).split())
+    assert "--inputs" in output
+    assert "not UTF-8 text" in output
 
 
 def test_flag_overrides_json(tmp_path: Path):

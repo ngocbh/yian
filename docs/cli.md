@@ -348,7 +348,7 @@ log before publishing the progress event that the CLI renders.
 | Run-log creation or recovery failed | `1` (concise error printed to stderr) |
 | Memory setup failed (a custom memory type, a storage path that is not a local file, or a flow `id:` that cannot be a directory name) | `1` (concise error printed to stderr) |
 | Run cancelled at the input prompt | `1` |
-| Invalid CLI input (including a forbidden resume combination, a bad `--memory-root` or `--memory-storage` flag, or required inputs missing without a TTY) | `2` |
+| Invalid CLI input (including a forbidden resume combination, a bad `--memory-root` or `--memory-storage` flag, an `--inputs` file that is not UTF-8 text, not valid JSON, or not a JSON object, or required inputs missing without a TTY) | `2` |
 | Run interrupted with Ctrl-C during execution | `130` |
 
 ## Compile errors

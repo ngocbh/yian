@@ -580,6 +580,52 @@ def _parse_kv(pairs: List[str]) -> Dict[str, Any]:
     return out
 
 
+def _read_inputs_json(path: Path) -> Dict[str, Any]:
+    """Read the `--inputs` file as one JSON object of input names to values.
+
+    Args:
+        path (`Path`):
+            The `--inputs` file. It must be UTF-8 text holding one JSON object.
+
+    Returns:
+        `Dict[str, Any]`:
+            The decoded object, keyed by input name.
+
+    Raises:
+        `typer.BadParameter`:
+            Raised when the file is not UTF-8 text, is not valid JSON, or its
+            top-level value is not an object.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        raise typer.BadParameter("is not UTF-8 text", param_hint="--inputs") from None
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise typer.BadParameter(
+            f"invalid JSON at line {exc.lineno}, column {exc.colno}: {exc.msg}",
+            param_hint="--inputs",
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise typer.BadParameter(
+            f"must contain a JSON object, got {_JSON_TYPE_NAMES[type(parsed)]}",
+            param_hint="--inputs",
+        )
+    return parsed
+
+
+# JSON names for the non-object top-level values `json.loads` can return.
+_JSON_TYPE_NAMES: Dict[type, str] = {
+    list: "array",
+    str: "string",
+    int: "number",
+    float: "number",
+    bool: "boolean",
+    type(None): "null",
+}
+
+
 # Example value for the scalars whose accepted string form isn't self-evident from the
 # type name — the ISO-8601 date/datetime, which the engine parses with
 # `date.fromisoformat` / `datetime.fromisoformat` (a bare date is not a valid datetime).
@@ -1495,7 +1541,7 @@ def run(
     else:
         supplied: Dict[str, Any] = {}
         if inputs is not None:
-            supplied.update(json.loads(inputs.read_text()))
+            supplied.update(_read_inputs_json(inputs))
         if input:
             supplied.update(_parse_kv(input))
 

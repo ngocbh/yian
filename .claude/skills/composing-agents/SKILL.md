@@ -829,8 +829,9 @@ starts, and a `human_input` node fails when it asks. There is no authored
 ## Validate & run
 - **Quick validate** (loads + compiles, no model): `yian run <flow>.yaml` will load
   first; or from Python `load_flow(text, search_paths=[flow_dir])`.
-- **Run:** `yian run <flow>.yaml [--inputs file.json] [--input k=v]...`. JSON inputs
-  load first; repeatable `--input` flags override individual keys but remain a
+- **Run:** `yian run <flow>.yaml [--inputs file.json] [--input k=v]...`. The
+  `--inputs` file must be UTF-8 text holding one JSON object; anything else fails
+  with exit code `2`. JSON inputs load first; repeatable `--input` flags override individual keys but remain a
   string/scalar surface. With an interactive stdin (TTY), every declaration still
   missing is prompted. Keep four outcomes distinct: a value, `Set null`,
   omit/use-default, and cancellation. Nullable boolean and `Literal[...]` selects

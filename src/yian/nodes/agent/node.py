@@ -55,6 +55,11 @@ def is_text_output(contract: Any) -> bool:
     )
 
 
+def is_max_tool_iterations(value: Any) -> bool:
+    """Whether `value` is a valid `max_tool_iterations`: a positive int, or `-1` for no cap."""
+    return type(value) is int and (value >= 1 or value == -1)
+
+
 class AgentNode(Node):
     """An LLM-backed leaf configured by a prompt and authored tools.
 
@@ -227,7 +232,7 @@ class AgentNode(Node):
     def _max_tool_iterations(self) -> int:
         """Return the positive authored loop bound or ``-1`` for no bound."""
         raw = self.env.get("max_tool_iterations", MAX_TOOL_ITERATIONS)
-        if isinstance(raw, bool) or not isinstance(raw, int) or (raw < 1 and raw != -1):
+        if not is_max_tool_iterations(raw):
             raise ValueError(
                 f"AGENT node {self.id!r}: env max_tool_iterations must be a positive int "
                 f"or -1 (no cap), got {raw!r}"

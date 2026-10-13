@@ -505,7 +505,7 @@ Keys in use today:
 
 | Key | Node kind | Meaning |
 |-----|-----------|---------|
-| `max_tool_iterations` | `agent` | Model turns the tool-calling loop runs before it gives up with an `AgentLoopError`. If the reply on the last allowed turn asks for tools, the node fails without running them, since no later model call could read their results. Default `-1` (**no cap** — run until a final answer). Set a positive int to bound it; `0` and other negatives are rejected. |
+| `max_tool_iterations` | `agent` | Model turns the tool-calling loop runs before it gives up with an `AgentLoopError`. If the reply on the last allowed turn asks for tools, the node fails without running them, since no later model call could read their results. Default `-1` (**no cap** — run until a final answer). Set a positive int to bound it; any other value (`0`, other negatives, a non-int) fails at load, on the flow `env:` or the AGENT node's `env:`. |
 
 ## Agent memory — `long_term_memory:`
 
@@ -626,7 +626,9 @@ model call (text, or structured for a typed `output:`).
 `mode:` was removed. A flow that still sets it fails to load with a message that
 says to delete the line; with `mode: plain` and `tools:`, those tools now run.
 
-An AGENT node's `output:` may be any declared shape. Only a bare, untagged `str`
+An AGENT node's `output:` may be any declared shape a model can generate, which
+excludes `file` and `None` anywhere in the type (a flow that declares one fails at
+load; produce such a value in a CODE node). Only a bare, untagged `str`
 keeps the node a **text producer**. A `Literal[...]` enum, record, union, non-string
 scalar, or list switches the node to **structured generation**: the engine derives a
 schema from the declared `output:` and asks the model to emit a conforming value

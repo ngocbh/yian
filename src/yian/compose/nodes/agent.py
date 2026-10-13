@@ -25,7 +25,8 @@ from yian.llm_clients import LLMConfig
 from yian.llm_clients.config import host_only_field_error
 from yian.memory.contracts import DeclSite, MemoryDecl
 from yian.nodes.agent import AgentNode
-from yian.nodes.agent.node import is_text_output
+from yian.nodes.agent.node import is_max_tool_iterations, is_text_output
+from yian.nodes.agent.structured import type_to_schema
 from yian.nodes.contracts import Parameter, ValueContract
 from yian.skills import SkillError
 
@@ -274,6 +275,14 @@ class AgentDescriptor(NodeDescriptor):
             ctx.diagnostics,
         )
         steerable_range = self.field_ranges.get(("field", "steerable")) or self.range
+        if "max_tool_iterations" in self.env and not is_max_tool_iterations(
+            self.env["max_tool_iterations"]
+        ):
+            raise ctx.diagnostics.error(
+                f"node {self.id!r}: `env.max_tool_iterations` must be a positive int or -1 "
+                f"(no cap), got {self.env['max_tool_iterations']!r}",
+                range=self.field_ranges.get(("field", "env")) or self.range,
+            )
         variables = self._read_variables(ctx)
         memories = tuple(
             MemoryDecl(decl.name, decl.type, decl.config, DeclSite((), ctx.owner, self.id), decl.origin)
@@ -310,6 +319,17 @@ class AgentDescriptor(NodeDescriptor):
             if override is not None
             else self.output_contract(ctx)
         )
+        if type(node.output_contract) is ValueContract:
+            try:
+                type_to_schema(node.output_contract.type)
+            except ValueError as exc:
+                raise ctx.diagnostics.error(
+                    f"node {self.id!r}: an AGENT can't produce this `output:`; a model "
+                    "generates only str, int, float, bool, date, datetime, Literal, record, "
+                    "union, and list values, not `file` or `None`. Produce the value in a CODE "
+                    "node.",
+                    range=self.field_ranges.get(("field", "outputs")) or self.range,
+                ) from exc
         if self.steerable and not is_text_output(node.output_contract):
             # Checked here too so the error points at the `steerable:` line.
             raise ctx.diagnostics.error(

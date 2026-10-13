@@ -109,3 +109,30 @@ def test_record_field_must_be_string():
     with pytest.raises(TypeCheckError) as ei:
         read_typedefs({"Bad": {"x": {"nested": "int"}}})  # inline nested object not allowed here
     assert "string expression" in str(ei.value)
+
+
+@pytest.mark.parametrize(
+    ("fields", "message"),
+    [
+        ({"": "int"}, "typedef 'R' field '': field names must be non-empty strings"),
+        ({1: "int"}, "typedef 'R' field 1: field names must be non-empty strings"),
+        ({"\ud800": "int"}, "field names must not contain a Unicode surrogate"),
+    ],
+)
+def test_record_field_name_rejected(fields, message):
+    with pytest.raises(TypeCheckError) as ei:
+        read_typedefs({"R": fields})
+    assert message in str(ei.value)
+
+
+@pytest.mark.parametrize(
+    ("expr", "message"),
+    [
+        ('Literal["", fast]', "empty Literal member"),
+        ('Literal["\ud800", fast]', "contains a Unicode surrogate"),
+    ],
+)
+def test_enum_tag_rejected(expr, message):
+    with pytest.raises(TypeCheckError) as ei:
+        read_typedefs({"Mode": expr})
+    assert message in str(ei.value)

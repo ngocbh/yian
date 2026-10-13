@@ -242,6 +242,10 @@ typedefs:
     note: Optional[str]                # nullable field
 ```
 
+`Literal` tags and record field names are non-empty text. `Literal["", a]`, an empty
+field name (`"": int`), or a lone surrogate such as `"\uD800"` fails the load, the same
+way wherever the type appears: in `typedefs:`, `input:`, or `output:`.
+
 `Optional[X]` (nullable) and a `= default` (omission-fill) are orthogonal. A
 required input has neither; `lookback: int = 30` defaults when omitted; and
 `Optional[date]` with no default may be omitted, resolving to null. An explicit

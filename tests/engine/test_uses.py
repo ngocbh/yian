@@ -213,6 +213,26 @@ def test_uncalled_missing_alias_is_loud():
     assert frames[0].range == expected
 
 
+def test_eager_uses_resolution_follows_source_order():
+    # Eight aliases: a hash-ordered walk matches source order by chance about once in 40320.
+    aliases = ["p8", "p7", "p6", "p5", "p4", "p3", "p2", "p1"]
+    seen = []
+    text = _BASE + "uses:\n" + "".join(f"  {a}: lib_{a}\n" for a in aliases)
+    load_flow(text, child_resolver=_fake_resolver(seen))
+    assert seen == [(f"lib_{a}", None) for a in aliases]
+
+
+def test_first_broken_alias_in_source_order_is_reported():
+    def reject(flow_id, version=None):
+        raise LoadDiagnostics().error(f"no such flow {flow_id!r}")
+    aliases = ["p8", "p7", "p6", "p5", "p4", "p3", "p2", "p1"]
+    text = _BASE + "uses:\n" + "".join(f"  {a}: lib_{a}\n" for a in aliases)
+    expected = SourceDocument.parse(text).root.child("uses").child("p8").range
+    with pytest.raises(LoadError, match="no such flow 'lib_p8'") as caught:
+        load_flow(text, child_resolver=reject)
+    assert caught.value.diagnostic.frames[0].range == expected
+
+
 def test_inline_call_routes_through_uses_arm():
     seen = []
     text = (

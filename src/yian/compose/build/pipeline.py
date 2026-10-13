@@ -1168,7 +1168,7 @@ def _assemble(
     registry,
     scope: _CallableScopeLike,
     owner: tuple[str, ...],
-    uses_aliases: set = frozenset(),
+    uses_aliases: tuple[str, ...] = (),
     version: Optional[str] = None,
     name: Optional[str] = None,
     description: Optional[str] = None,
@@ -1452,12 +1452,13 @@ def _assemble(
     # A `uses:` alias shares the callable namespace, so it must not collide with a node
     # id (the resolver only sees a bare name; the author conflates them). Checked here, where
     # node ids exist, and BEFORE eager resolution so the message is the precise collision.
-    collide = sorted(uses_aliases & set(descriptors))
+    collide = sorted(set(uses_aliases) & set(descriptors))
     if collide:
         raise diagnostics.error(f"uses: alias {collide} collides with a node id")
 
     # Eager `uses:` resolution (mirrors eager defs): resolve every alias now so a
     # declared-but-uncalled broken/`hub:`/missing target is loud at load, not at first call.
+    # Source order, so the first broken alias is the one reported, the same on every run.
     for alias in uses_aliases:
         scope.resolve(alias)
 

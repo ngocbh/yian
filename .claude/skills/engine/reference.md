@@ -776,20 +776,19 @@ remain omitted from manifests to preserve unbounded identities.
 
 `Type.variants` refines OBJECT into a union: a tuple of two or more non-nullable record
 members, in canonical order (by tag, else by `canonical_type_label`) and deduplicated by
-`==`, never `set()`, since `Type` holds dicts. `Optional[Union[...]]` sets `nullable` on the
-union. Tag fields are derived by `union_tag_fields` (a field every member requires as a
-non-nullable single-value `Literal`, with pairwise distinct values); nothing stores them.
-`resolve_type` rejects a union whose members neither have a tag field nor fail
-`types_overlap` pairwise, and `read_typedefs` resolves every typedef union eagerly. Value
-checks pick the member by the first tag field (or the one untagged member the value
-satisfies) and keep `TypeCheckError.path`. `types_compatible` is member by member: a
-union never fits a record sink, a union fits `object`, and `object` never fits a union.
-Structured generation maps a union to a plain pydantic `Union[...]` of `extra='forbid'`
-member models inside the `value` wrapper (`anyOf` + `const` tags, no `discriminator`), and
-maps a validation error at a union position to the member its tag selects. Manifests emit
-`"union": [...]` in canonical order only when present. `union_field` (read a field:
-shared, partial, or absent) and `restrict_union` (keep some members) serve the load-time
-checks.
+`==`, never `set()`, since `Type` holds dicts. `Optional[Union[...]]` sets `nullable` on
+the union. Tag fields are derived by `union_tag_fields` (a field every member requires as
+a non-nullable single-value `Literal`, with pairwise distinct values); nothing stores
+them. `resolve_type` rejects an untagged union with two members that `types_overlap`, and
+`read_typedefs` resolves every typedef union eagerly. Value checks pick the member by the
+first tag field (or the one untagged member the value satisfies) and keep
+`TypeCheckError.path`. `types_compatible` is member by member: a union never fits a record
+sink, a union fits `object`, and `object` never fits a union. Structured generation maps a
+union to a plain pydantic `Union[...]` of `extra='forbid'` member models inside the
+`value` wrapper (`anyOf` + `const` tags, no `discriminator`), and maps a validation error
+at a union position to the member its tag selects. Manifests emit `"union": [...]` in
+canonical order only when present. `union_field` (read a field: shared, partial, or
+absent) and `restrict_union` (keep some members) serve the load-time checks.
 
 AGENT's local `variables` field uses an ordered `list[Parameter]`, with an exact
 `ValueContract` and mandatory typed default for every entry. Compose reuses its
@@ -818,19 +817,21 @@ the tag to `case` on, or `isinstance` for an untagged union). Runtime growth pas
 `partial_union_fields=True`: fragments come from flows the loader already checked under
 narrowing, which the fragment does not record. Node asserts use the same walk.
 
-Compose's narrowing pass (`compose/validate/narrowing.py`) runs after the CASE desugar
-and node builds. A fact for a base path (`<node>.output[.path]`, `input.<name>[.path]`)
-is `Members(S)` (members of the base's own union, with nullability) or `Exact(T)`. An `on:`
+Compose's narrowing pass (`compose/validate/narrowing.py`) runs after the CASE desugar and
+node builds. A fact for a base path (`<node>.output[.path]`, `input.<name>[.path]`) is
+`Members(S)` (members of the base's own union, with nullability) or `Exact(T)`. An `on:`
 CASE over a union tag gives each `when:` handle its members and `else:` the unlisted ones;
-a searched CASE's top-level `isinstance(<direct ref>, T)` conjunct gives its handle a fact.
-Facts propagate in Kahn's order over data, CASE, and `depends_on` edges: control edges
-union, each required data group unions its producers, and contributions intersect
-(`union_facts`/`intersect_facts`; losing information is always sound). Optional groups
-and `runs_after` contribute nothing; unordered (cycle) nodes get no facts so
+a searched CASE's top-level `isinstance(<direct ref>, T)` conjunct gives its handle a
+fact. A searched CASE's `__rN` param whose every read follows an `isinstance` conjunct in
+the same `and` chain gets its own view (`Narrowing.param_views`, read through
+`for_param`). Facts propagate in Kahn's order over data, CASE, and `depends_on` edges:
+control edges union, each required data group unions its producers, and contributions
+intersect (`union_facts`/`intersect_facts`; losing information is always sound). Optional
+groups and `runs_after` contribute nothing; unordered (cycle) nodes get no facts so
 `reject_cycles` reports the cycle. `Narrowing.for_node(id)` returns the node's view, which
-the reference, call-type, and exhaustiveness checks read; flow outputs use the unnarrowed
-maps. Build-time seams (inline child input inference, LOOP seeds) run before the pass and
-see unnarrowed types.
+the call-type and exhaustiveness checks read; the reference check reads `for_param`, which
+falls back to `for_node`. Flow outputs use the unnarrowed maps. Build-time seams (inline
+child input inference, LOOP seeds) run before the pass and see unnarrowed types.
 
 Compose output derivation, builders, child signatures, and producer maps retain the
 complete output-contract sum. `ChildSignature.declared_outputs` retains ordered

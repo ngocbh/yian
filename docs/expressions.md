@@ -85,13 +85,13 @@ non-strict, so an embedded null contributes an empty string.
 (no arbitrary callable is reachable). Arithmetic runs on the resolved *values* with Python
 semantics — `str + str` concatenates, `list + list` extends (`${xs + [item]}`).
 
-**Compile-time companions** (never evaluate): `infer_expr_type(tree, ref_type_fn)`
-returns a type only for statically fixed results: scalar literals, exact references,
-comparisons/membership, `not`/`and`/`or`, and `isinstance`. Other expressions remain unknown rather
-than borrowing an operand's type. `expr_refs(tree)` collects the reference paths an
-expression reads — this is how the compiler infers data edges. `rewrite_expr_refs`
-rewrites only the reference *leaves* by source position — how refs are re-namespaced
-when a child flow is inlined.
+**Compile-time companions** (never evaluate): `infer_expr_type(tree, ref_type_fn)` returns
+a type only for statically fixed results: scalar literals, exact references,
+comparisons/membership, `not`/`and`/`or`, and `isinstance`. Other expressions remain
+unknown rather than borrowing an operand's type. `expr_refs(tree)` collects the reference
+paths an expression reads — this is how the compiler infers data edges.
+`rewrite_expr_refs` rewrites only the reference *leaves* by source position — how refs are
+re-namespaced when a child flow is inlined.
 
 **The condition surface** — `when:` / `until:` / `while:` / `asserts:` admit three
 spellings that parse and evaluate identically: bare `a > 5`, mixed `${a} > 5`, whole-span

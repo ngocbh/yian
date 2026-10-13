@@ -368,4 +368,5 @@ The supported contract uses Compose-style top-level
 with flat bodies; `case`/`when`/`then`/`else`/`on`; references `${…}` with `:-`/`:?`/`|`
 and `$$` escape; unquoted block-form bindings; strict schema + `x-*` + YAML anchors; and a
 **Python-typing** type system (`str`/`int`/`float`/`bool`, `list[X]`/`Optional[X]`, dataclass
-records, `Literal` enums, discriminated records, inline `TYPE = default`) — `typedefs:` registry.
+records, `Literal` enums, unions of records (`Union[...]`), inline `TYPE = default`) —
+`typedefs:` registry.

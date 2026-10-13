@@ -468,31 +468,32 @@ rejection resolves its contract-relative structural path through the matching ex
 field-local origins. The path is consumed before `Failure` construction and is not part
 of the run-record wire. Manifests include the semantic exact/partial contract but omit
 origins, so changing or rebasing provenance does not change flow or expansion identity.
-Compose and runtime growth reference validation share the source-neutral closed-field
-walk in `nodes/contracts.py`, so a partial record cannot expose a provably absent field.
-That walk, `output_contract_field_error`, also rejects any field on a scalar or list type;
-an opaque `object` (no declared fields) and `file` stay unchecked.
-On a union it reads a field every member has with the shared type (or untyped when the
-members' types differ) and rejects a field only some members have, naming the tag to
-`case` on or suggesting `isinstance`. Runtime growth passes `partial_union_fields=True`:
-grown fragments come from flows the loader already checked under narrowing, and that
-narrowing is not recorded, so member-only reads are allowed there.
+Compose and runtime growth reference validation share the source-neutral closed-field walk
+in `nodes/contracts.py`, so a partial record cannot expose a provably absent field. That
+walk, `output_contract_field_error`, also rejects any field on a scalar or list type; an
+opaque `object` (no declared fields) and `file` stay unchecked. On a union it reads a
+field every member has with the shared type (the merged `Literal` when every member's
+field is a string `Literal`, untyped when the types otherwise differ) and rejects a field
+only some members have, naming the tag to `case` on or suggesting `isinstance`. Runtime
+growth passes `partial_union_fields=True`: grown fragments come from flows the loader
+already checked under narrowing, and that narrowing is not recorded, so member-only reads
+are allowed there.
 
 Compose's narrowing pass (`compose/validate/narrowing.py`, `compute_narrowing`) gives each
 node a view of the producer and flow-input contracts with narrowed union bases rebuilt. A
 fact for a base path (`<node>.output[.path]` or `input.<name>[.path]`) is `Members(S)` (a
-subset of the base's own union members, with nullability) or `Exact(T)`. An `on:` CASE over
-a union tag field gives each `when:` handle its tagged members and `else:` the unlisted
-ones, and a searched CASE's top-level `isinstance(<ref>, T)` conjunct gives its handle a
-fact (its `else:` carries none), and a later conjunct of the same `and` chain is checked
-against the narrowed base. A `when:` that is not a tag is a located load error. Facts flow in Kahn's order over
-data, CASE, and `depends_on` edges: control edges join by union, each required data group
-joins its producers by union, and all contributions meet by intersection. Optional groups
-and `runs_after` contribute nothing; nodes on a cycle get no facts and are left for
-`reject_cycles`. The reference, call-type, and CASE-exhaustiveness checks read
-`Narrowing.for_node(id)`; flow outputs are checked unnarrowed. Inline child bodies and
-LOOP seeds are typed while nodes build, before the pass, so they see unnarrowed types.
-Runtime routing is unchanged.
+subset of the base's own union members, with nullability) or `Exact(T)`. An `on:` CASE
+over a union tag field gives each `when:` handle its tagged members and `else:` the
+unlisted ones. A searched CASE's top-level `isinstance(<ref>, T)` conjunct gives its
+handle a fact; its `else:` carries none. A later conjunct of the same `and` chain is
+checked against the narrowed base (`Narrowing.for_param`). A `when:` that is not a tag is
+a located load error. Facts flow in Kahn's order over data, CASE, and `depends_on` edges:
+control edges join by union, each required data group joins its producers by union, and
+all contributions meet by intersection. Optional groups and `runs_after` contribute
+nothing; nodes on a cycle get no facts and are left for `reject_cycles`. The call-type and
+CASE-exhaustiveness checks read `Narrowing.for_node(id)`, and the reference check reads
+`for_param`, which falls back to it; flow outputs are checked unnarrowed. Inline child bodies and LOOP seeds are typed while nodes build, before
+the pass, so they see unnarrowed types. Runtime routing is unchanged.
 
 Physical Compose declarations derive exact `ValueContract`s. Output binding derivation,
 builders, child signatures, producer maps, and validators retain the complete

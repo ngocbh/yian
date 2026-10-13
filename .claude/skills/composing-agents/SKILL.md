@@ -129,7 +129,8 @@ values whose type isn't known at load (`object`, an untyped output, or anything 
 them) aren't checked.
 
 On a `Union[...]`, a field every member has reads anywhere (one type if the members
-agree, the merged `Literal` for the tag, else untyped). A field only some members have
+agree, the merged `Literal` if every member's field is a string `Literal`, else
+untyped). A field only some members have
 is a load error outside a narrowing `case` branch (see `case` below): `reference
 ${d.output.qty} reads field 'qty', which only union members with action buy, sell have;
 read it inside a case on ${d.output.action}`. Flow outputs are never narrowed.
@@ -165,9 +166,9 @@ including when `while:` stops before the first iteration or a run is replayed.
 
 ## Types
 
-Python typing vocabulary. Scalars: `str`, `int`, `float`, `bool`, `date`,
-`datetime`, `object`, `None`. Forms: `list[X]`, `Optional[X]`, `Literal[...]` (an
-enum of tags), named **records**, and `Union[A, B, ...]` of records. `Optional[X]` (nullable) and `= default`
+Python typing vocabulary. Scalars: `str`, `int`, `float`, `bool`, `date`, `datetime`,
+`object`, `None`. Forms: `list[X]`, `Optional[X]`, `Literal[...]` (an enum of tags), named
+**records**, and `Union[A, B, ...]` of records. `Optional[X]` (nullable) and `= default`
 (omission-fill) are orthogonal.
 
 Use `int[1, 12]` or `float[0.0, 1.0]` for inclusive numeric bounds. Supply two

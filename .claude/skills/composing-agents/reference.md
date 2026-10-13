@@ -238,12 +238,12 @@ strings stay literal, and each invocation gets a fresh copy of all defaults.
 Ownership follows the authored AGENT path plus name across repeated executions.
 A variable named `temperature` does not configure the model; use `llm_config:`.
 
-**Get a structured or numeric value out of an AGENT node.** Declare the typed shape directly
-as the node's `output:` — a `Literal[...]`, record, union, non-string scalar, or list switches
-the AGENT node to **structured generation** (the engine derives a schema and the model emits a
-conforming value, retried up to `retries:` times on deviation; see `typed_output.yaml`).
-Use a downstream `code` node only when you need deterministic post-processing of the
-value.
+**Get a structured or numeric value out of an AGENT node.** Declare the typed shape
+directly as the node's `output:` — a `Literal[...]`, record, union, non-string scalar, or
+list switches the AGENT node to **structured generation** (the engine derives a schema and
+the model emits a conforming value, retried up to `retries:` times on deviation; see
+`typed_output.yaml`). Use a downstream `code` node only when you need deterministic
+post-processing of the value.
 
 **Branch and rejoin.** A `case` runs exactly one branch; the others skip and their
 refs resolve to null. Always coalesce the branches back with `${a | b | c}` (see

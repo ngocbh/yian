@@ -121,11 +121,11 @@ through an `Optional[...]` record still gives `null` when the whole value is nul
 values whose type isn't known at load (`object`, an untyped output, or anything below
 them) aren't checked.
 
-On a [union](#unions-of-records-union), a field every member has can be read anywhere.
-Its type is the members' type when they agree, the merged `Literal` for a tag field, and
-untyped when they differ; it is nullable when any member's field is `Optional` or not
-required. A field only some members have is a load error outside a `case` branch that
-narrows the value (see [`case`](#case-branching)):
+On a [union](#unions-of-records-union), a field every member has can be read anywhere. Its
+type is the members' type when they agree, the merged `Literal` when every member's field
+is a string `Literal` (a tag field, for one), and untyped otherwise; it is nullable when
+any member's field is `Optional` or not required. A field only some members have is a load
+error outside a `case` branch that narrows the value (see [`case`](#case-branching)):
 
 ```
 reference ${d.output.qty} reads field 'qty', which only union members with action buy,
@@ -134,9 +134,10 @@ sell have; read it inside a case on ${d.output.action}
 
 An untagged union says `which only 1 of 2 union members have; check the member with
 isinstance(d.output, <Type>) in a case first`. A field no member has is an unknown field.
-The rule also covers asserts (a node's `${output...}` included), MAP `${item...}`, and
-flow outputs, which are never narrowed: to return a member field, read it in a branch
-node and join the branches.
+The rule also covers a node's `${output...}` asserts, flow asserts, MAP `${item...}`,
+and flow outputs, which are never narrowed. To return a member field, read it in a
+branch node and join the branches; to use one per item, pass `${item}` to the child and
+narrow there.
 
 !!! important "Prompt names are local"
     Inside a `prompt:` or an AGENT `system_prompt:` use names from the node's own
@@ -184,7 +185,8 @@ number, a list a list); embedded in surrounding text it is stringified.
 
 The type vocabulary is Python typing. Scalars: `str`, `int`, `float`, `bool`,
 `date`, `datetime`, `object`, `None`. Containers/forms: `list[X]`, `Optional[X]`,
-`Literal[...]` (an enum of tags), and named **records** (dataclass-style).
+`Literal[...]` (an enum of tags), named **records** (dataclass-style), and
+`Union[A, B, ...]` of records.
 
 Numeric domains may add inclusive bounds: `int[1, 12]` or `float[0.0, 1.0]`.
 Both endpoints are required and the lower endpoint must not exceed the upper.
@@ -856,8 +858,9 @@ place_buy:
 ```
 
 - Two `when:`s with one `then:` give that target the union of both members. `else:`
-  gives the members no `when:` lists, keeping an `Optional[...]` union's null; after
-  every tag is listed it narrows nothing.
+  gives the members no `when:` lists, keeping an `Optional[...]` union's null. Once
+  every tag is listed, `else:` sees only null for an `Optional[...]` union and leaves a
+  non-optional one unnarrowed.
 - `on:` must be one direct reference to a tag field: `${node.output[.field...].tag}` or
   `${input.x[.field...].tag}`. A coalesce or embedded text doesn't narrow.
 - A `when:` that isn't a tag is a load error: `when: buyy is not a tag of the union at

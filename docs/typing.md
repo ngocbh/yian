@@ -119,14 +119,14 @@ member is that member. The members must be told apart by the data alone:
   `value matches no member of <label>: <member>: <reason>; ...`.
 
 Otherwise resolution fails: `Union[Buy, Sell]: members 'Buy' and 'Sell' can match the same
-value; add a tag field every member declares as a single-value Literal, ...`. A union typedef
-(or a record field typed with one) resolves eagerly in `read_typedefs`, so a bad union fails
-even when nothing uses it. Compatibility is member by member: a source union fits a sink
-union when each source member fits some sink member, a record fits a union when it fits some
-member, a union fits `object`, and a union never fits a record (load can't tell which member
-arrives). `union_field` describes a
-field read on a union (every member has it, some do, or none do); `restrict_union` keeps
-some members. The manifest emits a union as `"union": [...]` in canonical order.
+value; add a tag field every member declares as a single-value Literal, ...`. A union
+typedef (or a record field typed with one) resolves eagerly in `read_typedefs`, so a bad
+union fails even when nothing uses it. Compatibility is member by member: a source union
+fits a sink union when each source member fits some sink member, a record fits a union
+when it fits some member, a union fits `object`, and a union never fits a record (load
+can't tell which member arrives). `union_field` describes a field read on a union (every
+member has it, some do, or none do); `restrict_union` keeps some members. The manifest
+emits a union as `"union": [...]` in canonical order.
 
 ## Authored contract origins
 

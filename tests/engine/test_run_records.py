@@ -950,21 +950,19 @@ def test_seed_canonicalizes_tuple_date_and_file_ref():
     assert canonical_seed(decoded)[0] == wire
 
 
-def test_strict_seed_keeps_supported_values_and_independent_canonical_copies():
+def test_seed_keeps_supported_values_and_independent_canonical_copies():
     value = {"files": (FileRef(uri="memory://answer"),), "count": 4, "ratio": 0.5}
-    wire, decoded = canonical_seed(value, reject_nonfinite=True)
-    assert wire == canonical_seed(value)[0] == decoded
+    wire, decoded = canonical_seed(value)
+    assert wire == decoded
     assert type(decoded["count"]) is int
     decoded["files"][0]["uri"] = "changed"
     assert wire["files"][0]["uri"] == "memory://answer"
     assert value["files"][0].uri == "memory://answer"
-    with pytest.raises(TypeError, match="reject_nonfinite"):
-        canonical_seed(value, reject_nonfinite=1)
 
 
 @pytest.mark.parametrize("number", [float("inf"), float("-inf"), float("nan")])
 @pytest.mark.parametrize("container", ["raw", "dict", "tuple", "model", "dataclass", "typed"])
-def test_strict_seed_rejects_nonfinite_before_json_mode_normalization(number, container):
+def test_seed_rejects_nonfinite_before_json_mode_normalization(number, container):
     from pydantic import BaseModel
     from yian.typesys.values import ObjectValue
 
@@ -984,14 +982,12 @@ def test_strict_seed_rejects_nonfinite_before_json_mode_normalization(number, co
         "typed": ObjectValue(value={"nested": number}),
     }[container]
     with pytest.raises(ValueError, match="non-finite"):
-        canonical_seed(value, reject_nonfinite=True)
-    if container == "raw":
-        assert canonical_seed(value) == (None, None)
+        canonical_seed(value)
 
 
 @pytest.mark.parametrize("number", [float("inf"), float("-inf"), float("nan")])
 @pytest.mark.parametrize("nested", [False, True])
-def test_strict_seed_rejects_nonfinite_pydantic_extras(number, nested):
+def test_seed_rejects_nonfinite_pydantic_extras(number, nested):
     from pydantic import BaseModel, ConfigDict, RootModel
 
     class Extras(BaseModel):
@@ -1002,14 +998,10 @@ def test_strict_seed_rejects_nonfinite_pydantic_extras(number, nested):
     if nested:
         value = RootModel[Extras](Extras(child={"items": (value,)}))
     with pytest.raises(ValueError, match="non-finite"):
-        canonical_seed(value, reject_nonfinite=True)
-    expected = {"declared": 1, "lost": None}
-    if nested:
-        expected = {"declared": 1, "child": {"items": [expected]}}
-    assert canonical_seed(value) == (expected, expected)
+        canonical_seed(value)
 
 
-def test_strict_seed_preserves_finite_pydantic_extras_and_file_values():
+def test_seed_preserves_finite_pydantic_extras_and_file_values():
     from pydantic import BaseModel, ConfigDict, RootModel
 
     class Extras(BaseModel):
@@ -1017,11 +1009,50 @@ def test_strict_seed_preserves_finite_pydantic_extras_and_file_values():
 
     value = RootModel[Extras](Extras(child=Extras(score=0.5, file=FileRef(uri="memory://answer"))))
     expected = {"child": {"score": 0.5, "file": {"uri": "memory://answer", "mime": None, "name": None}}}
-    wire, decoded = canonical_seed(value, reject_nonfinite=True)
+    wire, decoded = canonical_seed(value)
     assert wire == decoded == expected
     decoded["child"]["score"] = 1
     assert wire == expected
     assert value.root.child.score == 0.5
+
+
+def test_typed_output_rejects_nonfinite_at_its_field_path():
+    from yian.typesys.values import TypeCheckError
+
+    with pytest.raises(TypeCheckError) as caught:
+        canonical_typed({"a": [1.0, float("nan")]}, None)
+    assert caught.value.path == ("a", 1)
+    assert str(caught.value) == "output at a[1]: non-finite number nan is not a yian value"
+
+
+def test_expansion_record_with_nonfinite_seed_does_not_append():
+    from yian.runtime.log import MemoryRunLog
+
+    with pytest.raises(ValueError, match="limit: non-finite"):
+        MemoryRunLog("r").append(NodeExpandedRecord("n", {"limit": float("nan")}, (), "0" * 64))
+
+
+def test_run_started_record_with_nonfinite_llm_config_does_not_append():
+    from yian.runtime.log import MemoryRunLog
+
+    with pytest.raises(ValueError, match="non-finite"):
+        MemoryRunLog("r").append(
+            RunStartedRecord(
+                flow_fingerprint=_FINGERPRINT,
+                initial_pool=encode_pool(VariablePool(start_id="start")),
+                start_wiring_override={},
+                effective_llm_by_static_path={"a": {"temperature": float("nan")}},
+                num_workers=0,
+            )
+        )
+
+
+def test_pool_codec_rejects_nonfinite_values():
+    pool = VariablePool(start_id="start")
+    pool.set("start", {"x": {"a": float("inf")}})
+
+    with pytest.raises(ValueError, match="non-finite"):
+        encode_pool(pool)
 
 
 def test_canonical_helpers_reject_unordered_containers():

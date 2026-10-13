@@ -74,6 +74,7 @@ from yian.typesys.values import (
     ValueKind,
     build_value,
     build_value_as,
+    reject_nonfinite,
 )
 
 
@@ -1424,12 +1425,14 @@ def canonical_typed(
 
     Raises:
         `TypeCheckError`:
-            The live value does not satisfy ``declared`` or has no supported inferred type.
+            The live value does not satisfy ``declared``, has no supported inferred type,
+            or contains a NaN or infinity; ``path`` locates the rejected value.
         `ValueError`:
             The typed value contains data that cannot be represented as canonical JSON.
     """
     try:
         _reject_unordered_containers(value)
+        reject_nonfinite(value, "output")
         typed = build_value(value) if declared is None else build_value_as(declared, value)
         dumped = ANY_VALUE_ADAPTER.dump_python(typed, mode="json", warnings="error")
         wire = _copy_json(dumped)
@@ -1441,15 +1444,13 @@ def canonical_typed(
         raise ValueError("canonical data nesting exceeds the supported depth") from exc
 
 
-def canonical_seed(value: Any, *, reject_nonfinite: bool = False) -> tuple[Any, Any]:
+def canonical_seed(value: Any) -> tuple[Any, Any]:
     """Canonicalize a supported node value through Pydantic's JSON mode.
 
     Args:
         value (`Any`):
             Builder input or invocation data. Tuples, dates, datetimes, and
             Pydantic models such as `FileRef` become their JSON representations.
-        reject_nonfinite (`bool`, *optional*, defaults to `False`): Reject raw
-            non-finite floats before JSON-mode conversion can normalize them.
 
     Returns:
         `tuple[Any, Any]`:
@@ -1457,16 +1458,15 @@ def canonical_seed(value: Any, *, reject_nonfinite: bool = False) -> tuple[Any, 
             building must consume the decoded second value.
 
     Raises:
+        `TypeCheckError`:
+            The value contains a NaN or infinity; checked before JSON mode can turn
+            it into ``null``. ``path`` locates the rejected number.
         `ValueError`:
-            The value is not canonicalizable, or contains raw non-finite numbers
-            when `reject_nonfinite` is enabled.
-        `TypeError`:
-            `reject_nonfinite` is not an exact bool.
+            The value is not canonicalizable.
     """
-    if type(reject_nonfinite) is not bool:
-        raise TypeError("reject_nonfinite must be a bool")
     try:
-        _reject_unordered_containers(value, reject_nonfinite=reject_nonfinite)
+        _reject_unordered_containers(value)
+        reject_nonfinite(value, "value")
         dumped = _ANY_ADAPTER.dump_python(value, mode="json", warnings="error")
         wire = _copy_json(dumped)
         return wire, _copy_json(wire)
@@ -1486,12 +1486,15 @@ def encode_pool(pool: VariablePool) -> dict[str, Any]:
             Canonical JSON wire suitable for a `RunStartedRecord` payload.
 
     Raises:
+        `TypeCheckError`:
+            A stored or system value contains a NaN or infinity.
         `ValueError`:
             A nested typed value cannot cross the JSON boundary.
     """
     if not isinstance(pool, VariablePool):
         raise TypeError("encode_pool expects a VariablePool")
     _reject_unordered_containers(pool)
+    reject_nonfinite(pool, "variable pool")
     dumped = pool.model_dump(mode="json", warnings="error")
     wire = _copy_json(dumped)
     if not isinstance(wire, dict):  # defensive: VariablePool is a JSON object
@@ -2604,11 +2607,8 @@ def _reject_unordered_containers(
     value: Any,
     *,
     _active: set[int] | None = None,
-    reject_nonfinite: bool = False,
 ) -> None:
     """Reject unordered, cyclic, or non-string-keyed canonical input containers."""
-    if reject_nonfinite and isinstance(value, float) and not math.isfinite(value):
-        raise ValueError("non-finite numbers are not valid canonical JSON")
     if type(value) is str:
         _validated_json_string(value)
         return
@@ -2628,38 +2628,26 @@ def _reject_unordered_containers(
     active.add(identity)
     try:
         if isinstance(value, TypedValue):
-            _reject_unordered_containers(value.to_object(), _active=active, reject_nonfinite=reject_nonfinite)
+            _reject_unordered_containers(value.to_object(), _active=active)
             return
         if isinstance(value, BaseModel):
             for field_name in type(value).model_fields:
-                _reject_unordered_containers(
-                    getattr(value, field_name),
-                    _active=active,
-                    reject_nonfinite=reject_nonfinite,
-                )
-            _reject_unordered_containers(
-                value.model_extra,
-                _active=active,
-                reject_nonfinite=reject_nonfinite,
-            )
+                _reject_unordered_containers(getattr(value, field_name), _active=active)
+            _reject_unordered_containers(value.model_extra, _active=active)
             return
         if is_dataclass(value) and not isinstance(value, type):
             for field in fields(value):
-                _reject_unordered_containers(
-                    getattr(value, field.name),
-                    _active=active,
-                    reject_nonfinite=reject_nonfinite,
-                )
+                _reject_unordered_containers(getattr(value, field.name), _active=active)
             return
         if isinstance(value, dict):
             if any(type(key) is not str for key in value):
                 raise ValueError("canonical JSON object keys must be strings")
             for key, item in value.items():
-                _reject_unordered_containers(key, _active=active, reject_nonfinite=reject_nonfinite)
-                _reject_unordered_containers(item, _active=active, reject_nonfinite=reject_nonfinite)
+                _reject_unordered_containers(key, _active=active)
+                _reject_unordered_containers(item, _active=active)
             return
         for item in value:
-            _reject_unordered_containers(item, _active=active, reject_nonfinite=reject_nonfinite)
+            _reject_unordered_containers(item, _active=active)
     finally:
         active.remove(identity)
 

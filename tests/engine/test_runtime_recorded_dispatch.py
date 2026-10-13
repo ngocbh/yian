@@ -678,10 +678,10 @@ def test_partial_output_shape_failure_falls_back_to_node_origin(
     assert "unknown fields" in failures[0].message
 
 
-def test_non_type_output_failure_uses_the_contract_default_origin(
+def test_nonfinite_output_at_the_root_uses_the_contract_default_origin(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """Canonical JSON rejection has no value path and retains the root fallback."""
+    """A non-finite root output has the empty path and keeps the root fallback origin."""
     root_origin = OriginRef("nodes/work/output")
     unrelated_origin = OriginRef("nodes/work/output/unrelated")
     node = _ActionNode(
@@ -702,7 +702,8 @@ def test_non_type_output_failure_uses_the_contract_default_origin(
 
     assert len(failures) == 1
     assert failures[0].code == "contract.output"
-    assert failures[0].cause_type == "ValueError"
+    assert failures[0].cause_type == "TypeCheckError"
+    assert failures[0].message == "output: non-finite number nan is not a yian value"
     assert failures[0].trace == (root_origin,)
 
 

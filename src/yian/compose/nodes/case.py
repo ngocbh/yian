@@ -110,8 +110,14 @@ def _normalized_key_names(cursor: SourceCursor) -> dict[Any, Any]:
 class CaseDescriptor(NodeDescriptor):
     """kind=case — branch routing (searched `when:` or `on:`-value form).
 
-    A `case` routes only — it carries no authored `input:` (the lowering maps it onto the
-    inputs-bearing `CaseNode`). `else_` is the `else:` fallback.
+    A `case` carries no authored `input:` (the lowering maps it onto the inputs-bearing
+    `CaseNode`). It may declare `output:` (normalized to `outputs`): the type of the value it
+    produces. `else_` is the `else:` fallback.
+
+    `then_styles` (aligned 1:1 with `cases`), `else_style`, and `has_else` exist so branch
+    classification can tell an unquoted node name from quoted text, and `else: null` from no
+    `else:` at all. A style is the YAML scalar style of the authored value (non-string scalars
+    report ``"plain"``; mappings, lists, and missing values report None).
 
     Inherits the common node fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` + the
     `range`/`field_ranges` parse metadata) and delegates common parsing to `NodeDescriptor`.
@@ -121,7 +127,7 @@ class CaseDescriptor(NodeDescriptor):
     legality otherwise uses the default allowed/required-key and asserts-list checks.
     Only the case-specific fields are declared here.
 
-    Class attrs: `kind="case"`; `allowed` adds `cases`/`else`/`on` to the commons; `required`
+    Class attrs: `kind="case"`; `allowed` adds `cases`/`else`/`on`/`outputs` to the commons; `required`
     is `{"cases"}`; `binding_fields=()` — a `case` carries CONDITIONS (`on:` + each `when:`),
     not `${...}` sink bindings, so the kind-blind binding walk in `bindings.py` touches no field.
     `keyword_remap` is case-owned (the base's is empty): `else` is a Python keyword, so the
@@ -132,7 +138,7 @@ class CaseDescriptor(NodeDescriptor):
     """
 
     kind = "case"
-    allowed = NodeDescriptor.allow("cases", "else", "on")
+    allowed = NodeDescriptor.allow("cases", "else", "on", "outputs")
     required = NodeDescriptor.require("cases")
     binding_fields = ()
     # Case owns this remap (the base's is empty): `else` is a Python keyword, so the template
@@ -140,7 +146,9 @@ class CaseDescriptor(NodeDescriptor):
     keyword_remap = {"else": "else_"}
 
     cases: list[dict[str, Any]] = field(default_factory=list)
-    else_: Optional[str] = None
+    else_: Any = None
+    # True when `else:` was written, even as `else: null` (where `else_` stays None).
+    has_else: bool = False
     on: Optional[str] = None
     asserts: list[str] = field(default_factory=list)
     # Positional per-case source ranges of the `when:` / `then:` VALUES, aligned 1:1 with `cases`
@@ -154,6 +162,11 @@ class CaseDescriptor(NodeDescriptor):
     then_ranges: list[Optional[SourceRange]] = field(
         default_factory=list, compare=False
     )
+    # YAML scalar style of each `cases[N].then` value (aligned 1:1 with `cases`) and of the
+    # `else:` value, so an unquoted bare word (a node name) is told apart from quoted text.
+    # Out of equality like the ranges: a directly constructed descriptor has no source styles.
+    then_styles: list[Optional[str]] = field(default_factory=list, compare=False)
+    else_style: Optional[str] = field(default=None, compare=False)
     # Source-neutral sites follow the same positional identity as the Compose-only ranges.
     # An empty tuple means direct/source-free construction; otherwise it aligns 1:1
     # with `cases`. `on_origin` belongs to the generated `__on` binding, not a Case.
@@ -163,6 +176,9 @@ class CaseDescriptor(NodeDescriptor):
     def __post_init__(self) -> None:
         """Reject mutable, misaligned, or non-opaque CASE provenance."""
         super().__post_init__()
+        if self.else_ is not None and not self.has_else:
+            # Frozen dataclass: a directly constructed `else_=` implies the key was present.
+            object.__setattr__(self, "has_else", True)
         if type(self.when_origins) is not tuple:
             raise TypeError("CASE predicate origins must be a tuple")
         self._validate_origin_alignment()
@@ -194,19 +210,36 @@ class CaseDescriptor(NodeDescriptor):
         `cases:` is a sequence of `{when:, then:}` mappings whose per-item fields carry no unique
         text key, so neither `field_ranges` nor `item_range_list` can reach them; the positional
         `sequence_field_ranges` does. `_desugar_searched` / `desugar_case_call_targets` read these
-        to give a synth CASE param / call target its own caret."""
+        to give a synth CASE param / call target its own caret.
+
+        It also records each `then:` value's YAML scalar style (aligned with `cases`), the
+        `else:` value's style, and whether `else:` was written at all. Malformed shapes skip
+        style capture and reach the existing errors unchanged."""
         cursor = cls._normalize_cursor(cursor)
         desc = super().parse(node_id, cursor)
-        cases = cursor._value_view().get("cases")
+        body = cursor._value_view()
+        cases = body.get("cases")
         if isinstance(cases, Sequence) and not isinstance(cases, (str, bytes)):
             when_ranges = cursor.sequence_field_ranges("cases", "when")
             then_ranges = cursor.sequence_field_ranges("cases", "then")
+            cases_cursor = cursor.child("cases")
+            then_styles = [
+                cases_cursor.child(index).child("then").scalar_style
+                if isinstance(item, Mapping) and "then" in item
+                else None
+                for index, item in enumerate(cases)
+            ]
         else:
             when_ranges = []
             then_ranges = []
+            then_styles = []
         if when_ranges or then_ranges:
             desc = replace(desc, when_ranges=when_ranges, then_ranges=then_ranges)
-        return desc
+        has_else = "else" in body
+        else_style = cursor.child("else").scalar_style if has_else else None
+        return replace(
+            desc, then_styles=then_styles, else_style=else_style, has_else=has_else
+        )
 
     @classmethod
     def _normalize_cursor(cls, cursor: SourceCursor) -> SourceCursor:

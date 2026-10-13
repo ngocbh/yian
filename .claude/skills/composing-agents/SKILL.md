@@ -191,8 +191,8 @@ Python typing vocabulary. Scalars: `str`, `int`, `float`, `bool`, `date`, `datet
 `object`, `None`. Forms: `list[X]`, `Optional[X]`, `Literal[...]` (an enum of tags), named
 **records**, and `Union[A, B, ...]` of records. `Optional[X]` (nullable) and `= default`
 (omission-fill) are orthogonal. `date` is `YYYY-MM-DD`; `datetime` is
-`YYYY-MM-DDTHH:MM[:SS[.ffffff]][Z|±HH:MM]` (a space instead of `T` also works); other
-forms are rejected.
+`YYYY-MM-DDTHH:MM[:SS[.fff]][Z|±HH:MM]` (a space may replace `T`; `.fff` is 1–6
+digits); other forms are rejected.
 
 Use `int[1, 12]` or `float[0.0, 1.0]` for inclusive numeric bounds. Supply two
 ordered literal endpoints. Integer bounds may be arbitrary precision; float

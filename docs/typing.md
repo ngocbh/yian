@@ -42,12 +42,19 @@ lists     list[Any]  list[str]  list[int]  list[float]  list[bool]  list[object]
 | Kind | Form | Example |
 |---|---|---|
 | `date` | `YYYY-MM-DD` | `2026-05-21` |
-| `datetime` | `YYYY-MM-DD`, then `T` or a space, then `HH:MM`, an optional `:SS` with an optional 1–6 digit fraction, then an optional `Z` or `±HH:MM` | `2026-05-21T14:30:00+07:00` |
+| `datetime` | `YYYY-MM-DDTHH:MM[:SS[.fff]][±HH:MM]` | `2026-05-21T14:30:00+07:00` |
 
-`Z` means `+00:00`. The same strings are accepted on every supported Python version.
+A space may replace `T`, `.fff` is 1–6 fraction digits, and the offset may be `Z`,
+which means `+00:00`. The same strings are accepted on every supported Python version.
 Other ISO 8601 forms, such as `20260521` or `2026-W21-4`, are rejected with an error
-that shows the format. The value keeps the text as written. An unquoted date in a flow
-file is read by YAML 1.1 first. `file` is a reserved placeholder (not yet authorable).
+that shows the format. The value keeps the text as written.
+
+In a flow file, YAML 1.1 reads an unquoted timestamp first. A WAIT `until:` or a `case`
+value gets its ISO text, so YAML forms such as `2026-05-21 14:30:00 -5` work there; a
+typed default must be quoted (see [syntax](syntax.md#types)), and so must a timestamp
+anywhere else.
+
+`file` is a reserved placeholder (not yet authorable).
 
 ## `TypedValue` — self-describing, losslessly serializable
 

@@ -1580,13 +1580,13 @@ settle:
 ```
 
 `until:` must resolve to a `date` (`2026-05-21`) or `datetime`
-(`2026-05-21T14:30[:00][Z|+07:00]`) string; see
+(`2026-05-21T14:30[:00][Z|+07:00]`); see
 [the accepted forms](typing.md#valuekind-the-closed-vocabulary). A date means
 midnight UTC; a naive datetime is UTC; an offset-aware datetime is normalized to
-UTC. A deadline at or before the current instant returns immediately. Otherwise WAIT occupies one
-worker until the remaining wall-clock duration elapses, then returns `None`; it does
-not split the run into another execution segment. Engine/host shutdown wakes the
-worker cooperatively.
+UTC. A deadline at or before the current instant returns immediately. Otherwise
+WAIT occupies one worker until the remaining wall-clock duration elapses, then
+returns `None`; it does not split the run into another execution segment.
+Engine/host shutdown wakes the worker cooperatively.
 
 ### `call` / `map` — composition over child flows
 

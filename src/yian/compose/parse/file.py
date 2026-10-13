@@ -27,6 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
 from yian.compose.nodes import REMOVED_KINDS
+from yian.compose.parse.nodes import IDENTIFIER_RULE, identifier_suggestion, is_identifier
 from yian.compose.source import (
     SourceAccessError,
     SourceCursor,
@@ -241,7 +242,7 @@ def _desugar_compact(body: dict, root: SourceCursor) -> dict:
     flow *is* the node. Mirrors `loader._load_single_node_def` (the `defs:` precedent):
 
     - the flow `id:` names the single node (one id for both flow and node, so errors
-      reference a meaningful name);
+      reference a meaningful name), so it must be an identifier;
     - the flow `input:` is the node's SIGNATURE (`name: TYPE`), auto-wired into the node
       by name (`p = ${input.p}`);
     - the flow `output:` is the node's output TYPE (the codomain), re-exported as the
@@ -251,7 +252,7 @@ def _desugar_compact(body: dict, root: SourceCursor) -> dict:
 
     The returned dict is the canonical compose body (with a `nodes:` map) the strict
     `ComposeFile` schema then validates unchanged. Raises `LoadError` on a removed
-    kind, a non-leaf kind, or a missing flow `id:`.
+    kind, a non-leaf kind, or a missing or non-identifier flow `id:`.
     """
     diagnostics = LoadDiagnostics.from_cursor(root)
     kind = body["kind"]
@@ -273,6 +274,13 @@ def _desugar_compact(body: dict, root: SourceCursor) -> dict:
             "compact (single-node) flow: a top-level `id:` is required — it names the "
             "single node",
             range=root.range_of("id") if root.has("id") else root.range,
+        )
+    if not is_identifier(flow_id):
+        raise diagnostics.error(
+            f"compact flow id {flow_id!r} also names its node and must be an identifier "
+            f"({IDENTIFIER_RULE}); use {identifier_suggestion(flow_id)!r}, or the full "
+            f"`nodes:` form to keep a hyphenated flow id",
+            range=root.range_of("id"),
         )
     params = body.get("input") or {}
     if not isinstance(params, dict):

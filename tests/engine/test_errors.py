@@ -267,7 +267,7 @@ def test_single_node_def_model_kind_is_removed():
         ("e13-bad-type-expression.yaml", "bad type expression 'list['", 11),
         ("e14-unknown-system-ambient.yaml", "bogus", 11),
         ("e15-prompt-undeclared-input.yaml", "is not a declared input", 12),
-        ("e16-bad-typedef-name.yaml", "shadows", 4),
+        ("e16-bad-typedef-name.yaml", "shadows", 5),
         ("e17-case-nonexhaustive.yaml", "non-exhaustive", 13),
         # inline CODE load-time gates — all located at the `code:` content / field line.
         ("e30-inline-syntax-error.yaml", "never closed", 15),   # exact CODE line origin

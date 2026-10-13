@@ -481,69 +481,110 @@ def _refs_in_type(t: TypeExpr) -> set:
     return set()  # scalars / enums / dict-placeholder reference nothing
 
 
-def _has_union(t: TypeExpr) -> bool:
-    """Whether a parsed TypeExpr contains a `Union[...]` anywhere."""
-    if isinstance(t, UnionExpr):
-        return True
-    if isinstance(t, ListExpr):
-        return _has_union(t.element)
-    if isinstance(t, OptionalExpr):
-        return _has_union(t.inner)
-    return False
+def _typedef_parts(
+    defn: Union[RecordDef, VariantDef, AliasDef],
+) -> list[tuple[str | None, str | TypeExpr]]:
+    """Return a typedef's `(field, type)` parts: each record field, or the alias target."""
+    if isinstance(defn, RecordDef):
+        return list(defn.fields.items())
+    if isinstance(defn, AliasDef):
+        return [(None, defn.target)]
+    return []  # an enum's tags are already checked by parse_type
 
 
-def _check_unions(registry: TypeRegistry) -> None:
-    """Resolve every typedef `Union[...]`, so a bad union fails even when nothing uses it."""
-    # Typedefs otherwise resolve lazily, where they are used. A union's member checks
-    # (records, tag or no overlap) belong to its definition, so they run here; other
-    # typedefs stay lazy so this does not change when their errors appear.
+def _typedef_error(name: str, field: str | None, exc: TypeCheckError) -> TypeCheckError:
+    """Prefix an error with the typedef (and field) it belongs to, and locate it there."""
+    if field is None:
+        return TypeCheckError(f"typedef {name!r}: {exc}", path=(name,))
+    return TypeCheckError(f"typedef {name!r} field {field!r}: {exc}", path=(name, field))
+
+
+def _check_local(t: TypeExpr, registry: TypeRegistry) -> None:
+    """Check what a type expression says on its own: names it uses exist, bounds are valid."""
+    if isinstance(t, ScalarExpr):
+        if t.bounds is not None:
+            _validate_numeric_bounds(_SCALAR_SEG[t.name], t.bounds)
+    elif isinstance(t, RefExpr):
+        if t.name not in registry:
+            raise TypeCheckError(f"unknown type {t.name!r}")
+    elif isinstance(t, ListExpr):
+        _check_local(t.element, registry)
+    elif isinstance(t, OptionalExpr):
+        _check_local(t.inner, registry)
+    elif isinstance(t, UnionExpr):
+        for member in t.members:
+            _check_local(member, registry)
+
+
+def _check_typedefs(registry: TypeRegistry) -> None:
+    """Resolve every typedef, so a broken one fails even when nothing uses it."""
+    parsed: dict[str, list[tuple[str | None, TypeExpr]]] = {}
+    # First each typedef's own text, so an error names the typedef that holds the
+    # mistake rather than the first typedef that happens to use it.
     for name, defn in registry.items():
-        if isinstance(defn, AliasDef):
-            if _has_union(defn.target):
-                try:
-                    resolve_type(RefExpr(name), registry)
-                except TypeCheckError as exc:
-                    raise TypeCheckError(f"typedef {name!r}: {exc}") from exc
-        elif isinstance(defn, RecordDef):
-            for field, ts in defn.fields.items():
-                if "Union" not in ts:
-                    continue
-                try:
-                    parsed = parse_type(ts)
-                    if _has_union(parsed):
-                        resolve_type(parsed, registry, frozenset({name}))
-                except TypeCheckError as exc:
-                    raise TypeCheckError(f"typedef {name!r} field {field!r}: {exc}") from exc
+        parts = []
+        for field, written in _typedef_parts(defn):
+            try:
+                t = parse_type(written) if isinstance(written, str) else written
+                _check_local(t, registry)
+            except TypeCheckError as exc:
+                raise _typedef_error(name, field, exc) from exc
+            parts.append((field, t))
+        parsed[name] = parts
+
+    # Then the checks that follow references (recursion, union members), dependencies
+    # first for the same reason.
+    order: list[str] = []
+    visited: set[str] = set()
+
+    def visit(name: str) -> None:
+        if name in visited:
+            return
+        visited.add(name)
+        for _, t in parsed[name]:
+            for ref in sorted(_refs_in_type(t)):
+                visit(ref)
+        order.append(name)
+
+    for name in registry:
+        visit(name)
+    for name in order:
+        for field, t in parsed[name]:
+            try:
+                resolve_type(t, registry, frozenset({name}))
+            except TypeCheckError as exc:
+                raise _typedef_error(name, field, exc) from exc
 
 
 def _check_alias_cycles(registry: TypeRegistry) -> None:
-    """Reject an alias->alias cycle eagerly, located at the typedefs block (records are
-    caught lazily by resolve_type's `_seen`)."""
-    def visit(name: str, path: frozenset) -> None:
+    """Reject an alias->alias cycle, located at the alias it was found from (record
+    recursion is caught by `_check_typedefs`)."""
+    def visit(start: str, name: str, path: frozenset) -> None:
         defn = registry.get(name)
         if not isinstance(defn, AliasDef):
             return
         for ref in _refs_in_type(defn.target):
             if ref in path:
-                raise TypeCheckError(f"alias cycle through {ref!r} in typedefs")
+                raise TypeCheckError(f"alias cycle through {ref!r} in typedefs", path=(start,))
             if ref in registry:
-                visit(ref, path | {ref})
+                visit(start, ref, path | {ref})
 
     for name, defn in registry.items():
         if isinstance(defn, AliasDef):
-            visit(name, frozenset({name}))
+            visit(name, name, frozenset({name}))
 
 
 def read_typedefs(raw: dict) -> TypeRegistry:
     """Build a `TypeRegistry` from a raw `typedefs:` mapping (Python-typing surface).
 
-    A mapping value is a RECORD (`RecordDef`; field type-strings kept raw, resolved
-    lazily). A `Literal[...]` string is an ENUM (`VariantDef`, tag-only). Any other
-    string is an ALIAS (`AliasDef`). A **sequence** is the dropped tagged-union spelling
-    and is rejected: an all-bare-tags sequence must be a `Literal[...]` enum; a payload
+    A mapping value is a RECORD (`RecordDef`; field type-strings kept raw). A
+    `Literal[...]` string is an ENUM (`VariantDef`, tag-only). Any other string is an
+    ALIAS (`AliasDef`). A **sequence** is the dropped tagged-union spelling and is
+    rejected: an all-bare-tags sequence must be a `Literal[...]` enum; a payload
     sequence must be a `Union[...]` of records. Names must be PascalCase and must not
-    shadow a scalar/typing constructor. Alias cycles are rejected eagerly, and so is a
-    bad `Union[...]` written in any typedef, even one nothing uses.
+    shadow a scalar/typing constructor. Every typedef is then resolved, even one
+    nothing uses, so a bad field type, an unknown name, a recursive record, an alias
+    cycle, or a bad `Union[...]` fails here.
 
     Args:
         raw (`dict`):
@@ -556,9 +597,11 @@ def read_typedefs(raw: dict) -> TypeRegistry:
     Raises:
         `TypeCheckError`:
             A name is not PascalCase or shadows a builtin, a field name is empty, not a
-            string, or holds a Unicode surrogate, a field type is not a string,
-            a value is a union sequence, an alias cycle is detected, or a typedef writes a
-            `Union[...]` that does not resolve.
+            string, or holds a Unicode surrogate, a field type is not a string, a value is
+            a union sequence, or a typedef does not resolve (an unknown constructor or
+            name, bad bounds, a recursive record, an alias cycle, or a bad `Union[...]`).
+            The message names the typedef and field, and `path` is `(typedef,)` or
+            `(typedef, field)` when the error belongs to one entry.
 
     Example:
         `read_typedefs({"Buy": {"action": "Literal[buy]"}, "Sell": {"action":
@@ -568,10 +611,14 @@ def read_typedefs(raw: dict) -> TypeRegistry:
     registry: TypeRegistry = {}
     for name, value in (raw or {}).items():
         if not (isinstance(name, str) and name.isidentifier() and name[0].isupper()):
-            raise TypeCheckError(f"typedef name {name!r} must be PascalCase (an uppercase identifier)")
+            raise TypeCheckError(
+                f"typedef name {name!r} must be PascalCase (an uppercase identifier)",
+                path=(name,) if isinstance(name, str) else (),
+            )
         if _is_shadow(name):
             raise TypeCheckError(
-                f"typedef name {name!r} shadows a builtin scalar or typing constructor"
+                f"typedef name {name!r} shadows a builtin scalar or typing constructor",
+                path=(name,),
             )
         if isinstance(value, dict):
             for fname, ftype in value.items():
@@ -587,11 +634,15 @@ def read_typedefs(raw: dict) -> TypeRegistry:
                 if not isinstance(ftype, str):
                     raise TypeCheckError(
                         f"typedef {name!r} field {fname!r}: type must be a string expression "
-                        f"(got {type(ftype).__name__})"
+                        f"(got {type(ftype).__name__})",
+                        path=(name, fname) if isinstance(fname, str) else (name,),
                     )
             registry[name] = RecordDef(fields=dict(value))
         elif isinstance(value, str):
-            parsed = parse_type(value)
+            try:
+                parsed = parse_type(value)
+            except TypeCheckError as exc:
+                raise _typedef_error(name, None, exc) from exc
             if isinstance(parsed, EnumExpr):
                 registry[name] = VariantDef(tags=parsed.tags)
             else:
@@ -601,16 +652,19 @@ def read_typedefs(raw: dict) -> TypeRegistry:
                 members = ", ".join(str(m) for m in value)
                 raise TypeCheckError(
                     f"typedef {name!r}: a tag-only union must be a Literal[...] enum, not a "
-                    f"sequence (e.g. {name}: Literal[{members}])"
+                    f"sequence (e.g. {name}: Literal[{members}])",
+                    path=(name,),
                 )
             raise TypeCheckError(
                 f"typedef {name!r}: a tagged/payload union sequence is not supported; declare "
-                f"each member as a record and write {name}: Union[A, B, ...]"
+                f"each member as a record and write {name}: Union[A, B, ...]",
+                path=(name,),
             )
         else:
             raise TypeCheckError(
-                f"typedef {name!r}: unsupported definition of type {type(value).__name__}"
+                f"typedef {name!r}: unsupported definition of type {type(value).__name__}",
+                path=(name,),
             )
     _check_alias_cycles(registry)
-    _check_unions(registry)
+    _check_typedefs(registry)
     return registry

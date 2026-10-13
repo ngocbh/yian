@@ -246,6 +246,14 @@ typedefs:
 field name (`"": int`), or a lone surrogate such as `"\uD800"` fails the load, the same
 way wherever the type appears: in `typedefs:`, `input:`, or `output:`.
 
+Every typedef is checked when the flow loads, even one nothing uses. A record can't
+contain itself, directly or through other typedefs. A mistake fails at the typedef
+field that holds it:
+
+```
+bad typedefs: typedef 'Signal' field 'tags': unknown type constructor 'lst' in 'lst[str]'
+```
+
 `Optional[X]` (nullable) and a `= default` (omission-fill) are orthogonal. A
 required input has neither; `lookback: int = 30` defaults when omitted; and
 `Optional[date]` with no default may be omitted, resolving to null. An explicit

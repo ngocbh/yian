@@ -24,8 +24,9 @@ from yian.compose.nodes.agent import MODE_REMOVED_FIX
 from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from yian.compose.source import SourceCursor
 from yian.diagnostics import SourceRange
-from yian.expr.expressions import ExpressionError
-from yian.expr.template import prompt_refs
+from yian.expr import ExpressionError
+from yian.expr.grammar import is_bare_name
+from yian.expr.template import Span, scan_template
 from yian.nodes.contracts import ValueContract
 from yian.nodes.human_input import HumanInputNode
 from yian.typesys.values import Type, ValueKind
@@ -139,11 +140,15 @@ class HumanInputDescriptor(NodeDescriptor):
           `questions` (`questions_input=None`).
         - `self.questions` is a **string** (a bare `"${name}"` input ref): the named INPUT
           param is recorded as `questions_input` (`questions=None`), so the gate resolves the
-          list from its bound input at run time. The ref must name a single declared input —
-          exactly one ref, no dots (a pool ref like `"${a.output}"` is rejected; deeper
-          pool-ref validation is a later pass). A span `prompt_refs` rejects (malformed, an
-          unknown prompt function, or `isinstance`) is an error located at `questions:`.
+          list from its bound input at run time. The string must be exactly one whole
+          `${name}` span — no surrounding text, dots, calls, or operators (a pool ref like
+          `"${a.output}"` is rejected; whether the name is a declared input is checked by
+          `validate_human_questions`).
         - `self.questions` is `None` (legacy form): a plain prompt gate with no questions.
+
+        Raises:
+            `LoadError`: `questions:` is neither a list nor a string, or the string is not
+                exactly one whole `${name}`.
         """
         questions = self.questions
         if isinstance(questions, list):
@@ -154,26 +159,29 @@ class HumanInputDescriptor(NodeDescriptor):
                 questions_input=None,
                 title=self.node_name,
             )
+        questions_range = self.field_ranges.get(("field", "questions")) or self.range
         if isinstance(questions, str):
-            questions_range = self.field_ranges.get(("field", "questions")) or self.range
-            try:
-                refs = prompt_refs(questions)
-            except ExpressionError as exc:
+            name = _whole_ref_name(questions)
+            if name is None:
                 raise diagnostics.error(
-                    f"node {self.id!r} questions: {exc}", range=questions_range,
-                ) from exc
-            if len(refs) != 1 or "." in refs[0]:
-                raise diagnostics.error(
-                    f"node {self.id!r}: questions ref must be a single bare input name "
-                    f"(e.g. ${{qs}}), got {questions!r}",
+                    f"node {self.id!r} (kind=human_input): `questions:` as a string must be "
+                    f"exactly one `${{name}}` naming a declared input (e.g. `questions: "
+                    f"${{qs}}`), got {questions!r}; put any text in `prompt:` instead",
                     range=questions_range,
                 )
             return HumanInputNode(
                 self.id,
                 prompt=self.prompt or "",
                 questions=None,
-                questions_input=refs[0],
+                questions_input=name,
                 title=self.node_name,
+            )
+        if questions is not None:
+            raise diagnostics.error(
+                f"node {self.id!r} (kind=human_input): `questions:` must be a list of "
+                f"questions (each item `- question: ...`) or exactly `${{name}}` naming a "
+                f"declared input, got {type(questions).__name__} {questions!r}",
+                range=questions_range,
             )
         return HumanInputNode(self.id, prompt=self.prompt or "", title=self.node_name)
 
@@ -204,6 +212,23 @@ class HumanInputDescriptor(NodeDescriptor):
         node.params = self.sink_params()
         wiring = self.sink_wiring()
         return self._finish(node, wiring)
+
+
+def _whole_ref_name(text: str) -> Optional[str]:
+    """The input name when `text` is exactly one `${name}` span, else `None`.
+
+    `None` also covers surrounding text, a dotted path, a call, an operator, and a span that
+    does not parse."""
+    try:
+        segments = scan_template(text)
+    except ExpressionError:
+        return None
+    if len(segments) != 1 or not isinstance(segments[0], Span):
+        return None
+    tree = segments[0].tree
+    if not is_bare_name(tree):
+        return None
+    return str(tree.children[0])
 
 
 def _field_schema(name: str, typ: Type, required: bool) -> dict[str, Any]:

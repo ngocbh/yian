@@ -625,6 +625,9 @@ ask2:                                 # LLM-composed questions (desugared at loa
 (On an adaptive gate, `__questions` is reserved for the generated composer wire;
 do not declare it in `input:`.)
 Questions may also come from an upstream node: `questions: ${qs}`.
+`questions:` is a list or exactly one `${name}` naming a declared input;
+anything else (a mapping, a number, text around the ref, `${a.b}`, a call) is a
+load error. Put free text in `prompt:`.
 
 ### `wait` — block until an absolute UTC deadline
 ```yaml

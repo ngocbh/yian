@@ -224,7 +224,7 @@ def _reject_dotted_callee(tree: Tree | Token) -> None:
             )
 
 
-def _is_bare_name(node: Tree | Token) -> bool:
+def is_bare_name(node: Tree | Token) -> bool:
     """True for a `refcall` that is one non-keyword `NAME` with no trailers or call suffix."""
     return (
         isinstance(node, Tree)
@@ -263,7 +263,7 @@ def _validate_isinstance(tree: Tree | Token) -> None:
             raise ExpressionError(
                 f"isinstance takes exactly two arguments (a value and a type name), got {len(args)}"
             )
-        if not _is_bare_name(args[1].children[0]):
+        if not is_bare_name(args[1].children[0]):
             raise ExpressionError(
                 "isinstance's second argument must be a bare type name, e.g. isinstance(x, Buy)"
             )

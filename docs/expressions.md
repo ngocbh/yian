@@ -147,8 +147,14 @@ create no graph node.
 | Builtin | Does |
 |---------|------|
 | `render_as_json(value, indent=2)` | pretty-print a value as JSON |
-| `join(value, sep="\n")` | join an iterable's elements |
-| `upper(s)` / `lower(s)` | case-fold |
+| `join(value, sep="\n")` | join a list's elements, each stringified |
+| `upper(s)` / `lower(s)` | case-fold text |
+
+A builtin never turns null into text. A null argument, a null `join` element, a
+non-text `upper`/`lower` argument, or a non-list `join` argument fails the
+evaluation, like arithmetic over null. Give a default when the value may be
+missing: `${upper(input.name :- "")}`. A null nested inside a `render_as_json`
+value still renders as `null`.
 
 New builtins register with `@register_template_fn()`.
 

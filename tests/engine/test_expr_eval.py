@@ -181,6 +181,36 @@ def test_builtin_kwarg():
     assert _eval("upper(s=name)", _from({"name": "hi"})) == "HI"
 
 
+@pytest.mark.parametrize(
+    ("text", "values", "message"),
+    [
+        ("upper(name)", {}, "upper\\(\\) got null"),
+        ("lower(name)", {}, "lower\\(\\) got null"),
+        ("upper(n)", {"n": 3}, "upper\\(\\) takes str, got int"),
+        ("lower(xs)", {"xs": ["A"]}, "lower\\(\\) takes str, got list"),
+        ("render_as_json(name)", {}, "render_as_json\\(\\) got null"),
+        ('join(s, "-")', {"s": "abc"}, "join\\(\\) takes a list, got str"),
+        ('join(xs, "-")', {}, "join\\(\\) got null"),
+        ('join(xs, "-")', {"xs": ["a", None]}, "join\\(\\) got a null element"),
+    ],
+)
+def test_builtin_rejects_null_and_wrong_types(text, values, message):
+    # A builtin never turns null or a wrong-typed value into text (`upper(null)` is not
+    # "NONE"); it fails like arithmetic over null does.
+    with pytest.raises(ExpressionError, match=message):
+        _eval(text, _from(values))
+
+
+def test_builtin_condition_over_null_fails_instead_of_routing():
+    with pytest.raises(ExpressionError, match="upper\\(\\) got null"):
+        _eval('upper(name) == "NONE"', _from({}), mode=ResolveMode.CONDITION_FALSY)
+
+
+def test_builtin_join_stringifies_numbers_and_render_keeps_nested_null():
+    assert _eval('join(xs, "-")', _from({"xs": [1, 2]})) == "1-2"
+    assert _eval("render_as_json(d, 0)", _from({"d": {"k": None}})) == '{\n"k": null\n}'
+
+
 def test_builtin_call_result_dotted_access(monkeypatch):
     # dotted access on a call result: the builtin returns a dict, `.field` reads it.
     from yian.expr import builtins as _bi

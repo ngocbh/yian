@@ -278,7 +278,7 @@ def _require_concrete_selection(config: dict[str, Any], *, path: str) -> None:
 
 
 def _validate_layer(config: dict[str, Any]) -> None:
-    """Reject retired options, keys, and malformed host metadata before composition."""
+    """Reject unknown fields, retired options, and malformed host metadata before composition."""
     host_only = host_only_field_error(config)
     if host_only is not None:
         # Every layer here ends up in the recorded effective map, and a lower
@@ -288,6 +288,15 @@ def _validate_layer(config: dict[str, Any]) -> None:
         raise ValueError(f"llm_config.{HOST_KEY_MARKER} is internal to recorded runs")
     if str(config.get("provider", "")).lower() == "codex" or any(key in config for key in ("sandbox", "cwd")):
         LLMConfig(**config)
+    # The loader checks authored values; a host layer is checked here only for
+    # unknown keys, which would otherwise be recorded and silently ignored. Its
+    # values are checked when the model client is built.
+    unknown = sorted(set(config) - set(LLMConfig.model_fields) - {"_connection"})
+    if unknown:
+        raise ValueError(
+            f"llm_config has unknown field(s) {unknown} "
+            f"(allowed: {', '.join(sorted(LLMConfig.model_fields))})"
+        )
     if "_connection" in config:
         if config.get("provider") != "openai":
             raise ValueError("Internal connection metadata requires provider openai")

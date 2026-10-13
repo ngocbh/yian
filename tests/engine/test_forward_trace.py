@@ -177,7 +177,7 @@ def test_nested_agent_render_capture_uses_authored_model_map_and_replays_without
 
     flow = load_flow("""id: captured_models
 name: captured_models
-llm_config: {provider: test, model: root, temperature: 0.2}
+llm_config: {provider: ollama, model: root, temperature: 0.2}
 defs:
   leaf:
     input: {topic: str}
@@ -236,8 +236,8 @@ output: {left: '${left.output}', right: '${right.output}'}
     agents = [item for item in trace.occurrences if item.record.forward_capture.variable_names == ("instruction",)]
     assert len(agents) == len(rendered) == 6
     assert engine.state.effective_llm_by_static_path == {
-        "left/twice/writer": {"provider": "test", "model": "left", "temperature": 0.2},
-        "right/twice/writer": {"provider": "test", "model": "right", "temperature": 0.2},
+        "left/twice/writer": {"provider": "ollama", "model": "left", "temperature": 0.2},
+        "right/twice/writer": {"provider": "ollama", "model": "right", "temperature": 0.2},
     }
     positions = set()
     for occurrence in agents:

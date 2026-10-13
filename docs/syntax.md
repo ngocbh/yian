@@ -699,6 +699,12 @@ nodes:
       model: claude-opus-4-8    # fills the one field the flow leaves unset
 ```
 
+Every `llm_config:` in a flow file (node, `defs:` entry, or top level) is checked
+when the flow loads: an unknown key such as `modle:`, a bad value such as
+`temperature: hot`, or an unknown provider fails at that `llm_config:`. `inherit:`
+is valid only in a node's `llm_config:`. A host `run_flow(..., llm_config=...)`
+layer with an unknown key fails before any node runs.
+
 A flow file cannot set `api_key` or `base_url` at any level; loading such a flow
 fails. A library host passes the provider key, and optionally the endpoint it goes
 to, in `run_flow(..., llm_config={..., "api_key": key, "base_url": url})` instead

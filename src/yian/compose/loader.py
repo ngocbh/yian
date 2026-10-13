@@ -76,6 +76,7 @@ from yian.compose.source import (
     SourceDocument,
 )
 from yian.compose.source.catalog import _SourceCatalogBuilder, _scope_origin
+from yian.llm_clients import LLMConfig
 from yian.llm_clients.config import host_only_field_error
 
 
@@ -655,20 +656,30 @@ def load_flow(
     return flow
 
 
-def _reject_authored_host_fields(
+def _validate_authored_llm_config(
     llm_config: Any, where: str, *, diagnostics: LoadDiagnostics, cursor: SourceCursor | None,
 ) -> None:
-    """Refuse a flow- or def-level ``api_key`` or ``base_url``; only the host sets them."""
+    """Check a flow- or def-level ``llm_config`` the way an AGENT node's own is checked.
+
+    The layer must be a mapping of `LLMConfig` fields without ``api_key`` or
+    ``base_url``, which only the host sets.
+    """
+    if llm_config is None:
+        return
+    source_range = (
+        cursor.range_of("llm_config")
+        if cursor is not None and cursor.has("llm_config")
+        else None
+    )
+    if not isinstance(llm_config, Mapping):
+        raise diagnostics.error(f"{where}: llm_config must be a mapping", range=source_range)
     message = host_only_field_error(llm_config)
     if message is not None:
-        raise diagnostics.error(
-            f"{where}: {message}",
-            range=(
-                cursor.range_of("llm_config")
-                if cursor is not None and cursor.has("llm_config")
-                else None
-            ),
-        )
+        raise diagnostics.error(f"{where}: {message}", range=source_range)
+    try:
+        LLMConfig(**llm_config)
+    except Exception as exc:
+        raise diagnostics.error(f"{where}: llm_config: {exc}", range=source_range) from exc
 
 
 def _load_flow(
@@ -681,7 +692,7 @@ def _load_flow(
     diagnostics = LoadDiagnostics.from_document(document)
     f = parse_file(document)
     _reject_authored_private_callable_names(root, f.defs, f.uses)
-    _reject_authored_host_fields(f.llm_config, "flow", diagnostics=diagnostics, cursor=root)
+    _validate_authored_llm_config(f.llm_config, "flow", diagnostics=diagnostics, cursor=root)
     _validate_system(
         f.system,
         root.child("system") if root.has("system") else None,
@@ -1143,7 +1154,7 @@ def _load_def(
                 else None
             ),
         )
-    _reject_authored_host_fields(
+    _validate_authored_llm_config(
         body.get("llm_config"), f"defs entry {name!r}", diagnostics=diagnostics, cursor=def_cursor
     )
     nodes_cursor = _def_assembly_cursor(def_cursor, body["nodes"])

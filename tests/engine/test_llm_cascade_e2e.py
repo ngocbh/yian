@@ -52,16 +52,16 @@ def test_cascade_end_to_end_with_cli_layer(monkeypatch):
     monkeypatch.setattr(llm_clients_mod, "model_from_config", fake_model_from_config)
 
     loaded = load_flow(_FLOW)
-    res = run_flow(loaded, {}, llm_config={"max_tokens": 256})
+    res = run_flow(loaded, {}, llm_config={"anthropic_effort": "low"})
     assert res.status == "succeeded"
 
     by_model = {c["model"]: c for c in seen}
-    # inner: own model + flow provider/temperature + CLI max_tokens
+    # inner: own model + flow provider/temperature + CLI anthropic_effort
     assert by_model["claude-opus-4-8"] == {
         "model": "claude-opus-4-8",
         "provider": "anthropic",
         "temperature": 0.2,
-        "max_tokens": 256,
+        "anthropic_effort": "low",
     }
     # solo: inherit:false — own complete selection, no authored flow/CLI layers
     assert by_model["gpt-5.5"] == resolve_model_config({"provider": "openai", "model": "gpt-5.5"})

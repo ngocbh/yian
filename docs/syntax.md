@@ -1881,11 +1881,15 @@ every iteration, and so does the execution record a `learnable=True` run keeps f
 backward. Resume and backward read those, not the live graph. The engine's node budget
 (10,000 live nodes, "expansion exceeded node budget") is checked before pruning. So it
 limits how big one iteration can get (the finished iteration plus the next body), not
-how many iterations run. If a node grown inside the body is still unfinished when its
-iteration ends (a side branch whose output nothing reads), that body node's nested
-nodes stay live. In a top-level loop they stay for the rest of the run, so a body that
-leaves such a branch running every iteration still grows each iteration and reaches the
-budget; give that loop a `max:`.
+how many iterations run.
+
+The next iteration starts as soon as the body `output:` is ready, as a CALL's caller
+continues as soon as its child's output is. A body node the output doesn't read (a
+side step such as logging, notifying, or saving) may still be running then, so it can
+overlap the next iteration, whatever `num_workers` is. It runs to completion, and the
+run waits for it before it ends; a failure there fails the run. Until it finishes, it
+stays live with the nodes it reads and the nodes grown under it, and the next iteration
+that continues after it has finished prunes them.
 
 ## Effects from inside an AGENT node — the `ask_user` tool
 

@@ -678,3 +678,72 @@ def test_arithmetic_on_a_node_that_cannot_be_skipped_runs():
     nodes = _QTY + _code("root", "5", output="int")
     text = _flow(nodes, "\n  v: ${root.output * 2 + 1}\n  w: ${-root.output}")
     assert _run(text, {"approve": False}) == {"v": 11, "w": -5}
+
+
+def test_rewritten_output_fingerprints_as_the_explicit_null_default(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The rewrite changes the flow's fingerprint to that of the authored `:-null` form."""
+    from yian.compile.manifest import flow_fingerprint
+    import yian.compose.build.pipeline as pipeline
+
+    rewritten = flow_fingerprint(load_flow(_flow(_R1, "\n  order: ${order.output}")).compiled)
+    explicit = load_flow(_flow(_R1, "\n  order: ${order.output:-null}")).compiled
+    assert rewritten == flow_fingerprint(explicit)
+    monkeypatch.setattr(pipeline, "null_skipped_outputs", lambda outputs, model: outputs)
+    plain = load_flow(_flow(_R1, "\n  order: ${order.output}")).compiled
+    assert plain.outputs[0].from_ == "${order.output}"
+    assert rewritten != flow_fingerprint(plain)
+
+
+def test_hint_names_a_placeholder_default():
+    """The hint asks for a default without guessing its value."""
+    message = str(_load_error(_flow(_QTY, "\n  q: ${order.output.qty + 1}")))
+    assert message.endswith(
+        "give it a default with :-, e.g. (order.output.qty :- <default>)"
+    )
+
+
+def test_hint_replaces_a_null_default():
+    """An operand already defaulted to null gets the placeholder in place of `null`."""
+    message = str(_load_error(_flow(_QTY, "\n  q: ${(order.output.qty :- null) + 1}")))
+    assert message.endswith("e.g. (order.output.qty :- <default>)")
+
+
+_CHILD = (
+    "defs:\n  child:\n    input:\n      n: int\n    nodes:\n      k:\n        kind: code\n"
+    "        input:\n          n: ${input.n}\n        output: int\n        code: |\n"
+    "          return inputs['n']\n    output: ${k.output}\n"
+)
+# then: order / else: rejected, where `order` returns a list field and a str field
+_ITEMS = (
+    _gate("order", "rejected")
+    + _code("order", '{"items": [1], "s": "2020"}', output="\n      items: list[int]\n      s: str")
+    + _code("rejected", '"no"')
+)
+
+
+def test_arithmetic_in_a_map_over_names_map_over():
+    """A MAP `over:` that does arithmetic on a skipped value is rejected as `map over`."""
+    over = "    over: ${order.output.items + [3]}\n"
+    nodes = _ITEMS + "  m:\n    kind: map\n" + over + "    call: child\n    input:\n      n: ${item}\n"
+    text = _flow(nodes, "\n  r: ${rejected.output}", defs=_CHILD)
+    error = _load_error(text)
+    assert "node 'm' map over: ${order.output.items + [3]}" in str(error)
+    assert _error_lines(error, text) == [text.splitlines().index(over.rstrip("\n")) + 1]
+
+
+def test_arithmetic_in_a_wait_until_names_wait_until():
+    """A WAIT `until:` that does arithmetic on a skipped value is rejected as `wait until`."""
+    until = "    until: ${order.output.s + '-01-01'}\n"
+    text = _flow(_ITEMS + "  w:\n    kind: wait\n" + until, "\n  r: ${rejected.output}")
+    error = _load_error(text)
+    assert "node 'w' wait until: ${order.output.s + '-01-01'}" in str(error)
+    assert _error_lines(error, text) == [text.splitlines().index(until.rstrip("\n")) + 1]
+
+
+def test_arithmetic_in_a_default_is_checked_as_if_it_always_runs():
+    """`a.output :- (b.output + 1)` is rejected though `b` runs whenever `a` is skipped."""
+    nodes = _gate("a", "b") + _code("a", "1", output="int") + _code("b", "2", output="int")
+    error = _load_error(_flow(nodes, "\n  v: ${a.output :- (b.output + 1)}"))
+    assert "does arithmetic on b.output" in str(error)

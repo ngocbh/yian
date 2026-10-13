@@ -250,3 +250,11 @@ def test_exhaustive_cases():
     searched = CaseDescriptor(id="s", cases=[{"when": "${cls.output} == 'a'", "then": "na"}])
     descriptors = {"route": _on_case(), "s": searched}
     assert exhaustive_cases(descriptors, _cls(_AB)) == {"route"}
+
+
+def test_nodes_and_has_cases():
+    """The model exposes its node ids and whether any CASE routes within the level."""
+    m = model("c a b", route())
+    assert m.nodes == frozenset({"c", "a", "b"})
+    assert m.has_cases
+    assert not model("a b", [data("a", "b")]).has_cases

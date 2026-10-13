@@ -1065,11 +1065,13 @@ output:
 
   ```
   output 'q': ${order.output.qty + 1} does arithmetic on order.output.qty, which is null
-  when node 'order' is skipped; give it a default with :-, e.g. (order.output.qty :- 0)
+  when node 'order' is skipped; give it a default with :-, e.g. (order.output.qty :- <default>)
   ```
 
   A node that also plainly reads `${order.output}` is skipped with it, so its
-  arithmetic loads. Arithmetic in flow-level `asserts:` is not checked.
+  arithmetic loads. Arithmetic in flow-level `asserts:` is not checked. The default
+  side of `:-` is checked as if it always runs: `${a.output :- (b.output + 1)}` is an
+  error even when `b` runs whenever `a` is skipped, since `a` might be null while it runs.
 - In a LOOP body the null sets the carried field (see [`loop`](#loop-re-run-a-body-under-a-predicate-or-a-fixed-count));
   a MAP returns null for each element whose branch was skipped.
 

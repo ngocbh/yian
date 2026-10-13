@@ -7,7 +7,9 @@ is skipped or picked another branch. A data or ordering edge from a CASE is skip
 CASE is skipped or picked a branch other than `else:` or "no branch". A CASE that runs picks
 one of its branches, or no branch at all unless it is exhaustive. CASE conditions are treated
 as independent, so the model enumerates every combination of the choices of the CASEs that
-can skip an ancestor of the queried nodes.
+can skip an ancestor of the queried nodes. The default side of `:-` is checked as if it always
+runs: `${a.output :- (b.output + 1)}` is rejected even when `b` runs whenever `a` is skipped,
+which is a false positive only when `a` cannot be null while it runs.
 
 The enumeration is bounded by `_WORLD_LIMIT` assignments (complete or cut short) per query.
 Past the bound each query falls back to the answer that is safe for its caller:
@@ -137,6 +139,16 @@ class SkipModel:
             for parent in parents & self._choices.keys():
                 self._skip_targets[parent].add(node)
         self._order = self._topological_order(graph_parents)
+
+    @property
+    def nodes(self) -> frozenset[str]:
+        """`frozenset[str]`: The level's node ids."""
+        return frozenset(self._known)
+
+    @property
+    def has_cases(self) -> bool:
+        """`bool`: Whether some CASE routes to a node of the level; without one nothing skips."""
+        return bool(self._choices)
 
     def may_all_skip(self, producers: Iterable[str]) -> bool:
         """Return whether some CASE routing skips every node in `producers`.
@@ -340,6 +352,8 @@ def null_skipped_outputs(
         >>> null_skipped_outputs([FlowOutput("v", "${a.output}")], model)[0].from_
         '${a.output:-null}'
     """
+    if not model.has_cases:
+        return list(flow_outputs)
     rewritten = []
     for output in flow_outputs:
         source = binding_source(output.binding)
@@ -401,21 +415,28 @@ def check_skipped_arithmetic(
             At the first such binding, naming it, the operand and its producers, and asking
             for a `:-` default.
     """
+    if not model.has_cases:
+        return
     diagnostics = diagnostics or LoadDiagnostics()
-    known = set(build_results)
+    known = model.nodes
     for node_id, wiring in flow_wiring.items():
         result = build_results.get(node_id)
+        reserved = result.node.reserved_wiring_keys() if result is not None else set()
         for param, binding in wiring.items():
             found = _skipped_operand(binding, model, node_id, known)
             if found is None:
                 continue
             label, fallback = f"input {param!r}", None
             if result is not None:
-                label = result.node.wiring_ref_label(param)
+                if param in reserved:
+                    # A reserved key (`over`, `until`) is a kind field, not an input.
+                    label = f"{result.node.kind.value} {param}"
+                    own = result.field_ranges.get(("field", param))
+                else:
+                    label = result.node.wiring_ref_label(param)
+                    own = result.field_ranges.get(("input", param))
                 fallback = (
-                    result.field_ranges.get(("input", param))
-                    or result.field_ranges.get(("field", "inputs"))
-                    or result.node_range
+                    own or result.field_ranges.get(("field", "inputs")) or result.node_range
                 )
             # A synthetic param's label may already end in a colon (`on:`).
             raise _located_error(
@@ -550,6 +571,7 @@ def _arithmetic_message(
             The message, without the binding's name.
     """
     text = _operand_text(operand)
+    hint = _default_hint(operand)
     quoted = [repr(p) for p in producers]
     if len(quoted) == 1:
         who = f"node {quoted[0]} is"
@@ -557,8 +579,30 @@ def _arithmetic_message(
         who = f"nodes {', '.join(quoted[:-1])} and {quoted[-1]} are"
     return (
         f"{binding_source(binding)} does arithmetic on {text}, which is null when {who} "
-        f"skipped; give it a default with :-, e.g. ({text} :- 0)"
+        f"skipped; give it a default with :-, e.g. {hint}"
     )
+
+
+def _default_hint(operand: Tree | Token) -> str:
+    """Return the operand with a `:- <default>` placeholder, replacing a trailing `:- null`.
+
+    Args:
+        operand (`Tree | Token`):
+            The operand that may be null.
+
+    Returns:
+        `str`:
+            Parenthesized text such as `(order.output.qty :- <default>)`.
+    """
+    if (
+        isinstance(operand, Tree)
+        and operand.data == "default_expr"
+        and isinstance(operand.children[-1], Token)
+        and operand.children[-1].type == "NULL"
+    ):
+        kept = [_operand_text(child) for child in operand.children[:-1]]
+        return "(" + " :- ".join([*kept, "<default>"]) + ")"
+    return f"({_operand_text(operand)} :- <default>)"
 
 
 def _operand_text(operand: Tree | Token) -> str:

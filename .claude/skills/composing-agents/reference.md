@@ -63,7 +63,7 @@ embedded in surrounding text it is **stringified**. A child-flow call is the
 whole-value `call(...)` directive (below), never a `${flow(args)}` span. Arithmetic on
 a value that is null when a `case` skips its node is a load error at that binding
 (`output 'q': ${order.output.qty + 1} does arithmetic on order.output.qty, which is null
-when node 'order' is skipped; give it a default with :-, e.g. (order.output.qty :- 0)`).
+when node 'order' is skipped; give it a default with :-, e.g. (order.output.qty :- <default>)`).
 
 Child-flow output typing retains an exact or partial direct-reference contract, projects
 known partial-record fields exactly, and proves comparisons, membership, and

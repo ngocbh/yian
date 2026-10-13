@@ -5,20 +5,22 @@ Each binding's SOURCE contract is resolved from its reference over the PARENT pr
 flow-input contracts (a MAP's `${item...}` from the element type of `over:`), then its
 `Type` is checked with `types_compatible` against the CHILD input's declared `Type`. A
 literal, or the literal fallback of a `:-` escape, is validated by value instead, as the
-child's start validates it. Its
+child's start validates it: a CALL/MAP edge is not a flow boundary, so text is never
+converted to a number or bool across it. Its
 range anchor comes from the call node's transient Compose
 `BuildResult.field_ranges[("field", "inputs")]` (the coarse `input:` mapping span).
 
 Imports flow down only: `compile.validation` (the type comparator), `expr` (the binding-null
 analysis and escape parsing), `compose.helpers` (shared output-contract inference and load
 diagnostics), `compose.validate.typed_bindings` (literal and `${item}` helpers), and
-`nodes.binding` (the child start's string conversion).
+`nodes.binding` (the run boundary's string conversion, named in a hint only).
 Only the loader (and the compose package facade) import this back.
 """
 
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import date
 from typing import Any, Optional
 
 from yian.compile.validation import types_compatible
@@ -30,6 +32,7 @@ from yian.compose.helpers.output_contracts import (
     reference_contract,
     resolve_output_binding_contract,
 )
+from yian.compose.helpers.typed_bindings import yaml_quoted
 from yian.compose.nodes.base import BuildResult
 from yian.compose.validate.narrowing import Narrowing
 from yian.compose.validate.typed_bindings import (
@@ -139,9 +142,9 @@ def _binding_mismatch(
 ) -> str | None:
     """Return why one binding can't fill the child input `decl`, else `None`.
 
-    A literal is validated by value exactly as the child's start validates it, after
-    the start's string conversion, so `"3"` fits an `int` input, a quoted date fits a
-    `date` input, and `"abc"` fits neither. A lone `${ref :- fallback}` or
+    A literal is validated by value exactly as the child's start validates it, with no
+    string conversion, so a quoted date fits a `date` input but `"3"` does not fit an
+    `int` input. A lone `${ref :- fallback}` or
     `${ref :? message}` checks the de-nulled reference, then a literal fallback by value
     and a reference fallback by its contract. Any other source is checked by its
     resolved contract, a lone `${item...}` read through the element type of `over:`.
@@ -307,12 +310,12 @@ def _value_mismatch(what: str, value: Any, decl: Parameter) -> str | None:
         decl (`Parameter`): The child input, with a declared contract.
 
     Returns:
-        `str | None`: The mismatch, or `None` when the value fits.
+        `str | None`: The mismatch, with a hint when rewriting the literal would fix
+            it, or `None` when the value fits.
     """
     child_type = decl.contract.type
     try:
-        # The child's start converts a present string before validating it.
-        build_value_as(child_type, coerce_param(decl, value))
+        build_value_as(child_type, value)
     except TypeCheckError as exc:
         message = (
             f"child expects {canonical_type_label(child_type)!r}, but the {what} "
@@ -320,5 +323,51 @@ def _value_mismatch(what: str, value: Any, decl: Parameter) -> str | None:
         )
         if exc.path:
             message += f" ({exc})"
-        return message
+        hint = _literal_hint(value, decl)
+        return message if hint is None else f"{message}; {hint}"
     return None
+
+
+def _literal_hint(value: Any, decl: Parameter) -> str | None:
+    """Suggest how to rewrite a literal that doesn't fit `decl`, else `None`.
+
+    Text that a run boundary would convert is written unquoted instead. A value YAML
+    read as a non-string, such as an unquoted date or number, is quoted when its text
+    would fit.
+
+    Args:
+        value (`Any`): The literal that failed.
+        decl (`Parameter`): The child input, with a declared contract.
+
+    Returns:
+        `str | None`: The hint, or `None` when rewriting the literal can't help.
+    """
+    child_type = decl.contract.type
+    if isinstance(value, str):
+        candidate = coerce_param(replace(decl, coerce_strings=True), value)
+        if isinstance(candidate, str) or not _fits(child_type, candidate):
+            return None
+        written = shown_literal(build_value_as(child_type, candidate).to_object())
+        return f"text is not converted between flows, so write {written} without quotes"
+    if isinstance(value, bool):
+        if not _fits(child_type, "true"):
+            return None
+        return (
+            "quote it to keep it as text "
+            "(YAML reads unquoted yes/no/on/off/true/false as booleans)"
+        )
+    if isinstance(value, (int, float, date)):
+        text = shown_literal(value)
+        if not _fits(child_type, text):
+            return None
+        return f"quote it to keep it as text: {yaml_quoted(text)}"
+    return None
+
+
+def _fits(child_type: Type, value: Any) -> bool:
+    """Return whether `value` validates against `child_type`."""
+    try:
+        build_value_as(child_type, value)
+    except TypeCheckError:
+        return False
+    return True

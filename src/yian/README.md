@@ -388,8 +388,10 @@ display, order, and duplicate count while excluding origin.
 carriers (or `None` for a directly constructed no-input node). The flow still owns each
 parameter's `Binding`; the node owns the formal name, optional `ValueContract`,
 required/default presence, and string-coercion policy. Binding validates stored
-defaults without replacing their authored payload, and coerces supplied strings
-only when the parameter opts in. A bound null shadows a default but still passes
+defaults without replacing their authored payload and never converts a string:
+`run_flow` applies the coercion policy (`coerce_inputs`) to the top-level flow's
+supplied inputs before START binds them, so a value crossing a CALL/MAP/LOOP edge
+into a child START is validated unconverted. A bound null shadows a default but still passes
 through contract validation, so it is accepted only when the parameter is untyped
 or its contract accepts null (a nullable or `None`-kind type). A present typed
 `Binding` is checked after its source resolves and before the parameter contract:

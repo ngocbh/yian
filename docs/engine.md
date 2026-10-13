@@ -63,7 +63,7 @@ on kind (e.g. `binds_per_item` on `map`, `bind_reserved` for a `wait`'s `until` 
 
 A flow's own top-level `asserts:` are not a separate engine phase: at build they are
 lowered onto the synthesized `__start__`/`__end__` boundary nodes. A boundary assert
-(`${input.X}` only) is rewritten to read START's coerced `${output.X}`, then rides
+(`${input.X}` only) is rewritten to read START's bound `${output.X}`, then rides
 `__start__.post_asserts` through the ordinary inherited `Node.run` recipe. A post assert
 (`${node.output}`) similarly rides `__end__.post_asserts`. So `run.py` enforces no asserts
 itself; a false assert becomes a durable `NodeFailedRecord`, from which the reducer derives

@@ -34,6 +34,7 @@ diagnostics). The loader, the compose package facade, and the CALL/MAP check
 from __future__ import annotations
 
 import json
+from datetime import date, datetime
 from math import isfinite
 from typing import Any, Callable, Optional
 
@@ -368,14 +369,17 @@ def _item_reference_contract(
 
 
 def shown_literal(value: Any) -> str:
-    """Render a literal as YAML would write it (`true`, `null`, `"text"`).
+    """Render a literal as YAML would write it (`true`, `null`, `"text"`, `2026-01-01`).
 
     Args:
         value (`Any`): The literal to render.
 
     Returns:
-        `str`: JSON text for a JSON-able value, else its `repr`.
+        `str`: ISO text for a date or datetime, JSON text for a JSON-able value, else
+            its `repr`.
     """
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
     try:
         return json.dumps(value, ensure_ascii=False)
     except (TypeError, ValueError):

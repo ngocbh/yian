@@ -218,11 +218,13 @@ def test_declared_seed_type_types_an_opaque_producer():
 def test_declared_seed_type_is_checked_on_the_loop_node():
     """A declared `int` seed rejects a `"1"` on the LOOP node itself.
 
-    Untyped, the body's own `int` parameter coerces the text and the run succeeds.
+    Untyped, the text reaches the body's own `int` parameter, which does not convert
+    it across the LOOP edge, so the body's start fails.
     """
     untyped = run_flow(load_flow(_loop_flow("${opaque.output}", producer=_opaque('"1"'))), {})
-    assert untyped.status == "succeeded", untyped.failure
-    assert untyped.output == {"n": 3}
+    assert untyped.status == "failed"
+    assert untyped.failure.code == "contract.input"
+    assert untyped.failure.node_id == "loop#0/__start__"
 
     loaded = load_flow(_loop_flow("int = ${opaque.output}", producer=_opaque('"1"')))
 

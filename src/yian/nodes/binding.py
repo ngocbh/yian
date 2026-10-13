@@ -14,8 +14,12 @@ A MAP body binds a per-element `item` scope: `${item}` / `${item.path}` resolve 
 element passed via the `item=` kwarg (a body-local scope, NOT a pool head). The default (`item`
 unset) is the ordinary non-MAP bind path.
 
-Imports `expr` for source evaluation and `typesys` for contract validation and
-coercion; both sit below/beside `nodes` in the layer ladder.
+Binding never converts a string. Supplied text is converted only at the run boundary:
+`coerce_inputs` applies each top-level parameter's `coerce_strings` policy before START
+binds, so a value crossing a CALL/MAP/LOOP edge into a child START is validated as is.
+
+Imports `expr` for source evaluation and `typesys` for contract validation; both sit
+below/beside `nodes` in the layer ladder.
 """
 
 from __future__ import annotations
@@ -359,7 +363,7 @@ def _check_binding_type(
 ) -> None:
     """Validate a resolved value against its typed binding's declared contract.
 
-    The check runs before any parameter coercion and discards the built value, so
+    The check runs before the parameter contract and discards the built value, so
     the original payload is delivered unchanged (an ``int`` declared ``float`` stays
     an ``int``) and a string never satisfies a non-string declared type.
 
@@ -474,8 +478,9 @@ def bind_params(
                     # nullable/untyped accepts it; a non-nullable contract rejects it.
                     value = None
             if p.contract is not None:
-                if present and p.coerce_strings:
-                    value = coerce_param(p, value)
+                # No string conversion here: a CALL/MAP/LOOP edge is not a flow
+                # boundary. `run_flow` converts the top-level flow's supplied inputs
+                # (`coerce_inputs`) before START binds them.
                 try:
                     checked = build_value_as(p.contract.type, value)
                 except TypeCheckError as exc:

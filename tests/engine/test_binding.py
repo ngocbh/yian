@@ -110,7 +110,7 @@ def test_binding_capture_matches_the_value_actually_delivered(monkeypatch):
 
     def resolve(path):
         reads.append(path)
-        value = " 12 " if path == "count" else original
+        value = 12 if path == "count" else original
         return ResolvedValue(value, True, SourceRef("run", 1, (path,)))
 
     def observe(value):
@@ -121,7 +121,7 @@ def test_binding_capture_matches_the_value_actually_delivered(monkeypatch):
     collector = BindingCollector()
     delivered = bind_params(
         [
-            Parameter("count", contract=INTEGER, coerce_strings=True),
+            Parameter("count", contract=NUMBER),
             Parameter("payload"),
         ],
         {"count": "${count}", "payload": "${observe(payload)}"},
@@ -131,8 +131,9 @@ def test_binding_capture_matches_the_value_actually_delivered(monkeypatch):
     )
     captured = collector.freeze()
     assert captured.bound_inputs == delivered == {
-        "count": 12, "payload": {"items": ["before"]}
+        "count": 12.0, "payload": {"items": ["before"]}
     }
+    assert type(delivered["count"]) is float
     assert reads == ["count", "payload"]
     assert calls == [original]
     delivered["payload"]["items"].append("node mutation")
@@ -140,7 +141,7 @@ def test_binding_capture_matches_the_value_actually_delivered(monkeypatch):
     assert captured.bound_inputs["payload"] == {"items": ["before"]}
     routed = route_feedback(
         captured.route, {"count": "Too large."},
-        lambda source: {"count": " 12 ", "payload": original},
+        lambda source: {"count": 12, "payload": original},
     )
     assert [(c.source, c.feedback) for c in routed.contributions] == [
         (SourceRef("run", 1), {"count": "Too large."})
@@ -646,26 +647,23 @@ def test_bind_type_mismatch_raises():
         )
 
 
-def test_bind_supplied_string_coerces_only_when_enabled():
+def test_bind_never_converts_a_supplied_string():
+    # Only the run boundary (`coerce_inputs`) converts text; a child START bound across
+    # a CALL/MAP/LOOP edge validates the value as is, whatever its policy says.
     pool = _pool(n="30")
-    with pytest.raises(BindingError):
-        bind_inputs(
-            [InputBinding(name="n", contract=INTEGER, source="${system.n}")],
-            pool,
-        )
-
-    rec = bind_inputs(
-        [
-            InputBinding(
-                name="n",
-                contract=INTEGER,
-                source="${system.n}",
-                coerce_strings=True,
+    for coerce_strings in (False, True):
+        with pytest.raises(BindingError, match="'30' does not match declared type int"):
+            bind_inputs(
+                [
+                    InputBinding(
+                        name="n",
+                        contract=INTEGER,
+                        source="${system.n}",
+                        coerce_strings=coerce_strings,
+                    )
+                ],
+                pool,
             )
-        ],
-        pool,
-    )
-    assert rec == {"n": 30}
 
 
 def test_bind_incompatible_stored_default_is_not_coerced():

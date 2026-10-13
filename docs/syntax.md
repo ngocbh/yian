@@ -300,7 +300,10 @@ flow loads. Stored defaults are never string-coerced: write `int = 30`, not
 `int = "30"`; a date string must likewise be quoted, such as
 `date = "2026-01-01"`. Compatible payloads retain their authored representation,
 so `float = 30` remains the integer `30`. String coercion applies only to values
-supplied at a flow boundary.
+supplied at a flow boundary: the inputs of the top-level flow, given on the command
+line, in a JSON inputs file, or to `run_flow`. A `call`, `map`, or `loop` edge into a
+child flow is not a flow boundary, so nothing is coerced across it (see
+[`call` / `map`](#call-map-composition-over-child-flows)).
 
 A supplied string coerces to `int` or `float` when it parses as one. For `bool`,
 `1`, `true`, `yes`, `y`, and `on` become true and `0`, `false`, `no`, `n`, and
@@ -1598,30 +1601,42 @@ Each argument must fit the child's input type, checked at load:
 - A reference is compared by its type. A MAP's `${item}` or `${item.field}` is typed
   from the element type of `over:`. A `str` source does not fit an `int` or `date`
   input, and an `Optional` source does not fit a strict one.
-- A YAML literal is validated by value, exactly as the child's start validates it,
-  including its conversion of a string for an `int`, `float`, or `bool` input: `5` and
-  `"5"` fit a `float` input and `"2026-01-01"` a `date` input, but `"abc"` does not fit
-  `int`, `9` does not fit `int[1, 3]`, and `5` does not fit `str`. `null` fits only an
+- A YAML literal is validated by value, exactly as the child's start validates it.
+  Nothing is coerced, because a `call`/`map` edge is not a flow boundary: `"3"` does
+  not fit an `int` input (write `3`), and an unquoted `2026-01-01`, which YAML reads as
+  a date, does not fit a `date` input (write `"2026-01-01"`). `5` fits a `float` input,
+  `9` does not fit `int[1, 3]`, and `5` does not fit `str`. `null` fits only an
   `Optional` input.
 - `${x :- fallback}` checks `x` without its null, then the fallback: a literal by
   value, a reference by its type (`:- null` fits only an `Optional` input).
   `${x :? message}` checks `x` without its null.
-- A source whose type the loader can't prove is checked when the child starts. For a
-  value narrower than the input, such as an `Optional` source you know is set, use a
+- A source whose type the loader can't prove is checked, again with no coercion, when
+  the child starts: the text `"3"` from an untyped `code` output into an `int` input
+  fails with `contract.input`. For a value narrower than the input, such as an
+  `Optional` source you know is set, use a
   [typed binding](#typed-bindings-name-type-value): `t: int = ${input.n}`.
 
 ```text
 call node 'each': binding 'day' — child expects 'date', source is 'str'
-call node 'c': binding 'n' — child expects 'int', but the value "abc" does not fit
+call node 'c': binding 'n' — child expects 'int', but the value "3" does not fit; text is not converted between flows, so write 3 without quotes
+call node 'c': binding 'day' — child expects 'date', but the value 2026-01-01 does not fit; quote it to keep it as text: "2026-01-01"
 ```
 
 Changed: a `${item}`, literal, or `:-` argument used to be checked only when the child
-started, after the work upstream had run. A literal that fails here always failed
-there. A `${item}` or the reference before `:-` now follows the rule a direct reference
-already did, so these used to run when every value fit and now fail at load: a
-`${item}` over a `list[str]` into a `date` input (type the list `list[date]`), and a
-`${item}` over a `list[Optional[str]]`, or `${x :- null}`, into a strict input (use a
-typed binding).
+started, after the work upstream had run, and the child's start converted text for an
+`int`, `float`, or `bool` input. These used to run and now fail at load:
+
+- a literal or `:-` fallback written as text for a number or bool, such as `n: "3"` or
+  `${input.n :- "3"}` into an `int` input (write `3`);
+- an unquoted date or datetime literal into a `date` or `datetime` input (quote it);
+- a `${item}` over a `list[str]` into a `date` input (type the list `list[date]`), and a
+  `${item}` over a `list[Optional[str]]`, or `${x :- null}`, into a strict input (use a
+  typed binding).
+
+Text from a source the loader can't type, such as an untyped `code` output, is no
+longer converted when the child starts either: it fails with `contract.input`. The same
+holds for a `loop` seed, such as `n: "1"` into the body's `int` input. Type the source,
+or convert the value in the producing node.
 
 #### Inline child bodies — skip a one-off `defs:` entry
 

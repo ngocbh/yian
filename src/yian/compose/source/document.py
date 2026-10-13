@@ -330,6 +330,44 @@ def _mark_to_range(node: yaml.Node | None) -> SourceRange | None:
     )
 
 
+def _first_repeated_key(
+    root_node: yaml.Node | None,
+    source_values: dict[int, Any],
+) -> tuple[Any, SourceRange, SourceRange] | None:
+    """Find the first mapping that repeats one of its own keys, in document order.
+
+    Keys a ``<<:`` merge brings in are YAML's override mechanism and never
+    count; only a mapping's own pairs are compared, by constructed key.
+    """
+
+    stack = [root_node] if root_node is not None else []
+    seen: set[int] = set()
+    while stack:
+        node = stack.pop()
+        if id(node) in seen:
+            continue
+        seen.add(id(node))
+        if isinstance(node, SequenceNode):
+            stack.extend(reversed(node.value))
+            continue
+        if not isinstance(node, MappingNode):
+            continue
+        first_keys: dict[Any, yaml.Node] = {}
+        for key_node, _value_node in node.value:
+            if key_node.tag == "tag:yaml.org,2002:merge":
+                continue
+            key = source_values.get(id(key_node), _MISSING)
+            if key is _MISSING:
+                continue
+            first = first_keys.setdefault(key, key_node)
+            if first is not key_node:
+                return key, _mark_to_range(first), _mark_to_range(key_node)
+        for key_node, value_node in reversed(node.value):
+            stack.append(value_node)
+            stack.append(key_node)
+    return None
+
+
 _YAML_LINE_BREAKS = frozenset(("\r", "\n", "\x85", "\u2028", "\u2029"))
 _CONSTRUCTED_LINE_BREAKS = frozenset(("\n", "\u2028", "\u2029"))
 
@@ -717,12 +755,26 @@ class SourceDocument:
     _root_node: yaml.Node | None = field(repr=False, compare=False)
     _definitions: tuple[_Definition, ...] = field(repr=False, compare=False)
     _root_definition: int = field(repr=False, compare=False)
+    _repeated_key: tuple[Any, SourceRange, SourceRange] | None = field(
+        default=None, repr=False, compare=False
+    )
 
     @property
     def root(self) -> SourceCursor:
         """Return a cursor at the document root."""
 
         return SourceCursor._physical(self, self._root_definition)
+
+    @property
+    def repeated_key(self) -> tuple[Any, SourceRange, SourceRange] | None:
+        """Return the first key a mapping repeats among its own pairs.
+
+        The tuple is the constructed key, the first pair's key range, and the
+        repeating pair's key range. YAML lookup keeps the last pair; Compose
+        rejects the document instead.
+        """
+
+        return self._repeated_key
 
     def _resolve_occurrence(self, path: OccurrencePath) -> SourceCursor:
         """Replay one finite physical occurrence path through the definition DAG."""
@@ -761,6 +813,7 @@ class SourceDocument:
                     if isinstance(state, _PairSequence)
                 },
             )
+            repeated_key = _first_repeated_key(root_node, loader._source_values)
         except (yaml.YAMLError, yaml.reader.ReaderError) as exc:
             raise SourceSyntaxError(str(exc), _problem_range(exc, text)) from exc
         finally:
@@ -780,4 +833,5 @@ class SourceDocument:
             _root_node=root_node,
             _definitions=definitions,
             _root_definition=root_definition,
+            _repeated_key=repeated_key,
         )

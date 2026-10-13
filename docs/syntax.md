@@ -57,6 +57,13 @@ Node IDs are the keys under `nodes:`. They cannot contain `.`, `#`, or `/`:
 while `#` and `/` are reserved for generated runtime identities. In compact
 mode, the flow `id` also names its node and follows this rule.
 
+A mapping can't repeat a key: two nodes with one id, a field written twice, or a
+section written twice is a load error at the second key, such as `duplicate key 'a'
+(first at line 4)`. Keys a `<<:` merge brings in may still be overridden.
+
+Changed: a repeated key used to load silently, and the last one won. Remove or rename
+the earlier copy; the flow then runs as before.
+
 ### Compact mode — when the flow *is* one node
 
 The common case is "one flow, one node." Writing a full `nodes:` map plus a

@@ -16,7 +16,12 @@ from dataclasses import replace
 from math import ceil, floor, isfinite
 from typing import Any
 
-from yian.typesys.values import Type, ValueKind, canonical_union_order
+from yian.typesys.values import (
+    Type,
+    ValueKind,
+    canonical_union_order,
+    list_kind_for_element,
+)
 
 _SCALAR_KINDS = {
     "string": ValueKind.STRING,
@@ -24,10 +29,6 @@ _SCALAR_KINDS = {
     "number": ValueKind.NUMBER,
     "boolean": ValueKind.BOOLEAN,
     "null": ValueKind.NONE,
-}
-
-_LIST_KIND_FOR_ELEMENT = {
-    kind.element_kind: kind for kind in ValueKind if kind.is_list() and kind.element_kind
 }
 
 _REF_PREFIXES = ("#/$defs/", "#/definitions/")
@@ -55,6 +56,12 @@ def type_from_json_schema(
     Returns:
         `Type | None`:
             The translated type, or `None` when the schema has no yian equivalent.
+
+    Example:
+        `{"anyOf": [{"type": "integer", "minimum": 1, "exclusiveMaximum": 10},
+        {"type": "null"}]}` gives `Optional[int[1,9]]` either way. An object with
+        `properties` gives a record when `closed=True` and plain `object` when
+        `closed=False`.
     """
     typ = _translate(schema, closed=closed, root=schema if root is None else root, refs=())
     if typ is None:
@@ -74,7 +81,7 @@ def _translate(
     refs: tuple[str, ...],
 ) -> Type | None:
     """Translate one schema node; `refs` holds the `$ref`s being resolved above it."""
-    if not isinstance(schema, Mapping) or "not" in schema or "prefixItems" in schema:
+    if not isinstance(schema, Mapping):
         return None
 
     def sub(node: Any, more_refs: tuple[str, ...] = ()) -> Type | None:
@@ -111,10 +118,11 @@ def _translate(
         return _union([sub({**schema, "type": member}) for member in json_type])
     if json_type == "array":
         items = schema.get("items")
-        element = sub(items) if isinstance(items, Mapping) else None
+        # Tuple positions have no yian spelling; `list[Any]` accepts every tuple.
+        element = None if "prefixItems" in schema or not isinstance(items, Mapping) else sub(items)
         if element is None:
             return Type.scalar(ValueKind.LIST_ANY)
-        return Type(kind=_list_kind(element), element=element)
+        return Type(kind=list_kind_for_element(element), element=element)
     if json_type == "object":
         return _object(schema, closed=closed, sub=sub)
     kind = _SCALAR_KINDS.get(json_type) if isinstance(json_type, str) else None
@@ -188,22 +196,17 @@ def _bounds(
     return bounds if bounds[0] <= bounds[1] else None
 
 
-def _list_kind(element: Type) -> ValueKind:
-    """Return the list storage kind the type resolver picks for `element`."""
-    if element.tags is not None:
-        return ValueKind.LIST_STRING
-    if element.fields is not None or element.variants is not None:
-        return ValueKind.LIST_OBJECT
-    return _LIST_KIND_FOR_ELEMENT.get(element.kind, ValueKind.LIST_ANY)
-
-
 def _object(
     schema: Mapping[str, Any],
     *,
     closed: bool,
     sub: Callable[[Any], Type | None],
-) -> Type | None:
-    """Translate an object schema to a record, or to plain `object` when open."""
+) -> Type:
+    """Translate an object schema to a record, or to plain `object` when open.
+
+    A property with no yian type also gives plain `object`, which still rejects
+    non-objects.
+    """
     plain = Type.scalar(ValueKind.OBJECT)
     properties = schema.get("properties")
     if not isinstance(properties, Mapping):
@@ -225,7 +228,7 @@ def _object(
     for name, prop in properties.items():
         field = sub(prop)
         if field is None:
-            return None
+            return plain
         fields[name] = field
     return Type(
         kind=ValueKind.OBJECT,

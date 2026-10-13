@@ -435,7 +435,7 @@ def _validate_type_shape(
                 active=active,
                 validated=validated,
             )
-            expected_kind = _list_kind_for_element(element)
+            expected_kind = list_kind_for_element(element)
             if typ.kind is not ValueKind.LIST_ANY and typ.kind is not expected_kind:
                 raise ValueError(
                     f"list storage kind {typ.kind.value!r} does not match "
@@ -499,8 +499,19 @@ def _validate_type_metadata_string(value: str) -> None:
         raise ValueError("type metadata contains a Unicode surrogate") from exc
 
 
-def _list_kind_for_element(element: Type) -> ValueKind:
-    """Return the storage tag selected by the public type resolver for an element."""
+def list_kind_for_element(element: Type) -> ValueKind:
+    """Return the list storage kind the type resolver picks for an element type.
+
+    A `Literal` element stores as `list[str]`, a record or union element as
+    `list[object]`, a scalar element as its own list kind, and anything else as
+    `list[Any]`.
+
+    Args:
+        element (`Type`): The list's element type.
+
+    Returns:
+        `ValueKind`: The `list[...]` storage kind.
+    """
     semantic_kind = element.kind
     if element.tags is not None:
         semantic_kind = ValueKind.STRING

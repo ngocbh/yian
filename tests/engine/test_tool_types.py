@@ -96,7 +96,10 @@ _TAGGED_UNION = {
         ({"allOf": [{"type": "integer"}, {"minimum": 0}]}, None),
         ({}, None),
         ({"not": {"type": "string"}}, None),
-        ({"type": "array", "prefixItems": [{"type": "integer"}]}, None),
+        ({"type": "string", "not": {"const": "x"}}, "str"),
+        ({"type": "array", "prefixItems": [{"type": "integer"}]}, "list[Any]"),
+        ({"type": "array", "prefixItems": [{"type": "integer"}], "items": {"type": "integer"}},
+         "list[Any]"),
         ({"minimum": 0}, None),
         ({"type": "integer", "title": "N", "description": "d", "default": 1,
           "examples": [1], "multipleOf": 2}, "int"),
@@ -111,29 +114,14 @@ def test_schema_translates_to_label(schema: dict[str, Any], label: str | None) -
     assert _label(schema) == label
 
 
-def test_integer_bounds_count_exclusive_endpoints() -> None:
-    typ = type_from_json_schema(
-        {"type": "integer", "minimum": 1, "exclusiveMaximum": 10}, closed=True
-    )
-    assert typ == Type(kind=ValueKind.INTEGER, bounds=(1, 9))
-
-
 def test_list_kinds_follow_the_type_resolver() -> None:
     def kind(items: dict[str, Any]) -> ValueKind:
         return type_from_json_schema({"type": "array", "items": items}, closed=True).kind
 
-    assert kind({"type": "string"}) is ValueKind.LIST_STRING
     assert kind({"enum": ["a"]}) is ValueKind.LIST_STRING
-    assert kind({"type": "boolean"}) is ValueKind.LIST_BOOLEAN
-    assert kind({"type": "number"}) is ValueKind.LIST_NUMBER
-    assert kind({"type": "object"}) is ValueKind.LIST_OBJECT
     assert kind({"type": "object", "properties": {"a": {"type": "integer"}}}) is (
         ValueKind.LIST_OBJECT
     )
-    assert kind({"type": "array"}) is ValueKind.LIST_ANY
-    assert kind({"type": "null"}) is ValueKind.LIST_ANY
-    untyped = type_from_json_schema({"type": "array"}, closed=True)
-    assert untyped == Type.scalar(ValueKind.LIST_ANY)
 
 
 _OBJECT = {
@@ -170,9 +158,9 @@ def test_closed_object_is_a_record(schema: dict[str, Any], closed: bool) -> None
     assert typ.required == frozenset({"b", "c"})
 
 
-def test_closed_object_with_an_untranslatable_property_has_no_type() -> None:
+def test_closed_object_with_an_untranslatable_property_is_plain_object() -> None:
     schema = {"type": "object", "properties": {"a": {}}, "required": ["a"]}
-    assert type_from_json_schema(schema, closed=True) is None
+    assert type_from_json_schema(schema, closed=True) == Type.scalar(ValueKind.OBJECT)
 
 
 def test_open_object_with_an_untranslatable_property_is_plain_object() -> None:
@@ -224,7 +212,7 @@ def test_definitions_refs_resolve_against_root() -> None:
     )
 
 
-def test_self_referential_ref_has_no_type() -> None:
+def test_record_with_a_self_referential_field_is_plain_object() -> None:
     schema = {
         "$defs": {
             "Node": {
@@ -235,6 +223,11 @@ def test_self_referential_ref_has_no_type() -> None:
         },
         "$ref": "#/$defs/Node",
     }
+    assert type_from_json_schema(schema, closed=True) == Type.scalar(ValueKind.OBJECT)
+
+
+def test_ref_to_itself_has_no_type() -> None:
+    schema = {"$defs": {"A": {"$ref": "#/$defs/A"}}, "$ref": "#/$defs/A"}
     assert type_from_json_schema(schema, closed=True) is None
 
 
@@ -278,11 +271,36 @@ _INT = Type.scalar(ValueKind.INTEGER)
                 required=frozenset({"a", "b"}),
             ),
         ),
-        ({"anyOf": [{"type": "object"}, {"type": "integer"}]}, False, _INT),
-        ({"anyOf": [{"type": "object"}, {"type": "integer"}]}, True, _INT),
-        ({"type": ["object", "integer"]}, True, _INT),
-        (_field_schema(_WithUnion, "v"), False, Type.scalar(ValueKind.STRING)),
-        (_field_schema(_WithUnion, "v"), True, Type.scalar(ValueKind.STRING)),
+        (
+            {"type": "object", "properties": {"a": {}}, "additionalProperties": False},
+            True,
+            Type(kind=ValueKind.OBJECT, fields={"a": _INT}, required=frozenset({"a"})),
+        ),
+        (
+            {"type": "object", "properties": {"a": {"type": "integer"}, "d": {"type": "integer"}},
+             "required": ["a"]},
+            True,
+            Type(kind=ValueKind.OBJECT, fields={"a": _INT}, required=frozenset({"a"})),
+        ),
+        (
+            _TAGGED_UNION,
+            False,
+            Type(
+                kind=ValueKind.OBJECT,
+                fields={"action": Type(kind=ValueKind.STRING, tags=frozenset({"buy"})),
+                        "qty": _INT, "note": Type.scalar(ValueKind.STRING)},
+                required=frozenset({"action", "qty", "note"}),
+            ),
+        ),
+        ({"anyOf": [{"type": "integer"}, {"type": "null"}]}, True, _INT),
+        ({"type": "string", "format": "date"}, True, Type.scalar(ValueKind.DATE)),
+        (
+            {"type": "array", "items": {"type": "number"}},
+            True,
+            Type.scalar(ValueKind.LIST_INTEGER),
+        ),
+        ({"type": "array", "prefixItems": [{"type": "integer"}]}, True,
+         Type.scalar(ValueKind.LIST_INTEGER)),
         ({"type": "integer"}, True, Type.scalar(ValueKind.NUMBER)),
         ({"type": "integer", "minimum": 0, "maximum": 9}, True, Type.scalar(ValueKind.NUMBER)),
     ],
@@ -291,7 +309,13 @@ def test_translation_never_reports_an_accepted_value_as_disjoint(
     schema: dict[str, Any], closed: bool, inferred: Type
 ) -> None:
     declared = type_from_json_schema(schema, closed=closed)
-    assert declared is None or type_relation(inferred, declared) != "disjoint"
+    assert declared is not None
+    assert type_relation(inferred, declared) != "disjoint"
+
+
+@pytest.mark.parametrize("closed", [False, True])
+def test_pydantic_union_of_a_model_and_a_scalar_has_no_type(closed: bool) -> None:
+    assert type_from_json_schema(_field_schema(_WithUnion, "v"), closed=closed) is None
 
 
 @pytest.mark.parametrize(

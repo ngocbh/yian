@@ -223,3 +223,14 @@ def test_typed_str_seed_with_an_int_body_field_is_rejected() -> None:
         load_flow(_note_loop('str = "start"', "int", "1"))
     message = str(excinfo.value)
     assert "'note'" in message and "int" in message and "str" in message
+
+
+def test_literal_seed_with_a_str_body_field_is_rejected() -> None:
+    with pytest.raises(LoadError) as excinfo:
+        load_flow(_note_loop("Literal[a, b] = a", "str", '"a"'))
+    message = str(excinfo.value)
+    assert (
+        "the body returns 'note' as str, but the carried field is declared "
+        'Literal["a","b"]'
+    ) in message
+    assert '`note: str = "a"`' in message

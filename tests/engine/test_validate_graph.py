@@ -121,6 +121,23 @@ def test_numeric_domain_compatibility_requires_interval_containment(source, sink
 
 
 @pytest.mark.parametrize("source,sink,compatible", [
+    ("Literal[a, b]", "Literal[a, b]", True),
+    ("Literal[a]", "Literal[a, b]", True),
+    ("Literal[a, c]", "Literal[a, b]", False),
+    ("str", "Literal[a, b]", False),
+    ("Literal[a, b]", "str", True),
+    ("Optional[str]", "Optional[Literal[a, b]]", False),
+    ("list[str]", "list[Literal[a, b]]", False),
+    ("list[Literal[a]]", "list[Literal[a, b]]", True),
+])
+def test_enum_compatibility_requires_tag_subset(source, sink, compatible):
+    """An untagged source cannot prove membership, like an unbounded numeric source."""
+    from yian.typesys.types import type_for
+
+    assert types_compatible(type_for(source, {}), type_for(sink, {})) is compatible
+
+
+@pytest.mark.parametrize("source,sink,compatible", [
     ("list[int[2, 4]]", "list[float[1, 12]]", True),
     ("list[int]", "list[int[1, 12]]", False),
     ("list[int[0, 4]]", "list[float[1, 12]]", False),

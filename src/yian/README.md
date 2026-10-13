@@ -389,7 +389,9 @@ require finite, lossless float representation. Value checks preserve the failing
 structural path. Cross-flow compatibility requires interval containment, including
 integer-to-number widening. Inline type copying, nested generated schemas, and
 canonical labels preserve bounds. Manifests include bounds only when present,
-preserving the identity of unbounded declarations.
+preserving the identity of unbounded declarations. Enum (`tags`) compatibility
+follows the same rule: the source tags must be a subset of the sink's, and an
+untagged source cannot fill an enum sink.
 
 A union is `Type(kind=OBJECT, variants=(member, ...))`: two or more non-nullable record
 members in canonical order (by tag, else by canonical label), deduplicated by equality

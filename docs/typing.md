@@ -152,9 +152,12 @@ declared members (a non-union side counts as one member), and the results combin
 fits when all fit, disjoint when all are disjoint, and narrower otherwise. Narrowing
 views apply first, so a `case` branch's value has only the branch's members.
 
-Unlike `types_compatible`, which lets a tag-less `str` fill a `Literal` when wiring,
-this relation calls that narrower. It lets `date` and `datetime` fit `str`, since
-they are stored as strings.
+This relation agrees with `types_compatible`, the check for wiring, on what fits, with
+two differences. It treats records as closed, so a record fits only when its fields are
+a subset of the declared fields at every level. It lets `date` and `datetime` fit
+`str`, since they are stored as strings. Where wiring rejects a source that is only
+narrower, such as a tag-less `str` into a `Literal`, a typed binding accepts it and
+checks the value at runtime.
 
 ## Authored contract origins
 

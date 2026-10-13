@@ -166,8 +166,11 @@ are settled (taken, skipped, or expanded; none ready or running). Until then the
 live, along with any pruned id they read, and each later growth retires them once
 settled (`RunState.deferred_prune`); a self-pruning LOOP driver is always retired. The
 reducer finds grown nodes from accepted growth records (`RunState.growth_owner`). `NodeExpandedRecord.prune_ids` keeps only the ids the node
-asked for; replay re-derives the rest. Adding a new spawner kind means setting traits on
-its node; the core never gains a branch. Details: [Nodes](nodes.md).
+asked for; replay re-derives the rest. A growth costs its fragment plus its prunes, not
+the run's graph so far: the reducer looks up the live nodes it affects through the
+adjacency lists and a derived reverse index (`RunState.growth_index`), then applies the
+change in place after the record is appended. Adding a new spawner kind means setting
+traits on its node; the core never gains a branch. Details: [Nodes](nodes.md).
 
 ## Failure and durable recovery
 

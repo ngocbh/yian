@@ -12,8 +12,8 @@ from __future__ import annotations
 
 import copy
 from bisect import bisect_left
-from collections import deque
-from collections.abc import Callable
+from collections import ChainMap, deque
+from collections.abc import Callable, Container
 from dataclasses import dataclass, replace
 from typing import Any, NoReturn
 
@@ -242,6 +242,10 @@ class RunState:
         initial_static_ids (`frozenset[str]`):
             Immutable node IDs adopted before any runtime expansion.  Safe pruning
             may retire only later dynamic-overlay nodes.
+        growth_index (`_GrowthIndex | None`):
+            Reverse lookups derived from the live graph, built by the first growth
+            and kept current by growth commits, so a growth looks up the nodes it
+            affects instead of scanning every node.
     """
 
     def __init__(self, flow: CompiledFlow) -> None:
@@ -285,6 +289,7 @@ class RunState:
             memory_order=self.backward_state.memory_order,
         )
         self.initial_static_ids = frozenset(flow.nodes)
+        self.growth_index: _GrowthIndex | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -575,45 +580,53 @@ class _GrowthDelta:
 
 @dataclass(frozen=True, slots=True)
 class _GrowthTopology:
-    """Detached final containers represented by immutable outer tuples."""
+    """Detached topology change: the fragment to add and what retires with it.
+
+    Commit applies it in place, so a growth costs the fragment plus its prunes
+    rather than a copy of every live container.
+    """
 
     nodes: tuple[tuple[str, Node], ...]
     edges: tuple[Edge, ...]
     wiring: tuple[tuple[str, dict[str, Any]], ...]
-    incoming: tuple[tuple[str, tuple[Edge, ...]], ...]
-    outgoing: tuple[tuple[str, tuple[Edge, ...]], ...]
-    pool_store: tuple[tuple[str, TypedValue], ...]
-    node_state: tuple[tuple[str, NodeState], ...]
-    edge_state: tuple[tuple[str, NodeState], ...]
-    ready: tuple[str, ...]
-    in_flight: tuple[str, ...]
-    accepted_starts: tuple[tuple[str, int], ...]
+    retired_edges: tuple[Edge, ...]
     depth: tuple[tuple[str, int], ...]
-    growth_owner: tuple[tuple[str, str], ...]
+    growth_owner: tuple[tuple[str, str | None], ...]
     deferred_prune: frozenset[str]
-    wiring_overrides: tuple[tuple[str, dict[str, Any]], ...]
+    names: tuple[tuple[str, tuple[str, ...]], ...]
 
 
 @dataclass(slots=True)
 class _GrowthApply:
-    """Independent final topology, reducer containers, and observer before append."""
+    """Fresh fragment wiring and observer built before append."""
 
-    nodes: dict[str, Node]
-    edges: list[Edge]
     wiring: dict[str, dict[str, Any]]
-    incoming: dict[str, list[Edge]]
-    outgoing: dict[str, list[Edge]]
-    pool_store: dict[str, TypedValue]
-    node_state: dict[str, NodeState]
-    edge_state: dict[str, NodeState]
-    ready: deque[str]
-    in_flight: dict[str, None]
-    accepted_starts: dict[str, int]
-    depth: dict[str, int]
-    growth_owner: dict[str, str]
-    deferred_prune: frozenset[str]
-    wiring_overrides: dict[str, dict[str, Any]]
     observers: tuple[Any, ...]
+
+
+@dataclass(slots=True)
+class _GrowthIndex:
+    """Reverse lookups over the live graph that growth checks read instead of scanning.
+
+    The first growth builds them from the live state.  Each growth commit then
+    keeps them current, since growth is the only transition that changes the
+    topology or growth ownership.
+
+    Attributes:
+        names (`dict[str, tuple[str, ...]]`):
+            Live node ID to the node IDs it names through its wiring,
+            ``commit_as``, ``origin_id``, or skipped output target.
+        referrers (`dict[str, dict[str, None]]`):
+            Node ID to the live nodes that name it, in node order; the inverse of
+            ``names``.
+        grown (`dict[str, dict[str, None]]`):
+            Owner ID to the live nodes its accepted growth owns; the inverse of
+            ``RunState.growth_owner``.
+    """
+
+    names: dict[str, tuple[str, ...]]
+    referrers: dict[str, dict[str, None]]
+    grown: dict[str, dict[str, None]]
 
 
 @dataclass(slots=True)
@@ -2166,21 +2179,7 @@ def _commit_growth(
     apply = _materialize_growth(plan)
 
     _append_and_verify(log, prepared)
-    state.flow.nodes = apply.nodes
-    state.flow.edges = apply.edges
-    state.flow.wiring = apply.wiring
-    state.flow._incoming = apply.incoming
-    state.flow._outgoing = apply.outgoing
-    state.pool.store = apply.pool_store
-    state.node_state = apply.node_state
-    state.edge_state = apply.edge_state
-    state.ready = apply.ready
-    state.in_flight = apply.in_flight
-    state.accepted_starts = apply.accepted_starts
-    state.depth = apply.depth
-    state.growth_owner = apply.growth_owner
-    state.deferred_prune = apply.deferred_prune
-    state.wiring_overrides = apply.wiring_overrides
+    _apply_growth(state, delta, plan.topology, apply.wiring)
     state.next_sequence = prepared.expected_sequence + 1
     return apply.observers
 
@@ -2593,7 +2592,7 @@ def _prepare_growth_topology(
     *,
     validated_fragment: tuple[tuple[str, ...], tuple[str, ...]],
 ) -> tuple[_GrowthDelta, _GrowthTopology]:
-    """Validate growth and materialize every final topology/state container."""
+    """Validate growth and build the detached change commit applies in place."""
     new_node_ids, new_edge_ids = validated_fragment
     if len(state.flow.nodes) + len(new_node_ids) > MAX_TOTAL_NODES:
         _raise_growth_rejected(
@@ -2603,6 +2602,7 @@ def _prepare_growth_topology(
             )
         )
     derived_depth = _validated_growth_depth(state, record.spawner_id)
+    index = _growth_index(state)
     _validate_growth_prune(
         state,
         record.spawner_id,
@@ -2610,91 +2610,47 @@ def _prepare_growth_topology(
         frozenset(new_node_ids),
     )
     retired_ids, deferred_prune = _retired_ids(
-        state, record.spawner_id, frozenset(record.prune_ids)
+        state, record.spawner_id, frozenset(record.prune_ids), index.grown
     )
-    _validate_prune_dependencies(state, fragment, retired_ids)
+    _validate_prune_dependencies(state, fragment, retired_ids, index)
 
-    combined_nodes = dict(state.flow.nodes)
-    combined_nodes.update(fragment.nodes)
-    combined_edges = [*state.flow.edges, *fragment.edges]
-    combined_wiring = copy.deepcopy(state.flow.wiring)
-    combined_wiring.update(copy.deepcopy(fragment.wiring))
+    retired_edges: dict[str, Edge] = {}
+    for node_id in sorted(retired_ids):
+        for edge in (*state.flow.outgoing(node_id), *state.flow.incoming(node_id)):
+            retired_edges.setdefault(edge.id, edge)
+    _validate_growth_redirects(
+        state,
+        fragment,
+        record.spawner_id,
+        retired_ids,
+        frozenset(retired_edges),
+        index,
+    )
 
-    final_nodes = {
-        node_id: node
-        for node_id, node in combined_nodes.items()
-        if node_id not in retired_ids
-    }
-    final_edges = [
-        edge
-        for edge in combined_edges
-        if edge.from_ not in retired_ids and edge.to not in retired_ids
-    ]
-    final_wiring = {
-        node_id: wiring
-        for node_id, wiring in combined_wiring.items()
-        if node_id not in retired_ids
-    }
-    incoming, outgoing = _growth_adjacency(final_nodes, final_edges)
-
-    node_state = dict(state.node_state)
-    node_state.update((node_id, NodeState.UNKNOWN) for node_id in new_node_ids)
-    node_state[record.spawner_id] = NodeState.EXPANDED
-    for node_id in retired_ids:
-        node_state.pop(node_id, None)
-
-    edge_state = dict(state.edge_state)
-    edge_state.update((edge_id, NodeState.UNKNOWN) for edge_id in new_edge_ids)
-    surviving_edge_ids = {edge.id for edge in final_edges}
-    edge_state = {
-        edge_id: disposition
-        for edge_id, disposition in edge_state.items()
-        if edge_id in surviving_edge_ids
-    }
-
-    pool_store = dict(state.pool.store)
-    depth = dict(state.depth)
-    wiring_overrides = copy.deepcopy(state.wiring_overrides)
-    for node_id in retired_ids:
-        pool_store.pop(node_id, None)
-        depth.pop(node_id, None)
-        wiring_overrides.pop(node_id, None)
-    if derived_depth is not None:
-        for node_id, node in fragment.nodes.items():
-            if node.is_spawner is True or node.commit_as == record.spawner_id:
-                depth[node_id] = derived_depth
-    growth_owner = dict(state.growth_owner)
-    growth_owner.update((node_id, record.spawner_id) for node_id in new_node_ids)
-    for node_id, owner in growth_owner.items():
-        # A self-pruning spawner's new nodes, and a kept subtree under a retired node,
-        # move to the nearest owner that survives this transition.
+    def surviving_owner(owner: str | None) -> str | None:
+        """Return the nearest owner at or above ``owner`` that this growth keeps."""
         while owner in retired_ids:
             owner = state.growth_owner.get(owner)
-        growth_owner[node_id] = owner
-    growth_owner = {
-        node_id: owner
-        for node_id, owner in growth_owner.items()
-        if node_id not in retired_ids and owner is not None
-    }
+        return owner
 
-    ready = tuple(
-        node_id for node_id in state.ready if node_id not in retired_ids
-    ) + (fragment.start_id,)
-    in_flight = tuple(
-        node_id
-        for node_id in state.in_flight
-        if node_id != record.spawner_id and node_id not in retired_ids
-    )
-    _validate_final_redirects(
-        nodes=final_nodes,
-        node_state=node_state,
-        edge_state=edge_state,
-        pool_store=pool_store,
-        ready=ready,
-        in_flight=in_flight,
-        incoming=incoming,
-        outgoing=outgoing,
-    )
+    # A kept subtree under a retired node, and a self-pruning spawner's new nodes,
+    # move to the nearest owner that survives this transition.
+    owner_changes = [
+        (node_id, surviving_owner(retired_id))
+        for retired_id in sorted(retired_ids)
+        for node_id in index.grown.get(retired_id, ())
+        if node_id not in retired_ids
+    ]
+    new_owner = surviving_owner(record.spawner_id)
+    owner_changes.extend((node_id, new_owner) for node_id in new_node_ids)
+
+    depth: list[tuple[str, int]] = []
+    if derived_depth is not None:
+        depth = [
+            (node_id, derived_depth)
+            for node_id, node in fragment.nodes.items()
+            if node.is_spawner is True or node.commit_as == record.spawner_id
+        ]
 
     delta = _GrowthDelta(
         spawner_id=record.spawner_id,
@@ -2708,25 +2664,17 @@ def _prepare_growth_topology(
         derived_depth=derived_depth,
     )
     topology = _GrowthTopology(
-        nodes=tuple(final_nodes.items()),
-        edges=tuple(final_edges),
-        wiring=tuple(final_wiring.items()),
-        incoming=tuple(
-            (node_id, tuple(edges)) for node_id, edges in incoming.items()
+        nodes=tuple(fragment.nodes.items()),
+        edges=tuple(fragment.edges),
+        wiring=tuple(copy.deepcopy(fragment.wiring).items()),
+        retired_edges=tuple(retired_edges.values()),
+        depth=tuple(depth),
+        growth_owner=tuple(owner_changes),
+        names=tuple(
+            (node_id, _node_names(node_id, node, fragment.wiring[node_id]))
+            for node_id, node in fragment.nodes.items()
         ),
-        outgoing=tuple(
-            (node_id, tuple(edges)) for node_id, edges in outgoing.items()
-        ),
-        pool_store=tuple(pool_store.items()),
-        node_state=tuple(node_state.items()),
-        edge_state=tuple(edge_state.items()),
-        ready=ready,
-        in_flight=in_flight,
-        accepted_starts=tuple((node_id, state.accepted_starts[node_id]) for node_id in in_flight),
-        depth=tuple(depth.items()),
-        growth_owner=tuple(growth_owner.items()),
         deferred_prune=deferred_prune,
-        wiring_overrides=tuple(wiring_overrides.items()),
     )
     return delta, topology
 
@@ -2735,36 +2683,20 @@ def _validate_growth_fragment(
     state: RunState,
     fragment: Flow,
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """Validate live topology first, then the node-produced fragment constraints."""
-    _reject_growth_cycle(
-        set(state.flow.nodes),
-        state.flow.edges,
-        as_growth_rejection=False,
-    )
-    static_producer_contracts: dict[str, OutputContract] = {}
-    for node_id, node in state.flow.nodes.items():
-        contract = node.output_contract
-        if contract is not None:
-            output_contract_type(contract)
-            static_producer_contracts[node_id] = contract
-    return _validate_growth_fragment_data(
-        state,
-        fragment,
-        static_producer_contracts=static_producer_contracts,
-    )
+    """Validate the node-produced fragment constraints against the live topology."""
+    return _validate_growth_fragment_data(state, fragment)
 
 
 def _validate_growth_fragment_data(
     state: RunState,
     fragment: Flow,
-    *,
-    static_producer_contracts: dict[str, OutputContract] | None = None,
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """Require a collision-free, self-contained, acyclic fragment.
 
-    ``static_producer_contracts`` is the already validated live-topology map.
-    When omitted, it is derived after the fragment's basic carrier checks; live
-    contract invariant errors still remain outside ``GrowthRejected``.
+    The work is proportional to the fragment: live nodes are looked up, not
+    rescanned, and only the live producers the fragment's wiring reads have
+    their output contracts checked.  A malformed live contract stays a host
+    invariant error outside ``GrowthRejected``.
     """
     if type(fragment.nodes) is not dict:
         _raise_growth_rejected(TypeError("growth fragment nodes must be a dict"))
@@ -2828,16 +2760,8 @@ def _validate_growth_fragment_data(
         validate_growth_metadata(fragment)
     except (TypeError, ValueError) as exc:
         _raise_growth_rejected(exc)
-    combined_nodes = dict(state.flow.nodes)
-    combined_nodes.update(fragment.nodes)
-    combined_node_ids = set(combined_nodes)
-    if static_producer_contracts is None:
-        static_producer_contracts = {}
-        for node_id, node in state.flow.nodes.items():
-            contract = node.output_contract
-            if contract is not None:
-                output_contract_type(contract)
-                static_producer_contracts[node_id] = contract
+    combined_nodes = ChainMap(fragment.nodes, state.flow.nodes)
+    combined_node_ids = combined_nodes.keys()
     fragment_producer_contracts: dict[str, OutputContract] = {}
     for node_id, node in fragment.nodes.items():
         contract = node.output_contract
@@ -2848,8 +2772,20 @@ def _validate_growth_fragment_data(
         except (TypeError, ValueError) as exc:
             _raise_growth_rejected(exc)
         fragment_producer_contracts[node_id] = contract
-    producer_contracts = dict(static_producer_contracts)
-    producer_contracts.update(fragment_producer_contracts)
+    live_producer_contracts: dict[str, OutputContract | None] = {}
+
+    def producer_contract(node_id: str) -> OutputContract | None:
+        """Return a producer's output contract, checking a live one on first read."""
+        if node_id in fragment_producer_contracts:
+            return fragment_producer_contracts[node_id]
+        if node_id not in state.flow.nodes:
+            return None
+        if node_id not in live_producer_contracts:
+            contract = state.flow.nodes[node_id].output_contract
+            output_contract_type(contract)
+            live_producer_contracts[node_id] = contract
+        return live_producer_contracts[node_id]
+
     for node_id, node in fragment.nodes.items():
         for attribute in ("commit_as", "origin_id"):
             target = getattr(node, attribute)
@@ -2949,11 +2885,12 @@ def _validate_growth_fragment_data(
             node,
             wiring,
             combined_node_ids,
-            producer_contracts,
+            producer_contract,
             reserved,
         )
 
-    live_edge_ids = {edge.id for edge in state.flow.edges}
+    # Every live edge has a disposition, so the edge-state keys are the live edge IDs.
+    live_edge_ids = state.edge_state.keys()
     new_edge_ids: list[str] = []
     seen_edge_ids: set[str] = set()
     for edge in fragment.edges:
@@ -3014,9 +2951,11 @@ def _validate_growth_fragment_data(
         new_edge_ids.append(edge.id)
 
     _validate_growth_reachability(fragment)
+    # Fragment edges target only fresh fragment nodes and live edges cannot reach
+    # them, so any new cycle lies wholly inside the fragment.
     _reject_growth_cycle(
-        combined_node_ids,
-        [*state.flow.edges, *fragment.edges],
+        set(fragment.nodes),
+        [edge for edge in fragment.edges if edge.from_ in fragment.nodes],
     )
     return tuple(new_node_ids), tuple(new_edge_ids)
 
@@ -3051,8 +2990,8 @@ def _validate_growth_wiring_refs(
     node_id: str,
     node: Node,
     wiring: dict[str, Any],
-    combined_node_ids: set[str],
-    producer_contracts: dict[str, OutputContract],
+    combined_node_ids: Container[str],
+    producer_contract: Callable[[str], OutputContract | None],
     reserved: set[str],
 ) -> None:
     """Apply closed reference rules to raw or carrier-wrapped fragment wiring."""
@@ -3080,17 +3019,17 @@ def _validate_growth_wiring_refs(
                 extra_heads,
             )
             parts = path.split(".")
-            if (
-                error is None
-                and len(parts) >= 2
-                and parts[1] == "output"
-                and parts[0] in producer_contracts
-            ):
+            contract = (
+                producer_contract(parts[0])
+                if error is None and len(parts) >= 2 and parts[1] == "output"
+                else None
+            )
+            if contract is not None:
                 # Fragments come from flows the loader already checked, where a CASE
                 # branch may narrow a union so that a member-only field read is valid.
                 # That narrowing is not recorded here, so such reads are allowed.
                 error = output_contract_field_error(
-                    producer_contracts[parts[0]],
+                    contract,
                     parts[2:],
                     path,
                     partial_union_fields=True,
@@ -3104,18 +3043,13 @@ def _validate_growth_wiring_refs(
                 )
 
 
-def _reject_growth_cycle(
-    node_ids: set[str],
-    edges: list[Edge],
-    *,
-    as_growth_rejection: bool = True,
-) -> None:
-    """Reject a cycle as fragment data or as a pre-existing host invariant."""
+def _reject_growth_cycle(node_ids: set[str], edges: list[Edge]) -> None:
+    """Reject a cycle among ``node_ids`` as node-produced fragment data."""
     adjacency: dict[str, list[str]] = {node_id: [] for node_id in node_ids}
     in_degree = {node_id: 0 for node_id in node_ids}
     for edge in edges:
         if edge.from_ not in node_ids or edge.to not in node_ids:
-            raise ValueError(f"combined growth edge {edge.id!r} has an unknown endpoint")
+            raise ValueError(f"growth edge {edge.id!r} has an unknown endpoint")
         adjacency[edge.from_].append(edge.to)
         in_degree[edge.to] += 1
     ready = [node_id for node_id, degree in in_degree.items() if degree == 0]
@@ -3129,15 +3063,9 @@ def _reject_growth_cycle(
                 ready.append(successor)
     if visited != len(node_ids):
         stuck = sorted(node_id for node_id, degree in in_degree.items() if degree)
-        message = (
-            f"growth fragment creates a cycle involving {stuck!r}"
-            if as_growth_rejection
-            else f"live topology contains a cycle involving {stuck!r}"
+        _raise_growth_rejected(
+            ValueError(f"growth fragment creates a cycle involving {stuck!r}")
         )
-        error = ValueError(message)
-        if as_growth_rejection:
-            _raise_growth_rejected(error)
-        raise error
 
 
 def _validated_growth_depth(state: RunState, spawner_id: str) -> int | None:
@@ -3164,10 +3092,48 @@ def _validated_growth_depth(state: RunState, spawner_id: str) -> int | None:
     return depth
 
 
+def _node_names(node_id: str, node: Node, wiring: dict[str, Any]) -> tuple[str, ...]:
+    """Return the node IDs one node names through its wiring and redirect fields."""
+    names: dict[str, None] = {}
+    for target in (node.commit_as, node.origin_id, node.skipped_output_target()):
+        if type(target) is str and target != node_id:
+            names[target] = None
+    for source in wiring.values():
+        source = binding_source(source)
+        if not isinstance(source, str):
+            continue
+        try:
+            paths = expr_refs_of(source)
+        except ExpressionError as exc:
+            raise ValueError(f"node {node_id!r} has invalid wiring: {exc}") from exc
+        for path in paths:
+            names.setdefault(path.split(".", 1)[0], None)
+    return tuple(names)
+
+
+def _growth_index(state: RunState) -> _GrowthIndex:
+    """Return ``state.growth_index``, building it from the live graph on first use."""
+    if state.growth_index is None:
+        names = {
+            node_id: _node_names(node_id, node, state.flow.wiring.get(node_id, {}))
+            for node_id, node in state.flow.nodes.items()
+        }
+        referrers: dict[str, dict[str, None]] = {}
+        for node_id, named in names.items():
+            for name in named:
+                referrers.setdefault(name, {})[node_id] = None
+        grown: dict[str, dict[str, None]] = {}
+        for node_id, owner in state.growth_owner.items():
+            grown.setdefault(owner, {})[node_id] = None
+        state.growth_index = _GrowthIndex(names=names, referrers=referrers, grown=grown)
+    return state.growth_index
+
+
 def _retired_ids(
     state: RunState,
     spawner_id: str,
     prune_ids: frozenset[str],
+    grown: dict[str, dict[str, None]],
 ) -> tuple[frozenset[str], frozenset[str]]:
     """Split the requested and deferred prune ids into those retired now and those kept.
 
@@ -3181,20 +3147,21 @@ def _retired_ids(
 
     Args:
         state (`RunState`):
-            Pre-transition state whose ``growth_owner`` names each node's owner.
+            Pre-transition state whose ``deferred_prune`` names earlier deferred ids.
         spawner_id (`str`):
             Spawner whose growth record asks for ``prune_ids``.
         prune_ids (`frozenset[str]`):
             Node IDs the growth record asks to prune.
+        grown (`dict[str, dict[str, None]]`):
+            Each owner's directly grown live nodes.
 
     Returns:
         `tuple[frozenset[str], frozenset[str]]`:
             The node IDs retired by this growth, and the candidates kept live and
             deferred to a later growth.
     """
-    owned: dict[str, list[str]] = {}
-    for node_id, owner in state.growth_owner.items():
-        owned.setdefault(owner, []).append(node_id)
+    if not prune_ids and not state.deferred_prune:
+        return frozenset(), frozenset()
     settled = (NodeState.TAKEN, NodeState.SKIPPED, NodeState.EXPANDED)
     ready_ids = set(state.ready)
 
@@ -3210,7 +3177,7 @@ def _retired_ids(
         unit = [candidate]
         pending = [candidate]
         while pending:
-            for node_id in owned.get(pending.pop(), ()):
+            for node_id in grown.get(pending.pop(), ()):
                 unit.append(node_id)
                 pending.append(node_id)
         units[candidate] = unit
@@ -3331,31 +3298,49 @@ def _validate_prune_dependencies(
     state: RunState,
     fragment: Flow,
     prune_ids: frozenset[str],
+    index: _GrowthIndex,
 ) -> None:
     """Validate explicit node-requested prune dependency constraints."""
-    _validate_prune_dependencies_data(state, fragment, prune_ids)
+    _validate_prune_dependencies_data(state, fragment, prune_ids, index)
 
 
 def _validate_prune_dependencies_data(
     state: RunState,
     fragment: Flow,
     prune_ids: frozenset[str],
+    index: _GrowthIndex,
 ) -> None:
-    """Reject future work whose edge, wiring, commit, or origin reads a pruned ID."""
+    """Reject future work whose edge, wiring, commit, or origin reads a pruned ID.
+
+    The future work checked is every fragment node plus each unfinished live node
+    that names a pruned ID or has an edge from one, found through the growth
+    index and adjacency rather than a scan of every node.
+    """
     if not prune_ids:
         return
-    dependent_ids = set(fragment.nodes)
-    dependent_ids.update(
-        node_id
-        for node_id, disposition in state.node_state.items()
-        if disposition is NodeState.UNKNOWN and node_id not in prune_ids
-    )
-    combined_nodes = dict(state.flow.nodes)
-    combined_nodes.update(fragment.nodes)
-    combined_wiring = dict(state.flow.wiring)
-    combined_wiring.update(fragment.wiring)
-    for edge in [*state.flow.edges, *fragment.edges]:
-        if edge.from_ in prune_ids and edge.to in dependent_ids:
+    candidates = dict.fromkeys(fragment.nodes)
+    for node_id in sorted(prune_ids):
+        candidates.update(dict.fromkeys(index.referrers.get(node_id, ())))
+        candidates.update(
+            dict.fromkeys(edge.to for edge in state.flow.outgoing(node_id))
+        )
+    dependent_ids = {
+        node_id: None
+        for node_id in candidates
+        if node_id in fragment.nodes
+        or (
+            node_id not in prune_ids
+            and state.node_state.get(node_id) is NodeState.UNKNOWN
+        )
+    }
+    combined_nodes = ChainMap(fragment.nodes, state.flow.nodes)
+    combined_wiring = ChainMap(fragment.wiring, state.flow.wiring)
+    pruned_edges = [
+        edge for node_id in sorted(prune_ids) for edge in state.flow.outgoing(node_id)
+    ]
+    pruned_edges.extend(edge for edge in fragment.edges if edge.from_ in prune_ids)
+    for edge in pruned_edges:
+        if edge.to in dependent_ids:
             _raise_growth_rejected(
                 ValueError(
                     f"surviving node {edge.to!r} depends on pruned edge source "
@@ -3412,21 +3397,6 @@ def _validate_prune_dependencies_data(
                             "pruned node"
                         )
                     )
-
-
-def _growth_adjacency(
-    nodes: dict[str, Node],
-    edges: list[Edge],
-) -> tuple[dict[str, list[Edge]], dict[str, list[Edge]]]:
-    """Build detached incoming/outgoing indexes for a fully validated topology."""
-    incoming: dict[str, list[Edge]] = {}
-    outgoing: dict[str, list[Edge]] = {}
-    for edge in edges:
-        if edge.from_ not in nodes or edge.to not in nodes:
-            raise ValueError(f"final growth edge {edge.id!r} has an unknown endpoint")
-        outgoing.setdefault(edge.from_, []).append(edge)
-        incoming.setdefault(edge.to, []).append(edge)
-    return incoming, outgoing
 
 
 def _recorded_stack(stacks: tuple[MemoryStack, ...], locator: tuple[str, ...]) -> MemoryStack | None:
@@ -3784,7 +3754,7 @@ def _skipped_output_target(state: RunState, node_id: str) -> str:
 
 
 def _validate_skipped_output_target(
-    nodes: dict[str, Node],
+    nodes: Container[str],
     node_id: str,
     target: Any,
 ) -> str:
@@ -3804,46 +3774,104 @@ def _validate_skipped_output_target(
     return target
 
 
-def _validate_final_redirects(
-    *,
-    nodes: dict[str, Node],
-    node_state: dict[str, NodeState],
-    edge_state: dict[str, NodeState],
-    pool_store: dict[str, TypedValue],
-    ready: tuple[str, ...],
-    in_flight: tuple[str, ...],
-    incoming: dict[str, list[Edge]],
-    outgoing: dict[str, list[Edge]],
+class _GrowthNodeIds:
+    """Membership view of the node IDs live after a growth, without copying them."""
+
+    __slots__ = ("_fragment", "_live", "_retired")
+
+    def __init__(
+        self,
+        fragment: dict[str, Node],
+        live: dict[str, Node],
+        retired: frozenset[str],
+    ) -> None:
+        """Combine the fragment's nodes with the live nodes the growth keeps."""
+        self._fragment = fragment
+        self._live = live
+        self._retired = retired
+
+    def __contains__(self, node_id: object) -> bool:
+        """Return whether ``node_id`` is a node after the growth."""
+        return node_id in self._fragment or (
+            node_id in self._live and node_id not in self._retired
+        )
+
+
+def _validate_growth_redirects(
+    state: RunState,
+    fragment: Flow,
+    spawner_id: str,
+    retired_ids: frozenset[str],
+    retired_edge_ids: frozenset[str],
+    index: _GrowthIndex,
 ) -> None:
-    """Require every final growth redirect to have one inert logical anchor."""
-    mutable: dict[str, list[str]] = {}
-    for node_id, node in nodes.items():
-        if node_state.get(node_id) is not NodeState.UNKNOWN:
-            continue
-        target = node.skipped_output_target()
+    """Require every redirect a growth adds to have one inert logical anchor.
+
+    Only targets of fragment nodes gain an owner, and the growth only relaxes
+    every other target, so those are the targets checked.  Each is read in the
+    post-growth topology: the live state plus the fragment minus the retired
+    nodes and edges.
+    """
+    final_ids = _GrowthNodeIds(fragment.nodes, state.flow.nodes, retired_ids)
+    new_owners: dict[str, list[str]] = {}
+    for node_id, node in fragment.nodes.items():
         try:
-            target = _validate_skipped_output_target(nodes, node_id, target)
+            target = _validate_skipped_output_target(
+                final_ids, node_id, node.skipped_output_target()
+            )
         except (TypeError, ValueError) as exc:
             _raise_growth_rejected(exc)
         if target == node_id:
             continue
-        mutable.setdefault(target, []).append(node_id)
-    for target, owner_ids in mutable.items():
-        owner_id = owner_ids[0]
+        new_owners.setdefault(target, []).append(node_id)
+    if not new_owners:
+        return
+    ready_ids = set(state.ready)
+    fragment_heads = {edge.to for edge in fragment.edges}
+    for target, fragment_owner_ids in new_owners.items():
+        owner_ids = [
+            node_id
+            for node_id in index.referrers.get(target, ())
+            if node_id != spawner_id
+            and node_id not in retired_ids
+            and state.node_state.get(node_id) is NodeState.UNKNOWN
+            and state.flow.nodes[node_id].skipped_output_target() == target
+        ]
+        owner_ids.extend(fragment_owner_ids)
+        if target in fragment.nodes:
+            disposition: Any = NodeState.UNKNOWN
+            is_executable = target == fragment.start_id
+            has_incoming = target in fragment_heads
+        else:
+            disposition = (
+                NodeState.EXPANDED
+                if target == spawner_id
+                else state.node_state.get(target)
+            )
+            is_executable = target in ready_ids or (
+                target in state.in_flight and target != spawner_id
+            )
+            has_incoming = any(
+                edge.id not in retired_edge_ids
+                for edge in state.flow.incoming(target)
+            )
         try:
             _require_unambiguous_redirect(
-                owner_id=owner_id,
+                owner_id=owner_ids[0],
                 target=target,
                 owners=tuple(owner_ids),
-                has_committed_value=target in pool_store,
-                disposition=node_state.get(target),
-                is_executable=target in ready or target in in_flight,
-                has_incoming=bool(incoming.get(target, ())),
+                has_committed_value=target in state.pool.store,
+                disposition=disposition,
+                is_executable=is_executable,
+                has_incoming=has_incoming,
             )
         except ValueError as exc:
             _raise_growth_rejected(exc)
-        for edge in outgoing.get(target, ()):
-            if edge_state.get(edge.id) is not NodeState.UNKNOWN:
+        # New fragment edges start UNKNOWN; only kept live edges can be settled.
+        for edge in state.flow.outgoing(target):
+            if edge.id in retired_edge_ids:
+                continue
+            if state.edge_state.get(edge.id) is not NodeState.UNKNOWN:
                 _raise_growth_rejected(
                     ValueError(
                         f"logical output target {target!r} has a settled outgoing "
@@ -4059,22 +4087,14 @@ def _route_outgoing(
     node_id: str,
     edge_updates: dict[str, NodeState],
 ) -> tuple[Edge, ...]:
-    """Return one node's validated outgoing adjacency in stored order."""
+    """Return one node's validated outgoing adjacency in stored order.
+
+    The adjacency index is the authority here; compile builds it and only growth
+    commits change it, so a route reads its own edges, not every edge in the flow.
+    """
     outgoing = state.flow.outgoing(node_id)
-    if type(outgoing) is not list or type(state.flow.edges) is not list:
-        raise TypeError("compiled flow edge storage and adjacency must be lists")
-    authoritative: list[Edge] = []
-    for edge in state.flow.edges:
-        if not isinstance(edge, Edge):
-            raise ValueError("compiled flow contains an invalid edge")
-        if edge.from_ == node_id:
-            authoritative.append(edge)
-    if len(outgoing) != len(authoritative) or any(
-        indexed is not stored for indexed, stored in zip(outgoing, authoritative)
-    ):
-        raise ValueError(
-            f"route node {node_id!r} has an invalid outgoing adjacency"
-        )
+    if type(outgoing) is not list:
+        raise TypeError("compiled flow adjacency must be lists")
     seen: set[str] = set()
     validated: list[Edge] = []
     for edge in outgoing:
@@ -4595,7 +4615,7 @@ def _growth_observer(record: NodeExpandedRecord) -> NodeExpanded:
 
 
 def _materialize_growth(plan: _GrowthPlan) -> _GrowthApply:
-    """Materialize every final container and fresh observer before durable append."""
+    """Build fresh fragment wiring and the observer before durable append."""
     envelope = decode_record(plan.envelope_bytes)
     record = envelope.record
     if not isinstance(record, NodeExpandedRecord):
@@ -4606,35 +4626,117 @@ def _materialize_growth(plan: _GrowthPlan) -> _GrowthApply:
         and record.topology_digest == plan.delta.topology_digest
     ):
         raise ValueError("immutable growth plan record and delta disagree")
-    topology = plan.topology
     return _GrowthApply(
-        nodes=dict(topology.nodes),
-        edges=list(topology.edges),
         wiring={
             node_id: copy.deepcopy(wiring)
-            for node_id, wiring in topology.wiring
-        },
-        incoming={
-            node_id: list(edges) for node_id, edges in topology.incoming
-        },
-        outgoing={
-            node_id: list(edges) for node_id, edges in topology.outgoing
-        },
-        pool_store=dict(topology.pool_store),
-        node_state=dict(topology.node_state),
-        edge_state=dict(topology.edge_state),
-        ready=deque(topology.ready),
-        in_flight={node_id: None for node_id in topology.in_flight},
-        accepted_starts=dict(topology.accepted_starts),
-        depth=dict(topology.depth),
-        growth_owner=dict(topology.growth_owner),
-        deferred_prune=topology.deferred_prune,
-        wiring_overrides={
-            node_id: copy.deepcopy(wiring)
-            for node_id, wiring in topology.wiring_overrides
+            for node_id, wiring in plan.topology.wiring
         },
         observers=(_growth_observer(record),),
     )
+
+
+def _apply_growth_index(
+    state: RunState,
+    delta: _GrowthDelta,
+    topology: _GrowthTopology,
+) -> None:
+    """Carry one growth into ``state.growth_index`` before ownership changes."""
+    index = state.growth_index
+    if index is None:  # preparation builds it; nothing to keep current otherwise
+        return
+    for node_id in delta.retired_ids:
+        for name in index.names.pop(node_id, ()):
+            referrers = index.referrers.get(name)
+            if referrers is not None:
+                referrers.pop(node_id, None)
+                if not referrers:
+                    del index.referrers[name]
+        owner = state.growth_owner.get(node_id)
+        if owner in index.grown:
+            index.grown[owner].pop(node_id, None)
+        index.grown.pop(node_id, None)
+    for node_id, named in topology.names:
+        index.names[node_id] = named
+        for name in named:
+            index.referrers.setdefault(name, {})[node_id] = None
+    for node_id, owner in topology.growth_owner:
+        previous = state.growth_owner.get(node_id)
+        if previous in index.grown:
+            index.grown[previous].pop(node_id, None)
+        if owner is not None:
+            index.grown.setdefault(owner, {})[node_id] = None
+
+
+def _apply_growth(
+    state: RunState,
+    delta: _GrowthDelta,
+    topology: _GrowthTopology,
+    wiring: dict[str, dict[str, Any]],
+) -> None:
+    """Install one prevalidated growth into the live containers in place.
+
+    Runs after append, so it only does dictionary and list updates that the
+    preparation already proved valid.
+    """
+    flow = state.flow
+    retired = frozenset(delta.retired_ids)
+    _apply_growth_index(state, delta, topology)
+    if retired:
+        # Edges are appended in growth order and a prune retires recent growth, so
+        # scanning back from the end finds the retired edges without a full pass.
+        pending = {edge.id for edge in topology.retired_edges}
+        position = len(flow.edges)
+        while pending and position:
+            position -= 1
+            if flow.edges[position].id in pending:
+                pending.discard(flow.edges[position].id)
+                del flow.edges[position]
+        for edge in topology.retired_edges:
+            state.edge_state.pop(edge.id, None)
+            for adjacency, node_id in (
+                (flow._outgoing, edge.from_),
+                (flow._incoming, edge.to),
+            ):
+                if node_id in retired or node_id not in adjacency:
+                    continue
+                kept = [other for other in adjacency[node_id] if other is not edge]
+                if kept:
+                    adjacency[node_id] = kept
+                else:
+                    del adjacency[node_id]
+        for node_id in delta.retired_ids:
+            flow.nodes.pop(node_id, None)
+            flow.wiring.pop(node_id, None)
+            flow._incoming.pop(node_id, None)
+            flow._outgoing.pop(node_id, None)
+            state.node_state.pop(node_id, None)
+            state.pool.store.pop(node_id, None)
+            state.depth.pop(node_id, None)
+            state.wiring_overrides.pop(node_id, None)
+            state.growth_owner.pop(node_id, None)
+
+    flow.nodes.update(topology.nodes)
+    flow.edges.extend(topology.edges)
+    flow.wiring.update(wiring)
+    for edge in topology.edges:
+        flow._outgoing.setdefault(edge.from_, []).append(edge)
+        flow._incoming.setdefault(edge.to, []).append(edge)
+    for node_id in delta.new_node_ids:
+        state.node_state[node_id] = NodeState.UNKNOWN
+    if delta.spawner_id not in retired:
+        state.node_state[delta.spawner_id] = NodeState.EXPANDED
+    for edge_id in delta.new_edge_ids:
+        state.edge_state[edge_id] = NodeState.UNKNOWN
+    del state.in_flight[delta.spawner_id]
+    del state.accepted_starts[delta.spawner_id]
+    state.ready.append(delta.fragment_start_id)
+    state.depth.update(topology.depth)
+    state.deferred_prune = topology.deferred_prune
+    for node_id, owner in topology.growth_owner:
+        if owner is None:
+            state.growth_owner.pop(node_id, None)
+        else:
+            state.growth_owner[node_id] = owner
 
 
 __all__ = [

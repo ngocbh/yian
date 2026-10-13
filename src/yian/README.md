@@ -1545,6 +1545,11 @@ growth retires them once settled (`RunState.deferred_prune`); a self-pruning LOO
 is always retired. The reducer finds grown nodes from accepted growth records
 (`RunState.growth_owner`). `NodeExpandedRecord.prune_ids` keeps
 only the ids the node asked for; replay re-derives the rest.
+A growth costs its fragment plus its prunes, not the run's graph so far. The reducer
+checks the fragment against the live state through indexes: the adjacency lists and
+`RunState.growth_index`, a derived reverse lookup of which live nodes name each node and
+which nodes each owner grew. Commit applies the change to the live containers in place
+after the record is appended.
 
 Compile also owns stable identity for the static program. `flow_manifest`
 canonicalizes execution semantics, `flow_fingerprint` hashes that manifest, and

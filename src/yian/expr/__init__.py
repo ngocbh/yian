@@ -21,7 +21,7 @@ when transferring feedback. This leaf uses only the standard library and stays
 independent of nodes, memory, and runtime.
 
 Flow invocation is NO LONGER a `${...}` construct — it is the compile-time
-whole-value `call(...)` directive (in `compose.calls`), not part of this engine.
+whole-value `call(...)` directive (in `compose.desugar.inline_calls`), not part of this engine.
 
 Knows about:   `typesys` (the pool and value types, in `expressions`).
 Never imports: `nodes`, `compile`, or `runtime` (they import IT).

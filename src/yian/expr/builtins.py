@@ -1,13 +1,13 @@
-"""Prompt builtins — functions an author may call INSIDE an AGENT/HUMAN_INPUT prompt.
+"""Builtins — pure functions an author may call inside a `${...}` expression.
 
-A prompt `${...}` span may be a plain reference (`${name}`) OR a builtin call
+A `${...}` span may be a plain reference (`${name}`) OR a builtin call
 (`${ render_as_json(${briefs}, 4) }`). `TEMPLATE_FNS` maps a builtin name to a pure
-value->value function; the prompt renderer (`expr.template.render_template_record`)
-invokes it at render time against the node's already-bound declared inputs.
+value->value function. The unified evaluator (`expr.expressions.eval_expr`) dispatches
+every call through it, so builtins work in prompts, bindings, and conditions; a prompt
+calls them against the node's already-bound declared inputs.
 
 This is a deliberate, bounded bend of the "all computation is a node" law: builtins are
-read-only string formatting over a node's OWN inputs, produce no graph node or edge, and
-are unavailable in `from:`/`when:`/bindings. See `docs/expressions.md`.
+read-only formatting and produce no graph node or edge. See `docs/expressions.md`.
 
 Knows about: `expr.expressions` (peer — `ExpressionError`).
 Never imports: `template`, `nodes`, `compile`, `runtime` (they sit above / beside it).

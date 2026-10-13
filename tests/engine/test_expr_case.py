@@ -5,7 +5,7 @@ import pytest
 from yian.expr.expressions import (
     ExpressionError,
     evaluate_when,
-    render_template,
+    evaluate_when_record,
     resolve_reference,
 )
 from yian.compile.model import END_ID, START_ID, Edge, CompiledFlow
@@ -174,36 +174,25 @@ def test_when_list_literal_membership_and_equality():
     assert evaluate_when("5 in [2 + 3, 10]", pool) is True
 
 
-# --- pool-scoped template rendering ----------------------------------------- #
-
-
-def test_render_template_substitutes_present_ref():
-    pool = VariablePool()
-    pool.add_system("topic", "ZETA")
-    # store the node's value directly (no `{"output": ...}` wrap).
-    pool.set("a", {"pe": 21.0})
-    assert (
-        render_template("Assess ${system.topic} pe=${a.output.pe}", pool)
-        == "Assess ZETA pe=21.0"
-    )
-
-
-def test_render_template_raises_on_unresolved_ref():
-    pool = VariablePool()
-    with pytest.raises(ExpressionError):
-        render_template("Assess ${system.topic} today.", pool)
-    with pytest.raises(ExpressionError):
-        render_template("From ${ghost.output}.", pool)
-
-
-def test_render_template_no_refs_is_identity():
-    assert render_template("plain text, no refs", VariablePool()) == "plain text, no refs"
-
-
 def test_condition_context_treats_missing_reference_as_falsy():
     # Template rendering is strict, while condition evaluation treats a miss as falsy.
     pool = VariablePool()
     assert evaluate_when("${ghost.output} > 5", pool) is False
+
+
+def test_record_condition_compares_a_miss_as_null():
+    # A miss is None compared as a plain value: `==` is false and `!=` is true.
+    assert evaluate_when_record('${x} == "done"', {}) is False
+    assert evaluate_when_record('${x} != "done"', {}) is True
+    assert evaluate_when_record('${x} != "done"', {"x": None}) is True
+    assert evaluate_when_record("${x}", {}) is False
+
+
+def test_builtins_evaluate_in_conditions_and_bindings():
+    from yian.expr.template import eval_binding
+
+    assert evaluate_when_record('${upper(s) == "AB"}', {"s": "ab"}) is True
+    assert eval_binding('${join(items, ",")}', {"items": ["a", "b"]}.get) == "a,b"
 
 
 # --- record-scoped strict prompt rendering ---------------------------------- #

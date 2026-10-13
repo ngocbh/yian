@@ -194,7 +194,7 @@ def test_builtin_call_with_string_arg():
 
 
 def test_call_result_dotted_access():
-    # dotted access on a call result (mirrors the prompt `_PromptCall.trailing`).
+    # dotted access on a call result (`${fn(x).field}`).
     _tree("fn(x).field")
 
 

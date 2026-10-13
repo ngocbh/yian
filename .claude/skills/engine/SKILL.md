@@ -349,7 +349,9 @@ Most are just the functional model (above) made enforceable:
   lower to that same child contract with stable lexical identity and a closed
   generated-input scope. A spawner returns only a canonical
   `Grow(seed, prune)`; the compile-owned `build_grow` interprets that seed after the
-  package-root run boundary injects it into runtime. Never assume a node is a leaf;
+  package-root run boundary injects it into runtime. Seed values are resolved data: the
+  child START receives them verbatim and never re-evaluates a `${...}` inside a string.
+  Never assume a node is a leaf;
   preserve recursion through compile + run and deterministic run-record replay.
 - **General / expressive** — the engine **privileges no output type** (report,
   classification, decision, number, structured record — whatever the terminal

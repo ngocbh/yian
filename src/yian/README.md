@@ -1491,8 +1491,10 @@ lock while a worker can still produce an outcome.
 A spawner node returns `Grow(seed, prune)` without importing `compile`. The
 kind-aware `compile.expand.build_grow(spawner, seed)` converts the canonical seed
 into a deterministic `Flow`; package-root `run.py` injects that callable into both
-live execution and replay. Runtime validates and splices the fragment generically,
-remaining kind-blind. During that compile-owned construction, CALL/MAP/LOOP
+live execution and replay. Seed values are resolved data: the child START receives
+each one verbatim, so text containing `${...}` (a shell script, an LLM answer) is never
+evaluated a second time inside the child. Runtime validates and splices the fragment
+generically, remaining kind-blind. During that compile-owned construction, CALL/MAP/LOOP
 prefix child clones with `spawner.failure_trace()`; MAP also stamps its generated
 boundaries, while a LOOP's next driver keeps only the enclosing
 `origin_context`. A LOOP merges the next carried record at respawn: the next driver

@@ -1572,56 +1572,64 @@ def test_growth_recipe_tampering_fails_replay_before_apply(change):
     assert (_trace_snapshot(replay.trace), tuple(replay.flow.nodes), replay.next_sequence) == before
 
 
-@pytest.mark.parametrize("seed,expected,early_peer", [
-    ("${peer.output | null}", 11, False),
-    ("${peer.output | null}", None, False),
-    ("${peer.output}", 11, True),
+@pytest.mark.parametrize("seed,early_peer", [
+    ("${peer.output | null}", False),
+    ("${peer.output}", False),
+    ("${peer.output}", True),
 ])
-def test_reference_looking_seed_strings_use_actual_forward_binding(seed, expected, early_peer):
+def test_reference_looking_seed_strings_reach_the_child_as_text(seed, early_peer):
+    # A seed is resolved data: the child START receives the exact text, its local route is a
+    # literal, and no feedback reaches `peer`, whichever order `peer` runs in.
     from yian.compile.model import START_ID
+    from yian.events import RunSucceeded
     from yian.expr.lineage import route_feedback
     from tests.engine._fakes import FuncNode
     from tests.engine._graph_builder import _engine
 
-    peer = FuncNode("peer", lambda _: expected)
+    peer = FuncNode("peer", lambda _: 11)
     engine = _engine(_seed_call_flow(extra_nodes=(peer,), extra_first=early_peer), {"seed": seed}, learnable=True)
     list(engine.run())
+    assert isinstance(engine.state.result, RunSucceeded), engine.state.result
     trace = engine.state.trace
     occurrences = {item.node_id: item for item in trace.occurrences}
     parent = occurrences["spawn"]
     child = occurrences[f"spawn/{START_ID}"]
     assert parent.record.forward_capture.bound_inputs == {"x": seed}
     capture = child.record.forward_capture
-    assert capture.bound_inputs == {"x": expected}
-    assert capture.evaluated_keys == frozenset({"x"})
-    assert child.input_route == capture.route
-    if early_peer:
-        assert occurrences["peer"].outcome_seq < parent.outcome_seq < child.outcome_seq
-    else:
-        assert parent.outcome_seq < occurrences["peer"].outcome_seq < child.outcome_seq
-    routed = route_feedback(child.input_route, {"x": "Change."}, trace.lookup_source)
-    assert [(item.source, item.feedback) for item in routed.contributions] == (
-        [(occurrences["peer"].source, "Change.")] if expected is not None else []
+    assert capture.bound_inputs == {"x": seed}
+    assert capture.evaluated_keys == frozenset()
+    assert capture.route.children[0].kind == "literal"
+    # The joined route reaches the run input the seed came from, not `peer`.
+    root = occurrences[START_ID]
+    assert child.input_route.children[0].source == SourceRef(
+        root.source.run_id, root.source.execution_seq, ("seed",)
     )
-    if expected is None:
-        assert capture.route.children[0].kind == "literal"
+    routed = route_feedback(child.input_route, {"x": "Change."}, trace.lookup_source)
+    assert all(item.source != occurrences["peer"].source for item in routed.contributions)
 
 
-def test_incomplete_child_binding_joins_only_safe_captured_fields():
+def test_failed_child_binding_joins_captured_fields():
     from yian.compile.model import START_ID
+    from yian.compose.helpers.types import read_type
+    from yian.nodes.contracts import Parameter, ValueContract
     from yian.runtime.log import NodeFailedRecord
     from tests.engine._graph_builder import _engine
 
-    engine = _engine(_seed_call_flow({"safe": "${input.safe}", "x": "${input.seed}"}),
-                     {"safe": 7, "seed": '${null :? "missing"}'}, learnable=True)
+    flow = _seed_call_flow({"safe": "${input.safe}", "x": "${input.seed}"})
+    flow.nodes["spawn"].child.nodes[START_ID].params = [
+        Parameter("safe"),
+        Parameter("x", contract=ValueContract(read_type("int", {})), required=True),
+    ]
+    engine = _engine(flow, {"safe": 7, "seed": "not a number"}, learnable=True)
     list(engine.run())
     trace = engine.state.trace
     child = trace.occurrences[-1]
     assert child.node_id == f"spawn/{START_ID}", child.record
     assert isinstance(child.record, NodeFailedRecord)
     assert child.record.failure == engine.state.result.failure
+    assert child.record.failure.code == "contract.input"
     assert child.record.forward_capture.bound_inputs is None
-    assert child.input_route.names == child.record.forward_capture.route.names == ("safe",)
+    assert child.input_route.names == child.record.forward_capture.route.names == ("safe", "x")
     root = next(item for item in trace.occurrences if item.node_id == START_ID)
     assert child.input_route.children[0].source == SourceRef(root.source.run_id, root.source.execution_seq, ("safe",))
     boundary, = trace.boundaries

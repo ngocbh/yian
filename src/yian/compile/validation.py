@@ -23,9 +23,10 @@ from yian.compile.model import END_ID, START_ID
 from yian.typesys.values import TypeCheckError, ValueKind, Type, build_value_as
 
 _CLOSED_HEADS = ()              # `outputs` is no longer a head; node-first head dispatch
-_SYSTEM_AMBIENTS = ("today", "now", "run_id")  # the ONLY valid ${system.X} ambients
+# The ONLY valid ${system.X} ambients, each with its scalar type label:
 #   today=date / now=datetime — the host clock seam; run_id=str — the run-scoped id
 #   (a host-injected ambient, like the clock; seeded once at the boundary, child-inherited)
+_SYSTEM_AMBIENTS = {"today": "date", "now": "datetime", "run_id": "str"}
 
 
 class FlowValidationError(ValueError):
@@ -392,7 +393,8 @@ def _classify_path(
     - `${input.X}` closed-checks against the flow's declared inputs.
     - `${<node>.output[.X]}` (node-first) checks against real node ids; the second
       segment MUST be the literal `output` (the syntactic discriminator).
-    - `${system.X}` is the strict clock ambient namespace.
+    - `${system.X}` is the strict clock ambient namespace; each ambient is a scalar,
+      so a field read below it is an error.
     - `extra_heads` is a per-call set of body-local scopes (e.g. MAP's `${item}`).
     - Legacy `${inputs.X}` / `${outputs.X}` return the retired-plural-head typo hint
       ("did you mean `input` / `<node>.output`?").
@@ -419,6 +421,12 @@ def _classify_path(
         if len(parts) < 2 or parts[1] not in _SYSTEM_AMBIENTS:
             bad = parts[1] if len(parts) >= 2 else ""
             return f"reference ${{{path}}} uses unknown system ambient {bad!r} (only today/now/run_id)"
+        if len(parts) > 2:
+            # every ambient is a scalar, so a field read can only drop segments at run time
+            return (
+                f"reference ${{{path}}} reads field {parts[2]!r} on type "
+                f"{_SYSTEM_AMBIENTS[parts[1]]}, which has no fields"
+            )
         return None
     # node-id head — `${<node>.output[.X]}`.
     if head in valid_targets:

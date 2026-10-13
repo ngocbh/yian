@@ -191,7 +191,7 @@ The runtime state primitive the engine owns. Narrow by design:
   |-----------|-------------|
   | `${input.X}` | field `X` of the flow's input |
   | `${node.output[.path]}` | node `node`'s value, dotting into an object |
-  | `${system.X}` | a host-injected ambient (run id / clock); reserved, run-global |
+  | `${system.X}` | a host-injected ambient: `today` (`date`), `now` (`datetime`), or `run_id` (`str`); reserved, run-global. These are scalars, so `${system.today.year}` is a load error |
 
   An unrecognized head resolves to `None` (the missing-ref-is-falsy contract — see
   [Expressions](expressions.md)). Because values are typed *objects*,

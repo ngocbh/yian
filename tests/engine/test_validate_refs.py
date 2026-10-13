@@ -159,6 +159,60 @@ def test_wait_until_accepts_valid_reference_sources(source: str):
     load_flow(_WAIT_REFERENCE_FLOW.replace("SOURCE", source))
 
 
+_SYSTEM_FIELD_FLOW = """\
+id: system_fields
+name: system_fields
+nodes:
+  read:
+    kind: code
+    input:
+      t: SOURCE
+    output: str
+    code: |
+      return str(inputs["t"])
+output: ${read.output}
+"""
+
+
+@pytest.mark.parametrize(
+    ("source", "message"),
+    [
+        ("${system.today.year}", "reads field 'year' on type date, which has no fields"),
+        ("${system.now.hour}", "reads field 'hour' on type datetime, which has no fields"),
+        ("${system.run_id.x.y}", "reads field 'x' on type str, which has no fields"),
+    ],
+)
+def test_system_ambient_field_read_is_a_load_error(source: str, message: str):
+    with pytest.raises(LoadError) as exc:
+        load_flow(_SYSTEM_FIELD_FLOW.replace("SOURCE", source))
+
+    assert message in str(exc.value)
+
+
+def test_system_ambient_field_read_in_case_when_is_a_load_error():
+    flow = """\
+id: system_case
+name: system_case
+nodes:
+  route:
+    kind: case
+    cases:
+      - when: ${system.today.year} == "2026"
+        then: done
+    else: done
+  done:
+    kind: code
+    output: int
+    code: |
+      return 1
+output: ${done.output}
+"""
+    with pytest.raises(LoadError) as exc:
+        load_flow(flow)
+
+    assert "reads field 'year' on type date, which has no fields" in str(exc.value)
+
+
 # --------------------------------------------------------------------------- #
 # e01 — dangling flow-output reference
 # --------------------------------------------------------------------------- #

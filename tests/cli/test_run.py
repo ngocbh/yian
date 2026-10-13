@@ -609,3 +609,23 @@ def test_prompt_request_offers_model_options_as_a_choice(monkeypatch):
 
     assert run_cli._prompt_request(request) == "B"
     assert seen == [{"question": "Which?", "options": [{"label": "A"}, {"label": "B"}]}]
+
+
+def test_undeclared_input_flag_is_a_bad_parameter(tmp_path: Path):
+    flow = _write_flow(tmp_path, ECHO_FLOW)
+    result = runner.invoke(
+        app, ["run", str(flow), "--input", "topic=clouds", "--input", "topik=x"]
+    )
+    assert result.exit_code == 2
+    # Rich wraps the error panel, so compare with the box and line breaks removed.
+    text = " ".join(_plain(result.output).replace("│", " ").split())
+    assert "unknown input 'topik'; declared inputs: topic" in text
+
+
+def test_undeclared_inputs_json_key_is_a_bad_parameter(tmp_path: Path):
+    flow = _write_flow(tmp_path, ECHO_FLOW)
+    inputs = tmp_path / "inputs.json"
+    inputs.write_text(json.dumps({"topic": "clouds", "topik": "x"}))
+    result = runner.invoke(app, ["run", str(flow), "--inputs", str(inputs)])
+    assert result.exit_code == 2
+    assert "unknown input 'topik'" in _plain(result.output)

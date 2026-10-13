@@ -89,8 +89,9 @@ yian run FLOW.yaml [--inputs inputs.json] [--input k=v]... \
 ```
 
 `--inputs` accepts a JSON object, including lists, records, and explicit nulls.
-Repeatable `--input k=v` supplies scalar overrides. In a terminal, the CLI
-prompts for declared inputs that are still missing.
+Repeatable `--input k=v` supplies scalar overrides. A name the flow does not
+declare is an error. In a terminal, the CLI prompts for declared inputs that are
+still missing.
 
 New runs use up to eight workers for independent ready nodes. Set
 `--num-workers N` / `-w N` to override the count, or `-w 0` for serial execution.

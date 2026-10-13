@@ -311,9 +311,10 @@ def run_flow(
         flow (`ComposedFlow`):
             Compiled, validated flow to copy and execute.
         inputs (`dict[str, Any]`):
-            Caller values keyed by declared input name. Supplied scalars are
-            coerced into the initial pool; START applies declared defaults and
-            full boundary type checks during its recorded node execution.
+            Caller values keyed by declared input name; any other key is an
+            error. Supplied scalars are coerced into the initial pool; START
+            applies declared defaults and full boundary type checks during its
+            recorded node execution.
         log (`str | os.PathLike[str] | None`, *optional*, defaults to `None`):
             New JSONL authority path. ``None`` uses a process-local
             ``MemoryRunLog``; an existing path is never overwritten.
@@ -405,13 +406,14 @@ def run_flow(
 
     Raises:
         `TypeError`:
-            A public argument has the wrong type, including a malformed `tools`
-            entry or group item, or a `steering` object without
-            `drain`/`interrupted`.
+            A public argument has the wrong type, including `inputs` that is not
+            a mapping, a malformed `tools` entry or group item, or a `steering`
+            object without `drain`/`interrupted`.
         `ValueError`:
-            Inputs, identity, worker count, model configuration, or prepared run
-            state violates its contract, ``llm_config.api_key`` lacks
-            ``llm_config.provider``, ``llm_config.base_url`` lacks
+            An `inputs` key names no declared input, or identity, worker count,
+            model configuration, or prepared run state violates its contract,
+            ``llm_config.api_key`` lacks ``llm_config.provider``,
+            ``llm_config.base_url`` lacks
             ``llm_config.api_key`` or is not an allowed URL, a `BaseTool` in
             `tools` is named differently from its key, a group tool's name
             clashes or is reserved, an AGENT grants a tool or group not in the

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import textwrap
+
 import pytest
 
-from yian.compose import load_flow
+from yian.compose import LoadError, load_flow
 from yian.run import run_flow
+from yian.typesys.values import ValueKind
 
 
 def _flow(nodes: str, output: str, *, inputs: str = "approve: bool", defs: str = "") -> str:
@@ -298,3 +301,100 @@ def test_on_over_a_nullable_literal_may_match_nothing(tag, expected):
     text = _flow(nodes, "\n  v: ${na.output | nb.output}")
     assert _sources(text) == ["${(na.output | nb.output) :- null}"]
     assert _run(text, {"approve": True}) == {"v": expected}
+
+
+def _child_defs(nodes: str, output: str, name: str = "child") -> str:
+    """Return a `defs:` block with one child taking `approve: bool` over `nodes`."""
+    return (
+        f"defs:\n  {name}:\n    input:\n      approve: bool\n    nodes:\n"
+        f"{textwrap.indent(nodes, '    ')}    output:{textwrap.indent(output, '    ')}\n"
+    )
+
+
+_CALL_C1 = "  c1:\n    kind: call\n    call: child\n    input:\n      approve: ${input.approve}\n"
+
+
+def _call_field_type(nodes: str, output: str, field: str):
+    """Return the type of `field` in the output contract of a CALL to a child flow."""
+    text = _flow(_CALL_C1, " ${c1.output}", defs=_child_defs(nodes, output))
+    contract = load_flow(text).compiled.nodes["c1"].output_contract
+    return contract.type.fields[field]
+
+
+def test_call_output_of_a_skipped_branch_is_optional():
+    """A CALL to a child whose output reads a CASE target sees `Optional[str]`."""
+    field = _call_field_type(_R1, "\n  order: ${order.output}", "order")
+    assert field.kind is ValueKind.STRING
+    assert field.nullable
+
+
+def test_call_output_of_a_coalesce_over_a_routing_only_case_is_optional():
+    """A coalesce of `str` targets of a CASE that may match nothing is `Optional[str]`."""
+    field = _call_field_type(_R2, "\n  v: ${a.output | b.output}", "v")
+    assert field.kind is ValueKind.STRING
+    assert field.nullable
+
+
+def test_call_output_of_a_dotted_skipped_read_is_optional():
+    """A field read `${order.output.status}` of a CASE target is Optional of its type."""
+    nodes = (
+        _gate("order", "rejected")
+        + _code("order", '{"status": 1}', output="\n      status: int")
+        + _code("rejected", '"no"')
+    )
+    field = _call_field_type(nodes, "\n  s: ${order.output.status}", "s")
+    assert field.kind is ValueKind.INTEGER
+    assert field.nullable
+
+
+def test_typed_output_over_a_skipped_branch_fails_at_runtime():
+    """`order: str = ${order.output}` loads; a skip fails the declared type at runtime."""
+    text = _flow(_R1, "\n  order: str = ${order.output}")
+    assert _run(text, {"approve": True}) == {"order": "filled"}
+    result = run_flow(load_flow(text), {"approve": False})
+    assert result.status == "failed"
+    assert result.failure.code == "binding.type"
+
+
+def test_optional_typed_output_over_a_skipped_branch_is_null():
+    """`order: Optional[str] = ${order.output}` returns null when skipped."""
+    text = _flow(_R1, "\n  order: Optional[str] = ${order.output}")
+    assert _run(text, {"approve": False}) == {"order": None}
+    assert _run(text, {"approve": True}) == {"order": "filled"}
+
+
+_USE_STR = """  use:
+    input:
+      s: str
+    nodes:
+      x:
+        kind: code
+        output: str
+        input:
+          s: ${input.s}
+        code: |
+          return inputs["s"]
+    output: ${x.output}
+"""
+
+
+def _pass_on(binding: str) -> str:
+    """Return a parent passing `c1`'s skipped output to a `str` input of another child."""
+    defs = _child_defs(_R1, "\n  order: ${order.output}") + _USE_STR
+    nodes = _CALL_C1 + f"  c2:\n    kind: call\n    call: use\n    input:\n      {binding}\n"
+    return _flow(nodes, " ${c2.output}", defs=defs)
+
+
+def test_passing_a_skipped_child_output_to_a_str_input_is_a_load_error():
+    """An untyped argument passing an `Optional[str]` child output to `str` is rejected."""
+    with pytest.raises(LoadError, match=r"Optional\[str\]"):
+        load_flow(_pass_on("s: ${c1.output.order}"))
+
+
+def test_typed_argument_narrows_a_skipped_child_output_at_runtime():
+    """`s: str = ${c1.output.order}` loads; a skip fails the declared type at runtime."""
+    text = _pass_on("s: str = ${c1.output.order}")
+    assert _run(text, {"approve": True}) == "filled"
+    result = run_flow(load_flow(text), {"approve": False})
+    assert result.status == "failed"
+    assert result.failure.code == "binding.type"

@@ -76,6 +76,7 @@ from yian.compose.helpers.output_contracts import resolve_output_binding_contrac
 from yian.compose.helpers.typed_bindings import split_typed_binding
 from yian.compose.desugar.adaptive_questions import desugar_adaptive_questions
 from yian.compose.desugar.case_targets import desugar_case_call_targets
+from yian.compose.desugar.case_values import desugar_case_values
 from yian.compose.validate.case_exhaustive import check_case_exhaustive, exhaustive_cases
 from yian.compose.validate.cycles import reject_cycles
 from yian.compose.validate.human_questions import validate_human_questions
@@ -1152,7 +1153,9 @@ def _assemble(
     the top-level flow and every in-file def:
 
       flow parameters -> split typed `name: Type = value` node inputs and flow outputs
-      into value + declared contract -> desugar -> build every node kind-blind
+      into value + declared contract -> desugar (case value branches to synth CODE nodes,
+      inline calls, adaptive questions, case call targets, `${case.output}`) -> build
+      every node kind-blind
       (`desc.build(ctx)`; physical node-output contracts compile at their existing
       leaf-owned position; a case lowers in its own build) -> attach declared input
       contracts to the node wiring -> cross-flow type check + case exhaustiveness ->
@@ -1443,6 +1446,11 @@ def _assemble(
         catalog_builder=catalog_builder,
         diagnostics=diagnostics,
     )
+
+    # Classify `case` branches and lift each value branch to a synth CODE node. Runs
+    # BEFORE the inline-call desugar so a value's `${...}` input bindings are walked by it
+    # and by the `${case.output}` expansion like any authored CODE input.
+    descriptors = desugar_case_values(descriptors, diagnostics=diagnostics)
 
     # Desugar inline `${ f(...) }` call expressions: each becomes a synth `call`
     # node (CallDescriptor, over=None) and its host binding is rewritten to

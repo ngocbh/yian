@@ -3,8 +3,8 @@
 A branch target may be an inline call (a fresh owned call) instead of a placed node id; it
 desugars to a synth `__call_<n>` node and the then:/else: is rewritten to that synth id. Sound
 because the case veto skip-floods the non-chosen synth branch. Accepted grammar: a whole-value
-`call(...)` directive (a route target is one node id); the retired inline `${flow(args)}` span
-target is a LoadError.
+`call(...)` directive (a route target is one node id). A `${...}` branch is a value, so a
+flow call inside its span is the retired inline `${flow(args)}` form, a LoadError.
 """
 
 import pytest
@@ -12,6 +12,9 @@ import pytest
 from yian.compose import LoadError, load_flow
 from yian.compose.desugar.inline_bodies import INLINE_FLOW_PREFIX
 from yian.run import run_flow
+
+# The retired inline `${flow(args)}` form's message.
+_SPAN_FLOW_CALL = r"a flow call 'take' inside \$\{\.\.\.\} is not supported"
 
 # An in-file `take` def (the branch callable): echoes its stance via the `took` CODE fn.
 _TAKE_DEF = """
@@ -31,7 +34,8 @@ defs:
 
 
 def test_non_bare_then_call_is_rejected():
-    # a `${...}` branch target is the retired inline `${flow(args)}` form -> loud.
+    # a `${...}` branch is a value; a flow call inside its span is the retired inline
+    # `${flow(args)}` form -> loud, pointing at the call(...) directive.
     text = f"""
 id: bad
 name: bad
@@ -41,13 +45,14 @@ input:
 nodes:
   gate:
     kind: case
+    output: str
     cases:
       - when: "${{input.score}} >= 0.5"
         then: ${{ take(stance="a") | take(stance="b") }}
-    else: nope
+    else: call(take, stance="c")
 output: ${{gate.output}}
 """
-    with pytest.raises(LoadError):
+    with pytest.raises(LoadError, match=_SPAN_FLOW_CALL):
         load_flow(text)
 
 
@@ -164,10 +169,10 @@ nodes:
     cases:
       - when: "${{input.score}} >= 0.5"
         then: call(take, stance="a") | call(take, stance="b")
-    else: nope
+    else: call(take, stance="c")
 output: ${{gate.output}}
 """
-    with pytest.raises(LoadError):
+    with pytest.raises(LoadError, match="a branch target must be a node id or a single call"):
         load_flow(text)
 
 
@@ -319,7 +324,7 @@ output: ${{gate.output}}
 
 
 def test_then_span_flow_call_target_is_rejected():
-    # the retired inline `${flow(args)}` case target is a LoadError pointing at call(...).
+    # the retired inline `${flow(args)}` case branch is a LoadError pointing at call(...).
     text = f"""
 id: bad
 name: bad
@@ -329,11 +334,12 @@ input:
 nodes:
   gate:
     kind: case
+    output: str
     cases:
       - when: "${{input.score}} >= 0.5"
         then: ${{ take(stance="pro") }}
-    else: nope
+    else: call(take, stance="con")
 output: ${{gate.output}}
 """
-    with pytest.raises(LoadError):
+    with pytest.raises(LoadError, match=_SPAN_FLOW_CALL):
         load_flow(text)

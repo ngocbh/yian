@@ -12,6 +12,10 @@ passes:
   key. It assigns each retained child a stable
   reserved identity from its complete lexical owner path; authored private-prefix
   targets are rejected before registration.
+- `case_values` — a `case` then:/else: is classified by YAML scalar style: an unquoted
+  bare word names a node (else a located error suggesting the nearest node or quoting),
+  and a value (quoted text, a non-string scalar, a mapping, a list, or a `${...}`
+  template) lifts to a synth `__value_<n>` CODE node that becomes the route target.
 - `inline_calls` — whole-value `call(<flow-id>, kw=...)` directives in any binding
   position mint a synth `call` node and rewrite the binding to `${<synth>.output}`.
   The same pass crosses raw flow assertions into ordered `Assertion` carriers; an

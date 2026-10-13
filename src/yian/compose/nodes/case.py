@@ -169,6 +169,9 @@ class CaseDescriptor(NodeDescriptor):
     # Out of equality like the ranges: a directly constructed descriptor has no source styles.
     then_styles: list[Optional[str]] = field(default_factory=list, compare=False)
     else_style: Optional[str] = field(default=None, compare=False)
+    # Synthetic value-node id -> the authored branch value it was lifted from, filled by
+    # `desugar_case_values` so later checks can read the value a branch produces.
+    value_branches: dict[str, Any] = field(default_factory=dict, compare=False)
     # Source-neutral sites follow the same positional identity as the Compose-only ranges.
     # An empty tuple means direct/source-free construction; otherwise it aligns 1:1
     # with `cases`. `on_origin` belongs to the generated `__on` binding, not a Case.

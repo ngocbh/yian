@@ -414,7 +414,7 @@ def test_growth_builder_receives_a_detached_spawner_and_failure_is_pure():
 
 @pytest.mark.parametrize(
     "helper_name",
-    ["_validate_growth_fragment_data", "expansion_digest", "_growth_adjacency"],
+    ["_validate_growth_fragment_data", "expansion_digest", "_validate_growth_redirects"],
 )
 def test_growth_host_helper_faults_propagate_with_identity(
     monkeypatch: pytest.MonkeyPatch,
@@ -1302,7 +1302,7 @@ def test_growth_requires_exact_live_carriers(
 
 
 def test_growth_rejects_malformed_static_contract_as_a_host_invariant():
-    """Static IR corruption remains outside the builder-owned fragment boundary."""
+    """A corrupt live contract the fragment reads stays outside the fragment boundary."""
     state, log = _initialized_spawner()
     state.flow.nodes["spawn"].output_contract = Type.scalar(  # type: ignore[assignment]
         ValueKind.STRING
@@ -1310,42 +1310,17 @@ def test_growth_rejects_malformed_static_contract_as_a_host_invariant():
     before = _snapshot(state)
     sequence = log.next_sequence
 
+    def reading_builder(spawner: Node, _seed: Any) -> Flow:
+        fragment = _unknown_reference_fragment(spawner.id)
+        fragment.wiring[fragment.end_id]["value"] = f"${{{spawner.id}.output}}"
+        return fragment
+
     with pytest.raises(TypeError, match="exact ValueContract") as caught:
-        prepare_expanded(
-            state,
-            "spawn",
-            Grow(seed={}),
-            lambda spawner, seed: _fragment(spawner.id),
-        )
+        prepare_expanded(state, "spawn", Grow(seed={}), reading_builder)
 
     assert not isinstance(caught.value, GrowthRejected)
     assert _snapshot(state) == before
     assert log.next_sequence == sequence
-
-
-def test_growth_rejects_a_static_cycle_as_a_host_invariant():
-    """A corrupt live graph must not become node-owned fragment rejection."""
-    state, log = _initialized_spawner()
-    state.flow.edges.append(
-        Edge(
-            id="corrupt-static-cycle",
-            from_=state.flow.end_id,
-            to=state.flow.start_id,
-        )
-    )
-    before = _snapshot(state)
-
-    with pytest.raises(ValueError, match="cycle") as caught:
-        prepare_expanded(
-            state,
-            "spawn",
-            Grow(seed={}),
-            lambda spawner, _seed: _fragment(spawner.id),
-        )
-
-    assert not isinstance(caught.value, GrowthRejected)
-    assert _snapshot(state) == before
-    assert log.next_sequence == 4
 
 
 def test_growth_enforces_peak_node_budget_before_same_transition_pruning(monkeypatch):

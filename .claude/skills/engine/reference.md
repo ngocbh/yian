@@ -250,7 +250,9 @@ identity-neutral. The source-neutral `iter_local_origins`,
 
 The rest of the splice (add subgraph, enforce `MAX_TOTAL_NODES`, mint one uniform `NodeExpandedRecord`,
 finish/mark the spawner, apply the origin `commit_as` to the derived terminal, schedule the
-subgraph's `start_id`) is uniform. A generated terminal's baked `Node.commit_as`
+subgraph's `start_id`) is uniform. It costs the fragment plus its prunes: validation looks
+up live nodes through adjacency and `RunState.growth_index` instead of scanning or copying
+the graph, and commit applies the change in place. A generated terminal's baked `Node.commit_as`
 redirects both paths: success resolves it after `Output.commit_as`, while the
 inherited `skipped_output_target()` propagates absence through the same spawner
 anchor. CASE selection still rides `Route.handle`; dynamic `Output.commit_as`

@@ -45,6 +45,7 @@ from yian.compile.memory_layout import (
     resolve_memory_layout,
 )
 from yian.compile.model import CompiledFlow
+from yian.compile.validation import type_relation
 from yian.compose.loader import ComposedFlow
 from yian.diagnostics import Failure, OriginRef
 from yian.events import (
@@ -88,6 +89,7 @@ from yian.runtime.memory_runtime import MemoryRuntime
 from yian.skills import Skill
 from yian.tools import ToolSet
 from yian.tools.types import tool_types
+from yian.typesys import Type, ValueKind, canonical_type_label
 from yian.typesys.pool import VariablePool
 from yian.typesys.seeding import default_run_id, seed_system_clock
 
@@ -826,8 +828,8 @@ def _check_tool_types(flow: CompiledFlow, tools: ToolSet) -> None:
 
     Raises:
         `ValueError`:
-            A TOOL node passes an input its tool does not take, or omits one
-            the tool requires.
+            A TOOL node passes an input its tool does not take, omits one the
+            tool requires, or binds an input whose type can never fit the tool's.
     """
     for node_id, node in _static_nodes(flow):
         call = node.host_tool_call()
@@ -852,6 +854,35 @@ def _check_tool_types(flow: CompiledFlow, tools: ToolSet) -> None:
                 f"TOOL node {node_id!r} is missing input {missing[0]!r} that tool "
                 f"{call.tool_id!r} requires"
             )
+        for name, inferred in call.input_types.items():
+            expected = declared.inputs.get(name)
+            # Disjoint is yian's non-coercing relation, so a binding pydantic
+            # would coerce (a string of digits into an int) is rejected too.
+            if expected is not None and type_relation(inferred, expected) == "disjoint":
+                raise ValueError(
+                    f"TOOL node {node_id!r} input {name!r}: tool {call.tool_id!r} takes "
+                    f"{canonical_type_label(expected)}, but the binding is "
+                    f"{_binding_label(inferred)}"
+                )
+
+
+_LITERAL_LABEL_WIDTH = 40
+
+
+def _binding_label(typ: Type) -> str:
+    """Return a binding type's label, showing a one-value string by its value."""
+    if (
+        typ.kind is ValueKind.STRING
+        and typ.tags is not None
+        and len(typ.tags) == 1
+        and typ.variants is None
+        and not typ.nullable
+    ):
+        (value,) = typ.tags
+        if len(value) > _LITERAL_LABEL_WIDTH:
+            value = value[: _LITERAL_LABEL_WIDTH - 3] + "..."
+        return f'"{value}" (str)'
+    return canonical_type_label(typ)
 
 
 def _check_skills(

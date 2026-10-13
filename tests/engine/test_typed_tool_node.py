@@ -6,6 +6,8 @@ import re
 from pathlib import Path
 
 import pytest
+from langchain_core.tools import BaseTool
+from pydantic import BaseModel, ConfigDict
 
 from yian.compose import load_flow
 from yian.nodes.base import _HostStop
@@ -346,3 +348,212 @@ def test_an_unknown_tool_id_still_fails_the_node():
     assert result.status == "failed"
     assert result.failure.node_id == "place"
     assert "unknown tool id" in result.failure.message
+
+
+def place_int(qty: int) -> str:
+    _calls.append({"qty": qty})
+    return f"placed {qty}"
+
+
+def place_float(qty: float) -> str:
+    _calls.append({"qty": qty})
+    return f"placed {qty}"
+
+
+def place_str(qty: str) -> str:
+    _calls.append({"qty": qty})
+    return f"placed {qty}"
+
+
+class Order(BaseModel):
+    qty: int
+
+
+class StrictOrder(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    qty: int
+
+
+def place_model(order: Order) -> str:
+    return f"placed {order.qty}"
+
+
+def place_strict_model(order: StrictOrder) -> str:
+    return f"placed {order.qty}"
+
+
+class _JsonSchemaTool(BaseTool):
+    """A tool whose argument schema is a JSON Schema dict."""
+
+    name: str = "place_order"
+    description: str = "Place one order."
+    args_schema: dict = {
+        "type": "object",
+        "properties": {"qty": {"type": "integer"}},
+        "required": ["qty"],
+        "additionalProperties": False,
+    }
+
+    def _run(self, qty: int) -> str:
+        return f"placed {qty}"
+
+
+def _typed_flow(binding: str, *, flow_inputs: str = "", extra_nodes: str = "") -> str:
+    """Return a flow whose TOOL node `place` binds `qty` as `binding`."""
+    return f"""
+id: placing
+name: placing
+{flow_inputs}
+nodes:
+{extra_nodes}
+  place:
+    kind: tool
+    tool_id: place_order
+    input:
+      qty: {binding}
+output: ${{place.output}}
+"""
+
+
+def test_a_disjoint_input_type_fails_at_run_start(tmp_path: Path):
+    path = tmp_path / "run.jsonl"
+    flow = load_flow(_typed_flow("${input.s}", flow_inputs="input:\n  s: str"))
+
+    with pytest.raises(ValueError, match=re.escape(
+        "TOOL node 'place' input 'qty': tool 'place_order' takes int, but the binding is str"
+    )):
+        run_flow(flow, {"s": "10"}, log=path, tools={"place_order": place_int})
+    assert not path.exists()
+    assert _calls == []
+
+
+def test_a_string_literal_into_an_int_fails_at_run_start():
+    flow = load_flow(_typed_flow('"10"'))
+
+    with pytest.raises(ValueError, match=re.escape(
+        "TOOL node 'place' input 'qty': tool 'place_order' takes int, "
+        'but the binding is "10" (str)'
+    )):
+        run_flow(flow, {}, tools={"place_order": place_int})
+    assert _calls == []
+
+
+def test_a_long_string_literal_is_truncated_in_the_message():
+    flow = load_flow(_typed_flow('"' + "x" * 60 + '"'))
+
+    with pytest.raises(ValueError) as excinfo:
+        run_flow(flow, {}, tools={"place_order": place_int})
+    message = str(excinfo.value)
+    assert "x" * 60 not in message
+    assert message.endswith('..." (str)')
+
+
+def test_an_int_literal_into_an_int_runs():
+    result = run_flow(load_flow(_typed_flow("10")), {}, tools={"place_order": place_int})
+
+    assert result.status == "succeeded", result.failure
+    assert result.output == "placed 10"
+
+
+def test_an_optional_input_starts_and_the_tool_validates_none():
+    flow = load_flow(_typed_flow("${input.n}", flow_inputs="input:\n  n: Optional[int]"))
+
+    missing = run_flow(flow, {"n": None}, tools={"place_order": place_int})
+    present = run_flow(flow, {"n": 3}, tools={"place_order": place_int})
+
+    assert missing.status == "failed"
+    assert missing.failure.node_id == "place"
+    assert present.status == "succeeded", present.failure
+    assert present.output == "placed 3"
+
+
+def test_an_int_into_a_float_runs():
+    flow = load_flow(_typed_flow("${input.n}", flow_inputs="input:\n  n: int"))
+
+    result = run_flow(flow, {"n": 2}, tools={"place_order": place_float})
+
+    assert result.status == "succeeded", result.failure
+
+
+def test_a_typed_binding_over_an_unproven_source_is_checked_by_its_declared_type():
+    code = """
+  c:
+    kind: code
+    code: 'return 1'
+"""
+    flow = load_flow(_typed_flow("int = ${c.output}", extra_nodes=code))
+
+    with pytest.raises(ValueError, match=re.escape(
+        "TOOL node 'place' input 'qty': tool 'place_order' takes str, but the binding is int"
+    )):
+        run_flow(flow, {}, tools={"place_order": place_str})
+
+
+_RECORD_FLOW = """
+id: placing
+name: placing
+input:
+  order: {qty: int, note: str}
+nodes:
+  place:
+    kind: tool
+    tool_id: place_order
+    input:
+      order: ${input.order}
+output: ${place.output}
+"""
+
+
+def test_a_record_with_an_extra_field_into_a_default_model_runs():
+    result = run_flow(
+        load_flow(_RECORD_FLOW), {"order": {"qty": 2, "note": "n"}},
+        tools={"place_order": place_model},
+    )
+
+    assert result.status == "succeeded", result.failure
+    assert result.output == "placed 2"
+
+
+def test_a_record_with_an_extra_field_into_a_closed_model_fails_at_run_start():
+    with pytest.raises(ValueError, match=re.escape(
+        "TOOL node 'place' input 'order': tool 'place_order' takes {\"qty\":int}, "
+        'but the binding is {"note":str,"qty":int}'
+    )):
+        run_flow(
+            load_flow(_RECORD_FLOW), {"order": {"qty": 2, "note": "n"}},
+            tools={"place_order": place_strict_model},
+        )
+
+
+def test_a_json_schema_tool_with_a_disjoint_binding_fails_at_run_start():
+    flow = load_flow(_typed_flow("${input.s}", flow_inputs="input:\n  s: str"))
+
+    with pytest.raises(ValueError, match=re.escape(
+        "TOOL node 'place' input 'qty': tool 'place_order' takes int, but the binding is str"
+    )):
+        run_flow(flow, {"s": "x"}, tools={"place_order": _JsonSchemaTool()})
+
+
+_ASK_FLOW = """
+id: asking
+name: asking
+nodes:
+  ask:
+    kind: tool
+    tool_id: ask_user
+    input:
+      question: Proceed?
+      options: "yes, no"
+output: ${ask.output}
+"""
+
+
+def test_ask_user_with_string_options_runs():
+    def handler(**request):
+        return f"answered {request['question']}"
+
+    result = run_flow(load_flow(_ASK_FLOW), {}, tools={"ask_user": handler})
+
+    assert result.status == "succeeded", result.failure
+    assert result.output == "answered Proceed?"

@@ -130,6 +130,24 @@ def test_aware_datetime_is_normalized_to_utc(monkeypatch: pytest.MonkeyPatch) ->
 
 
 @pytest.mark.parametrize(
+    ("deadline", "timeout"),
+    [
+        ("2026-01-02T00:00:00Z", 86_400.0),
+        ("2026-01-01T00:00:00.5Z", 0.5),
+        ("2026-01-01 01:00", 3_600.0),
+    ],
+    ids=["z-suffix", "short-fraction", "space-separator"],
+)
+def test_deadline_grammar_is_the_same_on_every_python(
+    deadline: str, timeout: float, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    result, event = _run_direct(deadline, monkeypatch)
+
+    assert result.value is None
+    assert event.timeouts == [timeout]
+
+
+@pytest.mark.parametrize(
     "deadline",
     ["2025-12-31T23:59:59+00:00", "2026-01-01T00:00:00+00:00"],
     ids=["past", "exact-boundary"],

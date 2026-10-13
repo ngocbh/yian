@@ -1,9 +1,10 @@
 """WAIT — block one worker until an absolute UTC deadline.
 
-WAIT accepts one resolved ISO date or datetime through its reserved ``until``
-wiring. A date and a naive datetime are interpreted in UTC; an aware datetime
-is normalized to UTC. The node waits cooperatively on the run-owned stop event,
-so engine failure or host shutdown can wake and drain its worker.
+WAIT accepts one resolved date or datetime string (the grammar in
+:mod:`yian.typesys.temporal`) through its reserved ``until`` wiring. A date and
+a naive datetime are interpreted in UTC; an aware datetime is normalized to UTC.
+The node waits cooperatively on the run-owned stop event, so engine failure or
+host shutdown can wake and drain its worker.
 """
 
 from datetime import datetime, timezone
@@ -16,18 +17,20 @@ from yian.nodes.binding import (
 )
 from yian.nodes.contracts import binding_source
 from yian.typesys.pool import VariablePool
+from yian.typesys.temporal import parse_date_or_datetime
 
 
 def resolve_until(
     until_src: Any, pool: VariablePool, *, bind: ReservedBinder | None = None,
 ) -> str:
-    """Resolve a raw or carrier-wrapped WAIT source to an ISO date/datetime.
+    """Resolve a raw or carrier-wrapped WAIT source to a date/datetime string.
 
     Exactly one semantic ``Binding`` layer is removed before a ``${...}``
     expression or literal is evaluated against ``pool``. Typed
     ``date``/``datetime`` values resolve to ISO strings; a raw object exposing
     ``isoformat()`` is formatted defensively. This binding operation validates the
-    absolute ISO deadline; the WAIT body reparses it only to compute the duration.
+    absolute deadline against :mod:`yian.typesys.temporal`; the WAIT body reparses
+    it only to compute the duration.
     An optional ``bind`` callable retains the normalized value at the read boundary.
     """
     if bind is not None:
@@ -36,7 +39,7 @@ def resolve_until(
 
 
 def _normalize_until(until_src: Any, value: Any) -> str:
-    """Validate one resolved WAIT value and return the ISO string delivered to it."""
+    """Validate one resolved WAIT value and return the string delivered to it."""
     origin = _source_origin(until_src)
     display_source = binding_source(until_src)
     if isinstance(value, str):
@@ -54,7 +57,7 @@ def _normalize_until(until_src: Any, value: Any) -> str:
         _deadline_utc(resolved)
     except (TypeError, ValueError, OverflowError) as exc:
         raise BindingError(
-            f"wait `until` is not an ISO date/datetime: {resolved!r}",
+            f"wait `until` {resolved!r}: {exc}",
             failure_code="contract.input",
             origin=origin,
         ) from exc
@@ -67,8 +70,10 @@ def _utc_now() -> datetime:
 
 
 def _deadline_utc(value: str) -> datetime:
-    """Parse one ISO date/datetime and return its aware UTC instant."""
-    deadline = datetime.fromisoformat(value)
+    """Parse one date/datetime string and return its aware UTC instant."""
+    deadline = parse_date_or_datetime(value)
+    if not isinstance(deadline, datetime):
+        return datetime(deadline.year, deadline.month, deadline.day, tzinfo=timezone.utc)
     if deadline.tzinfo is None:
         deadline = deadline.replace(tzinfo=timezone.utc)
     return deadline.astimezone(timezone.utc)
@@ -79,9 +84,9 @@ class WaitNode(Node):
 
     The ``until`` source lives in ``CompiledFlow.wiring[id]["until"]`` and is
     pre-resolved by :meth:`bind_reserved`. ``forward`` receives that concrete
-    ISO value plus the exact run-owned stop event. A normal timeout returns
-    ``Output(None)``; a lifecycle wake raises the private ``_HostStop`` signal so
-    the engine discards the node outcome while draining.
+    date/datetime string plus the exact run-owned stop event. A normal timeout
+    returns ``Output(None)``; a lifecycle wake raises the private ``_HostStop``
+    signal so the engine discards the node outcome while draining.
 
     Args:
         node_id: The node's unique id.

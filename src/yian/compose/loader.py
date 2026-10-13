@@ -78,6 +78,7 @@ from yian.compose.source import (
 from yian.compose.source.catalog import _SourceCatalogBuilder, _scope_origin
 from yian.llm_clients import LLMConfig
 from yian.llm_clients.config import host_only_field_error
+from yian.nodes.agent.node import is_max_tool_iterations
 
 
 _UNLOCATED_DIAGNOSTICS = LoadDiagnostics()
@@ -686,6 +687,18 @@ def _validate_authored_llm_config(
         raise diagnostics.error(f"{where}: llm_config: {exc}", range=source_range) from exc
 
 
+def _validate_flow_env(
+    env: dict[str, Any], *, diagnostics: LoadDiagnostics, cursor: SourceCursor,
+) -> None:
+    """Refuse a flow `env:` default that every AGENT node would reject when it runs."""
+    if "max_tool_iterations" in env and not is_max_tool_iterations(env["max_tool_iterations"]):
+        raise diagnostics.error(
+            "flow `env.max_tool_iterations` must be a positive int or -1 (no cap), "
+            f"got {env['max_tool_iterations']!r}",
+            range=cursor.child("env").range_of("max_tool_iterations"),
+        )
+
+
 def _load_flow(
     document: SourceDocument,
     child_resolver,
@@ -697,6 +710,7 @@ def _load_flow(
     f = parse_file(document)
     _reject_authored_private_callable_names(root, f.defs, f.uses)
     _validate_authored_llm_config(f.llm_config, "flow", diagnostics=diagnostics, cursor=root)
+    _validate_flow_env(f.env, diagnostics=diagnostics, cursor=root)
     _validate_system(
         f.system,
         root.child("system") if root.has("system") else None,

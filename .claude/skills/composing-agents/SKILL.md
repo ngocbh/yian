@@ -125,8 +125,10 @@ A whole-string `${ref}` resolves to the **typed value**; embedded in surrounding
 text it is **stringified**.
 
 Prompt templates are strict: a missing reference or any span whose final value is
-null raises, including an embedded span. Binding templates stay non-strict—a whole
-null remains typed null and an embedded null contributes empty text.
+null raises, including an embedded span. `:-`, `|`, and `:?` still fire on a missing
+or null operand (`${note :- "none"}`); only the fallback must resolve. Binding
+templates stay non-strict—a whole null remains typed null and an embedded null
+contributes empty text.
 
 When the loader knows a value's type, reading a field that type can't have is a load
 error: a field on a scalar (`str`, `int`, `Literal[...]`, ...) or a list, or a field a

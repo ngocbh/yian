@@ -123,6 +123,72 @@ def test_strict_prompt_allows_null_intermediate_with_non_null_result():
     assert render_template_record("value=${null | 'fallback'}", {}) == "value=fallback"
 
 
+@pytest.mark.parametrize(
+    ("template", "record", "expected"),
+    [
+        ('Note: ${note :- "none"}', {"note": None}, "Note: none"),
+        ('Note: ${note :- "none"}', {}, "Note: none"),
+        ('Note: ${note :- "none"}', {"note": "hi"}, "Note: hi"),
+        ('v=${sig.nope :- 0}', _REC, "v=0"),
+        ("Hi ${x | y}", {"x": None, "y": "Y"}, "Hi Y"),
+        ("Hi ${x | y | 'z'}", {"x": None, "y": None}, "Hi z"),
+        ("${x | y}", {"x": None, "y": "Y"}, "Y"),
+    ],
+)
+def test_strict_prompt_default_and_coalesce_fire_on_a_miss(template, record, expected):
+    assert render_template_record(template, record) == expected
+
+
+def test_strict_prompt_required_raises_its_own_message_on_a_miss():
+    from yian.expr import RequiredError
+
+    with pytest.raises(RequiredError, match="need x"):
+        render_template_record('Hi ${x :? "need x"}', {"x": None})
+
+
+@pytest.mark.parametrize("template", ["${x :- y}", "Hi ${x | y}", "${x :- null}"])
+def test_strict_prompt_still_raises_when_the_fallback_misses(template):
+    with pytest.raises(ExpressionError):
+        render_template_record(template, {"x": None, "y": None})
+
+
+def test_strict_prompt_miss_error_names_the_reference():
+    with pytest.raises(ExpressionError, match=r"\$\{sig\.nope\}"):
+        render_template_record("x ${sig.nope} y", _REC)
+    with pytest.raises(ExpressionError, match=r"\$\{ghost\}"):
+        render_template_record("x ${upper(ghost)} y", _REC)
+
+
+def test_prompt_default_fires_in_a_running_flow():
+    from yian import run_flow
+
+    flow = load_flow(
+        """
+id: p
+name: p
+input:
+  note: Optional[str]
+nodes:
+  ask:
+    kind: human_input
+    input:
+      note: ${input.note}
+    prompt: 'Note: ${note :- "none"}'
+    output: str
+output: ${ask.output}
+"""
+    )
+    asked = []
+
+    def ask(**req):
+        asked.append(req["question"])
+        return "ok"
+
+    result = run_flow(flow, {}, tools={"ask_user": ask})
+    assert result.status == "succeeded"
+    assert asked == ["Note: none"]
+
+
 # --- render: plain references ------------------------------------------------ #
 
 

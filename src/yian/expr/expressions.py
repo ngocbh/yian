@@ -327,7 +327,8 @@ class ResolveMode(Enum):
     """How a MISSING reference (one `resolve` maps to `None`) is treated.
 
     - `STRICT_RAISE`: a missing ref is an error — raise `ExpressionError`. For a
-      context where every reference must be present (a strict render).
+      context where every reference must be present (a strict render). A miss on a
+      non-final operand of `|`, `:-`, or `:?` is still `None`, so the operator fires.
     - `BINDING_NONE`: a missing ref is `None` — the binding contract (a coalesce /
       default may then fire, or the whole value is `None`).
     - `CONDITION_FALSY`: a missing ref is `None`, which is falsy through comparisons
@@ -385,6 +386,7 @@ class _EvalExpr:
         self._trace = trace
         self._frames: list[_TraceFrame] = []
         self._last_route: ValueRoute | None = None
+        self._miss_path: str | None = None
 
     # --- top-level entry: coerce a `_MISSING` head to a value per mode --- #
     def eval(self, node: "Tree | Token") -> Any:
@@ -396,9 +398,16 @@ class _EvalExpr:
         non-strict modes, a raised `ExpressionError` for `STRICT_RAISE`."""
         if v is _MISSING:
             if self._mode is ResolveMode.STRICT_RAISE:
-                raise ExpressionError("unresolved reference in expression")
+                where = f" ${{{self._miss_path}}}" if self._miss_path else ""
+                raise ExpressionError(f"unresolved reference{where} in expression")
             return None
         return v
+
+    @staticmethod
+    def _or_none(v: Any) -> Any:
+        """Turn `_MISSING` into `None` in every mode: a `|` / `:-` / `:?` operand whose
+        miss the operator itself handles."""
+        return None if v is _MISSING else v
 
     # --- dispatch --- #
     def _walk(self, node: "Tree | Token") -> Any:
@@ -489,6 +498,8 @@ class _EvalExpr:
         after = [c for c in children if isinstance(c, Tree) and c.data == "trailer"]
         for tr in after:
             value = self._dotted_step(value, str(tr.children[0]))
+        if value is _MISSING:
+            self._miss_path = f"{name}(...)" + "".join(f".{tr.children[0]}" for tr in after)
         if self._trace:
             routes = tuple(self._frames[-1].children)
             names = tuple(
@@ -541,6 +552,8 @@ class _EvalExpr:
             elif self._trace and present:
                 route = self._resolved_route(item, "item")
                 self._frames[-1].route = route.project(tuple(parts[1:]))
+            if value is _MISSING:
+                self._miss_path = path
             return value  # `_dotted_step` already yields `_MISSING` on a walk miss
         resolved = self._resolve(path)
         if self._trace:
@@ -549,7 +562,10 @@ class _EvalExpr:
             if resolved.present:
                 self._frames[-1].route = self._resolved_route(resolved, path)
             resolved = resolved.value if resolved.present else None
-        return _MISSING if resolved is None else resolved
+        if resolved is None:
+            self._miss_path = path
+            return _MISSING
+        return resolved
 
     def _resolved_route(self, resolved: ResolvedValue, path: str) -> ValueRoute:
         source = resolved.source
@@ -622,9 +638,12 @@ class _EvalExpr:
 
     def _do_coalesce(self, node: Tree) -> Any:
         """`a | b | c` — first operand that resolves to a non-None value wins; a
-        present falsy value (0 / "" / False) wins, only `None`/miss falls through."""
-        for child in node.children:
-            v = self._as_value(self._walk(child))
+        present falsy value (0 / "" / False) wins, only `None`/miss falls through. Only
+        the last operand's miss is subject to `STRICT_RAISE`."""
+        last = len(node.children) - 1
+        for i, child in enumerate(node.children):
+            walked = self._walk(child)
+            v = self._as_value(walked) if i == last else self._or_none(walked)
             if v is not None:
                 self._select_route("|")
                 return v
@@ -634,9 +653,9 @@ class _EvalExpr:
 
     def _do_default_expr(self, node: Tree) -> Any:
         """`head :- fallback` — the fallback is evaluated ONLY when `head` misses or
-        resolves to None."""
+        resolves to None. Only the fallback's miss is subject to `STRICT_RAISE`."""
         head, fallback = node.children
-        v = self._as_value(self._walk(head))
+        v = self._or_none(self._walk(head))
         if v is None:
             v = self._as_value(self._walk(fallback))
         self._select_route(":-")
@@ -644,9 +663,9 @@ class _EvalExpr:
 
     def _do_required_expr(self, node: Tree) -> Any:
         """`head :? message` — raise `RequiredError` (with `message`) when `head`
-        misses / is None."""
+        misses / is None, in every mode."""
         head, message = node.children
-        v = self._as_value(self._walk(head))
+        v = self._or_none(self._walk(head))
         if v is None:
             raise RequiredError(self._as_value(self._walk(message)))
         self._select_route(":?")

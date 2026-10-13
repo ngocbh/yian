@@ -134,7 +134,9 @@ A whole-string `${ref}` resolves to the **typed value**; embedded in surrounding
 text it is stringified.
 
 Prompt templates are strict: a missing reference or any span whose final value is
-null raises, even when the span is embedded in text. Binding templates retain their
+null raises, even when the span is embedded in text. `:-`, `|`, and `:?` still see a
+missing or null operand, so `${note :- "none"}` renders `none` for a null `note`; only
+the fallback (the last `|` operand) must resolve. Binding templates retain their
 non-strict behavior—a whole null remains a typed null, while an embedded null
 contributes empty text. A flow output that reads a node a `case` skipped is null too
 (see [Skipped branches and flow outputs](#skipped-branches-and-flow-outputs)).

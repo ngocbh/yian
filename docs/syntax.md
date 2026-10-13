@@ -1166,7 +1166,9 @@ backward. Resume and backward read those, not the live graph. The engine's node 
 limits how big one iteration can get (the finished iteration plus the next body), not
 how many iterations run. If a node grown inside the body is still unfinished when its
 iteration ends (a side branch whose output nothing reads), that body node's nested
-nodes stay live. In a top-level loop they stay for the rest of the run.
+nodes stay live. In a top-level loop they stay for the rest of the run, so a body that
+leaves such a branch running every iteration still grows each iteration and reaches the
+budget; give that loop a `max:`.
 
 ## Effects from inside an AGENT node — the `ask_user` tool
 

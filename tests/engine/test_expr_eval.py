@@ -186,10 +186,10 @@ def test_builtin_kwarg():
     [
         ("upper(name)", {}, "upper\\(\\) got null"),
         ("lower(name)", {}, "lower\\(\\) got null"),
-        ("upper(n)", {"n": 3}, "upper\\(\\) takes text, got int"),
-        ("lower(xs)", {"xs": ["A"]}, "lower\\(\\) takes text, got list"),
+        ("upper(n)", {"n": 3}, "upper\\(\\) takes str, got int"),
+        ("lower(xs)", {"xs": ["A"]}, "lower\\(\\) takes str, got list"),
         ("render_as_json(name)", {}, "render_as_json\\(\\) got null"),
-        ('join(s, "-")', {"s": "abc"}, "join\\(\\) takes a list, got text"),
+        ('join(s, "-")', {"s": "abc"}, "join\\(\\) takes a list, got str"),
         ('join(xs, "-")', {}, "join\\(\\) got null"),
         ('join(xs, "-")', {"xs": ["a", None]}, "join\\(\\) got a null element"),
     ],

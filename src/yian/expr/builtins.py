@@ -35,11 +35,11 @@ def register_template_fn(name: "str | None" = None) -> Callable[[Callable[..., A
     return _decorator
 
 
-_KIND_NAMES = {bool: "bool", int: "int", float: "float", str: "text", list: "list", dict: "record"}
+_KIND_NAMES = {bool: "bool", int: "int", float: "float", str: "str", list: "list", dict: "record"}
 
 
 def _kind(value: Any) -> str:
-    """Name `value`'s type the way a flow author writes it."""
+    """Name `value`'s type for an error message: `str`, `int`, `list`, `record`, ..."""
     return _KIND_NAMES.get(type(value), type(value).__name__)
 
 
@@ -51,10 +51,10 @@ def _reject_null(fn: str, value: Any, default: str = '""') -> None:
 
 
 def _text(fn: str, s: Any) -> str:
-    """Return `s` if it is text; raise on null or any other type."""
+    """Return `s` if it is a str; raise on null or any other type."""
     _reject_null(fn, s)
     if not isinstance(s, str):
-        raise TypeError(f"{fn}() takes text, got {_kind(s)}")
+        raise TypeError(f"{fn}() takes str, got {_kind(s)}")
     return s
 
 
@@ -81,11 +81,11 @@ def _join(value: Any, sep: str = "\n") -> str:
 
 @register_template_fn("upper")
 def _upper(s: Any) -> str:
-    """Upper-case text. Null or a non-text value is an error."""
+    """Upper-case a str. Null or a non-str value is an error."""
     return _text("upper", s).upper()
 
 
 @register_template_fn("lower")
 def _lower(s: Any) -> str:
-    """Lower-case text. Null or a non-text value is an error."""
+    """Lower-case a str. Null or a non-str value is an error."""
     return _text("lower", s).lower()

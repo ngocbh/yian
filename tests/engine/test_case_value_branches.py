@@ -13,6 +13,11 @@ and work inside a `defs:` body and an inline LOOP body.
 A CASE that declares `output: T` gets one synthetic result node `__case_<id>` that
 `${case.output}` reads: every taken branch is checked against T at runtime
 (`binding.type`, located at the CASE's `output:`), read or not, and readers see T.
+
+At load, a branch that can never produce T is rejected at the branch: a literal value
+that does not fit, a node, call, or inner case whose type is disjoint from T, a span in
+a value whose inferred type is disjoint from its position's type, and a span that reads
+another branch of the same CASE without a `:-` default.
 """
 
 import pytest
@@ -1378,3 +1383,224 @@ def test_untyped_inner_case_branch_is_checked_against_the_outer_output():
         "case node 'inner' then: `num` produces int, but case 'outer' declares output: str"
     ) in str(caught.value)
     assert _error_line(caught.value) == _line_of(text, "then: num")
+
+
+# --------------------------------------------------------------------------- #
+# Values with spans must fit the CASE's `output:`
+# --------------------------------------------------------------------------- #
+
+
+def test_span_value_disjoint_from_output_is_rejected():
+    text = _flow(
+        "    on: ${input.cmd}\n"
+        "    output: str\n"
+        "    cases:\n"
+        "      - when: a\n"
+        "        then: ${input.n}\n"
+        "    else: reply\n",
+        inputs="  cmd: str\n  n: int\n",
+    )
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    assert "case node 'route' then: declared str, but the value is int" in str(caught.value)
+    assert _error_line(caught.value) == _line_of(text, "then: ${input.n}")
+
+
+def test_narrower_span_value_loads_and_is_checked_at_runtime():
+    text = _flow(
+        "    on: ${input.cmd}\n"
+        "    output: Literal[a, b]\n"
+        "    cases:\n"
+        "      - when: a\n"
+        "        then: ${input.s}\n"
+        '    else: "b"\n',
+        inputs="  cmd: str\n  s: str\n",
+    )
+    loaded = load_flow(text)
+    bad = run_flow(loaded, {"cmd": "a", "s": "c"})
+    assert bad.status == "failed"
+    assert bad.failure.code == "binding.type"
+    assert bad.failure.node_id == "__case_route"
+    good = run_flow(loaded, {"cmd": "a", "s": "a"})
+    assert good.status == "succeeded", good.failure
+    assert good.output == "a"
+
+
+def test_record_value_field_disjoint_from_output_names_the_field():
+    text = _flow(
+        "    on: ${input.cmd}\n"
+        "    output:\n"
+        "      reply: str\n"
+        "    cases:\n"
+        "      - when: a\n"
+        "        then:\n"
+        "          reply: ${input.n}\n"
+        "    else:\n"
+        '      reply: "no"\n',
+        inputs="  cmd: str\n  n: int\n",
+    )
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    assert (
+        "case node 'route' then: declared str, but the value at .reply is int"
+    ) in str(caught.value)
+    assert _error_line(caught.value) == _line_of(text, "reply: ${input.n}")
+
+
+@pytest.mark.parametrize(
+    ("output", "then_text", "message"),
+    [
+        (
+            "\n      reply: str\n      n: int",
+            "\n          reply: ${input.s}",
+            "declared {\"n\":int,\"reply\":str}, but the value is missing required field 'n'",
+        ),
+        (
+            "\n      reply: str",
+            "\n          reply: ${input.s}\n          extra: 1",
+            "declared {\"reply\":str}, but the value has unknown field 'extra'",
+        ),
+        ("int", "\n          reply: ${input.s}", "declared int, but the value is a record"),
+        (
+            "\n      items: list[int]",
+            "\n          items:\n            - ${input.s}",
+            "declared int, but the value at .items[0] is str",
+        ),
+        (
+            "\n      items: list[int]",
+            "\n          items:\n            - ${input.n}\n            - x",
+            'the value "x" at .items[1] is not a valid int',
+        ),
+        ("str", "\n          - ${input.s}", "declared str, but the value is a list"),
+    ],
+)
+def test_span_value_shapes_that_cannot_fit_are_rejected(output, then_text, message):
+    text = _flow(
+        "    on: ${input.cmd}\n"
+        f"    output: {output}\n"
+        "    cases:\n"
+        "      - when: a\n"
+        f"        then: {then_text}\n"
+        "    else: null\n",
+        inputs="  cmd: str\n  s: str\n  n: int\n",
+    )
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    assert f"case node 'route' then: {message}" in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    ("output", "then_text"),
+    [
+        ("Optional[object]", "\n          a: ${input.s}"),
+        ("Optional[Reply]", "\n          text: ${input.s}"),
+        ("Optional[list[str]]", "\n          - ${input.s}"),
+    ],
+)
+def test_span_value_shapes_that_fit_load(output, then_text):
+    text = (
+        "typedefs:\n"
+        "  Text:\n    text: str\n"
+        "  Num:\n    num: int\n"
+        "  Reply: Union[Text, Num]\n"
+    ) + _flow(
+        "    on: ${input.cmd}\n"
+        f"    output: {output}\n"
+        "    cases:\n"
+        "      - when: a\n"
+        f"        then: {then_text}\n"
+        "    else: null\n",
+        inputs="  cmd: str\n  s: str\n",
+    )
+    result = run_flow(load_flow(text), {"cmd": "a", "s": "hi"})
+    assert result.status == "succeeded", result.failure
+
+
+def _union_flow(*, then_value: str, else_value: str) -> str:
+    """Return a flow whose case on a `Union[Buy, Sell]` tag has the given branch values."""
+    return (
+        "id: f\n"
+        "name: f\n"
+        "typedefs:\n"
+        "  Buy:\n"
+        "    action: Literal[buy]\n"
+        "    qty: int\n"
+        "  Sell:\n"
+        "    action: Literal[sell]\n"
+        "    price: float\n"
+        "input:\n"
+        "  kind: str\n"
+        "nodes:\n"
+        "  d:\n"
+        "    kind: code\n"
+        "    input:\n"
+        "      kind: ${input.kind}\n"
+        "    code: |\n"
+        '      if inputs["kind"] == "buy":\n'
+        '          return {"action": "buy", "qty": 3}\n'
+        '      return {"action": "sell", "price": 1.5}\n'
+        "    output: Union[Buy, Sell]\n"
+        "  route:\n"
+        "    kind: case\n"
+        "    on: ${d.output.action}\n"
+        "    output:\n"
+        "      qty: int\n"
+        "    cases:\n"
+        "      - when: buy\n"
+        "        then:\n"
+        f"          qty: {then_value}\n"
+        "    else:\n"
+        f"      qty: {else_value}\n"
+        "output: ${route.output}\n"
+    )
+
+
+def test_value_reads_a_union_member_field_its_branch_selects():
+    loaded = load_flow(_union_flow(then_value='"${d.output.qty}"', else_value="0"))
+    assert run_flow(loaded, {"kind": "buy"}).output == {"qty": 3}
+    assert run_flow(loaded, {"kind": "sell"}).output == {"qty": 0}
+
+
+def test_value_reading_a_field_its_branch_excludes_is_rejected():
+    text = _union_flow(then_value="0", else_value='"${d.output.qty}"')
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    # Reference validation reports it, reading the value node against the narrowed union.
+    assert (
+        "node '__value_1' input 'v0' from: reference ${d.output.qty} reads unknown field "
+        "'qty' on record"
+    ) in str(caught.value)
+    assert _error_line(caught.value) == _line_of(text, 'qty: "${d.output.qty}"')
+
+
+def test_value_reading_a_sibling_branch_is_rejected():
+    text = _flow(
+        "    on: ${input.cmd}\n"
+        "    output: str\n"
+        "    cases:\n"
+        "      - when: a\n"
+        '        then: "got ${reply.output}"\n'
+        "    else: reply\n"
+    )
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    assert (
+        "case node 'route' then: the value reads `reply`, another branch of 'route', "
+        "which never runs when this branch does"
+    ) in str(caught.value)
+    assert _error_line(caught.value) == _line_of(text, "then: \"got ${reply.output}\"")
+
+
+def test_value_reading_a_sibling_branch_with_a_default_loads():
+    text = _flow(
+        "    on: ${input.cmd}\n"
+        "    output: str\n"
+        "    cases:\n"
+        "      - when: a\n"
+        "        then: ${reply.output:-'none'}\n"
+        "    else: reply\n"
+    )
+    loaded = load_flow(text)
+    result = run_flow(loaded, {"cmd": "a"})
+    assert result.status == "succeeded", result.failure
+    assert result.output == "none"

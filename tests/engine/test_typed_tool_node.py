@@ -90,6 +90,7 @@ def test_the_gate_runs_on_every_call_inside_a_map():
     result = run_flow(load_flow(_MAP_FLOW), {}, tools={"place_order": place_order})
 
     assert result.status == "failed"
+    assert result.failure.node_id == "each#1/place"
     assert result.failure.code == "contract.output"
     assert "'bad' does not match declared type int" in result.failure.message
 
@@ -114,7 +115,11 @@ def test_a_one_node_tool_flow_gates_its_output():
     assert ok.status == "succeeded", ok.failure
     assert ok.output == 4
     assert bad.status == "failed"
+    assert bad.failure.node_id == "count"
     assert bad.failure.code == "contract.output"
+    (frame,) = flow.diagnose(bad.failure).frames
+    authored = frame.text.splitlines()[frame.range.start_line - 1]
+    assert authored.strip().startswith("output: int")
 
 
 _ORDERS_FLOW = """

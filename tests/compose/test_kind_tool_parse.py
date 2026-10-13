@@ -1,5 +1,6 @@
 """The `tool` kind handle: parsing records field ranges in the descriptor; build
-returns a runtime ToolNode with `inputs` wiring (the tool's sink surface) and stamped ranges."""
+returns a runtime ToolNode with `inputs` wiring (the tool's sink surface) and stamped ranges,
+and turns an optional authored `output:` into the node's output contract."""
 
 from yian.compose.nodes.base import BuildContext
 from yian.compose.nodes.tool import ToolDescriptor

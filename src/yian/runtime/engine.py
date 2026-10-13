@@ -280,6 +280,9 @@ class FlowEngine:
                 # Read the future before checking the shared event so an initiating host
                 # exception is not replaced by a sibling's derived cancellation wakeup.
                 outcome = future.result()
+                # A future whose result was read cannot carry a primary host stop; keeping
+                # it would hold a second copy of every node result until the run ends.
+                submitted.remove(future)
                 self._raise_if_stopped()
                 observers = self._commit_outcome(message.node_id, outcome)
                 if isinstance(self.state.result, RunFailed):

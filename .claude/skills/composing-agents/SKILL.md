@@ -83,10 +83,13 @@ is. `output: {name: ${x}, ...}` always returns a record, even with one field
 Field names must be strings: quote a `true`/`yes`/`null`/`1` key (`'true': ${x}`).
 A scalar literal (`output: 5`, a field `x: 5`) is returned as written.
 
-Node IDs are the keys under `nodes:`. They cannot contain `.`, `#`, or `/`:
-`.` separates the node name from `output` and its field path in a reference,
-while `#` and `/` are reserved for generated runtime identities. In compact
-mode, the flow `id` also names its node and follows this rule.
+Node IDs are the keys under `nodes:`. A node id must be an identifier: ASCII
+letters, digits, and `_`, not starting with a digit (`fetch_data`, not `fetch-data`
+or `2x`), so that `${fetch_data.output}` can reference it. The expression keywords
+`and`, `or`, `not`, `in`, `true`, `false`, `null`, and `none` can't be node ids
+either. In compact mode the flow `id:`, and for a single-node `defs:` entry the def
+name, also names the node and must be an identifier; a full-form flow id or a
+multi-node def name may keep hyphens.
 
 A mapping can't repeat a key (two nodes with one id, a field written twice): it's
 a load error at the second key. Keys a `<<:` merge brings in may still be overridden.

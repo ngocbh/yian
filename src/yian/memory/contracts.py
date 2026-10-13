@@ -1483,6 +1483,15 @@ class MemoryOperationError(Exception):
         self.retryable = retryable
         super().__init__(message)
 
+    def __reduce__(self) -> tuple[object, ...]:
+        """Rebuild from all four fields so copy and pickle keep the error intact."""
+        # `args` holds only the message, so the default `cls(*args)` rebuild fails.
+        return (
+            type(self),
+            (self.stage, self.code, self.message, self.retryable),
+            self.__dict__,
+        )
+
 
 class MemorySetupError(ValueError):
     """Invalid host memory setup, attributed to authored declarations when known.

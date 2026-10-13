@@ -163,8 +163,10 @@ def test_nested_path(tmp_path):
 
 def test_missing_ref_errors(tmp_path):
     parent = _write(tmp_path, "p", "p", call="ch", uses={"ch": "nope"})
-    with pytest.raises(LoadError, match="not found on search path"):
+    with pytest.raises(LoadError, match="not found on search path") as exc:
         load_flow(parent.read_text(), search_paths=[tmp_path])
+    # a local ref has no hub: scheme, so the miss says nothing about a marketplace
+    assert "marketplace" not in str(exc.value)
 
 
 def test_malformed_external_child_retains_parent_and_child_sources_once(

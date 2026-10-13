@@ -469,7 +469,8 @@ implementation reads (the engine never interprets `env`). A flow-level `env:`
 is the default for every node;
 each node overrides individual keys. Merge is **static at build time** (`{**flow_env,
 **node_env}`, node wins), **flow-local** (a child flow does NOT inherit the parent's
-flow env), literals only (no `${...}`).
+flow env; a multi-node `defs:` entry sets its own `env:` beside its `nodes:`),
+literals only (no `${...}`).
 
 ```yaml
 env: {max_tool_iterations: 150}         # flow default for every node

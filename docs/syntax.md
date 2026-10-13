@@ -499,7 +499,8 @@ nodes:
 The merge is **static, at build time** (`{**flow_env, **node_env}`) — there is no
 runtime cascade and no per-field resolution across parent flows. It is also
 **flow-local**: a called child flow does *not* inherit its parent's flow `env:` —
-it has its own. Values must be literals (no `${...}` refs).
+it has its own. A multi-node `defs:` entry sets its own `env:` at the same level as
+its `nodes:`. Values must be literals (no `${...}` refs).
 
 Keys in use today:
 

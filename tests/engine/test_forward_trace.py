@@ -1957,7 +1957,7 @@ def test_trace_replay_matches_live_accepted_prefixes(kind, monkeypatch):
     elif kind in ("call", "map", "loop"):
         extra = "    over: [1, 1]\n" if kind == "map" else ""
         extra += "    times: 3\n" if kind == "loop" else ""
-        binding = "${item}" if kind == "map" else "1"
+        binding = "'${item}'" if kind == "map" else "1"
         flow = load_flow(f"""
 id: trace-growth
 name: trace-growth
@@ -1975,7 +1975,7 @@ nodes:
   spawn:
     kind: {kind}
     call: child
-{extra}    input: {{n: '{binding}'}}
+{extra}    input: {{n: {binding}}}
 output: ${{spawn.output}}
 """).compiled
     elif kind == "route":

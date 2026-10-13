@@ -32,7 +32,7 @@ def test_start_kind_and_params_are_input_names():
     assert all(type(p) is Parameter for p in node.params)
 
 
-def test_start_through_eval_node_coerces_and_defaults_into_a_record():
+def test_start_through_eval_node_defaults_into_a_record_without_converting_text():
     from types import SimpleNamespace
 
     node = StartNode(
@@ -44,7 +44,7 @@ def test_start_through_eval_node_coerces_and_defaults_into_a_record():
         ],
     )
     pool = VariablePool()
-    pool.set(START_ID, {"topic": "ACME", "offset": "7"})
+    pool.set(START_ID, {"topic": "ACME", "offset": 7})
     flow = SimpleNamespace(
         wiring={
             "__start__": {
@@ -57,6 +57,12 @@ def test_start_through_eval_node_coerces_and_defaults_into_a_record():
     assert eval_node(node, flow, pool).outcome == Output(
         {"topic": "ACME", "offset": 7, "window": 30}
     )
+
+    # Text is converted only by `run_flow` before START is seeded, never by START itself.
+    pool.set(START_ID, {"topic": "ACME", "offset": "7"})
+    failure = eval_node(node, flow, pool).outcome.failure
+    assert failure.code == "contract.input"
+    assert "input 'offset': '7' does not match declared type int" in failure.message
 
 
 def test_start_e08_type_mismatch_returns_generic_input_failure():

@@ -146,7 +146,7 @@ def _lower_spawner_post_asserts(
     - `${output}` / `${output.field}` is kept unchanged — the cloned END's own record value
       (== the spawner's committed output) is what eval_node injects as `{"output": value}`.
     - each declared call input `${X}` becomes a synth END param (`__assert_input_<X>`) wired
-      off the cloned child START's coerced output (`${<callsite>/__start__.output.X:-null}`),
+      off the cloned child START's bound output (`${<callsite>/__start__.output.X:-null}`),
       with a structural `<callsite>/__start__ -> <callsite>/__end__` edge — the SAME shape the
       build-time producer/input lowering uses (see `compose/validate/asserts.py`). Repeated
       refs to the same input SHARE one synth param.
@@ -188,7 +188,7 @@ def _lower_spawner_post_asserts(
 
     def _rename(path: str) -> "str | None":
         # Keep `${output[.field]}` (the END's own value); map a declared input `${X[.rest]}` to a
-        # synth param bound off the cloned child START's coerced output.
+        # synth param bound off the cloned child START's bound output.
         segs = path.split(".")
         head = segs[0]
         if head == "output":
@@ -339,7 +339,7 @@ def clone_child(child, callsite: str, record: dict, *,
     #
     # A SPAWNER's OWN node-level POST asserts (a `call` node's `asserts:`) are LOWERED onto the
     # cloned END here (net-new — the child does not carry them): `${output}` stays, a declared call
-    # input `${X}` becomes a synth END param wired off the cloned child START's coerced output. They
+    # input `${X}` becomes a synth END param wired off the cloned child START's bound output. They
     # then fire through the SAME END post-assert seam (the node's `run` wrapper) as the def's own asserts.
     _lower_spawner_post_asserts(
         nodes[out_id], wiring.setdefault(out_id, {}), edges,
@@ -381,7 +381,7 @@ def call_subgraph(child, callsite: str, record: dict, *,
     is the single cloned child START and whose `end_id` is the cloned child END filler. The child's
     asserts (a def's `asserts:` lowered onto its START/END at build) ride the cloned boundary nodes
     and fire through the ordinary `Node.run` wrapper — boundary asserts after the cloned
-    `StartNode.forward()` coerces its record, and post asserts after the cloned
+    `StartNode.forward()` binds its record, and post asserts after the cloned
     `EndNode.forward()` returns `Output`.
 
     `post_asserts`/`input_names` carry the SPAWNER's OWN node-level POST `asserts:`

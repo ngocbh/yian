@@ -26,7 +26,7 @@ nodes:
     call: research-one          # resolves via the uses: alias above, applied once per topic
     input:                     # sink: per-element call args; ${item} in scope here
       topic: ${item}
-      as_of:  ${input.as_of:-"today"}    # default operator: the optional param, else the literal "today"
+      as_of:  ${input.as_of:-"2026-01-01"}  # default operator: the optional param, else a literal date
     parallel: true
     # research_each's value IS the list of callee returns -> list[{report, asof}].
     # Reference the whole list as ${research_each.output}.

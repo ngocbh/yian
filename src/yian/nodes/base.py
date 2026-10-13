@@ -488,7 +488,7 @@ class _HostStop(Exception):
 
 class NodeAssertFailed(Exception):
     """A node-local `asserts:` clause evaluated false (or errored) — raised by a node's own
-    `run()` template around its kind body (including StartNode after coercion).
+    `run()` template around its kind body (including StartNode after binding).
 
     `assertion` is the exact wrapper-owned semantic carrier, or `None` when the
     exception was raised outside that wrapper.

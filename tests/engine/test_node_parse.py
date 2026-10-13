@@ -314,7 +314,7 @@ def test_call_map_form_parses():
     assert node.kind == "map"                           # the MAP discriminator
     assert node.call == "research-one"
     assert node.over == "${input.topics}"
-    assert node.inputs == {"topic": "${item}", "as_of": '${input.as_of:-"today"}'}
+    assert node.inputs == {"topic": "${item}", "as_of": '${input.as_of:-"2026-01-01"}'}
     assert node.parallel is True
     assert node.node_name == "Research each topic"  # optional human label
 

@@ -1,12 +1,13 @@
 """START_ID — the flow's canonical parameter-binding boundary, internal-only. PURE.
 
 The loader synthesizes one StartNode per flow as its single root. The generic
-``eval_node -> bind_params -> Node.run`` path owns coercion, validation, required
-inputs, and defaults; START's body is the identity over that bound record.
+``eval_node -> bind_params -> Node.run`` path owns validation, required inputs, and
+defaults; START's body is the identity over that bound record. Only the top-level START
+sees converted text, because ``run_flow`` converts supplied inputs before seeding it.
 
 The flow's PRE `asserts:` are lowered onto START's ordinary `post_asserts` (each `${input.X}`
 rewritten to `${output.X}`) and fire through the generic wrapper/`eval_node` seam against START's
-COERCED output record — START is an ordinary scheduled node, not a bypass. This unifies top-level
+BOUND output record — START is an ordinary scheduled node, not a bypass. This unifies top-level
 and child-flow boundary asserts: both flow through the same post-assert seam. NOT START_ID's
 job: system/clock/run_id. Hidden from authors: a reserved __-prefixed id, never parseable.
 """

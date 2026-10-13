@@ -6,6 +6,8 @@ declared defaults for omitted args), drive the baked child engine, and re-export
 child's single value. These drive real CODE-only children through `run_flow` (no LLM).
 """
 
+import pytest
+
 from yian.compose import LoadError, load_flow
 from yian.compose.helpers.errors import LoadDiagnostics
 from yian.run import run_flow
@@ -235,7 +237,7 @@ def test_call_boundary_assert_sees_omitted_default():
     assert result.output == "ACME"
 
 
-_CALL_PARENT_BD_COERCE = """
+_CALL_PARENT_BD_TEXT = """
 id: ref-parent-bdc
 name: ref_parent_bdc
 input:
@@ -253,15 +255,13 @@ output: ${research.output}
 """
 
 
-def test_call_boundary_assert_sees_coerced_present_value():
-    # The eager boundary check must mirror START_ID's FULL transform (coerce THEN default), not just
-    # defaulting: a PRESENT call-arg that is a coercible literal ("30" -> int 30) must be seen
-    # COERCED by the boundary assert `${input.window} >= 1` — else `"30" >= 1` raises a
-    # str-vs-int TypeError and spuriously fails a child the body would run fine.
-    parent = load_flow(_CALL_PARENT_BD_COERCE, child_resolver=_resolver(**{"child-bd": _CHILD_BOUNDARY_DEFAULT}))
-    result = run_flow(parent, {"topic": "ACME"})
-    assert result.status == "succeeded", result.failure
-    assert result.output == "ACME"
+def test_call_arg_text_is_not_converted_for_a_typed_child_input():
+    # A CALL edge is not a flow boundary: the literal "30" into the child's `int` input is
+    # not converted, so the flow fails to load instead of the boundary assert ever
+    # comparing `"30" >= 1`.
+    with pytest.raises(LoadError) as exc:
+        load_flow(_CALL_PARENT_BD_TEXT, child_resolver=_resolver(**{"child-bd": _CHILD_BOUNDARY_DEFAULT}))
+    assert "binding 'window' — child expects 'int', but the value \"30\" does not fit" in str(exc.value)
 
 
 def test_call_run_expands_not_child_engine():

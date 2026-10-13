@@ -252,8 +252,9 @@ def test_unrecognized_bool_spelling_fails_at_boundary():
     assert not _has_node_output(result)
 
 
-def test_unrecognized_bool_text_fails_child_input():
-    # Untyped upstream text reaching a called def's bool input is checked the same way.
+def test_bool_text_is_not_converted_for_a_child_input():
+    # A CALL edge is not a flow boundary: untyped upstream text reaching a called def's
+    # bool input is validated as is, so even a recognized spelling fails.
     flow = load_flow("""
 id: gatekeeper
 name: gatekeeper
@@ -285,12 +286,12 @@ nodes:
       ok: ${src.output}
 output: ${g.output}
 """)
-    assert run_flow(flow, {"answer": "yes"}).output is True
-    result = run_flow(flow, {"answer": "approve"})
-    assert result.status == "failed"
-    assert result.failure is not None
-    assert "input 'ok'" in result.failure.message
-    assert "does not match declared type bool" in result.failure.message
+    for answer in ("yes", "approve"):
+        result = run_flow(flow, {"answer": answer})
+        assert result.status == "failed"
+        assert result.failure is not None
+        assert result.failure.code == "contract.input"
+        assert f"input 'ok': {answer!r} does not match declared type bool" in result.failure.message
 
 
 # --------------------------------------------------------------------------- #

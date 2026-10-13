@@ -257,7 +257,7 @@ anchor. CASE selection still rides `Route.handle`; dynamic `Output.commit_as`
 redirects only success unless a node-owned hook mirrors it. A
 spawner's own `post_asserts` (a `call` node's `asserts:`) are **lowered onto the cloned child
 `END`** at grow time (`expand._lower_spawner_post_asserts`): `${output}` stays; a declared input
-`${X}` becomes a synth END param wired off the cloned child START's coerced output, so the assert
+`${X}` becomes a synth END param wired off the cloned child START's bound output, so the assert
 fires through the child END's ordinary `run` wrapper — not re-checked at any commit site. Live
 growth and durable replay both pass the canonical seed persisted in `NodeExpandedRecord` through
 the same injected `compile.expand.build_grow`, so lowering is identical on resume. The moved

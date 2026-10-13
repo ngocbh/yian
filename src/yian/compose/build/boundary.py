@@ -76,7 +76,7 @@ def synthesize_boundary_graph(
 
     `lowered` (optional) is the flow's `asserts:` lowered into node-local `LoweredAsserts`.
     When given, its PRE (boundary) asserts are stamped on START's ordinary
-    `post_asserts` (they read `${output.X}` — START's coerced output), its POST asserts on END
+    `post_asserts` (they read `${output.X}` — START's bound output), its POST asserts on END
     (`end.post_asserts`), each synthesized END input becomes an extra `Parameter` on END plus a
     wiring entry and a producer edge — so a cross-node post assert's `${producer.output}`
     dependency is STRUCTURAL (a real END input) and survives child cloning. `None` leaves the
@@ -104,8 +104,8 @@ def synthesize_boundary_graph(
     if lowered is not None:
         # START fires its boundary asserts through the ORDINARY `post_asserts` seam: the lowered
         # PRE asserts read `${output.X}` (see asserts._pre_rename), so the node's `run` wrapper fires
-        # them against `{**inputs, "output": <START's coerced record>}` — the coerced/defaulted
-        # value, not the wire string. This unifies START with every other node (no bespoke slot);
+        # them against `{**inputs, "output": <START's bound record>}` — the bound/defaulted
+        # value. This unifies START with every other node (no bespoke slot);
         # eval_node stays kind-blind. END fires its POST asserts through the same seam; any
         # `${producer.output}` head is lowered to a synth END param (see below) that binds the
         # producer's value INTO END's record, so the assert fires record-only. Extend-safe: START

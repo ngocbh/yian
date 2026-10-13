@@ -533,9 +533,10 @@ def _run_flow_controlled(
         apply_execution_layout(private_flow, resolve_execution_layout(private_flow))
 
     canonical_run_id = run_id if run_id is not None else default_run_id()
-    # Canonicalize supplied boundary strings before RunStarted persists its input.
-    # The generic binder reuses the same idempotent policy and remains the authority
-    # for required/default handling, contract validation, and every child boundary.
+    # Convert supplied boundary strings before RunStarted persists its input. This is
+    # the only string conversion: the generic binder converts nothing, so a value
+    # crossing a CALL/MAP/LOOP edge is validated as is, and it stays the authority for
+    # required/default handling and contract validation.
     coerced = coerce_inputs(flow.input, inputs)
     pool = VariablePool(start_id=private_flow.start_id)
     pool.set(private_flow.start_id, copy.deepcopy(coerced))

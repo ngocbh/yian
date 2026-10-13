@@ -722,8 +722,9 @@ class Parameter:
     construct decides whether a contract or default is required.
 
     ``has_default`` distinguishes an explicit ``None`` default from no default.
-    ``coerce_strings`` is boundary policy derived from ``contract.type`` by a
-    later consumer; there is deliberately no parallel textual type field.
+    ``coerce_strings`` is run-boundary policy derived from ``contract.type`` by
+    ``coerce_inputs``, which applies it only to the top-level flow's supplied inputs;
+    there is deliberately no parallel textual type field.
 
     Attributes:
         name (`str`): Declared name in the owner's local record.
@@ -731,7 +732,7 @@ class Parameter:
         required (`bool`): Whether omission is invalid.
         has_default (`bool`): Whether ``default`` is semantically present.
         default (`Any`): Retained default payload; meaningful only when present.
-        coerce_strings (`bool`): Whether a boundary may coerce textual input.
+        coerce_strings (`bool`): Whether the run boundary may convert supplied text.
         origin (`OriginRef | None`): Parameter declaration site.
         default_origin (`OriginRef | None`): Explicit default site, when present.
     """

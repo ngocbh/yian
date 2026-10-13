@@ -215,8 +215,9 @@ isn't supplied at all.
 An explicit `Optional[int] = null` is a present default, unlike no `=`. A null
 default requires a nullable or `None` type, and an empty `=` is invalid. Defaults
 are YAML literals validated at load and are never string-coerced: use `int = 30`,
-not `int = "30"`, and quote date strings (`date = "2026-01-01"`). Only supplied
-boundary strings may be coerced. A compatible default keeps its authored payload,
+not `int = "30"`, and quote date strings (`date = "2026-01-01"`). Only strings supplied
+to the top-level flow (CLI, JSON inputs, `run_flow`) may be coerced; a `call`, `map`, or
+`loop` edge is not a flow boundary. A compatible default keeps its authored payload,
 so `float = 30` remains an integer.
 
 A `Union[...]` lists records. Give every member a **tag field**: the same field name
@@ -443,7 +444,7 @@ that change; a field it omits keeps its value. This is the shape
   ambient (no producer node to draw the check's dependency edge from), so a `system`
   ref is a LoadError; put a system-dependent check in a body node's `asserts:` or a `case`.
   A flow's `asserts:` are lowered onto its synthesized `start`/`end` boundary nodes and
-  fire on the ordinary node path (`start` post-coercion, `end` post-terminal), so a
+  fire on the ordinary node path (`start` post-binding, `end` post-terminal), so a
   called `defs:`/`uses:` child's asserts fire identically to the top-level flow's.
 
 ## Model selection — the `llm_config` cascade

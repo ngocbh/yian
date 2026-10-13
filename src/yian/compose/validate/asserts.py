@@ -12,8 +12,8 @@ START/END boundary nodes so it fires node-locally through `eval_node`:
 
 - a `${input.X}`-only assert -> **pre (boundary)**: depends only on the run
   arguments, so it rides START's ordinary `post_asserts` and fires against START's
-  COERCED output record (fail-fast, before any body node runs), with each `${input.X}`
-  rewritten to `${output.X}` (START's own coerced output).
+  BOUND output record (fail-fast, before any body node runs), with each `${input.X}`
+  rewritten to `${output.X}` (START's own bound output).
 - an assert that reads ANY `${<id>.output[.X]}` -> **post-terminal**: it depends
   on a produced value, so it rides the synthesized `EndNode.post_asserts` and
   fires AFTER the run reaches a terminal, with each producer ref rewritten to a
@@ -88,7 +88,7 @@ class LoweredAsserts:
     and namespacing under `kind: call` instead of silently failing.
 
     - `start_pre`: pre (boundary) asserts, `${input.X}` rewritten to `${output.X}` (they ride
-      START's ordinary `post_asserts`, firing against START's COERCED output record).
+      START's ordinary `post_asserts`, firing against START's BOUND output record).
     - `end_post`: post asserts, each producer/input ref rewritten to its synth-param ref.
     - `synth_params`: one untyped `Parameter(name=<synth>)` per synthesized END input.
     - `synth_wiring`: `dict[synth_name -> ${...} source string wired into END]`. A
@@ -121,7 +121,7 @@ def lower_flow_asserts(
     so it can fire node-locally, replacing only each assertion carrier's executable expression:
 
     - a PRE (boundary) assert rewrites each `${input.X}` ref to `${output.X}`, since START now
-      fires these from its ordinary `post_asserts` against its own coerced output record; and
+      fires these from its ordinary `post_asserts` against its own bound output record; and
     - a POST assert turns every non-`output` ref into a synthesized END param (`${producer
       .output}` -> `${__assert_<pid>}`, `${input.X}` -> `${__assert_input_<X>}`), with a
       matching `synth_wiring` edge, so the producer value is present in END's record when the
@@ -229,9 +229,8 @@ def lower_flow_asserts(
         if not is_post:
             # 3. PRE (boundary): rewrite each `${input.X}` ref to `${output.X}`. START's boundary
             # asserts now ride its ORDINARY `post_asserts`, fired by the wrapper/eval_node against
-            # `{**inputs, "output": <START's coerced record>}`. Reading `${output.X}` sees the
-            # COERCED, defaulted value (int 5), whereas a bare `${X}` would read the raw
-            # pre-coercion input (the wire string "5"). Unqualified flow-input names first
+            # `{**inputs, "output": <START's bound record>}`. Reading `${output.X}` sees the
+            # validated, defaulted value START binds. Unqualified flow-input names first
             # acquire the `input.` prefix; that prefix then maps to `output.`.
             def _pre_rename(path: str) -> "str | None":
                 path = _qualify_flow_input(path)

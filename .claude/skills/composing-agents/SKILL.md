@@ -200,7 +200,8 @@ An explicit `Optional[int] = null` is a present default, distinct from no `=`;
 null is invalid for a non-nullable type, and an empty `=` is invalid. The default
 RHS is a YAML literal validated at load and never string-coerced: write
 `int = 30`, not `int = "30"`, and quote date strings (`date = "2026-01-01"`).
-Only values supplied at a flow boundary may undergo string coercion. Compatible
+Only values supplied to the top-level flow (CLI, JSON inputs, `run_flow`) may undergo
+string coercion; a `call`, `map`, or `loop` edge is not a flow boundary. Compatible
 defaults keep their authored payload, so `float = 30` remains an integer.
 
 ```yaml
@@ -681,6 +682,17 @@ search path, by filename; `alias@v1` adds a version guard). A CALL's record fiel
 are available as `${one.output.field}`; a MAP returns a list at `${each.output}`,
 so project element fields in a downstream CODE/MAP step. `parallel:` is accepted
 but currently inert; run-level `num_workers` controls MAP concurrency.
+
+Each argument must fit the child's input type at load: a reference by its type
+(`${item...}` through the `over:` element type, or each element of a literal `over:`
+by value), a YAML literal by its value (`"2026-01-01"` fits `date`; `9` for
+`int[1, 3]` does not), `${x :- d}` by `x` without its null plus the fallback `d`, and
+`${a | b}` operand by operand. A `call`/`map` edge is not a flow boundary, so nothing
+is coerced across it: `"3"` does not fit `int` (write `3`), an unquoted `2026-01-01`
+(a YAML date) fits neither `date` nor `str` (quote it), and text from an untyped
+source into an `int` input fails at the child's start (`contract.input`). A `str`
+reference does not fit an `int` or `date` input: type the source (`list[date]`), or
+use a typed binding (`t: int = ${input.n}`) for a value narrower than the input.
 
 For a one-off child, replace `call:` with a non-empty `nodes:` body and add the
 required `output:` key:

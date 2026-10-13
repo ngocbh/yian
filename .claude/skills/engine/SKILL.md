@@ -211,6 +211,8 @@ this model whenever you design anything:
   A present typed `Binding` is checked after its source resolves and before the
   parameter contract: `build_value_as` against `Binding.contract`, discarding the
   built value so the payload is not converted; a miss is `binding.type`.
+  The binder never converts a string: only `run_flow`'s `coerce_inputs` converts the
+  top-level flow's supplied inputs, so a CALL/MAP/LOOP edge carries values as is.
   Supplied contract failures select
   `Parameter.contract.origins.at(TypeCheckError.path)` before the parameter
   fallback; default failures keep default-site ownership. Never add a parallel

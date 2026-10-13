@@ -10,8 +10,8 @@ the CASE branches that route the node; an unproven binding is left out. A TOOL h
 no item scope (`${item}` is legal only in a MAP's own `input:`), so none is used.
 
 Imports flow down only: `nodes` (the TOOL node), `compose.nodes` (build results), and
-the sibling typed-binding inference. Only the loader (and the compose package facade)
-import this back.
+the sibling narrowing view and typed-binding inference. Only the loader (and the compose
+package facade) import this back.
 """
 
 from __future__ import annotations

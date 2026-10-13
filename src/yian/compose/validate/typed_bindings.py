@@ -205,7 +205,8 @@ def _literal_type(value: Any) -> Type | None:
         value (`Any`): The bound literal.
 
     Returns:
-        `Type | None`: The literal's type, or `None` for a value with no type.
+        `Type | None`: The literal's type, or `None` for a non-finite number or a
+            value with no type.
     """
     # bool is an int subclass, so it is matched first.
     if type(value) is bool:

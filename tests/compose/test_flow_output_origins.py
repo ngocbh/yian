@@ -143,35 +143,6 @@ output:
     assert len(origins) == 5
 
 
-def test_mapped_output_uses_the_effective_duplicate_value_occurrence():
-    """A shadowed mapping pair cannot steal the final binding's origin."""
-    text = """id: duplicate-output-origin
-name: duplicate-output-origin
-nodes:
-  worker:
-    kind: code
-    code: return 1
-    output: int
-output:
-  result: ignored
-  result: ${worker.output}
-"""
-    document = SourceDocument.parse(text)
-    loaded = load_flow(text)
-    output_cursor = document.root.child("output")
-    occurrences = output_cursor.mapping_occurrences("result")
-
-    assert len(occurrences) == 2
-    assert occurrences[0].range != occurrences[1].range
-    _assert_output_site(
-        loaded.origin_resolver,
-        loaded.compiled,
-        "result",
-        occurrences[1],
-        source="${worker.output}",
-    )
-
-
 def test_output_alias_and_merge_sites_keep_distinct_occurrences():
     """Shared definitions retain occurrence-local output identities."""
     text = """id: aliased-output-origins

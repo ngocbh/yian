@@ -301,15 +301,23 @@ def _validation_error_range(
 
 
 def parse_source_document(text: str, label: str) -> SourceDocument:
-    """Parse one owned source document and translate syntax failure once."""
+    """Parse one owned source document; reject bad syntax and repeated keys once."""
 
     try:
-        return SourceDocument.parse(text, label)
+        document = SourceDocument.parse(text, label)
     except SourceSyntaxError as exc:
         raise LoadDiagnostics(label=label, text=text).error(
             f"invalid YAML: {exc}",
             range=exc.range,
         ) from exc
+    if document.repeated_key is not None:
+        key, first, second = document.repeated_key
+        raise LoadDiagnostics(label=label, text=text).error(
+            f"duplicate key {key!r} (first at line {first.start_line}); "
+            "a YAML mapping's keys must be unique, so remove or rename one",
+            range=second,
+        )
+    return document
 
 
 def flow_nodes_cursor(

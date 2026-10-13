@@ -21,7 +21,7 @@ from yian.nodes.contracts import (
 )
 from yian.typesys import TypeCheckError, Type, build_value_as, type_for
 from yian.typesys.values import ValueKind
-from yian.typesys.types import TypeRegistry
+from yian.typesys.types import TypeRegistry, encodes_as_utf8
 
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
 from yian.diagnostics import SourceRange
@@ -61,6 +61,11 @@ def _read_record_type(
         if child_cursor is not None and (type(key) is not str or not key):
             raise diagnostics.error(
                 "record field names must be non-empty strings",
+                range=child_cursor.key_range or child_cursor.range,
+            )
+        if child_cursor is not None and not encodes_as_utf8(key):
+            raise diagnostics.error(
+                f"record field name {key!r}: field names must not contain a Unicode surrogate",
                 range=child_cursor.key_range or child_cursor.range,
             )
         child_path = (*path, key)

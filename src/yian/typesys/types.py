@@ -102,7 +102,8 @@ def parse_type(s: str) -> TypeExpr:
 
     Raises:
         `TypeCheckError`:
-            The string is not a valid expression, uses an unknown constructor, spells a
+            The string is not a valid expression (including a lone Unicode surrogate or an
+            empty `Literal` member), uses an unknown constructor, spells a
             union as `A | B` (the hint suggests `Union[A, B]`), or lists `None` as a
             `Union[...]` member (the hint suggests `Optional[Union[...]]`).
 
@@ -115,6 +116,11 @@ def parse_type(s: str) -> TypeExpr:
         node = ast.parse(s, mode="eval").body
     except SyntaxError as exc:
         raise TypeCheckError(f"malformed type expression {s!r}: {exc}") from exc
+    except UnicodeEncodeError as exc:
+        # `ast.parse` encodes its source as UTF-8, so a lone surrogate stops it here.
+        raise TypeCheckError(
+            f"type expression {s!r} contains a Unicode surrogate (types must be valid UTF-8 text)"
+        ) from exc
     return _type_from_ast(node, s)
 
 
@@ -197,12 +203,31 @@ def _literal_tags(sl: "ast.expr", src: str) -> tuple:
     tags = []
     for e in elts:
         if isinstance(e, ast.Constant) and isinstance(e.value, str):
+            if not e.value:
+                raise TypeCheckError(
+                    f"empty Literal member in {src!r} (tags must be non-empty names or quoted strings)"
+                )
+            if not encodes_as_utf8(e.value):
+                # An escape such as "\uD800" in the quoted member decodes to a lone surrogate.
+                raise TypeCheckError(
+                    f"Literal member {e.value!r} in {src!r} contains a Unicode surrogate "
+                    f"(tags must be valid UTF-8 text)"
+                )
             tags.append(e.value)  # quoted member: Literal["red"]
         elif isinstance(e, ast.Name):
             tags.append(e.id)  # unquoted member: Literal[red]
         else:
             raise TypeCheckError(f"invalid Literal member in {src!r} (use names or quoted strings)")
     return tuple(tags)
+
+
+def encodes_as_utf8(name: str) -> bool:
+    """Return whether `name` encodes as UTF-8, i.e. holds no lone Unicode surrogate."""
+    try:
+        name.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
 
 
 def _is_shadow(name: str) -> bool:
@@ -530,7 +555,8 @@ def read_typedefs(raw: dict) -> TypeRegistry:
 
     Raises:
         `TypeCheckError`:
-            A name is not PascalCase or shadows a builtin, a field type is not a string,
+            A name is not PascalCase or shadows a builtin, a field name is empty, not a
+            string, or holds a Unicode surrogate, a field type is not a string,
             a value is a union sequence, an alias cycle is detected, or a typedef writes a
             `Union[...]` that does not resolve.
 
@@ -549,12 +575,21 @@ def read_typedefs(raw: dict) -> TypeRegistry:
             )
         if isinstance(value, dict):
             for fname, ftype in value.items():
+                if type(fname) is not str or not fname:
+                    raise TypeCheckError(
+                        f"typedef {name!r} field {fname!r}: field names must be non-empty strings"
+                    )
+                if not encodes_as_utf8(fname):
+                    raise TypeCheckError(
+                        f"typedef {name!r} field {fname!r}: field names must not contain a "
+                        f"Unicode surrogate"
+                    )
                 if not isinstance(ftype, str):
                     raise TypeCheckError(
                         f"typedef {name!r} field {fname!r}: type must be a string expression "
                         f"(got {type(ftype).__name__})"
                     )
-            registry[name] = RecordDef(fields={str(k): v for k, v in value.items()})
+            registry[name] = RecordDef(fields=dict(value))
         elif isinstance(value, str):
             parsed = parse_type(value)
             if isinstance(parsed, EnumExpr):

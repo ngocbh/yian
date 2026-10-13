@@ -9,9 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from lark import Tree
-
-from yian.expr.expressions import ISINSTANCE, _isinstance_type_name, _parse_condition
+from yian.expr import isinstance_type_names, parse_condition
 from yian.expr.template import Span, scan_template
 from yian.nodes.contracts import binding_source
 from yian.typesys import TypeCheckError
@@ -55,20 +53,12 @@ def collect_isinstance_names(source: Any, *, condition: bool = False) -> list[st
     if not isinstance(source, str):
         return []
     if condition:
-        trees = [_parse_condition(source)]
+        trees = [parse_condition(source)]
     else:
         trees = [seg.tree for seg in scan_template(source) if isinstance(seg, Span)]
     names: list[str] = []
     for tree in trees:
-        if not isinstance(tree, Tree):
-            continue
-        for node in tree.iter_subtrees_topdown():
-            if node.data != "refcall" or str(node.children[0]) != ISINSTANCE:
-                continue
-            call_suffix = node.children[-1]
-            if not (isinstance(call_suffix, Tree) and call_suffix.data == "call_suffix"):
-                continue
-            name = _isinstance_type_name(call_suffix)
+        for name in isinstance_type_names(tree):
             if name not in names:
                 names.append(name)
     return names

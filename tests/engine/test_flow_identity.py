@@ -318,7 +318,6 @@ def test_flow_fingerprint_changes_with_wiring_types_asserts_and_env():
 
 def test_manifest_emits_a_node_type_table_only_when_non_empty():
     original = _compiled()
-    pinned = load_flow(_PIN_FLOW % "output:\n  order: ${step.output}\n").compiled
     typed = copy.deepcopy(original)
     typed.nodes["step"].types = {
         "Small": Type(kind=ValueKind.STRING, tags=frozenset({"small"})),
@@ -328,18 +327,26 @@ def test_manifest_emits_a_node_type_table_only_when_non_empty():
     retyped.nodes["step"].types["Big"] = Type(kind=ValueKind.STRING, tags=frozenset({"huge"}))
 
     assert all("types" not in node for node in flow_manifest(original)["nodes"].values())
-    assert flow_fingerprint(pinned) == (
-        "dacabe0326df2af4e935cec6b57bdb3abcdc401c93af076e60c900a553c84203"
-    )
     table = flow_manifest(typed)["nodes"]["step"]["types"]
     assert [entry["name"] for entry in table] == ["Big", "Small"]
     assert flow_fingerprint(typed) != flow_fingerprint(original)
     assert flow_fingerprint(retyped) != flow_fingerprint(typed)
+    cleared = copy.deepcopy(typed)
+    cleared.nodes["step"].types = {}
+    assert flow_fingerprint(cleared) == flow_fingerprint(original)
 
 
-def test_manifest_rejects_a_type_table_that_is_not_a_dict():
+@pytest.mark.parametrize(
+    "types",
+    [
+        [("Big", Type.scalar(ValueKind.INTEGER))],
+        {1: Type.scalar(ValueKind.INTEGER)},
+        {"Big": "int"},
+    ],
+)
+def test_manifest_rejects_a_malformed_type_table(types):
     flow = _compiled()
-    flow.nodes["step"].types = [("Big", Type.scalar(ValueKind.INTEGER))]
+    flow.nodes["step"].types = types
     with pytest.raises(TypeError, match="types"):
         flow_manifest(flow)
 

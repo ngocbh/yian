@@ -1699,6 +1699,11 @@ def _node_manifest(
     # Emitted only when non-empty so nodes without `isinstance` keep their fingerprints.
     if type(node.types) is not dict:
         raise TypeError(f"{path}.types: expected dict, got {type(node.types).__name__}")
+    for name, typ in node.types.items():
+        if not isinstance(name, str):
+            raise TypeError(f"{path}.types: keys must be strings, got {type(name).__name__}")
+        if type(typ) is not Type:
+            raise TypeError(f"{path}.types.{name}: expected Type, got {type(typ).__name__}")
     if node.types:
         manifest["types"] = [
             {"name": name, "type": _type_manifest(node.types[name], ctx, f"{path}.types.{name}")}

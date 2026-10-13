@@ -237,8 +237,8 @@ class LoopNode(Node):
         while the authored loop origin remains local, so each iteration's failure trace contains
         that origin once. The type table is copied so every iteration's predicate and asserts
         resolve the same `isinstance` types. The complete `output_contract` and asserts are
-        copied for clone self-consistency only — the STOP commit validates against the COMPILED origin `L`'s
-        contract via its commit target, not the clone's.
+        copied for clone self-consistency only — the STOP commit validates against the
+        COMPILED origin `L`'s contract via its commit target, not the clone's.
 
         Args:
             k (`int`): The clone's iteration index.

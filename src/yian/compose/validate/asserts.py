@@ -72,8 +72,9 @@ from yian.compose.helpers.errors import LoadDiagnostics
 # cannot write `__`-prefixed ids, so a synth name never collides with an author id.
 _SYNTH_PREFIX = "__assert_"
 
-# Kinds whose node asserts move onto the spawned child flow's END.
-_SPAWNER_KINDS = frozenset({NodeKind.CALL, NodeKind.MAP, NodeKind.LOOP})
+# Kinds whose node asserts move onto the spawned child flow's END. MAP is absent because
+# every MAP node assert is already rejected.
+_SPAWNER_KINDS = frozenset({NodeKind.CALL, NodeKind.LOOP})
 
 
 @dataclass(frozen=True)

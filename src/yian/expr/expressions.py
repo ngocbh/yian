@@ -159,7 +159,7 @@ def _eval_comparison(op: str, lhs: Any, rhs: Any) -> bool:
 _WHOLE_SPAN_RE = re.compile(r"^\$\{(.*)\}$", re.DOTALL)
 
 
-def _parse_condition(expression: str) -> "Tree | Token":
+def parse_condition(expression: str) -> "Tree | Token":
     """Parse an expression-field value (`when:`/`on:`/an `asserts:` entry) via the ONE
     unified grammar, honouring the both-spellings entry rule.
 
@@ -171,6 +171,18 @@ def _parse_condition(expression: str) -> "Tree | Token":
     If the WHOLE trimmed value is a single `${...}` span, strip the outer braces and
     parse the interior; otherwise parse the whole value directly. The grammar's ref atom
     already admits a `${...}`-wrapped ref, so the mixed `${a} > 5` form parses as-is.
+
+    Args:
+        expression (`str`):
+            The field value, in any of the three spellings.
+
+    Returns:
+        `Tree | Token`:
+            The parsed expression.
+
+    Raises:
+        `ExpressionError`:
+            Raised when the value does not parse.
     """
     from yian.expr.grammar import parse_expr
 
@@ -188,7 +200,7 @@ def condition_refs(expression: str) -> list[str]:
 
     The condition analog of the template ref-walk ([`expr_refs_of`][yian.expr.template.expr_refs_of])
     and the prompt ref-walk ([`prompt_refs`][yian.expr.template.prompt_refs]): parse the
-    WHOLE value as ONE expression (via `_parse_condition`, honouring all three spellings — bare
+    WHOLE value as ONE expression (via `parse_condition`, honouring all three spellings — bare
     `a > 5`, mixed `${a} > 5`, whole `${a > 5}`) and collect its reference leaves via the shared
     [`expr_refs`][yian.expr.expressions.expr_refs]. Every compile-time consumer of a
     condition's refs (flow/node `asserts:`, a loop `while:`/`until:` predicate, a searched `case`
@@ -204,7 +216,7 @@ def condition_refs(expression: str) -> list[str]:
     Raises:
         `ExpressionError`: on a malformed condition (the caller frames it as a located load error).
     """
-    return expr_refs(_parse_condition(expression))
+    return expr_refs(parse_condition(expression))
 
 
 
@@ -222,7 +234,7 @@ def _evaluate(
     absent values. The truthiness fold of `and`/`or` is coerced back to a
     plain `bool` here, so a `when:`/`asserts:` predicate always yields a boolean.
     """
-    tree = _parse_condition(expression)
+    tree = parse_condition(expression)
     return bool(eval_expr(tree, resolve, mode=ResolveMode.CONDITION_FALSY, types=types))
 
 
@@ -914,6 +926,38 @@ def _isinstance_type_name(call_suffix: Tree) -> str:
     return str(call_suffix.children[1].children[0].children[0])
 
 
+def isinstance_type_names(tree: "Tree | Token") -> list[str]:
+    """Return the type names the `isinstance(x, T)` calls in a parsed expression name.
+
+    Args:
+        tree (`Tree | Token`):
+            A tree from [`parse_expr`][yian.expr.grammar.parse_expr] or `parse_condition`,
+            which have already checked each `isinstance` call's shape.
+
+    Returns:
+        `list[str]`:
+            Each `T` in source order, without duplicates. `[]` for a lone token.
+
+    Example:
+        ```python
+        isinstance_type_names(parse_expr("isinstance(x, Buy) or isinstance(y, int)"))
+        # ["Buy", "int"]
+        ```
+    """
+    if not isinstance(tree, Tree):
+        return []
+    names: list[str] = []
+    for node in tree.iter_subtrees_topdown():
+        if node.data != "refcall" or str(node.children[0]) != ISINSTANCE:
+            continue
+        call_suffix = node.children[-1]
+        if isinstance(call_suffix, Tree) and call_suffix.data == "call_suffix":
+            name = _isinstance_type_name(call_suffix)
+            if name not in names:
+                names.append(name)
+    return names
+
+
 def expr_refs(tree: "Tree | Token") -> list[str]:
     """
     Collect every reference-leaf PATH a unified `${...}` expression tree reads.
@@ -1065,7 +1109,7 @@ def rewrite_condition_refs(expression: str, rename: Callable[[str], "str | None"
     The rewrite analog of [`condition_refs`][yian.expr.expressions.condition_refs]:
     a whole-span `${a > 5}` keeps its outer braces and rewrites the interior; a mixed
     `${a} > 5` / bare `a > 5` are rewritten in place. `rename(path)` returns the replacement
-    path (or `None` to keep). The value is trimmed first (matching `_parse_condition`)."""
+    path (or `None` to keep). The value is trimmed first (matching `parse_condition`)."""
     text = expression.strip()
     m = _WHOLE_SPAN_RE.match(text)
     if m is not None and "}" not in m.group(1):

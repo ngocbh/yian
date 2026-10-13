@@ -1,5 +1,7 @@
 """`isinstance(x, T)` type names resolve at load into each node's type table."""
 
+import json
+
 import pytest
 
 from yian.compose import LoadError, load_flow
@@ -275,11 +277,25 @@ def test_a_run_that_used_isinstance_replays(tmp_path):
     replayed = resume_flow(load_flow(_LOOP_FLOW), log=log)
     assert replayed.status == "succeeded", replayed.failure
     assert replayed.output == first.output
-    lines = log.read_text().splitlines(keepends=True)
-    log.write_text("".join(lines[: len(lines) // 2]))
+    # Cut after the second iteration, so resume replays two iterations and runs two live.
+    kept = _cut_log_after(log, "loop#1/__end__")
+    assert "loop~1" in kept
+    assert not any(node_id and node_id.startswith(("loop~2", "loop#2/")) for node_id in kept)
     resumed = resume_flow(load_flow(_LOOP_FLOW), log=log)
     assert resumed.status == "succeeded", resumed.failure
     assert resumed.output == first.output
+
+
+def _cut_log_after(log, node_id: str) -> list[str]:
+    """Keep the log up to `node_id`'s success record; return the kept records' node ids."""
+    lines = log.read_text().splitlines(keepends=True)
+    records = [json.loads(line) for line in lines]
+    end = next(
+        index for index, record in enumerate(records)
+        if record["kind"] == "node_succeeded" and record["payload"]["node_id"] == node_id
+    )
+    log.write_text("".join(lines[: end + 1]))
+    return [record["payload"].get("node_id") for record in records[: end + 1]]
 
 
 _CHILD_FLOWS = (
@@ -410,6 +426,173 @@ def test_a_parent_cannot_use_a_childs_typedef():
     assert _error_line(error) == _line_of(text, "isinstance(input.value, Ticket)")
 
 
+_FLAG_DEF = """defs:
+  flag:
+    input:
+      is_buy: bool
+    nodes:
+      e:
+        kind: code
+        input:
+          is_buy: ${input.is_buy}
+        code: |
+          return inputs["is_buy"]
+    output: ${e.output}
+"""
+
+_MAP_FLOW = (
+    "id: p\nname: p\n"
+    + TYPEDEFS
+    + _FLAG_DEF
+    + """input:
+  orders: list[object]
+nodes:
+  each:
+    kind: map
+    call: flag
+    over: ${input.orders}
+    input:
+      is_buy: ${isinstance(item, Buy)}
+output: ${each.output}
+"""
+)
+
+
+def test_isinstance_in_a_map_per_item_input():
+    flow = load_flow(_MAP_FLOW)
+    assert flow.compiled.nodes["each"].types == {"Buy": BUY}
+    result = run_flow(flow, {"orders": [A_BUY, A_SELL, A_BUY]})
+    assert result.status == "succeeded", result.failure
+    assert result.output == [True, False, True]
+
+
+_CALL_ARG_FLOW = _flow(
+    """  c:
+    kind: code
+    input:
+      res: call(flag, is_buy=${isinstance(d.output, Buy)})
+    code: |
+      return inputs["res"]
+"""
+    + _FLAG_DEF
+    + "output: ${c.output}\n"
+)
+
+
+@pytest.mark.parametrize(("order", "expected"), [(A_BUY, True), (A_SELL, False)])
+def test_isinstance_in_a_call_directive_argument(order, expected):
+    flow = load_flow(_CALL_ARG_FLOW)
+    (synth,) = [node for nid, node in flow.compiled.nodes.items() if nid.startswith("__call")]
+    assert synth.types == {"Buy": BUY}
+    assert flow.compiled.nodes["c"].types == {}
+    result = run_flow(flow, {"order": order})
+    assert result.status == "succeeded", result.failure
+    assert result.output is expected
+
+
+_LOOP_SEED_FLOW = (
+    "id: p\nname: p\n"
+    + TYPEDEFS
+    + """input:
+  order: object
+defs:
+  bump:
+    input:
+      n: int
+      buy: bool
+    nodes:
+      step:
+        kind: code
+        input:
+          n: ${input.n}
+          buy: ${input.buy}
+        code: |
+          return {"n": inputs["n"] + 1, "buy": inputs["buy"]}
+        output:
+          n: int
+          buy: bool
+    output: ${step.output}
+nodes:
+  loop:
+    kind: loop
+    call: bump
+    input:
+      n: 0
+      buy: ${isinstance(input.order, Buy)}
+    until: n >= 3 and isinstance(buy, bool)
+    max: 10
+output: ${loop.output}
+"""
+)
+
+
+@pytest.mark.parametrize(("order", "buy"), [(A_BUY, True), (A_SELL, False)])
+def test_isinstance_in_a_loop_seed_and_until(order, buy):
+    flow = load_flow(_LOOP_SEED_FLOW)
+    assert flow.compiled.nodes["loop"].types == {"Buy": BUY, "bool": type_for("bool", {})}
+    result = run_flow(flow, {"order": order})
+    assert result.status == "succeeded", result.failure
+    assert result.output == {"n": 3, "buy": buy}
+
+
+_ON_FLOW = _flow(
+    """  route:
+    kind: case
+    on: ${isinstance(d.output, Buy)}
+    cases:
+      - when: true
+        then: b
+    else: o
+  b:
+    kind: code
+    code: |
+      return "buy"
+  o:
+    kind: code
+    code: |
+      return "other"
+output: ${b.output | o.output}
+"""
+)
+
+
+def test_isinstance_in_a_case_on():
+    # `on:` matches its value against each `when:` as a string, so a bool `on:` value only
+    # reaches `else:`. The run succeeding shows the `on:` binding evaluated with the table.
+    flow = load_flow(_ON_FLOW)
+    assert flow.compiled.nodes["route"].types == {"Buy": BUY}
+    result = run_flow(flow, {"order": A_BUY})
+    assert result.status == "succeeded", result.failure
+    flow.compiled.nodes["route"].types = {}
+    failed = run_flow(flow, {"order": A_BUY})
+    assert failed.status == "failed"
+    assert failed.failure.node_id == "route"
+
+
+def test_an_inline_body_cannot_take_a_whole_value_isinstance_argument():
+    # Inline bodies infer each argument's type while the parent builds, and a whole-value
+    # expression has no static type there; a named `defs:` body declares it instead.
+    text = _flow(
+        """  c:
+    kind: call
+    input:
+      is_buy: ${isinstance(d.output, Buy)}
+    nodes:
+      e:
+        kind: code
+        input:
+          is_buy: ${input.is_buy}
+        code: |
+          return inputs["is_buy"]
+    output: ${e.output}
+output: ${c.output}
+"""
+    )
+    error = _load_error(text)
+    assert "cannot infer type for inline binding 'c.input.is_buy'" in str(error)
+    assert _error_line(error) == _line_of(text, "is_buy: ${isinstance")
+
+
 # --- located load errors --- #
 
 
@@ -422,6 +605,11 @@ _UNKNOWN_SITES = {
     "loop while": (_LOOP_FLOW, "status, Running", "Runing", "while:"),
     "defs child": (_CHILD_FLOWS, "input.order, Sell", "Sel", "is_sell:"),
     "inline child": (_CHILD_FLOWS, "input.order, Buy", "By", "is_buy:"),
+    "map per-item input": (_MAP_FLOW, "item, Buy", "Buyy", "is_buy: ${isinstance(item"),
+    "call argument": (_CALL_ARG_FLOW, "d.output, Buy", "Buyy", "res: call"),
+    "loop seed": (_LOOP_SEED_FLOW, "input.order, Buy", "Buyy", "buy: ${isinstance"),
+    "loop until": (_LOOP_SEED_FLOW, "buy, bool", "boo", "until:"),
+    "case on": (_ON_FLOW, "d.output, Buy", "Buyy", "on: ${isinstance"),
 }
 
 

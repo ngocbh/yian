@@ -4,6 +4,7 @@
 bare type name looked up in the node's type table (`types=`), never a reference.
 """
 
+import json
 from dataclasses import replace
 
 import pytest
@@ -447,9 +448,22 @@ def test_loop_with_a_type_table_resumes_mid_loop(tmp_path):
     log = tmp_path / "run.jsonl"
     first = run_flow(_loop_flow(), {}, log=log)
     assert first.status == "succeeded", first.failure
-    # Cut the log mid-loop so resume replays the recorded drivers and runs the rest live.
-    lines = log.read_text().splitlines(keepends=True)
-    log.write_text("".join(lines[: len(lines) // 2]))
+    # Cut after the second iteration, so resume replays two iterations and runs two live.
+    kept = _cut_log_after(log, "loop#1/__end__")
+    assert "loop~1" in kept
+    assert not any(node_id and node_id.startswith(("loop~2", "loop#2/")) for node_id in kept)
     resumed = resume_flow(_loop_flow(), log=log)
     assert resumed.status == "succeeded", resumed.failure
     assert resumed.output == first.output
+
+
+def _cut_log_after(log, node_id: str) -> list[str]:
+    """Keep the log up to `node_id`'s success record; return the kept records' node ids."""
+    lines = log.read_text().splitlines(keepends=True)
+    records = [json.loads(line) for line in lines]
+    end = next(
+        index for index, record in enumerate(records)
+        if record["kind"] == "node_succeeded" and record["payload"]["node_id"] == node_id
+    )
+    log.write_text("".join(lines[: end + 1]))
+    return [record["payload"].get("node_id") for record in records[: end + 1]]

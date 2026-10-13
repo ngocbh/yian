@@ -17,10 +17,11 @@ from collections.abc import Callable, Mapping
 from dataclasses import replace
 from typing import Any
 
-from lark import Token, Tree
+from lark import Token
 
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
 from yian.compose.helpers.output_contracts import (
+    direct_reference_parts,
     output_contract_path_error,
     project_output_contract,
 )
@@ -297,7 +298,7 @@ def _infer_binding_string(
         return Type.scalar(ValueKind.STRING)
 
     expression = segments[0].tree
-    direct_parts = _direct_reference_parts(expression)
+    direct_parts = direct_reference_parts(expression)
     if direct_parts is not None:
         return _infer_direct_reference(
             direct_parts,
@@ -330,33 +331,6 @@ def _infer_binding_string(
         "a whole-value expression has no supported static scalar type",
         diagnostics,
     )
-
-
-def _direct_reference_parts(expression: Tree | Token) -> tuple[str, ...] | None:
-    """Return an exact lone ``refcall`` path, excluding calls and expressions."""
-    if not isinstance(expression, Tree) or expression.data != "refcall":
-        return None
-
-    children = expression.children
-    if (
-        not children
-        or not isinstance(children[0], Token)
-        or str(children[0].type) != "NAME"
-    ):
-        return None
-
-    parts = [str(children[0])]
-    for child in children[1:]:
-        if (
-            not isinstance(child, Tree)
-            or child.data != "trailer"
-            or len(child.children) != 1
-            or not isinstance(child.children[0], Token)
-            or str(child.children[0].type) != "NAME"
-        ):
-            return None
-        parts.append(str(child.children[0]))
-    return tuple(parts)
 
 
 def _infer_direct_reference(

@@ -5,7 +5,7 @@ from dataclasses import replace
 import pytest
 
 from yian.compile.model import Edge
-from yian.compose.helpers.errors import LoadError
+from yian.compose.helpers.errors import LoadDiagnostics, LoadError
 from yian.compose.helpers.types import read_type
 from yian.compose.nodes.base import BuildContext, NodeDescriptor
 from yian.compose.nodes.case import CaseDescriptor
@@ -18,7 +18,7 @@ from yian.compose.validate.narrowing import (
     narrow_contract_at,
     union_facts,
 )
-from yian.diagnostics import OriginRef
+from yian.diagnostics import OriginRef, SourceRange
 from yian.nodes.contracts import ContractOrigins, PartialRecordContract, ValueContract
 from yian.typesys import Type, ValueKind
 from yian.typesys.types import read_typedefs
@@ -65,6 +65,8 @@ def _case(
     on: str | None,
     cases: list[tuple[str, str]],
     else_: str | None = None,
+    *,
+    when_ranges=(),
 ) -> tuple[CaseDescriptor, list[Edge]]:
     """A CASE descriptor and the data and control edges its own build returns."""
     desc = CaseDescriptor(
@@ -72,6 +74,7 @@ def _case(
         on=on,
         cases=[{"when": when, "then": then} for when, then in cases],
         else_=else_,
+        when_ranges=list(when_ranges),
     )
     return desc, list(desc.build(BuildContext({})).edges)
 
@@ -87,7 +90,7 @@ def _data(src: str, dst: str, group: str = "x", *, optional: bool = False) -> Ed
     )
 
 
-def _compute(nodes, edges, producers, inputs=None):
+def _compute(nodes, edges, producers, inputs=None, *, diagnostics=None):
     """Run the narrowing pass over hand-built nodes and edges."""
     descriptors = {}
     all_edges = list(edges)
@@ -98,7 +101,9 @@ def _compute(nodes, edges, producers, inputs=None):
         else:
             desc = item
         descriptors[desc.id] = desc
-    return compute_narrowing(descriptors, all_edges, producers, inputs or {})
+    return compute_narrowing(
+        descriptors, all_edges, producers, inputs or {}, diagnostics=diagnostics
+    )
 
 
 def _decision_contract(typ: Type = DECISION) -> ValueContract:
@@ -212,6 +217,74 @@ def test_else_keeps_the_base_nullability_and_when_branches_drop_it():
 
     assert _view_type(narrowing, "b") == BUY
     assert _view_type(narrowing, "h") == replace(HOLD, nullable=True)
+
+
+def test_a_when_branch_and_else_into_one_target_join_to_every_member():
+    """Routing `buy` and `else:` to one node leaves every member possible."""
+    nodes = [
+        _node("d"),
+        _case("c", "${d.output.action}", [("buy", "x")], "x"),
+        _node("x"),
+    ]
+    narrowing = _compute(nodes, [], {"d": _decision_contract()})
+
+    assert narrowing.environment("x") == {"d.output": Members((BUY, HOLD, SELL))}
+    assert narrowing.for_node("x")[0]["d"].type == DECISION
+
+
+def test_a_then_target_named_default_carries_no_fact():
+    """A `then: default` node shares the else handle, so it is not narrowed."""
+    nodes = [
+        _node("d"),
+        _case("c", "${d.output.action}", [("buy", "b"), ("sell", "default")]),
+        _node("b"),
+        _node("default"),
+    ]
+    narrowing = _compute(nodes, [], {"d": _decision_contract()})
+
+    assert _view_type(narrowing, "b") == BUY
+    assert narrowing.environment("default") == {}
+
+
+def test_a_then_target_named_default_and_an_else_carry_no_fact():
+    """With `then: default` the else target shares the handle and is not narrowed either."""
+    nodes = [
+        _node("d"),
+        _case("c", "${d.output.action}", [("buy", "b"), ("sell", "default")], "h"),
+        _node("b"),
+        _node("default"),
+        _node("h"),
+    ]
+    narrowing = _compute(nodes, [], {"d": _decision_contract()})
+
+    assert _view_type(narrowing, "b") == BUY
+    assert narrowing.environment("default") == {}
+    assert narrowing.environment("h") == {}
+
+
+def test_else_keeps_nullability_from_a_nullable_path_segment():
+    """A nullable record on the way to the base makes the `else:` members nullable."""
+    holder = Type(
+        kind=ValueKind.OBJECT,
+        fields={"dec": DECISION},
+        required=frozenset({"dec"}),
+        nullable=True,
+    )
+    nodes = [
+        _node("d"),
+        _case("c", "${d.output.dec.action}", [("buy", "b")], "h"),
+        _node("b"),
+        _node("h"),
+    ]
+    narrowing = _compute(nodes, [], {"d": ValueContract(holder)})
+
+    assert narrowing.environment("h") == {
+        "d.output.dec": Members((HOLD, SELL), nullable=True)
+    }
+    assert _view_type(narrowing, "h").fields["dec"] == Type(
+        kind=ValueKind.OBJECT, variants=(HOLD, SELL), nullable=True
+    )
+    assert _view_type(narrowing, "b").fields["dec"] == BUY
 
 
 def test_control_edges_join_by_union_and_an_edge_without_facts_unconstrains():
@@ -431,6 +504,43 @@ def test_a_when_value_that_is_not_a_tag_is_a_load_error():
     assert str(caught.value).startswith(
         "when: buyy is not a tag of the union at ${d.output.action} "
         "(tags: buy, hold, sell)"
+    )
+
+
+def test_the_tag_error_points_at_the_when_value():
+    """The error is located at the offending `when:` value's range."""
+    ranges = [SourceRange(5, 15, 5, 18), SourceRange(7, 15, 7, 19)]
+    nodes = [
+        _node("d"),
+        _case(
+            "c",
+            "${d.output.action}",
+            [("buy", "b"), ("sel", "s")],
+            when_ranges=ranges,
+        ),
+        _node("b"),
+        _node("s"),
+    ]
+    diagnostics = LoadDiagnostics(label="flow.yaml", text="line\n" * 10)
+    with pytest.raises(LoadError) as caught:
+        _compute(nodes, [], {"d": _decision_contract()}, diagnostics=diagnostics)
+    assert caught.value.diagnostic.frames[-1].range == ranges[1]
+
+
+def test_a_tag_error_on_a_base_only_the_branch_view_has():
+    """A member-only union field is checked against the union the branch sees."""
+    nodes = [
+        _node("d"),
+        _case("c", "${d.output.action}", [("buy", "c2")], "h"),
+        _case("c2", "${d.output.leg.type}", [("limt", "l")]),
+        _node("l"),
+        _node("h"),
+    ]
+    with pytest.raises(LoadError) as caught:
+        _compute(nodes, [], {"d": _decision_contract()})
+    assert str(caught.value).startswith(
+        "when: limt is not a tag of the union at ${d.output.leg.type} "
+        "(tags: limit, market)"
     )
 
 

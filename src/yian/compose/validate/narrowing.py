@@ -11,6 +11,9 @@ contribution (control, required data groups, `depends_on`) meets by intersection
 then gets a view of the producer and flow-input contracts with its narrowed bases rebuilt, so
 the reference and type checks can read member fields inside a branch.
 
+The pass reads built, desugared CASE descriptors and their edges, so it runs after
+`desugar_case_call_targets` and the node builds.
+
 Knows about: descriptors, compiled edges, output contracts, and `typesys` unions.
 Never imports: runtime.
 """
@@ -21,13 +24,13 @@ from collections import deque
 from dataclasses import dataclass, field, replace
 from typing import Mapping, Optional, Sequence, TypeAlias
 
-from lark import Token, Tree
-
 from yian.compile.model import Edge
 from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.helpers.output_contracts import (
     combine_output_contracts,
+    direct_reference_parts,
     project_output_contract,
+    record_field_origins,
 )
 from yian.compose.nodes.base import NodeDescriptor
 from yian.compose.nodes.case import CaseDescriptor
@@ -35,7 +38,6 @@ from yian.expr import ExpressionError
 from yian.expr.template import Span, scan_template
 from yian.nodes.case import DEFAULT_HANDLE
 from yian.nodes.contracts import (
-    ContractOrigins,
     OutputContract,
     PartialRecordContract,
     ValueContract,
@@ -110,6 +112,10 @@ def union_facts(a: Optional[Fact], b: Optional[Fact]) -> Optional[Fact]:
     Returns:
         `Fact | None`:
             The set union of two `Members`, an `Exact` both sides share, or `None`.
+
+    Example:
+        `union_facts(Members((Buy,)), Members((Sell,)))` is `Members((Buy, Sell))`;
+        `union_facts(Members((Buy,)), None)` is `None`.
     """
     if isinstance(a, Members) and isinstance(b, Members):
         return Members(a.members + b.members, a.nullable or b.nullable)
@@ -134,6 +140,11 @@ def intersect_facts(a: Optional[Fact], b: Optional[Fact]) -> Optional[Fact]:
             The set intersection of two `Members`; `Members` of the one member an
             `Exact` names, else that `Exact`; an `Exact` both sides share; the other
             fact when one side is `None`; otherwise `None`.
+
+    Example:
+        `intersect_facts(Members((Buy, Sell)), Members((Sell, Hold)))` is
+        `Members((Sell,))`; `intersect_facts(Exact(Buy), Members((Buy, Sell)))` is
+        `Members((Buy,))`.
     """
     if a is None:
         return b
@@ -226,26 +237,6 @@ def _narrow_type(typ: Type, path: tuple[str, ...], narrowed: Type) -> Optional[T
     return replace(typ, fields={**typ.fields, path[0]: inner})
 
 
-def _partial_origins(contract: PartialRecordContract) -> ContractOrigins:
-    """Rebase each proven field's origins under its field name."""
-    entries: list[tuple[tuple[str | int, ...], object]] = []
-    for name, field_contract in contract.fields:
-        if field_contract is None:
-            continue
-        if field_contract.origins.default is not None:
-            entries.append(((name,), field_contract.origins.default))
-        entries.extend(
-            ((name, *path), origin) for path, origin in field_contract.origins.entries
-        )
-    entries.sort(
-        key=lambda entry: tuple(
-            (0, segment) if type(segment) is str else (1, segment)
-            for segment in entry[0]
-        )
-    )
-    return ContractOrigins(entries=tuple(entries))
-
-
 def narrow_contract_at(
     contract: OutputContract,
     path: tuple[str, ...],
@@ -272,6 +263,10 @@ def narrow_contract_at(
             The narrowed contract, or `None` when `path` names an absent field, crosses a
             union or a non-record, or goes below an opaque field.
 
+    Raises:
+        `TypeError`:
+            `contract` is neither a `ValueContract` nor a `PartialRecordContract`.
+
     Example:
         Narrowing `Union[Buy, Sell]` at `()` to `Buy` gives a `Buy` contract with the
         same origins.
@@ -287,7 +282,7 @@ def narrow_contract_at(
             f"PartialRecordContract, got {type(contract).__name__}"
         )
     if not path:
-        return ValueContract(typ, _partial_origins(contract))
+        return ValueContract(typ, record_field_origins(contract.fields))
     fields = dict(contract.fields)
     name, rest = path[0], path[1:]
     if name not in fields:
@@ -305,16 +300,31 @@ def narrow_contract_at(
     return PartialRecordContract(tuple(fields.items()))
 
 
+def _members_type(members: Sequence[Type], nullable: bool) -> Optional[Type]:
+    """The type of a value that is one of `members`, or `None` if it may be `None`.
+
+    Returns `None` for an empty set that is not nullable: no value fits.
+    """
+    if not members:
+        return Type(kind=ValueKind.NONE, nullable=True) if nullable else None
+    if len(members) == 1:
+        return replace(members[0], nullable=nullable)
+    return Type(
+        kind=ValueKind.OBJECT,
+        variants=canonical_union_order(members),
+        nullable=nullable,
+    )
+
+
 def _fact_type(fact: Fact) -> Optional[Type]:
-    """The type a node sees for a base under `fact`, or `None` for no view."""
+    """The type a node sees for a base under `fact`, or `None` for no view.
+
+    An empty member set on a nullable base can only be `None`; on a non-nullable base
+    the node never runs, so it gets no view.
+    """
     if isinstance(fact, Exact):
         return fact.type
-    if not fact.members:
-        # No member fits: a nullable base can only be None; otherwise the node never runs.
-        return Type(kind=ValueKind.NONE, nullable=True) if fact.nullable else None
-    if len(fact.members) == 1:
-        return replace(fact.members[0], nullable=fact.nullable)
-    return Type(kind=ValueKind.OBJECT, variants=fact.members, nullable=fact.nullable)
+    return _members_type(fact.members, fact.nullable)
 
 
 def _split_base(base: str) -> Optional[tuple[str, str, tuple[str, ...]]]:
@@ -392,24 +402,7 @@ def _direct_ref(text: object) -> Optional[tuple[str, ...]]:
         return None
     if len(segments) != 1 or not isinstance(segments[0], Span):
         return None
-    tree = segments[0].tree
-    if not isinstance(tree, Tree) or tree.data != "refcall" or not tree.children:
-        return None
-    head, *trailers = tree.children
-    if not isinstance(head, Token) or head.type != "NAME":
-        return None
-    parts = [str(head)]
-    for trailer in trailers:
-        if (
-            not isinstance(trailer, Tree)
-            or trailer.data != "trailer"
-            or len(trailer.children) != 1
-            or not isinstance(trailer.children[0], Token)
-            or trailer.children[0].type != "NAME"
-        ):
-            return None
-        parts.append(str(trailer.children[0]))
-    return tuple(parts)
+    return direct_reference_parts(segments[0].tree)
 
 
 def _union_type(contract: Optional[OutputContract]) -> Optional[Type]:
@@ -432,14 +425,7 @@ def _members_fact(
     """The fact that a value is one of `members`, relative to the base's own union."""
     if not members:
         return Members((), nullable)
-    if len(members) == 1:
-        typ = replace(members[0], nullable=nullable)
-    else:
-        typ = Type(
-            kind=ValueKind.OBJECT,
-            variants=canonical_union_order(members),
-            nullable=nullable,
-        )
+    typ = _members_type(members, nullable)
     if reference is None:
         # The base has no union of its own outside this branch, so the set is only an exact type.
         return Exact(typ)
@@ -500,6 +486,11 @@ def _on_case_facts(
         handle: {base: _members_fact(reference, members, False)}
         for handle, members in by_handle.items()
     }
+    if any(case.get("then") == DEFAULT_HANDLE for case in desc.cases):
+        # A `then:` node named like the else handle shares its edges: routing to it, or
+        # matching nothing, fires every edge with that handle, so it carries no fact.
+        facts.pop(DEFAULT_HANDLE, None)
+        return facts
     if desc.else_ is not None:
         unlisted = [
             member for member in union.variants if not member.fields[tag_field].tags & listed

@@ -11,7 +11,7 @@ import datetime
 from typing import Annotated, Any, Literal, Optional, Union
 
 import pytest
-from langchain_core.tools import BaseTool, InjectedToolArg, StructuredTool
+from langchain_core.tools import BaseTool, InjectedToolArg, StructuredTool, tool
 from pydantic import (
     BaseModel,
     BeforeValidator,
@@ -677,3 +677,52 @@ def test_input_with_an_arbitrary_type_is_unchecked() -> None:
     assert _input_labels(types) == {"sym": "str", "thing": None}
     assert types.required == frozenset({"sym", "thing"})
     assert types.output == Type.scalar(ValueKind.STRING)
+
+
+async def _fetch(x: int) -> list[str]:
+    """Fetch names."""
+    return [str(x)]
+
+
+def test_async_tool_output_is_read_from_the_coroutine() -> None:
+    built = StructuredTool.from_function(coroutine=_fetch)
+
+    assert built.func is None
+    assert tool_types(built).output == Type(
+        kind=ValueKind.LIST_STRING, element=Type.scalar(ValueKind.STRING)
+    )
+
+
+@tool(response_format="content_and_artifact")
+def _with_artifact(q: str) -> tuple[str, list[int]]:
+    """Answer and attach the raw rows."""
+    return q, [1]
+
+
+def test_artifact_tool_has_no_output() -> None:
+    # The function returns (content, artifact) but invoking the tool gives only
+    # the content.
+    types = tool_types(_with_artifact)
+
+    assert types.output is None
+    assert _input_labels(types) == {"q": "str"}
+
+
+class _UnresolvedArgs(BaseModel):
+    x: "NoSuchArgType"  # noqa: F821
+
+
+def _takes_unresolved(x: Any) -> int:
+    """Take an argument whose type does not resolve."""
+    return 1
+
+
+def test_unreadable_argument_schema_has_no_inputs() -> None:
+    built = StructuredTool.from_function(
+        _takes_unresolved, name="unresolved", args_schema=_UnresolvedArgs
+    )
+    types = tool_types(built)
+
+    assert types.inputs is None
+    assert types.required == frozenset()
+    assert types.output == Type.scalar(ValueKind.INTEGER)

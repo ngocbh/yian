@@ -337,7 +337,12 @@ def tool_types(tool: BaseTool) -> ToolTypes:
             `None` where it cannot be read without risking a narrower type than
             the tool accepts or returns.
     """
-    inputs, required = _input_types(tool.tool_call_schema)
+    try:
+        inputs, required = _input_types(tool.tool_call_schema)
+    except Exception:
+        # Building the schema can fail, for example on an unresolved forward
+        # reference; the tool's inputs are then unchecked.
+        inputs, required = None, frozenset()
     return ToolTypes(inputs=inputs, required=required, output=_output_type(tool))
 
 
@@ -391,6 +396,10 @@ def _field_type(field: Any) -> Type | None:
 
 def _output_type(tool: BaseTool) -> Type | None:
     """Return the JSON-like return type of the function `tool` wraps, else `None`."""
+    # Any other format splits the function's return value, and invoking the tool
+    # gives only part of it.
+    if getattr(tool, "response_format", "content") != "content":
+        return None
     fn = getattr(tool, "func", None) or getattr(tool, "coroutine", None)
     if not callable(fn):
         return None

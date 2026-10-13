@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import copy
 from dataclasses import FrozenInstanceError
 from pathlib import Path
+import pickle
 import subprocess
 import sys
 from types import TracebackType
@@ -553,6 +555,26 @@ def test_memory_errors_expose_typed_fields_and_origin() -> None:
             "failed",
             retryable=1,  # type: ignore[arg-type]
         )
+
+
+def test_memory_operation_error_survives_copy_and_pickle() -> None:
+    """A copied or unpickled operation error keeps every typed field."""
+    error = MemoryOperationError("recall", "backend.down", "backend is down", True)
+    error.__notes__ = ["while recalling"]
+
+    for clone in (
+        copy.copy(error),
+        copy.deepcopy(error),
+        pickle.loads(pickle.dumps(error)),
+    ):
+        assert type(clone) is MemoryOperationError
+        assert clone.stage == "recall"
+        assert clone.code == "backend.down"
+        assert clone.message == "backend is down"
+        assert clone.retryable is True
+        assert clone.args == ("backend is down",)
+        assert str(clone) == "backend is down"
+        assert clone.__notes__ == ["while recalling"]
 
 
 def test_learning_result_keeps_primary_independent_failure_attribution() -> None:

@@ -357,9 +357,6 @@ def test_scope_free_model_evidence_is_accepted_with_forward_capture(monkeypatch)
     assert record.evidence.interactions == (ModelTextInteraction("done"),)
     assert record.forward_capture.bound_inputs == {}
     assert record.forward_capture.scope.static_path == (node.id,)
-    from yian.runtime.learning import project_outcome_episodes
-
-    assert project_outcome_episodes(engine.state.run_id, record) == ()
 
 
 @pytest.mark.parametrize("stage", ["recall", "factory", "model", "success"])

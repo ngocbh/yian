@@ -1,16 +1,15 @@
 """Pure backward transfers and accepted backward/memory reducer projections.
 
 This module shares exact route-transfer validation with the backward callback
-driver and owns immutable attempt state and pure per-memory episode inventories.
-It projects owner-local contexts for every enabled memory key from complete accepted
-history and backward results alongside forward episode projections.
+driver and owns immutable attempt state. It projects owner-local contexts, the
+only episode projection, for every enabled memory key from complete accepted
+history and backward results.
 Contracts, records, and retained traces sit below it; state and callback drivers
 consume its pure projections. It invokes no callbacks or backend operations.
 """
 
 from __future__ import annotations
 
-from bisect import bisect_left
 from dataclasses import dataclass, replace
 from hashlib import sha256
 import json
@@ -20,14 +19,12 @@ from yian.diagnostics import Failure
 from yian.expr.lineage import FeedbackValue, RouteContext, SourceRef, has_feedback, route_feedback, validate_feedback
 from yian.memory import (
     DeclSite,
-    EvaluationEvidence,
     LearnContext,
     LearningFailure,
     LearningResult,
     MemoryEpisode,
     MemoryEpisodeStatus,
     MemoryMutation,
-    MemoryOccurrenceSegment,
     MemoryOperationFailure,
     MemorySpec,
     MemoryStack,
@@ -605,228 +602,6 @@ def reduce_backward_record(
     return backward._from_validated((*backward.attempts[:-1], next_attempt))
 
 
-@dataclass(frozen=True, slots=True)
-class _EpisodeLog:
-    """Persistent append log with canonical power-of-two chronological chunks.
-
-    Level zero holds one episode, level one holds two, and so on.  Occupied
-    levels are read from highest to lowest to recover record order.  Appending
-    merges only the binary-counter carry path, so retaining a long MAP/LOOP
-    history does not copy or revalidate every earlier episode per outcome.
-    """
-
-    levels: tuple[tuple[MemoryEpisode, ...] | None, ...] = ()
-
-    def __post_init__(self) -> None:
-        """Validate a directly constructed log once at its public boundary."""
-        if type(self.levels) is not tuple:
-            raise TypeError("episode log levels must be a tuple")
-        if self.levels and self.levels[-1] is None:
-            raise ValueError("episode log cannot have trailing empty levels")
-        for index, chunk in enumerate(self.levels):
-            if chunk is None:
-                continue
-            if type(chunk) is not tuple or len(chunk) != 1 << index:
-                raise ValueError("episode log chunks must match their binary level")
-            for episode in chunk:
-                _revalidate_episode(episode)
-
-    @classmethod
-    def _from_validated(
-        cls,
-        levels: tuple[tuple[MemoryEpisode, ...] | None, ...],
-    ) -> _EpisodeLog:
-        """Build from an existing valid log and one already-validated carry."""
-        value = object.__new__(cls)
-        object.__setattr__(value, "levels", levels)
-        return value
-
-    def append(self, episode: MemoryEpisode) -> _EpisodeLog:
-        """Return a log with one validated episode appended in record order."""
-        _revalidate_episode(episode)
-        levels = list(self.levels)
-        carry = (episode,)
-        index = 0
-        while index < len(levels) and levels[index] is not None:
-            prior = levels[index]
-            if prior is None:  # narrowed by the loop condition
-                raise AssertionError("occupied episode level disappeared")
-            carry = prior + carry
-            levels[index] = None
-            index += 1
-        if index == len(levels):
-            levels.append(carry)
-        else:
-            levels[index] = carry
-        return self._from_validated(tuple(levels))
-
-    def to_tuple(self) -> tuple[MemoryEpisode, ...]:
-        """Materialize chronological episodes only at the learning boundary."""
-        return tuple(
-            episode
-            for chunk in reversed(self.levels)
-            if chunk is not None
-            for episode in chunk
-        )
-
-
-def occurrence_key(
-    occurrence_path: tuple[MemoryOccurrenceSegment, ...],
-) -> tuple[tuple[str, tuple[str, ...], int], ...]:
-    """Return the canonical structural ordering key for one occurrence path."""
-    if type(occurrence_path) is not tuple or any(
-        type(segment) is not MemoryOccurrenceSegment for segment in occurrence_path
-    ):
-        raise TypeError("occurrence key requires a tuple of MemoryOccurrenceSegment values")
-    return tuple(
-        (segment.kind.value, segment.static_path, segment.index)
-        for segment in occurrence_path
-    )
-
-
-@dataclass(frozen=True, slots=True)
-class RuntimeLearningState:
-    """Pure immutable per-memory episode inventory without attempt progress.
-
-    Attributes:
-        memory_order (`tuple[str, ...]`): Recorded memory keys in table order.
-        episodes (`tuple[_EpisodeLog, ...]`): One persistent episode log per key.
-        episode_run_id (`str | None`): Run that produced every retained episode.
-    """
-
-    memory_order: tuple[str, ...] = ()
-    episodes: tuple[_EpisodeLog, ...] = ()
-    episode_run_id: str | None = None
-
-    def __post_init__(self) -> None:
-        """Require a canonical key order and revalidate all nested values."""
-        if type(self.memory_order) is not tuple or any(
-            type(key) is not str or not key for key in self.memory_order
-        ):
-            raise TypeError("learning memory_order must be a tuple of non-empty strings")
-        if self.memory_order != tuple(sorted(set(self.memory_order))):
-            raise ValueError("learning memory_order must be sorted and unique")
-        if type(self.episodes) is not tuple:
-            raise TypeError("learning episodes must be a tuple")
-        if len(self.episodes) != len(self.memory_order):
-            raise ValueError("learning episodes must align with memory_order")
-        if self.episode_run_id is not None and (
-            type(self.episode_run_id) is not str or not self.episode_run_id
-        ):
-            raise ValueError("episode_run_id must be a non-empty string or None")
-        episode_run_ids: set[str] = set()
-        for episode_log in self.episodes:
-            if type(episode_log) is not _EpisodeLog:
-                raise TypeError("memory episodes must be persistent episode logs")
-            _EpisodeLog(episode_log.levels)
-            for episode in episode_log.to_tuple():
-                episode_run_ids.add(episode.run_id)
-        if len(episode_run_ids) > 1:
-            raise ValueError("all learning episodes must share one run_id")
-        if self.episode_run_id != next(iter(episode_run_ids), None):
-            raise ValueError("episode_run_id must match retained episodes")
-
-    @classmethod
-    def for_memories(
-        cls,
-        memories: tuple[MemorySpec, ...] | None,
-    ) -> RuntimeLearningState:
-        """Return pristine learning state for one recorded key table."""
-        if memories is None:
-            return cls()
-        memory_order = tuple(spec.key for spec in memories)
-        return cls(memory_order=memory_order, episodes=tuple(_EpisodeLog() for _ in memory_order))
-
-    def episodes_for(self, memory: str) -> tuple[MemoryEpisode, ...]:
-        """Return accepted episodes for one recorded memory key."""
-        return self.episodes[self._memory_index(memory)].to_tuple()
-
-    def occurrence_inventory(
-        self,
-        memory: str,
-    ) -> tuple[tuple[MemoryOccurrenceSegment, ...], ...]:
-        """Return the sorted unique occurrence paths accepted for one memory."""
-        paths = {episode.occurrence_path for episode in self.episodes_for(memory)}
-        return tuple(sorted(paths, key=occurrence_key))
-
-    def learn_context(self, run_id: str, memory: str) -> LearnContext:
-        """Return a fresh closed context with ordered episodes and no feedback."""
-        if type(run_id) is not str or not run_id:
-            raise ValueError("learning context requires a non-empty run_id")
-        if self.episode_run_id is not None and self.episode_run_id != run_id:
-            raise ValueError("learning context run_id disagrees with its episodes")
-        return LearnContext(
-            run_id=run_id,
-            memory=memory,
-            episodes=self.episodes_for(memory),
-            feedback=(),
-        )
-
-    def append_episodes(
-        self,
-        additions: tuple[tuple[str, MemoryEpisode], ...],
-    ) -> RuntimeLearningState:
-        """Append one accepted outcome's projections in durable record order."""
-        if type(additions) is not tuple:
-            raise TypeError("episode additions must be a tuple")
-        if not additions:
-            return self
-        updated = list(self.episodes)
-        addition_run_ids: set[str] = set()
-        for memory, episode in additions:
-            index = self._memory_index(memory)
-            updated[index] = updated[index].append(episode)
-            addition_run_ids.add(episode.run_id)
-        if len(addition_run_ids) != 1:
-            raise ValueError("one accepted outcome must carry one episode run_id")
-        addition_run_id = next(iter(addition_run_ids))
-        if self.episode_run_id is not None and addition_run_id != self.episode_run_id:
-            raise ValueError("episode addition run_id disagrees with retained history")
-        return self._from_validated(episodes=tuple(updated), episode_run_id=addition_run_id)
-
-    def _from_validated(
-        self,
-        *,
-        episodes: tuple[_EpisodeLog, ...],
-        episode_run_id: str,
-    ) -> RuntimeLearningState:
-        """Replace validated aligned roots without rescanning frozen history."""
-        value = object.__new__(type(self))
-        object.__setattr__(value, "memory_order", self.memory_order)
-        object.__setattr__(value, "episodes", episodes)
-        object.__setattr__(value, "episode_run_id", episode_run_id)
-        return value
-
-    def _memory_index(self, memory: str) -> int:
-        """Resolve one recorded memory key by binary search."""
-        if type(memory) is not str:
-            raise TypeError("memory lookup requires a memory key string")
-        index = bisect_left(self.memory_order, memory)
-        if index >= len(self.memory_order) or self.memory_order[index] != memory:
-            raise ValueError("memory key is absent from the recorded table")
-        return index
-
-
-def _revalidate_episode(episode: MemoryEpisode) -> None:
-    """Replay every exact public invariant of one immutable episode."""
-    if type(episode) is not MemoryEpisode:
-        raise TypeError("episodes must contain MemoryEpisode values")
-    MemoryEpisode(
-        run_id=episode.run_id,
-        occurrence_path=episode.occurrence_path,
-        owner_static_path=episode.owner_static_path,
-        status=episode.status,
-        inputs=episode.inputs,
-        output=episode.output,
-        failure=episode.failure,
-        interactions=episode.interactions,
-        base_system_prompt=episode.base_system_prompt,
-        prompt=episode.prompt,
-        memory_sections=episode.memory_sections,
-        execution_seq=episode.execution_seq,
-    )
-
-
 def failure_json(failure: Failure) -> dict[str, object]:
     """Project one canonical durable Failure into source-neutral JSON."""
     if type(failure) is not Failure:
@@ -884,52 +659,6 @@ def _episode_outcome(
         raise TypeError("unsupported graph outcome for episode projection")
 
     return status, output, failure
-
-
-def project_outcome_episodes(
-    run_id: str,
-    record: (
-        NodeSucceededRecord
-        | NodeRoutedRecord
-        | NodeExpandedRecord
-        | NodeFailedRecord
-    ),
-    *,
-    execution_seq: int | None = None,
-) -> tuple[tuple[str, MemoryEpisode], ...]:
-    """Project one canonical accepted graph outcome into every memory in its scope."""
-    if type(run_id) is not str or not run_id:
-        raise ValueError("episode projection requires a non-empty run_id")
-    evidence = record.evidence
-    if evidence is None:
-        return ()
-    if type(evidence) is not EvaluationEvidence:
-        raise TypeError("episode projection evidence must be EvaluationEvidence")
-    if evidence.scope is None:
-        return ()
-
-    status, output, failure = _episode_outcome(record)
-    scope = evidence.scope
-    return tuple(
-        (
-            memory,
-            MemoryEpisode(
-                run_id=run_id,
-                occurrence_path=scope.occurrence_path,
-                owner_static_path=scope.static_path,
-                status=status,
-                inputs=evidence.bound_inputs,
-                output=output,
-                failure=failure,
-                interactions=evidence.interactions,
-                base_system_prompt=evidence.base_system_prompt,
-                prompt=evidence.prompt,
-                memory_sections=evidence.memory_sections,
-                execution_seq=execution_seq,
-            ),
-        )
-        for memory in scope.memories
-    )
 
 
 class OwnerContextError(Exception):
@@ -1052,7 +781,10 @@ def project_owner_contexts(
         raise TypeError("owner contexts require the complete recorded memory table")
     if type(stacks) is not tuple or any(type(stack) is not MemoryStack for stack in stacks):
         raise TypeError("owner contexts require the recorded memory stacks")
-    inventory = RuntimeLearningState.for_memories(memories)
+    keys = tuple(spec.key for spec in memories)
+    if keys != tuple(sorted(set(keys))):
+        raise ValueError("owner contexts require a memory table sorted by unique key")
+    known = frozenset(keys)
     recorded = {stack.locator: stack.memories for stack in stacks}
     if len(recorded) != len(stacks):
         raise ValueError("recorded memory stacks must have unique locators")
@@ -1067,8 +799,8 @@ def project_owner_contexts(
             raise TypeError("historical memory scope memories must be a tuple")
         if recorded.get(scope.static_path) != scope.memories:
             raise ValueError("historical memory scope disagrees with its recorded memory stack")
-        for key in scope.memories:
-            inventory._memory_index(key)
+        if not known.issuperset(scope.memories):
+            raise ValueError("historical memory scope names a key absent from the recorded table")
         if scope.memories:
             scopes[occurrence.source] = scope
 
@@ -1162,12 +894,9 @@ def memory_commit_id(
 
 __all__ = [
     "RuntimeBackwardState",
-    "RuntimeLearningState",
     "OwnerContextError",
     "failure_json",
     "memory_commit_id",
-    "occurrence_key",
-    "project_outcome_episodes",
     "project_owner_contexts",
     "reduce_backward_record",
     "validate_attributed_backward",

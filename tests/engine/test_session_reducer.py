@@ -94,7 +94,6 @@ def _snapshot(state):
         dict(state.accepted_starts),
         state.result,
         state.next_sequence,
-        state.learning_state,
         state.backward_state,
         dict(state.depth),
         dict(state.growth_owner),

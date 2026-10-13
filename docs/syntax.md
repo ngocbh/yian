@@ -661,7 +661,8 @@ extract:
 ```
 
 If the model deviates from the schema, the engine feeds the error back and retries
-up to `retries:` times (default 2):
+up to `retries:` times (default 2). `retries:` must be a non-negative integer
+(`0` means no retry); anything else fails at load:
 
 ```yaml
 extract:
@@ -733,6 +734,8 @@ provider/model defaults; it ignores enclosing flow, parent-flow, and CLI layers:
       model: gpt-5.5
       inherit: false            # own config + process defaults; no flow/CLI layers
 ```
+
+`inherit:` must be `true` or `false`; a quoted `"false"` or `null` fails at load.
 
 #### OpenAI authentication
 
@@ -921,7 +924,8 @@ error that says so.
 A TOOL node's `tool_id:` and an AGENT node's `tools:` grant name either a tool
 registered with `register_tool` or one the host passes to that run with
 `run_flow(..., tools={...})`. When a host passes `tools=`, the run sees only
-those tools. The flow text is the same either way.
+those tools. The flow text is the same either way. `tools:` is always a list of
+names, even for one tool (`tools: [search]`); `tools: search` fails at load.
 
 An AGENT node's `tools:` entry may also name a **tool group** that the host fills
 for each run. The YAML looks the same; only the host knows which names are groups:

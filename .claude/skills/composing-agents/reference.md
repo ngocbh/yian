@@ -450,7 +450,7 @@ it leaves unset from the layer outside it. Precedence (most specific first):
 4. process provider/model defaults, read exactly once when the run initializes
 
 Set flow-wide defaults with a top-level `llm_config:`; override one field per node;
-opt a node out of the authored outer layers with `inherit: false` (own dict plus
+opt a node out of the authored outer layers with `inherit: false` (a real boolean; own dict plus
 the snapshotted process provider/model defaults; no flow/parent/CLI layers). The
 static tree is resolved up front, so later environment changes do not alter the
 effective selection. See [`llm-config-cascade.yaml`](templates/llm-config-cascade.yaml).

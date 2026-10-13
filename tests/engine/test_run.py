@@ -14,6 +14,8 @@ with `status == "failed"`. The four behaviors pinned:
   to failed); all asserts true -> `"succeeded"`.
 """
 
+import pytest
+
 from yian.events import NodeSucceeded
 from yian.compose import load_flow
 from yian.nodes.contracts import Binding
@@ -214,6 +216,81 @@ def test_coercible_string_input_passes_boundary():
     result = run_flow(loaded, {"topic": "BETA", "seed": "0.7"})
     assert result.status == "succeeded", result.failure
     assert result.output == "pro case for BETA"
+
+
+_BOOL_FLOW = """
+id: bool_flag
+name: bool_flag
+input:
+  flag: bool
+nodes:
+  echo:
+    kind: code
+    input:
+      flag: ${input.flag}
+    code: |
+      return inputs["flag"]
+output: ${echo.output}
+"""
+
+
+@pytest.mark.parametrize("raw, expected", [("true", True), ("no", False)])
+def test_bool_spelling_coerces_at_boundary(raw, expected):
+    result = run_flow(load_flow(_BOOL_FLOW), {"flag": raw})
+    assert result.status == "succeeded", result.failure
+    assert result.output is expected
+
+
+def test_unrecognized_bool_spelling_fails_at_boundary():
+    # A typo such as "ture" must not silently become False.
+    result = run_flow(load_flow(_BOOL_FLOW), {"flag": "ture"})
+    assert result.status == "failed"
+    assert result.failure is not None
+    assert result.failure.code == "contract.input"
+    assert "input 'flag'" in result.failure.message
+    assert "does not match declared type bool" in result.failure.message
+    assert not _has_node_output(result)
+
+
+def test_unrecognized_bool_text_fails_child_input():
+    # Untyped upstream text reaching a called def's bool input is checked the same way.
+    flow = load_flow("""
+id: gatekeeper
+name: gatekeeper
+defs:
+  gate:
+    input:
+      ok: bool
+    nodes:
+      e:
+        kind: code
+        input:
+          ok: ${input.ok}
+        code: |
+          return inputs["ok"]
+    output: ${e.output}
+input:
+  answer: str
+nodes:
+  src:
+    kind: code
+    input:
+      a: ${input.answer}
+    code: |
+      return inputs["a"]
+  g:
+    kind: call
+    call: gate
+    input:
+      ok: ${src.output}
+output: ${g.output}
+""")
+    assert run_flow(flow, {"answer": "yes"}).output is True
+    result = run_flow(flow, {"answer": "approve"})
+    assert result.status == "failed"
+    assert result.failure is not None
+    assert "input 'ok'" in result.failure.message
+    assert "does not match declared type bool" in result.failure.message
 
 
 # --------------------------------------------------------------------------- #

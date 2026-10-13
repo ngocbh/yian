@@ -964,7 +964,7 @@ def test_seed_keeps_supported_values_and_independent_canonical_copies():
 @pytest.mark.parametrize("container", ["raw", "dict", "tuple", "model", "dataclass", "typed"])
 def test_seed_rejects_nonfinite_before_json_mode_normalization(number, container):
     from pydantic import BaseModel
-    from yian.typesys.values import ObjectValue
+    from yian.typesys.values import ObjectValue, TypeCheckError
 
     class Model(BaseModel):
         value: float
@@ -981,8 +981,17 @@ def test_seed_rejects_nonfinite_before_json_mode_normalization(number, container
         "dataclass": Box(number),
         "typed": ObjectValue(value={"nested": number}),
     }[container]
-    with pytest.raises(ValueError, match="non-finite"):
+    path = {
+        "raw": (),
+        "dict": ("nested", 0),
+        "tuple": (0,),
+        "model": ("value",),
+        "dataclass": ("value",),
+        "typed": ("nested",),
+    }[container]
+    with pytest.raises(TypeCheckError, match="non-finite") as caught:
         canonical_seed(value)
+    assert caught.value.path == path
 
 
 @pytest.mark.parametrize("number", [float("inf"), float("-inf"), float("nan")])
@@ -1028,15 +1037,18 @@ def test_typed_output_rejects_nonfinite_at_its_field_path():
 def test_expansion_record_with_nonfinite_seed_does_not_append():
     from yian.runtime.log import MemoryRunLog
 
+    log = MemoryRunLog("r")
     with pytest.raises(ValueError, match="limit: non-finite"):
-        MemoryRunLog("r").append(NodeExpandedRecord("n", {"limit": float("nan")}, (), "0" * 64))
+        log.append(NodeExpandedRecord("n", {"limit": float("nan")}, (), "0" * 64))
+    assert log.records() == ()
 
 
 def test_run_started_record_with_nonfinite_llm_config_does_not_append():
     from yian.runtime.log import MemoryRunLog
 
+    log = MemoryRunLog("r")
     with pytest.raises(ValueError, match="non-finite"):
-        MemoryRunLog("r").append(
+        log.append(
             RunStartedRecord(
                 flow_fingerprint=_FINGERPRINT,
                 initial_pool=encode_pool(VariablePool(start_id="start")),
@@ -1045,14 +1057,18 @@ def test_run_started_record_with_nonfinite_llm_config_does_not_append():
                 num_workers=0,
             )
         )
+    assert log.records() == ()
 
 
 def test_pool_codec_rejects_nonfinite_values():
+    from yian.typesys.values import TypeCheckError
+
     pool = VariablePool(start_id="start")
     pool.set("start", {"x": {"a": float("inf")}})
 
-    with pytest.raises(ValueError, match="non-finite"):
+    with pytest.raises(TypeCheckError, match="non-finite") as caught:
         encode_pool(pool)
+    assert caught.value.path == ("store", "start", "x", "a")
 
 
 def test_canonical_helpers_reject_unordered_containers():

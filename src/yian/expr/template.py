@@ -645,12 +645,8 @@ def _call_suffix_callees_absent_from_builtins(tree: "Tree | Token") -> list[str]
     """Every callee named by a builtin-CALL inside a parsed `${...}` span `tree` whose
     name is NOT a `TEMPLATE_FNS` builtin or `isinstance` — i.e. a FLOW call embedded in a
     `${...}` expression. A `refcall` carrying a `call_suffix` child is a call; a bare
-    reference (no suffix) names no callee and is skipped. Returned in tree-walk order (not deduped).
-    An empty list means the span calls only known builtins (or no callee at all)."""
-    from lark import Tree as _Tree  # runtime import: `Tree` is TYPE_CHECKING-only above
-
-    if not isinstance(tree, _Tree):
-        return []
+    reference (no suffix) names no callee and is skipped. Returned in tree-walk order (not
+    deduped). An empty list means the span calls only known builtins (or no callee at all)."""
     return [
         callee for callee in _call_callees(tree)
         if callee not in TEMPLATE_FNS and callee != ISINSTANCE
@@ -778,8 +774,9 @@ def flow_call_callees_in_spans(text: str) -> list[str]:
     """Every FLOW callee (a callee absent from `TEMPLATE_FNS`) named by a call inside a
     `${...}` span of `text`. The loader uses this to REJECT the retired inline
     `${ flow(args) }` form: a flow call belongs in the whole-value `call(...)` directive,
-    not inside a `${...}` expression. Pure builtins (`upper`, `join`, …) return nothing —
-    they stay legal inside `${...}`. Returns [] when no span names a flow callee.
+    not inside a `${...}` expression. Pure builtins (`upper`, `join`, …) and the
+    `isinstance(x, T)` type test return nothing — they stay legal inside `${...}`.
+    Returns [] when no span names a flow callee.
 
     Raises `ExpressionError` if a span interior does not parse (the same parse the
     downstream template evaluator performs)."""

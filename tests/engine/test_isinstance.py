@@ -4,11 +4,14 @@
 bare type name looked up in the node's type table (`types=`), never a reference.
 """
 
+from dataclasses import replace
+
 import pytest
 
 from yian.compose.loader import load_flow
 from yian.expr.expressions import (
     ExpressionError,
+    ResolveMode,
     condition_refs,
     eval_expr,
     evaluate_when,
@@ -123,6 +126,22 @@ def test_record_evaluation_without_types_names_the_type():
         evaluate_when_record("isinstance(order, Buy)", {"order": A_BUY})
 
 
+def test_a_missing_value_raises_under_strict_raise():
+    with pytest.raises(ExpressionError, match="unresolved reference"):
+        eval_expr(
+            parse_expr("isinstance(d.output, Buy)"), _resolver(),
+            mode=ResolveMode.STRICT_RAISE, types=TYPES,
+        )
+
+
+def test_an_optional_alias_accepts_a_missing_value():
+    types = {"MaybeBuy": replace(BUY, nullable=True)}
+    tree = parse_expr("isinstance(d.output, MaybeBuy)")
+    assert eval_expr(tree, _resolver(), types=types) is True
+    assert eval_expr(tree, _resolver(d={"output": A_BUY}), types=types) is True
+    assert eval_expr(tree, _resolver(d={"output": A_SELL}), types=types) is False
+
+
 # --- parsing --- #
 
 
@@ -143,6 +162,7 @@ def test_isinstance_takes_exactly_two_arguments(text):
     "isinstance(x, f(Buy))",
     "isinstance(x, 3)",
     "isinstance(x, [Buy])",
+    "isinstance(x, in)",
 ])
 def test_the_second_argument_must_be_a_bare_type_name(text):
     with pytest.raises(ExpressionError, match="type name"):
@@ -156,6 +176,11 @@ def test_the_second_argument_must_be_a_bare_type_name(text):
 def test_isinstance_has_no_keyword_form(text):
     with pytest.raises(ExpressionError, match="keyword"):
         parse_expr(text)
+
+
+def test_isinstance_result_has_no_fields_to_read():
+    with pytest.raises(ExpressionError, match="gives a bool"):
+        parse_expr("isinstance(x, Buy).ok")
 
 
 def test_isinstance_nested_in_a_larger_expression_is_validated():

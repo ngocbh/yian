@@ -225,13 +225,14 @@ def _reject_dotted_callee(tree: Tree | Token) -> None:
 
 
 def _is_bare_name(node: Tree | Token) -> bool:
-    """True for a `refcall` that is one `NAME` with no trailers or call suffix."""
+    """True for a `refcall` that is one non-keyword `NAME` with no trailers or call suffix."""
     return (
         isinstance(node, Tree)
         and node.data == "refcall"
         and len(node.children) == 1
         and isinstance(node.children[0], Token)
         and node.children[0].type == "NAME"
+        and str(node.children[0]) not in _RESERVED_REFERENCE_ROOTS
     )
 
 
@@ -239,7 +240,8 @@ def _validate_isinstance(tree: Tree | Token) -> None:
     """Require every `isinstance(...)` call to be `isinstance(<expr>, <TypeName>)`.
 
     The second argument names a type, so it must be a bare `NAME`: no dotted path,
-    call, literal, or `${...}` wrapping. Keyword arguments are not accepted.
+    call, literal, or `${...}` wrapping. Keyword arguments and dotted access on the
+    boolean result (`isinstance(x, T).f`) are not accepted.
     """
     if not isinstance(tree, Tree):
         return
@@ -252,6 +254,8 @@ def _validate_isinstance(tree: Tree | Token) -> None:
         )
         if call_suffix is None:
             continue
+        if node.children[-1] is not call_suffix:
+            raise ExpressionError("isinstance(...) gives a bool; it has no fields to read")
         args = call_suffix.children
         if any(len(arg.children) == 2 for arg in args):
             raise ExpressionError("isinstance takes positional arguments, not keyword arguments")
@@ -300,6 +304,7 @@ def parse_expr(text: str) -> Tree | Token:
     except LarkError as exc:
         raise ExpressionError(f"could not parse expression {text!r}: {exc}") from exc
     _reject_dotted_callee(tree)
-    _reject_reserved_reference_roots(tree)
+    # Before the reserved-root check, so `isinstance(x, in)` reports the type-name rule.
     _validate_isinstance(tree)
+    _reject_reserved_reference_roots(tree)
     return tree

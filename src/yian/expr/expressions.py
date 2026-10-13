@@ -32,8 +32,8 @@ class RequiredError(ExpressionError):
 
 
 # The type-test special form `isinstance(x, T)`: its second argument is a type name
-# looked up in the node's type table, never a reference, so every tree walker treats
-# only its first argument as an expression.
+# looked up in the node's type table, never a reference, so the evaluator, the reference
+# walkers and rewriters, and type inference treat only its first argument as an expression.
 ISINSTANCE = "isinstance"
 
 _VAR_RE = re.compile(r"\$\{([^}]+)\}")
@@ -564,7 +564,8 @@ class _EvalExpr:
 
         `T` is looked up in the type table, never resolved as a reference. The check is
         the variable pool's write-boundary check, so a value passes exactly when it
-        could be written to a slot of type `T`. A missing `x` is checked as `None`."""
+        could be written to a slot of type `T`. A missing `x` is checked as `None` in the
+        non-strict modes and raises in `STRICT_RAISE`."""
         type_name = _isinstance_type_name(call_suffix)
         typ = (self._types or {}).get(type_name)
         if typ is None:
@@ -871,9 +872,8 @@ def infer_expr_type(
             isinstance(child, Tree) and child.data == "call_suffix"
             for child in children
         ):
-            is_type_test = str(children[0]) == ISINSTANCE and not (
-                isinstance(children[-1], Tree) and children[-1].data == "trailer"
-            )
+            # `parse_expr` rejects dotted access on an `isinstance(...)` result.
+            is_type_test = str(children[0]) == ISINSTANCE
             return Type.scalar(ValueKind.BOOLEAN) if is_type_test else None
         path = ".".join(
             [str(children[0]), *(str(child.children[0]) for child in children[1:])]

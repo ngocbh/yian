@@ -464,14 +464,12 @@ def _member_only_field_error(
     having: tuple[Type, ...],
     field_name: str,
     path: str,
-    remaining: int,
+    union_path: str,
 ) -> str:
     """Return the error for reading a field only some members of `union` have.
 
-    `remaining` counts the path segments from `field_name` to the end of `path`, so
-    the union's own path is `path` without them.
+    `path` is the whole reference path and `union_path` the path of the union value.
     """
-    union_path = ".".join(path.split(".")[:-remaining])
     tag_fields = union_tag_fields(union)
     if tag_fields:
         tag = tag_fields[0]
@@ -555,7 +553,9 @@ def output_contract_field_error(
 
     typ = output_contract_type(contract)
     assert typ is not None
-    for index, field_name in enumerate(fields):
+    # The path segments walked so far, starting with the ones before `fields`.
+    walked = path.split(".")[: path.count(".") + 1 - len(fields)]
+    for field_name in fields:
         if typ.variants is not None:
             read = union_field(typ, field_name)
             if isinstance(read, FieldAbsent):
@@ -564,11 +564,12 @@ def output_contract_field_error(
                 if partial_union_fields:
                     return None
                 return _member_only_field_error(
-                    typ, read.members, field_name, path, len(fields) - index
+                    typ, read.members, field_name, path, ".".join(walked)
                 )
             if read.type is None:
                 return None
             typ = read.type
+            walked.append(field_name)
             continue
         if typ.fields is None:
             if typ.kind in _UNCHECKED_FIELD_KINDS:
@@ -580,6 +581,7 @@ def output_contract_field_error(
         if field_name not in typ.fields:
             return f"reference ${{{path}}} reads unknown field {field_name!r} on record"
         typ = typ.fields[field_name]
+        walked.append(field_name)
     return None
 
 

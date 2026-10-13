@@ -4,9 +4,8 @@ These operate on bare `Type`/`Edge`/path-set inputs (never a `FlowSpec`), so the
 Compose loader (`yian.compose`) reuses them directly:
 
 - `_reject_cycles` — Kahn's-algorithm cycle check over a bare edge list + node-id set.
-- `_classify_path` — head-resolution for one dotted `${...}` ref + the dotted
-  record-field walk, dispatched through `_walk_record_fields`.
-- `_walk_record_fields` — the dotted-field-into-a-record check.
+- `_classify_path` — head-resolution for one dotted `${...}` ref. Field reads are
+  checked by the shared output-contract walk in `nodes/contracts.py`.
 
 `FlowValidationError` is the shared structural-error type the compose loader catches
 and re-raises as a located `LoadError`.
@@ -16,7 +15,6 @@ and re-raises as a located `LoadError`.
 from dataclasses import replace
 
 from yian.compile.model import END_ID, START_ID
-from yian.nodes.contracts import ValueContract, output_contract_field_error
 from yian.typesys.values import ValueKind, Type
 
 _CLOSED_HEADS = ()              # `outputs` is no longer a head; node-first head dispatch
@@ -155,30 +153,11 @@ def types_compatible(source: Type, sink: Type) -> bool:
     return True
 
 
-def _walk_record_fields(typ: "Type | None", fields: list, path: str) -> "str | None":
-    """Walk a dotted field path into a producer's record `Type`.
-
-    Only a CHECKED record (`typ.fields` is not None) is walked; a scalar / opaque /
-    unresolved producer stays lenient (dotted access allowed, unchecked). An absent
-    field on a checked record is a located compile error. A union is checked by the
-    shared output-contract walk from there on."""
-    for index, f in enumerate(fields):
-        if typ is not None and typ.variants is not None:
-            return output_contract_field_error(ValueContract(typ), fields[index:], path)
-        if typ is None or typ.fields is None:
-            return None  # opaque / not a checked record -> lenient
-        if f not in typ.fields:
-            return f"reference ${{{path}}} reads unknown field {f!r} on record"
-        typ = typ.fields[f]
-    return None
-
-
 def _classify_path(
     path: str,
     valid_targets: set[str],
     flow_inputs: set[str],
     extra_heads: tuple = (),
-    producers: "dict[str, Type] | None" = None,
 ) -> "str | None":
     """Return an error message for a bad reference path, or None if acceptable.
 
@@ -228,6 +207,5 @@ def _classify_path(
                 f"reference ${{{path}}} on node {head!r} must be {head}.output[.field] "
                 f"(`.output` is the node-value selector)"
             )
-        # dotted-field walk into the producer's record Type, starting at parts[2:].
-        return _walk_record_fields((producers or {}).get(head), parts[2:], path)
+        return None
     return f"reference ${{{path}}} uses unknown namespace {head!r}"

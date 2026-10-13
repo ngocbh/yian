@@ -3,9 +3,9 @@
 import pytest
 
 from yian.compile.model import GrowthRejected
-from yian.compile.validation import _classify_path
 from yian.compose import load_flow
 from yian.compose.build.inline_inputs import canonicalize_inline_type
+from yian.compose.helpers.output_contracts import project_output_contract
 from yian.compose.helpers.errors import LoadError
 from yian.compose.helpers.types import read_type
 from yian.compose.nodes.human_input import _answer_schema
@@ -112,6 +112,35 @@ def test_shared_field_optional_in_one_member_reads_as_optional():
     assert contract.type == Type(kind=ValueKind.STRING, nullable=True)
 
 
+def test_shared_field_through_an_optional_union_reads_as_optional():
+    contract = _output_field(
+        _flow("output:\n  n: ${d.output.note}\n", output="Optional[Decision]"), "n"
+    )
+    assert contract.type == Type(kind=ValueKind.STRING, nullable=True)
+
+
+def test_shared_field_one_member_does_not_require_reads_as_optional():
+    text = Type.scalar(ValueKind.STRING)
+    tag = lambda value: Type(kind=ValueKind.STRING, tags=frozenset({value}))  # noqa: E731
+    union = Type(
+        kind=ValueKind.OBJECT,
+        variants=(
+            Type(
+                kind=ValueKind.OBJECT,
+                fields={"kind": tag("a"), "note": text},
+                required=frozenset({"kind", "note"}),
+            ),
+            Type(
+                kind=ValueKind.OBJECT,
+                fields={"kind": tag("b"), "note": text},
+                required=frozenset({"kind"}),
+            ),
+        ),
+    )
+    projected = project_output_contract(ValueContract(union), ["note"])
+    assert projected.type == Type(kind=ValueKind.STRING, nullable=True)
+
+
 def test_shared_field_of_differing_types_is_untyped_and_loads():
     typedefs = (
         "typedefs:\n"
@@ -134,6 +163,29 @@ def test_member_only_field_of_an_untagged_union_is_a_load_error():
         "reference ${d.output.text} reads field 'text', which only 1 of 2 union members "
         "have; check the member with isinstance(d.output, <Type>) in a case first"
     ) in msg
+
+
+def test_member_only_field_in_a_flow_assert_is_a_load_error():
+    text = _flow("asserts:\n  - ${d.output.qty} > 0\noutput: ${d.output}\n")
+    assert f"assert '${{d.output.qty}} > 0': {_TAGGED_QTY}" in _load_error(text)
+
+
+def test_member_only_field_in_a_searched_case_when_is_a_load_error():
+    rest = (
+        "  route:\n"
+        "    kind: case\n"
+        "    cases:\n"
+        "      - when: ${d.output.qty > 5}\n"
+        "        then: sink\n"
+        "    else: sink\n"
+        "  sink:\n"
+        "    kind: code\n"
+        "    input:\n      x: ${input.s}\n"
+        "    output: str\n"
+        "    code: return 'x'\n"
+        "output: ${sink.output}\n"
+    )
+    assert f"node 'route' cases[0].when from: {_TAGGED_QTY}" in _load_error(_flow(rest))
 
 
 def test_field_no_member_has_keeps_the_unknown_field_message():
@@ -284,15 +336,6 @@ def test_shared_walk_allows_member_only_fields_when_asked():
     assert output_contract_field_error(
         contract, ["zzz"], "d.output.zzz", partial_union_fields=True
     ) == ("reference ${d.output.zzz} reads unknown field 'zzz' on record")
-
-
-def test_classify_path_checks_union_fields_with_the_shared_walk():
-    producers = {"d": _decision()}
-    assert _classify_path("d.output.action", {"d"}, set(), (), producers) is None
-    assert _classify_path("d.output.qty", {"d"}, set(), (), producers) == (
-        "reference ${d.output.qty} reads field 'qty', which only union members with "
-        "action buy have; read it inside a case on ${d.output.action}"
-    )
 
 
 def test_runtime_growth_allows_member_only_fields():

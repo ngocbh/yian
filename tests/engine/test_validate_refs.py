@@ -1,7 +1,7 @@
 """Unit tests for reference-wiring validation.
 
-`validate_references` runs the reused leaf checkers (`compile.validation._classify_path`
-+ `_walk_record_fields`) over every binding site of a built flow — node input
+`validate_references` runs the reused leaf checker (`compile.validation._classify_path`)
+and the shared field-read walk over every binding site of a built flow — node input
 bindings from authored node `input:`, flow `output:` bindings, and (via the desugared
 `CaseNode.inputs`)
 each `case`'s `on:`/`when:` data refs. It accumulates ALL located errors and raises a

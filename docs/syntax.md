@@ -716,8 +716,8 @@ Inline notes:
 ### `case` — branching
 
 A `case` node **routes only** — it has no `input:`. Exactly one branch runs; the
-others are skipped (their references resolve to null). Join the branches back
-with a coalesce.
+others are skipped (their references resolve to null). Read the branch that ran
+with `${<case>.output}`.
 
 Simple form — match a value:
 
@@ -745,10 +745,29 @@ gate:
 ```
 
 Routing on a `Literal` is **exhaustiveness-checked**: omitting a tag with no
-`else:` is a compile error. Join the branches:
+`else:` is a compile error. Read the branch that ran:
 
 ```yaml
-output: ${bullish.output | cautious.output}
+output: ${gate.output}       # same as ${bullish.output | cautious.output}
+```
+
+`${<case>.output}` expands at load to a coalesce over the case's branch targets
+(a target that is itself a `case` expands to that case's targets), so it reads
+the one branch that ran. A field path works too: `${gate.output.text}`.
+
+- **Where it works:** any binding — a node `input:`, a MAP `over:`, the flow
+  `output:` — as the whole value or embedded in text (`"verdict: ${gate.output}"`).
+- **Where it is a load error:** inside a larger expression (`${gate.output | x.output}`,
+  a `:-` default, an operator), in a `case` `on:`/`when:`, or in an assert.
+- A case with no `then:` or `else:` has no value, so reading it is a load error.
+
+A branch target is a sibling node id or a `call(...)` directive, which runs a
+child flow as that branch (see [`call` / `map`](#call-map-composition-over-child-flows)):
+
+```yaml
+    cases:
+      - when: go
+        then: call(brief, tone="upbeat")
 ```
 
 ### `human_input` — a deterministic human gate

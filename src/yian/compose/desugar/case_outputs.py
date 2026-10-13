@@ -1,11 +1,12 @@
 """Desugar pass: `${<case>.output}` binding refs -> branch coalesce over case leaves.
 
 `expand_case_outputs` (below) walks every binding field (any node's `input:` /
-mapped-call `over:`) and the flow `output:` bindings, and rewrites a clean WHOLE-SPAN
-case-output ref `${<case>.output[.path]}` to a coalesce `${t1.output[.path] | t2.output… }`
-over the case's LEAF (non-case) branch targets. A case-value ref in any NON-clean binding
-position (coalesce / default operand / embedded text), or in a `case` condition
-(`on:`/`when:`) or an `assert`, is a located `LoadError` — those are not bindings.
+mapped-call `over:`) and the flow `output:` bindings, and rewrites each top-level `${…}`
+span that is exactly a case-output ref `${<case>.output[.path]}` to a coalesce
+`${t1.output[.path] | t2.output… }` over the case's LEAF (non-case) branch targets — whether
+that span is the whole value or embedded in text (`got ${gate.output}`). A case-value ref
+inside a larger expression (coalesce / default operand / any other operator), or in a `case`
+condition (`on:`/`when:`) or an `assert`, is a located `LoadError` — those are not bindings.
 
 Sound via the case-route veto: the losing branch skip-floods (its target output is null),
 so only the taken leaf is non-null in the emitted coalesce.
@@ -54,10 +55,10 @@ def expand_case_outputs(
     targets, returning `(new_descriptors, new_outputs)`.
 
     Walks every binding field (any node's `input:` / a mapped call's `over:`) and
-    the flow `output:` bindings; rewrites a clean whole-span case-output ref to the
-    branch coalesce. Rejects (located `LoadError`) a case-value ref in a non-clean
-    binding position, or in a `case` condition (`on:`/`when:`) or an `assert` — those are
-    not bindings. Descriptor field/item ranges locate node-owned sites;
+    the flow `output:` bindings; rewrites each top-level span that is exactly a
+    case-output ref (whole value or embedded in text) to the branch coalesce. Rejects
+    (located `LoadError`) a case-value ref inside a larger expression, or in a `case`
+    condition (`on:`/`when:`) or an `assert` — those are not bindings. Descriptor field/item ranges locate node-owned sites;
     ``outputs_range`` and ``assertion_range_at`` locate section-owned sites. A flow with
     no `case` node returns its inputs unchanged."""
     diagnostics = diagnostics or LoadDiagnostics()
@@ -173,8 +174,9 @@ def _expander(
     range: Optional[SourceRange] = None,
     diagnostics: LoadDiagnostics,
 ):
-    """A `value -> value` binding transform: expand a clean WHOLE-SPAN case-output ref to
-    the branch coalesce; reject a case ref in any non-clean position. Scans TOP-LEVEL
+    """A `value -> value` binding transform: expand each top-level span that is exactly a
+    case-output ref (whole value or embedded in text) to the branch coalesce; reject a case
+    ref inside a larger expression. Scans TOP-LEVEL
     `${…}` spans only — a case ref NESTED inside an enclosing span (e.g. a `:-` default
     value `${x:-${gate.output}}`) is caught as a non-clean ref of that span, and a `:?`
     message literal (`${x:?${gate.output}}` — not a ref) is left untouched (no
@@ -225,7 +227,7 @@ def _expand_span(
 ) -> str:
     """One TOP-LEVEL `${…}` span (its interior) -> the replacement `${…}` text.
 
-    A clean case-output interior `outputs.<case>[.path]` -> the branch coalesce over the case's
+    A clean case-output interior `<case>.output[.path]` -> the branch coalesce over the case's
     LEAF (non-case) targets (the path suffix re-applied per branch; a case-of-case is flattened
     by `_case_leaf_targets`). Any OTHER interior that reads a case value (via a nested
     ref / coalesce / default operand) -> a located `LoadError`. Everything else (a non-case ref,

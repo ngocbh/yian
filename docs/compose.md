@@ -358,10 +358,13 @@ the pipeline only ever sees a small set of kinds:
 
 | You write | Lowered to |
 |---|---|
-| inline `${ f(x) }` in a binding | a synthetic `call` node; the binding rewritten to `${synth.output}` |
+| `call(f, x=...)` as a binding's whole value | a synthetic `call` node; the binding rewritten to `${synth.output}` |
 | `human_input` with `adaptive_questions:` | a synthetic composer AGENT node + the rewritten gate |
-| `case` branch `then: ${child}` | a synthetic `call` node as the branch target |
+| `case` branch `then: call(f, x=...)` (or `else:`) | a synthetic `call` node as the branch target |
 | `${some_case.output}` | a coalesce over the case's branch targets |
+
+A flow call inside a `${...}` span (`${ f(x) }`) or a `${...}` branch target
+(`then: ${child}`) is a load error that points at the `call(...)` form.
 
 Because desugaring is a descriptor-level rewrite, the synthetic nodes flow through
 `build`, edge inference, validation, and the DAG check exactly like hand-written ones —

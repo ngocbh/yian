@@ -339,3 +339,25 @@ def test_case_map_scalar_over_does_not_use_input_named_over_range():
         )
 
     assert _only_frame(caught.value).range == scalar_range
+
+
+@pytest.mark.parametrize(
+    ("binding", "expanded"),
+    [
+        ("${gate.output}", "${left.output | right.output}"),
+        ("${gate.output.text}", "${left.output.text | right.output.text}"),
+        ("got ${gate.output}!", "got ${left.output | right.output}!"),
+    ],
+)
+def test_case_output_expands_whole_and_embedded_spans(binding, expanded):
+    consumer = CodeDescriptor(id="consumer", code="m:f", inputs={"value": binding})
+
+    new_descriptors, new_outputs = expand_case_outputs(
+        {"gate": _case_gate(), "consumer": consumer},
+        binding,
+        [],
+        diagnostics=_diagnostics(),
+    )
+
+    assert new_descriptors["consumer"].inputs == {"value": expanded}
+    assert new_outputs == expanded

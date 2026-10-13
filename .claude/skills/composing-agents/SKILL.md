@@ -394,8 +394,10 @@ Note `tool` uses `tool_id:` + `input:` (a tool declares no `output:`). ML infere
 goes through a host tool (`kind: tool`); `kind: model` was removed.
 
 ### `case` — branching (routes only; no `input:`)
-Exactly one branch runs; the others skip (their refs resolve to null). **Join the
-branches back with a `|` coalesce.**
+Exactly one branch runs; the others skip (their refs resolve to null). **Read the
+branch that ran with `${route.output}`** — it expands at load to the `|` coalesce
+over the branch targets. It works as a whole binding value or embedded in text, not
+inside a larger expression, a `case` condition, or an assert.
 ```yaml
 route:
   kind: case
@@ -409,7 +411,7 @@ route:
 ```
 Searched form (first true `when:` wins, no `on:`): `when: "score.output >= 0.5"`.
 Routing on a `Literal` is **exhaustiveness-checked** — omitting a tag with no
-`else:` is a compile error.
+`else:` is a compile error. A branch target may be `call(f, x=...)` instead of a node id.
 
 ### `human_input` — a guaranteed human gate
 **Always** calls the run's `ask_user` handler and blocks its worker until the
@@ -667,7 +669,7 @@ starts, and a `human_input` node fails when it asks. There is no authored
 - [ ] Every `prompt:` and `system_prompt:` references local inputs or, for an AGENT, its own declared variables.
 - [ ] Every variable has a typed default and a name distinct from local inputs.
 - [ ] Every `long_term_memory:` declaration is on a full flow or `agent`, uses one of the three forms with only allowlisted built-in config keys (or a custom type a Python host builds), and puts each `session` on exactly one AGENT.
-- [ ] Each `case` has an `else:` (or its `Literal` cases are exhaustive); branches are joined with `|`.
+- [ ] Each `case` has an `else:` (or its `Literal` cases are exhaustive); its result is read with `${<case>.output}` (or a `|` join).
 - [ ] `tool` ids are registered or passed per run with `tools=` (AGENT `tools:` may name a host-filled group); a `code` `module:function` is importable (or an inline `code: |` body `return`s a value); `call`/`uses:` targets resolve on the search path.
 - [ ] Every CALL/MAP/LOOP has exactly one child form: named `call:`, or non-empty inline `nodes:` plus an `output:` key; inline parent/item dependencies cross through outer `input:`.
 - [ ] A child-flow call is written `call(f, ...)` as a whole value, never `${flow(args)}`; string `:-` defaults and `:?` messages are quoted.

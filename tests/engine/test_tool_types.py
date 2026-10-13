@@ -574,6 +574,56 @@ def test_inputs_with_custom_validation_are_unchecked() -> None:
     assert types.required == frozenset(types.inputs)
 
 
+class _StrOrInt:
+    """A custom type whose JSON Schema says `str` but whose Python validation takes an int too."""
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source: Any, handler: Any) -> Any:
+        from pydantic_core import core_schema
+
+        return core_schema.json_or_python_schema(
+            json_schema=core_schema.str_schema(),
+            python_schema=core_schema.union_schema(
+                [core_schema.str_schema(), core_schema.int_schema()]
+            ),
+        )
+
+
+def _json_or_python(q: _StrOrInt) -> str:
+    """Take a value whose JSON and Python validation differ."""
+    return str(q)
+
+
+def test_input_with_separate_python_validation_is_unchecked() -> None:
+    types = tool_types(StructuredTool.from_function(_json_or_python))
+
+    assert _input_labels(types) == {"q": None}
+
+
+def test_too_deeply_nested_input_schema_is_unchecked() -> None:
+    deep: dict[str, Any] = {"type": "integer"}
+    for _ in range(5000):
+        deep = {"type": "array", "items": deep}
+
+    class _DeepTool(BaseTool):
+        name: str = "deep"
+        description: str = "A tool with a very deep JSON Schema."
+        args_schema: dict = {"type": "object", "properties": {}}
+
+        def _run(self, **kwargs: Any) -> None:
+            return None
+
+    deep_tool = _DeepTool()
+    # Set after construction: the BaseTool constructor deep-copies its fields.
+    deep_tool.args_schema = {
+        "type": "object",
+        "properties": {"x": deep, "y": {"type": "string"}},
+    }
+    types = tool_types(deep_tool)
+
+    assert _input_labels(types) == {"x": None, "y": "str"}
+
+
 class _NoFuncTool(BaseTool):
     name: str = "no_func"
     description: str = "A tool with no wrapped function."

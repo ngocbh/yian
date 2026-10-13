@@ -270,8 +270,11 @@ def _union(members: list[Type | None]) -> Type | None:
 
 
 # Validators that run on the raw input can accept values the JSON Schema
-# does not describe.
-_RAW_INPUT_VALIDATORS = frozenset({"function-before", "function-wrap", "function-plain"})
+# does not describe. A `json-or-python` schema validates Python input with a
+# branch the JSON Schema doesn't show.
+_RAW_INPUT_VALIDATORS = frozenset(
+    {"function-before", "function-wrap", "function-plain", "json-or-python"}
+)
 
 # Core-schema node types of values that wrap as yian values. Anything else
 # (models, dataclasses, sets, dates, enums, custom validators) is not a JSON-like
@@ -356,7 +359,7 @@ def _input_types(schema: Any) -> tuple[dict[str, Type | None] | None, frozenset[
         names = required if isinstance(required, list) else []
         return (
             {
-                name: type_from_json_schema(prop, closed=False, root=schema)
+                name: _input_type_from_json_schema(prop, root=schema)
                 for name, prop in properties.items()
             },
             frozenset(name for name in names if isinstance(name, str)),
@@ -393,7 +396,19 @@ def _field_type(field: Any) -> Type | None:
         return None
     if _core_types(core_schema) & _RAW_INPUT_VALIDATORS:
         return None
-    return type_from_json_schema(json_schema, closed=False)
+    return _input_type_from_json_schema(json_schema)
+
+
+def _input_type_from_json_schema(
+    schema: Any, *, root: Mapping[str, Any] | None = None
+) -> Type | None:
+    """Translate one input's JSON Schema, or return `None` when it nests too deeply."""
+    try:
+        return type_from_json_schema(schema, closed=False, root=root)
+    except RecursionError:
+        # A host or MCP schema can nest deeper than the translator recurses;
+        # such an input is left unchecked rather than failing the run.
+        return None
 
 
 def _output_type(tool: BaseTool) -> Type | None:

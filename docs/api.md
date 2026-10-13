@@ -324,7 +324,8 @@ follows the same rules:
 | other unions, or anything untranslatable | not checked |
 
 An input with a pydantic function validator (`mode="before"`, `"wrap"`, or
-`"plain"`) or `SkipValidation` is not checked. A pydantic v1 schema gets only
+`"plain"`), `SkipValidation`, or a custom type whose Python validation differs from
+its JSON Schema is not checked. A pydantic v1 schema gets only
 the name and required-input checks. A tool with a raw JSON Schema `args_schema`
 (a dict) is checked, but a TOOL node can't invoke it yet.
 

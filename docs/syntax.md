@@ -992,8 +992,8 @@ A literal is compared by its exact value, a typed binding (`qty: int = ${x}`) by
 its declared type, and a reference by its inferred type. An unproven binding is
 skipped. A narrower binding, such as `Optional[int]` into `int` or `str` into a
 `Literal`, starts; the tool's own argument validation checks it on each call.
-Nothing is coerced: the string `"10"` into an `int` input fails here, though the
-tool would have converted it. An unknown `tool_id:` still fails only when its node
+Nothing is coerced: the string `"10"` or `true` into an `int` input, or a number into
+a `date` or `datetime` input, fails here, though the tool would have converted it. An unknown `tool_id:` still fails only when its node
 runs. How yian reads a host tool's types is in
 [Typed tools](api.md#typed-tools).
 

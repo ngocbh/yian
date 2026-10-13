@@ -64,6 +64,7 @@ from yian.memory import (
 from yian.memory_host import MemoryRegistry
 from yian.nodes.base import Steering
 from yian.nodes.binding import coerce_inputs
+from yian.nodes.contracts import HostToolCall
 from yian.runtime.engine import FlowEngine
 from yian.runtime.eval_node import require_steering
 from yian.runtime.backward import drive_backward
@@ -814,7 +815,7 @@ def _check_tool_grants(flow: CompiledFlow, tools: ToolSet) -> None:
 
 
 def _check_tool_types(flow: CompiledFlow, tools: ToolSet) -> None:
-    """Prove every static TOOL node's inputs can reach the tool it invokes.
+    """Prove every static TOOL node's inputs and output agree with its tool's types.
 
     Runs before any record is written and covers every static node, including
     nodes that may never run. A node whose tool this run cannot resolve is
@@ -829,7 +830,8 @@ def _check_tool_types(flow: CompiledFlow, tools: ToolSet) -> None:
     Raises:
         `ValueError`:
             A TOOL node passes an input its tool does not take, omits one the
-            tool requires, or binds an input whose type can never fit the tool's.
+            tool requires, binds an input whose type can never fit the tool's, or
+            declares an output the tool can never return.
     """
     for node_id, node in _static_nodes(flow):
         call = node.host_tool_call()
@@ -840,31 +842,65 @@ def _check_tool_types(flow: CompiledFlow, tools: ToolSet) -> None:
         except ValueError:
             continue
         declared = tool_types(tool)
-        if declared.inputs is None:
-            continue
-        for name in call.inputs:
-            if name not in declared.inputs:
-                raise ValueError(
-                    f"TOOL node {node_id!r} input {name!r}: tool {call.tool_id!r} takes no "
-                    f"input {name!r}; it takes {sorted(declared.inputs)}"
-                )
-        missing = sorted(declared.required - set(call.inputs))
-        if missing:
+        if declared.inputs is not None:
+            _check_tool_inputs(node_id, call, declared.inputs, declared.required)
+        if (
+            declared.output is not None
+            and call.output_type is not None
+            and type_relation(declared.output, call.output_type) == "disjoint"
+        ):
             raise ValueError(
-                f"TOOL node {node_id!r} is missing input {missing[0]!r} that tool "
-                f"{call.tool_id!r} requires"
+                f"TOOL node {node_id!r} output: declared "
+                f"{canonical_type_label(call.output_type)}, but tool {call.tool_id!r} "
+                f"returns {canonical_type_label(declared.output)}"
             )
-        for name, inferred in call.input_types.items():
-            expected = declared.inputs.get(name)
-            # Disjoint is yian's non-coercing relation, so a binding pydantic
-            # would coerce (a string of digits into an int) is rejected too.
-            if expected is not None and type_relation(inferred, expected) == "disjoint":
-                raise ValueError(
-                    f"TOOL node {node_id!r} input {name!r}: tool {call.tool_id!r} takes "
-                    f"{canonical_type_label(expected)}, but the binding is "
-                    f"{_binding_label(inferred)}"
-                )
 
+
+def _check_tool_inputs(
+    node_id: str,
+    call: HostToolCall,
+    inputs: Mapping[str, Type | None],
+    required: frozenset[str],
+) -> None:
+    """Prove one TOOL node's inputs match the names and types its tool declares.
+
+    Args:
+        node_id (`str`):
+            The node's path, for the error message.
+        call (`HostToolCall`):
+            The node's tool call.
+        inputs (`Mapping[str, Type | None]`):
+            The tool's declared input types by name; `None` leaves an input unchecked.
+        required (`frozenset[str]`):
+            The names of the inputs the tool requires.
+
+    Raises:
+        `ValueError`:
+            An input is not one the tool takes, a required input is missing, or an
+            input's binding type is disjoint from the tool's.
+    """
+    for name in call.inputs:
+        if name not in inputs:
+            raise ValueError(
+                f"TOOL node {node_id!r} input {name!r}: tool {call.tool_id!r} takes no "
+                f"input {name!r}; it takes {sorted(inputs)}"
+            )
+    missing = sorted(required - set(call.inputs))
+    if missing:
+        raise ValueError(
+            f"TOOL node {node_id!r} is missing input {missing[0]!r} that tool "
+            f"{call.tool_id!r} requires"
+        )
+    for name, inferred in call.input_types.items():
+        expected = inputs.get(name)
+        # Disjoint is yian's non-coercing relation, so a binding pydantic would
+        # coerce (a string of digits into an int) is rejected too.
+        if expected is not None and type_relation(inferred, expected) == "disjoint":
+            raise ValueError(
+                f"TOOL node {node_id!r} input {name!r}: tool {call.tool_id!r} takes "
+                f"{canonical_type_label(expected)}, but the binding is "
+                f"{_binding_label(inferred)}"
+            )
 
 _LITERAL_LABEL_WIDTH = 40
 

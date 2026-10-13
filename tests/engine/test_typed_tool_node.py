@@ -4,15 +4,18 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Literal, Optional, Union
 
 import pytest
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict
+from typing_extensions import TypedDict
 
 from yian.compose import load_flow
 from yian.nodes.base import _HostStop
 from yian.run import resume_flow, run_flow
-from yian.tools import TOOL_REGISTRY
+from yian.tools import TOOL_REGISTRY, ToolSet
+from yian.tools.types import tool_types
 
 
 @pytest.fixture(autouse=True)
@@ -557,3 +560,148 @@ def test_ask_user_with_string_options_runs():
 
     assert result.status == "succeeded", result.failure
     assert result.output == "answered Proceed?"
+
+
+def _declared_output(fn):
+    """Return the return type the run reads from `fn` as a tool."""
+    return tool_types(ToolSet({"place_order": fn}).resolve(["place_order"])[0]).output
+
+
+def test_a_return_type_disjoint_from_the_declared_output_fails_at_run_start(tmp_path: Path):
+    path = tmp_path / "run.jsonl"
+    assert _declared_output(place_int) is not None
+
+    with pytest.raises(ValueError, match=re.escape(
+        "TOOL node 'place' output: declared int, but tool 'place_order' returns str"
+    )):
+        run_flow(load_flow(_INT_FLOW), {}, log=path, tools={"place_order": place_int})
+    assert not path.exists()
+    assert _calls == []
+
+
+class Filled(TypedDict):
+    type: Literal["filled"]
+    qty: int
+
+
+class Interrupted(TypedDict):
+    type: Literal["interrupted"]
+    by: str
+    partial: Optional[int]
+
+
+class Rejected(TypedDict):
+    type: Literal["rejected"]
+    reason: str
+
+
+class Cancelled(TypedDict):
+    type: Literal["cancelled"]
+
+
+def place_variant(qty: int) -> Union[Filled, Interrupted]:
+    return {"type": "filled", "qty": qty}
+
+
+def place_refused(qty: int) -> Union[Rejected, Cancelled]:
+    return {"type": "cancelled"}
+
+
+def test_a_union_return_matching_the_declared_union_runs():
+    assert _declared_output(place_variant) is not None
+
+    result = run_flow(load_flow(_ORDERS_FLOW), {}, tools={"place_order": place_variant})
+
+    assert result.status == "succeeded", result.failure
+    assert result.output == "filled 5"
+
+
+def test_a_union_return_with_no_shared_tag_fails_at_run_start():
+    assert _declared_output(place_refused) is not None
+
+    with pytest.raises(ValueError, match=re.escape(
+        "TOOL node 'place' output: declared "
+    )) as excinfo:
+        run_flow(load_flow(_ORDERS_FLOW), {}, tools={"place_order": place_refused})
+    returns = str(excinfo.value).split("but tool 'place_order' returns ")[1]
+    assert 'Literal["rejected"]' in returns and 'Literal["cancelled"]' in returns
+
+
+_RECORD_OUTPUT_FLOW = """
+id: placing
+name: placing
+nodes:
+  place:
+    kind: tool
+    tool_id: place_order
+    input:
+      qty: 5
+    output: {qty: int}
+output: ${place.output}
+"""
+
+
+def place_dict(qty: int) -> dict:
+    return {"qty": qty}
+
+
+def place_bad_dict(qty: int) -> dict:
+    return {"qty": "bad"}
+
+
+def test_a_wider_return_type_runs_and_the_gate_still_checks_each_value():
+    assert _declared_output(place_dict) is not None
+    flow = load_flow(_RECORD_OUTPUT_FLOW)
+
+    ok = run_flow(flow, {}, tools={"place_order": place_dict})
+    bad = run_flow(flow, {}, tools={"place_order": place_bad_dict})
+
+    assert ok.status == "succeeded", ok.failure
+    assert ok.output == {"qty": 5}
+    assert bad.status == "failed"
+    assert bad.failure.code == "contract.output"
+
+
+def place_unannotated(qty: int):
+    return "x"
+
+
+class _QtyArgs(BaseModel):
+    qty: int
+
+
+class _NoFuncTool(BaseTool):
+    """A tool that defines `_run` instead of wrapping a function."""
+
+    name: str = "place_order"
+    description: str = "Place one order."
+    args_schema: type[BaseModel] = _QtyArgs
+
+    def _run(self, qty: int) -> str:
+        return "x"
+
+
+def place_model_result(qty: int) -> Order:
+    return Order(qty=qty)
+
+
+@pytest.mark.parametrize(
+    "tool",
+    [place_unannotated, _NoFuncTool(), place_model_result],
+    ids=["unannotated", "no-func", "model-return"],
+)
+def test_an_unread_return_type_skips_the_check_and_the_gate_still_applies(tool):
+    assert _declared_output(tool) is None
+
+    result = run_flow(load_flow(_INT_FLOW), {}, tools={"place_order": tool})
+
+    assert result.status == "failed"
+    assert result.failure.node_id == "place"
+    assert result.failure.code == "contract.output"
+
+
+def test_a_node_without_output_runs_any_return_type():
+    result = run_flow(load_flow(_typed_flow("5")), {}, tools={"place_order": place_int})
+
+    assert result.status == "succeeded", result.failure
+    assert result.output == "placed 5"

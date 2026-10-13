@@ -403,6 +403,15 @@ class RuntimeBackwardState:
             if attempt.requests and attempt.ready is None:
                 raise ValueError("backward requests require accepted Ready proposals")
 
+    def _from_validated(self, attempts: tuple[_BackwardAttempt, ...]) -> RuntimeBackwardState:
+        """Replace history whose one changed attempt the reducer already checked."""
+        # Rechecking every earlier attempt on each record would make the Nth
+        # attempt cost O(N) and a replayed log O(N^2).
+        value = object.__new__(type(self))
+        object.__setattr__(value, "memory_order", self.memory_order)
+        object.__setattr__(value, "attempts", attempts)
+        return value
+
     @property
     def current(self) -> _BackwardAttempt | None:
         """Return the most recently accepted attempt, including a closed one."""
@@ -560,7 +569,7 @@ def reduce_backward_record(
             raise ValueError("backward attempt cannot start from the accepted prefix")
         if record.attempt_id != len(backward.attempts) + 1:
             raise ValueError("backward attempt_id must be the next accepted start")
-        return replace(backward, attempts=(*backward.attempts, _BackwardAttempt(record)))
+        return backward._from_validated((*backward.attempts, _BackwardAttempt(record)))
     current = backward.current
     if current is None or current.finished is not None or record.attempt_id != current.started.attempt_id:
         raise ValueError("backward record requires its matching unfinished attempt")
@@ -593,7 +602,7 @@ def reduce_backward_record(
         next_attempt = replace(current, observations=(*current.observations, record))
     else:
         raise ValueError("backward commit requires a completed memory proposal")
-    return replace(backward, attempts=(*backward.attempts[:-1], next_attempt))
+    return backward._from_validated((*backward.attempts[:-1], next_attempt))
 
 
 @dataclass(frozen=True, slots=True)

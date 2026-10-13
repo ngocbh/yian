@@ -530,6 +530,27 @@ def test_repeated_driven_attempts_request_distinct_commit_ids_for_identical_batc
     assert requests[0].commit_id.startswith("ac-memory-v3:")
 
 
+def test_each_attempt_checks_only_its_own_records_not_earlier_attempts(monkeypatch):
+    import yian.runtime.learning as learning_module
+
+    engine, _ = _terminal(("A",))
+    original = learning_module._revalidate_run_record
+    checks = 0
+
+    def count_check(record) -> None:
+        nonlocal checks
+        checks += 1
+        original(record)
+
+    monkeypatch.setattr(learning_module, "_revalidate_run_record", count_check)
+    per_attempt = []
+    for index in range(12):
+        checks = 0
+        assert _drive(engine, {"A": _Memory()}, feedback=f"review {index}").status == "succeeded"
+        per_attempt.append(checks)
+    assert len(set(per_attempt)) == 1, per_attempt
+
+
 def test_cleanup_error_after_finished_preserves_success_and_admits_a_later_attempt(monkeypatch):
     engine, _ = _terminal()
     memory = _Memory()

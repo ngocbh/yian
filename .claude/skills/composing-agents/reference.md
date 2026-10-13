@@ -478,7 +478,8 @@ nodes:
 ```
 
 Keys in use: `max_tool_iterations` (AGENT node) — tool-calling loop turns before an
-`AgentLoopError` (default `-1` = no cap; set a positive int to bound it).
+`AgentLoopError` (default `-1` = no cap; set a positive int to bound it). Tool calls in
+the last allowed turn's reply are not run.
 
 ## Agent memory — `long_term_memory:`
 

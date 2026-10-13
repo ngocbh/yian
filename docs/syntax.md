@@ -502,7 +502,7 @@ Keys in use today:
 
 | Key | Node kind | Meaning |
 |-----|-----------|---------|
-| `max_tool_iterations` | `agent` | Model turns the tool-calling loop runs before it gives up with an `AgentLoopError`. Default `-1` (**no cap** — run until a final answer). Set a positive int to bound it; `0` and other negatives are rejected. |
+| `max_tool_iterations` | `agent` | Model turns the tool-calling loop runs before it gives up with an `AgentLoopError`. If the reply on the last allowed turn asks for tools, the node fails without running them, since no later model call could read their results. Default `-1` (**no cap** — run until a final answer). Set a positive int to bound it; `0` and other negatives are rejected. |
 
 ## Agent memory — `long_term_memory:`
 

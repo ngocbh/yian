@@ -98,6 +98,7 @@ from yian.tools.types import tool_types
 from yian.typesys import Type, ValueKind, canonical_type_label
 from yian.typesys.pool import VariablePool
 from yian.typesys.seeding import default_run_id, seed_system_clock
+from yian.typesys.values import reject_nonfinite
 
 
 EventHook = Callable[[Any], None]
@@ -412,7 +413,8 @@ def run_flow(
             a mapping, a malformed `tools` entry or group item, or a `steering`
             object without `drain`/`interrupted`.
         `ValueError`:
-            An `inputs` key names no declared input, or identity, worker count,
+            An `inputs` key names no declared input, an `inputs` value holds a
+            NaN or infinity at any depth, or identity, worker count,
             model configuration, or prepared run state violates its contract,
             ``llm_config.api_key`` lacks ``llm_config.provider``,
             ``llm_config.base_url`` lacks
@@ -538,6 +540,8 @@ def _run_flow_controlled(
     # crossing a CALL/MAP/LOOP edge is validated as is, and it stays the authority for
     # required/default handling and contract validation.
     coerced = coerce_inputs(flow.input, inputs)
+    for name, value in coerced.items():
+        reject_nonfinite(value, f"input {name!r}")
     pool = VariablePool(start_id=private_flow.start_id)
     pool.set(private_flow.start_id, copy.deepcopy(coerced))
     seed_system_clock(pool)

@@ -464,3 +464,51 @@ output: ${writer.output}
     assert result.failure.message == "default for 't': non-finite number inf is not a yian value"
     assert result.failure.trace[0].key == "/s:root/s:node/s:writer/s:variables/s:t/s:default"
     assert calls == []
+
+
+def _input_flow(declared: str) -> str:
+    """Return a flow whose run input `x: declared` feeds one CODE node."""
+    return f"""
+id: nonfinite
+name: nonfinite
+input:
+  x: {declared}
+nodes:
+  c:
+    kind: code
+    input:
+      y: ${{input.x}}
+    code: |
+      return inputs["y"]
+output: ${{c.output}}
+"""
+
+
+@pytest.mark.parametrize(
+    ("declared", "value", "message"),
+    [
+        ("float", math.nan, "input 'x': non-finite number nan is not a yian value"),
+        ("float", "inf", "input 'x': non-finite number inf is not a yian value"),
+        (
+            "object",
+            {"a": [1, math.inf]},
+            "input 'x' at a[1]: non-finite number inf is not a yian value",
+        ),
+        (
+            "object",
+            [1.0, -math.inf],
+            "input 'x' at [1]: non-finite number -inf is not a yian value",
+        ),
+    ],
+    ids=["nan", "coerced-string", "nested-object", "list"],
+)
+def test_a_nonfinite_run_input_is_rejected_before_the_run_starts(
+    tmp_path, declared, value, message
+):
+    log = tmp_path / "run.jsonl"
+
+    with pytest.raises(ValueError) as caught:
+        run_flow(load_flow(_input_flow(declared)), {"x": value}, log=log)
+
+    assert str(caught.value) == message
+    assert not log.exists()

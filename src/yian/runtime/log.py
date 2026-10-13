@@ -727,7 +727,7 @@ class JsonlRunLog:
                 0o600,
             )
             os.fchmod(fd, 0o600)
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            _lock_exclusive(fd, canonical_path)
             locked = True
             file = os.fdopen(fd, "r+b", buffering=0)
             fd = None  # the binary file now owns this descriptor
@@ -753,7 +753,7 @@ class JsonlRunLog:
         locked = False
         try:
             fd = os.open(canonical_path, os.O_RDWR)
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            _lock_exclusive(fd, canonical_path)
             locked = True
             file = os.fdopen(fd, "r+b", buffering=0)
             fd = None  # the binary file now owns this descriptor
@@ -770,9 +770,9 @@ class JsonlRunLog:
             else:
                 os.lseek(file.fileno(), complete_end, os.SEEK_SET)
 
-            records = _decode_complete_prefix(data)
+            records = _decode_complete_prefix(data, canonical_path)
             if not records:
-                raise ValueError("cannot resume an empty run log")
+                raise ValueError(f"cannot resume an empty run log: {canonical_path}")
             return cls(
                 canonical_path,
                 records[0].run_id,
@@ -2758,32 +2758,56 @@ def _copy_envelope(envelope: RecordEnvelope) -> RecordEnvelope:
     return decode_record(encode_record(envelope))
 
 
-def _decode_complete_prefix(data: bytes) -> list[RecordEnvelope]:
-    """Validate every newline-terminated record and its shared identity."""
+def _decode_complete_prefix(data: bytes, path: Path) -> list[RecordEnvelope]:
+    """Validate every newline-terminated record and its shared identity.
+
+    Errors name ``path``, the 1-based line, and the expected seq so a damaged
+    log can be located without bisecting it.
+    """
     if not data:
         return []
     lines = data.split(b"\n")
     if lines[-1] != b"":
-        raise ValueError("run-log prefix is not newline terminated")
+        raise ValueError(f"run log {path} is not newline terminated")
 
     records: list[RecordEnvelope] = []
     run_id: str | None = None
     for expected_sequence, line in enumerate(lines[:-1]):
-        envelope = decode_record(line)
+        where = f"run log {path} line {expected_sequence + 1} (seq {expected_sequence})"
+        try:
+            envelope = decode_record(line)
+        except ValueError as exc:
+            raise ValueError(f"{where}: {exc}") from exc
         if envelope.seq != expected_sequence:
             raise ValueError(
-                "run-log sequence mismatch: "
+                f"{where}: run-log sequence mismatch: "
                 f"expected {expected_sequence}, found {envelope.seq}"
             )
         if run_id is None:
             run_id = envelope.run_id
         elif envelope.run_id != run_id:
             raise ValueError(
-                f"run-log run_id mismatch: expected {run_id!r}, "
+                f"{where}: run-log run_id mismatch: expected {run_id!r}, "
                 f"found {envelope.run_id!r}"
             )
         records.append(envelope)
     return records
+
+
+def _lock_exclusive(descriptor: int, path: Path) -> None:
+    """Take the nonblocking exclusive lock, naming ``path`` when another holder has it.
+
+    The raised ``BlockingIOError`` keeps the original ``errno`` so callers that
+    match on ``EAGAIN``/``EWOULDBLOCK`` still work.
+    """
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as exc:
+        error = BlockingIOError(
+            f"run log {path} is locked by another writer (is the run still active?)"
+        )
+        error.errno = exc.errno
+        raise error from exc
 
 
 def _rollback_append(descriptor: int, prefix_size: int) -> list[BaseException]:

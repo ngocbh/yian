@@ -394,6 +394,23 @@ def test_jsonl_excludes_a_second_writer(tmp_path: Path):
         assert reopened.run_id == "run"
 
 
+def test_jsonl_lock_contention_names_the_log_and_the_likely_cause(tmp_path: Path):
+    path = tmp_path / "run.jsonl"
+    first = _baseline_log(path)
+    try:
+        with pytest.raises(BlockingIOError) as caught:
+            JsonlRunLog.resume(path)
+    finally:
+        first.close()
+
+    assert str(caught.value) == (
+        f"run log {path} is locked by another writer (is the run still active?)"
+    )
+    assert isinstance(caught.value.__cause__, BlockingIOError)
+    assert caught.value.errno == caught.value.__cause__.errno
+    _assert_lock_available(path)
+
+
 def test_jsonl_excludes_a_writer_in_a_separate_process(tmp_path: Path):
     path = tmp_path / "run.jsonl"
     first = _baseline_log(path)
@@ -588,6 +605,43 @@ def test_jsonl_resume_rejects_a_corrupt_complete_line_and_releases_lock(
         JsonlRunLog.resume(path)
 
     _assert_lock_available(path)
+
+
+@pytest.mark.parametrize(
+    ("damaged", "message"),
+    [
+        (b"{not-json}\n", "invalid run-record JSON"),
+        (b"\n", "invalid run-record JSON"),
+        (_wire_line(seq=2, node_id=""), "node_id"),
+        (_wire_line(seq=2).replace(b"node_started", b"xnode_started"), "xnode_started"),
+        (_wire_line(seq=5), "sequence mismatch: expected 2, found 5"),
+        (_wire_line(seq=2, run_id="other"), "run_id mismatch"),
+    ],
+    ids=["json", "blank", "payload", "kind", "sequence", "run-id"],
+)
+def test_jsonl_resume_errors_name_the_log_line_and_seq(
+    tmp_path: Path, damaged: bytes, message: str
+):
+    path = tmp_path / "run.jsonl"
+    path.write_bytes(_wire_line(seq=0) + _wire_line(seq=1) + damaged)
+
+    with pytest.raises(ValueError) as caught:
+        JsonlRunLog.resume(path)
+
+    text = str(caught.value)
+    assert text.startswith(f"run log {path} line 3 (seq 2): ")
+    assert message in text
+    _assert_lock_available(path)
+
+
+def test_jsonl_resume_empty_error_names_the_log(tmp_path: Path):
+    path = tmp_path / "empty.jsonl"
+    path.touch()
+
+    with pytest.raises(ValueError) as caught:
+        JsonlRunLog.resume(path)
+
+    assert str(caught.value) == f"cannot resume an empty run log: {path}"
 
 
 @pytest.mark.parametrize(

@@ -13,6 +13,7 @@ from yian.cli import app
 import yian.cli.run as run_cli
 from yian.events import NodeStarted
 from yian.runtime.log import (
+    JsonlRunLog,
     RecordEnvelope,
     RunRecord,
     RunResumedRecord,
@@ -53,6 +54,11 @@ def _write_flow(tmp_path: Path) -> Path:
 def _plain(text: str) -> str:
     """Remove optional Rich styling so CLI contracts are color-environment neutral."""
     return _ANSI_SGR.sub("", text)
+
+
+def _unwrapped(text: str) -> str:
+    """Drop styling and all whitespace, since Rich wraps long paths at any column."""
+    return re.sub(r"\s+", "", _plain(text))
 
 
 def _envelopes(path: Path) -> list[RecordEnvelope]:
@@ -313,9 +319,32 @@ def test_corrupt_resume_is_a_clean_cli_error(
     assert result.exit_code == 1
     assert isinstance(result.exception, SystemExit)
     plain_output = _plain(result.output)
-    assert "resume failed: invalid run-record JSON" in plain_output
+    assert _unwrapped(
+        f"resume failed: run log {log} line 1 (seq 0): invalid run-record JSON"
+    ) in _unwrapped(result.output)
     assert ("Traceback" in plain_output) is has_traceback
     assert calls == []
+
+
+def test_locked_resume_names_the_log_and_the_likely_cause(tmp_path: Path) -> None:
+    """Resuming a log another run still holds says so instead of a bare errno."""
+    flow_path = _write_flow(tmp_path)
+    loaded = load_flow(_FLOW, search_paths=[tmp_path])
+    log = tmp_path / "held.jsonl"
+    run_flow(loaded, {"topic": "lakes"}, log=log, run_id="held-run")
+
+    with JsonlRunLog.resume(log):
+        result = runner.invoke(
+            app,
+            ["run", str(flow_path), "--resume", str(log), "--quiet"],
+        )
+
+    assert result.exit_code == 1
+    assert _unwrapped(
+        f"resume failed: run log {log} is locked by another writer "
+        "(is the run still active?)"
+    ) in _unwrapped(result.output)
+    assert "Errno" not in result.output
 
 
 def test_default_directory_failure_is_a_clean_cli_error(

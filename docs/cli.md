@@ -68,7 +68,8 @@ session memory nor provides exactly-once execution. See the
 [Python API recovery contract](api.md#durable-recovery-with-resume_flow).
 
 Expected host-side failures while creating or recovering a log (for example a
-corrupt, mismatched, or locked log) are reported as concise errors. Pass
+corrupt, mismatched, or locked log) are reported as concise errors that name the
+log path, plus the line and seq of a damaged record. Pass
 `--engine-trace` when debugging the engine to include the Python traceback.
 
 `yian chat` uses the same default directory and reports one new path for its initial

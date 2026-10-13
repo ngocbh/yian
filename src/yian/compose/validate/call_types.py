@@ -23,6 +23,7 @@ from yian.compose.helpers.output_contracts import (
     resolve_output_binding_contract,
 )
 from yian.compose.nodes.base import BuildResult
+from yian.compose.validate.narrowing import Narrowing
 from yian.diagnostics import SourceRange
 from yian.expr import binding_co_skips
 from yian.nodes.contracts import (
@@ -40,12 +41,14 @@ def check_call_map_types(
     flow_inputs: dict[str, ValueContract],
     flow_wiring: dict[str, dict[str, Any]],
     *,
+    narrowing: Narrowing | None = None,
     diagnostics: LoadDiagnostics | None = None,
 ) -> None:
     """Cross-flow type check for every `call` binding (a loader post-build pass).
 
     Each binding's SOURCE contract (resolved from its `${<id>.output}`/`${input.X}` ref
-    over the PARENT producer + flow-input contracts) is projected to its `Type` and must
+    over the PARENT producer + flow-input contracts, as the call node's `narrowing` view
+    sees them when given) is projected to its `Type` and must
     satisfy `types_compatible` against the CHILD input's declared `Type`. A
     `${item}`/coalesce/literal/opaque source — or an opaque/absent child input
     (incl. the reserved `over` key) — stays lenient (skipped). Loud + located at the
@@ -82,6 +85,9 @@ def check_call_map_types(
         if node.is_loop or not getattr(node, "child_inputs", None):
             continue
         child_decls = {d.name: d for d in node.child_inputs}
+        node_producers, node_inputs = (
+            narrowing.for_node(nid) if narrowing is not None else (producers, flow_inputs)
+        )
         for param, src in flow_wiring.get(nid, {}).items():
             decl = child_decls.get(param)
             if decl is None or decl.contract is None:
@@ -89,8 +95,8 @@ def check_call_map_types(
             child_type = decl.contract.type
             source_contract = resolve_output_binding_contract(
                 src,
-                producers,
-                flow_inputs,
+                node_producers,
+                node_inputs,
             )
             if source_contract is None:
                 continue  # ${item}/coalesce/literal/opaque source -> lenient

@@ -104,3 +104,37 @@ def test_human_input_parse_questions_and_adaptive_are_mutually_exclusive():
     reader = _reader_for(flow, "ask")
     with pytest.raises(LoadError, match="mutually exclusive"):
         HumanInputDescriptor.parse("ask", reader)
+
+
+def _questions_ref_flow(questions: str) -> str:
+    return f"""\
+id: ask
+name: ask
+input:
+  order: object
+nodes:
+  ask:
+    kind: human_input
+    input:
+      order: ${{input.order}}
+    questions: '{questions}'
+output: ${{ask.output}}
+"""
+
+
+@pytest.mark.parametrize(
+    ("questions", "message"),
+    [
+        (
+            "${isinstance(order, Buy)}",
+            "questions: isinstance is not a prompt function; compute it in an input binding",
+        ),
+        ("${bogus(order)}", "questions: unknown prompt function 'bogus'"),
+    ],
+)
+def test_human_input_questions_prompt_function_errors_point_at_questions(questions, message):
+    from yian.compose import load_flow
+
+    with pytest.raises(LoadError, match=message) as exc:
+        load_flow(_questions_ref_flow(questions))
+    assert exc.value.diagnostic.frames[-1].range.start_line == 10

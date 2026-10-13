@@ -12,7 +12,6 @@ resolution. Runtime receives only the resolved ``Type`` values.
 from __future__ import annotations
 
 import ast
-import json
 from dataclasses import dataclass, replace
 from typing import Union
 
@@ -21,6 +20,9 @@ from yian.typesys.values import (
     ValueKind,
     Type,
     _validate_numeric_bounds,
+    canonical_union_order,
+    types_overlap,
+    union_tag_fields,
 )
 
 
@@ -59,7 +61,12 @@ class DictExpr:
     pass
 
 
-TypeExpr = Union[ScalarExpr, ListExpr, RefExpr, OptionalExpr, EnumExpr, DictExpr]
+@dataclass(frozen=True)
+class UnionExpr:
+    members: tuple  # the authored `Union[...]` members, in authored order
+
+
+TypeExpr = Union[ScalarExpr, ListExpr, RefExpr, OptionalExpr, EnumExpr, DictExpr, UnionExpr]
 
 _SCALAR_KEYWORDS = {
     "str", "int", "float", "bool", "date", "datetime", "object", "file", "None", "none",
@@ -74,10 +81,11 @@ def parse_type(s: str) -> TypeExpr:
 
     Accepts the one Python-surface vocabulary (`str`/`int`/`float`/`bool`/`Any`/`date`/
     `datetime`/`object`/`file`/`None`, `int[min,max]`/`float[min,max]`,
-    `list[X]`/`Optional[X]`/`dict[K,V]`/`Literal[...]`,
+    `list[X]`/`Optional[X]`/`dict[K,V]`/`Literal[...]`/`Union[A, B, ...]`,
     `topics`). A bare name that is neither a scalar nor a constructor is a registry
     reference. The legacy engine spelling (`string`/`integer`/`number`/`boolean`) no
-    longer parses (it resolves as an unknown registry RefExpr).
+    longer parses (it resolves as an unknown registry RefExpr). `Union[...]` members are
+    only checked to be records when the type is resolved.
 
     Args:
         s (`str`):
@@ -86,12 +94,17 @@ def parse_type(s: str) -> TypeExpr:
     Returns:
         `TypeExpr`:
             The parsed AST node (`ScalarExpr`, `ListExpr`, `RefExpr`, `OptionalExpr`,
-            `EnumExpr`, or `DictExpr`) — still unresolved against any registry.
+            `EnumExpr`, `DictExpr`, or `UnionExpr`) — still unresolved against any registry.
 
     Raises:
         `TypeCheckError`:
-            The string is not a valid expression, uses an unknown constructor, or is a
-            `Union[...]` (unsupported — model a tagged variant as a discriminated record).
+            The string is not a valid expression, uses an unknown constructor, spells a
+            union as `A | B` (the hint suggests `Union[A, B]`), or lists `None` as a
+            `Union[...]` member (the hint suggests `Optional[Union[...]]`).
+
+    Example:
+        `parse_type("Union[Buy, Sell]")` gives
+        `UnionExpr((RefExpr("Buy"), RefExpr("Sell")))`.
     """
     s = s.strip()
     try:
@@ -139,12 +152,29 @@ def _type_from_ast(node: "ast.expr", src: str) -> TypeExpr:
         if ctor in ("dict", "Dict"):
             return DictExpr()
         if ctor == "Union":
-            raise TypeCheckError(
-                f"Union types are not supported ({src!r}); model a tagged variant as a "
-                f"discriminated record {{tag: Literal[...], ...}} routed by `case ... on tag`"
-            )
+            elts = sl.elts if isinstance(sl, ast.Tuple) else [sl]
+            if not elts:
+                raise TypeCheckError(f"malformed type expression {src!r}")
+            members = tuple(_type_from_ast(e, src) for e in elts)
+            if ScalarExpr("None") in members:
+                raise TypeCheckError(
+                    f"None is not a union member in {src!r}; use Optional[Union[...]]"
+                )
+            return UnionExpr(members)
         raise TypeCheckError(f"unknown type constructor {ctor!r} in {src!r}")
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+        operands = ", ".join(ast.unparse(operand) for operand in _bar_operands(node))
+        raise TypeCheckError(
+            f"malformed type expression {src!r}: use Union[{operands}] (| is not a type operator)"
+        )
     raise TypeCheckError(f"malformed type expression {src!r}")
+
+
+def _bar_operands(node: "ast.expr") -> list:
+    """Flatten an `A | B | C` chain into its operands, left to right."""
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+        return _bar_operands(node.left) + _bar_operands(node.right)
+    return [node]
 
 
 def _numeric_endpoint(node: ast.expr, src: str) -> int | float:
@@ -221,7 +251,10 @@ def resolve_type(t: TypeExpr, registry: TypeRegistry, _seen: frozenset[str] = fr
     """Resolve a `TypeExpr` against the registry into a runtime `Type`.
 
     Expands records field-by-field and follows aliases transitively, guarding against
-    reference cycles via `_seen`.
+    reference cycles via `_seen`. A `Union[...]` flattens nested unions and aliases,
+    drops duplicate members, and requires every member to be a non-nullable record. Its
+    members must be told apart by a tag field or by shapes that can't overlap. A union
+    with one distinct member is that member.
 
     Args:
         t (`TypeExpr`):
@@ -235,12 +268,21 @@ def resolve_type(t: TypeExpr, registry: TypeRegistry, _seen: frozenset[str] = fr
 
     Returns:
         `Type`:
-            The leaf structural type: a scalar, a typed list, a closed record, or a
-            tag-constrained variant.
+            The leaf structural type: a scalar, a typed list, a closed record, a
+            tag-constrained variant, or a union of records with members in canonical
+            order.
 
     Raises:
         `TypeCheckError`:
-            A `RefExpr` names an unknown type, or a record/alias reference is recursive.
+            A `RefExpr` names an unknown type, a record/alias reference is recursive, a
+            union member is not a record or is nullable, or two union members can match
+            the same value.
+
+    Example:
+        With `Buy: {action: Literal[buy], qty: int}` and
+        `Sell: {action: Literal[sell], price: float}` registered,
+        `resolve_type(parse_type("Union[Sell, Buy]"), registry)` gives a union whose
+        members are `Buy` then `Sell`.
     """
     if isinstance(t, ScalarExpr):
         kind = _SCALAR_SEG[t.name]
@@ -256,6 +298,9 @@ def resolve_type(t: TypeExpr, registry: TypeRegistry, _seen: frozenset[str] = fr
 
     if isinstance(t, DictExpr):
         return Type.scalar(ValueKind.OBJECT)  # lenient (no key/value typing yet)
+
+    if isinstance(t, UnionExpr):
+        return _resolve_union(t, registry, _seen)
 
     if isinstance(t, ListExpr):
         elem = resolve_type(t.element, registry, _seen)
@@ -287,6 +332,94 @@ def resolve_type(t: TypeExpr, registry: TypeRegistry, _seen: frozenset[str] = fr
     return Type(kind=ValueKind.OBJECT, fields=fields, required=required)
 
 
+def _resolve_union(t: UnionExpr, registry: TypeRegistry, _seen: frozenset[str]) -> Type:
+    """Resolve a `Union[...]` into a record, or a union of distinguishable records."""
+    label = _expr_label(t)
+    members: list[tuple[str, str | None, Type]] = []
+    for name, origin, member in _union_parts(t, registry, _seen):
+        if member.nullable:
+            raise TypeCheckError(
+                f"{label}: member {name!r} is nullable; use Optional[Union[...]] instead"
+            )
+        if member.fields is None:
+            raise TypeCheckError(f"{label}: member {name!r} is not a record")
+        # `Type` holds dicts, so it is unhashable; dedupe by equality.
+        same = next((m for m in members if m[2] == member), None)
+        if same is None:
+            members.append((name, origin, member))
+        elif same[1] != origin:
+            # Two differently named records with one shape can't be told apart.
+            raise _overlap_error(label, same[0], name)
+    if len(members) == 1:
+        return members[0][2]
+    union = Type(
+        kind=ValueKind.OBJECT,
+        variants=canonical_union_order(member for _, _, member in members),
+    )
+    if not union_tag_fields(union):
+        for i, (a_name, _, a) in enumerate(members):
+            for b_name, _, b in members[i + 1:]:
+                if types_overlap(a, b):
+                    raise _overlap_error(label, a_name, b_name)
+    return union
+
+
+def _overlap_error(label: str, a_name: str, b_name: str) -> TypeCheckError:
+    """Build the error for two union members that can match the same value."""
+    return TypeCheckError(
+        f"{label}: members {a_name!r} and {b_name!r} can match the same value; add a tag "
+        f"field every member declares as a single-value Literal, with a different value "
+        f"in each member, e.g. kind: Literal[{a_name.lower()}]"
+    )
+
+
+def _union_parts(
+    t: TypeExpr,
+    registry: TypeRegistry,
+    _seen: frozenset[str],
+    name: str | None = None,
+) -> list[tuple[str, str | None, Type]]:
+    """Return a union's flattened `(display name, origin, resolved member)` triples.
+
+    Nested unions and aliases are expanded so error messages can name each member the
+    way it was written. The origin is the registry name an alias chain ends at, or
+    `None` when the member is not a reference; it tells a repeated member from a
+    differently named record of the same shape.
+    """
+    if isinstance(t, UnionExpr):
+        parts: list[tuple[str, str | None, Type]] = []
+        for member in t.members:
+            parts.extend(_union_parts(member, registry, _seen))
+        return parts
+    if isinstance(t, RefExpr):
+        if t.name in _seen:
+            raise TypeCheckError(f"recursive type reference: {t.name!r}")
+        defn = registry.get(t.name)
+        if isinstance(defn, AliasDef):
+            return _union_parts(defn.target, registry, _seen | {t.name}, name or t.name)
+    origin = t.name if isinstance(t, RefExpr) else None
+    return [(name or _expr_label(t), origin, resolve_type(t, registry, _seen))]
+
+
+def _expr_label(t: TypeExpr) -> str:
+    """Render a parsed type back to its authored spelling, for messages."""
+    if isinstance(t, ScalarExpr):
+        if t.bounds is None:
+            return t.name
+        return f"{t.name}[{t.bounds[0]}, {t.bounds[1]}]"
+    if isinstance(t, RefExpr):
+        return t.name
+    if isinstance(t, ListExpr):
+        return f"list[{_expr_label(t.element)}]"
+    if isinstance(t, OptionalExpr):
+        return f"Optional[{_expr_label(t.inner)}]"
+    if isinstance(t, EnumExpr):
+        return "Literal[" + ", ".join(t.tags) + "]"
+    if isinstance(t, UnionExpr):
+        return "Union[" + ", ".join(_expr_label(m) for m in t.members) + "]"
+    return "dict"
+
+
 def type_for(type_str: str, registry: TypeRegistry) -> Type:
     """Parse a type string and resolve it against the registry in one step.
 
@@ -303,56 +436,6 @@ def type_for(type_str: str, registry: TypeRegistry) -> Type:
     return resolve_type(parse_type(type_str), registry)
 
 
-def canonical_type_label(typ: Type) -> str:
-    """Render one deterministic, unambiguous label for a structural type.
-
-    Record keys and variant tags use compact JSON quoting. Structurally refined
-    lists render from their element; a valid flat-list type falls back to its
-    storage-kind spelling.
-
-    Args:
-        typ (`Type`): The resolved structural type to label.
-
-    Returns:
-        `str`: A compact canonical type expression.
-
-    """
-    label = _canonical_nonnullable_label(typ)
-    return f"Optional[{label}]" if typ.nullable else label
-
-
-def _canonical_nonnullable_label(typ: Type) -> str:
-    """Render ``typ`` without applying its outer nullable wrapper."""
-    if typ.fields is not None:
-        fields = (
-            f"{_json_string(name)}:{canonical_type_label(typ.fields[name])}"
-            for name in sorted(typ.fields)
-        )
-        return "{" + ",".join(fields) + "}"
-
-    if typ.tags is not None:
-        return "Literal[" + ",".join(
-            _json_string(tag) for tag in sorted(typ.tags)
-        ) + "]"
-
-    if typ.kind.is_list():
-        if typ.element is None:
-            return typ.kind.value
-        return f"list[{canonical_type_label(typ.element)}]"
-
-    if typ.bounds is not None:
-        _validate_numeric_bounds(typ.kind, typ.bounds)
-        endpoints = ",".join(json.dumps(value, allow_nan=False) for value in typ.bounds)
-        return f"{typ.kind.value}[{endpoints}]"
-
-    return typ.kind.value
-
-
-def _json_string(value: str) -> str:
-    """Encode one record key or variant tag as compact canonical JSON."""
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
-
-
 # ---------- typedefs: registry builder ----------
 
 
@@ -364,7 +447,44 @@ def _refs_in_type(t: TypeExpr) -> set:
         return _refs_in_type(t.element)
     if isinstance(t, OptionalExpr):
         return _refs_in_type(t.inner)
+    if isinstance(t, UnionExpr):
+        return set().union(*(_refs_in_type(m) for m in t.members))
     return set()  # scalars / enums / dict-placeholder reference nothing
+
+
+def _has_union(t: TypeExpr) -> bool:
+    """Whether a parsed TypeExpr contains a `Union[...]` anywhere."""
+    if isinstance(t, UnionExpr):
+        return True
+    if isinstance(t, ListExpr):
+        return _has_union(t.element)
+    if isinstance(t, OptionalExpr):
+        return _has_union(t.inner)
+    return False
+
+
+def _check_unions(registry: TypeRegistry) -> None:
+    """Resolve every typedef `Union[...]`, so a bad union fails even when nothing uses it."""
+    # Typedefs otherwise resolve lazily, where they are used. A union's member checks
+    # (records, tag or no overlap) belong to its definition, so they run here; other
+    # typedefs stay lazy so this does not change when their errors appear.
+    for name, defn in registry.items():
+        if isinstance(defn, AliasDef):
+            if _has_union(defn.target):
+                try:
+                    resolve_type(RefExpr(name), registry)
+                except TypeCheckError as exc:
+                    raise TypeCheckError(f"typedef {name!r}: {exc}") from exc
+        elif isinstance(defn, RecordDef):
+            for field, ts in defn.fields.items():
+                if "Union" not in ts:
+                    continue
+                try:
+                    parsed = parse_type(ts)
+                    if _has_union(parsed):
+                        resolve_type(parsed, registry, frozenset({name}))
+                except TypeCheckError as exc:
+                    raise TypeCheckError(f"typedef {name!r} field {field!r}: {exc}") from exc
 
 
 def _check_alias_cycles(registry: TypeRegistry) -> None:
@@ -392,9 +512,9 @@ def read_typedefs(raw: dict) -> TypeRegistry:
     lazily). A `Literal[...]` string is an ENUM (`VariantDef`, tag-only). Any other
     string is an ALIAS (`AliasDef`). A **sequence** is the dropped tagged-union spelling
     and is rejected: an all-bare-tags sequence must be a `Literal[...]` enum; a payload
-    sequence must be a discriminated record routed by `case ... on tag`. Names must be
-    PascalCase and must not shadow a scalar/typing constructor. Alias cycles are rejected
-    eagerly.
+    sequence must be a `Union[...]` of records. Names must be PascalCase and must not
+    shadow a scalar/typing constructor. Alias cycles are rejected eagerly, and so is a
+    bad `Union[...]` written in any typedef, even one nothing uses.
 
     Args:
         raw (`dict`):
@@ -407,7 +527,13 @@ def read_typedefs(raw: dict) -> TypeRegistry:
     Raises:
         `TypeCheckError`:
             A name is not PascalCase or shadows a builtin, a field type is not a string,
-            a value is a union sequence, or an alias cycle is detected.
+            a value is a union sequence, an alias cycle is detected, or a typedef writes a
+            `Union[...]` that does not resolve.
+
+    Example:
+        `read_typedefs({"Buy": {"action": "Literal[buy]"}, "Sell": {"action":
+        "Literal[sell]"}, "Decision": "Union[Buy, Sell]"})` registers two records and an
+        alias to their union.
     """
     registry: TypeRegistry = {}
     for name, value in (raw or {}).items():
@@ -439,12 +565,13 @@ def read_typedefs(raw: dict) -> TypeRegistry:
                     f"sequence (e.g. {name}: Literal[{members}])"
                 )
             raise TypeCheckError(
-                f"typedef {name!r}: a tagged/payload union sequence is not supported; model it "
-                f"as a discriminated record {{tag: Literal[...], ...}} routed by `case ... on tag`"
+                f"typedef {name!r}: a tagged/payload union sequence is not supported; declare "
+                f"each member as a record and write {name}: Union[A, B, ...]"
             )
         else:
             raise TypeCheckError(
                 f"typedef {name!r}: unsupported definition of type {type(value).__name__}"
             )
     _check_alias_cycles(registry)
+    _check_unions(registry)
     return registry

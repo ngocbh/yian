@@ -11,6 +11,7 @@ import pytest
 from pydantic import BaseModel, ConfigDict
 
 import yian.compile.manifest as manifest_module
+import yian.typesys.values as values_module
 from yian.compile.manifest import expansion_digest, flow_fingerprint, flow_manifest
 from yian.compile.memory_layout import apply_memory_layout, resolve_memory_layout
 from yian.compile.model import START_ID, CompiledFlow, Edge, Flow, FlowOutput
@@ -313,6 +314,41 @@ def test_flow_fingerprint_changes_with_wiring_types_asserts_and_env():
     assert flow_fingerprint(asserts) != baseline
     assert flow_fingerprint(env) != baseline
     assert flow_fingerprint(title) == baseline
+
+
+def test_manifest_emits_a_node_type_table_only_when_non_empty():
+    original = _compiled()
+    typed = copy.deepcopy(original)
+    typed.nodes["step"].types = {
+        "Small": Type(kind=ValueKind.STRING, tags=frozenset({"small"})),
+        "Big": Type(kind=ValueKind.STRING, tags=frozenset({"big"})),
+    }
+    retyped = copy.deepcopy(typed)
+    retyped.nodes["step"].types["Big"] = Type(kind=ValueKind.STRING, tags=frozenset({"huge"}))
+
+    assert all("types" not in node for node in flow_manifest(original)["nodes"].values())
+    table = flow_manifest(typed)["nodes"]["step"]["types"]
+    assert [entry["name"] for entry in table] == ["Big", "Small"]
+    assert flow_fingerprint(typed) != flow_fingerprint(original)
+    assert flow_fingerprint(retyped) != flow_fingerprint(typed)
+    cleared = copy.deepcopy(typed)
+    cleared.nodes["step"].types = {}
+    assert flow_fingerprint(cleared) == flow_fingerprint(original)
+
+
+@pytest.mark.parametrize(
+    "types",
+    [
+        [("Big", Type.scalar(ValueKind.INTEGER))],
+        {1: Type.scalar(ValueKind.INTEGER)},
+        {"Big": "int"},
+    ],
+)
+def test_manifest_rejects_a_malformed_type_table(types):
+    flow = _compiled()
+    flow.nodes["step"].types = types
+    with pytest.raises(TypeError, match="types"):
+        flow_manifest(flow)
 
 
 def test_flow_fingerprint_includes_authored_llm_layers_but_not_effective_values():
@@ -2597,6 +2633,78 @@ def test_parameter_manifest_rejects_noncanonical_containers(params):
         flow_manifest(flow)
 
 
+def _member(tag: str, **fields: ValueKind) -> Type:
+    """Build a closed record tagged by a single-value `action` Literal."""
+    record_fields = {"action": Type(kind=ValueKind.STRING, tags=frozenset({tag}))}
+    record_fields.update({name: Type.scalar(kind) for name, kind in fields.items()})
+    return Type(
+        kind=ValueKind.OBJECT,
+        fields=record_fields,
+        required=frozenset(record_fields),
+    )
+
+
+def _union(*members: Type) -> Type:
+    return Type(kind=ValueKind.OBJECT, variants=members)
+
+
+def test_union_free_manifest_has_no_union_key_and_keeps_its_fingerprint():
+    fragment = _fragment()
+    fragment.nodes["body"].output_contract = ValueContract(_member("buy", qty=ValueKind.INTEGER))
+    output_type = flow_manifest(fragment)["nodes"]["body"]["output_type"]
+
+    assert "union" not in output_type
+    assert all("union" not in field["type"] for field in output_type["fields"])
+    assert flow_fingerprint(_fragment()) == (
+        "16d1ca51cfd1c4730aea134054211d87708d8aa08bc8f592b41df96c74982d00"
+    )
+
+
+def test_union_manifest_orders_members_canonically():
+    buy = _member("buy", qty=ValueKind.INTEGER)
+    sell = _member("sell", price=ValueKind.NUMBER)
+    first = _fragment()
+    second = copy.deepcopy(first)
+    first.nodes["body"].output_contract = ValueContract(_union(buy, sell))
+    second.nodes["body"].output_contract = ValueContract(_union(sell, buy))
+
+    union_manifest = flow_manifest(second)["nodes"]["body"]["output_type"]["union"]
+    assert [member["fields"][0]["type"]["tags"] for member in union_manifest] == [
+        ["buy"],
+        ["sell"],
+    ]
+    assert flow_fingerprint(first) == flow_fingerprint(second)
+    assert expansion_digest(first) == expansion_digest(second)
+
+
+def test_deep_untagged_union_manifests_quickly(monkeypatch):
+    def record(**fields: Type) -> Type:
+        return Type(kind=ValueKind.OBJECT, fields=fields, required=frozenset(fields))
+
+    depth = 30
+    typ = _union(
+        record(a=Type.scalar(ValueKind.STRING)), record(b=Type.scalar(ValueKind.INTEGER))
+    )
+    for level in range(depth):
+        typ = _union(record(inner=typ), record(**{f"leaf{level}": Type.scalar(ValueKind.INTEGER)}))
+    fragment = _fragment()
+    fragment.nodes["body"].output_contract = ValueContract(typ)
+
+    calls = [0]
+    render = values_module._canonical_nonnullable_label
+
+    def counted(typ: Type) -> str:
+        calls[0] += 1
+        return render(typ)
+
+    monkeypatch.setattr(values_module, "_canonical_nonnullable_label", counted)
+    flow_fingerprint(fragment)
+    # Ordering each level's members labels that level's subtree, so the work is
+    # quadratic in depth; the bound rules out the exponential relabelling of nested
+    # members.
+    assert depth < calls[0] <= 3 * (depth + 2) ** 2
+
+
 @pytest.mark.parametrize(
     ("first_type", "second_type"),
     [
@@ -2629,8 +2737,30 @@ def test_parameter_manifest_rejects_noncanonical_containers(params):
             Type(kind=ValueKind.STRING, nullable=False),
             Type(kind=ValueKind.STRING, nullable=True),
         ),
+        (
+            _union(_member("buy", qty=ValueKind.INTEGER), _member("sell")),
+            _union(_member("buy", qty=ValueKind.NUMBER), _member("sell")),
+        ),
+        (
+            _union(_member("buy"), _member("sell")),
+            _union(_member("buy"), _member("short")),
+        ),
+        (
+            _union(_member("buy"), _member("sell")),
+            _union(_member("buy"), _member("sell"), _member("hold")),
+        ),
     ],
-    ids=["kind", "fields", "required", "tags", "element", "nullable"],
+    ids=[
+        "kind",
+        "fields",
+        "required",
+        "tags",
+        "element",
+        "nullable",
+        "variants-member-field",
+        "variants-tag",
+        "variants-member-added",
+    ],
 )
 def test_flow_fingerprint_covers_each_structural_type_field(first_type, second_type):
     first = _fragment()

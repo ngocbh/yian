@@ -1,11 +1,11 @@
 # Typed output — an AGENT node that emits a structured value, not just text.
 #
 # An AGENT node's `output:` may be any declared shape. Only a bare `str` keeps the
-# node a text producer; a `Literal[...]`, record, non-string scalar, or list switches it to
-# STRUCTURED GENERATION — the engine derives a schema from `output:` and asks the model
-# to emit a conforming value (native structured output, or a JSON prompt-injection
-# fallback for providers that lack it), validated at the write boundary like any other
-# node output.
+# node a text producer; a `Literal[...]`, record, union, non-string scalar, or list
+# switches it to STRUCTURED GENERATION — the engine derives a schema from `output:`
+# and asks the model to emit a conforming value (native structured output, or a JSON
+# prompt-injection fallback for providers that lack it), validated at the write
+# boundary like any other node output.
 #
 # `retries:` (default 2) caps the self-correction loop when the model deviates from the
 # schema — the engine feeds the validation error back and re-asks.

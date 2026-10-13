@@ -48,14 +48,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import Callable
 
-from yian.compile.validation import _classify_path, _walk_record_fields
+from yian.compile.validation import _classify_path
 from yian.diagnostics import OriginRef, SourceRange
 from yian.expr import ExpressionError, condition_refs
 from yian.expr.expressions import rewrite_condition_refs
 from yian.expr.template import flow_call_callees_in_spans
 from yian.compose.desugar.inline_calls import desugar_call_directives
+from yian.compose.helpers.isinstance_types import collect_isinstance_names
 from yian.compose.helpers.output_contracts import output_contract_path_error
-from yian.nodes.base import Node
+from yian.nodes.base import Node, NodeKind
 from yian.nodes.contracts import (
     Assertion,
     OutputContract,
@@ -70,6 +71,10 @@ from yian.compose.helpers.errors import LoadDiagnostics
 # Reserved prefix for the END params synthesized from a lowered post-assert. Authors
 # cannot write `__`-prefixed ids, so a synth name never collides with an author id.
 _SYNTH_PREFIX = "__assert_"
+
+# Kinds whose node asserts move onto the spawned child flow's END. MAP is absent because
+# every MAP node assert is already rejected.
+_SPAWNER_KINDS = frozenset({NodeKind.CALL, NodeKind.LOOP})
 
 
 @dataclass(frozen=True)
@@ -369,6 +374,23 @@ def validate_node_asserts(
                     )
                 )
                 continue
+            # A spawner's asserts are lowered onto the child's END, which resolves
+            # `isinstance` types in the child flow, not here.
+            kind = getattr(node, "kind", None)
+            if kind in _SPAWNER_KINDS:
+                try:
+                    type_test = bool(collect_isinstance_names(a, condition=True))
+                except ExpressionError:
+                    type_test = False
+                if type_test:
+                    errors.append(
+                        (
+                            f"node {nid!r} assert {a!r}: isinstance in a {kind.value} "
+                            f"node's asserts is not supported; assert inside the child flow",
+                            error_range,
+                        )
+                    )
+                    continue
             # parse-check + collect refs on the ONE unified condition walk (any spelling).
             try:
                 refs = condition_refs(a)
@@ -388,23 +410,19 @@ def validate_node_asserts(
                     reads_output = True
                     if len(segs) > 1:
                         contract = node.output_contract
-                        if type(contract) is PartialRecordContract:
-                            err = output_contract_path_error(
-                                contract, segs[1:], ref
-                            )
-                            if err is not None:
-                                errors.append(
-                                    (f"node {nid!r} assert: {err}", error_range)
-                                )
-                            continue
-                        if contract is not None and type(contract) is not ValueContract:
+                        if contract is not None and type(contract) not in (
+                            ValueContract,
+                            PartialRecordContract,
+                        ):
                             raise TypeError(
                                 f"node {nid!r} output_contract must be an exact "
                                 "ValueContract, PartialRecordContract, or None, "
                                 f"got {type(contract).__name__}"
                             )
-                        sh = contract.type if contract is not None else None
-                        if sh is not None and sh.kind != ValueKind.OBJECT:
+                        if (
+                            type(contract) is ValueContract
+                            and contract.type.kind != ValueKind.OBJECT
+                        ):
                             errors.append(
                                 (
                                     f"node {nid!r} assert: ${{{ref}}} — the node output is "
@@ -413,8 +431,8 @@ def validate_node_asserts(
                                     error_range,
                                 )
                             )
-                        else:
-                            err = _walk_record_fields(sh, segs[1:], ref)
+                        elif contract is not None:
+                            err = output_contract_path_error(contract, segs[1:], ref)
                             if err is not None:
                                 errors.append(
                                     (

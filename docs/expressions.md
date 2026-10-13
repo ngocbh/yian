@@ -40,6 +40,7 @@ construct:
 | list literal | `[1, "x", a]` |
 | builtin call | `upper(name)`, `join(items, ", ")` |
 | coalesce / default / required | `a \| b \| c`, `a :- d`, `a :? "msg"` |
+| type test | `isinstance(a, Buy)` |
 
 Two load-bearing points: one shared `NAME` terminal with an optional call-suffix (a naive
 separate-ref-plus-call grammar won't parse under LALR); and `#`/`/` are in `NAME` (runtime
@@ -62,7 +63,8 @@ evaluator serves the pool, a prompt's local record, and the map-body `item` scop
 3. an **ordered comparison with `None` is `False`** — so an absent value routes to `default`.
 
 In bindings, CASE conditions, and flow outputs the loader rejects field reads a known
-type can't have (see `syntax.md`), so a `None` there is a null, skipped, or untyped
+type can't have, including a field only some members of a union have outside a
+narrowing `case` branch (see `syntax.md`), so a `None` there is a null, skipped, or untyped
 value, not a misspelled field. LOOP predicates and some assert reads check only the
 name, so a `None` in a condition can still be a dotted miss.
 
@@ -83,13 +85,13 @@ non-strict, so an embedded null contributes an empty string.
 (no arbitrary callable is reachable). Arithmetic runs on the resolved *values* with Python
 semantics — `str + str` concatenates, `list + list` extends (`${xs + [item]}`).
 
-**Compile-time companions** (never evaluate): `infer_expr_type(tree, ref_type_fn)`
-returns a type only for statically fixed results: scalar literals, exact references,
-comparisons/membership, and `not`/`and`/`or`. Other expressions remain unknown rather
-than borrowing an operand's type. `expr_refs(tree)` collects the reference paths an
-expression reads — this is how the compiler infers data edges. `rewrite_expr_refs`
-rewrites only the reference *leaves* by source position — how refs are re-namespaced
-when a child flow is inlined.
+**Compile-time companions** (never evaluate): `infer_expr_type(tree, ref_type_fn)` returns
+a type only for statically fixed results: scalar literals, exact references,
+comparisons/membership, `not`/`and`/`or`, and `isinstance`. Other expressions remain
+unknown rather than borrowing an operand's type. `expr_refs(tree)` collects the reference
+paths an expression reads — this is how the compiler infers data edges.
+`rewrite_expr_refs` rewrites only the reference *leaves* by source position — how refs are
+re-namespaced when a child flow is inlined.
 
 **The condition surface** — `when:` / `until:` / `while:` / `asserts:` admit three
 spellings that parse and evaluate identically: bare `a > 5`, mixed `${a} > 5`, whole-span
@@ -140,6 +142,52 @@ create no graph node.
 | `upper(s)` / `lower(s)` | case-fold |
 
 New builtins register with `@register_template_fn()`.
+
+## `isinstance` — the type test
+
+`isinstance(x, T)` is `true` when the value of `x` satisfies the type named `T`:
+
+```yaml
+input:
+  is_buy: ${isinstance(decide.output, Buy)}
+```
+
+It is a special form, not a `TEMPLATE_FNS` builtin. `T` is a bare type name, never a
+reference: a `typedefs:` name, or one of `str`, `int`, `float`, `bool`, `date`,
+`datetime`, `object`. The grammar has no `[...]` in an expression, so give `list[...]` or
+`Optional[...]` an alias first. Each flow resolves the names against its own `typedefs:`
+(a `uses:` child against its own, and a parent can't name a child's type). An unknown name
+is a located load error: `unknown type 'list'; isinstance takes a typedefs: name or one of
+str, int, float, bool, date, datetime, object`. The call must be exactly
+`isinstance(<expr>, <TypeName>)`: two positional arguments, and no field read on the
+result.
+
+The check is the pool's write-boundary check (`build_value_as`), so a value passes exactly
+when it could be written to a slot of type `T` (an `int` passes `float`). A missing `x` is
+checked as `None` in the non-strict modes, so it fails a record and passes an
+`Optional[...]` alias. Load-time inference types the result `bool`, and the ref-walk and
+rewrites skip `T`.
+
+Compose gives each node a type table (`Node.types`) of the names its expressions use, and
+evaluates with it. `isinstance` works in:
+
+- bindings: node inputs, MAP per-item inputs, `call(...)` arguments, LOOP seeds;
+- `case` `when:` conditions, where a searched `case` also narrows (see
+  [Flow syntax → `case`](syntax.md#narrowing-a-union-in-a-branch));
+- node asserts and flow asserts;
+- LOOP `while:` / `until:`;
+- flow outputs.
+
+It is a load error in:
+
+- prompts and HUMAN_INPUT `questions:`: `isinstance is not a prompt function; compute it
+  in an input binding`;
+- WAIT `until:` and MAP `over:`: `isinstance is not supported in a wait node's until:`;
+- a `call` or `loop` node's own asserts, which run on the child flow's END:
+  `isinstance in a call node's asserts is not supported; assert inside the child flow`.
+
+An inline child body can't take a whole-value `${isinstance(...)}` argument (`cannot infer
+type for inline binding`); declare the input in a `defs:` flow instead.
 
 ## Retained expression routes
 

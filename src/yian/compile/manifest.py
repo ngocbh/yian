@@ -52,14 +52,14 @@ from yian.nodes.map import MapNode
 from yian.nodes.start import StartNode
 from yian.nodes.tool import ToolNode
 from yian.nodes.wait import WaitNode
-from yian.typesys.values import Type
+from yian.typesys.values import Type, canonical_union_order
 
 __all__ = ["expansion_digest", "flow_fingerprint", "flow_manifest"]
 
 
 # Fields common to every concrete Node. Most are emitted below; title is emitted only for
-# HUMAN_INPUT because other node kinds use it as display metadata. Keeping both sets explicit is
-# the fail-loud field policy.
+# HUMAN_INPUT because other node kinds use it as display metadata, and types only when non-empty.
+# Keeping both sets explicit is the fail-loud field policy.
 _COMMON_NODE_FIELDS = frozenset(
     {
         "id",
@@ -71,6 +71,7 @@ _COMMON_NODE_FIELDS = frozenset(
         "commit_as",
         "origin_id",
         "env",
+        "types",
     }
 )
 _IGNORED_NODE_FIELDS = frozenset(
@@ -185,7 +186,9 @@ _VALUE_CONTRACT_CANONICAL_FIELDS = frozenset({"type"})
 _VALUE_CONTRACT_IGNORED_FIELDS = frozenset({"origins"})
 _PARTIAL_RECORD_CONTRACT_FIELDS = frozenset({"fields"})
 _CONTRACT_ORIGINS_IGNORED_FIELDS = frozenset({"default", "entries"})
-_TYPE_FIELDS = frozenset({"kind", "fields", "required", "tags", "element", "nullable", "bounds"})
+_TYPE_FIELDS = frozenset(
+    {"kind", "fields", "required", "tags", "element", "nullable", "bounds", "variants"}
+)
 _CASE_CANONICAL_FIELDS = frozenset({"handle", "when"})
 _CASE_IGNORED_FIELDS = frozenset({"origin"})
 _MEMORY_DECL_CANONICAL_FIELDS = frozenset({"name", "type", "_config", "site"})
@@ -1375,7 +1378,7 @@ def _canonical_value(
 
 
 def _type_manifest(value: Type | None, ctx: _ManifestContext, path: str) -> Any:
-    """Canonicalize one resolved structural Type, including nested fields/elements."""
+    """Canonicalize one resolved structural Type, including nested fields/elements/members."""
     if value is None:
         return None
     _check_fields(value, _TYPE_FIELDS, path)
@@ -1404,6 +1407,13 @@ def _type_manifest(value: Type | None, ctx: _ManifestContext, path: str) -> Any:
         if value.bounds is not None:
             value.validate_shape()
             manifest["bounds"] = list(value.bounds)
+        if value.variants is not None:
+            # Members are emitted in canonical order so authored order is not identity.
+            value.validate_shape()
+            manifest["union"] = [
+                _type_manifest(member, ctx, f"{path}.union[{index}]")
+                for index, member in enumerate(canonical_union_order(value.variants))
+            ]
         return manifest
     finally:
         ctx.types.remove(object_id)
@@ -1685,6 +1695,20 @@ def _node_manifest(
             for index, assertion in enumerate(node.pre_asserts)
         ],
     }
+
+    # Emitted only when non-empty so nodes without `isinstance` keep their fingerprints.
+    if type(node.types) is not dict:
+        raise TypeError(f"{path}.types: expected dict, got {type(node.types).__name__}")
+    for name, typ in node.types.items():
+        if not isinstance(name, str):
+            raise TypeError(f"{path}.types: keys must be strings, got {type(name).__name__}")
+        if type(typ) is not Type:
+            raise TypeError(f"{path}.types.{name}: expected Type, got {type(typ).__name__}")
+    if node.types:
+        manifest["types"] = [
+            {"name": name, "type": _type_manifest(node.types[name], ctx, f"{path}.types.{name}")}
+            for name in sorted(node.types)
+        ]
 
     if node.kind is NodeKind.START:
         pass

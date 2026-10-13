@@ -38,6 +38,8 @@ One function, `load_flow()`, drives a fixed pipeline. Read it like a compiler:
   │
   ├─ infer_data_edges       → read every ${...} and add the corresponding data edges;
   │                            append each case's own data+control edges from its build
+  ├─ compute_narrowing      → each node's view of union contracts under the CASE
+  │                            branches (`on:` tag, `isinstance`) that route it
   ├─ infer_ordering_edges   → add authored depends_on/runs_after ordering-only edges
   ├─ validate_references    → every ${...} resolves and type-checks
   ├─ stamp node assertions → validate/classify one originated carrier per list position
@@ -45,6 +47,8 @@ One function, `load_flow()`, drives a fixed pipeline. Read it like a compiler:
   │                            FlowOutput bindings (mapping keys stay origin-free)
   ├─ synthesize boundary    → START/END nodes, edges, and binding-preserving wiring;
   │                            END is a value or a record by the shape of `output:`
+  ├─ fill type tables       → resolve each node's `isinstance` type names into
+  │                            `Node.types` against the flow's `typedefs:`
   ├─ reject_cycles          → the graph is a DAG
   ├─ check_case_handles     → every branch has a home
   ├─ discard build locations → no SourceRange enters Node or CompiledFlow

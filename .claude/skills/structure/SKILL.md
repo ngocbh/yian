@@ -238,6 +238,14 @@ input inference, and validation import this lower helper; it never owns YAML nav
 or graph-stage policy. `ChildSignature` and the producer map preserve the source-neutral
 `OutputContract` sum owned by `nodes/contracts.py`; no temporary Compose metadata becomes
 a second runtime authority.
+`compose/helpers/isinstance_types.py` collects the type names `isinstance` calls use and
+resolves them against the owning flow's `typedefs:`; `compose/build` stores the result on
+`Node.types` after the START/END boundary is synthesized, so the evaluator never sees a
+registry. `compose/validate/narrowing.py` computes union narrowing from built CASE
+descriptors and edges and hands each node a view of the producer and flow-input contracts;
+the reference, call-type, and exhaustiveness validators read that view, while the
+field-read rule itself stays in `nodes/contracts.py`. Narrowing is load-time only and adds
+nothing to runtime.
 For authored node outputs, `compose/build` injects a Compose-owned optional reader through
 `BuildContext`; the base descriptor invokes it only when an output-authoring leaf reaches
 its established contract step. This preserves earlier kind-owned validation order while

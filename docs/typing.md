@@ -86,6 +86,7 @@ dataclass whose `kind` is the storage tag, with optional refining fields:
 | **record** | `kind=OBJECT`, `fields={name: Type}`, `required={names}` (closed) |
 | **variant** (enum) | `kind=STRING`, `tags={labels}` |
 | **typed list** | `kind=LIST_*`, `element=<Type>` |
+| **union** | `kind=OBJECT`, `variants=(record, ...)`: two or more non-nullable records |
 | **Optional[X]** | X's `Type` with `nullable=True` |
 
 For a refined specialized list, `Type.element.nullable` permits `None` alongside
@@ -99,9 +100,33 @@ not the reverse.
 
 Authors write types as Python-typing strings; `parse_type` parses them via Python's own
 `ast` (so the vocabulary *is* typing: `list[X]`, `Optional[X]`, `Literal[...]`, a bare
-PascalCase registry name). `Union[...]` is rejected — model a tagged union as a
-discriminated record. `read_typedefs` builds the per-flow `TypeRegistry`, `resolve_type`
-resolves a parsed expr against it into a leaf `Type`.
+PascalCase registry name, `Union[A, B, ...]`). `read_typedefs` builds the per-flow
+`TypeRegistry`, `resolve_type` resolves a parsed expr against it into a leaf `Type`.
+
+`Union[...]` members are records. `resolve_type` flattens nested unions and aliases, drops
+repeated members, and orders the members canonically (by tag, else by
+`canonical_type_label`), so authored order is not identity. A union with one distinct
+member is that member. The members must be told apart by the data alone:
+
+- **Tagged.** A tag field is one every member requires as a non-nullable single-value
+  `Literal`, with a different value in each (`union_tag_fields` derives it; nothing is
+  stored). `build_value_as` picks the member by the tag (the first tag field by name), then
+  runs that member's record check. A missing tag fails at `(tag,)` with
+  `missing tag field 'action' (expected one of ['buy', 'sell'])`; an unknown one with
+  `'hold' is not a tag of the union (expected one of ['buy', 'sell'])`.
+- **Untagged.** The members' shapes can't overlap (`types_overlap`, conservative), so a
+  value satisfies at most one, and that member's check runs. No match fails at `()` with
+  `value matches no member of <label>: <member>: <reason>; ...`.
+
+Otherwise resolution fails: `Union[Buy, Sell]: members 'Buy' and 'Sell' can match the same
+value; add a tag field every member declares as a single-value Literal, ...`. A union
+typedef (or a record field typed with one) resolves eagerly in `read_typedefs`, so a bad
+union fails even when nothing uses it. Compatibility is member by member: a source union
+fits a sink union when each source member fits some sink member, a record fits a union
+when it fits some member, a union fits `object`, and a union never fits a record (load
+can't tell which member arrives). `union_field` describes a field read on a union (every
+member has it, some do, or none do); `restrict_union` keeps some members. The manifest
+emits a union as `"union": [...]` in canonical order.
 
 ## Authored contract origins
 

@@ -548,7 +548,7 @@ def _evaluate_node_stream(
             params = node.params if node.params is not None else []
             record = bind_params(
                 params, node_wiring, pool, collector=binding_collector,
-                source_resolver=source_resolver, _finish_capture=False,
+                source_resolver=source_resolver, types=node.types, _finish_capture=False,
             )
         reserved = node.bind_reserved(node_wiring, pool, bind=reserved_binder)
         record.update(reserved)
@@ -620,6 +620,7 @@ def _evaluate_node_stream(
                 return bind_params(
                     params, node_wiring, pool, item=element,
                     collector=item_collector, source_resolver=source_resolver,
+                    types=node.types,
                 )
             except BindingError as exc:
                 if binding_collector is not None:

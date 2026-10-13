@@ -9,6 +9,8 @@ down into it.
 Modules:
   - `errors`      the document-owned diagnostic factory plus `LoadError`, whose one
                   canonical `Diagnostic` is ready for direct boundary rendering.
+  - `isinstance_types` the type names `isinstance(x, T)` calls name in a binding or
+                  condition, and their resolution against a flow's `typedefs:`.
   - `memory`      strict named-policy parsing plus opaque occurrence attachment.
   - `output_contracts` the template-aware output-binding contract resolver: exact or
                   partial direct-reference projection, source-free proven expression

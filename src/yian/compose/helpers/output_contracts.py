@@ -15,7 +15,9 @@ or runtime.
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Any
+from typing import Any, Iterable
+
+from lark import Token, Tree
 
 from yian.expr import ExpressionError, infer_expr_type
 from yian.expr.template import Span, scan_template, template_refs
@@ -28,14 +30,18 @@ from yian.nodes.contracts import (
     output_contract_field_error,
     output_contract_type,
 )
-from yian.typesys.values import Type, ValueKind
+from yian.typesys.values import FieldRead, Type, ValueKind, union_field
 
 
 def project_output_contract(
     contract: OutputContract,
     fields: list[str],
 ) -> OutputContract | None:
-    """Project a proven path from an exact or partial record output contract."""
+    """Project a proven path from an exact or partial record output contract.
+
+    A field read on a union projects to the members' shared field type; a field
+    only some members have, or whose types differ, projects to `None`.
+    """
     if type(contract) is PartialRecordContract:
         contract.validate_shape()
         if not fields:
@@ -58,6 +64,14 @@ def project_output_contract(
     typ = contract.type
     path_nullable = typ.nullable
     for field in fields:
+        if typ.variants is not None:
+            read = union_field(typ, field)
+            if not isinstance(read, FieldRead) or read.type is None:
+                return None
+            # The shared type is already nullable when any member's field may be absent.
+            path_nullable = path_nullable or read.type.nullable
+            typ = read.type
+            continue
         if typ.fields is None:
             return None
         field_type = typ.fields.get(field)
@@ -127,14 +141,19 @@ def output_contract_path_error(
     contract: OutputContract,
     fields: list[str],
     path: str,
+    *,
+    partial_union_fields: bool = False,
 ) -> str | None:
     """Return the field-read error for an output path, else ``None``.
 
-    The error is an undeclared record field or any field on a scalar or list.
+    The error is an undeclared record field, any field on a scalar or list, or a
+    field only some members of a union have (unless `partial_union_fields`).
     An opaque field inside a partial record remains lenient below that field,
     while the partial record's closed root name set is still enforced.
     """
-    return output_contract_field_error(contract, fields, path)
+    return output_contract_field_error(
+        contract, fields, path, partial_union_fields=partial_union_fields
+    )
 
 
 def resolve_output_binding_contract(
@@ -257,28 +276,87 @@ def combine_output_contracts(
             )
         )
 
-    origins: list[tuple[tuple[str | int, ...], Any]] = []
-    for name, contract in fields.items():
-        assert type(contract) is ValueContract
-        if contract.origins.default is not None:
-            origins.append(((name,), contract.origins.default))
-        origins.extend(
-            ((name, *path), origin) for path, origin in contract.origins.entries
-        )
-    origins.sort(key=_origin_path_sort_key)
     return ValueContract(
         type=Type(
             kind=ValueKind.OBJECT,
             fields={name: contract.type for name, contract in fields.items()},
             required=frozenset(fields),
         ),
-        origins=ContractOrigins(entries=tuple(origins)),
+        origins=record_field_origins(fields.items()),
     )
+
+
+def record_field_origins(
+    fields: Iterable[tuple[str, ValueContract | None]],
+) -> ContractOrigins:
+    """Index each field contract's origins under its field name, as one record's origins.
+
+    Args:
+        fields (`Iterable[tuple[str, ValueContract | None]]`):
+            Record field names paired with exact contracts; `None` (an opaque field)
+            contributes no origin.
+
+    Returns:
+        `ContractOrigins`:
+            No root origin; each field's root origin at `(name,)` and its nested origins
+            below it, in canonical path order.
+    """
+    origins: list[tuple[tuple[str | int, ...], Any]] = []
+    for name, contract in fields:
+        if contract is None:
+            continue
+        if contract.origins.default is not None:
+            origins.append(((name,), contract.origins.default))
+        origins.extend(
+            ((name, *path), origin) for path, origin in contract.origins.entries
+        )
+    origins.sort(key=_origin_path_sort_key)
+    return ContractOrigins(entries=tuple(origins))
+
+
+def direct_reference_parts(expression: Tree | Token) -> tuple[str, ...] | None:
+    """Return the path of a lone plain reference, excluding calls and expressions.
+
+    Args:
+        expression (`Tree | Token`):
+            One parsed `${...}` interior, as `Span.tree`.
+
+    Returns:
+        `tuple[str, ...] | None`:
+            The dotted path's names, such as `("d", "output", "action")`, or `None`
+            when the expression is not a plain `refcall` of names (an index, a call,
+            an escape such as `:-`, or any operator).
+    """
+    if not isinstance(expression, Tree) or expression.data != "refcall":
+        return None
+
+    children = expression.children
+    if (
+        not children
+        or not isinstance(children[0], Token)
+        or str(children[0].type) != "NAME"
+    ):
+        return None
+
+    parts = [str(children[0])]
+    for child in children[1:]:
+        if (
+            not isinstance(child, Tree)
+            or child.data != "trailer"
+            or len(child.children) != 1
+            or not isinstance(child.children[0], Token)
+            or str(child.children[0].type) != "NAME"
+        ):
+            return None
+        parts.append(str(child.children[0]))
+    return tuple(parts)
 
 
 __all__ = [
     "combine_output_contracts",
+    "direct_reference_parts",
     "output_contract_path_error",
     "project_output_contract",
+    "record_field_origins",
     "resolve_output_binding_contract",
 ]

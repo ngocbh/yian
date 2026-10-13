@@ -25,6 +25,9 @@ reject an ill-formed flow before it is compiled:
   it never navigates Compose cursors itself.
 - `handles.py` — `check_case_handles`: a `CaseNode`'s handles align with its
   outgoing control edges.
+- `narrowing.py` — `compute_narrowing`: the union narrowing facts each node gets from
+  the CASE branches that route it, and the per-node views of the producer and
+  flow-input contracts with each narrowed base rebuilt (`Narrowing.for_node`).
 
 Post-build passes may consult `BuildResult.node_range` / `field_ranges`, and assertion
 validation may receive a temporary descriptor/callback range. Those coordinates stay in

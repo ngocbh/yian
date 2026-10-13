@@ -30,8 +30,9 @@ the flow's producer types, which are only assembled after every node is built, s
 in `.build()`. `.build()` lowers unconditionally; the loader runs `check_case_exhaustive` in the
 validate phase.
 
-Imports flow down/peer only: `expr` (ref scan/rewrite), `nodes` (Case/CaseNode/Parameter),
-`compile.model` (Edge), and the compose peer `source`/`helpers.errors`/`nodes.base`.
+Imports flow down/peer only: `lark` (parse-tree types), `expr` (ref scan/rewrite and the
+`isinstance` tree helpers), `nodes` (Case/CaseNode/Parameter), `compile.model` (Edge), and
+the compose peers `source`/`helpers.errors`/`helpers.output_contracts`/`nodes.base`.
 It imports NOTHING from parse/desugar/edges/validate/build/loader (the ladder), so it stays a
 leaf of the nodes package.
 """
@@ -42,18 +43,25 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Optional
 
+from lark import Token, Tree
+
 from yian.compile.model import Edge
 from yian.diagnostics import OriginRef
 from yian.expr import (
     ExpressionError,
     binding_co_skips,
-    condition_refs,
+    expr_refs,
     expr_refs_of,
+    isinstance_subject,
+    isinstance_type_names,
+    parse_condition,
+    parse_expr,
     rewrite_condition_refs,
 )
 from yian.nodes.case import DEFAULT_HANDLE, Case, CaseNode
 from yian.nodes.contracts import Binding, Parameter, binding_source
 from yian.compose.helpers.errors import LoadDiagnostics
+from yian.compose.helpers.output_contracts import direct_reference_parts
 from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from yian.compose.source import SourceCursor
 
@@ -312,20 +320,6 @@ def _outputs_producer(ref: str) -> Optional[str]:
     return None
 
 
-def _refs_in(expr: str) -> list[str]:
-    """The distinct reference paths a `when:` expression reads, in first-seen order.
-
-    Routes through `condition_refs` (parse the WHOLE `when:` value, all three spellings —
-    bare / mixed / whole-span) so it agrees with `_rewrite_when`, which rewrites the same
-    parsed leaves. Raises `ExpressionError` on a malformed `when:` (the caller frames it
-    as a located `LoadError`)."""
-    out: list[str] = []
-    for path in condition_refs(expr):
-        if path not in out:
-            out.append(path)
-    return out
-
-
 def _quote(
     value: str,
     diagnostics: LoadDiagnostics | None = None,
@@ -476,6 +470,170 @@ def _desugar_on(
     )
 
 
+IsinstanceCheck = tuple[str, str]
+"""A top-level `isinstance(<base>, <T>)` conjunct: the dotted base path and the type name."""
+
+
+def _isinstance_check(conjunct: Tree | Token) -> Optional[IsinstanceCheck]:
+    """The check a conjunct makes when it is `isinstance(<direct ref>, T)`, else `None`."""
+    subject = isinstance_subject(conjunct)
+    if isinstance(subject, Token) and subject.type == "WRAPPED_REF":
+        # The mixed spelling `isinstance(${d.output}, T)` wraps the reference in braces.
+        try:
+            subject = parse_expr(str(subject)[2:-1])
+        except ExpressionError:
+            return None
+    if subject is None:
+        return None
+    parts = direct_reference_parts(subject)
+    if parts is None:
+        return None
+    return ".".join(parts), isinstance_type_names(conjunct)[0]
+
+
+GuardedRead = tuple[int, tuple[IsinstanceCheck, ...]]
+"""One read of a searched-case param: its case index and the checks guarding it."""
+
+
+def _conjuncts(tree: Tree | Token) -> list[Tree | Token]:
+    """The operands of a top-level `and` chain; a lone operand otherwise."""
+    if isinstance(tree, Tree) and tree.data == "and_expr":
+        return [
+            child
+            for child in tree.children
+            if not (isinstance(child, Token) and child.type == "AND")
+        ]
+    return [tree]
+
+
+@dataclass(frozen=True)
+class _SearchedParams:
+    """The `__rN` params of a searched case, from one parse of its `when:`s.
+
+    Args:
+        ref_to_local (`dict[str, str]`):
+            Each distinct ref path and its local, in first-seen order.
+        local_case_index (`dict[str, int]`):
+            The case index each local was first seen in (its caret / label site).
+        guards (`dict[str, list[GuardedRead]]`):
+            For each local, the case index of each occurrence and the checks guarding it.
+    """
+
+    ref_to_local: dict[str, str]
+    local_case_index: dict[str, int]
+    guards: dict[str, list[GuardedRead]]
+
+
+def _searched_params(desc: CaseDescriptor, diagnostics: LoadDiagnostics) -> _SearchedParams:
+    """Allocate one `__rN` local per distinct ref across all searched `when:`s.
+
+    Locals and guards come from the same parse, so every guarded occurrence has a local.
+    An occurrence inside a top-level `and` operand is guarded by the
+    `isinstance(<direct ref>, T)` operands before it; any other occurrence has no guards.
+
+    Raises:
+        `LoadError`:
+            A `when:` is not a string or does not parse.
+    """
+    ref_to_local: dict[str, str] = {}
+    local_case_index: dict[str, int] = {}
+    guards: dict[str, list[GuardedRead]] = {}
+    for ci, c in enumerate(desc.cases):
+        when = c.get("when")
+        when_range = (
+            desc.when_ranges[ci]
+            if ci < len(desc.when_ranges)
+            else desc.field_ranges.get(("field", "cases")) or desc.range
+        )
+        if not isinstance(when, str):
+            raise diagnostics.error(
+                f"case node {desc.id!r}: each searched case needs a string `when:` expression",
+                range=when_range,
+            )
+        try:
+            tree = parse_condition(when)
+        except ExpressionError as exc:
+            raise diagnostics.error(
+                f"case node {desc.id!r}: `when:` {when!r} is not a valid boolean expression: {exc}",
+                range=when_range,
+            ) from exc
+        # Parsing the whole value once covers all three spellings, matching `_rewrite_when`.
+        for ref in expr_refs(tree):
+            if ref not in ref_to_local:
+                local = f"__r{len(ref_to_local)}"
+                ref_to_local[ref] = local
+                local_case_index[local] = ci
+                guards[local] = []
+        checks: list[IsinstanceCheck] = []
+        for conjunct in _conjuncts(tree):
+            for ref in expr_refs(conjunct):
+                guards[ref_to_local[ref]].append((ci, tuple(checks)))
+            check = _isinstance_check(conjunct)
+            if check is not None:
+                checks.append(check)
+    return _SearchedParams(ref_to_local, local_case_index, guards)
+
+
+def isinstance_conjuncts(when: Any) -> list[IsinstanceCheck]:
+    """Return the `isinstance(<direct ref>, T)` checks among a `when:`'s top-level conjuncts.
+
+    Only top-level `and` operands count: a check under `or` or `not` does not hold
+    whenever the case matches.
+
+    Args:
+        when (`Any`):
+            A searched case's original `when:` value, in any spelling. A non-string or
+            unparsable value makes no checks.
+
+    Returns:
+        `list[IsinstanceCheck]`:
+            `(base path, type name)` pairs in source order.
+
+    Example:
+        `isinstance_conjuncts("isinstance(d.output, Buy) and x > 1")` is
+        `[("d.output", "Buy")]`.
+    """
+    if not isinstance(when, str):
+        return []
+    try:
+        tree = parse_condition(when)
+    except ExpressionError:
+        return []
+    checks = (_isinstance_check(conjunct) for conjunct in _conjuncts(tree))
+    return [check for check in checks if check is not None]
+
+
+def searched_param_guards(desc: CaseDescriptor) -> dict[str, list[GuardedRead]]:
+    """Return, per searched-case `__rN` param, each occurrence's case and guarding checks.
+
+    An occurrence of a param's ref inside a top-level `and` operand is guarded by the
+    `isinstance(<direct ref>, T)` operands before it in the same chain: `and`
+    short-circuits, so the read only runs once those checks pass. An occurrence anywhere
+    else has no guards. The params are allocated exactly as the build allocates them.
+
+    Args:
+        desc (`CaseDescriptor`):
+            A searched case that has already built. An `on:` case has no guards.
+
+    Returns:
+        `dict[str, list[GuardedRead]]`:
+            For each local, one `(case index, guarding checks)` pair per occurrence,
+            across all `when:`s in source order.
+
+    Raises:
+        `LoadError`:
+            `desc` has a `when:` its build would reject. The loader only calls this after
+            the build succeeded, so the error is unlocated.
+
+    Example:
+        For a first case `isinstance(d.output, Buy) and d.output.qty > 5`, the local
+        of `d.output.qty` maps to `[(0, (("d.output", "Buy"),))]`.
+    """
+    if desc.on is not None:
+        return {}
+    return _searched_params(desc, LoadDiagnostics()).guards
+
+
 def _desugar_searched(
     desc: CaseDescriptor,
     diagnostics: LoadDiagnostics,
@@ -485,37 +643,8 @@ def _desugar_searched(
     Returns `(node, wiring, data_edges, control_edges, param_ranges, param_labels)` — the last
     two locate each synth `__rN` at the `cases[N].when` it was first seen in and label it
     `cases[N].when` (not the synthetic `__rN`)."""
-    # Allocate one local per distinct ref across ALL when:s (first-seen order), remembering the
-    # case index each was first seen in (its caret / label site).
-    ref_to_local: dict[str, str] = {}
-    local_case_index: dict[str, int] = {}
-    for ci, c in enumerate(desc.cases):
-        when = c.get("when")
-        if not isinstance(when, str):
-            raise diagnostics.error(
-                f"case node {desc.id!r}: each searched case needs a string `when:` expression",
-                range=(
-                    desc.when_ranges[ci]
-                    if ci < len(desc.when_ranges)
-                    else desc.field_ranges.get(("field", "cases")) or desc.range
-                ),
-            )
-        try:
-            refs = _refs_in(when)
-        except ExpressionError as exc:
-            raise diagnostics.error(
-                f"case node {desc.id!r}: `when:` {when!r} is not a valid boolean expression: {exc}",
-                range=(
-                    desc.when_ranges[ci]
-                    if ci < len(desc.when_ranges)
-                    else desc.field_ranges.get(("field", "cases")) or desc.range
-                ),
-            ) from exc
-        for ref in refs:
-            if ref not in ref_to_local:
-                local = f"__r{len(ref_to_local)}"
-                ref_to_local[ref] = local
-                local_case_index[local] = ci
+    params = _searched_params(desc, diagnostics)
+    ref_to_local, local_case_index = params.ref_to_local, params.local_case_index
 
     wiring: dict[str, Any] = {}
     for ref, local in ref_to_local.items():
@@ -573,6 +702,7 @@ def _rewrite_when(when: str, ref_to_local: dict[str, str]) -> str:
     """Rewrite each reference in `when` to its bare local `__rN`, honouring all three
     condition spellings. A `${<ref>}` (mixed) becomes `${__rN}`, a bare `<ref>`
     (whole-span / bare) becomes `__rN`; the surrounding expression is preserved. A ref
-    with no allocated local is left untouched. Shares `rewrite_condition_refs` with
-    `_refs_in`, so extraction and rewrite parse the SAME leaves."""
+    with no allocated local is left untouched. `rewrite_condition_refs` parses the value
+    like `parse_condition`, so extraction in `_searched_params` and rewrite see the SAME
+    leaves."""
     return rewrite_condition_refs(when, lambda path: ref_to_local.get(path))

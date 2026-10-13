@@ -35,6 +35,7 @@ from yian.expr.template import Span, eval_template, scan_template
 from yian.nodes.contracts import Binding, Parameter, binding_source
 from yian.typesys import TypeCheckError, ValueKind, build_value_as
 from yian.typesys.pool import VariablePool
+from yian.typesys.values import Type
 
 
 BindingFailureCode: TypeAlias = Literal["binding.evaluate", "contract.input"]
@@ -258,6 +259,7 @@ def _resolve_source(
     collector: BindingCollector | None = None,
     name: str = "",
     source_resolver: SourceResolver | None = None,
+    types: dict[str, Type] | None = None,
 ) -> Any:
     """Resolve one raw or carrier-wrapped source via the template language.
 
@@ -275,6 +277,7 @@ def _resolve_source(
     `nodes <- expr` boundary. ``collector`` optionally retains the selected route
     under ``name``; ``source_resolver`` pairs values with accepted producer identities
     in one read. Without that injected resolver, capture records no producer identity.
+    ``types`` is the table an ``isinstance(x, T)`` looks ``T`` up in (``None`` means no types).
     """
     origin = _source_origin(source)
     source_value = binding_source(source)
@@ -291,7 +294,7 @@ def _resolve_source(
                 return ResolvedValue(value, value is not None)
 
             segments = scan_template(source_value)
-            result = eval_template(segments, resolve, item, trace=True)
+            result = eval_template(segments, resolve, item, trace=True, types=types)
             collector._record_source(
                 name, result.route, any(isinstance(seg, Span) for seg in segments)
             )
@@ -300,6 +303,7 @@ def _resolve_source(
             source_value,
             lambda path: resolve_reference(path, pool),
             item,
+            types=types,
         )
     except (RequiredError, ExpressionError) as exc:
         raise BindingError(
@@ -317,6 +321,7 @@ def bind_params(
     item: Any = None,
     collector: BindingCollector | None = None,
     source_resolver: SourceResolver | None = None,
+    types: dict[str, Type] | None = None,
     _finish_capture: bool = True,
 ) -> dict[str, Any]:
     """Resolve each declared `Parameter` into a typed record — the engine's read boundary.
@@ -339,6 +344,9 @@ def bind_params(
             Retain delivered values and routes independently of node execution.
         source_resolver (`SourceResolver`, *optional*, defaults to `None`):
             One-read value/presence/source lookup used only when capturing bindings.
+        types (`dict[str, Type]`, *optional*, defaults to `None`):
+            The type table an `isinstance(x, T)` in a source looks `T` up in, keyed by type
+            name (the node's `types`). `None` means no types.
         _finish_capture (`bool`, *optional*, defaults to `True`):
             Internal evaluator seam. False retains routes while deferring the
             input snapshot until reserved values and wrapper defaults are complete.
@@ -361,7 +369,7 @@ def bind_params(
             source = wiring.get(p.name)
             value = _resolve_source(
                 source, pool, item, collector=collector if present else None,
-                name=p.name, source_resolver=source_resolver,
+                name=p.name, source_resolver=source_resolver, types=types,
             )
             if value is None:
                 # Distinguish an OMITTED input (no wiring edge) from one BOUND-TO-NULL (an edge that

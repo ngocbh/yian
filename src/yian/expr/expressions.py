@@ -7,7 +7,8 @@ Grammar: comparisons (`==` `!=` `<` `<=` `>` `>=` `in` `not in`) and arithmetic 
 references and literals, combined with `and` / `or` / `not` and parentheses. The same
 parsed tree feeds `eval_expr`, conservative `infer_expr_type`, and the reference walkers.
 Conditions route through the ONE unified engine; a bare reference with no comparison
-operator is a truthiness test (not an error).
+operator is a truthiness test (not an error). `isinstance(x, T)` checks a value against a
+type named in the `types` table every evaluation entry point accepts.
 """
 
 import re
@@ -19,7 +20,7 @@ from lark import Token, Tree
 
 from yian.expr.lineage import ResolvedValue, SourceRef, TracedValue, ValueRoute
 from yian.typesys.pool import VariablePool
-from yian.typesys.values import Type, ValueKind
+from yian.typesys.values import Type, TypeCheckError, ValueKind, build_value_as
 
 
 class ExpressionError(ValueError):
@@ -29,6 +30,11 @@ class ExpressionError(ValueError):
 class RequiredError(ExpressionError):
     """A `${ref:?message}` whose ref was unbound (the binder maps it to BindingError)."""
 
+
+# The type-test special form `isinstance(x, T)`: its second argument is a type name
+# looked up in the node's type table, never a reference, so the evaluator, the reference
+# walkers and rewriters, and type inference treat only its first argument as an expression.
+ISINSTANCE = "isinstance"
 
 _VAR_RE = re.compile(r"\$\{([^}]+)\}")
 _NUMBER_RE = re.compile(r"^-?\d+(\.\d+)?$")
@@ -153,7 +159,7 @@ def _eval_comparison(op: str, lhs: Any, rhs: Any) -> bool:
 _WHOLE_SPAN_RE = re.compile(r"^\$\{(.*)\}$", re.DOTALL)
 
 
-def _parse_condition(expression: str) -> "Tree | Token":
+def parse_condition(expression: str) -> "Tree | Token":
     """Parse an expression-field value (`when:`/`on:`/an `asserts:` entry) via the ONE
     unified grammar, honouring the both-spellings entry rule.
 
@@ -165,6 +171,18 @@ def _parse_condition(expression: str) -> "Tree | Token":
     If the WHOLE trimmed value is a single `${...}` span, strip the outer braces and
     parse the interior; otherwise parse the whole value directly. The grammar's ref atom
     already admits a `${...}`-wrapped ref, so the mixed `${a} > 5` form parses as-is.
+
+    Args:
+        expression (`str`):
+            The field value, in any of the three spellings.
+
+    Returns:
+        `Tree | Token`:
+            The parsed expression.
+
+    Raises:
+        `ExpressionError`:
+            Raised when the value does not parse.
     """
     from yian.expr.grammar import parse_expr
 
@@ -182,7 +200,7 @@ def condition_refs(expression: str) -> list[str]:
 
     The condition analog of the template ref-walk ([`expr_refs_of`][yian.expr.template.expr_refs_of])
     and the prompt ref-walk ([`prompt_refs`][yian.expr.template.prompt_refs]): parse the
-    WHOLE value as ONE expression (via `_parse_condition`, honouring all three spellings — bare
+    WHOLE value as ONE expression (via `parse_condition`, honouring all three spellings — bare
     `a > 5`, mixed `${a} > 5`, whole `${a > 5}`) and collect its reference leaves via the shared
     [`expr_refs`][yian.expr.expressions.expr_refs]. Every compile-time consumer of a
     condition's refs (flow/node `asserts:`, a loop `while:`/`until:` predicate, a searched `case`
@@ -198,24 +216,31 @@ def condition_refs(expression: str) -> list[str]:
     Raises:
         `ExpressionError`: on a malformed condition (the caller frames it as a located load error).
     """
-    return expr_refs(_parse_condition(expression))
+    return expr_refs(parse_condition(expression))
 
 
 
-def _evaluate(expression: str, resolve: Callable[[str], Any]) -> bool:
+def _evaluate(
+    expression: str,
+    resolve: Callable[[str], Any],
+    types: "dict[str, Type] | None" = None,
+) -> bool:
     """Parse + evaluate a `when:`/`asserts:` expression on the UNIFIED engine, resolving
-    each reference via `resolve`; the result is coerced to `bool`.
+    each reference via `resolve` and each `isinstance` type name via `types`; the result
+    is coerced to `bool`.
 
     Runs the unified `eval_expr` in `CONDITION_FALSY` mode — a missing reference is `None`
     and therefore falsy through comparisons, which lets `case default` routing handle
     absent values. The truthiness fold of `and`/`or` is coerced back to a
     plain `bool` here, so a `when:`/`asserts:` predicate always yields a boolean.
     """
-    tree = _parse_condition(expression)
-    return bool(eval_expr(tree, resolve, mode=ResolveMode.CONDITION_FALSY))
+    tree = parse_condition(expression)
+    return bool(eval_expr(tree, resolve, mode=ResolveMode.CONDITION_FALSY, types=types))
 
 
-def evaluate_when(expression: str, pool: VariablePool) -> bool:
+def evaluate_when(
+    expression: str, pool: VariablePool, types: "dict[str, Type] | None" = None,
+) -> bool:
     """
     Evaluate a `when:` boolean expression against the variable pool.
 
@@ -237,6 +262,8 @@ def evaluate_when(expression: str, pool: VariablePool) -> bool:
         pool (`VariablePool`):
             The variable pool each reference resolves against (`node`/`system` namespaces).
             A reference that resolves to `None` participates as a falsy value.
+        types (`dict[str, Type] | None`, *optional*, defaults to `None`):
+            The type table `isinstance(x, T)` looks `T` up in. `None` means no types.
 
     Returns:
         `bool`:
@@ -244,15 +271,16 @@ def evaluate_when(expression: str, pool: VariablePool) -> bool:
 
     Raises:
         `ExpressionError`:
-            If the expression is malformed, references an invalid path, or mixes
-            incompatible types (e.g. arithmetic over a non-number).
+            If the expression is malformed, references an invalid path, mixes
+            incompatible types (e.g. arithmetic over a non-number), or names a type
+            absent from `types`.
 
     Example:
         ```python
         evaluate_when("${score.output} >= 0.5 and ${flag.output}", pool)
         ```
     """
-    return _evaluate(expression, lambda path: resolve_reference(path, pool))
+    return _evaluate(expression, lambda path: resolve_reference(path, pool), types)
 
 
 def first_failing_assert(exprs, pool: VariablePool):
@@ -266,7 +294,9 @@ def first_failing_assert(exprs, pool: VariablePool):
     return None
 
 
-def evaluate_when_record(expression: str, record: dict) -> bool:
+def evaluate_when_record(
+    expression: str, record: dict, types: "dict[str, Type] | None" = None,
+) -> bool:
     """Evaluate a strict-CASE `when:` against the node's bound input record.
 
     `${name}` / `${name.path}` resolve against `record`; a miss -> None, which is falsy
@@ -279,8 +309,10 @@ def evaluate_when_record(expression: str, record: dict) -> bool:
     `when:` deliberately stays falsy so `default` can fire — so a dotted-key typo on a
     declared dict input routes to `default` silently until the `types:` registry can
     validate dotted paths at compile time (the head is checked today, not the path).
+
+    `types` is the table `isinstance(x, T)` looks `T` up in (`None` means no types).
     """
-    return _evaluate(expression, lambda path: _resolve_in_record(path, record))
+    return _evaluate(expression, lambda path: _resolve_in_record(path, record), types)
 
 
 # --------------------------------------------------------------------------- #
@@ -344,11 +376,12 @@ class _EvalExpr:
 
     def __init__(
         self, resolve: Callable[[str], Any], item: Any, mode: ResolveMode,
-        *, trace: bool = False,
+        *, trace: bool = False, types: "dict[str, Type] | None" = None,
     ):
         self._resolve = resolve
         self._item = item
         self._mode = mode
+        self._types = types
         self._trace = trace
         self._frames: list[_TraceFrame] = []
         self._last_route: ValueRoute | None = None
@@ -449,7 +482,10 @@ class _EvalExpr:
         # exactly as a ref miss (strict raises, non-strict maps to None). Without this the
         # miss leaked a plain `None`, which a multi-span concat stringified to "" (a silent
         # blank that broke the STRICT_RAISE floor).
-        value = self._call_builtin(name, call_suffix)
+        if name == ISINSTANCE:
+            value = self._isinstance(call_suffix)
+        else:
+            value = self._call_builtin(name, call_suffix)
         after = [c for c in children if isinstance(c, Tree) and c.data == "trailer"]
         for tr in after:
             value = self._dotted_step(value, str(tr.children[0]))
@@ -457,12 +493,14 @@ class _EvalExpr:
             routes = tuple(self._frames[-1].children)
             names = tuple(
                 str(arg.children[0]) if len(arg.children) == 2 else ""
-                for arg in call_suffix.children
+                for arg in _value_args(name, call_suffix)
             )
             args = ", ".join(
                 f"{key}={route.expression}" if key else route.expression
                 for key, route in zip(names, routes)
             )
+            if name == ISINSTANCE:
+                args += f", {_isinstance_type_name(call_suffix)}"
             suffix = "".join(f".{tr.children[0]}" for tr in after)
             self._frames[-1].route = replace(
                 ValueRoute.literal(None if value is _MISSING else value),
@@ -532,6 +570,24 @@ class _EvalExpr:
             stepped = value.get(step)
             return _MISSING if stepped is None else stepped
         return _MISSING
+
+    def _isinstance(self, call_suffix: Tree) -> bool:
+        """`isinstance(x, T)`: whether the value of `x` satisfies the type named `T`.
+
+        `T` is looked up in the type table, never resolved as a reference. The check is
+        the variable pool's write-boundary check, so a value passes exactly when it
+        could be written to a slot of type `T`. A missing `x` is checked as `None` in the
+        non-strict modes and raises in `STRICT_RAISE`."""
+        type_name = _isinstance_type_name(call_suffix)
+        typ = (self._types or {}).get(type_name)
+        if typ is None:
+            raise ExpressionError(f"isinstance: unknown type {type_name!r}")
+        value = self._as_value(self._walk(call_suffix.children[0].children[0]))
+        try:
+            build_value_as(typ, value)
+        except TypeCheckError:
+            return False
+        return True
 
     def _call_builtin(self, callee: str, call_suffix: Tree) -> Any:
         """Dispatch a builtin call through `TEMPLATE_FNS`. Positional and keyword
@@ -707,6 +763,7 @@ def eval_expr(
     mode: ResolveMode = ResolveMode.BINDING_NONE,
     *,
     trace: bool = False,
+    types: "dict[str, Type] | None" = None,
 ) -> Any:
     """
     Evaluate a unified `${...}` expression tree (from `expr.grammar.parse_expr`).
@@ -714,7 +771,8 @@ def eval_expr(
     The ONE evaluator for every `${...}` construct: references (bare / dotted /
     `${}`-wrapped / `item`-scoped), arithmetic and comparisons over VALUES (so
     `str+str` concatenates and `list+list` extends), boolean combinators, list
-    literals, coalesce / default / required, and pure builtin calls.
+    literals, coalesce / default / required, pure builtin calls, and the
+    `isinstance(x, T)` type test.
 
     Three semantics support `case default` routing:
     a missing reference is `None` (in the non-strict modes); arithmetic over that
@@ -744,6 +802,9 @@ def eval_expr(
         trace (`bool`, *optional*, defaults to `False`):
             Internal retention switch. Collect a compositional route during this
             evaluation and return `TracedValue(value, route)`.
+        types (`dict[str, Type] | None`, *optional*, defaults to `None`):
+            The type table `isinstance(x, T)` looks `T` up in, keyed by type name.
+            `None` means no types, so any `isinstance` raises.
 
     Returns:
         `Any`:
@@ -753,13 +814,14 @@ def eval_expr(
     Raises:
         `ExpressionError`:
             On an unsupported node, an unknown builtin, a builtin failure, arithmetic
-            over an incompatible operand (incl. `None`), or a strict-mode miss.
+            over an incompatible operand (incl. `None`), a strict-mode miss, or an
+            `isinstance` type name absent from `types`.
         `RequiredError`:
             When a `head :? message` required atom's head misses / is None.
         `TypeError`:
             When a traced resolver does not return `ResolvedValue`.
     """
-    return _EvalExpr(resolve, item, mode, trace=trace).eval(tree)
+    return _EvalExpr(resolve, item, mode, trace=trace, types=types).eval(tree)
 
 
 # --------------------------------------------------------------------------- #
@@ -774,11 +836,11 @@ def infer_expr_type(
     """Return the statically proven type of one parsed expression, if any.
 
     Inference is deliberately conservative: literal tokens, exact references
-    (including the wrapped back-compat spelling), comparisons, and boolean
-    combinators have fixed result types. Other forms remain unknown until their
-    runtime value semantics can be modeled without guessing. Reference lookup is
-    injected so this source-neutral expression layer does not know about a flow
-    graph or Compose document.
+    (including the wrapped back-compat spelling), comparisons, boolean
+    combinators, and `isinstance(x, T)` have fixed result types. Other forms remain
+    unknown until their runtime value semantics can be modeled without guessing.
+    Reference lookup is injected so this source-neutral expression layer does not
+    know about a flow graph or Compose document.
 
     Args:
         tree (`Tree | Token`):
@@ -822,7 +884,9 @@ def infer_expr_type(
             isinstance(child, Tree) and child.data == "call_suffix"
             for child in children
         ):
-            return None
+            # `parse_expr` rejects dotted access on an `isinstance(...)` result.
+            is_type_test = str(children[0]) == ISINSTANCE
+            return Type.scalar(ValueKind.BOOLEAN) if is_type_test else None
         path = ".".join(
             [str(children[0]), *(str(child.children[0]) for child in children[1:])]
         )
@@ -849,6 +913,83 @@ def infer_expr_type(
 # --------------------------------------------------------------------------- #
 
 
+def _value_args(callee: str, call_suffix: Tree) -> list:
+    """The `arg` subtrees of a call whose values are expressions.
+
+    Every argument of a builtin is an expression; `isinstance(x, T)` has only `x`."""
+    args = call_suffix.children
+    return args[:1] if callee == ISINSTANCE else args
+
+
+def _isinstance_type_name(call_suffix: Tree) -> str:
+    """The type name of a validated `isinstance(x, T)` call suffix."""
+    return str(call_suffix.children[1].children[0].children[0])
+
+
+def isinstance_type_names(tree: "Tree | Token") -> list[str]:
+    """Return the type names the `isinstance(x, T)` calls in a parsed expression name.
+
+    Args:
+        tree (`Tree | Token`):
+            A tree from [`parse_expr`][yian.expr.grammar.parse_expr] or `parse_condition`,
+            which have already checked each `isinstance` call's shape.
+
+    Returns:
+        `list[str]`:
+            Each `T` in source order, without duplicates. `[]` for a lone token.
+
+    Example:
+        ```python
+        isinstance_type_names(parse_expr("isinstance(x, Buy) or isinstance(y, int)"))
+        # ["Buy", "int"]
+        ```
+    """
+    if not isinstance(tree, Tree):
+        return []
+    names: list[str] = []
+    for node in tree.iter_subtrees_topdown():
+        if node.data != "refcall" or str(node.children[0]) != ISINSTANCE:
+            continue
+        call_suffix = node.children[-1]
+        if isinstance(call_suffix, Tree) and call_suffix.data == "call_suffix":
+            name = _isinstance_type_name(call_suffix)
+            if name not in names:
+                names.append(name)
+    return names
+
+
+def isinstance_subject(tree: "Tree | Token") -> "Tree | Token | None":
+    """Return the tested expression `x` of an `isinstance(x, T)` call.
+
+    Args:
+        tree (`Tree | Token`):
+            A parsed expression from [`parse_expr`][yian.expr.grammar.parse_expr] or
+            `parse_condition`, which have already checked each `isinstance` call's shape.
+
+    Returns:
+        `Tree | Token | None`:
+            The first argument's expression when `tree` itself is an `isinstance` call,
+            else `None`.
+
+    Example:
+        ```python
+        isinstance_subject(parse_expr("isinstance(d.output, Buy)"))  # the `d.output` refcall
+        isinstance_subject(parse_expr("isinstance(d.output, Buy) and x"))  # None
+        ```
+    """
+    if (
+        not isinstance(tree, Tree)
+        or tree.data != "refcall"
+        or len(tree.children) != 2
+        or str(tree.children[0]) != ISINSTANCE
+    ):
+        return None
+    call_suffix = tree.children[1]
+    if not isinstance(call_suffix, Tree) or call_suffix.data != "call_suffix":
+        return None
+    return call_suffix.children[0].children[0]
+
+
 def expr_refs(tree: "Tree | Token") -> list[str]:
     """
     Collect every reference-leaf PATH a unified `${...}` expression tree reads.
@@ -858,7 +999,8 @@ def expr_refs(tree: "Tree | Token") -> list[str]:
     `call_suffix` is a reference — its dotted path (leading NAME joined with each
     `trailer` segment) is collected. A `refcall` WITH a `call_suffix` is a builtin
     CALL: the callee name contributes NO ref, but each `arg` VALUE's refs ARE
-    collected (recursively). Literals contribute nothing. Coalesce / default /
+    collected (recursively). `isinstance(x, T)` collects only `x`'s refs; `T` is a
+    type name. Literals contribute nothing. Coalesce / default /
     required refs are all collected, including the nested-default ref.
 
     `item`-headed refs ARE collected here — matching the evaluator, which resolves
@@ -902,7 +1044,7 @@ def _collect_expr_refs(node: "Tree | Token", refs: list[str]) -> None:
             refs.append(".".join([str(children[0]), *segments]))
             return
         # a builtin call: the callee contributes NO ref; walk each arg VALUE only.
-        for arg in call_suffix.children:  # each child is an `arg` subtree; empty `fn()` -> no children -> skipped
+        for arg in _value_args(str(children[0]), call_suffix):  # empty `fn()` -> skipped
             # a kwarg carries a leading NAME token; the value expr is the last child.
             _collect_expr_refs(arg.children[-1], refs)
         return
@@ -930,8 +1072,9 @@ def rewrite_expr_refs(text: str, rename: Callable[[str], "str | None"]) -> str:
     in by source position. `rename` returns the new dotted path, or `None` to leave that
     reference untouched. Everything that is NOT a reference leaf — operators, numbers, string
     and list literals, a builtin CALL's callee name, parentheses, whitespace — is preserved
-    verbatim. A bare `refcall` (`a.b`) is replaced with the bare new path; a `${a}`
-    `WRAPPED_REF` leaf is replaced with the braced `${new}` (its wrapping preserved).
+    verbatim, as is the type name of an `isinstance(x, T)`. A bare `refcall` (`a.b`) is
+    replaced with the bare new path; a `${a}` `WRAPPED_REF` leaf is replaced with the braced
+    `${new}` (its wrapping preserved).
 
     Args:
         text (`str`): the expression source (a bare expression, or a span interior).
@@ -984,7 +1127,7 @@ def _collect_ref_edits(
                 edits.append((start, end, new))
             return
         # a builtin call: the callee is NOT a reference; rewrite each arg VALUE only.
-        for arg in call_suffix.children:
+        for arg in _value_args(str(children[0]), call_suffix):
             _collect_ref_edits(arg.children[-1], rename, edits)
         return
     for child in node.children:
@@ -998,7 +1141,7 @@ def rewrite_condition_refs(expression: str, rename: Callable[[str], "str | None"
     The rewrite analog of [`condition_refs`][yian.expr.expressions.condition_refs]:
     a whole-span `${a > 5}` keeps its outer braces and rewrites the interior; a mixed
     `${a} > 5` / bare `a > 5` are rewritten in place. `rename(path)` returns the replacement
-    path (or `None` to keep). The value is trimmed first (matching `_parse_condition`)."""
+    path (or `None` to keep). The value is trimmed first (matching `parse_condition`)."""
     text = expression.strip()
     m = _WHOLE_SPAN_RE.match(text)
     if m is not None and "}" not in m.group(1):

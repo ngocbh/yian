@@ -122,7 +122,7 @@ def test_searched_multiref_allocates_r0_r1():
 
 
 # A searched `when:` may be written in any of the three condition spellings — the
-# build extracts refs (_refs_in) and rewrites them (_rewrite_when) through the SAME
+# build extracts refs (_searched_params) and rewrites them (_rewrite_when) through the SAME
 # parse, so all three allocate the same __rN, wire the same source, and route the same.
 @pytest.mark.parametrize(
     "when, expect_when",

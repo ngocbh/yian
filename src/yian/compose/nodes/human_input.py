@@ -24,6 +24,7 @@ from yian.compose.nodes.agent import MODE_REMOVED_FIX
 from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from yian.compose.source import SourceCursor
 from yian.diagnostics import SourceRange
+from yian.expr.expressions import ExpressionError
 from yian.expr.template import prompt_refs
 from yian.nodes.contracts import ValueContract
 from yian.nodes.human_input import HumanInputNode
@@ -140,7 +141,8 @@ class HumanInputDescriptor(NodeDescriptor):
           param is recorded as `questions_input` (`questions=None`), so the gate resolves the
           list from its bound input at run time. The ref must name a single declared input —
           exactly one ref, no dots (a pool ref like `"${a.output}"` is rejected; deeper
-          pool-ref validation is a later pass).
+          pool-ref validation is a later pass). A span `prompt_refs` rejects (malformed, an
+          unknown prompt function, or `isinstance`) is an error located at `questions:`.
         - `self.questions` is `None` (legacy form): a plain prompt gate with no questions.
         """
         questions = self.questions
@@ -153,12 +155,18 @@ class HumanInputDescriptor(NodeDescriptor):
                 title=self.node_name,
             )
         if isinstance(questions, str):
-            refs = prompt_refs(questions)
+            questions_range = self.field_ranges.get(("field", "questions")) or self.range
+            try:
+                refs = prompt_refs(questions)
+            except ExpressionError as exc:
+                raise diagnostics.error(
+                    f"node {self.id!r} questions: {exc}", range=questions_range,
+                ) from exc
             if len(refs) != 1 or "." in refs[0]:
                 raise diagnostics.error(
                     f"node {self.id!r}: questions ref must be a single bare input name "
                     f"(e.g. ${{qs}}), got {questions!r}",
-                    range=(self.field_ranges.get(("field", "questions")) or self.range),
+                    range=questions_range,
                 )
             return HumanInputNode(
                 self.id,

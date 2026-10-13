@@ -9,10 +9,10 @@ callable:
   in its own build) -> cross-flow type check + case exhaustiveness -> infer data
   edges + append each case's own edges -> validate references + classify asserts
   -> attach authored assertion/flow-output binding origins -> synthesize the START_ID/END_ID
-  boundary over ALL edges -> reject cycles + check if/else handles ->
-  CompiledFlow.from_parts. One retained assertion item cursor supplies its carrier
-  origin and Compose-only validation range; only the origin crosses into the
-  semantic assertion.
+  boundary over ALL edges -> resolve each node's `isinstance` type table -> reject cycles +
+  check if/else handles -> CompiledFlow.from_parts. One retained assertion item cursor
+  supplies its carrier origin and Compose-only validation range; only the origin crosses
+  into the semantic assertion.
 
 Holds `ComposedFlow` (the compiled+validated flow the engine runs) plus the flow
 `output:` parser and source-origin attachment. Ladder position: the LAST phase
@@ -35,15 +35,19 @@ from yian.diagnostics import (
     OriginResolver,
     SourceRange,
 )
-from yian.nodes.base import Node
+from yian.nodes.base import Node, NodeKind
 from yian.nodes.contracts import (
+    Assertion,
     OutputContract,
     Parameter,
     PartialRecordContract,
     ValueContract,
     as_binding,
 )
+from yian.expr import ExpressionError
 from yian.memory.contracts import DeclSite, MemoryDecl
+from yian.typesys import TypeCheckError
+from yian.typesys.types import TypeRegistry
 from yian.typesys.values import Type
 from yian.compose.validate.asserts import lower_flow_asserts
 from yian.compose.build.boundary import synthesize_boundary_graph
@@ -64,6 +68,10 @@ from yian.compose.desugar.inline_bodies import (
 from yian.compose.desugar.inline_calls import _synth_id_gen, desugar_inline_calls
 from yian.compose.desugar.case_outputs import expand_case_outputs
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
+from yian.compose.helpers.isinstance_types import (
+    collect_isinstance_names,
+    resolve_isinstance_type,
+)
 from yian.compose.helpers.output_contracts import resolve_output_binding_contract
 from yian.compose.desugar.adaptive_questions import desugar_adaptive_questions
 from yian.compose.desugar.case_targets import desugar_case_call_targets
@@ -71,6 +79,7 @@ from yian.compose.validate.case_exhaustive import check_case_exhaustive
 from yian.compose.validate.cycles import reject_cycles
 from yian.compose.validate.human_questions import validate_human_questions
 from yian.compose.validate.loop_types import check_loop_type_contract
+from yian.compose.validate.narrowing import compute_narrowing
 from yian.compose.edges.ordering import infer_ordering_edges
 from yian.compose.validate.call_types import check_call_map_types
 from yian.compose.validate.references import validate_references
@@ -714,6 +723,164 @@ def _stamp_flow_output_origins(
     return stamped
 
 
+def _site_range(
+    item: SourceRange | None,
+    field_ranges: dict[tuple[str, str], SourceRange],
+    field: str,
+    node_range: SourceRange | None,
+) -> SourceRange | None:
+    """Return a site's own range, else its node field's range, else the node's range.
+
+    Args:
+        item (`SourceRange | None`):
+            The site's own range, `None` when it has none.
+        field_ranges (`dict[tuple[str, str], SourceRange]`):
+            The node's field ranges, keyed like `BuildResult.field_ranges`.
+        field (`str`):
+            The node field holding the site, e.g. `"asserts"`.
+        node_range (`SourceRange | None`):
+            The node's range.
+
+    Returns:
+        `SourceRange | None`:
+            The narrowest range available.
+    """
+    return item or field_ranges.get(("field", field)) or node_range
+
+
+def _nth_range(ranges: list[SourceRange | None], index: int) -> SourceRange | None:
+    """Return `ranges[index]`, or `None` past the end."""
+    return ranges[index] if index < len(ranges) else None
+
+
+def _fill_type_tables(
+    nodes: dict[str, Node],
+    flow_wiring: dict[str, dict[str, Any]],
+    build_results: dict[str, BuildResult],
+    descriptors: dict[str, NodeDescriptor],
+    flow_asserts: list[Assertion],
+    flow_assertion_ranges: list[SourceRange | None],
+    outputs_cursor: SourceCursor | None,
+    outputs_range: SourceRange | None,
+    registry: TypeRegistry,
+    diagnostics: LoadDiagnostics,
+) -> None:
+    """Set each node's `types` to the `isinstance` type names its expressions use.
+
+    A node evaluates its wiring sources, its asserts, a CASE's `when:`s and a LOOP's
+    predicate with its own table. Names resolve against this flow's `registry`.
+
+    Args:
+        nodes (`dict[str, Node]`):
+            Every node of the flow, START/END included, keyed by id. Mutated in place.
+        flow_wiring (`dict[str, dict[str, Any]]`):
+            Each node's `param -> source` wiring.
+        build_results (`dict[str, BuildResult]`):
+            The body nodes' build results, for their field ranges.
+        descriptors (`dict[str, NodeDescriptor]`):
+            The body nodes' descriptors, for their authored asserts and ranges.
+        flow_asserts (`list[Assertion]`):
+            The flow's authored `asserts:` carriers, aligned with `flow_assertion_ranges`.
+        flow_assertion_ranges (`list[SourceRange | None]`):
+            Each flow assert's range.
+        outputs_cursor (`SourceCursor | None`):
+            The authored `output:` value; a mapping locates each named output.
+        outputs_range (`SourceRange | None`):
+            The whole `output:` range, used when an output has no range of its own.
+        registry (`TypeRegistry`):
+            The flow's `typedefs:` registry.
+        diagnostics (`LoadDiagnostics`):
+            The flow document's diagnostic factory, for located errors.
+
+    Raises:
+        `LoadError`:
+            Raised at the offending site for an unknown type name, or for `isinstance`
+            in a reserved wiring key (WAIT `until:`, MAP `over:`).
+    """
+    resolved: dict[str, Type] = {}
+
+    def table(names: list[str], where: str, rng: SourceRange | None) -> dict[str, Type]:
+        """Resolve `names`, raising at `rng` for an unknown one."""
+        for name in names:
+            if name not in resolved:
+                try:
+                    resolved[name] = resolve_isinstance_type(name, registry)
+                except TypeCheckError as exc:
+                    raise diagnostics.error(f"{where}: {exc}", range=rng) from exc
+        return {name: resolved[name] for name in names}
+
+    def output_range(name: str) -> SourceRange | None:
+        """One flow output's authored range, else the whole `output:` range."""
+        try:
+            if outputs_cursor is not None and outputs_cursor.has(name):
+                return outputs_cursor.child(name).range
+        except SourceAccessError:
+            pass  # a bare `output:` value has no named children
+        return outputs_range
+
+    def names_in(source: Any, *, condition: bool = False) -> list[str]:
+        """The type names `source` uses; earlier passes report a source that won't parse."""
+        try:
+            return collect_isinstance_names(source, condition=condition)
+        except ExpressionError:
+            return []
+
+    # Authored flow asserts first, so an unknown name is located at its own assert. The
+    # lowered START/END asserts below use the same names.
+    for index, assertion in enumerate(flow_asserts):
+        where = f"flow assert {assertion.display!r}"
+        rng = flow_assertion_ranges[index]
+        table(names_in(assertion.expression, condition=True), where, rng)
+
+    for nid, node in nodes.items():
+        result = build_results.get(nid)
+        desc = descriptors.get(nid)
+        franges = result.field_ranges if result is not None else {}
+        node_range = result.node_range if result is not None else None
+        types: dict[str, Type] = {}
+        reserved = node.reserved_wiring_keys()
+        for param, source in flow_wiring.get(nid, {}).items():
+            if node.kind is NodeKind.END:  # END's wiring carries the flow outputs
+                where = f"flow output {param!r}"
+                rng = output_range(param)
+            else:
+                # A synthesized param's label may end in ':' (`on:`); the message adds one.
+                where = f"node {nid!r} {node.wiring_ref_label(param).removesuffix(':')}"
+                key = ("field", param) if param in reserved else ("input", param)
+                rng = _site_range(franges.get(key), franges, "inputs", node_range)
+            names = names_in(source)
+            if names and param in reserved:
+                raise diagnostics.error(
+                    f"node {nid!r}: isinstance is not supported in a {node.kind.value} "
+                    f"node's {param}:",
+                    range=rng,
+                )
+            types.update(table(names, where, rng))
+        authored = list(getattr(desc, "asserts", None) or [])
+        assert_ranges = list(getattr(desc, "assert_ranges", None) or [])
+        for index, expression in enumerate(authored):
+            where = f"node {nid!r} assert {expression!r}"
+            rng = _site_range(_nth_range(assert_ranges, index), franges, "asserts", node_range)
+            types.update(table(names_in(expression, condition=True), where, rng))
+        if node.kind in (NodeKind.START, NodeKind.END):
+            # START/END evaluate the lowered flow asserts, whose names were located above.
+            for assertion in [*node.pre_asserts, *node.post_asserts]:
+                names = names_in(assertion.expression, condition=True)
+                types.update(table(names, f"flow assert {assertion.display!r}", None))
+        when_ranges = list(getattr(desc, "when_ranges", None) or [])
+        for index, case in enumerate(getattr(node, "cases", None) or ()):
+            where = f"case node {nid!r} cases[{index}].when"
+            rng = _site_range(_nth_range(when_ranges, index), franges, "cases", node_range)
+            types.update(table(names_in(case.when, condition=True), where, rng))
+        predicate = getattr(node, "predicate", None)
+        if isinstance(predicate, str):
+            keyword = getattr(node, "predicate_kind", "while")
+            where = f"loop node {nid!r} {keyword}"
+            rng = _site_range(None, franges, keyword, node_range)
+            types.update(table(names_in(predicate, condition=True), where, rng))
+        node.types = types
+
+
 def _assemble(
     *,
     inputs_section: Optional[dict] = None,
@@ -746,8 +913,8 @@ def _assemble(
       node-output contracts compile at their existing leaf-owned position; a case lowers
       in its own build) -> cross-flow type check + case exhaustiveness -> infer data
       edges + append each case's own edges -> validate references + classify asserts
-      -> attach authored flow-output binding origins -> synthesize roots/terminals -> reject cycles
-      + check if/else handles -> CompiledFlow.from_parts.
+      -> attach authored flow-output binding origins -> synthesize roots/terminals -> resolve
+      `isinstance` type tables -> reject cycles + check if/else handles -> CompiledFlow.from_parts.
 
     Exactly one input representation is required: `inputs_section` is the authored
     mapping that still needs parsing, while `input_parameters` carries parameters already
@@ -1275,6 +1442,19 @@ def _assemble(
             )
         producers[nid] = contract
 
+    # Data edges — the projection of flow.wiring (leaf + WAIT + call/map); a case owns its own
+    # data+control edges (`case_edges`, from each `CaseDescriptor.build`), appended below.
+    data_edges = infer_data_edges(descriptors, flow_wiring)
+    # What each node may assume about union values from the CASE branches that route it.
+    narrowing = compute_narrowing(
+        descriptors,
+        data_edges + case_edges,
+        producers,
+        flow_input_contracts,
+        registry=registry,
+        diagnostics=diagnostics,
+    )
+
     # cross-flow type check: each `call` binding's source type vs the callable
     # input type (needs producers, so it runs after all nodes are built).
     check_call_map_types(
@@ -1282,6 +1462,7 @@ def _assemble(
         producers,
         flow_input_contracts,
         flow_wiring,
+        narrowing=narrowing,
         diagnostics=diagnostics,
     )
     # loop `'a -> 'a` type contract (types): each field the body returns is compared with
@@ -1299,6 +1480,7 @@ def _assemble(
     check_case_exhaustive(
         descriptors,
         producers,
+        narrowing=narrowing,
         diagnostics=diagnostics,
     )
 
@@ -1312,9 +1494,6 @@ def _assemble(
         diagnostics=diagnostics,
     )
 
-    # Data edges — the projection of flow.wiring (leaf + WAIT + call/map); a case owns its own
-    # data+control edges (`case_edges`, from each `CaseDescriptor.build`), appended here.
-    data_edges = infer_data_edges(descriptors, flow_wiring)
     reconciled = data_edges + case_edges
 
     # Reference + assert validation over the built flow. Errors locate
@@ -1328,6 +1507,7 @@ def _assemble(
         flow_wiring,
         input_contracts=flow_input_contracts,
         outputs_range=outputs_range,
+        narrowing=narrowing,
         diagnostics=diagnostics,
     )
     # human_input gates: structurally check a literal `questions:` list at load, and
@@ -1391,6 +1571,20 @@ def _assemble(
     nodes.update(boundary_nodes)
     flow_wiring.update(boundary_wiring)
     edges: list[Edge] = structural + boundary_edges
+
+    # Type tables for `isinstance`, once START/END carry the lowered flow asserts and outputs.
+    _fill_type_tables(
+        nodes,
+        flow_wiring,
+        build_results,
+        descriptors,
+        asserts_section,
+        flow_assertion_ranges,
+        outputs_cursor,
+        outputs_range,
+        registry,
+        diagnostics,
+    )
 
     # A cycle spans nodes; every actual member contributes its authored range.
     # START_ID/END_ID are acyclic by construction (START_ID has no incoming,

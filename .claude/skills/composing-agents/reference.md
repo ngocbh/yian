@@ -183,6 +183,7 @@ Python typing vocabulary. Scalars: `str`, `int`, `float`, `bool`, `date`,
 | bounded float | `float[0.0, 1.0]` | inclusive finite float endpoints |
 | alias | `Basket: list[str]` | aliases compose |
 | record | (see below) | fields recurse |
+| union | `Union[Buy, Sell]` | one of several records, told apart by a tag field or by shape |
 
 ```yaml
 typedefs:
@@ -202,6 +203,24 @@ not `int = "30"`, and quote date strings (`date = "2026-01-01"`). Only supplied
 boundary strings may be coerced. A compatible default keeps its authored payload,
 so `float = 30` remains an integer.
 
+A `Union[...]` lists records. Give every member a **tag field**: the same field name
+declared as a single-value `Literal`, with a different value in each member. Members
+with no tag load only when their shapes can't overlap.
+
+```yaml
+typedefs:
+  Buy:
+    action: Literal[buy]
+    qty: int
+  Sell:
+    action: Literal[sell]
+    price: float
+  Order: Union[Buy, Sell]
+```
+
+`Buy | Sell` and `Union[Buy, None]` are load errors with hints (`use Union[Buy, Sell]`,
+`use Optional[Union[...]]`). A bad union fails at its typedef even if nothing uses it.
+
 Bounds require two ordered numeric literals and exclude booleans. Integer bounds
 retain arbitrary precision. Float bounds must be finite; integer endpoints used
 in a float domain must convert without rounding. Bounds compose with other
@@ -219,17 +238,24 @@ strings stay literal, and each invocation gets a fresh copy of all defaults.
 Ownership follows the authored AGENT path plus name across repeated executions.
 A variable named `temperature` does not configure the model; use `llm_config:`.
 
-**Get a structured or numeric value out of an AGENT node.** Declare the typed shape directly
-as the node's `output:` — a `Literal[...]`, record, non-string scalar, or list switches
-the AGENT node to **structured generation** (the engine derives a schema and the model emits a
-conforming value, retried up to `retries:` times on deviation; see `typed_output.yaml`).
-Use a downstream `code` node only when you need deterministic post-processing of the
-value.
+**Get a structured or numeric value out of an AGENT node.** Declare the typed shape
+directly as the node's `output:` — a `Literal[...]`, record, union, non-string scalar, or
+list switches the AGENT node to **structured generation** (the engine derives a schema and
+the model emits a conforming value, retried up to `retries:` times on deviation; see
+`typed_output.yaml`). Use a downstream `code` node only when you need deterministic
+post-processing of the value.
 
 **Branch and rejoin.** A `case` runs exactly one branch; the others skip and their
 refs resolve to null. Always coalesce the branches back with `${a | b | c}` (see
 `branching.yaml`). Routing on a `Literal` is exhaustiveness-checked — cover every
 tag or add an `else:`.
+
+**Branch on a union.** Route with `on: ${d.output.action}` (the tag field). Each
+`when:` target, and nodes chained to it by plain refs or `depends_on`, reads its member's
+fields (`${d.output.qty}` under `when: buy`); `else:` sees the unlisted members. Outside a
+branch only fields every member has can be read. For an untagged union, use a searched
+`case` with `when: isinstance(d.output, Text)`. Return a member field from the flow by
+joining branch nodes (`${b.output | s.output}`); flow outputs are never narrowed.
 
 **Order without data flow.** When node B must run after A but consumes no value
 from it (a `wait`, a side-effecting tool), use `depends_on: [a]` (co-skips B if A
@@ -301,7 +327,7 @@ compares the optional exit field with `true` to prove `bool`. This is the shape
     x: ${input.x}
   ```
 - **An AGENT node's `output:` may be any shape** — only a bare, untagged `str` keeps it a text
-  producer; a `Literal[...]`/record/non-string scalar/list switches it to structured
+  producer; a `Literal[...]`/record/union/non-string scalar/list switches it to structured
   generation (schema-checked at the write boundary, `retries:`-capped self-correction).
 - **Prompt names are local.** Inside `prompt:` use names from the node's own
   `input:` block, written bare (`${name}`); AGENT prompts also see local `variables:`. Pool refs
@@ -338,6 +364,16 @@ compares the optional exit field with `true` to prove `bool`. This is the shape
   includes a `call` node: its POST asserts may read `${output}` **and** the call's
   declared inputs (`${name}`), like a leaf node. `map` nodes reject node-local
   `asserts:` at load time — assert a `map`'s result with a flow-level/downstream check.
+  A `call`/`loop` node's own asserts can't use `isinstance` (they run on the child's
+  `end`); assert inside the child flow.
+- **`isinstance(x, T)` takes a bare type name** — a `typedefs:` name or
+  `str`/`int`/`float`/`bool`/`date`/`datetime`/`object`. `list[...]`/`Optional[...]` need
+  an alias. It is not a prompt function: compute it in an input binding. WAIT `until:`
+  and MAP `over:` reject it.
+- **A member-only union field fails to load outside its branch.** `${d.output.qty}`
+  where only `Buy` has `qty` must sit under `when: buy` (or an `isinstance` case).
+  A `when:` value that isn't a tag of the union is a load error, and inline child
+  bodies are typed before narrowing.
 - **Flow-level `asserts:` read `input.X` (boundary, before any node) or `node.output`
   (post, after the terminal).** An exact unqualified input name is shorthand (`age`
   means `input.age`) and takes precedence over a same-named node; dotted input reads

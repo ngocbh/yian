@@ -95,12 +95,12 @@ def test_legacy_engine_names_no_longer_resolve():
     assert parse_type("topics") == ListExpr(ScalarExpr("str"))
 
 
-def test_parse_union_rejected():
+def test_union_of_scalars_rejected():
     from yian.typesys.values import TypeCheckError as _SE
 
     with pytest.raises(_SE) as ei:
-        parse_type("Union[int, str]")
-    assert "discriminated record" in str(ei.value) or "case" in str(ei.value)
+        type_for("Union[int, str]", {})
+    assert "Union[int, str]: member 'int' is not a record" in str(ei.value)
 
 
 def test_parse_malformed_raises():
@@ -245,7 +245,7 @@ def test_bounded_type_defaults_preserve_compatible_integer_payloads():
 
 
 def test_bounded_numeric_labels_include_nested_domains():
-    from yian.typesys.types import canonical_type_label
+    from yian.typesys.values import canonical_type_label
 
     assert canonical_type_label(type_for("int[ -2, +4 ]", {})) == "int[-2,4]"
     assert canonical_type_label(type_for("list[Optional[float[0.0, 1.5]]]", {})) == (

@@ -1223,7 +1223,9 @@ A log that marks no agent ignores it.
 
 Recovery locks the existing file before reading it, durably truncates any bytes
 after its final newline, validates the complete record prefix, and checks that the
-supplied flow has the recorded fingerprint. It reconstructs the typed pool,
+supplied flow has the recorded fingerprint. A log another writer still holds
+raises `BlockingIOError` naming the path; a damaged record raises `ValueError`
+naming the path, its 1-based line, and the expected seq. It reconstructs the typed pool,
 dynamic expansions, original input, run identity, diagnostics, and snapshotted LLM
 configuration without reading current process defaults. A run started before the
 AGENT `mode:` field was removed cannot be resumed: the AGENT manifest changed, so

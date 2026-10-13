@@ -1,8 +1,9 @@
 # chat — a turn-by-turn conversational REPL (agent without tools; deterministic transcript).
 #
-# The turn boundary is STRUCTURAL: HUMAN_INPUT feeds a CASE; exact exit text builds the
-# exit record, otherwise AGENT + a second CODE node build the normal transcript. The LLM
-# only fills the reply; output bindings rejoin the branches into the carried record.
+# The turn boundary is STRUCTURAL: HUMAN_INPUT feeds a typed CASE that returns the turn's
+# record. Exact exit text is a value branch: it keeps the transcript and sets `exited`.
+# Anything else calls `respond`, where the AGENT fills the reply and a CODE node folds it
+# into the transcript. The LLM only fills the reply.
 # Run it with:  yian chat examples/chat.yaml
 id: chat
 name: chat
@@ -11,7 +12,46 @@ description: A turn-by-turn conversational assistant (one model call per turn, n
 input:
   opening: str            # seed transcript; the CLI passes "" (empty)
 
+typedefs:
+  Turn:                   # the carried record, and each turn's result
+    transcript: str
+    exited: bool
+
 defs:
+  respond:                # a CASE result is the routed node's output, so the reply chain is a def
+    input:
+      transcript: str
+      message: str
+    nodes:
+      reply:
+        kind: agent
+        input:
+          transcript: ${input.transcript}
+          message:    ${input.message}
+        output: str
+        prompt: |-
+          You are a helpful conversational assistant.
+
+          Conversation so far:
+          ${transcript}
+
+          User: ${message}
+      fold:
+        kind: code
+        input:
+          transcript: ${input.transcript}
+          message: ${input.message}
+          reply: ${reply.output}
+        output: Turn
+        code: |
+          return {
+              "transcript": inputs["transcript"]
+              + "\n\nUser: " + inputs["message"]
+              + "\n\nAssistant: " + inputs["reply"],
+              "exited": False,
+          }
+    output: ${fold.output}
+
   turn:                   # body: 'a -> 'a over {transcript, exited}
     input:
       transcript: str
@@ -24,52 +64,18 @@ defs:
       route:
         kind: case
         on: ${ask.output}
+        output: Turn            # every branch produces a Turn
         cases:
           - when: /exit
-            then: exit_turn
+            then:               # a value branch: the exit record itself
+              transcript: ${input.transcript}
+              exited: true
           - when: /quit
-            then: exit_turn
-        else: reply
-      exit_turn:
-        kind: code
-        input:
-          transcript: ${input.transcript}
-        output:
-          transcript: str
-          exited: bool
-        code: |
-          return {"transcript": inputs["transcript"], "exited": True}
-      reply:
-        kind: agent
-        input:
-          transcript: ${input.transcript}
-          message:    ${ask.output}
-        output: str
-        prompt: |-
-          You are a helpful conversational assistant.
-
-          Conversation so far:
-          ${transcript}
-
-          User: ${message}
-      normal_turn:
-        kind: code
-        input:
-          transcript: ${input.transcript}
-          message: ${ask.output}
-          reply: ${reply.output}
-        output: str
-        code: |
-          return (
-              inputs["transcript"]
-              + "\n\nUser: " + inputs["message"]
-              + "\n\nAssistant: " + inputs["reply"]
-          )
-    # Adjacent defaulted spans concatenate as str. Comparing the optional exit
-    # record field with true always yields the carried bool, including on a miss.
-    output:
-      transcript: '${exit_turn.output.transcript:-""}${normal_turn.output:-""}'
-      exited: ${exit_turn.output.exited == true}
+            then:
+              transcript: ${input.transcript}
+              exited: true
+        else: call(respond, transcript=${input.transcript}, message=${ask.output})
+    output: ${route.output}
 
 nodes:
   chat:
@@ -77,6 +83,6 @@ nodes:
     call: turn
     input:
       transcript: ${input.opening}
-      exited: false                 # CASE sets true for exact /exit or /quit input
+      exited: false                 # the CASE's exit branch sets true for exact /exit or /quit
     while: "not ${exited}"          # a carried-field predicate (verified to parse)
 output: ${chat.output.transcript}

@@ -1,12 +1,12 @@
 # Conversational REPL — the same turn-by-turn LOOP shape used by `yian chat`.
-# The turn boundary is STRUCTURAL: HUMAN_INPUT feeds a CASE; exact exit text builds the
-# exit record, otherwise an AGENT node + a second CODE node build the normal transcript. The LLM
-# only fills the reply; output bindings rejoin the branches into the carried record.
+# The turn boundary is STRUCTURAL: HUMAN_INPUT feeds a typed CASE that returns the turn's
+# record. Exact exit text is a value branch: it keeps the transcript and sets `exited`.
+# Anything else calls `respond`, where an AGENT node fills the reply and a CODE node folds
+# it into the transcript. The LLM only fills the reply.
 #
 # Carried record ('a): {transcript: str, exited: bool} — threaded turn to turn ('a -> 'a).
-# The body returns carried fields only; an omitted one keeps its value. A raw
-# multi-ref coalesce has no inferable type, so adjacent defaulted spans preserve `str`;
-# comparing the optional exit field with `true` proves `bool` below.
+# A CASE with `output:` must be exhaustive (`else:` here) and every branch, value or
+# routed, must produce that type; `${route.output}` reads whichever branch ran.
 
 id: chat
 name: chat
@@ -15,7 +15,46 @@ description: A turn-by-turn assistant (AGENT node without tools, deterministic t
 input:
   opening: str            # seed transcript; `yian chat` passes "" (empty)
 
+typedefs:
+  Turn:                   # the carried record, and each turn's result
+    transcript: str
+    exited: bool
+
 defs:
+  respond:                # a CASE result is the routed node's output, so the reply chain is a def
+    input:
+      transcript: str
+      message: str
+    nodes:
+      reply:
+        kind: agent
+        input:
+          transcript: ${input.transcript}
+          message:    ${input.message}
+        output: str
+        prompt: |-
+          You are a helpful conversational assistant.
+
+          Conversation so far:
+          ${transcript}
+
+          User: ${message}
+      fold:
+        kind: code
+        input:
+          transcript: ${input.transcript}
+          message: ${input.message}
+          reply: ${reply.output}
+        output: Turn
+        code: |
+          return {
+              "transcript": inputs["transcript"]
+              + "\n\nUser: " + inputs["message"]
+              + "\n\nAssistant: " + inputs["reply"],
+              "exited": False,
+          }
+    output: ${fold.output}
+
   turn:                   # body: 'a -> 'a over {transcript, exited}
     input:
       transcript: str
@@ -28,50 +67,20 @@ defs:
       route:
         kind: case
         on: ${ask.output}
+        output: Turn            # every branch produces a Turn
         cases:
           - when: /exit
-            then: exit_turn
+            then:               # a value branch: the exit record itself
+              transcript: ${input.transcript}
+              exited: true
           - when: /quit
-            then: exit_turn
-        else: reply
-      exit_turn:
-        kind: code
-        input:
-          transcript: ${input.transcript}
-        output:
-          transcript: str
-          exited: bool
-        code: |
-          return {"transcript": inputs["transcript"], "exited": True}
-      reply:
-        kind: agent
-        input:
-          transcript: ${input.transcript}
-          message:    ${ask.output}
-        output: str
-        prompt: |-
-          You are a helpful conversational assistant.
-
-          Conversation so far:
-          ${transcript}
-
-          User: ${message}
-      normal_turn:
-        kind: code
-        input:
-          transcript: ${input.transcript}
-          message: ${ask.output}
-          reply: ${reply.output}
-        output: str
-        code: |
-          return (
-              inputs["transcript"]
-              + "\n\nUser: " + inputs["message"]
-              + "\n\nAssistant: " + inputs["reply"]
-          )
-    output:                         # both carried fields; a body may also return just one
-      transcript: '${exit_turn.output.transcript:-""}${normal_turn.output:-""}'
-      exited: ${exit_turn.output.exited == true}  # comparison is always bool
+            then:
+              transcript: ${input.transcript}
+              exited: true
+        else: call(respond, transcript=${input.transcript}, message=${ask.output})
+    # The whole carried record; a body may instead return a mapping of carried fields,
+    # and an omitted field keeps its value.
+    output: ${route.output}
 
 nodes:
   chat:
@@ -79,6 +88,6 @@ nodes:
     call: turn
     input:                          # the SEED carried record — defines 'a
       transcript: ${input.opening}
-      exited: false                 # CASE sets true for exact /exit or /quit input
+      exited: false                 # the CASE's exit branch sets true for exact /exit or /quit
     while: "not ${exited}"          # pre-check over a carried field
 output: ${chat.output.transcript}

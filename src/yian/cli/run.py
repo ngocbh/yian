@@ -71,6 +71,7 @@ from yian.run import (
 )
 from yian.events import NodeFailed
 from yian.nodes.base import _HostStop
+from yian.nodes.binding import check_input_names
 from yian.nodes.contracts import Parameter
 from yian.tools import registered_tools
 from yian.typesys import (
@@ -1544,6 +1545,11 @@ def run(
             supplied.update(_read_inputs_json(inputs))
         if input:
             supplied.update(_parse_kv(input))
+        # Before prompting, so a typo'd name fails instead of prompting for the real one.
+        try:
+            check_input_names(loaded.input, supplied)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc), param_hint="'--input' / '--inputs'") from exc
 
         prompted = _gather_missing_inputs(
             loaded.input,

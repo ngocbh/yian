@@ -116,7 +116,10 @@ run_flow(
 
 Coerces supplied `inputs` against the flow's declared types, snapshots the
 complete LLM configuration, initializes the run log, and drives the flow to a
-terminal. Stored defaults are not coerced.
+terminal. Stored defaults are not coerced. Every `inputs` key must name a
+declared input; an unknown name raises `ValueError` listing the declared inputs,
+and `inputs` that is not a mapping raises `TypeError`, both before the log is
+created.
 
 - `log` — an optional JSONL path. `None` still uses the same record/reducer path
   with a process-local log. A path creates a new durable log exclusively; an

@@ -21,6 +21,7 @@ coercion; both sit below/beside `nodes` in the layer ladder.
 from __future__ import annotations
 
 import copy
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Callable, Literal, TypeAlias
 
@@ -227,16 +228,41 @@ def coerce_param(parameter: Parameter, value: Any) -> Any:
     return value
 
 
+def check_input_names(params: list[Parameter], raw: Mapping[str, Any]) -> None:
+    """Reject top-level inputs that are not a mapping or name an undeclared input.
+
+    Raises:
+        `TypeError`: ``raw`` is not a mapping.
+        `ValueError`: A key names no declared input; the message lists the
+            declared names.
+    """
+    if not isinstance(raw, Mapping):
+        raise TypeError(
+            f"inputs must be a mapping of input names to values, got {type(raw).__name__}"
+        )
+    declared = [parameter.name for parameter in params]
+    unknown = sorted(repr(name) for name in raw if name not in declared)
+    if unknown:
+        noun = "input" if len(unknown) == 1 else "inputs"
+        raise ValueError(
+            f"unknown {noun} {', '.join(unknown)}; "
+            f"declared inputs: {', '.join(declared) or '(none)'}"
+        )
+
+
 def coerce_inputs(
-    params: list[Parameter], raw: dict[str, Any]
+    params: list[Parameter], raw: Mapping[str, Any]
 ) -> dict[str, Any]:
-    """Coerce supplied top-level values while retaining undeclared keys unchanged."""
+    """Coerce supplied top-level values, each keyed by a declared input name.
+
+    Raises:
+        `TypeError`: ``raw`` is not a mapping.
+        `ValueError`: A key names no declared input.
+    """
     _validate_parameters(params)
+    check_input_names(params, raw)
     by_name = {parameter.name: parameter for parameter in params}
-    return {
-        name: coerce_param(by_name[name], value) if name in by_name else value
-        for name, value in raw.items()
-    }
+    return {name: coerce_param(by_name[name], value) for name, value in raw.items()}
 
 
 def apply_defaults(

@@ -231,6 +231,20 @@ def test_structured_validation_path_strips_only_generated_wrappers():
     assert _structured_validation_path(list_error, listed) == (1, "age")
 
 
+@pytest.mark.parametrize("native", [True, False])
+def test_structured_validation_path_strips_nullable_record_wrapper(native):
+    """A nullable record root is wrapped like a scalar, so its wrapper is stripped too."""
+    typ = Type(
+        kind=ValueKind.OBJECT,
+        fields={"name": Type.scalar(ValueKind.STRING), "age": Type.scalar(ValueKind.INTEGER)},
+        required=frozenset({"name", "age"}),
+        nullable=True,
+    )
+    error = _validation_error(typ, {"value": {"name": "a", "age": "bad"}}, native=native)
+
+    assert _structured_validation_path(error, typ) == ("age",)
+
+
 def test_structured_validation_path_accepts_generated_constructor_frame():
     """LangChain's Pydantic constructor route proves the same exact schema."""
     typ = Type.scalar(ValueKind.INTEGER)

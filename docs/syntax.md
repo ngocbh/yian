@@ -622,7 +622,10 @@ scalar, or list switches the node to **structured generation**: the engine deriv
 schema from the declared `output:` and asks the model to emit a conforming value
 (via the provider's native structured output, or a JSON prompt-injection fallback
 for providers that lack it). A root `Literal[...]` is constrained internally as a
-single `value` field and returned to the flow as the bare tag. The result is
+single `value` field and returned to the flow as the bare tag. `Optional[X]` allows
+null in the schema wherever it appears: at the root, as a list element, or as a
+record field. A root `Optional[str]` stays a text producer, so it never returns
+null. The result is
 validated while its canonical success record is prepared, like every other node
 output.
 

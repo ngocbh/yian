@@ -68,6 +68,25 @@ def test_fallback_tolerates_bare_code_fence():
     assert calls["n"] == 1
 
 
+def test_fallback_accepts_null_for_a_nullable_root():
+    typ = Type(kind=ValueKind.INTEGER, nullable=True)
+    calls = {"n": 0}
+
+    class _Null:
+        def invoke(self, msgs):
+            calls["n"] += 1
+            assert '"null"' in msgs[-1].content  # the schema shown to the model allows null
+
+            class R:
+                content = '{"value": null}'
+
+            return R()
+
+    cfg = {"provider": "vllm", "model": "no-structured-sentinel"}
+    assert generate_structured(_Null(), [], typ, llm_config=cfg) is None
+    assert calls["n"] == 1
+
+
 def test_fallback_retries_on_unparseable_then_succeeds():
     typ = Type.scalar(ValueKind.INTEGER)
     calls = {"n": 0}

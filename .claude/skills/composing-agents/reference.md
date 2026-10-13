@@ -269,8 +269,10 @@ A variable named `temperature` does not configure the model; use `llm_config:`.
 directly as the node's `output:` — a `Literal[...]`, record, union, non-string scalar, or
 list switches the AGENT node to **structured generation** (the engine derives a schema and
 the model emits a conforming value, retried up to `retries:` times on deviation; see
-`typed_output.yaml`). Use a downstream `code` node only when you need deterministic
-post-processing of the value.
+`typed_output.yaml`). `Optional[X]` lets the model answer null at the root, in a list
+element, or in a record field; a root `Optional[str]` stays plain text and never returns
+null. Use a downstream `code` node only when you need deterministic post-processing of the
+value.
 
 **Branch and rejoin.** A `case` takes one branch; the other targets skip, and so do
 nodes that plainly read them. Read the taken branch's result with `${route.output}`

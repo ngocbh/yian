@@ -73,6 +73,38 @@ engine or flow change.
 - Put new external dependencies behind small injected callables. The AGENT node's
   direct model access is the existing exception.
 
+## Language principles
+
+Judge every change to the flow language against these. A change that breaks one
+needs a reason recorded in its issue.
+
+1. **One defined meaning.** A flow does exactly what the docs say, or fails with a
+   clear error. Nothing is undefined or silently different.
+2. **Catch errors early.** Load time before runtime, runtime before a wrong result.
+3. **Fail loudly.** A failure never looks like success: no silent null, no silent skip.
+4. **Few concepts that compose.** Before adding a feature, remove the restriction
+   that makes it seem necessary.
+5. **Orthogonal.** A feature works in every position where it makes sense, without
+   special cases.
+6. **Regular.** The same syntax means the same thing everywhere, and different
+   things look different.
+7. **Unambiguous.** Neither a reader nor the loader has to guess. Quoted text is text.
+8. **Explicit over implicit.** An implicit rule is allowed only when it is easy to
+   predict and visible, for example in a type.
+9. **Predictable cost.** An author can tell what a flow costs (live state, growth,
+   calls) without reading the engine.
+10. **Local reasoning.** A node, body, or flow can be understood from its own text
+    and the interfaces it declares.
+11. **Grow through user-written pieces.** Flows, host tools, and imports, not a new
+    keyword for each need.
+12. **Stable once relied on.** A breaking change comes with a migration path and an
+    error that says what to change.
+13. **Errors teach.** A load error names the location and, where possible, the fix.
+14. **Plain YAML.** A flow file is ordinary YAML (YAML 1.1, as PyYAML reads it) that
+    reads naturally to anyone who knows YAML. yian adds meaning inside strings (`${...}`,
+    conditions) and through YAML's own tags; it never changes YAML's syntax or makes a
+    value mean something YAML says it doesn't.
+
 ## Docs change with code
 
 Update the matching docs and project skill in the same pull request as a surface

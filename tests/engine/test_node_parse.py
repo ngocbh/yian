@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from yian.compose import LoadError
+from yian.compose import LoadError, load_flow
 from yian.compose.parse.file import (
     AgentDescriptor,
     CallDescriptor,
@@ -112,6 +112,157 @@ def test_reserved_plural_head_rejected(reserved):
   output: str
 """
         )
+
+
+# ---------- node ids must be identifiers ----------
+
+
+@pytest.mark.parametrize(
+    ("node_id", "suggestion"),
+    [("fetch-data", "fetch_data"), ("'2x'", "_2x"), ("'a b'", "a_b"), ("café", "caf_")],
+)
+def test_non_identifier_node_id_rejected(node_id, suggestion):
+    """A node id `${...}` can't reference is rejected where the node is defined."""
+    with pytest.raises(LoadError, match=r"must be an identifier") as exc:
+        _nodes(
+            f"""
+{node_id}:
+  kind: agent
+  prompt: hi
+  output: str
+"""
+        )
+    assert f"try {suggestion!r}" in str(exc.value)
+    assert exc.value.diagnostic.frames[-1].range.start_line == 3
+
+
+def test_empty_node_id_rejected_without_reference_hint():
+    with pytest.raises(LoadError, match=r"node id '' must be an identifier") as exc:
+        _nodes(
+            """
+'':
+  kind: agent
+  prompt: hi
+  output: str
+"""
+        )
+    assert "${" not in str(exc.value)
+    assert "; try" not in str(exc.value)
+
+
+@pytest.mark.parametrize("keyword", ["and", "or", "not", "in", "'true'", "'false'", "'null'", "none"])
+def test_expression_keyword_node_id_rejected(keyword):
+    """An identifier that is an expression keyword can't be a reference root."""
+    name = keyword.strip("'")
+    with pytest.raises(LoadError, match=rf"node id {name!r} is an expression keyword"):
+        _nodes(
+            f"""
+{keyword}:
+  kind: agent
+  prompt: hi
+  output: str
+"""
+        )
+
+
+def test_identifier_node_ids_accepted():
+    descs = _nodes(
+        """
+fetch_data:
+  kind: agent
+  prompt: hi
+  output: str
+_private2:
+  kind: agent
+  prompt: hi
+  output: str
+notify:
+  kind: agent
+  prompt: hi
+  output: str
+"""
+    )
+    assert list(descs) == ["fetch_data", "_private2", "notify"]
+
+
+def test_referenced_hyphenated_node_names_the_id_not_split_refs():
+    flow = """
+id: f
+name: f
+input: {}
+nodes:
+  fetch-data:
+    kind: code
+    code: "return 1"
+output: ${fetch-data.output}
+"""
+    with pytest.raises(
+        LoadError, match=r"node id 'fetch-data' must be an identifier.*try 'fetch_data'"
+    ) as exc:
+        load_flow(flow)
+    assert "unknown namespace" not in str(exc.value)
+
+
+@pytest.mark.parametrize("kind", ["call", "map"])
+def test_hyphenated_node_in_inline_body_rejected(kind):
+    over = "    over: [1, 2]\n" if kind == "map" else ""
+    flow = f"""
+id: f
+name: f
+input: {{}}
+nodes:
+  outer:
+    kind: {kind}
+{over}    input: {{}}
+    nodes:
+      inner-step:
+        kind: code
+        code: "return 1"
+    output: ${{inner-step.output}}
+output: ${{outer.output}}
+"""
+    with pytest.raises(LoadError, match=r"node id 'inner-step' must be an identifier"):
+        load_flow(flow)
+
+
+def test_hyphenated_single_node_def_rejected_but_multi_node_def_name_loads():
+    single = """
+id: f
+name: f
+input: {}
+defs:
+  my-def:
+    kind: code
+    code: "return 1"
+    output: int
+nodes:
+  a:
+    kind: call
+    call: my-def
+output: ${a.output}
+"""
+    with pytest.raises(LoadError, match=r"node id 'my-def' must be an identifier.*try 'my_def'"):
+        load_flow(single)
+
+    multi = """
+id: f
+name: f
+input: {}
+defs:
+  my-def:
+    input: {}
+    nodes:
+      b:
+        kind: code
+        code: "return 1"
+    output: ${b.output}
+nodes:
+  a:
+    kind: call
+    call: my-def
+output: ${a.output}
+"""
+    load_flow(multi)
 
 
 # ---------- agent / code ----------

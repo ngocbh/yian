@@ -243,7 +243,7 @@ output: ${top.output}
 @pytest.mark.parametrize(
     "source",
     [
-        """id: compact-code
+        """id: compact_code
 name: compact_code
 long_term_memory: reflective
 output: str

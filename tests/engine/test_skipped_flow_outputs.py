@@ -39,14 +39,15 @@ def _gate(then: str, else_: str | None = None, name: str = "gate", when: str = "
 
 # then: order / else: rejected
 _R1 = _gate("order", "rejected") + _code("order", '"filled"') + _code("rejected", '"no"')
-# two `when:` cases and no `else:`: neither matches when `approve` is false
+# two `when:` cases and no `else:`: neither matches when `approve` and `other` are false
 _R2 = (
     "  gate:\n    kind: case\n    cases:\n"
     "      - when: ${input.approve}\n        then: a\n"
-    "      - when: ${input.approve == false and false}\n        then: b\n"
+    "      - when: ${input.other}\n        then: b\n"
     + _code("a", '"A"')
     + _code("b", '"B"')
 )
+_R2_INPUTS = "approve: bool\n  other: bool"
 
 
 def _run(text: str, inputs: dict, **kw):
@@ -71,10 +72,11 @@ def test_record_output_of_a_skipped_branch_is_null():
 
 def test_coalesce_over_a_routing_only_case_is_null():
     """A `|` over targets of a CASE that may match nothing gives null."""
-    text = _flow(_R2, "\n  v: ${a.output | b.output}")
+    text = _flow(_R2, "\n  v: ${a.output | b.output}", inputs=_R2_INPUTS)
     assert _sources(text) == ["${(a.output | b.output) :- null}"]
-    assert _run(text, {"approve": False}) == {"v": None}
-    assert _run(text, {"approve": True}) == {"v": "A"}
+    assert _run(text, {"approve": False, "other": False}) == {"v": None}
+    assert _run(text, {"approve": True, "other": False}) == {"v": "A"}
+    assert _run(text, {"approve": False, "other": True}) == {"v": "B"}
 
 
 def test_nested_case_target_is_null_when_either_case_skips_it():
@@ -114,10 +116,10 @@ def test_dotted_output_is_null():
 
 def test_ref_default_group_over_a_routing_only_case_is_null():
     """`${a.output :- ${b.output}}` over a CASE that may match nothing returns null."""
-    text = _flow(_R2, "\n  v: ${a.output :- ${b.output}}")
+    text = _flow(_R2, "\n  v: ${a.output :- ${b.output}}", inputs=_R2_INPUTS)
     assert _sources(text) == ["${(a.output :- ${b.output}) :- null}"]
-    assert _run(text, {"approve": False}) == {"v": None}
-    assert _run(text, {"approve": True}) == {"v": "A"}
+    assert _run(text, {"approve": False, "other": False}) == {"v": None}
+    assert _run(text, {"approve": True, "other": False}) == {"v": "A"}
 
 
 def test_depends_on_a_skipped_target_is_null():
@@ -305,10 +307,12 @@ def test_on_over_a_nullable_literal_may_match_nothing(tag, expected):
     assert _run(text, {"approve": True}) == {"v": expected}
 
 
-def _child_defs(nodes: str, output: str, name: str = "child") -> str:
-    """Return a `defs:` block with one child taking `approve: bool` over `nodes`."""
+def _child_defs(
+    nodes: str, output: str, name: str = "child", inputs: str = "approve: bool"
+) -> str:
+    """Return a `defs:` block with one child taking `inputs` (one per line) over `nodes`."""
     return (
-        f"defs:\n  {name}:\n    input:\n      approve: bool\n    nodes:\n"
+        f"defs:\n  {name}:\n    input:\n{textwrap.indent(inputs, '      ')}\n    nodes:\n"
         f"{textwrap.indent(nodes, '    ')}    output:{textwrap.indent(output, '    ')}\n"
     )
 
@@ -316,9 +320,15 @@ def _child_defs(nodes: str, output: str, name: str = "child") -> str:
 _CALL_C1 = "  c1:\n    kind: call\n    call: child\n    input:\n      approve: ${input.approve}\n"
 
 
-def _call_field_type(nodes: str, output: str, field: str):
-    """Return the type of `field` in the output contract of a CALL to a child flow."""
-    text = _flow(_CALL_C1, " ${c1.output}", defs=_child_defs(nodes, output))
+def _call_field_type(nodes: str, output: str, field: str, *, other: bool = False):
+    """Return the type of `field` in the output contract of a CALL to a child flow.
+
+    With `other`, the child also takes `other: bool` and the CALL passes `false`.
+    """
+    call, inputs = _CALL_C1, "approve: bool"
+    if other:
+        call, inputs = call + "      other: false\n", inputs + "\nother: bool"
+    text = _flow(call, " ${c1.output}", defs=_child_defs(nodes, output, inputs=inputs))
     contract = load_flow(text).compiled.nodes["c1"].output_contract
     return contract.type.fields[field]
 
@@ -332,7 +342,7 @@ def test_call_output_of_a_skipped_branch_is_optional():
 
 def test_call_output_of_a_coalesce_over_a_routing_only_case_is_optional():
     """A coalesce of `str` targets of a CASE that may match nothing is `Optional[str]`."""
-    field = _call_field_type(_R2, "\n  v: ${a.output | b.output}", "v")
+    field = _call_field_type(_R2, "\n  v: ${a.output | b.output}", "v", other=True)
     assert field.kind is ValueKind.STRING
     assert field.nullable
 

@@ -26,10 +26,10 @@ nodes:
 output: ${n.output}
 """
 
-# A terminal output whose only producer may be skipped. The loader gives it the null default
-# (`${kept.output:-null}`), so END_ID's group is optional and the run returns null. `gate`
-# routes to `cold`; `kept` is skip-flooded.
-_COALESCE_REQUIRED = """
+# A terminal output whose only producer, `kept`, is a CASE target that may be skipped. The
+# loader rewrites the output to the null default `${kept.output:-null}`, so END_ID's group is
+# optional: when `gate` routes to `cold`, `kept` is skipped and the run returns null.
+_SKIPPED_TERMINAL = """
 id: e7
 name: e7
 input:
@@ -96,7 +96,7 @@ def test_terminal_helpers_retired():
 def test_terminal_output_of_a_skipped_producer_is_null():
     # END_ID's group for an output the loader null-defaults is optional, so a skipped producer
     # commits null. A required group that dies still fails the run (test_engine.py covers it).
-    loaded = load_flow(_COALESCE_REQUIRED)
+    loaded = load_flow(_SKIPPED_TERMINAL)
     assert loaded.compiled.outputs[0].from_ == "${kept.output:-null}"
     res = run_flow(loaded, _E7_INPUTS)
     assert res.status == "succeeded", res.failure

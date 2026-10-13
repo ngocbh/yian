@@ -287,9 +287,11 @@ class FlowEngine:
                 observers = self._commit_outcome(message.node_id, outcome)
                 if isinstance(self.state.result, RunFailed):
                     self.stop_event.set()
+                    # Publish the durable failure before the join: a sibling may block on
+                    # a human answer, and the host needs the failure to withdraw it.
+                    yield from self._publish(observers)
                     self._shutdown_and_discard(executor, messages)
                     shut_down = True
-                    yield from self._publish(observers)
                     return
                 yield from self._publish(observers)
         except BaseException as exc:

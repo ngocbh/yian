@@ -324,7 +324,9 @@ each start before submission; workers only evaluate and return raw results or tr
 stream chunks. The dispatcher alone prepares, appends, and applies outcomes, so only the
 number of nodes in flight differs. A pooled drive owns its workers through a full join:
 abnormal dispatch exit first signals cooperative stop, then joins every submitted worker
-before the run boundary releases the log.
+before the run boundary releases the log. When a node outcome fails the run, the
+dispatcher signals stop and publishes that durable `NodeFailed` and `RunFailed` before
+the join, so a host learns of the failure while siblings are still blocked.
 Each pooled node runs in a separate copy of the host's context variables, so
 host effects retain their cancellation context and node-local context changes
 do not leak into the dispatcher or later worker calls.

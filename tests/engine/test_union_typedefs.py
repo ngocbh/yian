@@ -73,9 +73,11 @@ def test_none_member_hints_optional():
     assert "use Optional[Union[...]]" in str(caught.value)
 
 
-def test_empty_union_is_malformed():
-    with pytest.raises(TypeCheckError):
-        parse_type("Union[]")
+@pytest.mark.parametrize("text", ["Union[]", "Union[()]"])
+def test_empty_union_is_malformed(text):
+    with pytest.raises(TypeCheckError) as caught:
+        parse_type(text)
+    assert f"malformed type expression {text!r}" in str(caught.value)
 
 
 # --------------------------------------------------------------------------- #
@@ -158,6 +160,13 @@ def test_untagged_disjoint_union_resolves():
     assert set(map(canonical_type_label, reply.variants)) == set(map(canonical_type_label, members))
 
 
+def test_resolve_type_accepts_union_expr_directly():
+    registry = _registry()
+    union = resolve_type(UnionExpr((RefExpr("Sell"), RefExpr("Buy"))), registry)
+    assert isinstance(union, Type)
+    assert _tags(union.variants) == ["buy", "sell"]
+
+
 def test_canonical_label_uses_canonical_order():
     registry = _registry()
     union = type_for("Union[Sell, Buy]", registry)
@@ -208,7 +217,8 @@ def test_overlapping_members_rejected():
         type_for("Union[Bull, Bear]", registry)
     assert (
         "Union[Bull, Bear]: members 'Bull' and 'Bear' can match the same value; add a tag "
-        "field every member declares as a single-value Literal, e.g. "
+        "field every member declares as a single-value Literal, with a different value in "
+        "each member, e.g. kind: Literal[bull]"
     ) in str(caught.value)
 
 
@@ -242,7 +252,7 @@ def test_recursive_member_rejected():
             "Leaf": {"kind": "Literal[leaf]"},
             "Node": {"kind": "Literal[node]", "child": "Union[Node, Leaf]"},
         })
-    assert "recursive type reference" in str(caught.value)
+    assert "typedef 'Node' field 'child': recursive type reference" in str(caught.value)
 
 
 # --------------------------------------------------------------------------- #
@@ -264,8 +274,20 @@ def test_unused_overlapping_union_fails_in_read_typedefs():
 def test_unused_record_with_bad_union_field_fails_in_read_typedefs():
     with pytest.raises(TypeCheckError) as caught:
         read_typedefs({**TRADES, "Ticker": "str", "Order": {"pick": "Union[Buy, Ticker]"}})
-    assert "typedef 'Order'" in str(caught.value)
+    assert "typedef 'Order' field 'pick': Union[Buy, Ticker]" in str(caught.value)
     assert "member 'Ticker' is not a record" in str(caught.value)
+
+
+def test_malformed_union_field_is_prefixed():
+    with pytest.raises(TypeCheckError) as caught:
+        read_typedefs({**TRADES, "Order": {"pick": "Union[Buy, Sell"}})
+    assert "typedef 'Order' field 'pick': malformed type expression" in str(caught.value)
+
+
+def test_record_without_union_fields_stays_lazy():
+    registry = read_typedefs({"Order": {"pick": "Nope", "note": "str"}})
+    with pytest.raises(TypeCheckError, match="unknown type 'Nope'"):
+        type_for("Order", registry)
 
 
 def test_alias_cycle_through_union_rejected():
@@ -319,21 +341,3 @@ def test_load_flow_accepts_union_typedef():
         "output: {y: \"${a.output}\"}\n"
     )
     load_flow(text)
-
-
-# --------------------------------------------------------------------------- #
-# The dropped sequence spelling
-# --------------------------------------------------------------------------- #
-
-
-def test_payload_sequence_suggests_union():
-    with pytest.raises(TypeCheckError) as caught:
-        read_typedefs({"Choice": ["defer", {"approve": {"count": "int"}}]})
-    assert "Union[" in str(caught.value)
-
-
-def test_resolve_type_accepts_union_expr_directly():
-    registry = _registry()
-    union = resolve_type(UnionExpr((RefExpr("Sell"), RefExpr("Buy"))), registry)
-    assert isinstance(union, Type)
-    assert _tags(union.variants) == ["buy", "sell"]

@@ -5,13 +5,13 @@ from __future__ import annotations
 import copy
 import json
 import re
-import time
 from dataclasses import dataclass, replace
 
 import pytest
 from pydantic import BaseModel, ConfigDict
 
 import yian.compile.manifest as manifest_module
+import yian.typesys.values as values_module
 from yian.compile.manifest import expansion_digest, flow_fingerprint, flow_manifest
 from yian.compile.memory_layout import apply_memory_layout, resolve_memory_layout
 from yian.compile.model import START_ID, CompiledFlow, Edge, Flow, FlowOutput
@@ -2642,21 +2642,32 @@ def test_union_manifest_orders_members_canonically():
     assert expansion_digest(first) == expansion_digest(second)
 
 
-def test_deep_untagged_union_manifests_quickly():
+def test_deep_untagged_union_manifests_quickly(monkeypatch):
     def record(**fields: Type) -> Type:
         return Type(kind=ValueKind.OBJECT, fields=fields, required=frozenset(fields))
 
+    depth = 30
     typ = _union(
         record(a=Type.scalar(ValueKind.STRING)), record(b=Type.scalar(ValueKind.INTEGER))
     )
-    for level in range(30):
+    for level in range(depth):
         typ = _union(record(inner=typ), record(**{f"leaf{level}": Type.scalar(ValueKind.INTEGER)}))
     fragment = _fragment()
     fragment.nodes["body"].output_contract = ValueContract(typ)
 
-    started = time.perf_counter()
+    calls = [0]
+    render = values_module._canonical_nonnullable_label
+
+    def counted(typ: Type) -> str:
+        calls[0] += 1
+        return render(typ)
+
+    monkeypatch.setattr(values_module, "_canonical_nonnullable_label", counted)
     flow_fingerprint(fragment)
-    assert time.perf_counter() - started < 2.0
+    # Ordering each level's members labels that level's subtree, so the work is
+    # quadratic in depth; the bound rules out the exponential relabelling of nested
+    # members.
+    assert depth < calls[0] <= 3 * (depth + 2) ** 2
 
 
 @pytest.mark.parametrize(

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-import time
 from dataclasses import replace
 
 import pytest
+
+import yian.typesys.values as values_module
 
 from yian.typesys import (
     FieldAbsent,
@@ -327,14 +328,31 @@ def _deep_untagged_union(depth: int) -> Type:
     return typ
 
 
-def test_deep_untagged_union_labels_and_checks_in_linear_work():
-    typ = _deep_untagged_union(30)
-    started = time.perf_counter()
+def _count_label_nodes(monkeypatch) -> list[int]:
+    """Count the type nodes labelled, one call per node rendered."""
+    calls = [0]
+    render = values_module._canonical_nonnullable_label
+
+    def counted(typ):
+        calls[0] += 1
+        return render(typ)
+
+    monkeypatch.setattr(values_module, "_canonical_nonnullable_label", counted)
+    return calls
+
+
+def test_deep_untagged_union_labels_and_checks_in_linear_work(monkeypatch):
+    depth = 30
+    typ = _deep_untagged_union(depth)
+    calls = _count_label_nodes(monkeypatch)
     label = canonical_type_label(typ)
+    assert label.count("Union[") == depth + 1
+    # Each level adds a union, two records and a leaf: a constant number of nodes.
+    assert depth < calls[0] <= 6 * (depth + 1)
+    calls[0] = 0
     with pytest.raises(TypeCheckError, match="^value matches no member of "):
         build_value_as(typ, {"inner": 3})
-    assert time.perf_counter() - started < 2.0
-    assert label.count("Union[") == 31
+    assert depth < calls[0] <= 12 * (depth + 1)
 
 
 def test_list_of_union():

@@ -368,8 +368,8 @@ def _overlap_error(label: str, a_name: str, b_name: str) -> TypeCheckError:
     """Build the error for two union members that can match the same value."""
     return TypeCheckError(
         f"{label}: members {a_name!r} and {b_name!r} can match the same value; add a tag "
-        f"field every member declares as a single-value Literal, e.g. "
-        f"kind: Literal[{a_name.lower()}]"
+        f"field every member declares as a single-value Literal, with a different value "
+        f"in each member, e.g. kind: Literal[{a_name.lower()}]"
     )
 
 
@@ -464,21 +464,27 @@ def _has_union(t: TypeExpr) -> bool:
 
 
 def _check_unions(registry: TypeRegistry) -> None:
-    """Resolve every typedef that writes a `Union[...]`, so a bad union fails even unused."""
+    """Resolve every typedef `Union[...]`, so a bad union fails even when nothing uses it."""
+    # Typedefs otherwise resolve lazily, where they are used. A union's member checks
+    # (records, tag or no overlap) belong to its definition, so they run here; other
+    # typedefs stay lazy so this does not change when their errors appear.
     for name, defn in registry.items():
         if isinstance(defn, AliasDef):
-            bearing = _has_union(defn.target)
+            if _has_union(defn.target):
+                try:
+                    resolve_type(RefExpr(name), registry)
+                except TypeCheckError as exc:
+                    raise TypeCheckError(f"typedef {name!r}: {exc}") from exc
         elif isinstance(defn, RecordDef):
-            bearing = any(
-                "Union" in ts and _has_union(parse_type(ts)) for ts in defn.fields.values()
-            )
-        else:
-            bearing = False
-        if bearing:
-            try:
-                resolve_type(RefExpr(name), registry)
-            except TypeCheckError as exc:
-                raise TypeCheckError(f"typedef {name!r}: {exc}") from exc
+            for field, ts in defn.fields.items():
+                if "Union" not in ts:
+                    continue
+                try:
+                    parsed = parse_type(ts)
+                    if _has_union(parsed):
+                        resolve_type(parsed, registry, frozenset({name}))
+                except TypeCheckError as exc:
+                    raise TypeCheckError(f"typedef {name!r} field {field!r}: {exc}") from exc
 
 
 def _check_alias_cycles(registry: TypeRegistry) -> None:

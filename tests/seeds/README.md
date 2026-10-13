@@ -125,9 +125,7 @@ typedefs:
   Bundle: list[Topic]                 #   aliases compose -> list[str]
   Amount: float
   Category: Literal[pro, con, mixed]  # enum
-  Choice: Union[Defer, Approve, Reject] # union of records, told apart by the `decision` tag
-  Defer:
-    decision: Literal[defer]
+  Choice: Union[Approve, Reject]      # union of records, told apart by the `decision` tag
   Approve:
     decision: Literal[approve]
     count: int
@@ -161,8 +159,8 @@ named record is **type-checked at compile time** (`${analyze.output.rating.categ
 - **Equivalence** across call/map boundaries is **structural** and recursive through records and
   lists; recursive or alias-cycle definitions are rejected.
 - *Status:* the Compose loader resolves scalars, `list[X]`, `Optional[X]`, records, `Literal` enums,
-  `Union[...]` of records, and aliases. `dict[K, V]` currently resolves to a lenient object placeholder; structural key/value
-  checking remains unsupported.
+  `Union[...]` of records, and aliases. `dict[K, V]` currently resolves to a lenient object
+  placeholder; structural key/value checking remains unsupported.
 
 ## References & interpolation
 

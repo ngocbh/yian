@@ -26,7 +26,8 @@ passes:
 - `case_targets` — a `case` then:/else: whole-value `call(...)` route target mints a
   synth call node and rewrites the route target to its id.
 - `case_outputs` — every `${<case>.output}` binding ref expands to a coalesce over
-  the case's branch leaf targets.
+  the case's branch leaf targets, or, for a case that declares `output:`, to its synth
+  `__case_<id>` result node, which checks each taken branch against that type.
 
 Ladder position: desugar imports DOWN/peer only — `helpers`, `nodes`, `parse`, and
 the engine core (`expr`, `events`, `compile`, `nodes.*`). It NEVER imports the

@@ -59,6 +59,7 @@ from yian.compose.edges.data import infer_data_edges
 from yian.compose.edges.producers import _binding_producers
 from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from yian.compose.nodes.call import CallDescriptor
+from yian.compose.nodes.case import CaseDescriptor
 from yian.compose.nodes.loop import LoopDescriptor
 from yian.compose.nodes.map import MapDescriptor
 from yian.compose.desugar.inline_bodies import (
@@ -1154,7 +1155,8 @@ def _assemble(
 
       flow parameters -> split typed `name: Type = value` node inputs and flow outputs
       into value + declared contract -> desugar (case value branches to synth CODE nodes,
-      inline calls, adaptive questions, case call targets, `${case.output}`) -> build
+      inline calls, adaptive questions, case call targets, `${case.output}` with one synth
+      result node per typed case) -> build
       every node kind-blind
       (`desc.build(ctx)`; physical node-output contracts compile at their existing
       leaf-owned position; a case lowers in its own build) -> attach declared input
@@ -1452,6 +1454,17 @@ def _assemble(
     # and by the `${case.output}` expansion like any authored CODE input.
     descriptors = desugar_case_values(descriptors, diagnostics=diagnostics)
 
+    # Compile each typed case's `output:` once: its synth result node checks every taken
+    # branch against this contract, located at the case's `output:` (source-free: none).
+    case_types: dict[str, ValueContract] = {}
+    for node_id, descriptor in descriptors.items():
+        if isinstance(descriptor, CaseDescriptor) and descriptor.outputs is not None:
+            case_types[node_id] = read_authored_node_output(
+                node_id, descriptor.outputs
+            ) or ValueContract(
+                read_type(descriptor.outputs, registry, diagnostics=diagnostics)
+            )
+
     # Desugar inline `${ f(...) }` call expressions: each becomes a synth `call`
     # node (CallDescriptor, over=None) and its host binding is rewritten to
     # `${<synth>.output}`. Pure sugar — the rest of the pipeline treats the synth
@@ -1496,6 +1509,7 @@ def _assemble(
         outputs_range=outputs_range,
         assertion_range_at=flow_assertion_range_at,
         diagnostics=diagnostics,
+        case_types=case_types,
     )
 
     descriptor_cache: _DescriptorBuildCache | None = None

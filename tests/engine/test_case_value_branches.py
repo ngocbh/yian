@@ -9,6 +9,10 @@ classification errors (unknown word, reserved prefixes, a value without `output:
 unquoted typed binding, a quoted or nested call with spans, a value reading its own CASE,
 a bad ref inside a value) and runs that return the taken value, skip the other branch,
 and work inside a `defs:` body and an inline LOOP body.
+
+A CASE that declares `output: T` gets one synthetic result node `__case_<id>` that
+`${case.output}` reads: every taken branch is checked against T at runtime
+(`binding.type`, located at the CASE's `output:`), read or not, and readers see T.
 """
 
 import pytest
@@ -452,17 +456,17 @@ def test_quoted_lone_span_keeps_its_type():
 
 
 @pytest.mark.parametrize(
-    ("then_text", "expected"),
+    ("output_type", "then_text", "expected"),
     [
-        ('"costs $$5"', "costs $5"),
-        ('\n          a: "costs $$5"', {"a": "costs $5"}),
-        ('\n          a: "costs $$5 ${input.cmd}"', {"a": "costs $5 a"}),
+        ("str", '"costs $$5"', "costs $5"),
+        ("object", '\n          a: "costs $$5"', {"a": "costs $5"}),
+        ("object", '\n          a: "costs $$5 ${input.cmd}"', {"a": "costs $5 a"}),
     ],
 )
-def test_double_dollar_renders_one_dollar(then_text, expected):
+def test_double_dollar_renders_one_dollar(output_type, then_text, expected):
     text = _flow(
         "    on: ${input.cmd}\n"
-        "    output: object\n"
+        f"    output: {output_type}\n"
         "    cases:\n"
         "      - when: a\n"
         f"        then: {then_text}\n"
@@ -654,27 +658,488 @@ nodes:
         output:
           n: int
           exited: bool
+          note: str
         cases:
           - when: "${bump.output.n} >= 2"
             then:
               n: ${bump.output.n}
               exited: true
+              note: "done"
         else:
           n: ${bump.output.n}
           exited: false
-      label:
-        kind: case
-        output: str
-        cases:
-          - when: "${bump.output.n} >= 2"
-            then: "done"
-        else: 'more'
-    output:
-      n: ${route.output.n}
-      exited: ${route.output.exited}
-      note: ${label.output}
+          note: 'more'
+    output: ${route.output}
 output: ${loop.output}
 """
     result = run_flow(load_flow(text), {})
     assert result.status == "succeeded", result.failure
     assert result.output == {"n": 2, "exited": True, "note": "done"}
+
+
+# --------------------------------------------------------------------------- #
+# A typed CASE's result node
+# --------------------------------------------------------------------------- #
+
+
+def _literal_flow(output: str = "${route.output}", extra_nodes: str = "") -> str:
+    """Return a flow whose `Literal[yes, no]` case routes `else:` to a CODE node that
+    returns `"maybe"`."""
+    return (
+        "id: f\n"
+        "name: f\n"
+        "input:\n"
+        "  cmd: str\n"
+        "nodes:\n"
+        "  route:\n"
+        "    kind: case\n"
+        "    on: ${input.cmd}\n"
+        "    output: Literal[yes, no]\n"
+        "    cases:\n"
+        "      - when: a\n"
+        '        then: "yes"\n'
+        "    else: other\n"
+        "  other:\n"
+        "    kind: code\n"
+        "    code: |\n"
+        '      return "maybe"\n'
+        "    output: str\n"
+        f"{extra_nodes}"
+        f"output: {output}\n"
+    )
+
+
+def _assert_bad_branch_fails(loaded, text: str) -> None:
+    """Run the bad branch and check it fails `binding.type` at the result node, located
+    at the case's `output:` line."""
+    result = run_flow(loaded, {"cmd": "b"})
+    assert result.status == "failed"
+    assert result.failure.code == "binding.type"
+    assert result.failure.node_id == "__case_route"
+    assert "binding 'route'" in result.failure.message
+    diagnostic = loaded.diagnose(result.failure)
+    assert diagnostic.frames, diagnostic.notes
+    frame = diagnostic.frames[-1]
+    assert frame.text == text
+    assert frame.range.covered_lines(text) == [_line_of(text, "output: Literal[yes, no]")]
+
+
+def test_typed_case_checks_a_narrower_branch_at_runtime():
+    text = _literal_flow()
+    loaded = load_flow(text)
+    _assert_bad_branch_fails(loaded, text)
+    good = run_flow(loaded, {"cmd": "a"})
+    assert good.status == "succeeded", good.failure
+    assert good.output == "yes"
+
+
+def test_typed_case_checks_its_branch_even_when_unread():
+    extra = (
+        "  side:\n"
+        "    kind: code\n"
+        "    code: |\n"
+        '      return "side"\n'
+        "    output: str\n"
+    )
+    text = _literal_flow(output="${side.output}", extra_nodes=extra)
+    loaded = load_flow(text)
+    _assert_bad_branch_fails(loaded, text)
+    assert run_flow(loaded, {"cmd": "a"}).output == "side"
+
+
+def test_typed_case_read_inside_text():
+    text = _literal_flow(output="\n  out: 'got ${route.output}'")
+    loaded = load_flow(text)
+    _assert_bad_branch_fails(loaded, text)
+    good = run_flow(loaded, {"cmd": "a"})
+    assert good.status == "succeeded", good.failure
+    assert good.output == {"out": "got yes"}
+
+
+def test_untyped_case_gets_no_result_node():
+    loaded = load_flow(
+        _flow(
+            "    on: ${input.cmd}\n"
+            "    cases:\n"
+            "      - when: a\n"
+            "        then: reply\n"
+            "    else: reply\n"
+        )
+    )
+    assert not any(nid.startswith("__case_") for nid in loaded.compiled.nodes)
+    assert loaded.compiled.outputs[0].from_ == "${reply.output}"
+
+
+def test_typed_case_reader_sees_the_case_type_in_a_call():
+    text = """\
+id: f
+name: f
+input:
+  cmd: str
+defs:
+  child:
+    input:
+      n: str
+    nodes:
+      c:
+        kind: code
+        code: |
+          return inputs["n"]
+        input:
+          n: ${input.n}
+        output: str
+    output: ${c.output}
+nodes:
+  route:
+    kind: case
+    on: ${input.cmd}
+    output: int
+    cases:
+      - when: a
+        then: 1
+    else: 2
+  use:
+    kind: call
+    call: child
+    input:
+      n: ${route.output}
+output: ${use.output}
+"""
+    with pytest.raises(LoadError) as exc:
+        load_flow(text)
+    assert "binding 'n' — child expects 'str', source is 'int'" in str(exc.value)
+
+
+def test_typed_case_disjoint_typed_reader_is_a_load_error():
+    text = """\
+id: f
+name: f
+input:
+  cmd: str
+nodes:
+  route:
+    kind: case
+    on: ${input.cmd}
+    output: str
+    cases:
+      - when: a
+        then: "x"
+    else: "y"
+  use:
+    kind: code
+    input:
+      x: int = ${route.output}
+    code: |
+      return inputs["x"]
+output: ${use.output}
+"""
+    with pytest.raises(LoadError) as exc:
+        load_flow(text)
+    assert "declared int, but the value is str" in str(exc.value)
+    assert _error_line(exc.value) == _line_of(text, "x: int = ")
+
+
+def test_typed_case_wider_reader_still_checks_the_case_type():
+    text = """\
+id: f
+name: f
+typedefs:
+  Reply:
+    reply: str
+    n: int
+input:
+  cmd: str
+nodes:
+  route:
+    kind: case
+    on: ${input.cmd}
+    output: Reply
+    cases:
+      - when: a
+        then:
+          reply: "x"
+    else:
+      reply: "y"
+      n: 1
+  use:
+    kind: code
+    input:
+      x: object = ${route.output}
+    code: |
+      return inputs["x"]
+output: ${use.output}
+"""
+    loaded = load_flow(text)
+    result = run_flow(loaded, {"cmd": "a"})
+    assert result.status == "failed"
+    assert result.failure.code == "binding.type"
+    assert result.failure.node_id == "__case_route"
+    assert "missing required" in result.failure.message
+    assert "use" not in _started(result)
+    good = run_flow(loaded, {"cmd": "b"})
+    assert good.status == "succeeded", good.failure
+    assert good.output == {"reply": "y", "n": 1}
+
+
+def _record_case_flow(read: str) -> str:
+    """Return a flow with a record-typed case whose output reads `read`."""
+    return (
+        "id: f\n"
+        "name: f\n"
+        "input:\n"
+        "  cmd: str\n"
+        "nodes:\n"
+        "  route:\n"
+        "    kind: case\n"
+        "    on: ${input.cmd}\n"
+        "    output:\n"
+        "      reply: str\n"
+        "      exited: bool\n"
+        "    cases:\n"
+        "      - when: a\n"
+        "        then:\n"
+        '          reply: "hi"\n'
+        "          exited: true\n"
+        "    else:\n"
+        '      reply: "bye"\n'
+        "      exited: false\n"
+        f"output: {read}\n"
+    )
+
+
+def test_typed_case_field_read_runs():
+    result = run_flow(load_flow(_record_case_flow("${route.output.reply}")), {"cmd": "a"})
+    assert result.status == "succeeded", result.failure
+    assert result.output == "hi"
+
+
+def test_typed_case_unknown_field_read_is_a_load_error():
+    with pytest.raises(LoadError) as exc:
+        load_flow(_record_case_flow("${route.output.nope}"))
+    assert "reads unknown field 'nope' on record" in str(exc.value)
+
+
+def test_typed_case_feeds_loop_seed_inline_call_and_map():
+    text = """\
+id: f
+name: f
+input:
+  cmd: str
+nodes:
+  route:
+    kind: case
+    on: ${input.cmd}
+    output: list[str]
+    cases:
+      - when: a
+        then:
+          - x
+          - y
+    else: []
+  seeded:
+    kind: loop
+    times: 1
+    input:
+      items: ${route.output}
+    nodes:
+      keep:
+        kind: code
+        code: |
+          return inputs["items"]
+        input:
+          items: ${input.items}
+        output: list[str]
+    output:
+      items: ${keep.output}
+  wrapped:
+    kind: call
+    input:
+      items: ${route.output}
+    nodes:
+      count:
+        kind: code
+        code: |
+          return len(inputs["items"])
+        input:
+          items: ${input.items}
+        output: int
+    output: ${count.output}
+  each:
+    kind: map
+    over: ${route.output}
+    input:
+      value: ${item}
+    nodes:
+      upper:
+        kind: code
+        code: |
+          return inputs["value"].upper()
+        input:
+          value: ${input.value}
+        output: str
+    output: ${upper.output}
+output:
+  seeded: ${seeded.output}
+  wrapped: ${wrapped.output}
+  each: ${each.output}
+"""
+    result = run_flow(load_flow(text), {"cmd": "a"})
+    assert result.status == "succeeded", result.failure
+    assert result.output == {
+        "seeded": {"items": ["x", "y"]},
+        "wrapped": 2,
+        "each": ["X", "Y"],
+    }
+
+
+def test_typed_case_on_union_tag_still_narrows():
+    text = """\
+id: f
+name: f
+typedefs:
+  Buy:
+    action: Literal[buy]
+    qty: int
+  Hold:
+    action: Literal[hold]
+    note: str
+  Decision: Union[Buy, Hold]
+input:
+  kind: str
+nodes:
+  d:
+    kind: code
+    input:
+      kind: ${input.kind}
+    code: |
+      if inputs["kind"] == "buy":
+          return {"action": "buy", "qty": 3}
+      return {"action": "hold", "note": "wait"}
+    output: Decision
+  route:
+    kind: case
+    on: ${d.output.action}
+    output: int
+    cases:
+      - when: buy
+        then: qty
+      - when: hold
+        then: 0
+  qty:
+    kind: code
+    input:
+      q: ${d.output.qty}
+    code: |
+      return inputs["q"]
+    output: int
+output: ${route.output}
+"""
+    loaded = load_flow(text)
+    assert run_flow(loaded, {"kind": "buy"}).output == 3
+    assert run_flow(loaded, {"kind": "hold"}).output == 0
+
+
+def test_bad_case_output_type_is_located():
+    text = _flow(
+        "    on: ${input.cmd}\n"
+        "    output: NotAType\n"
+        "    cases:\n"
+        "      - when: a\n"
+        '        then: "x"\n'
+        "    else: reply\n"
+    )
+    with pytest.raises(LoadError) as exc:
+        load_flow(text)
+    assert "NotAType" in str(exc.value)
+    assert _error_line(exc.value) == _line_of(text, "output: NotAType")
+
+
+def test_expand_case_outputs_adds_the_result_node_for_a_typed_case():
+    from yian.compose import expand_case_outputs
+    from yian.compose.parse.file import CaseDescriptor, CodeDescriptor
+    from yian.nodes.contracts import ValueContract
+    from yian.typesys.values import Type, ValueKind
+
+    contract = ValueContract(Type.scalar(ValueKind.STRING))
+    descriptors = {
+        "gate": CaseDescriptor(
+            id="gate",
+            cases=[{"when": "${s.output} >= 0.5", "then": "pro"}],
+            else_="caut",
+            outputs="str",
+        ),
+        "c": CodeDescriptor(
+            id="c",
+            code="m:f",
+            inputs={
+                "whole": "${gate.output}",
+                "dotted": "${gate.output.report}",
+                "text": "pre ${gate.output} post",
+            },
+        ),
+    }
+    new, outputs = expand_case_outputs(
+        descriptors, "${gate.output}", [], case_types={"gate": contract}
+    )
+    assert new["c"].inputs == {
+        "whole": "${__case_gate.output}",
+        "dotted": "${__case_gate.output.report}",
+        "text": "pre ${__case_gate.output} post",
+    }
+    assert outputs == "${__case_gate.output}"
+    result = new["__case_gate"]
+    assert isinstance(result, CodeDescriptor)
+    assert result.inputs == {"gate": "${pro.output | caut.output}"}
+    assert result.input_types == {"gate": contract}
+    assert result.outputs == "str"
+    assert result.code == "return inputs['gate']"
+    assert result.node_name == "gate result"
+
+
+def test_typed_case_result_node_skips_when_its_case_is_skipped():
+    text = """\
+id: f
+name: f
+input:
+  cmd: str
+nodes:
+  outer:
+    kind: case
+    on: ${input.cmd}
+    cases:
+      - when: a
+        then: inner
+    else: other
+  inner:
+    kind: case
+    output: str
+    cases:
+      - when: "${input.cmd} == 'a'"
+        then: "in-a"
+    else: "in-else"
+  other:
+    kind: code
+    code: |
+      return "other"
+    output: str
+output: ${outer.output}
+"""
+    result = run_flow(load_flow(text), {"cmd": "b"})
+    assert result.status == "succeeded", result.failure
+    assert result.output == "other"
+    assert "__case_inner" in _skipped(result)
+
+
+def test_typed_case_without_a_resolvable_branch_is_rejected_even_unread():
+    from yian.compose import expand_case_outputs
+    from yian.compose.parse.file import CaseDescriptor
+    from yian.nodes.contracts import ValueContract
+    from yian.typesys.values import Type, ValueKind
+
+    descriptors = {
+        "a": CaseDescriptor(id="a", cases=[{"when": "${x}", "then": "b"}], outputs="str"),
+        "b": CaseDescriptor(id="b", cases=[{"when": "${x}", "then": "a"}]),
+    }
+    contract = ValueContract(Type.scalar(ValueKind.STRING))
+    with pytest.raises(LoadError, match="has no resolvable branch value"):
+        expand_case_outputs(descriptors, None, [], case_types={"a": contract})

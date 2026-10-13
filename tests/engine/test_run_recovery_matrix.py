@@ -602,7 +602,72 @@ nodes:
     input:
       n: 0
       exited: false
-    times: 2
+    times: 3
+output: ${repeated.output}
+"""
+
+_LOOP_BODY_NESTED_LOOP_AND_CASE = """
+id: recovery-loop-body-nested-loop-case
+name: recovery_loop_body_nested_loop_case
+defs:
+  echo_one:
+    input:
+      value: int
+    nodes:
+      echo:
+        kind: code
+        input:
+          x: ${input.value}
+        output: int
+        code: tests.engine._compose_codefns:echo_x
+    output: ${echo.output}
+  inc:
+    input:
+      n: int
+    nodes:
+      c:
+        kind: call
+        call: echo_one
+        input:
+          value: ${input.n}
+    output:
+      n: ${c.output}
+  turn:
+    input:
+      n: int
+      exited: bool
+    nodes:
+      inner:
+        kind: loop
+        call: inc
+        input:
+          n: ${input.n}
+        times: 2
+      pick:
+        kind: case
+        cases:
+          - when: "input.n % 2 == 0"
+            then: call(echo_one, value=${input.n})
+        else: call(echo_one, value=${input.n})
+      bump:
+        kind: code
+        depends_on: [inner]
+        input:
+          n: ${pick.output}
+          exited: ${input.exited}
+        output:
+          n: int
+          exited: bool
+        code: tests.engine._compose_codefns:loop_bump
+    output: ${bump.output}
+nodes:
+  repeated:
+    kind: loop
+    call: turn
+    input:
+      n: 0
+      exited: false
+    times: 3
 output: ${repeated.output}
 """
 
@@ -743,6 +808,7 @@ def _state_snapshot(state: RunState) -> dict[str, Any]:
         "ready": tuple(state.ready),
         "in_flight": tuple(state.in_flight),
         "depth": dict(state.depth),
+        "growth_owner": dict(state.growth_owner),
         "wiring_overrides": copy.deepcopy(state.wiring_overrides),
         "effective_llm_by_static_path": copy.deepcopy(
             state.effective_llm_by_static_path
@@ -877,12 +943,32 @@ def test_every_nested_growth_prefix_replays_to_the_live_state(
         )
 
 
+@pytest.mark.parametrize(
+    ("source", "expected_output", "spawner_suffixes"),
+    [
+        (_LOOP_BODY_SPAWNERS, {"n": 3, "exited": True}, ("/nested_call", "/nested_map")),
+        (
+            _LOOP_BODY_NESTED_LOOP_AND_CASE,
+            {"n": 3, "exited": True},
+            ("/inner", "/c", "/__call_0"),
+        ),
+    ],
+    ids=["call-map", "loop-case"],
+)
+@pytest.mark.parametrize("num_workers", [0, 2], ids=["serial", "pooled"])
 def test_every_loop_body_call_and_map_prefix_replays_to_the_live_state(
     monkeypatch: pytest.MonkeyPatch,
+    source: str,
+    expected_output: dict[str, Any],
+    spawner_suffixes: tuple[str, ...],
+    num_workers: int,
 ) -> None:
-    """CALL and MAP nested inside each grown LOOP turn replay after every commit."""
-    loaded = load_flow(_LOOP_BODY_SPAWNERS)
-    state, log = _new_started_run(loaded, num_workers=0)
+    """Spawners nested inside each grown LOOP turn replay after every commit.
+
+    Only the last turn's body stays live at the end of the run.
+    """
+    loaded = load_flow(source)
+    state, log = _new_started_run(loaded, num_workers=num_workers)
     snapshots = [_state_snapshot(state)]
     original_commit = engine_module.commit_prepared
 
@@ -898,19 +984,19 @@ def test_every_loop_body_call_and_map_prefix_replays_to_the_live_state(
             state,
             log,
             grow_builder=build_grow,
-            num_workers=0,
+            num_workers=num_workers,
         ).run()
     )
 
     assert isinstance(observers[-1], RunSucceeded)
-    assert observers[-1].output == {"n": 2, "exited": False}
+    assert observers[-1].output == expected_output
     expanded_ids = tuple(
         envelope.record.spawner_id
         for envelope in log
         if isinstance(envelope.record, NodeExpandedRecord)
     )
-    assert any(node_id.endswith("/nested_call") for node_id in expanded_ids)
-    assert any(node_id.endswith("/nested_map") for node_id in expanded_ids)
+    for suffix in spawner_suffixes:
+        assert any(node_id.endswith(suffix) for node_id in expanded_ids), suffix
     records = tuple(log)
     assert len(snapshots) == len(records)
 
@@ -919,6 +1005,12 @@ def test_every_loop_body_call_and_map_prefix_replays_to_the_live_state(
         assert _state_snapshot(recovered) == expected, (
             f"replayed state diverged after loop-body prefix {length}/{len(records)}"
         )
+    stale = [
+        node_id
+        for node_id in state.flow.nodes
+        if node_id.startswith(("repeated#0/", "repeated#1/"))
+    ]
+    assert not stale
 
 
 @pytest.mark.parametrize("num_workers", [0, 2], ids=["serial", "pooled"])

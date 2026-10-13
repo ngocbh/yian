@@ -1236,6 +1236,25 @@ def test_loop_with_nested_growth_keeps_trace_indexes_bounded(shape):
     assert len(large.pending_connections) == len(small.pending_connections)
 
 
+def test_nested_growth_loop_resumes_from_a_cut_log(tmp_path):
+    """A resumed nested-growth LOOP finishes, and its log replays to one resident iteration."""
+    import yian.run as run_module
+    from yian.runtime.log import JsonlRunLog
+    src = _NESTED_BODIES["nested"][0].replace("TIMES", "6")
+    path = tmp_path / "run.jsonl"
+    first = run_flow(load_flow(src), {}, log=path)
+    assert first.status == "succeeded", first.failure
+    # Cut the log mid-run so resume replays the recorded growth and runs the rest live.
+    lines = path.read_text().splitlines(keepends=True)
+    path.write_text("".join(lines[: len(lines) // 2]))
+    resumed = resume_flow(load_flow(src), log=path)
+    assert resumed.status == "succeeded", resumed.failure
+    assert resumed.output == first.output
+    with JsonlRunLog.resume(path) as log:
+        state = run_module._replay_run_log(load_flow(src), log)
+    assert len(state.flow.nodes) == len(_finish_nested("nested", 2).state.flow.nodes)
+
+
 def test_loop_growth_record_keeps_only_the_requested_prune_ids():
     """The log records the body's direct ids and the driver; nested ids are derived."""
     from yian.runtime.log import NodeExpandedRecord

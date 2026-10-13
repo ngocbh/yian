@@ -907,10 +907,39 @@ nodes:
     input: {{n: '${{input.n}}', tag: '${{input.tag}}', seen: ''}}
 output: ${{loop.output}}
 """, {"seen": "review seen"}, {"tag": ("review seen",)}),
+    "nested-call": ("""id: passthrough
+name: passthrough
+input: {{n: int, tag: str}}
+defs:
+  dec:
+    input: {{n: int}}
+    nodes:
+      work:
+        kind: code
+        input: {{n: '${{input.n}}'}}
+        code: "return {{'n': inputs['n'] - 1}}"
+        output: {{n: int}}
+    output: ${{work.output}}
+  body:
+    input: {{n: int}}
+    nodes:
+      inner:
+        kind: call
+        call: dec
+        input: {{n: '${{input.n}}'}}
+    output: ${{inner.output}}
+nodes:
+  loop:
+    kind: loop
+    call: body
+    times: {times}
+    input: {{n: '${{input.n}}', tag: '${{input.tag}}'}}
+output: ${{loop.output}}
+""", {"tag": "review tag"}, {"tag": ("review tag",)}),
 }
 
 
-@pytest.mark.parametrize("times", [1, 2, 3])
+@pytest.mark.parametrize("times", [1, 2, 3, 6])
 @pytest.mark.parametrize("shape", sorted(_PASSTHROUGH_FLOWS))
 def test_loop_passthrough_field_routes_feedback_to_its_seed(shape, times, monkeypatch):
     from yian.compile.expand import build_grow
@@ -939,6 +968,8 @@ def test_loop_passthrough_field_routes_feedback_to_its_seed(shape, times, monkey
     if shape == "chat-shaped":
         expected_output["seen"] = "red"
     assert engine.state.trace.terminal.output == expected_output
+    if shape == "nested-call" and times >= 3:
+        assert not any(i.startswith("loop#0/") for i in engine.state.flow.nodes)
     root, results = compute_backward(engine.state.trace, feedback)
     validate_attributed_backward(engine.state.trace, feedback, root, results)
     assert root.input_feedback == expected

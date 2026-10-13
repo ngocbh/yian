@@ -261,8 +261,9 @@ one plain scalar, so it can't contain `: ` or ` #`, even in quotes after ` = `
 - **Load:** the declared type is compared with the inferred one. Disjoint is a load
   error (a `str` declared `int`; records are closed, so an extra required field
   is disjoint). Narrower (non-Optional over Optional, a `Literal` or bounded subset, a
-  record over `object`, a union member over the union) loads and is checked at runtime, as is a value with no
-  inferred type (arithmetic, builtin calls, untyped producers).
+  record over `object`, a union member over the union) loads and is checked at
+  runtime, as is a value with no inferred type (arithmetic, builtin calls, untyped
+  producers).
 - **Runtime:** the value is validated before the consuming node runs, with no
   conversion (an int bound as `float` stays an int; `"30"` is not an int). A miss
   fails the consumer (END for a flow output) with code `binding.type`, located at

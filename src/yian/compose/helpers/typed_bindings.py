@@ -210,9 +210,10 @@ def _not_a_type_message(
     """
     head = _HEAD_IDENTIFIER.match(left)
     reason = ""
-    # A `Union[...]` fails for reasons a close match can't fix, such as a member
-    # that is not a record, so the resolver's own reason is the useful part.
-    if head is not None and head.group() == _UNION and left != _UNION:
+    # A `Union[...]` (or a `|` written for one) fails for reasons a close match can't
+    # fix, such as a member that is not a record, so the resolver's own reason is the
+    # useful part.
+    if "|" in left or (head is not None and head.group() == _UNION and left != _UNION):
         reason = f" ({error})"
     message = (
         f"`{left}` in `{label}: {text}` is not a type{reason}. "

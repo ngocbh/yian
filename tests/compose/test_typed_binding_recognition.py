@@ -132,6 +132,12 @@ def test_invalid_union_explains_why():
     )
 
 
+def test_pipe_union_keeps_the_resolver_hint():
+    message = str(_error("Buy | Sell = ${x}"))
+    assert "use Union[Buy, Sell]" in message
+    assert message.startswith("`Buy | Sell` in `qty: Buy | Sell = ${x}` is not a type (")
+
+
 def test_bare_union_gets_the_generic_message():
     message = str(_error("Union = 1"))
     assert message.startswith("`Union` in `qty: Union = 1` is not a type. ")

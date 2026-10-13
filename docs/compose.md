@@ -44,15 +44,18 @@ One function, `load_flow()`, drives a fixed pipeline. Read it like a compiler:
   │                            append each case's own data+control edges from its build
   ├─ compute_narrowing      → each node's view of union contracts under the CASE
   │                            branches (`on:` tag, `isinstance`) that route it
+  ├─ check typed inputs     → a typed node input whose inferred type (read against
+  │                            its node's narrowed view) is disjoint from its declared
+  │                            type is rejected, before the call/loop type checks
   ├─ infer_ordering_edges   → add authored depends_on/runs_after ordering-only edges
   ├─ validate_references    → every ${...} resolves and type-checks
   ├─ stamp node assertions → validate/classify one originated carrier per list position
   ├─ stamp flow outputs     → source-backed bare/mapped values on final
   │                            FlowOutput bindings (mapping keys stay origin-free);
   │                            declared output types land on Binding.contract
-  ├─ check typed bindings   → a literal must fit its declared type; a source whose
-  │                            inferred type is disjoint from it is rejected
-  │                            (narrower or unknown is left to the runtime check)
+  ├─ check typed outputs    → a typed flow output whose inferred type is disjoint
+  │                            from its declared type is rejected (narrower or
+  │                            unknown is left to the runtime check)
   ├─ synthesize boundary    → START/END nodes, edges, and binding-preserving wiring;
   │                            END is a value or a record by the shape of `output:`;
   │                            END's output contract comes from declared output types

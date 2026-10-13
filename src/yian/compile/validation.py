@@ -288,6 +288,9 @@ def _relate_kinds(inferred: ValueKind, declared: ValueKind) -> TypeRelation:
         return "fits"
     if inferred is ValueKind.INTEGER and declared is ValueKind.NUMBER:
         return "fits"
+    if inferred is ValueKind.NUMBER and declared is ValueKind.INTEGER:
+        # A float-typed value can still be an int: a record field is never widened.
+        return "narrower"
     if inferred in _STRING_STORED and declared is ValueKind.STRING:
         return "fits"
     if inferred is ValueKind.STRING and declared in _STRING_STORED:

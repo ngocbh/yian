@@ -81,6 +81,8 @@ def test_fits(inferred: str, declared: str) -> None:
         # both sides may omit the field, so the empty record is shared
         ("AOptStr", "AOpt"),
         ("float", "float[0, 1]"),
+        # a float-typed record field may hold an int, since record fields never widen
+        ("float", "int"),
     ],
 )
 def test_narrower(inferred: str, declared: str) -> None:
@@ -100,7 +102,6 @@ def test_unrefined_list_into_refined_list_is_narrower() -> None:
     [
         ("str", "int"),
         ("bool", "int"),
-        ("float", "int"),
         ("int", "list[int]"),
         ("list[str]", "list[int]"),
         ("list[int]", "list[object]"),

@@ -501,8 +501,9 @@ a located load error. Facts flow in Kahn's order over data, CASE, and `depends_o
 control edges join by union, each required data group joins its producers by union, and
 all contributions meet by intersection. Optional groups and `runs_after` contribute
 nothing; nodes on a cycle get no facts and are left for `reject_cycles`. The call-type and
-CASE-exhaustiveness checks read `Narrowing.for_node(id)`, and the reference check reads
-`for_param`, which falls back to it; flow outputs are checked unnarrowed. Inline child bodies and LOOP seeds are typed while nodes build, before
+CASE-exhaustiveness checks read `Narrowing.for_node(id)`, and the reference and
+typed-input checks read `for_param`, which falls back to it; flow outputs are checked
+unnarrowed. Inline child bodies and LOOP seeds are typed while nodes build, before
 the pass, so they see unnarrowed types. Runtime routing is unchanged.
 
 Physical Compose declarations derive exact `ValueContract`s. Output binding derivation,

@@ -87,9 +87,7 @@ from yian.runtime.log import (
     encode_record,
 )
 from yian.runtime.learning import (
-    RuntimeLearningState,
     RuntimeBackwardState,
-    project_outcome_episodes,
     reduce_backward_record,
 )
 from yian.typesys.pool import VariablePool
@@ -237,8 +235,6 @@ class RunState:
         trace (`RetainedTrace | None`):
             Accepted executions, immutable producer entries and private backward
             handlers, enabled by recorded learning independently of memory scopes.
-        learning_state (`RuntimeLearningState`):
-            Pure immutable episode inventory in recorded memory-key order.
         backward_state (`RuntimeBackwardState`):
             Immutable accepted backward attempts and irreversible commit facts.
         initial_static_ids (`frozenset[str]`):
@@ -277,14 +273,13 @@ class RunState:
         self.memory_stacks: tuple[MemoryStack, ...] | None = None
         self.learnable = False
         self.trace: RetainedTrace | None = None
-        self.learning_state = RuntimeLearningState()
         self.backward_state = RuntimeBackwardState()
         self._memory_authority = _MemoryAuthority(
             snapshots=None,
             learnable=False,
             memories=None,
             memory_stacks=None,
-            memory_order=self.learning_state.memory_order,
+            memory_order=self.backward_state.memory_order,
         )
         self.initial_static_ids = frozenset(flow.nodes)
 
@@ -370,7 +365,6 @@ class _RunStartedApply:
     memories: tuple[MemorySpec, ...] | None
     memory_stacks: tuple[MemoryStack, ...] | None
     learnable: bool
-    learning_state: RuntimeLearningState
     backward_state: RuntimeBackwardState
     memory_authority: _MemoryAuthority
     observers: tuple[Any, ...]
@@ -424,8 +418,6 @@ class _SuccessPlan:
     end_node_identity: int | None
     delta: _SuccessDelta
     terminal: _TerminalDelta | None
-    originating_learning_state: RuntimeLearningState
-    next_learning_state: RuntimeLearningState
     trace_delta: TraceDelta | None = None
 
 
@@ -463,8 +455,6 @@ class _RoutePlan:
     end_node_identity: int | None
     delta: _RouteDelta
     terminal: _TerminalDelta | None
-    originating_learning_state: RuntimeLearningState
-    next_learning_state: RuntimeLearningState
     trace_delta: TraceDelta | None = None
 
 
@@ -522,8 +512,6 @@ class _FailurePlan:
     end_id: str
     end_node_identity: int | None
     failure: Failure
-    originating_learning_state: RuntimeLearningState
-    next_learning_state: RuntimeLearningState
     trace_delta: TraceDelta | None = None
 
 
@@ -548,8 +536,6 @@ class _GrowthPlan:
     end_node_identity: int | None
     delta: _GrowthDelta
     topology: _GrowthTopology
-    originating_learning_state: RuntimeLearningState
-    next_learning_state: RuntimeLearningState
     trace_delta: TraceDelta | None = None
 
 
@@ -564,7 +550,6 @@ class _BackwardPlan:
     start_node_identity: int
     end_id: str
     end_node_identity: int | None
-    originating_learning_state: RuntimeLearningState
     originating_backward_state: RuntimeBackwardState
     next_backward_state: RuntimeBackwardState
     trace_delta: TraceDelta | None = None
@@ -1321,13 +1306,6 @@ def _prepare_success_transition(
         raise TypeError("node-success envelope decoded to a different record kind")
     if canonical_record != record:
         raise ValueError("NodeSucceededRecord is not in canonical wire form")
-    next_learning_state = state.learning_state.append_episodes(
-        project_outcome_episodes(
-            run_id, canonical_record,
-            execution_seq=state.trace.started[canonical_record.node_id] if state.trace is not None else None,
-        )
-    )
-
     start_id = state.flow.start_id
     end_id = state.flow.end_id
     plan = _SuccessPlan(
@@ -1342,8 +1320,6 @@ def _prepare_success_transition(
         ),
         delta=delta,
         terminal=terminal,
-        originating_learning_state=state.learning_state,
-        next_learning_state=next_learning_state,
     )
     observer_value = ANY_VALUE_ADAPTER.validate_json(
         delta.value_bytes,
@@ -1425,13 +1401,6 @@ def _prepare_route_transition(
             delta,
             terminal_unreachable_failure=canonical_record.terminal_failure,
         )
-    next_learning_state = state.learning_state.append_episodes(
-        project_outcome_episodes(
-            run_id, canonical_record,
-            execution_seq=state.trace.started[canonical_record.node_id] if state.trace is not None else None,
-        )
-    )
-
     terminal = _prepare_terminal_delta(
         state,
         completing_node_id=delta.node_id,
@@ -1456,8 +1425,6 @@ def _prepare_route_transition(
         ),
         delta=delta,
         terminal=terminal,
-        originating_learning_state=state.learning_state,
-        next_learning_state=next_learning_state,
     )
     observers = (NodeRouted(delta.node_id, delta.handle),) + tuple(
         NodeSkipped(node_id) for node_id in delta.skipped_node_ids
@@ -1509,12 +1476,6 @@ def _prepare_failure_transition(
         raise ValueError("NodeFailedRecord is not in canonical wire form")
 
     failure = canonical_record.failure
-    next_learning_state = state.learning_state.append_episodes(
-        project_outcome_episodes(
-            run_id, canonical_record,
-            execution_seq=state.trace.started[canonical_record.failure.node_id] if state.trace is not None else None,
-        )
-    )
     start_id = state.flow.start_id
     end_id = state.flow.end_id
     plan = _FailurePlan(
@@ -1528,8 +1489,6 @@ def _prepare_failure_transition(
             id(state.flow.nodes[end_id]) if end_id in state.flow.nodes else None
         ),
         failure=failure,
-        originating_learning_state=state.learning_state,
-        next_learning_state=next_learning_state,
     )
     return PreparedTransition(
         record=canonical_record,
@@ -1629,13 +1588,6 @@ def _prepare_growth_transition(
                 _raise_growth_rejected(ValueError(
                     f"seed connection {connection.seed_path!r} was not captured"
                 ))
-    next_learning_state = state.learning_state.append_episodes(
-        project_outcome_episodes(
-            run_id, canonical_record,
-            execution_seq=state.trace.started[canonical_record.spawner_id] if state.trace is not None else None,
-        )
-    )
-
     start_id = state.flow.start_id
     end_id = state.flow.end_id
     plan = _GrowthPlan(
@@ -1650,8 +1602,6 @@ def _prepare_growth_transition(
         ),
         delta=delta,
         topology=topology,
-        originating_learning_state=state.learning_state,
-        next_learning_state=next_learning_state,
     )
     return PreparedTransition(
         record=canonical_record,
@@ -1679,7 +1629,7 @@ def _prepare_backward_transition(
     plan = _BackwardPlan(
         state, state.flow, encoded, start_id, id(state.flow.nodes[start_id]),
         end_id, id(state.flow.nodes[end_id]) if end_id in state.flow.nodes else None,
-        state.learning_state, state.backward_state, next_backward,
+        state.backward_state, next_backward,
         _prepare_record_trace(state, envelope),
     )
     return PreparedTransition(envelope.record, envelope.run_id, envelope.seq, plan, ())
@@ -2078,7 +2028,6 @@ def _commit_success(
     if not isinstance(prepared.record, NodeSucceededRecord):
         raise TypeError("success plan requires a NodeSucceededRecord")
     _require_prepared_origin(state, plan)
-    _require_learning_plan_origin(state, plan)
     _require_initialized_nonterminal(state)
     _require_authority_coordinates(log, state, prepared, initialized=True)
     _require_unchanged_record(prepared, plan.envelope_bytes)
@@ -2102,7 +2051,6 @@ def _commit_success(
     state.ready.extend(delta.newly_ready_ids)
     if apply.terminal is not None:
         state.result = apply.terminal.result
-    state.learning_state = plan.next_learning_state
     state.next_sequence = prepared.expected_sequence + 1
     return apply.observers
 
@@ -2119,7 +2067,6 @@ def _commit_route(
     if not isinstance(prepared.record, NodeRoutedRecord):
         raise TypeError("route plan requires a NodeRoutedRecord")
     _require_prepared_origin(state, plan)
-    _require_learning_plan_origin(state, plan)
     _require_initialized_nonterminal(state)
     _require_authority_coordinates(log, state, prepared, initialized=True)
     _require_unchanged_record(prepared, plan.envelope_bytes)
@@ -2150,7 +2097,6 @@ def _commit_route(
     state.terminal_unreachable_failure = delta.terminal_unreachable_failure
     if apply.terminal is not None:
         state.result = apply.terminal.result
-    state.learning_state = plan.next_learning_state
     state.next_sequence = prepared.expected_sequence + 1
     return apply.observers
 
@@ -2167,7 +2113,6 @@ def _commit_failure(
     if not isinstance(prepared.record, NodeFailedRecord):
         raise TypeError("failure plan requires a NodeFailedRecord")
     _require_prepared_origin(state, plan)
-    _require_learning_plan_origin(state, plan)
     _require_initialized_nonterminal(state)
     _require_authority_coordinates(log, state, prepared, initialized=True)
     _require_unchanged_record(prepared, plan.envelope_bytes)
@@ -2185,7 +2130,6 @@ def _commit_failure(
     del state.in_flight[node_id]
     del state.accepted_starts[node_id]
     state.result = apply.result
-    state.learning_state = plan.next_learning_state
     state.next_sequence = prepared.expected_sequence + 1
     return apply.observers
 
@@ -2202,7 +2146,6 @@ def _commit_growth(
     if not isinstance(prepared.record, NodeExpandedRecord):
         raise TypeError("growth plan requires a NodeExpandedRecord")
     _require_prepared_origin(state, plan)
-    _require_learning_plan_origin(state, plan)
     _require_initialized_nonterminal(state)
     _require_authority_coordinates(log, state, prepared, initialized=True)
     _require_unchanged_record(prepared, plan.envelope_bytes)
@@ -2232,7 +2175,6 @@ def _commit_growth(
     state.depth = apply.depth
     state.growth_owner = apply.growth_owner
     state.wiring_overrides = apply.wiring_overrides
-    state.learning_state = plan.next_learning_state
     state.next_sequence = prepared.expected_sequence + 1
     return apply.observers
 
@@ -2292,7 +2234,6 @@ def _commit_backward(log: RunLog, state: RunState, prepared: PreparedTransition)
     if type(plan) is not _BackwardPlan:
         raise TypeError("backward commit requires its exact plan")
     _require_prepared_origin(state, plan)
-    _require_learning_plan_origin(state, plan)
     if state.backward_state is not plan.originating_backward_state:
         raise ValueError("prepared backward transition has stale attempt authority")
     _require_initialized_terminal_backward(state)
@@ -2330,15 +2271,6 @@ def _require_prepared_origin(
             "prepared transition belongs to a different originating RunState"
         )
     _require_originating_flow(state, plan)
-
-
-def _require_learning_plan_origin(
-    state: RunState,
-    plan: _SuccessPlan | _RoutePlan | _FailurePlan | _GrowthPlan | _BackwardPlan,
-) -> None:
-    """Require the exact immutable learning projection used during preparation."""
-    if state.learning_state is not plan.originating_learning_state:
-        raise ValueError("prepared transition has stale learning-state authority")
 
 
 def _require_authority_coordinates(
@@ -2424,7 +2356,6 @@ def _require_initialized(state: RunState) -> None:
         and type(state.wiring_overrides) is dict
         and type(state.input) is dict
         and type(state.effective_llm_by_static_path) is dict
-        and type(state.learning_state) is RuntimeLearningState
         and type(state.backward_state) is RuntimeBackwardState
         and type(state._memory_authority) is _MemoryAuthority
         and type(state.initial_static_ids) is frozenset
@@ -2498,12 +2429,9 @@ def _validate_runtime_memory_configuration(state: RunState) -> None:
         and state.memory_stacks is authority.memory_stacks
         and type(state.learnable) is bool
         and state.learnable is authority.learnable
-        and state.learning_state.memory_order is authority.memory_order
         and state.backward_state.memory_order is authority.memory_order
     ):
         raise ValueError("run-state memory roots disagree with RunStarted authority")
-    if state.learning_state.episode_run_id not in (None, state.run_id):
-        raise ValueError("run-state learning episodes belong to another run")
 
 
 def _validate_node_started(state: RunState, record: NodeStartedRecord) -> None:
@@ -4340,7 +4268,6 @@ def _require_pristine(state: RunState) -> None:
         and type(state.wiring_overrides) is dict
         and type(state.input) is dict
         and type(state.effective_llm_by_static_path) is dict
-        and type(state.learning_state) is RuntimeLearningState
         and type(state.backward_state) is RuntimeBackwardState
         and type(state._memory_authority) is _MemoryAuthority
         and type(state.initial_static_ids) is frozenset
@@ -4377,13 +4304,12 @@ def _require_pristine(state: RunState) -> None:
         and state.memory_stacks is None
         and state.learnable is False
         and state.trace is None
-        and state.learning_state == RuntimeLearningState()
         and state.backward_state == RuntimeBackwardState()
         and state._memory_authority.snapshots is None
         and state._memory_authority.memories is None
         and state._memory_authority.memory_stacks is None
         and state._memory_authority.learnable is False
-        and state._memory_authority.memory_order is state.learning_state.memory_order
+        and state._memory_authority.memory_order is state.backward_state.memory_order
         and state.initial_static_ids == frozenset(state.flow.nodes)
     ):
         raise ValueError("RunStarted requires a pristine RunState at sequence 0")
@@ -4459,14 +4385,15 @@ def _materialize_run_started(
     if not isinstance(canonical_input, dict):
         raise TypeError("canonical START input is not a dict")
 
-    learning_state = RuntimeLearningState.for_memories(record.memories)
-    backward_state = RuntimeBackwardState(learning_state.memory_order)
+    backward_state = RuntimeBackwardState(
+        () if record.memories is None else tuple(spec.key for spec in record.memories)
+    )
     memory_authority = _MemoryAuthority(
         snapshots=record.memory_snapshots,
         learnable=record.learnable,
         memories=record.memories,
         memory_stacks=record.memory_stacks,
-        memory_order=learning_state.memory_order,
+        memory_order=backward_state.memory_order,
     )
     return _RunStartedApply(
         pool=pool,
@@ -4489,7 +4416,6 @@ def _materialize_run_started(
         memories=record.memories,
         memory_stacks=record.memory_stacks,
         learnable=record.learnable,
-        learning_state=learning_state,
         backward_state=backward_state,
         memory_authority=memory_authority,
         observers=(RunStarted(),),
@@ -4518,7 +4444,6 @@ def _apply_run_started(state: RunState, apply: _RunStartedApply) -> None:
     state.memories = apply.memories
     state.memory_stacks = apply.memory_stacks
     state.learnable = apply.learnable
-    state.learning_state = apply.learning_state
     state.backward_state = apply.backward_state
     state._memory_authority = apply.memory_authority
     state.next_sequence = apply.next_sequence

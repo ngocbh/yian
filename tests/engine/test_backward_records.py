@@ -1097,10 +1097,10 @@ def test_postterminal_trace_delta_rejects_equal_but_noncanonical_fields_before_a
     prepared = replace(prepared, _plan=replace(prepared._plan, trace_delta=delta))
     trace = state.trace
     writers, sources = dict(trace.current_writers), dict(trace.sources)
-    learning, backward, sequence = state.learning_state, state.backward_state, state.next_sequence
+    backward, sequence = state.backward_state, state.next_sequence
     with pytest.raises((TypeError, ValueError)):
         commit_prepared(log, state, prepared)
-    assert state.learning_state is learning and state.backward_state is backward
+    assert state.backward_state is backward
     assert state.trace is trace and type(trace.next_sequence) is int
     assert dict(trace.current_writers) == writers and dict(trace.sources) == sources
     assert state.next_sequence == trace.next_sequence == log.next_sequence == sequence

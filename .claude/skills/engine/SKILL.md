@@ -471,7 +471,8 @@ Most are just the functional model (above) made enforceable:
   attribution validation. `runtime.backward` owns callback invocation and the
   explicit attempt driver. Ready/replay validation must not call a node or
   materialize transcript contexts. `RuntimeBackwardState` is the sole attempt
-  authority; `RuntimeLearningState` keeps pure inventory/episode projection only.
+  authority. `project_owner_contexts` is the only episode projection; forward
+  execution keeps no per-memory episode inventory.
 - **Binding capture follows the actual read boundary** — optional input capture
   uses the existing expression walk and a paired value/presence/source resolver.
   Never reevaluate a callable or reconstruct provenance from value equality.

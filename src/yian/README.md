@@ -1125,8 +1125,9 @@ node callback fold does no work, but every memory key still learns.
 `runtime.learning` owns pure root seeding/projection, ordered message transfer,
 complete attributed-result validation, and owner-context construction. The
 callback driver imports those helpers; state/replay never imports the driver or
-invokes callbacks. `RuntimeLearningState` retains only forward inventory/episodes;
-`RuntimeBackwardState` is the sole attempt authority.
+invokes callbacks. `RuntimeBackwardState` is the sole attempt authority and holds
+the recorded memory-key order. Forward execution keeps no per-memory episode
+inventory: `project_owner_contexts` is the only episode projection.
 
 `project_owner_contexts` consumes the recorded memory table and stacks and every
 accepted occurrence, including CODE, MAP, growth, causal route failures, and early

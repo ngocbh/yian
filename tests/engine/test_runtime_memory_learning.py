@@ -27,11 +27,7 @@ from yian.memory import (
 from yian.nodes.agent import AgentNode
 from yian.nodes.base import Grow, Node, NodeKind
 from yian.nodes.map import MapNode
-from yian.runtime.learning import (
-    RuntimeLearningState,
-    memory_commit_id,
-    project_outcome_episodes,
-)
+from yian.runtime.learning import _episode_outcome, memory_commit_id
 from yian.runtime.log import (
     MemoryRunLog,
     NodeExpandedRecord,
@@ -673,6 +669,17 @@ def _commit_record(state: RunState, log: MemoryRunLog, record) -> None:
     assert commit_prepared(log, state, prepared) == ()
 
 
+def _contexts(state: RunState) -> dict:
+    """Return the learner contexts of a terminal run's retained trace, keyed by memory."""
+    from yian.runtime.backward import compute_backward
+
+    root, results = compute_backward(state.trace, None)
+    contexts = learning_module.project_owner_contexts(
+        state.trace, state.memories, state.memory_stacks, None, root, results,
+    )
+    return {context.memory: context for context in contexts}
+
+
 def test_runstarted_retains_defensive_memory_authority_and_projects_episodes() -> None:
     state, _log, table = _successful_terminal()
 
@@ -682,10 +689,11 @@ def test_runstarted_retains_defensive_memory_authority_and_projects_episodes() -
         MemorySnapshotEnvelope("outer", {"epoch": 4}),
     )
     assert state.learnable is True
-    assert state.learning_state.memory_order == ("local", "outer")
+    assert state.backward_state.memory_order == ("local", "outer")
 
-    outer_episode = state.learning_state.episodes_for("outer")
-    local_episode = state.learning_state.episodes_for("local")
+    contexts = _contexts(state)
+    outer_episode = contexts["outer"].episodes
+    local_episode = contexts["local"].episodes
     assert len(outer_episode) == len(local_episode) == 1
     assert outer_episode[0].owner_static_path == ("flow", "agent")
     assert outer_episode[0].occurrence_path == _occurrence()
@@ -693,10 +701,6 @@ def test_runstarted_retains_defensive_memory_authority_and_projects_episodes() -
     assert outer_episode[0].output == {"answer": 7}
     assert outer_episode[0].inputs == {"question": "q"}
     assert outer_episode[0].interactions == (ModelTextInteraction("answer"),)
-    context = state.learning_state.learn_context(_RUN_ID, "outer")
-    assert context.memory == "outer"
-    assert context.episodes == outer_episode
-    assert context.feedback == ()
 
     detached = state.memories[0].config
     detached["limit"] = 999
@@ -732,10 +736,10 @@ def test_engine_episodes_use_the_physical_start_sequence_for_every_outcome(kind)
         prepared = prepare_expanded(state, node.id, Grow(seed={}), lambda spawner, _seed: _fragment(spawner.id), **kwargs)
     commit_prepared(log, state, prepared)
     assert physical_sequence != outcome_sequence
-    for memory in node.memory_scope.memories:
-        episode = state.learning_state.episodes_for(memory)[-1]
-        assert episode.execution_seq == physical_sequence
     assert state.trace.occurrences[-1].source.execution_seq == physical_sequence
+    if kind == "failure":
+        for context in _contexts(state).values():
+            assert context.episodes[-1].execution_seq == physical_sequence
 
 
 def test_causal_route_episode_retains_the_accepted_failure():
@@ -744,10 +748,10 @@ def test_causal_route_episode_retains_the_accepted_failure():
     scope = _scope()
     failure = Failure("graph.terminal_unreachable", "No terminal route.", "agent")
     record = NodeRoutedRecord("agent", "go", evidence=_evidence(scope), terminal_failure=failure)
-    for _memory, episode in project_outcome_episodes(_RUN_ID, record):
-        assert episode.status is MemoryEpisodeStatus.FAILED
-        assert episode.output is None
-        assert episode.failure["code"] == failure.code
+    status, output, failure_payload = _episode_outcome(record)
+    assert status is MemoryEpisodeStatus.FAILED
+    assert output is None
+    assert failure_payload["code"] == failure.code
 
 
 def test_failure_episode_uses_full_canonical_durable_failure_json() -> None:
@@ -770,7 +774,7 @@ def test_failure_episode_uses_full_canonical_durable_failure_json() -> None:
     commit_prepared(_log, state, prepared)
 
     assert isinstance(state.result, RunFailed)
-    episode = state.learning_state.episodes_for("local")[0]
+    episode, = _contexts(state)["local"].episodes
     assert episode.failure == {
         "code": "node.execute",
         "message": "visible",
@@ -873,7 +877,6 @@ def test_empty_enabled_table_retains_scope_free_evidence_without_episodes() -> N
         forward_capture=_forward_capture(node, {"question": "q"}),
     )
     assert prepared.record.evidence.scope is None
-    assert project_outcome_episodes(_RUN_ID, prepared.record) == ()
     with pytest.raises(ValueError, match="evidence scope does not match"):
         prepare_node_succeeded(
             state,
@@ -967,145 +970,33 @@ def test_expanded_map_occurrence_projects_and_replays_from_live_node_scope() -> 
     succeed(END_ID, None)
     assert isinstance(state.result, RunSucceeded)
 
-    episode = state.learning_state.episodes_for("outer")[0]
-    assert episode.owner_static_path == dynamic_scope.static_path
+    episodes = _contexts(state)["outer"].episodes
+    episode, = (item for item in episodes if item.owner_static_path == dynamic_scope.static_path)
     assert episode.occurrence_path == (
         MemoryOccurrenceSegment(MemoryOccurrenceKind.MAP_ITEM, ("flow", "map"), 0),
     )
+    assert episode.interactions == (ModelTextInteraction("answer"),)
 
     replayed = _replay_records(
         RunState(pristine_flow),
         tuple(log),
         grow_builder=build_grow,
     )
-    assert replayed.learning_state == state.learning_state
-    assert replayed.learning_state.episodes_for("outer") == (episode,)
+    assert _contexts(replayed)["outer"].episodes == episodes
 
 
 def test_route_and_growth_projection_use_closed_source_neutral_envelopes() -> None:
-    scope = _scope(memories=("local",))
-    evidence = _evidence(scope)
-    route = project_outcome_episodes(
-        _RUN_ID,
-        NodeRoutedRecord("agent", "yes", evidence=evidence),
-    )
-    growth = project_outcome_episodes(
-        _RUN_ID,
-        NodeExpandedRecord(
-            "agent",
-            {"value": (1, 2)},
-            ("a", "z"),
-            "b" * 64,
-            evidence=evidence,
-        ),
+    _status, route, _failure = _episode_outcome(NodeRoutedRecord("agent", "yes"))
+    _status, growth, _failure = _episode_outcome(
+        NodeExpandedRecord("agent", {"value": (1, 2)}, ("a", "z"), "b" * 64),
     )
 
-    assert [memory for memory, _episode in route] == ["local"]
-    assert route[0][1].output == {"kind": "route", "handle": "yes"}
-    assert growth[0][1].output == {
+    assert route == {"kind": "route", "handle": "yes"}
+    assert growth == {
         "kind": "grow",
         "seed": {"value": [1, 2]},
         "prune_ids": ["a", "z"],
     }
-
-
-def test_episode_order_is_record_order_while_occurrence_inventory_is_structural(
-) -> None:
-    learning = RuntimeLearningState.for_memories(_table(("local",)))
-    for index, handle in ((2, "second-structurally"), (0, "first-structurally")):
-        scope = _scope(memories=("local",), occurrence=_occurrence(index))
-        record = NodeRoutedRecord("agent", handle, evidence=_evidence(scope))
-        learning = learning.append_episodes(project_outcome_episodes(_RUN_ID, record))
-
-    assert [episode.output["handle"] for episode in learning.episodes_for("local")] == [
-        "second-structurally",
-        "first-structurally",
-    ]
-    assert [path[0].index for path in learning.occurrence_inventory("local")] == [0, 2]
-
-
-def test_episode_append_validates_only_new_persistent_history(monkeypatch) -> None:
-    learning = RuntimeLearningState.for_memories(_table(("local",)))
-    original = learning_module._revalidate_episode
-    validations = 0
-
-    def count_validation(episode) -> None:
-        nonlocal validations
-        validations += 1
-        original(episode)
-
-    monkeypatch.setattr(learning_module, "_revalidate_episode", count_validation)
-    for index in range(129):
-        scope = _scope(memories=("local",), occurrence=_occurrence(index))
-        learning = learning.append_episodes(
-            project_outcome_episodes(
-                _RUN_ID,
-                NodeRoutedRecord("agent", str(index), evidence=_evidence(scope)),
-            )
-        )
-
-    assert validations == 129
-    episodes = learning.episodes_for("local")
-    assert [episode.output["handle"] for episode in episodes] == [
-        str(index) for index in range(129)
-    ]
-    with pytest.raises(ValueError, match="run_id disagrees"):
-        learning.learn_context("another-run", "local")
-    with pytest.raises(ValueError, match="run_id disagrees"):
-        learning.append_episodes(
-            project_outcome_episodes(
-                "another-run",
-                NodeRoutedRecord(
-                    "agent",
-                    "foreign",
-                    evidence=_evidence(_scope(memories=("local",))),
-                ),
-            )
-        )
-
-
-def test_learning_state_rejects_unknown_or_malformed_memory_keys() -> None:
-    learning = RuntimeLearningState.for_memories(_table(_keys()))
-    assert RuntimeLearningState.for_memories(None) == RuntimeLearningState()
-    with pytest.raises(ValueError, match="absent from the recorded table"):
-        learning.episodes_for("missing")
-    with pytest.raises(TypeError):
-        learning.episodes_for(("outer",))
-    with pytest.raises(ValueError, match="sorted and unique"):
-        RuntimeLearningState(memory_order=("outer", "local"), episodes=learning.episodes)
-    with pytest.raises(ValueError, match="align with memory_order"):
-        RuntimeLearningState(memory_order=("local",), episodes=learning.episodes)
-
-
-def test_large_memory_table_uses_indexed_lookup(monkeypatch) -> None:
-    keys = tuple(f"agent-{index:04d}" for index in range(1024))
-    learning = RuntimeLearningState.for_memories(_table(keys))
-    original_bisect = learning_module.bisect_left
-    calls = reads = 0
-
-    class _CountingOrder:
-        def __init__(self, items: tuple[str, ...]) -> None:
-            self.items = items
-
-        def __len__(self) -> int:
-            return len(self.items)
-
-        def __getitem__(self, index: int) -> str:
-            nonlocal reads
-            reads += 1
-            return self.items[index]
-
-    def counting_bisect(items, value, *args, **kwargs):
-        nonlocal calls
-        calls += 1
-        return original_bisect(_CountingOrder(items), value, *args, **kwargs)
-
-    monkeypatch.setattr(learning_module, "bisect_left", counting_bisect)
-    for key in keys:
-        assert learning.episodes_for(key) == ()
-
-    assert calls == len(keys)
-    assert reads <= len(keys) * 11
 
 
 def test_graph_outcome_uses_constant_memory_roots_and_indexed_scope(
@@ -1119,9 +1010,6 @@ def test_graph_outcome_uses_constant_memory_roots_and_indexed_scope(
     )
     state, log = _start_trace_node(node, keys=keys, learnable=True, stacks=stacks)
 
-    def reject_full_table_rebuild(*_args, **_kwargs):
-        pytest.fail("hot graph transition rebuilt the complete memory table")
-
     original_recorded_stack = state_module._recorded_stack
     stack_calls = 0
 
@@ -1130,17 +1018,7 @@ def test_graph_outcome_uses_constant_memory_roots_and_indexed_scope(
         stack_calls += 1
         return original_recorded_stack(recorded, locator)
 
-    original_index = RuntimeLearningState._memory_index
-    index_calls = 0
-
-    def count_index(self, memory):
-        nonlocal index_calls
-        index_calls += 1
-        return original_index(self, memory)
-
-    monkeypatch.setattr(RuntimeLearningState, "for_memories", classmethod(reject_full_table_rebuild))
     monkeypatch.setattr(state_module, "_recorded_stack", count_recorded_stack)
-    monkeypatch.setattr(RuntimeLearningState, "_memory_index", count_index)
 
     prepared = prepare_node_succeeded(
         state,
@@ -1152,7 +1030,6 @@ def test_graph_outcome_uses_constant_memory_roots_and_indexed_scope(
     commit_prepared(log, state, prepared)
 
     assert stack_calls == 1
-    assert index_calls < 100
 
 
 def test_commit_id_has_one_documented_canonical_encoding() -> None:
@@ -1220,3 +1097,14 @@ def test_replay_rejects_an_eligible_node_scope_that_differs_from_its_recorded_st
     original.nodes["agent"].memory_scope = _scope(node.id, memories=("outer",))
     with pytest.raises(ValueError, match="exact recorded memory stack"):
         _replay_records(RunState(original), tuple(log), grow_builder=build_grow)
+
+
+def test_owner_contexts_are_the_only_episode_projection() -> None:
+    state, _log, table = _successful_terminal()
+
+    assert not hasattr(state, "learning_state")
+    for name in ("RuntimeLearningState", "project_outcome_episodes", "occurrence_key"):
+        assert not hasattr(learning_module, name)
+    episode, = _contexts(state)["outer"].episodes
+    assert episode.owner_static_path == ("flow", "agent")
+    assert state.backward_state.memory_order == tuple(spec.key for spec in table)

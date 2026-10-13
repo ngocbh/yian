@@ -175,8 +175,9 @@ def test_datetime_value_rejects_other_shapes(text):
 
 
 def test_seeded_clock_values_fit_the_grammar():
-    assert DateTimeValue(value=now_utc())
-    assert DateValue(value=today_utc())
+    now, today = now_utc(), today_utc()
+    assert DateTimeValue(value=now).value == now
+    assert DateValue(value=today).value == today
 
 
 def test_build_value_as_accepts_the_grammar():

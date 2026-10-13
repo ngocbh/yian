@@ -78,8 +78,8 @@ class ValueKind(str, Enum):
     STRING = "str"
     INTEGER = "int"
     NUMBER = "float"
-    DATE = "date"  # "YYYY-MM-DD" (see yian.typesys.temporal), stored as str; never auto-inferred
-    DATETIME = "datetime"  # see yian.typesys.temporal; stored as str; never auto-inferred
+    DATE = "date"  # grammar in yian.typesys.temporal; stored as str; never auto-inferred
+    DATETIME = "datetime"  # grammar in yian.typesys.temporal; stored as str; never auto-inferred
     BOOLEAN = "bool"
     OBJECT = "object"
     FILE = "file"  # reserved: never auto-inferred, not authorable yet
@@ -181,7 +181,7 @@ class DateValue(TypedValue):
 
 class DateTimeValue(TypedValue):
     kind: Literal[ValueKind.DATETIME] = ValueKind.DATETIME
-    value: str  # "YYYY-MM-DD[T| ]HH:MM[:SS[.f]][Z|+HH:MM]"; see yian.typesys.temporal
+    value: str  # "YYYY-MM-DD[T| ]HH:MM[:SS[.f]][Z|±HH:MM]"; see yian.typesys.temporal
 
     @field_validator("value")
     @classmethod

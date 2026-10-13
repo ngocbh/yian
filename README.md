@@ -148,7 +148,9 @@ log, and invariant faults propagate as exceptions.
 
 A library host can inject per-run tools (including its `ask_user` handler and
 named tool groups that an AGENT grants by name) with `tools=`, provider
-configuration, and named memory implementations. To pass a provider key without an
+configuration, and named memory implementations. Before a run starts, each TOOL
+node's inputs and `output:` are checked against the argument and return types its
+tool declares; see [Typed tools](docs/api.md#typed-tools). To pass a provider key without an
 environment variable, add it to the run's config, as in
 `llm_config={"provider": "anthropic", "model": "claude-sonnet-4-5", "api_key": key}`;
 the key is never recorded or echoed, so pass it again to `resume_flow(...,
@@ -156,9 +158,6 @@ api_key=key)` or `result.backward(..., api_key=key)`. A `base_url` beside the ke
 such as an Azure OpenAI resource's `https://<resource>.openai.azure.com/openai/v1/`
 with `"provider": "openai"`, is where that key is sent; flow files cannot set it.
 Without one, the provider's default or environment endpoint applies.
-Before a run starts, each TOOL node's inputs and `output:` are checked against the
-argument and return types its tool declares; see
-[Typed tools](docs/api.md#typed-tools).
 Passing `learnable=True`
 retains accepted execution for a later explicit `result.backward(feedback)` call,
 with or without memory. Each call is a new

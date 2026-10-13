@@ -480,20 +480,14 @@ def get_facts(symbol: str, limit: int = 10) -> list[Fact]:
     "Fetch recent facts for a symbol."   # docstring = the description the model sees
     ...
 ```
-**Typed TOOL nodes.** A returned value that does not fit `output:` fails the node
-(`contract.output`). Expected outcomes are variants of the output type, e.g.
-`OrderResult: Union[Filled, Interrupted]`, routed with `case` on the tag; the host's
-tool returns its `Interrupted` variant, and an exception still fails the node. When a
-run starts, every static TOOL node is checked against the run's tool: an input the
-tool doesn't take, a missing required input, an input type that can never fit, or an
-`output:` the tool's return annotation can never satisfy raises `ValueError`. Nothing
-is coerced: `qty: "10"` into an `int` argument fails. Narrower bindings (`Optional[int]`
-into `int`) start and the tool validates each call. An unknown `tool_id` fails only
-when its node runs. See `docs/syntax.md` (Typed TOOL nodes) and `docs/api.md`
-(Typed tools).
 Or give it to one run only: `run_flow(flow, inputs, tools={"get_facts": get_facts})`.
 That mapping is the run's whole tool set: registered tools are hidden. To keep
 them, pass `tools={**registered_tools(), "get_facts": get_facts}`.
+
+**Typed TOOL nodes.** Every returned value must fit `output:`; model expected outcomes
+as union variants (`Union[Filled, Interrupted]`) and route them with `case`. At run
+start, unknown or missing inputs and input or output types that can never fit raise
+`ValueError`, with no coercion (`qty: "10"` into `int` fails). See `docs/syntax.md`.
 
 **Tool groups.** When the tools an AGENT may use change between runs (for example,
 tools a permission system grants), grant a group name and let the host fill it:

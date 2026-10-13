@@ -927,7 +927,7 @@ flow that grants one needs a Python host. See [Tool groups](api.md#tool-groups).
 A TOOL node may declare `output:` of any type, including a union of records.
 Every value the tool returns is checked against it before downstream nodes see
 it. A mismatch fails the node with `contract.output`, located at `output:`.
-Without `output:`, any return value passes.
+Without `output:`, any JSON-like value passes.
 
 Expected outcomes are variants of the output type; route them with `case` on the
 tag:
@@ -967,19 +967,21 @@ nodes:
 output: ${on_filled.output | on_interrupted.output}
 ```
 
-Interrupts and progress belong to the host: its tool returns the `Interrupted`
+Interrupts belong to the host: its tool returns the `Interrupted`
 variant, and yian validates it like any other value. A tag the union lacks fails
 at the gate (`'rejected' is not a tag of the union`). An exception from the tool
 still fails the node.
 
 When a run starts, before any record is written, every static TOOL node is
 checked against the run's tool. That includes nodes that may never run: an
-unreached `case` branch, `defs:`, and LOOP and MAP bodies. The run raises
+unreached `case` branch and the child flows of `call`, `map`, and `loop` nodes
+(an uncalled `defs:` entry is not checked). The run raises
 `ValueError` for:
 
 - an input the tool doesn't take:
-  `TOOL node 'place' input 'qtty': tool 'place_order' takes no input 'qtty'; it takes ['qty', 'sym']`;
-- a required input the node doesn't pass;
+  `TOOL node 'place' input 'qtty': tool 'place_order' takes no such input; it takes ['qty', 'sym']`;
+- required inputs the node doesn't pass, all named in one error:
+  `TOOL node 'place' is missing inputs ['qty', 'sym'] that tool 'place_order' requires`;
 - an input whose type can never fit, by the same disjoint rule as a
   [typed binding](#load-check):
   `TOOL node 'place' input 'qty': tool 'place_order' takes int, but the binding is "10" (str)`;
@@ -994,6 +996,11 @@ Nothing is coerced: the string `"10"` into an `int` input fails here, though the
 tool would have converted it. An unknown `tool_id:` still fails only when its node
 runs. How yian reads a host tool's types is in
 [Typed tools](api.md#typed-tools).
+
+Changed: a coercible value such as `qty: "10"` into an `int` tool input used to be
+converted by the tool on each call; it now fails at run start. Input names and
+missing inputs used to fail only when the node ran; they are now checked at run
+start, even for nodes that may never run.
 
 A `code` node's `code:` field is one of two shapes:
 

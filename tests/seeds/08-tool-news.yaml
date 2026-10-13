@@ -4,7 +4,7 @@
 # Shows: kind: tool with flat tool_id (a TOOL_REGISTRY key) + `input` named by the tool's
 # arguments (bound like any node's inputs — ${...} or literal), the tool's whole value
 # consumed downstream, and the whole-string (typed) vs embedded (stringified) ${...}
-# distinction. This node declares no `output:`, so any return value passes; with one,
+# distinction. This node declares no `output:`, so any JSON-like value passes; with one,
 # every returned value is checked against it.
 
 id: tool-news

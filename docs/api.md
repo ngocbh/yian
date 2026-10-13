@@ -300,27 +300,16 @@ other's tools, and `resume_flow` uses the groups passed to it (see
 
 ### Typed tools
 
-A TOOL node calls one host tool directly. When a run starts, before the log is
-created, every static TOOL node is checked against the tool it names in this
-run's tools, including nodes that may never run. `run_flow`, and `resume_flow`
-for an unfinished run, raise `ValueError` naming the node, the input, the tool,
-and both types when:
-
-- the node passes an input the tool doesn't take;
-- the node omits an input the tool requires;
-- an input's binding type can never fit the tool's type (they are disjoint);
-- the node declares `output:` and the tool's return type can never fit it.
-
-The input check doesn't coerce. A `str` binding into an `int` argument fails, even
-the literal `"10"` that pydantic would convert. A narrower binding (`Optional[int]`
-into `int`, `str` into a `Literal`) starts, and the tool's argument validation
-checks each call. Unproven bindings are skipped. An unknown `tool_id` still fails
-only when its node runs. The flow syntax is in
-[Typed TOOL nodes](syntax.md#typed-tool-nodes).
+A TOOL node calls one host tool directly. When a run starts, before any record is
+written, every static TOOL node is checked against the tool it names in this run's
+tools, including nodes that may never run. `run_flow`, and `resume_flow` for an
+unfinished run, raise `ValueError` naming the node and the tool when an input
+name, a missing input, or an input or output type can't match; the rules and
+messages are in [Typed TOOL nodes](syntax.md#typed-tool-nodes).
 
 Input types come from the tool's public argument schema. Each pydantic v2 field
-is translated through its JSON Schema, so a tool whose schema is JSON Schema (such
-as an MCP tool) follows the same rules:
+is translated through its JSON Schema, so a tool whose schema is JSON Schema
+follows the same rules:
 
 | JSON Schema | yian type |
 | --- | --- |
@@ -345,8 +334,8 @@ or a `StructuredTool` built from a function. Return a `TypedDict`, `dict`,
 `list`, or scalar. The output check is skipped when there is no annotation, the
 annotation is `Any`, the tool is a `BaseTool` that doesn't wrap a function, the
 tool uses `response_format="content_and_artifact"`, or the return type is not
-JSON-like (a pydantic model, dataclass, set, date, or enum; such values fail the
-`output:` gate anyway). On Python 3.10 and 3.11, use `typing_extensions.TypedDict`;
+JSON-like (a pydantic model, dataclass, set, date, or enum; most such values fail
+the `output:` gate anyway). On Python 3.10 and 3.11, use `typing_extensions.TypedDict`;
 pydantic rejects `typing.TypedDict` there.
 
 ```python
@@ -372,7 +361,9 @@ def place_order(qty: int) -> Union[Filled, Interrupted]:
 result = run_flow(flow, {}, tools={"place_order": place_order})
 ```
 
-Whatever the run-start check finds, the node's `output:` gate still validates
+`flow` is the `OrderResult` example from [Typed TOOL nodes](syntax.md#typed-tool-nodes),
+loaded with `load_flow`.
+The run-start check doesn't replace the gate: the node's `output:` still validates
 each returned value.
 
 A node or flow-assert failure returns `RunResult(status="failed")` with one

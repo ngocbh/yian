@@ -16,6 +16,7 @@ Evaluation deliberately lives in `expr.expressions`.
   the result (`fn(x).field`) — mirroring the prompt call form.
 - Coalesce (`a | b | c`), default (`a :- d`), required (`a :? "msg"`), including a
   wrapped-ref default RHS (`a :- ${b}`).
+- The `isinstance(x, T)` special form, whose second argument is a bare type name.
 
 ## Shared terminal design for references and calls
 
@@ -56,7 +57,7 @@ from lark.exceptions import LarkError
 
 # Reuse the existing expression error — `expressions.ExpressionError` is already
 # the base of `expressions.RequiredError`, so parse failures here stay in one family.
-from yian.expr.expressions import ExpressionError
+from yian.expr.expressions import ISINSTANCE, ExpressionError
 
 # The unified grammar. Precedence, lowest to highest:
 #   coalesce (`|`) -> default/required (`:-`/`:?`) -> or -> and -> not
@@ -223,13 +224,55 @@ def _reject_dotted_callee(tree: Tree | Token) -> None:
             )
 
 
+def _is_bare_name(node: Tree | Token) -> bool:
+    """True for a `refcall` that is one `NAME` with no trailers or call suffix."""
+    return (
+        isinstance(node, Tree)
+        and node.data == "refcall"
+        and len(node.children) == 1
+        and isinstance(node.children[0], Token)
+        and node.children[0].type == "NAME"
+    )
+
+
+def _validate_isinstance(tree: Tree | Token) -> None:
+    """Require every `isinstance(...)` call to be `isinstance(<expr>, <TypeName>)`.
+
+    The second argument names a type, so it must be a bare `NAME`: no dotted path,
+    call, literal, or `${...}` wrapping. Keyword arguments are not accepted.
+    """
+    if not isinstance(tree, Tree):
+        return
+    for node in tree.iter_subtrees():
+        if node.data != "refcall" or str(node.children[0]) != ISINSTANCE:
+            continue
+        call_suffix = next(
+            (c for c in node.children if isinstance(c, Tree) and c.data == "call_suffix"),
+            None,
+        )
+        if call_suffix is None:
+            continue
+        args = call_suffix.children
+        if any(len(arg.children) == 2 for arg in args):
+            raise ExpressionError("isinstance takes positional arguments, not keyword arguments")
+        if len(args) != 2:
+            raise ExpressionError(
+                f"isinstance takes exactly two arguments (a value and a type name), got {len(args)}"
+            )
+        if not _is_bare_name(args[1].children[0]):
+            raise ExpressionError(
+                "isinstance's second argument must be a bare type name, e.g. isinstance(x, Buy)"
+            )
+
+
 def parse_expr(text: str) -> Tree | Token:
     """
     Parse one unified `${...}` expression into a Lark tree (PARSE ONLY).
 
     This does no evaluation and touches no variable pool — it is the shared front
-    end for the evaluator in `expr.expressions`. A dotted-callee builtin call (`a.b(x)`) is
-    rejected here; every other construct in the module docstring parses.
+    end for the evaluator in `expr.expressions`. A dotted-callee builtin call (`a.b(x)`) and
+    a malformed `isinstance(x, T)` are rejected here; every other construct in the module
+    docstring parses.
 
     Args:
         text (`str`):
@@ -248,8 +291,9 @@ def parse_expr(text: str) -> Tree | Token:
 
     Raises:
         `ExpressionError`:
-            If `text` does not parse, is a dotted-callee builtin call, or uses a
-            reserved operator word as a reference root.
+            If `text` does not parse, is a dotted-callee builtin call, uses a
+            reserved operator word as a reference root, or calls `isinstance`
+            with anything but a value and a bare type name.
     """
     try:
         tree = _PARSER.parse(text)
@@ -257,4 +301,5 @@ def parse_expr(text: str) -> Tree | Token:
         raise ExpressionError(f"could not parse expression {text!r}: {exc}") from exc
     _reject_dotted_callee(tree)
     _reject_reserved_reference_roots(tree)
+    _validate_isinstance(tree)
     return tree

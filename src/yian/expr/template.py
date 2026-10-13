@@ -27,7 +27,8 @@ NOT a binding (it reads already-bound declared inputs, mints no edge), but it is
 
 Knows about: `expr.expressions` (peer — `_parse_literal`, `ExpressionError`) and
 `expr.builtins` (the prompt `TEMPLATE_FNS` registry).
-Never imports: `nodes`, `compile`, `runtime`, `typesys` (pool-agnostic via `resolve`).
+Never imports: `nodes`, `compile`, `runtime`, or `typesys` at runtime (pool-agnostic via
+`resolve`; `Type` appears in annotations only).
 """
 
 from __future__ import annotations
@@ -40,6 +41,7 @@ from typing import TYPE_CHECKING, Any, Callable, Optional, Union
 from yian.expr import grammar
 from yian.expr.builtins import TEMPLATE_FNS
 from yian.expr.expressions import (
+    ISINSTANCE,
     ExpressionError,
     ResolveMode,
     _parse_literal,
@@ -49,8 +51,10 @@ from yian.expr.expressions import (
 )
 from yian.expr.lineage import TracedValue, ValueRoute
 
-if TYPE_CHECKING:  # `Tree`/`Token` appear ONLY in the `Span.tree` annotation
+if TYPE_CHECKING:  # annotation-only imports
     from lark import Token, Tree
+
+    from yian.typesys.values import Type
 
 
 # --------------------------------------------------------------------------- #
@@ -225,7 +229,12 @@ def _split_calls_aware(s: str, sep: str) -> list:
 
 
 def eval_binding(
-    source: str, resolve: Callable[[str], Any], item: Any = None, *, trace: bool = False,
+    source: str,
+    resolve: Callable[[str], Any],
+    item: Any = None,
+    *,
+    trace: bool = False,
+    types: dict[str, Type] | None = None,
 ) -> Any:
     """
     Evaluate a binding-value TEMPLATE string to a value (through the unified engine).
@@ -257,6 +266,8 @@ def eval_binding(
             Internal retention switch. The resolver returns `ResolvedValue` and
             `item` may supply the same carrier; return a `TracedValue` containing
             the ordinary result and the route collected by this evaluation.
+        types (`dict[str, Type] | None`, *optional*, defaults to `None`):
+            The type table `isinstance(x, T)` looks `T` up in. `None` means no types.
 
     Returns:
         `Any`:
@@ -274,7 +285,7 @@ def eval_binding(
     """
     return eval_template(
         scan_template(source), resolve, item=item, mode=ResolveMode.BINDING_NONE,
-        trace=trace,
+        trace=trace, types=types,
     )
 
 
@@ -621,8 +632,8 @@ def prompt_refs(text: str) -> list[str]:
     plain-span path plus each builtin-call argument path (literals contribute nothing), in
     source order (not deduped). Also rejects an unknown builtin callee — the loader relies
     on this compile-time check so a prompt naming a non-existent `TEMPLATE_FNS` formatter
-    fails at load, not at render. Raises `ExpressionError` on a malformed / unparseable
-    span too."""
+    fails at load, not at render — and `isinstance`, which a prompt has no type table
+    for. Raises `ExpressionError` on a malformed / unparseable span too."""
     segments = scan_template(text)
     for seg in segments:
         if isinstance(seg, Span):
@@ -632,24 +643,32 @@ def prompt_refs(text: str) -> list[str]:
 
 def _call_suffix_callees_absent_from_builtins(tree: "Tree | Token") -> list[str]:
     """Every callee named by a builtin-CALL inside a parsed `${...}` span `tree` whose
-    name is NOT a `TEMPLATE_FNS` builtin — i.e. a FLOW call embedded in a `${...}`
-    expression. A `refcall` carrying a `call_suffix` child is a call; a bare reference
-    (no suffix) names no callee and is skipped. Returned in tree-walk order (not deduped).
+    name is NOT a `TEMPLATE_FNS` builtin or `isinstance` — i.e. a FLOW call embedded in a
+    `${...}` expression. A `refcall` carrying a `call_suffix` child is a call; a bare
+    reference (no suffix) names no callee and is skipped. Returned in tree-walk order (not deduped).
     An empty list means the span calls only known builtins (or no callee at all)."""
     from lark import Tree as _Tree  # runtime import: `Tree` is TYPE_CHECKING-only above
 
     if not isinstance(tree, _Tree):
         return []
-    out: list[str] = []
-    for node in tree.iter_subtrees():
-        if node.data != "refcall":
-            continue
-        has_call = any(
-            isinstance(c, _Tree) and c.data == "call_suffix" for c in node.children
-        )
-        if has_call and str(node.children[0]) not in TEMPLATE_FNS:
-            out.append(str(node.children[0]))
-    return out
+    return [
+        callee for callee in _call_callees(tree)
+        if callee not in TEMPLATE_FNS and callee != ISINSTANCE
+    ]
+
+
+def _call_callees(tree: "Tree | Token") -> list[str]:
+    """Every callee named by a call inside a parsed `${...}` span, in tree-walk order."""
+    from lark import Tree as _Tree  # runtime import: `Tree` is TYPE_CHECKING-only above
+
+    if not isinstance(tree, _Tree):
+        return []
+    return [
+        str(node.children[0])
+        for node in tree.iter_subtrees()
+        if node.data == "refcall"
+        and any(isinstance(c, _Tree) and c.data == "call_suffix" for c in node.children)
+    ]
 
 
 def _reject_unknown_prompt_builtin(tree: Tree | Token) -> None:
@@ -657,7 +676,12 @@ def _reject_unknown_prompt_builtin(tree: Tree | Token) -> None:
     absent from `TEMPLATE_FNS`. Walks the parse tree for `refcall`s carrying a `call_suffix`
     (a call); a bare reference (no suffix) names no builtin and is skipped. This is the
     compile-time mirror of the render-time `unknown expression function` raise, so the
-    loader can reject an unknown prompt builtin without evaluating."""
+    loader can reject an unknown prompt builtin without evaluating. `isinstance` is
+    rejected too: prompt builtins only format, and a prompt has no type table."""
+    if ISINSTANCE in _call_callees(tree):
+        raise ExpressionError(
+            "isinstance is not a prompt function; compute it in an input binding"
+        )
     bad = _call_suffix_callees_absent_from_builtins(tree)
     if bad:
         raise ExpressionError(f"unknown prompt function {bad[0]!r}")
@@ -773,6 +797,7 @@ def eval_template(
     mode: ResolveMode = ResolveMode.BINDING_NONE,
     *,
     trace: bool = False,
+    types: dict[str, Type] | None = None,
 ) -> Any:
     """
     Evaluate scanned template `segments` to a value.
@@ -799,6 +824,8 @@ def eval_template(
             Internal retention switch. The resolver returns `ResolvedValue` and
             `item` may supply the same carrier. Record each embedded expression's
             route and half-open character span in the rendered output.
+        types (`dict[str, Type] | None`, *optional*, defaults to `None`):
+            The type table `isinstance(x, T)` looks `T` up in. `None` means no types.
 
     Returns:
         `Any`:
@@ -816,7 +843,7 @@ def eval_template(
             When a traced resolver does not return `ResolvedValue`.
     """
     def eval_span(span: Span) -> Any:
-        result = eval_expr(span.tree, resolve, item=item, mode=mode, trace=trace)
+        result = eval_expr(span.tree, resolve, item=item, mode=mode, trace=trace, types=types)
         value = result.value if trace else result
         if value is None and mode is ResolveMode.STRICT_RAISE:
             raise ExpressionError("null value in strict template")

@@ -1,0 +1,241 @@
+"""`isinstance(x, T)` in the expression language.
+
+`isinstance` is a special form: the first argument is an expression, the second a
+bare type name looked up in the node's type table (`types=`), never a reference.
+"""
+
+import pytest
+
+from yian.expr.expressions import (
+    ExpressionError,
+    condition_refs,
+    eval_expr,
+    evaluate_when,
+    evaluate_when_record,
+    expr_refs,
+    infer_expr_type,
+    rewrite_condition_refs,
+    rewrite_expr_refs,
+)
+from yian.expr.grammar import parse_expr
+from yian.expr.lineage import ResolvedValue, SourceRef
+from yian.expr.template import (
+    binding_co_skips,
+    eval_binding,
+    eval_template,
+    expr_refs_of,
+    flow_call_callees_in_spans,
+    prompt_refs,
+    rewrite_template_refs,
+    scan_template,
+)
+from yian.typesys.pool import VariablePool
+from yian.typesys.values import Type, ValueKind
+
+
+def _member(tag: str, **fields: ValueKind) -> Type:
+    """Build a closed record tagged by a single-value `action` Literal."""
+    record_fields = {"action": Type(kind=ValueKind.STRING, tags=frozenset({tag}))}
+    record_fields.update({name: Type.scalar(kind) for name, kind in fields.items()})
+    return Type(kind=ValueKind.OBJECT, fields=record_fields, required=frozenset(record_fields))
+
+
+BUY = _member("buy", qty=ValueKind.INTEGER)
+SELL = _member("sell", price=ValueKind.NUMBER)
+TYPES = {"Buy": BUY, "Sell": SELL, "Order": Type(kind=ValueKind.OBJECT, variants=(BUY, SELL))}
+
+A_BUY = {"action": "buy", "qty": 3}
+A_SELL = {"action": "sell", "price": 1.5}
+
+
+def _resolver(**values):
+    def resolve(path):
+        head, *parts = path.split(".")
+        value = values.get(head)
+        for part in parts:
+            value = value.get(part) if isinstance(value, dict) else None
+        return value
+
+    return resolve
+
+
+# --- evaluation --- #
+
+
+def test_eval_expr_checks_the_value_against_the_named_type():
+    resolve = _resolver(d={"output": A_BUY})
+    assert eval_expr(parse_expr("isinstance(d.output, Buy)"), resolve, types=TYPES) is True
+    assert eval_expr(parse_expr("isinstance(d.output, Sell)"), resolve, types=TYPES) is False
+    assert eval_expr(parse_expr("isinstance(d.output, Order)"), resolve, types=TYPES) is True
+
+
+def test_a_missing_value_is_not_an_instance_of_a_record():
+    assert eval_expr(parse_expr("isinstance(d.output, Buy)"), _resolver(), types=TYPES) is False
+
+
+def test_isinstance_composes_with_other_operators():
+    resolve = _resolver(d={"output": A_BUY})
+    tree = parse_expr("isinstance(d.output, Buy) and d.output.qty > 2")
+    assert eval_expr(tree, resolve, types=TYPES) is True
+    tree = parse_expr("not isinstance(d.output, Buy)")
+    assert eval_expr(tree, resolve, types=TYPES) is False
+
+
+def test_evaluate_when_record_uses_the_type_table():
+    assert evaluate_when_record("isinstance(order, Sell)", {"order": A_SELL}, types=TYPES)
+    assert not evaluate_when_record("${isinstance(order, Buy)}", {"order": A_SELL}, types=TYPES)
+
+
+def test_evaluate_when_uses_the_type_table():
+    pool = VariablePool()
+    pool.set("d", A_SELL)
+    assert evaluate_when("isinstance(d.output, Sell)", pool, types=TYPES)
+    assert not evaluate_when("isinstance(d.output, Buy)", pool, types=TYPES)
+
+
+def test_eval_binding_and_eval_template_use_the_type_table():
+    resolve = _resolver(d={"output": A_BUY})
+    assert eval_binding("${isinstance(d.output, Buy)}", resolve, types=TYPES) is True
+    assert eval_binding("buy? ${isinstance(d.output, Sell)}", resolve, types=TYPES) == "buy? False"
+    segments = scan_template("${isinstance(d.output, Buy)}")
+    assert eval_template(segments, resolve, types=TYPES) is True
+
+
+def test_scalar_type_names_check_scalars():
+    types = {"int": Type.scalar(ValueKind.INTEGER), "str": Type.scalar(ValueKind.STRING)}
+    resolve = _resolver(n=3)
+    assert eval_expr(parse_expr("isinstance(n, int)"), resolve, types=types) is True
+    assert eval_expr(parse_expr("isinstance(n, str)"), resolve, types=types) is False
+
+
+@pytest.mark.parametrize("types", [None, {}, {"Sell": SELL}])
+def test_an_unknown_type_name_is_an_error_naming_it(types):
+    with pytest.raises(ExpressionError, match="'Buy'"):
+        eval_expr(parse_expr("isinstance(d.output, Buy)"), _resolver(d={"output": A_BUY}), types=types)
+
+
+def test_record_evaluation_without_types_names_the_type():
+    with pytest.raises(ExpressionError, match="'Buy'"):
+        evaluate_when_record("isinstance(order, Buy)", {"order": A_BUY})
+
+
+# --- parsing --- #
+
+
+@pytest.mark.parametrize("text", [
+    "isinstance(x)",
+    "isinstance()",
+    "isinstance(x, Buy, Sell)",
+])
+def test_isinstance_takes_exactly_two_arguments(text):
+    with pytest.raises(ExpressionError, match="isinstance"):
+        parse_expr(text)
+
+
+@pytest.mark.parametrize("text", [
+    'isinstance(x, "Buy")',
+    "isinstance(x, a.b)",
+    "isinstance(x, ${Buy})",
+    "isinstance(x, f(Buy))",
+    "isinstance(x, 3)",
+    "isinstance(x, [Buy])",
+])
+def test_the_second_argument_must_be_a_bare_type_name(text):
+    with pytest.raises(ExpressionError, match="type name"):
+        parse_expr(text)
+
+
+@pytest.mark.parametrize("text", [
+    "isinstance(value=x, type=Buy)",
+    "isinstance(x, type=Buy)",
+])
+def test_isinstance_has_no_keyword_form(text):
+    with pytest.raises(ExpressionError, match="keyword"):
+        parse_expr(text)
+
+
+def test_isinstance_nested_in_a_larger_expression_is_validated():
+    with pytest.raises(ExpressionError, match="isinstance"):
+        parse_expr("a > 1 and isinstance(x)")
+    with pytest.raises(ExpressionError, match="isinstance"):
+        parse_expr("upper(isinstance(x, a.b))")
+
+
+# --- references and rewrites --- #
+
+
+def test_reference_walks_skip_the_type_name():
+    assert expr_refs(parse_expr("isinstance(d.output, Buy)")) == ["d.output"]
+    assert condition_refs("isinstance(d.output, Buy) and d.output.qty > 1") == [
+        "d.output", "d.output.qty",
+    ]
+    assert condition_refs("${isinstance(d.output, Buy)}") == ["d.output"]
+    assert expr_refs_of("ok: ${isinstance(d.output, Buy)}") == ["d.output"]
+
+
+def test_rewrites_leave_the_type_name_alone():
+    def rename(path):
+        return "x." + path
+
+    assert rewrite_expr_refs("isinstance(d.output, Buy)", rename) == "isinstance(x.d.output, Buy)"
+    assert rewrite_condition_refs("${isinstance(d.output, Buy)}", rename) == (
+        "${isinstance(x.d.output, Buy)}"
+    )
+    assert rewrite_template_refs("ok ${isinstance(d.output, Buy)}", rename) == (
+        "ok ${isinstance(x.d.output, Buy)}"
+    )
+
+
+# --- static checks --- #
+
+
+def test_infer_expr_type_gives_bool_without_looking_up_the_type_name():
+    seen = []
+
+    def ref_type(path):
+        seen.append(path)
+        return None
+
+    inferred = infer_expr_type(parse_expr("isinstance(d.output, Buy)"), ref_type)
+    assert inferred == Type.scalar(ValueKind.BOOLEAN)
+    assert "Buy" not in seen
+
+
+def test_isinstance_binding_does_not_co_skip():
+    assert binding_co_skips("${isinstance(d.output, Buy)}") is False
+    assert binding_co_skips("${upper(d.output)}") is False
+
+
+# --- callee and prompt handling --- #
+
+
+def test_isinstance_is_not_a_flow_callee():
+    assert flow_call_callees_in_spans("${isinstance(x, Buy)}") == []
+    assert flow_call_callees_in_spans("${isinstance(x, Buy) and flow(a=1)}") == ["flow"]
+
+
+def test_isinstance_is_not_a_prompt_function():
+    with pytest.raises(ExpressionError, match="isinstance is not a prompt function"):
+        prompt_refs("${isinstance(x, Buy)}")
+    with pytest.raises(ExpressionError, match="compute it in an input binding"):
+        prompt_refs("Order: ${render_as_json(x)} ${upper(isinstance(x, Buy))}")
+
+
+# --- tracing --- #
+
+
+def test_traced_isinstance_records_one_route_over_the_first_argument():
+    def resolve(path):
+        head, *parts = path.split(".")
+        return ResolvedValue(A_BUY, True, SourceRef("run", 0, tuple(parts)))
+
+    traced = eval_binding("${isinstance(d.output, Buy)}", resolve, trace=True, types=TYPES)
+    assert traced.value is True
+    route = traced.route
+    assert route.kind == "opaque"
+    assert route.expression == "isinstance(d.output, Buy)"
+    assert len(route.children) == 1
+    assert route.names == ("",)
+    child = route.children[0]
+    assert child.kind == "source"
+    assert child.source == SourceRef("run", 0, ("output",))

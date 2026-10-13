@@ -162,7 +162,7 @@ def test_loaded_recursive_flow_can_be_run_twice_without_graph_or_llm_leaks(monke
     first = run_flow(
         loaded,
         {"topics": ["alpha", "beta"]},
-        llm_config={"provider": "openai", "max_tokens": 111},
+        llm_config={"provider": "openai", "openai_reasoning_effort": "low"},
     )
     assert first.status == "succeeded", first.failure
     assert _graph_snapshot(loaded.compiled) == static
@@ -172,7 +172,7 @@ def test_loaded_recursive_flow_can_be_run_twice_without_graph_or_llm_leaks(monke
     second = run_flow(
         loaded,
         {"topics": ["alpha", "beta"]},
-        llm_config={"provider": "google", "max_tokens": 222},
+        llm_config={"provider": "google", "google_thinking_level": "high"},
     )
     assert second.status == "succeeded", second.failure
     assert second.output == first.output
@@ -180,12 +180,12 @@ def test_loaded_recursive_flow_can_be_run_twice_without_graph_or_llm_leaks(monke
 
     assert first_configs
     assert all(
-        config["provider"] == "openai" and config["max_tokens"] == 111
+        config["provider"] == "openai" and config["openai_reasoning_effort"] == "low"
         for config in first_configs
     )
     assert seen
     assert all(
-        config["provider"] == "google" and config["max_tokens"] == 222
+        config["provider"] == "google" and config["google_thinking_level"] == "high"
         for config in seen
     )
 

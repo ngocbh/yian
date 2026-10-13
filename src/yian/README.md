@@ -211,7 +211,9 @@ rejected key, so `AgentNode` and `ProfileMemory.learn` scrub the key and its
 masked fragments from their errors (`llm_clients.redact`) before the kind-blind
 runtime records the failure. Authored layers cannot set `api_key` or `_host_key`,
 because they reach the recorded effective map; the loader rejects a flow- or
-def-level `api_key`.
+def-level `api_key`. The loader checks flow- and def-level `llm_config:` against
+`LLMConfig` as it does a node's, and the cascade rejects unknown keys in the host
+layer, so a typo never reaches the recorded map.
 
 `LLMConfig.base_url` is where a config's key is sent, so a host key is never sent
 to a `base_url` from an authored layer. This covers authored layers only: when the

@@ -448,9 +448,8 @@ output: ${{child.output}}
 def test_host_key_marker_is_not_an_authored_option():
     with pytest.raises(ValueError, match="_host_key"):
         run_flow(load_flow(_FLOW), {}, llm_config={"provider": "vllm", "model": "m", "_host_key": True})
-    flow = load_flow(_FLOW.replace("nodes:", "llm_config: {_host_key: true}\nnodes:"))
     with pytest.raises(ValueError, match="_host_key"):
-        run_flow(flow, {}, llm_config={"provider": "vllm", "model": "m"})
+        load_flow(_FLOW.replace("nodes:", "llm_config: {_host_key: true}\nnodes:"))
 
 
 def test_reflective_memory_refuses_a_key_it_would_record():

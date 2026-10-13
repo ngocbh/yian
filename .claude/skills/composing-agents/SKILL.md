@@ -339,6 +339,8 @@ off for checks and graders that must not be talked out of their job.
 A node may pin its model via `llm_config:`; otherwise the process defaults captured
 once when the run initializes apply. `inherit: false` skips authored flow/parent/CLI
 layers but still receives those provider/model defaults.
+Node, `defs:`, and flow `llm_config:` are all checked at load against the same
+fields; `inherit:` is node-only.
 OpenAI subscription and API-key connections both use `provider: openai`;
 select the method and default model with `yian auth openai`.
 Never put `api_key` or `base_url` in a flow's `llm_config:`; loading fails. A

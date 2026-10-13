@@ -508,3 +508,16 @@ def test_replay_uses_logged_map_after_environment_changes(monkeypatch):
     assert right.nodes["agent"].llm_config == recorded["right/leaf_call/agent"]
     assert left.nodes["agent"].llm_config["provider"] == "openai"
     assert right.nodes["agent"].llm_config["provider"] == "anthropic"
+
+
+@pytest.mark.parametrize("layer", [{"modle": "x"}, {"provider": "openai", "inherit": False}])
+def test_host_layer_rejects_unknown_fields(layer):
+    loaded = load_flow("""
+id: f
+name: f
+nodes:
+  a: {kind: agent, prompt: hi}
+output: ${a.output}
+""")
+    with pytest.raises(ValueError, match=r"llm_config has unknown field\(s\)"):
+        resolve_llm_cascade(loaded.compiled, layer, defaults=_DEFAULTS, provider_models=_PROVIDER_MODELS)

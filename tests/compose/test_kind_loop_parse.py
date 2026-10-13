@@ -68,3 +68,59 @@ def test_loop_parse_maps_until_keyword():
     assert desc.until_ == "${carry.done}"
     assert desc.while_ is None
     assert isinstance(desc.field_ranges[("field", "until")], SourceRange)
+
+
+_PREDICATE_FLOW = """\
+id: f
+name: f
+input:
+  n: int
+defs:
+  body:
+    input:
+      x: int
+    nodes:
+      inc:
+        kind: code
+        code: return inputs["x"] + 1
+        input:
+          x: ${input.x}
+        output: int
+    output:
+      x: ${inc.output}
+nodes:
+  lp:
+    kind: loop
+    call: body
+    input:
+      x: ${input.n}
+    PREDICATE
+    max: 3
+output: ${lp.output}
+"""
+
+
+@pytest.mark.parametrize(
+    ("predicate", "message"),
+    [
+        ("while: true", r"`while:` must be an expression string .* \(got True\)"),
+        ("while: false", r"`while:` must be an expression string .* \(got False\)"),
+        ("until: 1", r"`until:` must be an expression string .* \(got 1\)"),
+        ("until: [x]", r"`until:` must be an expression string .* \(got \['x'\]\)"),
+    ],
+)
+def test_loop_rejects_a_non_string_predicate_at_its_field(predicate, message):
+    """A YAML bool/number/list predicate is a located load error, not a crash or a runtime failure."""
+    from yian.compose import load_flow
+
+    with pytest.raises(LoadError, match=message) as excinfo:
+        load_flow(_PREDICATE_FLOW.replace("PREDICATE", predicate))
+    assert excinfo.value.diagnostic.frames[-1].range.start_line == 24
+
+
+def test_loop_rejects_an_empty_predicate_at_load():
+    """`while: ''` is falsy but present: it fails to parse at load, not at runtime."""
+    from yian.compose import load_flow
+
+    with pytest.raises(LoadError, match=r"`while:` is not a valid boolean expression"):
+        load_flow(_PREDICATE_FLOW.replace("PREDICATE", "while: ''"))

@@ -1134,6 +1134,10 @@ gate:
   else: cautious
 ```
 
+`cases:` is a list of `{when:, then:}` mappings. Any other shape (a `cases:`
+mapping without `- `, a bare word, a list item that is not a mapping) is a load
+error at that field.
+
 Read the taken branch's output with `${gate.output}`:
 
 ```yaml
@@ -1791,7 +1795,9 @@ nodes:
 *before* each iteration; 0 iterations run if the seed already fails it. It is a
 record-scoped boolean over bare refs — every ref must name a **carried record
 field** (a typo'd name is rejected at load, not silently read as falsy) — written
-in the canonical bare form: `while: not exited`. `max:` is optional.
+in the canonical bare form: `while: not exited`. `max:` is optional. The
+predicate is an expression string: a YAML `true`, `false`, number, or list is a
+load error, and so is an empty string.
 
 **`until:` — post-check / do-while (1+ runs).** Same record-scoped predicate
 syntax as `while:` (bare refs, no `${}`), but checked *after*

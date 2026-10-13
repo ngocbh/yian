@@ -532,6 +532,7 @@ route:
   else: more_info_brief        # runs when no `when:` matches
 ```
 Searched form (first true `when:` wins, no `on:`): `when: "score.output >= 0.5"`.
+`cases:` is a list of `{when:, then:}` mappings; any other shape is a load error.
 Routing on a `Literal` node output is **exhaustiveness-checked** — omitting a tag
 with no `else:` is a load error.
 
@@ -744,7 +745,8 @@ blocks (a `human_input` leaf) makes the loop a live chat REPL: the same run thre
 each answered turn. Pick **exactly one**
 driver: `while:` (pre-check, 0+ runs), `until:` (post-check / do-while, 1+ runs,
 stop when the predicate becomes true), or `times: N` (fixed count). `max:` is
-optional for `while:`/`until:` but **redundant and rejected** with `times:`.
+optional for `while:`/`until:` but **redundant and rejected** with `times:`. A
+`while:`/`until:` is an expression string; `while: true` or `until: 1` is a load error.
 
 #### Conversational REPL — the `loop` shape used by `yian chat`
 A chat is a `loop` whose body blocks each turn at `ask` (`human_input`), then a

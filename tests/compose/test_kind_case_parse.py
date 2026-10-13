@@ -286,7 +286,7 @@ def test_case_descriptor_rejects_misaligned_or_nonopaque_origins():
         descriptor.build(BuildContext({}))
 
 
-@pytest.mark.parametrize("malformed_cases", ["null", "7"])
+@pytest.mark.parametrize("malformed_cases", ["[{then: done}]", "[{when: 1}]"])
 def test_source_attachment_does_not_preempt_malformed_case_validation(
     malformed_cases,
 ):
@@ -609,3 +609,35 @@ def test_case_parse_on_form_keeps_output_and_styles():
     assert desc.outputs == "str"
     assert desc.then_styles == ["double"]
     assert desc.else_style == "single"
+
+
+_SHAPE_HEAD = "id: f\nname: f\ninput:\n  n: int\nnodes:\n  gate:\n    kind: case\n"
+_SHAPE_TAIL = (
+    "  done:\n    kind: code\n    code: return 1\n    output: int\n"
+    "output: ${done.output}\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("body", "message", "line"),
+    [
+        (
+            '    cases: {when: "${input.n} > 1", then: done}\n',
+            r"`cases:` must be a list of \{when:, then:\} mappings \(got \{'when'",
+            8,
+        ),
+        ("    cases: done\n", r"`cases:` must be a list .* \(got 'done'\)", 8),
+        ("    cases: null\n", r"`cases:` must be a list .* \(got None\)", 8),
+        ("    cases: 7\n", r"`cases:` must be a list .* \(got 7\)", 8),
+        (
+            "    cases: [done]\n",
+            r"`cases\[0\]` must be a \{when:, then:\} mapping \(got 'done'\)",
+            8,
+        ),
+    ],
+)
+def test_case_rejects_malformed_cases_at_their_location(body, message, line):
+    """A `cases:` that is not a list of mappings is a located load error, not a crash."""
+    with pytest.raises(LoadError, match=message) as excinfo:
+        load_flow(_SHAPE_HEAD + body + _SHAPE_TAIL)
+    assert excinfo.value.diagnostic.frames[-1].range.start_line == line

@@ -33,7 +33,7 @@ from yian.nodes.agent.backward import backward_agent
 from yian.nodes.agent.loop import MAX_TOOL_ITERATIONS, run_agent
 from yian.nodes.agent.structured import _structured_validation_path
 from yian.nodes.base import BackwardContext, BackwardResult, Node, NodeKind, Output, Steering, _CapabilityFault, _HostStop
-from yian.nodes.binding import apply_defaults
+from yian.nodes.binding import BindingError, apply_defaults
 from yian.nodes.contracts import (
     Parameter,
     ValueContract,
@@ -281,10 +281,11 @@ class AgentNode(Node):
     def exception_origin(self, exception: Exception) -> OriginRef | None:
         """Select a generated structured-output contract origin when proven.
 
+        A memory recall or variable-default binding failure keeps its own origin.
         Unrelated Pydantic errors, non-validation failures, and contracts without
         authored provenance retain the common node-origin fallback.
         """
-        if isinstance(exception, MemoryRecallError):
+        if isinstance(exception, (MemoryRecallError, BindingError)):
             return (
                 exception.origin
                 if exception.origin is not None

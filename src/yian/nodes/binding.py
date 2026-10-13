@@ -287,7 +287,7 @@ def apply_defaults(
     payload rather than the typed value system's normalized representation.
 
     Raises:
-        BindingError: With ``failure_code="binding.evaluate"`` when a default holds a
+        `BindingError`: With ``failure_code="binding.evaluate"`` when a default holds a
             NaN or infinity at any depth or violates its parameter's contract.
     """
     _validate_parameters(params)
@@ -449,7 +449,7 @@ def bind_params(
         `dict[str, Any]`: The bound `{name: value}` record handed to the node instead of the pool.
 
     Raises:
-        BindingError: On expression/default/required evaluation failure, a resolved value
+        `BindingError`: On expression/default/required evaluation failure, a resolved value
             or filled default holding a NaN or infinity at any depth, typed binding
             rejection, or supplied input contract rejection; ``failure_code`` identifies
             the stage.
@@ -480,7 +480,7 @@ def bind_params(
                     value = p.default
                     used_default = True
                     _reject_nonfinite_binding(
-                        value, f"input {p.name!r}", p.default_origin or p.origin
+                        value, f"default for {p.name!r}", p.default_origin or p.origin
                     )
                     if collector is not None:
                         collector._record_source(p.name, ValueRoute.literal(value), False)

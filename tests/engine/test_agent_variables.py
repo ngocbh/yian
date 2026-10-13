@@ -135,24 +135,6 @@ def test_retained_agent_canonicalizes_supported_file_variable_without_changing_d
 
 
 @pytest.mark.parametrize("number", [float("inf"), float("-inf"), float("nan")])
-def test_nonfinite_variable_default_fails_the_agent_with_or_without_capture(monkeypatch, number):
-    from yian.nodes.contracts import ValueContract
-    from yian.runtime.eval_node import eval_node
-    from yian.typesys import Type, ValueKind, VariablePool
-
-    node = AgentNode("writer", prompt="ready", variables=[
-        Parameter("score", ValueContract(Type(ValueKind.NUMBER)), has_default=True, default=number),
-    ])
-    calls = []
-    monkeypatch.setattr(agent_module, "run_agent", lambda ctx: calls.append(ctx.prompt) or Output(ctx.prompt))
-    for capture in (False, True):
-        failure = eval_node(node, None, VariablePool(), capture_bindings=capture).outcome
-        assert failure.failure.code == "node.execute"
-        assert "non-finite" in failure.failure.message
-    assert calls == []
-
-
-@pytest.mark.parametrize("number", [float("inf"), float("-inf"), float("nan")])
 def test_retained_agent_fails_on_nonfinite_variable_model_extras(monkeypatch, number):
     from pydantic import BaseModel, ConfigDict
     from yian.compile.model import START_ID, END_ID

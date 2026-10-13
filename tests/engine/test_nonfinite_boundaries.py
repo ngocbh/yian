@@ -6,9 +6,11 @@ import pytest
 
 import yian.nodes.agent.node as agent_module
 from yian import load_flow, run_flow
+from yian.events import NodeStarted
 from yian.nodes.base import Output
 from yian.nodes.binding import BindingError, apply_defaults
-from yian.nodes.contracts import Parameter
+from yian.nodes.contracts import Parameter, ValueContract
+from yian.typesys import Type, ValueKind
 
 
 def _code_flow(output: str, value: str) -> str:
@@ -201,6 +203,7 @@ def test_a_binding_that_evaluates_to_infinity_fails_its_node(learnable):
     result = run_flow(load_flow(_SCALED_BINDING_FLOW), {"x": 1e308}, learnable=learnable)
 
     _assert_binding_fails(result, "c", "input 'y': non-finite number inf is not a yian value")
+    assert result.failure.trace[0].key == "/s:root/s:node/s:c/s:input/s:y/s:binding"
 
 
 def test_a_learnable_literal_nan_binding_fails_its_node():
@@ -255,7 +258,44 @@ def test_a_call_binding_that_evaluates_to_infinity_fails_the_call(declared):
     result = run_flow(load_flow(_call_flow(declared)), {"x": 1e308})
 
     _assert_binding_fails(result, "k", "input 'y': non-finite number inf is not a yian value")
-    assert not [event for event in result.events if "inner" in str(getattr(event, "node_id", ""))]
+    started = [event.node_id for event in result.events if isinstance(event, NodeStarted)]
+    assert started == ["__start__", "k"]
+
+
+@pytest.mark.parametrize("learnable", [False, True])
+def test_a_string_coerced_to_infinity_for_a_def_input_fails_the_call(learnable):
+    flow = load_flow("""
+id: nonfinite
+name: nonfinite
+defs:
+  body:
+    input:
+      y: float
+    nodes:
+      inner:
+        kind: code
+        input:
+          y: ${input.y}
+        code: |
+          return inputs["y"]
+    output: ${inner.output}
+nodes:
+  p:
+    kind: code
+    code: |
+      return "inf"
+  k:
+    kind: call
+    call: body
+    input:
+      y: ${p.output}
+output: ${k.output}
+""")
+    result = run_flow(flow, {}, learnable=learnable)
+
+    _assert_binding_fails(
+        result, "k/__start__", "input 'y': non-finite number inf is not a yian value"
+    )
 
 
 def test_a_literal_binding_names_the_nonfinite_path():
@@ -295,10 +335,9 @@ output: ${c.output}
 """)
     result = run_flow(flow, {})
 
-    assert result.status == "failed"
-    assert result.failure.code == "binding.evaluate"
-    assert result.failure.node_id == "__start__"
-    assert "input 'x'" in result.failure.message
+    _assert_binding_fails(
+        result, "__start__", "default for 'x': non-finite number inf is not a yian value"
+    )
 
 
 def _map_flow(over: str, item_binding: str) -> str:
@@ -334,6 +373,7 @@ def test_a_nonfinite_map_over_item_fails_the_map():
     assert result.failure.node_id == "m"
     assert "`over`" in result.failure.message
     assert "at [1]" in result.failure.message
+    assert result.failure.trace[0].key == "/s:root/s:node/s:m/s:reserved/s:over/s:binding"
 
 
 def test_a_nonfinite_map_item_binding_fails_the_map():
@@ -391,6 +431,15 @@ def test_apply_defaults_rejects_a_nonfinite_default():
     assert str(caught.value) == "default for 'p': non-finite number inf is not a yian value"
 
 
+def test_apply_defaults_rejects_a_nonfinite_default_before_its_contract():
+    parameter = Parameter(
+        "p", ValueContract(Type(ValueKind.INTEGER)), has_default=True, default=math.nan
+    )
+
+    with pytest.raises(BindingError, match="^default for 'p': non-finite number nan"):
+        apply_defaults([parameter], {})
+
+
 @pytest.mark.parametrize("learnable", [False, True])
 def test_a_nonfinite_agent_variable_default_fails_the_agent(monkeypatch, learnable):
     calls = []
@@ -412,17 +461,6 @@ output: ${writer.output}
     assert result.status == "failed"
     assert result.failure.code == "node.execute"
     assert result.failure.node_id == "writer"
-    assert "default for 't': non-finite" in result.failure.message
+    assert result.failure.message == "default for 't': non-finite number inf is not a yian value"
+    assert result.failure.trace[0].key == "/s:root/s:node/s:writer/s:variables/s:t/s:default"
     assert calls == []
-
-
-def test_apply_defaults_rejects_a_nonfinite_default_before_its_contract():
-    from yian.nodes.contracts import ValueContract
-    from yian.typesys import Type, ValueKind
-
-    parameter = Parameter(
-        "p", ValueContract(Type(ValueKind.INTEGER)), has_default=True, default=math.nan
-    )
-
-    with pytest.raises(BindingError, match="^default for 'p': non-finite number nan"):
-        apply_defaults([parameter], {})

@@ -134,6 +134,7 @@ from yian.typesys.values import (  # noqa: E402
 from yian.typesys.types import (  # noqa: E402
     RecordDef,
     VariantDef,
+    read_typedefs,
     resolve_type,  # noqa: F401
     type_for,
 )
@@ -273,8 +274,43 @@ def test_bounded_typed_write_preserves_the_previous_value_on_nested_rejection():
     with pytest.raises(TypeCheckError) as caught:
         pool.set("scores", [{"value": 0.5}, {"value": 1.1}], typ)
     assert caught.value.path == (1, "value")
-    assert pool.get("scores") == [{"value": 1}]
-    assert type(pool.get("scores")[0]["value"]) is int
+    assert pool.get("scores") == [{"value": 1.0}]
+    assert type(pool.get("scores")[0]["value"]) is float
+
+
+def test_float_slot_widens_at_any_depth():
+    reg = {
+        "Point": RecordDef(fields={"x": "float", "xs": "list[float]"}),
+        "Wrap": RecordDef(fields={"inner": "Point"}),
+    }
+    assert build_value_as(type_for("float", reg), 1).to_object() == 1.0
+    point = build_value_as(type_for("Point", reg), {"x": 1, "xs": [1, 2]}).to_object()
+    assert point == {"x": 1.0, "xs": [1.0, 2.0]}
+    assert type(point["x"]) is float and all(type(x) is float for x in point["xs"])
+    nested = build_value_as(type_for("Wrap", reg), {"inner": {"x": 1, "xs": []}}).to_object()
+    assert type(nested["inner"]["x"]) is float
+    items = build_value_as(type_for("list[Point]", reg), [{"x": 1, "xs": [2]}]).to_object()
+    assert items == [{"x": 1.0, "xs": [2.0]}]
+    assert type(items[0]["x"]) is float and type(items[0]["xs"][0]) is float
+
+
+def test_record_stores_a_tuple_field_as_a_list():
+    reg = {"Point": RecordDef(fields={"x": "float", "xs": "list[float]"})}
+    point = build_value_as(type_for("Point", reg), {"x": 1.5, "xs": (1, 2)}).to_object()
+    assert point["xs"] == [1.0, 2.0] and type(point["xs"]) is list
+
+
+def test_union_member_value_widens_its_float_fields():
+    reg = read_typedefs({
+        "Buy": {"action": "Literal[buy]", "qty": "int"},
+        "Sell": {"action": "Literal[sell]", "price": "float"},
+        "Count": {"n": "int"},
+        "Score": {"n": "float", "label": "str"},
+    })
+    tagged = build_value_as(type_for("Union[Buy, Sell]", reg), {"action": "sell", "price": 3})
+    assert type(tagged.to_object()["price"]) is float
+    untagged = build_value_as(type_for("Union[Count, Score]", reg), {"n": 3, "label": "x"})
+    assert type(untagged.to_object()["n"]) is float
 
 
 def test_type_for_preserves_its_public_keyword_name():

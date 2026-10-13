@@ -67,7 +67,8 @@ build_value_as(declared, v)  → wrap v as `declared`, RAISE on mismatch (check)
 `build_value` infers the kind (`bool` checked before `int`; empty list → `list[Any]`).
 `build_value_as` is the declared-type check used by both `VariablePool.set` and the
 run log's `canonical_typed` success-record boundary. It raises `TypeCheckError` on a
-mismatch; the only coercion is widening (`int` fills a `float` slot).
+mismatch; the only coercion is widening (`int` fills a `float` slot at any depth:
+a record field, a list item, or a union member's field).
 `TypeCheckError.path` is an immutable tuple relative to the declared type: string
 segments name record fields and integer segments are actual list indices. A
 mismatch at the checked root uses `()`; a nested container mismatch keeps its

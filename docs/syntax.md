@@ -478,8 +478,10 @@ Nothing is converted: an int bound as `float` stays an int, and the string `"30"
 is not an int. A failure fails the consuming node (END for a flow output) with the
 failure code `binding.type`, and the diagnostic points at the binding.
 
-A flow's committed output is stored like any typed node output: a whole-value
-`float` or `list[float]` output is widened from int; record fields are not.
+A flow's committed output is stored like any typed node output: an int in a
+`float` slot is widened to a float at any depth, whether the slot is the whole
+value, a `list[float]` item, or a typed record field. An untyped field of a record
+output keeps its value as returned.
 
 ### Downstream
 

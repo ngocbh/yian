@@ -77,6 +77,90 @@ def test_warm_skipped_depends_on_co_skips_runs_after_survives():
     assert result.output == "cautious note for ACME"
 
 
+# --- ordering edges FROM a case: the routed case settled, so they hold ---------- #
+
+
+def _case_source_flow(*, field: str, on_branch: bool, with_else: bool = True) -> str:
+    """A `gate` case routing to `pro`/`con`, with an ordering edge `field: [gate]` on a
+    third node `note` (or, with ``on_branch``, on the `pro` branch target itself)."""
+    branch_dep = f"\n    {field}: [gate]" if on_branch else ""
+    note_dep = "" if on_branch else f"\n    {field}: [gate]"
+    else_line = "\n    else: con" if with_else else ""
+    con_output = "${pro.output | con.output}" if with_else else "${pro.output}"
+    return f"""
+id: case-source
+name: case_source
+input:
+  score: float
+  topic: str
+nodes:
+  gate:
+    kind: case
+    cases:
+      - when: "${{input.score}} >= 0.5"
+        then: pro{else_line}
+  pro:
+    kind: code{branch_dep}
+    code: tests.engine._compose_codefns:pick_pro
+    input:
+      topic: ${{input.topic}}
+    output: str
+  con:
+    kind: code
+    code: tests.engine._compose_codefns:pick_con
+    input:
+      topic: ${{input.topic}}
+    output: str
+  note:
+    kind: code{note_dep}
+    code: tests.engine._compose_codefns:cautious
+    input:
+      topic: ${{input.topic}}
+    output: str
+output:
+  pick: "{con_output}"
+  note: ${{note.output}}
+"""
+
+
+@pytest.mark.parametrize("field", ["depends_on", "runs_after"])
+@pytest.mark.parametrize("score", [0.9, 0.2])
+def test_ordering_on_a_case_runs_on_every_branch(field, score):
+    # The case routes either way, so it settles; an ordering edge from it is satisfied.
+    result = run_flow(
+        load_flow(_case_source_flow(field=field, on_branch=False)),
+        {"score": score, "topic": "ACME"},
+    )
+    assert result.status == "succeeded", result.failure
+    assert "note" in _succeeded(result)
+    assert result.output["note"] == "cautious note for ACME"
+
+
+@pytest.mark.parametrize("field", ["depends_on", "runs_after"])
+def test_branch_target_ordered_on_its_case_runs_when_taken(field):
+    flow = load_flow(_case_source_flow(field=field, on_branch=True))
+    taken = run_flow(flow, {"score": 0.9, "topic": "ACME"})
+    assert taken.status == "succeeded", taken.failure
+    assert taken.output["pick"] == "pro: ACME"
+    assert "con" not in _succeeded(taken)
+    lost = run_flow(flow, {"score": 0.2, "topic": "ACME"})
+    assert lost.status == "succeeded", lost.failure
+    assert lost.output["pick"] == "con: ACME"
+    assert "pro" not in _succeeded(lost)
+
+
+def test_depends_on_a_case_with_no_match_and_no_else_still_runs():
+    # No case matches and there is no `else:`: every branch skips, but the case settled.
+    result = run_flow(
+        load_flow(_case_source_flow(field="depends_on", on_branch=False, with_else=False)),
+        {"score": 0.2, "topic": "ACME"},
+    )
+    assert result.status == "succeeded", result.failure
+    ran = _succeeded(result)
+    assert "note" in ran
+    assert "pro" not in ran
+
+
 # --- negatives: located unknown target + ordering cycle --------------------- #
 
 _UNKNOWN_DEP = """

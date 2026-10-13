@@ -1077,7 +1077,9 @@ Inline notes:
 
 A `case` node routes — it has no `input:`. It takes one branch; the other targets
 are skipped, and so is every node that plainly reads a skipped node or names it in
-`depends_on`. Read its result with `${case.output}`. A routing-only `case` may take
+`depends_on`. A node that names the `case` itself in `depends_on:` or `runs_after:` is
+not on a branch: it runs whichever branch the `case` takes, and is skipped only when the
+`case` is. Read its result with `${case.output}`. A routing-only `case` may take
 none when no `when:` matches and there is no `else:` (see
 [Exhaustiveness](#exhaustiveness)); a flow output that reads a skipped node returns
 null (see [Skipped branches and flow outputs](#skipped-branches-and-flow-outputs)).
@@ -1091,6 +1093,11 @@ to mean no `else:`; it is now a load error unless the `case` declares an `Option
 `output:` (then it is the value `null`). Node ids may no
 longer start with `__value_` or `__case_`. Flows without value branches or a typed
 `case` keep their fingerprints.
+
+Changed: a node with `depends_on:` naming a `case` used to be skipped whenever the `case`
+took a `when:` branch rather than `else:`, so a flow output reading it returned null, and
+a branch target that also named its own `case` in `depends_on:` never ran. Both now run on
+every branch the `case` takes.
 
 Simple form — match a value:
 
@@ -1288,10 +1295,11 @@ output:
 ```
 
 - **May be skipped:** a `case` target, or a node that plainly reads one (or names it
-  in `depends_on`), under some combination of `case` choices. A `case` that runs takes
-  one branch, or none unless it is exhaustive: it has `else:`, or its `on:` is a
-  non-nullable `Literal` node output or flow input with every tag listed (a null `on:`
-  value matches nothing).
+  in `depends_on`), under some combination of `case` choices. A node that names the
+  `case` itself in `depends_on` runs on every branch the `case` takes. A `case` that
+  runs takes one branch, or none unless it is exhaustive: it has `else:`, or its `on:`
+  is a non-nullable `Literal` node output or flow input with every tag listed (a null
+  `on:` value matches nothing).
   So a join over an exhaustive `case`'s branches (`${bullish.output | cautious.output}`,
   or `${gate.output}`) is never null. Conditions of different `case`s are
   treated as independent.

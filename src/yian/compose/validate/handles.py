@@ -25,9 +25,9 @@ def check_case_handles(
 ) -> None:
     """Every desugared `CaseNode`'s handles align with its outgoing control edges.
 
-    Mirrors `compile.validation._check_case_handles`: each outgoing edge's handle
-    (defaulting to `default`) must be a declared case handle or `default`, and every
-    declared case must have an outgoing edge. The `case` desugar emits the
+    Each outgoing control edge's handle must be a declared case handle or `default`, and
+    every declared case must have an outgoing edge. A handle-less edge (`depends_on`,
+    `runs_after`, a data read) is not a branch, so it is not checked. The `case` desugar emits the
     `gate -> <then|else>` control edges and the `CaseNode.cases`; this pins them
     consistent. Raises `LoadError` on the first misalignment.
     """
@@ -37,7 +37,9 @@ def check_case_handles(
             continue
         case_handles = {c.handle for c in node.cases}
         out_handles = {
-            (e.source_handle or DEFAULT_HANDLE) for e in edges if e.from_ == node_id
+            e.source_handle
+            for e in edges
+            if e.from_ == node_id and e.source_handle is not None
         }
         for handle in out_handles:
             if handle != DEFAULT_HANDLE and handle not in case_handles:

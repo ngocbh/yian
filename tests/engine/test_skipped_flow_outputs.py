@@ -130,12 +130,12 @@ def test_depends_on_a_skipped_target_is_null():
     assert _run(text, {"approve": True}) == {"a": "after"}
 
 
-def test_depends_on_a_case_is_null_when_it_takes_a_real_branch():
-    """`depends_on` a CASE is skipped when the CASE takes a `when:` branch, not `else:`."""
+def test_depends_on_a_case_runs_on_every_branch():
+    """`depends_on` a CASE runs whichever branch the CASE takes, so its output needs no null."""
     nodes = _R1 + _code("after", '"after"', extra="    depends_on: [gate]\n")
     text = _flow(nodes, "\n  a: ${after.output}")
-    assert _sources(text) == ["${after.output:-null}"]
-    assert _run(text, {"approve": True}) == {"a": None}
+    assert _sources(text) == ["${after.output}"]
+    assert _run(text, {"approve": True}) == {"a": "after"}
     assert _run(text, {"approve": False}) == {"a": "after"}
 
 
@@ -697,6 +697,14 @@ def test_arithmetic_in_a_node_routed_by_a_case_on_the_value_loads():
     text = _flow(nodes, "\n  u: ${use.output}")
     assert _run(text, {"approve": True}) == {"u": 4}
     assert _run(text, {"approve": False}) == {"u": None}
+
+
+def test_arithmetic_on_a_node_that_depends_on_a_case_loads():
+    """A node with `depends_on` a CASE runs on every branch, so its output is never null."""
+    note = _code("note", "1", output="int", extra="    depends_on: [gate]\n")
+    text = _flow(_QTY + note, "\n  q: ${order.output.qty :- (note.output + 1)}")
+    assert _run(text, {"approve": True}) == {"q": 2}
+    assert _run(text, {"approve": False}) == {"q": 2}
 
 
 def test_arithmetic_on_a_defaulted_value_loads():

@@ -131,12 +131,20 @@ def test_node_targeted_by_a_sole_branch_of_an_exhaustive_case_never_skips():
     assert not m.may_all_skip({"n"})
 
 
-def test_depends_on_a_case_skips_when_it_takes_a_real_branch():
-    """The runtime takes a non-control edge from a CASE only on its default route."""
+def test_depends_on_a_case_runs_on_every_branch():
+    """An ordering edge from a CASE is not a branch: it skips only when the CASE is skipped."""
     edges = [ctl("gate", "then", "a"), ctl("gate", "default", "b"), order("gate", "after")]
     m = model("gate a b after", edges, {"gate"})
+    assert not m.may_all_skip({"after"})
+    assert m.may_skip_while_running({"a"}, "after")
+
+
+def test_depends_on_a_skipped_case_skips():
+    """An ordering edge from a CASE that an outer CASE skips co-skips its node."""
+    edges = [ctl("outer", "then", "gate"), ctl("gate", "then", "a"), order("gate", "after")]
+    m = model("outer gate a after", edges)
     assert m.may_all_skip({"after"})
-    assert not m.may_all_skip({"after", "a"})
+    assert not m.may_skip_while_running({"gate"}, "after")
 
 
 def test_runs_after_a_case_never_skips():
@@ -146,12 +154,12 @@ def test_runs_after_a_case_never_skips():
     assert not m.may_all_skip({"after"})
 
 
-def test_required_data_from_a_case_skips_unless_it_routes_default():
-    """A required data edge from a CASE is taken only when it routes `else:` or nothing."""
+def test_required_data_from_a_case_runs_on_every_branch():
+    """A required data edge from a CASE is taken on every route the CASE picks."""
     edges = [ctl("gate", "then", "a"), data("gate", "reader")]
     m = model("gate a reader", edges)
-    assert m.may_all_skip({"reader"})
-    assert not m.may_all_skip({"reader", "a"})
+    assert not m.may_all_skip({"reader"})
+    assert m.may_skip_while_running({"a"}, "reader")
 
 
 def test_may_skip_while_running():

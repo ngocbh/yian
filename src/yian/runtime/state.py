@@ -3663,13 +3663,14 @@ def _prepare_route_delta(
     joins: dict[str, _JoinScratch] = {}
 
     root_edges = _route_outgoing(state, record.node_id, edge_updates)
+    # Only branch edges carry a handle. A handle-less edge (a `depends_on`/`runs_after`
+    # ordering edge) is not a branch: the router settled by routing, so it is TAKEN on
+    # every route rather than read as the `default` branch.
     matched = tuple(
-        edge
-        for edge in root_edges
-        if (edge.source_handle or "default") == record.handle
+        edge for edge in root_edges if edge.source_handle == record.handle
     )
     # The reserved default route may deliberately have no authored edge: a CASE
-    # without ``else`` selects no branch and skip-floods every outgoing edge. Any
+    # without ``else`` selects no branch and skip-floods every branch edge. Any
     # other unknown handle is invalid node-produced data.
     if not matched and record.handle != "default":
         _raise_node_data(
@@ -3687,7 +3688,7 @@ def _prepare_route_delta(
                 (
                     edge,
                     NodeState.TAKEN
-                    if (edge.source_handle or "default") == record.handle
+                    if edge.source_handle in (None, record.handle)
                     else NodeState.SKIPPED,
                 )
                 for edge in root_edges

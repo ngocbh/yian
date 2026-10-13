@@ -682,6 +682,14 @@ are available as `${one.output.field}`; a MAP returns a list at `${each.output}`
 so project element fields in a downstream CODE/MAP step. `parallel:` is accepted
 but currently inert; run-level `num_workers` controls MAP concurrency.
 
+Each argument must fit the child's input type at load: a reference by its type
+(`${item...}` through the `over:` element type), a YAML literal by its value as
+the child's start would (`"3"` fits `int`, `"2026-01-01"` fits `date`, `"abc"` and
+`9` for `int[1, 3]` do not), and `${x :- d}` by `x` without its null plus the fallback
+`d`. A `str` reference does not fit an `int` or `date` input: type the source
+(`list[date]`), or use a typed binding (`t: int = ${input.n}`) for a value narrower
+than the input.
+
 For a one-off child, replace `call:` with a non-empty `nodes:` body and add the
 required `output:` key:
 

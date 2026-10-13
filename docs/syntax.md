@@ -1593,6 +1593,36 @@ child's `output:` is a record, even of one field, the MAP returns a list of reco
 `parallel:` is accepted but currently inert; MAP concurrency is controlled by
 the run's `num_workers`, while collection order remains the `over:` order.
 
+Each argument must fit the child's input type, checked at load:
+
+- A reference is compared by its type. A MAP's `${item}` or `${item.field}` is typed
+  from the element type of `over:`. A `str` source does not fit an `int` or `date`
+  input, and an `Optional` source does not fit a strict one.
+- A YAML literal is validated by value, exactly as the child's start validates it,
+  including its conversion of a string for an `int`, `float`, or `bool` input: `5` and
+  `"5"` fit a `float` input and `"2026-01-01"` a `date` input, but `"abc"` does not fit
+  `int`, `9` does not fit `int[1, 3]`, and `5` does not fit `str`. `null` fits only an
+  `Optional` input.
+- `${x :- fallback}` checks `x` without its null, then the fallback: a literal by
+  value, a reference by its type (`:- null` fits only an `Optional` input).
+  `${x :? message}` checks `x` without its null.
+- A source whose type the loader can't prove is checked when the child starts. For a
+  value narrower than the input, such as an `Optional` source you know is set, use a
+  [typed binding](#typed-bindings-name-type-value): `t: int = ${input.n}`.
+
+```text
+call node 'each': binding 'day' — child expects 'date', source is 'str'
+call node 'c': binding 'n' — child expects 'int', but the value "abc" does not fit
+```
+
+Changed: a `${item}`, literal, or `:-` argument used to be checked only when the child
+started, after the work upstream had run. A literal that fails here always failed
+there. A `${item}` or the reference before `:-` now follows the rule a direct reference
+already did, so these used to run when every value fit and now fail at load: a
+`${item}` over a `list[str]` into a `date` input (type the list `list[date]`), and a
+`${item}` over a `list[Optional[str]]`, or `${x :- null}`, into a strict input (use a
+typed binding).
+
 #### Inline child bodies — skip a one-off `defs:` entry
 
 When a CALL, MAP, or LOOP body is used only once, put the child graph directly

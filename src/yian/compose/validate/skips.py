@@ -15,17 +15,25 @@ Past the bound each query falls back to the answer that is safe for its caller:
 `may_skip_while_running` says False (nothing is reported). A level whose edges have a cycle
 has no skippable nodes here; the cycle check reports the cycle.
 
-Knows about: compiled edges and the CASE default handle. Never imports: runtime.
+`null_skipped_outputs` gives a flow output that reads only nodes that may all be skipped the
+explicit null default, so it returns null instead of leaving END unreachable.
+
+Knows about: compiled edges, flow outputs, the CASE default handle, and binding producers.
+Never imports: runtime.
 """
 
 from __future__ import annotations
 
 from collections import deque
 from collections.abc import Iterable, Set
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
-from yian.compile.model import Edge
+from yian.compile.model import Edge, FlowOutput
+from yian.compose.edges.producers import _binding_producers
+from yian.compose.helpers.output_contracts import direct_reference_path
+from yian.expr import binding_co_skips
 from yian.nodes.case import DEFAULT_HANDLE
+from yian.nodes.contracts import binding_source
 
 _WORLD_LIMIT = 10_000
 
@@ -293,3 +301,45 @@ class SkipModel:
         # The runtime gives a non-control edge from a CASE the default handle, so it is taken
         # only when the CASE routes `else:` or matches nothing.
         return source in skipped or choices.get(source) not in (None, DEFAULT_HANDLE)
+
+
+def null_skipped_outputs(
+    flow_outputs: list[FlowOutput], model: SkipModel
+) -> list[FlowOutput]:
+    """Give each flow output whose producers may all be skipped the explicit null default.
+
+    Args:
+        flow_outputs (`list[FlowOutput]`):
+            The flow level's declared outputs.
+        model (`SkipModel`):
+            The skip model of the same level.
+
+    Returns:
+        `list[FlowOutput]`:
+            The outputs in order. A co-skipping source `${E}` whose producers may all be
+            skipped becomes `${E:-null}` when `E` is one reference, else `${(E) :- null}`; its
+            origin and declared contract are kept. Every other output is returned as is.
+
+    Example:
+        >>> edges = [Edge(id="t", from_="c", to="a", source_handle="then")]
+        >>> model = SkipModel(["c", "a"], edges, set())
+        >>> null_skipped_outputs([FlowOutput("v", "${a.output}")], model)[0].from_
+        '${a.output:-null}'
+    """
+    rewritten = []
+    for output in flow_outputs:
+        source = binding_source(output.binding)
+        if (
+            isinstance(source, str)
+            and binding_co_skips(source)
+            and model.may_all_skip(_binding_producers(output.binding))
+        ):
+            # A co-skipping source is exactly one whole `${...}` span.
+            interior = source[2:-1]
+            if direct_reference_path(source) is not None:
+                new = "${" + interior + ":-null}"
+            else:
+                new = "${(" + interior + ") :- null}"
+            output = replace(output, binding=replace(output.binding, source=new))
+        rewritten.append(output)
+    return rewritten

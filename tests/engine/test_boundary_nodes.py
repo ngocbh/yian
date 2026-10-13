@@ -26,9 +26,9 @@ nodes:
 output: ${n.output}
 """
 
-# A required terminal output whose only producer SKIPS -> END_ID's required group dies ->
-# END_ID is skip-flooded, never commits -> RunFailed (via END_ID disposition). `gate` routes to
-# `kept`; `dropped` is skip-flooded, so the `output: ${dropped.output}` group co-skips.
+# A terminal output whose only producer may be skipped. The loader gives it the null default
+# (`${kept.output:-null}`), so END_ID's group is optional and the run returns null. `gate`
+# routes to `cold`; `kept` is skip-flooded.
 _COALESCE_REQUIRED = """
 id: e7
 name: e7
@@ -93,13 +93,14 @@ def test_terminal_helpers_retired():
     assert not hasattr(FlowEngine, "_terminal_coskip")
 
 
-def test_terminal_coskip_fails_via_end_disposition():
-    # a required flow `output:` group whose only producer SKIPS -> END_ID's required group dies ->
-    # END_ID is skip-flooded, never commits -> RunFailed (via END_ID disposition), byte-stable msg.
-    res = run_flow(load_flow(_COALESCE_REQUIRED), _E7_INPUTS)
-    assert res.status == "failed"
-    assert "skipped" in res.failure.message
-    assert res.failure.message == "terminal output 'result' skipped"
+def test_terminal_output_of_a_skipped_producer_is_null():
+    # END_ID's group for an output the loader null-defaults is optional, so a skipped producer
+    # commits null. A required group that dies still fails the run (test_engine.py covers it).
+    loaded = load_flow(_COALESCE_REQUIRED)
+    assert loaded.compiled.outputs[0].from_ == "${kept.output:-null}"
+    res = run_flow(loaded, _E7_INPUTS)
+    assert res.status == "succeeded", res.failure
+    assert res.output is None
 
 
 # --- START_ID seeded at engine init + ${input.X} -> store[START_ID]; inputs namespace retired -- #

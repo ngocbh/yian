@@ -1,11 +1,14 @@
-"""AGENT structured output for a union of records: generation and error paths."""
+"""AGENT structured output for a union of records: generation, error paths and a run."""
 
 import json
 
 import pytest
 from pydantic import ValidationError
 
+import yian.llm_clients as llm_clients_mod
+from yian.compose.loader import load_flow
 from yian.nodes.agent.structured import _structured_validation_path, generate_structured
+from yian.run import run_flow
 from yian.typesys.types import read_typedefs, type_for
 
 
@@ -148,3 +151,84 @@ def test_untagged_union_reply_returns_the_matching_member():
     assert generate_structured(model, [], typ, llm_config=NATIVE) == {
         "name": "lookup", "input": {"q": 1},
     }
+
+
+_AGENT_FLOW = """
+id: decide
+name: decide
+typedefs:
+  Buy: {action: 'Literal[buy]', qty: int}
+  Sell: {action: 'Literal[sell]', qty: int, price: float}
+  Hold: {action: 'Literal[hold]', note: str}
+  Decision: Union[Buy, Sell, Hold]
+nodes:
+  a:
+    kind: agent
+    prompt: decide a trade
+    output: Decision
+  route:
+    kind: case
+    on: ${a.output.action}
+    cases:
+      - when: buy
+        then: place_buy
+      - when: sell
+        then: place_sell
+    else: log_hold
+  place_buy:
+    kind: code
+    input:
+      qty: ${a.output.qty}
+    code: |
+      return "buy " + str(inputs["qty"])
+    output: str
+  place_sell:
+    kind: code
+    input:
+      qty: ${a.output.qty}
+      price: ${a.output.price}
+    code: |
+      return inputs["qty"] * inputs["price"]
+    output: float
+  log_hold:
+    kind: code
+    input:
+      note: ${a.output.note}
+    code: |
+      return "hold: " + inputs["note"]
+    output: str
+output:
+  decision: ${a.output}
+  trade: ${place_buy.output | place_sell.output | log_hold.output}
+"""
+
+
+@pytest.mark.parametrize("decision, trade", [
+    ({"action": "buy", "qty": 3}, "buy 3"),
+    ({"action": "sell", "qty": 2, "price": 1.5}, 3.0),
+    ({"action": "hold", "note": "wait"}, "hold: wait"),
+])
+def test_agent_union_output_routes_a_case_and_its_branch_reads_member_fields(
+    monkeypatch, decision, trade,
+):
+    model = _Replies({"value": decision})
+    monkeypatch.setattr(llm_clients_mod, "model_from_config", lambda _config: model)
+
+    result = run_flow(load_flow(_AGENT_FLOW), {})
+    assert result.status == "succeeded", result.failure
+    assert result.output == {"decision": decision, "trade": trade}
+    assert model.calls == 1
+
+
+def test_agent_union_output_with_an_unknown_tag_fails_the_agent(monkeypatch):
+    model = _Replies({"value": {"action": "wait"}})
+    monkeypatch.setattr(llm_clients_mod, "model_from_config", lambda _config: model)
+
+    result = run_flow(load_flow(_AGENT_FLOW), {})
+    assert result.status == "failed"
+    assert result.failure.node_id == "a"
+    assert result.failure.code == "node.execute"
+    assert "literal_error" in result.failure.message
+    # The unknown tag maps to the union's tag field; a typedef output locates it at the contract.
+    (origin,) = result.failure.trace
+    assert origin.key == "/s:root/s:node/s:a/s:output/s:contract/s:root"

@@ -55,13 +55,13 @@ _SCALAR_PY: dict[ValueKind, type] = {
 }
 
 
-def _py_type(typ: Type, *, closed: bool = False) -> Any:
+def _py_type(typ: Type, *, closed: bool = False, position: str = "") -> Any:
     """The python annotation for a value of `typ` as a pydantic field type.
 
     A `STRING` with `tags` is a `Literal[...]` variant; a nested `OBJECT` with `fields`
     becomes its own submodel; a union becomes a plain `Union[...]` of closed member models
-    named `Member1`, `Member2`, ... in member order; a `LIST_*` becomes
-    `list[<element type>]`.
+    in member order; a `LIST_*` becomes `list[<element type>]`. Nested models are named
+    after their position (see `_member_names`), so every `$defs` key stays readable.
 
     Args:
         typ (`Type`):
@@ -69,6 +69,8 @@ def _py_type(typ: Type, *, closed: bool = False) -> Any:
         closed (`bool`, *optional*, defaults to `False`):
             Whether records reject unknown fields. Union members and everything inside
             them are always closed, so a reply can't match a member by ignoring fields.
+        position (`str`, *optional*, defaults to `""`):
+            The slot's position name, built by `_nested`. `""` is the schema root.
 
     Returns:
         `Any`:
@@ -89,29 +91,58 @@ def _py_type(typ: Type, *, closed: bool = False) -> Any:
         return _SCALAR_PY[seg]
     if seg == ValueKind.OBJECT and typ.variants is not None:
         members = tuple(
-            _record_model(member, name=_member_name(index), closed=True)
-            for index, member in enumerate(typ.variants)
+            _record_model(member, position=name, closed=True)
+            for name, member in zip(_member_names(typ, position), typ.variants)
         )
         return Union[members]  # type: ignore[valid-type]
     if seg == ValueKind.OBJECT:
-        return _record_model(typ, closed=closed) if typ.fields else dict
+        if not typ.fields:
+            return dict
+        return _record_model(typ, position=position, closed=closed)
     if seg == ValueKind.LIST_ANY and typ.element is None:
         return list
     if seg.is_list():
         elem = typ.element
         if elem is not None:
-            return List[_py_type(elem, closed=closed)]  # type: ignore[misc]
+            item = _py_type(elem, closed=closed, position=_nested(position, "item"))
+            return List[item]  # type: ignore[misc]
         scalar = seg.element_kind
         return List[_SCALAR_PY[scalar]] if scalar in _SCALAR_PY else list  # type: ignore[misc]
     raise ValueError(f"type_to_schema: no structured mapping for segment type {seg!r}")
 
 
-def _member_name(index: int) -> str:
-    """Name the model of the union member at `index`; error locations carry this name."""
-    return f"Member{index + 1}"
+def _nested(position: str, segment: str) -> str:
+    """Return the position name of `segment` (a field, `item`, or a member) inside `position`."""
+    return f"{position}_{segment}" if position else segment
 
 
-def _record_model(typ: Type, *, name: str = "Record", closed: bool = False) -> type[BaseModel]:
+def _member_names(typ: Type, position: str) -> tuple[str, ...]:
+    """Name the member models of the union at `position`, in member order.
+
+    A tagged union whose tag values are all identifiers names each member after its tag
+    (`buy`, `sell`); otherwise the members are `Member1`, `Member2`, .... Error locations
+    carry these names, so `_select_member_error` derives them the same way.
+
+    Args:
+        typ (`Type`):
+            The union.
+        position (`str`):
+            The union's position name. `""` is the schema root.
+
+    Returns:
+        `tuple[str, ...]`:
+            One model name per member.
+    """
+    tag_fields = union_tag_fields(typ)
+    tags = [
+        next(iter(member.fields[tag_fields[0]].tags)) for member in typ.variants
+    ] if tag_fields else []
+    if not tags or not all(tag.isidentifier() for tag in tags):
+        tags = [f"Member{index + 1}" for index in range(len(typ.variants))]
+    return tuple(_nested(position, tag) for tag in tags)
+
+
+def _record_model(typ: Type, *, position: str = "", closed: bool = False) -> type[BaseModel]:
     """Build a pydantic model from an `OBJECT` Type.
 
     Each `fields` entry is a model field, required iff named in `required` (others
@@ -120,8 +151,9 @@ def _record_model(typ: Type, *, name: str = "Record", closed: bool = False) -> t
     Args:
         typ (`Type`):
             A record type.
-        name (`str`, *optional*, defaults to `"Record"`):
-            The model name, which is the schema title.
+        position (`str`, *optional*, defaults to `""`):
+            The record's position name, which is the model name and schema title and
+            prefixes the models inside it. `""` is the schema root, named `Record`.
         closed (`bool`, *optional*, defaults to `False`):
             Whether the model and the records inside it reject unknown fields.
 
@@ -132,13 +164,13 @@ def _record_model(typ: Type, *, name: str = "Record", closed: bool = False) -> t
     required = typ.required or frozenset()
     spec: dict[str, Any] = {}
     for field_name, sub in (typ.fields or {}).items():
-        ann = _py_type(sub, closed=closed)
+        ann = _py_type(sub, closed=closed, position=_nested(position, field_name))
         if field_name in required and not sub.nullable:
             spec[field_name] = (ann, ...)
         else:
             spec[field_name] = (Optional[ann], None)
     config = ConfigDict(extra="forbid") if closed else None
-    return create_model(name, __config__=config, **spec)
+    return create_model(position or "Record", __config__=config, **spec)
 
 
 def type_to_schema(typ: Type) -> Optional[type[BaseModel]]:
@@ -582,6 +614,7 @@ def _structured_validation_path(
 def _select_error(
     errors: list[tuple[tuple[str | int, ...], Any]],
     typ: Type,
+    position: str = "",
 ) -> tuple[tuple[str | int, ...], Any]:
     """Pick the error to report and drop the union member segments from its location.
 
@@ -593,40 +626,44 @@ def _select_error(
             be empty.
         typ (`Type`):
             The type at the errors' common position.
+        position (`str`, *optional*, defaults to `""`):
+            That position's name, as `_py_type` built it. `""` is the schema root.
 
     Returns:
         `tuple[tuple[str | int, ...], Any]`:
             The contract-relative location and the error type of the chosen error.
     """
     if typ.variants is not None:
-        return _select_member_error(errors, typ)
+        return _select_member_error(errors, typ, position)
     location = errors[0][0]
     if not location:
         return errors[0]
     head = location[0]
     if typ.kind == ValueKind.OBJECT and typ.fields and type(head) is str and head in typ.fields:
-        child = typ.fields[head]
+        child, child_position = typ.fields[head], _nested(position, head)
     elif (typ.kind == ValueKind.LIST_ANY or typ.kind.is_list()) and type(head) is int:
-        child = typ.element
+        child, child_position = typ.element, _nested(position, "item")
     else:
         child = None
     if child is None:
         return errors[0]
     inner = [(loc[1:], kind) for loc, kind in errors if loc[:1] == (head,)]
-    path, error_type = _select_error(inner, child)
+    path, error_type = _select_error(inner, child, child_position)
     return (head,) + path, error_type
 
 
 def _select_member_error(
     errors: list[tuple[tuple[str | int, ...], Any]],
     typ: Type,
+    position: str,
 ) -> tuple[tuple[str | int, ...], Any]:
     """Pick the error at a union position, where each location starts with a member name.
 
-    When every member rejects the tag field as `missing` or `literal_error`, the error is
-    the tag field. Otherwise the members whose tag reported `literal_error` are dropped;
-    a single remaining member reports its first error, and several (an untagged union no
-    member matches) report the union's own position. This matches the engine's value check.
+    In a tagged union a member with any error at its tag field is ruled out; if none is
+    left, the error is the tag field. A single remaining member reports its first error,
+    and several (an untagged union no member matches) report the union's own position.
+    Member selection matches the engine's value check; the first error inside a member
+    can differ from the engine's, since pydantic reports extra fields last.
 
     Args:
         errors (`list[tuple[tuple[str | int, ...], Any]]`):
@@ -634,12 +671,14 @@ def _select_member_error(
             not be empty.
         typ (`Type`):
             The union.
+        position (`str`):
+            The union's position name, as `_py_type` built it.
 
     Returns:
         `tuple[tuple[str | int, ...], Any]`:
             The contract-relative location and the error type of the chosen error.
     """
-    members = {_member_name(index): member for index, member in enumerate(typ.variants)}
+    members = dict(zip(_member_names(typ, position), typ.variants))
     location, error_type = errors[0]
     if not location or type(location[0]) is not str or location[0] not in members:
         return errors[0]
@@ -652,14 +691,14 @@ def _select_member_error(
     if tag_fields:
         tag = tag_fields[0]
         tag_errors = {
-            name: next((kind for loc, kind in member_errors if loc == (tag,)), None)
+            name: kind
             for name, member_errors in grouped.items()
+            for loc, kind in member_errors
+            if loc == (tag,)
         }
-        if len(grouped) == len(members) and all(
-            kind in ("missing", "literal_error") for kind in tag_errors.values()
-        ):
+        remaining = [name for name in grouped if name not in tag_errors]
+        if not remaining:
             return (tag,), tag_errors[location[0]]
-        remaining = [name for name in grouped if tag_errors[name] != "literal_error"]
     if len(remaining) != 1:
         return (), error_type
-    return _select_error(grouped[remaining[0]], members[remaining[0]])
+    return _select_error(grouped[remaining[0]], members[remaining[0]], remaining[0])

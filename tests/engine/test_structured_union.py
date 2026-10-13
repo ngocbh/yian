@@ -21,6 +21,8 @@ REGISTRY = read_typedefs({
     "Order": {"trade": "Union[Buy, Sell]", "note": "str"},
     "Ticket": {"kind": "Literal[ticket]", "trade": "Optional[Union[Buy, Sell]]"},
     "Skip": {"kind": "Literal[skip]"},
+    "Limit": {"px": "float"},
+    "Bid": {"action": "Literal[bid]", "limit": "Limit"},
 })
 TRADE = type_for("Union[Buy, Sell]", REGISTRY)
 
@@ -84,6 +86,12 @@ def test_sell_reply_with_qty_retries_then_reports_the_sell_members_first_error(c
     assert model.calls == 3
     # The `buy` member is dropped by its tag; `sell` reports `price` missing before `qty`.
     assert _structured_validation_path(error, TRADE) == ("price",)
+
+
+def test_unknown_field_in_a_record_nested_in_a_member_is_rejected_at_its_path():
+    typ = type_for("Union[Bid, Sell]", REGISTRY)
+    _, error = _exhausted(typ, {"value": {"action": "bid", "limit": {"px": 1.0, "zz": 1}}})
+    assert _structured_validation_path(error, typ) == ("limit", "zz")
 
 
 def test_sell_reply_with_extra_qty_reports_the_unknown_field():

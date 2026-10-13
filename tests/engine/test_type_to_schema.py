@@ -165,11 +165,22 @@ def _union_arms(schema, arm_schema):
     return [schema["$defs"][ref.rsplit("/", 1)[-1]] for ref in refs]
 
 
+def _schema_keys(node):
+    """Yield every key of a JSON schema, at any depth."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            yield key
+            yield from _schema_keys(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _schema_keys(value)
+
+
 def _assert_member_defs(schema, members, size):
     assert len(members) == size
     assert all(member["additionalProperties"] is False for member in members)
     assert len({member["title"] for member in members}) == size
-    assert "discriminator" not in str(schema) and "oneOf" not in str(schema)
+    assert not {"oneOf", "discriminator"} & set(_schema_keys(schema))
 
 
 def test_tagged_union_schema_is_any_of_closed_members_with_const_tags():
@@ -182,6 +193,38 @@ def test_tagged_union_schema_is_any_of_closed_members_with_const_tags():
     members = _union_arms(schema, schema["properties"]["value"])
     _assert_member_defs(schema, members, 2)
     assert [member["properties"]["action"]["const"] for member in members] == ["buy", "sell"]
+    assert [member["title"] for member in members] == ["buy", "sell"]
+
+
+def test_union_members_with_non_identifier_tags_are_numbered():
+    from yian.typesys.types import read_typedefs, type_for
+
+    registry = read_typedefs({
+        "Now": {"when": "Literal['right now']"},
+        "Later": {"when": "Literal[later]"},
+    })
+    schema = type_to_schema(type_for("Union[Now, Later]", registry)).model_json_schema()
+    members = _union_arms(schema, schema["properties"]["value"])
+    assert [member["title"] for member in members] == ["Member1", "Member2"]
+
+
+def test_union_nested_in_a_member_gets_position_named_defs():
+    from yian.typesys.types import read_typedefs, type_for
+
+    registry = read_typedefs({
+        **_TRADES,
+        "Limit": {"px": "float"},
+        "Ticket": {"kind": "Literal[ticket]", "trade": "Union[Buy, Sell]", "limit": "Limit"},
+        "Skip": {"kind": "Literal[skip]", "trade": "Union[Buy, Sell]"},
+    })
+    schema = type_to_schema(type_for("list[Union[Ticket, Skip]]", registry)).model_json_schema()
+    defs = schema["$defs"]
+    assert not [key for key in defs if "__" in key]
+    assert len({definition["title"] for definition in defs.values()}) == len(defs)
+    assert set(defs) == {
+        "item_skip", "item_skip_trade_buy", "item_skip_trade_sell",
+        "item_ticket", "item_ticket_limit", "item_ticket_trade_buy", "item_ticket_trade_sell",
+    }
 
 
 def test_untagged_union_schema_is_any_of_closed_members():

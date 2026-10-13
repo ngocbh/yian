@@ -36,12 +36,7 @@ _STYLES = _PLAIN_TEXT_STYLES | {"plain"}
 _YAML_FIRST_STARTS = ("'", '"', "[", "{")
 _HEAD_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _CLOSE_MATCH_CUTOFF = 0.6
-# `Union` is a known head that never resolves, so it explains itself instead of
-# drawing a close match.
 _UNION = "Union"
-_UNION_UNSUPPORTED = (
-    "Union types are not supported; model a tagged variant as a discriminated record."
-)
 
 
 @dataclass(frozen=True)
@@ -114,9 +109,10 @@ def split_typed_binding(
 
     try:
         declared = type_for(left, registry)
-    except TypeCheckError:
+    except TypeCheckError as exc:
         raise diagnostics.error(
-            _not_a_type_message(left, value.strip(), binding_label, registry), range=range
+            _not_a_type_message(left, value.strip(), binding_label, registry, exc),
+            range=range,
         ) from None
     if not right:
         raise diagnostics.error(
@@ -197,28 +193,42 @@ def _literal_mismatch_message(
     return message
 
 
-def _not_a_type_message(left: str, text: str, label: str, registry: TypeRegistry) -> str:
-    """Explain that `left` is not a type and show how to quote `text` instead."""
+def _not_a_type_message(
+    left: str, text: str, label: str, registry: TypeRegistry, error: TypeCheckError
+) -> str:
+    """Explain that `left` is not a type and show how to quote `text` instead.
+
+    Args:
+        left (`str`): The authored text before the separator.
+        text (`str`): The whole authored binding value.
+        label (`str`): The binding's key name.
+        registry (`TypeRegistry`): The flow's typedefs, offered as close matches.
+        error (`TypeCheckError`): Why `left` failed to resolve.
+
+    Returns:
+        `str`: The error message.
+    """
+    head = _HEAD_IDENTIFIER.match(left)
+    reason = ""
+    # A `Union[...]` fails for reasons a close match can't fix, such as a member
+    # that is not a record, so the resolver's own reason is the useful part.
+    if head is not None and head.group() == _UNION and left != _UNION:
+        reason = f" ({error})"
     message = (
-        f"`{left}` in `{label}: {text}` is not a type. "
+        f"`{left}` in `{label}: {text}` is not a type{reason}. "
         f'If you meant the text "{text}", quote it: `{label}: {_yaml_quoted(text)}`'
     )
-    head = _HEAD_IDENTIFIER.match(left)
     names = BUILTIN_TYPE_NAMES | registry.keys()
     if head is None:
         return message
-    if head.group() == _UNION:
-        return f"{message} {_UNION_UNSUPPORTED}"
     # A valid head means the error lies later in the expression, e.g. `list[Strr]`;
     # suggesting a sibling of the head would point at the wrong part.
     if head.group() in names:
         return message
-    # `Union` competes as a candidate so a misspelling of it, e.g. `Unoin`, is not
-    # steered to an unrelated name such as `none`; it is never offered itself.
     matches = difflib.get_close_matches(
-        head.group(), sorted(names | {_UNION}), n=1, cutoff=_CLOSE_MATCH_CUTOFF
+        head.group(), sorted(names), n=1, cutoff=_CLOSE_MATCH_CUTOFF
     )
-    if matches and matches[0] != _UNION:
+    if matches:
         message += f" Did you mean `{matches[0]}`?"
     return message
 

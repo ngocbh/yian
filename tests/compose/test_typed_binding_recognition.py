@@ -14,6 +14,8 @@ REGISTRY = read_typedefs(
     {
         "OrderResult": {"id": "str", "qty": "int"},
         "Size": "Literal[small, large]",
+        "Buy": {"action": "Literal[buy]", "qty": "int"},
+        "Sell": {"action": "Literal[sell]", "qty": "int"},
     }
 )
 DIAGNOSTICS = LoadDiagnostics(label="flow.yaml", text="inputs:\n  qty: a = b\n")
@@ -115,17 +117,29 @@ def test_valid_head_with_a_bad_type_gets_no_close_match(text):
     assert "Did you mean" not in str(_error(text))
 
 
-@pytest.mark.parametrize("text", ["Union[int, str] = 1", "Union = 1"])
-def test_union_head_explains_it_is_unsupported(text):
-    message = str(_error(text))
-    assert "Did you mean" not in message
-    assert message.endswith(
-        " Union types are not supported; model a tagged variant as a discriminated record."
+def test_union_of_records_is_a_type():
+    assert _split("Union[Buy, Sell] = ${x}") == TypedBindingText(
+        type_text="Union[Buy, Sell]", value="${x}"
     )
 
 
-def test_misspelled_union_gets_no_close_match():
-    assert "Did you mean" not in str(_error("Unoin[int, str] = 1"))
+def test_invalid_union_explains_why():
+    assert str(_error("Union[Buy, str] = 1")) == (
+        "`Union[Buy, str]` in `qty: Union[Buy, str] = 1` is not a type "
+        "(Union[Buy, str]: member 'str' is not a record). "
+        'If you meant the text "Union[Buy, str] = 1", quote it: '
+        '`qty: "Union[Buy, str] = 1"`'
+    )
+
+
+def test_bare_union_gets_the_generic_message():
+    message = str(_error("Union = 1"))
+    assert message.startswith("`Union` in `qty: Union = 1` is not a type. ")
+    assert "Did you mean" not in message
+
+
+def test_misspelled_union_gets_a_close_match():
+    assert str(_error("Unoin[Buy, Sell] = ${x}")).endswith(" Did you mean `Union`?")
 
 
 def test_lowercase_any_is_a_type():

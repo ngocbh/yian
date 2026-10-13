@@ -41,7 +41,7 @@ from yian.expr.template import Span, eval_template, scan_template
 from yian.nodes.contracts import Binding, Parameter, ValueContract, binding_source
 from yian.typesys import TypeCheckError, ValueKind, build_value_as
 from yian.typesys.pool import VariablePool
-from yian.typesys.values import Type
+from yian.typesys.values import Type, reject_nonfinite
 
 
 BindingFailureCode: TypeAlias = Literal[
@@ -180,6 +180,14 @@ def _source_origin(source: Any) -> OriginRef | None:
     return source.origin if isinstance(source, Binding) else None
 
 
+def _reject_nonfinite_binding(value: Any, where: str, origin: OriginRef | None) -> None:
+    """Raise a ``binding.evaluate`` `BindingError` if ``value`` holds a NaN or infinity."""
+    try:
+        reject_nonfinite(value, where)
+    except TypeCheckError as exc:
+        raise BindingError(str(exc), failure_code="binding.evaluate", origin=origin) from exc
+
+
 def _validate_parameters(params: list[Parameter]) -> None:
     """Require the canonical exact-list parameter carrier at every binding seam."""
     if type(params) is not list:
@@ -277,12 +285,21 @@ def apply_defaults(
     A caller-passed value, including ``None``, always shadows a default. Defaults
     are validated against any semantic contract but retain their original Python
     payload rather than the typed value system's normalized representation.
+
+    Raises:
+        BindingError: With ``failure_code="binding.evaluate"`` when a default holds a
+            NaN or infinity at any depth or violates its parameter's contract.
     """
     _validate_parameters(params)
     output = dict(inputs)
     for parameter in params:
         if parameter.name in output or not parameter.has_default:
             continue
+        _reject_nonfinite_binding(
+            parameter.default,
+            f"default for {parameter.name!r}",
+            parameter.default_origin or parameter.origin,
+        )
         if parameter.contract is not None:
             try:
                 build_value_as(parameter.contract.type, parameter.default)
@@ -432,7 +449,8 @@ def bind_params(
         `dict[str, Any]`: The bound `{name: value}` record handed to the node instead of the pool.
 
     Raises:
-        BindingError: On expression/default/required evaluation failure, typed binding
+        BindingError: On expression/default/required evaluation failure, a resolved value
+            or filled default holding a NaN or infinity at any depth, typed binding
             rejection, or supplied input contract rejection; ``failure_code`` identifies
             the stage.
     """
@@ -449,6 +467,7 @@ def bind_params(
                 source, pool, item, collector=collector if present else None,
                 name=p.name, source_resolver=source_resolver, types=types,
             )
+            _reject_nonfinite_binding(value, f"input {p.name!r}", _source_origin(source))
             if present and isinstance(source, Binding) and source.contract is not None:
                 _check_binding_type(p.name, source, source.contract, value)
             if value is None:
@@ -460,6 +479,9 @@ def bind_params(
                 if not present and p.has_default:
                     value = p.default
                     used_default = True
+                    _reject_nonfinite_binding(
+                        value, f"input {p.name!r}", p.default_origin or p.origin
+                    )
                     if collector is not None:
                         collector._record_source(p.name, ValueRoute.literal(value), False)
                 elif not present and p.required:

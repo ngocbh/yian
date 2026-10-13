@@ -1,6 +1,14 @@
 """NaN, infinity, and float overflow fail at the first boundary that sees them."""
 
+import math
+
+import pytest
+
+import yian.nodes.agent.node as agent_module
 from yian import load_flow, run_flow
+from yian.nodes.base import Output
+from yian.nodes.binding import BindingError, apply_defaults
+from yian.nodes.contracts import Parameter
 
 
 def _code_flow(output: str, value: str) -> str:
@@ -162,3 +170,259 @@ def test_a_nonfinite_float_output_fails_the_node():
     assert result.failure.code == "contract.output"
     assert result.failure.node_id == "n"
     assert result.failure.message == "output: non-finite number nan is not a yian value"
+
+
+_SCALED_BINDING_FLOW = """
+id: nonfinite
+name: nonfinite
+input:
+  x: float
+nodes:
+  c:
+    kind: code
+    input:
+      y: ${input.x * 10}
+    code: |
+      return inputs["y"]
+output: ${c.output}
+"""
+
+
+def _assert_binding_fails(result, node_id: str, message: str) -> None:
+    """Assert `node_id` failed `binding.evaluate` with exactly `message`."""
+    assert result.status == "failed"
+    assert result.failure.code == "binding.evaluate"
+    assert result.failure.node_id == node_id
+    assert result.failure.message == message
+
+
+@pytest.mark.parametrize("learnable", [False, True])
+def test_a_binding_that_evaluates_to_infinity_fails_its_node(learnable):
+    result = run_flow(load_flow(_SCALED_BINDING_FLOW), {"x": 1e308}, learnable=learnable)
+
+    _assert_binding_fails(result, "c", "input 'y': non-finite number inf is not a yian value")
+
+
+def test_a_learnable_literal_nan_binding_fails_its_node():
+    flow = load_flow("""
+id: nonfinite
+name: nonfinite
+nodes:
+  c:
+    kind: code
+    input:
+      y: .nan
+    code: |
+      return inputs["y"]
+output: ${c.output}
+""")
+    result = run_flow(flow, {}, learnable=True)
+
+    _assert_binding_fails(result, "c", "input 'y': non-finite number nan is not a yian value")
+
+
+def _call_flow(declared: str) -> str:
+    """Return a flow whose `k` CALL node binds `input.x * 10` to a def input `y: declared`."""
+    return f"""
+id: nonfinite
+name: nonfinite
+input:
+  x: float
+defs:
+  body:
+    input:
+      y: {declared}
+    nodes:
+      inner:
+        kind: code
+        input:
+          y: ${{input.y}}
+        code: |
+          return inputs["y"]
+    output: ${{inner.output}}
+nodes:
+  k:
+    kind: call
+    call: body
+    input:
+      y: ${{input.x * 10}}
+output: ${{k.output}}
+"""
+
+
+@pytest.mark.parametrize("declared", ["float", "int"])
+def test_a_call_binding_that_evaluates_to_infinity_fails_the_call(declared):
+    result = run_flow(load_flow(_call_flow(declared)), {"x": 1e308})
+
+    _assert_binding_fails(result, "k", "input 'y': non-finite number inf is not a yian value")
+    assert not [event for event in result.events if "inner" in str(getattr(event, "node_id", ""))]
+
+
+def test_a_literal_binding_names_the_nonfinite_path():
+    flow = load_flow("""
+id: nonfinite
+name: nonfinite
+nodes:
+  c:
+    kind: code
+    input:
+      y: {a: [1, .nan]}
+    code: |
+      return inputs["y"]
+output: ${c.output}
+""")
+    result = run_flow(flow, {})
+
+    _assert_binding_fails(
+        result, "c", "input 'y' at a[1]: non-finite number nan is not a yian value"
+    )
+
+
+def test_a_nonfinite_start_default_fails_start():
+    flow = load_flow("""
+id: nonfinite
+name: nonfinite
+input:
+  x: float = .inf
+nodes:
+  c:
+    kind: code
+    input:
+      y: ${input.x}
+    code: |
+      return inputs["y"]
+output: ${c.output}
+""")
+    result = run_flow(flow, {})
+
+    assert result.status == "failed"
+    assert result.failure.code == "binding.evaluate"
+    assert result.failure.node_id == "__start__"
+    assert "input 'x'" in result.failure.message
+
+
+def _map_flow(over: str, item_binding: str) -> str:
+    """Return a flow whose `m` MAP node iterates `over` and binds `y` to `item_binding`."""
+    return f"""
+id: nonfinite
+name: nonfinite
+input:
+  x: float
+nodes:
+  m:
+    kind: map
+    over: "{over}"
+    input:
+      y: float = {item_binding}
+    nodes:
+      work:
+        kind: code
+        input:
+          y: ${{input.y}}
+        code: |
+          return inputs["y"]
+    output: ${{work.output}}
+output: ${{m.output}}
+"""
+
+
+def test_a_nonfinite_map_over_item_fails_the_map():
+    result = run_flow(load_flow(_map_flow("${[input.x, input.x * 10]}", "${item}")), {"x": 1e308})
+
+    assert result.status == "failed"
+    assert result.failure.code == "binding.evaluate"
+    assert result.failure.node_id == "m"
+    assert "`over`" in result.failure.message
+    assert "at [1]" in result.failure.message
+
+
+def test_a_nonfinite_map_item_binding_fails_the_map():
+    result = run_flow(load_flow(_map_flow("${[input.x, 2.0]}", "${item * 10}")), {"x": 1e308})
+
+    _assert_binding_fails(result, "m", "input 'y': non-finite number inf is not a yian value")
+
+
+def test_a_nonfinite_flow_output_binding_fails_the_end_binding():
+    flow = load_flow("""
+id: nonfinite
+name: nonfinite
+input:
+  x: float
+nodes:
+  c:
+    kind: code
+    code: |
+      return 1
+output: ${input.x * 10}
+""")
+    result = run_flow(flow, {"x": 1e308})
+
+    assert result.status == "failed"
+    assert result.failure.code == "binding.evaluate"
+    assert result.failure.message == "input 'result': non-finite number inf is not a yian value"
+
+
+def test_a_nonfinite_temporary_inside_a_template_is_allowed():
+    flow = load_flow("""
+id: nonfinite
+name: nonfinite
+input:
+  x: float
+nodes:
+  c:
+    kind: code
+    input:
+      y: v=${input.x * 10}
+    code: |
+      return inputs["y"]
+output: ${c.output}
+""")
+    result = run_flow(flow, {"x": 1e308})
+
+    assert result.status == "succeeded"
+    assert result.output == "v=inf"
+
+
+def test_apply_defaults_rejects_a_nonfinite_default():
+    with pytest.raises(BindingError) as caught:
+        apply_defaults([Parameter("p", has_default=True, default=math.inf)], {})
+
+    assert caught.value.failure_code == "binding.evaluate"
+    assert str(caught.value) == "default for 'p': non-finite number inf is not a yian value"
+
+
+@pytest.mark.parametrize("learnable", [False, True])
+def test_a_nonfinite_agent_variable_default_fails_the_agent(monkeypatch, learnable):
+    calls = []
+    monkeypatch.setattr(agent_module, "run_agent", lambda ctx: calls.append(ctx) or Output("x"))
+    flow = load_flow("""
+id: nonfinite
+name: nonfinite
+llm_config: {provider: ollama, model: test}
+nodes:
+  writer:
+    kind: agent
+    variables: {t: 'float = .inf'}
+    prompt: 'go ${t}'
+    output: str
+output: ${writer.output}
+""")
+    result = run_flow(flow, {}, learnable=learnable)
+
+    assert result.status == "failed"
+    assert result.failure.code == "node.execute"
+    assert result.failure.node_id == "writer"
+    assert "default for 't': non-finite" in result.failure.message
+    assert calls == []
+
+
+def test_apply_defaults_rejects_a_nonfinite_default_before_its_contract():
+    from yian.nodes.contracts import ValueContract
+    from yian.typesys import Type, ValueKind
+
+    parameter = Parameter(
+        "p", ValueContract(Type(ValueKind.INTEGER)), has_default=True, default=math.nan
+    )
+
+    with pytest.raises(BindingError, match="^default for 'p': non-finite number nan"):
+        apply_defaults([parameter], {})

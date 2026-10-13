@@ -744,8 +744,9 @@ class JsonlRunLog:
         """Lock, repair, and validate one existing complete JSONL prefix.
 
         Lock acquisition happens before any file read.  Bytes after the final
-        newline are never records—even when those bytes form valid JSON—and are
-        durably truncated before complete lines are decoded.
+        newline are never records—even when those bytes form valid JSON.  They
+        are durably truncated only after the complete lines decode as a
+        non-empty run log, so a rejected file is left unchanged.
         """
         canonical_path = Path(path)
         fd: int | None = None
@@ -760,19 +761,18 @@ class JsonlRunLog:
 
             data = file.read()
             complete_end = data.rfind(b"\n") + 1
+            records = _decode_complete_prefix(data[:complete_end], canonical_path)
+            if not records:
+                raise ValueError(f"cannot resume an empty run log: {canonical_path}")
+
+            descriptor = file.fileno()
             if complete_end != len(data):
-                descriptor = file.fileno()
                 os.ftruncate(descriptor, complete_end)
                 os.lseek(descriptor, complete_end, os.SEEK_SET)
                 file.flush()
                 os.fsync(descriptor)
-                data = data[:complete_end]
             else:
-                os.lseek(file.fileno(), complete_end, os.SEEK_SET)
-
-            records = _decode_complete_prefix(data, canonical_path)
-            if not records:
-                raise ValueError(f"cannot resume an empty run log: {canonical_path}")
+                os.lseek(descriptor, complete_end, os.SEEK_SET)
             return cls(
                 canonical_path,
                 records[0].run_id,

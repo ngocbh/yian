@@ -1359,9 +1359,12 @@ suggested. Show them as choices, but still let the human type another answer. Ea
 concurrent runs in one process never share one. Within one run, the default
 `num_workers=8` lets several nodes (for example two MAP items) call the handler at
 the same time, so the handler must be thread-safe.
-`node_id` is the expanded node id (for example `loop#1/ask` for a LOOP's second
-iteration), so a run id plus `node_id` identifies one question; bind the run id in
-the handler's closure when the host needs it. The mapping is the whole tool set,
+For a `human_input` node, `node_id` is the expanded node id (for example
+`loop#1/ask` for a LOOP's second iteration), so a run id plus `node_id` identifies
+one question; bind the run id in the handler's closure when the host needs it.
+A model-requested call sets only `question` and `options`; `questions`,
+`answer_schema`, `title`, and `node_id` are `None`, so the handler cannot tell
+which AGENT, or which LOOP or MAP occurrence of it, asked. The mapping is the whole tool set,
 so a flow that also uses registered tools passes
 `tools={**registered_tools(), "ask_user": ask}`. `ask_user` never comes from the
 global registry: a run without its own handler fails any HUMAN_INPUT node that

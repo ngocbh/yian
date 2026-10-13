@@ -20,6 +20,7 @@ from yian.expr import ExpressionError, condition_refs
 from yian.nodes.contracts import (
     OutputContract,
     PartialRecordContract,
+    output_contract_field_error,
 )
 from yian.nodes.loop import LoopNode
 from yian.compose.helpers.output_contracts import (
@@ -277,9 +278,10 @@ class LoopDescriptor(NodeDescriptor):
             )
         # `while:`/`until:` predicate scope: the predicate is evaluated against the carried record
         # (record-scoped `evaluate_when_record`), where the ONLY resolvable names are the carried
-        # keys — an undeclared name silently resolves falsy, and without a `max:` the loop would
-        # spin forever. Reject a predicate whose ref head isn't a carried field at load, so a typo
-        # is loud not a runaway.
+        # keys — an undeclared name or field silently resolves falsy, so `while:` would run zero
+        # times and `until:` without a `max:` would spin forever. Reject a predicate whose ref
+        # head isn't a carried field, or whose field read the carried record's type can't have,
+        # at load, so a typo is loud not a runaway.
         # `times:` has no predicate, so skip it.
         predicate_src = self.while_ if self.while_ is not None else self.until_
         if predicate_src is not None:
@@ -288,18 +290,28 @@ class LoopDescriptor(NodeDescriptor):
             # mixed `${score} >= 0.8`, whole `${score >= 0.8}`), unlike a flat `${...}` regex
             # which read a whole-span predicate as one bogus head and a bare one as no heads.
             try:
-                heads = {r.split(".", 1)[0] for r in condition_refs(predicate_src)}
+                refs = condition_refs(predicate_src)
             except ExpressionError as exc:
                 errors.append(
                     f"loop node {self.id!r}: `{pred_kw}:` is not a valid boolean expression: {exc}"
                 )
-                heads = set()
+                refs = []
+            heads = {r.split(".", 1)[0] for r in refs}
             unknown = sorted(heads - carried)
             if unknown:
                 errors.append(
                     f"loop node {self.id!r}: `{pred_kw}:` references unknown name(s) {unknown} — "
                     f"the predicate reads the carried record {sorted(carried)}"
                 )
+            if not errors and node.output_contract is not None:
+                # With the field names valid, `output_contract` is the carried record's
+                # contract (the body's for a total loop, merged with typed seeds otherwise).
+                for ref in dict.fromkeys(refs):
+                    field_error = output_contract_field_error(
+                        node.output_contract, ref.split("."), ref
+                    )
+                    if field_error:
+                        errors.append(f"loop node {self.id!r}: `{pred_kw}:` {field_error}")
             # A body that returns none of the fields the predicate reads can never change it,
             # so without `max:` the loop never ends. `returned_fields` is set only when the
             # body returns a known strict subset of the carried record. Skip when a driver,

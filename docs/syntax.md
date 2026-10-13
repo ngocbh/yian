@@ -1830,8 +1830,9 @@ nodes:
 **`while:` — pre-check (0+ runs).** A predicate evaluated on the carried record
 *before* each iteration; 0 iterations run if the seed already fails it. It is a
 record-scoped boolean over bare refs — every ref must name a **carried record
-field** (a typo'd name is rejected at load, not silently read as falsy) — written
-in the canonical bare form: `while: not exited`. `max:` is optional. The
+field**, and a field read below it (`state.count`) must be one the carried field's
+type has (a typo'd name or field is rejected at load, not silently read as falsy) —
+written in the canonical bare form: `while: not exited`. `max:` is optional. The
 predicate is an expression string: a YAML `true`, `false`, number, or list is a
 load error, and so is an empty string.
 

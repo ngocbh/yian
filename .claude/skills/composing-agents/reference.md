@@ -409,8 +409,8 @@ that change; a field it omits keeps its value. This is the shape
   Give EXACTLY ONE driver: `while:` (pre-check, 0+ runs), `until:` (post-check /
   do-while, 1+ runs), or `times: N` (fixed count). `max:` is optional for
   `while:`/`until:` but REDUNDANT+REJECTED with `times:`.
-  Every `while:`/`until:` ref must name a carried field (a typo is rejected at load,
-  not read as falsy), and `max:` (when given) and `times:` must be a plain integer `>= 1`.
+  Every `while:`/`until:` ref must name a carried field, and a field read below it must
+  exist on that field's type (a typo is rejected at load, not read as falsy), and `max:` (when given) and `times:` must be a plain integer `>= 1`.
 - **Node-local `asserts:` reading `${output}` are POST checks** — they fire once the
   node's value is committed, and fail the run loudly on a false/raising expr. This
   includes a `call` node: its POST asserts may read `${output}` **and** the call's

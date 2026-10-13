@@ -886,10 +886,10 @@ node without `steerable: true` never reads it.
 ### `code` / `tool` — the other leaves
 
 These are the non-LLM computational leaves — a Python callable or a registered
-tool. CODE consumes `input:` bindings and may declare a typed `output:`. TOOL
-instead accepts an untyped `input:` map defined by the registered tool and rejects
-`output:`; its return value is still bound as the node's `output` for downstream
-references.
+tool. Both consume `input:` bindings and may declare a typed `output:`. A TOOL
+node's `input:` names are the tool's own arguments. Its return value is bound as
+the node's `output` for downstream references; see
+[Typed TOOL nodes](#typed-tool-nodes) for how both sides are checked.
 
 Running an ML model is a host capability: the host serves it behind a tool, and
 the flow calls it with `kind: tool`. `kind: model` was removed; loading it is an
@@ -921,6 +921,79 @@ different tools share a name, or when a group contains a tool named `ask_user` o
 `load_skill`. Groups may share the same tool; the model sees it once.
 `ask_user` stays a separate top-level entry. `yian run` fills no groups, so a
 flow that grants one needs a Python host. See [Tool groups](api.md#tool-groups).
+
+#### Typed TOOL nodes
+
+A TOOL node may declare `output:` of any type, including a union of records.
+Every value the tool returns is checked against it before downstream nodes see
+it. A mismatch fails the node with `contract.output`, located at `output:`.
+Without `output:`, any return value passes.
+
+Expected outcomes are variants of the output type; route them with `case` on the
+tag:
+
+```yaml
+typedefs:
+  Filled: {type: 'Literal[filled]', qty: int}
+  Interrupted: {type: 'Literal[interrupted]', by: str, partial: 'Optional[int]'}
+  OrderResult: Union[Filled, Interrupted]
+nodes:
+  place:
+    kind: tool
+    tool_id: place_order
+    input:
+      qty: 5
+    output: OrderResult
+  route:
+    kind: case
+    on: ${place.output.type}
+    cases:
+      - when: filled
+        then: on_filled
+      - when: interrupted
+        then: on_interrupted
+  on_filled:
+    kind: code
+    input:
+      qty: ${place.output.qty}
+    code: 'return f"filled {inputs[''qty'']}"'
+    output: str
+  on_interrupted:
+    kind: code
+    input:
+      by: ${place.output.by}
+    code: 'return "stopped by " + inputs["by"]'
+    output: str
+output: ${on_filled.output | on_interrupted.output}
+```
+
+Interrupts and progress belong to the host: its tool returns the `Interrupted`
+variant, and yian validates it like any other value. A tag the union lacks fails
+at the gate (`'rejected' is not a tag of the union`). An exception from the tool
+still fails the node.
+
+When a run starts, before any record is written, every static TOOL node is
+checked against the run's tool. That includes nodes that may never run: an
+unreached `case` branch, `defs:`, and LOOP and MAP bodies. The run raises
+`ValueError` for:
+
+- an input the tool doesn't take:
+  `TOOL node 'place' input 'qtty': tool 'place_order' takes no input 'qtty'; it takes ['qty', 'sym']`;
+- a required input the node doesn't pass;
+- an input whose type can never fit, by the same disjoint rule as a
+  [typed binding](#load-check):
+  `TOOL node 'place' input 'qty': tool 'place_order' takes int, but the binding is "10" (str)`;
+- an `output:` the tool's return annotation can never satisfy:
+  `TOOL node 'place' output: declared int, but tool 'place_order' returns str`.
+
+A literal is compared by its exact value, a typed binding (`qty: int = ${x}`) by
+its declared type, and a reference by its inferred type. An unproven binding is
+skipped. A narrower binding, such as `Optional[int]` into `int` or `str` into a
+`Literal`, starts; the tool's own argument validation checks it on each call.
+Nothing is coerced: the string `"10"` into an `int` input fails here, though the
+tool would have converted it. An unknown `tool_id:` still fails only when its node
+runs. How yian reads a host tool's types is in
+[Typed tools](api.md#typed-tools).
 
 A `code` node's `code:` field is one of two shapes:
 

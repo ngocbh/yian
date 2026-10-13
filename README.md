@@ -156,6 +156,9 @@ api_key=key)` or `result.backward(..., api_key=key)`. A `base_url` beside the ke
 such as an Azure OpenAI resource's `https://<resource>.openai.azure.com/openai/v1/`
 with `"provider": "openai"`, is where that key is sent; flow files cannot set it.
 Without one, the provider's default or environment endpoint applies.
+Before a run starts, each TOOL node's inputs and `output:` are checked against the
+argument and return types its tool declares; see
+[Typed tools](docs/api.md#typed-tools).
 Passing `learnable=True`
 retains accepted execution for a later explicit `result.backward(feedback)` call,
 with or without memory. Each call is a new

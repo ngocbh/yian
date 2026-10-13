@@ -229,7 +229,9 @@ terminal. Stored defaults are not coerced.
   also gets the built-in `load_skill` tool, which is not part of this mapping.
   A list or tuple value is a tool group (see [Tool groups](#tool-groups)).
   Every static AGENT grant must name a tool or group in this set; otherwise
-  `run_flow` raises `ValueError` before the log is created.
+  `run_flow` raises `ValueError` before the log is created. Every static TOOL
+  node is also checked against its tool's argument and return types (see
+  [Typed tools](#typed-tools)).
 - `skills` — the skills this run may use, keyed by name (see [Skills](#skills)).
   An AGENT's `skills:` grant selects from this mapping. A listed skill that is
   missing raises `ValueError` before the run starts.
@@ -295,6 +297,83 @@ neither their contents nor their tools. Only the group names in the flow are par
 of its fingerprint. Each run gets its own groups, so concurrent runs never see each
 other's tools, and `resume_flow` uses the groups passed to it (see
 [Durable recovery](#durable-recovery-with-resume_flow)).
+
+### Typed tools
+
+A TOOL node calls one host tool directly. When a run starts, before the log is
+created, every static TOOL node is checked against the tool it names in this
+run's tools, including nodes that may never run. `run_flow`, and `resume_flow`
+for an unfinished run, raise `ValueError` naming the node, the input, the tool,
+and both types when:
+
+- the node passes an input the tool doesn't take;
+- the node omits an input the tool requires;
+- an input's binding type can never fit the tool's type (they are disjoint);
+- the node declares `output:` and the tool's return type can never fit it.
+
+The input check doesn't coerce. A `str` binding into an `int` argument fails, even
+the literal `"10"` that pydantic would convert. A narrower binding (`Optional[int]`
+into `int`, `str` into a `Literal`) starts, and the tool's argument validation
+checks each call. Unproven bindings are skipped. An unknown `tool_id` still fails
+only when its node runs. The flow syntax is in
+[Typed TOOL nodes](syntax.md#typed-tool-nodes).
+
+Input types come from the tool's public argument schema. Each pydantic v2 field
+is translated through its JSON Schema, so a tool whose schema is JSON Schema (such
+as an MCP tool) follows the same rules:
+
+| JSON Schema | yian type |
+| --- | --- |
+| `string`, `integer`, `number`, `boolean`, `null` | `str`, `int`, `float`, `bool`, `None` |
+| a number bound on both ends | `int[a,b]` / `float[a,b]`; a one-sided bound is dropped |
+| string `enum` or `const` | `Literal[...]` |
+| `format` (`date`, `uri`, …) | `str` |
+| `array` with `items` | `list[...]`; tuples give `list[Any]` |
+| `object` with `properties` | input: `object`, unless `additionalProperties: false` makes it a record; output: a record, unless it allows extra keys |
+| `anyOf`/`oneOf` with `null` | `Optional[...]` |
+| `anyOf`/`oneOf` of records | `Union[...]` |
+| other unions, or anything untranslatable | not checked |
+
+An input with a pydantic function validator (`mode="before"`, `"wrap"`, or
+`"plain"`) or `SkipValidation` is not checked. A pydantic v1 schema gets only
+the name and required-input checks. A tool with a raw JSON Schema `args_schema`
+(a dict) is checked, but a TOOL node can't invoke it yet.
+
+The return type is read from the annotation of the function behind the tool: a
+function passed in `tools=` or in a group, one registered with `register_tool`,
+or a `StructuredTool` built from a function. Return a `TypedDict`, `dict`,
+`list`, or scalar. The output check is skipped when there is no annotation, the
+annotation is `Any`, the tool is a `BaseTool` that doesn't wrap a function, the
+tool uses `response_format="content_and_artifact"`, or the return type is not
+JSON-like (a pydantic model, dataclass, set, date, or enum; such values fail the
+`output:` gate anyway). On Python 3.10 and 3.11, use `typing_extensions.TypedDict`;
+pydantic rejects `typing.TypedDict` there.
+
+```python
+from typing import Literal, Optional, Union
+from typing_extensions import TypedDict
+
+
+class Filled(TypedDict):
+    type: Literal["filled"]
+    qty: int
+
+
+class Interrupted(TypedDict):
+    type: Literal["interrupted"]
+    by: str
+    partial: Optional[int]
+
+
+def place_order(qty: int) -> Union[Filled, Interrupted]:
+    ...
+
+
+result = run_flow(flow, {}, tools={"place_order": place_order})
+```
+
+Whatever the run-start check finds, the node's `output:` gate still validates
+each returned value.
 
 A node or flow-assert failure returns `RunResult(status="failed")` with one
 immutable `result.failure`; a successful flow returns `status="succeeded"` with

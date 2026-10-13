@@ -1,19 +1,30 @@
 # Tool use — a TOOL node (deterministic, no LLM) feeds an AGENT node.
-# A `tool` uses `tool_id:` + `input:` (a tool declares no output:). The id must be
+# A `tool` uses `tool_id:` + `input:` (the tool's argument names), and may declare
+# `output:`; every value the tool returns is checked against it. The id must be
 # registered in Python before the flow runs:
 #
+#   from typing_extensions import TypedDict
 #   from yian.tools import register_tool
 #
+#   class Fact(TypedDict):
+#       text: str
+#       source: str
+#
 #   @register_tool("get_facts")
-#   def get_facts(query: str, limit: int = 5) -> list[dict]:
+#   def get_facts(query: str, limit: int = 5) -> list[Fact]:
 #       "Fetch recent facts for a subject."   # docstring = what the model sees
 #       ...
 #
 # or passed to one run only: run_flow(flow, inputs, tools={"get_facts": get_facts}).
+# When the run starts, the node's inputs and output: are checked against
+# get_facts's argument and return types.
 
 id: tool-use
 name: tool_use
 description: Call a registered tool, then have an AGENT node write from the result.
+
+typedefs:
+  Fact: {text: str, source: str}
 
 input:
   subject: str
@@ -22,9 +33,10 @@ nodes:
   facts:
     kind: tool
     tool_id: get_facts             # a registered or per-run tool id
-    input:                         # untyped — each value is a ${...} ref or a literal
+    input:                         # each value is a ${...} ref or a literal
       query: ${input.subject}
       limit: 5
+    output: list[Fact]
 
   summary:
     kind: agent

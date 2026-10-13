@@ -206,6 +206,12 @@ otherwise only the mapping's entries, and `ask_user` only from the run. A list v
 is a named tool group; the AGENT's tool loop expands granted groups through
 `ToolSet.expand` before binding and the grant check, and the run boundary checks
 every static `Node.granted_tools()` grant against the `ToolSet` before any record.
+The same walk reads `Node.host_tool_call()`: TOOL returns a `HostToolCall` (tool id,
+input names, proven input types, declared output type), and the boundary compares it
+with `tools.types.tool_types(tool)` through `type_relation`. Unknown or missing inputs
+and disjoint input or output types raise `ValueError`; an unresolved `tool_id` is left
+to the node. `ToolNode.input_types` is stamped by the compose pass at load; it is
+derived from wiring, so the manifest ignores it and it is not in the fingerprint.
 The AGENT node is the
 deliberate model-access exception: its loop in `nodes/agent/loop.py` imports
 `llm_clients` and calls `model_from_config` directly, while its granted tools resolve
@@ -230,6 +236,7 @@ Runtime and compile validation read these node members instead of branching on
 | `is_loop: bool` | growth reducer: gate the origin-keyed single-live-expansion invariant (the driver self-respawns, so each iteration's grow is attributed to `origin_id` and supersedes the prior expansion) | `False` → `True` on `loop` |
 | `needs_stop_event: bool` | read boundary (`eval_node`): pass the exact cooperative run-stop event | `False` → `True` on agent/wait |
 | `needs_tools: bool` | read boundary (`eval_node`): pass the run's `ToolSet` as `caps['tools']` | `False` → `True` on tool/human_input/agent |
+| `host_tool_call() -> HostToolCall \| None` | run boundary only (`run.py`): check a direct tool call against the run's tool types before any record | `None` → the TOOL node's call |
 | `needs_live_events: bool` | read boundary (`eval_node`): pass `emit_stream`/`emit_event` for the host sinks that exist; faults escape as host faults | `False` → `True` on agent |
 | `needs_steering: bool` | read boundary (`eval_node`): pass the run's `Steering` inbox as `caps['steering']` when the host supplied one; faults and wrong return types escape as host faults | `False` → the AGENT's authored `steerable:` |
 

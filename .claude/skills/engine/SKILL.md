@@ -382,7 +382,11 @@ Most are just the functional model (above) made enforceable:
   explicitly granted `ask_user` tool and HUMAN_INPUT call the run's own handler
   (passed as `tools={"ask_user": ...}`) inside their live invocation. A group
   tool may never be named `ask_user` or `load_skill`; host-filled tool groups (`tools={"box": [...]}`)
-  expand before the AGENT grant check, and unresolved grants fail at run start. The
+  expand before the AGENT grant check, and unresolved grants fail at run start.
+  The run boundary also checks each static TOOL node's `host_tool_call()` against
+  its tool's declared argument and return types (`tools.types`) before any record;
+  a TOOL `output:` is the ordinary output gate, so expected outcomes are variants
+  of that type and exceptions still fail the node. The
   handler takes six keywords; the model can set only `question` and `options`
   (cleaned leniently), and the rest stay `InjectedToolArg`. The AGENT
   node checks the run-owned stop event between external model/tool effects, and

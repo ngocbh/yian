@@ -380,6 +380,11 @@ compares the optional exit field with `true` to prove `bool`. This is the shape
   the search path). `alias@v1` adds a version guard.
 - **No `kind: model`** — removed; serve ML inference behind a host tool and call it
   with `kind: tool`. Use `code` for deterministic compute.
+- **A `tool` node's `input:` names are its tool's arguments; `output:` is optional.**
+  When declared, every returned value is checked against it. At run start each
+  static TOOL node is checked against the run's tool: unknown or missing inputs,
+  and input or output types that can never fit, raise `ValueError`. No coercion:
+  a `"10"` literal into an `int` argument fails.
 - **`loop` bodies return a subset of the carried record.** The body's `output:`
   returns at least one of the loop's `input:` (carried record) fields, and no others;
   each omitted field keeps its previous value. The body reads only a subset of the

@@ -455,22 +455,42 @@ verdict:
 
 ### `tool` — a registered tool (no LLM)
 ```yaml
-news:
-  kind: tool
-  tool_id: get_facts           # a registered or per-run tool id
-  input:                       # untyped — each value is a ${...} ref or a literal
-    symbol: ${input.topic}
-    limit: 10
+typedefs:
+  Fact: {text: str, source: str}
+nodes:
+  news:
+    kind: tool
+    tool_id: get_facts         # a registered or per-run tool id
+    input:                     # the tool's own argument names; a ${...} ref or a literal
+      symbol: ${input.topic}
+      limit: 10
+    output: list[Fact]         # optional; every returned value is checked against it
 ```
 Register the tool in Python so the id resolves:
 ```python
+from typing_extensions import TypedDict   # typing.TypedDict fails in pydantic on 3.10/3.11
 from yian.tools import register_tool
 
+class Fact(TypedDict):
+    text: str
+    source: str
+
 @register_tool("get_facts")
-def get_facts(symbol: str, limit: int = 10) -> list[dict]:
+def get_facts(symbol: str, limit: int = 10) -> list[Fact]:
     "Fetch recent facts for a symbol."   # docstring = the description the model sees
     ...
 ```
+**Typed TOOL nodes.** A returned value that does not fit `output:` fails the node
+(`contract.output`). Expected outcomes are variants of the output type, e.g.
+`OrderResult: Union[Filled, Interrupted]`, routed with `case` on the tag; the host's
+tool returns its `Interrupted` variant, and an exception still fails the node. When a
+run starts, every static TOOL node is checked against the run's tool: an input the
+tool doesn't take, a missing required input, an input type that can never fit, or an
+`output:` the tool's return annotation can never satisfy raises `ValueError`. Nothing
+is coerced: `qty: "10"` into an `int` argument fails. Narrower bindings (`Optional[int]`
+into `int`) start and the tool validates each call. An unknown `tool_id` fails only
+when its node runs. See `docs/syntax.md` (Typed TOOL nodes) and `docs/api.md`
+(Typed tools).
 Or give it to one run only: `run_flow(flow, inputs, tools={"get_facts": get_facts})`.
 That mapping is the run's whole tool set: registered tools are hidden. To keep
 them, pass `tools={**registered_tools(), "get_facts": get_facts}`.
@@ -487,7 +507,7 @@ name (or a group tool's name is a top-level key), or a group has a tool named
 `ask_user` or `load_skill`; the handler stays the top-level `ask_user` entry. `yian run`
 fills no groups, so such flows need a Python host. Pass groups again to `resume_flow`;
 restarted nodes use the contents passed there.
-Note `tool` uses `tool_id:` + `input:` (a tool declares no `output:`). ML inference
+Note `tool` uses `tool_id:` + `input:`, with an optional `output:`. ML inference
 goes through a host tool (`kind: tool`); `kind: model` was removed.
 
 ### `case` — branching (routes only; no `input:`)

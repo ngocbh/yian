@@ -178,6 +178,13 @@ langchain-core and the standard library, never nodes, compile, compose, runtime,
 Reading skill folders parses YAML frontmatter, so it lives in `compose/skills.py`
 and uses `compose.source.literals.parse_yaml_literal`.
 
+`tools/` is a leaf beside `skills/`: `registry.py` owns `register_tool`, the
+global registry, and the per-run `ToolSet`; `types.py` reads a tool's declared
+argument and return types as yian `Type`s for the run-start TOOL check. It imports
+langchain-core, pydantic, `typesys`, and the skills leaf, never nodes, compile,
+compose, runtime, `run.py`, or CLI. The run boundary compares the types; `tools/`
+only reads them.
+
 `llm_clients/auth/` is a private authentication leaf below model construction and
 host settings. It owns immutable credential/selection carriers, provider login
 and refresh protocols, and private atomic storage. It imports no model SDK,

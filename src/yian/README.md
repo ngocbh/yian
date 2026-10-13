@@ -1486,7 +1486,9 @@ interrupt by returning a variant of that type. An exception still fails the node
 
 Pooled drives own their executors through a full join: an abnormal dispatch exit
 signals cooperative stop before joining, so the boundary never releases its run-log
-lock while a worker can still produce an outcome.
+lock while a worker can still produce an outcome. When a node outcome fails the run,
+the dispatcher publishes that failure's durable observers before the join, so a host
+can withdraw a sibling's pending `ask_user` prompt instead of waiting for its answer.
 
 ## Dynamic growth and stable identity
 

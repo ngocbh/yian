@@ -1361,6 +1361,11 @@ suggested. Show them as choices, but still let the human type another answer. Ea
 concurrent runs in one process never share one. Within one run, the default
 `num_workers=8` lets several nodes (for example two MAP items) call the handler at
 the same time, so the handler must be thread-safe.
+If another node fails the run while a handler is waiting, `on_event` receives
+`NodeFailed` and `RunFailed` right away, before the run waits for its in-flight
+nodes. `run_flow` returns only after every pending handler returns or raises, and
+it discards their answers. To stop waiting on a human, withdraw the prompt when
+`on_event` sees the failure and make the handler return.
 For a `human_input` node, `node_id` is the expanded node id (for example
 `loop#1/ask` for a LOOP's second iteration), so a run id plus `node_id` identifies
 one question; bind the run id in the handler's closure when the host needs it.

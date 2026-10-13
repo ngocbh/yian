@@ -6,7 +6,7 @@ import threading
 import time
 
 from yian.compile.model import END_ID, START_ID
-from yian.events import RunSucceeded
+from yian.events import NodeFailed, RunFailed, RunSucceeded
 from yian.nodes.human_input import HumanInputNode
 from yian.runtime.engine import FlowEngine
 from yian.tools import ToolSet
@@ -134,3 +134,54 @@ def test_ready_work_waits_while_every_worker_is_blocked():
     assert ready_node_completed.is_set()
     assert "exception" not in outcome
     assert isinstance(outcome["events"][-1], RunSucceeded)
+
+
+def test_failure_reaches_on_event_while_a_sibling_prompt_is_pending():
+    prompt_entered = threading.Event()
+    withdraw_prompt = threading.Event()
+    prompt_returned = threading.Event()
+    pending_when_observed: dict[str, bool] = {}
+
+    def answer(**request):
+        prompt_entered.set()
+        # A human who never answers; only the host withdrawing the prompt ends it.
+        withdraw_prompt.wait(2)
+        prompt_returned.set()
+        return "withdrawn"
+
+    def fail_after_prompt(inputs):
+        assert prompt_entered.wait(2), "HUMAN_INPUT did not occupy a worker"
+        raise RuntimeError("boom")
+
+    def on_event(event):
+        if isinstance(event, (NodeFailed, RunFailed)):
+            pending_when_observed[type(event).__name__] = not prompt_returned.is_set()
+            withdraw_prompt.set()
+
+    graph = _graph(
+        [
+            HumanInputNode("ask", prompt="Question?"),
+            FuncNode("bad", fail_after_prompt),
+        ],
+        [
+            (START_ID, "ask"),
+            (START_ID, "bad"),
+            ("ask", END_ID),
+            ("bad", END_ID),
+        ],
+    )
+
+    engine = _engine(
+        graph,
+        num_workers=2,
+        on_event=on_event,
+        tools=ToolSet({"ask_user": answer}),
+    )
+    events = list(engine.run())
+
+    assert isinstance(events[-1], RunFailed)
+    assert events[-1].failure.message == "boom"
+    # The host hears about the failure while the prompt is still open, so it can
+    # withdraw the prompt instead of the run waiting for an answer it discards.
+    assert pending_when_observed == {"NodeFailed": True, "RunFailed": True}
+    assert not any(thread.name.startswith("ac-worker-") for thread in threading.enumerate())

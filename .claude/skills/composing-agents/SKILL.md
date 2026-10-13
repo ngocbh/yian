@@ -549,7 +549,7 @@ narrower is checked at runtime (`binding.type`, at the synthetic result node
 `__case_<id>`), on every run even if unread. `null` needs `Optional[...]`. A CASE
 that produces a value (`output:`, a value branch, or read via `${case.output}`) needs
 `else:` or an `on:` Literal with every tag listed. `${case.output}` works as a whole
-binding or inside text, not in a coalesce, `:-` default, `when:`/`on:`, or assert. A
+binding or inside text, not in a coalesce, `:-` default, expression, `when:`/`on:`, or assert. A
 span that reads a node that may be skipped needs `:-`; a value may not read its own
 CASE or plainly read another of its branches.
 

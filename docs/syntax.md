@@ -1064,7 +1064,9 @@ Changed: reading `${case.output}` of a `case` that isn't
 [exhaustive](#exhaustiveness) used to load, and returned null when no branch ran; it is
 now a load error. Add an `else:`, or list every tag of a non-nullable `Literal` `on:`.
 An unquoted `then:` or `else:` word that names no node used to fail with a `KeyError`;
-it is now a load error that suggests the nearest node, or quoting. Node ids may no
+it is now a load error that suggests the nearest node, or quoting. An empty `else:` used
+to mean no `else:`; it is now a load error unless the `case` declares an `Optional`
+`output:` (then it is the value `null`). Node ids may no
 longer start with `__value_` or `__case_`. Flows without value branches or a typed
 `case` keep their fingerprints.
 
@@ -1194,7 +1196,8 @@ route:
 `${case.output}` reads the taken branch's value, and `${case.output.field}` reads
 one field of it. Use it as a whole binding or inside text
 (`note: "got ${route.output}"`). It is a load error in a coalesce, in a `:-`
-default, in a `when:` or `on:`, and in asserts.
+default, inside an expression (`${route.output == "yes"}`), in a `when:` or `on:`, and in
+asserts.
 
 #### Exhaustiveness
 

@@ -1158,12 +1158,13 @@ live iteration until the host answers, then the same run advances into the next
 iteration. This is the shape a chat REPL takes.
 
 Each continuing iteration **prunes** the previous iteration's body nodes from the
-live graph, so a body of leaf nodes keeps about one iteration resident. Nodes grown
-inside the body by a nested CALL, MAP, or LOOP are not pruned, so they pile up every
-iteration: each iteration gets slower, and the run fails once it reaches the engine's
-node budget (10,000 live nodes, "expansion exceeded node budget"). Such a loop cannot
-run forever: keep the nested work small, or give it a `max:` low enough that a runaway
-fails with `LoopMaxExceeded` before it reaches the budget.
+live graph, along with the nodes grown under them by a nested CALL, MAP, or LOOP. So
+the live graph stays about one iteration, whatever the body. The run log (and, when
+learning is on, the retained trace) still keeps every iteration; resume and feedback
+read those. A nested node still running when its iteration ends (one whose output
+nothing reads) keeps its subtree live for the rest of the run. The engine's node
+budget (10,000 live nodes, "expansion exceeded node budget") then limits only what one
+iteration grows at its peak.
 
 ## Effects from inside an AGENT node — the `ask_user` tool
 

@@ -160,8 +160,10 @@ fan-out/fan-in boundaries with the same context, and LOOP respawn copies only it
 driver's outer context so the authored loop origin appears once. Runtime only
 splices the resulting fragment and never branches on kind to construct a trace.
 `prune` is growth's generic inverse: a self-respawning loop retires the
-iteration it just finished in the same step. It retires that iteration's direct body
-nodes; nodes grown inside it by a nested CALL, MAP, or LOOP stay live. Adding a new
+iteration it just finished in the same step. Pruning an id also retires the live nodes
+grown under it (by a nested CALL, MAP, or LOOP, transitively) once they are all settled.
+The reducer derives them from accepted growth records (`RunState.growth_owner`); the
+record keeps only the node's requested ids, and replay re-derives the rest. Adding a new
 spawner kind means setting traits on its node; the core never gains a branch. Details:
 [Nodes](nodes.md).
 

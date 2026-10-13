@@ -1016,6 +1016,11 @@ verdict:
   code: pkg.mod:fn             # module:function
 ```
 
+Only the `module:function` text is part of the flow fingerprint, not the function's
+source. Keep the function unchanged while a run may be resumed; an edited function
+passes the resume check and runs in the restarted nodes. See
+[Durable recovery](api.md#durable-recovery-with-resume_flow).
+
 **Inline** — real source shipped with the flow. Write a **bare body** (no `def`) that
 reads the node's inputs via the `inputs` dict and **`return`s** a value; the engine
 wraps it as `def main(inputs):` and runs it **in-process**:

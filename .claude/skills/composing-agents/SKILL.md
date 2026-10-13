@@ -446,6 +446,8 @@ for feedback shapes and repeated backward attempts.
 a bare body that reads the `inputs` dict and `return`s a value (the engine wraps it as
 `def main(inputs)` and runs it in-process; same one-dict convention, so a body promotes to
 a reference by copy-paste). See [`templates/inline-code.yaml`](templates/inline-code.yaml).
+The fingerprint holds a reference's `module:function` text, not the function's source:
+keep a referenced function unchanged until a resumable run finishes.
 ```yaml
 verdict:
   kind: code

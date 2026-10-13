@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import copy
+import importlib
 import json
 import re
+import sys
 from dataclasses import dataclass, replace
 
 import pytest
@@ -273,6 +275,37 @@ output: ${leaf.output}
 
     assert flow_fingerprint(code) != flow_fingerprint(tool)
     assert flow_fingerprint(code) != flow_fingerprint(changed_code)
+
+
+def test_reference_code_identity_is_the_token_not_the_callable_body(
+    tmp_path, monkeypatch
+):
+    module = tmp_path / "identity_refmod.py"
+    module.write_text("def fn(inputs):\n    return 'one'\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setattr(sys, "dont_write_bytecode", True)
+    monkeypatch.delitem(sys.modules, "identity_refmod", raising=False)
+    text = """
+id: ref
+name: Ref
+nodes:
+  leaf:
+    kind: code
+    output: str
+    code: identity_refmod:fn
+output: ${leaf.output}
+"""
+    before = flow_fingerprint(_compiled(text))
+
+    module.write_text("def fn(inputs):\n    return 'a changed body'\n")
+    monkeypatch.delitem(sys.modules, "identity_refmod", raising=False)
+    importlib.invalidate_caches()
+    (tmp_path / "identity_refmod_other.py").write_text(module.read_text())
+
+    assert flow_fingerprint(_compiled(text)) == before
+    assert flow_fingerprint(
+        _compiled(text.replace("identity_refmod:fn", "identity_refmod_other:fn"))
+    ) != before
 
 
 def test_flow_fingerprint_preserves_semantic_edge_order():

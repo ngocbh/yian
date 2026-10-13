@@ -185,7 +185,7 @@ appears — bindings, conditions, prompts. Inside it you may write:
 | `${a == b}`, `${x in [1, 2]}` | comparisons — `== != < <= > >=`, `in` / `not in` |
 | `${a and b}`, `${not a}` | boolean — `and` / `or` / `not` |
 | `${[a, b, c]}` | a list literal (elements are themselves expressions) |
-| `${upper(name)}`, `${join(items, ", ")}` | a pure builtin call (with dotted access on the result: `${fn(x).field}`) |
+| `${upper(name)}`, `${join(items, ", ")}` | a pure builtin call (with dotted access on the result: `${fn(x).field}`); a null or wrong-typed argument fails, so default it: `${upper(name :- "")}` |
 | `${X:-default}` | value, else `default` if absent |
 | `${X:?"msg"}` | required — fail with the literal `msg` if absent (quote the message) |
 | `${a \| b \| c}` | first present among peers (n-ary coalesce — for branch joins) |

@@ -47,7 +47,7 @@ One expression grammar, everywhere `${...}` appears:
 |------|---------|
 | `${a + b}`, `${a * b + 1}` | arithmetic — `+ - * / % **`, unary minus |
 | `${a == b}`, `${x in [1, 2]}` | comparisons / membership / `and`/`or`/`not` |
-| `${[a, b]}`, `${upper(x)}` | list literal / pure builtin call |
+| `${[a, b]}`, `${upper(x)}` | list literal / pure builtin call (null or wrong-typed args fail: `${upper(x :- "")}`) |
 | `${X:-default}` | value, else `default` if absent |
 | `${X:?"msg"}` | required — fail with the literal `msg` if absent (quote the message) |
 | `${a \| b \| c}` | first present among peers (e.g. the branches of a routing-only `case`) |

@@ -151,7 +151,7 @@ read it inside a case on ${d.output.action}`. Flow outputs are never narrowed.
 |------|---------|
 | `${a + b}`, `${a * b + 1}` | arithmetic — `+ - * / % **`, unary minus |
 | `${a == b}`, `${x in [1, 2]}` | comparisons / membership / `and`/`or`/`not` |
-| `${[a, b]}`, `${upper(x)}` | list literal / pure builtin call |
+| `${[a, b]}`, `${upper(x)}` | list literal / pure builtin call (null or wrong-typed args fail: `${upper(x :- "")}`) |
 | `${isinstance(x, Buy)}` | type test; `T` is a `typedefs:` name or `str`/`int`/`float`/`bool`/`date`/`datetime`/`object` |
 | `${X:-default}` | value, else `default` if absent |
 | `${X:?"msg"}` | required — fail with the literal `msg` if absent (quote the message) |

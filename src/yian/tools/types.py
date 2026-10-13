@@ -1,20 +1,24 @@
-"""Translate a tool's JSON Schema into a yian `Type`.
+"""Read a tool's declared input and return types as yian `Type`s.
 
 The translation is never narrower than what the schema accepts; it may widen.
 That keeps a run-start check against the result from reporting a binding as
 disjoint when the tool would accept it. A schema with no yian equivalent
 translates to `None`, which means "do not check".
 
-Knows about: typesys and the Python standard library.
+Knows about: typesys, pydantic, langchain-core, and the Python standard library.
 Never imports: nodes, compile, compose, runtime, the run boundary, or CLI.
 """
 
 from __future__ import annotations
 
+import typing
 from collections.abc import Callable, Mapping
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from math import ceil, floor, isfinite
-from typing import Any
+from typing import Annotated, Any
+
+from langchain_core.tools import BaseTool
+from pydantic import SkipValidation, TypeAdapter
 
 from yian.typesys.values import (
     Type,
@@ -264,3 +268,155 @@ def _union(members: list[Type | None]) -> Type | None:
         variants=canonical_union_order(others),
         nullable=nullable,
     )
+
+
+# Validators that run on the raw input can accept values the JSON Schema
+# does not describe.
+_RAW_INPUT_VALIDATORS = frozenset({"function-before", "function-wrap", "function-plain"})
+
+# Core-schema node types of values that wrap as yian values. Anything else
+# (models, dataclasses, sets, dates, enums, custom validators) is not a JSON-like
+# value, so a node cannot output it.
+_JSON_LIKE_CORE_TYPES = frozenset(
+    {
+        "any",
+        "str",
+        "int",
+        "float",
+        "bool",
+        "none",
+        "literal",
+        "list",
+        "tuple",
+        "dict",
+        "typed-dict",
+        "typed-dict-field",
+        "union",
+        "tagged-union",
+        "nullable",
+        "default",
+        "definitions",
+        "definition-ref",
+    }
+)
+
+
+@dataclass(frozen=True)
+class ToolTypes:
+    """The types a tool declares for its inputs and its return value.
+
+    Args:
+        inputs (`Mapping[str, Type | None] | None`):
+            The model-visible inputs by name. `None` when the argument schema
+            cannot be read, so no input is checked. A `None` value means that
+            input is not checked.
+        required (`frozenset[str]`):
+            The names of the inputs a call must pass.
+        output (`Type | None`):
+            The return type, or `None` when it is not checked.
+    """
+
+    inputs: Mapping[str, Type | None] | None
+    required: frozenset[str]
+    output: Type | None
+
+
+def tool_types(tool: BaseTool) -> ToolTypes:
+    """Read the declared input and return types of `tool`.
+
+    Inputs come from the model-visible argument schema, so injected arguments are
+    left out. The return type comes from the annotation of the wrapped function.
+
+    Args:
+        tool (`BaseTool`):
+            The tool to read.
+
+    Returns:
+        `ToolTypes`:
+            The input types, required input names, and return type. Each part is
+            `None` where it cannot be read without risking a narrower type than
+            the tool accepts or returns.
+    """
+    inputs, required = _input_types(tool.tool_call_schema)
+    return ToolTypes(inputs=inputs, required=required, output=_output_type(tool))
+
+
+def _input_types(schema: Any) -> tuple[dict[str, Type | None] | None, frozenset[str]]:
+    """Return the input types and required names of a tool argument schema."""
+    if isinstance(schema, Mapping):
+        properties = schema.get("properties")
+        if not isinstance(properties, Mapping):
+            return None, frozenset()
+        required = schema.get("required", [])
+        names = required if isinstance(required, list) else []
+        return (
+            {
+                name: type_from_json_schema(prop, closed=False, root=schema)
+                for name, prop in properties.items()
+            },
+            frozenset(name for name in names if isinstance(name, str)),
+        )
+    fields = getattr(schema, "model_fields", None)
+    if isinstance(fields, Mapping):
+        return (
+            {name: _field_type(field) for name, field in fields.items()},
+            frozenset(name for name, field in fields.items() if field.is_required()),
+        )
+    fields = getattr(schema, "__fields__", None)
+    if isinstance(fields, Mapping):
+        # Pydantic v1 schemas drop nullability, so their types are not read.
+        return (
+            dict.fromkeys(fields),
+            frozenset(name for name, field in fields.items() if field.required),
+        )
+    return None, frozenset()
+
+
+def _field_type(field: Any) -> Type | None:
+    """Return the input type of one pydantic v2 field, or `None` to leave it unchecked."""
+    try:
+        metadata = list(field.metadata)
+        if any(item is SkipValidation or isinstance(item, SkipValidation) for item in metadata):
+            return None
+        # The metadata keeps constraints such as `ge`/`le` that the bare
+        # annotation loses.
+        hint = Annotated[(field.annotation, *metadata)] if metadata else field.annotation
+        adapter = TypeAdapter(hint)
+        if _core_types(adapter.core_schema) & _RAW_INPUT_VALIDATORS:
+            return None
+        return type_from_json_schema(adapter.json_schema(), closed=False)
+    except Exception:
+        return None
+
+
+def _output_type(tool: BaseTool) -> Type | None:
+    """Return the JSON-like return type of the function `tool` wraps, else `None`."""
+    fn = getattr(tool, "func", None) or getattr(tool, "coroutine", None)
+    if not callable(fn):
+        return None
+    try:
+        hints = typing.get_type_hints(fn)
+        if "return" not in hints or hints["return"] is Any:
+            return None
+        adapter = TypeAdapter(hints["return"])
+        if not _core_types(adapter.core_schema) <= _JSON_LIKE_CORE_TYPES:
+            return None
+        return type_from_json_schema(adapter.json_schema(), closed=True)
+    except Exception:
+        return None
+
+
+def _core_types(schema: Any) -> set[str]:
+    """Return every node `type` in a pydantic core schema, serializers included."""
+    found: set[str] = set()
+    stack = [schema]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, Mapping):
+            # A field named `type` maps to a schema, not a string.
+            if isinstance(node.get("type"), str):
+                found.add(node["type"])
+            stack.extend(node.values())
+        elif isinstance(node, (list, tuple)):
+            stack.extend(node)
+    return found

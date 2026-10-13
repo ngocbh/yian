@@ -6,13 +6,26 @@ tools and MCP tools that only publish a schema.
 
 from __future__ import annotations
 
-from typing import Any, Union
+import dataclasses
+import datetime
+from typing import Annotated, Any, Literal, Optional, Union
 
 import pytest
-from pydantic import BaseModel
+from langchain_core.tools import BaseTool, InjectedToolArg, StructuredTool
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    SkipValidation,
+    field_validator,
+)
+from pydantic.v1 import BaseModel as BaseModelV1
+from typing_extensions import TypedDict
 
 from yian.compile.validation import type_relation
-from yian.tools.types import type_from_json_schema
+from yian.tools import TOOL_REGISTRY, ToolSet, register_tool, registered_tools
+from yian.tools.types import ToolTypes, tool_types, type_from_json_schema
 from yian.typesys.values import Type, ValueKind, canonical_type_label
 
 
@@ -354,3 +367,313 @@ def test_malformed_required_is_plain_object() -> None:
 def test_closed_object_that_admits_other_keys_is_plain_object(extra: dict[str, Any]) -> None:
     schema = {"type": "object", "properties": {"a": {"type": "integer"}}, **extra}
     assert type_from_json_schema(schema, closed=True) == Type.scalar(ValueKind.OBJECT)
+
+
+# --------------------------------------------------------------------------- #
+# Declared tool types
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def restore_tool_registry():
+    """Keep process-global registrations isolated between tests."""
+    original = dict(TOOL_REGISTRY)
+    yield
+    TOOL_REGISTRY.clear()
+    TOOL_REGISTRY.update(original)
+
+
+class Filled(TypedDict):
+    type: Literal["filled"]
+    qty: int
+
+
+def place(sym: str, qty: Annotated[int, Field(ge=1)], mode: Literal["a", "b"] = "a") -> Filled:
+    """Place an order."""
+    return {"type": "filled", "qty": qty}
+
+
+_FILLED = Type(
+    kind=ValueKind.OBJECT,
+    fields={
+        "type": Type(kind=ValueKind.STRING, tags=frozenset({"filled"})),
+        "qty": Type.scalar(ValueKind.INTEGER),
+    },
+    required=frozenset({"type", "qty"}),
+)
+
+
+def _input_labels(types: ToolTypes) -> dict[str, str | None]:
+    assert types.inputs is not None
+    return {
+        name: None if typ is None else canonical_type_label(typ)
+        for name, typ in types.inputs.items()
+    }
+
+
+def _registered_place() -> BaseTool:
+    register_tool("place")(place)
+    return TOOL_REGISTRY["place"]
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        _registered_place,
+        lambda: ToolSet({"place": place}).resolve(["place"])[0],
+        lambda: ToolSet({"g": [place]}).resolve(["place"])[0],
+    ],
+    ids=["register_tool", "mapping-entry", "group-item"],
+)
+def test_function_tool_types(build, restore_tool_registry) -> None:
+    types = tool_types(build())
+
+    assert _input_labels(types) == {"sym": "str", "qty": "int", "mode": 'Literal["a","b"]'}
+    assert types.required == frozenset({"sym", "qty"})
+    assert types.output == _FILLED
+
+
+def test_registered_tools_copy_keeps_the_output_type(restore_tool_registry) -> None:
+    register_tool("place")(place)
+    tool = ToolSet(registered_tools()).resolve(["place"])[0]
+
+    assert tool_types(tool).output == _FILLED
+
+
+def _returns_none(x: int) -> None:
+    """Return nothing."""
+
+
+def _unannotated(x: int):
+    """Return without an annotation."""
+    return x
+
+
+def _returns_any(x: int) -> Any:
+    """Return anything."""
+    return x
+
+
+def _returns_unresolvable(x: int) -> "NoSuchName":  # noqa: F821
+    """Return a type that does not resolve."""
+    return x
+
+
+class Model(BaseModel):
+    a: int
+
+
+class WithModel(TypedDict):
+    m: Model
+
+
+@dataclasses.dataclass
+class Point:
+    x: int
+
+
+def _returns_model(x: int) -> Model:
+    """Return a model."""
+    return Model(a=x)
+
+
+def _returns_model_list(x: int) -> list[Model]:
+    """Return models."""
+    return [Model(a=x)]
+
+
+def _returns_typed_dict_with_model(x: int) -> WithModel:
+    """Return a record holding a model."""
+    return {"m": Model(a=x)}
+
+
+def _returns_dataclass(x: int) -> Point:
+    """Return a dataclass."""
+    return Point(x)
+
+
+def _returns_set(x: int) -> set[int]:
+    """Return a set."""
+    return {x}
+
+
+def _returns_date(x: int) -> datetime.date:
+    """Return a date."""
+    return datetime.date.today()
+
+
+class _XArgs(BaseModel):
+    x: int
+
+
+def _output(fn) -> Type | None:
+    # An explicit schema keeps langchain from resolving the return annotation.
+    return tool_types(StructuredTool.from_function(fn, args_schema=_XArgs)).output
+
+
+def test_explicit_none_return_is_none_kind() -> None:
+    assert _output(_returns_none) == Type.scalar(ValueKind.NONE)
+
+
+@pytest.mark.parametrize(
+    "fn",
+    [
+        _unannotated,
+        _returns_any,
+        _returns_unresolvable,
+        _returns_model,
+        _returns_model_list,
+        _returns_typed_dict_with_model,
+        _returns_dataclass,
+        _returns_set,
+        _returns_date,
+    ],
+)
+def test_return_without_a_json_like_type_has_no_output(fn) -> None:
+    assert _output(fn) is None
+
+
+def _check(x: str) -> str:
+    return x
+
+
+class Nested(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    a: int
+
+    @field_validator("a", mode="before")
+    @classmethod
+    def _coerce(cls, value: Any) -> Any:
+        return int(value)
+
+
+def _validated(
+    bounded: Annotated[int, Field(ge=1, le=9)],
+    before: list[Annotated[str, BeforeValidator(_check)]],
+    nested: Nested,
+    skipped: Annotated[int, SkipValidation],
+    maybe: Optional[int],
+    when: datetime.datetime,
+) -> int:
+    """Take inputs with validators."""
+    return bounded
+
+
+def test_inputs_with_custom_validation_are_unchecked() -> None:
+    types = tool_types(StructuredTool.from_function(_validated))
+
+    assert _input_labels(types) == {
+        "bounded": "int[1,9]",
+        "before": None,
+        "nested": None,
+        "skipped": None,
+        "maybe": "Optional[int]",
+        "when": "str",
+    }
+    # `Optional[int]` with no default is still required.
+    assert types.required == frozenset(types.inputs)
+
+
+class _NoFuncTool(BaseTool):
+    name: str = "no_func"
+    description: str = "A tool with no wrapped function."
+
+    def _run(self, value: int) -> int:
+        return value
+
+
+def test_base_tool_without_a_function_has_no_output() -> None:
+    types = tool_types(_NoFuncTool())
+
+    assert types.output is None
+
+
+def _double(x: int) -> list[int]:
+    """Double a number."""
+    return [x, x]
+
+
+def test_host_built_structured_tool_reads_the_function_return() -> None:
+    assert tool_types(StructuredTool.from_function(_double)).output == Type(
+        kind=ValueKind.LIST_INTEGER, element=Type.scalar(ValueKind.INTEGER)
+    )
+
+
+def _ask_handler(**request: Any) -> Any:
+    return "yes"
+
+
+def test_injected_arguments_are_not_inputs() -> None:
+    tool = ToolSet({"ask_user": _ask_handler}).resolve(["ask_user"])[0]
+    types = tool_types(tool)
+
+    assert _input_labels(types) == {"question": "str", "options": None}
+    assert types.required == frozenset({"question"})
+
+
+class _LegacyArgs(BaseModelV1):
+    value: int
+    note: Optional[str] = None
+
+
+def _legacy(value: int, note: Optional[str] = None) -> int:
+    """Use a pydantic v1 schema."""
+    return value
+
+
+def test_pydantic_v1_schema_reads_names_only() -> None:
+    tool = StructuredTool.from_function(_legacy, name="legacy", args_schema=_LegacyArgs)
+    types = tool_types(tool)
+
+    assert types.inputs == {"value": None, "note": None}
+    assert types.required == frozenset({"value"})
+
+
+class _JsonSchemaTool(BaseTool):
+    name: str = "json_schema_tool"
+    description: str = "Increment one integer."
+    args_schema: dict[str, Any] = {
+        "type": "object",
+        "$defs": {"Mode": {"enum": ["x", "y"], "type": "string"}},
+        "properties": {
+            "value": {"type": "integer", "minimum": 0, "maximum": 5},
+            "mode": {"$ref": "#/$defs/Mode"},
+        },
+        "required": ["value"],
+        "additionalProperties": False,
+    }
+
+    def _run(self, value: int, mode: str = "x") -> int:
+        return value + 1
+
+
+def test_json_schema_dict_tool_inputs_are_translated() -> None:
+    types = tool_types(_JsonSchemaTool())
+
+    assert _input_labels(types) == {"value": "int[0,5]", "mode": 'Literal["x","y"]'}
+    assert types.required == frozenset({"value"})
+    assert types.output is None
+
+
+class Plain:
+    """A class with no schema."""
+
+
+class _PlainArgs(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    sym: str
+    thing: Plain
+
+
+def _with_plain(sym: str, thing: Plain) -> str:
+    """Take an arbitrary object."""
+    return sym
+
+
+def test_input_with_an_arbitrary_type_is_unchecked() -> None:
+    tool = StructuredTool.from_function(_with_plain, args_schema=_PlainArgs)
+    types = tool_types(tool)
+
+    assert _input_labels(types) == {"sym": "str", "thing": None}
+    assert types.required == frozenset({"sym", "thing"})
+    assert types.output == Type.scalar(ValueKind.STRING)

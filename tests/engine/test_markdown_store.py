@@ -82,6 +82,45 @@ def test_relative_path_is_bound_to_the_construction_directory(
     assert not (tmp_path / "b" / "ada.md").exists()
 
 
+def test_symlinked_path_writes_through_to_its_target(tmp_path) -> None:
+    (tmp_path / "repo").mkdir()
+    (tmp_path / "work").mkdir()
+    target = tmp_path / "repo" / "ada.md"
+    target.write_text("# Ada\n", encoding="utf-8")
+    link = tmp_path / "work" / "ada.md"
+    link.symlink_to(target)
+    store = FileMarkdownStore(link)
+    first = store.write("# Ada\nLikes tea.\n", base_version=store.read()[1])
+    assert link.is_symlink()
+    assert target.read_text(encoding="utf-8") == "# Ada\nLikes tea.\n"
+    assert sorted(p.name for p in (tmp_path / "work").iterdir()) == ["ada.md"]
+    assert (tmp_path / "repo" / ".ada.md.writes.jsonl").is_file()
+    target.write_text("# Ada\nEdited by hand.\n", encoding="utf-8")
+    with pytest.raises(MarkdownVersionMismatch):
+        FileMarkdownStore(target).write("lost update\n", base_version=first)
+    assert store.read()[0] == "# Ada\nEdited by hand.\n"
+
+
+def test_symlinked_parent_follows_the_link_before_parent_steps(tmp_path) -> None:
+    (tmp_path / "real" / "sub").mkdir(parents=True)
+    (tmp_path / "link").symlink_to(tmp_path / "real" / "sub")
+    store = FileMarkdownStore(tmp_path / "link" / ".." / "ada.md")
+    store.write("hello", base_version=markdown_version(""))
+    assert (tmp_path / "real" / "ada.md").read_text(encoding="utf-8") == "hello"
+    assert (tmp_path / "real" / ".ada.md.lock").is_file()
+    assert not (tmp_path / "ada.md").exists()
+
+
+def test_dangling_symlink_creates_its_target(tmp_path) -> None:
+    link = tmp_path / "ada.md"
+    link.symlink_to(tmp_path / "notes.md")
+    store = FileMarkdownStore(link)
+    assert store.read() == ("", markdown_version(""))
+    store.write("hello", base_version=markdown_version(""))
+    assert link.is_symlink()
+    assert (tmp_path / "notes.md").read_text(encoding="utf-8") == "hello"
+
+
 def test_write_is_compare_and_set_and_keeps_every_version(tmp_path) -> None:
     store = FileMarkdownStore(tmp_path / "ada.md")
     assert isinstance(store, MarkdownStore)

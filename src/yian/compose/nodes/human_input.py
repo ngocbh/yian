@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from yian.compose.helpers.errors import LoadDiagnostics
-from yian.compose.nodes.agent import MODE_REMOVED_FIX
+from yian.compose.nodes.agent import MODE_REMOVED_FIX, retries_error
 from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from yian.compose.source import SourceCursor
 from yian.diagnostics import SourceRange
@@ -129,6 +129,13 @@ class HumanInputDescriptor(NodeDescriptor):
                 raise diagnostics.error(
                     f"node {node_id!r} (kind=human_input): `adaptive_questions:` "
                     f"requires a `prompt:` (the LLM brief)",
+                    range=ranges.get(("field", "adaptive_questions")),
+                )
+            problem = retries_error(auto["retries"]) if "retries" in auto else None
+            if problem is not None:
+                raise diagnostics.error(
+                    f"node {node_id!r} (kind=human_input): "
+                    f"`adaptive_questions.retries:` {problem}",
                     range=ranges.get(("field", "adaptive_questions")),
                 )
         super()._validate_fields(node_id, kwargs, ranges, own_range, diagnostics)

@@ -304,14 +304,14 @@ node a text producer. A `Literal[...]` enum, record, union, non-string scalar, o
 switches it to **structured generation** — the engine derives a schema from
 `output:` and the model emits a conforming value (native structured output, or a
 JSON fallback for providers that lack it), validated at the write boundary and
-retried up to `retries:` times (default 2) on deviation. A root `Literal[...]`
+retried up to `retries:` times (default 2, a non-negative integer) on deviation. A root `Literal[...]`
 returns its bare tag to the flow. A union returns the matching member's record; each
 member's schema pins its tag and rejects unknown fields.
 Use a downstream `code` node only for deterministic post-processing.
 An AGENT with `tools:` or `skills:` runs the tool loop; without them it makes one model
 call (text, or structured for a typed `output:`). `mode:` was removed; writing it is a
 load error.
-To give an AGENT node ordinary tools: `tools: [tool_id, ...]`.
+To give an AGENT node ordinary tools: `tools: [tool_id, ...]` (always a list, even for one).
 A `tools:` name may also be a host-filled tool group (see "Tool groups" below).
 To set who the model is: `system_prompt: "You are ${name}, ${title}."`. It
 **replaces** the framework's default system instruction (omit it to keep the default)

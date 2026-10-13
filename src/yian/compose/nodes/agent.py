@@ -40,6 +40,14 @@ MODE_REMOVED_FIX = (
 )
 
 
+def retries_error(value: Any) -> str | None:
+    """Return why `value` is not a valid `retries:` count, or `None` when it is."""
+    # bool is an int subclass, so `retries: true` would otherwise mean 1.
+    if type(value) is int and value >= 0:
+        return None
+    return f"must be a non-negative integer, got {value!r}"
+
+
 def _validate_llm_config(
     cfg: Mapping[str, Any] | None,
     node_id: str,
@@ -65,8 +73,8 @@ def _validate_llm_config(
         `tuple[dict[str, Any], bool]`: Config without `inherit`, then its boolean value.
 
     Raises:
-        `LoadError`: The config is not a mapping, sets `api_key` or `base_url`, or
-            violates `LLMConfig`.
+        `LoadError`: The config is not a mapping, sets a non-boolean `inherit`, sets
+            `api_key` or `base_url`, or violates `LLMConfig`.
     """
     diagnostics = diagnostics or LoadDiagnostics()
     if cfg is None:
@@ -79,7 +87,12 @@ def _validate_llm_config(
     cfg = dict(cfg)
     if not cfg:
         return {}, True
-    inherit = bool(cfg.pop("inherit", True))
+    inherit = cfg.pop("inherit", True)
+    if type(inherit) is not bool:
+        raise diagnostics.error(
+            f"node {node_id!r}: llm_config `inherit:` must be true or false, got {inherit!r}",
+            range=source_range,
+        )
     host_only = host_only_field_error(cfg)
     if host_only is not None:
         raise diagnostics.error(f"node {node_id!r}: {host_only}", range=source_range)
@@ -190,7 +203,7 @@ class AgentDescriptor(NodeDescriptor):
         own_range: SourceRange | None,
         diagnostics: LoadDiagnostics,
     ) -> None:
-        """Check the `system_prompt:`, `skills:`, and `steerable:` shapes and parse a present named policy."""
+        """Check the `system_prompt:`, `tools:`, `skills:`, `retries:`, and `steerable:` shapes and parse a present named policy."""
         if "system_prompt" in kwargs:
             system_prompt = kwargs["system_prompt"]
             if not isinstance(system_prompt, str) or not system_prompt:
@@ -198,6 +211,24 @@ class AgentDescriptor(NodeDescriptor):
                     f"node {node_id!r} (kind={cls.kind}): `system_prompt:` must be a "
                     "non-empty string",
                     range=ranges.get(("field", "system_prompt")) or own_range,
+                )
+        if "tools" in kwargs:
+            tools = kwargs["tools"]
+            if not isinstance(tools, list) or not all(
+                isinstance(name, str) and name for name in tools
+            ):
+                example = tools if isinstance(tools, str) and tools else "search"
+                raise diagnostics.error(
+                    f"node {node_id!r} (kind={cls.kind}): `tools:` must be a list of "
+                    f"tool names; write `tools: [{example}]`",
+                    range=ranges.get(("field", "tools")) or own_range,
+                )
+        if "retries" in kwargs:
+            problem = retries_error(kwargs["retries"])
+            if problem is not None:
+                raise diagnostics.error(
+                    f"node {node_id!r} (kind={cls.kind}): `retries:` {problem}",
+                    range=ranges.get(("field", "retries")) or own_range,
                 )
         skills = kwargs.get("skills")
         if skills is not None and skills != "all" and not (

@@ -135,10 +135,16 @@ type with the type inferred for its value through `compile.validation.type_relat
   usual runtime one.
 - **narrower** — some inferred values may miss the declared type (Optional into
   non-Optional, `str` into a `Literal`, an unbounded number into a bounded one, an
-  `object` value into a record); the binding loads and the binder checks it at runtime.
+  `object` value into a record, a union into one of its members); the binding loads
+  and the binder checks it at runtime.
 - **disjoint** — no non-null inferred value fits; loading fails. Records count as
   closed, so an extra required field makes them disjoint, and sharing only `None`
   is not overlap.
+
+Unions compare member-wise: each inferred member takes its best relation against the
+declared members (a non-union side counts as one member), and the results combine to
+fits when all fit, disjoint when all are disjoint, and narrower otherwise. Narrowing
+views apply first, so a `case` branch's value has only the branch's members.
 
 Unlike `types_compatible`, which lets a tag-less `str` fill a `Literal` when wiring,
 this relation calls that narrower. It lets `date` and `datetime` fit `str`, since

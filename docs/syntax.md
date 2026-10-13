@@ -290,7 +290,9 @@ At run time a value with no tag fails with `missing tag field 'action' (expected
 Wiring checks members: a union fills a union input when each of its members fits some
 member of the input's union, and a record fills a union input when it fits a member. A
 union fills an `object` input, but never a record input: narrow it in a `case` branch
-first (see [`case`](#case-branching)). Reading fields of a union is covered under
+first (see [`case`](#case-branching)), or declare the member with a
+[typed binding](#typed-bindings-name-type-value) (`buy: Buy = ${decision.output}`),
+which loads and is checked at runtime. Reading fields of a union is covered under
 [References](#references-naming-a-value).
 
 ## Typed bindings — `name: Type = value`
@@ -402,7 +404,12 @@ The loader compares the declared type with the type it infers for the value:
   Records are closed, so a record with a required field the declared record lacks
   is disjoint.
 - A **narrower** declared type loads and is checked at runtime: non-Optional over
-  Optional, a `Literal` or bounded subset, or a record over `object`.
+  Optional, a `Literal` or bounded subset, a record over `object`, or a union member
+  over the union (explicit narrowing, e.g. `buy: Buy = ${decision.output}`).
+- Unions compare member by member: a member declared as its union fits, and a
+  record that matches no member is disjoint. Inside a narrowing `case` branch the
+  value has the branch's members, so `buy: Buy = ${decision.output}` in the `sell`
+  branch fails at load.
 - A MAP's lone `${item}` or `${item.field}` is inferred from the element type of
   `over:`, so `t: str = ${item}` over a `list[int]` fails at load.
 - A value whose type can't be inferred (arithmetic, a builtin call, an untyped

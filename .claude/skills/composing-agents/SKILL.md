@@ -211,7 +211,8 @@ overlap. Otherwise the typedef fails with `members 'Buy' and 'Sell' can match th
 value; add a tag field ...`. Write `Union[...]`, never `A | B` (load error with a hint);
 a nullable union is `Optional[Union[...]]` or `Optional[Order]`, not `Union[A, None]`.
 A union fills a union or `object` input member by member, never a record input: narrow
-it in a `case` first.
+it in a `case` first, or with a typed binding (`buy: Buy = ${d.output}`), checked at
+runtime.
 
 ## Typed bindings — `name: Type = value`
 
@@ -260,7 +261,7 @@ one plain scalar, so it can't contain `: ` or ` #`, even in quotes after ` = `
 - **Load:** the declared type is compared with the inferred one. Disjoint is a load
   error (a `str` declared `int`; records are closed, so an extra required field
   is disjoint). Narrower (non-Optional over Optional, a `Literal` or bounded subset, a
-  record over `object`) loads and is checked at runtime, as is a value with no
+  record over `object`, a union member over the union) loads and is checked at runtime, as is a value with no
   inferred type (arithmetic, builtin calls, untyped producers).
 - **Runtime:** the value is validated before the consuming node runs, with no
   conversion (an int bound as `float` stays an int; `"30"` is not an int). A miss

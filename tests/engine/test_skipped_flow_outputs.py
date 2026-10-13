@@ -156,12 +156,19 @@ _TAKE = """defs:
 
 
 def test_then_call_target_is_null():
-    """A `then: call(...)` target of a CASE that may match nothing gives null."""
-    nodes = '  gate:\n    kind: case\n    cases:\n      - when: ${input.approve}\n' \
-        '        then: call(take, stance="pro")\n'
-    text = _flow(nodes, "\n  v: ${gate.output}", defs=_TAKE)
-    assert _run(text, {"approve": False}) == {"v": None}
-    assert _run(text, {"approve": True}) == {"v": "pro"}
+    """A `then: call(...)` target gives null when an outer CASE skips its CASE."""
+    # Reading `${inner.output}` makes `inner` produce a value, so it must be exhaustive;
+    # the skip comes from the routing-only `outer`, which may match nothing.
+    nodes = (
+        _gate("inner", name="outer")
+        + _gate('call(take, stance="pro")', 'call(take, stance="con")', name="inner", when="inner")
+    )
+    text = _flow(
+        nodes, "\n  v: ${inner.output}", inputs="approve: bool\n  inner: bool", defs=_TAKE
+    )
+    assert _run(text, {"approve": False, "inner": True}) == {"v": None}
+    assert _run(text, {"approve": True, "inner": True}) == {"v": "pro"}
+    assert _run(text, {"approve": True, "inner": False}) == {"v": "con"}
 
 
 def test_call_node_target_is_null():
@@ -253,6 +260,53 @@ def test_case_output_of_an_exhaustive_case_is_unchanged():
     text = _flow(_JOIN, "\n  v: ${gate.output}")
     assert _sources(text) == ["${pro.output | caut.output}"]
     assert _run(text, {"approve": False}) == {"v": "caut"}
+
+
+# A typed CASE with a value branch: `then: "pro"` / else: caut (always takes a branch)
+_TYPED_JOIN = (
+    "  route:\n    kind: case\n    output: str\n    cases:\n"
+    '      - when: ${input.approve}\n        then: "pro"\n'
+    "    else: caut\n" + _code("caut", '"caut"')
+)
+
+
+def test_case_output_of_a_typed_exhaustive_case_is_unchanged():
+    """`${route.output}` of a typed exhaustive CASE reads its result node, never null."""
+    text = _flow(_TYPED_JOIN, "\n  v: ${route.output}")
+    assert _sources(text) == ["${__case_route.output}"]
+    assert _run(text, {"approve": True}) == {"v": "pro"}
+    field = _call_field_type(_TYPED_JOIN, "\n  v: ${route.output}", "v")
+    assert field.kind is ValueKind.STRING
+    assert not field.nullable
+
+
+def test_case_output_over_a_typed_inner_case_is_unchanged():
+    """An untyped exhaustive CASE whose branch is a typed CASE keeps a plain coalesce."""
+    nodes = (
+        _gate("route", "hold", name="gate", when="other")
+        + _TYPED_JOIN
+        + _code("hold", '"held"')
+    )
+    text = _flow(nodes, "\n  v: ${gate.output}", inputs=_R2_INPUTS)
+    assert _sources(text) == ["${__case_route.output | hold.output}"]
+    assert _run(text, {"approve": False, "other": True}) == {"v": "caut"}
+    assert _run(text, {"approve": True, "other": False}) == {"v": "held"}
+
+
+def test_case_output_of_a_typed_case_over_a_typed_inner_case_is_unchanged():
+    """A typed exhaustive CASE whose branch is a typed CASE reads its result node."""
+    nodes = (
+        "  gate:\n    kind: case\n    output: str\n    cases:\n"
+        "      - when: ${input.other}\n        then: route\n"
+        '    else: "held"\n' + _TYPED_JOIN
+    )
+    text = _flow(nodes, "\n  v: ${gate.output}", inputs=_R2_INPUTS)
+    assert _sources(text) == ["${__case_gate.output}"]
+    assert _run(text, {"approve": True, "other": True}) == {"v": "pro"}
+    assert _run(text, {"approve": True, "other": False}) == {"v": "held"}
+    field = _call_field_type(nodes, "\n  v: ${gate.output}", "v", other=True)
+    assert field.kind is ValueKind.STRING
+    assert not field.nullable
 
 
 def test_root_node_output_is_unchanged():

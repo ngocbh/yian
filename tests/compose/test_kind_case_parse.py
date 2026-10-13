@@ -13,6 +13,7 @@ from yian.compose import load_flow
 from yian.compose.helpers.errors import LoadError
 from yian.compose.nodes.base import BuildContext
 from yian.compose.nodes.case import CaseDescriptor
+from yian.compose.parse.nodes import parse_nodes
 from yian.compose.source import SourceDocument
 from yian.compose.source.catalog import _scope_origin
 from yian.diagnostics import OriginRef
@@ -438,3 +439,161 @@ def test_formatting_moves_case_ranges_without_changing_keys_or_fingerprint():
     ) != tuple(
         relocated.origin_resolver.resolve(origin).range for origin in relocated_origins
     )
+
+
+def _parse_case(body):
+    # `parse_nodes` runs the shared `output:` -> `outputs` key projection.
+    text = "nodes:\n  g:\n" + textwrap.indent(textwrap.dedent(body), "    ")
+    return parse_nodes(SourceDocument.parse(text).root.child("nodes"))["g"]
+
+
+def test_case_parse_accepts_output_type():
+    desc = _parse_case(
+        """\
+        kind: case
+        output: str
+        cases:
+          - when: "${a.output}"
+            then: b
+        """
+    )
+    assert desc.outputs == "str"
+
+
+def test_case_parse_accepts_output_mapping():
+    desc = _parse_case(
+        """\
+        kind: case
+        output:
+          a: int
+        cases:
+          - when: "${a.output}"
+            then: b
+        """
+    )
+    assert desc.outputs == {"a": "int"}
+
+
+def test_case_parse_keeps_then_styles_aligned_with_cases():
+    desc = _parse_case(
+        """\
+        kind: case
+        cases:
+          - when: "${a.output} == 1"
+            then: reply
+          - when: "${a.output} == 2"
+            then: "reply"
+          - when: "${a.output} == 3"
+            then: 'r'
+          - when: "${a.output} == 4"
+            then: |
+              some text
+          - when: "${a.output} == 5"
+            then: 3
+          - when: "${a.output} == 6"
+            then:
+              a: 1
+        """
+    )
+    assert desc.then_styles == ["plain", "double", "single", "literal", "plain", None]
+
+
+def test_case_parse_keeps_else_style():
+    plain = _parse_case(
+        """\
+        kind: case
+        cases:
+          - when: "${a.output}"
+            then: b
+        else: reply
+        """
+    )
+    double = _parse_case(
+        """\
+        kind: case
+        cases:
+          - when: "${a.output}"
+            then: b
+        else: "approve"
+        """
+    )
+    missing = _parse_case(
+        """\
+        kind: case
+        cases:
+          - when: "${a.output}"
+            then: b
+        """
+    )
+    assert plain.else_style == "plain"
+    assert double.else_style == "double"
+    assert missing.else_style is None
+
+
+def test_case_parse_tells_else_null_from_no_else():
+    null_else = _parse_case(
+        """\
+        kind: case
+        cases:
+          - when: "${a.output}"
+            then: b
+        else: null
+        """
+    )
+    no_else = _parse_case(
+        """\
+        kind: case
+        cases:
+          - when: "${a.output}"
+            then: b
+        """
+    )
+    named_else = _parse_case(
+        """\
+        kind: case
+        cases:
+          - when: "${a.output}"
+            then: b
+        else: reply
+        """
+    )
+    assert null_else.else_ is None and null_else.has_else is True
+    assert no_else.has_else is False
+    assert named_else.has_else is True
+
+
+def test_case_descriptor_constructed_with_else_has_else():
+    desc = CaseDescriptor(id="g", cases=[{"when": "a", "then": "b"}], else_="b")
+    assert desc.has_else is True
+
+
+def test_case_parse_keeps_then_null_key():
+    desc = _parse_case(
+        """\
+        kind: case
+        cases:
+          - when: "${a.output}"
+            then: null
+        """
+    )
+    assert "then" in desc.cases[0]
+    assert desc.cases[0]["then"] is None
+    assert desc.then_styles == ["plain"]
+
+
+def test_case_parse_on_form_keeps_output_and_styles():
+    desc = _parse_case(
+        """\
+        kind: case
+        on: ${a.output}
+        output: str
+        cases:
+          - when: x
+            then: "b"
+        else: 'c'
+        """
+    )
+    assert desc.on == "${a.output}"
+    assert desc.outputs == "str"
+    assert desc.then_styles == ["double"]
+    assert desc.else_style == "single"

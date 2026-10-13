@@ -28,6 +28,9 @@ reject an ill-formed flow before it is compiled:
 - `narrowing.py` — `compute_narrowing`: the union narrowing facts each node gets from
   the CASE branches that route it, and the per-node views of the producer and
   flow-input contracts with each narrowed base rebuilt (`Narrowing.for_node`).
+- `case_values.py` — `check_case_values`: every branch of a typed `case` can produce its
+  `output:` type (a literal value exactly; a node, call, or inner case unless its type is
+  disjoint, leaving a narrower one to the case's runtime check).
 - `typed_bindings.py` — `check_typed_inputs` / `check_typed_outputs`: a typed node
   input or flow output can fit its declared type (literal text exactly; a reference
   unless its inferred type is disjoint, leaving a narrower one to the runtime check);

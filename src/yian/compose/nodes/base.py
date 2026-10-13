@@ -131,7 +131,7 @@ class NodeDescriptor:
     # so `_check_keys` compares against `cls.allowed` directly (no manual COMMON union).
     # Each kind extends it via `allow(...)` with its own keys; `inputs`/`outputs` are the
     # normalized carriers for authored `input:`/`output:` and remain opt-in
-    # (a signature-less kind like wait/case never lists them, so it keeps rejecting them).
+    # (a signature-less kind like wait never lists them, so it keeps rejecting them).
     allowed: ClassVar[frozenset[str]] = frozenset(
         {"kind", "node_name", "depends_on", "runs_after", "env"}
     )

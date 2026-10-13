@@ -506,7 +506,12 @@ all contributions meet by intersection. Optional groups and `runs_after` contrib
 nothing; nodes on a cycle get no facts and are left for `reject_cycles`. The call-type and
 CASE-exhaustiveness checks read `Narrowing.for_node(id)`, and the reference and
 typed-input checks read `for_param`, which falls back to it; flow outputs are checked
-unnarrowed. Inline child bodies and LOOP seeds are typed while nodes build, before
+unnarrowed. A CASE that produces a value (it declares `output:`, has a value branch, or is
+read as `${case.output}`) must be exhaustive: an `else:`, or every tag of a non-nullable
+enum `on:`, with a flow-input `on:` resolved for it too. Compose lifts each CASE value
+branch to a synthetic `__value_N` CODE node and gives a typed CASE one `__case_<id>`
+CODE result node that checks the taken branch; this is load-time desugar, and the
+runtime is unchanged. Inline child bodies and LOOP seeds are typed while nodes build, before
 the pass, so they see unnarrowed types. Runtime routing is unchanged.
 
 Physical Compose declarations derive exact `ValueContract`s. Output binding derivation,

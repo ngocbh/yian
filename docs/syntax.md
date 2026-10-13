@@ -152,8 +152,8 @@ An untagged union says `which only 1 of 2 union members have; check the member w
 isinstance(d.output, <Type>) in a case first`. A field no member has is an unknown field.
 The rule also covers a node's `${output...}` asserts, flow asserts, MAP `${item...}`,
 and flow outputs, which are never narrowed. To return a member field, read it in a
-branch node and join the branches; to use one per item, pass `${item}` to the child and
-narrow there.
+branch and return the `case` result with `${case.output}`; to use one per item, pass
+`${item}` to the child and narrow there.
 
 !!! important "Prompt names are local"
     Inside a `prompt:` or an AGENT `system_prompt:` use names from the node's own
@@ -1053,11 +1053,22 @@ Inline notes:
 
 ### `case` — branching
 
-A `case` node **routes only** — it has no `input:`. It takes one branch, or none
-when no `when:` matches and there is no `else:`. The other targets are skipped, and
-so is every node that plainly reads a skipped node or names it in `depends_on`.
-Join the branches back with a coalesce; a flow output that reads a skipped node
-returns null (see [Skipped branches and flow outputs](#skipped-branches-and-flow-outputs)).
+A `case` node routes — it has no `input:`. It takes one branch; the other targets
+are skipped, and so is every node that plainly reads a skipped node or names it in
+`depends_on`. Read its result with `${case.output}`. A routing-only `case` may take
+none when no `when:` matches and there is no `else:` (see
+[Exhaustiveness](#exhaustiveness)); a flow output that reads a skipped node returns
+null (see [Skipped branches and flow outputs](#skipped-branches-and-flow-outputs)).
+
+Changed: reading `${case.output}` of a `case` that isn't
+[exhaustive](#exhaustiveness) used to load, and returned null when no branch ran; it is
+now a load error. Add an `else:`, or list every tag of a non-nullable `Literal` `on:`.
+An unquoted `then:` or `else:` word that names no node used to fail with a `KeyError`;
+it is now a load error that suggests the nearest node, or quoting. An empty `else:` used
+to mean no `else:`; it is now a load error unless the `case` declares an `Optional`
+`output:` (then it is the value `null`). Node ids may no
+longer start with `__value_` or `__case_`. Flows without value branches or a typed
+`case` keep their fingerprints.
 
 Simple form — match a value:
 
@@ -1070,7 +1081,7 @@ route:
       then: go_brief
     - when: no_go
       then: no_go_brief
-  else: more_info_brief        # required unless the cases are exhaustive
+  else: more_info_brief        # runs when no `when:` matches
 ```
 
 Searched form — first true `when:` wins (a boolean expression, no `on:`):
@@ -1084,12 +1095,140 @@ gate:
   else: cautious
 ```
 
-Routing on a `Literal` is **exhaustiveness-checked**: omitting a tag with no
-`else:` is a compile error. Join the branches:
+Read the taken branch's output with `${gate.output}`:
 
 ```yaml
-output: ${bullish.output | cautious.output}   # never null: the case takes one of them
+output: ${gate.output}         # bullish's output or cautious's output
 ```
+
+Routing on a `Literal` node output is **exhaustiveness-checked**: omitting a tag
+with no `else:` is a load error. A routing-only `case` over any other value may
+match nothing; then no branch runs. A `case` that
+[produces a value](#exhaustiveness) must always match.
+
+#### Branches
+
+A `then:` or `else:` is one of:
+
+- a sibling node: an unquoted word (`then: reply`);
+- a child flow call: an unquoted `call(...)` that is the whole value
+  (`else: call(respond, message=${ask.output})`, see
+  [Inline `call(...)`](#inline-call-a-flow-call-as-a-bindings-whole-value));
+- a value: anything else (`else: "approve"`).
+
+An unquoted word always names a node. A word that names no node is a load error
+that suggests the nearest node and quoting:
+
+```text
+case node 'route' then: `replyy` names no node. Did you mean `reply`? If you meant the text "replyy", quote it: `then: "replyy"`
+```
+
+A quoted branch (`"..."`, `'...'`, or a block `|`/`>`) is always a value:
+
+- `else: "approve"` is the text `approve`.
+- `then: "reply"` is the text `reply`, even when a node is named `reply`.
+- `then: "call(f)"` is the text `call(f)`. A quoted call that holds `${...}` is a
+  load error; drop the quotes to call the flow.
+- `then: "${x}"` evaluates its span like any quoted binding. A lone span keeps
+  its type.
+
+A value can be text, a number, a bool, `null`, a list, or a record (a block
+mapping), nested to any depth:
+
+- `${...}` spans may appear anywhere inside a value. They are evaluated when the
+  branch runs.
+- Words nested in a list or record are text: `- x` is the text `x`.
+- `$$` is a literal `$`: `"costs $$5"` is `costs $5`.
+- A YAML date (`2026-01-02`) becomes its ISO text.
+- A `call(...)` nested in a value, an unquoted `Type = value` branch (the
+  `case`'s `output:` gives the type), and a non-finite number (`.inf`, `.nan`)
+  are load errors.
+
+A whole-value span that reads a skipped node skips the value branch too, like any
+node input, and the `case` result with it. When a span reads a node that may be
+skipped, give it a `:-` default. A value that reads its own `case` is a load
+error. So is a value that plainly reads another branch of the same `case` (outside
+a coalesce or a `:-` default), since that branch never runs when this one does.
+
+```yaml
+decide:
+  kind: case
+  on: ${review.output}         # Literal[ok, bad, unsure]
+  output: str
+  cases:
+    - when: ok
+      then: "approve"          # quoted: the text approve
+    - when: bad
+      then: write_rejection    # unquoted: the node write_rejection
+  else: "ask ${input.owner}"   # text with a span
+```
+
+#### `output:` — the type of the result
+
+A `case` with a value branch declares `output:`. Every branch must fit it by the
+[typed-binding rule](#load-check): a branch whose type is disjoint from `output:`
+is a load error at the branch, and a narrower one is checked at runtime (failure
+code `binding.type`). Readers of `${case.output}` see the declared type. `null`
+is a valid branch value only when `output:` is `Optional[...]`.
+
+A typed `case` checks the taken branch's value on every run, even when nothing
+reads it. The failure is located at the `case`'s `output:`.
+
+This turn of a chat loop returns one `Turn` record from either branch. Exact
+`/exit` text is a record value; anything else calls the `respond` flow, which
+returns a `Turn`:
+
+```yaml
+route:
+  kind: case
+  on: ${ask.output}
+  output: Turn                 # Turn: {transcript: str, exited: bool}
+  cases:
+    - when: /exit
+      then:                    # a value branch: the record itself
+        transcript: ${input.transcript}
+        exited: true
+  else: call(respond, transcript=${input.transcript}, message=${ask.output})
+```
+
+#### Reading the result
+
+`${case.output}` reads the taken branch's value, and `${case.output.field}` reads
+one field of it. Use it as a whole binding or inside text
+(`note: "got ${route.output}"`). It is a load error in a coalesce, in a `:-`
+default, inside an expression (`${route.output == "yes"}`), in a `when:` or `on:`, and in
+asserts.
+
+#### Exhaustiveness
+
+A `case` produces a value when it declares `output:`, has a value branch, or is
+read through `${case.output}`. A `case` that such a `case` routes to produces one
+too. It must always match: it needs an `else:`, or an `on:` whose type is a
+non-nullable `Literal` with every tag listed in a `when:`. A flow input counts
+as an `on:` type, and inside a narrowing branch only the tags that reach the
+`case` count. Otherwise loading fails:
+
+```text
+case node 'gate' produces a value, so it must be exhaustive: add an `else:` (on: ${input.x} is str, not a Literal)
+```
+
+The reason in parentheses is one of:
+
+- `on: ... is str, not a Literal`: the `on:` type has no tags;
+- `a searched case needs an else:`;
+- `${input.choice} may be null`: the `on:` type is `Optional[...]`;
+- `enum tag(s) ['b'] not covered`: a tag has no `when:`.
+
+A routing-only `case` keeps "no match, nothing runs", and routing on a `Literal`
+node output is still checked for missing tags.
+
+#### Synthetic nodes
+
+Each value branch becomes a CODE node `__value_N`, the branch target. A typed
+`case` gets a CODE result node `__case_<id>` that checks the taken branch against
+`output:`; `${case.output}` reads it. Both are recorded like any node and appear
+in traces and failures (a bad branch value fails at `__case_<id>`). Node ids may
+not start with the reserved prefixes `__value_` and `__case_`.
 
 #### Skipped branches and flow outputs
 
@@ -1131,8 +1270,8 @@ output:
   one branch, or none unless it is exhaustive: it has `else:`, or its `on:` is a
   non-nullable `Literal` node output or flow input with every tag listed (a null `on:`
   value matches nothing).
-  So a join over an exhaustive `case`'s branches (`${bullish.output | cautious.output}`
-  above, or `${gate.output}`) is never null. Conditions of different `case`s are
+  So a join over an exhaustive `case`'s branches (`${bullish.output | cautious.output}`,
+  or `${gate.output}`) is never null. Conditions of different `case`s are
   treated as independent.
 - **Type:** the field is `Optional[T]` when its reference has type `T`, or when every
   reference of its coalesce has type `T`, and untyped otherwise. An explicit `${x :- null}` is `Optional[T]`
@@ -1200,6 +1339,8 @@ place_buy:
   same value, and then sees the members any of them allows.
 - A nested `on:` over a field of the narrowed member narrows again, and its exhaustiveness
   counts only that member's tags.
+- A value branch sees the narrowed type like a routed node: under `when: buy` its
+  spans may read `${decide.output.qty}`.
 - A `call` target can pass the narrowed value to a child whose input is the member
   (`order: Buy`). An inline child body's inputs are typed before narrowing, so a member
   field bound there fails with `cannot infer type for inline binding`. A nested

@@ -59,6 +59,7 @@ from yian.compose.edges.data import infer_data_edges
 from yian.compose.edges.producers import _binding_producers
 from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from yian.compose.nodes.call import CallDescriptor
+from yian.compose.nodes.case import CaseDescriptor
 from yian.compose.nodes.loop import LoopDescriptor
 from yian.compose.nodes.map import MapDescriptor
 from yian.compose.desugar.inline_bodies import (
@@ -66,7 +67,7 @@ from yian.compose.desugar.inline_bodies import (
     extract_inline_bodies,
 )
 from yian.compose.desugar.inline_calls import _synth_id_gen, desugar_inline_calls
-from yian.compose.desugar.case_outputs import expand_case_outputs
+from yian.compose.desugar.case_outputs import case_output_reads, expand_case_outputs
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
 from yian.compose.helpers.isinstance_types import (
     collect_isinstance_names,
@@ -76,7 +77,9 @@ from yian.compose.helpers.output_contracts import resolve_output_binding_contrac
 from yian.compose.helpers.typed_bindings import split_typed_binding
 from yian.compose.desugar.adaptive_questions import desugar_adaptive_questions
 from yian.compose.desugar.case_targets import desugar_case_call_targets
+from yian.compose.desugar.case_values import desugar_case_values
 from yian.compose.validate.case_exhaustive import check_case_exhaustive, exhaustive_cases
+from yian.compose.validate.case_values import check_case_values
 from yian.compose.validate.cycles import reject_cycles
 from yian.compose.validate.human_questions import validate_human_questions
 from yian.compose.validate.loop_types import check_loop_type_contract
@@ -1123,6 +1126,37 @@ def _fill_type_tables(
         node.types = types
 
 
+def _value_cases(descriptors: dict, read: frozenset[str]) -> frozenset[str]:
+    """Return the ids of the cases that produce a value.
+
+    A case produces a value when it declares `output:` or is in `read`; a case that is a
+    `then:`/`else:` target of a value-producing case produces one too.
+
+    Args:
+        descriptors (`dict`): Node descriptors keyed by node id.
+        read (`frozenset[str]`): The case ids some binding reads as `${<case>.output}`.
+
+    Returns:
+        `frozenset[str]`: The value-producing case ids.
+    """
+    cases = {
+        nid: d for nid, d in descriptors.items() if isinstance(d, CaseDescriptor)
+    }
+    pending = [
+        nid for nid, d in cases.items() if d.outputs is not None or nid in read
+    ]
+    found: set[str] = set()
+    while pending:
+        nid = pending.pop()
+        if nid in found:
+            continue
+        found.add(nid)
+        case = cases[nid]
+        targets = [c.get("then") for c in case.cases] + [case.else_]
+        pending.extend(t for t in targets if isinstance(t, str) and t in cases)
+    return frozenset(found)
+
+
 def _assemble(
     *,
     inputs_section: Optional[dict] = None,
@@ -1152,7 +1186,10 @@ def _assemble(
     the top-level flow and every in-file def:
 
       flow parameters -> split typed `name: Type = value` node inputs and flow outputs
-      into value + declared contract -> desugar -> build every node kind-blind
+      into value + declared contract -> desugar (case value branches to synth CODE nodes,
+      inline calls, adaptive questions, case call targets, `${case.output}` with one synth
+      result node per typed case) -> build
+      every node kind-blind
       (`desc.build(ctx)`; physical node-output contracts compile at their existing
       leaf-owned position; a case lowers in its own build) -> attach declared input
       contracts to the node wiring -> cross-flow type check + case exhaustiveness ->
@@ -1444,6 +1481,22 @@ def _assemble(
         diagnostics=diagnostics,
     )
 
+    # Classify `case` branches and lift each value branch to a synth CODE node. Runs
+    # BEFORE the inline-call desugar so a value's `${...}` input bindings are walked by it
+    # and by the `${case.output}` expansion like any authored CODE input.
+    descriptors = desugar_case_values(descriptors, diagnostics=diagnostics)
+
+    # Compile each typed case's `output:` once: its synth result node checks every taken
+    # branch against this contract, located at the case's `output:` (source-free: none).
+    case_types: dict[str, ValueContract] = {}
+    for node_id, descriptor in descriptors.items():
+        if isinstance(descriptor, CaseDescriptor) and descriptor.outputs is not None:
+            case_types[node_id] = read_authored_node_output(
+                node_id, descriptor.outputs
+            ) or ValueContract(
+                read_type(descriptor.outputs, registry, diagnostics=diagnostics)
+            )
+
     # Desugar inline `${ f(...) }` call expressions: each becomes a synth `call`
     # node (CallDescriptor, over=None) and its host binding is rewritten to
     # `${<synth>.output}`. Pure sugar — the rest of the pipeline treats the synth
@@ -1478,6 +1531,12 @@ def _assemble(
         diagnostics=diagnostics,
     )
 
+    # The cases whose value is used, taken before the expansion below rewrites the reads;
+    # each must be exhaustive (checked once producer types are known).
+    value_cases = _value_cases(
+        descriptors, case_output_reads(descriptors, outputs_section)
+    )
+
     # Expand `${<case>.output}` value refs to a coalesce over the case's branch targets.
     # Runs after the inline-call desugar (so synth-node bindings are covered too)
     # and before the build loop — downstream sees only ordinary branch-target refs.
@@ -1488,6 +1547,7 @@ def _assemble(
         outputs_range=outputs_range,
         assertion_range_at=flow_assertion_range_at,
         diagnostics=diagnostics,
+        case_types=case_types,
     )
 
     descriptor_cache: _DescriptorBuildCache | None = None
@@ -1729,6 +1789,18 @@ def _assemble(
         diagnostics=diagnostics,
     )
 
+    # Branches of a typed case that can never produce its `output:` type. Runs before the
+    # typed-input check so a disjoint branch is reported at the branch, not at the case's
+    # result node.
+    check_case_values(
+        descriptors,
+        case_types,
+        producers,
+        flow_input_contracts,
+        narrowing=narrowing,
+        diagnostics=diagnostics,
+    )
+
     # Typed node inputs that can never fit their declared type. The CALL, MAP, and LOOP
     # checks below take a typed binding's declared type as its source, so a value that
     # cannot fit that type must be reported here first, against the binding itself.
@@ -1782,6 +1854,7 @@ def _assemble(
         descriptors,
         producers,
         narrowing=narrowing,
+        value_cases=value_cases,
         diagnostics=diagnostics,
     )
 

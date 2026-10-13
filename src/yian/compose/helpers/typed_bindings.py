@@ -186,7 +186,7 @@ def _literal_mismatch_message(
     except TypeCheckError:
         return message
     message += (
-        f"; quote it to keep it as text: `{label}: {type_text} = {_yaml_quoted(right)}`"
+        f"; quote it to keep it as text: `{label}: {type_text} = {yaml_quoted(right)}`"
     )
     if isinstance(parsed, bool):
         message += " (YAML reads unquoted yes/no/on/off/true/false as booleans)"
@@ -217,7 +217,7 @@ def _not_a_type_message(
         reason = f" ({error})"
     message = (
         f"`{left}` in `{label}: {text}` is not a type{reason}. "
-        f'If you meant the text "{text}", quote it: `{label}: {_yaml_quoted(text)}`'
+        f'If you meant the text "{text}", quote it: `{label}: {yaml_quoted(text)}`'
     )
     names = BUILTIN_TYPE_NAMES | registry.keys()
     if head is None:
@@ -234,7 +234,7 @@ def _not_a_type_message(
     return message
 
 
-def _yaml_quoted(text: str) -> str:
+def yaml_quoted(text: str) -> str:
     """Quote `text` as a YAML scalar that reads back as exactly `text`."""
     # A single-quoted scalar folds line breaks and cannot escape, so text with a
     # control character needs a double-quoted scalar with escapes.

@@ -27,11 +27,14 @@ One function, `load_flow()`, drives a fixed pipeline. Read it like a compiler:
   │                          output becomes its value + a declared ValueContract
   │                          (YAML scalar style decides; quoted/block is plain text)
   │
-  ├─ desugar_inline_calls        ┐  rewrite author sugar into core nodes and
-  │                               │  carrierize flow assertions by source order.
+  ├─ desugar_case_values         ┐  rewrite author sugar into core nodes and
+  ├─ desugar_inline_calls        │  carrierize flow assertions by source order.
   ├─ desugar_adaptive_questions  │  Mint synthetic nodes where needed.
   ├─ desugar_case_call_targets   │  After this, only core kinds remain.
   ├─ expand_case_outputs         ┘
+  │    desugar_case_values classifies each CASE branch (node, call, or value) and
+  │    lifts each value to a `__value_N` CODE node; expand_case_outputs adds a
+  │    `__case_<id>` result node for each typed CASE (one with `output:`)
   │
   ├─ build (per kind, via KINDS) → a runtime NODE + its flow-owned WIRING/EDGES;
   │                                Compose-only node/field ranges stay on BuildResult
@@ -44,6 +47,8 @@ One function, `load_flow()`, drives a fixed pipeline. Read it like a compiler:
   │                            append each case's own data+control edges from its build
   ├─ compute_narrowing      → each node's view of union contracts under the CASE
   │                            branches (`on:` tag, `isinstance`) that route it
+  ├─ check case values      → a branch of a typed CASE that can never produce its
+  │                            `output:` type is rejected at the branch
   ├─ check typed inputs     → a typed node input whose inferred type (read against
   │                            its node's narrowed view) is disjoint from its declared
   │                            type is rejected, before the call/loop type checks
@@ -389,10 +394,12 @@ the pipeline only ever sees a small set of kinds:
 
 | You write | Lowered to |
 |---|---|
-| inline `${ f(x) }` in a binding | a synthetic `call` node; the binding rewritten to `${synth.output}` |
+| `call(f, x=...)` as a binding's whole value | a synthetic `call` node; the binding rewritten to `${synth.output}` |
 | `human_input` with `adaptive_questions:` | a synthetic composer AGENT node + the rewritten gate |
-| `case` branch `then: ${child}` | a synthetic `call` node as the branch target |
-| `${some_case.output}` | a coalesce over the case's branch targets |
+| `case` branch `then: call(child, ...)` | a synthetic `call` node as the branch target |
+| `case` value branch (`else: "approve"`) | a synthetic `code` node `__value_N` as the branch target |
+| typed `case` (`output:`) | a synthetic `code` result node `__case_<id>`; `${case.output}` reads it |
+| `${some_case.output}` of an untyped `case` | a coalesce over the case's branch targets |
 
 Because desugaring is a descriptor-level rewrite, the synthetic nodes flow through
 `build`, edge inference, validation, and the DAG check exactly like hand-written ones —

@@ -12,6 +12,10 @@ passes:
   key. It assigns each retained child a stable
   reserved identity from its complete lexical owner path; authored private-prefix
   targets are rejected before registration.
+- `case_values` — a `case` then:/else: is classified by YAML scalar style: an unquoted
+  bare word names a node (else a located error suggesting the nearest node or quoting),
+  and a value (quoted text, a non-string scalar, a mapping, a list, or a `${...}`
+  template) lifts to a synth `__value_<n>` CODE node that becomes the route target.
 - `inline_calls` — whole-value `call(<flow-id>, kw=...)` directives in any binding
   position mint a synth `call` node and rewrite the binding to `${<synth>.output}`.
   The same pass crosses raw flow assertions into ordered `Assertion` carriers; an
@@ -22,7 +26,8 @@ passes:
 - `case_targets` — a `case` then:/else: whole-value `call(...)` route target mints a
   synth call node and rewrites the route target to its id.
 - `case_outputs` — every `${<case>.output}` binding ref expands to a coalesce over
-  the case's branch leaf targets.
+  the case's branch leaf targets, or, for a case that declares `output:`, to its synth
+  `__case_<id>` result node, which checks each taken branch against that type.
 
 Ladder position: desugar imports DOWN/peer only — `helpers`, `nodes`, `parse`, and
 the engine core (`expr`, `events`, `compile`, `nodes.*`). It NEVER imports the

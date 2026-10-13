@@ -65,7 +65,11 @@ class NodeSucceeded:
 @dataclass
 class NodeRouted:
     """A router (CASE) selected an out-edge handle; the engine takes it and skip-floods the
-    siblings. Stores no value."""
+    siblings. Stores no value.
+
+    `handle` is the taken branch's handle: `"#else"` (`ELSE_HANDLE`) for `else:` or no
+    match.
+    """
 
     node_id: str
     handle: str

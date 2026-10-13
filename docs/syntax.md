@@ -1196,6 +1196,15 @@ took a `when:` branch rather than `else:`, so a flow output reading it returned 
 a branch target that also named its own `case` in `depends_on:` never ran. Both now run on
 every branch the `case` takes.
 
+Changed: a `then:` naming a node `default` used to share the `else:` route, so both
+branches ran (and with no `else:`, `default` ran when nothing matched); it is now an
+ordinary node. The `else:` route's handle is `#else` (was `default`) in
+`NodeRouted.handle`, run logs, memory episodes, and the CLI's `✓ gate → #else` line.
+Flows and child flows with a `case` `else:` get new fingerprints and expansion digests, so
+resuming an old run log of one, or of a `case` that matched nothing, fails with a
+fingerprint, digest, or replay error. Stored memory episodes keep `default`; they are not
+replayed.
+
 Simple form — match a value:
 
 ```yaml

@@ -56,11 +56,11 @@ name of a reference. They remain legal as dotted field names, such as
 construct. It is pool-agnostic — `resolve` turns a reference path into a value, so the same
 evaluator serves the pool, a prompt's local record, and the map-body `item` scope.
 
-**Three locked semantics** (`case default` routing depends on them):
+**Three locked semantics** (`case` routing to `else:` depends on them):
 
 1. a **missing reference is `None`** (non-strict modes),
 2. **arithmetic over that `None` raises** — a missing operand never silently becomes `0`,
-3. an **ordered comparison with `None` is `False`** — so an absent value routes to `default`.
+3. an **ordered comparison with `None` is `False`** — so an absent value routes to `else:`.
 
 When the `None` would come from a node a `case` may skip, Compose rejects the arithmetic at
 load and asks for a `:-` default (see `syntax.md`, "Skipped branches and flow outputs").

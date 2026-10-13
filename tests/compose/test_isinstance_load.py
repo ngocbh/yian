@@ -749,5 +749,5 @@ output: ${ask.output}
 """
     )
     error = _load_error(text)
-    assert "isinstance is not a prompt function; compute it in an input binding" in str(error)
+    assert "exactly one `${name}`" in str(error)
     assert _error_line(error) == _line_of(text, "questions:")

@@ -122,19 +122,68 @@ output: ${{ask.output}}
 """
 
 
-@pytest.mark.parametrize(
-    ("questions", "message"),
-    [
-        (
-            "${isinstance(order, Buy)}",
-            "questions: isinstance is not a prompt function; compute it in an input binding",
-        ),
-        ("${bogus(order)}", "questions: unknown prompt function 'bogus'"),
-    ],
-)
-def test_human_input_questions_prompt_function_errors_point_at_questions(questions, message):
+@pytest.mark.parametrize("questions", ["${isinstance(order, Buy)}", "${bogus(order)}"])
+def test_human_input_questions_prompt_function_errors_point_at_questions(questions):
     from yian.compose import load_flow
 
-    with pytest.raises(LoadError, match=message) as exc:
+    with pytest.raises(LoadError, match=r"exactly one `\$\{name\}`") as exc:
         load_flow(_questions_ref_flow(questions))
     assert exc.value.diagnostic.frames[-1].range.start_line == 10
+
+
+def _load_questions(questions_yaml):
+    from yian.compose import load_flow
+
+    return load_flow(
+        "id: f\n"
+        "name: f\n"
+        "input: {qs: \"list[object]\"}\n"
+        "nodes:\n"
+        "  ask:\n"
+        "    kind: human_input\n"
+        "    input: {qs: \"${input.qs}\"}\n"
+        f"    questions: {questions_yaml}\n"
+        "output: ${ask.output}\n"
+    )
+
+
+def _questions_line(exc):
+    # 1-based line of the `questions:` field in the `_load_questions` flow.
+    return exc.value.diagnostic.frames[-1].range.start_line
+
+
+@pytest.mark.parametrize(
+    "questions_yaml",
+    ["5", "true", '{question: "Pick one", header: P}'],
+)
+def test_human_input_build_rejects_questions_that_are_not_a_list_or_ref(questions_yaml):
+    # A non-list, non-string `questions:` used to build a plain gate with an empty prompt.
+    with pytest.raises(LoadError, match=r"`questions:` must be a list") as exc:
+        _load_questions(questions_yaml)
+    assert _questions_line(exc) == 8
+
+
+@pytest.mark.parametrize(
+    "questions_yaml",
+    [
+        '"Answer these carefully: ${qs}"',
+        '"${qs} "',
+        '"${upper(qs)}"',
+        '"${qs or qs}"',
+        '"${qs.items}"',
+        '"${qs}${qs}"',
+        '"qs"',
+        '"${qs[0]}"',
+    ],
+)
+def test_human_input_build_rejects_questions_string_that_is_not_one_whole_ref(questions_yaml):
+    # Text or an expression around the ref used to be dropped, keeping only the name.
+    with pytest.raises(LoadError, match=r"exactly one `\$\{name\}`") as exc:
+        _load_questions(questions_yaml)
+    assert _questions_line(exc) == 8
+
+
+@pytest.mark.parametrize("questions_yaml", ['"${qs}"', '"${ qs }"', "${qs}"])
+def test_human_input_build_accepts_a_whole_questions_ref(questions_yaml):
+    node = _load_questions(questions_yaml).compiled.nodes["ask"]
+    assert node.questions_input == "qs" and node.questions is None

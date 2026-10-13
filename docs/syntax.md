@@ -1477,6 +1477,10 @@ ask:
   questions: ${qs}
 ```
 
+`questions:` is either a list or exactly one `${name}` naming a declared input;
+anything else (a mapping, a number, text around the ref, `${a.b}`, a call) is a
+load error. Put free text in `prompt:`.
+
 ### `wait` — block until an absolute UTC deadline
 
 ```yaml

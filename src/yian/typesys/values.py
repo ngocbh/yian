@@ -19,12 +19,13 @@ in `yian.typesys.temporal`; otherwise it is the leaf.
 
 import json
 from collections.abc import Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, is_dataclass, replace
+from dataclasses import fields as _dataclass_fields
 from enum import Enum
 from math import isfinite
 from typing import Annotated, Any, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
+from pydantic import BaseModel, ConfigDict, Field, RootModel, TypeAdapter, field_validator
 
 from yian.typesys.temporal import parse_date, parse_datetime
 
@@ -59,6 +60,119 @@ class TypeCheckError(ValueError):
                 )
         super().__init__(*args)
         self.path = path
+
+
+def find_nonfinite(value: Any) -> tuple[tuple[str | int, ...], float] | None:
+    """Find the first NaN or infinity inside a value, depth-first and in order.
+
+    Descends into `dict` values, `list`/`tuple` items, `TypedValue` payloads,
+    pydantic models (declared fields, then extras; a `RootModel` contributes its
+    root without a segment), and dataclass instances. A container already on the
+    current descent path is skipped rather than reported: the canonical codecs
+    run `_reject_unordered_containers` first, and that owns the cycle error.
+
+    Args:
+        value (`Any`):
+            The value to search.
+
+    Returns:
+        `tuple[tuple[str | int, ...], float] | None`:
+            The field/index path to the first non-finite float and the float
+            itself, or `None` when every number is finite.
+    """
+    return _find_nonfinite(value, (), set())
+
+
+def _find_nonfinite(
+    value: Any,
+    path: tuple[str | int, ...],
+    active: set[int],
+) -> tuple[tuple[str | int, ...], float] | None:
+    if isinstance(value, float):
+        return None if isfinite(value) else (path, value)
+    is_container = (
+        isinstance(value, (BaseModel, dict, list, tuple))
+        or (is_dataclass(value) and not isinstance(value, type))
+    )
+    if not is_container or id(value) in active:
+        return None
+    active.add(id(value))
+    try:
+        for child, child_path in _nonfinite_children(value, path):
+            found = _find_nonfinite(child, child_path, active)
+            if found is not None:
+                return found
+        return None
+    finally:
+        active.discard(id(value))
+
+
+def _nonfinite_children(
+    value: Any,
+    path: tuple[str | int, ...],
+) -> Iterable[tuple[Any, tuple[str | int, ...]]]:
+    # `TypedValue` subclasses `BaseModel`; unwrap it first so paths gain no `value` segment.
+    if isinstance(value, TypedValue):
+        yield value.to_object(), path
+    elif isinstance(value, RootModel):
+        yield value.root, path
+    elif isinstance(value, BaseModel):
+        for name in type(value).model_fields:
+            yield getattr(value, name), path + (name,)
+        for key, item in (value.model_extra or {}).items():
+            yield item, path + (_path_key(key),)
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            yield item, path + (_path_key(key),)
+    elif isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            yield item, path + (index,)
+    else:
+        for field in _dataclass_fields(value):
+            yield getattr(value, field.name), path + (field.name,)
+
+
+def _path_key(key: Any) -> str:
+    # `TypeCheckError` paths hold exact `str` segments, so a `str` subclass key is unwrapped.
+    return str.__str__(key) if isinstance(key, str) else repr(key)
+
+
+def reject_nonfinite(value: Any, where: str) -> None:
+    """Raise if a value contains a NaN or infinity at any depth.
+
+    Args:
+        value (`Any`):
+            The value to check.
+        where (`str`):
+            Names the boundary for the message, e.g. ``"input 'x'"``.
+
+    Raises:
+        `TypeCheckError`:
+            A non-finite float was found; ``path`` locates it and the message reads
+            ``<where>[ at <path>]: non-finite number <repr> is not a yian value``.
+    """
+    found = find_nonfinite(value)
+    if found is None:
+        return
+    path, number = found
+    location = f"{where} at {_render_value_path(path)}" if path else where
+    raise TypeCheckError(
+        f"{location}: non-finite number {number!r} is not a yian value",
+        path=path,
+    )
+
+
+def _render_value_path(path: tuple[str | int, ...]) -> str:
+    """Render a path as ``a[1].b``, quoting a non-identifier key as ``['my key']``."""
+    parts = []
+    for segment in path:
+        if isinstance(segment, int):
+            parts.append(f"[{segment}]")
+        elif segment.isidentifier():
+            parts.append(f".{segment}" if parts else segment)
+        else:
+            parts.append(f"[{segment!r}]")
+    return "".join(parts)
 
 
 # --------------------------------------------------------------------------- #

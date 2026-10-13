@@ -943,20 +943,20 @@ def test_every_nested_growth_prefix_replays_to_the_live_state(
         )
 
 
-@pytest.mark.parametrize(
-    ("source", "expected_output", "spawner_suffixes"),
-    [
-        (_LOOP_BODY_SPAWNERS, {"n": 3, "exited": True}, ("/nested_call", "/nested_map")),
-        (
-            _LOOP_BODY_NESTED_LOOP_AND_CASE,
-            {"n": 3, "exited": True},
-            ("/inner", "/c", "/__call_0"),
-        ),
-    ],
-    ids=["call-map", "loop-case"],
+_CALL_MAP = (_LOOP_BODY_SPAWNERS, {"n": 3, "exited": True}, ("/nested_call", "/nested_map"))
+_LOOP_CASE = (
+    _LOOP_BODY_NESTED_LOOP_AND_CASE, {"n": 3, "exited": True}, ("/inner", "/c", "/__call_0"),
 )
-@pytest.mark.parametrize("num_workers", [0, 2], ids=["serial", "pooled"])
-def test_every_loop_body_call_and_map_prefix_replays_to_the_live_state(
+
+
+# Every prefix replays from scratch, so the long loop-case log runs serially only; the
+# call-map case covers pooled replay.
+@pytest.mark.parametrize(
+    ("source", "expected_output", "spawner_suffixes", "num_workers"),
+    [(*_CALL_MAP, 0), (*_CALL_MAP, 2), (*_LOOP_CASE, 0)],
+    ids=["call-map-serial", "call-map-pooled", "loop-case-serial"],
+)
+def test_every_loop_body_spawner_prefix_replays_to_the_live_state(
     monkeypatch: pytest.MonkeyPatch,
     source: str,
     expected_output: dict[str, Any],
@@ -1011,6 +1011,7 @@ def test_every_loop_body_call_and_map_prefix_replays_to_the_live_state(
         if node_id.startswith(("repeated#0/", "repeated#1/"))
     ]
     assert not stale
+    assert any(node_id.startswith("repeated#2/") for node_id in state.flow.nodes)
 
 
 @pytest.mark.parametrize("num_workers", [0, 2], ids=["serial", "pooled"])

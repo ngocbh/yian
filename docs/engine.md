@@ -166,9 +166,8 @@ grown under it (by a nested CALL, MAP, or LOOP, transitively) if all of them are
 subtree stays live under the nearest surviving owner, and a later prune of that owner
 retires it if it has settled. The reducer finds them from accepted growth records
 (`RunState.growth_owner`). `NodeExpandedRecord.prune_ids` keeps only the ids the node
-asked for; replay re-derives the rest. Adding a new
-spawner kind means setting traits on its node; the core never gains a branch. Details:
-[Nodes](nodes.md).
+asked for; replay re-derives the rest. Adding a new spawner kind means setting traits on
+its node; the core never gains a branch. Details: [Nodes](nodes.md).
 
 ## Failure and durable recovery
 

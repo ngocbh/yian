@@ -970,6 +970,7 @@ def test_loop_passthrough_field_routes_feedback_to_its_seed(shape, times, monkey
     assert engine.state.trace.terminal.output == expected_output
     if shape == "nested-call" and times >= 3:
         assert not any(i.startswith("loop#0/") for i in engine.state.flow.nodes)
+        assert any(i.startswith(f"loop#{times - 1}/") for i in engine.state.flow.nodes)
     root, results = compute_backward(engine.state.trace, feedback)
     validate_attributed_backward(engine.state.trace, feedback, root, results)
     assert root.input_feedback == expected

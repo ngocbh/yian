@@ -564,6 +564,46 @@ def test_until_runs_body_at_least_once():
     assert result.output == {"n": 0}
 
 
+# The seed `seen: null` is a placeholder the first body fills in; `'b' in seen` cannot be
+# evaluated on it. `until:` must not consult the predicate before the first body.
+UNTIL_SEED_UNEVALUABLE = """
+id: usu
+name: usu
+defs:
+  step:
+    input:
+      seen: Optional[list[str]]
+      n: int
+    nodes:
+      bump:
+        kind: code
+        input:
+          n: ${input.n}
+        output:
+          seen: Optional[list[str]]
+          n: int
+        code: |
+          return {"seen": ["a", "b"][: inputs["n"] + 1], "n": inputs["n"] + 1}
+    output: ${bump.output}
+nodes:
+  repeat:
+    kind: loop
+    call: step
+    until: "'b' in seen"
+    max: 5
+    input:
+      seen: ${null}
+      n: 0
+output: ${repeat.output}
+"""
+
+
+def test_until_does_not_evaluate_predicate_on_seed():
+    result = run_flow(load_flow(UNTIL_SEED_UNEVALUABLE), {})
+    assert result.status == "succeeded", result.failure
+    assert result.output == {"seen": ["a", "b"], "n": 2}
+
+
 def test_loop_budget_exceeded_in_step_fails_run(monkeypatch):
     # The node-budget guard inside `_apply_grow` raises a RuntimeError; when a fresh driver's
     # grow (iteration >= 1, driven by `loop~1` off the body-END wiring) trips it, it must become a

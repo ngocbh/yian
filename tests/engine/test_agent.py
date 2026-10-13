@@ -480,6 +480,32 @@ def test_env_max_tool_iterations_overrides_cap(monkeypatch):
     assert looping.calls == 2         # stopped at exactly the env bound
 
 
+def test_tool_loop_cap_does_not_run_the_last_replys_tools(monkeypatch):
+    # The reply that uses the last allowed model turn asks for a tool. No later model call
+    # could read its result, so the node fails without running it.
+    tool = _FakeTool(lambda a: "ok")
+    monkeypatch.setitem(tools_mod.TOOL_REGISTRY, "noop", tool)
+    looping = _FakeChat([_ai_tool_call("noop", {}, str(i)) for i in range(2)])
+    _patch_model(monkeypatch, looping)
+    node = _node(tools=["noop"])
+    node.env = {"max_tool_iterations": 2}
+    ev = _run_node(node)
+    assert isinstance(ev, EvaluationFailure)
+    assert ev.failure.cause_type == "AgentLoopError"
+    assert "not run" in ev.failure.message
+    assert looping.calls == 2
+    assert len(tool.seen) == 1        # only the first reply's call ran
+
+
+def test_tool_loop_cap_of_one_still_answers_without_tools(monkeypatch):
+    # A cap of 1 allows one model turn: a reply with no tool calls finishes the node.
+    monkeypatch.setitem(tools_mod.TOOL_REGISTRY, "noop", _FakeTool(lambda a: "ok"))
+    _patch_model(monkeypatch, _FakeChat([AIMessage(content="done")]))
+    node = _node(tools=["noop"])
+    node.env = {"max_tool_iterations": 1}
+    assert _run_node(node).value == "done"
+
+
 def test_env_max_tool_iterations_minus_one_accepted():
     # -1 is the explicit no-cap sentinel and passes validation (unlike 0 / other negatives).
     node = _node()

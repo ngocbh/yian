@@ -112,7 +112,7 @@ def run_agent(ctx: AgentRunContext) -> Output:
     iterations = 0
     reply = None
 
-    while ctx.max_tool_iterations < 0 or iterations < ctx.max_tool_iterations:
+    while True:
         ctx.check_stopped()
         if ctx.interrupted():
             return _interrupted(ctx, reply)
@@ -165,6 +165,15 @@ def run_agent(ctx: AgentRunContext) -> Output:
                     )
                 )
             return Output(value=text)
+
+        if iterations == ctx.max_tool_iterations:
+            # No later model call could read these results, so running them would only
+            # add side effects to a node that is already failing.
+            raise AgentLoopError(
+                f"agent node {ctx.node_id!r} hit the tool-iteration cap "
+                f"({ctx.max_tool_iterations}) without a final answer; the last reply's "
+                f"{len(calls)} tool call(s) were not run"
+            )
 
         for call_index, call in enumerate(calls):
             ctx.check_stopped()
@@ -229,11 +238,6 @@ def run_agent(ctx: AgentRunContext) -> Output:
             )
             record_tool_result(ctx.evaluation_trace, name, result_message.content)
             messages.append(result_message)
-
-    raise AgentLoopError(
-        f"agent node {ctx.node_id!r} hit the tool-iteration cap "
-        f"({ctx.max_tool_iterations}) without a final answer"
-    )
 
 
 def _interrupted(ctx: AgentRunContext, reply: BaseMessage | None) -> Output:

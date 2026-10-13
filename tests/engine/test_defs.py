@@ -754,6 +754,49 @@ def test_unreferenced_broken_def_is_loud_eager_build():
     assert "defs entry 'unused_broken'" in str(exc.value)
 
 
+_STR_TO_LITERAL_CHILD = """
+id: str-to-literal
+name: str_to_literal
+input:
+  s: {source}
+defs:
+  child:
+    kind: code
+    code: |
+      return inputs["mode"]
+    input:
+      mode: Literal[a, b]
+    output: str
+nodes:
+  go:
+    kind: call
+    call: child
+    input:
+      mode: {binding}
+output: ${{go.output}}
+"""
+
+
+def test_untagged_source_to_literal_child_input_is_rejected():
+    """A plain `str` cannot fill a `Literal[...]` input at load, as `int` cannot fill `int[1, 12]`."""
+    with pytest.raises(LoadError) as caught:
+        load_flow(_STR_TO_LITERAL_CHILD.format(source="str", binding="${input.s}"))
+
+    assert "call node 'go': binding 'mode'" in str(caught.value)
+    assert "child expects 'Literal[\"a\",\"b\"]', source is 'str'" in str(caught.value)
+
+
+@pytest.mark.parametrize("source,binding", [
+    ("Literal[a]", "${input.s}"),
+    ("Literal[a, b]", "${input.s}"),
+    ("str", "a"),
+])
+def test_tag_subset_or_literal_binding_fills_literal_child_input(source, binding):
+    flow = load_flow(_STR_TO_LITERAL_CHILD.format(source=source, binding=binding))
+
+    assert run_flow(flow, {"s": "a"}).output == "a"
+
+
 # --------------------------------------------------------------------------- #
 # nullable-strictness: a nullable source bound to a non-nullable child input is
 # rejected unless the BINDING guarantees non-null (:-literal / :?).

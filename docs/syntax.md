@@ -236,7 +236,9 @@ endpoint expressions are invalid. Bounds work inside aliases, records, lists,
 and `Optional[...]`.
 Defaults and supplied values must satisfy them. Cross-flow wiring requires the
 source domain to fit inside the destination domain; an unbounded source cannot
-establish that guarantee for a bounded destination.
+establish that guarantee for a bounded destination. Enums follow the same rule:
+a `Literal[...]` destination accepts a source whose tags are a subset of its own,
+not a plain `str`.
 
 Name reusable types in `typedefs:`:
 

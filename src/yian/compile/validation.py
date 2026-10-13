@@ -85,8 +85,9 @@ def types_compatible(source: Type, sink: Type) -> bool:
     Same `kind` (with int->number widening, mirroring `_coerce_scalar`); the singleton
     `None` source may fill any nullable sink; records match structurally (every field the
     sink REQUIRES is present + compatible); enums by tag-subset (source tags within the
-    sink's accepted tags); list elements recurse, treating a bare specialized list as its
-    non-null scalar element contract; a nullable source cannot fill a non-nullable sink.
+    sink's accepted tags, so an untagged source cannot fill an enum sink); list elements
+    recurse, treating a bare specialized list as its non-null scalar element contract; a
+    nullable source cannot fill a non-nullable sink.
     A bounded numeric sink requires a source interval contained within its bounds.
     A source union fits a sink union when each of its members fits some sink member; a
     record fits a union when it fits some member; a union fits `object` but never a
@@ -149,9 +150,8 @@ def types_compatible(source: Type, sink: Type) -> bool:
         for fname, ftyp in sink.fields.items():
             if fname in source.fields and not types_compatible(source.fields[fname], ftyp):
                 return False
-    if sink.tags is not None and source.tags is not None:
-        if not source.tags <= sink.tags:
-            return False
+    if sink.tags is not None and (source.tags is None or not source.tags <= sink.tags):
+        return False
     return True
 
 

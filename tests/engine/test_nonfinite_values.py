@@ -4,7 +4,17 @@ from dataclasses import dataclass
 import pytest
 from pydantic import BaseModel, ConfigDict, RootModel
 
-from yian.typesys.values import ObjectValue, TypeCheckError, find_nonfinite, reject_nonfinite
+from yian.runtime.log import canonical_typed
+from yian.typesys.values import (
+    ObjectValue,
+    Type,
+    TypeCheckError,
+    ValueKind,
+    build_value,
+    build_value_as,
+    find_nonfinite,
+    reject_nonfinite,
+)
 
 NONFINITE = [math.inf, -math.inf, math.nan]
 
@@ -71,3 +81,23 @@ def test_a_str_subclass_key_becomes_an_exact_str_segment():
 
 def test_reject_nonfinite_passes_finite_values():
     reject_nonfinite({"a": [1.0]}, "input 'y'")
+
+
+def test_an_int_too_large_for_a_float_slot_fails_at_the_root():
+    with pytest.raises(TypeCheckError, match="too large for float") as caught:
+        build_value_as(Type.scalar(ValueKind.NUMBER), 10**400)
+    assert caught.value.path == ()
+
+
+def test_an_int_too_large_for_a_float_list_item_fails_at_its_index():
+    with pytest.raises(TypeCheckError, match="too large for float") as caught:
+        build_value_as(Type.scalar(ValueKind.LIST_NUMBER), [1, 10**400])
+    assert caught.value.path == (1,)
+
+
+def test_an_inferred_float_list_with_a_huge_int_fails_at_its_index():
+    with pytest.raises(TypeCheckError, match="too large for float") as caught:
+        build_value([0.5, 10**400])
+    assert caught.value.path == (1,)
+    with pytest.raises(TypeCheckError, match="too large for float"):
+        canonical_typed([0.5, 10**400], None)

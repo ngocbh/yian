@@ -1134,11 +1134,31 @@ def _scalar_matches(declared: ValueKind, value: Any) -> bool:
     return False
 
 
-def _coerce_scalar(declared: ValueKind, value: Any) -> Any:
+def _coerce_scalar(declared: ValueKind, value: Any, path: tuple[str | int, ...]) -> Any:
     # Only widening: an int may fill a NUMBER slot as a float.
     if declared == ValueKind.NUMBER and isinstance(value, int) and not isinstance(value, bool):
-        return float(value)
+        return _widen_int(value, path)
     return value
+
+
+def _widen_int(value: int, path: tuple[str | int, ...]) -> float:
+    """Widen an int to a float, failing where it would overflow to infinity.
+
+    Args:
+        value (`int`): The int to widen.
+        path (`tuple[str | int, ...]`): Field/index path to ``value``.
+
+    Returns:
+        `float`: ``value`` as a float.
+
+    Raises:
+        `TypeCheckError`: ``value`` is beyond float's range.
+    """
+    try:
+        return float(value)
+    except OverflowError:
+        # No repr of the int: `str()` of a huge int hits Python's digit limit.
+        raise TypeCheckError("int is too large for float", path=path) from None
 
 
 # --------------------------------------------------------------------------- #
@@ -1191,7 +1211,10 @@ def _infer_list(items: list[Any]) -> TypedValue:
     if element_types == {ValueKind.INTEGER}:
         return ListIntegerValue(value=items)
     if element_types <= {ValueKind.INTEGER, ValueKind.NUMBER}:
-        return ListNumberValue(value=[float(x) for x in items])
+        return ListNumberValue(value=[
+            _widen_int(x, (index,)) if isinstance(x, int) else float(x)
+            for index, x in enumerate(items)
+        ])
     if element_types == {ValueKind.OBJECT}:
         return ListObjectValue(value=items)
     return ListAnyValue(value=items)
@@ -1462,7 +1485,10 @@ def _build_scalar_or_list(
                         f"(declared {declared.value})",
                         path=path + (index,),
                     )
-            items = [_coerce_scalar(element, item) for item in items]
+            items = [
+                _coerce_scalar(element, item, path + (index,))
+                for index, item in enumerate(items)
+            ]
         return _LIST_VALUE_CLASS[declared](value=items)
 
     if not _scalar_matches(declared, value):
@@ -1470,4 +1496,4 @@ def _build_scalar_or_list(
         if declared in _TEMPORAL_PARSERS and isinstance(value, str):
             message += f": {_temporal_error(declared, value)}"
         raise TypeCheckError(message, path=path)
-    return _SCALAR_VALUE_CLASS[declared](value=_coerce_scalar(declared, value))
+    return _SCALAR_VALUE_CLASS[declared](value=_coerce_scalar(declared, value, path))

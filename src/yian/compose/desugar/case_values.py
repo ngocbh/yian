@@ -4,7 +4,8 @@ A `case` branch is a sibling node, a `call(...)`, or a value. The YAML scalar st
 them apart, so every branch is classified first:
 
 - an unquoted (plain, or source-free) string is a node name unless it is a `call(...)`
-  (left for `desugar_case_call_targets`), holds ` = ` (a load error: the case's `output:`
+  (a whole-value directive is left for `desugar_case_call_targets`; any other text starting
+  with `call(` is a load error), holds ` = ` (a load error: the case's `output:`
   gives the type, so `then: int = ${x}` is a mistake; quoting keeps the text), or holds a
   `${...}` span (a template value). A bare word that names no node is a load error that
   suggests the nearest node name and the quoted form;
@@ -17,8 +18,8 @@ A value branch needs the case's `output:` type. Each value lifts to one synth CO
 (recorded in `CaseDescriptor.value_branches`). Each string holding `${` becomes one input
 binding `vN`, so the binder evaluates it exactly like a node input; everything else is a
 Python literal in the generated code, so a quoted text never reaches the inline-call
-desugar. A span that reads the case itself, or a span-bearing `call(...)` nested inside a
-mapping or list, is a load error.
+desugar. A malformed span, a span that reads the case itself, a `call(...)` nested inside
+a mapping or list, a non-finite number, and a value that contains itself are load errors.
 
 Runs in `_assemble` after the typed-binding splits and BEFORE `desugar_inline_calls`, so
 the synth node's input bindings are walked by the inline-call and `${case.output}` passes
@@ -30,8 +31,9 @@ was lifted from (the case's positional `then_ranges[N]`, or its `("field", "else
 falling back to the case node's own range.
 
 Imports flow down/peer only: `compose.parse.file` (descriptors), `compose.desugar.inline_calls`
-(the reserved `__call_` prefix), `compose.helpers` (errors, YAML quoting), `expr`, `diagnostics`.
-Only the loader imports this back.
+(the `call(...)` recognizer, the reserved `__call_` prefix), `compose.helpers` (errors, YAML
+quoting), `expr`, `diagnostics`. Only the loader pipeline and the `yian.compose` re-export import
+this back.
 """
 
 from __future__ import annotations
@@ -39,12 +41,11 @@ from __future__ import annotations
 import datetime
 import difflib
 import itertools
-import math
 import re
 from dataclasses import dataclass, replace
 from typing import Any, Optional
 
-from yian.compose.desugar.inline_calls import _SYNTH_PREFIX
+from yian.compose.desugar.inline_calls import _SYNTH_PREFIX, _match_directive
 from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.helpers.typed_bindings import yaml_quoted
 from yian.compose.parse.file import CaseDescriptor, CodeDescriptor
@@ -57,6 +58,8 @@ _RESERVED_PREFIXES = (VALUE_PREFIX, CASE_PREFIX)
 _QUOTED_STYLES = frozenset({"single", "double", "literal", "folded"})
 _CALL_HEAD = re.compile(r"call\s*\(")
 _CLOSE_MATCH_CUTOFF = 0.6
+# A word YAML 1.1 reads as text although Python reads it as a number (`1e3`, `2.5E-4`).
+_EXPONENT_WORD = re.compile(r"([+-]?\d+(?:\.\d*)?)[eE]([+-]?)(\d+)")
 
 
 def desugar_case_values(
@@ -212,13 +215,19 @@ def _branch_target(
     ):
         return value
     if desc.outputs is None:
+        if value is None:
+            raise diagnostics.error(
+                f"{host} is empty; name a node, or add `output: Optional[...]` for a null "
+                "value",
+                range=rng,
+            )
         raise diagnostics.error(
             f"{host} a value branch needs the case's type; add `output: <Type>` to "
             f"{desc.id!r}",
             range=rng,
         )
     synth_id = f"{VALUE_PREFIX}{next(counter)}"
-    node = value_node(
+    node = _value_node(
         synth_id,
         value,
         node_name=node_name,
@@ -262,8 +271,8 @@ def _is_value(
         `bool`: Whether the branch is a value to lift.
 
     Raises:
-        `LoadError`: An unquoted branch holds ` = ` or names no node; a quoted
-            `call(...)` holds a span.
+        `LoadError`: An unquoted branch is a `call(...)` that is not one whole directive,
+            holds ` = `, or names no node; a quoted `call(...)` holds a span.
     """
     if not isinstance(value, str):
         return True
@@ -280,7 +289,13 @@ def _is_value(
             )
         return True
     if is_call:
-        # Lifted (or rejected) by `desugar_case_call_targets`.
+        if _match_directive(value) is None:
+            raise diagnostics.error(
+                f"{host} a branch target must be a node id or a single call "
+                f"(got {value!r}) — not a coalesce / embedded text / dotted call",
+                range=rng,
+            )
+        # Lifted by `desugar_case_call_targets`.
         return False
     if " = " in value or value.endswith(" ="):
         raise diagnostics.error(
@@ -295,23 +310,30 @@ def _is_value(
             value, suggestable, n=1, cutoff=_CLOSE_MATCH_CUTOFF
         )
         suggestion = f" Did you mean `{matches[0]}`?" if matches else ""
+        number = _EXPONENT_WORD.fullmatch(value)
+        number_hint = ""
+        if number is not None:
+            mantissa, sign, exponent = number.groups()
+            if "." not in mantissa:
+                mantissa += ".0"
+            number_hint = f", or write a YAML number such as {mantissa}e{sign or '+'}{exponent}"
         raise diagnostics.error(
             f"{host} `{value}` names no node.{suggestion} If you meant the text "
-            f'"{value}", quote it: `{label} {yaml_quoted(value)}`',
+            f'"{value}", quote it: `{label} {yaml_quoted(value)}`{number_hint}',
             range=rng,
         )
     return False
 
 
-def value_node(
+def _value_node(
     synth_id: str,
     value: Any,
     *,
     node_name: str,
     range: Optional[SourceRange],
     diagnostics: LoadDiagnostics,
-    host: str = "case value",
-    label: str = "then:",
+    host: str,
+    label: str,
 ) -> CodeDescriptor:
     """Build the synth CODE node that produces one branch value.
 
@@ -323,10 +345,9 @@ def value_node(
         range (`Optional[SourceRange]`): The branch's source range; the node and each of its
             inputs locate here.
         diagnostics (`LoadDiagnostics`): Source ownership for located errors.
-        host (`str`, *optional*, defaults to `"case value"`): Message prefix naming the
-            branch.
-        label (`str`, *optional*, defaults to `"then:"`): The branch key, `"then:"` or
-            `"else:"`, for the fix a message suggests.
+        host (`str`): Message prefix naming the branch, such as `"case node 'r' then:"`.
+        label (`str`): The branch key, `"then:"` or `"else:"`, for the fix a message
+            suggests.
 
     Returns:
         `CodeDescriptor`: An untyped inline CODE node. Each string holding `${` is one
@@ -334,16 +355,15 @@ def value_node(
         every other part written as a Python literal.
 
     Raises:
-        `LoadError`: A mapping key is not a string, a scalar has no literal form, or a
-            span-bearing `call(...)` is nested inside a mapping or list.
+        `LoadError`: See `_literal`.
 
     Example:
-        `value_node("__value_0", {"t": "${input.t}", "done": True}, ...)` has
+        `_value_node("__value_0", {"t": "${input.t}", "done": True}, ...)` has
         `inputs == {"v0": "${input.t}"}` and code `return {'t': inputs['v0'], 'done': True}`.
     """
     inputs: dict[str, str] = {}
     site = _Site(host=host, label=label, range=range, diagnostics=diagnostics)
-    expr = _literal(value, inputs, nested=False, site=site)
+    expr = _literal(value, inputs, nested=False, site=site, containers=set())
     return CodeDescriptor(
         id=synth_id,
         node_name=node_name,
@@ -365,7 +385,14 @@ class _Site:
     diagnostics: LoadDiagnostics
 
 
-def _literal(value: Any, inputs: dict[str, str], *, nested: bool, site: _Site) -> str:
+def _literal(
+    value: Any,
+    inputs: dict[str, str],
+    *,
+    nested: bool,
+    site: _Site,
+    containers: set[int],
+) -> str:
     """Return Python source that builds `value`, adding each span-bearing string to `inputs`.
 
     Args:
@@ -373,23 +400,30 @@ def _literal(value: Any, inputs: dict[str, str], *, nested: bool, site: _Site) -
         inputs (`dict[str, str]`): Collects input name -> template string, in walk order.
         nested (`bool`): Whether `value` sits inside a mapping or list.
         site (`_Site`): Where the branch sits, for located errors.
+        containers (`set[int]`): `id()`s of the mappings and lists enclosing `value`, so a
+            YAML alias that contains itself is caught instead of recursing forever.
 
     Returns:
         `str`: A Python expression that evaluates to the value.
 
     Raises:
-        `LoadError`: A mapping key is not a string, a scalar has no literal form, or a
-            nested span-bearing string is a `call(...)`.
+        `LoadError`: A nested string starts with `call(`, a span is malformed, a number is
+            not finite, a mapping key is not a string, a value contains itself, or a scalar
+            has no literal form.
     """
     if isinstance(value, str):
+        if nested and _CALL_HEAD.match(value.strip()):
+            raise site.diagnostics.error(
+                f"{site.host} a `call(...)` nested in a value is not supported; write the "
+                f"call as the branch (`{site.label} call(...)`) or in a node, or reword the "
+                "text",
+                range=site.range,
+            )
         if "${" in value:
-            if nested and _CALL_HEAD.match(value.strip()):
-                raise site.diagnostics.error(
-                    f"{site.host} a `call(...)` nested in a value would run outside the "
-                    f"branch; write the call as the branch (`{site.label} call(...)`) or in "
-                    "a node",
-                    range=site.range,
-                )
+            try:
+                expr_refs_of(value)
+            except ExpressionError as exc:
+                raise site.diagnostics.error(f"{site.host} {exc}", range=site.range) from exc
             name = f"v{len(inputs)}"
             inputs[name] = value
             return f"inputs[{name!r}]"
@@ -398,26 +432,41 @@ def _literal(value: Any, inputs: dict[str, str], *, nested: bool, site: _Site) -
     if value is None or isinstance(value, (bool, int)):
         return repr(value)
     if isinstance(value, float):
-        if math.isnan(value):
-            return "float('nan')"
-        if math.isinf(value):
-            return "float('inf')" if value > 0 else "float('-inf')"
+        # False for nan as well as for both infinities.
+        if not float("-inf") < value < float("inf"):
+            raise site.diagnostics.error(
+                f"{site.host} numbers must be finite (got {value!r})", range=site.range
+            )
         return repr(value)
     if isinstance(value, (datetime.date, datetime.datetime)):
         return repr(value.isoformat())
-    if isinstance(value, dict):
-        parts = []
-        for key, item in value.items():
-            if not isinstance(key, str):
-                raise site.diagnostics.error(
-                    f"{site.host} record keys must be strings (got {key!r})",
-                    range=site.range,
+    if isinstance(value, (dict, list)):
+        if id(value) in containers:
+            raise site.diagnostics.error(
+                f"{site.host} a branch value can't contain itself", range=site.range
+            )
+        containers.add(id(value))
+        if isinstance(value, dict):
+            parts = []
+            for key, item in value.items():
+                if not isinstance(key, str):
+                    raise site.diagnostics.error(
+                        f"{site.host} record keys must be strings (got {key!r})",
+                        range=site.range,
+                    )
+                item_expr = _literal(
+                    item, inputs, nested=True, site=site, containers=containers
                 )
-            parts.append(f"{key!r}: {_literal(item, inputs, nested=True, site=site)}")
-        return "{" + ", ".join(parts) + "}"
-    if isinstance(value, list):
-        items = [_literal(item, inputs, nested=True, site=site) for item in value]
-        return "[" + ", ".join(items) + "]"
+                parts.append(f"{key!r}: {item_expr}")
+            expr = "{" + ", ".join(parts) + "}"
+        else:
+            items = [
+                _literal(item, inputs, nested=True, site=site, containers=containers)
+                for item in value
+            ]
+            expr = "[" + ", ".join(items) + "]"
+        containers.discard(id(value))
+        return expr
     raise site.diagnostics.error(
         f"{site.host} a branch value can't hold a {type(value).__name__}",
         range=site.range,
@@ -425,12 +474,9 @@ def _literal(value: Any, inputs: dict[str, str], *, nested: bool, site: _Site) -
 
 
 def _reads_case(source: str, case_id: str) -> bool:
-    """Return True when a template string reads `${<case_id>.output...}`."""
-    try:
-        refs = expr_refs_of(source)
-    except ExpressionError:
-        return False  # malformed spans are reported by reference validation
-    for ref in refs:
+    """Return True when a template string (already parsed by `_literal`) reads
+    `${<case_id>.output...}`."""
+    for ref in expr_refs_of(source):
         parts = ref.split(".")
         if len(parts) >= 2 and parts[0] == case_id and parts[1] == "output":
             return True

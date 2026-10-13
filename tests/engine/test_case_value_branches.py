@@ -144,14 +144,13 @@ def test_authored_node_with_reserved_prefix_is_rejected(node_id, prefix):
     assert _error_line(caught.value) == _line_of(text, f"{node_id}:")
 
 
-@pytest.mark.parametrize("else_value", ['"approve"', "null"])
-def test_value_branch_without_output_type_is_rejected(else_value):
+def test_value_branch_without_output_type_is_rejected():
     text = _flow(
         "    on: ${input.cmd}\n"
         "    cases:\n"
         "      - when: a\n"
         "        then: reply\n"
-        f"    else: {else_value}\n"
+        '    else: "approve"\n'
     )
     with pytest.raises(LoadError) as caught:
         load_flow(text)
@@ -159,7 +158,27 @@ def test_value_branch_without_output_type_is_rejected(else_value):
         "case node 'route' else: a value branch needs the case's type; "
         "add `output: <Type>` to 'route'"
     ) in str(caught.value)
-    assert _error_line(caught.value) == _line_of(text, f"else: {else_value}")
+    assert _error_line(caught.value) == _line_of(text, 'else: "approve"')
+
+
+@pytest.mark.parametrize(
+    ("then_text", "else_text", "label"),
+    [("reply", "null", "else:"), ("null", "reply", "then:"), ("", "reply", "then:")],
+)
+def test_empty_branch_without_output_type_is_rejected(then_text, else_text, label):
+    text = _flow(
+        "    on: ${input.cmd}\n"
+        "    cases:\n"
+        "      - when: a\n"
+        f"        then: {then_text}\n"
+        f"    else: {else_text}\n"
+    )
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    assert (
+        f"case node 'route' {label} is empty; name a node, or add "
+        "`output: Optional[...]` for a null value"
+    ) in str(caught.value)
 
 
 def test_unquoted_typed_binding_branch_is_rejected_with_quote_hint():
@@ -215,6 +234,113 @@ def test_nested_call_with_span_in_value_is_rejected():
     message = str(caught.value)
     assert "case node 'route' then: a `call(...)` nested in a value" in message
     assert "then: call(...)" in message
+
+
+def test_nested_call_without_span_in_value_is_rejected():
+    text = _flow(
+        "    on: ${input.cmd}\n"
+        "    output:\n"
+        "      a: str\n"
+        "    cases:\n"
+        "      - when: a\n"
+        "        then:\n"
+        "          a: call(child, x=1)\n"
+        "    else: reply\n"
+    )
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    assert "case node 'route' then: a `call(...)` nested in a value" in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    ("then_text", "else_text", "label", "needle"),
+    [
+        ("call(child, x=1) | x", "reply", "then:", "then: call("),
+        ("reply", "call(child, x=${input.cmd}) | y", "else:", "else: call("),
+    ],
+)
+def test_unquoted_call_that_is_not_one_directive_is_rejected(
+    then_text, else_text, label, needle
+):
+    text = _flow(
+        "    on: ${input.cmd}\n"
+        "    output: str\n"
+        "    cases:\n"
+        "      - when: a\n"
+        f"        then: {then_text}\n"
+        f"    else: {else_text}\n"
+    )
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    message = str(caught.value)
+    assert f"case node 'route' {label} a branch target must be a node id or a single call" in (
+        message
+    )
+    assert "no longer supported" not in message
+    assert _error_line(caught.value) == _line_of(text, needle)
+
+
+def test_malformed_span_in_value_names_the_branch():
+    text = _flow(
+        "    on: ${input.cmd}\n"
+        "    output: str\n"
+        "    cases:\n"
+        "      - when: a\n"
+        '        then: "hello ${input.cmd"\n'
+        "    else: reply\n"
+    )
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    message = str(caught.value)
+    assert message.startswith("case node 'route' then: ")
+    assert "__value_" not in message
+    assert _error_line(caught.value) == _line_of(text, "then: \"hello")
+
+
+@pytest.mark.parametrize("number", [".inf", "-.inf", ".nan"])
+def test_non_finite_number_in_value_is_rejected(number):
+    text = _flow(
+        "    on: ${input.cmd}\n"
+        "    output: object\n"
+        "    cases:\n"
+        "      - when: a\n"
+        "        then:\n"
+        f"          a: {number}\n"
+        "    else: reply\n"
+    )
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    assert "case node 'route' then: numbers must be finite" in str(caught.value)
+
+
+def test_self_containing_alias_in_value_is_rejected():
+    text = _flow(
+        "    on: ${input.cmd}\n"
+        "    output: object\n"
+        "    cases:\n"
+        "      - when: a\n"
+        "        then: &R [*R]\n"
+        "    else: reply\n"
+    )
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    assert "case node 'route' then: a branch value can't contain itself" in str(caught.value)
+
+
+def test_unknown_word_that_reads_as_a_number_suggests_yaml_number():
+    text = _flow(
+        "    on: ${input.cmd}\n"
+        "    output: float\n"
+        "    cases:\n"
+        "      - when: a\n"
+        "        then: 1e3\n"
+        "    else: reply\n"
+    )
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    message = str(caught.value)
+    assert "`1e3` names no node." in message
+    assert "or write a YAML number such as 1.0e+3" in message
 
 
 def test_value_with_a_non_string_key_is_rejected():
@@ -511,6 +637,7 @@ nodes:
     input:
       n: 0
       exited: false
+      note: start
     while: not ${exited}
     max: 10
     nodes:
@@ -535,11 +662,19 @@ nodes:
         else:
           n: ${bump.output.n}
           exited: false
+      label:
+        kind: case
+        output: str
+        cases:
+          - when: "${bump.output.n} >= 2"
+            then: "done"
+        else: 'more'
     output:
       n: ${route.output.n}
       exited: ${route.output.exited}
+      note: ${label.output}
 output: ${loop.output}
 """
     result = run_flow(load_flow(text), {})
     assert result.status == "succeeded", result.failure
-    assert result.output == {"n": 2, "exited": True}
+    assert result.output == {"n": 2, "exited": True, "note": "done"}

@@ -376,11 +376,11 @@ def test_desugar_case_values_writes_scalars_as_python_literals():
     gate = CaseDescriptor(
         id="gate",
         cases=[
-            {"when": "${s.output} > 1", "then": float("-inf")},
+            {"when": "${s.output} > 1", "then": -1.5},
             {"when": "${s.output} > 2", "then": datetime.date(2026, 1, 2)},
             {"when": "${s.output} > 3", "then": ["costs $$5", None, True]},
         ],
-        else_=float("nan"),
+        else_=0,
         outputs="object",
     )
     new = desugar_case_values(
@@ -388,10 +388,24 @@ def test_desugar_case_values_writes_scalars_as_python_literals():
         diagnostics=_diagnostics(),
     )
 
-    assert new["__value_0"].code == "return float('-inf')"
+    assert new["__value_0"].code == "return -1.5"
     assert new["__value_1"].code == "return '2026-01-02'"
     assert new["__value_2"].code == "return ['costs $5', None, True]"
-    assert new["__value_3"].code == "return float('nan')"
+    assert new["__value_3"].code == "return 0"
     assert new["__value_3"].node_name == "gate else"
     assert all(new[f"__value_{n}"].inputs == {} for n in range(4))
     assert new["gate"].else_ == "__value_3"
+
+
+@pytest.mark.parametrize("number", [float("inf"), float("-inf"), float("nan")])
+def test_desugar_case_values_rejects_non_finite_numbers(number):
+    gate = CaseDescriptor(
+        id="gate",
+        cases=[{"when": "${s.output} > 1", "then": {"a": [number]}}],
+        outputs="object",
+    )
+    with pytest.raises(LoadError, match="case node 'gate' then: numbers must be finite"):
+        desugar_case_values(
+            {"gate": gate, "s": CodeDescriptor(id="s", code="m:f")},
+            diagnostics=_diagnostics(),
+        )

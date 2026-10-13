@@ -56,7 +56,17 @@ def test_literal_outside_the_grammar_names_the_accepted_forms(literal):
     assert caught.value.failure_code == "contract.input"
     assert "2026-05-21" in message
     assert "2026-05-21T14:30[:00][Z|+07:00]" in message
+    # The value is named once; the parser's message shows the format, not the value.
     assert message.count(literal) == 1
+
+
+def test_deadline_that_overflows_in_utc_names_the_value():
+    literal = "0001-01-01T00:00+01:00"
+    with pytest.raises(BindingError) as caught:
+        resolve_until(literal, VariablePool())
+
+    assert caught.value.failure_code == "contract.input"
+    assert literal in str(caught.value)
 
 
 @pytest.mark.parametrize(

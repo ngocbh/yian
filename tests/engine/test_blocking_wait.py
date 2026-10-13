@@ -138,7 +138,7 @@ def test_aware_datetime_is_normalized_to_utc(monkeypatch: pytest.MonkeyPatch) ->
     ],
     ids=["z-suffix", "short-fraction", "space-separator"],
 )
-def test_deadline_grammar_is_the_same_on_every_python(
+def test_deadline_accepts_z_short_fraction_and_space_separator(
     deadline: str, timeout: float, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     result, event = _run_direct(deadline, monkeypatch)

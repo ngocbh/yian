@@ -1371,7 +1371,8 @@ class SourceCursor:
 
         Raises:
             `SourceAccessError`:
-                Raised when this cursor is not a traversable mapping.
+                Raised when this cursor is not a traversable mapping, or when two
+                keys would share one name after renaming.
             `TypeError`:
                 Raised when a replacement key is outside the SafeLoader value
                 algebra.
@@ -1384,7 +1385,18 @@ class SourceCursor:
                 self.range,
             )
         entries: dict[Any, tuple[Any, SourceCursor | None]] = {}
+        origins: dict[Any, Any] = {}
         for key, value in self._value.items():
             renamed_key = names.get(key, key)
+            if renamed_key in entries:
+                # Keeping either entry would silently drop the other authored value.
+                renamed = key if key in names else origins[renamed_key]
+                other = origins[renamed_key] if key in names else key
+                raise SourceAccessError(
+                    f"key {renamed!r} and key {other!r} both mean {renamed_key!r}; "
+                    f"keep one",
+                    self.key_range_of(renamed),
+                )
+            origins[renamed_key] = key
             entries[renamed_key] = (value, self.child(key))
         return self.project_mapping(entries)

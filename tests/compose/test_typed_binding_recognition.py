@@ -198,9 +198,10 @@ def test_text_with_control_characters_gets_a_valid_quoting_suggestion(text):
     assert parse_yaml_literal(suggestion) == {"qty": text}
 
 
-def test_call_directive_with_spaced_keyword_is_not_a_type():
-    error = _error("call(f, a = 1)")
-    assert str(error).startswith("`call(f, a` in `qty: call(f, a = 1)` is not a type.")
+@pytest.mark.parametrize("text", ["call(f, a = 1)", "  call (f, note=\"a = b\")"])
+def test_call_directive_holding_a_separator_is_not_typed(text):
+    # an unquoted value starting with `call(` is a directive, never a typed binding.
+    assert _split(text) is None
 
 
 @pytest.mark.parametrize("text", ["int =", "int = "])

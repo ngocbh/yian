@@ -6,7 +6,7 @@ A `case` branch may route to a FRESH owned call instead of a placed node id:
 target is rewritten to that synth id (which is then both the CaseNode handle and
 the control-edge target, exactly like a plain `then: id`). Accepted grammar: a
 whole-value `call(...)` directive — a route target resolves to exactly one node id, so
-a coalesce / embedded text / dotted call is a located LoadError. Value branches (quoted
+any other text starting with `call(` is a located LoadError naming the problem. Value branches (quoted
 text, `${...}` templates, non-string values) were already lifted to synth `__value_<n>`
 nodes by `desugar_case_values`, so this pass sees node ids, those synth ids, and unquoted
 calls. Sound because the case-route veto skip-floods the non-chosen synth branch even when its
@@ -117,12 +117,11 @@ def _lift_case_target(
       its synth call node(s) into `synth`, return the OUTER call's synth id;
     - a plain node id (no `${`, not a `call(...)` directive) -> passed through unchanged.
 
-    Anything else — a coalesce / embedded text / dotted call, or any `${...}` span — is a
-    `LoadError`: a route target must resolve to exactly one node id."""
+    Anything else — text starting with `call(` that is not exactly one directive, or any
+    `${...}` span — is a `LoadError`: a route target must resolve to exactly one node id."""
     diagnostics = diagnostics or LoadDiagnostics()
     if not isinstance(target, str):
         return target  # None (handled by the caller) or a native literal
-    stripped = target.strip()
     # A whole-value `call(...)` directive: recognized BEFORE the plain-id passthrough,
     # since a directive carries no `${` and would otherwise look like a bare node id.
     try:
@@ -141,15 +140,8 @@ def _lift_case_target(
                 )
             return outer.id
     if "${" not in target:
-        # Not a directive and no span: a plain node id, UNLESS it is a rejected `call(...)`
-        # attempt (e.g. a coalesce of directives) that the recognizer declined — those must
-        # not slip through as a node id.
-        if stripped.startswith("call("):
-            raise diagnostics.error(
-                f"{host}: a branch target must be a node id or a single call "
-                f"(got {target!r}) — not a coalesce / embedded text / dotted call",
-                range=range,
-            )
+        # Not a directive and no span: a plain node id. Text starting with `call(` never
+        # gets here; the recognizer above lifts it or raises.
         return target
     # A `${...}` branch target is the retired inline `${flow(args)}` form: a route target
     # is a node id or a whole-value call(...) directive (handled above) — nothing else.

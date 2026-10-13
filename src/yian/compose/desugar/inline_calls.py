@@ -9,6 +9,13 @@ synth nodes as ordinary `call` nodes — inline calls are pure load-time sugar, 
 runtime kind, the synth callee resolves through the SAME composite resolver
 (defs-first) as a named call.
 
+An unquoted value whose trimmed text starts with `call(` must be exactly one well-formed
+directive; anything else (unbalanced parens, trailing text, a missing comma, a positional
+or repeated keyword) is a located `LoadError` that names the problem. A quoted value
+(YAML `'...'`, `"..."`, or a block scalar) is text and never a directive, so quoting is
+the escape for literal `call(` text. An assert is an expression, not text, so it is held
+to the directive rule however it is quoted.
+
 The retired inline `${ f(args) }` form — a FLOW call embedded inside a `${...}` span —
 is a hard-break `LoadError` pointing the author at the `call(...)` directive; a pure
 builtin (`upper`, `join`, …) inside `${...}` stays legal.
@@ -39,7 +46,7 @@ directive rather than a host input that shares its param name. The flow `output:
 sections have no descriptor, so their inline calls use a supplied section/item range.
 
 Imports flow DOWN/peer only: `compose.parse.file` (descriptors), `compose.nodes.bindings` (the
-kind-blind binding-field walk) + `compose.helpers.errors` (peers), `expr` (the ref-walk + the
+kind-blind binding-field walk) + `compose.helpers` (errors, YAML quoting; peers), `expr` (the ref-walk + the
 span flow-call detector), `diagnostics` (SourceRange). Only the loader imports this back.
 """
 
@@ -61,12 +68,12 @@ from yian.expr.template import (
     _arg_source,
     _find_paren_end,
     _split_calls_aware,
-    _split_kv,
     flow_call_callees_in_spans,
 )
 from yian.compose.nodes.bindings import map_binding_strings
 from yian.compose.desugar.inline_bodies import INLINE_FLOW_PREFIX
 from yian.compose.helpers.errors import LoadDiagnostics
+from yian.compose.helpers.typed_bindings import CALL_HEAD, QUOTED_STYLES, yaml_quoted
 from yian.compose.parse.file import (
     CallDescriptor,
     NodeDescriptor,
@@ -75,6 +82,7 @@ from yian.compose.parse.file import (
 # The reserved id prefix for synthesized inline-call nodes. A monotonic counter per
 # flow/def keeps them unique; the collision guard reserves the namespace from users.
 _SYNTH_PREFIX = "__call_"
+_FLOW_ID = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
 
 
 def _synth_id_gen() -> Callable[[], str]:
@@ -91,6 +99,8 @@ def desugar_inline_calls(
     outputs_range: Optional[SourceRange] = None,
     assertion_range_at: Optional[Callable[[int], Optional[SourceRange]]] = None,
     assertion_origin_at: Optional[Callable[[int], OriginRef | None]] = None,
+    binding_style_at: Optional[Callable[[str, str, str], Optional[str]]] = None,
+    output_style_at: Optional[Callable[[Any], Optional[str]]] = None,
     next_id: Optional[Callable[[], str]] = None,
     diagnostics: LoadDiagnostics | None = None,
 ) -> tuple:
@@ -107,9 +117,17 @@ def desugar_inline_calls(
 
     Each synth node from a node host locates at the range of the binding it was found in (its
     own `call(...)` directive line). A synth from flow `output:` uses ``outputs_range``; one
-    from `asserts:` uses the authored item returned by ``assertion_range_at``. Raises
-    `LoadError` on a malformed inline call, a `${item}` capture, or a reserved-prefix
-    collision — located at the host node / `output:` / `asserts:`."""
+    from `asserts:` uses the authored item returned by ``assertion_range_at``.
+
+    ``binding_style_at(node_id, field, key)`` and ``output_style_at(key)`` (`None` for a
+    single output) return a binding's YAML scalar style; a quoted value is text, so it is
+    never a directive. A missing lookup or a `None` style reads as plain. An assert is an
+    expression, so its quoting never makes it text.
+
+    Raises `LoadError` on a malformed inline call (any unquoted value starting with
+    `call(` that is not exactly one directive), a quoted `call(...)` holding a span, a
+    `${item}` capture, or a reserved-prefix collision — located at the host node /
+    `output:` / `asserts:`."""
     diagnostics = diagnostics or LoadDiagnostics()
     mint = next_id or _synth_id_gen()
 
@@ -133,6 +151,11 @@ def desugar_inline_calls(
             host=nid,
             range=rng,
             field_ranges=field_ranges,
+            style_at=(
+                (lambda field, key, nid=nid: binding_style_at(nid, field, key))
+                if binding_style_at is not None
+                else None
+            ),
             diagnostics=diagnostics,
         )
         new_descriptors[nid] = new_desc
@@ -151,6 +174,7 @@ def desugar_inline_calls(
         outputs_section,
         mint,
         range=outputs_range,
+        style_at=output_style_at,
         diagnostics=diagnostics,
     )
     for call in out_calls:
@@ -223,6 +247,7 @@ def _desugar_descriptor(
     host: str,
     range: Optional[SourceRange],
     field_ranges: Optional[dict],
+    style_at: Optional[Callable[[str, str], Optional[str]]],
     diagnostics: LoadDiagnostics,
 ) -> tuple:
     """Desugar a descriptor's binding fields, returning `(new_desc, calls, origins)`.
@@ -230,7 +255,8 @@ def _desugar_descriptor(
     Walks the binding fields via `map_binding_strings`; each inline call is tagged in
     `origins` with the SOURCE RANGE of the binding it was found in (via `_binding_origin`),
     so its synth node locates at its own `call(...)` directive rather than the host header.
-    Nested inner-first calls share their enclosing binding's origin."""
+    Nested inner-first calls share their enclosing binding's origin. ``style_at(field,
+    key)`` gives each binding's YAML scalar style (plain when absent)."""
     calls: list = []
     origins: dict[str, Optional[SourceRange]] = {}
 
@@ -243,6 +269,7 @@ def _desugar_descriptor(
             calls,
             host,
             range=origin,
+            style=style_at(field, key) if style_at is not None else None,
             diagnostics=diagnostics,
         )
         for c in calls[before:]:
@@ -260,20 +287,44 @@ def _desugar_value(
     host: str,
     *,
     range: Optional[SourceRange] = None,
+    style: Optional[str] = None,
+    quotable: bool = True,
     diagnostics: LoadDiagnostics | None = None,
 ) -> str:
     """Desugar one binding string. A WHOLE-VALUE `call(<flow-id>, kw=...)` directive lifts
     to a synth call node (accumulated in `calls`, the value rewritten to `${<synth>.output}`).
     A flow call embedded INSIDE a `${...}` span is the retired `${flow(args)}` form — a
     located `LoadError` pointing at the `call(...)` directive. Any other value (plain refs,
-    pure builtins, literals) is returned unchanged. Maps `ExpressionError` (a malformed
+    pure builtins, literals) is returned unchanged.
+
+    ``style`` is the value's YAML scalar style. A quoted value is text: it is never a
+    directive, and a quoted `call(...)` holding a span is a load error (its author most
+    likely meant the call). ``quotable`` is False for an assert, whose quoting does not
+    make it text, so its errors offer no quoting fix. Maps `ExpressionError` (a malformed
     directive or an unparseable span) to a located `LoadError` at ``range``."""
     diagnostics = diagnostics or LoadDiagnostics()
+    quoted = quotable and style in QUOTED_STYLES
+    is_call = CALL_HEAD.match(value.strip()) is not None
+    if quoted and is_call and "${" in value:
+        raise diagnostics.error(
+            f"{host}: a quoted `call(...)` is text, so it can't hold `${{...}}` here; "
+            "drop the quotes to call the flow, or reword the text",
+            range=range,
+        )
+    if is_call and not quoted:
+        try:
+            new_value, found = desugar_call_directives(value, mint)
+        except ExpressionError as exc:
+            hint = (
+                f". If you meant the text, quote the whole value: "
+                f"`{yaml_quoted(value.strip())}`"
+                if quotable
+                else ""
+            )
+            raise diagnostics.error(f"{host}: {exc}{hint}", range=range) from exc
+        calls.extend(found)
+        return new_value
     try:
-        new_value, found = desugar_call_directives(value, mint)
-        if found:  # a whole-value `call(...)` directive
-            calls.extend(found)
-            return new_value
         flow_callees = flow_call_callees_in_spans(value)
     except ExpressionError as exc:
         raise diagnostics.error(
@@ -291,22 +342,25 @@ def _desugar_value(
 
 
 def desugar_call_directives(value: str, mint: Callable[[], str]) -> tuple:
-    """Recognize a WHOLE-VALUE `call(<flow-id>, kw=...)` directive, else no-op.
+    """Desugar a WHOLE-VALUE `call(<flow-id>, kw=...)` directive, else no-op.
 
-    A directive is recognized IFF the whole trimmed `value` is exactly `call( … )`:
-    a leading `call`, balanced parens, and nothing non-whitespace after the close
-    paren. Its FIRST arg is the POSITIONAL flow id (a bare identifier, may be
-    hyphenated — flow ids allow `-`); every remaining arg is a `name=value` keyword.
-    Each keyword value passes through `_arg_source` (so `window=30` -> int 30, a
-    quoted scalar unwraps, a `${…}`-bearing value stays a binding string). An arg
-    value may ITSELF be a whole-value `call(...)` — desugared inner-first.
+    A value whose trimmed text starts with `call(` must be exactly one directive: a
+    leading `call`, balanced parens, and nothing non-whitespace after the close paren.
+    Its FIRST arg is the POSITIONAL flow id (a bare identifier, may be hyphenated — flow
+    ids allow `-`); every remaining arg is a `name=value` keyword, each at most once.
+    Each keyword value passes through `_arg_source` (so `window=30` -> int 30, a quoted
+    scalar unwraps to text, a `${…}`-bearing value stays a binding string). An unquoted
+    arg value starting with `call(` is ITSELF a directive, under the same rule —
+    desugared inner-first.
 
     Returns `(new_value, calls)`: if `value` is a directive, `new_value` is the synth
     `${<id>.output}` ref and `calls` lists the `InlineCall`s (each nested call before
-    its enclosing one, inner-first). If `value` is NOT a whole-value directive, returns
+    its enclosing one, inner-first). If `value` does not start with `call(`, returns
     `(value, [])` unchanged (the caller then checks the value for a retired span
-    flow-call). Raises `ExpressionError` on a positional arg after the flow
-    id (message mentions "keyword"), a malformed `name=value` keyword, or a
+    flow-call). Raises `ExpressionError` naming the problem when a value starting with
+    `call(` is not one directive: unbalanced parentheses, text after the close paren, a
+    first arg that is not a bare flow id, a positional arg after the flow id (message
+    mentions "keyword"), an unquoted `=` inside a keyword value (a missing comma), or a
     keyword passed more than once."""
     match = _match_directive(value)
     if match is None:
@@ -317,11 +371,20 @@ def desugar_call_directives(value: str, mint: Callable[[], str]) -> tuple:
     for pair in _split_calls_aware(args_str, ","):
         if not pair.strip():
             continue  # a trailing comma / an empty kwarg slot
-        name, arg_value = _split_kv(
-            pair
-        )  # raises if no top-level `=` (positional -> loud)
+        parts = _split_calls_aware(pair, "=")
+        if len(parts) < 2:
+            raise ExpressionError(
+                f"call({flow_id}, ...) passes a positional argument {pair.strip()!r}; "
+                "every argument after the flow id must be a keyword (name=value)"
+            )
+        name = parts[0].strip()
+        if len(parts) > 2:
+            raise ExpressionError(
+                f"call({flow_id}, ...) keyword {name!r} has an unquoted `=` in its value "
+                f"{'='.join(parts[1:]).strip()!r}; add the missing comma, or quote the value"
+            )
         new_value, inner = desugar_call_directives(
-            arg_value, mint
+            parts[1], mint
         )  # inner-first recursion
         calls.extend(inner)
         if name in args:
@@ -336,33 +399,38 @@ def desugar_call_directives(value: str, mint: Callable[[], str]) -> tuple:
 
 def _match_directive(value: str) -> Optional[tuple]:
     """`value` -> `(flow_id, remaining_args_str)` if it is a whole-value `call(...)`
-    directive, else None. Whole-value means: trimmed, a leading `call`, balanced
-    parens (via `_find_paren_end`), and nothing after the close paren. The flow id is
-    the first top-level arg (a bare identifier, may be hyphenated). A positional first
-    arg is REQUIRED to be a bare id; a non-directive shape (mid-value, trailing
-    content, unbalanced parens, or a non-`call` head) returns None.
+    directive, or None when its trimmed text does not start with `call(`.
 
     Returns `remaining_args_str` = the raw args substring AFTER the flow id's comma
-    (empty when `call(f)` has no kwargs). A positional arg after the flow id is left
-    for `_split_kv` to reject (so its "keyword" message surfaces)."""
+    (empty when `call(f)` has no kwargs); `desugar_call_directives` checks those args.
+    Raises `ExpressionError` when the value starts with `call(` but its parens are
+    unbalanced, text follows the close paren, or the first arg is not a bare flow id."""
     s = value.strip()
-    m = re.match(r"call\s*\(", s)
+    m = CALL_HEAD.match(s)
     if m is None:
         return None
     open_idx = m.end() - 1
     close_idx = _find_paren_end(s, open_idx + 1)
     if close_idx is None:
-        return None  # unbalanced parens — not a directive
-    if s[close_idx + 1 :].strip():
-        return None  # trailing content after `)` — not whole-value
+        raise ExpressionError(
+            "`call(` is never closed (check its parentheses and quotes)"
+        )
+    trailing = s[close_idx + 1 :].strip()
+    if trailing:
+        raise ExpressionError(
+            f"text follows the closing `)`: {trailing!r}; a call(...) must be the "
+            "whole value"
+        )
     args_str = s[open_idx + 1 : close_idx]
-    parts = _split_calls_aware(args_str, ",")
-    first = parts[0].strip()
-    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*", first):
-        return None  # the first arg is not a bare flow id — not a directive
+    first = _split_calls_aware(args_str, ",")[0].strip()
+    if not _FLOW_ID.fullmatch(first):
+        raise ExpressionError(
+            "a call(...) must start with a flow id (a bare name) and a comma, "
+            f"got {first!r}"
+        )
     # everything after the first comma is the remaining (keyword) args; the loop over
     # this substring never re-sees the positional flow id, so a positional arg among
-    # the REMAINING args (e.g. `call(f, 30)`) reaches `_split_kv` and fails loudly.
+    # the REMAINING args (e.g. `call(f, 30)`) fails loudly there.
     comma = args_str.find(",")
     remaining = args_str[comma + 1 :] if comma != -1 else ""
     return first, remaining
@@ -373,22 +441,33 @@ def _desugar_outputs(
     mint: Callable[[], str],
     *,
     range: Optional[SourceRange] = None,
+    style_at: Optional[Callable[[Any], Optional[str]]] = None,
     diagnostics: LoadDiagnostics,
 ) -> tuple:
     """Desugar the flow `output:` section, returning `(new_outputs, inline_calls)`.
-    ``range`` is the `output:` section source range."""
+    ``range`` is the `output:` section source range; ``style_at(key)`` gives an output's
+    YAML scalar style (`key` is None for a single output; plain when absent)."""
     calls: list = []
-    new_outputs = map_outputs_strings(
-        outputs,
-        lambda value: _desugar_value(
+
+    def desugar(value: str, key: Any) -> str:
+        return _desugar_value(
             value,
             mint,
             calls,
             "flow outputs",
             range=range,
+            style=style_at(key) if style_at is not None else None,
             diagnostics=diagnostics,
-        ),
-    )
+        )
+
+    if isinstance(outputs, dict):
+        new_outputs = {
+            k: (desugar(v, k) if isinstance(v, str) else v) for k, v in outputs.items()
+        }
+    elif isinstance(outputs, str):
+        new_outputs = desugar(outputs, None)
+    else:
+        new_outputs = outputs
     return new_outputs, calls
 
 
@@ -447,6 +526,7 @@ def _desugar_asserts(
             calls,
             "assert",
             range=assertion_range,
+            quotable=False,
             diagnostics=diagnostics,
         )
         for call in calls[before:]:

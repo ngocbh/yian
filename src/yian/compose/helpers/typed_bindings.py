@@ -1,10 +1,11 @@
 """Recognize `Type = value` text in a binding by its YAML scalar style.
 
-An unquoted (plain-style) binding value containing ` = ` is always a typed binding:
-the text before the first separator must be a type, or loading fails with a
-suggestion to quote the value. A quoted or block scalar is always plain text, so
-quoting is the one way to write literal text that contains ` = `. A literal right
-side is checked against the type here, where the authored text is still at hand.
+An unquoted (plain-style) binding value containing ` = ` is a typed binding, unless it
+starts with `call(` (it is then a `call(...)` directive): the text before the first
+separator must be a type, or loading fails with a suggestion to quote the value. A
+quoted or block scalar is always plain text, so quoting is the one way to write literal
+text that contains ` = `. A literal right side is checked against the type here, where
+the authored text is still at hand.
 """
 
 from __future__ import annotations
@@ -30,8 +31,11 @@ from yian.typesys.values import Type
 _SEPARATOR = " = "
 # YAML drops the trailing space of `qty: int = `, delivering "int =".
 _TRAILING_SEPARATOR = " ="
-_PLAIN_TEXT_STYLES = frozenset({"single", "double", "literal", "folded"})
-_STYLES = _PLAIN_TEXT_STYLES | {"plain"}
+# YAML scalar styles that make a binding text, never a typed binding or a directive.
+QUOTED_STYLES = frozenset({"single", "double", "literal", "folded"})
+_STYLES = QUOTED_STYLES | {"plain"}
+# An unquoted value whose trimmed text starts with this is a `call(...)` directive.
+CALL_HEAD = re.compile(r"call\s*\(")
 # A right side starting with a quote or a bracket is read as YAML first.
 _YAML_FIRST_STARTS = ("'", '"', "[", "{")
 _HEAD_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -67,7 +71,7 @@ def split_typed_binding(
     """Split a binding value into its declared type and value when it is typed.
 
     The value is typed when it is a string of plain or unknown style containing
-    ` = ` (or ending in ` =`). A right side that starts with a quote or a bracket
+    ` = ` (or ending in ` =`) that does not start with `call(`. A right side that starts with a quote or a bracket
     is read as YAML first: a quoted string containing `${` or starting with
     `call(` is then a template or directive, and a collection is a literal whose
     nested strings stay text. Any other right side containing `${` or starting
@@ -88,7 +92,8 @@ def split_typed_binding(
 
     Returns:
         `TypedBindingText | None`: The split binding, or `None` when the value is
-            plain text (non-string, quoted or block style, or no separator).
+            plain text (non-string, quoted or block style, or no separator) or a
+            `call(...)` directive.
 
     Raises:
         `LoadError`: The left side is not a type, the right side is empty or
@@ -97,7 +102,10 @@ def split_typed_binding(
     """
     if style is not None and style not in _STYLES:
         raise ValueError(f"unknown YAML scalar style {style!r}")
-    if style in _PLAIN_TEXT_STYLES or not isinstance(value, str):
+    if style in QUOTED_STYLES or not isinstance(value, str):
+        return None
+    # A `call(...)` directive may hold ` = ` in its arguments (`call(f, a = 1)`).
+    if CALL_HEAD.match(value.strip()):
         return None
     if _SEPARATOR in value:
         left, right = value.split(_SEPARATOR, 1)
@@ -150,7 +158,7 @@ def _is_template(text: str) -> bool:
     Returns:
         `bool`: True when the text contains a `${` span or is a `call(...)` directive.
     """
-    return "${" in text or text.startswith("call(")
+    return "${" in text or CALL_HEAD.match(text) is not None
 
 
 def _literal_mismatch_message(

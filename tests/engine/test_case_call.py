@@ -176,15 +176,20 @@ output: ${{gate.output}}
         load_flow(text)
 
 
+@pytest.mark.parametrize("label", ["then", "else"])
 @pytest.mark.parametrize(
-    "target, message",
+    "target, problem",
     [
-        ('call(take, stance="a", stance="b")', "'stance' more than once"),
-        ("call(take, 30)", "keyword"),
+        ('call(take, stance="a", stance="b")', "keyword 'stance' more than once"),
+        ("call(take, 30)", "passes a positional argument '30'"),
+        ("call(take", "`call(` is never closed"),
+        ('call(take, stance="a") tail', "text follows the closing `)`: 'tail'"),
+        ('call(take stance="a")', "must start with a flow id (a bare name) and a comma"),
     ],
 )
-def test_malformed_then_call_directive_args_are_located_load_errors(target, message):
-    # a bad directive argument in a route target is a LoadError naming the CASE node.
+def test_malformed_branch_call_directive_is_a_located_load_error(label, target, problem):
+    # an unquoted then:/else: starting with `call(` must be exactly one directive.
+    then_target, else_target = (target, "nope") if label == "then" else ("nope", target)
     text = f"""
 id: bad
 name: bad
@@ -196,13 +201,49 @@ nodes:
     kind: case
     cases:
       - when: "${{input.score}} >= 0.5"
-        then: '{target}'
-    else: nope
+        then: {then_target}
+    else: {else_target}
+  nope:
+    kind: code
+    code: tests.engine._compose_codefns:took
+    input:
+      stance: x
+    output: str
 output: ${{gate.output}}
 """
-    with pytest.raises(LoadError, match=message) as caught:
+    with pytest.raises(LoadError) as caught:
         load_flow(text)
-    assert "case node 'gate' then:" in str(caught.value)
+    message = str(caught.value)
+    assert f"case node 'gate' {label}:" in message
+    assert problem in message
+    assert "If you meant the text, quote it:" in message
+    line = next(
+        number
+        for number, source in enumerate(text.splitlines(), start=1)
+        if f"{label}: call(" in source
+    )
+    assert caught.value.diagnostic.frames[-1].range.start_line == line
+
+
+def test_quoted_malformed_branch_call_is_a_text_value():
+    text = f"""
+id: ok
+name: ok
+input:
+  score: float
+nodes:
+  gate:
+    kind: case
+    output: str
+    cases:
+      - when: "${{input.score}} >= 0.5"
+        then: 'call(take'
+    else: "call(take) tail"
+output: ${{gate.output}}
+"""
+    flow = load_flow(text)
+    assert run_flow(flow, {"score": 0.9}).output == "call(take"
+    assert run_flow(flow, {"score": 0.1}).output == "call(take) tail"
 
 
 def test_inline_binding_and_then_call_directive_share_minter_no_collision():

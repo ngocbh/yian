@@ -255,6 +255,8 @@ type forms and constrain defaults, supplied values, and generated schemas.
 Cross-flow wiring requires the source domain to fit inside the destination;
 an unbounded source does not prove a bounded destination safe, and a plain `str`
 does not prove a `Literal[...]` destination safe (its tags must be a subset).
+A typed binding (`mode: Literal[a, b] = ${input.s}`) accepts either and checks
+the value at run time.
 
 ## Recipes
 

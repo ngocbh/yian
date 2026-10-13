@@ -133,6 +133,5 @@ def test_union_field_follows_members():
     assert not types_compatible(_t("WideOrder"), _t("Order"))
 
 
-def test_plain_str_tag_fits_union():
-    # The existing scalar rule lets a plain str fill a Literal, so this record fits Buy.
-    assert types_compatible(_t("LooseBuy"), _t("Union[Buy, Sell]"))
+def test_plain_str_tag_does_not_fit_union():
+    assert not types_compatible(_t("LooseBuy"), _t("Union[Buy, Sell]"))

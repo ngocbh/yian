@@ -790,11 +790,66 @@ def test_untagged_source_to_literal_child_input_is_rejected():
     ("Literal[a]", "${input.s}"),
     ("Literal[a, b]", "${input.s}"),
     ("str", "a"),
+    ("str", "Literal[a, b] = ${input.s}"),
 ])
 def test_tag_subset_or_literal_binding_fills_literal_child_input(source, binding):
     flow = load_flow(_STR_TO_LITERAL_CHILD.format(source=source, binding=binding))
 
     assert run_flow(flow, {"s": "a"}).output == "a"
+
+
+def test_typed_binding_from_str_checks_the_tag_at_run_time():
+    flow = load_flow(
+        _STR_TO_LITERAL_CHILD.format(source="str", binding="Literal[a, b] = ${input.s}")
+    )
+
+    result = run_flow(flow, {"s": "c"})
+
+    assert result.status == "failed"
+    assert result.failure.code == "binding.type"
+    assert result.failure.node_id == "go"
+
+
+_STR_TO_LITERAL_GUARDED = """
+id: str-to-literal-guarded
+name: str_to_literal_guarded
+typedefs:
+  Mode: Literal[a, b]
+input:
+  s: str
+defs:
+  child:
+    kind: code
+    code: |
+      return inputs["mode"]
+    input:
+      mode: Mode
+    output: str
+nodes:
+  route:
+    kind: case
+    cases:
+      - when: isinstance(input.s, Mode)
+        then: go
+    else: other
+  go:
+    kind: call
+    call: child
+    input:
+      mode: ${input.s}
+  other:
+    kind: code
+    code: return "other"
+output: ${go.output | other.output}
+"""
+
+
+@pytest.mark.parametrize("s,expected", [("a", "a"), ("c", "other")])
+def test_isinstance_guard_lets_str_fill_literal_child_input(s, expected):
+    """Under `isinstance(input.s, Mode)` the source is `Mode`, so the call loads."""
+    flow = load_flow(_STR_TO_LITERAL_GUARDED)
+
+    assert run_flow(flow, {"s": s}).output == expected
 
 
 # --------------------------------------------------------------------------- #

@@ -177,8 +177,7 @@ def type_relation(inferred: Type, declared: Type) -> TypeRelation:
       may omit (or may both hold `None`) still shares non-null record values, so it
       is narrower, not disjoint.
 
-    This mirrors `types_compatible` for ``"fits"`` but is stricter where that check
-    is lenient for wiring: a tag-less string into a `Literal` is only narrower, and
+    This mirrors `types_compatible` for ``"fits"`` but is stricter in one place:
     records are treated as closed, as the write-boundary check treats them (unknown
     fields are rejected), so a record fits only when its fields are a subset of the
     declared fields at every level. It is also more permissive in one place: `date`

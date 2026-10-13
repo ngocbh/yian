@@ -238,7 +238,11 @@ Defaults and supplied values must satisfy them. Cross-flow wiring requires the
 source domain to fit inside the destination domain; an unbounded source cannot
 establish that guarantee for a bounded destination. Enums follow the same rule:
 a `Literal[...]` destination accepts a source whose tags are a subset of its own,
-not a plain `str`.
+not a plain `str`. To pass a wider source anyway, declare the destination type
+with a [typed binding](#typed-bindings-name-type-value), which checks the value
+at run time (`mode: Literal[a, b] = ${input.s}`), or route the call under a
+`case` on `isinstance(input.s, Mode)`, where `Mode` names the `Literal[...]` in
+`typedefs:`.
 
 Name reusable types in `typedefs:`:
 

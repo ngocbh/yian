@@ -345,6 +345,7 @@ output: ${each.output}
     msg = str(exc.value)
     assert "item" in msg
     assert "named `call`" in msg
+    assert "`input:` may read" in msg
 
 
 def test_user_node_with_synth_prefix_is_loud():

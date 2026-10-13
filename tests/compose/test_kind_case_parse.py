@@ -158,6 +158,18 @@ def test_case_parse_requires_cases():
         CaseDescriptor.parse("route", reader)
 
 
+def test_case_with_both_on_spellings_is_a_located_error():
+    # Plain `on:` (YAML 1.1 True) and quoted `"on":` are the same field; keep neither silently.
+    flow = (
+        "id: c\nname: c\nnodes:\n  route:\n    kind: case\n    on: ${x.output}\n"
+        '    "on": ${y.output}\n    cases:\n      - when: a\n        then: hot\n'
+    )
+    with pytest.raises(LoadError, match='key `on` and key `"on"` both mean') as exc:
+        load_flow(flow)
+
+    assert exc.value.diagnostic.frames[-1].range == SourceRange(6, 5, 6, 7)
+
+
 def test_case_build_lowers_to_case_node_with_edges():
     reader = _reader_for(_FLOW, "route")
     desc = CaseDescriptor.parse("route", reader)

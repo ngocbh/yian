@@ -979,6 +979,21 @@ class SourceCursor:
             return definition.raw
         return None
 
+    def _authored_key(self, key: Any) -> str:
+        """Return mapping key `key` as written in the source, in backticks.
+
+        Falls back to the constructed key's repr when the key has no source scalar.
+        """
+
+        child = self._optional_child(key)
+        if child is not None and child._document is not None:
+            if child._key_definition is not None:
+                definition = child._document._definitions[child._key_definition]
+                if isinstance(definition, _ScalarDef) and definition.raw is not None:
+                    quote = definition.style if definition.style in ("'", '"') else ""
+                    return f"`{quote}{definition.raw}{quote}`"
+        return repr(key)
+
     @property
     def source_key_value(self) -> Any:
         """Return the constructed key selecting this physical occurrence.
@@ -1390,12 +1405,12 @@ class SourceCursor:
             renamed_key = names.get(key, key)
             if renamed_key in entries:
                 # Keeping either entry would silently drop the other authored value.
-                renamed = key if key in names else origins[renamed_key]
+                moved = key if key in names else origins[renamed_key]
                 other = origins[renamed_key] if key in names else key
                 raise SourceAccessError(
-                    f"key {renamed!r} and key {other!r} both mean {renamed_key!r}; "
-                    f"keep one",
-                    self.key_range_of(renamed),
+                    f"key {self._authored_key(moved)} and key "
+                    f"{self._authored_key(other)} both mean {renamed_key!r}; keep one",
+                    self.key_range_of(moved),
                 )
             origins[renamed_key] = key
             entries[renamed_key] = (value, self.child(key))

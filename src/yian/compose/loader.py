@@ -200,7 +200,7 @@ _DEF_ALLOWED = frozenset(
 )
 # The authored spellings of `_DEF_ALLOWED`, for error messages.
 _DEF_SURFACE_KEYS = frozenset(
-    {"input", "nodes", "output", "asserts", "llm_config", "long_term_memory"}
+    {"inputs": "input", "outputs": "output"}.get(key, key) for key in _DEF_ALLOWED
 )
 
 

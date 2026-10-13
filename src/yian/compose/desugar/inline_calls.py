@@ -478,7 +478,7 @@ def _to_call_descriptor(
                 f"{host}: inline call {call.callee!r} cannot capture ${{item}} "
                 f"(arg {name!r}) — it desugars to a top-level call node with no "
                 f"map-element scope; use a named `call` node (whose per-element "
-                f"`inputs:` may read `${{item}}`)",
+                f"`input:` may read `${{item}}`)",
                 range=range,
             )
     return CallDescriptor(

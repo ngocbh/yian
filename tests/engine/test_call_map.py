@@ -171,8 +171,9 @@ def test_map_input_named_over_is_reserved():
         "    input:\n      over: ${item}\n"
         "output: ${m.output}\n"
     )
-    with pytest.raises(LoadError, match="'over' is reserved"):
+    with pytest.raises(LoadError, match="'over' is reserved") as exc:
         load_flow(text)
+    assert "rename the `input:` entry" in str(exc.value)
 
 
 # --------------------------------------------------------------------------- #

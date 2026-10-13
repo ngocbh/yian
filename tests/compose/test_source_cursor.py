@@ -1432,10 +1432,22 @@ def test_renamed_rejects_a_key_that_collides_with_another():
         "inputs: plural\n"
     ).root
 
-    with pytest.raises(SourceAccessError, match="'input'.*'inputs'") as exc:
+    with pytest.raises(SourceAccessError, match="`input`.*`inputs`") as exc:
         base.renamed({"input": "inputs"})
 
     assert exc.value.range == base.key_range_of("input")
+
+
+def test_renamed_collision_names_keys_as_authored():
+    # YAML 1.1 reads a plain `on:` key as True; the error quotes what the author wrote.
+    base = SourceDocument.parse('on: plain\n"on": quoted\n').root
+
+    with pytest.raises(SourceAccessError) as exc:
+        base.renamed({True: "on"})
+
+    assert str(exc.value).startswith('key `on` and key `"on"` both mean \'on\'')
+    assert "True" not in str(exc.value)
+    assert exc.value.range == base.key_range_of(True)
 
 
 def test_renamed_allows_swapping_two_keys():

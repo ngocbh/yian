@@ -410,7 +410,9 @@ that change; a field it omits keeps its value. This is the shape
   do-while, 1+ runs), or `times: N` (fixed count). `max:` is optional for
   `while:`/`until:` but REDUNDANT+REJECTED with `times:`.
   Every `while:`/`until:` ref must name a carried field, and a field read below it must
-  exist on that field's type (a typo is rejected at load, not read as falsy), and `max:` (when given) and `times:` must be a plain integer `>= 1`.
+  exist on that field's type (a typo is rejected at load, not read as falsy; a field only
+  some union members have needs an `isinstance(r, T) and ...` part before the read), and
+  `max:` (when given) and `times:` must be a plain integer `>= 1`.
 - **Node-local `asserts:` reading `${output}` are POST checks** — they fire once the
   node's value is committed, and fail the run loudly on a false/raising expr. This
   includes a `call` node: its POST asserts may read `${output}` **and** the call's

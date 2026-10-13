@@ -152,7 +152,8 @@ contributes empty text. A flow output that reads a node a `case` skipped is null
 When the loader knows a value's type, reading a field that type can't have is a load
 error: a field on a scalar (`str`, `int`, `Literal[...]`, ...) or a list, or a field a
 record doesn't declare. This covers `${input.X...}`, `${node.output...}`, and a MAP's
-`${item...}` in bindings, `case` conditions, and flow outputs. Reading a declared field
+`${item...}` in bindings, `case` conditions, and flow outputs, and the carried fields a
+LOOP `while:`/`until:` predicate reads. Reading a declared field
 through an `Optional[...]` record still gives `null` when the whole value is null, and
 values whose type isn't known at load (`object`, an untyped output, or anything below
 them) aren't checked.
@@ -174,6 +175,20 @@ The rule also covers a node's `${output...}` asserts, flow asserts, MAP `${item.
 and flow outputs, which are never narrowed. To return a member field, read it in a
 branch and return the `case` result with `${case.output}`; to use one per item, pass
 `${item}` to the child and narrow there.
+
+A LOOP `while:`/`until:` predicate can't sit in a `case` branch, so it narrows with a
+top-level `and` part instead: an `isinstance(r, T)` part lets the parts after it read `T`'s
+fields, as in a searched `case` `when:`. A check under `or` or `not`, or after the read,
+doesn't narrow. Unnarrowed, the error points at that form:
+
+```yaml
+until: isinstance(r, Done) and r.answer == "ok"
+```
+
+```
+reference ${r.answer} reads field 'answer', which only 1 of 2 union members have; check
+the member first with `isinstance(r, <Type>) and ...`
+```
 
 !!! important "Prompt names are local"
     Inside a `prompt:` or an AGENT `system_prompt:` use names from the node's own
@@ -1831,10 +1846,11 @@ nodes:
 *before* each iteration; 0 iterations run if the seed already fails it. It is a
 record-scoped boolean over bare refs — every ref must name a **carried record
 field**, and a field read below it (`state.count`) must be one the carried field's
-type has (a typo'd name or field is rejected at load, not silently read as falsy) —
-written in the canonical bare form: `while: not exited`. `max:` is optional. The
-predicate is an expression string: a YAML `true`, `false`, number, or list is a
-load error, and so is an empty string.
+type has (a typo'd name or field is rejected at load, not silently read as falsy; a
+field only some union members have needs an `isinstance` part before it, see
+[References](#references-naming-a-value)) — written in the canonical bare form:
+`while: not exited`. `max:` is optional. The predicate is an expression string: a
+YAML `true`, `false`, number, or list is a load error, and so is an empty string.
 
 **`until:` — post-check / do-while (1+ runs).** Same record-scoped predicate
 syntax as `while:` (bare refs, no `${}`), but checked *after*

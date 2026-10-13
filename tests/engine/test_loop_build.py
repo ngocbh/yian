@@ -1214,3 +1214,107 @@ def test_predicate_field_on_omitted_literal_seed_is_not_checked():
         "SEED", "{limit: 2}"
     )
     load_flow(src)
+
+
+# A predicate reads a union's member-only field after a top-level `isinstance` conjunct on
+# the same value: `and` short-circuits, so the read only runs on that member, as in a CASE.
+UNION_STATE = """
+id: loop-union
+name: loop_union
+typedefs:
+  Done: {answer: str}
+  More: {hint: str}
+  Step: Union[Done, More]
+nodes:
+  ask:
+    kind: loop
+    PRED
+    input:
+      n: 0
+      r: Step = {"hint":"start"}
+    nodes:
+      step:
+        kind: code
+        input:
+          n: ${input.n}
+        output:
+          n: int
+          r: Step
+        code: |
+          n = inputs["n"] + 1
+          return {"n": n, "r": {"answer": "ok"} if n >= 3 else {"hint": "again"}}
+    output: ${step.output}
+output: ${ask.output}
+"""
+
+
+@pytest.mark.parametrize(
+    "pred",
+    [
+        "until: isinstance(r, Done) and r.answer == 'ok'",
+        "until: ${isinstance(r, Done) and r.answer == 'ok'}",
+        "until: isinstance(${r}, Done) and n > 0 and ${r.answer} == 'ok'",
+    ],
+)
+def test_predicate_member_field_read_guarded_by_isinstance_builds(pred):
+    flow = load_flow(UNION_STATE.replace("PRED", pred))
+    result = run_flow(flow, {})
+    assert result.status == "succeeded", result.failure
+    assert result.output == {"n": 3, "r": {"answer": "ok"}}
+
+
+@pytest.mark.parametrize(
+    "pred",
+    [
+        "until: r.answer == 'ok'",
+        # Only a top-level `and` part guards: under `or` or `not` the check may not hold.
+        "until: n > 5 or isinstance(r, Done) and r.answer == 'ok'",
+        "while: not (isinstance(r, Done) and r.answer == 'ok')",
+        # The check must come before the read.
+        "until: r.answer == 'ok' and isinstance(r, Done)",
+    ],
+)
+def test_predicate_unguarded_member_field_read_is_rejected(pred):
+    with pytest.raises(LoadError) as e:
+        load_flow(UNION_STATE.replace("PRED", pred))
+    message = str(e.value)
+    assert "reads field 'answer', which only 1 of 2 union members have" in message
+    assert "check the member first with `isinstance(r, <Type>) and ...`" in message
+    assert "case" not in message
+
+
+def test_predicate_read_of_a_field_the_checked_member_lacks_is_rejected():
+    pred = "until: isinstance(r, More) and r.answer == 'ok'"
+    with pytest.raises(LoadError, match="reads unknown field 'answer' on record"):
+        load_flow(UNION_STATE.replace("PRED", pred))
+
+
+def test_predicate_tagged_member_field_error_points_at_isinstance():
+    src = (
+        UNION_STATE.replace(
+            "  Done: {answer: str}\n  More: {hint: str}\n",
+            "  Done: {kind: 'Literal[done]', answer: str}\n"
+            "  More: {kind: 'Literal[more]', hint: str}\n",
+        )
+        .replace('{"hint":"start"}', '{"kind":"more","hint":"start"}')
+        .replace('{"answer": "ok"}', '{"kind": "done", "answer": "ok"}')
+        .replace('{"hint": "again"}', '{"kind": "more", "hint": "again"}')
+    )
+    with pytest.raises(LoadError) as e:
+        load_flow(src.replace("PRED", "until: r.answer == 'ok'"))
+    message = str(e.value)
+    assert "reads field 'answer', which only union members with kind done have" in message
+    assert "check the member first with `isinstance(r, <Type>) and ...`" in message
+    assert "case on" not in message
+    flow = load_flow(src.replace("PRED", "until: isinstance(r, Done) and r.answer == 'ok'"))
+    assert run_flow(flow, {}).output == {"n": 3, "r": {"kind": "done", "answer": "ok"}}
+
+
+def test_predicate_isinstance_check_on_an_object_field_checks_reads_on_the_type():
+    src = UNION_STATE.replace('r: Step = {"hint":"start"}', 'r: object = {"hint":"start"}').replace(
+        "          r: Step\n", "          r: object\n"
+    )
+    with pytest.raises(LoadError, match="reads unknown field 'answr' on record"):
+        load_flow(src.replace("PRED", "until: isinstance(r, Done) and r.answr == 'ok'"))
+    flow = load_flow(src.replace("PRED", "until: isinstance(r, Done) and r.answer == 'ok'"))
+    assert run_flow(flow, {}).output == {"n": 3, "r": {"answer": "ok"}}

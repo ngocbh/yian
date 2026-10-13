@@ -135,7 +135,8 @@ contributes empty text.
 When the loader knows a value's type, reading a field that type can't have is a load
 error: a field on a scalar (`str`, `int`, `Literal[...]`, ...) or a list, or a field a
 record doesn't declare. This covers `${input.X...}`, `${node.output...}`, and a MAP's
-`${item...}` in bindings, `case` conditions, and flow outputs. Reading a declared field
+`${item...}` in bindings, `case` conditions, and flow outputs, and the carried fields a
+LOOP `while:`/`until:` predicate reads. Reading a declared field
 through an `Optional[...]` record still gives `null` when the whole value is null, and
 values whose type isn't known at load (`object`, an untyped output, or anything below
 them) aren't checked.
@@ -145,7 +146,11 @@ agree, the merged `Literal` if every member's field is a string `Literal`, else
 untyped). A field only some members have
 is a load error outside a narrowing `case` branch (see `case` below): `reference
 ${d.output.qty} reads field 'qty', which only union members with action buy, sell have;
-read it inside a case on ${d.output.action}`. Flow outputs are never narrowed.
+read it inside a case on ${d.output.action}`. Flow outputs are never narrowed. A LOOP
+`while:`/`until:` predicate narrows with a top-level `and` part before the read, as a
+searched `case` `when:` does: `until: isinstance(r, Done) and r.answer == "ok"` (a check
+under `or`/`not` doesn't narrow); unnarrowed, the error says to check the member first
+with `isinstance(r, <Type>) and ...`.
 
 **Operators inside `${...}`** — one expression grammar, everywhere:
 

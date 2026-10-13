@@ -15,20 +15,26 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from yian.compile.validation import types_compatible
 from yian.diagnostics import SourceRange
-from yian.expr import ExpressionError, condition_refs
+from yian.expr import ExpressionError, expr_refs, parse_condition
 from yian.nodes.contracts import (
     OutputContract,
     PartialRecordContract,
+    ValueContract,
     output_contract_field_error,
 )
 from yian.nodes.loop import LoopNode
+from yian.typesys import TypeCheckError
+from yian.typesys.types import TypeRegistry
+from yian.compose.helpers.isinstance_types import resolve_isinstance_type
 from yian.compose.helpers.output_contracts import (
     combine_output_contracts,
     project_output_contract,
 )
 from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
+from yian.compose.nodes.case import IsinstanceCheck, guarded_refs
 from yian.compose.nodes.resolver import (
     _callable_display,
     _resolve_child,
@@ -130,8 +136,9 @@ class LoopDescriptor(NodeDescriptor):
         The deep TYPE-level half compares every statically proven returned field with its
         statically proven carried seed in the loader pass `check_loop_type_contract`, which
         needs the assembled parent producers/flow-input contracts.
-        `ctx.registry` is unused (loop resolves its output contract from the body signature); the
-        inline-CODE anchors on `ctx` are read only by the CODE build.
+        `ctx.registry` reads an inline body's declared outputs and resolves the type names of
+        `isinstance` checks in the predicate; the inline-CODE anchors on `ctx` are read only by
+        the CODE build.
 
         Args:
             ctx (`BuildContext`):
@@ -290,12 +297,13 @@ class LoopDescriptor(NodeDescriptor):
             # mixed `${score} >= 0.8`, whole `${score >= 0.8}`), unlike a flat `${...}` regex
             # which read a whole-span predicate as one bogus head and a bare one as no heads.
             try:
-                refs = condition_refs(predicate_src)
+                tree = parse_condition(predicate_src)
             except ExpressionError as exc:
                 errors.append(
                     f"loop node {self.id!r}: `{pred_kw}:` is not a valid boolean expression: {exc}"
                 )
-                refs = []
+                tree = None
+            refs = expr_refs(tree) if tree is not None else []
             heads = {r.split(".", 1)[0] for r in refs}
             unknown = sorted(heads - carried)
             if unknown:
@@ -303,12 +311,12 @@ class LoopDescriptor(NodeDescriptor):
                     f"loop node {self.id!r}: `{pred_kw}:` references unknown name(s) {unknown} — "
                     f"the predicate reads the carried record {sorted(carried)}"
                 )
-            if not errors and node.output_contract is not None:
+            if tree is not None and not errors and node.output_contract is not None:
                 # With the field names valid, `output_contract` is the carried record's
                 # contract (the body's for a total loop, merged with typed seeds otherwise).
-                for ref in dict.fromkeys(refs):
-                    field_error = output_contract_field_error(
-                        node.output_contract, ref.split("."), ref
+                for ref, checks in dict.fromkeys(guarded_refs(tree)):
+                    field_error = _predicate_field_error(
+                        node.output_contract, ref, checks, ctx.registry
                     )
                     if field_error:
                         errors.append(f"loop node {self.id!r}: `{pred_kw}:` {field_error}")
@@ -384,3 +392,42 @@ def _contract_field_names(
     if contract is None or contract.type.fields is None:
         return None
     return set(contract.type.fields)
+
+
+def _predicate_field_error(
+    contract: OutputContract,
+    ref: str,
+    checks: tuple[IsinstanceCheck, ...],
+    registry: TypeRegistry,
+) -> str | None:
+    """Return why a predicate ref reads a field the carried record can't have, else `None`.
+
+    A check `isinstance(<base>, T)` guarding the read, with `<base>` a strict prefix of
+    `ref`, narrows `<base>` to `T` as a searched CASE does, so the fields below it are
+    walked on `T`. The value passes every guarding check, so the read is fine when any
+    of them allows it. A check the base's type already satisfies narrows nothing, and
+    one whose type name doesn't resolve is left to the type-table check.
+    """
+    parts = ref.split(".")
+    narrowed_errors: list[str | None] = []
+    for base, type_name in checks:
+        base_parts = base.split(".")
+        if len(base_parts) >= len(parts) or parts[: len(base_parts)] != base_parts:
+            continue
+        try:
+            typ = resolve_isinstance_type(type_name, registry)
+        except TypeCheckError:
+            continue
+        base_contract = project_output_contract(contract, base_parts)
+        if type(base_contract) is ValueContract and types_compatible(base_contract.type, typ):
+            continue
+        narrowed_errors.append(
+            output_contract_field_error(
+                ValueContract(typ), parts[len(base_parts) :], ref, isinstance_hint=True
+            )
+        )
+    if not narrowed_errors:
+        return output_contract_field_error(contract, parts, ref, isinstance_hint=True)
+    if None in narrowed_errors:
+        return None
+    return narrowed_errors[-1]

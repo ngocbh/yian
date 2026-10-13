@@ -29,7 +29,7 @@ from yian.nodes.contracts import (
 )
 from yian.typesys.values import Type
 from yian.compose.helpers.errors import LoadDiagnostics
-from yian.compose.parse.file import CaseDescriptor
+from yian.compose.parse.file import CaseDescriptor, NodeDescriptor
 from yian.compose.validate.narrowing import Narrowing
 
 
@@ -66,7 +66,7 @@ def check_case_exhaustive(
         _check_exhaustive(desc, _on_covered(desc), case_producers, diagnostics)
 
 
-def case_on_exhaustive(
+def case_is_exhaustive(
     desc: CaseDescriptor, producers: dict[str, OutputContract]
 ) -> bool:
     """Return whether a `case` always takes a branch when it runs.
@@ -91,6 +91,37 @@ def case_on_exhaustive(
     if typ is None or typ.tags is None or typ.nullable:
         return False
     return typ.tags <= _on_covered(desc)
+
+
+def exhaustive_cases(
+    descriptors: dict[str, NodeDescriptor],
+    producers: dict[str, OutputContract],
+    *,
+    narrowing: Narrowing | None = None,
+) -> set[str]:
+    """Return the ids of the CASE descriptors that always take a branch when they run.
+
+    Args:
+        descriptors (`dict[str, NodeDescriptor]`):
+            The level's node id -> descriptor. Non-CASE descriptors are ignored.
+        producers (`dict[str, OutputContract]`):
+            Producer node id -> output contract.
+        narrowing (`Narrowing | None`, *optional*, defaults to `None`):
+            Per-node narrowed views; each CASE resolves its `on:` against its own view.
+
+    Returns:
+        `set[str]`:
+            The exhaustive CASE ids (see `case_is_exhaustive`).
+    """
+    return {
+        desc.id
+        for desc in descriptors.values()
+        if isinstance(desc, CaseDescriptor)
+        and case_is_exhaustive(
+            desc,
+            narrowing.for_node(desc.id)[0] if narrowing is not None else producers,
+        )
+    }
 
 
 def _on_covered(desc: CaseDescriptor) -> set[str]:

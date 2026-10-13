@@ -167,13 +167,12 @@ def resolve_output_binding_contract(
     A typed binding (a ``Binding`` whose ``contract`` is set) resolves to its
     declared contract, since that type is what the binding guarantees at runtime.
     Otherwise a direct whole-value reference retains the referenced contract, including
-    provenance.  An explicit null default ``${ref :- null}`` over such a reference
-    retains it as ``Optional``; ``${(a | b) :- null}`` over references of one
-    exact type receives a source-free ``Optional`` contract.  A computed
-    whole-value expression receives a new source-free contract only when the
-    expression engine proves its result type.  Embedded
-    or multiple template spans always produce ``str``; malformed, literal-text,
-    and unsupported computed bindings remain untyped.
+    provenance.  An explicit null default ``${ref :- null}`` over such a reference retains
+    it as ``Optional``; ``${(a | b) :- null}`` over references of one exact type receives a
+    source-free ``Optional`` contract.  A computed whole-value expression receives a new
+    source-free contract only when the expression engine proves its result type.  Embedded
+    or multiple template spans always produce ``str``; malformed, literal-text, and
+    unsupported computed bindings remain untyped.
 
     Args:
         binding (`Any`):
@@ -263,7 +262,7 @@ def _null_default_contract(
             _direct_value_contract(operand, reference_contracts)
             for operand in head.children
         ]
-        if not operands or any(operand is None for operand in operands):
+        if any(operand is None for operand in operands):
             return None
         types = [replace(operand.type, nullable=False) for operand in operands]
         if any(typ != types[0] for typ in types[1:]):
@@ -282,10 +281,7 @@ def _direct_value_contract(
     """Return the exact contract of an operand that is one direct reference, else `None`."""
     if not _is_direct_reference(operand):
         return None
-    refs = expr_refs(operand)
-    if len(refs) != 1:
-        return None
-    contract = reference_contracts.get(refs[0])
+    contract = reference_contracts.get(expr_refs(operand)[0])
     return contract if type(contract) is ValueContract else None
 
 

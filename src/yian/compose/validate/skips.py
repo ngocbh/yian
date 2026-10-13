@@ -3,31 +3,29 @@
 A node is skipped when the runtime join rule marks it dead: it has control edges (from CASEs)
 and every one is skipped, or a required data group has every producer skipped, or a required
 ordering edge (`depends_on`) has its producer skipped. A control edge is skipped when its CASE
-is skipped or picked another branch. A CASE that runs picks one of its branches, or no branch
-at all unless it is exhaustive (`exhaustive_cases`). CASE conditions are treated as
-independent, so the model enumerates every combination of the choices of the CASEs that are
-ancestors of the queried nodes.
+is skipped or picked another branch. A data or ordering edge from a CASE is skipped when the
+CASE is skipped or picked a branch other than `else:` or "no branch". A CASE that runs picks
+one of its branches, or no branch at all unless it is exhaustive. CASE conditions are treated
+as independent, so the model enumerates every combination of the choices of the CASEs that
+can skip an ancestor of the queried nodes.
 
-The enumeration is bounded by `_WORLD_LIMIT` assignments (complete or cut short) per query. Past
-the bound each query falls back to the answer that is safe for its caller: `may_all_skip`
-says True (the output gets a null default it may not need) and `may_skip_while_running` says
-False (nothing is reported). A level whose edges have a cycle has no skippable nodes here; the cycle check
-reports the cycle.
+The enumeration is bounded by `_WORLD_LIMIT` assignments (complete or cut short) per query.
+Past the bound each query falls back to the answer that is safe for its caller:
+`may_all_skip` says True (the output gets a null default it may not need) and
+`may_skip_while_running` says False (nothing is reported). A level whose edges have a cycle
+has no skippable nodes here; the cycle check reports the cycle.
 
-Knows about: compiled edges, CASE descriptors and output contracts. Never imports: runtime.
+Knows about: compiled edges and the CASE default handle. Never imports: runtime.
 """
 
 from __future__ import annotations
 
 from collections import deque
+from collections.abc import Iterable, Set
 from dataclasses import dataclass, field
-from typing import AbstractSet, Iterable, Optional
 
 from yian.compile.model import Edge
-from yian.compose.parse.file import CaseDescriptor, NodeDescriptor
-from yian.compose.validate.case_exhaustive import case_on_exhaustive
-from yian.compose.validate.narrowing import Narrowing
-from yian.nodes.contracts import OutputContract
+from yian.nodes.case import DEFAULT_HANDLE
 
 _WORLD_LIMIT = 10_000
 
@@ -39,8 +37,16 @@ class _Join:
     control: list[tuple[str, str]] = field(default_factory=list)  # (case, handle)
     # input group -> (optional, producers); a group takes its first edge's `optional`, like
     # the runtime join.
-    groups: dict[Optional[str], tuple[bool, list[str]]] = field(default_factory=dict)
+    groups: dict[str | None, tuple[bool, list[str]]] = field(default_factory=dict)
     required_order: list[str] = field(default_factory=list)
+
+    def skip_sources(self) -> set[str]:
+        """Return the producers of the edges that can make this node skip."""
+        sources = {case for case, _ in self.control} | set(self.required_order)
+        for optional, producers in self.groups.values():
+            if not optional:
+                sources.update(producers)
+        return sources
 
 
 class SkipModel:
@@ -52,7 +58,7 @@ class SkipModel:
             (START, a flow input) is a producer that never skips.
         edges (`Iterable[Edge]`):
             The level's edges. An edge into a node outside `node_ids` is ignored.
-        exhaustive (`AbstractSet[str]`):
+        exhaustive (`Set[str]`):
             Ids of the CASEs that always take a branch when they run.
         limit (`int`, *optional*, defaults to `_WORLD_LIMIT`):
             Most CASE assignments one query examines before it falls back.
@@ -68,7 +74,7 @@ class SkipModel:
         self,
         node_ids: Iterable[str],
         edges: Iterable[Edge],
-        exhaustive: AbstractSet[str],
+        exhaustive: Set[str],
         *,
         limit: int = _WORLD_LIMIT,
     ) -> None:
@@ -76,34 +82,39 @@ class SkipModel:
         self._known = set(self._nodes)
         self._limit = limit
         self._joins = {n: _Join() for n in self._nodes}
-        self._parents: dict[str, set[str]] = {n: set() for n in self._nodes}
+        graph_parents: dict[str, set[str]] = {n: set() for n in self._nodes}
         handles: dict[str, dict[str, None]] = {}
-        self._control_targets: dict[str, set[str]] = {}
         for edge in edges:
             if edge.to not in self._known:
                 continue
             join = self._joins[edge.to]
             if edge.from_ in self._known:
-                self._parents[edge.to].add(edge.from_)
+                graph_parents[edge.to].add(edge.from_)
             if edge.source_handle is not None:
                 join.control.append((edge.from_, edge.source_handle))
                 if edge.from_ in self._known:
                     handles.setdefault(edge.from_, {})[edge.source_handle] = None
-                    self._control_targets.setdefault(edge.from_, set()).add(edge.to)
             elif edge.ordering:
                 if not edge.optional:
                     join.required_order.append(edge.from_)
             else:
-                optional, producers = join.groups.setdefault(
-                    edge.input_group, (edge.optional, [])
+                join.groups.setdefault(edge.input_group, (edge.optional, []))[1].append(
+                    edge.from_
                 )
-                producers.append(edge.from_)
         # A CASE's choices: each branch, then "no branch" (None) unless it is exhaustive.
-        self._choices: dict[str, tuple[Optional[str], ...]] = {
+        self._choices: dict[str, tuple[str | None, ...]] = {
             case: (*names, *(() if case in exhaustive else (None,)))
             for case, names in handles.items()
         }
-        self._order = self._topological_order()
+        # Only these edges can skip a node, so only they decide which CASEs a query branches on.
+        self._parents = {
+            n: self._joins[n].skip_sources() & self._known for n in self._nodes
+        }
+        self._skip_targets: dict[str, set[str]] = {case: set() for case in self._choices}
+        for node, parents in self._parents.items():
+            for parent in parents & self._choices.keys():
+                self._skip_targets[parent].add(node)
+        self._order = self._topological_order(graph_parents)
 
     def may_all_skip(self, producers: Iterable[str]) -> bool:
         """Return whether some CASE routing skips every node in `producers`.
@@ -146,12 +157,21 @@ class SkipModel:
             consumer = None
         return self._search(targets, consumer, on_limit=False)
 
-    def _topological_order(self) -> list[str] | None:
-        """Return the level's nodes in topological order, or None when the edges cycle."""
-        indegree = {n: len(self._parents[n]) for n in self._nodes}
+    def _topological_order(self, parents: dict[str, set[str]]) -> list[str] | None:
+        """Return the level's nodes in topological order, or None when the edges cycle.
+
+        Args:
+            parents (`dict[str, set[str]]`):
+                Node id -> the level's nodes with an edge into it.
+
+        Returns:
+            `list[str] | None`:
+                The nodes, each after all of its parents, or None for a cyclic level.
+        """
+        indegree = {n: len(parents[n]) for n in self._nodes}
         children: dict[str, list[str]] = {n: [] for n in self._nodes}
-        for node, parents in self._parents.items():
-            for parent in parents:
+        for node, sources in parents.items():
+            for parent in sources:
                 children[parent].append(node)
         ready = deque(n for n in self._nodes if not indegree[n])
         order = []
@@ -192,10 +212,10 @@ class SkipModel:
         nodes = [n for n in self._order if n in closure]
         branching = {
             case
-            for case in self._choices
-            if case in closure and self._control_targets[case] & closure
+            for case, reached in self._skip_targets.items()
+            if case in closure and reached & closure
         }
-        stack: list[tuple[int, frozenset[str], dict[str, Optional[str]]]] = [
+        stack: list[tuple[int, frozenset[str], dict[str, str | None]]] = [
             (0, frozenset(), {})
         ]
         worlds = 0
@@ -222,7 +242,7 @@ class SkipModel:
         return False
 
     def _skips(
-        self, node: str, skipped: set[str], choices: dict[str, Optional[str]]
+        self, node: str, skipped: set[str], choices: dict[str, str | None]
     ) -> bool:
         """Return whether `node` is skipped, given its skipped ancestors and CASE choices.
 
@@ -231,7 +251,7 @@ class SkipModel:
                 A node id in the level.
             skipped (`set[str]`):
                 The skipped nodes among the ones before `node` in topological order.
-            choices (`dict[str, Optional[str]]`):
+            choices (`dict[str, str | None]`):
                 The branch each running CASE before `node` picked; `None` is no branch.
 
         Returns:
@@ -245,38 +265,31 @@ class SkipModel:
         ):
             return True
         if any(
-            not optional and all(p in skipped for p in producers)
+            not optional and all(self._edge_skipped(p, skipped, choices) for p in producers)
             for optional, producers in join.groups.values()
         ):
             return True
-        return any(p in skipped for p in join.required_order)
+        return any(self._edge_skipped(p, skipped, choices) for p in join.required_order)
 
+    @staticmethod
+    def _edge_skipped(
+        source: str, skipped: set[str], choices: dict[str, str | None]
+    ) -> bool:
+        """Return whether a data or ordering edge from `source` is skipped.
 
-def exhaustive_cases(
-    descriptors: dict[str, NodeDescriptor],
-    producers: dict[str, OutputContract],
-    narrowing: Narrowing | None = None,
-) -> set[str]:
-    """Return the ids of the CASE descriptors that always take a branch when they run.
+        Args:
+            source (`str`):
+                The edge's producer.
+            skipped (`set[str]`):
+                The skipped nodes so far.
+            choices (`dict[str, str | None]`):
+                The branch each running CASE picked; `None` is no branch.
 
-    Args:
-        descriptors (`dict[str, NodeDescriptor]`):
-            The level's node id -> descriptor. Non-CASE descriptors are ignored.
-        producers (`dict[str, OutputContract]`):
-            Producer node id -> output contract.
-        narrowing (`Narrowing | None`, *optional*, defaults to `None`):
-            Per-node narrowed views; each CASE resolves its `on:` against its own view.
-
-    Returns:
-        `set[str]`:
-            The exhaustive CASE ids (see `case_on_exhaustive`).
-    """
-    return {
-        desc.id
-        for desc in descriptors.values()
-        if isinstance(desc, CaseDescriptor)
-        and case_on_exhaustive(
-            desc,
-            narrowing.for_node(desc.id)[0] if narrowing is not None else producers,
-        )
-    }
+        Returns:
+            `bool`:
+                Whether `source` is skipped, or it is a CASE that picked a branch other than
+                `else:` or no branch.
+        """
+        # The runtime gives a non-control edge from a CASE the default handle, so it is taken
+        # only when the CASE routes `else:` or matches nothing.
+        return source in skipped or choices.get(source) not in (None, DEFAULT_HANDLE)

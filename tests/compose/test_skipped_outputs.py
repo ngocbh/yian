@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import pytest
+
+from yian.compose import LoadError, load_flow
 from yian.compose.helpers.output_contracts import resolve_output_binding_contract
 from yian.diagnostics import OriginRef
 from yian.nodes.contracts import (
@@ -110,3 +113,40 @@ def test_null_default_over_a_flow_input_is_optional() -> None:
 
     assert type(resolved) is ValueContract
     assert resolved.type == OPTIONAL_STR
+
+
+_NULL_DEFAULT_ON = """
+id: f
+name: f
+nodes:
+  cls:
+    kind: code
+    output: Literal[a, b, c]
+    code: |
+      return "a"
+  route:
+    kind: case
+    on: ${cls.output :- null}
+    cases:
+      - when: a
+        then: na
+      - when: b
+        then: nb
+  na:
+    kind: code
+    output: str
+    code: |
+      return "A"
+  nb:
+    kind: code
+    output: str
+    code: |
+      return "B"
+output: ${na.output | nb.output}
+"""
+
+
+def test_on_over_a_null_default_is_checked_for_exhaustiveness() -> None:
+    """`on: ${cls.output :- null}` now has the enum's type, so a missing tag is a load error."""
+    with pytest.raises(LoadError, match="non-exhaustive"):
+        load_flow(_NULL_DEFAULT_ON)

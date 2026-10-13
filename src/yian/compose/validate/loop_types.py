@@ -229,7 +229,7 @@ def _check_inline_returned_fields(
         if types_compatible(body_field, parameter.type):
             continue
         typed = isinstance(seed, Binding) and seed.contract is not None
-        # A declared seed type narrows: the next iteration's parameter check rejects a null.
+        # The next iteration's input check rejects a null.
         if typed and types_compatible(replace(body_field, nullable=False), parameter.type):
             continue
         returned_label = canonical_type_label(body_field)

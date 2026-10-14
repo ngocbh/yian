@@ -2,14 +2,24 @@ import copy
 import inspect
 from contextvars import ContextVar
 from functools import cache, cached_property
+from operator import itemgetter
 from typing import Any, Optional
 
 import anthropic
 from anthropic.resources.messages import Messages
 from langchain_anthropic import ChatAnthropic
+from langchain_anthropic.chat_models import convert_to_anthropic_tool
+from langchain_core.exceptions import OutputParserException
+from langchain_core.output_parsers.openai_tools import (
+    JsonOutputKeyToolsParser,
+    PydanticToolsParser,
+)
+from langchain_core.runnables import RunnableLambda, RunnableMap, RunnablePassthrough
+from langchain_core.utils.pydantic import is_basemodel_subclass
 from pydantic import Field
 
 from .base_client import BaseLLMClient, check_no_redirects, normalize_content
+from .capabilities import has_open_schema
 from .provider_blocks import merge_request_body
 from .validators import validate_model
 
@@ -103,21 +113,25 @@ class NormalizedChatAnthropic(ChatAnthropic):
     def invoke(self, input, config=None, **kwargs):
         return self.normalize_reply(super().invoke(input, config, **kwargs))
 
-    def with_structured_output(self, schema, *, method=None, **kwargs):
+    def with_structured_output(self, schema, *, method=None, include_raw=False, **kwargs):
         """Bind `schema` as structured output, in a form the block's thinking allows.
 
         langchain-anthropic picks its method from the model's own ``thinking`` field,
         which a block's ``thinking`` does not set, so it would force a tool call beside
         thinking, a pair the Messages API rejects. With thinking on in the block and no
-        `method` given, this uses the JSON-schema output format (``output_config.format``).
+        `method` given, this uses the JSON-schema output format (``output_config.format``),
+        except for a schema with an open part (`has_open_schema`), which that format's
+        grammar rejects: such a schema goes as an unforced tool (`_unforced_tool_output`).
 
         Args:
             schema (`dict` or `type`):
                 The output schema.
             method (`str`, *optional*, defaults to `None`):
-                ``"function_calling"`` or ``"json_schema"``; `None` picks
-                ``"json_schema"`` when the block turns thinking on, else
-                ``"function_calling"``.
+                ``"function_calling"`` or ``"json_schema"``; `None` picks as described
+                above when the block turns thinking on, else ``"function_calling"``.
+            include_raw (`bool`, *optional*, defaults to `False`):
+                Whether to return ``{"raw", "parsed", "parsing_error"}`` instead of the
+                parsed output.
             **kwargs:
                 Passed to `ChatAnthropic.with_structured_output`.
 
@@ -128,8 +142,61 @@ class NormalizedChatAnthropic(ChatAnthropic):
         if method is None:
             thinking = self.block.get("thinking")
             thinking_on = isinstance(thinking, dict) and thinking.get("type") != "disabled"
+            if thinking_on and has_open_schema(schema):
+                return self._unforced_tool_output(schema, include_raw=include_raw)
             method = "json_schema" if thinking_on else "function_calling"
-        return super().with_structured_output(schema, method=method, **kwargs)
+        return super().with_structured_output(
+            schema, method=method, include_raw=include_raw, **kwargs
+        )
+
+    def _unforced_tool_output(self, schema, *, include_raw):
+        """Bind `schema` as a tool the model may call, and parse the reply's call to it.
+
+        Thinking rules out forcing the tool, so a reply can come without the call. That
+        reply raises `OutputParserException` naming the tool, which a caller's retry can
+        send back as a correction; with `include_raw` it comes back as
+        ``parsing_error`` instead. This mirrors langchain-anthropic's own thinking path
+        without its warning, which it emits on every binding.
+
+        Args:
+            schema (`dict` or `type`):
+                The output schema.
+            include_raw (`bool`):
+                Whether to return ``{"raw", "parsed", "parsing_error"}``, assembled as
+                `ChatAnthropic.with_structured_output` does.
+
+        Returns:
+            `Runnable`:
+                A runnable that returns outputs matching `schema`.
+        """
+        tool = convert_to_anthropic_tool(schema)
+        name = tool["name"]
+        llm = self.bind_tools(
+            [schema],
+            ls_structured_output_format={
+                "kwargs": {"method": "function_calling"}, "schema": tool,
+            },
+        )
+
+        def require_tool_call(message):
+            if not any(call["name"] == name for call in message.tool_calls):
+                raise OutputParserException(f"Call the {name} tool with the answer.")
+            return message
+
+        if isinstance(schema, type) and is_basemodel_subclass(schema):
+            parser = PydanticToolsParser(tools=[schema], first_tool_only=True)
+        else:
+            parser = JsonOutputKeyToolsParser(key_name=name, first_tool_only=True)
+        parse = RunnableLambda(require_tool_call) | parser
+        if not include_raw:
+            return llm | parse
+        parser_assign = RunnablePassthrough.assign(
+            parsed=itemgetter("raw") | parse, parsing_error=lambda _: None
+        )
+        parser_none = RunnablePassthrough.assign(parsed=lambda _: None)
+        return RunnableMap(raw=llm) | parser_assign.with_fallbacks(
+            [parser_none], exception_key="parsing_error"
+        )
 
     def _get_request_payload(self, input_, *, stop=None, **kwargs):
         """Return langchain's request payload with `block` merged into the call options.

@@ -79,7 +79,7 @@ class HumanInputDescriptor(NodeDescriptor):
 
     @classmethod
     def parse(cls, node_id: str, cursor: SourceCursor) -> "HumanInputDescriptor":
-        """Reject the removed `adaptive_questions.mode:` key and non-text text, parse, and range the text.
+        """Reject `adaptive_questions.mode:` and a non-text brief or question text; range the text.
 
         After the template `parse`, rejects the first `question`/`header`/option `label`/
         `description` in a literal `questions:` list that is present but not a string, at that
@@ -143,14 +143,14 @@ class HumanInputDescriptor(NodeDescriptor):
         Overrides the base hook, run by the template `parse` after the own-key loop. Reads the
         three question surfaces from `kwargs` (already populated by the loop — human_input has no
         `keyword_remap`, so the kwargs keys equal the surface keys), NOT the raw body. Runs the
-        one-of-three legality check FIRST (matching the pre-refactor precedence), then calls
-        `super()` for the default asserts-list check: exactly one of prompt/questions/
-        adaptive_questions is required, `questions` and `adaptive_questions` are mutually
-        exclusive, and an adaptive block must itself be a dict carrying its own `prompt:` (the
-        LLM brief). The "needs a question surface" error anchors on `own_range` (the node body)
-        since no question field is present to carry a range; the other two anchor on the
-        `adaptive_questions:` field range where it exists. Then a present `prompt:` must be text,
-        anchored on its own field range."""
+        one-of-three legality check FIRST (matching the pre-refactor precedence): exactly one of
+        prompt/questions/adaptive_questions is required, `questions` and `adaptive_questions`
+        are mutually exclusive, and an adaptive block must itself be a dict carrying its own
+        `prompt:` (the LLM brief). The "needs a question surface" error anchors on `own_range`
+        (the node body) since no question field is present to carry a range; the other two
+        anchor on the `adaptive_questions:` field range where it exists. Then it checks that a
+        present `prompt:` is text, anchored on its own field range, and finally calls `super()`
+        for the default asserts-list check."""
         # One-of-three legality: needs a question surface, `questions`/`adaptive_questions` are
         # mutually exclusive, and an adaptive block needs its own `prompt:` (the LLM brief).
         has_q = kwargs.get("questions") is not None
@@ -308,7 +308,7 @@ def _range_at(cursor: SourceCursor, path: tuple[str | int, ...]) -> Optional[Sou
     """The `SourceRange` of the value at `path` under `cursor`, or `None` when it has none.
 
     `None` also covers a path the cursor cannot walk (e.g. past a recursive alias cut), so
-    that string's error falls back to the `questions:` range."""
+    the caller's error falls back to an enclosing range."""
     try:
         for step in path:
             cursor = cursor.child(step)

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import re
-
 import pytest
 
 from yian.compose import load_flow
@@ -161,7 +159,7 @@ nodes:
     <<: *b
 output: ${a.output}
 """)
-    assert re.search(r"node 'a' \(kind=agent\): `prompt:` must be text", str(error))
+    assert "node 'a' (kind=agent): `prompt:` must be text" in str(error)
     assert _line(error) == 3
 
 

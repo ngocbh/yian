@@ -87,9 +87,12 @@ def test_rewrite_none_keeps_leaf():
 
 def test_rewrite_passes_the_read():
     seen = []
-    rewrite_condition_reads(
-        "(b.output | c.output) == 2", lambda i, read: seen.append((i, read.path, read.escape))
-    )
+
+    def keep(i, read):
+        seen.append((i, read.path, read.escape))
+        return None
+
+    rewrite_condition_reads("(b.output | c.output) == 2", keep)
     assert seen == [(0, "b.output", 0), (1, "c.output", 0)]
 
 

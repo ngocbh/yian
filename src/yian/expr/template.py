@@ -26,7 +26,7 @@ NOT a binding (it reads already-bound declared inputs, mints no edge), but it is
 `${...}` template, and it reuses these scanners — so it lives here rather than in
 `expressions` (which cannot import this module without a cycle).
 
-Knows about: `expr.expressions` (peer — the evaluator and `ExpressionError`) and
+Knows about: `expr.expressions` (peer — the evaluator, `_value_args`, and `ExpressionError`) and
 `expr.builtins` (the prompt `TEMPLATE_FNS` registry).
 Never imports: `nodes`, `compile`, `runtime`, or `typesys` at runtime (pool-agnostic via
 `resolve`; `Type` appears in annotations only).
@@ -357,7 +357,7 @@ _ESCAPES = frozenset({"coalesce", "default_expr", "required_expr"})
 class ConditionRead:
     """One reference occurrence in a parsed condition.
 
-    Args:
+    Attributes:
         path (`str`):
             The reference path.
         escape (`int | None`):
@@ -378,7 +378,7 @@ def _condition_read_leaves(tree: "Tree | Token") -> "list[tuple[Tree, ConditionR
     """Each reference leaf of a parsed condition with its `ConditionRead`, in source order.
 
     The one walk behind `condition_reads` and `rewrite_condition_reads`, so occurrence
-    indexes agree between them. Same reference/builtin-arg decomposition as
+    indexes agree between them. KEEP IN SYNC with the reference/builtin-arg decomposition of
     `_collect_expr_refs`: a builtin call's callee and an `isinstance` type name are not
     reads; its argument values are.
 

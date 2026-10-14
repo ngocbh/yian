@@ -13,7 +13,7 @@ from pydantic import Field
 
 from .api_key_env import OPTIONAL_API_KEY_PROVIDERS, get_api_key_env
 from .base_client import BaseLLMClient, normalize_content
-from .capabilities import get_capabilities
+from .capabilities import get_capabilities, has_open_schema
 from .factory import _PROVIDER_BASE_URL
 from .provider_blocks import merge_request_body
 from .validators import validate_model
@@ -133,6 +133,29 @@ class NormalizedChatOpenAI(RequestBlockMixin, ChatOpenAI):
         return normalize_content(response)
 
     def with_structured_output(self, schema, *, method=None, **kwargs):
+        """Bind `schema` for structured output with the method the capability table picks.
+
+        On a request langchain routes to the Responses API, where function tools default
+        to strict, a schema with an open part (`has_open_schema`) is sent with
+        ``strict=False``, since strict mode rejects it. An explicit ``method`` or
+        ``strict`` is respected; Chat Completions requests are unchanged.
+
+        Args:
+            schema (`dict | type`):
+                The output schema: a pydantic class, a TypedDict or a JSON-schema dict.
+            method (`str`, *optional*, defaults to `None`):
+                The structured-output method; `None` takes the model's preferred one.
+            **kwargs:
+                Passed to `ChatOpenAI.with_structured_output`.
+
+        Returns:
+            `Runnable`:
+                The structured-output runnable langchain builds.
+
+        Raises:
+            `NotImplementedError`:
+                The model has no structured-output method.
+        """
         caps = get_capabilities(self.model_name)
         if caps.preferred_structured_method == "none":
             raise NotImplementedError(
@@ -145,6 +168,15 @@ class NormalizedChatOpenAI(RequestBlockMixin, ChatOpenAI):
         # DeepSeek's official tool-calling examples do.
         if method == "function_calling" and not caps.supports_tool_choice:
             kwargs.setdefault("tool_choice", None)
+        # Routing depends on the model's own fields and name, not on per-call kwargs,
+        # so an empty payload answers it.
+        if (
+            method == "function_calling"
+            and "strict" not in kwargs
+            and self._use_responses_api({})
+            and has_open_schema(schema)
+        ):
+            kwargs["strict"] = False
         return super().with_structured_output(schema, method=method, **kwargs)
 
 

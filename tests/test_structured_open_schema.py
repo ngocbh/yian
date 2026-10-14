@@ -6,11 +6,13 @@ import httpx
 import pytest
 from langchain_core.messages import HumanMessage
 from langchain_core.runnables import RunnableBinding, RunnableParallel, RunnableSequence
-from langchain_openai import AzureChatOpenAI
+from langchain_openai import AzureChatOpenAI, ChatOpenAI
 from openai.lib._parsing._completions import type_to_response_format_param
 
 from yian.llm_clients.azure_client import AzureOpenAIClient
 from yian.llm_clients.capabilities import has_open_schema
+from yian.llm_clients.openai_client import OpenAIClient
+from yian.llm_clients.openai_subscription import SubscriptionAccess, create_subscription_model
 from yian.nodes.agent.structured import type_to_schema
 from yian.typesys.types import read_typedefs, type_for
 from yian.typesys.values import Type, ValueKind
@@ -202,3 +204,88 @@ def test_azure_open_schema_with_include_raw_parses_the_tool_call(azure_env):
     (body,) = server.bodies
     assert "tools" in body
     assert "response_format" not in body
+
+
+def _responses_tool(payload):
+    (tool,) = payload["tools"]
+    assert tool["type"] == "function"
+    assert "function" not in tool
+    return tool
+
+
+def _openai(model="gpt-5", provider="openai"):
+    return OpenAIClient(model, provider=provider, api_key="k").get_llm()
+
+
+def _subscription():
+    return create_subscription_model(
+        "gpt-5.5", access_source=lambda: SubscriptionAccess("synthetic-access", "synthetic-account"),
+    )
+
+
+def _today(llm, schema):
+    """The payload a function-calling request for `schema` had before open schemas were told apart."""
+    return _payload(llm, ChatOpenAI.with_structured_output(llm, schema, method="function_calling"))
+
+
+@pytest.mark.parametrize("text", ["object", "R"])
+def test_openai_responses_sends_strict_false_for_an_open_schema(text):
+    llm = _openai()
+    assert llm.use_responses_api is True
+    tool = _responses_tool(_payload(llm, llm.with_structured_output(_schema(text))))
+    assert tool["strict"] is False
+    assert has_open_schema(tool["parameters"])
+
+
+def test_openai_responses_closed_schema_payload_is_unchanged():
+    llm = _openai()
+    schema = _schema("C")
+    payload = _payload(llm, llm.with_structured_output(schema))
+    assert payload == _today(llm, schema)
+    assert "strict" not in _responses_tool(payload)
+
+
+def test_openai_compatible_chat_completions_open_schema_payload_is_unchanged():
+    llm = _openai("openai/gpt-4o", provider="openrouter")
+    assert not llm._use_responses_api({})
+    schema = _schema("object")
+    payload = _payload(llm, llm.with_structured_output(schema))
+    assert payload == _today(llm, schema)
+    assert "strict" not in _only_function(payload)
+    assert "strict" not in payload["tools"][0]
+
+
+def test_openai_compatible_responses_routed_model_sends_strict_false_for_an_open_schema():
+    llm = _openai("openai/gpt-5.1-codex", provider="openrouter")
+    assert llm._use_responses_api({})
+    tool = _responses_tool(_payload(llm, llm.with_structured_output(_schema("object"))))
+    assert tool["strict"] is False
+
+
+def test_openai_explicit_strict_is_passed_through_for_an_open_schema():
+    llm = _openai()
+    tool = _responses_tool(_payload(llm, llm.with_structured_output(_schema("object"), strict=True)))
+    assert tool["strict"] is True
+
+
+def test_subscription_sends_strict_false_for_an_open_schema():
+    model = _subscription()
+    tool = _responses_tool(_payload(model, model.with_structured_output(_schema("object"))))
+    assert tool["strict"] is False
+    assert has_open_schema(tool["parameters"])
+
+
+def test_subscription_closed_schema_payload_is_unchanged():
+    model = _subscription()
+    schema = _schema("C")
+    payload = _payload(model, model.with_structured_output(schema))
+    assert payload == _today(model, schema)
+    assert "strict" not in _responses_tool(payload)
+
+
+def test_subscription_explicit_strict_is_passed_through_for_an_open_schema():
+    model = _subscription()
+    tool = _responses_tool(
+        _payload(model, model.with_structured_output(_schema("object"), strict=True))
+    )
+    assert tool["strict"] is True

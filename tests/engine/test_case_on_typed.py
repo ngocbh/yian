@@ -5,14 +5,19 @@ Ints and floats compare numerically (`when: 2` matches `2.0`), a bool never equa
 text, and an untyped `on:` gets the same exact comparison at runtime. A non-finite number,
 a list or record, and an unquoted datetime are located load errors. Where the `on:` type is
 known, a `when:` value that can never be a member of it is a located load error, even next
-to an `else:`, naming the value, the type, and the fix.
+to an `else:`, naming the value, the type, and the fix. A `when:` value equal to an earlier
+one (`1` and `1.0`, a date and its ISO text) is a load error at the later one, for any `on:`.
+A routing-only case over a `Literal` flow input must list every tag or have an `else:`.
 """
+
+import datetime
 
 import pytest
 
 from yian.compose import LoadError, load_flow
 from yian.compose.helpers.errors import LoadDiagnostics
-from yian.compose.nodes.case import _match_condition
+from yian.compose.nodes.case import _match_condition, on_match_key
+from yian.compose.validate.case_exhaustive import _duplicate_when_message
 from yian.expr.expressions import evaluate_when_record
 from yian.run import run_flow
 from yian.typesys.types import type_for
@@ -584,3 +589,169 @@ def test_malformed_date_text_on_a_date_is_not_a_value():
     assert message.startswith(
         "case node 'route': `when: \"2026-1-2\"` is not a value of `on: ${input.n}` (`date`): "
     )
+
+
+# --- duplicate when: values --- #
+
+
+def _nth_line(text: str, needle: str, n: int) -> int:
+    """Return the 1-based line number of the `n`-th (1-based) line containing `needle`."""
+    lines = [
+        number
+        for number, line in enumerate(text.splitlines(), start=1)
+        if needle in line
+    ]
+    return lines[n - 1]
+
+
+_DUPLICATE = (
+    "case node 'route': `when: %s` duplicates `when: %s` (first at line %d), "
+    "so it never matches; remove one"
+)
+
+
+def test_repeated_int_when_is_a_load_error():
+    text = _flow([("1", "one"), ("1", "two")], on_type="int")
+    error = _load_error(text)
+    assert str(error) == _DUPLICATE % ("1", "1", _nth_line(text, "when: 1", 1))
+    assert _error_line(error) == _nth_line(text, "when: 1", 2)
+
+
+def test_int_and_float_when_are_duplicates():
+    text = _flow([("1", "one"), ("1.0", "two")], on_type="float")
+    assert _when_error(text, "1.0") == _DUPLICATE % ("1.0", "1", _line_of(text, "when: 1"))
+
+
+def test_int_and_float_duplicate_reported_before_the_int_fix():
+    text = _flow([("1", "one"), ("1.0", "two")], on_type="int")
+    assert _when_error(text, "1.0") == _DUPLICATE % ("1.0", "1", _line_of(text, "when: 1"))
+
+
+def test_float_then_int_duplicate_reported_before_the_int_fix():
+    text = _flow([("1.0", "one"), ("1", "two")], on_type="int")
+    error = _load_error(text)
+    assert str(error) == _DUPLICATE % ("1", "1.0", _line_of(text, "when: 1.0"))
+    assert _error_line(error) == _nth_line(text, "when: 1", 2)
+
+
+def test_duplicate_on_an_untyped_on():
+    text = _flow([("2", "one"), ("2.0", "two")], on_type=None)
+    assert _when_error(text, "2.0") == _DUPLICATE % ("2.0", "2", _line_of(text, "when: 2"))
+
+
+def test_duplicate_text_when():
+    text = _flow([("a", "one"), ('"a"', "two"), ("b", "three")], on_type="Literal[a, b]")
+    assert _when_error(text, '"a"') == _DUPLICATE % ('"a"', "a", _line_of(text, "when: a"))
+
+
+def test_date_and_its_iso_text_are_duplicates():
+    text = _flow([("2026-01-02", "one"), ('"2026-01-02"', "two")], on_type="str")
+    assert _when_error(text, '"2026-01-02"') == _DUPLICATE % (
+        '"2026-01-02"',
+        "2026-01-02",
+        _line_of(text, "when: 2026-01-02"),
+    )
+
+
+def test_bool_number_and_text_are_distinct():
+    load_flow(_flow([("1", "one"), ("true", "two"), ('"1"', "three")], on_type=None))
+
+
+def test_duplicate_next_to_else_and_same_target():
+    text = _flow([("3", "one"), ("3", "one")], on_type="int")
+    error = _load_error(text)
+    assert str(error) == _DUPLICATE % ("3", "3", _nth_line(text, "when: 3", 1))
+    assert _error_line(error) == _nth_line(text, "when: 3", 2)
+
+
+def test_on_match_key():
+    assert on_match_key(1) == on_match_key(1.0)
+    assert on_match_key(True) != on_match_key(1)
+    assert on_match_key("1") != on_match_key(1)
+    assert on_match_key(datetime.date(2026, 1, 2)) == on_match_key("2026-01-02")
+    assert on_match_key(False) != on_match_key(0)
+    assert len({on_match_key(1), on_match_key(1.0)}) == 1
+    assert on_match_key(-0.0) == on_match_key(0)
+    assert on_match_key(2**53 + 1) != on_match_key(float(2**53))
+
+
+def test_duplicate_message_without_a_source_range():
+    message = _duplicate_when_message(
+        1, None, 1, None, first_range=None, first_index=0
+    )
+    assert message.endswith("(first at cases[0]), so it never matches; remove one")
+
+
+def test_duplicate_through_an_alias_shows_the_spelling():
+    text = _flow([("&a 1", "one"), ("*a", "two")], on_type="int")
+    assert str(_load_error(text)) == _DUPLICATE % ("1", "1", _line_of(text, "when: &a 1"))
+
+
+# --- routing-only enum coverage --- #
+
+
+_UNCOVERED = (
+    "case node 'route' on %s: non-exhaustive — enum tag(s) ['b'] not covered by a case "
+    "`when:` or an `else:`"
+)
+
+
+def test_routing_only_literal_flow_input_missing_a_tag():
+    text = _flow([("a", "one")], on_type="Literal[a, b]", else_=None)
+    error = _load_error(text)
+    assert str(error) == _UNCOVERED % "${input.n}"
+    assert _error_line(error) == _line_of(text, "  route:")
+
+
+def test_routing_only_literal_flow_input_with_else_loads():
+    load_flow(_flow([("a", "one")], on_type="Literal[a, b]", else_="other"))
+
+
+def test_routing_only_literal_flow_input_listing_every_tag_loads():
+    load_flow(_flow([("a", "one"), ("b", "two")], on_type="Literal[a, b]", else_=None))
+
+
+def test_routing_only_loop_carried_literal_missing_a_tag():
+    text = (
+        "id: f\nname: f\ninput:\n  s: int\nnodes:\n"
+        "  rep:\n    kind: loop\n    times: 2\n    input:\n      n: Literal[a, b] = a\n    nodes:\n"
+        "      route:\n        kind: case\n        on: ${input.n}\n        cases:\n"
+        "          - when: a\n            then: one\n"
+        + _branch_body("one", "Literal[a, b]", '"b"')
+        + "    output:\n      n: ${one.output}\n"
+        "output: ${rep.output}\n"
+    )
+    error = _load_error(text)
+    assert str(error).endswith(_UNCOVERED % "${input.n}")
+    assert _error_line(error) == _line_of(text, "      route:")
+
+
+def test_routing_only_map_child_literal_input_missing_a_tag():
+    text = (
+        "id: f\nname: f\ninput:\n  xs: list[Literal[a, b]]\nnodes:\n"
+        "  each:\n    kind: map\n    over: ${input.xs}\n    input:\n      x: ${item}\n    nodes:\n"
+        "      route:\n        kind: case\n        on: ${input.x}\n        cases:\n"
+        "          - when: a\n            then: one\n"
+        + _branch_body("one", "str", '"one"')
+        + "    output: ${one.output}\n"
+        "output: ${each.output}\n"
+    )
+    error = _load_error(text)
+    assert str(error).endswith(_UNCOVERED % "${input.x}")
+    assert _error_line(error) == _line_of(text, "      route:")
+
+
+def test_routing_only_call_child_literal_input_missing_a_tag():
+    text = (
+        "id: f\nname: f\ninput:\n  k: Literal[a, b]\n"
+        "defs:\n  child:\n    input:\n      k: Literal[a, b]\n    nodes:\n"
+        "      route:\n        kind: case\n        on: ${input.k}\n        cases:\n"
+        "          - when: a\n            then: one\n"
+        + _branch_body("one", "str", '"one"')
+        + "    output: ${one.output}\n"
+        "nodes:\n  c:\n    kind: call\n    call: child\n    input:\n      k: ${input.k}\n"
+        "output: ${c.output}\n"
+    )
+    error = _load_error(text)
+    assert str(error).endswith(_UNCOVERED % "${input.k}")
+    assert _error_line(error) == _line_of(text, "      route:")

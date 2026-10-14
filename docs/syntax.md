@@ -1419,6 +1419,12 @@ value. A `when:` that can't be a value of the `on:` type (a typo'd tag, a wrong 
 type) is a load error even with an `else:`. An unquoted datetime `when:` is a load error;
 quote it. Flows with a number or bool `when:` get new fingerprints.
 
+Changed: a routing-only `case` over a `Literal` flow input (also a LOOP body's carried
+field or a child flow's input) that omits a tag with no `else:` used to load and run no
+branch for that tag; it is now a load error, as for a `Literal` node output. Two `when:`s
+with the same value (`when: 1` twice, `when: 1` and `when: 1.0`) used to load with the
+later one dead; that is now a load error.
+
 Simple form — match a value:
 
 ```yaml
@@ -1441,12 +1447,15 @@ Matching:
   number, and quoted values are text (`when: "1"` matches only the text `1`).
 - A `when: yes` (or `no`, `on`, `off`, `y`, `n`) on a `bool` `on:` is text, so it is a
   load error that says to write `true` or `false`.
+- Two `when:`s with the same value are a load error at the later one (`when: 1` and
+  `when: 1.0` are the same value; `when: 1`, `when: true` and `when: "1"` are not).
 - Where the `on:` type is known (node outputs, flow inputs, a LOOP body's carried fields,
   a child flow's inputs), a `when:` it can't hold is a load error, even with an `else:`:
 
 ```text
 case node 'route': `when: 1` is an int but `on: ${input.n}` is `str`; quote it: `when: "1"`
 case node 'route': `when: nogo` is not a tag of `on: ${synth.output}` (`Literal["go","no_go"]`); use one of: go, no_go
+case node 'route': `when: 1.0` duplicates `when: 1` (first at line 7), so it never matches; remove one
 ```
 
 Searched form — first true `when:` wins (a boolean expression, no `on:`):
@@ -1470,10 +1479,10 @@ Read the taken branch's output with `${gate.output}`:
 output: ${gate.output}         # bullish's output or cautious's output
 ```
 
-Routing on a `Literal` node output is **exhaustiveness-checked**: omitting a tag
-with no `else:` is a load error. A routing-only `case` over any other value may
-match nothing; then no branch runs. A `case` that
-[produces a value](#exhaustiveness) must always match.
+Routing on a `Literal` node output or flow input (a LOOP body's carried field, a child
+flow's input) is **exhaustiveness-checked**: omitting a tag with no `else:` is a
+load error. A routing-only `case` over any other value may match nothing; then no
+branch runs. A `case` that [produces a value](#exhaustiveness) must always match.
 
 #### Branches
 
@@ -1580,7 +1589,9 @@ too. It must always match: it needs an `else:`, or an `on:` whose type is a
 non-nullable `Literal` with every tag listed in a `when:`, or a non-nullable `bool` with
 `when: true` and `when: false`. A flow input counts
 as an `on:` type, and inside a narrowing branch only the tags that reach the
-`case` count. Otherwise loading fails:
+`case` count. Only a tagged union's member narrows: a branch on a plain `Literal`
+doesn't, so a nested `case` on that same `Literal` still lists every tag or has an
+`else:`. A value-producing `case` that may match nothing fails to load:
 
 ```text
 case node 'gate' produces a value, so it must be exhaustive: add an `else:` (on: ${input.x} is str, not a Literal or bool)
@@ -1595,7 +1606,7 @@ The reason in parentheses is one of:
 - `bool value(s) [false] not covered`: a `bool` `on:` lacks `when: false`.
 
 A routing-only `case` keeps "no match, nothing runs", and routing on a `Literal`
-node output is still checked for missing tags.
+node output or flow input is still checked for missing tags.
 
 #### Synthetic nodes
 

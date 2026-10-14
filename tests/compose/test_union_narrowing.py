@@ -388,6 +388,16 @@ def test_an_inner_on_case_is_exhaustive_over_its_narrowed_tag():
     ))
 
 
+def test_an_inner_on_case_over_a_flow_input_is_exhaustive_over_its_narrowed_tag():
+    _loads(_flow(
+        _case("route", "${input.d.action}", [("buy", "inner")], else_="e"),
+        _case("inner", "${input.d.action}", [("buy", "t")]),
+        _code("t", {"l": "${input.d.limit}"}),
+        _code("e"),
+        inputs="  s: str\n  d: Decision\n",
+    ))
+
+
 # --- other bases --- #
 
 
@@ -588,12 +598,13 @@ def test_required_groups_from_buy_and_sell_branches_meet_empty():
 # --- exhaustiveness --- #
 
 
-def test_a_non_exhaustive_on_over_a_literal_input_still_loads():
-    _loads(_flow(
+def test_a_non_exhaustive_on_over_a_literal_input_errors():
+    msg = _load_error(_flow(
         _case("route", "${input.mode}", [("a", "b")]),
         _code("b"),
         inputs="  s: str\n  mode: Literal[a, b]\n",
     ))
+    assert "enum tag(s) ['b'] not covered" in msg
 
 
 def test_a_non_exhaustive_on_over_a_union_node_output_still_errors():

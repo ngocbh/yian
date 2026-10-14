@@ -585,7 +585,11 @@ a non-nullable `bool` `on:`, with a flow-input `on:` resolved for it too; `when:
 compare as typed values, not text. An `on:` CASE's `when:` values are typed literals, and
 `compose/validate/case_exhaustive.py` (`check_case_when_values`) runs one membership check
 right after narrowing: where the `on:` type is known, a `when:` it can't hold (a non-tag,
-a wrong scalar type) is a located load error, even next to an `else:`. Compose lifts each
+a wrong scalar type) is a located load error, even next to an `else:`. Before that, it
+rejects a `when:` equal to an earlier one (typed equality: `1` and `1.0` are equal; `1`,
+`true` and `"1"` are not) at the later one, for any `on:`. A routing-only CASE over a
+`Literal` node output or flow input (a LOOP body's carried field, a child flow's input)
+needs a `when:` for every tag unless it has an `else:`. Compose lifts each
 CASE value branch to a synthetic `__value_N` CODE node and gives a typed CASE one
 `__case_<id>` CODE result node that checks the taken branch; this is load-time desugar,
 and the runtime is unchanged. A node a desugar pass lifts out of an authored node (an

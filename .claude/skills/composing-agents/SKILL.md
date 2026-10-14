@@ -584,7 +584,8 @@ It takes one branch; the other targets skip, and so does every node that plainly
 reads (or `depends_on`) a skipped one. Read the taken branch's result with
 `${route.output}` (or `${route.output.field}`). A routing-only `case` (no `output:`,
 no value branch, never read via `${route.output}`) may take none when no `when:`
-matches and there is no `else:`.
+matches and there is no `else:`; over a `Literal` node output or flow input it still
+needs a `when:` for every tag.
 ```yaml
 route:
   kind: case
@@ -598,15 +599,18 @@ route:
 ```
 Searched form (first true `when:` wins, no `on:`): `when: "score.output >= 0.5"`.
 `cases:` is a list of `{when:, then:}` mappings; any other shape is a load error.
-Routing on a `Literal` node output is **exhaustiveness-checked** — omitting a tag
-with no `else:` is a load error.
+Routing on a `Literal` node output or flow input (a LOOP body's carried field, a child
+flow's input) is **exhaustiveness-checked** — omitting a tag with no `else:` is a load
+error.
 
 **Matching.** Each `when:` is a typed value of the `on:` type (text, a number, or a bool;
 an unquoted date is its ISO text; quote a datetime). Ints and floats compare numerically,
 a bool never equals a number, and quoted values are text. Where the `on:` type is known, a
 `when:` it can't hold is a load error even with an `else:` (``case node 'route': `when: 1`
 is an int but `on: ${input.n}` is `str`; quote it: `when: "1"` ``). An untyped `on:` also
-compares exactly: `when: 1` doesn't match the text `"1"`.
+compares exactly: `when: 1` doesn't match the text `"1"`. Two `when:`s with the same
+value (`when: 1` and `when: 1.0`; not `1`, `true` and `"1"`) are a load error at the
+later one.
 
 **Branches.** A `then:`/`else:` is a sibling node (an unquoted word), a child call
 (an unquoted `call(...)` as the whole value), or a **value**. Any node name works as a

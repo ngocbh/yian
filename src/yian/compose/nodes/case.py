@@ -384,6 +384,32 @@ def on_match_value(value: Any) -> Any:
     return value
 
 
+def on_match_key(value: Any) -> tuple[str, Any]:
+    """Return a hashable key that is equal for two `when:` values exactly when they match
+    the same `on:` values.
+
+    Text matches text, a bool matches only the same bool, and ints and floats match
+    numerically (`_match_condition`'s comparison), so `1` and `1.0` share a key while
+    `True`, `1`, and `"1"` do not.
+
+    Args:
+        value (`Any`):
+            The authored `when:` value: text, a bool, an int, a float, or a date (the
+            build rejects anything else).
+
+    Returns:
+        `tuple[str, Any]`:
+            `("text", s)`, `("bool", b)`, or `("number", n)` over the value's match value
+            (`on_match_value`).
+    """
+    match = on_match_value(value)
+    if isinstance(match, bool):
+        return ("bool", match)
+    if isinstance(match, (int, float)):
+        return ("number", match)
+    return ("text", match)
+
+
 def _number_text(value: int | float) -> str:
     """Return a number as expression-literal digits: no exponent, and a float keeps a `.`."""
     # repr is the shortest round-tripping form; Decimal spells it positionally, since the

@@ -2,9 +2,9 @@
 
 Two coverage laws for `case` nodes:
 
-- Enum coverage, for every case: when an `on:` ref resolves to an ENUM node output, every
-  enum tag must be covered by a case `when:` value OR by a present `else:`. A missing tag
-  with no `else:` is a `LoadError`.
+- Enum coverage, for every case: when an `on:` ref resolves to an ENUM node output or flow
+  input, every enum tag must be covered by a case `when:` value OR by a present `else:`. A
+  missing tag with no `else:` is a `LoadError`.
 - Value-producing cases: a case that produces a value (it declares `output:`, is read
   through `${<case>.output}`, or is a branch target of such a case) must be exhaustive. It
   has an `else:`, or it is an `on:` form whose `on:` type is non-nullable and fully listed
@@ -18,16 +18,17 @@ One membership law for `on:`-form `when:` values (`check_case_when_values`): whe
 `on:` type is known, every `when:` value must be a possible member of it (compared exactly:
 no text conversion, a bool is not a number), even when the case has an `else:`. A value
 that can never equal the `on:` value is a `LoadError` naming the value, the type, and the
-fix.
+fix. Two `when:` values that are equal (typed equality, `on_match_key`) are a `LoadError` at
+the later one, for every `on:`-form case, since the later one never matches.
 
 This lives in the validate phase (not in `CaseDescriptor.build`) because it needs the flow's
 `producers` map — each producer node's `output_contract` — which only exists after every node is
 built. `.build()` lowers the case unconditionally; the loader runs `check_case_exhaustive` in
 the validate phase, alongside the other cross-node checks.
 
-Imports flow down/peer only: `expr` (ref scan), `nodes.contracts` (the output-contract
-sum), `typesys` (Type and the strict value check), and the compose peers
-`helpers.output_contracts`, `helpers.errors`, `helpers.typed_bindings`,
+Imports flow down/peer only: `diagnostics` (SourceRange), `expr` (ref scan),
+`nodes.contracts` (the output-contract sum), `typesys` (Type and the strict value check),
+and the compose peers `helpers.output_contracts`, `helpers.errors`, `helpers.typed_bindings`,
 `helpers.yaml_words`, `nodes.case`,
 `source.literals`, `parse.file`, `validate.narrowing`, and `validate.typed_bindings`.
 Nothing in the engine imports this back.
@@ -42,6 +43,7 @@ from typing import Any, Optional
 from yian.compose.helpers.output_contracts import (
     resolve_output_binding_contract,
 )
+from yian.diagnostics import SourceRange
 from yian.expr import ExpressionError, expr_refs_of
 from yian.nodes.contracts import (
     OutputContract,
@@ -53,7 +55,7 @@ from yian.typesys.values import Type, ValueKind, canonical_type_label
 from yian.compose.helpers.errors import LoadDiagnostics, source_text
 from yian.compose.helpers.typed_bindings import yaml_quoted
 from yian.compose.helpers.yaml_words import former_boolean_fix
-from yian.compose.nodes.case import on_match_value
+from yian.compose.nodes.case import on_match_key, on_match_value
 from yian.compose.parse.file import CaseDescriptor, NodeDescriptor
 from yian.compose.source.literals import parse_yaml_literal
 from yian.compose.validate.narrowing import Narrowing
@@ -73,7 +75,8 @@ def check_case_exhaustive(
     A known field projected from either arm of a partial record can drive enum coverage.
     With `narrowing`, each case resolves its `on:` ref against its own view of the
     producers and flow inputs, so a case inside a branch covers only the tags that can
-    reach it. Errors are located at the case node.
+    reach it, and enum coverage applies to an `on:` over a flow input too. Errors are
+    located at the case node.
 
     Args:
         descriptors (`dict`): The flow's node descriptors keyed by node id.
@@ -107,7 +110,7 @@ def check_case_exhaustive(
         )
         if desc.id in value_cases:
             _check_value_exhaustive(desc, case_producers, case_inputs, diagnostics)
-        _check_exhaustive(desc, _on_covered(desc), case_producers, diagnostics)
+        _check_exhaustive(desc, _on_covered(desc), case_producers, case_inputs, diagnostics)
 
 
 def check_case_when_values(
@@ -118,13 +121,21 @@ def check_case_when_values(
     narrowing: Narrowing | None = None,
     diagnostics: LoadDiagnostics | None = None,
 ) -> None:
-    """Reject an `on:`-form `when:` value that can never equal the `on:` value.
+    """Reject an `on:`-form `when:` value that repeats an earlier one or can never equal
+    the `on:` value.
+
+    Two `when:` values are duplicates when they match the same `on:` values (typed
+    equality: `1` and `1.0` are equal, `1`, `true`, and `"1"` are not); the later one never
+    matches. A duplicate is reported before any membership error in the same case, so a
+    repeated value is reported as such rather than as a non-member whose fix would repeat
+    it.
 
     A `when:` value is a member of the `on:` type when the type accepts it as is: text is
     never converted, a bool is not a number, an int fits a float, and `Literal` tags and
     numeric bounds apply. The `on:` ref resolves against the unnarrowed producers and flow
     inputs first, then the case's narrowed view, so a field only a branch's members have is
-    checked too. A case whose `on:` type is unknown or `object` is not checked.
+    checked too. A case whose `on:` type is unknown or `object` gets no membership check
+    (duplicates are still rejected).
 
     Args:
         descriptors (`dict[str, NodeDescriptor]`):
@@ -141,20 +152,22 @@ def check_case_when_values(
 
     Raises:
         `LoadError`:
-            A `when:` value can never be a member of its case's `on:` type. The error is
-            located at the first such value in source order.
+            Two `when:` values are equal (typed equality); located at the later one. Or a
+            `when:` value can never be a member of its case's `on:` type; located at the
+            first such value in source order.
     """
     diagnostics = diagnostics or LoadDiagnostics()
     for desc in descriptors.values():
         if not isinstance(desc, CaseDescriptor) or desc.on is None:
             continue
+        _check_duplicate_whens(desc, diagnostics)
         typ = _resolve_on_type(desc.on, producers, flow_inputs)
         if typ is None and narrowing is not None:
             typ = _resolve_on_type(desc.on, *narrowing.for_node(desc.id))
         if typ is None or typ.kind is ValueKind.OBJECT:
             continue
         for index, case in enumerate(desc.cases):
-            when_range = desc.when_ranges[index] if index < len(desc.when_ranges) else None
+            when_range = _when_range(desc, index)
             message = _when_value_error(
                 desc.on, case.get("when"), typ, source_text(diagnostics, when_range)
             )
@@ -162,6 +175,98 @@ def check_case_when_values(
                 raise diagnostics.error(
                     f"case node {desc.id!r}: {message}", range=when_range or desc.range
                 )
+
+
+def _check_duplicate_whens(desc: CaseDescriptor, diagnostics: LoadDiagnostics) -> None:
+    """Reject an `on:`-form case's `when:` value that equals an earlier one.
+
+    Args:
+        desc (`CaseDescriptor`):
+            The `on:`-form case.
+        diagnostics (`LoadDiagnostics`):
+            Source ownership for located errors and the authored `when:` text.
+
+    Raises:
+        `LoadError`:
+            Two `when:` values match the same `on:` values (`on_match_key`). The error is
+            located at the later one, the first such repeat in source order.
+    """
+    seen: dict[tuple[str, Any], int] = {}
+    for index, case in enumerate(desc.cases):
+        value = case.get("when")
+        if type(value) not in _VALUE_PHRASES:
+            continue
+        key = on_match_key(value)
+        if key not in seen:
+            seen[key] = index
+            continue
+        first = seen[key]
+        when_range = _when_range(desc, index)
+        first_range = _when_range(desc, first)
+        message = _duplicate_when_message(
+            value,
+            source_text(diagnostics, when_range),
+            desc.cases[first].get("when"),
+            source_text(diagnostics, first_range),
+            first_range=first_range,
+            first_index=first,
+        )
+        raise diagnostics.error(f"case node {desc.id!r}: {message}", range=when_range or desc.range)
+
+
+def _when_range(desc: CaseDescriptor, index: int) -> SourceRange | None:
+    """Return the source range of a case's `index`-th `when:` value, when known."""
+    return desc.when_ranges[index] if index < len(desc.when_ranges) else None
+
+
+def _duplicate_when_message(
+    value: Any,
+    src: str | None,
+    first_value: Any,
+    first_src: str | None,
+    *,
+    first_range: SourceRange | None,
+    first_index: int,
+) -> str:
+    """Return the message for a `when:` value that repeats an earlier one.
+
+    Args:
+        value (`Any`):
+            The later, repeated `when:` value.
+        src (`str | None`):
+            Its authored source text, when known.
+        first_value (`Any`):
+            The earlier `when:` value it equals.
+        first_src (`str | None`):
+            The earlier value's authored source text, when known.
+        first_range (`SourceRange | None`):
+            The earlier value's source range, when known.
+        first_index (`int`):
+            The earlier value's index in `cases`, shown when its range is unknown.
+
+    Returns:
+        `str`:
+            The message, without the `case node` prefix.
+    """
+    shown = _authored_or_spelling(value, src)
+    first_shown = _authored_or_spelling(first_value, first_src)
+    where = (
+        f"first at line {first_range.start_line}"
+        if first_range is not None
+        else f"first at cases[{first_index}]"
+    )
+    return (
+        f"`when: {shown}` duplicates `when: {first_shown}` ({where}), "
+        "so it never matches; remove one"
+    )
+
+
+def _authored_or_spelling(value: Any, src: str | None) -> str:
+    """Return a `when:` value's authored text, or its spelling when that text is unknown or
+    starts with an anchor, alias, or tag (which is not part of the value's spelling)."""
+    if src is not None and not src.startswith(("&", "*", "!")):
+        return src
+    return _spelling(value)
 
 
 # The scalar kind of each `when:` value type, for "this value has the right kind but is
@@ -243,8 +348,7 @@ def _when_fix(value: Any, typ: Type, src: str | None) -> str:
     if not isinstance(value, str):
         # An anchor, alias, or tag is not part of the value's spelling, so quoting the
         # source would change the text; the value's own spelling is quoted instead.
-        authored = src is not None and not src.startswith(("&", "*", "!"))
-        written = src if authored else _spelling(value)
+        written = _authored_or_spelling(value, src)
         if _fits(typ, written):
             return f"; quote it: `when: {yaml_quoted(written)}`"
         if isinstance(value, float) and value.is_integer() and _fits(typ, int(value)):
@@ -508,20 +612,37 @@ def _check_exhaustive(
     desc: CaseDescriptor,
     covered: list[Any],
     producers: dict[str, OutputContract],
+    inputs: dict[str, ValueContract],
     diagnostics: LoadDiagnostics | None = None,
 ) -> None:
     """Enum-exhaustiveness for the `on:` form.
 
-    Resolves the `on:` ref to a `Type`; if it carries `.tags` (an enum), every tag must
-    be a text `when:` match value OR be covered by a present `else:`. A missing tag with no
-    `else:` is a `LoadError`. A non-enum / unresolved producer is lenient (no check).
+    Resolves the `on:` ref to a `Type`; if it carries `.tags` (an enum node output or flow
+    input), every tag must be a text `when:` match value OR be covered by a present
+    `else:`. A non-enum or unresolved `on:` is lenient (no check).
+
+    Args:
+        desc (`CaseDescriptor`):
+            The case descriptor.
+        covered (`list[Any]`):
+            The case's typed `when:` match values.
+        producers (`dict[str, OutputContract]`):
+            The producer contracts the case sees.
+        inputs (`dict[str, ValueContract]`):
+            The flow-input contracts the case sees.
+        diagnostics (`LoadDiagnostics | None`, *optional*, defaults to `None`):
+            Source ownership for located errors.
+
+    Raises:
+        `LoadError`:
+            An enum tag is not covered and the case has no `else:`; located at the case.
     """
     diagnostics = diagnostics or LoadDiagnostics()
     if desc.on is None or desc.else_ is not None:
         return  # searched form, or an else: that satisfies coverage
-    typ = _resolve_on_type(desc.on, producers)
+    typ = _resolve_on_type(desc.on, producers, inputs)
     if typ is None or typ.tags is None:
-        return  # not a checked enum producer -> lenient
+        return  # not a checked enum -> lenient
     missing = sorted(typ.tags - _covered_tags(covered))
     if missing:
         raise diagnostics.error(

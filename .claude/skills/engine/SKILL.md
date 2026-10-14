@@ -262,9 +262,11 @@ this model whenever you design anything:
   non-nullable `bool` `on:`, compared as typed values), with a flow-input `on:` resolved
   for it. `case_exhaustive.py`'s `check_case_when_values` runs right after narrowing: an
   `on:` CASE's `when:` values are typed literals, and one the known `on:` type can't hold
-  is a located load error, even next to an `else:`. Load-time desugar lifts each CASE
-  value branch to a `__value_N` CODE node and gives a typed CASE a `__case_<id>` result
-  node; the runtime is unchanged. Python-authored nodes pass `output_contract=`; there is
+  is a located load error, even next to an `else:`. It also rejects a `when:` equal to
+  an earlier one (typed equality: `1` and `1.0` are equal), at the later one, for any
+  `on:`. Routing-only enum coverage reads `Literal` flow inputs as well as node outputs.
+  Load-time desugar lifts each CASE value branch to a `__value_N` CODE node and gives a
+  typed CASE a `__case_<id>` result node; the runtime is unchanged. Python-authored nodes pass `output_contract=`; there is
   no parallel output-Type API. Authored `output:` syntax (the descriptor's normalized
   `outputs` field) stays unchanged. Compose injects an optional source-aware reader
   through `BuildContext`; `NodeDescriptor.output_contract()` invokes it only at each

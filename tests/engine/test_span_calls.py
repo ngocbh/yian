@@ -220,7 +220,7 @@ _SITES = {
     "flow-output-record": (_fill(_CODE, **{**_GOOD_CODE, "out": "{a: '${upper(x.output, 1)}'}"}), "flow output from: "),
     "defs-body-input": (_fill(_BODY, inner="${upper(input.w, 1)}", w="${input.v}"), "node 's' input 'n' from: "),
     "call-input": (_fill(_BODY, inner="${input.w}", w="${upper(input.v, 1)}"), "node 'c' input 'w' from: "),
-    "call-kwarg": (_fill(_CALL_KWARG, w="${upper(input.v, 1)}"), "node '__call_0' input 'w' from: "),
+    "call-kwarg": (_fill(_CALL_KWARG, w="${upper(input.v, 1)}"), "node 'x' input 'n' call(body) argument 'w' from: "),
     "map-over": (_fill(_MAP, over="${upper(input.v, 1)}", item="${item}"), "node 'm' map over: "),
     "map-item-input": (_fill(_MAP, over="${[input.v]}", item="${upper(item, 1)}"), "node 'm' map input 'item' from: "),
     "loop-seed": (_fill(_LOOP, n="${upper(input.v, 1)}"), "node 'r' input 'n' from: "),
@@ -304,6 +304,12 @@ def test_python_built_child_binding_names_its_static_path(tmp_path):
     flow = load_flow(_fill(_BODY, inner="${input.w}", w="${input.v}"))
     flow.compiled.nodes["c"].child.wiring["s"]["n"] = Binding("${upper(input.w, 1)}")
     _run_raises(flow, rf"^node 'c/s' input 'n': {_UPPER_RUN}", tmp_path)
+
+
+def test_python_built_inline_call_argument_names_the_argument(tmp_path):
+    flow = load_flow(_fill(_CALL_KWARG, w="${input.v}"))
+    flow.compiled.wiring["__call_0"]["w"] = Binding("${upper(input.v, 1)}")
+    _run_raises(flow, rf"^node 'x' input 'n' call\(body\) argument 'w': {_UPPER_RUN}", tmp_path)
 
 
 def test_python_built_reserved_and_synthetic_keys_use_their_site_labels(tmp_path):

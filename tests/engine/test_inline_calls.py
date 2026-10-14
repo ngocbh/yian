@@ -651,5 +651,6 @@ output: ${use.output}
     with pytest.raises(LoadError) as exc:
         load_flow(text)
     msg = str(exc.value)
-    assert "__call_0" in msg
-    assert "child expects" in msg  # the cross-flow type-check message
+    # The cross-flow type check names the authored argument, not the synth node.
+    assert "node 'use' input 'topic' call(enrich) argument 'topic' — child expects" in msg
+    assert "__call_" not in msg

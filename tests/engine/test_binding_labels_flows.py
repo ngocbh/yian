@@ -1,8 +1,8 @@
 """Runtime binding errors name a desugared param the way load errors name it.
 
 A CASE `on:` reads as `node '<id>' on:`, and a value entry's one input reads as
-`value entry '<id>'` (template paths add `at <path>`). An ordinary node input keeps
-`input '<p>'`.
+`value entry '<id>'` (template paths add `at <path>`), and an inline call's argument reads
+as `<site> call(<callee>) argument '<p>'`. An ordinary node input keeps `input '<p>'`.
 """
 
 import pytest
@@ -279,3 +279,39 @@ def test_an_unknown_type_in_a_record_flow_output_names_the_field():
         load_flow(_code_and("\n  r: ${isinstance(input.s, Nope)}", "  s: !str\n"))
 
     assert "flow output 'r': unknown type 'Nope'" in str(caught.value)
+
+
+def test_an_inline_call_argument_failure_names_the_argument():
+    text = """
+id: f
+name: f
+input:
+  x: !float
+defs:
+  child:
+    input:
+      y: !float
+    nodes:
+      c:
+        kind: code
+        code: "return inputs['y']"
+        input:
+          y: ${input.y}
+        output: float
+    output: ${c.output}
+nodes:
+  n:
+    kind: code
+    code: "return inputs['a']"
+    input:
+      a: call(child, y=${input.x * 10})
+    output: float
+output: ${n.output}
+"""
+    result = run_flow(load_flow(text), {"x": 1e308})
+
+    assert result.status == "failed"
+    assert result.failure.node_id == "__call_0"
+    assert result.failure.message == (
+        "node 'n' input 'a' call(child) argument 'y': non-finite number inf is not a yian value"
+    )

@@ -178,7 +178,7 @@ def test_a_call_target_under_sell_fails_the_call_type_check():
         _case("route", _ON, [("sell", "call(place, order=${d.output})")], else_="e"),
         _code("e"),
     ))
-    assert "binding 'order' — child expects" in msg
+    assert "argument 'order' — child expects" in msg
     assert """source is '{"action":Literal(sell)""" in msg
 
 
@@ -186,7 +186,7 @@ def test_an_unrouted_call_of_the_whole_union_still_fails():
     msg = _load_error(_flow(
         _code("c", {"r": "call(place, order=${d.output})"}),
     ))
-    assert "binding 'order' — child expects" in msg
+    assert "argument 'order' — child expects" in msg
 
 
 # --- chains --- #
@@ -313,7 +313,7 @@ def test_a_nullable_union_else_target_sees_an_optional_union():
 
     _loads(flow("place_maybe_rest"))
     msg = _load_error(flow("place_rest"))
-    assert "binding 'order' — child expects" in msg and "Optional(" in msg
+    assert "argument 'order' — child expects" in msg and "Optional(" in msg
 
 
 def test_a_nullable_union_narrows_to_a_non_nullable_member_under_when():
@@ -442,7 +442,7 @@ def test_a_path_base_through_an_optional_record_keeps_nullability_in_else():
 
     _loads(flow("place_maybe_rest"))
     msg = _load_error(flow("place_rest"))
-    assert "binding 'order' — child expects" in msg and "Optional(" in msg
+    assert "argument 'order' — child expects" in msg and "Optional(" in msg
 
 
 # --- not narrowed --- #
@@ -556,7 +556,7 @@ def test_a_nullable_union_defensive_else_sees_none():
         _code("b"),
         d_type="Optional(Decision)",
     ))
-    assert "binding 'order' — child expects" in msg
+    assert "argument 'order' — child expects" in msg
     assert msg.endswith("source is 'None'")
 
 
@@ -798,7 +798,7 @@ def test_isinstance_narrows_an_opaque_object_to_the_checked_type():
 
     _loads(flow("isinstance(x.output, Buy)"))
     msg = _load_error(flow("isinstance(x.output, Sell)"))
-    assert "binding 'order' — child expects" in msg
+    assert "argument 'order' — child expects" in msg
     assert """source is '{"action":Literal(sell)""" in msg
 
 
@@ -823,7 +823,7 @@ def test_an_opaque_object_outside_isinstance_does_not_fit_a_record():
         _searched(("input.s == 'x'", "call(place, order=${x.output})")),
         _code("e"),
     ))
-    assert "binding 'order' — child expects" in msg and "source is 'object'" in msg
+    assert "argument 'order' — child expects" in msg and "source is 'object'" in msg
 
 
 def test_a_target_routed_by_two_isinstance_cases_gets_their_union():

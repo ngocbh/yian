@@ -411,7 +411,10 @@ def test_validate_references_diag_case_then_call_locates_at_then_line():
     )
     with pytest.raises(LoadError) as exc:
         load_flow(text)
-    assert "nope" in str(exc.value) and "'__call_0'" in str(exc.value)
+    assert "node 'gate' cases[0].then call(helper) argument 'x' from: reference ${nope.output}" in (
+        str(exc.value)
+    )
+    assert "__call_" not in str(exc.value)
     assert exc.value.diagnostic.frames[0].range.start_line == 12
 
 

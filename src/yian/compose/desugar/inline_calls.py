@@ -238,7 +238,7 @@ def desugar_inline_calls(
     for nid, desc in descriptors.items():
         rng = getattr(desc, "range", None)
         field_ranges = getattr(desc, "field_ranges", None)
-        new_desc, calls, origins = _desugar_descriptor(
+        new_desc, calls, origins, sites, call_sites = _desugar_descriptor(
             desc,
             mint,
             host=nid,
@@ -260,12 +260,14 @@ def desugar_inline_calls(
             synth[call.id] = _to_call_descriptor(
                 call,
                 host=f"node {nid!r}",
+                site=sites[call.id],
+                call_site=call_sites[call.id],
                 host_id=nid,
                 range=origins.get(call.id, rng),
                 diagnostics=diagnostics,
             )
 
-    new_outputs, out_calls = _desugar_outputs(
+    new_outputs, out_calls, out_sites, out_call_sites = _desugar_outputs(
         outputs_section,
         mint,
         range=outputs_range,
@@ -278,23 +280,29 @@ def desugar_inline_calls(
         synth[call.id] = _to_call_descriptor(
             call,
             host="flow outputs",
+            site=out_sites[call.id],
+            call_site=out_call_sites[call.id],
             range=outputs_range,
             diagnostics=diagnostics,
         )
 
-    new_asserts, assert_calls, assert_ranges = _desugar_asserts(
-        asserts_section,
-        mint,
-        assertion_range_at=assertion_range_at,
-        assertion_origin_at=assertion_origin_at,
-        type_names=type_names,
-        diagnostics=diagnostics,
+    new_asserts, assert_calls, assert_ranges, assert_sites, assert_call_sites = (
+        _desugar_asserts(
+            asserts_section,
+            mint,
+            assertion_range_at=assertion_range_at,
+            assertion_origin_at=assertion_origin_at,
+            type_names=type_names,
+            diagnostics=diagnostics,
+        )
     )
     for call in assert_calls:
         assert_range = assert_ranges.get(call.id)
         synth[call.id] = _to_call_descriptor(
             call,
             host="assert",
+            site=assert_sites[call.id],
+            call_site=assert_call_sites[call.id],
             range=assert_range,
             diagnostics=diagnostics,
         )
@@ -372,18 +380,35 @@ def _desugar_descriptor(
     type_names: frozenset[str],
     diagnostics: LoadDiagnostics,
 ) -> tuple:
-    """Desugar a descriptor's binding fields, returning `(new_desc, calls, origins)`.
+    """Desugar a descriptor's binding fields.
 
     Walks the binding fields via `map_binding_sources`; each inline call is tagged in
     `origins` with the SOURCE RANGE of the binding it was found in (via `_binding_origin`),
     so its synth node locates at its own `call(...)` directive rather than the host header.
-    Nested inner-first calls share their enclosing binding's origin. ``style_at(field,
-    key)`` gives each binding's YAML scalar style (plain when absent)."""
+    It is also tagged in `sites` with that binding's author-facing phrase (`node 'x' input
+    'a'`, `value entry 'v'`, `node 'm' map over`) and in `call_sites` with its address
+    (`("input", host, key)`, or `("field", host, field)` for a scalar binding field).
+    Nested inner-first calls share their enclosing binding's tags. ``style_at(field,
+    key)`` gives each binding's YAML scalar style (plain when absent).
+
+    Returns:
+        `tuple`:
+            `(new_desc, calls, origins, sites, call_sites)`.
+    """
     calls: list = []
     origins: dict[str, Optional[SourceRange]] = {}
+    sites: dict[str, str] = {}
+    call_sites: dict[str, tuple[str, ...]] = {}
 
     def mapper(field: str, key: str, source: Any) -> Any:
         origin = _binding_origin(field, key, field_ranges, range)
+        if field == "inputs":
+            # A value entry names its one input `value entry '<id>'`.
+            site = desc.field_labels.get(f"input {key!r}") or f"node {host!r} input {key!r}"
+            call_site = ("input", host, key)
+        else:
+            site = f"node {host!r} {desc.kind} {field}"
+            call_site = ("field", host, field)
         before = len(calls)
         new_source = _desugar_source(
             source,
@@ -401,10 +426,12 @@ def _desugar_descriptor(
         )
         for c in calls[before:]:
             origins[c.id] = origin
+            sites[c.id] = site
+            call_sites[c.id] = call_site
         return new_source
 
     new_desc = map_binding_sources(desc, mapper)
-    return new_desc, calls, origins
+    return new_desc, calls, origins, sites, call_sites
 
 
 def _desugar_source(
@@ -713,14 +740,26 @@ def _desugar_outputs(
     type_names: frozenset[str] = frozenset(),
     diagnostics: LoadDiagnostics,
 ) -> tuple:
-    """Desugar the flow `output:` section, returning `(new_outputs, inline_calls)`.
+    """Desugar the flow `output:` section.
+
     ``range`` is the `output:` section source range; ``style_at(key)`` gives an output's
     YAML scalar style (`key` is None for a single output; plain when absent), and
-    ``typed`` names the outputs declared with a type."""
+    ``typed`` names the outputs declared with a type.
+
+    Returns:
+        `tuple`:
+            `(new_outputs, inline_calls, sites, call_sites)`: `sites` maps each call's
+            synth id to its output's phrase (`flow output`, `flow output 'r'`) and
+            `call_sites` to its address `("output", key)` (`key` is `None` for a single
+            output).
+    """
     calls: list = []
-    new_outputs = map_output_sources(
-        outputs,
-        lambda key, source: _desugar_source(
+    sites: dict[str, str] = {}
+    call_sites: dict[str, tuple[str, Any]] = {}
+
+    def desugar(key: Any, source: Any) -> Any:
+        before = len(calls)
+        new_source = _desugar_source(
             source,
             mint,
             calls,
@@ -730,9 +769,14 @@ def _desugar_outputs(
             quotable=key not in typed,
             type_names=type_names,
             diagnostics=diagnostics,
-        ),
-    )
-    return new_outputs, calls
+        )
+        for call in calls[before:]:
+            sites[call.id] = "flow output" if key is None else f"flow output {key!r}"
+            call_sites[call.id] = ("output", key)
+        return new_source
+
+    new_outputs = map_output_sources(outputs, desugar)
+    return new_outputs, calls, sites, call_sites
 
 
 def _desugar_asserts(
@@ -752,11 +796,19 @@ def _desugar_asserts(
     wins. ``assertion_range_at`` supplies a source range by authored list index, keeping
     duplicate assertion text distinct. Rewriting changes only the executable expression,
     so generated node ids never replace authored presentation. `None`/empty returns unchanged.
+
+    Returns:
+        `tuple`:
+            `(new_asserts, inline_calls, call_ranges, sites, call_sites)`: each maps a
+            call's synth id to its assertion's source range, its phrase (`flow assert
+            '<display>'`), and its address `("assert", index)`.
     """
     if not asserts:
-        return asserts, [], {}
+        return asserts, [], {}, {}, {}
     calls: list = []
     call_ranges: dict[str, Optional[SourceRange]] = {}
+    sites: dict[str, str] = {}
+    call_sites: dict[str, tuple[str, int]] = {}
     new_asserts: list[Assertion] = []
     for index, value in enumerate(asserts):
         assertion_range = (
@@ -797,14 +849,18 @@ def _desugar_asserts(
         )
         for call in calls[before:]:
             call_ranges[call.id] = assertion_range
+            sites[call.id] = f"flow assert {assertion.display!r}"
+            call_sites[call.id] = ("assert", index)
         new_asserts.append(replace(assertion, expression=expression))
-    return new_asserts, calls, call_ranges
+    return new_asserts, calls, call_ranges, sites, call_sites
 
 
 def _to_call_descriptor(
     call: InlineCall,
     *,
     host: str,
+    site: Optional[str] = None,
+    call_site: Optional[tuple[str | int | None, ...]] = None,
     host_id: Optional[str] = None,
     range: Optional[SourceRange] = None,
     diagnostics: LoadDiagnostics | None = None,
@@ -823,6 +879,13 @@ def _to_call_descriptor(
             The recognized directive: synth id, callee, and keyword args.
         host (`str`):
             The site named in error messages (`node 'x'`, `flow outputs`, ...).
+        site (`str`, *optional*, defaults to `None`):
+            The authored binding the directive was written in (`node 'x' input 'a'`,
+            `flow output`, ...). When given, the synth node's `field_labels` name the call
+            `<site> call(<callee>)` and each argument `<site> call(<callee>) argument
+            '<name>'`, so its errors read as the authored text, not the synth id.
+        call_site (`tuple`, *optional*, defaults to `None`):
+            The address of that binding, recorded as the synth node's `call_site`.
         host_id (`str`, *optional*, defaults to `None`):
             The node the call was lifted out of, recorded as the synth node's `host` so it
             takes that node's CASE routes, `depends_on`, and `runs_after`. `None` for a call
@@ -857,6 +920,17 @@ def _to_call_descriptor(
                 f"`input:` may read `${{item}}`)",
                 range=range,
             )
+    field_labels = (
+        {
+            "call": f"{site} call({call.callee})",
+            **{
+                f"input {name!r}": f"{site} call({call.callee}) argument {name!r}"
+                for name in call.args
+            },
+        }
+        if site is not None
+        else {}
+    )
     return CallDescriptor(
         id=call.id,
         call=call.callee,
@@ -865,6 +939,8 @@ def _to_call_descriptor(
         host=host_id,
         range=range,
         field_ranges={},
+        field_labels=field_labels,
+        call_site=call_site,
     )
 
 

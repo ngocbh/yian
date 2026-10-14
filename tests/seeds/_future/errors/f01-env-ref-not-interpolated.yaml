@@ -6,9 +6,6 @@
 #                                       is handed to the node as the env var's value
 #   env: {RETRIES: 123}              -> only env KEYS are checked for str-ness
 #
-# (A literal under a secret name, such as `API_KEY: 123`, is a load error; a `${...}` there
-# passes because it holds no secret.)
-#
 # A per-entry range alone cannot create a diagnostic because no validation runs for `env:` values.
 # The engine has no failure or semantic origin to attach to this literal pass-through.
 #

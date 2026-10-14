@@ -18,9 +18,6 @@ Modules:
   - `output_contracts` the template-aware output-binding contract resolver: exact or
                   partial direct-reference projection, source-free proven expression
                   results, closed-record assembly, and closed-path validation.
-  - `secret_literals` `secret_literal_path`: the first literal value under a secret
-                  name, walking nested containers; plus the shared message wording
-                  and `check_env_secrets` for an `env:` mapping.
   - `source`      parse-free boundary-input range projection over an existing
                   `SourceCursor`; compatibility metadata, never a YAML parser. Assertion
                   origin/range pairs come from one retained item cursor in the build

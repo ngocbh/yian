@@ -410,16 +410,3 @@ def test_package_root_scan_catches_facade_spellings() -> None:
         )
     }
     assert "yian" not in targets
-
-
-def test_secret_names_leaf_imports_only_stdlib() -> None:
-    """Compose and memory both read the secret name list, so it imports no yian."""
-    path = PACKAGE_ROOT / "secret_names.py"
-    violations = [
-        f"{path.relative_to(SOURCE_ROOT)}:{line}: {statement} -> {target}"
-        for line, target, statement in _import_targets(path)
-        if target == "yian" or target.startswith("yian.")
-    ]
-    assert not violations, "secret_names must stay a stdlib leaf:\n" + "\n".join(
-        violations
-    )

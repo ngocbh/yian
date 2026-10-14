@@ -6,8 +6,7 @@ fails loudly until its identity policy is decided, instead of silently changing 
 semantics without changing the fingerprint.
 
 Every authored value, including a literal under any name, is part of the manifest: the
-manifest never guesses at secrets, since flow files are kept free of literal secrets when
-they load.
+manifest never redacts or guesses at secrets.
 """
 
 from __future__ import annotations

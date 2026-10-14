@@ -4,6 +4,7 @@ from langchain_openai import AzureChatOpenAI
 
 from .base_client import BaseLLMClient, normalize_content
 from .config import AZURE_NEEDS_BASE_URL
+from .openai_client import RequestBlockMixin
 from .validators import validate_model
 
 _PASSTHROUGH_KWARGS = (
@@ -28,8 +29,8 @@ def _base_endpoint(endpoint: str) -> str:
     return e.rstrip("/")
 
 
-class NormalizedAzureChatOpenAI(AzureChatOpenAI):
-    """AzureChatOpenAI with normalized content output."""
+class NormalizedAzureChatOpenAI(RequestBlockMixin, AzureChatOpenAI):
+    """AzureChatOpenAI with normalized content output and the `azure` block in each request."""
 
     def invoke(self, input, config=None, **kwargs):
         return self.normalize_reply(super().invoke(input, config, **kwargs))
@@ -76,7 +77,9 @@ class AzureOpenAIClient(BaseLLMClient):
             if key in self.kwargs:
                 llm_kwargs[key] = self.kwargs[key]
 
-        return NormalizedAzureChatOpenAI(**llm_kwargs)
+        return NormalizedAzureChatOpenAI(
+            **llm_kwargs, block=self.kwargs.get("block") or {}, block_provider="azure",
+        )
 
     def validate_model(self) -> bool:
         """Azure accepts any deployed model name."""

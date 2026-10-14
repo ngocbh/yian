@@ -157,8 +157,11 @@ def model_from_config(config) -> BaseChatModel:
     which needs that key, replaces the provider's default endpoint. For `azure`,
     `base_url` is the required resource endpoint and `model` the deployment name.
 
-    Provider-specific reasoning knobs apply only to the selected provider. The
-    returned model supports ordinary tool binding, structured output, and invocation.
+    Provider-specific reasoning knobs apply only to the selected provider. The block
+    named after the provider is passed to its client as ``block``; the OpenAI-family
+    clients (``openai``, ``azure`` and the OpenAI-compatible vendors) send it into the
+    request body as written. The returned model supports ordinary tool binding,
+    structured output, and invocation.
 
     Args:
         config (`LLMConfig` or `dict`):
@@ -195,7 +198,7 @@ def model_from_config(config) -> BaseChatModel:
             reasoning_effort=config.openai_reasoning_effort,
         )
 
-    kwargs: dict[str, Any] = {}
+    kwargs: dict[str, Any] = {"block": config.block_for(provider)}
     if provider == "anthropic" and config.anthropic_effort:
         kwargs["effort"] = config.anthropic_effort
     elif provider == "openai" and config.openai_reasoning_effort:

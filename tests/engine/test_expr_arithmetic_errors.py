@@ -1,4 +1,4 @@
-"""Arithmetic or rendering that Python can't complete fails the run, not the caller."""
+"""Arithmetic that Python can't complete fails the run, not the caller."""
 
 import sys
 
@@ -52,12 +52,6 @@ def test_an_int_too_large_for_float_division_fails_the_run():
 def test_a_type_error_on_a_huge_int_fails_the_run():
     failure = _failed("n: !int", '${10 ** input.n + "a"}', {"n": 5000})
     assert "type error" in failure.message
-
-
-@needs_digit_limit
-def test_an_embedded_int_too_large_for_text_fails_the_run():
-    failure = _failed("n: !int", "'x=${10 ** input.n}'", {"n": 5000})
-    assert "as text" in failure.message
 
 
 def test_a_missing_format_key_fails_the_run():

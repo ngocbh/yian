@@ -81,10 +81,9 @@ value is checked.
 
 An `int` computed by an expression or a node, or supplied as an input, has no size
 limit. The run log and the run's outputs record it exactly, however many digits it
-has, and `resume_flow` reads it back unchanged. An int literal written in the YAML
-may have at most Python's limit (4300 digits by default); a longer one is a load
-error. Rendering an int as text (embedded in a string or in prompt text) follows the
-same limit; see
+has, and `resume_flow` reads it back unchanged. An int literal in the YAML has no size
+limit either. Rendering an int as text (embedded in a string or in prompt text) writes
+all its digits; see
 [Expressions → Arithmetic follows Python](expressions.md#arithmetic-follows-python).
 
 ## Nesting limit

@@ -133,16 +133,14 @@ compute fails like any other expression error:
 - `**` overflow: `${2.0 ** 5000}`;
 - an int too large to mix with a float: `${10 ** 400 * 1.0}`;
 - a repetition count too large: `${"a" * 10 ** 20}`;
-- a missing `%(key)s`: `${"%(k)s" % record}` when `record` has no `k`;
-- a value holding an int too long to render as text (past Python's limit, 4300 digits
-  by default), embedded in text or anywhere in a prompt: `"v=${10 ** 5000}"`.
+- a missing `%(key)s`: `${"%(k)s" % record}` when `record` has no `k`.
 
 An int of any size is a value: a whole-string `${10 ** 5000}` binds the int, and the
-run log, outputs, and `resume_flow` keep every digit. Rendering it as text fails. An
-int literal written in the YAML may have at most Python's limit (4300 digits by
-default); a longer one is a load error.
-`render_as_json` writes all the digits, so `${render_as_json(big)}` is text you can
-embed or put in a prompt.
+run log, outputs, and `resume_flow` keep every digit. Embedding it in text or a prompt
+(`"v=${10 ** 5000}"`), `join`, and the `%` conversions `%s`, `%r`, `%a`, `%d`, `%i` and `%u`
+(`${"%d" % big}`) write all its digits, and so does `render_as_json`. `%e`, `%f`, `%g`
+and `%c` need a float or a character, so an int too large for one fails like
+`${10 ** 400 * 1.0}`. An int literal in the YAML may have any number of digits.
 
 The failure is `binding.evaluate` in a binding, `node.execute` at the CASE node in a
 searched `when:`, `assertion.failed` in a node or flow `asserts:`, and `node.execute` at the

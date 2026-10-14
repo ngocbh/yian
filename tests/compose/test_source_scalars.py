@@ -181,14 +181,42 @@ def test_explicit_tag_rejects_a_non_core_form(read, text, found):
         assert caught.value.range.start_line == 1
 
 
-@ENTRY_POINTS
-def test_an_integer_too_long_to_convert_is_a_located_syntax_error(read):
-    message = "an integer with 5000 digits is too long"
-    with pytest.raises(SourceSyntaxError, match=message) as caught:
-        read("value: " + "1" * 5000 + "\n")
+D = "1" * 5000  # past Python's default 4300-digit limit
+ONES = (10**5000 - 1) // 9  # the int spelled by D
 
-    if read is _document_value:
-        assert caught.value.range is not None
+
+@pytest.fixture
+def _default_int_digit_limit():
+    """Run a test under Python's default int/str digit limit."""
+    get = getattr(sys, "get_int_max_str_digits", None)
+    if get is None:
+        yield  # this Python has no limit
+        return
+    before = get()
+    sys.set_int_max_str_digits(4300)
+    try:
+        yield
+        after = get()
+    finally:
+        sys.set_int_max_str_digits(before)
+    assert after == 4300, "yian code changed the global digit limit"
+
+
+@pytest.mark.usefixtures("_default_int_digit_limit")
+@ENTRY_POINTS
+def test_an_integer_of_any_length_loads(read):
+    assert read("value: " + D + "\n") == {"value": ONES}
+    assert read("value: -" + D + "\n") == {"value": -ONES}
+    assert read("value: +" + D + "\n") == {"value": ONES}
+    assert read("value: 0" + D + "\n") == {"value": ONES}
+    assert read("value: 0x" + "f" * 5000 + "\n") == {"value": 16**5000 - 1}
+    assert read("value: 0o" + "7" * 5000 + "\n") == {"value": 8**5000 - 1}
+    assert read("value: !!int " + D + "\n") == {"value": ONES}
+
+
+@pytest.mark.usefixtures("_default_int_digit_limit")
+def test_read_plain_scalar_reads_an_integer_of_any_length():
+    assert read_plain_scalar(D) == ONES
 
 
 @pytest.mark.parametrize(

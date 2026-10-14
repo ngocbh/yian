@@ -99,6 +99,54 @@ output: ${echo.output}
 """
 
 
+_EMBED_FLOW = """
+id: big-embed
+name: big_embed
+input:
+  x: !int
+nodes:
+  show:
+    kind: code
+    input:
+      text: "v=${input.x}"
+    code: |
+      return inputs["text"]
+output: ${show.output}
+"""
+
+_JOIN_FLOW = """
+id: big-join
+name: big_join
+input:
+  xs: !list(int)
+nodes:
+  show:
+    kind: code
+    input:
+      text: ${join(input.xs, ",")}
+    code: |
+      return inputs["text"]
+output: ${show.output}
+"""
+
+_ASK_FLOW = """
+id: big-ask
+name: big_ask
+input:
+  x: !int
+nodes:
+  ask:
+    kind: human_input
+    input:
+      x: ${input.x}
+    prompt: "x is ${x}"
+    questions:
+      - question: "q ${x}"
+        header: Q
+output: ${ask.output}
+"""
+
+
 def test_a_big_int_literal_route_keeps_its_value():
     route = ValueRoute.literal(BIG)
 
@@ -195,3 +243,33 @@ def test_a_big_int_expression_literal_evaluates_to_the_int():
 
 def test_parse_literal_reads_a_big_int():
     assert _parse_literal("1" * 5000) == ONES
+
+
+@pytest.mark.parametrize("learnable", [False, True])
+def test_a_big_int_embedded_in_text_renders_every_digit(learnable):
+    result = run_flow(load_flow(_EMBED_FLOW), {"x": BIG}, learnable=learnable)
+
+    assert result.status == "succeeded", result.failure
+    assert result.output == "v=" + DIGITS
+
+
+def test_join_writes_a_big_int_in_full():
+    result = run_flow(load_flow(_JOIN_FLOW), {"xs": [BIG, 1]})
+
+    assert result.status == "succeeded", result.failure
+    assert result.output == DIGITS + ",1"
+
+
+def test_a_gate_renders_a_big_int_in_its_prompt_and_question_text():
+    requests = []
+
+    def ask_user(**request):
+        requests.append(request)
+        return {"Q": "ok"}
+
+    result = run_flow(load_flow(_ASK_FLOW), {"x": BIG}, tools={"ask_user": ask_user})
+
+    assert result.status == "succeeded", result.failure
+    (request,) = requests
+    assert request["question"] == "x is " + DIGITS
+    assert request["questions"][0]["question"] == "q " + DIGITS

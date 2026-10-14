@@ -1,12 +1,12 @@
-"""JSON text for values that hold ints of any size.
+"""JSON text and plain text for values that hold ints of any size.
 
 Python limits how many digits an int may have when it is converted to or from
 text (`sys.set_int_max_str_digits`). That limit is process-wide, so yian never
 changes it; this module converts long ints itself and otherwise defers to the
-standard `json` module. Converting a long int either way takes time quadratic
-in its digit count (about 0.2 s each way at 100,000 digits), and yian sets no
-limit on that cost. This module imports only the standard library and sits
-below every yian package.
+standard `json` module for JSON text and to `str` for plain text. Converting a
+long int either way takes time quadratic in its digit count (about 0.2 s each
+way at 100,000 digits), and yian sets no limit on that cost. This module
+imports only the standard library and sits below every yian package.
 """
 
 from __future__ import annotations
@@ -149,6 +149,80 @@ def loads(data: str | bytes, **kwargs: Any) -> Any:
     except ValueError:
         # Most likely the digit limit; a hook's own error is raised again below.
         return json.loads(data, parse_int=parse_int, **kwargs)
+
+
+class _IntDigits:
+    """Stands in for a long int when printing; its `repr` is the int's digits."""
+
+    def __init__(self, value: int) -> None:
+        self._text = int_text(value)
+
+    def __repr__(self) -> str:
+        return self._text
+
+
+def displayable(value: Any) -> Any:
+    """Return `value` with every long int swapped for an object whose `repr` is its digits.
+
+    `repr` and `str` of an int past Python's process-wide digit limit raise
+    `ValueError`; the returned value prints instead. Dicts (keys and values),
+    lists and tuples are walked and rebuilt, as their base type, only when they
+    hold a long int; any other value is returned unchanged.
+
+    Args:
+        value (`Any`): The value to print.
+
+    Returns:
+        `Any`: `value` itself, or a copy whose long ints print as their digits.
+    """
+    if isinstance(value, int) and not isinstance(value, bool):
+        return _IntDigits(value) if value.bit_length() > _SHORT_INT_BITS else value
+    if isinstance(value, dict):
+        pairs = [(displayable(key), displayable(item)) for key, item in value.items()]
+        if all(
+            new_key is key and new_item is item
+            for (new_key, new_item), (key, item) in zip(pairs, value.items())
+        ):
+            return value
+        return dict(pairs)
+    if isinstance(value, (list, tuple)):
+        items = [displayable(item) for item in value]
+        if all(new is old for new, old in zip(items, value)):
+            return value
+        return items if isinstance(value, list) else tuple(items)
+    return value
+
+
+def as_text(value: Any) -> str:
+    """Return `str(value)`, writing ints of any size in full.
+
+    Values that `str` converts take it directly. When `str` raises
+    `ValueError`, the value is converted again through `displayable`, so a long
+    int, alone or inside dicts (keys included), lists and tuples, is written with
+    every digit.
+
+    Args:
+        value (`Any`): The value to convert.
+
+    Returns:
+        `str`: The text `str(value)` would give without the digit limit; on the
+            retry, a dict, list or tuple subclass is written as its base type.
+
+    Raises:
+        `ValueError`: `str` raised for a value that `displayable` can't walk,
+            such as a long int inside a set or another object.
+
+    Example:
+        ```python
+        >>> as_text({"n": 10**5000})[:8]
+        "{'n': 10"
+        ```
+    """
+    try:
+        return str(value)
+    except ValueError:
+        # Most likely the digit limit; any other ValueError is raised again here.
+        return str(displayable(value))
 
 
 def _encode(

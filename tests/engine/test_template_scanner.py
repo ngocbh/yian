@@ -13,8 +13,6 @@ result and concatenates it with the literal runs. `template_refs(segments)` unio
 the span refs in source order.
 """
 
-import sys
-
 import pytest
 
 from yian.expr.expressions import ExpressionError, ResolveMode
@@ -220,31 +218,28 @@ def test_eval_template_strict_mode_raises_on_miss():
 # Rendering an embedded span's value as text
 # --------------------------------------------------------------------------- #
 
-# Python 3.10.0-3.10.6 has no int-to-str digit limit, so a huge int renders there.
-needs_digit_limit = pytest.mark.skipif(
-    not hasattr(sys, "get_int_max_str_digits"), reason="no int-to-str digit limit"
-)
+_DIGITS = "1" + "0" * 5000  # the decimal text of 10**5000
 
 
-@needs_digit_limit
-def test_eval_template_embedded_int_too_large_for_text_raises_expression_error():
-    with pytest.raises(ExpressionError, match="as text"):
-        eval_template(scan_template("x=${n}"), lambda p: 10**5000 if p == "n" else None)
+def test_eval_template_embedded_huge_int_renders_every_digit():
+    rendered = eval_template(scan_template("x=${n}"), lambda p: 10**5000 if p == "n" else None)
+    assert rendered == "x=" + _DIGITS
 
 
-@needs_digit_limit
-def test_eval_template_embedded_list_holding_a_huge_int_raises_expression_error():
-    with pytest.raises(ExpressionError, match="as text"):
-        eval_template(scan_template("x=${n}"), lambda p: [10**5000])
+def test_eval_template_embedded_list_holding_a_huge_int_renders_every_digit():
+    rendered = eval_template(scan_template("x=${n}"), lambda p: [10**5000])
+    assert rendered == "x=[" + _DIGITS + "]"
 
 
-@needs_digit_limit
 def test_eval_template_whole_single_span_keeps_a_huge_int_typed():
     value = eval_template(scan_template("${n}"), lambda p: 10**5000 if p == "n" else None)
     assert value == 10**5000
 
 
-@needs_digit_limit
-def test_render_template_record_whole_span_int_too_large_for_text_raises_expression_error():
-    with pytest.raises(ExpressionError, match="as text"):
-        render_template_record("${n}", {"n": 10**5000})
+def test_render_template_record_whole_span_huge_int_renders_every_digit():
+    assert render_template_record("${n}", {"n": 10**5000}) == _DIGITS
+
+
+def test_render_template_record_embedded_dict_holding_a_huge_int_renders_every_digit():
+    rendered = render_template_record("a ${n} b", {"n": {"k": 10**5000}})
+    assert rendered == "a {'k': " + _DIGITS + "} b"

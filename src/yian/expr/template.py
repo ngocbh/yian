@@ -38,6 +38,7 @@ import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional, Union
 
+import yian.json_codec as json_codec
 from yian.expr import grammar
 from yian.expr.builtins import TEMPLATE_FNS
 from yian.expr.expressions import (
@@ -538,15 +539,23 @@ def _resolve_record_strict_or_none(path: str, record: dict) -> Any:
 
 
 def _as_text(value: Any) -> str:
-    """Return `str(value)`, raising `ExpressionError` when Python can't render it as text."""
+    """Return `str(value)` with ints of any size written in full.
+
+    Args:
+        value (`Any`): The value to render.
+
+    Returns:
+        `str`: The value's text.
+
+    Raises:
+        `ExpressionError`: The value can't be written as text, such as a long
+            int inside a set.
+    """
     try:
-        return str(value)
+        return json_codec.as_text(value)
     except ValueError as exc:
-        # str() of an int past Python's digit limit raises; the run must fail, not crash.
-        raise ExpressionError(
-            f"cannot render the {type(value).__name__} value as text: "
-            "it holds an int longer than Python's digit limit"
-        ) from exc
+        # The run must fail, not crash.
+        raise ExpressionError(f"cannot render the {type(value).__name__} value as text") from exc
 
 
 def render_template_record(text: str, record: dict) -> str:
@@ -581,7 +590,7 @@ def render_template_record(text: str, record: dict) -> str:
         `ExpressionError`:
             On an unbalanced span, an unresolved reference (unknown input or dict-path
             miss), a final `None` span value, an unknown builtin, a builtin that fails,
-            or a value holding an int too long to render as text.
+            or a value that can't be rendered as text.
     """
     segments = scan_template(text)
     result = eval_template(
@@ -848,7 +857,7 @@ def eval_template(
         `ExpressionError`:
             On any error `eval_expr` raises for a span interior, when a span's final
             value is `None` in `STRICT_RAISE` mode, or when an embedded value can't be
-            rendered as text (an int past Python's digit limit).
+            rendered as text.
         `RequiredError`:
             When a span's `head :? message` required atom misses / is None.
         `TypeError`:

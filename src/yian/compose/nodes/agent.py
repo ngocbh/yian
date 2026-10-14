@@ -30,6 +30,7 @@ from yian.nodes.agent.node import is_max_tool_iterations, is_text_output
 from yian.nodes.agent.structured import type_to_schema
 from yian.nodes.contracts import Parameter, ValueContract
 from yian.skills import SkillError
+from yian.typesys.values import value_repr
 
 if TYPE_CHECKING:
     from yian.compose.source.catalog import _SourceCatalogBuilder
@@ -46,7 +47,7 @@ def retries_error(value: Any) -> str | None:
     # bool is an int subclass, so `retries: true` would otherwise mean 1.
     if type(value) is int and value >= 0:
         return None
-    return f"must be a non-negative integer, got {value!r}"
+    return f"must be a non-negative integer, got {value_repr(value)}"
 
 
 def not_text_error(field: str, value: Any) -> str:
@@ -133,7 +134,7 @@ def _validate_llm_config(
     if type(inherit) is not bool:
         raise diagnostics.error(
             f"{prefix} `inherit:` must be true or false, got "
-            f"{inherit!r}{_former_boolean_hint(inherit)}",
+            f"{value_repr(inherit)}{_former_boolean_hint(inherit)}",
             range=source_range,
         )
     host_only = host_only_field_error(cfg)
@@ -366,7 +367,7 @@ class AgentDescriptor(NodeDescriptor):
         ):
             raise ctx.diagnostics.error(
                 f"node {self.id!r}: `env.max_tool_iterations` must be a positive int or -1 "
-                f"(no cap), got {self.env['max_tool_iterations']!r}",
+                f"(no cap), got {value_repr(self.env['max_tool_iterations'])}",
                 range=self.field_ranges.get(("field", "env")) or self.range,
             )
         variables = self._read_variables(ctx)

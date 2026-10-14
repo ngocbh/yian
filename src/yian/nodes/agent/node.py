@@ -53,7 +53,7 @@ from yian.nodes.contracts import (
 from yian.skills.catalog import Skill, SkillError, check_skill_name
 from yian.skills.tool import LOAD_SKILL, system_prompt_with_skills
 from yian.tools import ToolSet
-from yian.typesys.values import ValueKind, build_value_as, canonical_type_label
+from yian.typesys.values import ValueKind, build_value_as, canonical_type_label, value_repr
 
 
 def is_text_output(contract: Any) -> bool:
@@ -268,7 +268,7 @@ class AgentNode(Node):
         if not is_max_tool_iterations(raw):
             raise ValueError(
                 f"AGENT node {self.id!r}: env max_tool_iterations must be a positive int "
-                f"or -1 (no cap), got {raw!r}"
+                f"or -1 (no cap), got {value_repr(raw)}"
             )
         return raw
 

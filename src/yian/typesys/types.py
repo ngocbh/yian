@@ -16,6 +16,7 @@ import re
 from dataclasses import dataclass, replace
 from typing import Union
 
+import yian.json_codec as json_codec
 from yian.typesys.values import (
     _BUILTIN_CONSTANTS,
     _NAME_PATTERN,
@@ -130,6 +131,11 @@ def parse_type(s: str) -> TypeExpr:
 
 def _bracket_error(s: str) -> TypeCheckError:
     """Explain that types use parentheses, showing `s` in that spelling when it parses."""
+    if re.search(r"[0-9][0-9_]{600,}", s):
+        # `ast.parse` rejects a decimal literal past Python's digit limit and its
+        # message carries Python's hint, so a long digit run skips the respelling;
+        # 600 is below the smallest limit Python allows (640).
+        return TypeCheckError("types use parentheses, not brackets")
     try:
         spelled = legacy_respelling(s)
     except TypeCheckError as exc:
@@ -350,7 +356,7 @@ class _TypeParser:
             high = self._endpoint()
             bounds = (low, high)
             if bounds != (None, None) and _valid_bounds(ctor, bounds):
-                example = f"{ctor}({'' if low is None else low}..{'' if high is None else high})"
+                example = f"{ctor}({_endpoint_text(low)}..{_endpoint_text(high)})"
             raise self._malformed(f"write a range: {example}")
         dots = self._peek() == ".."
         high = None
@@ -381,7 +387,7 @@ class _TypeParser:
             return None
         text = self._next()[1]
         if re.fullmatch(r"[+-]?[0-9]+", text):
-            return int(text)
+            return json_codec.parse_int(text)
         return float(text)
 
     def _literal_tags(self) -> tuple:
@@ -413,6 +419,15 @@ def _range_needs_dots(ctor: str) -> str:
     else:
         examples = "float(0.0..1.0), float(0.0..), or float(..1.0)"
     return f"a numeric range needs `..`, e.g. {examples}"
+
+
+def _endpoint_text(end: int | float | None) -> str:
+    """Spell a range end as type text: empty when open, every digit of an int."""
+    if end is None:
+        return ""
+    if isinstance(end, int):
+        return json_codec.int_text(end)
+    return str(end)
 
 
 def _valid_bounds(ctor: str, bounds: tuple) -> bool:
@@ -803,7 +818,7 @@ def format_type_expr(t: TypeExpr) -> str:
     if isinstance(t, ScalarExpr):
         if t.bounds is None:
             return t.name
-        low, high = ("" if end is None else end for end in t.bounds)
+        low, high = (_endpoint_text(end) for end in t.bounds)
         return f"{t.name}({low}..{high})"
     if isinstance(t, RefExpr):
         return t.name

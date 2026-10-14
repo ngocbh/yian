@@ -31,6 +31,7 @@ from yian.nodes.contracts import (
     _rewrite_origin_carrier,
     binding_source,
 )
+from yian.typesys.values import value_repr
 
 
 class MapNode(Node):
@@ -123,7 +124,9 @@ class MapNode(Node):
         over_src = node_wiring["over"]
 
         def validate(items):
-            display_src = binding_source(over_src)
+            source = binding_source(over_src)
+            # An authored literal may hold an int too long for Python to write as text.
+            display_src = source if isinstance(source, str) else value_repr(source)
             if items is None or not isinstance(items, list):
                 raise BindingError(
                     f"MAP node {self.id!r}: `over` ({display_src}) did not resolve to a list",

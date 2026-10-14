@@ -60,7 +60,6 @@ from rich.text import Text
 from yian.compile.model import END_ID, START_ID
 from yian.cli.memory import MemoryOptionError, build_cli_memories
 from yian.cli.terminal import PromptRequest, TerminalBroker
-from yian.cli.utils import displayable
 from yian.compose.helpers.errors import LoadError
 from yian.compose.loader import load_flow
 from yian.compose.skills import default_skill_roots, load_skills
@@ -365,7 +364,7 @@ class _ProgressReporter:
 
     def _emit_output(self, output: Any) -> None:
         """Print a node's produced value, indented under its check (verbose only)."""
-        body = output if isinstance(output, str) else repr(displayable(output))
+        body = output if isinstance(output, str) else repr(json_codec.displayable(output))
         for line in body.splitlines() or [""]:
             self._emit(Text(f"    {line}", style="dim"))
 
@@ -1883,7 +1882,7 @@ def run(
         if isinstance(out, str) and out.strip():
             console.print(Markdown(out))
         else:
-            console.print(displayable(out))
+            console.print(json_codec.displayable(out))
     else:
         # The loaded front end projects authored origins to source frames; failures
         # without presentable origins retain their semantic message.

@@ -153,8 +153,7 @@ They now read as the table says, as in a named `input:`, which also changes such
 flow's fingerprint. A bare date passed to any call input (`date` included) and a
 bare number such as `1e3` passed to a `str` input now fail at load. Write `null`
 for null and quote a value you mean as text (`x="1e3"`). Under a secret name,
-`password=None` now fails; write `null`. A bare int too long for Python to convert
-used to load and now fails at load, as in a named `input:`.
+`password=None` now fails; write `null`.
 
 ### Compact mode — when the flow *is* one node
 
@@ -357,16 +356,17 @@ other expression error. See
 
 A whole-string `${expr}` resolves to the **typed value** (a number stays a
 number, a list a list); embedded in surrounding text it is stringified. A typed value
-may hold an int of any size, and the run records every digit. Rendering it as text
-is limited: embedded in text or in a prompt, a value holding an int too long to
-render (past 4300 digits by default) fails like any other expression error: a binding
-fails with `binding.evaluate`, and a prompt fails its node. An int literal written in
-the YAML has the same limit; a longer one is a load error.
+may hold an int of any size, and the run records every digit. Embedded in text or in
+a prompt, such a value is written in full. An int literal in the YAML may have any
+number of digits.
 
-Changed: an operator Python can't complete, or a value too long to render as text, in a
-binding or an `asserts:` used to raise out of `run_flow`; now the run fails like any
-other expression error. In a prompt or a CASE `when:` the node already failed; the
-message now names the operator or value.
+Changed: an int literal or an `int(lo..hi)` range end longer than Python's digit limit
+(4300 digits by default) used to be a load error, and embedding, `join`ing, or
+`%`-formatting such an int as text used to fail. All of these work now.
+
+Changed: an operator Python can't complete in a binding or an `asserts:` used to raise
+out of `run_flow`; now the run fails like any other expression error. In a prompt or a
+CASE `when:` the node already failed; the message now names the operator.
 
 NaN, infinity, and complex numbers are not yian values. A binding whose value is
 NaN, infinity, or complex at any depth, whether an expression result, a literal, or a
@@ -424,10 +424,10 @@ type as a YAML tag on the value (`qty: !int ${size.output.qty}`); see
 Numeric domains may add an inclusive range: `int(1..12)` or `float(0.0..1.0)`. Either
 end may be left open: `int(0..)` (0 or more), `int(..100)` (at most 100), `float(0.0..)`.
 `int(..)` is an error; write `int`. The lower end must not exceed the upper. The parser
-reads `0..1` as a range, not as `0.` and `.1`. Integer ends are exact, up to Python's
-digit limit (4300 digits by default). Float ends must be finite; integer ends used in a
-float range must convert without rounding. Booleans and computed end expressions are
-invalid. Ranges work inside aliases, records, lists, and `Optional(...)`.
+reads `0..1` as a range, not as `0.` and `.1`. Integer ends are exact, at any size.
+Float ends must be finite; integer ends used in a float range must convert without
+rounding. Booleans and computed end expressions are invalid. Ranges work inside aliases,
+records, lists, and `Optional(...)`.
 Defaults and supplied values must satisfy them. Cross-flow wiring requires the
 source range to fit inside the destination range; an unbounded source cannot
 establish that guarantee for a bounded destination. An open end counts as unbounded on
@@ -1813,6 +1813,9 @@ Inline notes:
   *their* code as *you* (remote code execution). Keep flow YAML operator-authored and
   version-controlled. A runaway body is not killed; interrupt the run to stop it. A killable,
   sandboxed runtime (and an opt-in gate for untrusted sources) is planned.
+- **The body is Python**, so its literals follow Python's rules, not the YAML's: a decimal
+  int literal longer than Python's digit limit in `code:` is a load error (Python's syntax
+  error); write it in hex or compute it.
 - **Output must be JSON-representable** (`str` / `int` / `float` / `bool` / `list` /
   `object` / typedefs); a non-serializable return — even nested — fails at the node.
 - **Imports** resolve against the process `sys.path` (cwd + `PYTHONPATH`), same as the

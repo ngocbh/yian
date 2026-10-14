@@ -10,7 +10,9 @@ The engine is three layers, all pool-agnostic (they take a `resolve` callable):
   (`parse_condition`, `evaluate_when`, `first_failing_assert`), the `isinstance` type
   names a tree uses (`isinstance_type_names`), its constructor names
   (`constructor_names`), and a call's tested expression
-  (`isinstance_subject`), and pool resolution (`resolve_reference`).
+  (`isinstance_subject`), and pool resolution (`resolve_reference`). Its `%`
+  formats text through `percent_format` (`format_text`) when the right side holds
+  an int past Python's digit limit, which yian never raises.
 - `template` — the binding/prompt scanner: splits a value into text + `${...}`
   spans, then drives the engine per span (`eval_binding`, `eval_template`,
   `expr_refs_of`, `prompt_refs`, `render_template_record`, `scan_template`), and

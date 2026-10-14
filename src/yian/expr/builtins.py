@@ -78,7 +78,7 @@ def _join(value: Any, sep: str = "\n") -> str:
         raise TypeError(f"join() takes a list, got {_kind(value)}")
     if any(x is None for x in value):
         raise TypeError("join() got a null element; drop or default it before joining")
-    return sep.join(str(x) for x in value)
+    return sep.join(json_codec.as_text(x) for x in value)
 
 
 @register_template_fn("upper")

@@ -36,9 +36,9 @@ the flow's producer types, which are only assembled after every node is built, s
 in `.build()`. `.build()` lowers unconditionally; the loader runs `check_case_exhaustive` in the
 validate phase.
 
-Imports flow down/peer only: `lark` (parse-tree types), `expr` (ref scan/rewrite and the
-`isinstance` tree helpers), `nodes` (Case/CaseNode/Parameter), `compile.model` (Edge),
-`typesys` (the non-finite check), and the compose peers
+Imports flow down/peer only: `lark` (parse-tree types), `json_codec` (int digits), `expr`
+(ref scan/rewrite and the `isinstance` tree helpers), `nodes` (Case/CaseNode/Parameter),
+`compile.model` (Edge), `typesys` (the non-finite check), and the compose peers
 `source`/`helpers.errors`/`helpers.output_contracts`/`helpers.tags`/`nodes.base`.
 It imports NOTHING from parse/desugar/edges/validate/build/loader (the ladder), so it stays a
 leaf of the nodes package.
@@ -54,6 +54,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from lark import Token, Tree
 
+import yian.json_codec as json_codec
 from yian.compile.model import Edge
 from yian.diagnostics import OriginRef
 from yian.expr import (
@@ -71,7 +72,7 @@ from yian.expr import (
 from yian.nodes.case import ELSE_HANDLE, Case, CaseNode
 from yian.nodes.contracts import Binding, Parameter, binding_source, iter_source_strings
 from yian.typesys import TypeCheckError
-from yian.typesys.values import reject_nonfinite
+from yian.typesys.values import reject_nonfinite, value_repr
 from yian.compose.helpers.errors import LoadDiagnostics, source_text
 from yian.compose.helpers.output_contracts import direct_reference_parts
 from yian.compose.helpers.tags import yaml_quoted
@@ -239,7 +240,7 @@ class CaseDescriptor(NodeDescriptor):
             hint = "; start each case with `- `" if isinstance(desc.cases, Mapping) else ""
             raise diagnostics.error(
                 f"{where}: `cases:` must be a list of {{when:, then:}} mappings "
-                f"(got {desc.cases!r}){hint}",
+                f"(got {value_repr(desc.cases)}){hint}",
                 range=desc.field_ranges.get(("field", "cases")) or desc.range,
             )
         cases_cursor = cursor.child("cases")
@@ -247,7 +248,7 @@ class CaseDescriptor(NodeDescriptor):
             if not isinstance(item, Mapping):
                 raise diagnostics.error(
                     f"{where}: `cases[{index}]` must be a {{when:, then:}} mapping "
-                    f"(got {item!r})",
+                    f"(got {value_repr(item)})",
                     range=cases_cursor.child(index).range or desc.range,
                 )
 
@@ -425,6 +426,8 @@ def on_match_key(value: Any) -> tuple[str, Any]:
 
 def _number_text(value: int | float) -> str:
     """Return a number as expression-literal digits: no exponent, and a float keeps a `.`."""
+    if isinstance(value, int):
+        return json_codec.int_text(value)
     # repr is the shortest round-tripping form; Decimal spells it positionally, since the
     # NUMBER terminal has no exponent.
     text = format(Decimal(repr(value)), "f")

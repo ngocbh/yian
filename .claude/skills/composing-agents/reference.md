@@ -56,8 +56,7 @@ One expression grammar, everywhere `${...}` appears:
 
 Arithmetic is Python's: `+` concatenates text and lists, `*` repeats them, `%` formats text
 (`${"%.2f" % p}`), a bool is 0/1 (but a CASE `on:` never equates a bool with a number). No
-cost limits; an operator Python can't complete (overflow), or a value holding an int too long
-to render as text, fails like an expression error.
+cost limits; an operator Python can't complete (overflow) fails like an expression error.
 
 `and`, `or`, `not`, and `in` are reserved operators, so none can be the root
 name of a reference. A dotted field may use those names (`${record.output.in}`).
@@ -292,8 +291,10 @@ binding whose value holds one at any depth fails its node with `binding.evaluate
 a temporary inside an expression is fine. Keep the value in range or return null
 explicitly: a `case` routed to a value entry `no_value: !Optional(float) null`, or a
 `code` node returning `None`. An int of any size is a value and is recorded
-exactly; rendering one past Python's digit limit as text still fails, and an int
-literal written in the YAML past that limit is a load error.
+exactly; an int literal in the YAML may have any number of digits, and text (a
+template, a prompt, `join`, `%s`/`%d` and the other text and integer `%` conversions)
+writes every digit; `%e`/`%f`/`%g`/`%c` on an int too large for a float or character
+fail as in Python.
 
 A value nests at most 100 levels, counting each record and list. A binding or MAP
 `over` list nested deeper fails `binding.evaluate` and a node output fails

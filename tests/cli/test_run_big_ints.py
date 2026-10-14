@@ -12,7 +12,6 @@ from typer.testing import CliRunner
 from tests.cli.test_run import STRUCTURED_INPUT_FLOW, _tty_input_stream
 from yian.cli import app
 import yian.cli.run as run_cli
-from yian.cli.utils import displayable
 import yian.json_codec as json_codec
 
 
@@ -187,19 +186,6 @@ def test_structured_prompt_reads_a_big_int(
     assert result.exit_code == 0, result.output
     assert validated == [raw]
     assert DIGITS in _unwrapped(result.stdout)
-
-
-def test_displayable_spells_big_ints_and_keeps_other_values() -> None:
-    """`displayable` swaps long ints for their digits and leaves other values alone."""
-    assert DIGITS in str(displayable({"a": [BIG]}))
-    assert DIGITS in repr(displayable((BIG,)))
-    assert repr(displayable(BIG)) == DIGITS
-    small = {"a": [1, 2.5, "x", None, True], "b": (3,)}
-    assert displayable(small) is small
-    marker = object()
-    assert displayable(marker) is marker
-    assert displayable(True) is True
-    assert displayable(7) == 7
 
 
 def test_chat_prints_a_big_int_reply(tmp_path: Path) -> None:

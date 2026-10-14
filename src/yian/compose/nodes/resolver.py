@@ -35,6 +35,7 @@ from yian.nodes.contracts import (
 )
 from yian.nodes.end import EndNode
 from yian.typesys.types import BUILTIN_TYPE_NAMES
+from yian.typesys.values import value_repr
 
 
 @dataclass(frozen=True)
@@ -192,7 +193,7 @@ def child_signature(loaded: Any) -> ChildSignature:
 
 def _callable_display(flow_id: str, child_label: str | None = None) -> str:
     """Return an author-facing callable description without changing named errors."""
-    return child_label or f"callable {flow_id!r}"
+    return child_label or f"callable {value_repr(flow_id)}"
 
 
 def _resolve_child(

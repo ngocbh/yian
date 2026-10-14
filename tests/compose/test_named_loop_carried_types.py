@@ -34,6 +34,9 @@ def _named_loop(
         seed (`str`): The LOOP's `n:` seed binding, e.g. `${input.z}`.
         driver (`str`, *optional*, defaults to `"times: 2"`): The LOOP's driver lines.
         flow_input (`str`, *optional*, defaults to `"z: !int"`): The flow's input line.
+
+    Returns:
+        `str`: The flow's YAML text.
     """
     return f"""
 id: named
@@ -70,7 +73,11 @@ _WHILE = "while: ${n != null}\n    max: 10"
 
 
 def _nullable_message(seed: str) -> str:
-    """Return the load error for a body returning `Optional(int)` into `n: int`."""
+    """Return the load error for a body returning `Optional(int)` into `n: int`.
+
+    Args:
+        seed (`str`): The LOOP's `n:` seed binding, echoed in the tag hint.
+    """
     return (
         "loop node 'repeat': the body 'step' returns 'n' as Optional(int), but takes 'n' "
         "as int; make the input Optional(int), or tag the seed to leave the check to "
@@ -183,7 +190,11 @@ def test_int_returned_into_a_float_input_loads() -> None:
 
 
 def _record_loop(seed: str) -> str:
-    """Return a flow whose named body takes `n: P` and returns it as `Optional(P)`."""
+    """Return a flow whose named body takes `n: P` and returns it as `Optional(P)`.
+
+    Args:
+        seed (`str`): The LOOP's `n:` seed binding.
+    """
     return "typedefs:\n  P:\n    x: int\n" + _named_loop(
         "P", "Optional(P)", 'inputs["n"]', seed, flow_input="p: !P"
     )

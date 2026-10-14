@@ -981,8 +981,8 @@ A named body's returned field must fit the body's own input, since the next iter
 binds it there: returning `Optional(int)` into `n: !int` is a load error that asks you to
 make the input `Optional(int)` or tag the seed (`n: !int ${input.m}`) to leave the
 null check to runtime; an `Any` field needs `isinstance` narrowing in a `case` or a typed
-producer, and any
-other mismatch (`float` into `int`) needs the body's input and output types to agree.
+producer, and any other mismatch (`float` into `int`) needs the body's input and output
+types to agree.
 `loop` accepts the same inline `nodes:` + `output:` form instead of `call:`; its
 generated parameters are the carried `input:` fields, so the same `'a -> 'a`
 contract still applies. Those parameters are typed from the seeds, and each returned

@@ -245,7 +245,7 @@ def _check_returned_fields(
     returned = node.returned_fields
     parameters = {
         parameter.name: parameter.contract
-        for parameter in getattr(node, "child_inputs", None) or ()
+        for parameter in node.child_inputs or ()
         if parameter.contract is not None
     }
     for field_name, seed in wiring.items():

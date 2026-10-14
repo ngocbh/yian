@@ -2816,9 +2816,8 @@ returns the whole carried record.
   you to make the input `Optional(str)`, or to tag the seed to leave the check to
   runtime. A named body that returns an `Any` field into a typed input is a load
   error that asks you to narrow it with `isinstance` in a `case` or declare its
-  producer's type; any other mismatch,
-  such as a `float` into an `int` input, asks you to make the body's input and output
-  types agree, tagged seed or not.
+  producer's type; any other mismatch, such as a `float` into an `int` input, asks
+  you to make the body's input and output types agree, tagged seed or not.
 - **Omitted is not null.** An omitted field keeps its value. A returned null sets the
   field to null, and so does a field that reads a node a `case` skipped (see
   [Skipped branches and flow outputs](#skipped-branches-and-flow-outputs)). When the

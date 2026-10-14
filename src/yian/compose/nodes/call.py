@@ -12,14 +12,16 @@ stamps only the descriptor's opaque origin onto the runtime node. Registered int
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
+from yian.diagnostics import SourceRange
 from yian.nodes.base import Node
 from yian.nodes.contracts import ContractOrigins, Parameter, ValueContract
 from yian.nodes.call import CallNode
 from yian.nodes.map import MapNode
 from yian.typesys.values import Type, ValueKind
-from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
+from yian.compose.helpers.errors import LoadDiagnostics
+from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor, reject_non_text
 from yian.compose.nodes.resolver import (
     ChildSignature,
     _callable_display,
@@ -58,7 +60,8 @@ class CallDescriptor(NodeDescriptor):
 
     Inherits the common descriptor fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` +
     the Compose-only `range`/`field_ranges` parse metadata) and normalized `inputs` carrier from `NodeDescriptor`; only the
-    call/map-specific fields are declared here. `over`/`parallel` are fields on the shared base
+    call/map-specific fields are declared here. Its `_validate_fields` hook rejects a `call:`
+    YAML read as non-text (including `null`), then runs the base asserts-list check. `over`/`parallel` are fields on the shared base
     class (a plain `call` leaves them at `None`/`False`); only `map` lists them in its `allowed`.
     `child_label` is compiler-owned diagnostic metadata for an anonymous inline child. It is
     deliberately absent from `allowed`, never authorable, and excluded from descriptor equality.
@@ -86,6 +89,27 @@ class CallDescriptor(NodeDescriptor):
     over: Optional[str] = None
     parallel: bool = False
     asserts: list[str] = field(default_factory=list)
+
+    @classmethod
+    def _validate_fields(
+        cls,
+        node_id: str,
+        kwargs: dict[str, Any],
+        ranges: dict[tuple[str, str], SourceRange],
+        own_range: Optional[SourceRange],
+        diagnostics: LoadDiagnostics,
+    ) -> None:
+        """Reject a non-text `call:`, then run the base checks."""
+        reject_non_text(
+            cls.kind,
+            node_id,
+            "call",
+            kwargs.get("call"),
+            ranges.get(("field", "call")) or own_range,
+            diagnostics,
+            required=True,
+        )
+        super()._validate_fields(node_id, kwargs, ranges, own_range, diagnostics)
 
     def build(self, ctx: BuildContext) -> BuildResult:
         """Construct the runtime `CallNode`/`MapNode` (+ wiring) for this descriptor —

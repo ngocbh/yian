@@ -125,7 +125,6 @@ _NODE_FIELD_ROWS = {
         _flow(f"  c:\n    kind: human_input\n    prompt: hi\n    questions: {D}\n"),
         "`questions:` must be a list of questions",
     ),
-    "call_target": (_flow(f"  c:\n    kind: call\n    call: {D}\n"), "could not resolve callable"),
     "kind": (_flow(f"  c:\n    kind: {D}\n"), "unknown kind"),
     "node_output": (
         _flow(f"  c:\n    kind: code\n    output: {D}\n    code: |\n      return 1\n"),
@@ -149,6 +148,7 @@ def test_a_node_field_message_shows_a_long_int_as_a_placeholder(text, phrase):
 
 # A text field's message names what YAML read, not the value.
 _NON_TEXT_FIELD_ROWS = {
+    "call_target": (_flow(f"  c:\n    kind: call\n    call: {D}\n"), "`call:` must be text"),
     "tool_id": (
         _flow(f"  c:\n    kind: tool\n    tool_id: {D}\n"),
         "`tool_id:` must be text",

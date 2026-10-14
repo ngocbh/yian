@@ -210,3 +210,68 @@ def test_code_in_def_compact_merge_and_inline_body(text, node, line):
 @pytest.mark.parametrize("text", [_code("\"return 'x'\""), _tool("'5'")])
 def test_text_code_and_tool_id_still_load(text):
     load_flow(text)
+
+
+_CALL_HEADS = {
+    "call": "",
+    "map": "    over: ${input.xs}\n",
+    "loop": "    times: 2\n",
+}
+
+
+def _call(kind: str, v: str) -> str:
+    """A flow whose `kind` node `a` has `call: <v>`, beside a `defs:` entry `body`."""
+    return (
+        """\
+id: f
+name: f
+input:
+  xs: !list(int)
+defs:
+  body:
+    input:
+      v: !int
+    nodes:
+      one:
+        kind: code
+        output: {v: int}
+        code: "return {'v': 1}"
+    output: ${one.output}
+nodes:
+  a:
+    kind: @KIND
+@HEAD    call: @V
+    input: {v: 1}
+output: ${a.output}
+"""
+        .replace("@KIND", kind)
+        .replace("@HEAD", _CALL_HEADS[kind])
+        .replace("@V", v)
+    )
+
+
+@pytest.mark.parametrize(("value", "phrase"), NON_TEXT)
+@pytest.mark.parametrize("kind", list(_CALL_HEADS))
+def test_non_text_call_is_a_load_error(kind, value, phrase):
+    text = _call(kind, value)
+    error = _error(text)
+    assert (
+        f"node 'a' (kind={kind}): `call:` must be text, but YAML read it as {phrase}; "
+        "put it in quotes"
+    ) in str(error)
+    assert _start_line(error) == _line(text, "call: ")
+
+
+@pytest.mark.parametrize("kind", list(_CALL_HEADS))
+def test_null_call_is_empty(kind):
+    text = _call(kind, "null")
+    error = _error(text)
+    assert (
+        f"node 'a' (kind={kind}): `call:` must be text, but it is empty; write the text"
+    ) in str(error)
+    assert _start_line(error) == _line(text, "call: ")
+
+
+@pytest.mark.parametrize("kind", list(_CALL_HEADS))
+def test_text_call_still_loads(kind):
+    load_flow(_call(kind, "body"))

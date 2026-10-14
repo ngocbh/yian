@@ -4,7 +4,8 @@ Each block mirrors the request body of one provider API with the same names, nes
 allowed values, and yian deep-merges it into that body as written. Fields that yian builds
 itself (model, messages, tools, structured output, streaming, conversation state) are
 reserved: setting one is a load error that says so. Error messages name the block and the
-key path and never echo values.
+key path and never echo values; the key path can include keys the author wrote in a mapping
+field (e.g. a ``metadata`` key), since keys are names rather than values.
 """
 
 from __future__ import annotations
@@ -12,20 +13,19 @@ from __future__ import annotations
 import types
 import typing
 from collections.abc import Collection, Mapping
-from typing import Any, ClassVar, Dict, List, Literal, Optional, Union
+from typing import Annotated, Any, ClassVar, Dict, List, Literal, Optional, Union
 
 from pydantic import (
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Discriminator,
     Field,
     StringConstraints,
     Tag,
-    ValidationInfo,
     model_serializer,
     model_validator,
 )
-from typing_extensions import Annotated
 
 
 class _Block(BaseModel):
@@ -44,61 +44,24 @@ class _Block(BaseModel):
         strict=True,
     )
 
-    # Provider name used in messages when the validation context names no block.
+    # Block name used in messages, e.g. "qwen-cn".
     default_block: ClassVar[str] = ""
-    # How an unknown key is described, e.g. "is not a field of the X request".
+    # How an unknown key is described, e.g. "is not a supported field of the X request".
     api: ClassVar[str] = ""
     # Dotted key path -> what yian builds there; setting one is an error.
     reserved: ClassVar[Dict[str, str]] = {}
 
     @model_validator(mode="before")
     @classmethod
-    def _check_keys(cls, data: Any, info: ValidationInfo) -> Any:
+    def _check_keys(cls, data: Any) -> Any:
         """Refuse reserved and unknown key paths, naming each one and what is allowed."""
         if not cls.api or not isinstance(data, Mapping):
             return data
-        context = info.context if isinstance(info.context, Mapping) else {}
-        block = context.get("block") or cls.default_block
         problems: list[str] = []
-        cls._collect_problems(cls, data, block, "", problems)
+        _key_problems(cls, data, top=cls, prefix="", problems=problems)
         if problems:
             raise ValueError("; ".join(problems))
         return data
-
-    @classmethod
-    def _collect_problems(
-        cls, model: type[_Block], data: Mapping, block: str, prefix: str, problems: list[str]
-    ) -> None:
-        """Append a message for each reserved or unknown key of ``data``, recursing into parts."""
-        fields = {field.alias or name: field for name, field in model.model_fields.items()}
-        for key, value in data.items():
-            path = f"{prefix}{key}"
-            if path in cls.reserved:
-                problems.append(
-                    f"`{block}.{path}` is built by yian ({cls.reserved[path]}); remove it"
-                )
-            elif key not in fields:
-                problems.append(
-                    f"`{block}.{path}` {cls.api}; allowed: {', '.join(sorted(fields))}"
-                )
-            else:
-                cls._check_value(fields[key].annotation, value, block, path, problems)
-
-    @classmethod
-    def _check_value(
-        cls, annotation: Any, value: Any, block: str, path: str, problems: list[str]
-    ) -> None:
-        """Check the keys of a nested block, or of each block in a list, at ``path``."""
-        if isinstance(value, Mapping):
-            part = _nested_block(annotation, value)
-            if part is not None:
-                cls._collect_problems(part, value, block, f"{path}.", problems)
-        elif isinstance(value, list):
-            items = [typing.get_args(m)[0] for m in _members(annotation) if _is_list(m)]
-            if items:
-                item = Union[tuple(items)]
-                for index, entry in enumerate(value):
-                    cls._check_value(item, entry, block, f"{path}[{index}]", problems)
 
     @model_serializer(mode="wrap")
     def _drop_unset(self, handler):
@@ -107,6 +70,49 @@ class _Block(BaseModel):
         if isinstance(data, dict):
             return {key: value for key, value in data.items() if value is not None}
         return data
+
+
+def _key_problems(
+    model: type[_Block], data: Mapping, *, top: type[_Block], prefix: str, problems: list[str]
+) -> None:
+    """Append a message for each reserved or unknown key of ``data``, recursing into parts.
+
+    ``model`` is the class ``data`` is checked against; ``top`` is the top-level block,
+    which supplies the block name, the reserved paths and the unknown-key wording.
+    """
+    fields = {field.alias or name: field for name, field in model.model_fields.items()}
+    for key, value in data.items():
+        path = f"{prefix}{key}"
+        if path in top.reserved:
+            problems.append(
+                f"`{top.default_block}.{path}` is built by yian ({top.reserved[path]}); remove it"
+            )
+        elif key not in fields:
+            problems.append(
+                f"`{top.default_block}.{path}` {top.api}; allowed: {', '.join(sorted(fields))}"
+            )
+        else:
+            _value_problems(fields[key].annotation, value, top=top, path=path, problems=problems)
+
+
+def _value_problems(
+    annotation: Any, value: Any, *, top: type[_Block], path: str, problems: list[str]
+) -> None:
+    """Check the keys of a nested block, or of each block in a list, at ``path``.
+
+    Blocks inside a mapping field (``Dict[str, SomeBlock]``) are not walked; none exists,
+    and pydantic's own ``extra_forbidden`` error would still refuse an unknown key there.
+    """
+    if isinstance(value, Mapping):
+        part = _nested_block(annotation, value)
+        if part is not None:
+            _key_problems(part, value, top=top, prefix=f"{path}.", problems=problems)
+    elif isinstance(value, list):
+        items = [typing.get_args(m)[0] for m in _members(annotation) if _is_list(m)]
+        if items:
+            item = Union[tuple(items)]
+            for index, entry in enumerate(value):
+                _value_problems(item, entry, top=top, path=f"{path}[{index}]", problems=problems)
 
 
 def _members(annotation: Any) -> list[Any]:
@@ -131,8 +137,8 @@ def _nested_block(annotation: Any, value: Mapping) -> Optional[type[_Block]]:
     names no variant, there is none, and field validation reports the problem instead.
     """
     blocks = [m for m in _members(annotation) if isinstance(m, type) and issubclass(m, _Block)]
-    if len(blocks) == 1:
-        return blocks[0]
+    if len(blocks) <= 1:
+        return blocks[0] if blocks else None
     tag = value.get("type")
     for candidate in blocks:
         field = candidate.model_fields.get("type")
@@ -176,8 +182,46 @@ class OpenAIText(_Block):
     verbosity: Optional[Literal["low", "medium", "high"]] = None
 
 
+class OpenAIAccessPrograms(_Block):
+    """The ``access_programs`` object of an OpenAI Responses API request."""
+
+    cyber: Optional[Literal["standard", "daybreak_blue", "daybreak_red"]] = None
+
+
+class OpenAIModerationMode(_Block):
+    """How moderation treats the input or the output: score it, or block it."""
+
+    mode: Literal["score", "block"]
+
+
+class OpenAIModerationPolicy(_Block):
+    """The ``moderation.policy`` object of an OpenAI Responses API request."""
+
+    input: Optional[OpenAIModerationMode] = None
+    output: Optional[OpenAIModerationMode] = None
+
+
+class OpenAIModeration(_Block):
+    """The ``moderation`` object of an OpenAI Responses API request."""
+
+    model: str
+    policy: Optional[OpenAIModerationPolicy] = None
+
+
+class OpenAIPromptCacheOptions(_Block):
+    """The ``prompt_cache_options`` object of an OpenAI Responses API request.
+
+    ``comparison_response_id`` is left out because it names one earlier response, and
+    ``prewarm`` because it suppresses the reply yian reads.
+    """
+
+    mode: Optional[Literal["implicit", "explicit"]] = None
+    ttl: Optional[Literal["30m"]] = None
+
+
 _MetadataKey = Annotated[str, StringConstraints(max_length=64)]
 _MetadataValue = Annotated[str, StringConstraints(max_length=512)]
+_Metadata = Annotated[Dict[_MetadataKey, _MetadataValue], Field(max_length=16)]
 
 
 class _OpenAIResponsesShared(_Block):
@@ -200,11 +244,15 @@ class _OpenAIResponsesShared(_Block):
         "store": "conversation state",
         "include": "response items",
         "background": "request lifecycle",
+        "context_management": "conversation state",
     }
 
+    access_programs: Optional[OpenAIAccessPrograms] = None
     max_tool_calls: Optional[int] = Field(default=None, ge=1)
-    metadata: Optional[Dict[_MetadataKey, _MetadataValue]] = Field(default=None, max_length=16)
+    metadata: Optional[_Metadata] = None
+    moderation: Optional[OpenAIModeration] = None
     prompt_cache_key: Optional[str] = None
+    prompt_cache_options: Optional[OpenAIPromptCacheOptions] = None
     prompt_cache_retention: Optional[Literal["in_memory", "24h"]] = None
     reasoning: Optional[OpenAIReasoning] = None
     safety_identifier: Optional[str] = Field(default=None, max_length=64)
@@ -224,7 +272,8 @@ class OpenAIResponsesBlock(_OpenAIResponsesShared):
     Mirrors ``POST /v1/responses``
     (https://platform.openai.com/docs/api-reference/responses/create), checked
     2026-10-13 against that reference and the ``openai`` SDK's
-    ``openai.types.responses.response_create_params``.
+    ``openai.types.responses.response_create_params`` (``openai`` 3.22.1): every body
+    keyword of ``Responses.create`` is a field here or reserved.
 
     Example:
         ```yaml
@@ -235,7 +284,7 @@ class OpenAIResponsesBlock(_OpenAIResponsesShared):
         ```
     """
 
-    api: ClassVar[str] = "is not a field of the OpenAI Responses API request"
+    api: ClassVar[str] = "is not a supported field of the OpenAI Responses API request"
 
     max_output_tokens: Optional[int] = Field(default=None, ge=1)
     temperature: Optional[float] = Field(default=None, ge=0, le=2)
@@ -268,7 +317,17 @@ _CHAT_RESERVED: Dict[str, str] = {
 }
 
 _Stop4 = Union[str, Annotated[List[str], Field(max_length=4)]]
-_Metadata = Annotated[Dict[_MetadataKey, _MetadataValue], Field(max_length=16)]
+
+
+def _token_id_key(key: Any) -> Any:
+    """Turn an integer token id, as YAML reads ``{50256: -100}``, into the string JSON sends."""
+    if isinstance(key, int) and not isinstance(key, bool) and key >= 0:
+        return str(key)
+    return key
+
+
+# A ``logit_bias`` key: a token id written as a non-negative integer or a digit string.
+_TokenId = Annotated[str, BeforeValidator(_token_id_key), StringConstraints(pattern=r"^[0-9]+$")]
 
 
 class _ChatSampling(_Block):
@@ -299,7 +358,7 @@ class _ChatLogprobs(_Block):
     top_logprobs: Optional[int] = Field(default=None, ge=0, le=20)
 
 
-class XAIChatBlock(_ChatSampling, _ChatPenalties, _ChatLength):
+class XAIChatBlock(_ChatSampling, _ChatPenalties, _ChatLength, _ChatLogprobs):
     """The ``xai`` block: the request body of the xAI Chat Completions API.
 
     Mirrors ``POST /v1/chat/completions``
@@ -316,7 +375,7 @@ class XAIChatBlock(_ChatSampling, _ChatPenalties, _ChatLength):
     """
 
     default_block: ClassVar[str] = "xai"
-    api: ClassVar[str] = "is not a field of the xAI Chat Completions request"
+    api: ClassVar[str] = "is not a supported field of the xAI Chat Completions request"
     reserved: ClassVar[Dict[str, str]] = {
         **_CHAT_RESERVED,
         "deferred": "request lifecycle",
@@ -324,7 +383,6 @@ class XAIChatBlock(_ChatSampling, _ChatPenalties, _ChatLength):
         "web_search_options": "tools: server-side search",
     }
 
-    logprobs: Optional[bool] = None
     prompt_cache_key: Optional[str] = None
     reasoning_effort: Optional[str] = None
     safety_identifier: Optional[str] = None
@@ -343,7 +401,7 @@ class GLMThinking(_Block):
 
 
 class GLMChatBlock(_Block):
-    """The ``glm`` and ``glm-cn`` blocks: the request body of the Z.AI GLM Chat Completion API.
+    """The ``glm`` block: the request body of the Z.AI GLM Chat Completion API.
 
     Mirrors ``POST /api/paas/v4/chat/completions``
     (https://docs.z.ai/api-reference/llm/chat-completion), checked 2026-10-13.
@@ -358,7 +416,7 @@ class GLMChatBlock(_Block):
     """
 
     default_block: ClassVar[str] = "glm"
-    api: ClassVar[str] = "is not a field of the Z.AI GLM Chat Completion request"
+    api: ClassVar[str] = "is not a supported field of the Z.AI GLM Chat Completion request"
     reserved: ClassVar[Dict[str, str]] = {**_CHAT_RESERVED, "tool_stream": "streaming"}
 
     do_sample: Optional[bool] = None
@@ -373,6 +431,12 @@ class GLMChatBlock(_Block):
     user_id: Optional[str] = Field(default=None, min_length=6, max_length=128)
 
 
+class GLMCNChatBlock(GLMChatBlock):
+    """The ``glm-cn`` block: `GLMChatBlock` for the mainland China endpoint."""
+
+    default_block: ClassVar[str] = "glm-cn"
+
+
 class MiniMaxThinking(_Block):
     """The ``thinking`` object of a MiniMax chat request."""
 
@@ -380,7 +444,7 @@ class MiniMaxThinking(_Block):
 
 
 class MiniMaxChatBlock(_ChatSampling, _ChatLength):
-    """The ``minimax`` and ``minimax-cn`` blocks: the body of MiniMax's OpenAI-compatible API.
+    """The ``minimax`` block: the request body of MiniMax's OpenAI-compatible API.
 
     Mirrors the Chat Completions parameters MiniMax lists
     (https://platform.minimax.io/docs/api-reference/text-openai-api), checked 2026-10-13.
@@ -395,7 +459,7 @@ class MiniMaxChatBlock(_ChatSampling, _ChatLength):
     """
 
     default_block: ClassVar[str] = "minimax"
-    api: ClassVar[str] = "is not a field of the MiniMax Chat Completions request"
+    api: ClassVar[str] = "is not a supported field of the MiniMax Chat Completions request"
     reserved: ClassVar[Dict[str, str]] = {
         **_CHAT_RESERVED,
         "reasoning_split": "keeps reasoning out of the message content",
@@ -404,6 +468,12 @@ class MiniMaxChatBlock(_ChatSampling, _ChatLength):
     reasoning_effort: Optional[Literal["low", "medium", "high", "xhigh", "max"]] = None
     service_tier: Optional[Literal["standard", "priority"]] = None
     thinking: Optional[MiniMaxThinking] = None
+
+
+class MiniMaxCNChatBlock(MiniMaxChatBlock):
+    """The ``minimax-cn`` block: `MiniMaxChatBlock` for the mainland China endpoint."""
+
+    default_block: ClassVar[str] = "minimax-cn"
 
 
 class DeepSeekThinking(_Block):
@@ -429,7 +499,7 @@ class DeepSeekChatBlock(_ChatLogprobs):
     """
 
     default_block: ClassVar[str] = "deepseek"
-    api: ClassVar[str] = "is not a field of the DeepSeek Chat Completion request"
+    api: ClassVar[str] = "is not a supported field of the DeepSeek Chat Completion request"
     reserved: ClassVar[Dict[str, str]] = dict(_CHAT_RESERVED)
 
     max_tokens: Optional[int] = Field(default=None, ge=1, le=393216)
@@ -452,7 +522,7 @@ class QwenSearchOptions(_Block):
 
 
 class QwenChatBlock(_ChatLength):
-    """The ``qwen`` and ``qwen-cn`` blocks: the body of Model Studio's OpenAI-compatible chat.
+    """The ``qwen`` block: the request body of Model Studio's OpenAI-compatible chat.
 
     Mirrors Alibaba Cloud Model Studio's OpenAI-compatible Chat Completions request
     (https://www.alibabacloud.com/help/en/model-studio/qwen-api-via-openai-chat-completions),
@@ -469,7 +539,7 @@ class QwenChatBlock(_ChatLength):
     """
 
     default_block: ClassVar[str] = "qwen"
-    api: ClassVar[str] = "is not a field of the Model Studio Chat Completions request"
+    api: ClassVar[str] = "is not a supported field of the Model Studio Chat Completions request"
     reserved: ClassVar[Dict[str, str]] = {
         **_CHAT_RESERVED,
         "tool_stream": "streaming",
@@ -500,6 +570,12 @@ class QwenChatBlock(_ChatLength):
     top_p: Optional[float] = Field(default=None, gt=0, le=1)
     use_multichannel: Optional[bool] = None
     vl_high_resolution_images: Optional[bool] = None
+
+
+class QwenCNChatBlock(QwenChatBlock):
+    """The ``qwen-cn`` block: `QwenChatBlock` for the mainland China endpoint."""
+
+    default_block: ClassVar[str] = "qwen-cn"
 
 
 class OpenRouterReasoning(_Block):
@@ -533,8 +609,9 @@ class OpenRouterChatBlock(_ChatSampling, _ChatPenalties, _ChatLength, _ChatLogpr
     (https://openrouter.ai/docs/api/api-reference/chat/create-a-chat-completion), with
     bounds from https://openrouter.ai/docs/api/reference/parameters and the ``reasoning``
     fields from https://openrouter.ai/docs/guides/best-practices/reasoning-tokens,
-    checked 2026-10-13. ``provider`` (routing preferences) and ``trace`` are passed
-    through as written.
+    checked 2026-10-13. ``provider`` (routing preferences) is passed through as written.
+    ``session_id`` and ``trace`` are left out because they identify one conversation or
+    trace, so a value fixed in the flow would group every run together.
 
     Example:
         ```yaml
@@ -545,7 +622,7 @@ class OpenRouterChatBlock(_ChatSampling, _ChatPenalties, _ChatLength, _ChatLogpr
     """
 
     default_block: ClassVar[str] = "openrouter"
-    api: ClassVar[str] = "is not a field of the OpenRouter Chat Completions request"
+    api: ClassVar[str] = "is not a supported field of the OpenRouter Chat Completions request"
     reserved: ClassVar[Dict[str, str]] = {
         **_CHAT_RESERVED,
         "plugins": "tools",
@@ -559,7 +636,7 @@ class OpenRouterChatBlock(_ChatSampling, _ChatPenalties, _ChatLength, _ChatLogpr
     }
 
     cache_control: Optional[OpenRouterCacheControl] = None
-    logit_bias: Optional[Dict[str, Annotated[float, Field(ge=-100, le=100)]]] = None
+    logit_bias: Optional[Dict[_TokenId, Annotated[float, Field(ge=-100, le=100)]]] = None
     metadata: Optional[_Metadata] = None
     min_p: Optional[float] = Field(default=None, ge=0, le=1)
     models: Optional[List[str]] = None
@@ -575,11 +652,9 @@ class OpenRouterChatBlock(_ChatSampling, _ChatPenalties, _ChatLength, _ChatLogpr
     service_tier: Optional[
         Literal["auto", "default", "fast", "flex", "priority", "scale", "ultrafast"]
     ] = None
-    session_id: Optional[str] = Field(default=None, max_length=256)
     stop: Optional[_Stop4] = None
     top_a: Optional[float] = Field(default=None, ge=0, le=1)
     top_k: Optional[int] = Field(default=None, ge=0)
-    trace: Optional[Dict[str, Any]] = None
     user: Optional[str] = None
     verbosity: Optional[Literal["low", "medium", "high", "xhigh", "max"]] = None
 
@@ -602,7 +677,7 @@ class VLLMChatBlock(_ChatPenalties, _ChatLength, _ChatLogprobs):
     """
 
     default_block: ClassVar[str] = "vllm"
-    api: ClassVar[str] = "is not a field of the vLLM Chat Completions request"
+    api: ClassVar[str] = "is not a supported field of the vLLM Chat Completions request"
     reserved: ClassVar[Dict[str, str]] = {
         **_CHAT_RESERVED,
         "guided_json": "structured output",
@@ -610,6 +685,7 @@ class VLLMChatBlock(_ChatPenalties, _ChatLength, _ChatLogprobs):
         "guided_choice": "structured output",
         "guided_grammar": "structured output",
         "guided_decoding_backend": "structured output",
+        "guided_whitespace_pattern": "structured output",
         "structured_outputs": "structured output",
         "chat_template": "messages",
         "add_generation_prompt": "messages",
@@ -621,7 +697,7 @@ class VLLMChatBlock(_ChatPenalties, _ChatLength, _ChatLogprobs):
     ignore_eos: Optional[bool] = None
     include_stop_str_in_output: Optional[bool] = None
     length_penalty: Optional[float] = None
-    logit_bias: Optional[Dict[str, float]] = None
+    logit_bias: Optional[Dict[_TokenId, float]] = None
     min_p: Optional[float] = Field(default=None, ge=0, le=1)
     min_tokens: Optional[int] = Field(default=None, ge=0)
     priority: Optional[int] = None
@@ -658,6 +734,8 @@ class AzureChatBlock(_ChatSampling, _ChatPenalties, _ChatLength, _ChatLogprobs):
     Mirrors the chat completions request in the Azure OpenAI reference
     (https://learn.microsoft.com/azure/ai-foundry/openai/latest) and the matching
     ``openai.types.chat.completion_create_params`` fields, checked 2026-10-13.
+    ``service_tier``, ``prompt_cache_options`` and ``moderation`` are left out: the
+    ``openai`` SDK sends them, but the Azure reference does not list them.
 
     Example:
         ```yaml
@@ -668,7 +746,7 @@ class AzureChatBlock(_ChatSampling, _ChatPenalties, _ChatLength, _ChatLogprobs):
     """
 
     default_block: ClassVar[str] = "azure"
-    api: ClassVar[str] = "is not a field of the Azure OpenAI Chat Completions request"
+    api: ClassVar[str] = "is not a supported field of the Azure OpenAI Chat Completions request"
     reserved: ClassVar[Dict[str, str]] = {
         **_CHAT_RESERVED,
         "data_sources": "tools: On Your Data retrieval",
@@ -678,7 +756,7 @@ class AzureChatBlock(_ChatSampling, _ChatPenalties, _ChatLength, _ChatLogprobs):
         "audio": "output format",
     }
 
-    logit_bias: Optional[Dict[str, Annotated[int, Field(ge=-100, le=100)]]] = None
+    logit_bias: Optional[Dict[_TokenId, Annotated[int, Field(ge=-100, le=100)]]] = None
     metadata: Optional[_Metadata] = None
     prompt_cache_key: Optional[str] = None
     prompt_cache_retention: Optional[Literal["in_memory", "24h"]] = None
@@ -762,7 +840,7 @@ class AnthropicMessagesBlock(_Block):
     """
 
     default_block: ClassVar[str] = "anthropic"
-    api: ClassVar[str] = "is not a field of the Anthropic Messages API request"
+    api: ClassVar[str] = "is not a supported field of the Anthropic Messages API request"
     reserved: ClassVar[Dict[str, str]] = {
         "model": "llm_config.model",
         "messages": "messages",
@@ -863,7 +941,7 @@ class GeminiGenerateContentBlock(_Block):
     """
 
     default_block: ClassVar[str] = "google"
-    api: ClassVar[str] = "is not a field of the Gemini generateContent request"
+    api: ClassVar[str] = "is not a supported field of the Gemini generateContent request"
     reserved: ClassVar[Dict[str, str]] = {
         "model": "llm_config.model",
         "contents": "messages",
@@ -887,7 +965,11 @@ class GeminiGenerateContentBlock(_Block):
 
 
 class OllamaOptions(_Block):
-    """The ``options`` object of an Ollama chat request, with the fields of ``ollama.Options``."""
+    """The ``options`` object of an Ollama chat request.
+
+    Has the fields of ``ollama.Options`` plus ``min_p``, which the /api/chat reference
+    lists; the client sends ``options`` as a plain mapping.
+    """
 
     # Load-time options.
     numa: Optional[bool] = None
@@ -920,6 +1002,7 @@ class OllamaOptions(_Block):
     mirostat: Optional[int] = None
     mirostat_tau: Optional[float] = None
     mirostat_eta: Optional[float] = None
+    min_p: Optional[float] = None
     penalize_newline: Optional[bool] = None
     stop: Optional[List[str]] = None
 
@@ -930,6 +1013,7 @@ class OllamaChatBlock(_Block):
     Mirrors ``POST /api/chat``
     (https://github.com/ollama/ollama/blob/main/docs/api.md#generate-a-chat-completion),
     checked 2026-10-13, limited to what ``ollama.Client.chat`` sends (``ollama`` 0.6.3).
+    ``think`` takes the levels the reference lists; the client passes any string through.
 
     Example:
         ```yaml
@@ -941,7 +1025,7 @@ class OllamaChatBlock(_Block):
     """
 
     default_block: ClassVar[str] = "ollama"
-    api: ClassVar[str] = "is not a field of the Ollama /api/chat request"
+    api: ClassVar[str] = "is not a supported field of the Ollama /api/chat request"
     reserved: ClassVar[Dict[str, str]] = {
         "model": "llm_config.model",
         "messages": "messages",
@@ -954,7 +1038,7 @@ class OllamaChatBlock(_Block):
     keep_alive: Optional[Union[float, str]] = None
     logprobs: Optional[bool] = None
     options: Optional[OllamaOptions] = None
-    think: Optional[Union[bool, Literal["low", "medium", "high"]]] = None
+    think: Optional[Union[bool, Literal["low", "medium", "high", "max"]]] = None
     top_logprobs: Optional[int] = None
 
 
@@ -964,11 +1048,11 @@ PROVIDER_BLOCKS: Dict[str, type[_Block]] = {
     "xai": XAIChatBlock,
     "deepseek": DeepSeekChatBlock,
     "qwen": QwenChatBlock,
-    "qwen-cn": QwenChatBlock,
+    "qwen-cn": QwenCNChatBlock,
     "glm": GLMChatBlock,
-    "glm-cn": GLMChatBlock,
+    "glm-cn": GLMCNChatBlock,
     "minimax": MiniMaxChatBlock,
-    "minimax-cn": MiniMaxChatBlock,
+    "minimax-cn": MiniMaxCNChatBlock,
     "openrouter": OpenRouterChatBlock,
     "vllm": VLLMChatBlock,
     "ollama": OllamaChatBlock,
@@ -1000,6 +1084,14 @@ def block_schema(
     Raises:
         `KeyError`:
             Raised when ``provider`` has no block.
+
+    Example:
+        ```python
+        block_schema("openai", {"method": "subscription"})
+        # OpenAISubscriptionBlock
+        block_schema("qwen-cn")
+        # QwenCNChatBlock
+        ```
     """
     if (
         provider == "openai"
@@ -1042,6 +1134,8 @@ def merge_request_body(
         ```
     """
     for key, value in block.items():
+        if value is None:
+            continue
         if top_level is not None and key not in top_level:
             if not isinstance(body.get("extra_body"), dict):
                 body["extra_body"] = {}

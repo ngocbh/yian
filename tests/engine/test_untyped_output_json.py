@@ -103,12 +103,20 @@ def test_canonical_typed_rejects_untyped_non_json_values(value, message, path):
     ids=["field", "item"],
 )
 def test_canonical_typed_accepts_untyped_files(value):
-    canonical_typed(value, None)
+    wire, _ = canonical_typed(value, None)
+    # A nested file is recorded as a plain object.
+    assert {"uri": "f", "mime": None, "name": None} in (
+        list(wire["value"].values()) if isinstance(wire["value"], dict) else wire["value"]
+    )
 
 
-def test_canonical_typed_does_not_walk_a_built_value():
+def test_canonical_typed_does_not_walk_a_built_value(monkeypatch):
+    def fail(*args, **kwargs):
+        raise AssertionError("a built value was walked")
+
+    monkeypatch.setattr("yian.runtime.log.reject_non_json", fail)
     wire, _ = canonical_typed(build_value({"a": 1}), None)
-    assert wire == canonical_typed({"a": 1}, None)[0]
+    assert wire["value"] == {"a": 1}
 
 
 @pytest.mark.parametrize(

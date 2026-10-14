@@ -7,6 +7,8 @@ derives the graph's edges:
   `_binding_producers`): the node ids a `${...}` reference reads from.
 - `data.py` — `infer_data_edges`: a data `Edge` per `${<id>.output[.…]}` ref.
 - `ordering.py` — `infer_ordering_edges`: `depends_on:`/`runs_after:` ordering gates.
+- `hosts.py` — `host_control_edges`: a lifted node's copies of its host's CASE route
+  edges and `depends_on:`/`runs_after:` ordering gates.
 
 Ladder position: `edges/` imports helpers/nodes/parse/desugar + the engine core
 (`compile.model`, `expr`). It NEVER imports `validate`/`build`/`loader`. The LATER

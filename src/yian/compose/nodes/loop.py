@@ -98,8 +98,7 @@ class LoopDescriptor(NodeDescriptor):
         own_range: Optional[SourceRange],
         diagnostics: LoadDiagnostics,
     ) -> None:
-        """Reject a non-text `call:` and a non-string `while:`/`until:`, then run the base
-        asserts-list check.
+        """Reject a non-text `call:` or `while:`/`until:`, then run the base asserts check.
 
         A YAML bool, number, or list would otherwise crash the callable resolution or the
         predicate ref check, or, when falsy (`while: false`), skip it and fail only at runtime."""

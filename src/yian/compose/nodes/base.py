@@ -139,7 +139,7 @@ def not_text_detail(exc: ValidationError) -> tuple[str, Any] | None:
     loc = tuple(first["loc"])
     if loc[-1] == "str":
         # A union reports one error per member, the `str` member first; any other error under
-        # the same parent (a list member's item error extends it) marks a non-text-only field.
+        # the same parent (a list member's item error extends it) marks a field that takes more than text.
         parent = loc[:-1]
         if any(
             error is not first and tuple(error["loc"][: len(parent)]) == parent

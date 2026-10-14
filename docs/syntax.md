@@ -163,9 +163,9 @@ node 'a' (kind=code): `code:` must be text, but YAML read it as an integer; put 
 
 CASE `on:` takes a reference, so its error says "write a reference such as
 `on: ${input.x}`"; `kind:` lists the kind names. `null` on an optional field (`on:`,
-`node_name:`, `description:`, `version:`) means absent; on a required one it is a load error, such as "`code:` must be
-text, but it is empty; write the text". MAP `over:`, WAIT `until:`, and the flow
-`output:` are values, not text.
+`node_name:`, `description:`, `version:`) means absent; on a required one it is a load
+error, such as "`code:` must be text, but it is empty; write the text". MAP `over:`,
+WAIT `until:`, and the flow `output:` are values, not text.
 
 Changed: a non-text value in these fields used to crash with a raw Python error
 (`code:`, CASE `on:`, `call:`, a list or mapping `kind:`, a `defs:` assert), load

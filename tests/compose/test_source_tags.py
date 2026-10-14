@@ -1,6 +1,7 @@
 """Tests for local YAML tags kept by the source layer."""
 
 import copy
+import inspect
 import re
 import sys
 
@@ -10,6 +11,7 @@ from yian.compose.loader import _single_node_def_cursor
 from yian.compose.parse.file import flow_nodes_cursor
 from yian.compose.parse.nodes import normalize_node_signature_cursor
 from yian.compose.source import SourceCursor, SourceDocument, SourceSyntaxError, TaggedNode
+from yian.compose.source.scalars import MAX_YAML_NESTING
 from yian.diagnostics import SourceRange
 
 
@@ -213,11 +215,17 @@ def test_flow_context_tag_hint():
 
 
 def test_bare_tag_check_does_not_shrink_nesting_depth():
-    # Composing costs about two frames per nesting level; a check inside the
-    # recursive compose step made it three, so this depth would not parse.
-    depth = int(sys.getrecursionlimit() * 0.42)
+    # Composing costs about two frames per nesting level. A check inside the recursive
+    # compose step would make it three; with room for only two, a document at the
+    # nesting limit would not parse.
+    depth = MAX_YAML_NESTING - 1  # the root mapping is one level
     text = "a: " + "[" * depth + "1" + "]" * depth + "\n"
-    value = SourceDocument.parse(text).root.child("a").value
+    previous = sys.getrecursionlimit()
+    sys.setrecursionlimit(len(inspect.stack(0)) + 2 * MAX_YAML_NESTING + 100)
+    try:
+        value = SourceDocument.parse(text).root.child("a").value
+    finally:
+        sys.setrecursionlimit(previous)
     for _ in range(depth - 1):
         (value,) = value
     assert value == [1]

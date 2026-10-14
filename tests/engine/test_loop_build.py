@@ -11,6 +11,9 @@ needed), stamps `output_contract`, and enforces the two halves of the type contr
   each returned body output Type == carried record Type per field — a located
   `LoadError` on a same-names/different-TYPES mismatch (needs the assembled
   producers/flow-input types).
+
+Separately, `check_call_map_types` checks each seed that reads no reference (a literal,
+or a `${...}` with no references) by value against a named body's declared input.
 """
 
 import pytest
@@ -137,7 +140,8 @@ output: ${chat_loop.output}
 # carried `n` is seeded from `${input.n0}` (an int flow input) -> a same-names/
 # different-TYPES mismatch, caught in the loader post-build pass
 # check_loop_type_contract. (The carried field must be seeded from a ref with a
-# resolvable Type — a bare literal stays lenient/opaque in the type pass.)
+# resolvable Type — a bare literal stays lenient/opaque in the carried-type pass;
+# check_call_map_types checks it against the body's input instead.)
 BAD_TYPES = """
 id: loop-bad-types
 name: loop_bad_types

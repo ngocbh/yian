@@ -646,7 +646,13 @@ def invoke_model(
         # Only finite JSON can be stored, so a non-finite number anywhere in the reply fails it.
         reject_nonfinite(raw, "model reply")
     except Exception as rejected:
-        # A stop that arrived during the call wins over the rejection.
+        # Without a transcript the stop is checked before `check_reply`, so a pending
+        # stop wins over any rejection here too, a host fault included.
+        try:
+            check_stopped()
+        except BaseException as stop:
+            _observe_failure(turn, ordinal, "model", stop, check_stopped)
+            raise
         _observe_failure(turn, ordinal, "model", rejected, check_stopped)
         raise
     with _memory_boundary():
@@ -660,8 +666,9 @@ def _observe_preserving_error(turn, ordinal, status, primary, *, failure=None):
 
     Ordinary errors use the existing evaluator-unwrapped capability carrier when
     publication also fails, except that a stop `turn.observe` honors after
-    publishing wins and is raised. BaseException cancellation and existing carriers
-    retain their control identity; in particular `_HostStop.primary` must stay visible.
+    publishing wins and is raised. A derived stop primary is replaced by the stop
+    `turn.observe` raised. BaseException cancellation, existing carriers and initiating
+    stops retain their control identity; in particular `_HostStop.primary` must stay visible.
     """
     try:
         turn.observe(ordinal, status, failure=failure)
@@ -680,6 +687,10 @@ def _observe_preserving_error(turn, ordinal, status, primary, *, failure=None):
                     )
             except BaseException:
                 pass
+        if stopped and isinstance(primary, _HostStop) and not primary.primary:
+            # The turn re-raises its own cached stop when it finishes; raising that
+            # same instance keeps it from being noted as a second, failed cleanup.
+            raise
         if isinstance(primary, Exception) and not isinstance(
             primary, (_CapabilityFault, _HostStop)
         ):
@@ -692,14 +703,16 @@ def _observe_failure(turn, ordinal, operation, primary, check_stopped):
     """Record a sanitized external-effect failure; a pending stop wins over an ordinary error.
 
     With a stop pending, the effect is recorded `interrupted` and the stop is
-    raised, with `primary` as its context. Otherwise the caller re-raises `primary`.
+    raised, with `primary` as its context. Otherwise, and always for a host fault
+    (`_CapabilityFault`), the caller re-raises `primary`.
     """
     interrupted = isinstance(
         primary, (_HostStop, AsyncCancelledError, FutureCancelledError)
     ) or not isinstance(primary, Exception)
-    if not interrupted:
-        # `turn.observe` honors a pending stop only after recording `failed`,
-        # so the stop is checked first to record the effect `interrupted`.
+    if not interrupted and not isinstance(primary, _CapabilityFault):
+        # SessionMemory's turn honors a pending stop only after recording `failed`,
+        # so the stop is checked first to record the effect `interrupted`. A host
+        # fault keeps priority over the stop, as it does without memory.
         try:
             check_stopped()
         except BaseException as stop:

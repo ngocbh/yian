@@ -5,6 +5,7 @@ from threading import Event
 from langchain_core.messages import AIMessage, HumanMessage
 import pytest
 
+from yian.events import ModelCallStarted
 import yian.llm_clients as llm_clients
 import yian.tools as tools
 from yian.memory.session import SessionMemory
@@ -15,6 +16,15 @@ from tests.engine.test_agent_nonfinite_replies import _flow, _setup
 from tests.engine.test_agent_session import _Model, _view
 from tests.engine.test_agent_session_structured import _typed_flow
 from tests.engine.test_agent_session_tools import _Chat, _Tool, _call
+
+
+def _contexts(error):
+    """Return the messages of every exception in `error`'s `__context__` chain."""
+    messages = []
+    while error.__context__ is not None:
+        error = error.__context__
+        messages.append(str(error))
+    return messages
 
 
 @pytest.mark.parametrize("session", [True, False])
@@ -31,7 +41,8 @@ def test_a_stop_during_a_failing_model_call_stops_the_run(monkeypatch, session):
     with pytest.raises(_HostStop) as caught:
         _run_flow_controlled(flow, {"question": "q"}, memory=memory, stop_event=stop)
     if session:
-        assert str(caught.value.__context__) == "provider boom"
+        assert not getattr(caught.value, "__notes__", None)
+        assert "provider boom" in _contexts(caught.value)
         view = _view(memory["session"])
         assert [effect.status for effect in view.effects] == ["interrupted"]
         assert view.effects[0].failure.code == "api.model.interrupted"
@@ -55,7 +66,8 @@ def test_a_stop_during_a_failing_tool_call_stops_the_run(monkeypatch, session):
     with pytest.raises(_HostStop) as caught:
         _run_flow_controlled(flow, {"question": "q"}, memory=memory, stop_event=stop)
     if session:
-        assert str(caught.value.__context__) == "tool boom"
+        assert not getattr(caught.value, "__notes__", None)
+        assert "tool boom" in _contexts(caught.value)
         view = _view(memory["session"])
         assert [effect.status for effect in view.effects] == ["completed", "interrupted"]
         assert view.effects[1].failure.code == "api.tool.interrupted"
@@ -72,12 +84,15 @@ def test_a_stop_during_a_failing_structured_call_stops_the_run(monkeypatch):
 
     monkeypatch.setattr(llm_clients, "model_from_config", lambda _: _Model([stop_then_raise]))
     memory = SessionMemory()
-    with pytest.raises(_HostStop):
+    with pytest.raises(_HostStop) as caught:
         _run_flow_controlled(
             _typed_flow(native=False), {"question": "q"}, memory={"session": memory}, stop_event=stop
         )
+    assert not getattr(caught.value, "__notes__", None)
+    assert "provider boom" in _contexts(caught.value)
     view = _view(memory)
     assert [effect.status for effect in view.effects] == ["interrupted"]
+    assert view.effects[0].failure.code == "api.model.interrupted"
     assert view.closed_invocations[-1].status == "interrupted"
 
 
@@ -86,13 +101,15 @@ class _StopOnObserve:
 
     def __init__(self):
         self.observed = []
+        self.stop = None
 
     def request(self, operation, payload, items=()):
         return 1
 
     def observe(self, ordinal, status, *, items=(), failure=None):
         self.observed.append(status)
-        raise _HostStop()
+        self.stop = _HostStop()
+        raise self.stop
 
 
 class _BadStr:
@@ -112,7 +129,7 @@ def test_a_stop_raised_while_observing_a_failure_wins(call, observed):
     """A stop raised by `observe` after recording the outcome is raised instead of a host fault."""
     turn = _StopOnObserve()
 
-    with pytest.raises(_HostStop):
+    with pytest.raises(_HostStop) as caught:
         if call == "model":
             invoke_model(turn, _fail, new_messages=[HumanMessage("q")], check_stopped=lambda: None)
         else:
@@ -121,3 +138,33 @@ def test_a_stop_raised_while_observing_a_failure_wins(call, observed):
                 model_exchange_id="e", call_index=0, tool_call_id="t", check_stopped=lambda: None,
             )
     assert turn.observed == observed
+    assert caught.value is turn.stop
+    primary = caught.value.__context__
+    assert str(primary) == ("cannot represent" if call == "representation" else "boom")
+    assert not any(
+        note.startswith("Conversation observation failed")
+        for note in getattr(primary, "__notes__", ())
+    )
+
+
+@pytest.mark.parametrize("session", [True, False])
+def test_a_host_callback_fault_escapes_a_pending_stop(monkeypatch, session):
+    """An `on_event` sink that sets the stop and raises surfaces its error, as without memory."""
+    stop = Event()
+
+    def on_event(event):
+        if isinstance(event, ModelCallStarted):
+            stop.set()
+            raise ValueError("sink boom")
+
+    _setup(monkeypatch, [AIMessage(content="fine")])
+    flow, memory = _flow(session)
+    with pytest.raises(ValueError, match="sink boom"):
+        _run_flow_controlled(
+            flow, {"question": "q"}, memory=memory, stop_event=stop,
+            on_event=on_event, num_workers=0,
+        )
+    if session:
+        view = _view(memory["session"])
+        assert [effect.status for effect in view.effects] == ["failed"]
+        assert view.effects[0].failure.code == "api.model.failed"

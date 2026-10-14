@@ -2308,8 +2308,9 @@ def _assemble(
     )
     # loop `'a -> 'a` type contract (types): each field the body returns is compared with
     # its carried seed-source Type (needs producers, so it runs alongside the cross-flow
-    # call/map type check above). An inline body's returned fields must also fit the
-    # parameters generated from its seeds, since they are bound to them on the next turn.
+    # call/map type check above). Each returned field must also fit the body parameter it
+    # is bound to on the next turn: a named body's declared input, or the parameter an
+    # inline body generates from its seed (`inline_loops` only selects the wording).
     check_loop_type_contract(
         build_results,
         producers,

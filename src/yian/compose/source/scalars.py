@@ -7,7 +7,8 @@ own implicit-resolver table and the ``int``/``float``/``bool`` constructors for 
 YAML 1.2 core schema, keeping two YAML 1.1 extensions: unquoted timestamps and
 ``<<`` merge keys. Its own ``timestamp`` constructor makes a date-shaped plain
 scalar that is not a real date or time, such as ``2026-13-45`` or an offset of
-``+05:99``, a located ``ConstructorError`` that says to quote it. PyYAML's global ``SafeLoader`` tables are never modified.
+``+05:99``, a located ``ConstructorError`` that says to quote it. PyYAML's global
+``SafeLoader`` tables are never modified.
 
 Knows about:   PyYAML.
 Never imports: compose helpers or phases, nodes, compile, runtime, the run

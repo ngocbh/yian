@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from concurrent.futures import CancelledError, Future
 from dataclasses import dataclass, field
-from queue import Queue
+from queue import Empty, Queue
 from threading import Event, Lock, current_thread, main_thread
 from typing import Any, Callable
 
@@ -264,12 +264,22 @@ class TerminalBroker:
                 continue
 
     def serve(self) -> ControllerComplete:
-        """Drain terminal work on the process main thread through completion."""
+        """Drain terminal work on the process main thread through completion.
+
+        The queue wait wakes every ``_STOP_POLL_SECONDS`` so a pending Ctrl-C raises
+        ``KeyboardInterrupt`` even while no message arrives.
+        """
         if current_thread() is not main_thread():
             raise RuntimeError("terminal broker must be served on the process main thread")
 
         while True:
-            message = self._messages.get()
+            try:
+                # A timed wait returns the main thread to bytecode, where it runs a SIGINT
+                # handler that a signal on another thread tripped; an untimed queue wait
+                # would sleep through it until the next message.
+                message = self._messages.get(timeout=_STOP_POLL_SECONDS)
+            except Empty:
+                continue
             if isinstance(message, ControllerComplete):
                 self.cancel_all()
                 return message

@@ -475,15 +475,10 @@ def _run_with_terminal_controller(
         on_event = lambda event: broker.render(partial(reporter.handle, event))
 
     controller_finished = threading.Event()
-    controller_signal_mask: Any = None
 
     def drive() -> None:
         """Publish exactly one result or exception from the controller thread."""
         try:
-            # A new POSIX thread inherits the launcher's temporary SIGINT block. Restore the
-            # caller's original mask before this controller can spawn engine workers/processes.
-            if controller_signal_mask is not None:
-                signal.pthread_sigmask(signal.SIG_SETMASK, controller_signal_mask)
             result = controller(stop_event, on_event, ask_user, broker.render)
         except BaseException as exc:
             stop_event.set()
@@ -508,26 +503,38 @@ def _run_with_terminal_controller(
         stop_event.set()
 
     def start_controller() -> None:
-        """Launch with SIGINT deferred until ``started`` records the OS thread.
+        """Launch the controller with Ctrl-C deferred until ``started`` is recorded.
 
-        CPython's ``Thread.start`` can be interrupted after creating the OS thread but before
-        publishing ``ident``. Blocking SIGINT across that short POSIX launch handshake closes
-        the otherwise unobservable join-before-return race.
+        A SIGINT handled while ``Thread.start`` runs would escape with ``started`` still
+        False and skip the join. A temporary handler records it instead; restoring the
+        caller's handler replays it, so the caller's policy applies once the controller
+        is tracked.
         """
-        nonlocal controller_signal_mask, started
-        pthread_sigmask = getattr(signal, "pthread_sigmask", None)
-        if threading.current_thread() is threading.main_thread() and pthread_sigmask is not None:
-            previous_mask = pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
-            controller_signal_mask = previous_mask
-            try:
-                controller_thread.start()
-                started = True
-            finally:
-                # A pending SIGINT is delivered here, after `started` became authoritative.
-                pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+        nonlocal started
+        # Python handlers can only be set on the main thread, and a handler installed
+        # outside Python (getsignal None) could not be restored afterwards.
+        if (
+            threading.current_thread() is not threading.main_thread()
+            or signal.getsignal(signal.SIGINT) is None
+        ):
+            controller_thread.start()
+            started = True
             return
-        controller_thread.start()
-        started = True
+        deferred = False
+
+        def defer_sigint(signum: int, frame: Any) -> None:
+            """Record a Ctrl-C that arrives while the controller thread starts."""
+            nonlocal deferred
+            deferred = True
+
+        previous = signal.signal(signal.SIGINT, defer_sigint)
+        try:
+            controller_thread.start()
+            started = True
+        finally:
+            signal.signal(signal.SIGINT, previous)
+            if deferred:
+                signal.raise_signal(signal.SIGINT)
 
     if reporter is not None:
         reporter.start()

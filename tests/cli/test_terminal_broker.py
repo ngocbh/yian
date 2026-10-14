@@ -6,8 +6,10 @@ import ast
 from concurrent.futures import CancelledError
 from pathlib import Path
 from queue import Queue
+import signal
 import sys
 from threading import Event, Thread, current_thread, main_thread
+import time
 from typing import Any
 
 import pytest
@@ -575,3 +577,49 @@ def test_serve_rejects_non_main_thread_without_consuming_completion() -> None:
     assert isinstance(error, RuntimeError)
     assert "main thread" in str(error)
     assert broker.serve() is complete
+
+
+@pytest.mark.skipif(not hasattr(signal, "pthread_kill"), reason="needs pthread_kill")
+def test_serve_raises_sigint_tripped_on_another_thread_without_a_message() -> None:
+    """An idle serve() still runs a SIGINT handler tripped on a worker thread."""
+
+    waiting = Event()
+
+    class _SignalingQueue(Queue):
+        """A queue that reports when serve() starts waiting on it."""
+
+        def get(self, *args: Any, **kwargs: Any) -> Any:
+            waiting.set()
+            return super().get(*args, **kwargs)
+
+    broker = TerminalBroker(lambda request: None)
+    broker._messages = _SignalingQueue()
+    release = Event()
+
+    def interrupt_from_worker() -> None:
+        # Signal only once serve() waits, so the KeyboardInterrupt cannot escape
+        # pytest.raises (pytest treats that as a user abort of the session).
+        waiting.wait(_TIMEOUT)
+        # Thread-directed, so the handler is tripped here and the main thread's
+        # queue wait is not interrupted by the signal itself.
+        signal.pthread_kill(current_thread().ident, signal.SIGINT)
+        # Fallback so a broken serve() fails the timing assert instead of hanging.
+        release.wait(_TIMEOUT)
+        broker.controller_complete(result="late")
+
+    worker = Thread(target=interrupt_from_worker, daemon=True)
+    # Independent of the inherited disposition (a background job inherits SIGINT ignored).
+    previous = signal.signal(signal.SIGINT, signal.default_int_handler)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            worker.start()
+            started = time.monotonic()
+            broker.serve()
+        elapsed = time.monotonic() - started
+    finally:
+        release.set()
+        worker.join(_TIMEOUT)
+        signal.signal(signal.SIGINT, previous)
+
+    assert elapsed < 1.5
+    assert not worker.is_alive()

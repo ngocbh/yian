@@ -285,7 +285,18 @@ def test_a_flow_file_sets_the_azure_endpoint_and_the_run_records_it(tmp_path, mo
     assert result.status == "succeeded", result.failure
     assert built == [("azure", "deploy-a", AZURE_RESOURCE, None)]
     assert _effective(path) == {
-        "agent": {"provider": "azure", "model": "deploy-a", "base_url": AZURE_RESOURCE},
+        "agent": {
+            "provider": "azure",
+            "model": "deploy-a",
+            "base_url": AZURE_RESOURCE,
+            "_connection": {
+                "method": "api_key",
+                "source": "environment",
+                "credential_id": None,
+                "endpoint": None,
+                "store_path": None,
+            },
+        },
     }
 
 

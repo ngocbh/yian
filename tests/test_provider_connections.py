@@ -1,17 +1,26 @@
 """Pinned connection metadata on every keyed provider, without network."""
 
+import json
+import time
+
 import pytest
 
 from yian.compile.llm_cascade import _validate_layer
+from yian.compose.loader import load_flow
+from yian.llm_clients import connection as connection_module
 from yian.llm_clients import factory
+from yian.llm_clients.auth import ApiKeyCredentials, AuthStore, OAuthCredentials
 from yian.llm_clients.config import azure_resource_endpoint
 from yian.llm_clients.connection import (
     HOST_KEY_MARKER,
+    ConnectionSnapshot,
+    connection_snapshot,
     legacy_connection_config,
     resolve_model_config,
     split_model_config,
     validate_connection,
 )
+from yian.run import run_flow
 
 STORE = {
     "method": "api_key",
@@ -62,8 +71,10 @@ def test_connection_metadata_validation_per_provider():
         with pytest.raises(ValueError):
             validate_connection(value, "azure")
 
-    for provider in ("ollama", "unknown", None, ["openai"]):
-        with pytest.raises(ValueError, match="not used for provider"):
+    with pytest.raises(ValueError, match="not used for provider ollama"):
+        validate_connection(ENVIRONMENT, "ollama")
+    for provider in ("unknown-secret", None, ["openai"]):
+        with pytest.raises(ValueError, match="not used for an unsupported provider$"):
             validate_connection(ENVIRONMENT, provider)
 
 
@@ -149,3 +160,193 @@ def test_non_openai_connection_adds_no_openai_route(monkeypatch):
     )
     assert "api_key" not in captured[0] and "base_url" not in captured[0]
     assert captured[1]["api_key"].get_secret_value() == "host-key" and "base_url" not in captured[1]
+
+
+def _no_provider_keys(monkeypatch):
+    for name in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+
+
+def _store_connection(selection, endpoint=None):
+    return {
+        "method": "api_key",
+        "source": "store",
+        "credential_id": selection.credential_id,
+        "endpoint": endpoint,
+        "store_path": str(AuthStore().path),
+    }
+
+
+def test_snapshot_connections_per_provider(monkeypatch):
+    _no_provider_keys(monkeypatch)
+    saved = AuthStore().save("anthropic", ApiKeyCredentials("saved-secret"), "m")
+
+    connections = connection_snapshot().connections
+
+    assert connections["anthropic"] == _store_connection(saved)
+    assert connections["google"] == ENVIRONMENT
+    assert "ollama" not in connections
+    assert connections["openai"] == {
+        "method": "api_key",
+        "source": "missing",
+        "credential_id": None,
+        "endpoint": "https://api.openai.com/v1",
+        "store_path": None,
+    }
+
+
+@pytest.mark.parametrize(
+    ("provider", "credentials", "endpoint"),
+    [
+        ("openai", None, None),
+        ("openai", ApiKeyCredentials("k"), "https://api.example/v1"),
+        ("anthropic", OAuthCredentials("a", "r", time.time() + 3600, "acct"), None),
+        ("google", ApiKeyCredentials("k"), "https://example.com/"),
+        ("azure", ApiKeyCredentials("k"), None),
+        ("azure", None, "https://r.openai.azure.com/"),
+        ("azure", ApiKeyCredentials("k"), "http://r.openai.azure.com/"),
+        ("ollama", ApiKeyCredentials("k"), None),
+    ],
+)
+def test_snapshot_rejects_impossible_saved_logins(provider, credentials, endpoint):
+    AuthStore().save(provider, credentials, "m", endpoint=endpoint, make_default=False)
+    with pytest.raises(ValueError, match=f"The saved {provider} login is invalid; run 'yian auth {provider}' again"):
+        connection_snapshot()
+
+
+def test_snapshot_accepts_keyless_logins_and_skips_unsupported_ones(monkeypatch):
+    store = AuthStore()
+    store.save("ollama", None, "l", make_default=False)
+    store.save("vllm", None, "v", make_default=False)
+    store.save("claude", ApiKeyCredentials("k"), "c", make_default=False)
+
+    snapshot = connection_snapshot()
+
+    assert snapshot.provider_models["ollama"] == "l"
+    assert snapshot.connections["vllm"] == ENVIRONMENT
+    assert "claude" not in snapshot.provider_models
+    assert "claude" not in snapshot.connections
+
+    monkeypatch.delenv("YIAN_DEFAULT_PROVIDER")
+    store.set_default("claude")
+    with pytest.raises(ValueError, match="saved default provider 'claude' is not supported"):
+        connection_snapshot()
+
+
+def test_bind_records_store_and_environment_connections(monkeypatch):
+    _no_provider_keys(monkeypatch)
+    saved = AuthStore().save("anthropic", ApiKeyCredentials("saved-secret"), "m")
+    snapshot = connection_snapshot()
+    effective = {
+        "a": {"provider": "anthropic", "model": "m"},
+        "g": {"provider": "google", "model": "g"},
+        "o": {"provider": "ollama", "model": "l"},
+    }
+
+    bound = snapshot.bind(effective)
+
+    assert bound["a"]["_connection"] == _store_connection(saved)
+    assert bound["g"]["_connection"] == ENVIRONMENT
+    assert "_connection" not in bound["o"]
+    assert "_connection" not in effective["a"]
+
+    hosted = snapshot.bind(effective, host_key_provider="anthropic")
+    assert hosted["a"][HOST_KEY_MARKER] is True
+    assert "_connection" not in hosted["a"]
+    assert hosted["g"]["_connection"] == ENVIRONMENT
+
+
+def test_bind_azure_endpoint_rules(monkeypatch):
+    effective = {"z": {"provider": "azure", "model": "dep"}}
+
+    bound = connection_snapshot().bind(effective)
+    assert "base_url" not in bound["z"]
+    assert bound["z"]["_connection"] == ENVIRONMENT
+
+    saved = AuthStore().save(
+        "azure", ApiKeyCredentials("saved-secret"), "dep", endpoint="https://r.openai.azure.com/"
+    )
+    snapshot = connection_snapshot()
+    store = _store_connection(saved, "https://r.openai.azure.com/")
+
+    bound = snapshot.bind(effective)["z"]
+    assert bound["base_url"] == "https://r.openai.azure.com/"
+    assert bound["_connection"] == store
+
+    same = {"provider": "azure", "model": "dep", "base_url": "https://r.openai.azure.com/openai/v1/"}
+    bound = snapshot.bind({"z": same})["z"]
+    assert bound["base_url"] == "https://r.openai.azure.com/openai/v1/"
+    assert bound["_connection"] == store
+
+    other = {"provider": "azure", "model": "dep", "base_url": "https://other.openai.azure.com/"}
+    bound = snapshot.bind({"z": other})["z"]
+    assert bound["base_url"] == "https://other.openai.azure.com/"
+    assert bound["_connection"] == ENVIRONMENT
+
+
+def test_resolve_model_config_attaches_without_rereading_on_replay(monkeypatch):
+    _no_provider_keys(monkeypatch)
+    real_snapshot = connection_snapshot
+
+    def no_snapshot():
+        pytest.fail("read the connection snapshot")
+
+    monkeypatch.setattr(connection_module, "connection_snapshot", no_snapshot)
+    assert resolve_model_config({"provider": "ollama", "model": "l"}) == {
+        "provider": "ollama",
+        "model": "l",
+    }
+    hosted = resolve_model_config({"provider": "anthropic", "model": "m", "api_key": "k"})
+    assert "_connection" not in hosted
+    pinned = {"provider": "anthropic", "model": "m", "_connection": STORE}
+    assert resolve_model_config(pinned) == pinned
+    host = ConnectionSnapshot({}, {}, {}).host_connection()
+    recorded = {"provider": "openai", "model": "m", "api_key": "k", "_connection": host}
+    assert resolve_model_config(recorded)["_connection"] == host
+    monkeypatch.setattr(connection_module, "connection_snapshot", real_snapshot)
+
+    assert resolve_model_config({"provider": "anthropic", "model": "m"})["_connection"] == ENVIRONMENT
+    saved = AuthStore().save("anthropic", ApiKeyCredentials("saved-secret"), "m")
+    assert resolve_model_config({"provider": "anthropic", "model": "m"})[
+        "_connection"
+    ] == _store_connection(saved)
+    assert (
+        resolve_model_config({"provider": "openai", "model": "m", "api_key": "k"})["_connection"]
+        == host
+    )
+    azure = AuthStore().save(
+        "azure", ApiKeyCredentials("saved-secret"), "dep", endpoint="https://r.openai.azure.com/"
+    )
+    resolved = resolve_model_config({"provider": "azure", "model": "dep"})
+    assert resolved["base_url"] == "https://r.openai.azure.com/"
+    assert resolved["_connection"] == _store_connection(azure, "https://r.openai.azure.com/")
+
+
+def test_run_records_connections(monkeypatch, tmp_path):
+    _no_provider_keys(monkeypatch)
+    saved = AuthStore().save("anthropic", ApiKeyCredentials("saved-secret"), "m")
+
+    class _Model:
+        def invoke(self, messages):
+            class _Response:
+                content = "ok"
+
+            return _Response()
+
+    monkeypatch.setattr("yian.llm_clients.model_from_config", lambda config: _Model())
+    flow = load_flow(
+        "id: f\nname: f\nnodes:\n"
+        "  a: {kind: agent, prompt: hi, llm_config: {provider: anthropic, model: m}}\n"
+        "  g: {kind: agent, prompt: hi, llm_config: {provider: google, model: g}}\n"
+        "output: ${a.output}\n"
+    )
+    log = tmp_path / "r.jsonl"
+
+    assert run_flow(flow, {}, log=log).status == "succeeded"
+
+    started = json.loads(log.read_text().splitlines()[0])
+    assert started["kind"] == "run_started"
+    recorded = started["payload"]["effective_llm_by_static_path"]
+    assert recorded["a"]["_connection"] == _store_connection(saved)
+    assert recorded["g"]["_connection"] == ENVIRONMENT
+    assert b"saved-secret" not in log.read_bytes()

@@ -1,11 +1,14 @@
 """Snapshot model defaults and nonsecret connection identities at host boundaries.
 
 There is no built-in provider or model: defaults come only from the environment
-(``YIAN_DEFAULT_PROVIDER``/``YIAN_DEFAULT_MODEL``) and the saved login. Auth
-storage owns credentials and refresh. This module resolves selection and
-provides injected credential callables to model transports. Recorded metadata is
-internal, never a YAML option, and never contains a token or API key. Compilation
-may use the detached snapshot without authentication effects.
+(``YIAN_DEFAULT_PROVIDER``/``YIAN_DEFAULT_MODEL``) and the saved logins. Auth
+storage owns credentials and refresh. This module resolves selection, records
+on every keyed agent which connection it uses (the saved login or the
+provider's key environment variable; OpenAI also a host key, subscription, or
+missing key), and provides injected credential callables to model transports.
+Recorded metadata is internal, never a YAML option, and never contains a token
+or API key. Compilation may use the detached snapshot without authentication
+effects.
 """
 
 from __future__ import annotations
@@ -19,7 +22,14 @@ from urllib.parse import urlsplit
 
 from pydantic import ValidationError
 
-from .auth import ApiKeyCredentials, AuthError, AuthStore, OAuthCredentials, OpenAIAuth
+from .auth import (
+    ApiKeyCredentials,
+    AuthError,
+    AuthStore,
+    OAuthCredentials,
+    OpenAIAuth,
+    ProviderSelection,
+)
 from .config import (
     AZURE_NEEDS_BASE_URL,
     RETIRED_LLM_CONFIG_KEYS,
@@ -105,8 +115,11 @@ class ConnectionSnapshot:
     """One detached host selection shared across every static agent in a run.
 
     ``defaults`` holds the selected default provider and its model, either of which
-    may be absent. ``stray_model`` records a ``YIAN_DEFAULT_MODEL`` that names no
-    provider, so an agent that needs a default can say why it was ignored.
+    may be absent. ``connections`` holds one connection per keyed provider: the
+    saved login, else the provider's key environment variable (for OpenAI, the
+    environment key or a missing one). A saved Azure login's connection carries
+    its resource endpoint. ``stray_model`` records a ``YIAN_DEFAULT_MODEL`` that
+    names no provider, so an agent that needs a default can say why it was ignored.
     """
 
     defaults: dict[str, Any]
@@ -124,12 +137,19 @@ class ConnectionSnapshot:
     ) -> dict[str, dict[str, Any]]:
         """Attach selected connection identity without changing any input maps.
 
+        Every other keyed agent records its provider's connection from the
+        snapshot; an ``ollama`` agent records none. An ``azure`` agent with a
+        saved login and no ``base_url`` gets the login's endpoint as its
+        ``base_url``; one whose ``base_url`` names another resource records the
+        environment connection instead, since the saved key belongs to the saved
+        resource.
+
         Agents of ``host_key_provider`` authenticate with a key the host supplies
         outside the map. Each records the nonsecret ``HOST_KEY_MARKER``, and an
         OpenAI agent records a ``host`` connection instead of the saved or
-        environment one. ``host_base_url``, the endpoint the host gave with that
-        key, is recorded on those agents only, and is the OpenAI host
-        connection's endpoint.
+        environment one; other providers record no connection. ``host_base_url``,
+        the endpoint the host gave with that key, is recorded on those agents
+        only, and is the OpenAI host connection's endpoint.
         """
         result = copy.deepcopy(effective)
         for config in result.values():
@@ -140,10 +160,32 @@ class ConnectionSnapshot:
                 if config["provider"] == "openai":
                     config["_connection"] = self.host_connection(host_base_url)
                 continue
-            connection = self.connections.get(config["provider"])
-            if connection is not None:
-                config["_connection"] = copy.deepcopy(connection)
+            self._attach(config)
         return result
+
+    def _attach(self, config: dict[str, Any]) -> None:
+        """Record the provider's snapshot connection on one config without a host key.
+
+        Args:
+            config (`dict[str, Any]`): A mutable config with its ``provider`` set.
+                An ``azure`` config may get its ``base_url`` from the saved login.
+        """
+        provider = config["provider"]
+        connection = self.connections.get(provider)
+        if connection is None:
+            return
+        connection = validate_connection(connection, provider)
+        if provider == "azure" and connection["source"] == "store":
+            base_url = config.get("base_url")
+            if base_url is None:
+                config["base_url"] = connection["endpoint"]
+            elif azure_resource_endpoint(base_url) != azure_resource_endpoint(
+                connection["endpoint"]
+            ):
+                # The saved key belongs to its own resource; another one reads
+                # AZURE_OPENAI_API_KEY as before.
+                connection = copy.deepcopy(_ENVIRONMENT_CONNECTION)
+        config["_connection"] = connection
 
     def host_connection(self, endpoint: str | None = None) -> dict[str, Any]:
         """Return the nonsecret identity of an OpenAI key supplied by the host.
@@ -176,11 +218,16 @@ def connection_snapshot() -> ConnectionSnapshot:
 
     The default provider is ``YIAN_DEFAULT_PROVIDER``, else the saved default, else
     none. Each saved selection supplies its provider's model; ``YIAN_DEFAULT_MODEL``
-    overrides the default provider's.
+    overrides the default provider's. Each keyed provider gets a connection: its
+    saved API-key login (or, for OpenAI, subscription), else its key environment
+    variable. A saved login for a provider this version does not support is
+    skipped unless it is the default.
 
     Raises:
         `ValueError`: ``YIAN_DEFAULT_PROVIDER`` or the saved default names an
-            unsupported provider.
+            unsupported provider, or a supported provider's saved login is of a
+            kind it cannot use (such as a subscription outside OpenAI, or an
+            Azure login without a valid endpoint).
     """
     store = AuthStore()
     state = store.read()
@@ -203,6 +250,7 @@ def connection_snapshot() -> ConnectionSnapshot:
                 )
             # A login for a provider this version no longer runs selects nothing.
             continue
+        _check_selection(selection)
         models[selection.provider] = selection.model
         if selection.provider == "openai":
             connections[selection.provider] = {
@@ -216,6 +264,17 @@ def connection_snapshot() -> ConnectionSnapshot:
                 ),
                 "store_path": str(store.path),
             }
+        elif selection.method == "api_key":
+            connections[selection.provider] = {
+                "method": "api_key",
+                "source": "store",
+                "credential_id": selection.credential_id,
+                "endpoint": selection.endpoint,
+                "store_path": str(store.path),
+            }
+    for keyed in SUPPORTED_LLM_PROVIDERS:
+        if keyed in _KEYED and keyed != "openai" and keyed not in connections:
+            connections[keyed] = copy.deepcopy(_ENVIRONMENT_CONNECTION)
     stray_model = False
     if environment.get("YIAN_DEFAULT_MODEL"):
         if provider is None:
@@ -237,7 +296,7 @@ def connection_snapshot() -> ConnectionSnapshot:
         if provider in models:
             defaults["model"] = models[provider]
     connections = {
-        provider: validate_connection(value) for provider, value in connections.items()
+        name: validate_connection(value, name) for name, value in connections.items()
     }
     return ConnectionSnapshot(
         defaults,
@@ -246,6 +305,34 @@ def connection_snapshot() -> ConnectionSnapshot:
         environment.get("OPENAI_BASE_URL") or _API_ENDPOINT,
         stray_model,
     )
+
+
+def _check_selection(selection: ProviderSelection) -> None:
+    """Check that a supported provider's saved login is a kind it can use.
+
+    Args:
+        selection (`ProviderSelection`): A saved login of a supported provider.
+
+    Raises:
+        `ValueError`: OpenAI has no credential; another provider has a
+            subscription; a provider other than Azure has an endpoint; Azure has
+            no key or no valid endpoint; or Ollama has a key.
+    """
+    provider, method, endpoint = selection.provider, selection.method, selection.endpoint
+    invalid = (
+        (provider == "openai" and method == "none")
+        or (provider != "openai" and method == "subscription")
+        or (provider != "azure" and endpoint is not None)
+        or (provider == "azure" and (endpoint is None or method == "none"))
+        or (provider == "ollama" and method == "api_key")
+    )
+    if not invalid and provider == "azure":
+        try:
+            validate_base_url(endpoint)
+        except ValueError:
+            invalid = True
+    if invalid:
+        raise ValueError(f"The saved {provider} login is invalid; run 'yian auth {provider}' again")
 
 
 def validate_connection(value: Any, provider: str | None = "openai") -> dict[str, Any]:
@@ -270,8 +357,12 @@ def validate_connection(value: Any, provider: str | None = "openai") -> dict[str
             ``provider`` takes no connection. Errors never echo values.
     """
     if not isinstance(provider, str) or provider not in _KEYED:
-        name = provider if isinstance(provider, str) else None
-        raise ValueError(f"Internal connection metadata is not used for provider {name}")
+        name = (
+            f"provider {provider}"
+            if isinstance(provider, str) and provider in SUPPORTED_LLM_PROVIDERS
+            else "an unsupported provider"
+        )
+        raise ValueError(f"Internal connection metadata is not used for {name}")
     if type(value) is not dict or set(value) != _FIELDS:
         raise ValueError("Invalid internal connection metadata fields")
     if provider != "openai":
@@ -466,9 +557,16 @@ def resolve_model_config(
     """Resolve a fresh config, preserving any existing pinned connection.
 
     An unset provider or model comes from the snapshot's defaults and saved models.
+    A config with a model and a pinned connection, or a non-OpenAI config with a
+    provider and model that needs no snapshot connection (keyless, or with its
+    own ``api_key``), returns without reading the snapshot. Otherwise an OpenAI
+    config with an ``api_key`` gets a ``host`` connection, and any other keyed
+    config gets its provider's connection as `ConnectionSnapshot.bind` attaches
+    it, including an Azure login's endpoint as ``base_url``.
 
     Raises:
-        `ValueError`: No layer sets the provider or its model.
+        `ValueError`: No layer sets the provider or its model, or the snapshot
+            cannot be read.
     """
     validated, metadata = split_model_config(config)
     raw = validated.model_dump(exclude_none=True)
@@ -477,7 +575,12 @@ def resolve_model_config(
     if metadata is not None and validated.model:
         raw["_connection"] = metadata
         return raw
-    if validated.provider and validated.model and validated.provider != "openai":
+    if (
+        validated.provider != "openai"
+        and validated.provider
+        and validated.model
+        and (validated.provider not in _KEYED or validated.api_key is not None)
+    ):
         return raw
     snapshot = snapshot or connection_snapshot()
     provider = validated.provider or snapshot.defaults.get("provider")
@@ -491,8 +594,8 @@ def resolve_model_config(
         raw["_connection"] = metadata
     elif provider == "openai" and validated.api_key is not None:
         raw["_connection"] = snapshot.host_connection(validated.base_url)
-    elif provider in snapshot.connections:
-        raw["_connection"] = copy.deepcopy(snapshot.connections[provider])
+    elif validated.api_key is None:
+        snapshot._attach(raw)
     return raw
 
 

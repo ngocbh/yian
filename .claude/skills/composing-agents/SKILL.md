@@ -80,7 +80,7 @@ is. `output: {name: ${x}, ...}` always returns a record, even with one field
 `${child.output.order}`) or none (`output: {}` returns `{}`). No `output:` (or
 `output: null`) returns `None`. Either form may declare types with typed bindings:
 `output: Size = ${x}`, or a field `size: Size = ${x}` under a block `output:`.
-Field names must be strings: quote a `true`/`null`/`1` key (`'true': ${x}`).
+Every key in a flow must be text: quote a `true`/`1`/`null`/date key (`'true': ${x}`).
 A scalar literal (`output: 5`, a field `x: 5`) is returned as written.
 
 Node IDs are the keys under `nodes:`. A node id must be an identifier: ASCII

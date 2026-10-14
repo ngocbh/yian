@@ -81,6 +81,23 @@ def test_quoted_integer_default_is_not_coerced():
         read_flow_inputs({"value": 'int = "30"'}, {})
 
 
+def test_former_boolean_word_default_for_bool_names_the_boolean_to_write():
+    with pytest.raises(LoadError) as caught:
+        read_flow_inputs({"flag": "bool = no"}, {})
+
+    assert str(caught.value) == (
+        "input 'flag': default 'no' does not satisfy the declared type: "
+        "'no' does not match declared type bool; `no` is text; write `false`"
+    )
+
+
+def test_former_boolean_word_default_for_int_gets_no_fix():
+    with pytest.raises(LoadError) as caught:
+        read_flow_inputs({"flag": "int = no"}, {})
+
+    assert "is text" not in str(caught.value)
+
+
 def test_number_default_retains_compatible_integer_payload():
     parameter = _by_name(read_flow_inputs({"value": "float = 30"}, {}))["value"]
 

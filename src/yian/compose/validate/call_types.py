@@ -37,6 +37,7 @@ from yian.compose.helpers.output_contracts import (
     resolve_output_binding_contract,
 )
 from yian.compose.helpers.typed_bindings import yaml_quoted
+from yian.compose.helpers.yaml_words import former_boolean_fix
 from yian.compose.nodes.base import BuildResult
 from yian.compose.validate.narrowing import Narrowing
 from yian.compose.validate.typed_bindings import (
@@ -424,22 +425,28 @@ def _literal_hint(
 ) -> str | None:
     """Suggest how to rewrite a literal that doesn't fit `decl`, else `None`.
 
-    Text that a run boundary would convert to a finite number or a bool is written
-    unquoted instead. A value YAML read as a non-string, such as an unquoted number or
-    date, or a list or record holding dates, is quoted when its text would fit.
+    A YAML 1.1 boolean spelling such as `yes` gets the `true`/`false` to write when a
+    boolean fits. Other text that a run boundary would convert to a finite number or a
+    bool is written unquoted instead. A value YAML read as a non-string, such as an
+    unquoted number or date, or a list or record holding dates, is quoted when its text
+    would fit.
 
     Args:
         value (`Any`): The literal that failed.
         decl (`Parameter`): The child input, with a declared contract.
         text (`str | None`): The literal as written, if known.
         yaml (`bool`): Whether YAML read the literal, rather than the `${...}`
-            expression syntax, which reads only `true`/`false` as booleans.
+            expression syntax; only a YAML literal gets the note on how YAML reads
+            booleans.
 
     Returns:
         `str | None`: The hint, or `None` when rewriting the literal can't help.
     """
     child_type = decl.contract.type
     if isinstance(value, str):
+        fix = former_boolean_fix(value)
+        if fix is not None and _fits(child_type, fix[0]):
+            return fix[1]
         candidate = coerce_param(replace(decl, coerce_strings=True), value)
         if isinstance(candidate, str) or not _fits(child_type, candidate):
             return None
@@ -455,7 +462,7 @@ def _literal_hint(
             return "quote it to keep it as text"
         return (
             "quote it to keep it as text "
-            "(YAML reads unquoted yes/no/on/off/true/false as booleans)"
+            "(YAML reads unquoted true/false as booleans)"
         )
     if isinstance(value, (int, float, date)):
         written = text or shown_literal(value)

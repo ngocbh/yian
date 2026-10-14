@@ -65,10 +65,13 @@ def _flow(child: str, binding: str, *, over: str | None = None) -> str:
         ("str", "5", None, "child expects 'str', but the value 5 does not fit; quote it to keep it as text: \"5\""),
         ("int", '"3"', None, "child expects 'int', but the value \"3\" does not fit; text is not converted between flows, so write 3 without quotes"),
         ("float", '"5"', None, "child expects 'float', but the value \"5\" does not fit; text is not converted between flows, so write 5.0 without quotes"),
-        ("bool", '"yes"', None, "child expects 'bool', but the value \"yes\" does not fit; text is not converted between flows, so write true without quotes"),
+        ("bool", '"yes"', None, "child expects 'bool', but the value \"yes\" does not fit; `yes` is text; write `true`"),
+        ("bool", "yes", None, "child expects 'bool', but the value \"yes\" does not fit; `yes` is text; write `true`"),
+        ("Optional[bool]", "Off", None, "child expects 'Optional[bool]', but the value \"Off\" does not fit; `Off` is text; write `false`"),
+        ("bool", '"true"', None, "child expects 'bool', but the value \"true\" does not fit; text is not converted between flows, so write true without quotes"),
         ("date", "2026-01-01", None, "child expects 'date', but the value 2026-01-01 does not fit; quote it to keep it as text: \"2026-01-01\""),
         ("datetime", "2026-01-01T10:00:00", None, "child expects 'datetime', but the value 2026-01-01T10:00:00 does not fit; quote it to keep it as text: \"2026-01-01T10:00:00\""),
-        ("str", "true", None, "child expects 'str', but the value true does not fit; quote it to keep it as text (YAML reads unquoted yes/no/on/off/true/false as booleans)"),
+        ("str", "true", None, "child expects 'str', but the value true does not fit; quote it to keep it as text (YAML reads unquoted true/false as booleans)"),
         ("int", '${input.n:-"3"}', None, "child expects 'int', but the default \"3\" does not fit; text is not converted between flows, so write 3 without quotes"),
         ("int", '"abc"', None, "child expects 'int', but the value \"abc\" does not fit"),
         ("int[1, 3]", "9", None, "child expects 'int[1,3]', but the value 9 does not fit"),
@@ -103,12 +106,29 @@ def test_unprovable_fit_is_a_load_error(child, binding, over, message):
         ("float", '"nan"', "child expects 'float', but the value \"nan\" does not fit"),
         ("str", "${input.m:-2026-01-01}", "child expects 'str', but the default 2024 does not fit"),
         ("str", "${input.m:-true}", "child expects 'str', but the default true does not fit; quote it to keep it as text"),
+        ("int", "yes", "child expects 'int', but the value \"yes\" does not fit"),
+        ("Literal[a, b]", "no", "child expects 'Literal[\"a\",\"b\"]', but the value \"no\" does not fit"),
     ],
 )
 def test_no_rewrite_hint_when_rewriting_cannot_help(child, binding, message):
     with pytest.raises(LoadError) as exc:
         load_flow(_flow(child, binding))
     assert str(exc.value).splitlines()[0].endswith(f"binding 't' — {message}")
+
+
+def test_inline_call_with_a_former_boolean_word_names_the_boolean_to_write():
+    text = _CALL.replace(
+        "  c:\n    kind: {kind}\n    {over}\n    call: child\n    input:\n      t: {binding}\n",
+        "  c:\n    kind: code\n    input:\n      x: call(child, t=yes)\n    code: return 1\n",
+    ).format(child="bool")
+    with pytest.raises(LoadError) as exc:
+        load_flow(text)
+    message = str(exc.value).splitlines()[0]
+    assert message.endswith(
+        "binding 't' — child expects 'bool', but the value \"yes\" does not fit; "
+        "`yes` is text; write `true`"
+    )
+    assert "without quotes" not in message
 
 
 @pytest.mark.parametrize(

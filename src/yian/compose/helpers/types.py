@@ -24,6 +24,7 @@ from yian.typesys.values import ValueKind
 from yian.typesys.types import TypeRegistry, encodes_as_utf8
 
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
+from yian.compose.helpers.yaml_words import former_boolean_fix
 from yian.diagnostics import SourceRange
 from yian.compose.source import (
     SourceAccessError,
@@ -250,6 +251,29 @@ def _split_default(spec: str) -> tuple[str, Optional[str]]:
     return spec.strip(), None
 
 
+def _former_boolean_hint(declared: Type, default: Any) -> str:
+    """Return the fix for a YAML 1.1 boolean spelling default a boolean would fill, else `""`.
+
+    Args:
+        declared (`Type`):
+            The declaration's type.
+        default (`Any`):
+            The default as YAML read it.
+
+    Returns:
+        `str`:
+            `"; "` and the fix, such as ``"; `no` is text; write `false`"``, or `""`.
+    """
+    fix = former_boolean_fix(default)
+    if fix is None:
+        return ""
+    try:
+        build_value_as(declared, fix[0])
+    except TypeCheckError:
+        return ""
+    return f"; {fix[1]}"
+
+
 def _read_flow_parameter(
     name: str,
     value: Any,
@@ -285,7 +309,7 @@ def _read_flow_parameter(
             except ValueError as exc:
                 raise diagnostics.error(
                     f"{declaration_label} {name!r}: default {default!r} does not satisfy "
-                    f"the declared type: {exc}"
+                    f"the declared type: {exc}{_former_boolean_hint(typ, default)}"
                 ) from exc
         return Parameter(
             name=name,

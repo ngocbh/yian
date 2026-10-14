@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from yian.compose.helpers.errors import LoadDiagnostics
+from yian.compose.helpers.yaml_words import former_boolean_fix
 from yian.compose.source import SourceSyntaxError, parse_yaml_literal
 from yian.diagnostics import SourceRange
 from yian.typesys import (
@@ -169,7 +170,10 @@ def _literal_mismatch_message(
     declared: Type,
     error: TypeCheckError,
 ) -> str:
-    """Explain that a literal right side does not fit, suggesting quotes when they help.
+    """Explain that a literal right side does not fit, suggesting a rewrite when one helps.
+
+    A YAML 1.1 boolean spelling such as `yes` gets the `true`/`false` to write when a
+    boolean fits; a non-string literal whose text would fit gets the quoted form.
 
     Args:
         label (`str`): The binding's key name.
@@ -185,20 +189,41 @@ def _literal_mismatch_message(
     message = f"binding {label!r}: `{right}` is not a valid {type_text}"
     if error.path:
         message += f" ({error})"
+    if isinstance(parsed, str):
+        fix = former_boolean_fix(parsed)
+        if fix is not None and _fits(declared, fix[0]):
+            message += f"; {fix[1]}"
+        return message
     # Quoting only helps when YAML read the text as a non-string and the text
     # itself would fit, e.g. `str = 30` or `date = 2026-01-01`.
-    if isinstance(parsed, str):
-        return message
-    try:
-        build_value_as(declared, right)
-    except TypeCheckError:
+    if not _fits(declared, right):
         return message
     message += (
         f"; quote it to keep it as text: `{label}: {type_text} = {yaml_quoted(right)}`"
     )
     if isinstance(parsed, bool):
-        message += " (YAML reads unquoted yes/no/on/off/true/false as booleans)"
+        message += " (YAML reads unquoted true/false as booleans)"
     return message
+
+
+def _fits(declared: Type, value: Any) -> bool:
+    """Whether `value` passes the write-boundary check against `declared`.
+
+    Args:
+        declared (`Type`):
+            The declared type.
+        value (`Any`):
+            The candidate value.
+
+    Returns:
+        `bool`:
+            True when `build_value_as(declared, value)` succeeds.
+    """
+    try:
+        build_value_as(declared, value)
+    except TypeCheckError:
+        return False
+    return True
 
 
 def _not_a_type_message(

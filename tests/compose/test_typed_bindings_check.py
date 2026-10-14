@@ -195,7 +195,7 @@ def test_true_literal_for_str_explains_yaml_booleans():
     message = str(error.diagnostic.message)
     assert message.startswith("binding 'x': `true` is not a valid str")
     assert '`x: str = "true"`' in message
-    assert "yes/no/on/off/true/false as booleans" in message
+    assert "(YAML reads unquoted true/false as booleans)" in message
 
 
 @pytest.mark.parametrize("word", ["yes", "no"])
@@ -204,6 +204,33 @@ def test_unquoted_yes_or_no_literal_for_str_is_text(word):
 
     assert result.status == "succeeded", result.failure
     assert result.output == word
+
+
+def test_former_boolean_word_for_bool_names_the_boolean_to_write():
+    text = _flow("bool = yes")
+
+    error = _load_error(text)
+
+    assert str(error.diagnostic.message) == (
+        "binding 'x': `yes` is not a valid bool; `yes` is text; write `true`"
+    )
+    assert _error_line(error) == _line_of(text, "      x: bool = yes")
+
+
+def test_former_boolean_word_for_a_bool_output_names_the_boolean_to_write():
+    text = """
+id: checked
+name: checked
+nodes: {}
+output:
+  ok: bool = n
+"""
+    error = _load_error(text)
+
+    assert str(error.diagnostic.message) == (
+        "binding 'ok': `n` is not a valid bool; `n` is text; write `false`"
+    )
+    assert _error_line(error) == _line_of(text, "  ok: bool = n")
 
 
 def test_null_literal_for_a_record_output_field_fails_at_its_line():

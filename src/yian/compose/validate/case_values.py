@@ -8,7 +8,7 @@ pass that check, located at the branch itself rather than at the result node:
   `CaseDescriptor.value_branches`) with no `${...}` span anywhere is checked exactly with
   the write-boundary check, after the same preparation the lifted code applies (a date
   becomes its ISO text, a span-free string is `$$`-unescaped). A `null` into a
-  non-Optional T, and a YAML non-string scalar (`yes`, `3`) where T would take the text,
+  non-Optional T, and a YAML non-string scalar (`true`, `3`) where T would take the text,
   get a message saying how to fix it;
 - a value branch with spans is checked position by position: a span string's type is
   inferred over the producer and flow-input contracts as the value node sees them (with
@@ -336,7 +336,7 @@ class _Checker:
             return ""
         hint = f"; quote it to keep it as text: `{branch.label} {yaml_quoted(text)}`"
         if isinstance(value, bool):
-            hint += " (YAML reads unquoted yes/no/on/off/true/false as booleans)"
+            hint += " (YAML reads unquoted true/false as booleans)"
         return hint
 
     def _source_text(self, rng: Optional[SourceRange]) -> Optional[str]:

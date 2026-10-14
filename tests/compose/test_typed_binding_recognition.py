@@ -222,7 +222,7 @@ def test_malformed_yaml_right_side_names_the_binding():
 
 
 _QUOTE_HINT = "; quote it to keep it as text: "
-_BOOLEAN_NOTE = " (YAML reads unquoted yes/no/on/off/true/false as booleans)"
+_BOOLEAN_NOTE = " (YAML reads unquoted true/false as booleans)"
 
 
 def test_unquoted_false_for_str_suggests_quoting_and_explains_booleans():
@@ -237,6 +237,32 @@ def test_unquoted_false_for_str_suggests_quoting_and_explains_booleans():
 @pytest.mark.parametrize("word", ["no", "yes"])
 def test_unquoted_yes_or_no_for_str_is_text(word):
     assert _split(f"str = {word}") == TypedBindingText(type_text="str", value=word)
+
+
+@pytest.mark.parametrize(
+    ("text", "message"),
+    [
+        ("bool = yes", "binding 'qty': `yes` is not a valid bool; `yes` is text; write `true`"),
+        (
+            "Optional[bool] = Off",
+            "binding 'qty': `Off` is not a valid Optional[bool]; `Off` is text; write `false`",
+        ),
+        ('bool = "on"', "binding 'qty': `\"on\"` is not a valid bool; `on` is text; write `true`"),
+    ],
+)
+def test_former_boolean_word_for_bool_names_the_boolean_to_write(text, message):
+    assert str(_error(text)) == message
+
+
+@pytest.mark.parametrize(
+    ("text", "message"),
+    [
+        ("int = yes", "binding 'qty': `yes` is not a valid int"),
+        ("Literal[a, b] = no", "binding 'qty': `no` is not a valid Literal[a, b]"),
+    ],
+)
+def test_former_boolean_word_gets_no_fix_when_a_boolean_would_not_fit(text, message):
+    assert str(_error(text)) == message
 
 
 @pytest.mark.parametrize(

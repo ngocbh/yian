@@ -8,7 +8,8 @@ them apart, so every branch is classified first:
   with `call(` is a load error naming the problem), holds ` = ` (a load error: the case's `output:`
   gives the type, so `then: int = ${x}` is a mistake; quoting keeps the text), or holds a
   `${...}` span (a template value). A bare word that names no node is a load error that
-  suggests the nearest node name and the quoted form;
+  suggests the nearest node name and the quoted form, and for a YAML 1.1 boolean word
+  (`yes`, `off`) the `true`/`false` to write when the case's type takes a boolean;
 - a quoted string (`"..."`, `'...'`, or a block `|`/`>`) is text, so it is a value; a
   quoted `call(...)` holding a span is a load error, since quoting a call makes it text;
 - a non-string scalar (`null`, bool, number, date), a mapping, or a list is a value.
@@ -33,8 +34,9 @@ falling back to the case node's own range.
 
 Imports flow down/peer only: `compose.parse.file` (descriptors), `compose.desugar.inline_calls`
 (the `call(...)` recognizer, the reserved `__call_` prefix), `compose.helpers` (errors, YAML
-quoting), `expr`, `diagnostics`. Only the loader pipeline, the `yian.compose` re-export, and
-`compose.validate.case_values` (the shared value walk) import this back.
+quoting, YAML 1.1 boolean words), `expr`, `diagnostics`, and `nodes.contracts` and `typesys`
+(the case's type, for the boolean fix). Only the loader pipeline, the `yian.compose`
+re-export, and `compose.validate.case_values` (the shared value walk) import this back.
 """
 
 from __future__ import annotations
@@ -42,34 +44,41 @@ from __future__ import annotations
 import datetime
 import difflib
 import itertools
-import re
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import Any, Optional
 
 from yian.compose.desugar.inline_calls import _SYNTH_PREFIX, desugar_call_directives
 from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.helpers.typed_bindings import CALL_HEAD, QUOTED_STYLES, yaml_quoted
+from yian.compose.helpers.yaml_words import former_boolean_fix
 from yian.compose.parse.file import CaseDescriptor, CodeDescriptor
 from yian.diagnostics import SourceRange
 from yian.expr import ExpressionError, eval_binding, expr_refs_of
+from yian.nodes.contracts import ValueContract
+from yian.typesys import TypeCheckError, build_value_as
+from yian.typesys.values import Type
 
 VALUE_PREFIX = "__value_"
 CASE_PREFIX = "__case_"
 _RESERVED_PREFIXES = (VALUE_PREFIX, CASE_PREFIX)
 _CLOSE_MATCH_CUTOFF = 0.6
-# A word YAML 1.1 reads as text although Python reads it as a number (`1e3`, `2.5E-4`).
-_EXPONENT_WORD = re.compile(r"([+-]?\d+(?:\.\d*)?)[eE]([+-]?)(\d+)")
 
 
 def desugar_case_values(
     descriptors: dict,
     *,
+    case_types: Mapping[str, ValueContract] | None = None,
     diagnostics: LoadDiagnostics | None = None,
 ) -> dict:
     """Classify every `case` branch and lift each value branch to a synth CODE node.
 
     Args:
         descriptors (`dict`): The flow's parsed descriptors, keyed by node id.
+        case_types (`Mapping[str, ValueContract] | None`, *optional*, defaults to `None`):
+            The contract of each typed case's `output:`, keyed by case id; a bare
+            YAML 1.1 boolean word (`yes`) that names no node is offered the boolean to
+            write only when it fits this type. `None` offers it nowhere.
         diagnostics (`LoadDiagnostics | None`, *optional*, defaults to `None`): Source
             ownership for located errors; a fresh range-only owner when `None`.
 
@@ -90,6 +99,7 @@ def desugar_case_values(
         `return {'a': 1, 'b': inputs['v0']}`; the branch is rewritten to `__value_0`.
     """
     diagnostics = diagnostics or LoadDiagnostics()
+    case_types = case_types or {}
     for nid, desc in descriptors.items():
         for prefix in _RESERVED_PREFIXES:
             if nid.startswith(prefix):
@@ -111,6 +121,8 @@ def desugar_case_values(
             new_descriptors[nid] = desc
             continue
         value_branches = dict(desc.value_branches)
+        contract = case_types.get(nid)
+        case_type = contract.type if contract is not None else None
 
         new_cases = list(desc.cases)
         for index, case in enumerate(desc.cases):
@@ -121,6 +133,7 @@ def desugar_case_values(
                 case["then"],
                 style=_nth(desc.then_styles, index),
                 desc=desc,
+                case_type=case_type,
                 label="then:",
                 node_name=f"{nid} then[{index}]",
                 rng=rng,
@@ -139,6 +152,7 @@ def desugar_case_values(
                 desc.else_,
                 style=desc.else_style,
                 desc=desc,
+                case_type=case_type,
                 label="else:",
                 node_name=f"{nid} else",
                 rng=desc.field_ranges.get(("field", "else")) or desc.range,
@@ -169,6 +183,7 @@ def _branch_target(
     *,
     style: Optional[str],
     desc: CaseDescriptor,
+    case_type: Optional[Type],
     label: str,
     node_name: str,
     rng: Optional[SourceRange],
@@ -185,6 +200,8 @@ def _branch_target(
         value (`Any`): The authored `then:`/`else:` value.
         style (`Optional[str]`): Its YAML scalar style; `None` (unknown) reads as plain.
         desc (`CaseDescriptor`): The case that owns the branch.
+        case_type (`Optional[Type]`): The case's `output:` type, or `None` when it has
+            none.
         label (`str`): `"then:"` or `"else:"`, for messages.
         node_name (`str`): Display name for a synth value node.
         rng (`Optional[SourceRange]`): The branch's source range.
@@ -205,6 +222,7 @@ def _branch_target(
     if not _is_value(
         value,
         style=style,
+        case_type=case_type,
         host=host,
         label=label,
         descriptors=descriptors,
@@ -247,6 +265,7 @@ def _is_value(
     value: Any,
     *,
     style: Optional[str],
+    case_type: Optional[Type],
     host: str,
     label: str,
     descriptors: dict,
@@ -259,6 +278,8 @@ def _is_value(
     Args:
         value (`Any`): The authored `then:`/`else:` value.
         style (`Optional[str]`): Its YAML scalar style; `None` (unknown) reads as plain.
+        case_type (`Optional[Type]`): The case's `output:` type, or `None`; a YAML 1.1
+            boolean word that names no node is offered the boolean when it fits.
         host (`str`): Message prefix naming the branch, such as `"case node 'r' then:"`.
         label (`str`): `"then:"` or `"else:"`, for the quoted form a message suggests.
         descriptors (`dict`): The flow's descriptors; a bare word must name one.
@@ -315,19 +336,36 @@ def _is_value(
             value, suggestable, n=1, cutoff=_CLOSE_MATCH_CUTOFF
         )
         suggestion = f" Did you mean `{matches[0]}`?" if matches else ""
-        number = _EXPONENT_WORD.fullmatch(value)
-        number_hint = ""
-        if number is not None:
-            mantissa, sign, exponent = number.groups()
-            if "." not in mantissa:
-                mantissa += ".0"
-            number_hint = f", or write a YAML number such as {mantissa}e{sign or '+'}{exponent}"
         raise diagnostics.error(
             f"{host} `{value}` names no node.{suggestion} If you meant the text "
-            f'"{value}", quote it: `{label} {yaml_quoted(value)}`{number_hint}',
+            f'"{value}", quote it: `{label} {yaml_quoted(value)}`'
+            f"{_boolean_hint(value, case_type)}",
             range=rng,
         )
     return False
+
+
+def _boolean_hint(word: str, case_type: Optional[Type]) -> str:
+    """Return the boolean clause for a YAML 1.1 boolean word the case's type takes, else `""`.
+
+    Args:
+        word (`str`):
+            The bare branch word that names no node.
+        case_type (`Optional[Type]`):
+            The case's `output:` type, or `None` when it has none.
+
+    Returns:
+        `str`:
+            Such as `", or write `true` for the boolean"`, or `""`.
+    """
+    fix = former_boolean_fix(word)
+    if fix is None or case_type is None:
+        return ""
+    try:
+        build_value_as(case_type, fix[0])
+    except TypeCheckError:
+        return ""
+    return f", or write `{'true' if fix[0] else 'false'}` for the boolean"
 
 
 def _value_node(

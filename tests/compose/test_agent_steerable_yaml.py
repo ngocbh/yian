@@ -38,6 +38,11 @@ def test_steerable_agent_without_declared_output_is_text() -> None:
     ("line", "output", "message"),
     [
         ("    steerable: yes please", "    output: str", "`steerable:` must be true or false"),
+        (
+            "    steerable: yes",
+            "    output: str",
+            "`steerable:` must be true or false; `yes` is text; write `true`",
+        ),
         ("    steerable: true", "    output: int", "steerable needs `str` output"),
         ("    steerable: true", "    output: {answer: str}", "steerable needs `str` output"),
     ],

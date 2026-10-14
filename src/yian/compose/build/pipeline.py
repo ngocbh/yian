@@ -1591,11 +1591,6 @@ def _assemble(
         diagnostics=diagnostics,
     )
 
-    # Classify `case` branches and lift each value branch to a synth CODE node. Runs
-    # BEFORE the inline-call desugar so a value's `${...}` input bindings are walked by it
-    # and by the `${case.output}` expansion like any authored CODE input.
-    descriptors = desugar_case_values(descriptors, diagnostics=diagnostics)
-
     # Compile each typed case's `output:` once: its synth result node checks every taken
     # branch against this contract, located at the case's `output:` (source-free: none).
     case_types: dict[str, ValueContract] = {}
@@ -1606,6 +1601,13 @@ def _assemble(
             ) or ValueContract(
                 read_type(descriptor.outputs, registry, diagnostics=diagnostics)
             )
+
+    # Classify `case` branches and lift each value branch to a synth CODE node. Runs
+    # BEFORE the inline-call desugar so a value's `${...}` input bindings are walked by it
+    # and by the `${case.output}` expansion like any authored CODE input.
+    descriptors = desugar_case_values(
+        descriptors, case_types=case_types, diagnostics=diagnostics
+    )
 
     # Desugar inline `${ f(...) }` call expressions: each becomes a synth `call`
     # node (CallDescriptor, over=None) and its host binding is rewritten to

@@ -1386,7 +1386,69 @@ def test_unquoted_yes_with_no_node_named_yes_names_no_node():
         "case node 'route' else: `yes` names no node. "
         'If you meant the text "yes", quote it: `else: "yes"`'
     ) in message
+    assert "write `true`" not in message
     assert _error_line(caught.value) == _line_of(text, "else: yes")
+
+
+def test_unquoted_yes_under_bool_output_also_offers_the_boolean():
+    text = _flow(
+        "    on: ${input.cmd}\n"
+        "    output: bool\n"
+        "    cases:\n"
+        "      - when: a\n"
+        "        then: true\n"
+        "    else: yes\n"
+    )
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    message = str(caught.value)
+    assert (
+        "case node 'route' else: `yes` names no node. "
+        'If you meant the text "yes", quote it: `else: "yes"`, or write `true` for the '
+        "boolean"
+    ) in message
+    assert _error_line(caught.value) == _line_of(text, "else: yes")
+
+
+def test_unquoted_no_without_output_offers_no_boolean():
+    text = _flow(
+        "    on: ${input.cmd}\n"
+        "    cases:\n"
+        "      - when: a\n"
+        "        then: reply\n"
+        "    else: no\n"
+    )
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    message = str(caught.value)
+    assert (
+        "case node 'route' else: `no` names no node. "
+        'If you meant the text "no", quote it: `else: "no"`'
+    ) in message
+    assert "write `false`" not in message
+    assert _error_line(caught.value) == _line_of(text, "else: no")
+
+
+def test_unquoted_yes_routes_to_a_node_named_yes():
+    text = _flow(
+        "    on: ${input.cmd}\n"
+        "    cases:\n"
+        "      - when: a\n"
+        "        then: reply\n"
+        "    else: yes\n",
+        extra_nodes=(
+            "  yes:\n"
+            "    kind: code\n"
+            "    code: tests.engine._compose_codefns:echo\n"
+            "    input:\n"
+            "      topic: agreed\n"
+            "    output: str\n"
+        ),
+    )
+    result = run_flow(load_flow(text), {"cmd": "b"})
+    assert result.status == "succeeded", result.failure
+    assert "yes" in _started(result)
+    assert "reply" not in _started(result)
 
 
 def test_unquoted_true_into_str_output_gets_the_quote_hint():
@@ -1403,7 +1465,7 @@ def test_unquoted_true_into_str_output_gets_the_quote_hint():
     message = str(caught.value)
     assert "case node 'route' else: the value true is not a valid str" in message
     assert 'quote it to keep it as text: `else: "true"`' in message
-    assert "YAML reads unquoted yes/no/on/off/true/false as booleans" in message
+    assert "(YAML reads unquoted true/false as booleans)" in message
     assert _error_line(caught.value) == _line_of(text, "else: true")
 
 

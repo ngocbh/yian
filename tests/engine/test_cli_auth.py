@@ -351,7 +351,13 @@ def checks(monkeypatch, setup_auth):
     fake = Checks()
     monkeypatch.setattr(auth_cli, "list_models", fake.list_models)
     monkeypatch.setattr(auth_cli, "_model_answers", fake.model_answers)
-    variables = ("OLLAMA_BASE_URL", "VLLM_BASE_URL", "VLLM_API_KEY", "OPENAI_API_VERSION")
+    variables = (
+        "OLLAMA_BASE_URL",
+        "VLLM_BASE_URL",
+        "VLLM_API_KEY",
+        "OPENAI_API_VERSION",
+        *(name for names in auth_cli._ELSEWHERE_ENV.values() for name in names),
+    )
     for name in variables:
         monkeypatch.delenv(name, raising=False)
     return setup_auth[0], fake
@@ -455,6 +461,40 @@ def test_listing_failure_on_a_terminal_asks_for_a_model_name(monkeypatch, checks
     assert "can't reach host" in result.output and asked == ["--model"]
     assert fake.answers == [("anthropic", "claude-x", "private-key", None)]
     assert store.selection("anthropic").model == "claude-x"
+
+
+@pytest.mark.parametrize(
+    ("provider", "variable"),
+    [("anthropic", "ANTHROPIC_BASE_URL"), ("google", "GOOGLE_GENAI_USE_VERTEXAI")],
+)
+def test_base_url_variable_skips_the_listing(monkeypatch, checks, provider, variable):
+    store, fake = checks
+    monkeypatch.setenv(PROVIDER_API_KEY_ENV[provider], "private-key")
+    monkeypatch.setenv(variable, "https://gateway.example.com")
+    result = runner.invoke(app, ["auth", provider, "--model", "m1"])
+    assert result.exit_code == 0, result.output
+    assert fake.listings == []
+    assert fake.answers == [(provider, "m1", "private-key", None)]
+    assert store.selection(provider).model == "m1"
+
+
+def test_base_url_variable_on_a_terminal_asks_for_a_model_name(monkeypatch, checks):
+    store, fake = checks
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "private-key")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://gateway.example.com")
+    asked = []
+
+    def ask(message, *, option):
+        asked.append(option)
+        return "claude-x"
+
+    monkeypatch.setattr(auth_cli, "_require_terminal", lambda option: None)
+    monkeypatch.setattr(auth_cli, "_ask", ask)
+    result = runner.invoke(app, ["auth", "anthropic"])
+    assert result.exit_code == 0, result.output
+    assert "ANTHROPIC_BASE_URL" in result.output and asked == ["--model"]
+    assert fake.listings == []
+    assert fake.answers == [("anthropic", "claude-x", "private-key", None)]
 
 
 def test_ollama_setup_saves_model_only(monkeypatch, checks):

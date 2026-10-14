@@ -32,6 +32,12 @@ _NO_DEFAULT = (
 )
 # Environment overrides of a local server's URL, read the way its client reads them.
 _BASE_URL_ENV = {"ollama": "OLLAMA_BASE_URL", "vllm": "VLLM_BASE_URL"}
+# Variables the provider's SDK reads to send runs to another host than the one listed;
+# a gateway's key must not go to the public host's listing.
+_ELSEWHERE_ENV = {
+    "anthropic": ("ANTHROPIC_API_URL", "ANTHROPIC_BASE_URL"),
+    "google": ("GOOGLE_GEMINI_BASE_URL", "GOOGLE_GENAI_USE_VERTEXAI"),
+}
 
 
 def _require_terminal(option: str) -> None:
@@ -315,8 +321,9 @@ def _setup_provider(
 ) -> None:
     """Read a provider's key, endpoint, and model, check the model, and save the login.
 
-    A model in the provider's listing is accepted as is. Any other model, and every
-    Azure deployment, must answer one short prompt. vLLM's key is optional unless
+    A model in the provider's listing is accepted as is. Any other model, every
+    Azure deployment, and every model when a variable in `_ELSEWHERE_ENV` sends runs
+    to another host, must answer one short prompt. vLLM's key is optional unless
     `api_key_env` names its variable.
 
     Raises:
@@ -349,15 +356,26 @@ def _setup_provider(
     else:
         if model is None:
             _require_terminal("--model")  # Before the listing request.
+        elsewhere = next(
+            (name for name in _ELSEWHERE_ENV.get(provider, ()) if os.environ.get(name)),
+            None,
+        )
         variable = _BASE_URL_ENV.get(provider)
         base_url = (os.environ.get(variable) or None) if variable else None
         failure = None
-        try:
-            models = list_models(provider, key, base_url)
-        except ModelListError as error:
-            failure = str(error)
+        if elsewhere is None:
+            try:
+                models = list_models(provider, key, base_url)
+            except ModelListError as error:
+                failure = str(error)
         if model is None:
-            if models:
+            if elsewhere is not None:
+                typer.echo(
+                    f"{elsewhere} is set, so runs use another host than the {provider} "
+                    "listing; type a model name"
+                )
+                model = _ask("Model:", option="--model")
+            elif models:
                 model = _choose(
                     "Model:", list(models), default=models[0], option="--model"
                 )
@@ -422,7 +440,9 @@ def auth(
     environment variable or a hidden prompt; ollama takes none, and vllm's is
     optional unless --api-key-env names its variable. A model the provider
     doesn't list, and every Azure deployment, must answer one short prompt
-    before the login is saved. azure also needs OPENAI_API_VERSION set.
+    before the login is saved; with a base-URL variable such as
+    ANTHROPIC_BASE_URL set, the listing is skipped and the model must answer.
+    azure also needs OPENAI_API_VERSION set.
 
     `yian auth PROVIDER --default` makes a saved login the default.
     `yian auth PROVIDER --remove` deletes one saved login.

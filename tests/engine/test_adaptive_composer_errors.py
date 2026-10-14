@@ -10,7 +10,7 @@ from yian.compose import LoadError, load_flow
 _FLOW = """\
 id: f
 name: f
-input: {{proj: str}}
+input: {{proj: !str }}
 nodes:
   ask:
     kind: human_input
@@ -77,7 +77,7 @@ def test_compact_flow_llm_config_error_names_the_flow_node():
         """\
 id: f
 name: f
-input: {proj: str}
+input: {proj: !str }
 kind: human_input
 adaptive_questions:
   prompt: "Q ${proj}"
@@ -98,7 +98,7 @@ def test_valid_llm_config_loads():
 _INPUT_FLOW = """\
 id: f
 name: f
-input: {{proj: str}}
+input: {{proj: !str }}
 nodes:
   up:
     kind: code
@@ -186,7 +186,7 @@ def test_isinstance_unknown_type_names_the_gate():
 
 
 def test_literal_inputs_still_load():
-    inputs = "      cfg: {a: 1}\n      ls: [1, 2]\n      n: list[int] = [1]\n"
+    inputs = "      cfg: {a: 1}\n      ls: [1, 2]\n      n: !list(int) [1]\n"
     load_flow(_input_flow(inputs, brief="Q ${cfg} ${ls} ${n}"))
     load_flow(
         f"""\
@@ -204,9 +204,9 @@ output: ${{a.output}}
 
 
 def test_typed_input_mismatch_names_the_gate():
-    error = _load_error(_input_flow("      proj: list[int] = ${input.proj}\n"))
+    error = _load_error(_input_flow("      proj: !list(int) ${input.proj}\n"))
     message = str(error)
-    assert "node 'ask' input 'proj': declared list[int], but the value is str" in message
+    assert "node 'ask' input 'proj': declared list(int), but the value is str" in message
     assert "ask__compose" not in message
     assert _line(error) == 12
 
@@ -217,7 +217,7 @@ def test_skipped_operand_arithmetic_names_the_gate():
 id: f
 name: f
 input:
-  approve: bool
+  approve: !bool
 nodes:
   gate:
     kind: case
@@ -253,11 +253,11 @@ def test_defs_body_input_error_names_the_gate():
 id: f
 name: f
 input:
-  topic: str
+  topic: !str
 defs:
   pick:
     input:
-      topic: str
+      topic: !str
     nodes:
       ask:
         kind: human_input

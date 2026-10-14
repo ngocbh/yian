@@ -348,8 +348,9 @@ class _TypeParser:
         if self._peek() == ",":
             self._next()
             high = self._endpoint()
-            if low is not None and high is not None and _valid_bounds(ctor, (low, high)):
-                example = f"{ctor}({low}..{high})"
+            bounds = (low, high)
+            if bounds != (None, None) and _valid_bounds(ctor, bounds):
+                example = f"{ctor}({'' if low is None else low}..{'' if high is None else high})"
             raise self._malformed(f"write a range: {example}")
         dots = self._peek() == ".."
         high = None

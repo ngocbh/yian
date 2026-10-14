@@ -132,7 +132,8 @@ def _scalar_annotation(
 ) -> Any:
     """Return the pydantic annotation of a scalar slot of `kind`, within inclusive `bounds`.
 
-    An open (`None`) end has no limit, so its schema has no `minimum` or `maximum`.
+    An open (`None`) end has no limit, so the schema omits that end's `minimum` or
+    `maximum`.
     A `float` slot rejects NaN and infinity, which are not yian values; the JSON
     schema is unchanged.
     """

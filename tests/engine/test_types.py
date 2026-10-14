@@ -709,6 +709,12 @@ def test_two_argument_range_hint_suggests_only_a_valid_range():
     assert "write a range: int(1..12)" in str(caught.value)
     with pytest.raises(TypeCheckError, match=re.escape("write a range: float(0.5..2)")):
         parse_type("float(0.5, 2)")
+    with pytest.raises(TypeCheckError, match=re.escape("write a range: int(0..)")):
+        parse_type("int(0,)")
+    with pytest.raises(TypeCheckError, match=re.escape("write a range: int(..100)")):
+        parse_type("int(,100)")
+    with pytest.raises(TypeCheckError, match=re.escape("write a range: int(1..12)")):
+        parse_type("int(,)")
 
 
 def test_bracket_single_endpoint_hint_uses_the_range_spelling():

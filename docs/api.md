@@ -127,8 +127,8 @@ load error, and in the host `llm_config` it raises `ValueError` before the run s
 when an AGENT uses it. An int of any size is a value: the log records every digit,
 and `resume_flow` reads it back exact. A node assertion set in Python whose expression
 doesn't parse raises `ExpressionError` (a `ValueError`) naming the node, assertion
-list, and assertion, before the log is created;
-`resume_flow` of an unfinished run raises it before appending.
+list, and assertion, before the log is created; `resume_flow` raises it for an
+unfinished run before appending any record.
 
 - `log` — an optional JSONL path. `None` still uses the same record/reducer path
   with a process-local log. A path creates a new durable log exclusively; an

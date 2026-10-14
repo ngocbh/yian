@@ -42,6 +42,7 @@ from yian.compile.llm_cascade import (
     bind_api_key,
     host_key_providers,
     resolve_llm_cascade,
+    static_agent_labels,
 )
 from yian.compile.manifest import flow_fingerprint
 from yian.compile.memory_layout import (
@@ -472,16 +473,33 @@ def _secret_key(raw: str | SecretStr) -> SecretStr:
 
 
 def _check_effective_llm(
-    effective_llm: Mapping[str, dict[str, Any]], api_key: str | None,
+    effective_llm: Mapping[str, dict[str, Any]],
+    api_key: str | None,
+    labels: Mapping[str, str],
 ) -> None:
-    """Reject any agent config its model call would reject, before the run starts."""
+    """Reject any agent config its model call would reject, before the run starts.
+
+    Args:
+        effective_llm (`Mapping[str, dict[str, Any]]`):
+            The effective model map, keyed by static agent path.
+        api_key (`str | None`):
+            The host key, supplied to each config marked for it.
+        labels (`Mapping[str, str]`):
+            The authored site of each synthesized agent's ``llm_config``, keyed by
+            static agent path; a message names it instead of the path.
+
+    Raises:
+        `ValueError`: A config would be rejected by its model call; the message names
+            its agent path, or the authored site of a synthesized agent.
+    """
     for path, config in effective_llm.items():
         # The host key stays out of the map; supply it where the marker expects it.
         probe = {**config, "api_key": api_key} if HOST_KEY_MARKER in config else config
         try:
             check_model_config(probe)
         except ValueError as exc:
-            raise ValueError(f"Agent {path!r}: {exc}") from exc
+            where = labels.get(path) or f"Agent {path!r}"
+            raise ValueError(f"{where}: {exc}") from exc
 
 
 def _run_flow_controlled(
@@ -543,7 +561,7 @@ def _run_flow_controlled(
         api_key = None
     if api_key is not None:
         bind_api_key(private_flow, api_key)
-    _check_effective_llm(effective_llm, api_key)
+    _check_effective_llm(effective_llm, api_key, static_agent_labels(private_flow))
 
     if learnable:
         apply_execution_layout(private_flow, resolve_execution_layout(private_flow))
@@ -794,7 +812,7 @@ def _resume_flow_controlled(
         _check_templates(flow.compiled)
         _check_tool_types(flow.compiled, run_tools)
         skills = _check_skills(flow.compiled, skills)
-        _check_recorded_llm_fields(state.effective_llm_by_static_path)
+        _check_recorded_llm_fields(state.effective_llm_by_static_path, static_agent_labels(flow.compiled))
         if check_llm_configs is not None:
             check_llm_configs(legacy_connection_map(state.effective_llm_by_static_path))
 
@@ -1075,7 +1093,9 @@ def _binding_label(typ: Type) -> str:
     return canonical_type_label(typ)
 
 
-def _check_recorded_llm_fields(effective: Mapping[str, Mapping[str, Any]]) -> None:
+def _check_recorded_llm_fields(
+    effective: Mapping[str, Mapping[str, Any]], labels: Mapping[str, str],
+) -> None:
     """Check the public fields of each recorded agent config before a resume appends.
 
     A record written before a key was retired may carry it set; resuming would then
@@ -1086,10 +1106,14 @@ def _check_recorded_llm_fields(effective: Mapping[str, Mapping[str, Any]]) -> No
     Args:
         effective (`Mapping[str, Mapping[str, Any]]`):
             The recorded effective model map, keyed by static agent path.
+        labels (`Mapping[str, str]`):
+            The authored site of each synthesized agent's ``llm_config``, keyed by
+            static agent path; a message names it instead of the path.
 
     Raises:
         `ValueError`: A config has an invalid or retired field; the message names its
-            agent path and never echoes values.
+            agent path, or the authored site of a synthesized agent, and never echoes
+            values.
     """
     for path, config in effective.items():
         host_only = (HOST_KEY_MARKER, "base_url") if HOST_KEY_MARKER in config else ()
@@ -1097,7 +1121,8 @@ def _check_recorded_llm_fields(effective: Mapping[str, Mapping[str, Any]]) -> No
         try:
             split_model_config(legacy_connection_config(public))
         except ValueError as exc:
-            raise ValueError(f"Agent {path!r}: {exc}") from exc
+            where = labels.get(path) or f"Agent {path!r}"
+            raise ValueError(f"{where}: {exc}") from exc
 
 
 def _check_skills(

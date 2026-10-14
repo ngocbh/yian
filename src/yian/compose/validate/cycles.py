@@ -8,7 +8,8 @@ nodes are not blamed. The boundary sentinels (`__start__`/`__end__`) are acyclic
 construction, so passing the fully-assembled edge set is fine.
 
 Located parse metadata: the caller passes `node_ranges` (node id -> `SourceRange`). The
-cycle diagnostic carries one frame per located cycle member in authored source order.
+cycle diagnostic carries one frame per located named node in authored source order; a
+generated node can be named as the authored host it came from.
 Its notes form a "why" legend: one line per dependency edge inside a cyclic component,
 so the author sees which `${...}` reference closes the cycle.
 
@@ -18,6 +19,8 @@ loader (and the compose package facade) imports this back.
 """
 
 from __future__ import annotations
+
+from collections.abc import Mapping
 
 from yian.compile.model import END_ID, START_ID, Edge
 from yian.compile.validation import FlowValidationError, _reject_cycles
@@ -32,6 +35,8 @@ def reject_cycles(
     node_ranges: "dict[str, SourceRange] | None" = None,
     diagnostics: LoadDiagnostics | None = None,
     gate_ids: frozenset[str] = frozenset(),
+    synth_hosts: Mapping[str, str] | None = None,
+    synth_wires: frozenset[str] = frozenset(),
 ) -> None:
     """Raise a `LoadError` if the inferred (real-node) graph has a directed cycle.
 
@@ -40,15 +45,26 @@ def reject_cycles(
     components. A node blocked downstream of a cycle is not a cycle member. Sentinel
     `__start__`/`__end__` edges cannot close a cycle.
 
-    `node_ranges` (node id -> `SourceRange`) gives every located node in the loop its own
-    frame, ordered by authored line and column.
+    `node_ranges` (node id -> `SourceRange`) gives every located node named in the error one
+    frame, ordered by authored line and column; a synth node reported as its host shares the
+    host's frame.
 
     The error also carries a "why" legend (`Diagnostic.notes`): one line per dependency edge
     *inside* the loop — "<consumer> depends on <producer> (<consumer>.input.<group>)" — so the
-    author sees which reference closes the cycle, not just which nodes are in it.
+    author sees which reference closes the cycle, not just which nodes are in it. A synth node
+    reported as its host is named as the host, its generated wire is left out, and duplicate
+    lines collapse.
 
     `gate_ids` names the data gates a lifted node got from its host (group
     `<node>.<group>`); their notes cite the host's input, "(gate: <node>.input.<group>)".
+
+    Args:
+        synth_hosts (`Mapping[str, str]`, *optional*, defaults to `None`):
+            Synth node id -> the authored host it was generated from. A synth node is
+            reported as that host when only its generated wire into the host closes the
+            cycle; otherwise it keeps its id and a note names its host.
+        synth_wires (`frozenset[str]`, *optional*, defaults to `frozenset()`):
+            Ids of those generated wire edges from a synth node into its host.
     """
     diagnostics = diagnostics or LoadDiagnostics()
     ranges = node_ranges or {}
@@ -57,6 +73,24 @@ def reject_cycles(
     except FlowValidationError as exc:
         components = _cyclic_components(edges, node_ids)
         cycle_nodes = set().union(*components)
+        alias: dict[str, str] = {}
+        synth_notes: list[str] = []
+        for synth, host in (synth_hosts or {}).items():
+            if synth not in cycle_nodes:
+                continue
+            component = next(c for c in components if synth in c)
+            inside = [e for e in edges if e.from_ == synth and e.to in component]
+            if all(e.id in synth_wires for e in inside):
+                alias[synth] = host
+            else:
+                synth_notes.append(f"{synth} is generated from node {host!r}")
+        named = sorted({alias.get(n, n) for n in cycle_nodes})
+        # A named host takes its own range; an aliased member stands in only without one.
+        located: dict[str, SourceRange] = {}
+        for node_id in sorted(cycle_nodes, key=lambda n: (n in alias, n)):
+            source_range = ranges.get(node_id)
+            if source_range is not None:
+                located.setdefault(alias.get(node_id, node_id), source_range)
         authored = sorted(
             (
                 source_range.start_line,
@@ -64,17 +98,21 @@ def reject_cycles(
                 node_id,
                 source_range,
             )
-            for node_id in cycle_nodes
-            if (source_range := ranges.get(node_id)) is not None
+            for node_id, source_range in located.items()
         )
         frames = tuple(
             frame
             for _, _, _, source_range in authored
             if (frame := diagnostics.frame(source_range)) is not None
         )
-        notes = _cycle_notes(edges, components, gate_ids=gate_ids)
+        notes = sorted(
+            {
+                *_cycle_notes(edges, components, gate_ids=gate_ids, aliases=alias),
+                *synth_notes,
+            }
+        )
         raise diagnostics.error(
-            f"flow has a cycle involving {sorted(cycle_nodes)}; flows must be acyclic",
+            f"flow has a cycle involving {named}; flows must be acyclic",
             frames=frames,
             notes=notes,
         ) from exc
@@ -85,6 +123,7 @@ def _cycle_notes(
     components: tuple[frozenset[str], ...],
     *,
     gate_ids: frozenset[str] = frozenset(),
+    aliases: Mapping[str, str] | None = None,
 ) -> list[str]:
     """Return one note per dependency edge within a cyclic component.
 
@@ -95,7 +134,13 @@ def _cycle_notes(
     `gate_ids` is a lifted node's data gate, whose group is `<node>.<group>`: it cites
     `gate: <node>.input.<group>`, the host input it mirrors. Notes are sorted and
     de-duplicated for deterministic presentation.
+
+    Args:
+        aliases (`Mapping[str, str]`, *optional*, defaults to `None`):
+            Synth node id -> the host it is reported as. Notes name an aliased node as its
+            host, and its generated wire into that host is omitted.
     """
+    alias = aliases or {}
     component_by_node = {
         node_id: index
         for index, component in enumerate(components)
@@ -106,18 +151,24 @@ def _cycle_notes(
     for e in edges:
         component = component_by_node.get(e.from_)
         if component is not None and component_by_node.get(e.to) == component:
+            if alias.get(e.from_) == e.to:
+                # The desugar's own wire from a synth node into its host, not an authored
+                # dependency.
+                continue
+            to = alias.get(e.to, e.to)
+            from_ = alias.get(e.from_, e.from_)
             if e.id in gate_ids and e.input_group:
                 # Only gate ids are split: an authored input key may itself contain a `.`.
                 node, _, group = e.input_group.partition(".")
                 via = f"gate: {node}.input.{group}"
             elif e.input_group:
-                via = f"{e.to}.input.{e.input_group}"
+                via = f"{to}.input.{e.input_group}"
             else:
                 via = "ordering"
-            key = (e.to, e.from_, via)
+            key = (to, from_, via)
             if key not in seen:
                 seen.add(key)
-                notes.append(f"{e.to} depends on {e.from_} ({via})")
+                notes.append(f"{to} depends on {from_} ({via})")
     return sorted(notes)
 
 

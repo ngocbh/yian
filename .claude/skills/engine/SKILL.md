@@ -909,7 +909,10 @@ retain derived ranges; `NodeDescriptor._finish()` copies them to Compose-only
 `BuildResult.node_range` / `field_ranges`, and a desugar's author-facing names for a
 synth node's fields and inputs to `BuildResult.field_labels`, for post-build validation.
 Assembly discards all three before `CompiledFlow`, so semantic nodes have no YAML range or
-aligned assertion-range fields. Never reparse a source slice or mutate
+aligned assertion-range fields; only a synth AGENT's `llm_config` label survives, as the
+render-only `AgentNode.llm_config_label` for run-start messages. A labelled synth node is
+reported as its host in a cycle error unless the cycle runs through an author's read of it.
+Never reparse a source slice or mutate
 anchors/aliases/merges.
 An unchanged source-backed string cursor exposes `ScalarSource`: its whole range and,
 for literal `|` blocks, exact zero-based constructed-line ranges captured from the

@@ -805,7 +805,8 @@ Questions may also come from an upstream node: `questions: ${qs}`.
 The prompt, the adaptive brief, and a literal list's question text (`question`, option
 `label`/`description`) read the gate's `input:` names bare and are checked at load; `header`
 is not a template. A bad brief is reported as `node '<gate>' adaptive_questions.prompt`,
-and a bad `llm_config` as `node '<gate>' adaptive_questions.llm_config`.
+and a bad `llm_config` as `node '<gate>' adaptive_questions.llm_config`. A cycle through
+the gate and a model-config error at run start also name the gate, not `<gate>__compose`.
 `adaptive_questions:` takes only `prompt`, `llm_config`, and `retries`; any other key is a
 load error.
 `questions:` is a list or exactly one `${name}` naming a declared input;

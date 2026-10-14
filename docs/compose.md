@@ -279,7 +279,9 @@ field_labels = result.field_labels
   node. `field_labels` holds the author-facing names a desugar sets for a synth node's
   fields and inputs, such as `node 'ask' adaptive_questions.prompt` or
   `node 'ask' input 'proj'` for an adaptive gate's composer. Assembly drops all three
-  before `CompiledFlow.from_parts`; compile and runtime never receive them.
+  before `CompiledFlow.from_parts`; compile and runtime never receive them. The
+  composer's `llm_config` label is also copied to the render-only
+  `AgentNode.llm_config_label`, which run-start messages use.
 
 Leaf kinds (`agent`/`code`/`tool`) ignore `ctx.resolver`; `call`/`map`/`loop` use
 it to resolve the child flow they expand into. CODE alone also reads
@@ -517,7 +519,9 @@ notes, and ordered `DiagnosticFrame` values; each frame contains the source labe
 complete text, and exact `SourceRange` it indexes. A bad imported child therefore keeps
 the child's YAML frame instead of applying child coordinates to its parent file.
 Definition and import sites prepend outer context without mutating the inner failure,
-and a cycle uses authored-order peer frames. Source-free Python composition remains a
+and a cycle uses authored-order peer frames. An adaptive gate's composer is framed and
+named as its gate, unless the cycle runs through an author's read of the composer.
+Source-free Python composition remains a
 valid unlocated diagnostic. No load-error renderer reparses YAML or receives source text
 separately, and no parallel line-map or section-line fallback is threaded through later
 Compose phases.

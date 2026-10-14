@@ -189,6 +189,118 @@ def test_reject_cycles_keeps_a_dotted_group_that_is_not_a_gate() -> None:
     assert "c depends on spy (c.input.k.v)" in caught.value.diagnostic.notes
 
 
+def _alias_cycle_edges() -> list[Edge]:
+    """Return a gate `g` reading its own output, plus its synth node `c` wired into it."""
+    return [
+        Edge(id="c->g", from_="c", to="g", input_group="__questions"),
+        Edge(id="g->g", from_="g", to="g", input_group="proj"),
+        Edge(id="g->c", from_="g", to="c", input_group="proj"),
+    ]
+
+
+def test_reject_cycles_reports_an_alias_as_its_host() -> None:
+    same = SourceRange(5, 3, 5, 6)
+
+    with pytest.raises(LoadError) as caught:
+        reject_cycles(
+            _alias_cycle_edges(),
+            {"g", "c"},
+            node_ranges={"g": same, "c": same},
+            diagnostics=_range_diagnostics(),
+            synth_hosts={"c": "g"},
+            synth_wires=frozenset({"c->g"}),
+        )
+
+    assert "flow has a cycle involving ['g']" in str(caught.value)
+    assert len(caught.value.diagnostic.frames) == 1
+    assert caught.value.diagnostic.notes == ("g depends on g (g.input.proj)",)
+
+
+def test_reject_cycles_frames_an_unlocated_host_at_its_synth_node() -> None:
+    synth = SourceRange(7, 3, 7, 6)
+
+    with pytest.raises(LoadError) as caught:
+        reject_cycles(
+            _alias_cycle_edges(),
+            {"g", "c"},
+            node_ranges={"c": synth},
+            diagnostics=_range_diagnostics(),
+            synth_hosts={"c": "g"},
+            synth_wires=frozenset({"c->g"}),
+        )
+
+    assert "flow has a cycle involving ['g']" in str(caught.value)
+    assert [frame.range for frame in caught.value.diagnostic.frames] == [synth]
+
+
+def test_reject_cycles_alias_keeps_other_members() -> None:
+    edges = [
+        Edge(id="b->g", from_="b", to="g", input_group="proj"),
+        Edge(id="b->c", from_="b", to="c", input_group="proj"),
+        Edge(id="c->g", from_="c", to="g", input_group="__questions"),
+        Edge(id="g->b", from_="g", to="b", input_group="a"),
+    ]
+    ranges = {
+        "b": SourceRange(5, 3, 5, 4),
+        "g": SourceRange(9, 3, 9, 4),
+        "c": SourceRange(9, 3, 9, 4),
+    }
+
+    with pytest.raises(LoadError) as caught:
+        reject_cycles(
+            edges,
+            set(ranges),
+            node_ranges=ranges,
+            diagnostics=_range_diagnostics(),
+            synth_hosts={"c": "g"},
+            synth_wires=frozenset({"c->g"}),
+        )
+
+    assert "flow has a cycle involving ['b', 'g']" in str(caught.value)
+    assert [f.range.start_line for f in caught.value.diagnostic.frames] == [5, 9]
+    assert caught.value.diagnostic.notes == (
+        "b depends on g (b.input.a)",
+        "g depends on b (g.input.proj)",
+    )
+
+
+def test_reject_cycles_keeps_a_synth_node_read_inside_the_cycle() -> None:
+    edges = [
+        Edge(id="c->b", from_="c", to="b", input_group="a"),
+        Edge(id="b->c", from_="b", to="c", input_group="proj"),
+        Edge(id="c->g", from_="c", to="g", input_group="__questions"),
+    ]
+
+    with pytest.raises(LoadError) as caught:
+        reject_cycles(
+            edges,
+            {"b", "c", "g"},
+            synth_hosts={"c": "g", "z": "y"},
+            synth_wires=frozenset({"c->g"}),
+        )
+
+    notes = caught.value.diagnostic.notes
+    assert "flow has a cycle involving ['b', 'c']" in str(caught.value)
+    assert "c is generated from node 'g'" in notes
+    assert all("z" not in note for note in notes)
+
+
+def test_reject_cycles_ignores_synth_out_edges_outside_the_component() -> None:
+    edges = _alias_cycle_edges() + [
+        Edge(id="c->log", from_="c", to="log", input_group="q"),
+    ]
+
+    with pytest.raises(LoadError) as caught:
+        reject_cycles(
+            edges,
+            {"g", "c", "log"},
+            synth_hosts={"c": "g"},
+            synth_wires=frozenset({"c->g"}),
+        )
+
+    assert "flow has a cycle involving ['g']" in str(caught.value)
+
+
 def test_validate_references_diag_has_range():
     # A node input binding that references an unknown node (`${ghost.output}`) is a dangling
     # ref. The aggregate LoadError anchors its `range` on the OFFENDING ENTRY — the per-binding

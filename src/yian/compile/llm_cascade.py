@@ -127,11 +127,13 @@ def apply_effective_llm_map(
             details.append(f"extra paths: {extra}")
         raise ValueError("effective LLM map path mismatch; " + "; ".join(details))
 
+    labels = static_agent_labels(flow)
     for path in sorted(expected):
         config = effective[path]
         if not isinstance(config, dict):
-            raise TypeError(f"effective LLM config for {path!r} must be a dict")
-        _require_concrete_selection(config, path=path)
+            subject = labels.get(path) or repr(path)
+            raise TypeError(f"effective LLM config for {subject} must be a dict")
+        _require_concrete_selection(config, path=path, label=labels.get(path))
 
     _apply_flow(flow, effective, path=())
 
@@ -165,7 +167,7 @@ def _resolve_flow(
                 if not config["model"]:
                     raise ValueError(f"Provider {config['provider']!r} needs an explicit model; set llm_config.model or --model")
             path_key = _path_key(node_path)
-            _require_concrete_selection(config, path=path_key)
+            _require_concrete_selection(config, path=path_key, label=_agent_label(node, path))
             node.llm_config = copy.deepcopy(config)
             effective[path_key] = copy.deepcopy(config)
 
@@ -198,6 +200,46 @@ def _static_agent_paths(
         if child is not None:
             paths.extend(_static_agent_paths(child, node_path))
     return paths
+
+
+def static_agent_labels(flow: Any) -> dict[str, str]:
+    """Map each synthesized agent's static path to the authored site of its ``llm_config``.
+
+    Walks the static tree like the effective map does, without mutating it. An
+    authored agent has no label and is absent, so its messages keep naming its path.
+
+    Args:
+        flow (`CompiledFlow`):
+            The flow whose static agents to label.
+
+    Returns:
+        `dict[str, str]`: The label of each labelled agent, keyed by static agent path.
+    """
+    labels: dict[str, str] = {}
+    _collect_agent_labels(flow, (), labels)
+    return labels
+
+
+def _collect_agent_labels(flow: Any, path: tuple[str, ...], labels: dict[str, str]) -> None:
+    """Add the labels of ``flow``'s static agents, at callsite ``path``, to ``labels``."""
+    for node_id, node in flow.nodes.items():
+        node_path = (*path, node_id)
+        if isinstance(node, AgentNode):
+            label = _agent_label(node, path)
+            if label is not None:
+                labels[_path_key(node_path)] = label
+        child = getattr(node, "child", None)
+        if child is not None:
+            _collect_agent_labels(child, node_path, labels)
+
+
+def _agent_label(node: AgentNode, parent: tuple[str, ...]) -> str | None:
+    """Return a synthesized agent's ``llm_config`` label, with its callsite when nested."""
+    if node.llm_config_label is None:
+        return None
+    if not parent:
+        return node.llm_config_label
+    return f"{node.llm_config_label} in {_path_key(parent)!r}"
 
 
 def _apply_flow(
@@ -252,22 +294,40 @@ def _path_key(path: tuple[str, ...]) -> str:
     return "/".join(path)
 
 
-def _require_concrete_selection(config: dict[str, Any], *, path: str) -> None:
-    """Reject a config that could fall through to ambient provider/model settings."""
+def _require_concrete_selection(
+    config: dict[str, Any], *, path: str, label: str | None = None,
+) -> None:
+    """Reject a config that could fall through to ambient provider/model settings.
+
+    Args:
+        config (`dict[str, Any]`):
+            One agent's effective configuration.
+        path (`str`):
+            The agent's static path, named by every message unless ``label`` is given.
+        label (`str`, *optional*, defaults to `None`):
+            The authored site of a synthesized agent's ``llm_config``, named instead of
+            ``path``.
+
+    Raises:
+        `ValueError`:
+            If the config has an invalid marker or base_url, a bad field, or no
+            concrete provider/model.
+    """
+    subject = label or repr(path)
     if config.get(HOST_KEY_MARKER, True) is not True:
-        raise ValueError(f"effective LLM config for {path!r} has an invalid host key marker")
+        raise ValueError(f"effective LLM config for {subject} has an invalid host key marker")
     if "base_url" in config:
         # An Azure base_url is its resource endpoint; any other serves only a host key.
         if HOST_KEY_MARKER not in config and config.get("provider") != "azure":
             raise ValueError(
-                f"effective LLM config for {path!r} has a base_url without a host key; "
+                f"effective LLM config for {subject} has a base_url without a host key; "
                 "only provider azure takes a base_url from a flow file"
             )
         # A recorded map is replayed on resume; check its URL before any node runs.
         try:
             validate_base_url(config["base_url"])
         except ValueError as exc:
-            raise ValueError(f"effective LLM config for {path!r}: {exc}") from None
+            raise ValueError(f"effective LLM config for {subject}: {exc}") from None
     # Only a resolved map carries the marker and the host key's base_url;
     # authored layers may not (except an Azure endpoint, checked above). A retired
     # key can only come from a map recorded before it retired; such a finished run
@@ -284,7 +344,7 @@ def _require_concrete_selection(config: dict[str, Any], *, path: str) -> None:
     ]
     if missing:
         raise ValueError(
-            f"effective LLM config for {path!r} lacks concrete fields: {missing}"
+            f"effective LLM config for {subject} lacks concrete fields: {missing}"
         )
 
 

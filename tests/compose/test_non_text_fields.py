@@ -322,3 +322,87 @@ def test_null_case_on_is_absent():
 
 def test_text_case_on_still_loads():
     load_flow(_case_on("${input.proj}"))
+
+
+def _node_name(v: str) -> str:
+    """A flow whose CODE node `a` has `node_name: <v>`."""
+    return """\
+id: f
+name: f
+nodes:
+  a:
+    kind: code
+    node_name: @V
+    output: str
+    code: "return 'x'"
+output: ${a.output}
+""".replace("@V", v)
+
+
+@pytest.mark.parametrize(("value", "phrase"), NON_TEXT)
+def test_non_text_node_name_is_a_load_error(value, phrase):
+    text = _node_name(value)
+    error = _error(text)
+    assert (
+        f"node 'a' (kind=code): `node_name:` must be text, but YAML read it as {phrase}; "
+        "put it in quotes"
+    ) in str(error)
+    assert _start_line(error) == _line(text, "node_name: ")
+
+
+@pytest.mark.parametrize("value", ["null", "'5'"])
+def test_null_and_text_node_name_still_load(value):
+    load_flow(_node_name(value))
+
+
+_TEXT_CASE_ON = _case_on("${input.proj}")
+_SEARCHED_CASE = _case_on("null").replace("    on: null\n", "")
+
+
+@pytest.mark.parametrize(
+    ("text", "marker", "fragment"),
+    [
+        (
+            _call("loop", "body").replace("    times: 2\n", "    times: 2\n    while: 5\n"),
+            "while: 5",
+            "must be an expression string over the carried record",
+        ),
+        (
+            _call("loop", "body").replace("    times: 2\n", "    times: 2\n    until: 5\n"),
+            "until: 5",
+            "must be an expression string over the carried record",
+        ),
+        (
+            _SEARCHED_CASE.replace("when: x", "when: 5"),
+            "when: 5",
+            "each searched case needs a string `when:` expression",
+        ),
+        (
+            _TEXT_CASE_ON.replace("when: x", "when: [a]"),
+            "when: [a]",
+            "takes text, a number, or a bool",
+        ),
+        (
+            _TEXT_CASE_ON.replace("then: b", "then: 5"),
+            "then: 5",
+            "a branch names a node or calls a flow",
+        ),
+        (
+            _TEXT_CASE_ON.replace("else: c", "else: 5"),
+            "else: 5",
+            "a branch names a node or calls a flow",
+        ),
+        (
+            _code("\"return 'x'\"").replace(
+                "    output: str\n", '    output: str\n    asserts: ["true", 5]\n'
+            ),
+            "asserts: ",
+            "`asserts:` must be a list of strings",
+        ),
+    ],
+    ids=["while", "until", "searched-when", "on-when", "then", "else", "asserts"],
+)
+def test_already_located_fields_are_unchanged(text, marker, fragment):
+    error = _error(text)
+    assert fragment in str(error)
+    assert _start_line(error) == _line(text, marker)

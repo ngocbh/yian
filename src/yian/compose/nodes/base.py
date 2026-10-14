@@ -464,14 +464,19 @@ class NodeDescriptor:
         are mutated IN PLACE (the accumulators the template passes to the descriptor
         constructor). `env:` is validated to be a mapping with string keys, and `depends_on:`/
         `runs_after:` to be lists of strings — a bad shape raises a located `LoadError` naming
-        `cls.kind`. `node_name` is copied through untouched; whether each ordering target names
+        `cls.kind`. A `node_name:` YAML read as non-text is a located `LoadError` (`null` stays
+        absent); otherwise it is copied through untouched. Whether each ordering target names
         a real node is checked later by the loader edge pass."""
         diagnostics = LoadDiagnostics.from_cursor(cursor)
         body = cursor._value_view()
         for key in ("node_name", "depends_on", "runs_after"):
             if key in body:
                 value = cursor.get(key)
-                if key != "node_name":
+                if key == "node_name":
+                    reject_non_text(
+                        cls.kind, node_id, key, value, cursor.range_of(key), diagnostics
+                    )
+                else:
                     cls._check_ordering_field(node_id, key, value, cursor, diagnostics)
                 kwargs[key] = value
                 rng = cursor.range_of(key)

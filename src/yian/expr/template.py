@@ -549,7 +549,7 @@ def _as_text(value: Any) -> str:
 
     Raises:
         `ExpressionError`: The value can't be written as text, such as a long
-            int inside a set or a dict key.
+            int inside a set.
     """
     try:
         return json_codec.as_text(value)

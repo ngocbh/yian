@@ -17,7 +17,6 @@ from dataclasses import dataclass, replace
 from typing import Union
 
 import yian.json_codec as json_codec
-
 from yian.typesys.values import (
     _BUILTIN_CONSTANTS,
     _NAME_PATTERN,
@@ -134,7 +133,8 @@ def _bracket_error(s: str) -> TypeCheckError:
     """Explain that types use parentheses, showing `s` in that spelling when it parses."""
     if re.search(r"[0-9][0-9_]{600,}", s):
         # `ast.parse` rejects a decimal literal past Python's digit limit and its
-        # message carries Python's hint, so a long digit run skips the respelling.
+        # message carries Python's hint, so a long digit run skips the respelling;
+        # 600 is below the smallest limit Python allows (640).
         return TypeCheckError("types use parentheses, not brackets")
     try:
         spelled = legacy_respelling(s)

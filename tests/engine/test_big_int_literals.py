@@ -150,15 +150,19 @@ def _case_flow(when: str) -> str:
 def test_a_case_when_matches_a_long_int():
     flow = load_flow(_case_flow(D))
 
-    assert run_flow(flow, {"x": ONES}).output == "big"
-    assert run_flow(flow, {"x": 1}).output == "other"
+    for x, expected in ((ONES, "big"), (1, "other")):
+        result = run_flow(flow, {"x": x})
+        assert result.status == "succeeded"
+        assert result.output == expected
 
 
 def test_a_case_when_matches_a_negative_long_int():
     flow = load_flow(_case_flow("-" + D))
 
-    assert run_flow(flow, {"x": -ONES}).output == "big"
-    assert run_flow(flow, {"x": ONES}).output == "other"
+    for x, expected in ((-ONES, "big"), (ONES, "other")):
+        result = run_flow(flow, {"x": x})
+        assert result.status == "succeeded"
+        assert result.output == expected
 
 
 def test_a_quoted_long_int_when_against_an_int_on_says_to_drop_the_quotes():

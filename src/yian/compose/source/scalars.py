@@ -109,7 +109,7 @@ class _FlowLoader(yaml.SafeLoader):
         return text.lower() == "true"
 
     def construct_yaml_int(self, node: yaml.Node) -> int:
-        """Construct a core-schema integer; leading zeros stay decimal.
+        """Construct a core-schema integer of any length; leading zeros stay decimal.
 
         Args:
             node (`yaml.Node`):

@@ -133,7 +133,7 @@ def run_agent(ctx: AgentRunContext) -> Output:
                 new_messages=new_messages,
                 check_stopped=ctx.check_stopped,
                 exchange_id=exchange_id,
-                check_reply=_reject_nonfinite_arguments,
+                check_reply=_reject_invalid_arguments,
             )
         except ReplyInterrupted as cut:
             return _interrupted(ctx, cut.reply)
@@ -207,13 +207,10 @@ def run_agent(ctx: AgentRunContext) -> Output:
             arguments = raw_arguments or {}
             if ctx.evaluation_trace is not None:
                 try:
-                    # Memory freezes evidence under its own JSON bound, but an episode
-                    # wraps it a few levels deeper; the value limit leaves that room.
-                    reject_deep_nesting(arguments, "tool arguments")
                     call_interaction = ToolCallInteraction(name, arguments)
                 except (TypeError, ValueError, RecursionError):
-                    # Evidence remains observational for malformed or too-deep arguments;
-                    # the ordinary tool boundary below retains its established behavior.
+                    # Evidence remains observational for malformed arguments; the
+                    # ordinary tool boundary below retains its established error.
                     pass
                 else:
                     ctx.evaluation_trace.record_interaction(call_interaction)
@@ -245,10 +242,13 @@ def run_agent(ctx: AgentRunContext) -> Output:
             messages.append(result_message)
 
 
-def _reject_nonfinite_arguments(reply: BaseMessage) -> None:
-    """Raise `TypeCheckError` if any tool call of a reply has a NaN or infinity in its arguments."""
+def _reject_invalid_arguments(reply: BaseMessage) -> None:
+    """Raise `TypeCheckError` if a tool call's arguments nest too deep or hold a NaN or infinity."""
     for call in getattr(reply, "tool_calls", None) or []:
-        reject_nonfinite(call.get("args"), f"tool call {call.get('name')!r} arguments")
+        where = f"tool call {call.get('name')!r} arguments"
+        # Depth first: the non-finite walk recurses, so it must not see an unbounded value.
+        reject_deep_nesting(call.get("args"), where)
+        reject_nonfinite(call.get("args"), where)
 
 
 def _interrupted(ctx: AgentRunContext, reply: BaseMessage | None) -> Output:

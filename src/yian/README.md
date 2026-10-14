@@ -460,13 +460,20 @@ yian value (each record and list is a level)`). The same boundaries apply it, de
 before the non-finite walk: the binder fails a resolved value, filled default, or MAP
 `over` list with `binding.evaluate` at its origin, so `${[x]}` around a 100-level `x`
 fails and MAP items may nest 99; an AGENT variable default fails `node.execute`;
-`run_flow` raises `ValueError` for a run input before the log exists; and
-`RunResult.backward` raises `ValueError` for deeper feedback before an attempt starts.
-Live success admission (`prepare_node_succeeded`) checks a node output whole and fails
-`contract.output` at the field path with the declared field's origin. A record built
-around a value is one level deeper, so a record flow output wrapping a 100-level value
-fails at `__end__`, and a MAP whose children return 100-level values fails at its
-fan-in END (`<map>/__end__`). A node with the `commits_input_record` trait (START)
+`run_flow` raises `ValueError` for a run input before the log exists;
+`RunResult.backward` raises `ValueError` for deeper feedback before an attempt starts;
+and an AGENT checks the model's reply as for NaN: `run_agent`'s `check_reply` fails
+deeper tool-call arguments with `node.execute` before any call runs, and structured
+generation checks the unwrapped value (`structured output at ...`), which
+self-corrects under `retries:`. On the native path with a transcript the structured
+check also runs in `check_reply`, on the carrier's parsed value, so a deeper value is
+observed `failed` and never stored (its raw reply could exceed memory's 128-level
+bound, and the raw non-finite walk recurses). Live success admission
+(`prepare_node_succeeded`) checks a node output whole and fails `contract.output` at
+the field path with the declared field's origin. A record built around a value is
+one level deeper, so a record flow output wrapping a 100-level value fails at
+`__end__`, and a MAP whose children return 100-level values fails at its fan-in END
+(`<map>/__end__`). A node with the `commits_input_record` trait (START)
 passes `enclosing_levels=-1`, since its record wraps input values already checked.
 Replay validation does not re-apply the limit, so logs recorded before it still
 replay, and the run-log codecs never apply it; they see only values these entry
@@ -1259,9 +1266,7 @@ input and opaque-stop entries reconstruct context through the existing route
 interpreter; literal/default feedback remains local without a fabricated source.
 Defined JSON/materialization failure becomes a memory-attributed context failure
 before Ready; invalid record authority remains an error. Memory JSON allows 128
-levels, and run material at the value limit nests about 108, so it always fits;
-AGENT evidence (a structured model value or tool-call arguments) deeper than the value
-limit is not recorded. A
+levels, and run material at the value limit nests about 108, so it always fits. A
 context that still cannot be built (for example from a log recorded before the
 limit) raises `OwnerContextError` carrying the owner occurrence's `BackwardContext`;
 each occurrence's feedback is validated on its own so the failure is attributed to

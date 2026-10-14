@@ -78,10 +78,13 @@ this model whenever you design anything:
   enclosing_levels=0)` checks iteratively, before the non-finite walk, at the same
   entries: binder (`binding.evaluate`, MAP `over` included), AGENT variable
   default (`node.execute`), `run_flow` inputs and `RunResult.backward` feedback
-  (`ValueError`). Live success admission checks a node output whole
-  (`contract.output` at the path); a record or list built around a value is a
-  level deeper, so a MAP's result list or a record flow output can fail at its
-  END. Only the kind-blind `commits_input_record` trait (START) may go one level
+  (`ValueError`), and the model reply: `check_reply` fails deeper tool-call
+  arguments with `node.execute` before any call runs, and a deeper structured
+  value self-corrects under `retries:` (with a transcript it is rejected in
+  `check_reply`, so it is never stored). Live success admission checks a node
+  output whole (`contract.output` at the path); a record or list built around a
+  value is a level deeper, so a MAP's result list or a record flow output can
+  fail at its END. Only the kind-blind `commits_input_record` trait (START) may go one level
   over. Replay and the run-log codecs never apply the limit, so older logs replay.
 - `AgentNode.variables` reuses ordered `Parameter` declarations, each with an
   exact contract and explicit typed default. Reject duplicate names and input
@@ -522,8 +525,7 @@ Most are just the functional model (above) made enforceable:
   materialize transcript contexts. `RuntimeBackwardState` is the sole attempt
   authority. `project_owner_contexts` is the only episode projection; forward
   execution keeps no per-memory episode inventory. Memory JSON allows 128 levels,
-  so run material at the value limit fits (AGENT evidence over the limit is not
-  recorded); a context that still cannot be built
+  so run material at the value limit fits; a context that still cannot be built
   raises `OwnerContextError` with the owner's `BackwardContext`, and the driver
   records `memory.invalid_context` naming that occurrence and the cause (only
   root fallback feedback has no node). Rebuild a `LearnContext`; never deep-copy one.

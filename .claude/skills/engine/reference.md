@@ -841,7 +841,13 @@ runs it before `reject_nonfinite`, so a resolved value, filled default, or MAP `
 list fails `binding.evaluate` at its origin (`${[x]}` around a 100-level `x` fails;
 MAP items may nest 99); an AGENT variable default fails `node.execute`; `run_flow`
 raises `ValueError` for a run input before the log exists; `RunResult.backward`
-raises `ValueError` for deeper feedback before an attempt starts.
+raises `ValueError` for deeper feedback before an attempt starts. A model reply is
+checked like a NaN: deeper tool-call arguments fail the AGENT with `node.execute`
+before any call of the reply runs (`tool call 'lookup' arguments at x.a...`), and a
+deeper structured value fails `structured output at <path>`, retried under
+`retries:`. With session memory the native path checks the carrier's parsed value
+before storing the raw reply, so the model effect is observed `failed` and the reply
+is not kept.
 `prepare_node_succeeded` checks a live output whole and fails `contract.output` at
 the field path with the declared field's origin. A record or list built around a
 value is one level deeper: a record flow output fails at `__end__`, a MAP's result

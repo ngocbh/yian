@@ -150,9 +150,9 @@ recall order.
 
 Memory JSON has its own nesting bound of 128 levels. A run value nests at most 100
 levels ([nesting limit](typing.md#nesting-limit)) and an episode or feedback entry
-wraps it about 8 levels deeper, so run material always fits. AGENT evidence deeper
-than the limit (a structured model value or tool-call arguments) is not recorded.
-When a learn context
+wraps it about 8 levels deeper, so run material always fits; an AGENT's structured
+value or tool-call arguments past the limit fail at the reply, so they never become
+evidence. When a learn context
 still cannot be built, for example from a log recorded before the value limit, the
 attempt fails with `memory.invalid_context` before any learner runs. The
 `BackwardFailure` names the occurrence whose episode or feedback failed (`node_id`,

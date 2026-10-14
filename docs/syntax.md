@@ -965,9 +965,9 @@ extract:
 ```
 
 If the model deviates from the schema, the engine feeds the error back and retries
-up to `retries:` times (default 2). A NaN or infinity in the reply (`{"score": NaN}`)
-is a deviation too. `retries:` must be a non-negative integer
-(`0` means no retry); anything else fails at load:
+up to `retries:` times (default 2). A NaN or infinity in the reply (`{"score": NaN}`),
+or a value nested deeper than 100 levels, is a deviation too. `retries:` must be a
+non-negative integer (`0` means no retry); anything else fails at load:
 
 ```yaml
 extract:

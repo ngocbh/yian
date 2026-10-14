@@ -570,7 +570,8 @@ result = run_flow(flow, inputs, log="run.jsonl", steering=inbox)
   error, not a node failure.
 - An interrupted node succeeds with its text so far. The run log records its
   output like any other; it has no separate interrupted flag. A complete reply
-  whose tool call holds a NaN or infinity still fails the node, interrupt or not.
+  whose tool call holds a NaN or infinity, or arguments nested deeper than 100
+  levels, still fails the node, interrupt or not.
 - `on_event` shows the interrupt taking effect. A cut stream ends with its
   `final=True` chunk, and its `ModelCallFinished` has no `error` and the usage of
   the chunks already received. Each tool call the node skipped gets a

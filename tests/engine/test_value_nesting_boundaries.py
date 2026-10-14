@@ -2,6 +2,7 @@
 
 import json
 import sys
+from types import SimpleNamespace
 
 import pytest
 from langchain_core.messages import AIMessage
@@ -16,6 +17,18 @@ from yian.nodes.contracts import Parameter
 from yian.run import resume_flow
 from yian.typesys import TypeCheckError
 from yian.typesys.pool import VariablePool
+from yian.typesys.values import Type, ValueKind
+from tests.engine.test_agent_nonfinite_replies import (
+    _NATIVE,
+    _Carrier,
+    _correction,
+    _flow as _tool_flow,
+    _generate,
+    _setup as _setup_tool,
+    _structured_flow,
+    _texts,
+)
+from tests.engine.test_agent_session import _view
 
 
 def _code_flow(body: str, *, output_line: str = "", flow_output: str = "${deep.output}") -> str:
@@ -448,21 +461,164 @@ def test_value_at_the_limit_learns_from_a_record_output():
     _assert_learns(flow, {}, {"a": "bad"})
 
 
-class _StructuredChat:
-    """Chat model whose structured reply is `value`, then an empty reflection."""
+# A model reply past the limit is checked alongside NaN and infinity: a structured value
+# self-corrects under `retries:`, and tool-call arguments fail the node before any call.
 
-    def __init__(self, value):
-        self.value = value
+_FREEFORM = Type(kind=ValueKind.OBJECT)
+
+
+def _deep_text(levels: int) -> str:
+    """Return a structured reply whose `value` nests `levels` levels, built without recursion."""
+    return '{"value": ' + '{"a": ' * levels + '"leaf"' + "}" * levels + "}"
+
+
+def _assert_reply_too_deep(message: str, where: str) -> None:
+    """Assert `message` names `where`, a path into the value, and the limit."""
+    assert f"{where} at " in message
+    assert "deeper than 100 levels" in message
+    assert "recursion" not in message
+
+
+@pytest.mark.parametrize("levels", [101, 1500])
+def test_a_fallback_structured_value_over_the_limit_self_corrects(levels):
+    model = _texts(_deep_text(levels), '{"value": {"k": 1}}')
+
+    assert _generate(model, _FREEFORM) == {"k": 1}
+    assert len(model.calls) == 2
+    _assert_reply_too_deep(_correction(model), "structured output")
+
+
+def test_an_exhausted_fallback_structured_value_over_the_limit_is_located():
+    with pytest.raises(TypeCheckError) as caught:
+        _generate(_texts(_deep_text(101)), _FREEFORM, max_retries=0)
+    assert caught.value.path == ("a",) * 100
+
+
+@pytest.mark.parametrize("levels", [101, 1500])
+def test_a_native_structured_value_over_the_limit_self_corrects(levels):
+    model = _Carrier([_nest_dict(levels), {"k": 1}])
+
+    assert _generate(model, _FREEFORM, config=_NATIVE) == {"k": 1}
+    assert len(model.calls) == 2
+    _assert_reply_too_deep(_correction(model), "structured output")
+
+
+@pytest.mark.parametrize("native", [True, False])
+@pytest.mark.parametrize("session", [True, False])
+def test_a_structured_agent_over_the_limit_self_corrects_under_retries(monkeypatch, native, session):
+    model = (_Carrier([_nest_dict(101), {"k": 1}]) if native
+             else _texts(_deep_text(101), '{"value": {"k": 1}}'))
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _: model)
+    flow, memory = _structured_flow("object", native=native, session=session, retries=1)
+
+    result = run_flow(flow, {"question": "q"}, memory=memory)
+
+    assert result.status == "succeeded" and result.output == {"k": 1}
+    _assert_reply_too_deep(_correction(model), "structured output")
+    assert "provider error (" not in _correction(model)
+
+
+def test_a_native_session_value_at_the_limit_is_stored(monkeypatch):
+    model = _Carrier([_nest_dict(100)])
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _: model)
+    flow, memory = _structured_flow("object", native=True, session=True, retries=0)
+
+    result = run_flow(flow, {"question": "q"}, memory=memory)
+
+    assert result.status == "succeeded" and result.output == _nest_dict(100)
+    assert [effect.status for effect in _view(memory["session"]).effects] == ["completed"]
+
+
+@pytest.mark.parametrize("levels", [101, 120, 1500])
+def test_a_native_session_value_over_the_limit_is_not_stored_and_self_corrects(monkeypatch, levels):
+    # The raw reply carries the value, so it is rejected before memory stores it.
+    model = _Carrier([_nest_dict(levels), {"k": 1}])
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _: model)
+    flow, memory = _structured_flow("object", native=True, session=True, retries=1)
+
+    result = run_flow(flow, {"question": "q"}, memory=memory)
+
+    assert result.status == "succeeded" and result.output == {"k": 1}
+    assert [effect.status for effect in _view(memory["session"]).effects] == ["failed", "completed"]
+    _assert_reply_too_deep(_correction(model), "structured output")
+    assert "provider error (" not in _correction(model)
+
+
+@pytest.mark.parametrize("levels", [101, 1500])
+@pytest.mark.parametrize("native", [True, False])
+@pytest.mark.parametrize("session", [True, False])
+def test_a_structured_agent_over_the_limit_without_retries_fails(monkeypatch, native, session, levels):
+    model = _Carrier([_nest_dict(levels)]) if native else _texts(_deep_text(levels))
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _: model)
+    flow, memory = _structured_flow("object", native=native, session=session, retries=0)
+
+    result = run_flow(flow, {"question": "q"}, memory=memory)
+
+    assert result.status == "failed"
+    assert result.failure.code == "node.execute"
+    assert result.failure.node_id == "agent"
+    _assert_reply_too_deep(result.failure.message, "structured output")
+
+
+def _deep_call(levels: int, *, first_args: object = None) -> AIMessage:
+    """Return a reply calling `lookup` with arguments `{"x": ...}` nested `levels` levels.
+
+    With `first_args`, a valid call with those arguments comes first.
+    """
+    calls = [{"name": "lookup", "args": {"x": _nest_dict(levels - 1)}, "id": "c2"}]
+    if first_args is not None:
+        calls.insert(0, {"name": "lookup", "args": first_args, "id": "c1"})
+    return AIMessage(content="", tool_calls=calls)
+
+
+@pytest.mark.parametrize("levels", [101, 1500])
+@pytest.mark.parametrize("session", [True, False])
+def test_tool_arguments_over_the_limit_fail_the_agent_before_any_call(monkeypatch, session, levels):
+    tool, chat = _setup_tool(monkeypatch, [_deep_call(levels)])
+    flow, memory = _tool_flow(session)
+
+    result = run_flow(flow, {"question": "q"}, memory=memory)
+
+    assert result.status == "failed"
+    assert result.failure.code == "node.execute"
+    assert result.failure.node_id == "agent"
+    _assert_reply_too_deep(result.failure.message, "tool call 'lookup' arguments")
+    assert tool.calls == [] and len(chat.calls) == 1
+    if session:
+        effects = _view(memory["session"]).effects
+        assert [(effect.kind, effect.status) for effect in effects] == [("model", "failed")]
+
+
+@pytest.mark.parametrize("session", [True, False])
+def test_tool_arguments_over_the_limit_in_a_later_call_stop_every_call(monkeypatch, session):
+    tool, _ = _setup_tool(monkeypatch, [_deep_call(101, first_args={"x": 1.0})])
+    flow, memory = _tool_flow(session)
+
+    result = run_flow(flow, {"question": "q"}, memory=memory)
+
+    assert result.status == "failed" and result.failure.code == "node.execute"
+    assert "deeper than 100 levels" in result.failure.message
+    assert tool.calls == []
+
+
+_REFLECTION = json.dumps({"input_feedback": {}, "self_feedback": [], "variable_feedback": {}})
+
+
+class _StructuredChat:
+    """Chat model replying `values` in turn (the last repeats), then an empty reflection."""
+
+    def __init__(self, *values):
+        self.values = list(values)
 
     def invoke(self, _messages):
-        return AIMessage(content=json.dumps({"input_feedback": {}, "self_feedback": [], "variable_feedback": {}}))
+        return AIMessage(content=_REFLECTION)
 
     def with_structured_output(self, schema, **_kwargs):
-        value = self.value
+        values = self.values
 
         class Bound:
             def invoke(self, _messages):
-                return schema.model_validate(value)
+                return schema.model_validate(values.pop(0) if len(values) > 1 else values[0])
 
         return Bound()
 
@@ -470,12 +626,7 @@ class _StructuredChat:
         return self
 
 
-def test_a_model_value_over_the_limit_fails_the_agent_and_backward_still_learns(monkeypatch):
-    # 126 levels is under memory's own JSON bound once frozen but over it once an
-    # episode wraps the evidence, so recording it would make backward raise.
-    chat = _StructuredChat({"t": _nest_dict(126)})
-    monkeypatch.setattr(llm_clients, "model_from_config", lambda _config: chat)
-    flow = _memory_flow("""
+_STRUCTURED_FLOW = """
 id: nesting
 name: nesting
 llm_config: {provider: ollama, model: test}
@@ -485,9 +636,36 @@ nodes:
     prompt: go
     output: {t: object}
 output: ${w.output}
-""")
+"""
+
+
+def test_a_model_value_at_the_limit_is_learned_from(monkeypatch):
+    chat = _StructuredChat({"t": _nest_dict(99)})
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _config: chat)
+
+    _assert_learns(_memory_flow(_STRUCTURED_FLOW), {}, "good")
+
+
+def test_a_model_value_over_the_limit_self_corrects_and_backward_learns(monkeypatch):
+    chat = _StructuredChat({"t": _nest_dict(126)}, {"t": {"k": 1}})
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _config: chat)
+
+    _assert_learns(_memory_flow(_STRUCTURED_FLOW), {}, "good")
+
+
+@pytest.mark.parametrize("levels", [126, 1500])
+def test_a_model_value_over_the_limit_fails_the_agent_and_backward_still_learns(monkeypatch, levels):
+    chat = _StructuredChat({"t": _nest_dict(levels)})
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _config: chat)
+    flow = _memory_flow(_STRUCTURED_FLOW)
+
     result = run_flow(flow, {}, memory=build_memories(flow), learnable=True)
-    _assert_too_deep(result, "w")
+
+    assert result.status == "failed"
+    assert result.failure.code == "node.execute"
+    assert result.failure.node_id == "w"
+    assert "structured output at t.a" in result.failure.message
+    assert "deeper than 100 levels" in result.failure.message
 
     outcome = result.backward("good")
 
@@ -495,7 +673,8 @@ output: ${w.output}
 
 
 class _ToolCallChat:
-    """Chat model that calls `lookup` with `{"q": arguments}`, finishes, then reflects."""
+    """Chat model whose tool-bound replies call `lookup` with `{"q": arguments}`, then
+    finish; unbound, it replies with an empty reflection."""
 
     def __init__(self, arguments):
         self.replies = [
@@ -503,25 +682,16 @@ class _ToolCallChat:
                 {"name": "lookup", "args": {"q": arguments}, "id": "1", "type": "tool_call"},
             ]),
             AIMessage(content="finished"),
-            AIMessage(content=json.dumps({"input_feedback": {}, "self_feedback": [], "variable_feedback": {}})),
         ]
 
     def bind_tools(self, *_args, **_kwargs):
-        return self
+        return SimpleNamespace(invoke=lambda _messages: self.replies.pop(0))
 
     def invoke(self, _messages):
-        return self.replies.pop(0)
+        return AIMessage(content=_REFLECTION)
 
 
-def _lookup(q: object) -> str:
-    """Look up `q`."""
-    return "ok"
-
-
-def test_tool_arguments_over_the_limit_run_and_backward_still_learns(monkeypatch):
-    chat = _ToolCallChat(_nest_dict(124))
-    monkeypatch.setattr(llm_clients, "model_from_config", lambda _config: chat)
-    flow = _memory_flow("""
+_TOOL_CALL_FLOW = """
 id: nesting
 name: nesting
 llm_config: {provider: ollama, model: test}
@@ -532,10 +702,50 @@ nodes:
     tools: [lookup]
     output: str
 output: ${w.output}
-""")
-    result = run_flow(flow, {}, memory=build_memories(flow), learnable=True, tools={"lookup": _lookup})
-    assert result.status == "succeeded"
-    assert result.output == "finished"
+"""
+
+
+def _run_lookup(monkeypatch, arguments):
+    """Run `_TOOL_CALL_FLOW` learnably, calling `lookup` on `arguments`.
+
+    Returns the run result and the arguments each `lookup` call received.
+    """
+    calls = []
+
+    def lookup(q: object) -> str:
+        """Look up `q`."""
+        calls.append(q)
+        return "ok"
+
+    chat = _ToolCallChat(arguments)
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _config: chat)
+    flow = _memory_flow(_TOOL_CALL_FLOW)
+    result = run_flow(
+        flow, {}, memory=build_memories(flow), learnable=True, tools={"lookup": lookup}
+    )
+    return result, calls
+
+
+def test_tool_arguments_at_the_limit_run_and_are_learned_from(monkeypatch):
+    result, calls = _run_lookup(monkeypatch, _nest_dict(99))
+    assert result.status == "succeeded" and result.output == "finished"
+    assert calls == [_nest_dict(99)]
+
+    outcome = _backward_with_less_stack(result, "good")
+
+    assert outcome.status == "succeeded"
+    assert outcome.learning.status == "succeeded"
+
+
+@pytest.mark.parametrize("levels", [124, 1500])
+def test_tool_arguments_over_the_limit_fail_the_agent_and_backward_still_learns(monkeypatch, levels):
+    result, calls = _run_lookup(monkeypatch, _nest_dict(levels))
+    assert result.status == "failed"
+    assert result.failure.code == "node.execute"
+    assert result.failure.node_id == "w"
+    assert "tool call 'lookup' arguments at q.a" in result.failure.message
+    assert "deeper than 100 levels" in result.failure.message
+    assert calls == []
 
     outcome = result.backward("good")
 

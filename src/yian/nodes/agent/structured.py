@@ -391,6 +391,7 @@ def _generate_native(
         nonlocal reply_surfaced
         reply_surfaced = True
         if memory_context.transcript is not None:
+            _reject_deep_carrier(response, schema, typ)
             _reject_nonfinite_carrier(response)
 
     for _ in range(max_retries + 1):
@@ -410,6 +411,7 @@ def _generate_native(
             )
             obj = response if memory_context.transcript is None else _native_parsed(response)
             value = _unwrap(obj, typ)
+            reject_deep_nesting(value, "structured output")
             reject_nonfinite(value, "structured output")
             if memory_context.transcript is not None:
                 check_stopped()
@@ -436,9 +438,6 @@ def _generate_native(
         else:
             if evaluation_trace is not None:
                 try:
-                    # Memory freezes evidence under its own JSON bound, but an episode
-                    # wraps it a few levels deeper; the value limit leaves that room.
-                    reject_deep_nesting(value, "model value")
                     interaction = ModelValueInteraction(value)
                 except (TypeError, ValueError, RecursionError):
                     # Evidence is observational. A value the dispatcher will reject must
@@ -477,6 +476,19 @@ def _native_carrier_error(response: dict) -> BaseException | None:
     if not isinstance(response["parsed"], BaseModel):
         raise _CapabilityFault(TypeError("native structured parsed value must be a BaseModel"))
     return None
+
+
+def _reject_deep_carrier(response: Any, schema: type[BaseModel], typ: Type) -> None:
+    """Raise `TypeCheckError` if a native carrier's parsed value nests past the value limit.
+
+    A carrier that is malformed or holds a parsing error is left alone. The raw reply
+    carries the value, so this runs before memory stores it: a value past the limit may be
+    too deep for memory, and the non-finite walk of the raw reply recurses.
+    """
+    if type(response) is not dict or set(response) != {"raw", "parsed", "parsing_error"}:
+        return
+    if response["parsing_error"] is None and isinstance(response["parsed"], schema):
+        reject_deep_nesting(_unwrap(response["parsed"], typ), "structured output")
 
 
 def _reject_nonfinite_carrier(response: Any) -> None:
@@ -551,6 +563,7 @@ def _generate_fallback(
             record_model_text(evaluation_trace, text)
             obj = schema.model_validate(json_codec.loads(_strip_code_fence(text)))
             value = _unwrap(obj, typ)
+            reject_deep_nesting(value, "structured output")
             reject_nonfinite(value, "structured output")
             if memory_context.transcript is not None:
                 check_stopped()

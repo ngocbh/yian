@@ -117,8 +117,12 @@ The first boundary that sees a deeper value rejects it:
   (`<map>/__end__`); a LOOP body's record output likewise counts its level;
 - `RunResult.backward(feedback)`: deeper feedback raises `ValueError` before any
   backward attempt starts;
-- AGENT evidence: a deeper structured model value or tool-call arguments is left
-  out of the evidence backward learns from; the node runs as it otherwise would.
+- a model reply, checked before the non-finite check: an AGENT's deeper structured
+  value self-corrects under `retries:` like a NaN (`structured output at t.a...`), and
+  deeper tool-call arguments fail the AGENT with `node.execute` before any call of that
+  reply runs (`tool call 'lookup' arguments at x.a...`). With session memory that
+  model call is recorded `failed` and the reply is not kept (a JSON-text structured
+  reply is kept, since it is text).
 
 START's input record holds the input values, so it alone may sit one level over the
 limit. Replaying or resuming a recorded log does not re-check the limit, so logs

@@ -2,19 +2,26 @@
 
 import math
 from threading import Event
+from types import SimpleNamespace
 
-from langchain_core.messages import AIMessage
-from pydantic import BaseModel
+from langchain_core.messages import AIMessage, HumanMessage
+from pydantic import BaseModel, ValidationError
 import pytest
 
 import yian.llm_clients as llm_clients
 import yian.tools as tools
 from yian.compose import load_flow
 from yian.events import ModelCallFinished, ToolCallStarted
+from yian.memory import MemoryContext
 from yian.memory.session import SessionMemory
-from yian.nodes.base import _HostStop
+from yian.nodes.agent.structured import _structured_validation_path, generate_structured
+from yian.nodes.base import _CapabilityFault, _HostStop
 from yian.run import _run_flow_controlled, run_flow
+from yian.typesys.types import read_typedefs, type_for
+from yian.typesys.values import Type, TypeCheckError, ValueKind
+from tests.engine._session_fakes import harness, request
 from tests.engine.test_agent_session import _FLOW, _Model, _view
+from tests.engine.test_agent_session_structured import _Native
 from tests.engine.test_agent_session_tools import _TOOL_FLOW, _Chat, _Tool
 from tests.engine.test_agent_steering import Inbox, _flow as _steer_flow, _recorder
 
@@ -157,3 +164,198 @@ def test_an_interrupt_with_a_nonfinite_tool_call_fails_the_agent(monkeypatch, se
     assert ran == []
     if session:
         assert [(e.kind, e.status) for e in _view(memory["session"]).effects] == [("model", "failed")]
+
+
+# A NaN or infinity in a structured reply is a schema failure, retried via `retries:`.
+
+_NATIVE = {"provider": "openai", "model": "gpt-4o"}
+_FALLBACK = {"provider": "vllm", "model": "no-structured-sentinel"}
+_SCORE = Type(
+    kind=ValueKind.OBJECT,
+    fields={"score": Type.scalar(ValueKind.NUMBER)},
+    required=frozenset({"score"}),
+)
+
+
+class _Carrier:
+    """A native model that honours `include_raw`, putting each value in the raw tool call.
+
+    Each value is sent as `{key: value}`; `metadata` is every raw reply's `response_metadata`.
+    """
+
+    def __init__(self, values, *, key="value", metadata=None):
+        self.values = iter(values)
+        self.key = key
+        self.metadata = metadata or {}
+        self.calls = []
+
+    def with_structured_output(self, schema, *, include_raw=False):
+        outer = self
+
+        class Bound:
+            def invoke(self, messages):
+                outer.calls.append(list(messages))
+                value = next(outer.values)
+                args = {outer.key: value}
+                if not include_raw:
+                    return schema.model_validate(args)
+                raw = AIMessage(
+                    content="",
+                    response_metadata=outer.metadata,
+                    tool_calls=[{"name": schema.__name__, "args": args, "id": "format-id"}],
+                )
+                try:
+                    parsed = schema.model_validate(args)
+                except Exception as error:
+                    return {"raw": raw, "parsed": None, "parsing_error": error}
+                return {"raw": raw, "parsed": parsed, "parsing_error": None}
+
+        return Bound()
+
+
+def _texts(*replies):
+    return _Model([AIMessage(content=reply) for reply in replies])
+
+
+def _generate(model, typ, *, config=_FALLBACK, max_retries=2):
+    return generate_structured(model, [HumanMessage(content="q")], typ,
+                               max_retries=max_retries, llm_config=config)
+
+
+def _correction(model, call=1):
+    return model.calls[call][-1].content
+
+
+def _structured_flow(output, *, native, session, retries=None):
+    config = "{provider: openai, model: gpt-4o}" if native else "{provider: vllm, model: no-structured-sentinel}"
+    text = (_FLOW.replace("{provider: openai, model: test-model}", config)
+            .replace("    output: str", f"    output: {output}"))
+    if not session:
+        text = text.replace(_SESSION_LINE, "")
+    if retries is not None:
+        text = text.replace("    output:", f"    retries: {retries}\n    output:", 1)
+    return load_flow(text), ({"session": SessionMemory()} if session else None)
+
+
+@pytest.mark.parametrize("bad", ["NaN", "Infinity", "-Infinity", "1e999"])
+def test_a_nonfinite_fallback_field_is_retried(bad):
+    model = _texts(f'{{"score": {bad}}}', '{"score": 1.5}')
+    assert _generate(model, _SCORE) == {"score": 1.5}
+    assert len(model.calls) == 2
+    assert "score" in _correction(model) and "finite" in _correction(model)
+
+
+def test_an_exhausted_nonfinite_fallback_field_is_located_at_the_field():
+    with pytest.raises(ValidationError) as caught:
+        _generate(_texts('{"score": NaN}'), _SCORE, max_retries=0)
+    assert _structured_validation_path(caught.value, _SCORE) == ("score",)
+
+
+def test_a_bounded_float_rejects_nan_as_not_finite():
+    with pytest.raises(ValidationError) as caught:
+        _generate(_texts('{"value": NaN}'), type_for("float[0, 10]", {}), max_retries=0)
+    assert caught.value.errors()[0]["type"] == "finite_number"
+
+
+@pytest.mark.parametrize("typ", [type_for("list[float]", {}), Type(kind=ValueKind.LIST_NUMBER)])
+def test_a_nonfinite_list_item_is_retried(typ):
+    model = _texts('{"items": [1.0, NaN]}', '{"items": [1.0, 2.0]}')
+    assert _generate(model, typ) == [1.0, 2.0]
+    assert "items.1" in _correction(model) and "finite" in _correction(model)
+
+
+def test_a_nonfinite_union_member_field_is_retried():
+    registry = read_typedefs({"A": {"kind": "Literal[a]", "x": "float"}, "B": {"kind": "Literal[b]"}})
+    model = _texts('{"value": {"kind": "a", "x": NaN}}', '{"value": {"kind": "a", "x": 1.0}}')
+    assert _generate(model, type_for("Union[A, B]", registry)) == {"kind": "a", "x": 1.0}
+    assert len(model.calls) == 2 and "finite" in _correction(model)
+
+
+def test_a_nonfinite_native_value_without_memory_is_retried():
+    model = _Carrier([math.nan, 2.0])
+    assert _generate(model, Type.scalar(ValueKind.NUMBER), config=_NATIVE) == 2.0
+    assert len(model.calls) == 2
+
+
+def test_a_nonfinite_freeform_value_is_retried_and_located():
+    freeform = Type(kind=ValueKind.OBJECT)
+    model = _texts('{"value": {"k": NaN}}', '{"value": {"k": 1}}')
+    assert _generate(model, freeform) == {"k": 1}
+    assert "structured output at k: non-finite number" in _correction(model)
+    with pytest.raises(TypeCheckError) as caught:
+        _generate(_texts('{"value": {"k": NaN}}'), freeform, max_retries=0)
+    assert caught.value.path == ("k",)
+
+
+def test_a_nonfinite_native_session_reply_is_retried_with_the_full_error(monkeypatch):
+    model = _Native([math.nan, 2])
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _: model)
+    flow, memory = _structured_flow("float", native=True, session=True)
+    assert run_flow(flow, {"question": "q"}, memory=memory).output == 2.0
+    assert [effect.status for effect in _view(memory["session"]).effects] == ["failed", "completed"]
+    assert "finite" in _correction(model)
+    assert "provider error (" not in _correction(model)
+
+
+@pytest.mark.parametrize("session", [True, False])
+def test_an_exhausted_nonfinite_native_field_is_located_at_the_field(monkeypatch, session):
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _: _Carrier([math.nan], key="score"))
+    flow, memory = _structured_flow("{score: float}", native=True, session=session, retries=0)
+    result = run_flow(flow, {"question": "q"}, memory=memory)
+    assert result.status == "failed" and result.failure.code == "node.execute"
+    assert result.failure.trace[-1].key.endswith("/s:path/s:score")
+
+
+def test_nonfinite_session_metadata_fails_after_every_retry(monkeypatch):
+    model = _Carrier([1.0, 2.0, 3.0, 4.0],
+                     metadata={"logprobs": {"content": [{"logprob": -math.inf}]}})
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _: model)
+    flow, memory = _structured_flow("float", native=True, session=True)
+    result = run_flow(flow, {"question": "q"}, memory=memory)
+    assert result.status == "failed" and result.failure.code == "node.execute"
+    assert "model reply at response_metadata.logprobs.content[0].logprob" in result.failure.message
+    assert len(model.calls) == 3
+    assert "provider error (" not in _correction(model)
+
+
+def test_a_malformed_native_carrier_holding_nan_stays_a_capability_fault():
+    calls = []
+
+    class Model:
+        def with_structured_output(self, schema, *, include_raw):
+            def invoke(messages):
+                calls.append(messages)
+                raw = AIMessage(content="", tool_calls=[
+                    {"name": schema.__name__, "args": {"value": math.nan}, "id": "format-id"}])
+                return {"raw": raw, "parsed": None, "parsing_error": None, "extra": 1}
+            return SimpleNamespace(invoke=invoke)
+
+    memory = SessionMemory()
+    with pytest.raises(_CapabilityFault):
+        with harness(memory) as opened:
+            with opened.frame.open_turn(request(), check_stopped=lambda: None) as turn:
+                generate_structured(Model(), [], Type.scalar(ValueKind.NUMBER), llm_config=_NATIVE,
+                                    memory_context=MemoryContext(transcript=turn))
+    assert len(calls) == 1
+    assert [effect.status for effect in _view(memory).effects] == ["failed"]
+
+
+def test_a_nonfinite_fallback_session_reply_is_stored_and_retried(monkeypatch):
+    model = _texts('{"value": NaN}', '{"value": 2}')
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _: model)
+    flow, memory = _structured_flow("float", native=False, session=True)
+    assert run_flow(flow, {"question": "q"}, memory=memory).output == 2.0
+    assert [effect.status for effect in _view(memory["session"]).effects] == ["completed", "completed"]
+
+
+def test_a_nonfinite_record_reply_retries_end_to_end_and_fails_at_the_field(monkeypatch):
+    model = _texts('{"score": NaN}', '{"score": 0.5}')
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _: model)
+    flow, _ = _structured_flow("{score: float}", native=False, session=False)
+    assert run_flow(flow, {"question": "q"}).output == {"score": 0.5}
+
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _: _texts('{"score": NaN}'))
+    flow, _ = _structured_flow("{score: float}", native=False, session=False, retries=0)
+    result = run_flow(flow, {"question": "q"})
+    assert result.status == "failed" and result.failure.code == "node.execute"
+    assert result.failure.trace[-1].key.endswith("/s:path/s:score")

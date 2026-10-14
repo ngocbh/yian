@@ -42,7 +42,13 @@ from yian.nodes.agent.memory import invoke_model
 from yian.nodes.agent.live import LiveSinks, invoke_chat, invoke_structured
 from yian.nodes.agent.text import record_model_text, text_of
 from yian.nodes.base import _CapabilityFault, _HostStop
-from yian.typesys.values import Type, ValueKind, union_tag_fields
+from yian.typesys.values import (
+    Type,
+    TypeCheckError,
+    ValueKind,
+    reject_nonfinite,
+    union_tag_fields,
+)
 
 # ValueKind -> python type for a scalar slot. DATE/DATETIME persist as ISO strings.
 _SCALAR_PY: dict[ValueKind, type] = {
@@ -93,8 +99,7 @@ def _non_null_py_type(typ: Type, *, closed: bool, position: str) -> Any:
     if seg in _SCALAR_PY:
         if typ.bounds is not None:
             typ.validate_shape()
-            return Annotated[_SCALAR_PY[seg], Field(ge=typ.bounds[0], le=typ.bounds[1])]
-        return _SCALAR_PY[seg]
+        return _scalar_annotation(seg, typ.bounds)
     if seg == ValueKind.OBJECT and typ.variants is not None:
         members = tuple(
             _record_model(member, position=name, closed=True)
@@ -113,8 +118,24 @@ def _non_null_py_type(typ: Type, *, closed: bool, position: str) -> Any:
             item = _py_type(elem, closed=closed, position=_nested(position, "item"))
             return List[item]  # type: ignore[misc]
         scalar = seg.element_kind
-        return List[_SCALAR_PY[scalar]] if scalar in _SCALAR_PY else list  # type: ignore[misc]
+        return List[_scalar_annotation(scalar, None)] if scalar in _SCALAR_PY else list  # type: ignore[misc]
     raise ValueError(f"type_to_schema: no structured mapping for segment type {seg!r}")
+
+
+def _scalar_annotation(kind: ValueKind, bounds: tuple[int | float, int | float] | None) -> Any:
+    """Return the pydantic annotation of a scalar slot of `kind`, within inclusive `bounds`.
+
+    A `float` slot rejects NaN and infinity, which are not yian values; the JSON
+    schema is unchanged.
+    """
+    py_type = _SCALAR_PY[kind]
+    if kind == ValueKind.NUMBER:
+        if bounds is None:
+            return Annotated[float, Field(allow_inf_nan=False)]
+        return Annotated[float, Field(allow_inf_nan=False, ge=bounds[0], le=bounds[1])]
+    if bounds is None:
+        return py_type
+    return Annotated[py_type, Field(ge=bounds[0], le=bounds[1])]
 
 
 def _nested(position: str, segment: str) -> str:
@@ -282,11 +303,11 @@ def generate_structured(
     - **fallback** — the provider has no native structured output: render the JSON schema into
       the prompt, invoke for free text, then `json.loads` + `schema.model_validate` it.
 
-    Either way a deviation (schema rejection, unparseable JSON) appends a corrective
-    `HumanMessage` naming the error and retries, up to `max_retries` extra attempts
-    (`max_retries + 1` total invocations). The last error is re-raised once the cap is spent.
-    Session corrections expose only the type of a provider-side error; local parser
-    diagnostics after a surfaced reply stay intact. Session cancellation never retries.
+    Either way a deviation (schema rejection, unparseable JSON, a NaN or infinity in the
+    reply) appends a corrective `HumanMessage` naming the error and retries, up to
+    `max_retries` extra attempts (`max_retries + 1` total invocations). The last error is re-raised once the cap is spent.
+    Session corrections expose only the type of a provider-side error; diagnostics
+    raised once the reply surfaced stay intact. Session cancellation never retries.
 
     Args:
         model (`Any`): Configured provider model, optionally supporting native binding.
@@ -359,6 +380,14 @@ def _generate_native(
     msgs = list(messages)
     pending_messages = list(messages if new_messages is None else new_messages)
     last_err: Optional[Exception] = None
+    reply_surfaced = False
+
+    def check_reply(response: Any) -> None:
+        nonlocal reply_surfaced
+        reply_surfaced = True
+        if memory_context.transcript is not None:
+            _reject_nonfinite_carrier(response)
+
     for _ in range(max_retries + 1):
         check_stopped()
         reply_surfaced = False
@@ -372,11 +401,11 @@ def _generate_native(
                 memory_context.transcript,
                 lambda: invoke_structured(live, bound, msgs, exchange_id=exchange_id),
                 new_messages=delta, check_stopped=check_stopped, purpose="structured_native",
-                raw_reply=_native_raw, exchange_id=exchange_id,
+                raw_reply=_native_raw, exchange_id=exchange_id, check_reply=check_reply,
             )
-            reply_surfaced = True
             obj = response if memory_context.transcript is None else _native_parsed(response)
             value = _unwrap(obj, typ)
+            reject_nonfinite(value, "structured output")
             if memory_context.transcript is not None:
                 check_stopped()
         except (_CapabilityFault, _HostStop):
@@ -386,8 +415,8 @@ def _generate_native(
                 raise
             check_stopped()
             last_err = err
-            # Provider/binding errors can include credentials. Only local parsing
-            # diagnostics from an already retained raw reply belong in corrections.
+            # Provider/binding errors can include credentials. An error raised once the
+            # reply surfaced is yian's own diagnostic of that reply, so it is sent in full.
             detail = (f"provider error ({type(err).__name__})"
                       if memory_context.transcript is not None and not reply_surfaced else err)
             correction = HumanMessage(
@@ -421,16 +450,42 @@ def _native_raw(response):
 
 def _native_parsed(response):
     """Validate the native carrier after raw publication, then raise its exact error."""
+    error = _native_carrier_error(response)
+    if error is not None:
+        raise error
+    return response["parsed"]
+
+
+def _native_carrier_error(response: dict) -> BaseException | None:
+    """Return a native carrier's parsing error, raising `_CapabilityFault` if it is malformed."""
     if set(response) != {"raw", "parsed", "parsing_error"}:
         raise _CapabilityFault(ValueError("native structured response fields are invalid"))
     error = response["parsing_error"]
     if error is not None:
         if not isinstance(error, BaseException):
             raise _CapabilityFault(TypeError("native structured parsing_error must be an exception or None"))
-        raise error
+        return error
     if not isinstance(response["parsed"], BaseModel):
         raise _CapabilityFault(TypeError("native structured parsed value must be a BaseModel"))
-    return response["parsed"]
+    return None
+
+
+def _reject_nonfinite_carrier(response: Any) -> None:
+    """Raise a native carrier's parsing error when its raw reply holds a NaN or infinity.
+
+    A carrier whose raw reply is finite is left alone, so it is stored and parsed as
+    before. A malformed carrier raises `_CapabilityFault`. The parsing error is the
+    schema's own, so the retry and the exhausted error's origin match a run without
+    memory.
+    """
+    if type(response) is not dict:
+        return
+    try:
+        reject_nonfinite(response.get("raw"), "model reply")
+    except TypeCheckError:
+        error = _native_carrier_error(response)
+        if error is not None:
+            raise error
 
 
 def _generate_fallback(
@@ -458,6 +513,12 @@ def _generate_fallback(
     msgs = list(messages) + [instruction]
     pending_messages = list(messages if new_messages is None else new_messages) + [instruction]
     last_err: Optional[Exception] = None
+    reply_surfaced = False
+
+    def check_reply(_reply: Any) -> None:
+        nonlocal reply_surfaced
+        reply_surfaced = True
+
     for _ in range(max_retries + 1):
         check_stopped()
         reply_surfaced = False
@@ -470,14 +531,14 @@ def _generate_fallback(
                     live, model, msgs, exchange_id=exchange_id, purpose="structured_fallback"
                 ),
                 new_messages=delta, check_stopped=check_stopped, purpose="structured_fallback",
-                exchange_id=exchange_id,
+                exchange_id=exchange_id, check_reply=check_reply,
             )
-            reply_surfaced = True
             text = text_of(reply)
             check_stopped()
             record_model_text(evaluation_trace, text)
             obj = schema.model_validate(json.loads(_strip_code_fence(text)))
             value = _unwrap(obj, typ)
+            reject_nonfinite(value, "structured output")
             if memory_context.transcript is not None:
                 check_stopped()
         except (_CapabilityFault, _HostStop):
@@ -487,6 +548,7 @@ def _generate_fallback(
                 raise
             check_stopped()
             last_err = err
+            # As on the native path, an error raised once the reply surfaced is sent in full.
             detail = (f"provider error ({type(err).__name__})"
                       if memory_context.transcript is not None and not reply_surfaced else err)
             correction = HumanMessage(

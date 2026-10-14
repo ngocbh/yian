@@ -502,52 +502,51 @@ def _run_with_terminal_controller(
             host_error = (exc, exc.__traceback__)
         stop_event.set()
 
-    def start_controller() -> None:
-        """Launch the controller with Ctrl-C deferred until ``started`` is recorded.
+    caller_sigint = signal.getsignal(signal.SIGINT)
+    # Only a callable handler raises, and Python handlers can be set only on the main
+    # thread; SIG_IGN, SIG_DFL, and a handler set outside Python (None) are left alone.
+    own_sigint = threading.current_thread() is threading.main_thread() and callable(
+        caller_sigint
+    )
+    # Deferred until the controller is tracked, and again from the Ctrl-C that stops
+    # the run until cleanup ends.
+    defer_sigint = True
+    sigint_deferred = False
 
-        A SIGINT handled while ``Thread.start`` runs would escape with ``started`` still
-        False and skip the join. A temporary handler records it instead; restoring the
-        caller's handler replays it, so the caller's policy applies once the controller
-        is tracked.
-        """
-        nonlocal started
-        # Python handlers can only be set on the main thread, and a handler installed
-        # outside Python (getsignal None) could not be restored afterwards.
-        if (
-            threading.current_thread() is not threading.main_thread()
-            or signal.getsignal(signal.SIGINT) is None
-        ):
-            controller_thread.start()
-            started = True
+    def on_sigint(signum: int, frame: Any) -> None:
+        """Pass Ctrl-C to the caller's handler, or record it while the helper defers it."""
+        nonlocal defer_sigint, sigint_deferred
+        if defer_sigint:
+            sigint_deferred = True
             return
-        deferred = False
-
-        def defer_sigint(signum: int, frame: Any) -> None:
-            """Record a Ctrl-C that arrives while the controller thread starts."""
-            nonlocal deferred
-            deferred = True
-
-        previous = signal.signal(signal.SIGINT, defer_sigint)
         try:
-            controller_thread.start()
-            started = True
-        finally:
-            signal.signal(signal.SIGINT, previous)
-            if deferred:
-                signal.raise_signal(signal.SIGINT)
+            caller_sigint(signum, frame)
+        except BaseException:
+            # This Ctrl-C stops the run; a later one must not cut cleanup short.
+            defer_sigint = True
+            raise
 
-    if reporter is not None:
-        reporter.start()
-    try:
-        start_controller()
-        completion = broker.serve()
-    except BaseException as exc:
-        remember_host_error(exc)
-    finally:
+    def start_controller() -> None:
+        """Launch the controller, then let Ctrl-C reach the caller's handler.
+
+        A Ctrl-C handled while ``Thread.start`` runs would escape with ``started``
+        still False and skip the join, so it stays deferred until ``started`` is
+        recorded and is then replayed through the caller's handler.
+        """
+        nonlocal started, defer_sigint, sigint_deferred
+        controller_thread.start()
+        started = True
+        defer_sigint = False
+        if sigint_deferred:
+            sigint_deferred = False
+            signal.raise_signal(signal.SIGINT)
+
+    def clean_up() -> None:
+        """Join a started controller, then stop the reporter, keeping the first cause."""
+        # The handlers below catch a Ctrl-C only when the helper does not own SIGINT;
+        # otherwise they keep a reporter.stop() failure from replacing the first cause.
         if started:
-            # Keep the broker serving until the controller target has finished. Repeated
-            # Ctrl-C during a slow cooperative drain is deferred; it must not interrupt
-            # cleanup or replace the first host cause.
+            # Wait for the controller target to finish before joining; see drive().
             while not controller_finished.is_set():
                 try:
                     controller_finished.wait()
@@ -564,6 +563,42 @@ def _run_with_terminal_controller(
                 reporter.stop()
             except BaseException as exc:
                 remember_host_error(exc)
+
+    if own_sigint:
+        signal.signal(signal.SIGINT, on_sigint)
+    try:
+        if reporter is not None:
+            reporter.start()
+        try:
+            start_controller()
+            completion = broker.serve()
+            # Still inside the try: a Ctrl-C handled before this store raises here and
+            # takes the except path; one after it is only recorded.
+            defer_sigint = True
+        except BaseException as exc:
+            # Plain stores first: a Ctrl-C handled from here on is only recorded.
+            defer_sigint = True
+            if host_error is None:
+                host_error = (exc, exc.__traceback__)
+        finally:
+            # Again here: a Ctrl-C raised on entering the except skips its store.
+            defer_sigint = True
+            try:
+                if completion is None:
+                    stop_event.set()
+            finally:
+                clean_up()
+    finally:
+        if own_sigint:
+            signal.signal(signal.SIGINT, caller_sigint)
+            if sigint_deferred:
+                # The caller's handler decides what the deferred Ctrl-C does; an
+                # exception it raises counts only when nothing failed first.
+                try:
+                    signal.raise_signal(signal.SIGINT)
+                except BaseException as exc:
+                    if host_error is None:
+                        host_error = (exc, exc.__traceback__)
 
     if host_error is not None:
         error, tb = host_error

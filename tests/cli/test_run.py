@@ -611,6 +611,38 @@ def test_prompt_request_offers_model_options_as_a_choice(monkeypatch):
     assert seen == [{"question": "Which?", "options": [{"label": "A"}, {"label": "B"}]}]
 
 
+def test_prompt_request_hides_a_secret_answer(monkeypatch):
+    """A secret request asks through a password widget, never plain text."""
+    import questionary
+
+    from yian.cli.terminal import PromptRequest
+
+    widget = object()
+    built: list[tuple[str, str]] = []
+    asked: list[tuple[object, object]] = []
+
+    def password(label, **_options):
+        built.append(("password", label))
+        return widget
+
+    def text(label, **_options):
+        built.append(("text", label))
+        return widget
+
+    def ask_widget(given, request=None):
+        asked.append((given, request))
+        return "sk-x"
+
+    monkeypatch.setattr(questionary, "password", password)
+    monkeypatch.setattr(questionary, "text", text)
+    monkeypatch.setattr(run_cli, "_ask_widget", ask_widget)
+    request = PromptRequest(question="Enter KEY", secret=True)
+
+    assert run_cli._prompt_request(request) == "sk-x"
+    assert built == [("password", "Enter KEY")]
+    assert asked == [(widget, request)]
+
+
 def test_undeclared_input_flag_is_a_bad_parameter(tmp_path: Path):
     flow = _write_flow(tmp_path, ECHO_FLOW)
     result = runner.invoke(

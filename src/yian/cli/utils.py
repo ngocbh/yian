@@ -33,7 +33,7 @@ _OLLAMA_DEFAULT_BASE_URL = "http://localhost:11434"
 # never a "wrong guess"); we re-prompt to be friendly, but bound the loop so a
 # non-interactive-but-TTY caller feeding empty forever can't hang. 3 mirrors sudo's
 # `passwd_tries` default — the most familiar credential prompt on Linux.
-_MAX_KEY_PROMPTS = 3
+MAX_KEY_PROMPTS = 3
 
 
 def ensure_api_key(provider: str, *, interactive: bool = True) -> Optional[str]:
@@ -46,7 +46,7 @@ def ensure_api_key(provider: str, *, interactive: bool = True) -> Optional[str]:
     returned unchanged. When it is unset and a TTY is attached, the user is
     prompted (the answer is stripped and exported into the process env so downstream
     clients read it); an empty answer is treated as a fingerslip and re-prompts, up to
-    `_MAX_KEY_PROMPTS` times. With no TTY (or `interactive=False`) a required-but-missing
+    `MAX_KEY_PROMPTS` times. With no TTY (or `interactive=False`) a required-but-missing
     key raises rather than hanging on a prompt.
 
     Args:
@@ -67,7 +67,7 @@ def ensure_api_key(provider: str, *, interactive: bool = True) -> Optional[str]:
             The provider requires a key, none is set, and one of: no interactive
             prompt is available (no TTY, or `interactive=False`); the user cancels
             the prompt (Ctrl-C / Esc); or the user submits an empty answer
-            `_MAX_KEY_PROMPTS` times in a row. A single empty answer is not an
+            `MAX_KEY_PROMPTS` times in a row. A single empty answer is not an
             error — it re-prompts.
     """
     if provider.lower() == "openai":
@@ -92,9 +92,9 @@ def ensure_api_key(provider: str, *, interactive: bool = True) -> Optional[str]:
     import questionary
 
     # Interactive: an empty/whitespace answer is a fingerslip -> re-prompt, capped at
-    # _MAX_KEY_PROMPTS tries so the loop can't run forever. An explicit cancel (Ctrl-C / Esc,
+    # MAX_KEY_PROMPTS tries so the loop can't run forever. An explicit cancel (Ctrl-C / Esc,
     # where questionary returns None) aborts at once. The no-TTY path above already raised up front.
-    for _ in range(_MAX_KEY_PROMPTS):
+    for _ in range(MAX_KEY_PROMPTS):
         key = questionary.password(f"Enter {env_var} for provider {provider!r}:").ask()
         if key is None:  # Ctrl-C / Esc — the user chose to cancel; does not spend an extra try
             raise RuntimeError(f"no API key provided for {provider!r} (${env_var})")
@@ -104,7 +104,7 @@ def ensure_api_key(provider: str, *, interactive: bool = True) -> Optional[str]:
             return key
         # empty / whitespace-only — hit Enter with no real input; this attempt is spent, ask again
     raise RuntimeError(
-        f"no API key provided for {provider!r} (${env_var}) after {_MAX_KEY_PROMPTS} attempts"
+        f"no API key provided for {provider!r} (${env_var}) after {MAX_KEY_PROMPTS} attempts"
     )
 
 

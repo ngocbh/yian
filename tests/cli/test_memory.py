@@ -61,6 +61,7 @@ def _offline_model(monkeypatch):
 
     monkeypatch.setattr(llm_clients, "model_from_config", lambda config: _Model())
     monkeypatch.setattr(run_cli, "_ensure_provider_keys", lambda *args: None)
+    monkeypatch.setattr(run_cli, "_check_resume_credentials", lambda *args, **kwargs: None)
 
 
 def _flow_text(memory="{notes: episodic}", flow_id="cli-memory"):

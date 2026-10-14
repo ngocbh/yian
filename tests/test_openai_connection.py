@@ -9,11 +9,13 @@ from langchain_core.messages import HumanMessage
 
 from yian.llm_clients.auth import (
     ApiKeyCredentials,
+    AuthError,
     AuthStore,
     OAuthCredentials,
 )
 from yian.llm_clients.connection import (
     check_model_config,
+    connection_credentials,
     connection_snapshot,
     legacy_connection_config,
     resolve_model_config,
@@ -119,6 +121,31 @@ def test_api_environment_identity_checked_on_every_request(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "second-secret")
     with pytest.raises(RuntimeError, match="changed"):
         model.invoke([HumanMessage(content="hi")])
+
+
+def test_changed_environment_key_says_start_a_new_run(monkeypatch):
+    """A changed key is reported after the failure is recorded, so restoring it can't help."""
+    monkeypatch.setenv("OPENAI_API_KEY", "first-secret")
+    connection = connection_snapshot().connections["openai"]
+    monkeypatch.setenv("OPENAI_API_KEY", "second-secret")
+    with pytest.raises(AuthError) as caught:
+        connection_credentials(connection)
+    message = str(caught.value)
+    assert "changed since this run started; start a new run" in message
+    assert "restore" not in message
+
+
+def test_reconnected_store_credential_names_one_fix():
+    """A pinned saved credential that was replaced names one fix, without 'reconnect'."""
+    AuthStore().save("openai", ApiKeyCredentials("old-secret"), "gpt-5.5")
+    connection = connection_snapshot().connections["openai"]
+    AuthStore().save("openai", ApiKeyCredentials("new-secret"), "gpt-5.5")
+    with pytest.raises(AuthError) as caught:
+        connection_credentials(connection)
+    message = str(caught.value)
+    assert "changed" in message
+    assert message.count("start a new run") == 1
+    assert "reconnect" not in message
 
 
 def test_missing_identity_does_not_adopt_later_environment_key(monkeypatch):

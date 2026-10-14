@@ -30,10 +30,12 @@ _STOP_POLL_SECONDS = 0.05
 class PromptRequest:
     """One worker's prompt payload and its single-assignment answer channel.
 
-    The public metadata mirrors the run's ``ask_user`` handler. A prompt
-    implementation may register a non-blocking cancellation callback while its
-    terminal widget is active; cancellation invokes that callback from the cancelling
-    thread so it can schedule a thread-safe widget exit.
+    The public metadata mirrors the run's ``ask_user`` handler. ``secret`` asks
+    for a hidden answer; only the host sets it (for example, the CLI's API-key
+    prompt), never a model's ``ask_user`` call. A prompt implementation may
+    register a non-blocking cancellation callback while its terminal widget is
+    active; cancellation invokes that callback from the cancelling thread so it
+    can schedule a thread-safe widget exit.
     """
 
     question: str
@@ -42,6 +44,7 @@ class PromptRequest:
     title: str | None = None
     node_id: str | None = None
     options: list[str] | None = None
+    secret: bool = False
     _future: Future[Any] = field(default_factory=Future, init=False, repr=False)
     _completed: Event = field(default_factory=Event, init=False, repr=False)
     _cancelled: Event = field(default_factory=Event, init=False, repr=False)
@@ -173,6 +176,7 @@ class TerminalBroker:
         title: str | None = None,
         node_id: str | None = None,
         options: list[str] | None = None,
+        secret: bool = False,
     ) -> Any:
         """Enqueue one prompt and block the calling worker for its terminal result."""
         if self._stop_event is not None and self._stop_event.is_set():
@@ -186,6 +190,7 @@ class TerminalBroker:
             title=title,
             node_id=node_id,
             options=options,
+            secret=secret,
         )
         with self._lock:
             if self._cancelled or self._completion_published:

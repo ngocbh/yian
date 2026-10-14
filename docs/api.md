@@ -1321,7 +1321,8 @@ policy on top:
   `~/.yian/runs/<run_id>.jsonl` unless `--log PATH` selects another
   path; once runtime commits `RunStarted`, that file is authoritative;
 - `yian run FLOW --resume PATH` calls the same recovery boundary without accepting
-  fresh inputs, a second log path, or provider/model configuration;
+  fresh inputs, a second log path, or provider/model configuration, and checks
+  the recorded models' provider keys before an unfinished run appends anything;
 - omitting `-w` on resume preserves the recorded worker count, while an explicit
   value affects the new segment only;
 - `yian run` builds every declared built-in memory with `build_memories` and

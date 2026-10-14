@@ -46,6 +46,7 @@ class Model:
 
 clients.model_from_config = lambda _: Model()
 run_cli._ensure_provider_keys = lambda *args: None
+run_cli._check_resume_credentials = lambda *args, **kwargs: None
 main()
 """
 

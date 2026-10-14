@@ -92,7 +92,8 @@ class ConnectionSnapshot:
         })
 
 
-def _key_identity(key: str) -> str:
+def key_identity(key: str) -> str:
+    """Return the nonsecret SHA-256 identity recorded for an environment API key."""
     return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
@@ -135,7 +136,7 @@ def connection_snapshot() -> ConnectionSnapshot:
         connections["openai"] = {
             "method": "api_key",
             "source": "environment" if key else "missing",
-            "credential_id": _key_identity(key) if key else None,
+            "credential_id": key_identity(key) if key else None,
             "endpoint": environment.get("OPENAI_BASE_URL") or _API_ENDPOINT,
             "store_path": None,
         }
@@ -361,8 +362,8 @@ def connection_credentials(
         raise AuthError(
             "This run needs its OpenAI API key in OPENAI_API_KEY; use 'yian auth openai' for a new run"
         )
-    if source == "environment" and _key_identity(key) != connection["credential_id"]:
+    if source == "environment" and key_identity(key) != connection["credential_id"]:
         raise AuthError(
-            "The OpenAI environment API key changed; restore it or start a new run"
+            "The OpenAI environment API key changed since this run started; start a new run"
         )
     return ApiKeyCredentials(key)

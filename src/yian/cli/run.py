@@ -13,7 +13,9 @@ declarations stay absent, missing required declarations are rejected together, a
 structures or explicit null come from `--inputs`.
 Fresh runs use a reported durable log under ``~/.yian/runs`` unless
 ``--log`` selects a new path. ``--resume`` recovers an existing path without gathering
-fresh inputs or model configuration.
+fresh inputs or model configuration, but first checks that the recorded model configs'
+provider keys are available (prompting for a missing one on an interactive stdin), so a
+failed check leaves the log unchanged.
 Declared memories are built with `build_memories`: in RAM by default,
 under ``--memory-root DIR`` as ``DIR/<flow id>/<scope...>/<name>.sqlite``
 (``.md`` for profile),
@@ -1232,6 +1234,12 @@ def _prompt_request(request: PromptRequest) -> Any:
     """Render and answer one broker request on the process main thread."""
     import questionary
 
+    if request.secret:
+        return _ask_widget(
+            questionary.password(request.question, qmark="?", style=_q_style()),
+            request,
+        )
+
     if request.questions:
         title = request.title or request.node_id or "this step"
         count = len(request.questions)
@@ -1330,6 +1338,162 @@ def _ensure_provider_keys(loaded, cli_cfg: Dict[str, Any]) -> None:
 
     for provider in _agent_providers(loaded, cli_cfg):
         ensure_api_key(provider)
+
+
+class _ResumeKeyError(RuntimeError):
+    """A resumed run's recorded provider credentials are not available."""
+
+
+def _resume_env_key(
+    provider: str,
+    env_var: str,
+    identity: Optional[str],
+    *,
+    ask_secret: Callable[[str], Any],
+    prompt_available: bool,
+) -> None:
+    """Require ``env_var`` to hold the key a recorded run started with.
+
+    Only a missing key prompts; a typed key that passes is exported to
+    ``env_var``, as a fresh run exports its prompted key.
+
+    Args:
+        provider (`str`):
+            The provider name shown in prompts and errors.
+        env_var (`str`):
+            The environment variable that holds the provider's key.
+        identity (`str | None`):
+            The recorded `key_identity` of the key, or `None` when the record
+            has none, in which case any non-empty key passes.
+        ask_secret (`Callable[[str], Any]`):
+            Asks one hidden question and returns the answer, or `None` when the
+            user declines.
+        prompt_available (`bool`):
+            Whether a missing key may be prompted for.
+
+    Raises:
+        `_ResumeKeyError`:
+            The key is set but differs from the recorded one, is missing with no
+            prompt available, is declined or left empty `MAX_KEY_PROMPTS` times,
+            or a typed key differs from the recorded one.
+    """
+    from yian.llm_clients.connection import key_identity
+
+    existing = os.environ.get(env_var)
+    if existing:
+        if identity is not None and key_identity(existing) != identity:
+            raise _ResumeKeyError(
+                f"${env_var} is not the key this run started with; "
+                "set it to that key and resume again"
+            )
+        return
+    if not prompt_available:
+        raise _ResumeKeyError(
+            f"provider {provider!r} needs an API key but ${env_var} is not set; "
+            "set it and resume again"
+        )
+    from yian.cli.utils import MAX_KEY_PROMPTS
+
+    cancelled = (
+        f"no API key provided for {provider!r} (${env_var}); set it and resume again"
+    )
+    for _ in range(MAX_KEY_PROMPTS):
+        answer = ask_secret(f"Enter {env_var} for provider {provider!r}:")
+        if answer is None:
+            raise _ResumeKeyError(cancelled)
+        key = str(answer).strip()
+        if not key:
+            continue
+        if identity is not None and key_identity(key) != identity:
+            raise _ResumeKeyError(
+                "the key entered is not the one this run started with; "
+                f"set ${env_var} to that key and resume again"
+            )
+        os.environ[env_var] = key
+        return
+    raise _ResumeKeyError(cancelled)
+
+
+def _check_resume_credentials(
+    effective: Dict[str, Dict[str, Any]],
+    *,
+    ask_secret: Callable[[str], Any],
+    prompt_available: bool,
+) -> None:
+    """Check that the recorded model configs of a resumed run can authenticate.
+
+    Like a fresh run's preflight, it requires each provider's environment key;
+    it also requires an OpenAI environment key to be the one the run started
+    with. Only a missing key prompts. Every OpenAI connection then resolves its
+    credentials, so a replaced saved credential fails here instead of at the
+    first model call.
+    Checks run once per distinct OpenAI connection and once per other provider;
+    providers without a key variable are skipped.
+
+    Args:
+        effective (`dict[str, dict[str, Any]]`):
+            The recorded effective model map, keyed by static agent path. Only
+            each config's ``provider``, ``_connection``, and host-key marker
+            are read.
+        ask_secret (`Callable[[str], Any]`):
+            Asks one hidden question and returns the answer, or `None` when the
+            user declines.
+        prompt_available (`bool`):
+            Whether a missing key may be prompted for.
+
+    Raises:
+        `_ResumeKeyError`:
+            A key is missing, differs from the recorded one, was not provided
+            at the prompt, belongs to a Python host, or a recorded OpenAI
+            connection can no longer resolve its credentials.
+    """
+    from yian.llm_clients.api_key_env import get_api_key_env
+    from yian.llm_clients.auth import AuthError
+    from yian.llm_clients.connection import HOST_KEY_MARKER, connection_credentials
+
+    connections: List[Dict[str, Any]] = []
+    providers: List[str] = []
+    for config in effective.values():
+        provider = config["provider"]
+        connection = config.get("_connection")
+        if config.get(HOST_KEY_MARKER) or (
+            connection is not None and connection.get("source") == "host"
+        ):
+            raise _ResumeKeyError(
+                f"this run's {provider} API key came from a Python host's "
+                "llm_config.api_key, which the CLI cannot supply; resume it from "
+                "Python with resume_flow(api_key=...)"
+            )
+        if provider == "openai" and connection is not None:
+            if connection not in connections:
+                connections.append(connection)
+        elif provider not in providers:
+            providers.append(provider)
+
+    for connection in connections:
+        if connection.get("source") in ("environment", "legacy_environment"):
+            _resume_env_key(
+                "openai",
+                "OPENAI_API_KEY",
+                connection.get("credential_id"),
+                ask_secret=ask_secret,
+                prompt_available=prompt_available,
+            )
+    for connection in connections:
+        try:
+            connection_credentials(connection)
+        except AuthError as exc:
+            raise _ResumeKeyError(str(exc)) from exc
+    for provider in providers:
+        env_var = get_api_key_env(provider)
+        if env_var is not None:
+            _resume_env_key(
+                provider,
+                env_var,
+                None,
+                ask_secret=ask_secret,
+                prompt_available=prompt_available,
+            )
 
 
 def _validate_run_log_options(
@@ -1519,6 +1683,7 @@ def run(
     if resume is not None:
         selected_log = resume
         _report_run_log(selected_log)
+        prompt_available = sys.stdin.isatty()
 
         def controller(
             stop_event: threading.Event,
@@ -1535,6 +1700,11 @@ def run(
                     on_event=on_event,
                     stop_event=stop_event,
                     tools={**registered_tools(), "ask_user": ask_user},
+                    check_llm_configs=lambda effective: _check_resume_credentials(
+                        effective,
+                        ask_secret=lambda question: ask_user(question=question, secret=True),
+                        prompt_available=prompt_available,
+                    ),
                     **memory_options,
                     **skill_options,
                 )
@@ -1625,6 +1795,9 @@ def run(
         # controller boundary has already joined its workers; report the same
         # ordinary cancellation outcome used by pre-run prompts.
         err_console.print("[yellow]run cancelled[/yellow]")
+        raise typer.Exit(code=1)
+    except _ResumeKeyError as exc:
+        err_console.print(Text(str(exc), style="red"))
         raise typer.Exit(code=1)
     except (OSError, TypeError, ValueError, MemoryOperationError) as exc:
         action = "resume" if resume is not None else "run"

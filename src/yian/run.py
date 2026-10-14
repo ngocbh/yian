@@ -740,9 +740,17 @@ def _resume_flow_controlled(
     skills: Mapping[str, Skill] | None = None,
     steering: Steering | None = None,
     api_key: str | SecretStr | None = None,
+    check_llm_configs: Callable[[dict[str, dict[str, Any]]], None] | None = None,
     stop_event: threading.Event,
 ) -> RunResult:
-    """Recover and drive a durable run with a host-owned stop event."""
+    """Recover and drive a durable run with a host-owned stop event.
+
+    ``check_llm_configs`` receives a copy of the recorded effective model map (old
+    OpenAI records adapted to their legacy connection) after the terminal check,
+    before an unfinished run opens memory or appends ``RunResumed``. An exception
+    it raises stops recovery and appends nothing. The CLI uses it to check
+    provider credentials.
+    """
     run_tools = ToolSet(tools)
     api_key = None if api_key is None else _secret_key(api_key)
     require_steering(steering)
@@ -763,6 +771,8 @@ def _resume_flow_controlled(
         _check_tool_grants(flow.compiled, run_tools)
         _check_tool_types(flow.compiled, run_tools)
         skills = _check_skills(flow.compiled, skills)
+        if check_llm_configs is not None:
+            check_llm_configs(legacy_connection_map(state.effective_llm_by_static_path))
 
         if state.memories is not None:
             if memory is None:

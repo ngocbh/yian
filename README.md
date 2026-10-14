@@ -107,6 +107,10 @@ Resume an interrupted run against the same flow:
 yian run FLOW.yaml --resume PATH
 ```
 
+Resume checks the run's provider keys first. In a terminal it prompts for a
+missing key; otherwise it exits and appends nothing, so you can set the key and
+resume again.
+
 Run logs can contain inputs, model/tool/human data, outputs, memory snapshots,
 configuration, and tracebacks. Treat them as sensitive. See [The `yian`
 CLI](docs/cli.md) for input behavior, diagnostics, concurrency, and recovery.

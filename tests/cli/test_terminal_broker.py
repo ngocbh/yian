@@ -248,6 +248,30 @@ def test_ask_user_options_reach_the_prompt_request() -> None:
     assert [request.options for request in seen] == [["A", "B"]]
 
 
+def test_ask_user_secret_reaches_the_prompt_request() -> None:
+    """A host-set secret flag travels to the prompt; a plain ask is not secret."""
+    seen: list[PromptRequest] = []
+
+    def prompt(request: PromptRequest) -> str:
+        seen.append(request)
+        return "sk-x"
+
+    broker = TerminalBroker(prompt)
+    worker, outcome = _ask_async(broker, question="Key", secret=True)
+    _wait_for_messages(broker, 1)
+    plain_worker, plain_outcome = _ask_async(broker, question="Name")
+    _wait_for_messages(broker, 2)
+    broker.controller_complete()
+    broker.serve()
+    _join(worker)
+    _join(plain_worker)
+
+    assert _result(outcome) == "sk-x"
+    assert _result(plain_outcome) == "sk-x"
+    assert seen[0].secret is True
+    assert seen[1].secret is False
+
+
 def test_generic_eof_fails_current_prompt_and_cancels_queued_prompts() -> None:
     """EOF ends a non-chat interaction without leaving sibling callers blocked."""
     prompted: list[str] = []

@@ -582,6 +582,13 @@ Searched form (first true `when:` wins, no `on:`): `when: "score.output >= 0.5"`
 Routing on a `Literal` node output is **exhaustiveness-checked** — omitting a tag
 with no `else:` is a load error.
 
+**Matching.** Each `when:` is a typed value of the `on:` type (text, a number, or a bool;
+an unquoted date is its ISO text; quote a datetime). Ints and floats compare numerically,
+a bool never equals a number, and quoted values are text. Where the `on:` type is known, a
+`when:` it can't hold is a load error even with an `else:` (``case node 'route': `when: 1`
+is an int but `on: ${input.n}` is `str`; quote it: `when: "1"` ``). An untyped `on:` also
+compares exactly: `when: 1` doesn't match the text `"1"`.
+
 **Branches.** A `then:`/`else:` is a sibling node (an unquoted word), a child call
 (an unquoted `call(...)` as the whole value), or a **value**. Any node name works as a
 target, including `default`. An unquoted word always names a node; one that names no
@@ -606,7 +613,8 @@ A value branch needs `output:`. Every branch must fit it: disjoint is a load err
 narrower is checked at runtime (`binding.type`, at the synthetic result node
 `__case_<id>`), on every run even if unread. `null` needs `Optional[...]`. A CASE
 that produces a value (`output:`, a value branch, or read via `${case.output}`) needs
-`else:` or an `on:` Literal with every tag listed. `${case.output}` works as a whole
+`else:` or an `on:` Literal with every tag listed, or a non-nullable `bool` with
+`when: true` and `when: false`. `${case.output}` works as a whole
 binding or inside text, not in a coalesce, `:-` default, expression, `when:`/`on:`, or assert. A
 span that reads a node that may be skipped needs `:-`; a value may not read its own
 CASE or plainly read another of its branches.
@@ -615,8 +623,8 @@ CASE or plainly read another of its branches.
 may skip (`${order.output}`, `${a.output | b.output}`, `${a.output :- ${b.output}}`)
 returns `null` when they were skipped, typed `Optional[T]`; the loader reads it as if
 `:- null` were written. This holds in `defs:` children and inline CALL/LOOP/MAP bodies.
-A join over an exhaustive `case` (`else:`, or every tag of a non-nullable `Literal`)
-is never null. A typed `x: str = ${order.output}` loads and fails with `binding.type`
+A join over an exhaustive `case` (`else:`, every tag of a non-nullable `Literal`, or a
+non-nullable `bool` with `when: true` and `when: false`) is never null. A typed `x: str = ${order.output}` loads and fails with `binding.type`
 when skipped. Templates and comparisons are unchanged (embedded null renders as
 empty text). Arithmetic on such a value is a load error asking for `:-`.
 
@@ -624,8 +632,9 @@ empty text). Arithmetic on such a value is a load error asking for `:-`.
 `d.output` in each branch: a `when: buy` target (and nodes chained to it by plain refs or
 `depends_on`) can read `Buy`-only fields; `else:` sees the unlisted members. A join
 `${b.output | s.output}` of `buy` and `sell` branches sees both. `on:` must be one direct
-ref to the tag (not a coalesce); a `when:` that isn't a tag is a load error (`when: buyy
-is not a tag of the union at ${d.output.action} (tags: buy, sell)`). A searched `case`
+ref to the tag (not a coalesce); a `when:` that isn't a tag is a load error (``case node
+'route': `when: buyy` is not a tag of `on: ${d.output.action}` (`Literal["buy","sell"]`);
+use one of: buy, sell``). A searched `case`
 narrows with a top-level `and` part `isinstance(<ref>, T)`:
 `when: isinstance(d.output, Buy) and d.output.qty > 5`. Its `else:` doesn't narrow. Inline
 child bodies are typed before narrowing; read member fields in a branch node.
@@ -931,7 +940,7 @@ starts, and a `human_input` node fails when it asks. There is no authored
 - [ ] Every `prompt:` and `system_prompt:` references local inputs or, for an AGENT, its own declared variables.
 - [ ] Every variable has a typed default and a name distinct from local inputs.
 - [ ] Every `long_term_memory:` declaration is on a full flow or `agent`, uses one of the three forms with only allowlisted built-in config keys (or a custom type a Python host builds), and puts each `session` on exactly one AGENT.
-- [ ] Each `case` whose result is used has an `else:` or lists every tag of a non-nullable `Literal` `on:`; its result is read with `${case.output}`, and a value branch has the CASE's `output:` type.
+- [ ] Each `case` whose result is used has an `else:`, lists every tag of a non-nullable `Literal` `on:`, or is a non-nullable `bool` `on:` with `when: true` and `when: false`; its result is read with `${case.output}`, and a value branch has the CASE's `output:` type.
 - [ ] `tool` ids are registered or passed per run with `tools=` (AGENT `tools:` may name a host-filled group); a `code` `module:function` is importable (or an inline `code: |` body `return`s a value); `call`/`uses:` targets resolve on the search path.
 - [ ] Every CALL/MAP/LOOP has exactly one child form: named `call:`, or non-empty inline `nodes:` plus an `output:` key; inline parent/item dependencies cross through outer `input:`.
 - [ ] A child-flow call is written `call(f, ...)` as a whole value, never `${flow(args)}`; string `:-` defaults and `:?` messages are quoted.

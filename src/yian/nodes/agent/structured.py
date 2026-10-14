@@ -42,8 +42,8 @@ from pydantic import (
     create_model,
 )
 
-from yian.defaults import current
 import yian.json_codec as json_codec
+from yian.defaults import current
 from yian.memory.contracts import (
     MemoryContext,
     EvaluationTrace,

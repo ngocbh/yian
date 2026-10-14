@@ -1,15 +1,16 @@
 """AGENT `retries` and tool-loop defaults come from `yian.defaults` when the node sets none."""
 
 from langchain_core.messages import AIMessage
-from pydantic import BaseModel
 
-import yian.llm_clients as llm_clients
 import yian.tools as tools
 from yian.compile.manifest import flow_manifest
 from yian.compose import load_flow
 from yian.nodes.agent import AgentNode
 from yian.run import run_flow
+from tests.engine.test_agent import _FakeChat, _FakeTool, _ai_tool_call, _patch_model
 
+# The sentinel model has no native structured output, so the reply is parsed from text
+# and a bad reply costs one retry.
 _STRUCTURED = """id: scored
 name: scored
 llm_config: {provider: vllm, model: no-structured-sentinel}
@@ -42,46 +43,21 @@ output: ${agent.output}
 """
 
 
-class _Model:
-    """Return queued replies in order and count the calls."""
-
-    def __init__(self, replies):
-        self.replies = iter(replies)
-        self.calls = 0
-
-    def bind_tools(self, _granted):
-        return self
-
-    def invoke(self, _messages):
-        self.calls += 1
-        return next(self.replies)
-
-
-class _NoArguments(BaseModel):
-    """Schema for a tool that takes no arguments."""
-
-
-class _Tool:
-    args_schema = tool_call_schema = _NoArguments
-
-    def invoke(self, _arguments):
-        return "ok"
-
-
 def _with_retries(text, retries):
     return text.replace("    output:", f"    retries: {retries}\n    output:", 1)
 
 
 def _bad_then_good(monkeypatch):
-    model = _Model([AIMessage(content='{"score": "bad"}'), AIMessage(content='{"score": 1.5}')])
-    monkeypatch.setattr(llm_clients, "model_from_config", lambda _: model)
+    model = _FakeChat([AIMessage(content='{"score": "bad"}'), AIMessage(content='{"score": 1.5}')])
+    _patch_model(monkeypatch, model)
     return model
 
 
-def _tool_call(index):
-    return AIMessage(
-        content="", tool_calls=[{"name": "lookup", "args": {}, "id": str(index), "type": "tool_call"}]
-    )
+def _looping(monkeypatch, replies):
+    monkeypatch.setitem(tools.TOOL_REGISTRY, "lookup", _FakeTool(lambda _: "ok"))
+    model = _FakeChat(replies)
+    _patch_model(monkeypatch, model)
+    return model
 
 
 def test_agent_retries_default_of_zero_fails_on_the_first_bad_reply(monkeypatch, set_defaults):
@@ -115,9 +91,7 @@ def test_the_manifest_holds_the_agent_retries_default(set_defaults):
 
 def test_agent_max_tool_iterations_default_caps_the_loop(monkeypatch, set_defaults):
     set_defaults(AGENT_MAX_TOOL_ITERATIONS=1)
-    monkeypatch.setitem(tools.TOOL_REGISTRY, "lookup", _Tool())
-    model = _Model([_tool_call(i) for i in range(5)])
-    monkeypatch.setattr(llm_clients, "model_from_config", lambda _: model)
+    model = _looping(monkeypatch, [_ai_tool_call("lookup", {}, str(i)) for i in range(5)])
     result = run_flow(load_flow(_LOOPING), {"question": "q"})
     assert result.status == "failed" and result.failure.code == "node.execute"
     assert "tool-iteration cap (1)" in result.failure.message
@@ -126,9 +100,8 @@ def test_agent_max_tool_iterations_default_caps_the_loop(monkeypatch, set_defaul
 
 def test_authored_max_tool_iterations_wins_over_the_default(monkeypatch, set_defaults):
     set_defaults(AGENT_MAX_TOOL_ITERATIONS=1)
-    monkeypatch.setitem(tools.TOOL_REGISTRY, "lookup", _Tool())
-    model = _Model([_tool_call(0), _tool_call(1), AIMessage(content="done")])
-    monkeypatch.setattr(llm_clients, "model_from_config", lambda _: model)
+    replies = [_ai_tool_call("lookup", {}, "0"), _ai_tool_call("lookup", {}, "1")]
+    model = _looping(monkeypatch, [*replies, AIMessage(content="done")])
     text = _LOOPING.replace("    tools:", "    env: {max_tool_iterations: 3}\n    tools:", 1)
     assert run_flow(load_flow(text), {"question": "q"}).output == "done"
     assert model.calls == 3

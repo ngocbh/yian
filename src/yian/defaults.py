@@ -124,7 +124,10 @@ ENTRIES: tuple[Entry, ...] = (
     Entry(
         "AGENT_RETRIES",
         default=2,
-        description="AGENT retries after a failed model call when the node sets none",
+        description=(
+            "Extra attempts an AGENT gets to correct an invalid structured reply "
+            "when the node sets none"
+        ),
         group="setting",
         minimum=0,
         maximum=None,

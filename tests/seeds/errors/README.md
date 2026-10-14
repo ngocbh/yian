@@ -58,6 +58,7 @@ just what can.
 | `e39-llm-config-no-range.yaml` | a bad `llm_config:` entry (`provider: bogus_provider`) | retained `llm_config` value range, beginning at the invalid `provider:` entry |
 | `e40-agent-controls-no-range.yaml` | retired AGENT `controls:` field | field value (L13) |
 | `e43-agent-mode-removed.yaml` | removed AGENT `mode:` field (`mode: plain` beside `tools:`) | `mode:` key line (L13); the message says the tools will now be used |
+| `e44-literal-secret.yaml` | a literal value under a secret name (`password: hunter2` in a node `input:`) | the input line (L16); the message names the slot and `${input.password}` and never repeats the value |
 | `e30-inline-syntax-error.yaml` | a malformed inline `code:` body (`return (`) | inline syntax gate → exact literal-line `LoadError` via the CODE origin selector |
 | `e31-inline-no-return.yaml` | an inline `code:` body with no `return` | has-`return` load gate → located `LoadError` |
 | `e32-malformed-code-ref.yaml` | a `code:` value that is neither a valid ref nor inline source (dotted, no colon) | reject bucket → `LoadError` with a "did you mean" hint |

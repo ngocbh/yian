@@ -115,8 +115,181 @@ def test_refresh_is_serialized_and_preserves_identity(tmp_path):
     assert store.selection() == selection
 
 
+def _saved_kinds(store):
+    store.save("anthropic", ApiKeyCredentials("k-anth"), "claude-x")
+    store.save("ollama", None, "llama3")
+    store.save(
+        "azure",
+        ApiKeyCredentials("k-az"),
+        "dep",
+        endpoint="https://r.openai.azure.com/",
+    )
+    store.save("openai", OAuthCredentials("access", "refresh", 9000, "acct"), "gpt")
+    return {item.provider: item for item in store.read().selections}
+
+
+def _write_store(path, value):
+    path.parent.mkdir(mode=0o700, exist_ok=True)
+    path.write_text(json.dumps(value))
+    path.chmod(0o600)
+
+
+def test_store_saves_each_credential_kind(tmp_path):
+    store = AuthStore(tmp_path / "auth" / "auth.json")
+    saved = _saved_kinds(store)
+    assert len(store.read().selections) == 4
+    assert {name: item.method for name, item in saved.items()} == {
+        "anthropic": "api_key",
+        "ollama": "none",
+        "azure": "api_key",
+        "openai": "subscription",
+    }
+    assert {name: item.endpoint for name, item in saved.items()} == {
+        "anthropic": None,
+        "ollama": None,
+        "azure": "https://r.openai.azure.com/",
+        "openai": None,
+    }
+    assert saved["ollama"].model == "llama3"
+    assert stat.S_IMODE(store.path.stat().st_mode) == 0o600
+    assert "k-anth" not in repr(store.read())
+
+
+def test_credentials_for_saved_kinds(tmp_path):
+    store = AuthStore(tmp_path / "auth" / "auth.json")
+    saved = _saved_kinds(store)
+    anthropic = store.credentials("anthropic", saved["anthropic"].credential_id)
+    assert anthropic.api_key == "k-anth"
+    assert store.credentials("azure", saved["azure"].credential_id).api_key == "k-az"
+    with pytest.raises(AuthError, match="has no saved credential"):
+        store.credentials("ollama", saved["ollama"].credential_id)
+
+
+def test_remove_provider_and_default(tmp_path):
+    store = AuthStore(tmp_path / "auth" / "auth.json")
+    store.save("openai", ApiKeyCredentials("k-open"), "gpt")
+    store.save("anthropic", ApiKeyCredentials("k-anth"), "claude-x")
+    assert store.read().default_provider == "anthropic"
+    store.remove("anthropic")
+    state = store.read()
+    assert state.default_provider is None
+    assert [item.provider for item in state.selections] == ["openai"]
+    assert "k-anth" not in store.path.read_text()
+    with pytest.raises(AuthError, match="no saved anthropic login"):
+        store.remove("anthropic")
+
+    store.save("ollama", None, "llama3", make_default=False)
+    store.save(
+        "azure",
+        ApiKeyCredentials("k-az"),
+        "dep",
+        endpoint="https://r.openai.azure.com/",
+    )
+    store.remove("ollama")
+    store.remove("azure")
+    state = store.read()
+    assert state.default_provider is None
+    assert [item.provider for item in state.selections] == ["openai"]
+
+    missing = AuthStore(tmp_path / "missing" / "auth.json")
+    with pytest.raises(AuthError, match="no saved openai login"):
+        missing.remove("openai")
+    assert not missing.path.parent.exists()
+
+    legacy = tmp_path / "legacy" / "auth.json"
+    entry = {
+        "method": "api_key",
+        "model": "m",
+        "credential_id": "c" * 32,
+        "credentials": {"api_key": "k-legacy"},
+    }
+    _write_store(
+        legacy,
+        {
+            "version": 1,
+            "default_provider": "legacy-x",
+            "providers": {"legacy-x": entry, "openai": entry},
+        },
+    )
+    AuthStore(legacy).remove("legacy-x")
+    state = AuthStore(legacy).read()
+    assert state.default_provider is None
+    assert [item.provider for item in state.selections] == ["openai"]
+
+
+def test_set_default_requires_saved_provider(tmp_path):
+    store = AuthStore(tmp_path / "auth" / "auth.json")
+    first = store.save("openai", ApiKeyCredentials("k-open"), "gpt")
+    second = store.save("anthropic", ApiKeyCredentials("k-anth"), "claude-x")
+    store.set_default("openai")
+    assert store.read().default_provider == "openai"
+    with pytest.raises(AuthError, match="no saved google login"):
+        store.set_default("google")
+    assert store.read().default_provider == "openai"
+    assert store.selection("openai") == first
+    assert store.selection("anthropic") == second
+
+    store.save("ollama", None, "llama3", make_default=False)
+    store.save(
+        "azure",
+        ApiKeyCredentials("k-az"),
+        "dep",
+        endpoint="https://r.openai.azure.com/",
+        make_default=False,
+    )
+    store.set_default("ollama")
+    assert store.selection().provider == "ollama"
+    store.set_default("azure")
+    assert store.selection().endpoint == "https://r.openai.azure.com/"
+
+    missing = AuthStore(tmp_path / "missing" / "auth.json")
+    with pytest.raises(AuthError, match="no saved openai login"):
+        missing.set_default("openai")
+    assert not missing.path.parent.exists()
+
+
+def test_v1_store_without_new_fields_still_loads(tmp_path):
+    path = tmp_path / "auth" / "auth.json"
+    path.parent.mkdir(mode=0o700)
+    path.write_text(
+        '{"default_provider": "openai", "providers": {"openai": {"credential_id": '
+        '"0123456789abcdef0123456789abcdef", "credentials": {"api_key": "sk-old"}, '
+        '"method": "api_key", "model": "gpt-4o"}}, "version": 1}\n'
+    )
+    path.chmod(0o600)
+    store = AuthStore(path)
+    selection = store.selection()
+    assert selection.provider == "openai"
+    assert selection.method == "api_key"
+    assert selection.endpoint is None
+    assert store.credentials("openai", selection.credential_id).api_key == "sk-old"
+
+
+def _entry_store(**entry):
+    value = {
+        "method": "api_key",
+        "model": "m",
+        "credential_id": "c" * 32,
+        "credentials": {"api_key": "do-not-echo"},
+    }
+    value.update(entry)
+    return json.dumps(
+        {"version": 1, "default_provider": None, "providers": {"p": value}}
+    )
+
+
 @pytest.mark.parametrize(
-    "contents", ["{", "[]", '{"version":99}', '{"secret":"do-not-echo"}']
+    "contents",
+    [
+        "{",
+        "[]",
+        '{"version":99}',
+        '{"secret":"do-not-echo"}',
+        _entry_store(method="none"),
+        _entry_store(credentials=None),
+        _entry_store(endpoint=["do-not-echo"]),
+        _entry_store(secret="do-not-echo"),
+    ],
 )
 def test_malformed_store_fails_without_echoing_payload(tmp_path, contents):
     path = tmp_path / "auth" / "auth.json"

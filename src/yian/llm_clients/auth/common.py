@@ -58,17 +58,28 @@ Credentials = ApiKeyCredentials | OAuthCredentials
 
 @dataclass(frozen=True)
 class ProviderSelection:
-    """The nonsecret provider choice that a run may pin to one connection."""
+    """The nonsecret provider choice that a run may pin to one connection.
+
+    ``method`` is ``"none"`` for a provider saved without a credential, such as
+    a local server. ``endpoint`` is the provider's base URL when it needs one,
+    such as an Azure resource, and ``None`` otherwise.
+    """
 
     provider: str
-    method: Literal["api_key", "subscription"]
+    method: Literal["api_key", "subscription", "none"]
     model: str
     credential_id: str
+    endpoint: str | None = None
 
     def __post_init__(self) -> None:
-        if not all(
-            _text(value) for value in (self.provider, self.model, self.credential_id)
-        ) or self.method not in ("api_key", "subscription"):
+        if (
+            not all(
+                _text(value)
+                for value in (self.provider, self.model, self.credential_id)
+            )
+            or self.method not in ("api_key", "subscription", "none")
+            or (self.endpoint is not None and not _text(self.endpoint))
+        ):
             raise AuthError("Invalid provider selection")
 
 

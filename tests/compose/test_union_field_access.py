@@ -342,11 +342,11 @@ def test_runtime_growth_allows_member_only_fields():
     node = CodeNode("g", code="return None")
     producers = {"d": ValueContract(_decision())}
     _validate_growth_wiring_refs(
-        "g", node, {"v": "${d.output.qty}"}, {"d", "g"}, producers, set()
+        "g", node, {"v": "${d.output.qty}"}, {"d", "g"}, producers.get, set()
     )
     with pytest.raises(GrowthRejected, match="reads unknown field 'zzz' on record"):
         _validate_growth_wiring_refs(
-            "g", node, {"v": "${d.output.zzz}"}, {"d", "g"}, producers, set()
+            "g", node, {"v": "${d.output.zzz}"}, {"d", "g"}, producers.get, set()
         )
 
 

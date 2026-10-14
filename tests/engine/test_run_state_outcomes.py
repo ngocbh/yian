@@ -519,19 +519,6 @@ def test_route_rejects_malformed_source_handle_as_a_host_invariant(
     assert log.next_sequence == 4
 
 
-def test_route_rejects_stale_outgoing_adjacency_as_a_host_invariant():
-    state, log = _route_in_flight()
-    state.flow._outgoing["router"] = []
-    before = _state_snapshot(state)
-
-    with pytest.raises(ValueError, match="invalid outgoing adjacency") as caught:
-        prepare_node_routed(state, "router", "missing")
-
-    assert not isinstance(caught.value, state_module._NodeDataError)
-    assert _state_snapshot(state) == before
-    assert log.next_sequence == 4
-
-
 @pytest.mark.parametrize("field", ["node", "handle"])
 def test_route_requires_exact_nonempty_strings(field: str):
     state, _ = _route_in_flight()

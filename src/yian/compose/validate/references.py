@@ -10,7 +10,8 @@ Two subtleties mirror the representation-neutral collector:
 
 - **Prompt scope**: an AGENT `prompt:` or `system_prompt:` may interpolate this node's inputs
   and variables as bare `${name}`; a `${<id>.output}`/`${input.X}`/`${system.X}` in either is a
-  located error.
+  located error. A HUMAN_INPUT `prompt:` and its question text (`question`, option
+  `label`/`description`) follow the same rule, reading the gate's declared inputs.
 - **Case node-local refs**: the desugared CASE `when:` strings use `__rN`/`__on`,
   which resolve against the bound input record — they are EXCLUDED here (only the
   `__rN`/`__on` SOURCES are classified, against the pool; mirrors the strict CASE check).
@@ -18,9 +19,11 @@ Two subtleties mirror the representation-neutral collector:
 Located parse metadata: each error anchors on the referencing field's `SourceRange`, read
 from the transient Compose `BuildResult` (the coarse per-field span — e.g. the node's
 `input:` mapping for an input-binding ref, its `prompt:` or `system_prompt:` for a template ref).
+A HUMAN_INPUT question-text error anchors on its own `("text", "questions[i]...")` string
+range, else the `questions:` block.
 
 Imports flow down only: `compile.validation` (the leaf namespace checker), `expr` (the
-binding parser), `nodes` (Node/AgentNode behavior and the output-contract
+binding parser), `nodes` (Node/AgentNode/HumanInputNode behavior and the output-contract
 sum), `typesys` (`Type`, for a list's element type), and `compose.helpers` (closed-path
 projection, binding-contract resolution, and errors).
 Only the loader (and the compose package facade) import this back.
@@ -51,6 +54,8 @@ from yian.nodes.contracts import (
     ValueContract,
     binding_source,
 )
+from yian.nodes.human_input import HumanInputNode
+from yian.nodes.human_input.node import site_label, template_sites
 from yian.typesys import Type
 
 # Heads forbidden in a strict prompt (always trigger the bespoke hint).
@@ -139,8 +144,10 @@ def validate_references(
     Each error anchors on the referencing site's `SourceRange`, resolved from its
     `BuildResult.field_ranges` — the OFFENDING ENTRY where one exists (`("input", name)`, stamped per
     binding by the parse loop for every kind), else the enclosing block (`("field", "inputs")`
-    / `("field", "prompt")`), else the node header. `outputs_range` is the authored output
-    value/block range when the caller retains it. The aggregate carries the first retained range.
+    / `("field", "prompt")`), else the node header. A HUMAN_INPUT question-text error anchors on
+    its `("text", "questions[i]...")` string range, else the `questions:` block. `outputs_range`
+    is the authored output value/block range when the caller retains it. The aggregate carries
+    the first retained range.
 
     With `narrowing`, each node's references (a CASE's own sources included) are checked
     against that node's view of the producer and flow-input contracts, so a branch can
@@ -238,6 +245,35 @@ def validate_references(
             if err is not None:
                 errors.append((f"{where}: {err}", rng))
 
+    def check_template(
+        where: str,
+        template: str,
+        declared: "set[str]",
+        rng: Optional[SourceRange],
+        *,
+        noun: str,
+        hint_tail: str,
+    ) -> None:
+        """Parse one rendered template and name-check each ref against `declared`.
+
+        A malformed span, unknown builtin, or nested `${...}` is one error at `where`; each
+        ref whose head is not in `declared` is another, with the pool-ref hint (ending in
+        `hint_tail`) when the head is a pool-style head or a node id."""
+        try:
+            refs = prompt_refs(template)
+        except ExpressionError as exc:
+            errors.append((f"{where}: {exc}", rng))
+            return
+        for ref in refs:
+            head = ref.split(".", 1)[0].strip()
+            if head not in declared:
+                hint = (
+                    f" (a pool ref belongs in an input `from:`, not {hint_tail})"
+                    if head in _PROMPT_FORBIDDEN_HEADS or head in valid_targets
+                    else ""
+                )
+                errors.append((f"{where}: ${{{ref}}} is not a declared {noun}{hint}", rng))
+
     for node_id, result in build_results.items():
         node = result.node
         franges = result.field_ranges
@@ -252,6 +288,8 @@ def validate_references(
         # this node's declared inputs and variables as `${name}` (or a builtin-call
         # argument); a pool ref in either is loud, and an unknown builtin / malformed
         # span is rejected here (via `prompt_refs`, the renderer's compile-time companion).
+        # A HUMAN_INPUT `prompt:` and its question text (`question`, option `label` /
+        # `description`) follow the same rule, reading the gate's declared inputs.
         if isinstance(node, AgentNode):
             declared = {p.name for p in (node.params or [])}
             declared.update(variable.name for variable in node.variables)
@@ -261,25 +299,30 @@ def validate_references(
             ):
                 if not template:
                     continue
-                prompt_rng = franges.get(("field", field_name)) or node_range
-                try:
-                    refs = prompt_refs(template)
-                except ExpressionError as exc:
-                    errors.append((f"node {node_id!r} {field_name}: {exc}", prompt_rng))
-                    refs = []
-                for ref in refs:
-                    head = ref.split(".", 1)[0].strip()
-                    if head not in declared:
-                        hint = (
-                            " (a pool ref belongs in an input `from:`, not a strict AGENT prompt)"
-                            if head in _PROMPT_FORBIDDEN_HEADS or head in valid_targets
-                            else ""
-                        )
-                        errors.append((
-                            f"node {node_id!r} {field_name}: ${{{ref}}} is not a declared "
-                            f"input or variable{hint}",
-                            prompt_rng,
-                        ))
+                check_template(
+                    f"node {node_id!r} {field_name}",
+                    template,
+                    declared,
+                    franges.get(("field", field_name)) or node_range,
+                    noun="input or variable",
+                    hint_tail="a strict AGENT prompt",
+                )
+        elif isinstance(node, HumanInputNode):
+            declared = {p.name for p in (node.params or [])}
+            for path, text in template_sites(node.prompt, node.questions):
+                if not text:
+                    continue
+                label = site_label(path)
+                check_template(
+                    f"node {node_id!r} {label}",
+                    text,
+                    declared,
+                    franges.get(("text", label))
+                    or franges.get(("field", path[0]))
+                    or node_range,
+                    noun="input",
+                    hint_tail="human_input text",
+                )
         # Node-owned reserved wiring (`over`, `until`, ...) follows the same pool reference
         # grammar as ordinary inputs. It never receives a body-local scope: in particular,
         # MAP's `${item}` is valid only in each per-element input, not in `over:`.

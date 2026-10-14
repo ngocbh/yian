@@ -9,6 +9,7 @@ from yian.compose.nodes.base import BuildContext
 from yian.compose.nodes.human_input import HumanInputDescriptor
 from yian.compose.source import SourceDocument
 from yian.diagnostics import SourceRange
+from yian.nodes.human_input.node import site_label, template_sites
 
 
 _FLOW = """\
@@ -187,3 +188,77 @@ def test_human_input_build_rejects_questions_string_that_is_not_one_whole_ref(qu
 def test_human_input_build_accepts_a_whole_questions_ref(questions_yaml):
     node = _load_questions(questions_yaml).compiled.nodes["ask"]
     assert node.questions_input == "qs" and node.questions is None
+
+
+_TWO_QUESTIONS_FLOW = """\
+nodes:
+  ask:
+    kind: human_input
+    questions:
+      - question: First
+        header: One
+      - question: Second
+        header: Two
+        options:
+          - label: Alpha
+            description: First letter
+          - label: Beta
+            description: Second letter
+          - plain
+"""
+
+
+def test_human_input_parse_records_a_range_per_question_string():
+    desc = HumanInputDescriptor.parse("ask", _reader_for(_TWO_QUESTIONS_FLOW, "ask"))
+
+    label = desc.field_ranges[("text", "questions[1].options[0].label")]
+    assert isinstance(label, SourceRange)
+    assert label.start_line == 10
+    sites = template_sites(None, desc.questions)
+    assert len(sites) == 6
+    for path, _ in sites:
+        assert isinstance(desc.field_ranges[("text", site_label(path))], SourceRange)
+    assert not any(
+        key[0] == "text" and key[1].startswith("questions[1].options[2]")
+        for key in desc.field_ranges
+    )
+
+
+def test_human_input_parse_records_ranges_in_a_flow_style_list():
+    flow = """\
+nodes:
+  ask:
+    kind: human_input
+    questions:
+      - question: Pick
+        options: [{label: A, description: B}]
+"""
+    desc = HumanInputDescriptor.parse("ask", _reader_for(flow, "ask"))
+
+    for name in ("label", "description"):
+        rng = desc.field_ranges[("text", f"questions[0].options[0].{name}")]
+        assert rng.start_line == 6
+
+
+def test_human_input_parse_ranges_an_aliased_or_merged_question_at_its_authored_string():
+    flow = """\
+x-q: &q
+  question: Anchored?
+  header: A
+nodes:
+  ask:
+    kind: human_input
+    questions:
+      - *q
+      - &r {question: Earlier, header: B}
+      - *r
+      - <<: *q
+        header: C
+"""
+    desc = HumanInputDescriptor.parse("ask", _reader_for(flow, "ask"))
+
+    lines = {
+        i: desc.field_ranges[("text", f"questions[{i}].question")].start_line
+        for i in range(4)
+    }
+    assert lines == {0: 2, 1: 9, 2: 9, 3: 2}

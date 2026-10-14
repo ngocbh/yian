@@ -199,7 +199,7 @@ Everywhere you wire data you use a `${...}` reference:
 | `${input.X}` | field `X` of the flow's input |
 | `${node.output}` | node `node`'s whole value |
 | `${node.output.field}` | dot into an object value |
-| `${name}` / bare `name` | a local input in a node's `prompt:`, an AGENT's `system_prompt:`, or a `case` `when:`; AGENT prompts also see their own declared `variables:` |
+| `${name}` / bare `name` | a local input in a node's `prompt:` (AGENT or `human_input`), a `human_input` question's text, an AGENT's `system_prompt:`, or a `case` `when:`; AGENT prompts also see their own declared `variables:` |
 
 A whole-string `${ref}` resolves to the **typed value**; embedded in surrounding
 text it is stringified.
@@ -259,6 +259,10 @@ the member first with `isinstance(r, <Type>) and ...`
     `variables:`. Pool references
     (`${input.x}`, `${other.output}`) belong in the `input:` block, not the
     prompt. Bind it there, then refer to the local name in the prompt.
+    The same rule covers a `human_input` `prompt:` and its question text
+    (`question`, and each option's `label` and `description`). The loader checks
+    all of them, so an unknown name, a pool reference, an unknown function, or a
+    span that doesn't parse is a load error at that text.
 
 ### Operators inside `${...}`
 
@@ -1788,6 +1792,26 @@ ask:
     - question: "Any notes for the build?"       # no options -> free-text
       header: Notes
   # output omitted -> defaults to object: {Framework: ..., Notes: ...}
+```
+
+`question` and each option's `label` and `description` are templates like `prompt:`:
+they read the gate's `input:` names, bare. `header` is not a template. A pool
+reference is a load error at that string, with a hint to bind the value in `input:`:
+`node 'ask' questions[0].options[1].label: ${input.proj} is not a declared input`.
+
+Changed: most `human_input` prompt or question text with an unknown name, a pool
+reference, an unknown function, or a span that doesn't parse used to load and fail the
+gate when it ran. A `:-` default on a name the gate doesn't declare, or on a pool
+reference (`prompt: "Hi ${input.user :- 'there'}"`), used to render the default every
+time, silently. Both are now load errors. To migrate, bind the value and its default in
+`input:` and read the local name:
+
+```yaml
+greet:
+  kind: human_input
+  input:
+    user: ${input.user :- "there"}
+  prompt: "Hi ${user}"
 ```
 
 **Adaptive questions** — an LLM composes the questions from context. The block

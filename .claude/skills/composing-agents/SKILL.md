@@ -142,7 +142,7 @@ Allowed only for the **leaf kinds** (`agent`, `code`, `tool`, `human_input`) —
 | `${input.X}` | field `X` of the flow input |
 | `${node.output}` | node `node`'s whole (typed) value |
 | `${node.output.field}` | dot into an object value |
-| `${name}` (bare) | a local input inside `prompt:`, an AGENT `system_prompt:`, or `case` `when:`; AGENT prompts also see their own `variables:` |
+| `${name}` (bare) | a local input inside `prompt:` (AGENT or `human_input`), a `human_input` question's text, an AGENT `system_prompt:`, or `case` `when:`; AGENT prompts also see their own `variables:` |
 
 A whole-string `${ref}` resolves to the **typed value**; embedded in surrounding
 text it is **stringified**.
@@ -703,6 +703,8 @@ ask2:                                 # LLM-composed questions (desugared at loa
 (On an adaptive gate, `__questions` is reserved for the generated composer wire;
 do not declare it in `input:`.)
 Questions may also come from an upstream node: `questions: ${qs}`.
+The prompt and a literal list's question text (`question`, option `label`/`description`)
+read the gate's `input:` names bare and are checked at load; `header` is not a template.
 `questions:` is a list or exactly one `${name}` naming a declared input;
 anything else (a mapping, a number, text around the ref, `${a.b}`, a call) is a
 load error. Put free text in `prompt:`.
@@ -916,7 +918,10 @@ one-off child's body on that node.
 Inside a `prompt:` or an AGENT `system_prompt:` use names from the node's own `input:`
 block, written bare (`${name}`). An AGENT prompt also sees its own `variables:`. Pool references (`${input.x}`,
 `${other.output}`) go in the `input:` block — bind there, then use the local name
-in the prompt.
+in the prompt. The same rule covers a `human_input` `prompt:` and its question text
+(`question`, option `label` and `description`); the loader checks all of them, so an
+unknown name, a pool reference, an unknown function, or a span that doesn't parse is a
+load error at that text.
 
 ## Effects from inside an AGENT node — `ask_user`
 An AGENT node granted `tools: [ask_user]` can synchronously ask the human

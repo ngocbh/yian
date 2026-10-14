@@ -703,8 +703,8 @@ ask2:                                 # LLM-composed questions (desugared at loa
 (On an adaptive gate, `__questions` is reserved for the generated composer wire;
 do not declare it in `input:`.)
 Questions may also come from an upstream node: `questions: ${qs}`.
-The prompt and question text (`question`, option `label`/`description`) read the gate's
-`input:` names bare and are checked at load; `header` is not a template.
+The prompt and a literal list's question text (`question`, option `label`/`description`)
+read the gate's `input:` names bare and are checked at load; `header` is not a template.
 `questions:` is a list or exactly one `${name}` naming a declared input;
 anything else (a mapping, a number, text around the ref, `${a.b}`, a call) is a
 load error. Put free text in `prompt:`.

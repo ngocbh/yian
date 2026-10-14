@@ -409,6 +409,17 @@ def parse_source_document(text: str, label: str) -> SourceDocument:
     """Parse one owned source document once.
 
     Rejects bad syntax, a key YAML read as non-text, and repeated keys.
+
+    Args:
+        text (`str`): The flow file's YAML text.
+        label (`str`): Name that identifies the file in diagnostics.
+
+    Returns:
+        `SourceDocument`: The parsed document.
+
+    Raises:
+        `LoadError`: Raised at the problem for invalid YAML, at the key for a key
+            YAML read as non-text, and at the second key for a repeated key.
     """
 
     try:

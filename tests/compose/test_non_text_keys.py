@@ -6,8 +6,8 @@ from yian.compose.helpers.errors import LoadError
 from yian.compose.loader import load_flow
 from yian.diagnostics import SourceRange
 
-# One flow with a slot (`@K`) at each place a name is written. Filling one slot
-# with a key and the others with plain names keeps every other part valid.
+# One flow with a `{site}` format field at each place a name is written. Filling
+# one field with a key and the others with plain names keeps every other part valid.
 _FLOW = """id: f
 name: f
 typedefs:
@@ -254,4 +254,7 @@ output: ${a.output}
 
     error = _load_error(text)
 
+    assert error.diagnostic.message.startswith(
+        "the key `1` was read by YAML as an integer"
+    )
     assert error.diagnostic.frames[-1].range == SourceRange(6, 13, 6, 14)

@@ -380,6 +380,12 @@ def _first_non_text_key(
     no constructed value is skipped too; only merge keys lack one. An alias key
     is its anchored node, so it is reported at the anchor.
 
+    Args:
+        root_node (`yaml.Node | None`): The composed document root, or ``None`` for
+            an empty document.
+        source_values (`dict[int, Any]`): Constructed value per ``id(node)``, as
+            the loader retained it.
+
     Returns:
         `tuple[Any, str, SourceRange] | None`:
             The constructed key, its scalar text, and its range, or ``None`` when

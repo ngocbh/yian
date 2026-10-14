@@ -323,6 +323,35 @@ def reject_non_text_keys(value: Any, where: str) -> None:
             )
 
 
+def reject_non_json(value: Any, where: str, *, files: bool = False) -> None:
+    """Raise if a value is not a JSON value.
+
+    A JSON value is `None`, a `bool`, `int`, `float` or `str`, a `dict` with only
+    text keys and JSON values, or a `list`/`tuple` of JSON values. The walk is
+    depth-first and in order, and rejects a container inside itself. Nesting depth
+    and non-finite numbers are left to `reject_deep_nesting` and `reject_nonfinite`.
+
+    Args:
+        value (`Any`):
+            The value to check.
+        where (`str`):
+            Names the boundary for the message, e.g. ``"output"``.
+        files (`bool`, *optional*, defaults to `False`):
+            Also accept a `FileRef`, at the top level or nested, as a leaf.
+
+    Raises:
+        `TypeCheckError`:
+            A part is not a JSON value; ``path`` locates it and the message reads
+            ``<where>[ at <path>]: <reason>``, e.g. ``... <repr> is not a JSON value``,
+            ``... object keys must be text, got <repr>``, or ``... value contains itself``.
+    """
+    error = _json_value_error(value, (), files=files)
+    if error is None:
+        return
+    location = f"{where} at {_render_value_path(error.path)}" if error.path else where
+    raise TypeCheckError(f"{location}: {error}", path=error.path)
+
+
 def _too_deep(where: str, path: tuple[str | int, ...], limit: int) -> TypeCheckError:
     """Build the error for a container past the nesting limit at `path`."""
     location = f"{where} at {_render_value_path(path)}" if path else where
@@ -1486,7 +1515,7 @@ def _widen_int(value: int, path: tuple[str | int, ...]) -> float:
 
 
 def _json_value_error(
-    value: Any, path: tuple[str | int, ...]
+    value: Any, path: tuple[str | int, ...], *, files: bool = False
 ) -> Optional[TypeCheckError]:
     """Return why `value` is not a JSON value, or `None` when it is.
 
@@ -1501,13 +1530,15 @@ def _json_value_error(
             The value to check.
         path (`tuple[str | int, ...]`):
             Field/index path from the contract root to ``value``.
+        files (`bool`, *optional*, defaults to `False`):
+            Also accept a `FileRef`, at the top level or nested, as a leaf.
 
     Returns:
         `Optional[TypeCheckError]`:
             The error for the first bad part, depth-first and in order, with its
             path, or `None` when ``value`` is a JSON value.
     """
-    if _is_json_scalar(value):
+    if _is_json_scalar(value) or (files and isinstance(value, FileRef)):
         return None
     entries = _json_entries(value)
     if entries is None:
@@ -1539,7 +1570,7 @@ def _json_value_error(
             return TypeCheckError(
                 f"object keys must be text, got {value_repr(key)}", path=path_to()
             )
-        if _is_json_scalar(child):
+        if _is_json_scalar(child) or (files and isinstance(child, FileRef)):
             continue
         if id(child) in active:
             return TypeCheckError("value contains itself", path=path_to(key))

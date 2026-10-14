@@ -421,16 +421,30 @@ def test_integral_float_when_on_int():
     )
 
 
+def test_unquoted_1e3_when_is_a_float():
+    assert _route(_flow([("1e3", "one")], on_type="float"), {"n": 1000.0}) == "one"
+
+
 def test_no_drop_quotes_hint_for_text_yaml_reads_as_text():
-    # YAML 1.1 reads an unquoted 1e3 as text, YAML 1.2 as a float; both must hold up.
-    text = _flow([("1e3", "one")], on_type="float")
-    try:
-        load_flow(text)
-    except LoadError as error:
-        assert "`when: 1e3` is text but `on: ${input.n}` is `float`" in str(error)
-        assert "drop the quotes" not in str(error)
-    else:
-        assert _route(text, {"n": 1000.0}) == "one"
+    text = _flow([('"1_000"', "one")])
+    assert _when_error(text, '"1_000"') == (
+        "case node 'route': `when: \"1_000\"` is text but `on: ${input.n}` is `int`"
+    )
+
+
+@pytest.mark.parametrize(
+    ("when", "on_type", "fix"),
+    [
+        ("off", "bool", "`off` is text; write `false`"),
+        ('"yes"', "Optional[bool]", "`yes` is text; write `true`"),
+    ],
+)
+def test_former_boolean_word_on_a_bool(when, on_type, fix):
+    text = _flow([(when, "one")], on_type=on_type)
+    assert _when_error(text, when) == (
+        f"case node 'route': `when: {when}` is text but `on: ${{input.n}}` is `{on_type}`; "
+        f"{fix}"
+    )
 
 
 def test_invalid_date_text_hint_does_not_crash():

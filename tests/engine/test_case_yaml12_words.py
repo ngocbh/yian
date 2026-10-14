@@ -1,6 +1,8 @@
 """CASE `when:` words that YAML 1.1 read as booleans are text under YAML 1.2 rules."""
 
-from yian.compose import load_flow
+import pytest
+
+from yian.compose import LoadError, load_flow
 from yian.events import NodeStarted
 from yian.run import run_flow
 
@@ -61,13 +63,15 @@ def test_yes_and_no_cover_a_literal_input_without_else():
     assert "agree" not in _started(refused)
 
 
-def test_when_yes_does_not_match_a_true_bool():
-    # Pins current behavior: `when: yes` is the text "yes", which never equals True.
-    # A typed `when:` check is planned separately.
-    loaded = load_flow(_flow("bool", "    else: refuse\n"))
+def test_when_yes_on_a_bool_is_a_load_error():
+    text = _flow("bool", "    else: refuse\n")
 
-    result = run_flow(loaded, {"cmd": True})
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
 
-    assert result.status == "succeeded", result.failure
-    assert "refuse" in _started(result)
-    assert "agree" not in _started(result)
+    assert str(caught.value) == (
+        "case node 'route': `when: yes` is text but `on: ${input.cmd}` is `bool`; "
+        "`yes` is text; write `true`"
+    )
+    line = next(n for n, row in enumerate(text.splitlines(), 1) if "when: yes" in row)
+    assert caught.value.diagnostic.frames[-1].range.start_line == line

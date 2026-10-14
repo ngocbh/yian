@@ -99,8 +99,8 @@ only `true`/`false` are booleans, so `yes`/`no`/`on`/`off` are text (CASE's `on:
 key too); `017` is 17 (octal is `0o17`); `1e3` is a float; `1:30` and `1_000` are
 text; `2026-10-14` is a date. A `yes` in a typed binding or default, a call input,
 a `case` value, `steerable:`, or `inherit:` that needs a `bool` fails with
-"`yes` is text; write `true`". Under a `bool` `on:`, write `when: true`, not
-`when: yes` (which loads but never matches).
+"`yes` is text; write `true`". Under a `bool` `on:`, write `when: true`: a
+`when: yes` there is a load error with the same fix.
 
 ### Compact mode — when the flow is a single node
 

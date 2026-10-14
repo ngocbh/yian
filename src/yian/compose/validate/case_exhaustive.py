@@ -27,7 +27,8 @@ the validate phase, alongside the other cross-node checks.
 
 Imports flow down/peer only: `expr` (ref scan), `nodes.contracts` (the output-contract
 sum), `typesys` (Type and the strict value check), and the compose peers
-`helpers.output_contracts`, `helpers.errors`, `helpers.typed_bindings`, `nodes.case`,
+`helpers.output_contracts`, `helpers.errors`, `helpers.typed_bindings`,
+`helpers.yaml_words`, `nodes.case`,
 `source.literals`, `parse.file`, `validate.narrowing`, and `validate.typed_bindings`.
 Nothing in the engine imports this back.
 """
@@ -51,6 +52,7 @@ from yian.typesys import TypeCheckError, build_value_as
 from yian.typesys.values import Type, ValueKind, canonical_type_label
 from yian.compose.helpers.errors import LoadDiagnostics, source_text
 from yian.compose.helpers.typed_bindings import yaml_quoted
+from yian.compose.helpers.yaml_words import former_boolean_fix
 from yian.compose.nodes.case import on_match_value
 from yian.compose.parse.file import CaseDescriptor, NodeDescriptor
 from yian.compose.source.literals import parse_yaml_literal
@@ -235,7 +237,8 @@ def _when_fix(value: Any, typ: Type, src: str | None) -> str:
 
     Returns:
         `str`:
-            A quote, write-as-an-int, or drop-the-quotes hint, or `""` when none applies.
+            A quote, write-as-an-int, write-the-boolean, or drop-the-quotes hint, or `""`
+            when none applies.
     """
     if not isinstance(value, str):
         # An anchor, alias, or tag is not part of the value's spelling, so quoting the
@@ -247,6 +250,9 @@ def _when_fix(value: Any, typ: Type, src: str | None) -> str:
         if isinstance(value, float) and value.is_integer() and _fits(typ, int(value)):
             return f"; write it as an int: `when: {int(value)}`"
         return ""
+    former = former_boolean_fix(value, typ)
+    if former is not None:
+        return f"; {former[1]}"
     if src is not None and not src.startswith(("'", '"')):
         # Text written without quotes (`!!str 1`) has no quotes to drop.
         return ""

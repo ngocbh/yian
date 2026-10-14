@@ -116,7 +116,7 @@ Changed: yian used to read values with YAML 1.1's rules: an unquoted `yes`, `no`
 was octal 15, while `1e3` was text. Write `true`/`false` for a boolean, `90` or
 `1000` for those numbers, `0o17` for octal, and quote a value you mean as text. A
 `when: yes` on a `Literal[yes, no]` `on:` now matches the text `yes`; under a `bool`
-`on:` it no longer matches `true` and loads without an error, so write `when: true`.
+`on:` it is a load error, so write `when: true`.
 A CASE key spelled `On:` or `ON:` used to mean `on:`; write `on:`.
 
 ### Compact mode — when the flow *is* one node
@@ -1286,6 +1286,8 @@ Matching:
   is its ISO text; quote a datetime.
 - Ints and floats compare numerically (`when: 2` matches `2.0`), a bool never equals a
   number, and quoted values are text (`when: "1"` matches only the text `1`).
+- A `when: yes` (or `no`, `on`, `off`, `y`, `n`) on a `bool` `on:` is text, so it is a
+  load error that says to write `true` or `false`.
 - Where the `on:` type is known (node outputs, flow inputs, a LOOP body's carried fields,
   a child flow's inputs), a `when:` it can't hold is a load error, even with an `else:`:
 

@@ -357,19 +357,44 @@ def test_a_lone_span_of_unknown_type_asks_for_its_type():
     assert _taken(rewritten, n=3) == 4
 
 
-@pytest.mark.parametrize("then", ["[1, a]", "[[1], [a]]", "[{a: 1}, 2]"])
-def test_a_list_of_mixed_items_says_no_tag_holds_it(then):
+@pytest.mark.parametrize(
+    ("then", "tag", "value"),
+    [
+        ("[1, a]", "list(Any)", [1, "a"]),
+        ("[[1], [a]]", "list(Any)", [[1], ["a"]]),
+        ("[{a: 1}, 2]", "list(Any)", [{"a": 1}, 2]),
+        ("[null, 1, a]", "list(Optional(Any))", [None, 1, "a"]),
+        ('[1, "2024-01-01"]', "list(Any)", [1, "2024-01-01"]),
+    ],
+)
+def test_a_list_of_mixed_items_is_tagged_list_of_any(then, tag, value):
+    text = _flow(_on(then))
+    error = _load_error(
+        text, _value_branch("then", "route_then_0", f"!{tag} {then}")
+    )
+    assert _error_line(error) == _line_of(text, f"then: {then}")
+    assert _taken(_rewritten(error)) == value
+
+
+@pytest.mark.parametrize(
+    ("then", "value"),
+    [
+        ("[1, 2024-01-01]", [1, "2024-01-01"]),
+        ("[{a: 2024-01-01}, 2]", [{"a": "2024-01-01"}, 2]),
+    ],
+)
+def test_a_list_of_mixed_items_with_a_date_is_shown_with_the_date_quoted(then, value):
     text = _flow(_on(then))
     error = _load_error(
         text,
         _value_branch(
             "then",
             "route_then_0",
-            f"!<type> {then}",
-            note=" (no tag holds a list of mixed items; give its items one type)",
+            "!list(Any) " + then.replace("2024-01-01", '"2024-01-01"'),
         ),
     )
     assert _error_line(error) == _line_of(text, f"then: {then}")
+    assert _taken(_rewritten(error)) == value
 
 
 @pytest.mark.parametrize("then", ["&R [*R]", "&R [1, *R]", "&R {a: *R}"])

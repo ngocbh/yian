@@ -902,7 +902,9 @@ output:
 - A tagged entry is always a value, even a mapping with a `kind:` key. Keys a node body
   treats specially (`kind:`, `input:`, `depends_on:`) are plain fields in a value.
 - An untagged entry without `kind:` is a load error at the entry. For a literal, the
-  error shows the tag to write:
+  error shows the tag to write; a list of mixed items gets `!list(Any)`
+  (`!list(Optional(Any))` when an item is null), and one holding an unquoted date gets
+  `!<type>` and a note to quote its dates:
 
 ```text
 node 'x': an entry in `nodes:` is a node or a value; add `kind:` for a node, or a tag (`!object`, `!Buy`, ...) for a value, e.g. `x: !int 5`
@@ -2082,8 +2084,9 @@ tagged with the `case`'s old `output:` type when a tag can spell it and the valu
 it (a lone `${input.x}` or `${node.output}` fits when its type does), else with the type
 of that lone reference, else with a tag that fits the value (`!int 3`,
 `!Optional(str) null`, `!object {...}`, `!list(list(Optional(int))) [[1], [null]]`). A
-lone span of another type shows `!<type>` for you to fill in, and so does a list of
-mixed items, which no tag holds.
+list of mixed items gets `!list(Any)` (`!list(Optional(Any))` when an item is null),
+and a date in it is shown quoted, as text. A lone span of another type shows `!<type>`
+for you to fill in.
 
 A value no entry can hold is its own error at the branch: a number that is not finite, a
 value that contains itself through a YAML alias, a mapping with an empty key that would

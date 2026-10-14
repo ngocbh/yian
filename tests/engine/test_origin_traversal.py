@@ -122,15 +122,16 @@ def _loop_driver(child: CompiledFlow, signature: Parameter) -> LoopNode:
 _CompositeFactory = Callable[[CompiledFlow, Parameter], Node]
 
 
-def test_agent_variable_origins_rewrite_shared_carriers_once_without_walking_defaults():
-    # An `object` default holds JSON values only, so the payload is the text of a key.
-    payload_origin = "payload-only"
+def test_agent_variable_origins_rewrite_shared_carriers_once():
+    # An `object` default holds only JSON values, so it can't carry an origin object;
+    # `_rich_flow` checks that defaults aren't walked, through plain node params.
+    payload = "payload-only"
     contract = ValueContract(
         Type.scalar(ValueKind.OBJECT),
         ContractOrigins(_origin("type"), ((('leaf',), _origin("nested-type")),)),
     )
     variable = _parameter("settings", "variable", contract=contract,
-                          default={"opaque": payload_origin})
+                          default={"opaque": payload})
     first = AgentNode("first", variables=[variable])
     second = AgentNode("second", variables=[variable])
     first.output_contract = contract
@@ -150,7 +151,7 @@ def test_agent_variable_origins_rewrite_shared_carriers_once_without_walking_def
     assert copied is rewritten.nodes["second"].variables[0]
     assert copied.contract is rewritten.nodes["first"].output_contract
     assert sorted(seen) == ["nested-type", "type", "variable", "variable/default"]
-    assert copied.default["opaque"] == payload_origin
+    assert copied.default == {"opaque": payload}
     assert variable.origin == _origin("variable")
 
 

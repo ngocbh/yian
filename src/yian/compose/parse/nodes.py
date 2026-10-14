@@ -38,7 +38,7 @@ from yian.compose.helpers.secret_literals import (
     secret_literal_path,
 )
 from yian.compose.helpers.source import one_line_text
-from yian.compose.helpers.tags import QUOTED_STYLES, suggest_tag, yaml_quoted
+from yian.compose.helpers.tags import QUOTED_STYLES, suggest_tag, tag_text, yaml_quoted
 from yian.compose.nodes import KINDS, REMOVED_KINDS
 from yian.compose.source import (
     SourceAccessError,
@@ -61,13 +61,13 @@ _NON_IDENTIFIER_CHAR = re.compile(r"[^A-Za-z0-9_]")
 
 IDENTIFIER_RULE = "ASCII letters, digits, and _, not starting with a digit"
 
-# Shown after an example tagged `!<type>` for a list whose items share no type.
-MIXED_LIST_NOTE = "no tag holds a list of mixed items; give its items one type"
 # Item types a list of numbers joins to `float`.
 _INT = Type(kind=ValueKind.INTEGER)
 _FLOAT = Type(kind=ValueKind.NUMBER)
 # A null while list items are joined: its type is the other items' type, made optional.
 _NULL = Type(kind=ValueKind.NONE, nullable=True)
+# The item type of a list whose items share no type.
+_ANY = Type(kind=ValueKind.ANY)
 
 
 def is_identifier(name: object) -> bool:
@@ -263,11 +263,14 @@ def _reject_untagged_value(
     typ = example_type(value)
     if typ is not None:
         message += f", e.g. {suggest_tag(node_id, typ, _example_text(value, cursor))}"
-    elif isinstance(value, list):
-        message += (
-            f", e.g. `{node_id}: !<type> {_example_text(value, cursor)}` "
-            f"({MIXED_LIST_NOTE})"
-        )
+    else:
+        quoted = tag_text(quoted_dates_type(value))
+        if quoted is not None:
+            # The example shows the list as written, so its dates are still unquoted.
+            message += (
+                f", e.g. `{node_id}: !<type> {_example_text(value, cursor)}` "
+                f"(quote its dates to tag it `{quoted}`)"
+            )
     raise diagnostics.error(message, range=rng)
 
 
@@ -290,12 +293,15 @@ def example_type(value: Any) -> Type | None:
     Returns:
         `Type | None`: `Optional(str)` for null, `date` or `datetime` for an unquoted
             date, `object` for a mapping, a list of its items' joined type, else the
-            widened type of the value; `None` for a list whose items share no type, a
-            number that is not finite, or a value no type holds. Items join
-            recursively: a null makes the type optional, ints and floats join to
-            `float`, and an empty list joins any list, so `[[1], [null]]` is
-            `list(list(Optional(int)))` and `[[], [1]]` is `list(list(int))`. A list
-            of nulls only is `list(Optional(str))`.
+            widened type of the value; `None` for a number that is not finite, a value
+            no type holds, or a list whose items share no type and that holds an
+            unquoted date (see `quoted_dates_type`). Items join recursively: a null
+            makes the type optional, ints and floats join to `float`, and an empty
+            list joins any list, so `[[1], [null]]` is `list(list(Optional(int)))` and
+            `[[], [1]]` is `list(list(int))`. A list of nulls only is
+            `list(Optional(str))`. Items that share no type are `Any`, or
+            `Optional(Any)` when one of them is null, so `[1, a]` is `list(Any)` and
+            `[null, 1, a]` is `list(Optional(Any))`.
     """
     typ = _item_type(value)
     return None if typ is None else _settled(typ)
@@ -313,18 +319,61 @@ def _item_type(value: Any) -> Type | None:
     if isinstance(value, dict):
         return Type(kind=ValueKind.OBJECT)
     if isinstance(value, list) and value:
-        element = _item_type(value[0])
-        for item in value[1:]:
-            typ = _item_type(item)
-            if element is None or typ is None:
-                return None
-            element = _joined(element, typ)
-        return None if element is None else _list_of(element)
+        types = [_item_type(item) for item in value]
+        if any(typ is None for typ in types):
+            return None
+        element: Type | None = types[0]
+        for typ in types[1:]:
+            element = None if element is None else _joined(element, typ)
+        if element is not None:
+            return _list_of(element)
+        if _holds_date(value):
+            return None
+        return _list_of(dataclasses.replace(_ANY, nullable=None in value))
     try:
         # An empty list is a `list(Optional(Any))` with no element type, which joins any list.
         return Type.scalar(build_value(value).kind)
     except TypeCheckError:
         return None
+
+
+def quoted_dates_type(value: Any) -> Type | None:
+    """Return `example_type(value)` as if each unquoted date in it were quoted text.
+
+    `Any` holds a mixed list's items, but not an unquoted date (YAML reads it as a
+    date, not text), so `example_type` gives no type for a mixed list holding one.
+    Quoted, the date is text, and the list is `list(Any)` or a narrower list.
+
+    Args:
+        value (`Any`): An authored YAML value that does not contain itself.
+
+    Returns:
+        `Type | None`: The type of `value` with its dates read as text, such as
+            `list(Any)` for `[1, 2024-01-01]`, or `None` as for `example_type`.
+    """
+    return example_type(_dates_as_text(value))
+
+
+def _dates_as_text(value: Any) -> Any:
+    """Return `value`, which doesn't contain itself, with each date as its ISO text."""
+    if isinstance(value, datetime.date):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {key: _dates_as_text(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_dates_as_text(item) for item in value]
+    return value
+
+
+def _holds_date(value: Any) -> bool:
+    """Report whether a value that doesn't contain itself holds an unquoted date."""
+    if isinstance(value, datetime.date):
+        return True
+    if isinstance(value, dict):
+        return any(_holds_date(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_holds_date(item) for item in value)
+    return False
 
 
 def _joined(first: Type, second: Type) -> Type | None:

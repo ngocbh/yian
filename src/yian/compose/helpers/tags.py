@@ -890,6 +890,13 @@ class _TaggedValueReader:
         # itself would fit, e.g. `!str 30` or `!str 2026-01-01`.
         if isinstance(value, str):
             return message
+        if value is None and typ.kind is ValueKind.ANY and not typ.nullable:
+            # `Any` would read the quoted text as the string "null", which is rarely
+            # what a null under `!Any` means.
+            optional = f"!Optional({tag}) null"
+            return message + "; to allow null, write " + (
+                f"`{self.label}: {optional}`" if not path else f"`{optional}`"
+            )
         try:
             build_value_as(typ, text)
         except TypeCheckError:

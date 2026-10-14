@@ -15,7 +15,8 @@ A `case` only routes. Each `then:`/`else:` is classified by its YAML tag and sca
   own tag; else it takes the case's former `output:` type when a tag can spell it and
   the value fits it (a lone `${input.x}` or `${node.output}` reference fits when its
   type does); else the reference's type, or a tag guessed from the YAML value; else a
-  `!<type>` placeholder (a lone span of another type, a list of mixed items).
+  `!<type>` placeholder (a lone span of another type). The shown value quotes its
+  dates, so a list of mixed items holding a date is tagged as if they were text.
 
 A value no entry can hold is its own load error instead of a rewrite: a number that is
 not finite, a value that contains itself, a written-out `!object` mapping with an empty
@@ -81,10 +82,10 @@ from yian.compose.helpers.tags import (
 from yian.compose.helpers.types import read_type
 from yian.compose.parse.file import CaseDescriptor
 from yian.compose.parse.nodes import (
-    MIXED_LIST_NOTE,
     contains_itself,
     example_type,
     is_identifier,
+    quoted_dates_type,
 )
 from yian.compose.source import SourceCursor, SourceSyntaxError, parse_yaml_literal
 from yian.diagnostics import SourceRange
@@ -627,11 +628,16 @@ def _entry_tag(
                 text, note = suggested_literal(text, output.type)
             if _fits(text, output.type, reference):
                 return tag, output.type, text, note
-    typ = reference if interior is not None else example_type(branch.value)
+    if interior is not None:
+        typ = reference
+    else:
+        # `_value_text` quotes dates, so the entry reads them as text.
+        typ = example_type(branch.value)
+        if typ is None:
+            typ = quoted_dates_type(branch.value)
     tag = tag_text(typ, registry=registry)
     if tag is None:
-        note = MIXED_LIST_NOTE if isinstance(branch.value, list) else _SPAN_TYPE_NOTE
-        return "<type>", None, authored, note
+        return "<type>", None, authored, _SPAN_TYPE_NOTE
     return tag, typ, authored, None
 
 

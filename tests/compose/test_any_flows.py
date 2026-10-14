@@ -512,7 +512,10 @@ def test_a_typed_any_literal_loads_and_runs(binding, value):
 def test_a_null_any_literal_is_a_load_error():
     text = _literal("!Any null")
     error = _load_error(text)
-    assert "is not a valid Any" in str(error)
+    assert str(error).endswith(
+        "`null` is not a valid Any; to allow null, write `x: !Optional(Any) null`"
+    )
+    assert "quote" not in str(error)
     assert _error_line(error) == _line_of(text, "x: !Any null")
 
 

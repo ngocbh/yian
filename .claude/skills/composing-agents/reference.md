@@ -258,7 +258,8 @@ with `binding.type`. Declared types are in the flow fingerprint.
 
 NaN and infinity are not yian values. A binding whose value holds one at any
 depth fails its node with `binding.evaluate`; a temporary inside an expression is
-fine. Keep the value in range or return null explicitly.
+fine. Keep the value in range or return null explicitly: a `case` value branch
+`then: null` under `output: Optional[...]`, or a `code` node returning `None`.
 
 Bounds require two ordered numeric literals and exclude booleans. Integer bounds
 retain arbitrary precision. Float bounds must be finite; integer endpoints used

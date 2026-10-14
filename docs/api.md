@@ -123,7 +123,7 @@ created. NaN and infinity are not yian values: an `inputs` value holding one at 
 depth raises `ValueError` naming where it sits (`input 'x' at a[1]: ...`), also
 before the log is created. A non-finite `llm_config` value, such as `temperature`,
 is rejected too: in a flow file it is a load error, and in the host `llm_config` it
-raises `ValueError` before the run starts.
+raises `ValueError` before the run starts when an AGENT uses it.
 
 - `log` — an optional JSONL path. `None` still uses the same record/reducer path
   with a process-local log. A path creates a new durable log exclusively; an

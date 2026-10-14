@@ -787,9 +787,10 @@ nodes:
 
 Every `llm_config:` in a flow file (node, `defs:` entry, or top level) is checked
 when the flow loads: an unknown key such as `modle:`, a bad value such as
-`temperature: hot`, or an unknown provider fails at that `llm_config:`. `inherit:`
-is valid only in a node's `llm_config:`. A host `run_flow(..., llm_config=...)`
-layer with an unknown key fails before any node runs.
+`temperature: hot`, a non-finite number such as `temperature: .nan`, or an unknown
+provider fails at that `llm_config:`. `inherit:` is valid only in a node's
+`llm_config:`. A host `run_flow(..., llm_config=...)` layer with an unknown key
+fails before any node runs.
 
 A flow file cannot set `api_key` at any level, nor `base_url` except beside
 `provider: azure`; loading such a flow fails. A library host passes the provider
@@ -864,7 +865,8 @@ Variable names must be unique and cannot overlap the node's input names. Default
 are validated while loading, including bounds and enum choices. Nullable variables
 still require an explicit default, such as `Optional[str] = null`; a quoted empty
 string is a valid `str` default. Default strings are literal text, so `${...}`
-inside a default is not evaluated as a binding.
+inside a default is not evaluated as a binding. A NaN or infinity default fails the
+node when it runs.
 
 Each invocation starts with a fresh copy of these defaults. Repeated `${name}`
 references read the same local value. A variable belongs to its authored AGENT

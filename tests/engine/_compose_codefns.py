@@ -149,3 +149,11 @@ def meet(inputs: dict) -> str:
     # waits for the other `meet` node, then records its tag like `record`.
     MEET.wait()
     return record(inputs)
+
+
+def deep_tree(inputs: dict) -> dict:
+    # a {tree} record whose tree is a chain of `n` nested dicts (value nesting tests).
+    tree: object = "leaf"
+    for _ in range(inputs["n"]):
+        tree = {"a": tree}
+    return {"tree": tree}

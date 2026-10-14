@@ -39,6 +39,7 @@ class StartNode(Node):
     """
 
     kind = NodeKind.START
+    commits_input_record = True
 
     #: Reserved id of the synthesized input boundary.
     #: The canonical source of truth; `compile.model` re-exports it as `START_ID`/`START_ID`.

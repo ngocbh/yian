@@ -653,6 +653,10 @@ class Node(ABC):
     # Declares "I may grow the graph" (a spawner returns a `Grow`). Overridden True by
     # the spawner kinds (CALL/MAP/LOOP); the `eval_node` seam gates the grow path on it.
     is_spawner: ClassVar[bool] = False
+    # Declares "my committed output is the run's input record" (START). That record is the
+    # argument list around the input values, so it may go one level over the value nesting
+    # limit while each input value stays within it.
+    commits_input_record: ClassVar[bool] = False
     # Declares "I bind my inputs PER ELEMENT via a `bind_item` cap rather than once up front"
     # (MAP). When True, the read seam (`eval_node`) starts the record empty and supplies
     # `caps['bind_item']`; when False (the common case) it binds `params` once from the pool.

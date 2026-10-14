@@ -248,7 +248,9 @@ def test_no_policy_backward_still_records_ready_and_finished_without_opening_res
     assert len(node.calls) == 2
 
 
-def test_context_depth_failure_keeps_completed_backward_without_calling_learners():
+def test_context_depth_failure_keeps_completed_backward_without_calling_learners(monkeypatch):
+    # Only a log recorded before the value nesting limit holds a value this deep.
+    monkeypatch.setattr("yian.typesys.values.MAX_VALUE_NESTING", 500)
     value = "leaf"
     for _ in range(140):
         value = [value]

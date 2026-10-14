@@ -346,12 +346,14 @@ def test_owner_context_root_fallback_uses_only_actual_source_zero_fields(same_bo
 
 
 @pytest.mark.parametrize("material", ["episode", "contribution"])
-def test_owner_context_error_identifies_receiver_without_changing_forward_acceptance(material):
+def test_owner_context_error_identifies_receiver_without_changing_forward_acceptance(material, monkeypatch):
     from yian.compile.model import FlowOutput
     from yian.nodes.base import BackwardResult
     from yian.runtime.backward import compute_backward
     from tests.engine._backward_fakes import RecordingBackwardNode
 
+    # Only a log recorded before the value nesting limit holds a value this deep.
+    monkeypatch.setattr("yian.typesys.values.MAX_VALUE_NESTING", 500)
     value = "leaf"
     for _ in range(140 if material == "episode" else 123):
         value = [value]

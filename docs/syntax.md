@@ -166,7 +166,10 @@ CASE `on:` takes a reference, so its error says "write a reference such as
 `on: ${input.x}`"; `kind:` lists the kind names. `null` on an optional field (`on:`,
 `node_name:`, `description:`, `version:`) means absent; on a required one it is a load
 error, such as "`code:` must be text, but it is empty; write the text". MAP `over:`,
-WAIT `until:`, and the flow `output:` are values, not text.
+WAIT `until:`, and the flow `output:` are values, not text; `over:` must be a list and
+`until:` a date or datetime, checked at load (see
+[`wait`](#wait-block-until-an-absolute-utc-deadline) and
+[`call` / `map`](#call-map-composition-over-child-flows)).
 
 Changed: a non-text value in these fields used to crash with a raw Python error
 (`code:`, CASE `on:`, `call:`, a list or mapping `kind:`, a `defs:` assert), load
@@ -2480,6 +2483,22 @@ WAIT occupies one worker until the remaining wall-clock duration elapses, then
 returns `None`; it does not split the run into another execution segment.
 Engine/host shutdown wakes the worker cooperatively.
 
+An `until:` that can never be a date or datetime is a load error. A literal must be a
+YAML date or datetime, or text that parses as one (`'2026-05-21'`,
+`'2026-05-21T14:30'`); a number, boolean, list, mapping, `null`, or other text (`ok`,
+`'2026-13-01'`) fails. A reference or expression fails when its type can't hold a
+date or datetime: `int`, `bool`, `float`, `object`, `list(...)`, `Optional(int)`, or a
+`Literal(...)` with no date or datetime tag. A `str` reference loads and is parsed at
+run, as do `date`, `datetime`, `Optional(date)`, and `Any`; a source whose type can't
+be proven (arithmetic, a builtin call, an untyped producer) is checked at run.
+
+```text
+node 'w' (kind=wait): `until:` must be a date or datetime, but YAML read it as text that is not a date or datetime; write one such as `until: 2026-05-21`, or a reference such as `until: ${input.as_of}`
+node 'w' (kind=wait): `until:` must be a date or datetime, but the value is int; write a reference to a date, datetime, or text
+```
+
+Changed: a wrong-typed `until:` used to load and fail when the node ran.
+
 ### `call` / `map` — composition over child flows
 
 `call` runs a child flow once; `map` runs it over a list (`${item}` is the
@@ -2501,6 +2520,20 @@ requires a non-empty child `output:` and returns `list(U)` in `over:` order. If 
 child's `output:` is a record, even of one field, the MAP returns a list of records.
 `parallel:` is accepted but currently inert; MAP concurrency is controlled by
 the run's `num_workers`, while collection order remains the `over:` order.
+
+`over:` must be a list, checked at load. A literal that is not a list (a number,
+boolean, mapping, unquoted date, `null`, or text, including quoted `call(...)` text)
+fails; an unquoted `call(f)` is checked by its output type. A reference or expression
+fails when its type is not a list or `Any`, nullability aside: `str`, `int`, a record,
+a union, or `Optional(int)` fails, while `list(...)` and `Optional(list(...))` load. A
+source whose type can't be proven is checked at run.
+
+```text
+node 'm' (kind=map): `over:` must be a list, but YAML read it as an integer; write a list, or a reference such as `over: ${input.items}`
+node 'm' (kind=map): `over:` must be a list, but the value is str; write a reference to a list
+```
+
+Changed: a wrong-typed `over:` used to load and fail when the node ran.
 
 Each argument must fit the child's input type, checked at load. Nothing is coerced,
 because a `call`/`map` edge is not a flow boundary. A

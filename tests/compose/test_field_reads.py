@@ -481,7 +481,7 @@ def test_map_item_field_reads_are_checked(over_input, item_ref, expected):
         ("list(str)", "${item}"),
         ("list(object)", "${item.anything}"),
         ("list(Any)", "${item.anything}"),
-        ("object", "${item.anything}"),  # over: not a proven list
+        ("Any", "${item.anything}"),  # over: not a proven list
     ],
 )
 def test_map_item_reads_the_type_allows_still_load(over_input, item_ref):

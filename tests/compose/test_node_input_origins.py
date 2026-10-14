@@ -502,7 +502,7 @@ defs:
     nodes:
       pause:
         kind: wait
-        until: named-deadline
+        until: '2026-01-01'
       worker:
         kind: code
         code: tests.engine._compose_codefns:echo_x
@@ -514,7 +514,7 @@ defs:
 nodes:
   pause:
     kind: wait
-    until: root-deadline
+    until: '2026-01-02'
   named_call:
     kind: call
     call: named
@@ -523,7 +523,7 @@ nodes:
     nodes:
       pause:
         kind: wait
-        until: inline-deadline
+        until: '2026-01-03'
       worker:
         kind: code
         code: tests.engine._compose_codefns:echo_x
@@ -545,7 +545,7 @@ output:
             loaded.compiled.nodes["pause"],
             loaded.compiled.wiring["pause"]["until"],
             document.root.child("nodes").child("pause").child("until"),
-            "root-deadline",
+            "2026-01-02",
         ),
         (
             named_child.nodes["pause"],
@@ -555,7 +555,7 @@ output:
             .child("nodes")
             .child("pause")
             .child("until"),
-            "named-deadline",
+            "2026-01-01",
         ),
         (
             inline_child.nodes["pause"],
@@ -565,7 +565,7 @@ output:
             .child("nodes")
             .child("pause")
             .child("until"),
-            "inline-deadline",
+            "2026-01-03",
         ),
     )
 

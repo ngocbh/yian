@@ -24,8 +24,8 @@ nodes package: it never imports any sibling kind or `nodes/__init__`. Every kind
 imports it at module top level without cycling; `parse/file.py` re-exports it as the
 descriptor base type for its importers.
 
-It also owns the shared message for a text field whose value YAML read as non-text, so every
-kind reports that mistake in the same words.
+It also owns the shared messages for a field whose value YAML read as the wrong type (text
+or otherwise), so every kind reports that mistake in the same words.
 """
 
 from __future__ import annotations
@@ -84,6 +84,34 @@ def reject_container_spans(
         )
 
 
+def value_type_error(field: str, needed: str, value: Any, fix: str) -> str:
+    """Return the load error message for a field whose value YAML read as the wrong type.
+
+    Args:
+        field (`str`):
+            The field's path as authored, such as `over` or `questions[0].header`.
+        needed (`str`):
+            What the field takes, with its article, such as `text` or `a list`.
+        value (`Any`):
+            The field's value as YAML read it; `None` is reported as empty.
+        fix (`str`):
+            What the author should write instead.
+
+    Returns:
+        `str`:
+            The message, naming what YAML read the value as and the fix.
+
+    Example:
+        `value_type_error("over", "a list", 5, fix="write a list")` is
+        ``"`over:` must be a list, but YAML read it as an integer; write a list"``;
+        `value_type_error("over", "a list", None, fix="write a list")` is
+        ``"`over:` must be a list, but it is empty; write a list"``.
+    """
+    if value is None:
+        return f"`{field}:` must be {needed}, but it is empty; {fix}"
+    return f"`{field}:` must be {needed}, but YAML read it as {yaml_read_as(value)}; {fix}"
+
+
 def not_text_error(field: str, value: Any, fix: str | None = None) -> str:
     """Return the load error message for a text field whose value YAML read as non-text.
 
@@ -108,12 +136,9 @@ def not_text_error(field: str, value: Any, fix: str | None = None) -> str:
         `not_text_error("kind", [1], fix="write one of a, b")` is
         ``"`kind:` must be text, but YAML read it as a list; write one of a, b"``.
     """
-    if value is None:
-        return f"`{field}:` must be text, but it is empty; {fix or 'write the text'}"
-    return (
-        f"`{field}:` must be text, but YAML read it as {yaml_read_as(value)}; "
-        f"{fix or 'put it in quotes'}"
-    )
+    if fix is None:
+        fix = "write the text" if value is None else "put it in quotes"
+    return value_type_error(field, "text", value, fix)
 
 
 def not_text_detail(exc: ValidationError) -> tuple[str, Any] | None:
@@ -576,8 +601,8 @@ class NodeDescriptor:
         the asserts-list check), then `_read_common_fields` (the four commons with `env`
         validation). Finally constructs `cls(**kwargs, range=..., field_ranges=...)`.
 
-        Kinds customize the two hooks and may wrap `parse` itself (agent, human_input, and
-        case do). Returns the fully-populated descriptor instance (`cls`, never the abstract
+        Kinds customize the two hooks and may wrap `parse` itself (agent, human_input, case,
+        and map do). Returns the fully-populated descriptor instance (`cls`, never the abstract
         base)."""
         cursor = cls._normalize_cursor(cursor)
         diagnostics = LoadDiagnostics.from_cursor(cursor)

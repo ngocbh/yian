@@ -18,16 +18,17 @@ One membership law for `on:`-form `when:` values (`check_case_when_values`): whe
 `on:` type is known, every `when:` value must be a possible member of it (compared exactly:
 no text conversion, a bool is not a number), even when the case has an `else:`. A value
 that can never equal the `on:` value is a `LoadError` naming the value, the type, and the
-fix.
+fix. Two `when:` values that are equal (typed equality, `on_match_key`) are a `LoadError` at
+the later one, for every `on:`-form case, since the later one never matches.
 
 This lives in the validate phase (not in `CaseDescriptor.build`) because it needs the flow's
 `producers` map — each producer node's `output_contract` — which only exists after every node is
 built. `.build()` lowers the case unconditionally; the loader runs `check_case_exhaustive` in
 the validate phase, alongside the other cross-node checks.
 
-Imports flow down/peer only: `expr` (ref scan), `nodes.contracts` (the output-contract
-sum), `typesys` (Type and the strict value check), and the compose peers
-`helpers.output_contracts`, `helpers.errors`, `helpers.typed_bindings`,
+Imports flow down/peer only: `diagnostics` (SourceRange), `expr` (ref scan),
+`nodes.contracts` (the output-contract sum), `typesys` (Type and the strict value check),
+and the compose peers `helpers.output_contracts`, `helpers.errors`, `helpers.typed_bindings`,
 `helpers.yaml_words`, `nodes.case`,
 `source.literals`, `parse.file`, `validate.narrowing`, and `validate.typed_bindings`.
 Nothing in the engine imports this back.
@@ -50,10 +51,11 @@ from yian.nodes.contracts import (
 )
 from yian.typesys import TypeCheckError, build_value_as
 from yian.typesys.values import Type, ValueKind, canonical_type_label
+from yian.diagnostics import SourceRange
 from yian.compose.helpers.errors import LoadDiagnostics, source_text
 from yian.compose.helpers.typed_bindings import yaml_quoted
 from yian.compose.helpers.yaml_words import former_boolean_fix
-from yian.compose.nodes.case import on_match_value
+from yian.compose.nodes.case import on_match_key, on_match_value
 from yian.compose.parse.file import CaseDescriptor, NodeDescriptor
 from yian.compose.source.literals import parse_yaml_literal
 from yian.compose.validate.narrowing import Narrowing
@@ -118,13 +120,18 @@ def check_case_when_values(
     narrowing: Narrowing | None = None,
     diagnostics: LoadDiagnostics | None = None,
 ) -> None:
-    """Reject an `on:`-form `when:` value that can never equal the `on:` value.
+    """Reject an `on:`-form `when:` value that repeats an earlier one or can never equal
+    the `on:` value.
 
-    A `when:` value is a member of the `on:` type when the type accepts it as is: text is
+    Two `when:` values are duplicates when they match the same `on:` values (typed
+    equality: `1` and `1.0` are equal, `1`, `true`, and `"1"` are not); the later one never
+    matches. Duplicates are checked first, so a repeated value is reported as such rather
+    than as a non-member whose fix would repeat it. A `when:` value is a member of the `on:` type when the type accepts it as is: text is
     never converted, a bool is not a number, an int fits a float, and `Literal` tags and
     numeric bounds apply. The `on:` ref resolves against the unnarrowed producers and flow
     inputs first, then the case's narrowed view, so a field only a branch's members have is
-    checked too. A case whose `on:` type is unknown or `object` is not checked.
+    checked too. A case whose `on:` type is unknown or `object` gets no membership check
+    (duplicates are still rejected).
 
     Args:
         descriptors (`dict[str, NodeDescriptor]`):
@@ -141,20 +148,22 @@ def check_case_when_values(
 
     Raises:
         `LoadError`:
-            A `when:` value can never be a member of its case's `on:` type. The error is
-            located at the first such value in source order.
+            Two `when:` values are equal (typed equality); located at the later one. Or a
+            `when:` value can never be a member of its case's `on:` type; located at the
+            first such value in source order.
     """
     diagnostics = diagnostics or LoadDiagnostics()
     for desc in descriptors.values():
         if not isinstance(desc, CaseDescriptor) or desc.on is None:
             continue
+        _check_duplicate_whens(desc, diagnostics)
         typ = _resolve_on_type(desc.on, producers, flow_inputs)
         if typ is None and narrowing is not None:
             typ = _resolve_on_type(desc.on, *narrowing.for_node(desc.id))
         if typ is None or typ.kind is ValueKind.OBJECT:
             continue
         for index, case in enumerate(desc.cases):
-            when_range = desc.when_ranges[index] if index < len(desc.when_ranges) else None
+            when_range = _when_range(desc, index)
             message = _when_value_error(
                 desc.on, case.get("when"), typ, source_text(diagnostics, when_range)
             )
@@ -162,6 +171,92 @@ def check_case_when_values(
                 raise diagnostics.error(
                     f"case node {desc.id!r}: {message}", range=when_range or desc.range
                 )
+
+
+def _check_duplicate_whens(desc: CaseDescriptor, diagnostics: LoadDiagnostics) -> None:
+    """Reject an `on:`-form case's `when:` value that equals an earlier one.
+
+    Args:
+        desc (`CaseDescriptor`):
+            The `on:`-form case.
+        diagnostics (`LoadDiagnostics`):
+            Source ownership for located errors and the authored `when:` text.
+
+    Raises:
+        `LoadError`:
+            Two `when:` values match the same `on:` values (`on_match_key`). The error is
+            located at the later one, the first such repeat in source order.
+    """
+    seen: dict[tuple[str, Any], int] = {}
+    for index, case in enumerate(desc.cases):
+        value = case.get("when")
+        if type(value) not in _VALUE_PHRASES:
+            continue
+        key = on_match_key(value)
+        if key not in seen:
+            seen[key] = index
+            continue
+        first = seen[key]
+        when_range = _when_range(desc, index)
+        first_range = _when_range(desc, first)
+        message = _duplicate_when_message(
+            value,
+            source_text(diagnostics, when_range),
+            desc.cases[first].get("when"),
+            source_text(diagnostics, first_range),
+            first_range=first_range,
+            first_index=first,
+        )
+        raise diagnostics.error(
+            f"case node {desc.id!r}: {message}", range=when_range or desc.range
+        )
+
+
+def _when_range(desc: CaseDescriptor, index: int) -> SourceRange | None:
+    """Return the source range of a case's `index`-th `when:` value, when known."""
+    return desc.when_ranges[index] if index < len(desc.when_ranges) else None
+
+
+def _duplicate_when_message(
+    value: Any,
+    src: str | None,
+    first_value: Any,
+    first_src: str | None,
+    *,
+    first_range: SourceRange | None,
+    first_index: int,
+) -> str:
+    """Return the message for a `when:` value that repeats an earlier one.
+
+    Args:
+        value (`Any`):
+            The later, repeated `when:` value.
+        src (`str | None`):
+            Its authored source text, when known.
+        first_value (`Any`):
+            The earlier `when:` value it equals.
+        first_src (`str | None`):
+            The earlier value's authored source text, when known.
+        first_range (`SourceRange | None`):
+            The earlier value's source range, when known.
+        first_index (`int`):
+            The earlier value's index in `cases`, shown when its range is unknown.
+
+    Returns:
+        `str`:
+            The message, without the `case node` prefix.
+    """
+    shown = src or _spelling(value)
+    first_shown = first_src or _spelling(first_value)
+    where = (
+        f"first at line {first_range.start_line}"
+        if first_range is not None
+        else f"first at cases[{first_index}]"
+    )
+    return (
+        f"`when: {shown}` duplicates `when: {first_shown}` ({where}), "
+        "so it never matches; remove one"
+    )
 
 
 # The scalar kind of each `when:` value type, for "this value has the right kind but is

@@ -581,8 +581,8 @@ class NodeDescriptor:
         `own_range` (the node body's range, for anchoring an error about an ABSENT field, which
         has no per-field range). Default: if an `asserts:` field is present, it must be a `list`
         of `str` — a bad shape raises a located `LoadError` naming `cls.kind`. Presence-guarded:
-        absent `asserts` is a no-op, so kinds that never author `asserts` are unaffected. Only
-        `human_input` overrides this (running its one-of-three check, then `super()` for asserts).
+        absent `asserts` is a no-op, so kinds that never author `asserts` are unaffected. Kinds
+        override it for their own fields and call `super()`.
         """
         asserts = kwargs.get("asserts")
         if asserts is not None and not (

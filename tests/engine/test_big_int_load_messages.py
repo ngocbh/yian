@@ -147,6 +147,22 @@ def test_a_node_field_message_shows_a_long_int_as_a_placeholder(text, phrase):
     assert phrase in assert_load_message(text)
 
 
+# A text field's message names what YAML read, not the value.
+_NON_TEXT_FIELD_ROWS = {
+    "tool_id": (
+        _flow(f"  c:\n    kind: tool\n    tool_id: {D}\n"),
+        "`tool_id:` must be text",
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    "text, phrase", _NON_TEXT_FIELD_ROWS.values(), ids=_NON_TEXT_FIELD_ROWS.keys()
+)
+def test_a_non_text_field_message_shows_no_long_int(text, phrase):
+    assert phrase in assert_load_message(text, placeholder=False)
+
+
 # --- validate ----------------------------------------------------------------
 
 
@@ -305,18 +321,6 @@ def test_a_tool_binding_label_shows_a_long_int_as_a_placeholder():
     assert "set_int_max_str_digits" not in msg
     assert re.search(r"[0-9]{600}", msg) is None
     assert msg.endswith("but the binding is " + PLACEHOLDER + " (int)")
-
-
-def test_an_unknown_long_int_tool_id_shows_a_placeholder():
-    flow = load_flow(
-        f"id: p\nname: p\nnodes:\n  t:\n    kind: tool\n    tool_id: {D}\noutput: ${{t.output}}\n"
-    )
-    result = run_flow(flow, {}, tools={"place_order": lambda qty: qty})
-    msg = result.failure.message if result.failure is not None else ""
-    assert result.status == "failed"
-    assert f"unknown tool id {PLACEHOLDER}" in msg
-    assert "set_int_max_str_digits" not in msg
-    assert re.search(r"[0-9]{600}", msg) is None
 
 
 def test_a_tool_receives_a_long_int_input():

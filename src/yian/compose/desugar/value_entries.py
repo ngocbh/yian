@@ -23,14 +23,7 @@ from yian.compose.helpers.tags import read_tagged_value, suggest_tag
 from yian.compose.nodes.base import BuildContext
 from yian.compose.nodes.code import CodeDescriptor
 from yian.compose.source import SourceCursor
-from yian.expr import ExpressionError, expr_refs_of
-from yian.nodes.contracts import (
-    OutputContract,
-    PartialRecordContract,
-    ValueContract,
-    ValueTemplate,
-    iter_source_strings,
-)
+from yian.nodes.contracts import OutputContract, ValueContract, ValueTemplate
 from yian.typesys.types import TypeRegistry
 from yian.typesys.values import ValueKind
 
@@ -44,13 +37,9 @@ class ValueEntryDescriptor(CodeDescriptor):
 
     Attributes:
         tag (`ValueContract`): The entry's tag as a contract; the node's input type.
-        infer_record (`bool`): Whether the output contract is the record inferred
-            from the value rather than the tag: true for a bare `!object` over a
-            written-out mapping, whose keys are known.
     """
 
     tag: ValueContract
-    infer_record: bool = False
 
     def __post_init__(self) -> None:
         """Reject node-only fields, which a value entry can't author.
@@ -71,46 +60,46 @@ class ValueEntryDescriptor(CodeDescriptor):
         spells, so a read of a field it lacks fails at load: a literal field has its
         literal's type, a `${...}` field its producer's (opaque when unproven), an
         untagged nested mapping is inferred the same way, and a nested tag keeps its
-        declared type. Any other entry's contract is its tag.
+        declared type. A nested untagged mapping with an unproven field, or a list
+        whose items don't join, is opaque as a whole, since a partial record can't
+        nest. Any other entry's contract is its tag.
 
         Args:
             ctx (`BuildContext`): Supplies `binding_contract_reader`, which types a
-                value holding `${...}` spans from its producers.
+                value template (a value with a `${...}` span or a nested tag) from
+                its producers.
 
         Returns:
             `OutputContract`: The inferred exact or partial record, or the tag's
-                contract when the value isn't inferred or its record can't be read
-                (no reader, a span reading the entry itself, or an unproven shape).
+                contract when the value isn't inferred or can't be typed (no reader,
+                or a programmatic mapping with a non-text key).
+
+        Raises:
+            `LoadError`: A span reads the entry's own output, directly or through
+                other entries (a node build dependency cycle).
         """
-        if not self.infer_record:
+        if not self._infers_record():
             return self.tag
         value = self.inputs[self.id]
         if isinstance(value, ValueTemplate):
-            # An entry reading itself is left to the flow's cycle check, which names
-            # the cycle better than the build-order error reading it here would.
-            if ctx.binding_contract_reader is None or self._reads_itself(value):
+            if ctx.binding_contract_reader is None:
                 return self.tag
             contract = ctx.binding_contract_reader(
                 self.id, value, self.field_ranges.get(("input", self.id))
             )
         else:
             contract = literal_contract(value)
-        if type(contract) is PartialRecordContract:
-            return contract
-        if type(contract) is ValueContract and contract.type.fields is not None:
-            return contract
-        return self.tag
+        return self.tag if contract is None else contract
 
-    def _reads_itself(self, value: ValueTemplate) -> bool:
-        """Report whether a span in `value` reads this entry's own output."""
-        for _, text in iter_source_strings(value):
-            try:
-                refs = expr_refs_of(text)
-            except ExpressionError:
-                continue  # reported, located, by reference validation
-            if any(ref.split(".")[:2] == [self.id, "output"] for ref in refs):
-                return True
-        return False
+    def _infers_record(self) -> bool:
+        """Report whether the tag is a bare `object` over a written-out mapping."""
+        tag = self.tag.type
+        if tag.kind is not ValueKind.OBJECT or tag.fields is not None or tag.nullable:
+            return False
+        value = self.inputs[self.id]
+        if isinstance(value, ValueTemplate):
+            value = value.value
+        return type(value) is dict
 
 
 def read_value_entry(
@@ -175,14 +164,6 @@ def read_value_entry(
         if value_range is not None
         else {}
     )
-    tag = slot.contract.type
-    bare_object = (
-        tag.kind is ValueKind.OBJECT and tag.fields is None and not tag.nullable
-    )
-    value = slot.value
-    written_out = type(value) is dict or (
-        isinstance(value, ValueTemplate) and type(value.value) is dict
-    )
     return ValueEntryDescriptor(
         id=node_id,
         node_name=node_id,
@@ -190,7 +171,6 @@ def read_value_entry(
         inputs={node_id: slot.value},
         input_types={node_id: slot.contract},
         tag=slot.contract,
-        infer_record=bare_object and written_out,
         range=cursor.key_range or value_range,
         field_ranges=field_ranges,
         field_labels={f"input {node_id!r}": f"value entry {node_id!r}"},

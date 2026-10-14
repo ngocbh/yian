@@ -14,6 +14,8 @@ a field it lacks is a load error, a `${...}` field has its producer's type, and 
 tagged `!object` stays opaque. `!object ${x.output}` stays `object`.
 """
 
+import re
+
 import pytest
 
 from yian.compile.manifest import flow_fingerprint
@@ -230,7 +232,7 @@ def test_an_entry_reading_itself_is_rejected():
 
     error = _load_error(text)
 
-    assert str(error) == "flow has a cycle involving ['x']; flows must be acyclic"
+    assert re.fullmatch(re.escape("node build dependency cycle: x -> x"), str(error))
     assert _error_line(error) == _line_of(text, "  x: !object")
 
 
@@ -281,12 +283,11 @@ def test_fingerprint_is_stable_and_tracks_the_literal():
     assert changed != first
 
 
-def _record_flow(entries: str, reader: str, *, head: str = "") -> str:
+def _record_flow(entries: str, reader: str) -> str:
     """Return a flow with `entries` and a CODE node `use` whose input `c` is `reader`."""
     return (
         "id: f\n"
         "name: f\n"
-        f"{head}"
         "input:\n"
         "  n: !int\n"
         "nodes:\n"
@@ -407,3 +408,43 @@ def test_an_escaped_span_in_an_object_entry_is_text():
     error = _load_error(text)
 
     assert str(error) == "node 'use' input 'c': declared int, but the value is str"
+    assert _error_line(error) == _line_of(text, "c: !int")
+
+
+@pytest.mark.parametrize(("field", "typ"), [("[1, 2]", "list(int)"), ("true", "bool")])
+def test_a_literal_field_takes_its_literal_type(field, typ):
+    text = _record_flow(f"  r: !object\n    b: {field}\n", "!str ${r.output.b}")
+
+    error = _load_error(text)
+
+    assert str(error) == f"node 'use' input 'c': declared str, but the value is {typ}"
+    assert _error_line(error) == _line_of(text, "c: !str")
+
+
+_G_DEF = (
+    "defs:\n"
+    "  g:\n"
+    "    input:\n"
+    "      n: !int\n"
+    "    nodes:\n"
+    "      v:\n"
+    "        kind: code\n"
+    "        output: {q: int}\n"
+    "        code: |\n"
+    "          return {'q': 1}\n"
+    "    output: ${v.output}\n"
+)
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        "  o: !object call(g, n=${input.n})\n",
+        "  o: !Optional(object) {a: 1}\n",
+        "  o: !Optional(object)\n    a: ${input.n}\n",
+    ],
+)
+def test_an_object_entry_not_over_a_bare_object_mapping_keeps_its_tag(entry):
+    text = _record_flow(entry, "${o.output.zz}").replace("input:\n", _G_DEF + "input:\n", 1)
+
+    load_flow(text)

@@ -2,8 +2,9 @@
 
 This module projects synthesized boundary-input ranges from an existing source
 cursor and slices authored text out of a document. It never parses or calls
-`parse_nodes`/`parse_file`, keeping the helper layer below `parse`. Assertion origins and temporary ranges are deliberately
-absent: the build conductor derives both from one retained item cursor.
+`parse_nodes`/`parse_file`, keeping the helper layer below `parse`. Assertion
+origins and temporary ranges are deliberately absent: the build conductor derives
+both from one retained item cursor.
 """
 
 from __future__ import annotations

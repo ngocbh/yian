@@ -343,19 +343,24 @@ def literal_contract(value: Any) -> OutputContract | None:
 
     A mapping is a closed record of its keys' contracts, a list is a list of its
     items' joined type (as in `template_contract`), and a scalar has its kind's
-    widened type. Every string is `str`: the value is already read, so `$$` escapes
-    are undone and a string is never scanned for `${...}` spans.
+    widened type. A nested mapping with an unproven field, or a list whose items
+    don't join, is opaque as a whole, since a partial record can't nest. Every
+    string is `str`: the value is already read, so `$$` escapes are undone and a
+    string is never scanned for `${...}` spans.
 
     Args:
         value (`Any`): The literal, with no template or binding inside it.
 
     Returns:
         `OutputContract | None`: The exact or partial contract, or `None` when the
-            value's shape is unproven (a non-text key, a non-finite number, a list
-            whose items don't join).
+            value's shape is unproven (a non-text key, which only a programmatic
+            caller can pass, a non-finite number, a list whose items don't join).
     """
+    # Not `_tree_contract`: it would undo `$$` escapes a second time and read a `${...}`
+    # left by an escape as a span, but this value's strings are final text.
     if type(value) is dict:
-        # A record names its fields by text, so a mapping with another key is unproven.
+        # A loaded flow's mapping keys are text; this serves programmatic callers, whose
+        # mapping may have another key that no record field could name.
         if any(type(key) is not str for key in value):
             return None
         return combine_output_contracts(

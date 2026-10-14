@@ -10,13 +10,14 @@ a tag for a value.
 Only the generic, kind-independent pre-checks live here (node id shape and reserved ids,
 entry classification, the `input:`/`output:` -> plural back-map, `kind:` resolution);
 each kind's own `parse` owns its field legality (allowed/required/asserts/env) and its
-descriptor-local `SourceRange` recording (each field tagged `("field", name)`). Two kind-blind enrichments
-run after every kind parse: each `input:` binding's own range is stamped into the
-descriptor's `field_ranges` under `("input", name)`, and each `asserts:` item range is
-appended positionally to its `assert_ranges`. This metadata remains inside Compose;
-`_finish()` copies node/field locations to `BuildResult` for validation, while runtime
-diagnosis uses only opaque semantic-carrier origins. Source-order origin registration keeps
-duplicate assertions distinct without an aligned range list on the semantic node.
+descriptor-local `SourceRange` recording (each field tagged `("field", name)`). Two
+kind-blind enrichments run after every kind parse: each `input:` binding's own range is
+stamped into the descriptor's `field_ranges` under `("input", name)`, and each `asserts:`
+item range is appended positionally to its `assert_ranges`. This metadata remains inside
+Compose; `_finish()` copies node/field locations to `BuildResult` for validation, while
+runtime diagnosis uses only opaque semantic-carrier origins. Source-order origin
+registration keeps duplicate assertions distinct without an aligned range list on the
+semantic node.
 """
 
 from __future__ import annotations

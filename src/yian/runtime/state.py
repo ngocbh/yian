@@ -923,7 +923,7 @@ def prepare_node_succeeded(
     output_origin = output_contract_origin(output_contract, ())
     # Replay (`_validate_success_value`) skips the nesting check on purpose, so logs
     # recorded before the limit still replay.
-    enclosing_levels = -1 if type(state.flow.nodes[node_id]).commits_input_record else 0
+    enclosing_levels = -1 if state.flow.nodes[node_id].commits_input_record else 0
     try:
         reject_deep_nesting(output, "output", enclosing_levels=enclosing_levels)
         value_wire, typed = _canonical_output_value(

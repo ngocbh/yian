@@ -352,7 +352,8 @@ def test_owner_context_error_identifies_receiver_without_changing_forward_accept
     from yian.runtime.backward import compute_backward
     from tests.engine._backward_fakes import RecordingBackwardNode
 
-    # Only a log recorded before the value nesting limit holds a value this deep.
+    # The limit is raised so the live run produces a value deep enough to exceed the
+    # memory learn-context bound, which is what this test exercises.
     monkeypatch.setattr("yian.typesys.values.MAX_VALUE_NESTING", 500)
     value = "leaf"
     for _ in range(140 if material == "episode" else 123):

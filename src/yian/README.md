@@ -931,7 +931,8 @@ with `boundary=None`. Expansion validation and its digest include these derived
 connections and execution topology; authored fingerprints exclude them.
 
 The runtime core is **kind-blind**. It dispatches on this result sum and consults
-node-owned execution-semantic traits/hooks (`is_spawner`, `binds_per_item`, `item_source_key`,
+node-owned execution-semantic traits/hooks (`is_spawner`, `commits_input_record` (START's
+input record may go one level over the value nesting limit), `binds_per_item`, `item_source_key`,
 `bind_reserved`, `validate_execution_setup`, `grow_depth_delta`, `is_loop`,
 `needs_stop_event`, `needs_tools`, `needs_memory_context`, `needs_skills`,
 `needs_evaluation_trace`, `needs_live_events`, `needs_steering`, `memory_scope`, and

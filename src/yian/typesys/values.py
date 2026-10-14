@@ -205,7 +205,8 @@ def reject_deep_nesting(value: Any, where: str, *, enclosing_levels: int = 0) ->
         return
     if 1 + enclosing_levels > limit:
         raise _too_deep(where, (), limit)
-    # An explicit stack, not recursion: a value may be deeper than Python's recursion limit.
+    # An explicit stack, not recursion, so the walk does not depend on the caller's stack
+    # depth or the configured recursion limit.
     # Each frame holds its children iterator, the container, and its key in the parent;
     # the path is built only when rejecting.
     stack: list[tuple[Iterator[tuple[Any, Any]], Any, Any]] = [(iter(children), value, None)]

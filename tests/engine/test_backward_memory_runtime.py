@@ -249,7 +249,8 @@ def test_no_policy_backward_still_records_ready_and_finished_without_opening_res
 
 
 def test_context_depth_failure_keeps_completed_backward_without_calling_learners(monkeypatch):
-    # Only a log recorded before the value nesting limit holds a value this deep.
+    # The limit is raised so the live run produces a value deep enough to exceed the
+    # memory learn-context bound, which is what this test exercises.
     monkeypatch.setattr("yian.typesys.values.MAX_VALUE_NESTING", 500)
     value = "leaf"
     for _ in range(140):

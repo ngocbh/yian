@@ -87,7 +87,10 @@ def test_a_record_output_over_the_limit_fails_at_the_field():
     )
 
 
-@pytest.mark.parametrize("levels", [200, 250, 1500])
+# Before the limit, 200 levels raised pydantic's "Invalid JSON: recursion limit exceeded" out
+# of run_flow, and 1500 failed the inline CODE serializer with "Circular reference detected
+# (depth exceeded)".
+@pytest.mark.parametrize("levels", [200, 1500])
 def test_a_far_too_deep_inline_output_fails_without_raising(levels):
     flow = load_flow(_code_flow(_tree_body(levels), output_line=_TREE_OUTPUT))
     result = run_flow(flow, {})
@@ -154,12 +157,12 @@ output: ${{m.output}}
 """
 
 
-def test_a_map_result_list_over_the_limit_fails_the_map():
+def test_a_map_result_list_over_the_limit_fails_at_the_map_end():
     result = run_flow(load_flow(_map_flow(100)), {})
 
     assert result.status == "failed"
     assert result.failure.code == "contract.output"
-    assert result.failure.node_id.startswith("m")
+    assert result.failure.node_id == "m/__end__"
     assert "output at [0]" in result.failure.message
     assert "100 levels" in result.failure.message
 
@@ -198,6 +201,21 @@ output: ${echo.output}
 
     assert result.status == "succeeded"
     assert result.output == value
+
+
+def test_a_run_input_record_over_the_limit_fails_at_start():
+    flow = load_flow("""
+id: nesting
+name: nesting
+input:
+  x: object
+nodes: {}
+output: ${input.x}
+""")
+    result = run_flow(flow, {"x": _nest_dict(101)})
+
+    _assert_too_deep(result, "__start__")
+    assert result.failure.message.startswith("output at x.a")
 
 
 def test_replay_accepts_a_value_recorded_before_the_limit(monkeypatch, tmp_path):

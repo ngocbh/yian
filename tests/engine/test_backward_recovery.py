@@ -633,7 +633,8 @@ input:
 nodes: {}
 output: ${input.payload}
 """)
-    # Only a log recorded before the value nesting limit holds a value this deep.
+    # The limit is raised so the live run produces a value deep enough to exceed the
+    # memory learn-context bound, which is what this test exercises.
     monkeypatch.setattr("yian.typesys.values.MAX_VALUE_NESTING", 500)
     value = {"leaf": "retained"}
     for _ in range(140):

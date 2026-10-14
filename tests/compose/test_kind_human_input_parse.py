@@ -321,3 +321,136 @@ nodes:
 def test_human_input_parse_without_adaptive_questions_has_no_brief_range():
     desc = HumanInputDescriptor.parse("ask", _reader_for(_FLOW, "ask"))
     assert ("text", "adaptive_questions.prompt") not in desc.field_ranges
+
+
+ALLOWED = "(allowed: llm_config, prompt, retries)"
+
+
+def _unknown_adaptive(key):
+    return (
+        f"node 'ask' (kind=human_input): `adaptive_questions:` field {key!r} is not "
+        f"allowed {ALLOWED}"
+    )
+
+
+def _parse_error(flow):
+    with pytest.raises(LoadError) as caught:
+        HumanInputDescriptor.parse("ask", _reader_for(flow, "ask"))
+    return caught.value
+
+
+@pytest.mark.parametrize(
+    ("line", "key"), [("bogus: 1", "bogus"), ('system_prompt: "S ${nope}"', "system_prompt")]
+)
+def test_human_input_parse_rejects_an_unknown_adaptive_key(line, key):
+    flow = f"""\
+nodes:
+  ask:
+    kind: human_input
+    adaptive_questions:
+      prompt: Ask
+      {line}
+"""
+    error = _parse_error(flow)
+    assert _unknown_adaptive(key) in str(error)
+    rng = error.diagnostic.frames[-1].range
+    assert (rng.start_line, rng.start_col) == (6, 7)
+
+
+def test_human_input_parse_rejects_an_unknown_adaptive_key_in_flow_style():
+    flow = """\
+nodes:
+  ask:
+    kind: human_input
+    adaptive_questions: {prompt: Q, bogus: 1}
+"""
+    error = _parse_error(flow)
+    assert _unknown_adaptive("bogus") in str(error)
+    rng = error.diagnostic.frames[-1].range
+    assert (rng.start_line, rng.start_col) == (4, 37)
+
+
+def test_human_input_parse_reports_the_first_unknown_adaptive_key():
+    flow = """\
+nodes:
+  ask:
+    kind: human_input
+    adaptive_questions:
+      prompt: Ask
+      zeta: 1
+      alpha: 2
+"""
+    error = _parse_error(flow)
+    assert _unknown_adaptive("zeta") in str(error)
+
+
+def test_human_input_parse_rejects_a_non_string_adaptive_key():
+    flow = """\
+nodes:
+  ask:
+    kind: human_input
+    adaptive_questions:
+      prompt: Ask
+      1: x
+"""
+    error = _parse_error(flow)
+    assert _unknown_adaptive(1) in str(error)
+    rng = error.diagnostic.frames[-1].range
+    assert (rng.start_line, rng.start_col) == (6, 7)
+
+
+def test_human_input_parse_rejects_a_merged_unknown_adaptive_key():
+    flow = """\
+x-b: &b {prompt: Q, bogus: 1}
+nodes:
+  ask:
+    kind: human_input
+    adaptive_questions:
+      <<: *b
+"""
+    error = _parse_error(flow)
+    assert _unknown_adaptive("bogus") in str(error)
+    rng = error.diagnostic.frames[-1].range
+    assert (rng.start_line, rng.start_col) == (1, 21)
+
+
+def test_human_input_parse_ranges_an_unknown_adaptive_key_past_a_recursive_alias():
+    flow = """\
+nodes:
+  ask: &a
+    kind: human_input
+    adaptive_questions: *a
+"""
+    error = _parse_error(flow)
+    assert _unknown_adaptive("kind") in str(error)
+    rng = error.diagnostic.frames[-1].range
+    assert (rng.start_line, rng.start_col) == (4, 5)
+
+
+def test_human_input_parse_unknown_adaptive_key_without_source():
+    from yian.compose.parse.nodes import parse_nodes
+    from yian.compose.source import SourceCursor
+
+    body = {"kind": "human_input", "adaptive_questions": {"prompt": "Ask", "bogus": 1}}
+    with pytest.raises(LoadError) as caught:
+        parse_nodes(SourceCursor.virtual({"ask": body}))
+    assert _unknown_adaptive("bogus") in str(caught.value)
+    assert caught.value.diagnostic.frames == ()
+
+
+def test_human_input_parse_accepts_every_allowed_adaptive_key():
+    flow = """\
+nodes:
+  ask:
+    kind: human_input
+    adaptive_questions:
+      prompt: Ask
+      llm_config: {model: m}
+      retries: 2
+"""
+    desc = HumanInputDescriptor.parse("ask", _reader_for(flow, "ask"))
+    assert desc.adaptive_questions == {
+        "prompt": "Ask",
+        "llm_config": {"model": "m"},
+        "retries": 2,
+    }

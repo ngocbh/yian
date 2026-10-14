@@ -3,7 +3,8 @@
 One of the two-axis `compose/nodes/<kind>.py` modules: it owns the `human_input` node's
 frozen `HumanInputDescriptor`. It wraps the template `parse` from `NodeDescriptor` (which
 records each field's `SourceRange`) to reject the removed `adaptive_questions.mode:` key and
-record one `("text", "questions[i]...")` range per question string and a
+any `adaptive_questions:` key the adaptive desugar does not read, and to record one
+`("text", "questions[i]...")` range per question string and a
 `("text", "adaptive_questions.prompt")` range for the adaptive brief, overrides the
 `_validate_fields` hook to enforce the one-of-three question-surface legality, and overrides
 `build` (which constructs the runtime `HumanInputNode` and derives the answer schema). A
@@ -36,6 +37,9 @@ from yian.nodes.human_input import HumanInputNode
 from yian.nodes.human_input.node import site_label, template_sites
 from yian.typesys.values import Type, ValueKind
 
+# The keys the adaptive desugar reads from an `adaptive_questions:` block.
+_ADAPTIVE_KEYS = frozenset({"prompt", "llm_config", "retries"})
+
 
 @dataclass(frozen=True, kw_only=True)
 class HumanInputDescriptor(NodeDescriptor):
@@ -52,7 +56,8 @@ class HumanInputDescriptor(NodeDescriptor):
     Inherits the common descriptor fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` +
     the Compose-only `range`/`field_ranges` parse metadata), the `input:`/`output:` signature surface, and the
     template `parse` from `NodeDescriptor`, which it wraps to reject the removed
-    `adaptive_questions.mode:` key, a non-text `adaptive_questions.prompt:` brief, and a
+    `adaptive_questions.mode:` key, any `adaptive_questions:` key other than `prompt`,
+    `llm_config`, or `retries`, a non-text `adaptive_questions.prompt:` brief, and a
     non-text `question`/`header`/option `label`/`description` in a literal `questions:` list,
     and to add a `("text", "questions[i]...")` range for each question string and a
     `("text", "adaptive_questions.prompt")` range for the adaptive brief to `field_ranges`. It
@@ -81,7 +86,7 @@ class HumanInputDescriptor(NodeDescriptor):
 
     @classmethod
     def parse(cls, node_id: str, cursor: SourceCursor) -> "HumanInputDescriptor":
-        """Reject `adaptive_questions.mode:` and a non-text brief or question text; range the text.
+        """Reject unknown `adaptive_questions:` keys and a non-text brief or question; range text.
 
         After the template `parse`, rejects the first `question`/`header`/option `label`/
         `description` in a literal `questions:` list that is present but not a string, at that
@@ -93,18 +98,29 @@ class HumanInputDescriptor(NodeDescriptor):
         `adaptive_questions:` or `questions:` block.
 
         Raises:
-            `LoadError`: The `adaptive_questions:` block authors `mode:`, its `prompt:` brief is
-                not text (YAML read it as a number, boolean, date, list, or mapping), the
+            `LoadError`: The `adaptive_questions:` block authors `mode:` or a key other than
+                `prompt`/`llm_config`/`retries`, its `prompt:` brief is not text (YAML read
+                it as a number, boolean, date, list, or mapping), the
                 template `parse` rejects the node, or a literal question's `question`,
                 `header`, option `label`, or option `description` is present but not text.
         """
         adaptive = cursor.get("adaptive_questions")
-        if isinstance(adaptive, dict) and "mode" in adaptive:
-            raise LoadDiagnostics.from_cursor(cursor).error(
-                f"node {node_id!r} (kind=human_input): `adaptive_questions.mode:` was removed: "
-                f"{MODE_REMOVED_FIX}",
-                range=cursor.child("adaptive_questions").key_range_of("mode"),
-            )
+        if isinstance(adaptive, dict):
+            if "mode" in adaptive:
+                raise LoadDiagnostics.from_cursor(cursor).error(
+                    f"node {node_id!r} (kind=human_input): `adaptive_questions.mode:` was "
+                    f"removed: {MODE_REMOVED_FIX}",
+                    range=_key_range(cursor.child("adaptive_questions"), "mode")
+                    or cursor.key_range_of("adaptive_questions"),
+                )
+            for key in adaptive:
+                if key not in _ADAPTIVE_KEYS:
+                    raise LoadDiagnostics.from_cursor(cursor).error(
+                        f"node {node_id!r} (kind=human_input): `adaptive_questions:` field "
+                        f"{key!r} is not allowed (allowed: {', '.join(sorted(_ADAPTIVE_KEYS))})",
+                        range=_key_range(cursor.child("adaptive_questions"), key)
+                        or cursor.key_range_of("adaptive_questions"),
+                    )
         brief = adaptive.get("prompt") if isinstance(adaptive, dict) else None
         if brief is not None and not isinstance(brief, str):
             raise LoadDiagnostics.from_cursor(cursor).error(
@@ -323,6 +339,17 @@ def _range_at(cursor: SourceCursor, path: tuple[str | int, ...]) -> Optional[Sou
     except SourceAccessError:
         return None
     return cursor.range
+
+
+def _key_range(cursor: SourceCursor, key: Any) -> Optional[SourceRange]:
+    """The `SourceRange` of `key` in the mapping under `cursor`, or `None` when it has none.
+
+    `None` also covers a mapping past a recursive alias cut, so the caller's error falls back
+    to an enclosing range."""
+    try:
+        return cursor.key_range_of(key)
+    except SourceAccessError:
+        return None
 
 
 def _whole_ref_name(text: str) -> Optional[str]:

@@ -2037,10 +2037,13 @@ ask:
     retries: 3                   # optional — self-correction attempts
 ```
 
-`adaptive_questions.mode:` was removed; writing it is a load error.
+The block takes only `prompt:`, `llm_config:`, and `retries:`. Any other key is a load
+error at that key that lists the allowed keys. `adaptive_questions.mode:` was removed;
+writing it is a load error.
 
 Changed: a bad brief used to be reported on `node 'ask__compose' prompt` and point at
-the gate's `prompt:` line, or at the node when the gate had no `prompt:`.
+the gate's `prompt:` line, or at the node when the gate had no `prompt:`. An unknown key
+in the block used to load and be ignored.
 
 **Upstream questions** — read the list from an author-written upstream node:
 

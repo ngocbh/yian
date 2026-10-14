@@ -29,7 +29,14 @@ def _load_error(text: str, **kwargs) -> LoadError:
 
 @pytest.mark.parametrize(
     "value",
-    ["2026-13-45", "2026-02-30", "0000-01-01", "2026-01-01T25:00:00", "[2026-13-45]"],
+    [
+        "2026-13-45",
+        "2026-02-30",
+        "0000-01-01",
+        "2026-01-01T25:00:00",
+        "[2026-13-45]",
+        "2026-01-01T10:00:00+05:99",
+    ],
 )
 def test_a_named_input_value(value):
     text = _flow(value)
@@ -39,17 +46,23 @@ def test_a_named_input_value(value):
     assert error.diagnostic.frames[-1].range.start_line == _line_of(text, "topic:")
 
 
-def test_an_input_default():
-    text = _flow("${input.d}", inputs="input:\n  d: !date 2026-13-45\n")
-    error = _load_error(text)
-    assert "not a valid date" in str(error) and _FIX in str(error)
-    assert error.diagnostic.frames[-1].range.start_line == _line_of(text, "d: !date")
+_DATE = ("2026-13-45", "not a valid date: month must be in 1..12")
+_OFFSET = ("2026-01-01T10:00:00+05:99", "not a valid datetime: UTC offset minutes must be under 60")
 
 
-def test_a_typed_binding_literal():
-    text = _flow("!date 2026-13-45")
+@pytest.mark.parametrize(("kind", "value", "reason"), [("date", *_DATE), ("datetime", *_OFFSET)])
+def test_an_input_default(kind, value, reason):
+    text = _flow("${input.d}", inputs=f"input:\n  d: !{kind} {value}\n")
     error = _load_error(text)
-    assert "not a valid date" in str(error) and _FIX in str(error)
+    assert f"{reason}; {_FIX}" in str(error)
+    assert error.diagnostic.frames[-1].range.start_line == _line_of(text, f"d: !{kind}")
+
+
+@pytest.mark.parametrize(("kind", "value", "reason"), [("date", *_DATE), ("datetime", *_OFFSET)])
+def test_a_typed_binding_literal(kind, value, reason):
+    text = _flow(f"!{kind} {value}")
+    error = _load_error(text)
+    assert f"{reason}; {_FIX}" in str(error)
     assert error.diagnostic.frames[-1].range.start_line == _line_of(text, "topic:")
 
 

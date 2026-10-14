@@ -6,8 +6,8 @@ sexagesimal integer. ``_FlowLoader`` keeps PyYAML as the parser and swaps only i
 own implicit-resolver table and the ``int``/``float``/``bool`` constructors for the
 YAML 1.2 core schema, keeping two YAML 1.1 extensions: unquoted timestamps and
 ``<<`` merge keys. Its own ``timestamp`` constructor makes a date-shaped plain
-scalar that is not a real date a located ``ConstructorError`` that says to quote
-it. PyYAML's global ``SafeLoader`` tables are never modified.
+scalar that is not a real date or time, such as ``2026-13-45`` or an offset of
+``+05:99``, a located ``ConstructorError`` that says to quote it. PyYAML's global ``SafeLoader`` tables are never modified.
 
 Knows about:   PyYAML.
 Never imports: compose helpers or phases, nodes, compile, runtime, the run
@@ -57,25 +57,6 @@ def _pyyaml_timestamp_regex() -> re.Pattern[str]:
             if tag == _TIMESTAMP_TAG:
                 return regexp
     raise AssertionError("PyYAML has no implicit timestamp resolver")
-
-
-def _date_problem(error: ValueError) -> str:
-    """Return why a date-shaped text is not a date, from `datetime`'s error.
-
-    Args:
-        error (`ValueError`):
-            The error `datetime` or `timezone` raised.
-
-    Returns:
-        `str`:
-            The error's text, or ``UTC offset must be under 24:00`` for the
-            ``timedelta`` repr `timezone` gives for an offset of 24 hours or more.
-    """
-
-    text = str(error)
-    if text.startswith("offset must be a timedelta"):
-        return "UTC offset must be under 24:00"
-    return text
 
 
 class ScalarValueError(ConstructorError):
@@ -198,11 +179,11 @@ class _FlowLoader(yaml.SafeLoader):
 
         Raises:
             `ScalarValueError`:
-                Raised when an unquoted date-shaped text is not a real date, such as
-                ``2026-13-45``.
+                Raised when an unquoted date-shaped text is not a real date or time,
+                such as ``2026-13-45`` or an offset of ``+05:99``.
             `ConstructorError`:
                 Raised when an explicitly tagged text is not date-shaped, or is quoted
-                and not a real date.
+                and not a real date or time.
         """
 
         text = self.construct_scalar(node)
@@ -215,10 +196,17 @@ class _FlowLoader(yaml.SafeLoader):
                 node.start_mark,
             )
         try:
+            if match.group("tz_hour") is not None:
+                # PyYAML adds the offset as a timedelta, so minutes over 59 would roll
+                # into the hours; check it as typesys/temporal.py does, hours first.
+                if int(match.group("tz_hour")) >= 24:
+                    raise ValueError("UTC offset must be under 24:00")
+                if int(match.group("tz_minute") or 0) >= 60:
+                    raise ValueError("UTC offset minutes must be under 60")
             return super().construct_yaml_timestamp(node)
         except ValueError as exc:
             kind = "date" if match.group("hour") is None else "datetime"
-            reason = f"not a valid {kind}: {_date_problem(exc)}"
+            reason = f"not a valid {kind}: {exc}"
             if node.style is None:
                 raise ScalarValueError(reason, node.start_mark) from None
             # Quoted or block text under an explicit tag: quoting can't be the fix.

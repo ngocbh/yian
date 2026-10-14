@@ -19,6 +19,7 @@ from yian.compose.source import (
     read_plain_scalar,
 )
 from yian.compose.source.scalars import _FlowLoader
+from yian.typesys.temporal import parse_datetime
 
 
 def _document_value(text: str):
@@ -280,6 +281,10 @@ _BAD_DATES = [
     ("0000-01-01", "year 0 is out of range"),
     ("2026-01-01T25:00:00", "hour must be in 0..23"),
     ("2026-01-01 10:00:00 +99:00", "UTC offset must be under 24:00"),
+    ("2026-01-01 10:00:00 +05:99", "UTC offset minutes must be under 60"),
+    ("2026-01-01T10:00:00+05:60", "UTC offset minutes must be under 60"),
+    ("2026-01-01t10:00:00-5:99", "UTC offset minutes must be under 60"),
+    ("2026-01-01T10:00:00+23:60", "UTC offset minutes must be under 60"),
 ]
 
 
@@ -300,10 +305,16 @@ def test_an_unbuildable_date_is_a_located_syntax_error_with_the_fix(read, text, 
 
 @pytest.mark.parametrize(
     ("text", "line", "column"),
-    [("[1, 2026-13-45]\n", 1, 5), ("a:\n  2026-13-45: 1\n", 2, 3)],
-    ids=["in-a-list", "as-a-key"],
+    [
+        ("[1, 2026-13-45]\n", 1, 5),
+        ("a:\n  2026-13-45: 1\n", 2, 3),
+        ("[1, 2026-01-01T10:00:00+05:99]\n", 1, 5),
+        ("a:\n  2026-01-01T10:00:00+05:99: 1\n", 2, 3),
+    ],
+    ids=["in-a-list", "as-a-key", "offset-in-a-list", "offset-as-a-key"],
 )
 def test_an_unbuildable_date_in_a_list_or_key_is_located(text, line, column):
+    # Also matches "not a valid datetime".
     with pytest.raises(SourceSyntaxError, match="not a valid date") as caught:
         SourceDocument.parse(text)
 
@@ -321,12 +332,24 @@ def test_an_explicit_timestamp_tag_on_non_date_text_names_the_text(read):
 
 
 @ENTRY_POINTS
-def test_a_quoted_unbuildable_date_under_an_explicit_tag_gets_no_quoting_fix(read):
+@pytest.mark.parametrize(
+    ("text", "reason"),
+    [
+        ('"2026-13-45"', "not a valid date: month must be in 1..12"),
+        (
+            '"2026-01-01T10:00:00+05:99"',
+            "not a valid datetime: UTC offset minutes must be under 60",
+        ),
+    ],
+)
+def test_a_quoted_unbuildable_date_under_an_explicit_tag_gets_no_quoting_fix(
+    read, text, reason
+):
     with pytest.raises(SourceSyntaxError) as caught:
-        read('value: !!timestamp "2026-13-45"\n')
+        read(f"value: !!timestamp {text}\n")
 
     message = str(caught.value)
-    assert "not a valid date: month must be in 1..12" in message
+    assert reason in message
     assert "quote it" not in message
 
 
@@ -340,3 +363,29 @@ def test_no_constructor_raises_a_non_yaml_error(tag, text):
         yaml.load(f"value: !<{tag}> {text}\n", Loader=_FlowLoader)
     except yaml.YAMLError:
         pass
+
+
+@pytest.mark.parametrize(
+    ("text", "offset"),
+    [
+        ("2026-01-01T10:00:00+05:59", timedelta(hours=5, minutes=59)),
+        ("2026-01-01T10:00:00-23:59", -timedelta(hours=23, minutes=59)),
+        ("2026-01-01T10:00:00+5", timedelta(hours=5)),
+    ],
+)
+def test_an_in_range_offset_still_builds(text, offset):
+    value = parse_yaml_literal(text)
+    assert value == datetime(2026, 1, 1, 10, tzinfo=timezone(offset))
+    assert value.utcoffset() == offset
+
+
+@pytest.mark.parametrize(
+    "offset", ["+05:99", "+07:60", "+23:60", "+24:00", "+99:00", "+99:99"]
+)
+def test_the_loader_and_the_typed_grammar_reject_an_offset_for_the_same_reason(offset):
+    text = f"2026-05-21T14:30:00{offset}"  # YAML needs the seconds to read a timestamp
+    with pytest.raises(ValueError) as typed:
+        parse_datetime(text)
+    with pytest.raises(SourceSyntaxError) as loaded:
+        parse_yaml_literal(text)
+    assert str(typed.value) in str(loaded.value)

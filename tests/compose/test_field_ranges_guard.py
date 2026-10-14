@@ -2,7 +2,7 @@
 
 from dataclasses import replace
 
-from yian.compose.nodes.base import BuildContext
+from yian.compose.nodes.base import BuildContext, BuildResult
 from yian.compose.parse.nodes import parse_nodes
 from yian.compose.source import SourceDocument
 
@@ -73,3 +73,18 @@ def test_descriptor_field_labels_move_to_build_result_only() -> None:
     assert not hasattr(result.node, "field_labels")
     assert plain.build(BuildContext({})).field_labels == {}
     assert labelled == plain
+
+
+def test_build_result_site_name_prefers_the_label() -> None:
+    """A labelled site reads as its label; any other site is named on its own node."""
+    document = SourceDocument.parse(_FLOW)
+    node = parse_nodes(document.root.child("nodes"))["n"].build(BuildContext({})).node
+    result = BuildResult(
+        node=node,
+        wiring={},
+        field_labels={"input 'topic'": "node 'h' input 'topic'"},
+    )
+
+    assert result.site_name("n", "input 'topic'") == "node 'h' input 'topic'"
+    assert result.site_name("n", "input 'other'") == "node 'n' input 'other'"
+    assert result.site_name("n", "prompt") == "node 'n' prompt"

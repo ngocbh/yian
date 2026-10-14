@@ -92,3 +92,191 @@ adaptive_questions:
 
 def test_valid_llm_config_loads():
     load_flow(_flow(llm_config="      llm_config: {model: m}\n"))
+
+
+# The gate's first input is on line 12.
+_INPUT_FLOW = """\
+id: f
+name: f
+input: {{proj: str}}
+nodes:
+  up:
+    kind: code
+    output: int
+    code: "return 1"
+  ask:
+    kind: human_input
+    input:
+{inputs}{gate_prompt}    adaptive_questions:
+      prompt: "{brief}"
+output: ${{ask.output}}
+"""
+
+
+def _input_flow(inputs: str, *, brief: str = "Q ${proj}", gate_prompt: str = "") -> str:
+    return _INPUT_FLOW.format(inputs=inputs, brief=brief, gate_prompt=gate_prompt)
+
+
+def _node_lines(error: LoadError) -> list[str]:
+    return [
+        ln.strip() for ln in str(error).splitlines() if ln.strip().startswith("node ")
+    ]
+
+
+@pytest.mark.parametrize(
+    ("source", "fragment"),
+    [
+        ("${input.nope}", "points to unknown flow input 'nope'"),
+        ("${nope.output}", "uses unknown namespace 'nope'"),
+        ("${up.output.x}", "reads field 'x' on type int"),
+        ("${input.nope :- 'x'}", "points to unknown flow input 'nope'"),
+    ],
+    ids=["flow-input", "namespace", "field", "default"],
+)
+def test_bad_input_is_reported_once_on_the_gate(source, fragment):
+    error = _load_error(_input_flow(f'      proj: "{source}"\n'))
+    message = str(error)
+    lines = [ln.strip() for ln in message.splitlines() if "input 'proj'" in ln]
+    assert len(lines) == 1
+    assert lines[0].startswith("node 'ask' input 'proj' from: ")
+    assert fragment in lines[0]
+    assert "ask__compose" not in message
+    assert _line(error) == 12
+
+
+def test_two_inputs_with_the_same_bad_source_are_both_reported():
+    error = _load_error(
+        _input_flow(
+            "      x: ${input.nope}\n      y: ${input.nope}\n", brief="Q ${x} ${y}"
+        )
+    )
+    assert [ln.split(": ", 1)[0] for ln in _node_lines(error)] == [
+        "node 'ask' input 'x' from",
+        "node 'ask' input 'y' from",
+    ]
+    assert "ask__compose" not in str(error)
+
+
+def test_bad_brief_and_bad_input_are_each_reported_once():
+    error = _load_error(_input_flow("      proj: ${input.nope}\n", brief="Q ${nope}"))
+    assert [ln.split(": ", 1)[0] for ln in _node_lines(error)] == [
+        "node 'ask' adaptive_questions.prompt",
+        "node 'ask' input 'proj' from",
+    ]
+    assert "ask__compose" not in str(error)
+
+
+def test_bad_input_is_listed_before_a_bad_gate_prompt():
+    error = _load_error(
+        _input_flow("      proj: ${input.nope}\n", gate_prompt='    prompt: "${nope}"\n')
+    )
+    assert [ln.split(": ", 1)[0] for ln in _node_lines(error)] == [
+        "node 'ask' input 'proj' from",
+        "node 'ask' prompt",
+    ]
+    assert "ask__compose" not in str(error)
+
+
+def test_isinstance_unknown_type_names_the_gate():
+    error = _load_error(_input_flow("      proj: ${isinstance(input.proj, Nope)}\n"))
+    message = str(error)
+    assert message.startswith("node 'ask' input 'proj': unknown type 'Nope'")
+    assert "ask__compose" not in message
+    assert _line(error) == 12
+
+
+def test_literal_inputs_still_load():
+    inputs = "      cfg: {a: 1}\n      ls: [1, 2]\n      n: list[int] = [1]\n"
+    load_flow(_input_flow(inputs, brief="Q ${cfg} ${ls} ${n}"))
+    load_flow(
+        f"""\
+id: f
+name: f
+nodes:
+  a:
+    kind: agent
+    input:
+{inputs}    prompt: "Q ${{cfg}} ${{ls}} ${{n}}"
+    output: str
+output: ${{a.output}}
+"""
+    )
+
+
+def test_typed_input_mismatch_names_the_gate():
+    error = _load_error(_input_flow("      proj: list[int] = ${input.proj}\n"))
+    message = str(error)
+    assert "node 'ask' input 'proj': declared list[int], but the value is str" in message
+    assert "ask__compose" not in message
+
+
+def test_skipped_operand_arithmetic_names_the_gate():
+    error = _load_error(
+        """\
+id: f
+name: f
+input:
+  approve: bool
+nodes:
+  gate:
+    kind: case
+    cases:
+      - when: ${input.approve}
+        then: order
+  order:
+    kind: code
+    output: {qty: int}
+    code: |
+      return {"qty": 1}
+  ask:
+    kind: human_input
+    input:
+      q: ${order.output.qty * 2}
+    adaptive_questions:
+      prompt: "Q ${q}"
+output: ${ask.output}
+"""
+    )
+    message = str(error)
+    assert (
+        "node 'ask' input 'q': ${order.output.qty * 2} does arithmetic on order.output.qty"
+        in message
+    )
+    assert "ask__compose" not in message
+
+
+def test_defs_body_input_error_names_the_gate():
+    error = _load_error(
+        """\
+id: f
+name: f
+input:
+  topic: str
+defs:
+  pick:
+    input:
+      topic: str
+    nodes:
+      ask:
+        kind: human_input
+        input:
+          proj: ${input.nope}
+        adaptive_questions:
+          prompt: "Q ${proj}"
+    output: ${ask.output}
+nodes:
+  run:
+    kind: call
+    call: pick
+    input:
+      topic: ${input.topic}
+output: ${run.output}
+"""
+    )
+    message = str(error)
+    assert message.startswith("defs entry 'pick': ")
+    lines = [ln for ln in message.splitlines() if "input 'proj'" in ln]
+    assert len(lines) == 1
+    assert "node 'ask' input 'proj' from: " in lines[0]
+    assert "ask__compose" not in message
+    assert _line(error) == 13

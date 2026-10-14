@@ -98,7 +98,9 @@ def check_typed_inputs(
 
     Raises:
         `LoadError`: A literal-text source does not fit its declared type, or a
-            source's inferred type is disjoint from it.
+            source's inferred type is disjoint from it. The input is named by its
+            node's `BuildResult.site_name`, so an input a desugar copied onto a synth
+            node is named as the node it was authored on.
     """
     diagnostics = diagnostics or LoadDiagnostics()
     for node_id, wiring in flow_wiring.items():
@@ -116,11 +118,12 @@ def check_typed_inputs(
             message = _binding_error(binding, param_producers, param_inputs, item=item)
             if message is None:
                 continue
-            fallback = None
+            fallback, where = None, f"node {node_id!r} input {name!r}"
             if result is not None:
                 fallback = result.field_ranges.get(("input", name)) or result.node_range
+                where = result.site_name(node_id, f"input {name!r}")
             raise _located_error(
-                f"node {node_id!r} input {name!r}: {message}",
+                f"{where}: {message}",
                 binding,
                 fallback,
                 resolve_origin,

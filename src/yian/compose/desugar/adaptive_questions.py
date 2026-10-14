@@ -30,8 +30,10 @@ Located parse metadata: the synth composer agent inherits the gate descriptor's
 `("field", "prompt")` range is the brief's own range and its `("field", "llm_config")` range
 is the block's `llm_config:` value range. Its `field_labels` names its `prompt` and
 `llm_config` as the gate's `adaptive_questions.prompt` and `adaptive_questions.llm_config`,
-so a bad brief or config is reported on the gate at the authored value. The rewritten gate
-keeps its own ranges via `replace`.
+so a bad brief or config is reported on the gate at the authored value, and names each
+copied `input 'p'` as the gate's `input 'p'`, so a bad binding reads exactly like the gate's
+own error at the same range and is reported once. The rewritten gate keeps its own ranges
+via `replace`.
 """
 
 from __future__ import annotations
@@ -106,7 +108,8 @@ def desugar_adaptive_questions(
         # AgentDescriptor defaults (e.g. retries=2, llm_config={}) apply otherwise. The
         # synth agent inherits the gate's ranges so its downstream errors locate there,
         # but its prompt and llm_config are the block's, so their errors locate at the
-        # block's values and name the gate's fields. Its internal contract has no
+        # block's values and name the gate's fields. Its copied inputs are named as the
+        # gate's, so their errors read as the gate's own. Its internal contract has no
         # authorable type string.
         field_ranges = {
             k: v for k, v in desc.field_ranges.items() if k != ("field", "prompt")
@@ -138,6 +141,7 @@ def desugar_adaptive_questions(
             "field_labels": {
                 "prompt": f"node {gid!r} adaptive_questions.prompt",
                 "llm_config": f"node {gid!r} adaptive_questions.llm_config",
+                **{f"input {p!r}": f"node {gid!r} input {p!r}" for p in desc.inputs},
             },
         }
         if "llm_config" in auto:

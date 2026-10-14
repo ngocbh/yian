@@ -78,6 +78,8 @@ class BuildResult:
 
     ``node_range``, ``field_ranges``, and ``field_labels`` exist only while Compose
     validates the assembled graph. They are discarded before ``CompiledFlow`` construction.
+    ``field_labels`` maps a site label (a field name or an input's ``input 'x'`` label) to
+    the full author-facing phrase that names the site in diagnostics.
     """
 
     node: Node
@@ -89,6 +91,23 @@ class BuildResult:
         compare=False,
     )
     field_labels: dict[str, str] = field(default_factory=dict, compare=False)
+
+    def site_name(self, node_id: str, site: str) -> str:
+        """The author-facing name of one site of this node in a diagnostic.
+
+        Args:
+            node_id (`str`):
+                The id this node is built under.
+            site (`str`):
+                A site label: a field name (`prompt`) or an input's wiring label
+                (`input 'x'`).
+
+        Returns:
+            `str`:
+                The site's `field_labels` phrase when a desugar set one, else
+                `node '<node_id>' <site>`.
+        """
+        return self.field_labels.get(site) or f"node {node_id!r} {site}"
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -114,10 +133,11 @@ class NodeDescriptor:
       nested branch call), or `None`. It is not a YAML key. The host-edge step gives a lifted
       node its host's CASE routes, `depends_on`, and `runs_after`, and gates it on the host's
       other inputs.
-    - **Field labels** (`field_labels`): field name -> the full author-facing phrase that names
-      the field in diagnostics, owner included (`"node 'ask' adaptive_questions.prompt"`). A
-      desugar pass sets it on a synth node whose field text was authored under another node.
-      It is not a YAML key, and `compare=False` keeps it out of `==`.
+    - **Field labels** (`field_labels`): site label (a field name or an input's `input 'x'`
+      label) -> the full author-facing phrase that names the site in diagnostics, owner
+      included (`"node 'ask' adaptive_questions.prompt"`). A desugar pass sets it on a synth
+      node whose field text or input binding was authored under another node. It is not a
+      YAML key, and `compare=False` keeps it out of `==`.
     - **Located-parse metadata** (`origin`/`range`/`field_ranges`): the opaque authored node
       identity, node body's `SourceRange`, and each present field's `SourceRange`. `compare=False`
       keeps them out of `==`, so a descriptor still equals an identically-configured one built

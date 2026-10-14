@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 from yian.compose import load_flow
+from yian.diagnostics import OriginRef
 from yian.events import NodeStarted
 from yian.nodes.contracts import PartialRecordContract, ValueContract
 from yian.run import resume_flow, run_flow
@@ -21,6 +22,7 @@ from yian.typesys.values import (
     ValueKind,
     build_value,
     reject_non_json,
+    value_repr,
 )
 
 
@@ -243,7 +245,46 @@ def test_an_untyped_inline_return_fails_at_the_output(code, message):
     assert result.status == "failed"
     assert result.failure.code == "contract.output"
     assert result.failure.node_id == "mk"
-    assert re.fullmatch(message, result.failure.message)
+    assert re.fullmatch(message, result.failure.message), result.failure.message
+    # An untyped output has no `output:` contract, so the failure traces to the node.
+    assert result.failure.trace == (OriginRef("/s:root/s:node/s:mk"),)
+
+
+class _NoRepr:
+    """A value whose repr raises."""
+
+    def __repr__(self) -> str:
+        raise RuntimeError("no repr")
+
+
+def test_value_repr_names_the_type_when_repr_raises():
+    assert value_repr(_NoRepr()) == "<_NoRepr object>"
+
+
+@pytest.mark.parametrize("output", [None, "object"], ids=["untyped", "object"])
+def test_an_inline_return_whose_repr_raises_fails_at_the_output(output):
+    typed = "" if output is None else f"    output: {output}\n"
+    text = (
+        "id: p\nname: p\n"
+        "input:\n  s: !str\n"
+        "nodes:\n"
+        "  mk:\n"
+        "    kind: code\n"
+        "    input:\n"
+        "      s: ${input.s}\n"
+        + typed
+        + "    code: |\n"
+        "      class R:\n"
+        "          def __repr__(self):\n"
+        "              raise RuntimeError('no repr')\n"
+        "      return {'r': R()}\n"
+        "output: ${mk.output}\n"
+    )
+    result = _run(text)
+    assert result.status == "failed"
+    assert result.failure.code == "contract.output"
+    assert result.failure.node_id == "mk"
+    assert "<R object>" in result.failure.message, result.failure.message
 
 
 @pytest.mark.parametrize(
@@ -443,19 +484,32 @@ def _committed(path: Path) -> dict[str, dict]:
 
 
 @pytest.mark.parametrize(
-    ("text", "expected"),
+    ("text", "expected", "wires"),
     [
-        (_flow('{"a": [1, None], "t": (1, 2)}'), {"a": [1, None], "t": [1, 2]}),
-        (_PARTIAL_RECORD_FLOW, {"f": _FILE_WIRE, "g": [1]}),
+        (
+            _flow('{"a": [1, None], "t": (1, 2)}'),
+            {"a": [1, None], "t": [1, 2]},
+            {"mk": {"kind": "object", "value": {"a": [1, None], "t": [1, 2]}}},
+        ),
+        (
+            _PARTIAL_RECORD_FLOW,
+            {"f": _FILE_WIRE, "g": [1]},
+            {
+                "a": {"kind": "file", "value": _FILE_WIRE},
+                "b": {"kind": "list[int]", "value": [1]},
+                "__end__": {"kind": "object", "value": {"f": _FILE_WIRE, "g": [1]}},
+            },
+        ),
     ],
     ids=["untyped", "partial-record"],
 )
-def test_resuming_a_finished_run_replays_untyped_values(tmp_path: Path, text, expected):
+def test_resuming_a_finished_run_replays_untyped_values(tmp_path: Path, text, expected, wires):
     path = tmp_path / "run.jsonl"
     first = _run(text, log=path)
     assert first.status == "succeeded", first.failure
     assert first.output == expected
     committed = _committed(path)
+    assert {node: committed[node] for node in wires} == wires
     before = path.read_bytes()
 
     resumed = resume_flow(load_flow(text), log=path)
@@ -464,4 +518,3 @@ def test_resuming_a_finished_run_replays_untyped_values(tmp_path: Path, text, ex
     assert resumed.output == expected
     assert not [event for event in resumed.events if isinstance(event, NodeStarted)]
     assert path.read_bytes() == before
-    assert _committed(path) == committed

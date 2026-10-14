@@ -31,7 +31,8 @@ execution. No opt-in load-time gate exists because there is no untrusted-source 
 current runtime executes inline code **in-process** with no isolation — a runaway body
 cannot be killed, only interrupted with the run; there is no killable subprocess runtime or
 security sandbox. The returned value is checked at the output boundary, like any node
-output; a value that isn't JSON (or, untyped, a file) fails the output contract there.
+output: a value that doesn't match its declared `output:` type, or, untyped, isn't made of
+JSON values and files, fails `contract.output`.
 """
 
 import ast

@@ -73,13 +73,17 @@ def value_repr(value: Any) -> str:
             The value to show in a message.
 
     Returns:
-        `str`: ``repr(value)``, or ``<{type} too large to display>``.
+        `str`: ``repr(value)``, ``<{type} too large to display>``, or ``<{type} object>``
+            when the value's own repr raises.
     """
     try:
         return repr(value)
     except ValueError:
         # repr of an int past Python's str-digit limit raises, at any nesting depth.
         return f"<{type(value).__name__} too large to display>"
+    except Exception:
+        # A returned value's repr is user code; a broken one must not crash the run.
+        return f"<{type(value).__name__} object>"
 
 
 def reject_nonfinite(value: Any, where: str) -> None:

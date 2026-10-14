@@ -288,6 +288,11 @@ class ValueKind(str, Enum):
     `.value` IS the one Python-surface vocabulary: it is simultaneously the serialized
     discriminator tag, the author-written `type:` token, and the displayed name (so there
     is no second "engine name" to translate — `str`, never `string`).
+
+    Every kind but `ANY` is a storage tag and wire discriminator. `ANY` is type-only: no
+    carrier stores it, and an `Any` value persists under its natural kind (`str`,
+    `object`, `list[Any]`, ...). The list kinds keep the bracket storage spelling
+    (`list[str]`); type labels spell them `list(str)`.
     """
 
     NONE = "None"
@@ -299,6 +304,7 @@ class ValueKind(str, Enum):
     BOOLEAN = "bool"
     OBJECT = "object"
     FILE = "file"  # reserved: never auto-inferred, not authorable yet
+    ANY = "Any"  # type-only: any non-null JSON value, stored in its natural carrier
 
     LIST_ANY = "list[Any]"
     LIST_STRING = "list[str]"
@@ -1353,6 +1359,67 @@ def _widen_int(value: int, path: tuple[str | int, ...]) -> float:
         raise TypeCheckError("int is too large for float", path=path) from None
 
 
+def _json_value_error(
+    value: Any, path: tuple[str | int, ...]
+) -> Optional[TypeCheckError]:
+    """Return why `value` is not a JSON value, or `None` when it is.
+
+    A JSON value is `None`, a `bool`, `int`, `float` or `str`, a `dict` with only
+    `str` keys and JSON values, or a `list`/`tuple` of JSON values. Each `dict`,
+    `list` and `tuple` is one level, counted as `reject_deep_nesting` counts them;
+    a value past `MAX_VALUE_NESTING` levels, a cyclic one included, is rejected.
+    Non-finite numbers are left to `reject_nonfinite`.
+
+    Args:
+        value (`Any`):
+            The value to check.
+        path (`tuple[str | int, ...]`):
+            Field/index path from the contract root to ``value``.
+
+    Returns:
+        `Optional[TypeCheckError]`:
+            The error for the first bad part, depth-first and in order, with its
+            path, or `None` when ``value`` is a JSON value.
+    """
+    # An explicit stack, not recursion, so a deep or cyclic value ends at the level limit
+    # instead of the interpreter's recursion limit.
+    stack: list[tuple[Any, tuple[str | int, ...], int]] = [(value, path, 1)]
+    while stack:
+        item, item_path, level = stack.pop()
+        if item is None or isinstance(item, (str, int, float)):
+            continue
+        if isinstance(item, dict):
+            for key in item:
+                if not isinstance(key, str):
+                    return TypeCheckError(
+                        f"object keys must be text, got {value_repr(key)}", path=item_path
+                    )
+            # `TypeCheckError` paths hold exact `str` segments, so a `str` subclass key
+            # is unwrapped.
+            children = [
+                (child, item_path + (str.__str__(key),)) for key, child in item.items()
+            ]
+        elif isinstance(item, (list, tuple)):
+            children = [(child, item_path + (index,)) for index, child in enumerate(item)]
+        else:
+            return TypeCheckError(f"{value_repr(item)} is not a JSON value", path=item_path)
+        if level > MAX_VALUE_NESTING:
+            return TypeCheckError(
+                f"value nests deeper than {MAX_VALUE_NESTING} levels, "
+                "the limit for a yian value (each record and list is a level)",
+                path=item_path,
+            )
+        stack.extend((child, child_path, level + 1) for child, child_path in reversed(children))
+    return None
+
+
+def _require_json_value(value: Any, path: tuple[str | int, ...]) -> None:
+    """Raise the `_json_value_error` for `value` at `path`, if any."""
+    error = _json_value_error(value, path)
+    if error is not None:
+        raise error
+
+
 # --------------------------------------------------------------------------- #
 # Constructors
 # --------------------------------------------------------------------------- #
@@ -1569,6 +1636,16 @@ def _build_for_type(
         ]
         return _LIST_VALUE_CLASS[typ.kind](value=items)
 
+    if typ.kind is ValueKind.ANY:
+        if value is None:
+            raise TypeCheckError(
+                f"None does not match declared type {typ.kind.value}", path=path
+            )
+        _require_json_value(value, path)
+        if isinstance(value, (list, tuple)):
+            return ListAnyValue(value=list(value))
+        return _SCALAR_VALUE_CLASS[_infer_scalar_type(value)](value=value)
+
     # plain scalar / flat list — the original behavior
     return _build_scalar_or_list(typ.kind, value, path=path)
 
@@ -1683,7 +1760,10 @@ def _build_scalar_or_list(
             )
         items = list(value)
         element = declared.element_kind
-        if element is not None:
+        if element is None:
+            for index, item in enumerate(items):
+                _require_json_value(item, path + (index,))
+        else:
             for index, item in enumerate(items):
                 if not _scalar_matches(element, item):
                     raise TypeCheckError(
@@ -1691,6 +1771,8 @@ def _build_scalar_or_list(
                         f"(declared {_kind_label(declared)})",
                         path=path + (index,),
                     )
+                if element is ValueKind.OBJECT:
+                    _require_json_value(item, path + (index,))
             items = [
                 _coerce_scalar(element, item, path + (index,))
                 for index, item in enumerate(items)
@@ -1702,4 +1784,6 @@ def _build_scalar_or_list(
         if declared in _TEMPORAL_PARSERS and isinstance(value, str):
             message += f": {_temporal_error(declared, value)}"
         raise TypeCheckError(message, path=path)
+    if declared is ValueKind.OBJECT:
+        _require_json_value(value, path)
     return _SCALAR_VALUE_CLASS[declared](value=_coerce_scalar(declared, value, path))

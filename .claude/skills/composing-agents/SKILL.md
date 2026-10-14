@@ -750,7 +750,7 @@ value is a load error asking for `:-`.
 `depends_on`) can read `Buy`-only fields; `else:` sees the unlisted members. A join
 `${b.output | s.output}` of `buy` and `sell` branches sees both. `on:` must be one direct
 ref to the tag (not a coalesce); a `when:` that isn't a tag is a load error (``case node
-'route': `when: buyy` is not a tag of `on: ${d.output.action}` (`Literal("buy","sell")`);
+'route': `when: buyy` is not a tag of `on: ${d.output.action}` (`Literal(buy, sell)`);
 use one of: buy, sell``). A searched `case`
 narrows with a top-level `and` part `isinstance(<ref>, T)`:
 `when: isinstance(d.output, Buy) and d.output.qty > 5`. Its `else:` doesn't narrow.

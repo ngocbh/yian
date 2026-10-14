@@ -500,7 +500,7 @@ that change; a field it omits keeps its value. This is the shape
 - **A member-only union field fails to load outside its branch.** `${d.output.qty}`
   where only `Buy` has `qty` must sit under `when: buy` (or an `isinstance` case).
   A `when:` value that isn't a tag of the union is a load error (``case node 'route':
-  `when: buyy` is not a tag of `on: ${d.output.action}` (`Literal("buy","sell")`); use one
+  `when: buyy` is not a tag of `on: ${d.output.action}` (`Literal(buy, sell)`); use one
   of: buy, sell``), and inline child bodies are typed before narrowing.
 - **Flow-level `asserts:` read `input.X` (boundary, before any node) or `node.output`
   (post, after the terminal).** An exact unqualified input name is shorthand (`age`

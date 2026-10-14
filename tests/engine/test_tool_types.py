@@ -65,9 +65,9 @@ _TAGGED_UNION = {
         ({"type": "string", "format": "date"}, "str"),
         ({"type": "string", "format": "date-time"}, "str"),
         ({"type": "string", "format": "email", "minLength": 1, "pattern": "@"}, "str"),
-        ({"enum": ["b", "a"]}, 'Literal("a","b")'),
-        ({"enum": ["a", "b"], "type": "string"}, 'Literal("a","b")'),
-        ({"const": "buy"}, 'Literal("buy")'),
+        ({"enum": ["b", "a"]}, 'Literal(a, b)'),
+        ({"enum": ["a", "b"], "type": "string"}, 'Literal(a, b)'),
+        ({"const": "buy"}, 'Literal(buy)'),
         ({"enum": [1, 2], "type": "integer"}, "int"),
         ({"const": 3, "type": "number"}, "float"),
         ({"enum": [1, 2]}, None),
@@ -85,7 +85,7 @@ _TAGGED_UNION = {
         ({"type": "boolean"}, "bool"),
         ({"type": "null"}, "None"),
         ({"type": "array", "items": {"type": "integer"}}, "list(int)"),
-        ({"type": "array", "items": {"enum": ["x", "y"]}}, 'list(Literal("x","y"))'),
+        ({"type": "array", "items": {"enum": ["x", "y"]}}, 'list(Literal(x, y))'),
         ({"type": "array", "items": {"type": "array", "items": {"type": "string"}}},
          "list(list(str))"),
         ({"type": "array", "items": {"anyOf": [{"type": "integer"}, {"type": "null"}]}},
@@ -118,7 +118,7 @@ _TAGGED_UNION = {
           "examples": [1], "multipleOf": 2}, "int"),
         ({"type": "string", "minLength": 1, "maxLength": 9}, "str"),
         ({"anyOf": [_BUY, _SELL], "discriminator": {"propertyName": "action"}},
-         'Union({"action":Literal("buy"),"qty":int},{"action":Literal("sell"),"price":float})'),
+         'Union({"action":Literal(buy),"qty":int},{"action":Literal(sell),"price":float})'),
         ({"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 3,
           "uniqueItems": True}, "list(str)"),
     ],
@@ -164,7 +164,7 @@ def test_closed_object_is_a_record(schema: dict[str, Any], closed: bool) -> None
     assert {name: canonical_type_label(field) for name, field in typ.fields.items()} == {
         "a": "Optional(int)",
         "b": "list(str)",
-        "c": 'Literal("x","y")',
+        "c": 'Literal(x, y)',
         "d": "int",
     }
     # `a` is nullable and `d` is not listed in JSON `required`.
@@ -197,8 +197,8 @@ def test_tagged_union_of_defs_is_a_union_of_records_when_closed() -> None:
     assert typ is not None
     assert typ.variants is not None
     assert [canonical_type_label(member) for member in typ.variants] == [
-        '{"action":Literal("buy"),"qty":int}',
-        '{"action":Literal("sell"),"price":float}',
+        '{"action":Literal(buy),"qty":int}',
+        '{"action":Literal(sell),"price":float}',
     ]
     assert all(member.required == frozenset(member.fields) for member in typ.variants)
 
@@ -428,7 +428,7 @@ def _registered_place() -> BaseTool:
 def test_function_tool_types(build, restore_tool_registry) -> None:
     types = tool_types(build())
 
-    assert _input_labels(types) == {"sym": "str", "qty": "int", "mode": 'Literal("a","b")'}
+    assert _input_labels(types) == {"sym": "str", "qty": "int", "mode": 'Literal(a, b)'}
     assert types.required == frozenset({"sym", "qty"})
     assert types.output == _FILLED
 
@@ -700,7 +700,7 @@ class _JsonSchemaTool(BaseTool):
 def test_json_schema_dict_tool_inputs_are_translated() -> None:
     types = tool_types(_JsonSchemaTool())
 
-    assert _input_labels(types) == {"value": "int(0..5)", "mode": 'Literal("x","y")'}
+    assert _input_labels(types) == {"value": "int(0..5)", "mode": 'Literal(x, y)'}
     assert types.required == frozenset({"value"})
     assert types.output is None
 

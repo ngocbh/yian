@@ -1730,7 +1730,7 @@ Matching:
 
 ```text
 case node 'route': `when: 1` is an int but `on: ${input.n}` is `str`; quote it: `when: "1"`
-case node 'route': `when: nogo` is not a tag of `on: ${synth.output}` (`Literal["go","no_go"]`); use one of: go, no_go
+case node 'route': `when: nogo` is not a tag of `on: ${synth.output}` (`Literal(go, no_go)`); use one of: go, no_go
 case node 'route': `when: 1.0` duplicates `when: 1` (first at line 7), so it never matches; remove one
 ```
 
@@ -2018,7 +2018,7 @@ place_buy:
 - `on:` must be one direct reference to a tag field: `${node.output[.field...].tag}` or
   `${input.x[.field...].tag}`. A coalesce or embedded text doesn't narrow.
 - A `when:` that isn't a tag is a load error: ``case node 'route': `when: buyy` is not a
-  tag of `on: ${decide.output.action}` (`Literal["buy","hold","sell"]`); use one of: buy,
+  tag of `on: ${decide.output.action}` (`Literal(buy, hold, sell)`); use one of: buy,
   hold, sell``. Without `else:` every tag needs a
   `when:` (`enum tag(s) ['hold'] not covered`).
 - Narrowing follows the branch target's chain: a node that reads it through a plain

@@ -1043,7 +1043,7 @@ def test_canonical_variant_label_sorts_and_json_quotes_adversarial_tags():
         tags=frozenset({"é", "z", 'a,"b'}),
     )
 
-    assert canonical_type_label(typ) == 'Literal("a,\\"b","z","é")'
+    assert canonical_type_label(typ) == 'Literal("a,\\"b", z, é)'
 
 
 def test_canonical_record_label_sorts_and_json_quotes_adversarial_keys():

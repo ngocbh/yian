@@ -513,7 +513,7 @@ output: ${c.output}
 """
     error = _load_error(text)
     assert (
-        'Buy(...): the value is {"action":Literal("sell"),"price":float}, which can never '
+        'Buy(...): the value is {"action":Literal(sell),"price":float}, which can never '
         "be a Buy" in str(error)
     )
     assert _error_line(error) == _line_of(text, "x: ${Buy")
@@ -546,7 +546,7 @@ def test_an_unknown_keyword_field_is_a_load_error():
     [
         (
             '${Buy(action="sell", conviction=1)}',
-            "Buy(...) field 'action': declared Literal(\"buy\"), but the value is Literal(\"sell\")",
+            "Buy(...) field 'action': declared Literal(buy), but the value is Literal(sell)",
         ),
         (
             '${Buy(action="buy", conviction=d.output)}',
@@ -586,7 +586,7 @@ def test_downstream_sees_the_constructed_type():
     text = _consumer("!Sell ${Buy(d.output)}")
     assert (
         'declared Sell, but the value is '
-        '{"action":Literal("buy"),"conviction":float}' in str(_load_error(text))
+        '{"action":Literal(buy),"conviction":float}' in str(_load_error(text))
     )
 
 

@@ -335,3 +335,22 @@ def test_bundled_yaml_and_docs_spell_no_old_type_form():
 def test_load_messages_suggest_no_old_type_form():
     found = [problem for path in _files(MESSAGE_GLOBS) for problem in _message_hints(path)]
     assert not found, "messages must suggest tags and parentheses:\n" + "\n".join(found)
+
+
+# A bracket `Literal["a"]` or a parenthesized `Literal("a","b")` with no space after
+# the comma: the spellings type labels used before they printed `Literal(a, b)`.
+_OLD_LITERAL_LABEL = re.compile(r'Literal\["|Literal\("(?:[^"\\]|\\.)*","')
+_PYTHON_FENCE = re.compile(r"^[ \t]*```python.*?^[ \t]*```", re.MULTILINE | re.DOTALL)
+
+
+def test_docs_quote_literal_types_in_the_parenthesized_spelling():
+    offenders = []
+    for path in _files(DOC_GLOBS):
+        # A ```python block spells Python's `typing.Literal`, not a yian type.
+        text = _PYTHON_FENCE.sub("", path.read_text(encoding="utf-8"))
+        offenders += [
+            f"{path.relative_to(REPO_ROOT)}: {line.strip()}"
+            for line in text.splitlines()
+            if _OLD_LITERAL_LABEL.search(line)
+        ]
+    assert not offenders, offenders

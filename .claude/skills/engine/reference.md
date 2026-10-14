@@ -872,12 +872,12 @@ skips the check so logs recorded before the limit replay, and `canonical_typed`,
 `canonical_seed`, and `encode_pool` never apply it.
 
 `Type.variants` refines OBJECT into a union: a tuple of two or more non-nullable record
-members, in canonical order (by tag, else by `canonical_type_label`) and deduplicated by
-`==`, never `set()`, since `Type` holds dicts. `Optional(Union(...))` sets `nullable` on
-the union. Tag fields are derived by `union_tag_fields` (a field every member requires as
-a non-nullable single-value `Literal`, with pairwise distinct values); nothing stores
-them. `resolve_type` rejects an untagged union with two members that `types_overlap`, and
-`read_typedefs` resolves every typedef union eagerly. Value checks pick the member by the
+members, in canonical order (by tag, else by the bracket-spelled order key from `_labels`,
+not `canonical_type_label`) and deduplicated by `==`, never `set()`, since `Type` holds
+dicts. `Optional(Union(...))` sets `nullable` on the union. Tag fields are derived by
+`union_tag_fields` (a field every member requires as a non-nullable single-value
+`Literal`, with pairwise distinct values); nothing stores them. `resolve_type` rejects an
+untagged union with two members that `types_overlap`, and `read_typedefs` resolves every typedef union eagerly. Value checks pick the member by the
 first tag field (or the one untagged member the value satisfies) and keep
 `TypeCheckError.path`. `types_compatible` is member by member: a union never fits a record
 sink, a union fits `object`, and `object` never fits a union. Structured generation maps a

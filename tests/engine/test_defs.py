@@ -786,7 +786,7 @@ def test_untagged_source_to_literal_child_input_is_rejected():
         load_flow(_STR_TO_LITERAL_CHILD.format(source="!str", binding="${input.s}"))
 
     assert "call node 'go': binding 'mode'" in str(caught.value)
-    assert "child expects 'Literal(\"a\",\"b\")', source is 'str'" in str(caught.value)
+    assert "child expects 'Literal(a, b)', source is 'str'" in str(caught.value)
 
 
 @pytest.mark.parametrize("source,binding", [

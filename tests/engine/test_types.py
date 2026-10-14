@@ -625,7 +625,7 @@ def test_format_round_trips():
 def test_labels_use_parentheses():
     assert canonical_type_label(type_for("Optional(int(1..12))", {})) == "Optional(int(1..12))"
     assert canonical_type_label(type_for("list(str)", {})) == "list(str)"
-    assert canonical_type_label(type_for("Literal(b, a)", {})) == 'Literal("a","b")'
+    assert canonical_type_label(type_for("Literal(b, a)", {})) == "Literal(a, b)"
     assert canonical_type_label(type_for("float(0.5..1.5)", {})) == "float(0.5..1.5)"
 
 

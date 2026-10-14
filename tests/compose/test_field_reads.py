@@ -84,7 +84,7 @@ def test_case_when_on_a_missing_optional_record_input_is_falsy():
         ("date", "date"),
         ("datetime", "datetime"),
         ("int(0..10)", "int(0..10)"),
-        ("Literal(a, b)", 'Literal("a","b")'),
+        ("Literal(a, b)", "Literal(a, b)"),
         ("list(str)", "list(str)"),
         ("Optional(str)", "Optional(str)"),
     ],

@@ -18,6 +18,7 @@ in `yian.typesys.temporal`; otherwise it is the leaf.
 """
 
 import json
+import re
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, is_dataclass, replace
 from dataclasses import fields as _dataclass_fields
@@ -745,7 +746,8 @@ def list_kind_for_element(element: Type) -> ValueKind:
 def canonical_type_label(typ: Type) -> str:
     """Render one deterministic, unambiguous label for a structural type.
 
-    Record keys and variant tags use compact JSON quoting. Structurally refined
+    Record keys use compact JSON quoting; variant tags print bare when they read back
+    as names, else JSON-quoted (`Literal(go, "no go")`). Structurally refined
     lists render from their element; a valid flat-list type renders from its
     storage kind (`list(str)`). A union lists its members in canonical order.
 
@@ -762,8 +764,9 @@ def canonical_type_label(typ: Type) -> str:
 def _labels(typ: Type) -> tuple[str, str]:
     """Return `(label, order key)` for `typ`.
 
-    The label is the parenthesized spelling. The order key is the same label in the
-    older bracket spelling (`Optional[int[1,12]]`); union members sort by it, so
+    The label is the parenthesized spelling; its variant tags print bare when they read
+    back as names, else JSON-quoted. The order key is the same type in the older bracket
+    spelling (`Optional[int[1,12]]`, `Literal["go","no_go"]`); union members sort by it, so
     member order, JSON Schema `anyOf` order and manifest fingerprints did not move
     when the spelling changed. Both come from one walk so nested unions stay linear.
     """
@@ -790,8 +793,8 @@ def _canonical_nonnullable_label(typ: Type) -> tuple[str, str]:
         )
 
     if typ.tags is not None:
-        tags = ",".join(_json_string(tag) for tag in sorted(typ.tags))
-        return f"Literal({tags})", f"Literal[{tags}]"
+        tags = sorted(typ.tags)
+        return literal_label(tags), "Literal[" + ",".join(_json_string(tag) for tag in tags) + "]"
 
     if typ.kind.is_list():
         if typ.element is None:
@@ -822,6 +825,43 @@ def _kind_label(kind: ValueKind) -> str:
 def _json_string(value: str) -> str:
     """Encode one record key or variant tag as compact canonical JSON."""
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+# The type tokenizer's NAME token; a `Literal` member printed bare must match it.
+_NAME_PATTERN = r"[^\W\d]\w*"
+_NAME_TOKEN = re.compile(_NAME_PATTERN)
+
+# Names the type parser reads as constants, never as `Literal` members.
+_BUILTIN_CONSTANTS = ("True", "False", "None")
+
+
+def literal_label(tags: Iterable[str]) -> str:
+    """Spell a `Literal` type from its members, in the given order.
+
+    A member prints bare when it reads back as a name, else JSON-quoted; members are
+    separated by `", "`.
+
+    Args:
+        tags (`Iterable[str]`):
+            The `Literal` members, in the order to print them.
+
+    Returns:
+        `str`:
+            The `Literal` type text, which `parse_type` reads back.
+
+    Example:
+        `literal_label(["go", "no go", "True"])` gives `'Literal(go, "no go", "True")'`.
+    """
+    return "Literal(" + ", ".join(_literal_member(tag) for tag in tags) + ")"
+
+
+def _literal_member(tag: str) -> str:
+    """Spell one `Literal` member bare when it reads back as a name, else quoted."""
+    # The tokenizer's NAME and `str.isidentifier` disagree on a few Unicode characters;
+    # a bare member must pass both to read back as the same single name.
+    if _NAME_TOKEN.fullmatch(tag) and tag.isidentifier() and tag not in _BUILTIN_CONSTANTS:
+        return tag
+    return json.dumps(tag, ensure_ascii=False)
 
 
 # --------------------------------------------------------------------------- #
@@ -905,8 +945,8 @@ def union_tag_fields(typ: Type) -> tuple[str, ...]:
             The tag field names, or `()` for an untagged union or a non-union.
 
     Example:
-        A union of `{action: Literal[buy], qty: int}` and
-        `{action: Literal[sell], price: float}` gives `("action",)`.
+        A union of `{action: Literal(buy), qty: int}` and
+        `{action: Literal(sell), price: float}` gives `("action",)`.
     """
     if typ.variants is None:
         return ()
@@ -1164,7 +1204,7 @@ def types_overlap(a: Type, b: Type) -> bool:
             `True` when the two types may share a value.
 
     Example:
-        `{action: Literal[buy], qty: int}` and `{action: Literal[sell], price: float}`
+        `{action: Literal(buy), qty: int}` and `{action: Literal(sell), price: float}`
         do not overlap; `{conviction: float}` overlaps itself.
     """
     if _admits_none(a) and _admits_none(b):

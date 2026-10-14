@@ -231,6 +231,6 @@ def test_literal_seed_with_a_str_body_field_is_rejected() -> None:
     message = str(excinfo.value)
     assert (
         "the body returns 'note' as str, but the carried field is declared "
-        'Literal("a","b")'
+        'Literal(a, b)'
     ) in message
     assert '`note: !str "a"`' in message

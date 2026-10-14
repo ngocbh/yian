@@ -505,8 +505,12 @@ def test_final_run_boundary_signatures_and_result_fields_are_exact() -> None:
     ]
     assert list(controlled_resume.parameters) == [
         *recovered.parameters,
+        "check_llm_configs",
         "stop_event",
     ]
+    hook = controlled_resume.parameters["check_llm_configs"]
+    assert hook.kind is inspect.Parameter.KEYWORD_ONLY
+    assert hook.default is None
     for signature in (controlled_fresh, controlled_resume):
         assert signature.parameters["stop_event"].kind is inspect.Parameter.KEYWORD_ONLY
         assert signature.parameters["stop_event"].default is inspect.Parameter.empty
@@ -1054,6 +1058,138 @@ def test_resume_callback_exception_closes_and_unlocks_nonterminal_log(
     ) == 2
     assert any(isinstance(record, RunResumedRecord) for record in records)
     assert not any(type(record).__name__ == "RunAbortedRecord" for record in records)
+
+
+def _agent_resume_prefix(path: Path) -> dict[str, dict[str, Any]]:
+    """Leave the one-agent flow's answer in flight with a recorded pre-connection map."""
+    loaded = load_flow(_AGENT_FLOW)
+    effective = resolve_llm_cascade(
+        copy.deepcopy(loaded.compiled),
+        {},
+        defaults={"provider": "openai", "model": "recorded-model"},
+    )
+    _write_nonterminal_prefix(
+        path,
+        loaded,
+        {"topic": "Ada"},
+        started=("answer",),
+        num_workers=0,
+        effective=effective,
+    )
+    return effective
+
+
+def _offline_agent(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    """Answer the agent locally and return the configs its models were built from."""
+    captured: list[dict[str, Any]] = []
+
+    class _Model:
+        """Return one deterministic reply without a provider."""
+
+        def invoke(self, messages):
+            """Return the scripted text."""
+            return SimpleNamespace(content="recorded reply")
+
+    def model_from_config(config):
+        captured.append(copy.deepcopy(config))
+        return _Model()
+
+    monkeypatch.setattr(llm_clients_module, "model_from_config", model_from_config)
+    return captured
+
+
+def test_resume_hook_sees_recorded_configs_before_run_resumed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The hook gets a copy of the recorded map before recovery appends anything."""
+    from yian.llm_clients.connection import legacy_connection_map
+    from yian.runtime.log import decode_record
+
+    path = tmp_path / "hook.jsonl"
+    effective = _agent_resume_prefix(path)
+    captured = _offline_agent(monkeypatch)
+    seen: list[dict[str, dict[str, Any]]] = []
+    resumed_at_hook: list[bool] = []
+
+    def hook(configs: dict[str, dict[str, Any]]) -> None:
+        seen.append(copy.deepcopy(configs))
+        resumed_at_hook.append(any(
+            isinstance(decode_record(line).record, RunResumedRecord)
+            for line in path.read_bytes().splitlines()
+        ))
+        configs["answer"]["model"] = "hook-edited"
+        configs.clear()
+
+    result = run_module._resume_flow_controlled(
+        load_flow(_AGENT_FLOW),
+        log=path,
+        stop_event=threading.Event(),
+        check_llm_configs=hook,
+    )
+
+    assert result.status == "succeeded"
+    assert seen == [legacy_connection_map(effective)]
+    assert seen[0]["answer"]["_connection"]["source"] == "legacy_environment"
+    assert resumed_at_hook == [False]
+    assert [config["model"] for config in captured] == ["recorded-model"]
+
+
+def test_resume_hook_failure_leaves_the_log_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A raising hook propagates exactly, appends nothing, and releases the log."""
+    path = tmp_path / "hook-failure.jsonl"
+    _agent_resume_prefix(path)
+    _offline_agent(monkeypatch)
+    before = path.read_bytes()
+    expected = RuntimeError("no key")
+
+    def hook(configs: dict[str, dict[str, Any]]) -> None:
+        raise expected
+
+    with pytest.raises(RuntimeError) as caught:
+        run_module._resume_flow_controlled(
+            load_flow(_AGENT_FLOW),
+            log=path,
+            stop_event=threading.Event(),
+            check_llm_configs=hook,
+        )
+
+    assert caught.value is expected
+    assert path.read_bytes() == before
+    result = run_module._resume_flow_controlled(
+        load_flow(_AGENT_FLOW),
+        log=path,
+        stop_event=threading.Event(),
+    )
+    assert result.status == "succeeded"
+
+
+def test_terminal_resume_never_calls_the_hook(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A finished log is inspected without checking model credentials."""
+    path = tmp_path / "hook-terminal.jsonl"
+    _agent_resume_prefix(path)
+    _offline_agent(monkeypatch)
+    finished = run_module.resume_flow(load_flow(_AGENT_FLOW), log=path)
+    assert finished.status == "succeeded"
+    before = path.read_bytes()
+    calls: list[dict[str, dict[str, Any]]] = []
+
+    result = run_module._resume_flow_controlled(
+        load_flow(_AGENT_FLOW),
+        log=path,
+        stop_event=threading.Event(),
+        check_llm_configs=calls.append,
+    )
+
+    assert result.status == "succeeded"
+    assert calls == []
+    assert path.read_bytes() == before
 
 
 def test_callback_exception_drains_waiter_reraises_exactly_and_unlocks(

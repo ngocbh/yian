@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from yian.compose.desugar.inline_calls import (
+    ArgumentValueError,
     SecretArgumentError,
     desugar_call_directives,
 )
@@ -234,7 +235,8 @@ def _is_binding(value: Any, style: str | None) -> bool:
 
     Returns:
         `bool`: `True` for template text with a span, or an unquoted whole-value
-            `call(...)` directive that parses.
+            `call(...)` directive that parses or fails only on an unreadable bare
+            argument.
 
     Raises:
         `SecretArgumentError`: The directive passes a literal under a secret keyword.
@@ -249,6 +251,9 @@ def _is_binding(value: Any, style: str | None) -> bool:
         desugar_call_directives(value, lambda: "_")
     except SecretArgumentError:
         raise  # a literal secret argument is reported as such, not as the slot's value
+    except ArgumentValueError:
+        # Still a call: the desugar reports the argument, located, without echoing it.
+        return True
     except ExpressionError:
         return False
     return True

@@ -440,7 +440,7 @@ output: ${{n.output}}
     assert _argument_failure_key(result) == "/s:root/s:node/s:n/s:input/s:a/s:binding"
 
 
-def _case_call_flow(branches: str, readers: str = "", output: str = "${g.output}") -> str:
+def _case_call_flow(branches: str, readers: str = "") -> str:
     """Return a flow whose CASE `g` routes on `input.flag` with the given branches."""
     return _call_flow(
         f"""
@@ -450,7 +450,7 @@ nodes:
     on: ${{input.flag}}
 {branches}
   b: !float 1.0
-{readers}output: {output}
+{readers}output: ${{g.output}}
 """,
         inputs="  x: !float\n  flag: !bool\n",
     )

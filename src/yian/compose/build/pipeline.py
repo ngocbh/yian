@@ -1272,10 +1272,12 @@ def _stamp_inline_call_origins(
     """
 
     def wiring_origin(host: str, key: str) -> OriginRef | None:
+        """Return the origin already stamped on one node binding, if any."""
         source = flow_wiring.get(host, {}).get(key)
         return None if source is None else as_binding(source).origin
 
     def branch_origin(address: tuple) -> OriginRef | None:
+        """Register and return the origin of one CASE `then:` or `else:` branch."""
         case_id = address[1]
         if not nodes_cursor.has(case_id):
             return None
@@ -1297,6 +1299,7 @@ def _stamp_inline_call_origins(
         return catalog_builder.register(path, cursor)
 
     def site_origin(address: tuple) -> OriginRef | None:
+        """Return the origin of the authored binding at one `call_site` address."""
         kind = address[0]
         if kind in ("input", "field"):
             return wiring_origin(address[1], address[2])

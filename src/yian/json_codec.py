@@ -45,8 +45,9 @@ def parse_int(text: str) -> int:
     """Return the int that decimal text spells, at any length.
 
     Args:
-        text (`str`): An optional sign and ASCII digits in `_`-separated groups,
-            with optional surrounding whitespace, as `int()` accepts them.
+        text (`str`): Text of up to 600 characters is parsed by `int()`; longer
+            text must be ASCII digits with an optional sign and `_` groups,
+            with optional surrounding whitespace.
 
     Returns:
         `int`: The parsed value.
@@ -54,12 +55,12 @@ def parse_int(text: str) -> int:
     Raises:
         `ValueError`: The text is not a base-10 int literal.
     """
+    if len(text) <= _SHORT_INT_TEXT:
+        return int(text)
     stripped = text.strip()
     if _INT_LITERAL.fullmatch(stripped) is None:
         # Unlike int(), don't echo text that may be megabytes long.
         raise ValueError("invalid literal for int() with base 10")
-    if len(stripped) <= _SHORT_INT_TEXT:
-        return int(stripped)
     return int(Decimal(stripped.replace("_", "")))
 
 

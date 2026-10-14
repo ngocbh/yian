@@ -74,9 +74,15 @@ def test_parse_int_follows_the_int_grammar() -> None:
     assert json_codec.parse_int(" \n" + "1" * 700 + "\t") == int(Decimal("1" * 700))
 
 
-@pytest.mark.parametrize("text", ["١٢٣", "12.5", "1__0", "", " "])
-def test_parse_int_rejects_short_non_ascii_or_malformed_text(text: str) -> None:
-    """Short text follows the same ASCII-digit grammar as long text."""
+def test_parse_int_reads_short_text_as_int_does() -> None:
+    """Short text accepts whatever `int()` accepts, including non-ASCII digits."""
+    assert json_codec.parse_int("\u0661\u0662\u0663") == 123
+    assert json_codec.parse_int("\u00a0-12\u2003") == -12
+
+
+@pytest.mark.parametrize("text", ["12.5", "1__0", "", " "])
+def test_parse_int_rejects_short_malformed_text(text: str) -> None:
+    """Short text that `int()` rejects fails with its error."""
     with pytest.raises(ValueError, match="invalid literal for int"):
         json_codec.parse_int(text)
 

@@ -9,9 +9,10 @@ value entries.
 
 An entry is skipped like any node: when a CASE routes away from it, or when a whole-span
 read names a skipped node, while an embedded span renders a skipped read as empty text
-and an unrouted entry with no reads always runs. A routed `call(...)` entry skips its lifted call
-with it, and a resumed log replays an entry's recorded output. A routed entry reads a
-union member field its branch selects; a field its branch excludes is a load error.
+and an unrouted entry with no reads always runs. A routed `call(...)` entry skips its
+lifted call with it, and a resumed log replays an entry's recorded output. A routed entry
+reads a union member field its branch selects; a field its branch excludes is a load
+error.
 """
 
 import json

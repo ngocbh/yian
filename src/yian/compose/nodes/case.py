@@ -200,8 +200,8 @@ class CaseDescriptor(NodeDescriptor):
 
         It also records each `then:` value's YAML scalar style and tag (aligned with
         `cases`), the `else:` value's style and tag, and whether `else:` was written at
-        all. A `cases:` that is not a
-        list of mappings is a located load error before any of this runs."""
+        all. A `cases:` that is not a list of mappings is a located load error before
+        any of this runs."""
         desc = super().parse(node_id, cursor)
         cls._check_cases_shape(desc, cursor)
         body = cursor._value_view()

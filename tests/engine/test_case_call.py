@@ -4,7 +4,9 @@ A branch target may be an inline call (a fresh owned call) instead of a placed n
 desugars to a synth `__call_<n>` node and the then:/else: is rewritten to that synth id, so the
 case veto skip-floods it when the branch is not taken (a nested call's inner calls follow it).
 Accepted grammar: a whole-value `call(...)` directive (a route target is one node id). A
-`${...}` or quoted branch is a value, a LoadError that shows the value entry to write.
+quoted branch, or one holding `${...}`, is a value, a LoadError that shows the value entry
+to write; a flow call inside its `${...}` is a LoadError that says to call the flow as the
+branch (`then: call(take, ...)`).
 """
 
 import pytest

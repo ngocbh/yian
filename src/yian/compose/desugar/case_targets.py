@@ -10,9 +10,9 @@ any other text starting with `call(` is a located LoadError naming the problem. 
 that holds a value (quoted text, a `${...}` template, a non-string value) was already
 rejected by `check_case_branches`, so this pass sees node ids and unquoted calls. The
 outer synth call is the route target, so the case-route veto skip-floods it on a branch
-not taken. A nested directive's inner calls are lifted too; each
-records the outer call as its `host`, so the host-edge step gives it the outer call's route
-and gates it on the outer call's other arguments; it is skipped with it.
+not taken. A nested directive's inner calls are lifted too; each records the outer call
+as its `host`, so the host-edge step gives it the outer call's route and gates it on the
+outer call's other arguments; it is skipped with it.
 
 Runs in `_assemble` AFTER `desugar_inline_calls` (sharing its `next_id` minter — else
 the ids collide) and BEFORE `expand_case_outputs`, so the synth call's args (which may

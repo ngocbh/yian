@@ -388,6 +388,16 @@ def test_an_inner_on_case_is_exhaustive_over_its_narrowed_tag():
     ))
 
 
+def test_an_inner_on_case_over_a_flow_input_is_exhaustive_over_its_narrowed_tag():
+    _loads(_flow(
+        _case("route", "${input.d.action}", [("buy", "inner")], else_="e"),
+        _case("inner", "${input.d.action}", [("buy", "t")]),
+        _code("t", {"l": "${input.d.limit}"}),
+        _code("e"),
+        inputs="  s: str\n  d: Decision\n",
+    ))
+
+
 # --- other bases --- #
 
 

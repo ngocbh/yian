@@ -1590,7 +1590,9 @@ too. It must always match: it needs an `else:`, or an `on:` whose type is a
 non-nullable `Literal` with every tag listed in a `when:`, or a non-nullable `bool` with
 `when: true` and `when: false`. A flow input counts
 as an `on:` type, and inside a narrowing branch only the tags that reach the
-`case` count. Otherwise loading fails:
+`case` count. Only a tagged union's member narrows: a branch on a plain `Literal`
+doesn't, so a nested `case` on that same `Literal` still lists every tag or has an
+`else:`. Otherwise loading fails:
 
 ```text
 case node 'gate' produces a value, so it must be exhaustive: add an `else:` (on: ${input.x} is str, not a Literal or bool)

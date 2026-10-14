@@ -736,7 +736,9 @@ def test_routing_only_map_child_literal_input_missing_a_tag():
         + "    output: ${one.output}\n"
         "output: ${each.output}\n"
     )
-    assert str(_load_error(text)).endswith(_UNCOVERED % "${input.x}")
+    error = _load_error(text)
+    assert str(error).endswith(_UNCOVERED % "${input.x}")
+    assert _error_line(error) == _line_of(text, "      route:")
 
 
 def test_routing_only_call_child_literal_input_missing_a_tag():
@@ -750,6 +752,6 @@ def test_routing_only_call_child_literal_input_missing_a_tag():
         "nodes:\n  c:\n    kind: call\n    call: child\n    input:\n      k: ${input.k}\n"
         "output: ${c.output}\n"
     )
-    message = str(_load_error(text))
-    assert "${input.k}" in message
-    assert "['b']" in message
+    error = _load_error(text)
+    assert str(error).endswith(_UNCOVERED % "${input.k}")
+    assert _error_line(error) == _line_of(text, "      route:")

@@ -11,7 +11,7 @@ import pytest
 
 import yian.llm_clients as llm_clients_mod
 from tests.engine import _compose_codefns
-from yian.compose import load_flow
+from yian.compose import LoadError, load_flow
 from yian.events import NodeSkipped, NodeStarted, NodeSucceeded
 from yian.nodes.case import ELSE_HANDLE
 from yian.run import run_flow
@@ -565,3 +565,31 @@ def test_adaptive_composer_is_skipped_with_the_gate_depends_on(monkeypatch):
     _, result, calls, asked = _adaptive(monkeypatch, nodes, go=True, other=False)
     assert (calls, asked) == ([], [])
     assert _never_ran(result, "ask__compose")
+
+
+def test_adaptive_gate_with_an_inline_call_gates_both_lifted_nodes(monkeypatch):
+    nodes = _PREP + _ADAPTIVE.replace(
+        "      ctx: ${input.go}\n", '      ctx: call(side, tag="ctx")\n'
+    ).replace("    kind: human_input\n", "    kind: human_input\n    runs_after: [prep]\n")
+    flow, result, calls, asked = _adaptive(monkeypatch, nodes, go=False)
+    assert (calls, asked, _compose_codefns.RECORDED) == ([], [], ["prep"])
+    assert _never_ran(result, "__call_0") and _never_ran(result, "ask__compose")
+    assert _edge(flow, "router->__call_0#0").source_handle == "ask"
+    assert _edge(flow, "prep~>__call_0#0").optional
+
+
+def test_reading_a_lifted_node_in_the_hosts_runs_after_is_a_cycle():
+    # `audit` reads the composer, and the gate orders after `audit`: the composer now orders
+    # after `audit` too, so the two wait on each other.
+    nodes = _ADAPTIVE.replace(
+        "    kind: human_input\n", "    kind: human_input\n    runs_after: [audit]\n"
+    ) + """
+  audit:
+    kind: code
+    input:
+      q: ${ask__compose.output}
+    output: int
+    code: return len(inputs["q"])
+"""
+    with pytest.raises(LoadError, match="cycle"):
+        load_flow(_flow(nodes, output="  r: ${router.output}\n"))

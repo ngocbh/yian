@@ -1579,7 +1579,8 @@ ask:
 `list[Question]`) wired into the gate; the runtime gate never calls an LLM. The
 composer carries the gate's `case` routes, `depends_on:`, and `runs_after:`, so on a
 branch the gate isn't on no LLM call happens, and it waits for the gate's `runs_after:`
-nodes.
+nodes. So a node that reads `${<node>__compose.output}` can't also be in the gate's
+`depends_on:` or `runs_after:`: that is a cycle.
 The input name `__questions` is reserved for that generated wire and cannot be
 authored on an adaptive gate.
 
@@ -1835,7 +1836,9 @@ Rules:
   reach the node it is written in (its host), is skipped when a host `depends_on:` node
   is skipped, and waits for the host's `runs_after:` nodes. It does not wait on the
   host's other inputs: if one of them is skipped, the call still runs. A call in the
-  flow `output:` or `asserts:` has no host.
+  flow `output:` or `asserts:` has no host. A node that reads the call's output by id
+  (`${__call_0.output}`) is skipped with it, and if the host also names that node in
+  `depends_on:` or `runs_after:`, the flow has a cycle (a load error).
 - **In a flow `asserts:` item** a value starting with `call(` follows the same rule,
   quoted or not: an assert is an expression, so quoting it does not make it text.
 - **A flow call inside `${...}` is retired.** The old `${flow(args)}` form (a flow

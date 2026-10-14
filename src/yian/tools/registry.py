@@ -28,6 +28,7 @@ from langchain_core.tools import BaseTool, InjectedToolArg, StructuredTool
 from pydantic import BeforeValidator, Field
 
 from yian.skills.tool import LOAD_SKILL
+from yian.typesys.values import value_repr
 
 # Maps tool id -> a LangChain tool with a Pydantic argument schema. The supported
 # ``register_tool`` path guarantees that schema, which the strict invocation boundary needs.
@@ -393,14 +394,14 @@ class ToolSet:
             tool = self._tools.get(tool_id)
             if tool is None:
                 raise ValueError(
-                    f"unknown tool id {tool_id!r}; known tools: {sorted(self._tools)}"
+                    f"unknown tool id {value_repr(tool_id)}; known tools: {sorted(self._tools)}"
                 )
             return tool
         with _REGISTRY_LOCK:
             tool = TOOL_REGISTRY.get(tool_id)
             if tool is None:
                 raise ValueError(
-                    f"unknown tool id {tool_id!r}; known tools: {sorted(TOOL_REGISTRY)}"
+                    f"unknown tool id {value_repr(tool_id)}; known tools: {sorted(TOOL_REGISTRY)}"
                 )
             return tool
 
@@ -525,7 +526,7 @@ def _registered_tool(tool_id: str) -> BaseTool:
         tool = TOOL_REGISTRY.get(tool_id)
         if tool is None:
             raise ValueError(
-                f"unknown tool id {tool_id!r}; known tools: {sorted(TOOL_REGISTRY)}"
+                f"unknown tool id {value_repr(tool_id)}; known tools: {sorted(TOOL_REGISTRY)}"
             )
         return tool
 

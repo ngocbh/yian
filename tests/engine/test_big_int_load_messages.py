@@ -253,6 +253,17 @@ def test_a_tool_binding_label_shows_a_long_int_as_a_placeholder():
 
 
 
+def test_an_unknown_long_int_tool_id_shows_a_placeholder():
+    flow = load_flow(
+        f"id: p\nname: p\nnodes:\n  t:\n    kind: tool\n    tool_id: {D}\noutput: ${{t.output}}\n"
+    )
+    result = run_flow(flow, {}, tools={"place_order": lambda qty: qty})
+    msg = result.failure.message if result.failure is not None else ""
+    assert result.status == "failed"
+    assert f"unknown tool id {PLACEHOLDER}" in msg
+    assert "set_int_max_str_digits" not in msg
+
+
 def test_a_wait_until_long_int_fails_with_a_placeholder():
     result = run_flow(load_flow(_flow(f"  c:\n    kind: wait\n    until: {D}\n")), {})
     msg = result.failure.message

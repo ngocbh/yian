@@ -893,6 +893,9 @@ def prepare_node_succeeded(
             A carrier has the wrong exact type or ``output`` cannot be typed.
         `ValueError`:
             The executing node/target is invalid or ``output`` violates its type.
+        `Exception`:
+            Code inside ``output`` raised while it was checked; the private
+            node-data marker wraps it, as it wraps an ``output`` rejection.
     """
     if type(state) is not RunState:
         raise TypeError("prepare_node_succeeded expects a RunState")
@@ -931,7 +934,9 @@ def prepare_node_succeeded(
             output_contract,
             declared_type,
         )
-    except (TypeError, ValueError) as exc:
+    except Exception as exc:
+        # The checks run code inside the returned value (attribute access, `__iter__`,
+        # `items`), which may raise anything; that fails the node, not the run.
         if isinstance(exc, TypeCheckError):
             output_origin = output_contract_origin(output_contract, exc.path)
         _raise_node_data(exc, origin=output_origin)

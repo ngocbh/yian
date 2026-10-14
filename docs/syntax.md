@@ -495,9 +495,10 @@ holds one. Flow inputs are still converted to JSON when the run starts, so a dat
 `!object` input arrives as text, but a run input holding a mapping with a non-text key
 now makes `run_flow` raise before the run (`input 'o': object keys must be text, got
 1`). `Any` used to mean `object`, and the lowercase `any` is no longer a type. An
-untyped CODE or TOOL output used to accept a date, a set, or another non-JSON value,
-which the run log turned into text or rejected without a path; it now fails
-`contract.output` naming the path (`output at d: datetime.date(2026, 1, 1) is not a
+untyped CODE or TOOL output used to accept a date, a set, a pydantic model, an enum,
+or another non-JSON value, which the run log turned into text or rejected without a
+path (an untyped TOOL output turned a nested model into a dict and a nested enum into
+its value); it now fails `contract.output` naming the path (`output at d: datetime.date(2026, 1, 1) is not a
 JSON value`). So does an unquoted date in a flow output record without a type
 (`output: {as_of: 2026-01-01, ...}`); quote it. A returned dict with a non-text key
 fails `object keys must be text, got 1` for an untyped, `object`, or `Any` output, and

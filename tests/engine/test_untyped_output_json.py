@@ -1,6 +1,7 @@
 """Untyped values that cross a JSON boundary are checked as JSON values."""
 
 from datetime import date
+from enum import Enum
 import json
 from pathlib import Path
 import re
@@ -108,17 +109,33 @@ def test_canonical_typed_rejects_untyped_non_json_values(value, message, path):
     assert caught.value.path == path
 
 
+_FILE_WIRE = {"uri": "f", "mime": None, "name": None}
+
+
 @pytest.mark.parametrize(
-    "value",
-    [{"f": FileRef(uri="f")}, [FileRef(uri="f")]],
+    ("value", "expected"),
+    [
+        ({"f": FileRef(uri="f")}, {"kind": "object", "value": {"f": _FILE_WIRE}}),
+        ([FileRef(uri="f")], {"kind": "list[Any]", "value": [_FILE_WIRE]}),
+    ],
     ids=["field", "item"],
 )
-def test_canonical_typed_accepts_untyped_files(value):
+def test_canonical_typed_accepts_untyped_files(value, expected):
     wire, _ = canonical_typed(value, None)
     # A nested file is recorded as a plain object.
-    assert {"uri": "f", "mime": None, "name": None} in (
-        list(wire["value"].values()) if isinstance(wire["value"], dict) else wire["value"]
-    )
+    assert wire == expected
+
+
+class _Key(str, Enum):
+    """A text enum, used as a dict key."""
+
+    A = "a"
+
+
+def test_canonical_typed_records_a_text_subclass_key_as_plain_text():
+    wire, _ = canonical_typed({_Key.A: 1}, None)
+    assert wire == {"kind": "object", "value": {"a": 1}}
+    assert [type(key) for key in wire["value"]] == [str]
 
 
 def test_canonical_typed_does_not_walk_a_built_value(monkeypatch):
@@ -158,7 +175,6 @@ def test_canonical_typed_still_rejects_lone_surrogates(value, declared):
 # --------------------------------------------------------------------------- #
 
 _FILE = "__import__('yian.typesys.values', fromlist=['FileRef']).FileRef(uri='f')"
-_FILE_WIRE = {"uri": "f", "mime": None, "name": None}
 
 
 def _flow(code: str, *, output: str | None = None) -> str:
@@ -301,6 +317,67 @@ def test_a_typed_inline_return_with_a_non_text_key_fails_at_the_output(output, m
     assert result.failure.code == "contract.output"
     assert result.failure.node_id == "mk"
     assert result.failure.message == message
+
+
+def _body_flow(body: str) -> str:
+    """Return a flow whose untyped CODE node `mk` runs the inline `body`."""
+    return (
+        "id: p\nname: p\n"
+        "input:\n  s: !str\n"
+        "nodes:\n"
+        "  mk:\n"
+        "    kind: code\n"
+        "    input:\n"
+        "      s: ${input.s}\n"
+        "    code: |\n"
+        + textwrap.indent(body, "      ")
+        + "output: ${mk.output}\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "import dataclasses\n"
+        "@dataclasses.dataclass\n"
+        "class D:\n"
+        "    x: int = dataclasses.field(init=False)\n"
+        "return {'d': D()}\n",
+        "class L(list):\n"
+        "    def __iter__(self):\n"
+        "        raise RuntimeError('cannot iterate')\n"
+        "return L([1])\n",
+        "class M(dict):\n"
+        "    def items(self):\n"
+        "        raise KeyError('items')\n"
+        "return M(a=1)\n",
+    ],
+    ids=["unset-dataclass-field", "list-iter-raises", "dict-items-raises"],
+)
+def test_an_inline_return_that_breaks_the_output_check_fails_the_node(body):
+    result = _run(_body_flow(body))
+    assert result.status == "failed"
+    assert result.failure.code == "contract.output"
+    assert result.failure.node_id == "mk"
+
+
+def test_a_reference_return_that_breaks_the_output_check_fails_the_node():
+    text = (
+        "id: p\nname: p\n"
+        "input:\n  s: !str\n"
+        "nodes:\n"
+        "  mk:\n"
+        "    kind: code\n"
+        "    input:\n"
+        "      s: ${input.s}\n"
+        "    code: tests.engine._compose_codefns:unreadable_list\n"
+        "output: ${mk.output}\n"
+    )
+    result = _run(text)
+    assert result.status == "failed"
+    assert result.failure.code == "contract.output"
+    assert result.failure.node_id == "mk"
+    assert result.failure.message == "cannot iterate"
 
 
 @pytest.mark.parametrize(

@@ -67,8 +67,8 @@ class NodeRouted:
     """A router (CASE) selected an out-edge handle; the engine takes it and skip-floods the
     siblings. Stores no value.
 
-    `handle` is the taken branch's handle: `"#else"` (`ELSE_HANDLE`) for `else:` or no
-    match.
+    `handle` is the taken branch's handle: a `case`'s `then:` target id, or `"#else"`
+    (`ELSE_HANDLE`) for its `else:` route, also taken when no `when:` matches.
     """
 
     node_id: str

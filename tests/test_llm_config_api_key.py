@@ -341,3 +341,34 @@ def test_scrub_key_rewrites_a_message_attribute():
     exc = ProviderError(f"Incorrect API key provided: {key[:8]}****{key[-4:]}.")
     scrub_key(exc, key)
     assert exc.message == "Incorrect API key provided: [REDACTED]."
+
+
+def test_scrub_keys_removes_each_key_from_a_chain():
+    import traceback
+
+    from yian.llm_clients.redact import scrub_keys
+
+    first, second = "sk-sentinel-first-zqxw", "sk-sentinel-second-yvkt"
+    try:
+        try:
+            raise RuntimeError(f"Incorrect API key provided: {second[:8]}****{second[-4:]}.")
+        except RuntimeError as inner:
+            raise ValueError(f"wrapped: {first}") from inner
+    except ValueError as caught:
+        exc = caught
+    scrub_keys(exc, [first, SecretStr(second), None, ""])
+    text = "".join(traceback.format_exception(exc))
+    for fragment in (first, second, second[:8], "*" + second[-4:]):
+        assert fragment not in text
+    assert "wrapped: [REDACTED]" in text
+    assert "Incorrect API key provided: [REDACTED]." in text
+
+
+def test_scrub_keys_redacts_a_containing_key_whole():
+    from yian.llm_clients.redact import scrub_keys
+
+    short, long = "abcdefgh", "abcdefgh-longer-1234"
+    exc = RuntimeError(f"rejected {long} here")
+    scrub_keys(exc, [short, long])
+    assert str(exc) == "rejected [REDACTED] here"
+    assert "-longer-1234" not in str(exc)

@@ -39,9 +39,10 @@ The LAST compose phase before the loader. Three modules:
   item cursors with source order. Flow desugaring receives an origin callback while the
   conductor derives Compose-only validation ranges from that same cursor sequence; node
   validation receives one site callback that returns origin and range together. Only the
-  origin enters the semantic assertion carrier. Descriptor node/field ranges are copied to
-  `BuildResult.node_range` / `field_ranges` for post-build validation and discarded before
-  `CompiledFlow`; no semantic `Node` receives YAML coordinates or aligned assertion ranges.
+  origin enters the semantic assertion carrier. Descriptor node/field ranges and field labels
+  are copied to `BuildResult.node_range` / `field_ranges` / `field_labels` for post-build
+  validation and discarded before `CompiledFlow`; no semantic `Node` receives YAML coordinates
+  or aligned assertion ranges.
   Full root and multi-node-definition flow assertions are then reused by START/END, while
   compact-root and flat single-node-definition assertions stay node-local through their
   projected node cursor. After output rewrites it stamps source-backed bare/mapped root,

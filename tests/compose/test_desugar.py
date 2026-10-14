@@ -4,8 +4,8 @@ Each desugar pass rewrites a flow's parsed descriptors into ordinary descriptors
 bindings. A synth node a pass mints locates at the SITE it desugared from — the
 `call(...)` directive's own binding line, not the host node header — so its downstream
 errors caret the author's actual source. The exception is `adaptive_questions`, whose
-synth composer genuinely SHARES the gate's inputs verbatim and so correctly inherits the
-gate's `.range`/`field_ranges`.
+synth composer genuinely SHARES the gate's inputs verbatim and so inherits the gate's
+`.range`/`field_ranges`, except that the brief's range replaces the gate's `prompt:` range.
 """
 
 from dataclasses import replace
@@ -24,6 +24,7 @@ from yian.compose.helpers.errors import LoadDiagnostics, LoadError
 from yian.compose.parse.file import (
     CaseDescriptor,
     CodeDescriptor,
+    HumanInputDescriptor,
     MapDescriptor,
 )
 from yian.compose.parse.nodes import parse_nodes
@@ -178,20 +179,36 @@ def test_inline_map_scalar_over_does_not_use_input_named_over_range():
 
 def test_desugar_adaptive_questions_preserves_ranges():
     # An adaptive human_input gate lifts a synth composer agent (`<gate>__compose`).
-    # The synth agent must inherit the gate node's range/field_ranges.
+    # The synth agent inherits the gate node's range/field_ranges, but its `prompt:`
+    # is the brief, so it locates at the brief and is named as the gate's field.
     text = (
         "id: f\nname: f\nnodes:\n"
         "  ask:\n    kind: human_input\n"
+        "    prompt: Pick one\n"
         "    adaptive_questions:\n      prompt: Ask about ${input.topic}\n"
         "    input:\n      topic: ${input.topic}\n"
         "output: ${ask.output}\n"
     )
     descriptors = parse_nodes(_nodes_reader(text))
     gate = descriptors["ask"]
+    brief = gate.field_ranges[("text", "adaptive_questions.prompt")]
     new_descriptors = desugar_adaptive_questions(descriptors)
     composer = new_descriptors["ask__compose"]
     assert composer.range == gate.range
-    assert composer.field_ranges == gate.field_ranges
+    assert composer.field_ranges == {
+        **gate.field_ranges,
+        ("field", "prompt"): brief,
+    }
+    assert brief != gate.field_ranges[("field", "prompt")]
+    assert composer.field_labels == {"prompt": "node 'ask' adaptive_questions.prompt"}
+    assert new_descriptors["ask"].field_labels == {}
+
+
+def test_desugar_adaptive_questions_without_source():
+    gate = HumanInputDescriptor(id="ask", adaptive_questions={"prompt": "Q"})
+    composer = desugar_adaptive_questions({"ask": gate})["ask__compose"]
+    assert ("field", "prompt") not in composer.field_ranges
+    assert composer.field_labels["prompt"] == "node 'ask' adaptive_questions.prompt"
 
 
 def test_desugar_case_call_targets_locate_at_their_target_line():

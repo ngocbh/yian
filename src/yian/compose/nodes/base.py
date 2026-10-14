@@ -76,8 +76,8 @@ class BuildContext:
 class BuildResult:
     """A built node plus transient Compose-owned assembly metadata.
 
-    ``node_range`` and ``field_ranges`` exist only while Compose validates the
-    assembled graph. They are discarded before ``CompiledFlow`` construction.
+    ``node_range``, ``field_ranges``, and ``field_labels`` exist only while Compose
+    validates the assembled graph. They are discarded before ``CompiledFlow`` construction.
     """
 
     node: Node
@@ -88,6 +88,7 @@ class BuildResult:
         default_factory=dict,
         compare=False,
     )
+    field_labels: dict[str, str] = field(default_factory=dict, compare=False)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -95,7 +96,7 @@ class NodeDescriptor:
     """The base every `compose/nodes/<kind>.py` descriptor inherits — the fields common to
     all nodes, so no kind redeclares them.
 
-    Five field groups:
+    Six field groups:
     - **Author-surface commons** (`id` + `node_name`/`depends_on`/`runs_after`/`env`): `id` is
       the node's keyed-map key (no default); `node_name` the display title; `depends_on`/
       `runs_after` are RUN-ORDERING edges (no data flows — both gate on the source settling,
@@ -113,6 +114,10 @@ class NodeDescriptor:
       nested branch call), or `None`. It is not a YAML key. The host-edge step gives a lifted
       node its host's CASE routes, `depends_on`, and `runs_after`, and gates it on the host's
       other inputs.
+    - **Field labels** (`field_labels`): field name -> the full author-facing phrase that names
+      the field in diagnostics, owner included (`"node 'ask' adaptive_questions.prompt"`). A
+      desugar pass sets it on a synth node whose field text was authored under another node.
+      It is not a YAML key, and `compare=False` keeps it out of `==`.
     - **Located-parse metadata** (`origin`/`range`/`field_ranges`): the opaque authored node
       identity, node body's `SourceRange`, and each present field's `SourceRange`. `compare=False`
       keeps them out of `==`, so a descriptor still equals an identically-configured one built
@@ -171,6 +176,7 @@ class NodeDescriptor:
     # Set only by desugar on a synth node, so the lifted node runs only when its host can;
     # part of `==` because it changes the compiled graph.
     host: Optional[str] = None
+    field_labels: dict[str, str] = field(default_factory=dict, compare=False)
     origin: OriginRef | None = field(default=None, compare=False)
     range: Optional[SourceRange] = field(default=None, compare=False)
     # `(kind, key) -> SourceRange` for each authored named site. Stamped here at parse and
@@ -512,9 +518,9 @@ class NodeDescriptor:
 
         The tail helper every `build` ends with — the ONE place source metadata stamps live, so
         they cannot drift across the per-kind builds: copies this descriptor's opaque `origin`
-        onto the semantic node and retains its YAML ranges only in the transient
-        `BuildResult`. `edges` defaults to `()` (leaf/call/loop own no edges); `case` passes its
-        data+control edges.
+        onto the semantic node and retains its YAML ranges and a copy of its `field_labels` only
+        in the transient `BuildResult`. `edges` defaults to `()` (leaf/call/loop own no edges);
+        `case` passes its data+control edges.
         """
         if self.origin is not None and not isinstance(self.origin, OriginRef):
             raise TypeError("node descriptor origin must be an OriginRef or None")
@@ -525,4 +531,5 @@ class NodeDescriptor:
             edges=tuple(edges),
             node_range=self.range,
             field_ranges=dict(self.field_ranges),
+            field_labels=dict(self.field_labels),
         )

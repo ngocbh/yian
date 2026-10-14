@@ -1,5 +1,7 @@
 """Tests for transient Compose-owned range metadata."""
 
+from dataclasses import replace
+
 from yian.compose.nodes.base import BuildContext
 from yian.compose.parse.nodes import parse_nodes
 from yian.compose.source import SourceDocument
@@ -55,3 +57,19 @@ nodes:
 
     assert result.field_ranges[("input", "__r0")].start_line == 6
     assert not hasattr(result.node, "field_ranges")
+
+
+def test_descriptor_field_labels_move_to_build_result_only() -> None:
+    """Building copies author-facing field labels into Compose without stamping the node."""
+    document = SourceDocument.parse(_FLOW)
+    plain = parse_nodes(document.root.child("nodes"))["n"]
+    labels = {"prompt": "node 'h' adaptive_questions.prompt"}
+    labelled = replace(plain, field_labels=labels)
+
+    result = labelled.build(BuildContext({}))
+
+    assert result.field_labels == labels
+    assert result.field_labels is not labelled.field_labels
+    assert not hasattr(result.node, "field_labels")
+    assert plain.build(BuildContext({})).field_labels == {}
+    assert labelled == plain

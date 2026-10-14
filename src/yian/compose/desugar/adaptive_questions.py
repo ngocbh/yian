@@ -26,8 +26,10 @@ A post-build pass would skip that validation entirely.
 gate's questions input. Authors do not write it.
 
 Located parse metadata: the synth composer agent inherits the gate descriptor's
-`range`/`field_ranges` (so its downstream errors locate at the gate); the rewritten
-gate keeps its own ranges via `replace`.
+`range`/`field_ranges` (so its downstream errors locate at the gate), except that its
+`("field", "prompt")` range is the brief's own range, and its `field_labels` names its
+`prompt` as the gate's `adaptive_questions.prompt`, so a bad brief is reported on the gate
+at the brief. The rewritten gate keeps its own ranges via `replace`.
 """
 
 from __future__ import annotations
@@ -100,8 +102,17 @@ def desugar_adaptive_questions(
 
         # The block IS the agent spec. Pass optional fields only when present so the
         # AgentDescriptor defaults (e.g. retries=2, llm_config={}) apply otherwise. The
-        # synth agent inherits the gate's ranges so its downstream errors locate there.
-        # Its internal contract has no authorable type string.
+        # synth agent inherits the gate's ranges so its downstream errors locate there,
+        # but its prompt is the brief, so a prompt error locates at the brief and names
+        # the gate's field. Its internal contract has no authorable type string.
+        field_ranges = {
+            k: v for k, v in desc.field_ranges.items() if k != ("field", "prompt")
+        }
+        brief_range = desc.field_ranges.get(
+            ("text", "adaptive_questions.prompt")
+        ) or desc.field_ranges.get(("field", "adaptive_questions"))
+        if brief_range is not None:
+            field_ranges[("field", "prompt")] = brief_range
         agent_kwargs = {
             "id": synth_id,
             "prompt": auto["prompt"],
@@ -115,7 +126,8 @@ def desugar_adaptive_questions(
             # already make it wait like the gate.
             "host": gid,
             "range": desc.range,
-            "field_ranges": dict(desc.field_ranges),
+            "field_ranges": field_ranges,
+            "field_labels": {"prompt": f"node {gid!r} adaptive_questions.prompt"},
         }
         if "llm_config" in auto:
             agent_kwargs["llm_config"] = auto["llm_config"]

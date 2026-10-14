@@ -731,8 +731,9 @@ retaining the physical sources of selected children. While the cursor is still
 available, a descriptor may attach opaque origins for kind-owned semantic sites.
 Cursors and descriptors retain concrete ranges through parsing and desugaring;
 `NodeDescriptor._finish()` copies the descriptor's header and field locations
-for the built node to Compose-only `BuildResult.node_range` / `field_ranges`.
-Post-build validators
+for the built node to Compose-only `BuildResult.node_range` / `field_ranges`, and
+its `field_labels` (author-facing names a desugar sets for a synth node's fields) to
+`BuildResult.field_labels`. Post-build validators
 consume that metadata, and assembly drops it before `CompiledFlow`; the semantic
 node receives only the opaque origins. No phase reparses text or touches parser
 objects.

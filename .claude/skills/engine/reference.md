@@ -1095,7 +1095,8 @@ and installs an exact `ComposedFlow.origin_resolver`; source-free graphs use `No
 
 After cursor-based extraction and parsing, descriptors carry derived ranges and
 `NodeDescriptor._finish()` copies them into Compose-only
-`BuildResult.node_range` / `field_ranges`. Post-build validators consume that
+`BuildResult.node_range` / `field_ranges`, and a desugar's author-facing names for a
+synth node's fields into `BuildResult.field_labels`. Post-build validators consume that
 metadata; assembly discards it before `CompiledFlow.from_parts`, so semantic nodes
 carry no YAML range fields. No phase reparses source fragments or inspects the
 private document graph. The default file resolver adds a separate successful

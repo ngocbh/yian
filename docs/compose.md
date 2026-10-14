@@ -248,6 +248,7 @@ location metadata:
 result = desc.build(BuildContext(registry=registry, resolver=resolver))
 node, wiring, edges = result.node, result.wiring, result.edges
 node_range, field_ranges = result.node_range, result.field_ranges
+field_labels = result.field_labels
 ```
 
 - the **node** carries only what it needs to run: its canonical `output_contract`,
@@ -268,9 +269,12 @@ node_range, field_ranges = result.node_range, result.field_ranges
   reusable and why the flow, not the node, owns the graph.
 - the **edges** are empty (`()`) for every kind EXCEPT `case`, which lowers to a
   `CaseNode` in its own `build()` and returns its data+control branch edges here.
-- **`node_range` / `field_ranges`** remain in Compose so post-build validators can
-  locate errors after a descriptor has produced its semantic node. Assembly drops
-  both before `CompiledFlow.from_parts`; compile and runtime never receive them.
+- **`node_range` / `field_ranges` / `field_labels`** remain in Compose so post-build
+  validators can locate and name errors after a descriptor has produced its semantic
+  node. `field_labels` holds the author-facing names a desugar sets for a synth node's
+  fields, such as `node 'ask' adaptive_questions.prompt` for an adaptive gate's
+  composer. Assembly drops all three before `CompiledFlow.from_parts`; compile and
+  runtime never receive them.
 
 Leaf kinds (`agent`/`code`/`tool`) ignore `ctx.resolver`; `call`/`map`/`loop` use
 it to resolve the child flow they expand into. CODE alone also reads

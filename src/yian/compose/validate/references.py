@@ -20,7 +20,9 @@ Located parse metadata: each error anchors on the referencing field's `SourceRan
 from the transient Compose `BuildResult` (the coarse per-field span — e.g. the node's
 `input:` mapping for an input-binding ref, its `prompt:` or `system_prompt:` for a template ref).
 A HUMAN_INPUT question-text error anchors on its own `("text", "questions[i]...")` string
-range, else the `questions:` block.
+range, else the `questions:` block. A field a desugar authored under another node is named by
+its `BuildResult.field_labels` entry: an adaptive gate's brief is reported as the gate's
+`adaptive_questions.prompt` and anchors on the brief.
 
 Imports flow down only: `compile.validation` (the leaf namespace checker), `expr` (the
 binding parser), `nodes` (Node/AgentNode/HumanInputNode behavior and the output-contract
@@ -145,9 +147,11 @@ def validate_references(
     `BuildResult.field_ranges` — the OFFENDING ENTRY where one exists (`("input", name)`, stamped per
     binding by the parse loop for every kind), else the enclosing block (`("field", "inputs")`
     / `("field", "prompt")`), else the node header. A HUMAN_INPUT question-text error anchors on
-    its `("text", "questions[i]...")` string range, else the `questions:` block. `outputs_range`
-    is the authored output value/block range when the caller retains it. The aggregate carries
-    the first retained range.
+    its `("text", "questions[i]...")` string range, else the `questions:` block. An AGENT prompt
+    site is named by its `BuildResult.field_labels` entry when a desugar authored the field under
+    another node (an adaptive gate's composer brief reads `node '<gate>' adaptive_questions.prompt`
+    and anchors on the brief), else `node '<id>' <field>`. `outputs_range` is the authored output
+    value/block range when the caller retains it. The aggregate carries the first retained range.
 
     With `narrowing`, each node's references (a CASE's own sources included) are checked
     against that node's view of the producer and flow-input contracts, so a branch can
@@ -299,8 +303,12 @@ def validate_references(
             ):
                 if not template:
                     continue
+                where = (
+                    result.field_labels.get(field_name)
+                    or f"node {node_id!r} {field_name}"
+                )
                 check_template(
-                    f"node {node_id!r} {field_name}",
+                    where,
                     template,
                     declared,
                     franges.get(("field", field_name)) or node_range,

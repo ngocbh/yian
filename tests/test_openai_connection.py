@@ -324,18 +324,61 @@ def test_run_rejects_unsupported_default_provider_before_any_node(monkeypatch):
     assert events == []
 
 
-def test_check_model_config_rejects_subscription_temperature():
+@pytest.mark.parametrize("block", [{"temperature": 0.2}, {"max_output_tokens": 100}])
+def test_check_model_config_checks_the_openai_block_against_the_subscription_endpoint(block):
     subscription()
-    with pytest.raises(ValueError, match="subscription connections do not accept temperature"):
-        check_model_config(resolve_model_config({"temperature": 0.2}))
-    with pytest.raises(ValueError, match="subscription connections do not accept temperature"):
-        model_from_config(resolve_model_config({"temperature": 0.2}))
+    config = resolve_model_config({"openai": block})
+    with pytest.raises(ValueError) as caught:
+        check_model_config(config)
+    message = str(caught.value)
+    assert f"`openai.{next(iter(block))}`" in message
+    assert "ChatGPT subscription endpoint" in message
+    # A host key sends the same agent to the Responses API, which accepts the block.
+    check_model_config({**config, "api_key": "host-key"})
+
+
+@pytest.mark.parametrize("block", [{"temperature": 0.2}, {"max_output_tokens": 100}])
+def test_check_model_config_accepts_the_openai_block_on_an_api_key_connection(block):
+    AuthStore().save("openai", ApiKeyCredentials("saved-key"), "gpt-5.5")
+    config = resolve_model_config({"openai": block})
+    assert config["_connection"]["method"] == "api_key"
+    check_model_config(config)
+
+
+def test_factory_subscription_sends_the_openai_block(monkeypatch):
+    subscription()
+    from yian.llm_clients import openai_subscription
+
+    server = ResponsesServer(tool_first=False)
+    original = openai_subscription.create_subscription_model
+    with httpx.Client(transport=httpx.MockTransport(server)) as client:
+        monkeypatch.setattr(
+            openai_subscription,
+            "create_subscription_model",
+            lambda *a, **kw: original(*a, **kw, http_client=client, max_retries=0),
+        )
+        model = model_from_config(resolve_model_config({"openai": {"reasoning": {"effort": "low"}}}))
+        model.invoke("hi")
+    assert server.bodies[0]["reasoning"]["effort"] == "low"
+
+
+def test_run_rejects_a_subscription_openai_block_before_any_node():
+    subscription()
+    events = []
+    flow = load_flow(_SLOW_THEN_AGENT.replace(
+        "{extra}", "llm_config:\n  openai:\n    max_output_tokens: 100\n"
+    ))
+    with pytest.raises(ValueError, match=r"Agent 'w'.*`openai\.max_output_tokens`.*ChatGPT subscription"):
+        run_flow(flow, {"topic": "x"}, on_event=events.append)
+    assert events == []
 
 
 def test_run_rejects_subscription_temperature_before_any_node():
     subscription()
     events = []
-    flow = load_flow(_SLOW_THEN_AGENT.replace("{extra}", "llm_config:\n  temperature: 0.2\n"))
-    with pytest.raises(ValueError, match=r"Agent 'w'.*do not accept temperature"):
+    flow = load_flow(_SLOW_THEN_AGENT.replace(
+        "{extra}", "llm_config:\n  openai:\n    temperature: 0.2\n"
+    ))
+    with pytest.raises(ValueError, match=r"Agent 'w'.*`openai\.temperature`.*ChatGPT subscription"):
         run_flow(flow, {"topic": "x"}, on_event=events.append)
     assert events == []

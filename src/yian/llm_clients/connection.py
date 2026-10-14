@@ -15,9 +15,17 @@ import os
 from typing import Any
 from urllib.parse import urlsplit
 
+from pydantic import ValidationError
+
 from yian._settings import DEFAULT_PROVIDER, PROVIDER_DEFAULT_MODELS
 from .auth import ApiKeyCredentials, AuthError, AuthStore, OAuthCredentials, OpenAIAuth
-from .config import AZURE_NEEDS_BASE_URL, LLMConfig, SUPPORTED_LLM_PROVIDERS
+from .config import (
+    AZURE_NEEDS_BASE_URL,
+    RETIRED_LLM_CONFIG_KEYS,
+    LLMConfig,
+    SUPPORTED_LLM_PROVIDERS,
+)
+from .provider_blocks import block_schema
 
 _API_ENDPOINT = "https://api.openai.com/v1"
 _SUBSCRIPTION_ENDPOINT = "https://chatgpt.com/backend-api/codex"
@@ -253,23 +261,48 @@ def check_model_config(
 
     Raises:
         `AuthError`: The config carries ``HOST_KEY_MARKER`` but no ``api_key``.
-        `ValueError`: A field is invalid, the connection rejects a set field, or
-            an ``azure`` config has no ``base_url``.
+        `ValueError`: A field is invalid, the connection rejects a set field, an
+            ``azure`` config has no ``base_url``, or the provider's block does not fit
+            the API the call actually reaches (e.g. an ``openai`` block with
+            ``temperature`` on a ChatGPT subscription connection).
     """
     validated, connection = split_model_config(config)
     if validated.provider == "azure" and validated.base_url is None:
         raise ValueError(AZURE_NEEDS_BASE_URL)
-    if (
-        validated.api_key is None
-        and connection is not None
-        and connection["method"] == "subscription"
-        and validated.temperature is not None
-    ):
-        raise ValueError(
-            "OpenAI subscription connections do not accept temperature; remove "
-            "temperature from the llm_config that sets it (flow, def, node, or host)"
-        )
+    if validated.provider is not None:
+        _check_block(validated, connection)
     return validated, connection
+
+
+def _check_block(validated: LLMConfig, connection: dict[str, Any] | None) -> None:
+    """Check the provider's block against the schema of the API the call reaches.
+
+    Load time checks a block against the provider's usual API; the connection can route
+    the call to a narrower one (the ChatGPT subscription endpoint), known only here.
+
+    Args:
+        validated (`LLMConfig`): The validated config; its ``provider`` names the block.
+        connection (`dict[str, Any] | None`): The pinned connection, if any.
+
+    Raises:
+        `ValueError`: The block has a key or value that API refuses; the message is
+            the block class's own and never echoes values.
+    """
+    schema = block_schema(validated.provider, connection, validated.api_key)
+    try:
+        schema.model_validate(validated.block_for(validated.provider))
+    except ValidationError as exc:
+        raise ValueError(
+            "; ".join(_block_error_text(validated.provider, error) for error in exc.errors())
+        ) from None
+
+
+def _block_error_text(provider: str, error: dict[str, Any]) -> str:
+    """Return one block validation error as text naming its key path, without the input."""
+    if error["type"] == "value_error":
+        return str(error["ctx"]["error"])
+    path = ".".join(str(part) for part in error["loc"])
+    return f"`{provider}.{path}`: {error['msg']}"
 
 
 def resolve_model_config(
@@ -305,12 +338,16 @@ def resolve_model_config(
 def legacy_connection_config(config: dict[str, Any]) -> dict[str, Any]:
     """Pin old OpenAI records to their original API-key route without I/O."""
     result = copy.deepcopy(config)
-    # Old reflective snapshots serialized every optional public field, including
-    # these empty retired defaults. They carried no native execution behavior.
+    # Old records serialized every optional public field, including these empty
+    # retired defaults (sandbox/cwd, and the keys now written in provider blocks).
+    # As nulls they configured nothing; a set one still fails validation.
     if result.get("provider") != "codex":
         for field in ("sandbox", "cwd"):
             if field in result and result[field] is None:
                 del result[field]
+    for field in RETIRED_LLM_CONFIG_KEYS:
+        if field in result and result[field] is None:
+            del result[field]
     if result.get("provider") == "openai" and "_connection" not in result:
         result["_connection"] = {
             "method": "api_key",

@@ -4,6 +4,9 @@ The model-access leaf: `LLMConfig` (the selection
 carrier) and `model_from_config` (resolve it to a ready `BaseChatModel`), plus the
 per-provider client wrappers behind `create_llm_client`. The AGENT node and the
 Compose loader's `llm_config:` field draw on this; `chat/` and `cli/` use it too.
+`provider_blocks` holds the schema of each provider block in `LLMConfig`: the request
+body of the API that provider's calls reach, checked at load and again at run start
+against the API actually called, then sent as written by the client wrappers.
 The direct OpenAI subscription transport accepts an injected access source and
 returns a normal chat model; it owns no login, credential persistence, or tool loop.
 Both OpenAI authentication methods use this model interface. `auth/` owns staged
@@ -20,7 +23,7 @@ Never imports: any other yian subpackage — it is a leaf (peer of state /
 """
 
 from yian.llm_clients.base_client import BaseLLMClient
-from yian.llm_clients.config import LLMConfig
+from yian.llm_clients.config import LLM_CONFIG_KEYS, LLMConfig
 from yian.llm_clients.factory import (
     create_llm_client,
     model_from_config,
@@ -29,6 +32,7 @@ from yian.llm_clients.model_list import ModelListError, list_models
 
 __all__ = [
     "BaseLLMClient",
+    "LLM_CONFIG_KEYS",
     "LLMConfig",
     "ModelListError",
     "create_llm_client",

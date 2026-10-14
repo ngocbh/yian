@@ -344,7 +344,7 @@ def test_invalid_config_with_a_key_fails_before_the_run_without_echoing_it(tmp_p
                 "provider": "vllm",
                 "model": "served-model",
                 "api_key": SENTINEL,
-                "temperature": "hot",
+                "vllm": {"temperature": "hot"},
             },
         )
     assert events == []

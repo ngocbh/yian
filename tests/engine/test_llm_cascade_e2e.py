@@ -8,14 +8,15 @@ from yian.compose.loader import load_flow
 from yian.run import run_flow
 from yian.llm_clients.connection import resolve_model_config
 
-# Top flow sets provider+temperature; calls `sub`. Inside `sub`, `inner` overrides only
-# `model` (so it fills provider/temperature from the flow and the CLI fields), while
+# Top flow sets provider and an anthropic temperature; calls `sub`. Inside `sub`, `inner`
+# overrides only `model` (so it fills provider and its anthropic block from the flow and the
+# CLI fields, merged per block field), while
 # `solo` skips authored outer layers with inherit:false (its own dict already supplies
 # both process-defaulted selection fields in this case).
 _FLOW = """
 id: top
 name: top
-llm_config: {provider: anthropic, temperature: 0.2}
+llm_config: {provider: anthropic, anthropic: {temperature: 0.2}}
 defs:
   sub:
     nodes:
@@ -52,16 +53,15 @@ def test_cascade_end_to_end_with_cli_layer(monkeypatch):
     monkeypatch.setattr(llm_clients_mod, "model_from_config", fake_model_from_config)
 
     loaded = load_flow(_FLOW)
-    res = run_flow(loaded, {}, llm_config={"anthropic_effort": "low"})
+    res = run_flow(loaded, {}, llm_config={"anthropic": {"output_config": {"effort": "low"}}})
     assert res.status == "succeeded"
 
     by_model = {c["model"]: c for c in seen}
-    # inner: own model + flow provider/temperature + CLI anthropic_effort
+    # inner: own model + flow provider/temperature + CLI effort, one anthropic block
     assert by_model["claude-opus-4-8"] == {
         "model": "claude-opus-4-8",
         "provider": "anthropic",
-        "temperature": 0.2,
-        "anthropic_effort": "low",
+        "anthropic": {"temperature": 0.2, "output_config": {"effort": "low"}},
     }
     # solo: inherit:false — own complete selection, no authored flow/CLI layers
     assert by_model["gpt-5.5"] == resolve_model_config({"provider": "openai", "model": "gpt-5.5"})

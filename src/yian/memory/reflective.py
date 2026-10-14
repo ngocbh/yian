@@ -24,6 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 import yian.json_codec as json_codec
 from yian.llm_clients.connection import legacy_connection_config, resolve_model_config, split_model_config
 from yian.llm_clients import LLMConfig, model_from_config
+from yian.llm_clients.config import RETIRED_LLM_CONFIG_KEYS
 from yian.memory.contracts import (
     JsonObject,
     JsonValue,
@@ -376,7 +377,11 @@ def _parse_snapshot(
         llm_config = _copy_json_object(data["llm_config"], "snapshot.llm_config")
         # Preserve the exact historical snapshot for its recorded digest while
         # validating inert defaults removed from the current public carrier.
-        retired_nulls = {key: None for key in ("sandbox", "cwd") if key in llm_config and llm_config[key] is None}
+        retired_nulls = {
+            key: None
+            for key in ("sandbox", "cwd", *sorted(RETIRED_LLM_CONFIG_KEYS))
+            if key in llm_config and llm_config[key] is None
+        }
         validated_llm, connection = split_model_config({key: value for key, value in llm_config.items() if key not in retired_nulls})
         complete_llm = cast(
             JsonObject, validated_llm.model_dump(mode="json", exclude_none=False)

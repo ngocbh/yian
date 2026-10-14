@@ -6,6 +6,10 @@
 # initializes). An AGENT node's own field always wins. `inherit: false` skips the authored
 # flow/parent/CLI layers but still receives those process defaults.
 #
+# Request settings live in a block named after the provider (`anthropic:` below), shaped
+# like that provider's API request body. Blocks merge the same way, one field at a time,
+# and a node uses only the block of the provider it resolves to.
+#
 # Try the CLI layer (fills the gaps nothing else set):
 #   yian run llm-config-cascade.yaml --provider anthropic --model claude-opus-4-8
 
@@ -15,14 +19,18 @@ description: Show the llm_config cascade — flow default, per-node override, in
 
 llm_config:                       # the flow layer: every AGENT node inherits these defaults
   provider: anthropic
-  temperature: 0.2
+  anthropic:
+    max_tokens: 2048
+    output_config: {effort: low}
 
 nodes:
-  drafter:                        # inherits provider+temperature; overrides only model
+  drafter:                        # inherits provider, max_tokens; sets model, effort
     kind: agent
     prompt: Draft a one-line summary.
     llm_config:
       model: claude-opus-4-8
+      anthropic:
+        output_config: {effort: high}   # replaces the flow's output_config whole
 
   grader:                         # own selection + process defaults; no flow/CLI layer
     kind: agent

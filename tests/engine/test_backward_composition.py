@@ -243,7 +243,7 @@ defs:
           n: ${input.n}
     output: ${invoke.output}
   direct:
-    llm_config: {provider: openai, model: no-structured-sentinel, temperature: 0.1}
+    llm_config: {provider: openai, model: no-structured-sentinel, openai: {temperature: 0.1}}
     input:
       n: int
     nodes:
@@ -255,7 +255,7 @@ defs:
         times: 2
     output: ${loop.output}
   mapped:
-    llm_config: {provider: deepseek, model: no-structured-sentinel, temperature: 0.8}
+    llm_config: {provider: deepseek, model: no-structured-sentinel, deepseek: {temperature: 0.8}}
     input:
       n: int
     nodes:
@@ -325,7 +325,9 @@ output:
         selected = expected_map["/".join(scope.static_path)]
         assert capture.node_data["effective_llm_config"] == selected
         assert selected["provider"] == ("openai" if scope.static_path[0] == "one" else "deepseek")
-        assert selected["temperature"] == (0.1 if scope.static_path[0] == "one" else 0.8)
+        assert selected[selected["provider"]] == {
+            "temperature": 0.1 if scope.static_path[0] == "one" else 0.8
+        }
         assert occurrence.record.evidence is not None
         assert occurrence.record.evidence.prompt == capture.node_data["rendered_prompt"]
 

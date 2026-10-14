@@ -158,7 +158,7 @@ def test_snapshot_contains_only_public_pinned_model_configuration() -> None:
         {
             "provider": "ollama",
             "model": "qwen",
-            "temperature": 0.2,
+            "ollama": {"options": {"temperature": 0.2}},
         }
     )
 
@@ -168,10 +168,7 @@ def test_snapshot_contains_only_public_pinned_model_configuration() -> None:
     assert set(llm_config) == {
         "provider",
         "model",
-        "anthropic_effort",
-        "openai_reasoning_effort",
-        "google_thinking_level",
-        "temperature",
+        "ollama",
     }
     assert not {"api_key", "backend_token", "tenant_id"} & set(llm_config)
 
@@ -187,17 +184,14 @@ def test_defaults_are_read_once_and_recorded_snapshot_never_rereads_them(
         calls.append("snapshot")
         return original(config)
     monkeypatch.setattr(reflective, "resolve_model_config", resolve)
-    first = ReflectiveMemory({"temperature": 0.2})
+    first = ReflectiveMemory({"ollama": {"options": {"temperature": 0.2}}})
     with first.open_run() as session:
         snapshot = session.snapshot
     assert calls == ["snapshot"]
     assert snapshot["llm_config"] == {
-        "anthropic_effort": None,
-        "google_thinking_level": None,
         "model": "qwen",
-        "openai_reasoning_effort": None,
         "provider": "ollama",
-        "temperature": 0.2,
+        "ollama": {"options": {"temperature": 0.2}},
     }
 
     calls.clear()

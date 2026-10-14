@@ -219,7 +219,7 @@ def test_scoped_render_capture_requires_recorded_model_map_entry(monkeypatch):
     with pytest.raises(ValueError, match="missing static path 'authored/agent'"):
         eval_node(node, None, VariablePool(), capture_bindings=True, effective_llm_by_static_path={})
     assert calls == []
-    config = {"provider": "test", "model": "recorded", "temperature": 0.5}
+    config = {"provider": "openai", "model": "recorded", "openai": {"temperature": 0.5}}
     evaluated = eval_node(node, None, VariablePool(), capture_bindings=True,
                           effective_llm_by_static_path={"authored/agent": config})
     config["model"] = "later mutation"

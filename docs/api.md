@@ -124,15 +124,15 @@ holding one at any depth raises `ValueError` naming where it sits
 (`input 'x' at a[1]: ...`), also before the log is created. An `inputs` value may
 nest 100 levels (each record and list is a level); a deeper one raises `ValueError`
 naming the input and path, before the log is created (see
-[Types → Nesting limit](typing.md#nesting-limit)). A non-finite
-`llm_config` value, such as `temperature`, is rejected too: in a flow file it is a
-load error, and in the host `llm_config` it raises `ValueError` before the run starts
-when an AGENT uses it. An int of any size is a value: the log records every digit,
-and `resume_flow` reads it back exact. A node assertion, CASE `when`, or LOOP
-`while`/`until` set in Python whose expression doesn't parse raises `ExpressionError`
-(a `ValueError`) naming the node and the field (assertion list and assertion, case
-handle, or predicate keyword), before the log is created; `resume_flow` raises it for an
-unfinished run before appending any record.
+[Types → Nesting limit](typing.md#nesting-limit)). A non-finite value in an
+`llm_config` provider block, such as `{"openai": {"temperature": float("nan")}}`, is
+rejected too: in a flow file it is a load error, and in the host `llm_config` it raises
+`ValueError` before the run starts when an AGENT uses it. An int of any size is a
+value: the log records every digit, and `resume_flow` reads it back exact. A node
+assertion, CASE `when`, or LOOP `while`/`until` set in Python whose expression doesn't
+parse raises `ExpressionError` (a `ValueError`) naming the node and the field (assertion
+list and assertion, case handle, or predicate keyword), before the log is created;
+`resume_flow` raises it for an unfinished run before appending any record.
 
 - `log` — an optional JSONL path. `None` still uses the same record/reducer path
   with a process-local log. A path creates a new durable log exclusively; an
@@ -179,6 +179,31 @@ unfinished run before appending any record.
   the model configuration, so it always uses environment credentials.
   `ProfileMemory` accepts one in its own `llm_config`, with `provider`, and does not
   record it.
+
+  Besides `provider`, `model`, `api_key`, and `base_url`, the run layer takes the
+  same provider blocks as a flow file (see
+  [Provider blocks](syntax.md#provider-blocks-request-settings)): one block per
+  provider, named after it, holding request-body fields of the API that provider's
+  calls reach. They join the cascade per block field. Write a dashed block name as a
+  dict key:
+
+  ```python
+  llm_config={
+      "provider": "qwen-cn",
+      "model": "qwen-plus",
+      "qwen-cn": {"enable_thinking": True},
+  }
+  ```
+
+  A retired key (`temperature`, `anthropic_effort`, `openai_reasoning_effort`,
+  `google_thinking_level`) raises `ValueError` showing its block form.
+
+  Each layer is checked as a `yian.llm_clients.LLMConfig`. Its blocks are fields
+  named like the keys, except that the dashed ones are the attributes `qwen_cn`,
+  `glm_cn`, and `minimax_cn`; build such a config from a dict, as in
+  `LLMConfig.model_validate({"qwen-cn": {"enable_thinking": True}})`, since the
+  Python spelling is not accepted as a key. `config.block_for("qwen-cn")` returns
+  the block as a plain dict without its unset fields (`{}` when it is unset).
 
   A `base_url` entry replaces the provider's default endpoint for the agents that
   use the key, for example an Azure OpenAI resource's v1 surface:

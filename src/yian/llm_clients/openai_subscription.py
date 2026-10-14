@@ -8,7 +8,7 @@ logs in, persists credentials, executes tools, or retains conversation history.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import aclosing, closing
 from dataclasses import dataclass, field
 
@@ -16,6 +16,8 @@ import httpx
 from langchain_core.messages import ChatMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from pydantic import Field
+
+from .openai_client import RequestBlockMixin
 
 _BASE_URL = "https://chatgpt.com/backend-api/codex"
 _ACCESS_ARGUMENT = "_composer_subscription_access"
@@ -69,8 +71,12 @@ def _instruction_text(message) -> str:
     return "".join(parts)
 
 
-class _SubscriptionChatOpenAI(ChatOpenAI):
-    """Adapt Responses requests without owning an agent or tool loop."""
+class _SubscriptionChatOpenAI(RequestBlockMixin, ChatOpenAI):
+    """Adapt Responses requests without owning an agent or tool loop.
+
+    The ``openai`` block is merged into langchain's payload before the subscription
+    guards run, so a block can never switch off the protocol settings they enforce.
+    """
 
     access_source: Callable[[], SubscriptionAccess] = Field(exclude=True, repr=False)
     stop_check: Callable[[], None] | None = Field(
@@ -119,11 +125,6 @@ class _SubscriptionChatOpenAI(ChatOpenAI):
             raise ValueError(
                 "OpenAI subscription requests require the full conversation"
             )
-        for option in ("temperature", "max_output_tokens"):
-            if payload.get(option) is not None:
-                raise ValueError(
-                    f"OpenAI subscription requests do not support {option}"
-                )
         payload["include"] = list(
             dict.fromkeys(
                 [
@@ -202,7 +203,7 @@ def create_subscription_model(
     check_stopped: Callable[[], None] | None = None,
     http_client: httpx.Client | None = None,
     http_async_client: httpx.AsyncClient | None = None,
-    reasoning_effort: str | None = None,
+    block: Mapping | None = None,
     timeout: float = 60.0,
     max_retries: int = 2,
 ) -> ChatOpenAI:
@@ -216,7 +217,9 @@ def create_subscription_model(
         http_client (`httpx.Client | None`): Optional caller-owned sync transport.
         http_async_client (`httpx.AsyncClient | None`): Optional caller-owned async
             transport. Omitted clients use the SDK's standard client lifecycle.
-        reasoning_effort (`str | None`): Optional provider reasoning setting.
+        block (`Mapping | None`): Optional ``openai`` block, shaped like a Responses
+            request body and already checked against `OpenAISubscriptionBlock`;
+            merged into every request body as written. Defaults to None (nothing extra).
         timeout (`float`): Network-operation timeout in seconds; defaults to 60.
         max_retries (`int`): SDK transport retries; defaults to two. Does not retry
             partial response streams or execute tools.
@@ -244,7 +247,9 @@ def create_subscription_model(
         include=["reasoning.encrypted_content"],
         http_client=http_client,
         http_async_client=http_async_client,
-        reasoning_effort=reasoning_effort,
+        block=dict(block or {}),
+        block_provider="openai",
+        block_api="responses",
         timeout=timeout,
         max_retries=max_retries,
     )

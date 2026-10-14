@@ -1,17 +1,110 @@
+import copy
+import inspect
 import os
-from typing import Any, Optional
+from functools import cache
+from typing import Any, Literal, Optional
 
 from langchain_core.messages import AIMessage
 from langchain_openai import ChatOpenAI
+from langchain_openai.chat_models.base import BaseChatOpenAI
+from openai.resources.chat.completions import Completions
+from openai.resources.responses import Responses
+from pydantic import Field
 
 from .api_key_env import get_api_key_env
 from .base_client import BaseLLMClient, normalize_content
 from .capabilities import get_capabilities
 from .factory import _PROVIDER_BASE_URL
+from .provider_blocks import merge_request_body
 from .validators import validate_model
 
+# SDK keywords that configure the HTTP call rather than name a request-body field.
+_TRANSPORT_KEYWORDS = frozenset({"self", "extra_headers", "extra_query", "extra_body", "timeout"})
 
-class NormalizedChatOpenAI(ChatOpenAI):
+
+@cache
+def _sdk_body_keywords(responses: bool) -> frozenset[str]:
+    """Return the request-body fields the SDK method langchain calls takes as keywords.
+
+    Args:
+        responses (`bool`):
+            `True` for the Responses API (`responses.create`/`parse`), `False` for Chat
+            Completions (`chat.completions.create`/`parse`).
+
+    Returns:
+        `frozenset[str]`:
+            Keyword names of both methods, without the transport options.
+    """
+    resource = Responses if responses else Completions
+    methods = (resource.create, resource.parse)
+    names = {name for method in methods for name in inspect.signature(method).parameters}
+    return frozenset(names - _TRANSPORT_KEYWORDS)
+
+
+class RequestBlockMixin(BaseChatOpenAI):
+    """Send a provider block into every request body an OpenAI-family chat model builds.
+
+    Put it before the langchain class in the bases so its payload override runs after
+    langchain's own (and before a subclass's post-processing). The block is merged as
+    written: keys the SDK method takes stay top-level, the rest go into ``extra_body``.
+
+    Attributes:
+        block (`dict[str, Any]`, *optional*, defaults to `{}`):
+            The provider block, shaped like the request body of `block_api`. Empty sends
+            nothing extra.
+        block_provider (`str`, *optional*, defaults to `""`):
+            The provider whose block this is, named in errors.
+        block_api (`Literal["chat", "responses"]`, *optional*, defaults to `"chat"`):
+            The API whose request body the block mirrors: Chat Completions or Responses.
+    """
+
+    block: dict[str, Any] = Field(default_factory=dict, exclude=True, repr=False)
+    block_provider: str = Field(default="", exclude=True, repr=False)
+    block_api: Literal["chat", "responses"] = Field(default="chat", exclude=True, repr=False)
+
+    def _get_request_payload(self, input_, *, stop=None, **kwargs):
+        """Return langchain's request payload with `block` merged in.
+
+        Merging after langchain means its renames (e.g. ``max_tokens`` to
+        ``max_completion_tokens``) never touch a block key.
+
+        Args:
+            input_ (`LanguageModelInput`):
+                The messages or prompt being sent.
+            stop (`list[str]`, *optional*, defaults to `None`):
+                Stop sequences for this call.
+            **kwargs:
+                Call options langchain folds into the payload.
+
+        Returns:
+            `dict`:
+                Keyword arguments for the SDK method langchain calls.
+
+        Raises:
+            `ValueError`:
+                Raised when the block mirrors Chat Completions but langchain routes this
+                model to the Responses API.
+        """
+        payload = super()._get_request_payload(input_, stop=stop, **kwargs)
+        if not self.block:
+            return payload
+        responses = self._use_responses_api(payload)
+        if responses and self.block_api == "chat":
+            raise ValueError(
+                f"The {self.block_provider!r} block mirrors the Chat Completions request, "
+                f"but model {self.model_name!r} is routed to the Responses API; remove the "
+                f"block or use a model served through Chat Completions."
+            )
+        top_level = _sdk_body_keywords(responses)
+        # Nested payload dicts can be the model's own fields or the caller's call
+        # options; copy the ones the merge writes into so no call leaks into the next.
+        for key in {*self.block, "extra_body"}:
+            if isinstance(payload.get(key), dict):
+                payload[key] = copy.deepcopy(payload[key])
+        return merge_request_body(payload, self.block, top_level=top_level)
+
+
+class NormalizedChatOpenAI(RequestBlockMixin, ChatOpenAI):
     """ChatOpenAI with capability-aware binding and lossless Responses messages.
 
     Responses content blocks retain reasoning and tool continuation data for
@@ -156,8 +249,8 @@ class MinimaxChatOpenAI(NormalizedChatOpenAI):
 
 # Kwargs forwarded from user config to ChatOpenAI
 _PASSTHROUGH_KWARGS = (
-    "timeout", "max_retries", "reasoning_effort", "temperature",
-    "api_key", "callbacks", "http_client", "http_async_client",
+    "timeout", "max_retries", "api_key", "callbacks", "http_client",
+    "http_async_client",
 )
 
 # Self-hosted runtimes whose API key is optional: vLLM runs keyless by default
@@ -187,7 +280,7 @@ class OpenAIClient(BaseLLMClient):
     vLLM, …). Ollama has its own native client (see ollama_client).
 
     For native OpenAI models, uses the Responses API (/v1/responses) which
-    supports reasoning_effort with function tools across all model families
+    supports reasoning with function tools across all model families
     (GPT-4.1, GPT-5). Third-party compatible providers (xAI, OpenRouter,
     vLLM) use standard Chat Completions.
     """
@@ -255,7 +348,12 @@ class OpenAIClient(BaseLLMClient):
             chat_cls = MinimaxChatOpenAI
         else:
             chat_cls = NormalizedChatOpenAI
-        return chat_cls(**llm_kwargs)
+        return chat_cls(
+            **llm_kwargs,
+            block=self.kwargs.get("block") or {},
+            block_provider=self.provider,
+            block_api="responses" if self.provider == "openai" else "chat",
+        )
 
     def validate_model(self) -> bool:
         """Validate model for the provider."""

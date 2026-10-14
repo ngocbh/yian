@@ -795,6 +795,16 @@ Most are just the functional model (above) made enforceable:
   start without one (`check_model_config`); `model` is the deployment. Env
   `AZURE_OPENAI_ENDPOINT`/`AZURE_OPENAI_DEPLOYMENT_NAME` are not read. A host
   Azure key must bring its own `base_url` (`pop_host_credentials`).
+  Request settings live in provider blocks (`llm_clients/provider_blocks.py`): one
+  `LLMConfig` block per provider, each mirroring the request body of the API that
+  provider's calls reach, with reserved paths yian builds. Every block is checked at
+  load; the cascade rejects unknown and retired host-layer keys and merges blocks per
+  block field, one level deep (`merge_llm_config`, still associative); run start
+  re-checks each agent's block against the API actually called (`check_model_config`
+  → `block_schema`, e.g. `OpenAISubscriptionBlock` on a ChatGPT subscription). Clients
+  send the block as written (`merge_request_body`) with no translation; the only
+  default is Anthropic `max_tokens`. Keep `provider`, `_connection`, and `_host_key`
+  top-level in recorded configs (resume reads them there).
 - **One attempt barrier precedes commits** — accept Started, complete backward
   results and all memory proposals, then accept Ready. Commit each memory key
   once in sorted key order, even with an empty batch, accepting its positive-attempt

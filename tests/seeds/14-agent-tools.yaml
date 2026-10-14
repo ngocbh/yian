@@ -19,7 +19,8 @@ nodes:
     llm_config:
       provider: anthropic
       model: claude-opus-4-8
-      temperature: 0.3
+      anthropic:
+        temperature: 0.3
     input:
       topic: ${input.topic}
     output:                     # structured agent output (one object)

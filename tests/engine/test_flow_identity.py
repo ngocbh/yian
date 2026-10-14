@@ -18,6 +18,7 @@ from yian.compile.manifest import expansion_digest, flow_fingerprint, flow_manif
 from yian.compile.memory_layout import apply_memory_layout, resolve_memory_layout
 from yian.compile.model import START_ID, CompiledFlow, Edge, Flow, FlowOutput
 from yian.compose import load_flow
+from yian.compose.helpers.errors import LoadError
 from yian.diagnostics import OriginRef
 from yian.memory import (
     MemoryOccurrenceKind,
@@ -392,7 +393,8 @@ id: llm
 name: LLM
 llm_config:
   provider: openai
-  temperature: 0.2
+  openai:
+    temperature: 0.2
 nodes:
   ask:
     kind: agent
@@ -407,7 +409,7 @@ output: ${ask.output}
     baseline = flow_fingerprint(original)
 
     flow_layer = copy.deepcopy(original)
-    flow_layer.flow_llm_config["temperature"] = 0.7
+    flow_layer.flow_llm_config["openai"]["temperature"] = 0.7
 
     own_layer = copy.deepcopy(original)
     own_layer.nodes["ask"].own_llm_config["model"] = "gpt-5.5-pro"
@@ -425,6 +427,160 @@ output: ${ask.output}
     assert flow_fingerprint(own_layer) != baseline
     assert flow_fingerprint(inherit) != baseline
     assert flow_fingerprint(effective) == baseline
+
+
+_BLOCK_FLOW = """
+id: blocks
+name: Blocks
+llm_config:
+  provider: anthropic
+  anthropic:
+    max_tokens: 2048
+    output_config:
+      effort: low
+  openai:
+    reasoning:
+      effort: high
+nodes:
+  ask:
+    kind: agent
+    prompt: Answer briefly.
+    output: str
+    llm_config:
+      anthropic:
+        max_tokens: 512
+        thinking:
+          type: enabled
+          budget_tokens: 1024
+output: ${ask.output}
+"""
+
+
+def _plain_mapping(canonical):
+    """Unwrap the manifest's typed mapping form into plain nested values."""
+    if canonical.get("type") == "mapping":
+        keys = [entry["key"]["value"] for entry in canonical["entries"]]
+        assert keys == sorted(keys)
+        return {
+            entry["key"]["value"]: _plain_mapping(entry["value"])
+            for entry in canonical["entries"]
+        }
+    return canonical["value"]
+
+
+def test_manifest_records_blocks_as_nested_sorted_mappings():
+    manifest = flow_manifest(_compiled(_BLOCK_FLOW))
+
+    assert _plain_mapping(manifest["flow_llm_config"]) == {
+        "anthropic": {"max_tokens": "2048", "output_config": {"effort": "low"}},
+        "openai": {"reasoning": {"effort": "high"}},
+        "provider": "anthropic",
+    }
+    assert _plain_mapping(manifest["nodes"]["ask"]["own_llm_config"]) == {
+        "anthropic": {
+            "max_tokens": "512",
+            "thinking": {"budget_tokens": "1024", "type": "enabled"},
+        },
+    }
+
+
+def test_flow_fingerprint_tracks_block_fields_but_not_key_order():
+    baseline = flow_fingerprint(_compiled(_BLOCK_FLOW))
+    raised = _compiled(_BLOCK_FLOW.replace("effort: low", "effort: high"))
+    reordered = _compiled(
+        _BLOCK_FLOW.replace(
+            "    thinking:\n          type: enabled\n          budget_tokens: 1024\n",
+            "    thinking:\n          budget_tokens: 1024\n          type: enabled\n",
+        ).replace(
+            "  anthropic:\n    max_tokens: 2048\n    output_config:\n      effort: low\n"
+            "  openai:\n    reasoning:\n      effort: high\n",
+            "  openai:\n    reasoning:\n      effort: high\n"
+            "  anthropic:\n    output_config:\n      effort: low\n    max_tokens: 2048\n",
+        )
+    )
+
+    assert list(reordered.flow_llm_config) != list(_compiled(_BLOCK_FLOW).flow_llm_config)
+    assert list(reordered.nodes["ask"].own_llm_config["anthropic"]["thinking"]) == [
+        "budget_tokens",
+        "type",
+    ]
+    assert flow_fingerprint(raised) != baseline
+    assert flow_fingerprint(reordered) == baseline
+
+
+def test_block_field_names_are_not_redacted_as_credentials():
+    compiled = _compiled(
+        """
+id: block-names
+name: Block names
+llm_config:
+  provider: openai
+  openai:
+    max_output_tokens: 7771
+    safety_identifier: safety-id-value
+    prompt_cache_key: cache-key-value
+  anthropic:
+    max_tokens: 7772
+    thinking:
+      type: enabled
+      budget_tokens: 7773
+  ollama:
+    keep_alive: keep-alive-value
+  google:
+    generationConfig:
+      thinkingConfig:
+        thinkingBudget: 7774
+nodes:
+  ask:
+    kind: agent
+    prompt: Answer briefly.
+    output: str
+output: ${ask.output}
+"""
+    )
+    flow_config = _plain_mapping(flow_manifest(compiled)["flow_llm_config"])
+
+    assert flow_config["openai"] == {
+        "max_output_tokens": "7771",
+        "prompt_cache_key": "cache-key-value",
+        "safety_identifier": "safety-id-value",
+    }
+    assert flow_config["anthropic"] == {
+        "max_tokens": "7772",
+        "thinking": {"budget_tokens": "7773", "type": "enabled"},
+    }
+    assert flow_config["ollama"] == {"keep_alive": "keep-alive-value"}
+    assert flow_config["google"] == {
+        "generationConfig": {"thinkingConfig": {"thinkingBudget": "7774"}},
+    }
+
+
+@pytest.mark.parametrize(
+    ("layer", "message"),
+    [
+        ("api_key: sk-flow-secret", "llm_config.api_key is a host credential"),
+        ("openai: {api_key: sk-flow-secret}", "`openai.api_key` is not a supported field"),
+        ("anthropic: {api_key: sk-flow-secret}", "`anthropic.api_key` is not a supported field"),
+    ],
+)
+def test_a_flow_file_cannot_put_api_key_in_a_manifest(layer, message):
+    with pytest.raises(LoadError, match=re.escape(message)) as caught:
+        _compiled(
+            f"""
+id: keyed
+name: Keyed
+llm_config:
+  provider: openai
+  {layer}
+nodes:
+  ask:
+    kind: agent
+    prompt: Answer briefly.
+    output: str
+output: ${{ask.output}}
+"""
+        )
+    assert "sk-flow-secret" not in str(caught.value)
 
 
 # Every authored literal is identity: the manifest never guesses which values are secrets,
@@ -1244,7 +1400,7 @@ def test_expansion_digest_is_stable_across_canonical_mapping_order():
 def test_expansion_digest_applies_topology_only_policy_to_recursive_children():
     original = _parent_with_child('return inputs["x"] + 1')
     changed = copy.deepcopy(original)
-    changed.nodes["invoke"].child.flow_llm_config["temperature"] = 0.7
+    changed.nodes["invoke"].child.flow_llm_config["openai"] = {"temperature": 0.7}
 
     assert expansion_digest(changed) == expansion_digest(original)
 

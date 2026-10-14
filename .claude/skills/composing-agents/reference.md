@@ -302,7 +302,7 @@ the prompt. Each variable requires a validated typed default; nullable variables
 also need an explicit default. Variable and input names cannot overlap. Default
 strings stay literal, and each invocation gets a fresh copy of all defaults.
 Ownership follows the authored AGENT path plus name across repeated executions.
-A variable named `temperature` does not configure the model; use `llm_config:`.
+A variable named `temperature` does not configure the model; use its provider block in `llm_config:`.
 
 **Get a structured or numeric value out of an AGENT node.** Declare the typed shape
 directly as the node's `output:` — a `Literal[...]`, record, union, non-string scalar, or
@@ -519,11 +519,49 @@ static tree is resolved up front, so later environment changes do not alter the
 effective selection. See [`llm-config-cascade.yaml`](templates/llm-config-cascade.yaml).
 
 ```yaml
-llm_config: {provider: anthropic, temperature: 0.2}   # flow layer
+llm_config: {provider: anthropic, anthropic: {max_tokens: 8000}}   # flow layer
 nodes:
   a: {kind: agent, prompt: hi, llm_config: {model: claude-opus-4-8}}        # fills `model`
   b: {kind: agent, prompt: hi, llm_config: {provider: openai, model: gpt-5.5, inherit: false}}
 ```
+
+### Provider blocks
+
+The top level of `llm_config:` holds only `provider`, `model`, and `inherit:` (plus the
+host-only `api_key`/`base_url`). Every request setting goes in a block named after a
+provider. A node uses the block of its resolved provider; the other blocks are inert but
+still checked at load. A block mirrors the request body of the API yian calls (same
+names, nesting, and values) and is sent as written; the load check names the block,
+the key path, and what is allowed, without echoing the value.
+
+| Block | API (write fields as its reference does) |
+| --- | --- |
+| `openai` | OpenAI Responses (`reasoning: {effort: high}`, `max_output_tokens`, `text: {verbosity: low}`); on a ChatGPT subscription, re-checked at run start without `temperature`/`max_output_tokens` |
+| `azure` | Azure OpenAI Chat Completions (`reasoning_effort`, `max_completion_tokens`) |
+| `xai`, `deepseek`, `qwen`/`qwen-cn`, `glm`/`glm-cn`, `minimax`/`minimax-cn`, `openrouter`, `vllm` | that vendor's Chat Completions (e.g. `qwen: {enable_thinking: true}`, `deepseek: {thinking: {type: enabled}}`) |
+| `anthropic` | Messages (`max_tokens`, `thinking: {type: adaptive}`, `output_config: {effort: high}`) |
+| `google` | Gemini `generateContent`, REST camelCase (`generationConfig: {thinkingConfig: {thinkingLevel: HIGH}, maxOutputTokens: 8192}`) |
+| `ollama` | `/api/chat`: `think`, `options` (`temperature`, `num_ctx`, ...), `keep_alive`, `logprobs`, `top_logprobs`; no default `think` |
+
+Reserved, because yian builds them (setting one is a load error saying so): model,
+messages/`input`/`contents`, `system`/`instructions`/`systemInstruction`, tools and
+tool choice, `parallel_tool_calls`, structured output (`response_format`, `text.format`,
+`output_config.format`, `responseSchema`, `responseMimeType`, Ollama `format`),
+streaming, conversation state (`previous_response_id`, `conversation`, Responses
+`store`), and the reply count (`n`, `candidateCount`).
+
+Blocks cascade per block field, one level deep: a node's `anthropic: {output_config:
+{effort: low}}` keeps the flow's `anthropic: {max_tokens: 8000}`, but replaces the
+flow's whole `output_config`. An omitted field is not sent (Anthropic `max_tokens` is
+the one default). A limit of one model is left to the provider, whose error replaces a
+silent drop: newer Claude models refuse `temperature`, so don't set it for them.
+
+| Retired key | Block form |
+| --- | --- |
+| `anthropic_effort` | `anthropic: {output_config: {effort: …}}` |
+| `openai_reasoning_effort` | `openai: {reasoning: {effort: …}}` |
+| `google_thinking_level` | `google: {generationConfig: {thinkingConfig: {thinkingLevel: …}}}` |
+| `temperature` | `<provider>: {temperature: …}`; google `generationConfig.temperature`; ollama `options.temperature` |
 
 ## Per-node config — `env:`
 

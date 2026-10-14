@@ -387,6 +387,32 @@ How an AGENT node selects and builds its chat model.
 
 ::: yian.llm_clients.LLMConfig
 
+The provider blocks of `LLMConfig`, one class per API, each linking the reference it
+mirrors:
+
+::: yian.llm_clients.provider_blocks
+    options:
+      members:
+        - OpenAIResponsesBlock
+        - OpenAISubscriptionBlock
+        - AzureChatBlock
+        - XAIChatBlock
+        - DeepSeekChatBlock
+        - QwenChatBlock
+        - QwenCNChatBlock
+        - GLMChatBlock
+        - GLMCNChatBlock
+        - MiniMaxChatBlock
+        - MiniMaxCNChatBlock
+        - OpenRouterChatBlock
+        - VLLMChatBlock
+        - AnthropicMessagesBlock
+        - GeminiGenerateContentBlock
+        - OllamaChatBlock
+        - PROVIDER_BLOCKS
+        - block_schema
+        - merge_request_body
+
 ::: yian.llm_clients.model_from_config
 
 ::: yian.llm_clients.create_llm_client

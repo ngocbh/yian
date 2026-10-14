@@ -28,9 +28,7 @@ AZURE_RESOURCE = "https://res.openai.azure.com/"
 def test_a_set_base_url_dumps_and_an_unset_one_adds_nothing():
     config = LLMConfig(provider="openai", model="gpt-5.4", base_url=AZURE_V1, api_key=SENTINEL)
     assert config.model_dump() == {
-        "provider": "openai", "model": "gpt-5.4", "anthropic_effort": None,
-        "openai_reasoning_effort": None, "google_thinking_level": None,
-        "temperature": None, "base_url": AZURE_V1,
+        "provider": "openai", "model": "gpt-5.4", "base_url": AZURE_V1,
     }
     assert SENTINEL not in config.model_dump_json()
     # Recorded snapshots compare full dumps, so an unset base_url must add nothing.

@@ -39,7 +39,9 @@ def _context(**overrides):
             "variables": {"tone": "concise"},
             "variable_domains": {"tone": 'Literal["concise","detailed"]'},
             "rendered_prompt": "reefs: concise",
-            "effective_llm_config": {"provider": "test", "model": "recorded", "temperature": 0.4},
+            "effective_llm_config": {
+                "provider": "anthropic", "model": "recorded", "anthropic": {"temperature": 0.4},
+            },
             "_evaluation_evidence": None,
         },
         "downstream_context": ({"message_index": 0, "contexts": [{"expression": "items[1]"}]},),

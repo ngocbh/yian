@@ -1,34 +1,39 @@
-import re
+import copy
+import inspect
 from contextvars import ContextVar
-from functools import cached_property
+from functools import cache, cached_property
 from typing import Any, Optional
 
 import anthropic
+from anthropic.resources.messages import Messages
 from langchain_anthropic import ChatAnthropic
+from pydantic import Field
 
 from .base_client import BaseLLMClient, normalize_content
+from .provider_blocks import merge_request_body
 from .validators import validate_model
 
 _PASSTHROUGH_KWARGS = (
-    "timeout", "max_retries", "api_key", "max_tokens", "temperature",
-    "callbacks", "http_client", "http_async_client", "effort",
+    "timeout", "max_retries", "api_key", "callbacks", "http_client", "http_async_client",
 )
 
-# Anthropic's extended-thinking ``effort`` parameter is accepted by Opus 4.5+
-# and Sonnet 4.5+ only. Haiku (any version shipped to date) 400s with
-# ``"This model does not support the effort parameter"`` (#831). Future
-# ``claude-{opus,sonnet}-X-Y`` releases inherit effort support via the
-# forward-compat pattern below; future Haiku stays excluded by default.
-_EFFORT_EXACT = {
-    "claude-mythos-preview",  # non-standard preview name; effort-capable
-}
-_EFFORT_PATTERN = re.compile(r"^claude-(opus|sonnet)-\d+-\d+$")
+
+# langchain-anthropic takes these as call options and moves them into ``extra_body`` itself
+# when the installed SDK's ``Messages.create`` lacks them.
+_SAMPLING_KEYWORDS = frozenset({"temperature", "top_k", "top_p"})
 
 
-def _supports_effort(model: str) -> bool:
-    """Whether Anthropic accepts the ``effort`` parameter for this model."""
-    model_lc = model.lower()
-    return model_lc in _EFFORT_EXACT or bool(_EFFORT_PATTERN.match(model_lc))
+@cache
+def _call_keywords() -> frozenset[str]:
+    """Return the block keys ChatAnthropic can take as top-level call options.
+
+    Returns:
+        `frozenset[str]`:
+            Keyword names of the SDK's ``Messages.create`` (without ``self``) plus the
+            sampling fields langchain-anthropic relocates.
+    """
+    names = set(inspect.signature(Messages.create).parameters) - {"self"}
+    return frozenset(names | _SAMPLING_KEYWORDS)
 
 
 # The raw responses opened by the `_stream` call running in this context.
@@ -47,9 +52,13 @@ class NormalizedChatAnthropic(ChatAnthropic):
             Whether the HTTP client follows redirects. The SDK sends the key in
             ``x-api-key``, which httpx re-sends on a cross-origin redirect, so
             `AnthropicClient` turns this off for a host ``base_url``.
+        block (`dict[str, Any]`, *optional*, defaults to `{}`):
+            The ``anthropic`` block, shaped like the Messages API request body and sent
+            into every request as written. Empty sends nothing extra.
     """
 
     follow_redirects: bool = True
+    block: dict[str, Any] = Field(default_factory=dict, exclude=True, repr=False)
 
     @cached_property
     def _client(self) -> anthropic.Client:
@@ -76,6 +85,63 @@ class NormalizedChatAnthropic(ChatAnthropic):
 
     def invoke(self, input, config=None, **kwargs):
         return self.normalize_reply(super().invoke(input, config, **kwargs))
+
+    def with_structured_output(self, schema, *, method=None, **kwargs):
+        """Bind `schema` as structured output, in a form the block's thinking allows.
+
+        langchain-anthropic picks its method from the model's own ``thinking`` field,
+        which a block's ``thinking`` does not set, so it would force a tool call beside
+        thinking, a pair the Messages API rejects. With thinking on in the block and no
+        `method` given, this uses the JSON-schema output format (``output_config.format``).
+
+        Args:
+            schema (`dict` or `type`):
+                The output schema.
+            method (`str`, *optional*, defaults to `None`):
+                ``"function_calling"`` or ``"json_schema"``; `None` picks
+                ``"json_schema"`` when the block turns thinking on, else
+                ``"function_calling"``.
+            **kwargs:
+                Passed to `ChatAnthropic.with_structured_output`.
+
+        Returns:
+            `Runnable`:
+                A runnable that returns outputs matching `schema`.
+        """
+        if method is None:
+            thinking = self.block.get("thinking")
+            thinking_on = isinstance(thinking, dict) and thinking.get("type") != "disabled"
+            method = "json_schema" if thinking_on else "function_calling"
+        return super().with_structured_output(schema, method=method, **kwargs)
+
+    def _get_request_payload(self, input_, *, stop=None, **kwargs):
+        """Return langchain's request payload with `block` merged into the call options.
+
+        Merging before langchain builds the payload lets its own handling see the block:
+        moving sampling fields the SDK lacks into ``extra_body``, deriving beta headers,
+        and merging ``output_config`` so a block ``effort`` sits beside a structured
+        output ``format``. Block keys the SDK method does not take go into ``extra_body``.
+
+        Args:
+            input_ (`LanguageModelInput`):
+                The messages or prompt being sent.
+            stop (`list[str]`, *optional*, defaults to `None`):
+                Stop sequences for this call.
+            **kwargs:
+                Call options langchain folds into the payload.
+
+        Returns:
+            `dict`:
+                Keyword arguments for the SDK method langchain calls.
+        """
+        if self.block:
+            # Bound call options (e.g. a structured output's ``output_config``) are shared
+            # across calls, so merge into copies of the ones the block touches.
+            for key in (*self.block, "extra_body"):
+                if isinstance(kwargs.get(key), dict):
+                    kwargs[key] = copy.deepcopy(kwargs[key])
+            merge_request_body(kwargs, self.block, top_level=_call_keywords())
+        return super()._get_request_payload(input_, stop=stop, **kwargs)
 
     def _create(self, payload: dict) -> Any:
         response = super()._create(payload)
@@ -127,18 +193,15 @@ class AnthropicClient(BaseLLMClient):
     def get_llm(self) -> Any:
         """Return configured ChatAnthropic instance."""
         self.warn_if_unknown_model()
-        llm_kwargs = {"model": self.model}
+        llm_kwargs = {"model": self.model, "block": self.kwargs.get("block") or {}}
 
         if self.base_url:
             llm_kwargs["base_url"] = self.base_url
             llm_kwargs["follow_redirects"] = False
 
         for key in _PASSTHROUGH_KWARGS:
-            if key not in self.kwargs:
-                continue
-            if key == "effort" and not _supports_effort(self.model):
-                continue
-            llm_kwargs[key] = self.kwargs[key]
+            if key in self.kwargs:
+                llm_kwargs[key] = self.kwargs[key]
 
         return NormalizedChatAnthropic(**llm_kwargs)
 

@@ -22,9 +22,12 @@ from typing import Any
 from pydantic import SecretStr
 
 from yian.llm_clients.config import (
+    LLM_CONFIG_KEYS,
+    RETIRED_LLM_CONFIG_KEYS,
     LLMConfig,
     host_only_field_error,
     merge_llm_config,
+    retired_key_error,
     validate_base_url,
 )
 from yian.llm_clients.connection import HOST_KEY_MARKER, validate_connection
@@ -266,9 +269,13 @@ def _require_concrete_selection(config: dict[str, Any], *, path: str) -> None:
         except ValueError as exc:
             raise ValueError(f"effective LLM config for {path!r}: {exc}") from None
     # Only a resolved map carries the marker and the host key's base_url;
-    # authored layers may not (except an Azure endpoint, checked above).
+    # authored layers may not (except an Azure endpoint, checked above). A retired
+    # key can only come from a map recorded before it retired; such a finished run
+    # still replays, and resuming an unfinished one refuses it per agent.
     _validate_layer({
-        key: value for key, value in config.items() if key not in (HOST_KEY_MARKER, "base_url")
+        key: value
+        for key, value in config.items()
+        if key not in (HOST_KEY_MARKER, "base_url") and key not in RETIRED_LLM_CONFIG_KEYS
     })
     missing = [
         field
@@ -292,14 +299,21 @@ def _validate_layer(config: dict[str, Any]) -> None:
         raise ValueError(f"llm_config.{HOST_KEY_MARKER} is internal to recorded runs")
     if str(config.get("provider", "")).lower() == "codex" or any(key in config for key in ("sandbox", "cwd")):
         LLMConfig(**config)
+    retired = retired_key_error(config)
+    if retired is not None:
+        raise ValueError(retired)
     # The loader checks authored values; a host layer is checked here only for
     # unknown keys, which would otherwise be recorded and silently ignored. Its
-    # values are checked when the model client is built.
-    unknown = sorted(set(config) - set(LLMConfig.model_fields) - {"_connection"})
+    # values, including block contents, are checked against the effective config
+    # before the run starts (`check_model_config`) and when the model client is built.
+    unknown = sorted(set(config) - LLM_CONFIG_KEYS - {"_connection"})
+    for key in unknown:
+        if isinstance(key, str) and key.replace("_", "-") in LLM_CONFIG_KEYS:
+            raise ValueError(f"`{key}` is not an llm_config key; write `{key.replace('_', '-')}`")
     if unknown:
         raise ValueError(
             f"llm_config has unknown field(s) {unknown} "
-            f"(allowed: {', '.join(sorted(LLMConfig.model_fields))})"
+            f"(allowed: {', '.join(sorted(LLM_CONFIG_KEYS))})"
         )
     if "_connection" in config:
         if config.get("provider") != "openai":

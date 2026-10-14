@@ -207,7 +207,6 @@ def test_nontext_system_content_is_rejected_before_http():
     [
         {"store": True},
         {"previous_response_id": "old-response"},
-        {"max_output_tokens": 50},
         {"extra_body": {"store": True}},
         {"extra_body": {"previous_response_id": "old-response"}},
         {"extra_body": {"include": []}},
@@ -250,3 +249,28 @@ def test_async_uses_same_completion_guard(terminal):
 
     asyncio.run(invoke())
     assert server.streams[0].closed
+
+
+# provider -> a model id and a block sent through the subscription transport.
+BODY_CASES = {
+    "openai": {
+        "model": "gpt-5.5",
+        "block": {"reasoning": {"effort": "high"}, "text": {"verbosity": "low"}},
+    },
+}
+
+
+@pytest.mark.parametrize("provider", sorted(BODY_CASES))
+def test_openai_block_is_sent_beside_the_subscription_protocol_settings(provider):
+    case = BODY_CASES[provider]
+    server = ResponsesServer()
+    with httpx.Client(transport=httpx.MockTransport(server)) as client:
+        model = create_subscription_model(
+            case["model"], access_source=_access, http_client=client, block=case["block"]
+        )
+        model.invoke("Hi")
+    body = server.bodies[0]
+    assert body["reasoning"]["effort"] == "high"
+    assert body["text"]["verbosity"] == "low"
+    assert body["store"] is False and body["stream"] is True
+    assert "reasoning.encrypted_content" in body["include"]

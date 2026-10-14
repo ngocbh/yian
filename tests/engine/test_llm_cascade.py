@@ -18,12 +18,16 @@ _PROVIDER_MODELS = {"openai": "openai-default", "google": "google-default"}
 
 def test_merge_specific_wins_per_field():
     specific = {"model": "claude-opus-4-8"}
-    base = {"provider": "anthropic", "model": "claude-sonnet-4-5", "temperature": 0.2}
-    # specific wins per field; base fills the gaps (provider, temperature)
+    base = {
+        "provider": "anthropic",
+        "model": "claude-sonnet-4-5",
+        "anthropic": {"temperature": 0.2},
+    }
+    # specific wins per field; base fills the gaps (provider, anthropic block)
     assert merge_llm_config(specific, base) == {
         "provider": "anthropic",
         "model": "claude-opus-4-8",
-        "temperature": 0.2,
+        "anthropic": {"temperature": 0.2},
     }
 
 
@@ -37,25 +41,25 @@ def test_merge_treats_none_as_an_unset_field_in_every_layer():
     specific = {
         "provider": None,
         "model": "specific-model",
-        "temperature": None,
+        "anthropic": None,
     }
     base = {
         "provider": None,
         "model": None,
-        "temperature": 0.2,
-        "anthropic_effort": None,
+        "anthropic": {"temperature": 0.2},
+        "openai": None,
     }
 
     assert merge_llm_config(specific, base) == {
         "model": "specific-model",
-        "temperature": 0.2,
+        "anthropic": {"temperature": 0.2},
     }
 
 
 def test_merge_with_none_is_associative():
-    node = {"provider": None, "model": "node-model", "temperature": None}
-    flow = {"provider": "anthropic", "model": None, "temperature": 0.4}
-    caller = {"provider": "openai", "model": "caller-model", "temperature": None}
+    node = {"provider": None, "model": "node-model", "anthropic": None}
+    flow = {"provider": "anthropic", "model": None, "anthropic": {"temperature": 0.4}}
+    caller = {"provider": "openai", "model": "caller-model", "anthropic": {"temperature": None}}
 
     assert merge_llm_config(node, merge_llm_config(flow, caller)) == merge_llm_config(
         merge_llm_config(node, flow), caller
@@ -78,11 +82,14 @@ nodes:
 output: ${a.output}
 """
     loaded = load_flow(text)
-    resolve_llm_cascade(loaded.compiled, {"temperature": 0.3}, defaults=_DEFAULTS, provider_models=_PROVIDER_MODELS)
+    resolve_llm_cascade(
+        loaded.compiled, {"anthropic": {"temperature": 0.3}},
+        defaults=_DEFAULTS, provider_models=_PROVIDER_MODELS,
+    )
     a = loaded.compiled.nodes["a"]
-    # node sets model; flow fills provider; CLI fills temperature
+    # node sets model; flow fills provider; CLI fills the anthropic block
     assert a.llm_config == {
-        "model": "claude-opus-4-8", "provider": "anthropic", "temperature": 0.3
+        "model": "claude-opus-4-8", "provider": "anthropic", "anthropic": {"temperature": 0.3}
     }
 
 
@@ -90,12 +97,12 @@ def test_authored_null_fields_fall_through_the_cascade():
     text = """
 id: f
 name: f
-llm_config: {provider: null, model: null, temperature: 0.7}
+llm_config: {provider: null, model: null, anthropic: {temperature: 0.7}}
 nodes:
   a:
     kind: agent
     prompt: hi
-    llm_config: {provider: null, model: null, temperature: null}
+    llm_config: {provider: null, model: null, anthropic: {temperature: null}}
 output: ${a.output}
 """
     loaded = load_flow(text)
@@ -103,12 +110,12 @@ output: ${a.output}
     assert loaded.compiled.flow_llm_config == {
         "provider": None,
         "model": None,
-        "temperature": 0.7,
+        "anthropic": {"temperature": 0.7},
     }
     assert a.own_llm_config == {
         "provider": None,
         "model": None,
-        "temperature": None,
+        "anthropic": {"temperature": None},
     }
 
     effective = resolve_llm_cascade(loaded.compiled, {}, defaults=_DEFAULTS, provider_models=_PROVIDER_MODELS)
@@ -116,7 +123,7 @@ output: ${a.output}
     assert effective["a"] == {
         "provider": "anthropic",
         "model": "default-model",
-        "temperature": 0.7,
+        "anthropic": {"temperature": 0.7},
     }
     assert a.llm_config == effective["a"]
 
@@ -125,13 +132,16 @@ def test_inherit_false_node_ignores_authored_inheritance_layers_but_gets_default
     text = """
 id: f
 name: f
-llm_config: {provider: anthropic, temperature: 0.9}
+llm_config: {provider: anthropic, anthropic: {temperature: 0.9}}
 nodes:
   a: {kind: agent, prompt: hi, llm_config: {model: m, inherit: false}}
 output: ${a.output}
 """
     loaded = load_flow(text)
-    resolve_llm_cascade(loaded.compiled, {"temperature": 0.1}, defaults=_DEFAULTS, provider_models=_PROVIDER_MODELS)
+    resolve_llm_cascade(
+        loaded.compiled, {"anthropic": {"temperature": 0.1}},
+        defaults=_DEFAULTS, provider_models=_PROVIDER_MODELS,
+    )
     assert loaded.compiled.nodes["a"].llm_config == {
         "model": "m",
         "provider": "anthropic",
@@ -190,7 +200,7 @@ defs:
       inner:
         kind: agent
         prompt: hi
-        llm_config: {temperature: 0.7}
+        llm_config: {openai: {temperature: 0.7}}
     output: ${inner.output}
 nodes:
   invoke: {kind: call, call: child}
@@ -208,7 +218,7 @@ nodes:
       inner:
         kind: agent
         prompt: hi
-        llm_config: {temperature: 0.7}
+        llm_config: {openai: {temperature: 0.7}}
     output: ${inner.output}
 output: ${invoke.output}
 """
@@ -230,7 +240,7 @@ output: ${invoke.output}
         "invoke/inner": {
             "provider": "openai",
             "model": "caller-model",
-            "temperature": 0.7,
+            "openai": {"temperature": 0.7},
         }
     }
     assert (
@@ -510,7 +520,10 @@ def test_replay_uses_logged_map_after_environment_changes(monkeypatch):
     assert right.nodes["agent"].llm_config["provider"] == "anthropic"
 
 
-@pytest.mark.parametrize("layer", [{"modle": "x"}, {"provider": "openai", "inherit": False}])
+@pytest.mark.parametrize(
+    "layer",
+    [{"modle": "x"}, {"provider": "openai", "inherit": False}],
+)
 def test_host_layer_rejects_unknown_fields(layer):
     loaded = load_flow("""
 id: f
@@ -521,3 +534,40 @@ output: ${a.output}
 """)
     with pytest.raises(ValueError, match=r"llm_config has unknown field\(s\)"):
         resolve_llm_cascade(loaded.compiled, layer, defaults=_DEFAULTS, provider_models=_PROVIDER_MODELS)
+
+
+def test_host_layer_python_block_spelling_names_the_dashed_key():
+    loaded = load_flow("""
+id: f
+name: f
+nodes:
+  a: {kind: agent, prompt: hi}
+output: ${a.output}
+""")
+    with pytest.raises(ValueError, match="`qwen_cn` is not an llm_config key; write `qwen-cn`"):
+        resolve_llm_cascade(
+            loaded.compiled, {"qwen_cn": {"top_k": 4}}, defaults=_DEFAULTS,
+            provider_models=_PROVIDER_MODELS,
+        )
+
+
+def test_host_layer_block_merges_per_field_with_authored_blocks():
+    loaded = load_flow("""
+id: f
+name: f
+llm_config:
+  qwen-cn: {enable_thinking: true}
+nodes:
+  a:
+    kind: agent
+    prompt: hi
+    llm_config: {qwen-cn: {top_k: 4}}
+output: ${a.output}
+""")
+    effective = resolve_llm_cascade(
+        loaded.compiled,
+        {"provider": "qwen-cn", "model": "qwen3-max", "qwen-cn": {"top_k": 1, "seed": 7}},
+        defaults=_DEFAULTS,
+        provider_models=_PROVIDER_MODELS,
+    )
+    assert effective["a"]["qwen-cn"] == {"enable_thinking": True, "top_k": 4, "seed": 7}

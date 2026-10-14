@@ -338,7 +338,7 @@ output:
 
 # LLMConfig has extra=forbid; a typo'd llm_config: is a LoadError
 def test_llm_config_extra_forbid() -> None:
-    """A typo in `llm_config:` (e.g. `temparature` instead of `temperature`) fails at LOAD."""
+    """A typo in `llm_config:` (e.g. `modle` instead of `model`) fails at LOAD."""
     src = """
 id: f
 name: f
@@ -352,7 +352,7 @@ nodes:
     output: str
     prompt: "About ${topic}."
     llm_config:
-      temparature: 0.5
+      modle: gpt-5.5
 output:
   result: ${a.output}
 """

@@ -254,6 +254,8 @@ An AGENT's tool call whose arguments nest deeper fails the node before any call 
 An expression nests at most 100 levels too (each call, list, unary operator, comparison,
 `|`/`:-`/`:?`, and operator chain is one, so `a + b + ...` is one level at any length);
 a deeper one is a load error, so split it into smaller bindings.
+A flow file's YAML nests at most 200 levels (each mapping and list is one); deeper is a
+located load error.
 
 Only values supplied to the top-level flow (CLI, JSON inputs, `run_flow`) may undergo
 string coercion; a `call`, `map`, or `loop` edge is not a flow boundary.

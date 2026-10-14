@@ -102,6 +102,8 @@ fails. `reject_deep_nesting(value, where)` checks without recursion and raises
 An expression has the same bound (`expr.grammar.MAX_EXPRESSION_NESTING`), checked when
 it is parsed; see
 [Expressions → Expression nesting limit](expressions.md#expression-nesting-limit).
+A flow file's YAML has its own, larger bound of 200 levels; see
+[Syntax → YAML values](syntax.md#yaml-values).
 
 The first boundary that sees a deeper value rejects it:
 

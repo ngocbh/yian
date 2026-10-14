@@ -1032,7 +1032,10 @@ unquoted timestamps and `<<` merge keys, for documents, isolated literals
 (`parse_yaml_literal`), and one bare plain scalar (`read_plain_scalar`, which reads an
 inline `call(...)` argument), and never touches PyYAML's global tables. A date-shaped
 plain scalar that isn't a real date, such as `2026-13-45`, is a located YAML error
-that says to quote it. It constructs root text once as a `SourceDocument` with an
+that says to quote it. A document nested deeper than `MAX_YAML_NESTING` (200) levels,
+each mapping and list a level, is a located YAML error: `_FlowLoader.get_event` counts
+collection events, adding no frame per level, and stops before PyYAML's recursive
+composer runs out of stack. It constructs root text once as a `SourceDocument` with an
 immutable, defensive public cursor interface and keeps the composed and constructed
 YAML graph private. Each uncached external file gets one document too. The document
 owns the original text, label, semantic value, occurrence topology, and source ranges.

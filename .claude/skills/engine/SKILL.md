@@ -95,6 +95,9 @@ this model whenever you design anything:
   over. Replay and the run-log codecs never apply the limit, so older logs replay.
   An expression has the same bound (`expr.grammar.MAX_EXPRESSION_NESTING`), which
   `parse_expr` checks iteratively before any other walk; an operator chain is one level.
+- Documents yian reads nest at most `compose.source.scalars.MAX_YAML_NESTING` (200)
+  levels; `_FlowLoader.get_event` counts collection events and raises a located
+  `ComposerError` past it, before PyYAML's recursive composer runs out of stack.
 - `AgentNode.variables` reuses ordered `Parameter` declarations, each with an
   exact contract and explicit typed default. Reject duplicate names and input
   collisions. Resolve a detached default record once per invocation, then render

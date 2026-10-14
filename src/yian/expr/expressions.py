@@ -85,6 +85,15 @@ def _parse_literal(token: str) -> Any:
     raise ExpressionError(f"cannot parse literal {token!r}")
 
 
+def _operand_repr(value: Any) -> str:
+    """Return `repr(value)`, or a placeholder naming its type when it can't be rendered."""
+    try:
+        return repr(value)
+    except ValueError:
+        # repr of an int past Python's str-digit limit raises, at any nesting depth.
+        return f"<{type(value).__name__} too large to display>"
+
+
 def _eval_comparison(op: str, lhs: Any, rhs: Any) -> bool:
     try:
         if op == "==":
@@ -109,7 +118,9 @@ def _eval_comparison(op: str, lhs: Any, rhs: Any) -> bool:
         if op == ">=":
             return lhs >= rhs
     except TypeError as exc:
-        raise ExpressionError(f"type error evaluating {lhs!r} {op} {rhs!r}: {exc}") from exc
+        raise ExpressionError(
+            f"type error evaluating {_operand_repr(lhs)} {op} {_operand_repr(rhs)}: {exc}"
+        ) from exc
     raise ExpressionError(f"unsupported operator: {op!r}")
 
 
@@ -676,9 +687,14 @@ class _EvalExpr:
         try:
             value = op(lhs, rhs)
         except ZeroDivisionError as exc:
-            raise ExpressionError(f"division by zero: {lhs!r} {symbol} {rhs!r}") from exc
+            l, r = _operand_repr(lhs), _operand_repr(rhs)
+            raise ExpressionError(f"division by zero: {l} {symbol} {r}") from exc
         except TypeError as exc:
-            raise ExpressionError(f"type error evaluating {lhs!r} {symbol} {rhs!r}: {exc}") from exc
+            l, r = _operand_repr(lhs), _operand_repr(rhs)
+            raise ExpressionError(f"type error evaluating {l} {symbol} {r}: {exc}") from exc
+        except (ValueError, OverflowError, KeyError) as exc:
+            l, r = _operand_repr(lhs), _operand_repr(rhs)
+            raise ExpressionError(f"cannot compute {l} {symbol} {r}: {exc}") from exc
         if self._trace and symbol == "+" and type(lhs) is list and type(rhs) is list:
             self._frames[-1].route = ValueRoute(
                 "concat", children=tuple(self._frames[-1].children),
@@ -721,7 +737,9 @@ class _EvalExpr:
         try:
             return -v
         except TypeError as exc:
-            raise ExpressionError(f"unary minus on non-number {v!r}: {exc}") from exc
+            raise ExpressionError(f"unary minus on non-number {_operand_repr(v)}: {exc}") from exc
+        except (ValueError, OverflowError) as exc:
+            raise ExpressionError(f"cannot compute -{_operand_repr(v)}: {exc}") from exc
 
     def _do_list_lit(self, node: Tree) -> Any:
         value = [self._as_value(self._walk(c)) for c in node.children]

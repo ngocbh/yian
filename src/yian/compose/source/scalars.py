@@ -99,15 +99,26 @@ class _FlowLoader(yaml.SafeLoader):
 
         Raises:
             `ConstructorError`:
-                Raised when the text is not a core-schema integer.
+                Raised when the text is not a core-schema integer or has more digits
+                than Python converts.
         """
 
         text = self._core_text(node, _INT, "integer")
+        digits, base = text, 10
         if text.startswith("0o"):
-            return int(text[2:], 8)
-        if text.startswith("0x"):
-            return int(text[2:], 16)
-        return int(text, 10)
+            digits, base = text[2:], 8
+        elif text.startswith("0x"):
+            digits, base = text[2:], 16
+        try:
+            return int(digits, base)
+        except ValueError:
+            # Python caps how many digits it converts; keep the error located.
+            raise ConstructorError(
+                None,
+                None,
+                f"an integer with {len(digits)} digits is too long",
+                node.start_mark,
+            ) from None
 
     def construct_yaml_float(self, node: yaml.Node) -> float:
         """Construct a core-schema float, including ``.inf`` and ``.nan`` forms.

@@ -30,7 +30,8 @@ Modules:
                   Local variables reuse the default reader with a mandatory-default policy.
   - `uses`        `UsesRef` / `parse_uses_ref`: the `uses:` child-flow reference parser.
   - `yaml_words`  `former_boolean_fix`: the boolean a YAML 1.1 boolean spelling (`yes`,
-                  `off`) meant, and the fix a load error shows when one reaches a `bool`.
+                  `off`) meant, and the fix a load error shows when one reaches a `bool`
+                  that the boolean fits, at any depth of a list or record.
 
 The sibling `compose.source` package exclusively owns YAML parsing and its private
 source graph. Layer: `source <- helpers <- nodes <- parse <- desugar <- edges <-

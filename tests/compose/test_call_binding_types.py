@@ -68,6 +68,7 @@ def _flow(child: str, binding: str, *, over: str | None = None) -> str:
         ("bool", '"yes"', None, "child expects 'bool', but the value \"yes\" does not fit; `yes` is text; write `true`"),
         ("bool", "yes", None, "child expects 'bool', but the value \"yes\" does not fit; `yes` is text; write `true`"),
         ("bool", "yes", "[1, 2]", "child expects 'bool', but the value \"yes\" does not fit; `yes` is text; write `true`"),
+        ("list[bool]", "[true, no]", None, "child expects 'list[bool]', but the value [true, \"no\"] does not fit ('no' does not match declared type bool); `no` is text; write `false`"),
         ("Optional[bool]", "Off", None, "child expects 'Optional[bool]', but the value \"Off\" does not fit; `Off` is text; write `false`"),
         ("bool", '"true"', None, "child expects 'bool', but the value \"true\" does not fit; text is not converted between flows, so write true without quotes"),
         ("date", "2026-01-01", None, "child expects 'date', but the value 2026-01-01 does not fit; quote it to keep it as text: \"2026-01-01\""),

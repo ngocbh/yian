@@ -1593,6 +1593,8 @@ def _assemble(
 
     # Compile each typed case's `output:` once: its synth result node checks every taken
     # branch against this contract, located at the case's `output:` (source-free: none).
+    # Compiled before branch classification, whose "names no node" error offers the
+    # boolean to write for a `yes`/`no` word only when the case's type takes it.
     case_types: dict[str, ValueContract] = {}
     for node_id, descriptor in descriptors.items():
         if isinstance(descriptor, CaseDescriptor) and descriptor.outputs is not None:

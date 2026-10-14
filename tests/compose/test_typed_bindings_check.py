@@ -233,6 +233,22 @@ output:
     assert _error_line(error) == _line_of(text, "  ok: bool = n")
 
 
+def test_former_boolean_word_in_a_list_literal_names_the_boolean_to_write():
+    text = """
+id: checked
+name: checked
+nodes: {}
+output:
+  ok: list[bool] = [true, Off]
+"""
+    error = _load_error(text)
+
+    assert str(error.diagnostic.message) == (
+        "binding 'ok': `[true, Off]` is not a valid list[bool] "
+        "('Off' does not match declared type bool); `Off` is text; write `false`"
+    )
+
+
 def test_null_literal_for_a_record_output_field_fails_at_its_line():
     text = """
 id: checked

@@ -822,11 +822,11 @@ defaults, environments, and render metadata remain opaque.
 
 Compose source ownership is one-way too. `compose/source/` alone owns PyYAML and
 the private retained document graph; one loader class reads plain scalars with
-YAML 1.2 core rules plus unquoted timestamps and merge keys. Root text is constructed once as a
-`SourceDocument`; each uncached external file is constructed once too. The public
-cursor interface is immutable and defensive. The default file resolver's
-successful resolved-path cache reuses one compiled flow for every alias or diamond
-reference to that external file.
+YAML 1.2 core rules plus unquoted timestamps and merge keys. Root text is
+constructed once as a `SourceDocument`; each uncached external file is constructed
+once too. The public cursor interface is immutable and defensive. The default file
+resolver's successful resolved-path cache reuses one compiled flow for every alias
+or diamond reference to that external file.
 Persistent pair/arc ropes keep YAML merge topology compact; completed mapping
 summaries are reuse frontiers rather than recursively rescanned descendants.
 Defensive value snapshots are iterative and preserve shared/recursive aliases.

@@ -49,6 +49,7 @@ from yian.compose.desugar.inline_calls import _SYNTH_PREFIX
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
 from yian.compose.helpers.output_contracts import resolve_output_binding_contract
 from yian.compose.helpers.typed_bindings import yaml_quoted
+from yian.compose.helpers.yaml_words import former_boolean_fix
 from yian.compose.parse.file import CallDescriptor, CaseDescriptor
 from yian.compose.validate.narrowing import Narrowing
 from yian.diagnostics import SourceRange
@@ -317,7 +318,11 @@ class _Checker:
                         )
 
     def _quote_hint(self, branch: _Branch, value: Any, expected: Type) -> str:
-        """Return a hint to quote a YAML non-string scalar whose text would fit, else `""`.
+        """Return a hint to rewrite a value that does not fit, else `""`.
+
+        A YAML 1.1 boolean word where a boolean fits, at any depth, gets the
+        `true`/`false` to write; a YAML non-string scalar whose text would fit gets
+        the quoted form.
 
         Args:
             branch (`_Branch`): The branch the value sits on.
@@ -327,6 +332,9 @@ class _Checker:
         Returns:
             `str`: The hint, starting with `"; "`, or `""`.
         """
+        fix = former_boolean_fix(value, expected)
+        if fix is not None:
+            return f"; {fix[1]}"
         if not isinstance(value, (bool, int, float)):
             return ""
         text = self._source_text(branch.range) or _shown(value)

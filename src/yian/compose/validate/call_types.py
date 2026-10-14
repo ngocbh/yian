@@ -443,10 +443,10 @@ def _literal_hint(
         `str | None`: The hint, or `None` when rewriting the literal can't help.
     """
     child_type = decl.contract.type
+    fix = former_boolean_fix(value, child_type)
+    if fix is not None:
+        return fix[1]
     if isinstance(value, str):
-        fix = former_boolean_fix(value, child_type)
-        if fix is not None:
-            return fix[1]
         candidate = coerce_param(replace(decl, coerce_strings=True), value)
         if isinstance(candidate, str) or not _fits(child_type, candidate):
             return None

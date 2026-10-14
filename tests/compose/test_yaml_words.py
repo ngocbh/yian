@@ -6,7 +6,7 @@ import pytest
 
 from yian.compose.helpers.yaml_words import former_boolean_fix
 from yian.typesys import type_for
-from yian.typesys.types import TypeRegistry
+from yian.typesys.types import RecordDef, TypeRegistry
 
 
 @pytest.mark.parametrize(
@@ -45,3 +45,21 @@ def test_other_values_have_no_fix(value):
 def test_fix_is_offered_only_when_the_boolean_fits_the_declared_type(type_text, expected):
     declared = type_for(type_text, TypeRegistry())
     assert former_boolean_fix("yes", declared) == expected
+
+
+@pytest.mark.parametrize(
+    ("type_text", "value", "expected"),
+    [
+        ("list[bool]", ["yes", "no"], (True, "`yes` is text; write `true`")),
+        ("list[bool]", [True, "Off"], (False, "`Off` is text; write `false`")),
+        ("Rec", {"ok": "on", "name": "yes"}, (True, "`on` is text; write `true`")),
+        ("list[str]", ["yes"], None),
+        ("list[bool]", ["maybe"], None),
+        ("list[bool]", [1], None),
+        ("Rec", {"ok": True, "name": 3}, None),
+    ],
+)
+def test_fix_finds_the_rejected_word_inside_a_list_or_record(type_text, value, expected):
+    registry = {"Rec": RecordDef(fields={"ok": "bool", "name": "str"})}
+    declared = type_for(type_text, registry)
+    assert former_boolean_fix(value, declared) == expected

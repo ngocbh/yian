@@ -1410,6 +1410,25 @@ def test_unquoted_yes_under_bool_output_also_offers_the_boolean():
     assert _error_line(caught.value) == _line_of(text, "else: yes")
 
 
+def test_former_boolean_word_in_a_record_value_names_the_boolean_to_write():
+    text = _flow(
+        "    on: ${input.cmd}\n"
+        "    output:\n"
+        "      ok: bool\n"
+        "    cases:\n"
+        "      - when: a\n"
+        "        then:\n"
+        "          ok: yes\n"
+        "    else:\n"
+        "      ok: false\n"
+    )
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    message = str(caught.value)
+    assert "case node 'route' then: the value {\"ok\": \"yes\"} is not a valid" in message
+    assert "('yes' does not match declared type bool); `yes` is text; write `true`" in message
+
+
 def test_unquoted_no_without_output_offers_no_boolean():
     text = _flow(
         "    on: ${input.cmd}\n"

@@ -175,6 +175,16 @@ def test_explicit_tag_rejects_a_non_core_form(read, text, found):
         assert caught.value.range.start_line == 1
 
 
+@ENTRY_POINTS
+def test_an_integer_too_long_to_convert_is_a_located_syntax_error(read):
+    message = "an integer with 5000 digits is too long"
+    with pytest.raises(SourceSyntaxError, match=message) as caught:
+        read("value: " + "1" * 5000 + "\n")
+
+    if read is _document_value:
+        assert caught.value.range is not None
+
+
 _RESOLVER_TAGS = (
     "import yaml; "
     "print(repr([sorted((key, [tag for tag, _ in value]) "

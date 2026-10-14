@@ -189,10 +189,10 @@ def _literal_mismatch_message(
     message = f"binding {label!r}: `{right}` is not a valid {type_text}"
     if error.path:
         message += f" ({error})"
+    fix = former_boolean_fix(parsed, declared)
+    if fix is not None:
+        return f"{message}; {fix[1]}"
     if isinstance(parsed, str):
-        fix = former_boolean_fix(parsed, declared)
-        if fix is not None:
-            message += f"; {fix[1]}"
         return message
     # Quoting only helps when YAML read the text as a non-string and the text
     # itself would fit, e.g. `str = 30` or `date = 2026-01-01`.

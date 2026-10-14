@@ -949,18 +949,18 @@ None of these operations defines a source-key format or imports Compose; lexical
 key construction and returned-flow resolver integration remain front-end work.
 
 ## Compose source ownership
-
-`compose/source/` is the sole production Compose package that imports PyYAML. Its
+ `compose/source/` is the sole production Compose package that imports PyYAML. Its
 one loader class (`scalars.py`) reads plain scalars with YAML 1.2 core-schema rules
 plus unquoted timestamps and `<<` merge keys, for documents and isolated literals,
-and never touches PyYAML's global tables. It constructs root text once as a `SourceDocument` with an immutable, defensive public
-cursor interface and keeps the composed and constructed YAML graph private. Each
-uncached external file gets one document too. The document owns the original text,
-label, semantic value, occurrence topology, and source ranges. Alias and merge
-semantics are retained without later mutation of PyYAML nodes or constructed
-containers. Persistent pair/arc ropes retain merge topology without expansion,
-and completed mapping summaries stop repeated parent DAG scans. Public defensive
-snapshots use a stack-safe iterative copier that preserves shared and recursive
+and never touches PyYAML's global tables. It constructs root text once as a
+`SourceDocument` with an immutable, defensive public cursor interface and keeps the
+composed and constructed YAML graph private. Each uncached external file gets one
+document too. The document owns the original text, label, semantic value, occurrence
+topology, and source ranges. Alias and merge semantics are retained without later
+mutation of PyYAML nodes or constructed containers. Persistent pair/arc ropes retain
+merge topology without expansion, and completed mapping summaries stop repeated
+parent DAG scans. Public defensive snapshots use a stack-safe iterative copier that
+preserves shared and recursive
 aliases.
 
 Source-aware parsing and inline extraction use `SourceCursor`:

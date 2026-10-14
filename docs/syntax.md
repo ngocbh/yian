@@ -107,14 +107,17 @@ timestamp is a date, and a `<<:` merge key merges a mapping. Quoted and block (`
 
 The same rules apply to keys (CASE's `on:` is the text `on`), to input and output
 defaults, and to the literal after ` = ` in a typed binding. A `yes`/`no`/`on`/`off`
-that reaches a `bool` slot fails with the fix, such as
-"`yes` is text; write `true`".
+where a `bool` is expected fails with the fix, such as "`yes` is text; write `true`":
+in a typed binding or default, a call input, a `case` value, `steerable:`, or
+`llm_config` `inherit:`, including inside a list or record.
 
 Changed: yian used to read values with YAML 1.1's rules: an unquoted `yes`, `no`,
 `on`, or `off` was a boolean, `1:30` was the number 90, `1_000` was 1000, and `017`
 was octal 15, while `1e3` was text. Write `true`/`false` for a boolean, `90` or
 `1000` for those numbers, `0o17` for octal, and quote a value you mean as text. A
-`when: yes` on a `Literal[yes, no]` `on:` now matches the text `yes`.
+`when: yes` on a `Literal[yes, no]` `on:` now matches the text `yes`; under a `bool`
+`on:` it no longer matches `true` and loads without an error, so write `when: true`.
+A CASE key spelled `On:` or `ON:` used to mean `on:`; write `on:`.
 
 ### Compact mode — when the flow *is* one node
 

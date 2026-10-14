@@ -97,8 +97,10 @@ a load error at the second key. Keys a `<<:` merge brings in may still be overri
 Unquoted values follow YAML 1.2's core rules plus unquoted dates and `<<:` merges:
 only `true`/`false` are booleans, so `yes`/`no`/`on`/`off` are text (CASE's `on:`
 key too); `017` is 17 (octal is `0o17`); `1e3` is a float; `1:30` and `1_000` are
-text; `2026-10-14` is a date. A `yes` that reaches a `bool` slot fails with
-"`yes` is text; write `true`".
+text; `2026-10-14` is a date. A `yes` in a typed binding or default, a call input,
+a `case` value, `steerable:`, or `inherit:` that needs a `bool` fails with
+"`yes` is text; write `true`". Under a `bool` `on:`, write `when: true`, not
+`when: yes` (which loads but never matches).
 
 ### Compact mode — when the flow is a single node
 

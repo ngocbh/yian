@@ -110,10 +110,10 @@ def _arg_source(value: str) -> Any:
       bare string), so `window=30` binds int 30.
 
     NB this literal grammar is the expression grammar's, not YAML's. A bare `yes`/`no`/
-    `on`/`off` stays a string, as in a flow file, and so do forms YAML reads as numbers or
-    dates (`1e3`, `0x1F`, `0o17`, `+12`, `.5`, `2026-10-14`) and YAML's `~` null; `None`/
-    `none` is null here, while YAML reads it as text. Quotes, decimal numbers, `true`/
-    `false`, and `null` match the named form."""
+    `on`/`off` stays a string, as in a flow file, and so do forms YAML reads as numbers
+    or dates (`1e3`, `0x1F`, `0o17`, `+12`, `.5`, `1.`, `2026-10-14`) and YAML's `~`
+    null; `None`/`none` is null here, while YAML reads it as text. Quotes, integers,
+    `N.N` decimals, `true`/`false`, and `null` match the named form."""
     stripped = value.strip()
     if len(stripped) >= 2 and stripped[0] in ("'", '"') and stripped[-1] == stripped[0]:
         return stripped[1:-1]  # a quoted scalar -> its inner text (template or literal)

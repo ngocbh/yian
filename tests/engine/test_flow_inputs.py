@@ -98,6 +98,13 @@ def test_former_boolean_word_default_for_int_gets_no_fix():
     assert "is text" not in str(caught.value)
 
 
+def test_former_boolean_word_in_a_list_default_names_the_boolean_to_write():
+    with pytest.raises(LoadError) as caught:
+        read_flow_inputs({"flags": "list[bool] = [yes, no]"}, {})
+
+    assert str(caught.value).endswith("; `yes` is text; write `true`")
+
+
 def test_number_default_retains_compatible_integer_payload():
     parameter = _by_name(read_flow_inputs({"value": "float = 30"}, {}))["value"]
 

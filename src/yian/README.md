@@ -630,19 +630,19 @@ operation defines no lexical key policy and knows nothing about Compose or YAML.
 
 `compose/source/` is the only production Compose package that imports PyYAML.
 One loader class (`compose/source/scalars.py`) reads plain scalars with YAML 1.2
-core-schema rules plus unquoted timestamps and `<<` merge keys, for documents and
-for isolated literals (`parse_yaml_literal`), without touching PyYAML's global
-resolver or constructor tables. Root text and each uncached external file are constructed once as
-`SourceDocument`s, whose public cursor interface is immutable and defensive. They
-retain the original text and label while keeping PyYAML's composed/constructed
-graph private. YAML aliases and merge mappings are interpreted without mutating
-that graph. Persistent pair/arc ropes keep merge topology compact, and completed
-mapping summaries bound repeated merge-DAG traversal. Public value snapshots use
-a stack-safe iterative copier that preserves shared and recursive aliases. Within
-one successful file-import graph, the loader's resolved-path cache also ensures
-that each external physical file is read, parsed, and compiled once; aliases and
-diamond imports reuse that canonical `ComposedFlow` as the source for their
-lexically rebased views.
+core-schema rules plus unquoted timestamps and `<<` merge keys, for documents
+and for isolated literals (`parse_yaml_literal`), without touching PyYAML's
+global resolver or constructor tables. Root text and each uncached external file
+are constructed once as `SourceDocument`s, whose public cursor interface is
+immutable and defensive. They retain the original text and label while keeping
+PyYAML's composed/constructed graph private. YAML aliases and merge mappings are
+interpreted without mutating that graph. Persistent pair/arc ropes keep merge
+topology compact, and completed mapping summaries bound repeated merge-DAG
+traversal. Public value snapshots use a stack-safe iterative copier that
+preserves shared and recursive aliases. Within one successful file-import graph,
+the loader's resolved-path cache also ensures that each external physical file
+is read, parsed, and compiled once; aliases and diamond imports reuse that
+canonical `ComposedFlow` as the source for their lexically rebased views.
 
 Source-aware parsing and inline extraction navigate stable `SourceCursor` values.
 A physical cursor combines a definition range with an occurrence path (and a

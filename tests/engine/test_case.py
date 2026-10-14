@@ -10,8 +10,8 @@ a strict `CaseNode` plus control + data edges (its `BuildResult.edges`), with NO
   edges `gate->then(source_handle=then)` + `gate->else(source_handle=ELSE_HANDLE)`;
   the data edges carry the `__rN` `input_group`.
 - **`on:`** (`on: ${ref}`, `cases: [{when: <value>, then: <t>}]`): one input
-  `__on = ${ref}`; each `when: <value>` -> a typed `${__on}` match (`== "<text>"`, or a
-  number/bool literal with an `isinstance(${__on}, bool)` guard).
+  `__on = ${ref}`; each `when: <value>` -> a typed `__on` match (`== "<text>"`, or a
+  number/bool literal with an `isinstance(__on, bool)` guard).
 - **exhaustiveness**: a SEPARATE validate-phase check (`check_case_exhaustive`), NOT part of
   `.build()` — when `on:` names an ENUM producer (the dotted ref resolves to a `Type` with
   `.tags`), every tag must be covered by a case OR a present `else:`.
@@ -175,7 +175,7 @@ def test_on_desugar_builds_case():
     node = result.node
     assert result.wiring == {"__on": "${classify.output}"}
     whens = [c.when for c in node.cases]
-    assert whens == ['${__on} == "pro"', '${__on} == "con"', '${__on} == "mixed"']
+    assert whens == ['__on == "pro"', '__on == "con"', '__on == "mixed"']
     handles = [c.handle for c in node.cases]
     assert handles == ["pro_note", "con_note", "choppy_note"]
 
@@ -459,7 +459,7 @@ def test_on_value_with_double_quote_uses_single_quote_and_routes():
     # since the grammar has no escape support) and route correctly at eval time.
     from yian.compose.nodes.case import _quote
 
-    expr = '${__on} == ' + _quote('a"b')
+    expr = '__on == ' + _quote('a"b')
     assert evaluate_when_record(expr, {"__on": 'a"b'}) is True
     assert evaluate_when_record(expr, {"__on": "other"}) is False
 

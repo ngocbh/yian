@@ -155,10 +155,10 @@ def test_lowered_conditions():
     )
     cases = load_flow(text).compiled.nodes["route"].cases
     assert [case.when for case in cases] == [
-        "${__on} == 1 and not isinstance(${__on}, bool)",
-        "${__on} == 1.5 and not isinstance(${__on}, bool)",
-        "${__on} == true and isinstance(${__on}, bool)",
-        '${__on} == "x"',
+        "__on == 1 and not isinstance(__on, bool)",
+        "__on == 1.5 and not isinstance(__on, bool)",
+        "__on == true and isinstance(__on, bool)",
+        '__on == "x"',
     ]
 
 

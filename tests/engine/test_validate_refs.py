@@ -15,7 +15,7 @@ single `LoadError`. Three loud mechanisms are pinned:
 
 A clean flow (seed 01) passes. Case data-refs are validated from the desugared
 `CaseNode.inputs` (the `__rN`/`__on` sources, e.g. a dangling `${typo.output}`); the
-rewritten node-local `${__rN}`/`${__on}` are EXCLUDED from `_classify_path`.
+rewritten node-local `${__rN}`/`__on` are EXCLUDED from `_classify_path`.
 """
 
 from pathlib import Path

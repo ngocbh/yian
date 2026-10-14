@@ -19,9 +19,9 @@ no new node kind. Two surface forms:
 
 - **`on:`** (`on: ${ref}`, `cases: [{when: <value>, then: <t>}]`): one input `__on = ${ref}`;
   each `when: <value>` is a typed literal compared exactly: text (quoted, or an unquoted date
-  as its ISO text) becomes `${__on} == "<value>"`, a number
-  `${__on} == <n> and not isinstance(${__on}, bool)`, a bool
-  `${__on} == true and isinstance(${__on}, bool)`. The `isinstance` guard keeps a bool from
+  as its ISO text) becomes `__on == "<value>"`, a number
+  `__on == <n> and not isinstance(__on, bool)`, a bool
+  `__on == true and isinstance(__on, bool)`. The `isinstance` guard keeps a bool from
   equalling a number even when the `on:` type is unknown.
 
 Because the desugared `when:`s interpolate ONLY the node-local `__rN`/`__on` names, the strict
@@ -346,7 +346,7 @@ def _quote(
     *,
     range: SourceRange | None = None,
 ) -> str:
-    """A `when:` match value quoted as a string literal for `${__on} == "<v>"`.
+    """A `when:` match value quoted as a string literal for `__on == "<v>"`.
 
     The `when:`/`asserts:` grammar's STRING terminal is `/"[^"]*"/ | /'[^']*'/` with
     NO escape support (the evaluator strips the outer quotes verbatim), so we cannot
@@ -403,7 +403,7 @@ def _match_condition(
     index: int,
     range: SourceRange | None,
 ) -> str:
-    """Return the `${__on}` condition one `on:`-form `when:` value lowers to.
+    """Return the `__on` condition one `on:`-form `when:` value lowers to.
 
     Text compares as a string literal; a number compares numerically and never with a bool;
     a bool compares only with a bool.
@@ -422,17 +422,17 @@ def _match_condition(
         )
     value = on_match_value(value)
     if isinstance(value, str):
-        return f"${{__on}} == {_quote(value, diagnostics, range=range)}"
+        return f"__on == {_quote(value, diagnostics, range=range)}"
     if isinstance(value, bool):
         # Python's == has True == 1; the isinstance guard keeps a bool from equalling a number.
         literal = "true" if value else "false"
-        return f"${{__on}} == {literal} and isinstance(${{__on}}, bool)"
+        return f"__on == {literal} and isinstance(__on, bool)"
     if isinstance(value, (int, float)):
         try:
             reject_nonfinite(value, f"case node {node_id!r} cases[{index}].when")
         except TypeCheckError as exc:
             raise diagnostics.error(str(exc), range=range) from exc
-        return f"${{__on}} == {_number_text(value)} and not isinstance(${{__on}}, bool)"
+        return f"__on == {_number_text(value)} and not isinstance(__on, bool)"
     if isinstance(value, list):
         kind = "a list"
     elif isinstance(value, Mapping):
@@ -512,7 +512,7 @@ def _desugar_on(
     desc: CaseDescriptor,
     diagnostics: LoadDiagnostics,
 ) -> tuple[CaseNode, dict[str, Any], list[Edge], list[Edge], dict, dict[str, str]]:
-    """`on: ${ref}` form -> one `__on` param + one typed `${__on}` match condition per case.
+    """`on: ${ref}` form -> one `__on` param + one typed `__on` match condition per case.
 
     Each `when:` lowers through `_match_condition`, so it compares exactly with the `on:`
     value: text as text, numbers numerically, bools only with bools.

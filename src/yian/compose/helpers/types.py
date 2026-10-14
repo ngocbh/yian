@@ -35,6 +35,7 @@ from yian.compose.helpers.tags import (
     suggest_tag,
     yaml_quoted,
 )
+from yian.compose.helpers.value_nesting import check_written_value
 from yian.diagnostics import SourceRange
 from yian.compose.source import (
     SourceAccessError,
@@ -377,8 +378,14 @@ def _read_tagged_parameter(
     """Read one tagged declaration: the tag is its type, a value after it its default.
 
     A declaration with no value after the tag (`qty: !int`) has no default and is
-    required unless its type is nullable.
+    required unless its type is nullable. No default may nest deeper than a yian
+    value may.
     """
+    if cursor.has_value:
+        # First: the tag read below recurses through the value.
+        check_written_value(
+            cursor.value, f"{declaration_label} {name!r} default", cursor.range, diagnostics
+        )
     slot = read_tagged_value(
         cursor,
         registry,

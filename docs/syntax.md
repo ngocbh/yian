@@ -122,8 +122,9 @@ load error; quote it to keep it as text.
 A flow file's YAML nests at most 200 levels; each mapping and list is a level, counting
 the file's top level. A deeper file is a load error at the first mapping or list past
 the limit (`invalid YAML: this list nests deeper than 200 levels, the limit for a YAML
-document ...`). A written-out value deeper than 100 levels loads, and fails its node
-when it runs (see [Operators inside `${...}`](#operators-inside) and
+document ...`). A value written out where the flow reads a value (a node input, MAP
+`over:`, WAIT `until:`, CASE value, default, value entry, or flow output) nests at most
+100 levels; a deeper one is a load error at that value (see [Operators inside `${...}`](#operators-inside) and
 [Types → Nesting limit](typing.md#nesting-limit)).
 
 Changed: a file nested deeper than about 330 (mappings) to 490 (lists) levels used to
@@ -418,14 +419,30 @@ A temporary inside an expression is fine: the embedded template `"v=${x * 10}"` 
 the text `v=inf`. Only a binding's final value is checked. See [Expressions → Non-finite results](expressions.md#non-finite-results).
 
 A value nests at most 100 levels; each record and list is a level, and a record or
-list built around a value is one level deeper. A binding (expression result, literal,
-or default) or a MAP `over` list nested deeper fails its node with
-`binding.evaluate`, naming the path (`input 'y' at [0].a...: value nests deeper than
-100 levels, ...`): `${[input.x]}` around a 100-level `x` fails, and MAP items may
-nest 99 levels. A run input may nest 100 levels; `run_flow` rejects a deeper one
-before the run starts. A record flow output such as `{t: ${n.output}}` adds a level,
-so wrapping a 100-level output fails `contract.output` at `__end__`. See
-[Types → Nesting limit](typing.md#nesting-limit).
+list built around a value is one level deeper. A binding (an expression result, or a
+written-out value that a `${...}` inside makes deeper) or a MAP `over` list nested
+deeper fails its node with `binding.evaluate`, naming the path (`input 'y' at [0].a...:
+value nests deeper than 100 levels, ...`): `${[input.x]}` around a 100-level `x`
+fails, and MAP items may nest 99 levels. A run input may nest 100 levels; `run_flow`
+rejects a deeper one before the run starts. A record flow output such as
+`{t: ${n.output}}` adds a level, so wrapping a 100-level output fails `contract.output`
+at `__end__`. See [Types → Nesting limit](typing.md#nesting-limit).
+
+A value written out in the flow file is checked at load instead, with the same
+counting, whether YAML text or aliases build its depth: a node input (LOOP seeds and
+MAP per-item inputs included), MAP `over:`, WAIT `until:`, a value entry, a flow or
+`defs:` input default, an AGENT variable default, a CASE `then:`/`else:` value, and a
+flow `output:`. A record output's fields sit one level in, so they may nest 99 levels.
+One nested deeper is a load error at that value, named by where it is written
+(`node 'use' input 'topic' at [0]...: value nests deeper than 100 levels, ...`,
+`value entry 'v'`, `input 'x' default`, `variable 'x' default`, `flow output 'r'`).
+`${...}` text counts as a scalar here; the value it computes is checked when it runs.
+
+Changed: a written-out value nested deeper than 100 levels (up to the file's 200-level
+YAML limit) used to load and fail its node when it ran, or never fail in a branch that
+didn't run; it is now a load error. One built deep through YAML aliases could crash the
+load with a raw `RecursionError`; it is now the same load error. WAIT `until:` had no
+nesting check and now has one.
 
 An expression nests at most 100 levels too: each call, list, unary operator,
 comparison, `|`/`:-`/`:?`, and chain of operators is a level, so `a + b - c` is one
@@ -1513,9 +1530,10 @@ Variable names must be unique and cannot overlap the node's input names. Values
 are validated while loading, including ranges and enum choices. A variable with no
 value is a load error. Nullable variables still need an explicit value, such as
 `note: !Optional(str) null`; a quoted empty string is a valid `str` value. Values are
-literal text, so `${...}` inside a value, at any depth, is not evaluated. A NaN or
-infinity value, or one nested deeper than 100 levels, fails the node when it runs. The
-old `num: int[1, 12] = 4` form is a load error that shows `` `num: !int(1..12) 4` ``.
+literal text, so `${...}` inside a value, at any depth, is not evaluated. A value
+nested deeper than 100 levels is a load error at that value. A NaN or infinity value
+fails the node when it runs. The old `num: int[1, 12] = 4` form is a load error that
+shows `` `num: !int(1..12) 4` ``.
 
 Each invocation starts with a fresh copy of these defaults. Repeated `${name}`
 references read the same local value. A variable belongs to its authored AGENT

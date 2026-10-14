@@ -115,6 +115,7 @@ from yian.compose.validate.skips import (
     null_skipped_outputs,
 )
 from yian.compose.validate.tool_inputs import stamp_tool_input_types
+from yian.compose.validate.value_nesting import check_written_values
 from yian.compose.validate.typed_bindings import check_typed_inputs, check_typed_outputs
 from yian.compose.validate.wiring_parity import check_wiring_parity
 from yian.compose.parse.nodes import (
@@ -129,6 +130,7 @@ from yian.compose.helpers.types import (
     read_source_parameters,
     read_value_contract,
 )
+from yian.compose.helpers.value_nesting import check_written_value
 from yian.compose.validate.handles import check_case_handles
 from yian.compose.validate.asserts import validate_node_asserts
 from yian.compose.validate.constructors import constructor_errors
@@ -1847,7 +1849,14 @@ def _assemble(
     flow_inputs = {parameter.name for parameter in inputs}
 
     def read_value(node_id: str, cursor: SourceCursor) -> ValueEntryDescriptor:
-        """Lower one tagged `nodes:` entry."""
+        """Lower one tagged `nodes:` entry after checking its nesting."""
+        # First: the tag read walks the value recursively.
+        check_written_value(
+            cursor.value,
+            f"value entry {node_id!r}",
+            cursor.range or cursor.key_range,
+            diagnostics,
+        )
         return read_value_entry(
             node_id,
             cursor,
@@ -1902,6 +1911,26 @@ def _assemble(
     # this only hits its cache.
     for alias in uses_aliases:
         scope.resolve(alias)
+
+    def output_range(name: Any) -> SourceRange | None:
+        """One flow output's authored range, else the whole `output:` range."""
+        try:
+            if outputs_cursor is not None and outputs_cursor.has(name):
+                return outputs_cursor.child(name).range
+        except SourceAccessError:
+            pass  # a bare `output:` value has no named children
+        return outputs_range
+
+    # Bound a written-out value's nesting before the passes below walk it
+    # recursively; YAML aliases can make it deep while the text is shallow.
+    check_written_values(
+        descriptors,
+        outputs_section,
+        outputs_tagged=outputs_cursor is not None and outputs_cursor.tag is not None,
+        output_range=output_range,
+        outputs_range=outputs_range,
+        diagnostics=diagnostics,
+    )
 
     # A node's `output:` is a type declaration; a tag there is rejected before a
     # declaration with nothing after its tag reads as no output at all. A case has no

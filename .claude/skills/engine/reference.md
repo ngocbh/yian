@@ -885,6 +885,22 @@ with `commits_input_record` (START) passes `enclosing_levels=-1`. Replay validat
 skips the check so logs recorded before the limit replay, and `canonical_typed`,
 `canonical_seed`, and `encode_pool` never apply it.
 
+Compose rejects a value written out in a flow file past the limit at load, with the
+counting the run-time check applies to it:
+`compose.helpers.value_nesting.check_written_value` runs `reject_deep_nesting` and
+raises its message as a `LoadError` at the value's range. It runs before any
+recursive load walker reads the value (the tag read, the span check), so a value
+made deep by YAML aliases while the text stays shallow is a
+located error, not a `RecursionError`. Sites: input defaults and AGENT
+variable defaults in `helpers/types.py`, MAP `over:` and WAIT `until:` in their
+descriptors' `_validate_fields`, value entries in the pipeline's `read_value` (an
+untagged entry in `parse/nodes.py`), and node inputs (LOOP seeds and MAP per-item
+inputs included), CASE value branches, and flow outputs in
+`compose/validate/value_nesting.py`, a pre-pass before the tagged splits and the
+case-branch check (a record output's fields pass `enclosing_levels=1`).
+`${...}` text counts as a scalar, so the run-time checks still cover computed values
+and flows built in Python. WAIT `until:` has no run-time counterpart.
+
 `Type.variants` refines OBJECT into a union: a tuple of two or more non-nullable record
 members, in canonical order (by tag, else by the bracket-spelled order key from `_labels`,
 not `canonical_type_label`) and deduplicated by `==`, never `set()`, since `Type` holds

@@ -93,6 +93,10 @@ this model whenever you design anything:
   value is a level deeper, so a MAP's result list or a record flow output can
   fail at its END. Only the kind-blind `commits_input_record` trait (START) may go one level
   over. Replay and the run-log codecs never apply the limit, so older logs replay.
+  A value written out in a flow file is checked at load first
+  (`compose.helpers.value_nesting.check_written_value`, located `LoadError`), before
+  any recursive load walker, so YAML aliases can't crash the load; the run-time
+  checks remain for computed values and flows built in Python.
   An expression has the same bound (`expr.grammar.MAX_EXPRESSION_NESTING`), which
   `parse_expr` checks iteratively before any other walk; an operator chain is one level.
 - Documents yian reads nest at most `compose.source.scalars.MAX_YAML_NESTING` (200)

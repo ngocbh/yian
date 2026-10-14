@@ -553,7 +553,14 @@ fan-in END (`<map>/__end__`). A node with the `commits_input_record` trait (STAR
 passes `enclosing_levels=-1`, since its record wraps input values already checked.
 Replay validation does not re-apply the limit, so logs recorded before it still
 replay, and the run-log codecs never apply it; they see only values these entry
-checks bounded.
+checks bounded. Compose applies the same check at load to each value written out in
+a flow file (`compose.helpers.value_nesting.check_written_value`, which turns the
+`TypeCheckError` into a located `LoadError`): node inputs, MAP `over:`, WAIT `until:`,
+value entries, input and AGENT variable defaults, CASE value branches, and flow
+outputs (a record output's fields with `enclosing_levels=1`). It runs before any
+recursive load walker reads the value, so a value made deep by YAML aliases is a load
+error rather than a `RecursionError`. `${...}` text counts as a scalar, so the
+run-time checks above still cover computed values and flows built in Python.
 
 An expression has the same bound, `expr.grammar.MAX_EXPRESSION_NESTING` (set to
 `MAX_VALUE_NESTING`). A chain of same-precedence operators parses as one flat node

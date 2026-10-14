@@ -9,11 +9,14 @@ to an `else:`, naming the value, the type, and the fix. A `when:` value equal to
 one (`1` and `1.0`, a date and its ISO text) is a load error at the later one, for any `on:`.
 """
 
+import datetime
+
 import pytest
 
 from yian.compose import LoadError, load_flow
 from yian.compose.helpers.errors import LoadDiagnostics
-from yian.compose.nodes.case import _match_condition
+from yian.compose.nodes.case import _match_condition, on_match_key
+from yian.compose.validate.case_exhaustive import _duplicate_when_message
 from yian.expr.expressions import evaluate_when_record
 from yian.run import run_flow
 from yian.typesys.types import type_for
@@ -661,22 +664,23 @@ def test_duplicate_next_to_else_and_same_target():
 
 
 def test_on_match_key():
-    import datetime
-
-    from yian.compose.nodes.case import on_match_key
-
     assert on_match_key(1) == on_match_key(1.0)
     assert on_match_key(True) != on_match_key(1)
     assert on_match_key("1") != on_match_key(1)
     assert on_match_key(datetime.date(2026, 1, 2)) == on_match_key("2026-01-02")
     assert on_match_key(False) != on_match_key(0)
     assert len({on_match_key(1), on_match_key(1.0)}) == 1
+    assert on_match_key(-0.0) == on_match_key(0)
+    assert on_match_key(2**53 + 1) != on_match_key(float(2**53))
 
 
 def test_duplicate_message_without_a_source_range():
-    from yian.compose.validate.case_exhaustive import _duplicate_when_message
-
     message = _duplicate_when_message(
         1, None, 1, None, first_range=None, first_index=0
     )
     assert message.endswith("(first at cases[0]), so it never matches; remove one")
+
+
+def test_duplicate_through_an_alias_shows_the_spelling():
+    text = _flow([("&a 1", "one"), ("*a", "two")], on_type="int")
+    assert str(_load_error(text)) == _DUPLICATE % ("1", "1", _line_of(text, "when: &a 1"))

@@ -43,6 +43,7 @@ from typing import Any, Optional
 from yian.compose.helpers.output_contracts import (
     resolve_output_binding_contract,
 )
+from yian.diagnostics import SourceRange
 from yian.expr import ExpressionError, expr_refs_of
 from yian.nodes.contracts import (
     OutputContract,
@@ -51,7 +52,6 @@ from yian.nodes.contracts import (
 )
 from yian.typesys import TypeCheckError, build_value_as
 from yian.typesys.values import Type, ValueKind, canonical_type_label
-from yian.diagnostics import SourceRange
 from yian.compose.helpers.errors import LoadDiagnostics, source_text
 from yian.compose.helpers.typed_bindings import yaml_quoted
 from yian.compose.helpers.yaml_words import former_boolean_fix
@@ -125,8 +125,11 @@ def check_case_when_values(
 
     Two `when:` values are duplicates when they match the same `on:` values (typed
     equality: `1` and `1.0` are equal, `1`, `true`, and `"1"` are not); the later one never
-    matches. Duplicates are checked first, so a repeated value is reported as such rather
-    than as a non-member whose fix would repeat it. A `when:` value is a member of the `on:` type when the type accepts it as is: text is
+    matches. A duplicate is reported before any membership error in the same case, so a
+    repeated value is reported as such rather than as a non-member whose fix would repeat
+    it.
+
+    A `when:` value is a member of the `on:` type when the type accepts it as is: text is
     never converted, a bool is not a number, an int fits a float, and `Literal` tags and
     numeric bounds apply. The `on:` ref resolves against the unnarrowed producers and flow
     inputs first, then the case's narrowed view, so a field only a branch's members have is
@@ -246,8 +249,8 @@ def _duplicate_when_message(
         `str`:
             The message, without the `case node` prefix.
     """
-    shown = src or _spelling(value)
-    first_shown = first_src or _spelling(first_value)
+    shown = _authored_or_spelling(value, src)
+    first_shown = _authored_or_spelling(first_value, first_src)
     where = (
         f"first at line {first_range.start_line}"
         if first_range is not None
@@ -257,6 +260,15 @@ def _duplicate_when_message(
         f"`when: {shown}` duplicates `when: {first_shown}` ({where}), "
         "so it never matches; remove one"
     )
+
+
+
+def _authored_or_spelling(value: Any, src: str | None) -> str:
+    """Return a `when:` value's authored text, or its spelling when that text is unknown or
+    starts with an anchor, alias, or tag (which is not part of the value's spelling)."""
+    if src is not None and not src.startswith(("&", "*", "!")):
+        return src
+    return _spelling(value)
 
 
 # The scalar kind of each `when:` value type, for "this value has the right kind but is
@@ -338,8 +350,7 @@ def _when_fix(value: Any, typ: Type, src: str | None) -> str:
     if not isinstance(value, str):
         # An anchor, alias, or tag is not part of the value's spelling, so quoting the
         # source would change the text; the value's own spelling is quoted instead.
-        authored = src is not None and not src.startswith(("&", "*", "!"))
-        written = src if authored else _spelling(value)
+        written = _authored_or_spelling(value, src)
         if _fits(typ, written):
             return f"; quote it: `when: {yaml_quoted(written)}`"
         if isinstance(value, float) and value.is_integer() and _fits(typ, int(value)):

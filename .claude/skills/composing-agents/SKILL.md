@@ -111,14 +111,10 @@ default, a call input, a value entry, `steerable:`, or `inherit:` that needs a
 `when: true`: a `when: yes` there is a load error with the same fix.
 
 Never write a secret in a flow file: every written value is part of the flow's
-fingerprint. Under a secret name (`password`, `passwd`, `secret`, `client_secret`,
-`private_key`, `access_token`, `refresh_token`, `api_key`, or a name ending in
-`_api_key`, `_password`, `_secret`; case, camelCase, and `-`/`_` ignored) the value
-must be `${input.x}` (text around it is fine) or `null`; anything else fails at load,
-in bindings, outputs, value entries, `call(...)` arguments, defaults, `variables:`,
-`env:`, and keys nested in literal mappings. Credentials come from flow inputs or the
-host (`llm_config.api_key` only from the host). See `docs/syntax.md`, "Secrets stay
-out of flow files".
+fingerprint and the file is recorded in full. Pass credentials as flow inputs or from
+the host (`llm_config.api_key` only from the host). No name is special: a literal
+under `password` loads like any value. See `docs/syntax.md`, "Secrets stay out of
+flow files".
 
 ### Compact mode — when the flow is a single node
 
@@ -433,8 +429,8 @@ A written-out `!object` mapping keeps its record, so reading a field it doesn't 
 a load error; `!object ${x.output}` and a `!Any {...}` entry stay unchecked. The entry
 lowers to a CODE node with its id (in traces, failures, and the run log like any node)
 and runs like one: on its branch when a `case` routes to it, else when its inputs are
-ready. A runtime type miss fails it with `binding.type`. A secret-named id or nested key
-holding a literal is rejected; an entry that reads itself is a cycle.
+ready. A runtime type miss fails it with `binding.type`. An entry that reads itself is
+a cycle.
 
 **Constructors.** Inside `${...}` there are no YAML tags, so a typedef name builds or
 checks a typed value: `${Buy(action="buy", qty=size.output)}` builds a record from
@@ -1147,5 +1143,5 @@ starts, and a `human_input` node fails when it asks. There is no authored
 - [ ] Every CALL/MAP/LOOP has exactly one child form: named `call:`, or non-empty inline `nodes:` plus an `output:` key; inline parent/item dependencies cross through outer `input:`.
 - [ ] A child-flow call is written `call(f, ...)` as a whole value, never `${flow(args)}`; string `:-` defaults and `:?` messages are quoted.
 - [ ] Every typed slot uses a tag (`name: !T value`), never `name: T = value`; multi-argument types in a tag are named in `typedefs:`.
-- [ ] No secret is written in the file: every secret-named slot holds `${input.x}` or `null`.
+- [ ] No secret is written in the file: credentials come from flow inputs or the host.
 - [ ] It loads cleanly (`yian run` / `load_flow`) before you wire a model.

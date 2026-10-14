@@ -67,8 +67,6 @@ diagnostics  <-  events
                    ^   ^
       typesys + expr    └──────  llm_clients
 
-secret_names  <-  compose                 (stdlib-only leaf)
-
 compile runtime contracts <── runtime
 compose + compile.expand + runtime <── package-root run.py
 compile memory table + memory backends <── package-root memory_host.py <── cli
@@ -78,10 +76,7 @@ compile memory table + memory backends <── package-root memory_host.py <─�
 ranges, opaque origins, the authoring-format-neutral resolution protocol, and
 immutable exact routing across resolver namespaces; `events` imports it. The
 package facade resolves its declared public exports lazily so importing this leaf
-does not bootstrap compose or runtime. `secret_names.py` is another
-package-root leaf: the one short list of credential names that compose (and
-later memory) checks, importing only the standard library;
-`test_secret_names_leaf_imports_only_stdlib` ratchets that.
+does not bootstrap compose or runtime.
 
 `json_codec.py` is a stdlib-only leaf beside `diagnostics`: it writes and reads
 JSON text for values holding ints of any size, and renders such values as plain

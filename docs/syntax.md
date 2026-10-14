@@ -163,8 +163,7 @@ were text, while `None`/`none` and mixed-case `tRUE`/`nULL` were null or boolean
 They now read as the table says, as in a named `input:`, which also changes such a
 flow's fingerprint. A bare date passed to any call input (`date` included) and a
 bare number such as `1e3` passed to a `str` input now fail at load. Write `null`
-for null and quote a value you mean as text (`x="1e3"`). Under a secret name,
-`password=None` now fails; write `null`.
+for null and quote a value you mean as text (`x="1e3"`).
 
 ### Compact mode — when the flow *is* one node
 
@@ -999,13 +998,6 @@ It runs like any node:
 
 Other errors:
 
-- A value entry whose id is a [secret name](#secrets-stay-out-of-flow-files), or a nested
-  secret key, holding a literal is rejected like a node input, without the value:
-
-  ```text
-  value entry 'api_key' is a secret name, so its value can't be written in the flow file; pass it as an input (${input.api_key}) or from the host
-  ```
-
 - An entry that reads itself, or entries that read each other, are a cycle:
   `flow has a cycle involving ['x', 'y']; flows must be acyclic`. When a written-out
   `!object` entry is on the cycle, its record is typed from the others first, so the
@@ -1043,9 +1035,7 @@ The merge is **static, at build time** (`{**flow_env, **node_env}`) — there is
 runtime cascade and no per-field resolution across parent flows. It is also
 **flow-local**: a called child flow does *not* inherit its parent's flow `env:` —
 it has its own. A multi-node `defs:` entry sets its own `env:` at the same level as
-its `nodes:`. Values must be literals (no `${...}` refs). A key with a secret name
-can't hold a literal value (see
-[Secrets stay out of flow files](#secrets-stay-out-of-flow-files)).
+its `nodes:`. Values must be literals (no `${...}` refs).
 
 Keys in use today:
 
@@ -1055,98 +1045,34 @@ Keys in use today:
 
 ## Secrets stay out of flow files
 
-Every value written in a flow file is part of the flow's fingerprint (see
-[Durable recovery](api.md#durable-recovery-with-resume_flow)), so a credential
-doesn't belong there. Declare it as a flow input and pass the value when the flow
-runs, or have the host supply it.
+A flow file is shared and versioned, and it is recorded in full: every value written
+in it is part of the flow's manifest and fingerprint (see
+[Durable recovery](api.md#durable-recovery-with-resume_flow)) and reaches the run log
+as node inputs. So don't write a secret in a flow file, under any name. Pass a
+credential as a flow input, or have the host supply it. The run log records input
+values too, so keep logs access-controlled (see
+[Authoritative run logs](api.md#authoritative-run-logs)). An `llm_config.api_key`
+from the host is never recorded, and host tools are the other route.
 
-**Secret names.** `password`, `passwd`, `secret`, `client_secret`, `private_key`,
-`access_token`, `refresh_token`, `api_key`, and any name ending in `_api_key`,
-`_password`, or `_secret`. Matching ignores case, camelCase, `-` versus `_`, and
-leading or trailing `_`, so `clientSecret`, `Client-Secret`, `DB_PASSWORD`, and
-`OPENAI_API_KEY` match. `.` and spaces are not separators. Broader names such as
-`key`, `user`, `auth`, `token`, `sig`, `signature`, `page_token`, `secret_key`, and
-`apikey` are not on the list.
-
-**The rule.** Under a secret name the value must be a `${...}` reference or `null`.
-Anything else fails at load: text (even `''`), a number, a boolean, a list, a
-mapping, a `$${...}` escape (it is literal text), and malformed template text. Text
-around a reference is fine (`'Bearer ${input.token}'`). In a binding position, a
-whole-value [`call(...)` directive](#inline-call-a-flow-call-as-a-bindings-whole-value)
-counts as a binding, and its own keyword arguments follow the same rule.
-
-The rule applies to:
-
-- node `input:` and other binding fields, such as MAP `over:`, including the value
-  of a tagged binding (`password: !str ${input.password}`);
-- flow `output:`;
-- [value entries](#values-in-nodes) in `nodes:`, under the entry's id and at any nested
-  key (a value written in a `then:` or `else:` is a load error, and a secret key nested
-  in it is reported as a secret literal first, so the value is never echoed);
-- `call(...)` keyword arguments;
-- declaration defaults (flow `input:`, `defs:` inputs) and AGENT `variables:`;
-- `env:` on a node, a flow, or a `defs:` entry.
-
-A secret key nested in a literal mapping or list under any other name is checked
-too, and the error gives its path, such as `conn.items[0].password`. In `env:`,
-declaration defaults, and AGENT `variables:`, `${...}` is not evaluated: it stays
-text. It holds no secret, so it passes, but it doesn't bring a value in either; a
-value comes in through a binding, where nested `${...}` is evaluated.
-
-The error names the slot and the fix, and never repeats the value. This flow fails
-at load:
-
-```yaml
-nodes:
-  login:
-    kind: code
-    input:
-      user: admin
-      password: hunter2
-    output: str
-    code: |
-      return inputs["user"]
-```
-
-```
-node 'login': input 'password' is a secret name, so its value can't be written in the flow file; pass it as an input (${input.password}) or from the host
-```
-
-Declare the input and pass the value when the flow runs:
-
-```yaml
-input:
-  password: !str
-nodes:
-  login:
-    kind: code
-    input:
-      user: admin
-      password: ${input.password}
-    output: str
-    code: |
-      return inputs["user"]
-```
-
-A default under a secret name fails with `input 'password': a secret name can't have
-a default value in the flow file; drop the default and pass the value when the flow
-runs`. The error for an `env:` entry points the value to a node's `input:`. Model keys
-have their own rule: a flow file can't set `llm_config.api_key` at all (see
+No name is special: a literal under `password` or `api_key` is an ordinary value.
+Model keys have their own rule: a flow file can't set `llm_config.api_key` at all (see
 [`llm_config`](#llm_config-the-model-selection-cascade)). Memory config keeps its own,
 broader key rule: it rejects credential keys at any depth, whatever the value (see
 [Agent memory](#agent-memory-long_term_memory)).
 
-Changed: a literal value under a secret name used to load, and it was left out of the
-fingerprint. It now fails at load with the error above. Move the value to a flow input
-or have the host supply it. The fingerprint also used to leave out or mask values it
-guessed were credentials; it now covers every value written in the flow. Flows the
-old guess touched get a new fingerprint, so their earlier runs can't be resumed or
-replayed: a flow with any input, wiring key, or `env:` key named like a credential
-(`token`, `signature`, `auth`, `secret`, and similar), even with no literal value, or
-such a key nested in a literal mapping; any `${...}` under such a name; and any literal
-or mapping key holding URL userinfo (`https://user:pass@host`), credential-like query
-values (`key=`, `user=`, `sig=`, `*_token=`), or `host=… user=…`, `;`-separated, or
-JDBC connection text. Other flows keep their fingerprints.
+Changed: a literal value under a name such as `password`, `client_secret` or
+`OPENAI_API_KEY` used to fail at load (and before that it loaded but was left out of
+the fingerprint). It now loads like any other value, and it is part of the
+fingerprint. No flow that loaded before gets a new fingerprint from this. The
+fingerprint also used to leave out or mask values it guessed were credentials; it now
+covers every value written in the flow. Flows the old guess touched get a new
+fingerprint, so their earlier runs can't be resumed or replayed: a flow with any
+input, wiring key, or `env:` key named like a credential (`token`, `signature`,
+`auth`, `secret`, and similar), even with no literal value, or such a key nested in a
+literal mapping; any `${...}` under such a name; and any literal or mapping key
+holding URL userinfo (`https://user:pass@host`), credential-like query values (`key=`,
+`user=`, `sig=`, `*_token=`), or `host=… user=…`, `;`-separated, or JDBC connection
+text. Other flows keep their fingerprints.
 
 ## Agent memory — `long_term_memory:`
 

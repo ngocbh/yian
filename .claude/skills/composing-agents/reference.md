@@ -443,15 +443,9 @@ only the fields that change; a field it omits keeps its value. This is the shape
   name (`!Decision`). Prefer block-style mappings for tagged values; inside `{...}`
   put a space after a tag before `,` or `}`. A value starting with `call(` is a
   directive (quoted, it is text).
-- **No secrets in the file.** Under a secret name (`password`, `secret`,
-  `client_secret`, `private_key`, `access_token`, `refresh_token`, `api_key`,
-  `passwd`, or a name ending in `_api_key`, `_password`, `_secret`, matched across
-  case, camelCase, and `-`/`_`) a value must be `${...}` or `null`. A literal,
-  including `''`, a `$${...}` escape, or a nested `{password: x}`, fails at load:
-  `node 'login': input 'password' is a secret name, so its value can't be written in
-  the flow file; pass it as an input (${input.password}) or from the host`. In
-  `env:` and defaults `${...}` stays text, so pass a credential through a node
-  `input:` from a flow input, or from the host.
+- **No secrets in the file.** Every written value is part of the fingerprint and the
+  file is recorded in full, so pass a credential through a node `input:` from a flow
+  input, or from the host. No name is checked: a literal under `password` loads.
 - **Inline `{ ... }` maps + `${...}` need quotes.** In an inline flow mapping the
   `}` in `${input.x}` closes the map early. Either quote the value
   (`input: {x: "${input.x}"}`) or use block form (preferred):
@@ -617,7 +611,7 @@ is the default for every node;
 each node overrides individual keys. Merge is **static at build time** (`{**flow_env,
 **node_env}`, node wins), **flow-local** (a child flow does NOT inherit the parent's
 flow env; a multi-node `defs:` entry sets its own `env:` beside its `nodes:`),
-literals only (no `${...}`), and no literal under a secret name (see Gotchas).
+and literals only (no `${...}`).
 
 ```yaml
 env: {max_tool_iterations: 150}         # flow default for every node

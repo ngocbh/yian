@@ -156,3 +156,58 @@ def test_nested_output_arithmetic_on_a_skipped_value_is_rejected():
         ),
     ):
         load_flow(text)
+
+
+def _chain_flow(then: str, otherwise: str) -> str:
+    """Return a flow whose CODE node `d` sums `a`, `b` and `c`, with `then`/`otherwise` gated."""
+    producers = "".join(
+        f"""  {node}:
+    kind: code
+    output: int
+    code: |
+      return 1
+"""
+        for node in ("a", "b", "c", "e")
+    )
+    return f"""
+id: chain_skips
+name: chain_skips
+input:
+  approve: !bool
+nodes:
+  gate:
+    kind: case
+    cases:
+      - when: ${{input.approve}}
+        then: {then}
+    else: {otherwise}
+{producers}  d:
+    kind: code
+    input:
+      x: ${{a.output + b.output + c.output}}
+    code: |
+      return inputs["x"]
+output: ${{d.output}}
+"""
+
+
+def test_chain_arithmetic_names_its_possibly_skipped_operand():
+    with pytest.raises(LoadError) as info:
+        load_flow(_chain_flow(then="c", otherwise="e"))
+
+    assert info.value.diagnostic.message == (
+        "node 'd' input 'x': ${a.output + b.output + c.output} does arithmetic on c.output, "
+        "which is null when node 'c' is skipped; give it a default with :-, e.g. "
+        "(c.output :- <default>)"
+    )
+
+
+def test_chain_arithmetic_names_the_first_skipped_operand_in_source_order():
+    with pytest.raises(LoadError) as info:
+        load_flow(_chain_flow(then="a", otherwise="c"))
+
+    assert info.value.diagnostic.message == (
+        "node 'd' input 'x': ${a.output + b.output + c.output} does arithmetic on a.output, "
+        "which is null when node 'a' is skipped; give it a default with :-, e.g. "
+        "(a.output :- <default>)"
+    )

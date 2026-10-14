@@ -106,7 +106,8 @@ One `${...}` grammar; the context decides what happens to the result:
 A child-flow call written as a binding's **whole value** (or a `case`
 `then:`/`else:` target) — `call(f, arg=${ref}, k=lit)` — desugars at load into an
 anonymous `call` node; the host becomes `${<synth>.output}`. Keyword args only,
-each at most once;
+each at most once; a bare arg is one plain scalar read with the flow's YAML value
+rules (`x=1e3` is a float, `x=None` text), and a quoted arg is text;
 every authored node `input:` mapping participates, including HUMAN_INPUT context
 and LOOP carried-record seeds. Nesting is allowed (`call(a, x=call(b, y=1))`). The synth
 node runs only when its host node can: it carries the host's `case` routes, `depends_on:`,

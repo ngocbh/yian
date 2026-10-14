@@ -105,11 +105,11 @@ timestamp is a date, and a `<<:` merge key merges a mapping. Quoted and block (`
 | `1:30`, `1_000`, `0b101` | text |
 | `2026-10-14`, `2026-10-14T10:00:00Z` | date, datetime |
 
-The same rules apply to keys, to input and output defaults, and to the literal after
-` = ` in a typed binding. A `yes`/`no`/`on`/`off` where a `bool` is expected fails with
-the fix, such as "`yes` is text; write `true`": in a typed binding or default, a call
-input, a `case` value, `steerable:`, or `llm_config` `inherit:`, including inside a list
-or record.
+The same rules apply to keys, to input and output defaults, to the literal after
+` = ` in a typed binding, and to a bare `call(...)` argument. A `yes`/`no`/`on`/`off`
+where a `bool` is expected fails with the fix, such as "`yes` is text; write `true`":
+in a typed binding or default, a call input, a `case` value, `steerable:`, or
+`llm_config` `inherit:`, including inside a list or record.
 
 Every mapping key in a flow file must be text after YAML reads it: node ids, input
 and output names, typedef names and fields, keys in a written-out record value, and
@@ -137,6 +137,15 @@ was octal 15, while `1e3` was text. Write `true`/`false` for a boolean, `90` or
 `when: yes` on a `Literal[yes, no]` `on:` now matches the text `yes`; under a `bool`
 `on:` it is a load error, so write `when: true`.
 A CASE key spelled `On:` or `ON:` used to mean `on:`; write `on:`.
+
+Changed: a bare `call(...)` argument used to read with the expression grammar:
+`1e3`, `0x1F`, `0o17`, `+12`, `.5`, `1.`, `.inf`, `~`, an empty value, and dates
+were text, while `None`/`none` and mixed-case `tRUE`/`nULL` were null or booleans.
+They now read as the table says, as in a named `input:`, which also changes such a
+flow's fingerprint. A bare date passed to any call input (`date` included) and a
+bare number such as `1e3` passed to a `str` input now fail at load. Write `null`
+for null and quote a value you mean as text (`x="1e3"`). Under a secret name,
+`password=None` now fails; write `null`.
 
 ### Compact mode — when the flow *is* one node
 
@@ -2056,9 +2065,10 @@ checked as follows:
   `Optional` source does not fit a strict one.
 - A YAML literal is validated by value: `"3"` does not fit an `int` input (write `3`),
   `5` fits a `float` input, `9` does not fit `int[1, 3]`, and `5` does not fit `str`.
-  `null` fits only an `Optional` input. An unquoted `2026-01-01` is a date to YAML,
-  not text, so it fits neither a `date` nor a `str` input, alone or inside a list or
-  record: quote it (`"2026-01-01"`), as in a typed binding or a default.
+  `null` fits only an `Optional` input. An unquoted `2026-01-01` (a named input or
+  a bare `call(...)` argument) is a date to YAML, not text, so it fits neither a
+  `date` nor a `str` input, alone or inside a list or record: quote it
+  (`"2026-01-01"`), as in a typed binding or a default.
 - `${x :- fallback}` checks `x` without its null, then the fallback: a constant by
   value, a reference (`input.y` or `${input.y}`) by its type. `:- null` fits only an
   `Optional` input. `${x :? message}` checks `x` without its null, and `${a | b}`
@@ -2233,8 +2243,13 @@ Rules:
   `call(...)` that holds `${...}` is a load error; drop the quotes to call the flow.
   A `call(` in the *middle* of a value, or inside a `${...}` span, is also text.
 - **Keyword args only** — `call(f, x=1, note=${a.output})`. Each arg value is a
-  `${...}` expression or a literal (`window=30` binds the int `30`); a quoted arg
-  (`x="call(g)"`) is text. Each keyword appears at most once.
+  `${...}` expression or a literal. A bare literal is one plain YAML scalar read
+  with the [YAML values](#yaml-values) rules (`window=30` binds the int `30`, `1e3`
+  the float 1000.0, `~` null, `None` the text `None`); brackets, braces, anchors,
+  tags, and `<<` are not parsed, so `x=[1]` is the text `[1]`. A quoted arg
+  (`x="call(g)"`, `x="1e3"`) is text. A bare value YAML can't build, such as
+  `d=2026-13-45`, is a load error that says to quote it. Each keyword appears at
+  most once.
 - **Nesting is allowed** — `call(outer, x=call(inner, y=1))`. An unquoted arg that
   starts with `call(` follows the same whole-value rule.
 - **Runs only when its host can.** The call runs only on the `case` branches that reach

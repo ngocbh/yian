@@ -1,4 +1,5 @@
-"""The ``anthropic`` block reaches the Messages request body as written."""
+"""The ``anthropic`` block reaches the Messages request body as written; a host's HTTP
+clients carry the requests and never reach the body."""
 
 import asyncio
 import importlib

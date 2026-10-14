@@ -350,7 +350,8 @@ node a text producer. A `Literal[...]` enum, record, union, non-string scalar, o
 switches it to **structured generation** — the engine derives a schema from
 `output:` and the model emits a conforming value (native structured output, or a
 JSON fallback for providers that lack it), validated at the write boundary and
-retried up to `retries:` times (default 2, a non-negative integer) on deviation. A root `Literal[...]`
+retried up to `retries:` times (default 2, a non-negative integer) on deviation, a NaN
+or infinity in the reply included. A root `Literal[...]`
 returns its bare tag to the flow. A union returns the matching member's record; each
 member's schema pins its tag and rejects unknown fields.
 Use a downstream `code` node only for deterministic post-processing.

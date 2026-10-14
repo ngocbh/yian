@@ -66,7 +66,15 @@ boundary that sees one rejects it and names where it sits:
 - a node output: the node fails with `contract.output`, naming the field path;
 - an `llm_config` value: a load error, or `ValueError` before the run for a host config;
 - the run-log codecs (`canonical_typed`, `canonical_seed`, `encode_pool`): `TypeCheckError`
-  with a path. Nothing is recorded as `null` in its place.
+  with a path. Nothing is recorded as `null` in its place;
+- a model reply: in an AGENT's structured reply it is a schema deviation, retried
+  under `retries:`; in a tool call's arguments the AGENT fails with `node.execute`
+  before any call of that reply runs (`tool call 'lookup' arguments at x: non-finite
+  number nan is not a yian value`). With session memory a reply holding one anywhere,
+  provider metadata included, can't be stored: that model call is recorded `failed`
+  and the reply is not kept, so a text or tool AGENT fails with `node.execute` and a
+  structured AGENT retries, spending `retries:` even on a metadata NaN the model
+  can't fix.
 
 A temporary inside an expression may be infinite; only a binding's final value is checked.
 

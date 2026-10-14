@@ -414,6 +414,22 @@ too large for a float in a `float` slot fails the type check at its path. An ope
 Python can't complete, or a value too long to render as text, fails like any other
 expression error (`binding.evaluate` in a binding, `node.execute` for a prompt).
 
+An AGENT checks what the model sends back. `run_agent` passes `invoke_model` a
+`check_reply` that rejects a tool call whose arguments hold a NaN or infinity, before any call of
+that reply runs, so the AGENT fails `node.execute` (`tool call 'lookup' arguments at
+x: ...`). Structured generation marks every `float` slot `allow_inf_nan=False` (the
+JSON schema is unchanged), so `{"score": NaN}` is a `finite_number` schema error that
+self-corrects under `retries:` and, once spent, selects the declared field's origin;
+a freeform slot is checked after unwrapping (`structured output at k: ...`; on the
+native path with a transcript the raw check names it first, `model reply at
+tool_calls[0].args.value.k: ...`). With a
+transcript, `invoke_model` also rejects a raw reply holding one anywhere, provider
+metadata included, since only finite JSON can be stored: the model effect is observed
+`failed` (or `interrupted` when a stop is pending) and the reply is not stored. On the
+native path the carrier's own schema error is raised instead when it has one, so the
+retry and origin match a run without memory. Without a transcript, provider metadata
+is not checked.
+
 Numeric `Type` values may retain an inclusive `bounds` pair for INTEGER or
 NUMBER. Shape validation rejects malformed, reversed, or incompatible
 refinements; integer endpoints remain arbitrary precision, and NUMBER endpoints
@@ -1084,12 +1100,14 @@ interrupt cuts the streaming reply. At the top of each iteration `run_agent` che
 again before each tool call, and `stream_reply` checks it as each chunk after the
 first arrives, before showing it. A stream that runs out is never cut, so a
 single-chunk reply, or an interrupt that lands on the last chunk, returns the
-complete reply and the tool loop skips its calls. A mid-stream interrupt sends
+complete reply and the tool loop skips its calls (unless a call's arguments hold
+a NaN or infinity, which fails the node first). A mid-stream interrupt sends
 the `final=True` chunk and raises `ReplyInterrupted` (a leaf in
 `nodes/agent/interrupts.py`, shared by `live.py` and `memory.py`) with the visible
 text so far and `usage_of` the chunks received; `observe_model_call` reports that
 usage on `ModelCallFinished` with no `error`, and `invoke_model` observes the model
-effect as `interrupted` with the partial reply. `record_skipped_tool` records each
+effect as `interrupted` with the partial reply (it holds only text, so it is always
+finite JSON). `record_skipped_tool` records each
 call not run as an `interrupted` tool effect paired with an error `ToolMessage`,
 and `observe_skipped_tool_call` emits `ToolCallStarted` then
 `ToolCallFinished(error="interrupted")` for it. `run_agent` then calls the turn's

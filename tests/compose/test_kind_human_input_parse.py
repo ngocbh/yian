@@ -262,3 +262,62 @@ nodes:
         for i in range(4)
     }
     assert lines == {0: 2, 1: 9, 2: 9, 3: 2}
+
+
+def _brief_line(flow):
+    desc = HumanInputDescriptor.parse("ask", _reader_for(flow, "ask"))
+    return desc.field_ranges[("text", "adaptive_questions.prompt")].start_line
+
+
+def test_human_input_parse_records_the_adaptive_brief_range():
+    flow = """\
+nodes:
+  ask:
+    kind: human_input
+    adaptive_questions:
+      retries: 1
+      prompt: Ask about ${x}
+"""
+    assert _brief_line(flow) == 6
+
+
+def test_human_input_parse_records_a_flow_style_adaptive_brief_range():
+    flow = """\
+nodes:
+  ask:
+    kind: human_input
+    adaptive_questions: {prompt: "Q ${x}"}
+"""
+    assert _brief_line(flow) == 4
+
+
+def test_human_input_parse_records_a_block_scalar_adaptive_brief_range():
+    flow = """\
+nodes:
+  ask:
+    kind: human_input
+    adaptive_questions:
+      prompt: |
+        Ask about ${x}
+        and more.
+"""
+    assert _brief_line(flow) == 5
+
+
+def test_human_input_parse_ranges_a_merged_adaptive_brief_at_the_anchor():
+    flow = """\
+x-brief: &b
+  prompt: Ask about ${x}
+nodes:
+  ask:
+    kind: human_input
+    adaptive_questions:
+      <<: *b
+      retries: 1
+"""
+    assert _brief_line(flow) == 2
+
+
+def test_human_input_parse_without_adaptive_questions_has_no_brief_range():
+    desc = HumanInputDescriptor.parse("ask", _reader_for(_FLOW, "ask"))
+    assert ("text", "adaptive_questions.prompt") not in desc.field_ranges

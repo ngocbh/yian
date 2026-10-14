@@ -3,7 +3,8 @@
 One of the two-axis `compose/nodes/<kind>.py` modules: it owns the `human_input` node's
 frozen `HumanInputDescriptor`. It wraps the template `parse` from `NodeDescriptor` (which
 records each field's `SourceRange`) to reject the removed `adaptive_questions.mode:` key and
-record one `("text", "questions[i]...")` range per question string, overrides the
+record one `("text", "questions[i]...")` range per question string and a
+`("text", "adaptive_questions.prompt")` range for the adaptive brief, overrides the
 `_validate_fields` hook to enforce the one-of-three question-surface legality, and overrides
 `build` (which constructs the runtime `HumanInputNode` and derives the answer schema). A
 `prompt:`, an `adaptive_questions.prompt:` brief, or a literal question's `question`/`header`/
@@ -53,10 +54,11 @@ class HumanInputDescriptor(NodeDescriptor):
     template `parse` from `NodeDescriptor`, which it wraps to reject the removed
     `adaptive_questions.mode:` key, a non-text `adaptive_questions.prompt:` brief, and a
     non-text `question`/`header`/option `label`/`description` in a literal `questions:` list,
-    and to add a `("text", "questions[i]...")` range for each question string to
-    `field_ranges`. It overrides the `_validate_fields` hook (the one-of-three legality and a
-    text `prompt:`, calling `super()` for the default asserts-list check); only the
-    human_input-specific fields are declared here.
+    and to add a `("text", "questions[i]...")` range for each question string and a
+    `("text", "adaptive_questions.prompt")` range for the adaptive brief to `field_ranges`. It
+    overrides the `_validate_fields` hook (the one-of-three legality and a text `prompt:`,
+    calling `super()` for the default asserts-list check); only the human_input-specific
+    fields are declared here.
 
     Class attrs: `kind="human_input"`; `allowed` adds `prompt`/`questions`/`adaptive_questions`,
     normalized `inputs`/`outputs`, and `asserts` to the commons; `required` is empty (no single flat field is
@@ -83,10 +85,12 @@ class HumanInputDescriptor(NodeDescriptor):
 
         After the template `parse`, rejects the first `question`/`header`/option `label`/
         `description` in a literal `questions:` list that is present but not a string, at that
-        value. On top of the template `parse`'s per-field ranges, records one
-        `("text", site_label(path))` range for each string `template_sites` finds in a literal
-        `questions:` list (`question`, option `label`/`description`), so a text error points at
-        the string rather than the whole `questions:` block.
+        value. On top of the template `parse`'s per-field ranges, records a
+        `("text", "adaptive_questions.prompt")` range for an `adaptive_questions:` block's
+        `prompt:` brief and one `("text", site_label(path))` range for each string
+        `template_sites` finds in a literal `questions:` list (`question`, option `label`/
+        `description`), so a text error points at the string rather than the whole
+        `adaptive_questions:` or `questions:` block.
 
         Raises:
             `LoadError`: The `adaptive_questions:` block authors `mode:`, its `prompt:` brief is
@@ -110,8 +114,13 @@ class HumanInputDescriptor(NodeDescriptor):
                 or cursor.key_range_of("adaptive_questions"),
             )
         desc = super().parse(node_id, cursor)
+        ranges: dict[tuple[str, str], SourceRange] = {}
+        if isinstance(adaptive, dict) and "prompt" in adaptive:
+            rng = _range_at(cursor, ("adaptive_questions", "prompt"))
+            if rng is not None:
+                ranges[("text", "adaptive_questions.prompt")] = rng
         if not isinstance(desc.questions, list):
-            return desc
+            return replace(desc, field_ranges={**desc.field_ranges, **ranges})
         found = _non_text_question_field(desc.questions)
         if found is not None:
             path, value = found
@@ -122,7 +131,6 @@ class HumanInputDescriptor(NodeDescriptor):
                 or desc.field_ranges.get(("field", "questions"))
                 or desc.range,
             )
-        ranges: dict[tuple[str, str], SourceRange] = {}
         for path, _ in template_sites(None, desc.questions):
             rng = _range_at(cursor, path)
             if rng is not None:

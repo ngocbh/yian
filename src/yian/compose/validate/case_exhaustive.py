@@ -2,9 +2,9 @@
 
 Two coverage laws for `case` nodes:
 
-- Enum coverage, for every case: when an `on:` ref resolves to an ENUM node output, every
-  enum tag must be covered by a case `when:` value OR by a present `else:`. A missing tag
-  with no `else:` is a `LoadError`.
+- Enum coverage, for every case: when an `on:` ref resolves to an ENUM node output or flow
+  input, every enum tag must be covered by a case `when:` value OR by a present `else:`. A
+  missing tag with no `else:` is a `LoadError`.
 - Value-producing cases: a case that produces a value (it declares `output:`, is read
   through `${<case>.output}`, or is a branch target of such a case) must be exhaustive. It
   has an `else:`, or it is an `on:` form whose `on:` type is non-nullable and fully listed
@@ -75,7 +75,8 @@ def check_case_exhaustive(
     A known field projected from either arm of a partial record can drive enum coverage.
     With `narrowing`, each case resolves its `on:` ref against its own view of the
     producers and flow inputs, so a case inside a branch covers only the tags that can
-    reach it. Errors are located at the case node.
+    reach it, and enum coverage applies to an `on:` over a flow input too. Errors are
+    located at the case node.
 
     Args:
         descriptors (`dict`): The flow's node descriptors keyed by node id.
@@ -109,7 +110,7 @@ def check_case_exhaustive(
         )
         if desc.id in value_cases:
             _check_value_exhaustive(desc, case_producers, case_inputs, diagnostics)
-        _check_exhaustive(desc, _on_covered(desc), case_producers, diagnostics)
+        _check_exhaustive(desc, _on_covered(desc), case_producers, case_inputs, diagnostics)
 
 
 def check_case_when_values(
@@ -614,20 +615,37 @@ def _check_exhaustive(
     desc: CaseDescriptor,
     covered: list[Any],
     producers: dict[str, OutputContract],
+    inputs: dict[str, ValueContract],
     diagnostics: LoadDiagnostics | None = None,
 ) -> None:
     """Enum-exhaustiveness for the `on:` form.
 
-    Resolves the `on:` ref to a `Type`; if it carries `.tags` (an enum), every tag must
-    be a text `when:` match value OR be covered by a present `else:`. A missing tag with no
-    `else:` is a `LoadError`. A non-enum / unresolved producer is lenient (no check).
+    Resolves the `on:` ref to a `Type`; if it carries `.tags` (an enum node output or flow
+    input), every tag must be a text `when:` match value OR be covered by a present
+    `else:`. A non-enum or unresolved `on:` is lenient (no check).
+
+    Args:
+        desc (`CaseDescriptor`):
+            The case descriptor.
+        covered (`list[Any]`):
+            The case's typed `when:` match values.
+        producers (`dict[str, OutputContract]`):
+            The producer contracts the case sees.
+        inputs (`dict[str, ValueContract]`):
+            The flow-input contracts the case sees.
+        diagnostics (`LoadDiagnostics | None`, *optional*, defaults to `None`):
+            Source ownership for located errors.
+
+    Raises:
+        `LoadError`:
+            An enum tag is not covered and the case has no `else:`; located at the case.
     """
     diagnostics = diagnostics or LoadDiagnostics()
     if desc.on is None or desc.else_ is not None:
         return  # searched form, or an else: that satisfies coverage
-    typ = _resolve_on_type(desc.on, producers)
+    typ = _resolve_on_type(desc.on, producers, inputs)
     if typ is None or typ.tags is None:
-        return  # not a checked enum producer -> lenient
+        return  # not a checked enum -> lenient
     missing = sorted(typ.tags - _covered_tags(covered))
     if missing:
         raise diagnostics.error(

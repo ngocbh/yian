@@ -2166,13 +2166,16 @@ def test_routing_only_case_over_a_str_without_else_still_skips_on_no_match():
     assert not {"pa", "pb"} & _started(result)
 
 
-def test_routing_only_case_over_a_literal_input_missing_a_tag_still_loads():
+def test_routing_only_case_over_a_literal_input_missing_a_tag_is_a_load_error():
     text = _gate_flow(
         "    on: ${input.choice}\n" + _routes("a"),
         inputs="  choice: Literal[a, b]\n",
         output="${input.choice}",
     )
-    assert run_flow(load_flow(text), {"choice": "b"}).output == "b"
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    assert "non-exhaustive — enum tag(s) ['b'] not covered" in str(caught.value)
+    assert _error_line(caught.value) == _line_of(text, "  gate:")
 
 
 def test_inner_case_of_a_value_producing_case_must_be_exhaustive():

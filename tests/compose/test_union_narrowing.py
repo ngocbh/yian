@@ -588,12 +588,13 @@ def test_required_groups_from_buy_and_sell_branches_meet_empty():
 # --- exhaustiveness --- #
 
 
-def test_a_non_exhaustive_on_over_a_literal_input_still_loads():
-    _loads(_flow(
+def test_a_non_exhaustive_on_over_a_literal_input_errors():
+    msg = _load_error(_flow(
         _case("route", "${input.mode}", [("a", "b")]),
         _code("b"),
         inputs="  s: str\n  mode: Literal[a, b]\n",
     ))
+    assert "enum tag(s) ['b'] not covered" in msg
 
 
 def test_a_non_exhaustive_on_over_a_union_node_output_still_errors():

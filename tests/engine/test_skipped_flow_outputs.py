@@ -828,7 +828,7 @@ def _on_input(tags: str = "x y") -> str:
     ("tags", "inputs", "source", "expected"),
     [
         ("x y", "k: Literal[x, y]", "${a.output | b.output}", "${a.output | b.output}"),
-        ("x", "k: Literal[x, y]", "${a.output}", "${a.output:-null}"),
+        ("x", "k: str", "${a.output}", "${a.output:-null}"),
         (
             "x y",
             "k: Optional[Literal[x, y]]",
@@ -838,7 +838,8 @@ def _on_input(tags: str = "x y") -> str:
     ],
 )
 def test_on_over_a_literal_input(tags, inputs, source, expected):
-    """A fully listed non-nullable Literal input always takes a branch; otherwise null."""
+    """A fully listed non-nullable Literal input always takes a branch; a `str` or nullable
+    input may not, so its join defaults to null."""
     text = _flow(_on_input(tags), f"\n  v: {source}", inputs=inputs)
     assert _sources(text) == [expected]
     assert _run(text, {"k": "x"}) == {"v": 1}

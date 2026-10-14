@@ -988,9 +988,9 @@ checkpoint callback or acknowledgment is required. The caller executes a provide
 or tool between those calls, outside the backend lock. Cooperative stop checks run
 while waiting and between effects; actual observations are retained before honoring
 a stop that arrived during the effect. A model or tool call that raises while a stop
-is pending is observed `interrupted` and the run stops instead of failing; if the
-stop is honored only after the failure is recorded, the effect stays `failed` and
-the run still stops.
+is pending is observed `interrupted` and the run stops instead of failing (a host
+callback fault still escapes); if the stop is honored only after the failure is
+recorded, the effect stays `failed` and the run still stops.
 
 The evaluator keeps the lease through the node body, stream cleanup,
 post-assertions, and result-shape validation, then releases it before returning

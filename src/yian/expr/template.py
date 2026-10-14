@@ -26,7 +26,7 @@ NOT a binding (it reads already-bound declared inputs, mints no edge), but it is
 `${...}` template, and it reuses these scanners — so it lives here rather than in
 `expressions` (which cannot import this module without a cycle).
 
-Knows about: `expr.expressions` (peer — `_parse_literal`, `ExpressionError`) and
+Knows about: `expr.expressions` (peer — the evaluator and `ExpressionError`) and
 `expr.builtins` (the prompt `TEMPLATE_FNS` registry).
 Never imports: `nodes`, `compile`, `runtime`, or `typesys` at runtime (pool-agnostic via
 `resolve`; `Type` appears in annotations only).
@@ -44,7 +44,6 @@ from yian.expr.expressions import (
     ISINSTANCE,
     ExpressionError,
     ResolveMode,
-    _parse_literal,
     eval_expr,
     expr_refs,
     rewrite_expr_refs,
@@ -62,12 +61,9 @@ if TYPE_CHECKING:  # annotation-only imports
 # (`compose.desugar.inline_calls`).
 #
 # `InlineCall` is the plain-data record a desugared call produces (the directive
-# path builds one per call); `_split_kv` / `_arg_source` / `_default_literal` /
-# `_find_paren_end` / `_split_calls_aware` are the paren/quote/span-aware splitters +
-# arg-literal coercion the directive recognizer reuses. Keyword args only; each arg
-# VALUE is a full binding — a `${…}`-bearing value (or a quoted scalar) stays a string,
-# else it is a literal (so `window=30` binds int 30). The literal grammar is the
-# expression grammar's, not YAML's — see `_arg_source`.
+# path builds one per call); `_split_kv` / `_find_paren_end` / `_split_calls_aware`
+# are the paren/quote/span-aware splitters the directive recognizer reuses. Keyword
+# args only; reading each arg VALUE lives in `compose.desugar.inline_calls`.
 # --------------------------------------------------------------------------- #
 
 
@@ -78,16 +74,7 @@ class InlineCall:
 
     id: str
     callee: str
-    args: dict  # name -> a literal value or a `${…}` binding string (see `_arg_source`)
-
-
-def _default_literal(token: str) -> Any:
-    """A bare arg token -> its typed literal — a word that isn't a number/bool/null
-    spelling is a literal string (no quotes)."""
-    try:
-        return _parse_literal(token)
-    except ExpressionError:
-        return token
+    args: dict  # name -> a literal value or a `${…}` binding string
 
 
 def _split_kv(pair: str) -> tuple:
@@ -98,29 +85,6 @@ def _split_kv(pair: str) -> tuple:
             f"inline call arg {pair.strip()!r} must be keyword (name=value)"
         )
     return parts[0].strip(), "=".join(parts[1:])
-
-
-def _arg_source(value: str) -> Any:
-    """One inline-call arg value -> its source, mirroring the named form's `input:`:
-
-    - a fully-quoted scalar (`"…"`/`'…'`) -> its inner text (quotes stripped, like a
-      YAML quoted scalar): a binding template if it interpolates (`"hi ${name}"` ->
-      `hi ${name}`), else a plain string;
-    - an unquoted `${…}`-bearing value -> the binding string (ref / coalesce / embedded);
-    - else a bare token -> a literal via `_default_literal` (number / bool / null / a
-      bare string), so `window=30` binds int 30.
-
-    NB this literal grammar is the expression grammar's, not YAML's. A bare `yes`/`no`/
-    `on`/`off` stays a string, as in a flow file, and so do forms YAML reads as numbers
-    or dates (`1e3`, `0x1F`, `0o17`, `+12`, `.5`, `1.`, `2026-10-14`) and YAML's `~`
-    null; `None`/`none` is null here, while YAML reads it as text. Quotes, integers,
-    `N.N` decimals, `true`/`false`, and `null` match the named form."""
-    stripped = value.strip()
-    if len(stripped) >= 2 and stripped[0] in ("'", '"') and stripped[-1] == stripped[0]:
-        return stripped[1:-1]  # a quoted scalar -> its inner text (template or literal)
-    if "${" in stripped:
-        return stripped
-    return _default_literal(stripped)
 
 
 def _find_paren_end(s: str, start: int) -> Optional[int]:

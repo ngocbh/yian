@@ -74,9 +74,9 @@ from yian.expr import (
     ExpressionError,
     expr_refs_of,
 )
+from yian.expr.expressions import _parse_literal
 from yian.expr.template import (
     InlineCall,
-    _arg_source,
     _find_paren_end,
     _split_calls_aware,
     flow_call_callees_in_spans,
@@ -539,6 +539,38 @@ def _check_secret_argument(name: str, arg_value: str) -> None:
     path = secret_literal_path(name, _arg_source(arg_value))
     if path is not None:
         raise SecretArgumentError(name, path)
+
+
+def _default_literal(token: str) -> Any:
+    """A bare arg token -> its typed literal — a word that isn't a number/bool/null
+    spelling is a literal string (no quotes)."""
+    try:
+        return _parse_literal(token)
+    except ExpressionError:
+        return token
+
+
+def _arg_source(value: str) -> Any:
+    """One inline-call arg value -> its source, mirroring the named form's `input:`:
+
+    - a fully-quoted scalar (`"…"`/`'…'`) -> its inner text (quotes stripped, like a
+      YAML quoted scalar): a binding template if it interpolates (`"hi ${name}"` ->
+      `hi ${name}`), else a plain string;
+    - an unquoted `${…}`-bearing value -> the binding string (ref / coalesce / embedded);
+    - else a bare token -> a literal via `_default_literal` (number / bool / null / a
+      bare string), so `window=30` binds int 30.
+
+    NB this literal grammar is the expression grammar's, not YAML's. A bare `yes`/`no`/
+    `on`/`off` stays a string, as in a flow file, and so do forms YAML reads as numbers
+    or dates (`1e3`, `0x1F`, `0o17`, `+12`, `.5`, `1.`, `2026-10-14`) and YAML's `~`
+    null; `None`/`none` is null here, while YAML reads it as text. Quotes, integers,
+    `N.N` decimals, `true`/`false`, and `null` match the named form."""
+    stripped = value.strip()
+    if len(stripped) >= 2 and stripped[0] in ("'", '"') and stripped[-1] == stripped[0]:
+        return stripped[1:-1]  # a quoted scalar -> its inner text (template or literal)
+    if "${" in stripped:
+        return stripped
+    return _default_literal(stripped)
 
 
 def _inner_keywords(parts: list[str]) -> list[tuple[str, str]]:

@@ -9,8 +9,7 @@ down into it.
 Modules:
   - `directives`  `CALL_HEAD` and `match_call_directive`: recognizes a whole-value
                   `call(...)` directive in binding text, rejecting malformed text that
-                  starts with `call(`; `holds_secret_keyword` / `quoted_unless_secret`
-                  keep a secret keyword's text out of messages.
+                  starts with `call(`.
   - `errors`      the document-owned diagnostic factory plus `LoadError`, whose one
                   canonical `Diagnostic` is ready for direct boundary rendering.
   - `isinstance_types` the type names `isinstance(x, T)` calls name in a binding or
@@ -19,9 +18,6 @@ Modules:
   - `output_contracts` the template-aware output-binding contract resolver: exact or
                   partial direct-reference projection, source-free proven expression
                   results, closed-record assembly, and closed-path validation.
-  - `secret_literals` `secret_literal_path`: the first literal value under a secret
-                  name, walking nested containers; plus the shared message wording
-                  and `check_env_secrets` for an `env:` mapping.
   - `source`      parse-free boundary-input range projection over an existing
                   `SourceCursor`; compatibility metadata, never a YAML parser. Assertion
                   origin/range pairs come from one retained item cursor in the build

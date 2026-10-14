@@ -463,11 +463,9 @@ Most are just the functional model (above) made enforceable:
 - **Every authored value is flow identity** — `flow_manifest`/`flow_fingerprint`
   include every value written in the flow, under any name, so an edited literal
   fails the resume check. Never redact, mask, or drop a value because its name or
-  text looks like a credential. Keep secrets out of flow files instead: compose
-  rejects a literal under a secret name at load (list in `secret_names.py`, walker
-  and messages in `compose/helpers/secret_literals.py`, binding pre-pass in
-  `compose/validate/secret_literals.py`), with an error that never echoes the
-  value; credentials come from inputs or the host.
+  text looks like a credential. No name is special at load either: compose rejects
+  no value for its name. Keep secrets out of flow files by convention; credentials
+  come from inputs or the host.
 - **Blocking authorable effects return ordinary outputs** — an AGENT node's
   explicitly granted `ask_user` tool and HUMAN_INPUT call the run's own handler
   (passed as `tools={"ask_user": ...}`) inside their live invocation. A group

@@ -28,9 +28,7 @@ A case `output:` (`output: str`, or tagged `output: !str`) is a load error at th
 `output:` that says to tag the result where it is read (`x: !str ${route.output}`).
 A case with both reports its first value branch first.
 
-Runs in `_assemble` before `desugar_inline_calls`, so the branches are still as authored,
-and after `check_authored_bindings`, so a secret nested in a value branch is reported as a
-secret literal before a message here could echo it.
+Runs in `_assemble` before `desugar_inline_calls`, so the branches are still as authored.
 
 Imports flow down/peer only: `compile.validation` (type relations), `compose.desugar`
 (the `call(...)` check, value entry descriptors and the values they can't hold),
@@ -53,9 +51,7 @@ from typing import Any, Optional
 from yian.compile.validation import type_relation
 from yian.compose.desugar.inline_calls import (
     ArgumentValueError,
-    SecretArgumentError,
     desugar_call_directives,
-    holds_secret_keyword,
 )
 from yian.compose.desugar.value_entries import (
     EMPTY_RECORD_KEY,
@@ -329,24 +325,20 @@ def _check_call(
         diagnostics (`LoadDiagnostics`): Source ownership for located errors.
 
     Raises:
-        `LoadError`: The directive passes a literal secret, has an unreadable argument, or
-            is not exactly one call. Unless the text holds a span or a secret keyword, or
-            only one argument is wrong, the message shows the value entry to write for the
-            text.
+        `LoadError`: The directive has an unreadable argument or is not exactly one call.
+            Unless the text holds a span or only one argument is wrong, the message shows
+            the value entry to write for the text.
     """
     value = branch.value
     try:
         desugar_call_directives(value, lambda: "__check")
-    except SecretArgumentError as exc:
-        raise diagnostics.error(exc.message_for(host), range=branch.range) from exc
     except ArgumentValueError as exc:
         # The target is a single call; only one of its arguments is wrong.
         raise diagnostics.error(f"{host} {exc}", range=branch.range) from exc
     except ExpressionError as exc:
-        # A value entry can't hold quoted call text with a span, and text with a secret
-        # keyword must not be echoed, so neither gets the text's rewrite.
+        # A value entry can't hold quoted call text with a span, so it gets no rewrite.
         hint = ""
-        if "${" not in value and not holds_secret_keyword(value):
+        if "${" not in value:
             entry = _free_id(branch.entry_base, descriptors)
             hint = (
                 ". For the text, add a value entry and name it: "

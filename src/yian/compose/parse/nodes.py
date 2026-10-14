@@ -32,11 +32,6 @@ from typing import Any, Callable, NoReturn
 from yian.compile.model import END_ID, START_ID
 from yian.compose.helpers.directives import CALL_HEAD
 from yian.compose.helpers.errors import LoadDiagnostics
-from yian.compose.helpers.secret_literals import (
-    is_binding_text,
-    secret_literal_message,
-    secret_literal_path,
-)
 from yian.compose.helpers.source import one_line_text
 from yian.compose.helpers.tags import QUOTED_STYLES, suggest_tag, tag_text, yaml_quoted
 from yian.compose.nodes import KINDS, REMOVED_KINDS
@@ -46,7 +41,9 @@ from yian.compose.source import (
     SourceSyntaxError,
     parse_yaml_literal,
 )
+from yian.expr import ExpressionError, scan_template
 from yian.expr.grammar import EXPRESSION_KEYWORDS
+from yian.expr.template import Span
 from yian.typesys import TypeCheckError, build_value
 from yian.typesys.values import Type, ValueKind, list_kind_for_element, value_repr
 
@@ -236,8 +233,7 @@ def _reject_untagged_value(
     """Reject an untagged scalar, list, or null entry, showing the tag to write.
 
     A literal gets an example of the entry with its tag. A `${...}` or `call(...)`
-    value is not a literal, so it gets no example. Under a secret name a literal is
-    rejected as a secret literal instead, so the message never echoes it.
+    value is not a literal, so it gets no example.
 
     Args:
         node_id (`str`): The entry id.
@@ -252,12 +248,6 @@ def _reject_untagged_value(
     message = _NODE_OR_VALUE.format(node_id=node_id)
     if _is_reference(value, cursor.scalar_style):
         raise diagnostics.error(message, range=rng)
-    path = secret_literal_path(node_id, value)
-    if path is not None:
-        raise diagnostics.error(
-            secret_literal_message(f"value entry {node_id!r}", node_id, path),
-            range=rng,
-        )
     if not _writable(value):
         raise diagnostics.error(message, range=rng)
     typ = example_type(value)
@@ -278,10 +268,28 @@ def _is_reference(value: Any, style: str | None) -> bool:
     """Report whether an untagged value is a `${...}` template or a `call(...)` directive."""
     if not isinstance(value, str):
         return False
-    if is_binding_text(value):
+    if _is_binding_text(value):
         return True
     # A quoted `call(...)` is text, as in a binding.
     return style not in QUOTED_STYLES and CALL_HEAD.match(value.strip()) is not None
+
+
+def _is_binding_text(value: Any) -> bool:
+    """Return whether `value` is template text holding at least one `${...}` span.
+
+    Args:
+        value (`Any`): An authored value.
+
+    Returns:
+        `bool`: `True` for a string with a well-formed `${...}` span. Plain text, a
+            `$${...}` escape (literal text) and malformed template text are `False`.
+    """
+    if not isinstance(value, str):
+        return False
+    try:
+        return any(isinstance(segment, Span) for segment in scan_template(value))
+    except ExpressionError:
+        return False
 
 
 def example_type(value: Any) -> Type | None:

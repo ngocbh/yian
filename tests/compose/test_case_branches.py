@@ -13,9 +13,8 @@ itself, a written-out record with an empty key, a nested `call(...)`, a flow cal
 malformed span in `${...}`, a span reading the case) is its own located error. An
 unquoted word that names no node suggests the nearest node and the value entry for the
 text, which loads too. A CASE `output:`, tagged or not, is a
-load error at the `output:` that says to tag the result where it is read. A secret in a
-value branch is reported as a secret literal, never echoed. `${route.output}` reads the
-taken branch.
+load error at the `output:` that says to tag the result where it is read.
+`${route.output}` reads the taken branch.
 """
 
 import re
@@ -570,34 +569,27 @@ def test_a_malformed_span_in_a_value_is_rejected():
     assert _error_line(error) == _line_of(text, "then: {a:")
 
 
+@pytest.mark.parametrize("key", ["token", "access_token"])
 @pytest.mark.parametrize(
     ("branch", "needle"),
     [
-        ("then: {access_token: sk-1}", "then:"),
-        ("then:\n          access_token: sk-1", "access_token: sk-1"),
+        ("then: {{{key}: abc}}", "then:"),
+        ("then:\n          {key}: abc", "{key}: abc"),
     ],
+    ids=["flow", "block"],
 )
-def test_a_secret_in_a_value_branch_is_a_secret_literal(branch, needle):
+def test_a_mapping_value_branch_gets_the_branch_error_under_any_key(key, branch, needle):
     text = _flow(
         "    on: ${input.cmd}\n"
         "    cases:\n"
         "      - when: a\n"
-        f"        {branch}\n"
+        f"        {branch.format(key=key)}\n"
         "    else: reply\n"
     )
     error = _load_error(
-        text,
-        "node 'route': then[0] value has key 'access_token' (a secret name) with a "
-        "literal value; pass the value as an input or from the host",
+        text, _value_branch("then", "route_then_0", f"!object {{{key}: abc}}")
     )
-    assert "sk-1" not in str(error)
-    assert _error_line(error) == _line_of(text, needle)
-
-
-def test_a_key_that_is_no_secret_name_gets_the_branch_error():
-    text = _flow(_on("{token: abc}"))
-    error = _load_error(text, _value_branch("then", "route_then_0", "!object {token: abc}"))
-    assert _error_line(error) == _line_of(text, "then: {token")
+    assert _error_line(error) == _line_of(text, needle.format(key=key))
 
 
 # --------------------------------------------------------------------------- #

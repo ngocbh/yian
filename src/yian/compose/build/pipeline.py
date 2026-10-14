@@ -109,10 +109,6 @@ from yian.compose.edges.hosts import host_control_edges
 from yian.compose.edges.ordering import infer_ordering_edges
 from yian.compose.validate.call_types import check_call_map_types
 from yian.compose.validate.references import validate_references
-from yian.compose.validate.secret_literals import (
-    check_authored_bindings,
-    check_value_entry,
-)
 from yian.compose.validate.skips import (
     SkipModel,
     check_skipped_arithmetic,
@@ -1604,12 +1600,11 @@ def _assemble(
     the top-level flow and every in-file def:
 
       flow parameters -> parse nodes (a tagged entry lowers to a CODE node returning its
-      value, after a secret-literal check) -> split tagged node inputs and flow outputs
-      into value + declared contract -> check case branches (a node or a call; a value or
-      a case `output:` is a load error showing the value entry) -> desugar (inline calls,
-      adaptive questions, case call targets, `${case.output}` to a coalesce over the
-      case's branch targets) -> build
-      every node kind-blind
+      value) -> split tagged node inputs and flow outputs into value + declared
+      contract -> check case branches (a node or a call; a value or a case `output:` is
+      a load error showing the value entry) -> desugar (inline calls, adaptive
+      questions, case call targets, `${case.output}` to a coalesce over the case's
+      branch targets) -> build every node kind-blind
       (`desc.build(ctx)`; physical node-output contracts compile at their existing
       leaf-owned position; a case lowers in its own build) -> attach declared input
       contracts to the node wiring -> cross-flow type check + case exhaustiveness ->
@@ -1852,8 +1847,7 @@ def _assemble(
     flow_inputs = {parameter.name for parameter in inputs}
 
     def read_value(node_id: str, cursor: SourceCursor) -> ValueEntryDescriptor:
-        """Lower one tagged `nodes:` entry, after rejecting a secret literal in it."""
-        check_value_entry(node_id, cursor, diagnostics)
+        """Lower one tagged `nodes:` entry."""
         return read_value_entry(
             node_id,
             cursor,
@@ -1908,35 +1902,6 @@ def _assemble(
     # this only hits its cache.
     for alias in uses_aliases:
         scope.resolve(alias)
-
-    def output_range(name: Any) -> SourceRange | None:
-        """One flow output's authored range, else the whole `output:` range."""
-        try:
-            if outputs_cursor is not None and outputs_cursor.has(name):
-                return outputs_cursor.child(name).range
-        except SourceAccessError:
-            pass  # a bare `output:` value has no named children
-        return outputs_range
-
-    # Reject a literal under a secret name while values are still as authored: the
-    # tagged split and the desugars below may echo a value in their own errors.
-    check_authored_bindings(
-        descriptors,
-        outputs_section,
-        binding_style_at=lambda node_id, field, key: _binding_style(
-            nodes_cursor,
-            node_id,
-            field,
-            key,
-            value_entries=value_entries,
-            diagnostics=diagnostics,
-        ),
-        output_style_at=lambda key: _output_style(
-            outputs_cursor, key, diagnostics=diagnostics
-        ),
-        output_range=output_range,
-        diagnostics=diagnostics,
-    )
 
     # A node's `output:` is a type declaration; a tag there is rejected before a
     # declaration with nothing after its tag reads as no output at all. A case has no

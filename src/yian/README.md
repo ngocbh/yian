@@ -371,8 +371,7 @@ skipped is skipped, and a flow output gets null at that nested position. The bin
 evaluates nested spans in place rather than lifting them into synthetic nodes, which
 would run on an untaken CASE branch and could not read MAP's `${item}`. The inferred
 contract of a template is structural: each part keeps its type. The manifest encodes it as `value_template` (nested
-bindings as `binding`), apart from every authored literal; in a credential-named
-slot each leaf string keeps only its binding marker. `FlowOutput.from_` is a temporary read-only source view during the
+bindings as `binding`), like every authored literal. `FlowOutput.from_` is a temporary read-only source view during the
 remaining migration.
 
 `Node.origin` is the same source-neutral provenance shape for an authored node
@@ -1847,12 +1846,8 @@ reference, the `module:function` token, not the callable's source) but excludes
 `code_origin`, `code_line_origins`, and the retained compiled/owned-code caches,
 while CASE identity includes predicate handle/expression semantics but excludes
 each predicate origin. Thus source formatting, origin rebasing, and Python object
-identity cannot change program or expansion identity. Because every authored value is
-identity, compose rejects a literal value under a secret name at load:
-`compose/validate/secret_literals.py` checks node bindings, value entries, case branches,
-and flow outputs before tagged bindings are read, `compose/helpers/secret_literals.py`
-holds the walker and messages that defaults, `env:`, and `call(...)` arguments share, and
-the one list of secret names is the stdlib-only leaf `secret_names.py`.
+identity cannot change program or expansion identity. Credentials stay out of flow
+files by convention, not by a name check: no name is special at load.
 `resolve_llm_cascade` returns a complete map keyed by slash-separated paths of static
 AGENT nodes. The run boundary reads process provider/model defaults and nonsecret
 connection selections once at fresh-run initialization; `apply_effective_llm_map` restores

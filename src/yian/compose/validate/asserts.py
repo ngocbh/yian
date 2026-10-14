@@ -53,11 +53,7 @@ from yian.diagnostics import OriginRef, SourceRange
 from yian.expr import ExpressionError, condition_refs
 from yian.expr.expressions import rewrite_condition_refs
 from yian.expr.template import flow_call_callees_in_spans
-from yian.compose.desugar.inline_calls import (
-    SecretArgumentError,
-    desugar_call_directives,
-    holds_secret_keyword,
-)
+from yian.compose.desugar.inline_calls import desugar_call_directives
 from yian.compose.helpers.isinstance_types import (
     collect_constructor_names,
     collect_isinstance_names,
@@ -373,18 +369,13 @@ def validate_node_asserts(
             try:
                 _, directive_calls = desugar_call_directives(a, lambda: "__a")
                 span_callees = flow_call_callees_in_spans(a, type_names)
-            except SecretArgumentError as exc:
-                errors.append((exc.message_for(f"node {nid!r} assert"), error_range))
-                continue
             except ExpressionError:
                 directive_calls, span_callees = ["(malformed call)"], []
             if directive_calls or span_callees:
-                # A malformed call may hold a credential the parse never reached.
-                shown = "" if holds_secret_keyword(a) else f" {a!r}"
                 errors.append(
                     (
-                        f"node {nid!r} assert{shown}: an inline call is not allowed in "
-                        f"a node-local assert (use a flow-level assert)",
+                        f"node {nid!r} assert {a!r}: an inline call is not allowed in a "
+                        f"node-local assert (use a flow-level assert)",
                         error_range,
                     )
                 )

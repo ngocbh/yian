@@ -5,9 +5,6 @@ desugar <- edges <- validate <- build <- loader`). Given the Compose-owned build
 results, the derived edges, and the flow-owned wiring, this package runs the passes that
 reject an ill-formed flow before it is compiled:
 
-- `secret_literals.py` — `check_authored_bindings`: no node binding, flow output, or
-  case branch holds a literal value under a secret name; runs on authored values, before
-  the tagged-binding read, the case-branch check, and desugars that may echo a value.
 - `case_branches.py` — `check_case_branches`: a `case` branch names a node or calls a
   flow, and a `case` has no `output:`; a value branch, an unknown bare word, and a case
   `output:` are load errors that show the value entry or tag to write. Runs before the

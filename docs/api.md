@@ -411,9 +411,11 @@ a list selects positions and must have the exact output length at every nested
 level, including positions containing only `None`. Omitted fields and `None`
 carry no effective feedback. An empty string is effective text. A failed forward
 run accepts only a string or `None`, because it has no usable output shape.
-Invalid feedback, including feedback nested deeper than 100 levels, is rejected with
-`ValueError` before a new attempt or memory session opens, and preserves this
-result's previously observed outcome and learning objects.
+Invalid feedback is rejected before a new attempt or memory session opens, and
+preserves this result's previously observed outcome and learning objects. A message
+that is not a string, object, list, or `None`, or an object key that is not a string,
+raises `TypeError`; feedback that does not match the output's shape, or nests deeper
+than 100 levels, raises `ValueError`.
 
 This complete example needs no model or memory backend:
 

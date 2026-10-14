@@ -172,8 +172,8 @@ class RunResult:
 
         Raises:
             `TypeError`: Feedback has an invalid ordinary-message carrier.
-            `ValueError`: Retention is disabled, or feedback is invalid or nests
-                deeper than `MAX_VALUE_NESTING` levels.
+            `ValueError`: Retention is disabled, or feedback does not match the
+                output's shape or nests deeper than `MAX_VALUE_NESTING` levels.
             `MemorySetupError`: Enabled memories cannot restore their recorded
                 snapshots. Host and log faults also propagate while preserving
                 the accepted prefix.

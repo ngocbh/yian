@@ -22,6 +22,7 @@ from yian.expr.template import (
     Literal,
     Span,
     eval_template,
+    render_template_record,
     scan_template,
     template_refs,
 )
@@ -241,3 +242,9 @@ def test_eval_template_embedded_list_holding_a_huge_int_raises_expression_error(
 def test_eval_template_whole_single_span_keeps_a_huge_int_typed():
     value = eval_template(scan_template("${n}"), lambda p: 10**5000 if p == "n" else None)
     assert value == 10**5000
+
+
+@needs_digit_limit
+def test_render_template_record_whole_span_int_too_large_for_text_raises_expression_error():
+    with pytest.raises(ExpressionError, match="as text"):
+        render_template_record("${n}", {"n": 10**5000})

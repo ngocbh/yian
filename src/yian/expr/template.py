@@ -436,6 +436,18 @@ def _resolve_record_strict_or_none(path: str, record: dict) -> Any:
     return value
 
 
+def _as_text(value: Any) -> str:
+    """Return `str(value)`, raising `ExpressionError` when Python can't render it as text."""
+    try:
+        return str(value)
+    except ValueError as exc:
+        # str() of an int past Python's digit limit raises; the run must fail, not crash.
+        raise ExpressionError(
+            f"cannot render the {type(value).__name__} value as text: "
+            "it holds an int longer than Python's digit limit"
+        ) from exc
+
+
 def render_template_record(text: str, record: dict) -> str:
     """
     Render a strict AGENT / HUMAN_INPUT prompt against its bound input `record`.
@@ -467,7 +479,8 @@ def render_template_record(text: str, record: dict) -> str:
     Raises:
         `ExpressionError`:
             On an unbalanced span, an unresolved reference (unknown input or dict-path
-            miss), a final `None` span value, an unknown builtin, or a builtin that fails.
+            miss), a final `None` span value, an unknown builtin, a builtin that fails,
+            or a value holding an int too long to render as text.
     """
     segments = scan_template(text)
     result = eval_template(
@@ -475,7 +488,7 @@ def render_template_record(text: str, record: dict) -> str:
         lambda path: _resolve_record_strict_or_none(path, record),
         mode=ResolveMode.STRICT_RAISE,
     )
-    return str(result)
+    return _as_text(result)
 
 
 def prompt_refs(text: str) -> list[str]:
@@ -716,15 +729,7 @@ def eval_template(
         else:  # a Span embedded in surrounding text -> stringified
             evaluated = eval_span(seg)
             v = evaluated.value if trace else evaluated
-            try:
-                text = "" if v is None else str(v)
-            except ValueError as exc:
-                # str() of an int past Python's digit limit raises; the run must fail, not crash.
-                raise ExpressionError(
-                    f"cannot render the {type(v).__name__} value of an embedded ${{...}} "
-                    f"as text: {exc}"
-                ) from exc
-            parts.append(text)
+            parts.append("" if v is None else _as_text(v))
             if trace:
                 routes.append(evaluated.route)
                 spans.append((offset, offset + len(parts[-1])))

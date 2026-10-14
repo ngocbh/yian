@@ -1335,14 +1335,14 @@ def test_predicate_isinstance_check_with_an_unknown_type_reports_the_type():
     assert "union members" not in message
 
 
-# A named body taking `n: <body>` and `k: int`, returning only `k`, so `n` carries over
+# A named body taking `n: <n_type>` and `k: int`, returning only `k`, so `n` carries over
 # (a partial loop). The carried `extra` is not a body input, so it is never checked.
 _SEEDED = """id: p
 name: p
 defs:
   body:
     input:
-      n: {body}
+      n: {n_type}
       k: int
     nodes:
       step:
@@ -1367,24 +1367,35 @@ output: ${{loop.output}}
 """
 
 
-def _seeded(body: str, seed: str, driver: str = "times: 1") -> str:
-    return _SEEDED.format(body=body, seed=seed, driver=driver)
+def _seeded(n_type: str, seed: str, driver: str = "times: 1") -> str:
+    return _SEEDED.format(n_type=n_type, seed=seed, driver=driver)
 
 
 @pytest.mark.parametrize(
-    "body, seed, message",
+    "n_type, seed, message",
     [
         ("int", '"abc"', "child expects 'int', but the value \"abc\" does not fit"),
-        ("int", '"1"', "child expects 'int', but the value \"1\" does not fit; text is not converted between flows, so write 1 without quotes"),
+        (
+            "int",
+            '"1"',
+            "child expects 'int', but the value \"1\" does not fit; "
+            "text is not converted between flows, so write 1 without quotes",
+        ),
         ("int", "null", "child expects 'int', but the value null does not fit"),
         ("int = 5", "null", "child expects 'int', but the value null does not fit"),
-        ("str", "2026-01-01", "child expects 'str', but the value 2026-01-01 does not fit; quote it to keep it as text: \"2026-01-01\""),
+        (
+            "str",
+            "2026-01-01",
+            "child expects 'str', but the value 2026-01-01 does not fit; "
+            "quote it to keep it as text: \"2026-01-01\"",
+        ),
         ("int", "${null}", "child expects 'int', source is 'None'"),
         ("int", "${'1'}", "child expects 'int', source is 'str'"),
+        ("int", '"x${1}"', "child expects 'int', source is 'str'"),
     ],
 )
-def test_constant_seed_that_cannot_fill_the_body_input_is_a_load_error(body, seed, message):
-    text = _seeded(body, seed)
+def test_constant_seed_that_cannot_fill_the_body_input_is_a_load_error(n_type, seed, message):
+    text = _seeded(n_type, seed)
     with pytest.raises(LoadError) as caught:
         load_flow(text)
     assert f"loop node 'loop': binding 'n' — {message}" in str(caught.value)
@@ -1402,7 +1413,7 @@ def test_seed_is_checked_even_when_a_while_loop_never_runs():
 
 
 @pytest.mark.parametrize(
-    "body, seed, n",
+    "n_type, seed, n",
     [
         ("int", "1", 1),
         ("float", "5", 5),
@@ -1412,8 +1423,8 @@ def test_seed_is_checked_even_when_a_while_loop_never_runs():
         ("int", "${1 + 2}", 3),
     ],
 )
-def test_constant_seed_that_fits_the_body_input_loads_and_runs(body, seed, n):
-    result = run_flow(load_flow(_seeded(body, seed)), {})
+def test_constant_seed_that_fits_the_body_input_loads_and_runs(n_type, seed, n):
+    result = run_flow(load_flow(_seeded(n_type, seed)), {})
     assert result.status == "succeeded", result.failure
     assert result.output == {"n": n, "k": 1, "extra": "abc"}
 
@@ -1441,8 +1452,12 @@ output: ${loop.output}
     assert run_flow(flow, {}).output == {"n": "abc"}
 
 
-def test_issue_repro_full_loop_reports_the_binding():
-    with pytest.raises(LoadError, match="loop node 'loop': binding 'n' — child expects 'int', but the value \"abc\" does not fit"):
+def test_text_seed_into_int_input_of_a_full_loop_is_a_load_error():
+    with pytest.raises(
+        LoadError,
+        match="loop node 'loop': binding 'n' — "
+        "child expects 'int', but the value \"abc\" does not fit",
+    ):
         load_flow("""id: p
 name: p
 defs:

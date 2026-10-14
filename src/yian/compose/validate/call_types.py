@@ -1,15 +1,16 @@
-"""Graph-stage: the cross-flow TYPE check for `call`/`map` bindings and `loop` constant seeds.
+"""Graph-stage: the cross-flow TYPE check for `call`/`map` bindings and constant `loop` seeds.
 
 A loader post-build pass (run after the flow's leaves + child signatures are assembled).
 Each binding's SOURCE contract is resolved from its reference over the PARENT producer +
 flow-input contracts (a MAP's `${item...}` from the element type of `over:`), then its
-`Type` is checked with `types_compatible` against the CHILD input's declared `Type`. A
-literal, a constant operand of a `:-`/`|` escape, or each element of a literal `over:`
-list read through `${item...}`, is validated by value instead, as the child's start
-validates it: a CALL/MAP edge is not a flow boundary, so text is never converted to a
-number or bool across it. Its
-range anchor comes from the call node's transient Compose
-`BuildResult.field_ranges[("field", "inputs")]` (the coarse `input:` mapping span).
+`Type` is checked with `types_compatible` against the CHILD input's declared `Type` (a
+LOOP's body input for a seed). A LOOP has only its untyped seeds that read no reference
+checked. A literal, a constant operand of a `:-`/`|` escape, or each element of a literal
+`over:` list read through `${item...}`, is validated by value instead, as the child's
+start validates it: a CALL/MAP/LOOP edge is not a flow boundary, so text is never
+converted to a number or bool across it. Its range anchor comes from the call, map, or
+loop node's transient Compose `BuildResult.field_ranges[("field", "inputs")]` (the coarse
+`input:` mapping span).
 
 Imports flow down only: `compile.validation` (the type comparator), `expr` (the binding-null
 analysis and escape parsing), `compose.helpers` (shared output-contract inference and load
@@ -51,6 +52,7 @@ from yian.expr import (
     binding_co_skips,
     eval_expr,
     expr_refs,
+    expr_refs_of,
     scan_template,
 )
 from yian.expr.template import Span
@@ -86,9 +88,9 @@ def check_call_map_types(
     `over` key), stays lenient (skipped). Loud + located at the node's Compose-owned
     `input:` mapping range, else its authored node range. Iterates the WIRING (not the
     params) so a mis-named binding still surfaces here when its child decl is absent
-    rather than being silently skipped. A LOOP's untyped constant seeds are checked the
-    same way against its body's inputs; its other seeds are left to
-    `check_loop_type_contract`."""
+    rather than being silently skipped. A LOOP's untyped seeds that read no reference
+    are checked the same way against its body's inputs; its typed and reference seeds
+    are not checked against the body's inputs."""
     diagnostics = diagnostics or LoadDiagnostics()
     for label, contracts in (
         ("output producer", producers),
@@ -113,8 +115,8 @@ def check_call_map_types(
     for nid, result in build_results.items():
         node = result.node
         # CALL/MAP/LOOP carry `child_inputs` to type-check against. A LOOP's seeds fill its
-        # body's START like CALL arguments, but only a constant seed is checked here;
-        # check_loop_type_contract checks the carried types.
+        # body's START like CALL arguments; only an untyped seed that reads no reference is
+        # checked, since its value is known at load and so a mismatch is certain.
         # A leaf has no `child_inputs` attr, and a zero-input child gives [] (falsy), so skip.
         if not getattr(node, "child_inputs", None):
             continue
@@ -249,14 +251,16 @@ def _lone_span(source: Any) -> Tree | Token | None:
 
 
 def _constant_seed(src: Any) -> bool:
-    """Return whether an untyped binding is a YAML literal or a lone `${...}` with no references."""
+    """Return whether a binding is untyped and reads no reference."""
     if isinstance(src, Binding) and src.contract is not None:
         return False
     source = binding_source(src)
-    if literal_value(source) is not NOT_LITERAL:
+    if not isinstance(source, str):
         return True
-    tree = _lone_span(source)
-    return tree is not None and not expr_refs(tree)
+    try:
+        return not expr_refs_of(source)
+    except ExpressionError:
+        return False  # malformed text is reported by reference validation
 
 
 def _operand_path(node: Tree | Token) -> str | None:

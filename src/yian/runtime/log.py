@@ -136,13 +136,15 @@ class RunStartedRecord:
         _validate_run_memory_configuration(
             self.memories, self.memory_stacks, self.memory_snapshots, self.learnable,
         )
+        if not isinstance(self.defaults, Mapping):
+            raise TypeError("RunStarted defaults must be a mapping")
+        # A private copy keeps a caller's later edits out of the frozen record.
+        object.__setattr__(self, "defaults", dict(self.defaults))
         _validate_recorded_defaults(self.defaults)
 
 
 def _validate_recorded_defaults(recorded: Mapping[str, int]) -> None:
-    """Require a mapping of non-empty entry names to exact ints."""
-    if not isinstance(recorded, Mapping):
-        raise TypeError("RunStarted defaults must be a mapping")
+    """Require non-empty entry names mapped to exact ints."""
     for name, value in recorded.items():
         if type(name) is not str or not name:
             raise ValueError("RunStarted defaults names must be non-empty strings")

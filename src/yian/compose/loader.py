@@ -49,8 +49,8 @@ from yian.compile.memory_layout import (
     scope_memory_declarations,
 )
 from yian.compile.model import CompiledFlow
-from yian.defaults import current
 from yian.compile.origins import iter_flow_origins, rebase_flow_origins
+from yian.defaults import current
 from yian.diagnostics import (
     DiagnosticFrame,
     OriginRef,

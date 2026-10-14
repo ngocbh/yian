@@ -14,6 +14,7 @@ from yian.compile.manifest import flow_fingerprint
 from yian.defaults import Defaults, DefaultsError, DefaultsMismatchError
 from yian.run import resume_flow
 from yian.runtime.log import (
+    MemoryRunLog,
     NodeExpandedRecord,
     RecordEnvelope,
     RunStartedRecord,
@@ -199,6 +200,7 @@ def test_mismatch_is_reported_before_the_fingerprint(set_defaults, monkeypatch, 
     default_retries = load_flow(_AGENT)
     assert flow_fingerprint(default_retries.compiled) != flow_fingerprint(zero_retries.compiled)
 
+    # Resuming a finished run is enough: the check runs before anything else in replay.
     with pytest.raises(DefaultsMismatchError) as caught:
         resume_flow(default_retries, log=path)
 
@@ -265,6 +267,21 @@ def test_replay_takes_the_node_budget_from_the_record(set_defaults, tmp_path):
     assert state.run_defaults == Defaults()
 
 
+def test_replay_takes_a_recorded_node_budget_from_the_record(set_defaults, tmp_path):
+    flow = load_flow(_MAP)
+    path = tmp_path / "run.jsonl"
+    set_defaults(MAX_TOTAL_NODES=5000)
+    assert run_flow(flow, {"xs": [1, 2, 3, 4, 5]}, log=path).status == "succeeded"
+    envelopes = tuple(decode_record(line) for line in _lines(path))
+    set_defaults.unchecked(max_total_nodes=2)
+
+    state = _replay_records(
+        RunState(deepcopy(flow.compiled)), envelopes, grow_builder=build_grow,
+    )
+
+    assert state.run_defaults.max_total_nodes == 5000
+
+
 def _run_started(**extra) -> RunStartedRecord:
     record = decode_record(_RECORDED_ROUTE[0]).record
     return RunStartedRecord(
@@ -304,15 +321,46 @@ def test_decode_rejects_a_bad_recorded_value(recorded):
     envelope = json.loads(_RECORDED_ROUTE[0])
     envelope["payload"]["defaults"] = recorded
 
-    with pytest.raises((ValidationError, ValueError)):
+    with pytest.raises(ValidationError, match="defaults"):
         decode_record(json.dumps(envelope).encode())
 
 
 @pytest.mark.parametrize(
     "recorded",
-    [{"MAX_TOTAL_NODES": "5000"}, {"MAX_TOTAL_NODES": True}, {"": 1}, {1: 1}],
-    ids=["string", "bool", "empty-name", "int-name"],
+    [
+        {"MAX_TOTAL_NODES": "5000"},
+        {"MAX_TOTAL_NODES": True},
+        {"MAX_TOTAL_NODES": 5000.0},
+        {"": 1},
+        {1: 1},
+        [("MAX_TOTAL_NODES", 5000)],
+    ],
+    ids=["string", "bool", "float", "empty-name", "int-name", "pairs"],
 )
 def test_record_rejects_a_bad_recorded_value(recorded):
     with pytest.raises((TypeError, ValueError)):
         _run_started(defaults=recorded)
+
+
+def test_record_rejects_a_list_of_pairs_as_a_type_error():
+    with pytest.raises(TypeError, match="mapping"):
+        _run_started(defaults=[("MAX_TOTAL_NODES", 5000)])
+
+
+def test_record_keeps_its_own_copy_of_the_values():
+    recorded = {"MAX_TOTAL_NODES": 5000}
+    record = _run_started(defaults=recorded)
+
+    recorded["MAX_TOTAL_NODES"] = 6000
+
+    assert record.defaults == {"MAX_TOTAL_NODES": 5000}
+
+
+def test_append_revalidates_the_recorded_values():
+    record = _run_started(defaults={"MAX_TOTAL_NODES": 5000})
+    object.__setattr__(record, "defaults", {"MAX_TOTAL_NODES": "5000"})
+    log = MemoryRunLog("direct-engine-test")
+
+    with pytest.raises(TypeError, match="MAX_TOTAL_NODES"):
+        log.append(record)
+    assert log.next_sequence == 0

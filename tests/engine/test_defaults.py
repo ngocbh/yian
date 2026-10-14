@@ -177,8 +177,11 @@ def test_from_recorded_overlays_builtins() -> None:
     values = Defaults.from_recorded({"MAX_TOTAL_NODES": 5000})
     assert values == dataclasses.replace(Defaults(), max_total_nodes=5000)
     assert Defaults.from_recorded({}) == Defaults()
-    with pytest.raises(DefaultsMismatchError, match="YIAN_NOT_AN_ENTRY"):
+    with pytest.raises(DefaultsMismatchError) as caught:
         Defaults.from_recorded({"NOT_AN_ENTRY": 1})
+    assert str(caught.value) == (
+        "this run started with YIAN_NOT_AN_ENTRY, which this version of yian does not know"
+    )
 
 
 def test_current_reads_once(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -241,6 +244,38 @@ def test_check_recorded(set_defaults) -> None:
 
     with pytest.raises(DefaultsMismatchError, match="YIAN_NOT_AN_ENTRY"):
         check_recorded({"NOT_AN_ENTRY": 1})
+
+
+def test_check_recorded_reports_unknown_names_and_differences_together(set_defaults) -> None:
+    set_defaults(MAX_TOTAL_NODES=20_000)
+
+    with pytest.raises(DefaultsMismatchError) as caught:
+        check_recorded({"NOT_AN_ENTRY": 1, "AGENT_RETRIES": 0})
+
+    lines = str(caught.value).splitlines()
+    assert lines[0] == (
+        "this run started with YIAN_NOT_AN_ENTRY, which this version of yian does not know"
+    )
+    assert any("YIAN_AGENT_RETRIES is 2 here" in line for line in lines[1:])
+    assert any("unset YIAN_MAX_TOTAL_NODES" in line for line in lines[1:])
+    assert "resumed here" not in str(caught.value)
+
+
+def test_check_recorded_reports_an_out_of_range_value_as_invalid() -> None:
+    with pytest.raises(DefaultsMismatchError) as caught:
+        check_recorded({"MAX_VALUE_NESTING": 150})
+
+    message = str(caught.value)
+    assert message == (
+        "this run recorded an invalid value YIAN_MAX_VALUE_NESTING=150; "
+        "YIAN_MAX_VALUE_NESTING accepts an integer from 1 to 100"
+    )
+    assert "set YIAN_MAX_VALUE_NESTING=150" not in message
+
+
+def test_check_recorded_accepts_an_out_of_range_value_in_effect(set_defaults) -> None:
+    set_defaults.unchecked(max_value_nesting=150)
+    check_recorded({"MAX_VALUE_NESTING": 150})
 
 
 def test_every_test_starts_from_builtin_values() -> None:

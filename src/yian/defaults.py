@@ -402,14 +402,19 @@ class Defaults:
         Raises:
             DefaultsMismatchError: If a recorded name is not an entry.
         """
-        unknown = sorted(name for name in recorded if name not in _BY_NAME)
+        unknown = _unknown_names(recorded)
         if unknown:
-            named = ", ".join("YIAN_" + name for name in unknown)
-            raise DefaultsMismatchError(
-                f"this run started with {named}, which this version of yian does "
-                "not know, so it can't be resumed here"
-            )
+            raise DefaultsMismatchError("\n".join(unknown))
         return cls(**{name.lower(): value for name, value in recorded.items()})
+
+
+def _unknown_names(recorded: Mapping[str, int]) -> list[str]:
+    """Describe each recorded name that is not an entry, sorted by name."""
+    return [
+        f"this run started with YIAN_{name}, which this version of yian does not know"
+        for name in sorted(recorded)
+        if name not in _BY_NAME
+    ]
 
 
 class DefaultsError(ValueError):
@@ -528,18 +533,26 @@ def check_recorded(recorded: Mapping[str, int]) -> None:
         recorded (`Mapping[str, int]`): Entry name to value, as the run recorded it.
 
     Raises:
-        DefaultsMismatchError: Naming every variable whose value differs, or a
-            recorded name that is not an entry.
+        DefaultsMismatchError: Naming every recorded name that is not an entry
+            and every variable whose value differs, in one message.
     """
-    started = Defaults.from_recorded(recorded)
     here = current()
-    problems = []
+    problems = _unknown_names(recorded)
     for entry in ENTRIES:
         attribute = entry.name.lower()
-        now, then = getattr(here, attribute), getattr(started, attribute)
+        now, then = getattr(here, attribute), recorded.get(entry.name, entry.default)
         if now == then:
             continue
-        if then == entry.default:
+        maximum = _maximum(entry)
+        if then != entry.default and not (
+            then == entry.no_limit or entry.minimum <= then <= maximum
+        ):
+            # Advising `set YIAN_X=<then>` would name a value the variable refuses.
+            problems.append(
+                f"this run recorded an invalid value {entry.variable}={then}; "
+                f"{entry.variable} accepts {_range_text(entry, maximum)}"
+            )
+        elif then == entry.default:
             problems.append(
                 f"{entry.variable} is {now} here, but this run started with the "
                 f"default {then}; unset {entry.variable} to resume it"

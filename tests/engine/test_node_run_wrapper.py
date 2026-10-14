@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 
 from yian.diagnostics import OriginRef
+from yian.expr import ExpressionError
 from yian.nodes.base import (
     BackwardContext,
     BackwardResult,
@@ -257,3 +258,52 @@ def test_eval_node_fires_via_wrapper_positive_control():
     result = drive(node)
     assert isinstance(result, EvaluationFailure)
     assert "post-assert" in result.failure.message
+
+
+def test_unparseable_pre_assert_raises_its_parse_error_before_forward():
+    """A pre-assert that doesn't parse raises the parse error, not "pre-assert failed"."""
+    node = _ImplNode("n", value={"output": 1})
+    node.pre_asserts = [Assertion("${x} > 0", "x positive")]
+
+    with pytest.raises(ExpressionError) as excinfo:
+        node.run({"x": 5})
+
+    message = str(excinfo.value)
+    assert message.startswith(
+        "node 'n' pre-assert 'x positive' (`${x} > 0`) is not a valid boolean expression: "
+    )
+    assert "write `x > 0`" in message
+    assert node.ran is False
+
+
+def test_unparseable_post_assert_raises_before_forward_runs():
+    """A malformed post-assert is setup, so it is reported before the body has effects."""
+    node = _ImplNode("n", value={"output": 1})
+    node.pre_asserts = [Assertion("x > 0", "x positive")]
+    node.post_asserts = [Assertion("output.output >=", "output.output >=")]
+
+    with pytest.raises(
+        ExpressionError,
+        match=r"^node 'n' post-assert 'output\.output >=' is not a valid boolean expression: ",
+    ):
+        node.run({"x": 5})
+
+    assert node.ran is False
+
+
+def test_assert_evaluation_error_still_fails_the_assert():
+    """An expression that parses but can't evaluate (ordered op on a record) does not hold."""
+    node = _ImplNode("n", value={"output": 1})
+    node.post_asserts = [Assertion("output > 0", "output is positive")]
+
+    with pytest.raises(NodeAssertFailed, match="post-assert failed: output is positive"):
+        node.run({})
+
+
+def test_validate_assertions_names_the_given_path():
+    """The pre-run check names a node by its static path."""
+    node = _ImplNode("inner", value=None)
+    node.pre_asserts = [Assertion("${x} > 0", "${x} > 0")]
+
+    with pytest.raises(ExpressionError, match=r"^node 'call/inner' pre-assert '\$\{x\} > 0' is not"):
+        node.validate_assertions(path="call/inner")

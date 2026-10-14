@@ -12,8 +12,9 @@ needed), stamps `output_contract`, and enforces the two halves of the type contr
   `LoadError` on a same-names/different-TYPES mismatch (needs the assembled
   producers/flow-input types).
 
-Separately, `check_call_map_types` checks each seed that reads no reference (a literal,
-or a `${...}` with no references) by value against a named body's declared input.
+Separately, `check_call_map_types` checks each untyped seed that reads no reference
+against a named body's declared input: a literal by value, a reference-free `${...}` or
+template by its inferred type.
 """
 
 import pytest

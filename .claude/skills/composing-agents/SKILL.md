@@ -735,7 +735,7 @@ is coerced across it: `"3"` does not fit `int` (write `3`), an unquoted `2026-01
 source into an `int` input fails at the child's start (`contract.input`). A `str`
 reference does not fit an `int` or `date` input: type the source (`list[date]`), or
 use a typed binding (`t: int = ${input.n}`) for a value narrower than the input.
-A LOOP's literal or `${null}` seed is checked the same way against a named body's
+A LOOP's untyped literal or `${null}` seed is checked the same way against a named body's
 input.
 
 For a one-off child, replace `call:` with a non-empty `nodes:` body and add the

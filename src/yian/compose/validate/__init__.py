@@ -13,7 +13,7 @@ reject an ill-formed flow before it is compiled:
 - `human_questions.py` — `validate_human_questions`: the `human_input` questions
   surface is well-formed.
 - `call_types.py` — `check_call_map_types`: each `call`/`map` binding's source
-  Type, and each `loop` seed that reads no reference, is compatible with the child
+  Type, and each untyped `loop` seed that reads no reference, is compatible with the child
   input's declared Type.
 - `loop_types.py` — `check_loop_type_contract`: a `loop`'s carried record obeys
   the `'a -> 'a` type contract by comparing each proven field the body returns

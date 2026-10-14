@@ -115,8 +115,10 @@ def check_call_map_types(
     for nid, result in build_results.items():
         node = result.node
         # CALL/MAP/LOOP carry `child_inputs` to type-check against. A LOOP's seeds fill its
-        # body's START like CALL arguments; only an untyped seed that reads no reference is
-        # checked, since its value or type is fixed at load, so a mismatch is certain.
+        # body's START like CALL arguments, but only an untyped seed that reads no reference
+        # is checked here. Checking reference and typed seeds would bring CALL's `Optional`
+        # rule to LOOP, a separate change; check_loop_type_contract checks returned fields
+        # against the body output.
         # A leaf has no `child_inputs` attr, and a zero-input child gives [] (falsy), so skip.
         if not getattr(node, "child_inputs", None):
             continue

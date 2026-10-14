@@ -1746,9 +1746,10 @@ child's `output:` is a record, even of one field, the MAP returns a list of reco
 the run's `num_workers`, while collection order remains the `over:` order.
 
 Each argument must fit the child's input type, checked at load. Nothing is coerced,
-because a `call`/`map` edge is not a flow boundary. A
+because a `call`/`map` edge is not a flow boundary. An untyped
 [`loop`](#loop-re-run-a-body-under-a-predicate-or-a-fixed-count) seed that reads no
-reference follows the same rule against a named body's input:
+reference is checked the same way against a named body's input. Each argument is
+checked as follows:
 
 - A reference is compared by its type. A MAP's `${item}` or `${item.field}` is typed
   from the element type of `over:`; over a literal `over:` list, each element is
@@ -1793,8 +1794,10 @@ for an `int`, `float`, or `bool` input. These used to run and now fail at load:
 
 Text from a source the loader can't type, such as an untyped `code` output, is no
 longer converted when the child starts either: it fails with `contract.input`. The same
-holds for a `loop` seed whose type the loader can't prove, such as an untyped `code`
-output. Type the source, or convert the value in the producing node.
+holds for a `loop` seed that reads a reference or is typed: it is not checked against
+the body's input at load (a returned field is checked against the body's output), so a
+mismatch fails with `contract.input` when the body starts. Type the source, or convert
+the value in the producing node.
 
 Changed: a literal `loop` seed that doesn't fit a named body's input, such as `n: "1"`
 into an `int` input, used to fail when the body started, or not at all when the loop
@@ -2018,8 +2021,9 @@ returns the whole carried record.
   **returned** field against a statically proven seed source at load. A returned
   field must keep its carried type. An omitted field takes its type from its seed
   binding: a typed seed gives its declared type, and an untyped literal seed stays
-  untyped (it is still checked by value against a named body's input). Every proven returned field is enforced at
-  runtime and replay even when its seed was opaque at load. Each output field's type
+  untyped (it is still checked by value against a named body's input). Every proven
+  returned field is enforced at runtime and replay even when its seed was opaque at
+  load. Each output field's type
   is inferred from its binding shape (see [expressions](expressions.md)): a lone
   direct ref preserves an exact or partial contract, a known partial-record field is
   exact, a proven comparison or boolean expression is `bool`, and a

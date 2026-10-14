@@ -1,8 +1,10 @@
 """The ``anthropic`` block reaches the Messages request body as written."""
 
+import asyncio
 import importlib
 import inspect
 import json
+import warnings
 
 import anthropic
 import pytest
@@ -221,3 +223,111 @@ def test_structured_output_without_block_thinking_forces_the_tool(server, block)
     body = server.bodies[0]
     assert body["tool_choice"] == {"type": "tool", "name": "Answer"}
     assert "output_config" not in body
+
+
+@pytest.fixture
+def clean_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("YIAN_AUTH_FILE", str(tmp_path / "auth.json"))
+    for name in (*_ENV_KEYS, "ANTHROPIC_PROXY"):
+        monkeypatch.delenv(name, raising=False)
+    return monkeypatch
+
+
+@pytest.fixture
+def host_clients():
+    """A recorder and the SDK's own sync and async httpx clients routed to it."""
+    httpx = _anthropic_httpx()
+    recorder = _Server()
+    transport = httpx.MockTransport(recorder)
+    sync, async_ = httpx.Client(transport=transport), httpx.AsyncClient(transport=transport)
+    yield recorder, sync, async_
+    sync.close()
+    asyncio.run(async_.aclose())
+
+
+def test_a_host_http_client_carries_every_request(clean_env, host_clients):
+    recorder, sync, async_ = host_clients
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # langchain warns when a key goes to model_kwargs
+        chat = AnthropicClient(
+            "claude-sonnet-4-5", api_key="k", max_retries=0,
+            http_client=sync, http_async_client=async_,
+        ).get_llm()
+    assert chat.model_kwargs == {}
+    assert chat.invoke("hi").content == "ok"
+    assert asyncio.run(chat.ainvoke("hi")).content == "ok"
+    assert [str(r.url) for r in recorder.requests] == [
+        "https://api.anthropic.com/v1/messages"
+    ] * 2
+    for body in recorder.bodies:
+        assert "http_client" not in body and "http_async_client" not in body
+    assert not {"http_client", "http_async_client"} & set(chat.model_dump())
+
+
+def test_a_non_redirecting_host_client_is_used_with_a_base_url(clean_env, host_clients):
+    recorder, sync, _ = host_clients
+    chat = AnthropicClient(
+        "claude-sonnet-4-5", base_url="https://gateway.test", api_key="k",
+        max_retries=0, http_client=sync,
+    ).get_llm()
+    assert chat.invoke("hi").content == "ok"
+    assert [str(r.url) for r in recorder.requests] == ["https://gateway.test/v1/messages"]
+
+
+@pytest.mark.parametrize(
+    ("key", "factory"),
+    [
+        ("http_client", lambda: anthropic.DefaultHttpxClient()),
+        ("http_async_client", lambda: anthropic.DefaultAsyncHttpxClient()),
+    ],
+)
+def test_a_redirecting_host_client_is_rejected_beside_a_base_url(clean_env, key, factory):
+    client = factory()
+    try:
+        with pytest.raises(ValueError, match=f"{key} follows redirects.*follow_redirects=False"):
+            AnthropicClient(
+                "claude-sonnet-4-5", base_url="https://gateway.test", api_key="k",
+                **{key: client},
+            ).get_llm()
+    finally:
+        if key == "http_client":
+            client.close()
+        else:
+            asyncio.run(client.aclose())
+
+
+def test_a_directly_built_model_rejects_a_redirecting_client_beside_a_base_url():
+    with anthropic.DefaultHttpxClient() as client:
+        chat = NormalizedChatAnthropic(
+            model="claude-sonnet-4-5", api_key="k", base_url="https://gateway.test",
+            follow_redirects=False, http_client=client,
+        )
+        with pytest.raises(ValueError, match="http_client follows redirects"):
+            chat._client
+
+
+def test_a_redirecting_host_client_is_allowed_without_a_base_url(clean_env):
+    with anthropic.DefaultHttpxClient() as client:
+        AnthropicClient("claude-sonnet-4-5", api_key="k", http_client=client).get_llm()
+
+
+def test_a_proxy_beside_a_host_client_is_rejected(clean_env, host_clients):
+    _, sync, _ = host_clients
+    clean_env.setenv("ANTHROPIC_PROXY", "http://proxy.test:3128")
+    with pytest.raises(ValueError, match="ANTHROPIC_PROXY can't be used with http_client"):
+        AnthropicClient("claude-sonnet-4-5", api_key="k", http_client=sync).get_llm()
+
+
+def test_a_host_client_of_the_wrong_type_fails_when_the_model_is_built(clean_env):
+    with pytest.raises(TypeError, match="Invalid `http_client` argument; Expected an instance"):
+        AnthropicClient("claude-sonnet-4-5", api_key="k", http_client=object()).get_llm()
+
+
+@pytest.mark.skipif(
+    _anthropic_httpx().__name__ == "httpx", reason="the SDK is built on httpx itself"
+)
+def test_a_plain_httpx_client_on_an_httpx2_sdk_fails_when_the_model_is_built(clean_env):
+    import httpx
+
+    with httpx.Client() as client, pytest.raises(TypeError, match="is from the `httpx` package"):
+        AnthropicClient("claude-sonnet-4-5", api_key="k", http_client=client).get_llm()

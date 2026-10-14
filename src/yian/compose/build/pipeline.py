@@ -7,8 +7,8 @@ callable:
   kind-blind (`desc.build(ctx)`; physical node-output contracts compile at their
   existing leaf-owned build position; a case lowers
   in its own build) -> cross-flow type check + case exhaustiveness -> infer data
-  edges + append each case's own edges + copy each host's route/ordering edges onto
-  the nodes lifted out of it -> validate references + classify asserts
+  edges + append each case's own edges + copy each host's route/ordering edges and data
+  gates onto the nodes lifted out of it -> validate references + classify asserts
   -> attach authored assertion/flow-output binding origins -> synthesize the START_ID/END_ID
   boundary over ALL edges -> resolve each node's `isinstance` type table -> reject cycles +
   check if/else handles -> CompiledFlow.from_parts. One retained assertion item cursor
@@ -1307,7 +1307,7 @@ def _assemble(
       leaf-owned position; a case lowers in its own build) -> attach declared input
       contracts to the node wiring -> cross-flow type check + case exhaustiveness ->
       infer data edges + append each case's own edges + copy each host's route/ordering
-      edges onto the nodes lifted out of it -> validate references + classify asserts ->
+      edges and data gates onto the nodes lifted out of it -> validate references + classify asserts ->
       attach authored flow-output binding origins + declared output contracts
       -> synthesize roots/terminals -> resolve `isinstance` type tables -> reject cycles +
       check if/else handles -> CompiledFlow.from_parts.
@@ -1934,8 +1934,9 @@ def _assemble(
     # data+control edges (`case_edges`, from each `CaseDescriptor.build`), appended below.
     data_edges = infer_data_edges(descriptors, flow_wiring)
     # A node lifted out of an authored node (an inline `call(...)`, an adaptive composer) runs
-    # only on its host's routes and after its host's ordering, so it gets copies of them here,
-    # before narrowing and the skip model read the graph.
+    # only on its host's routes, after its host's ordering, and once its host's other data
+    # inputs settle, skipping when they would skip the host. So it gets copies of the routes
+    # and ordering plus data gates here, before narrowing and the skip model read the graph.
     host_edges = host_control_edges(descriptors, data_edges + case_edges)
     # What each node may assume about union values from the CASE branches that route it.
     narrowing = compute_narrowing(
@@ -2173,6 +2174,7 @@ def _assemble(
         node_ids,
         node_ranges=node_ranges,
         diagnostics=diagnostics,
+        gate_ids=frozenset(e.id for e in host_edges if e.input_group),
     )
     check_case_handles(nodes, edges, diagnostics=diagnostics)
 

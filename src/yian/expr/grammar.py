@@ -156,6 +156,39 @@ _RESERVED_REFERENCE_ROOTS = frozenset({"and", "or", "not", "in"})
 EXPRESSION_KEYWORDS = _RESERVED_REFERENCE_ROOTS | {"true", "false", "null", "none"}
 
 
+def find_span_end(s: str, start: int) -> int | None:
+    """Index of the `}` closing a `${...}` span whose interior begins at `start`
+    (brace-depth and quote aware), or None if unbalanced."""
+    depth, quote, i, n = 1, None, start, len(s)
+    while i < n:
+        c = s[i]
+        if quote is not None:
+            if c == quote:
+                quote = None
+        elif c in ("'", '"'):
+            quote = c
+        elif c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return None
+
+
+def whole_span_interior(text: str) -> str | None:
+    """The interior of `text` when the trimmed text is exactly one `${...}` span, else None.
+
+    Quote aware, so `${x == "}"}` is one span and `${a} > ${b}` is not.
+    """
+    text = text.strip()
+    if not text.startswith("${"):
+        return None
+    end = find_span_end(text, 2)
+    return text[2:end] if end == len(text) - 1 else None
+
+
 def _raise_if_reserved_reference_root(path: str) -> None:
     """Reject an exact operator word at the root of one reference path."""
     root = path.strip().split(".", 1)[0].strip()

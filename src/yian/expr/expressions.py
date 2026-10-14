@@ -124,9 +124,6 @@ def _eval_comparison(op: str, lhs: Any, rhs: Any) -> bool:
     raise ExpressionError(f"unsupported operator: {op!r}")
 
 
-_WHOLE_SPAN_RE = re.compile(r"^\$\{(.*)\}$", re.DOTALL)
-
-
 def parse_condition(expression: str) -> "Tree | Token":
     """Parse an expression-field value (`when:`/`on:`/an `asserts:` entry) via the ONE
     unified grammar, honouring the both-spellings entry rule.
@@ -152,15 +149,10 @@ def parse_condition(expression: str) -> "Tree | Token":
         `ExpressionError`:
             Raised when the value does not parse.
     """
-    from yian.expr.grammar import parse_expr
+    from yian.expr.grammar import parse_expr, whole_span_interior
 
-    text = expression.strip()
-    m = _WHOLE_SPAN_RE.match(text)
-    # A whole-span `${...}` with no unescaped `}` inside strips to its interior; a value
-    # with an interior `}` (e.g. `${a} > 5`) is NOT a single span and parses whole.
-    if m is not None and "}" not in m.group(1):
-        return parse_expr(m.group(1))
-    return parse_expr(text)
+    interior = whole_span_interior(expression)
+    return parse_expr(expression.strip() if interior is None else interior)
 
 
 def condition_refs(expression: str) -> list[str]:
@@ -1148,8 +1140,9 @@ def rewrite_condition_refs(expression: str, rename: Callable[[str], "str | None"
     a whole-span `${a > 5}` keeps its outer braces and rewrites the interior; a mixed
     `${a} > 5` / bare `a > 5` are rewritten in place. `rename(path)` returns the replacement
     path (or `None` to keep). The value is trimmed first (matching `parse_condition`)."""
-    text = expression.strip()
-    m = _WHOLE_SPAN_RE.match(text)
-    if m is not None and "}" not in m.group(1):
-        return "${" + rewrite_expr_refs(m.group(1), rename) + "}"
-    return rewrite_expr_refs(text, rename)
+    from yian.expr.grammar import whole_span_interior
+
+    interior = whole_span_interior(expression)
+    if interior is not None:
+        return "${" + rewrite_expr_refs(interior, rename) + "}"
+    return rewrite_expr_refs(expression.strip(), rename)

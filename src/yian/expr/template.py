@@ -122,27 +122,6 @@ def _arg_source(value: str) -> Any:
     return _default_literal(stripped)
 
 
-def _find_span_end(s: str, start: int) -> Optional[int]:
-    """Index of the `}` closing a `${…}` span whose interior begins at `start`
-    (brace-depth + quote aware), or None if unbalanced."""
-    depth, quote, i, n = 1, None, start, len(s)
-    while i < n:
-        c = s[i]
-        if quote is not None:
-            if c == quote:
-                quote = None
-        elif c in ("'", '"'):
-            quote = c
-        elif c == "{":
-            depth += 1
-        elif c == "}":
-            depth -= 1
-            if depth == 0:
-                return i
-        i += 1
-    return None
-
-
 def _find_paren_end(s: str, start: int) -> Optional[int]:
     """Index of the `)` closing a call whose args begin at `start` — paren-depth
     aware, skipping `${…}` spans (their inner parens) and quoted text; None if
@@ -158,7 +137,7 @@ def _find_paren_end(s: str, start: int) -> Optional[int]:
         if c in ("'", '"'):
             quote = c
         elif c == "$" and s[i + 1 : i + 2] == "{":
-            end = _find_span_end(s, i + 2)
+            end = grammar.find_span_end(s, i + 2)
             if end is None:
                 return None
             i = end + 1
@@ -342,7 +321,7 @@ def rewrite_template_refs(source: str, rename: Callable[[str], "str | None"]) ->
             out.append("$$")  # a literal `$` — never a span start; kept verbatim
             i += 2
         elif c == "$" and source[i + 1 : i + 2] == "{":
-            end = _find_span_end(source, i + 2)
+            end = grammar.find_span_end(source, i + 2)
             if end is None:  # unbalanced ${ — leave the rest for the binding parser
                 out.append(source[i:])
                 break
@@ -626,7 +605,7 @@ def scan_template(text: str) -> list[TypedValue]:
             if buf:
                 segments.append(Literal("".join(buf)))
                 buf = []
-            end = _find_span_end(text, i + 2)  # reuse the shared brace/quote matcher
+            end = grammar.find_span_end(text, i + 2)  # reuse the shared brace/quote matcher
             if end is None:
                 raise ExpressionError(f"unbalanced '${{' in template {text!r}")
             segments.append(Span(grammar.parse_expr(text[i + 2 : end])))

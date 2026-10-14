@@ -1371,8 +1371,9 @@ Inline notes:
 
 A `case` node routes — it has no `input:`. It takes one branch; the other targets
 are skipped, and so is every node that plainly reads a skipped node or names it in
-`depends_on`. A node the loader lifted out of a target on an untaken branch (an inline
-`call(...)` in its `input:`, an adaptive composer) is skipped too. A node that names the
+`depends_on`. A node the loader lifted out of a skipped node (an inline `call(...)` in
+its `input:`, an adaptive composer) is skipped too, whether that node is a target on an
+untaken branch or is skipped because one of its inputs is. A node that names the
 `case` itself in `depends_on:` or `runs_after:` is not on a branch: it runs whichever
 branch the `case` takes, and is skipped only when the `case` is. Read its result with
 `${case.output}`. A routing-only `case` may take
@@ -1718,7 +1719,8 @@ place_buy:
   (`order: Buy`). An inline child body's inputs are typed before narrowing, so a member
   field bound there fails with `cannot infer type for inline binding`. An inline
   `call(...)` lifted out of a routed node (a nested call in a target's arguments, or a
-  call in a branch node's `input:`) carries that node's route, so it is narrowed like it.
+  call in a branch node's `input:`) carries that node's route and waits for its inputs,
+  so it is narrowed like it.
 
 A searched `case` narrows with [`isinstance`](expressions.md#isinstance-the-type-test): each
 top-level `and` part `isinstance(<ref>, T)` of a `when:` narrows that reference to `T`
@@ -1791,9 +1793,10 @@ ask:
 **Adaptive questions** — an LLM composes the questions from context. The block
 **desugars at load** into a synthetic composer AGENT node (`<node>__compose`, output
 `list[Question]`) wired into the gate; the runtime gate never calls an LLM. The
-composer carries the gate's `case` routes, `depends_on:`, and `runs_after:`, so on a
-branch the gate isn't on no LLM call happens, and it waits for the gate's `runs_after:`
-nodes. So a node that reads `${<node>__compose.output}` can't also be in the gate's
+composer runs only when the gate can: it carries the gate's `case` routes,
+`depends_on:`, and `runs_after:`, and waits for the gate's other inputs, so no LLM call
+happens on a branch the gate isn't on or when a gate input it needs is skipped. So a node
+that reads `${<node>__compose.output}` can't also be read by the gate or be in its
 `depends_on:` or `runs_after:`: that is a cycle.
 The input name `__questions` is reserved for that generated wire and cannot be
 authored on an adaptive gate.
@@ -2035,7 +2038,9 @@ news: ${__call_0.output}
 ```
 
 A route can't be written on a node, so the example doesn't show it: a `case` branch
-that routes to `brief` routes `__call_0` too.
+that routes to `brief` routes `__call_0` too. Nor does it show the wait on `brief`'s other
+inputs: if `brief` also reads `notes: ${draft.output}`, `__call_0` waits for `draft` and is
+skipped when `draft` is.
 
 Rules:
 
@@ -2056,13 +2061,17 @@ Rules:
   (`x="call(g)"`) is text. Each keyword appears at most once.
 - **Nesting is allowed** — `call(outer, x=call(inner, y=1))`. An unquoted arg that
   starts with `call(` follows the same whole-value rule.
-- **Routed and ordered like its host.** The call runs only on the `case` branches that
+- **Runs only when its host can.** The call runs only on the `case` branches that
   reach the node it is written in (its host), is skipped when a host `depends_on:` node
-  is skipped, and waits for the host's `runs_after:` nodes. It does not wait on the
-  host's other inputs: if one of them is skipped, the call still runs. A call in the
-  flow `output:` or `asserts:` has no host. A node that reads the call's output by id
-  (`${__call_0.output}`) is skipped with it, and if the host also names that node in
-  `depends_on:` or `runs_after:`, the flow has a cycle (a load error).
+  is skipped, and waits for the host's `runs_after:` nodes. It also waits for the host's
+  other inputs and is skipped whenever a skipped input skips the host; an input with
+  a default (`${x.output :- "none"}`) doesn't skip the host, so the call
+  only waits for `x`. Calls written in the same node don't wait on each other unless one
+  reads the other (`call(f, x=call(g), y=${a.output})` skips `g` too when `a` is
+  skipped). A call in the flow `output:` or `asserts:` has no host. A node that reads the
+  call's output by id (`${__call_0.output}`) is skipped with it, and if the host also
+  reads that node or names it in `depends_on:` or `runs_after:`, the flow has a cycle (a
+  load error).
 - **In a flow `asserts:` item** a value starting with `call(` follows the same rule,
   quoted or not: an assert is an expression, so quoting it does not make it text.
 - **A flow call inside `${...}` is retired.** The old `${flow(args)}` form (a flow

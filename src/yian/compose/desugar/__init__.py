@@ -32,7 +32,8 @@ passes:
 A pass that lifts a node out of an authored node (an inline call in a node's binding, the
 inner calls of a nested branch call, the adaptive composer) records that node as the synth
 descriptor's `host`; after the build, `compose.edges.hosts.host_control_edges` gives every
-lifted node its host's CASE routes and `depends_on`/`runs_after` edges in one place. A
+lifted node its host's CASE routes, `depends_on`/`runs_after` edges, and data gates on the
+host's other inputs in one place. A
 branch target (`then: call(...)`, `__value_<n>`), a `__case_<id>` result node, and a flow
 `output:`/`asserts:` call have no host.
 

@@ -109,9 +109,10 @@ anonymous `call` node; the host becomes `${<synth>.output}`. Keyword args only,
 each at most once;
 every authored node `input:` mapping participates, including HUMAN_INPUT context
 and LOOP carried-record seeds. Nesting is allowed (`call(a, x=call(b, y=1))`). The synth
-node carries its host node's `case` routes, `depends_on:`, and `runs_after:` (inner calls of
-a nested branch call carry the branch), so it never runs on a branch its host isn't on; it
-doesn't wait on the host's other inputs.
+node runs only when its host node can: it carries the host's `case` routes, `depends_on:`,
+and `runs_after:` (inner calls of a nested branch call carry the branch), and waits for the
+host's other inputs, skipping whenever a skipped input skips the host (a `:-` default only
+waits). Calls in the same node don't wait on each other unless one reads the other.
 An **unquoted** value starting with `call(` must be exactly one well-formed
 directive, else a load error names the problem (unbalanced parens, trailing text,
 missing comma, positional or repeated keyword, a keyword without a name). A
@@ -343,7 +344,8 @@ give an AGENT node `tools: [ask_user]`. Both calls stay inside their live
 node execution. A `human_input` gate can present multiple-choice questions
 (static `questions:`), have an LLM compose them
 (`adaptive_questions:`, which desugars to a synthetic composer AGENT node + gate at load;
-the composer carries the gate's `case` routes, `depends_on:`, and `runs_after:`), or read
+the composer carries the gate's `case` routes, `depends_on:`, and `runs_after:`, and waits
+for the gate's other inputs), or read
 them from an upstream node (`questions: ${name}`); the answer is then a record
 keyed by each question's `header`. The adaptive desugar owns the `__questions`
 input name, so authors cannot bind that name on an adaptive gate.

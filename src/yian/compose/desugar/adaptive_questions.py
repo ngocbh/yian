@@ -10,7 +10,8 @@ retries?}`. This pass lowers that single descriptor into TWO ordinary descriptor
    the `output_contract_override` seam (no surface type-string), its prompt is the
    block's brief, and it inherits the gate's context `input:` with its declared
    types, and records the gate as its `host`, so the host-edge step gives it the gate's
-   CASE routes, `depends_on`, and `runs_after` (no LLM call on a branch the gate isn't on);
+   CASE routes, `depends_on`, `runs_after`, and data gates on the gate's other inputs (no LLM
+   call when the gate can't run);
 2. the original **HumanInputDescriptor** gate (same id), rewritten to read its
    questions from the composer: `questions: "${__questions}"`, with the composer's
    output wired into the reserved `__questions` input.

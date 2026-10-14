@@ -1414,7 +1414,7 @@ def test_seed_is_checked_even_when_a_while_loop_never_runs():
     # `k: 0` fails `while:` at once, so the body never binds `n`; like a CALL on an
     # untaken branch, the provable mismatch still fails at load.
     with pytest.raises(LoadError, match="loop node 'loop': binding 'n' — child expects 'int'"):
-        load_flow(_seeded("int", '"abc"', driver="while: ${k} > 5"))
+        load_flow(_seeded("int", '"abc"', driver="while: k > 5"))
 
 
 @pytest.mark.parametrize(

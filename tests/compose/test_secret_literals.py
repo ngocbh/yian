@@ -537,3 +537,117 @@ def test_a_secret_named_agent_variable_is_rejected():
         "variable 'password': a secret name can't be a variable, whose value is written "
         "in the flow file; pass it as a node input (${input.password}) instead"
     ) in _default_error(text)
+
+
+def _env_error(text: str) -> LoadError:
+    """Load `text`, asserting a secret env error that does not echo the value."""
+    with pytest.raises(LoadError) as exc_info:
+        load_flow(text)
+    message = str(exc_info.value)
+    assert "is a secret name" in message or "(a secret name)" in message, message
+    assert _SECRET not in message, message
+    assert "env holds static config written in the flow file" in message, message
+    assert "or have the host supply it" in message, message
+    return exc_info.value
+
+
+def _node_env_flow(*env_lines: str) -> str:
+    """Return a one-node flow whose `fetch` node has the given `env:` lines."""
+    return (
+        "id: f\nname: f\nnodes:\n  fetch:\n    kind: code\n    env:\n"
+        + "\n".join(f"      {line}" for line in env_lines)
+        + "\n    output: str\n    code: |\n      return 'x'\n"
+        "output: ${fetch.output}\n"
+    )
+
+
+def _flow_env_flow(*env_lines: str) -> str:
+    """Return a one-node flow whose flow-level `env:` has the given lines."""
+    return (
+        "id: f\nname: f\nenv:\n"
+        + "\n".join(f"  {line}" for line in env_lines)
+        + "\nnodes:\n  fetch:\n    kind: code\n    output: str\n"
+        "    code: |\n      return 'x'\n"
+        "output: ${fetch.output}\n"
+    )
+
+
+def test_a_literal_secret_in_node_env_is_rejected():
+    text = _node_env_flow("region: eu", f"DB_PASSWORD: {_SECRET}")
+    error = _env_error(text)
+
+    assert (
+        "node 'fetch': env 'DB_PASSWORD' is a secret name; env holds static config "
+        "written in the flow file (`${...}` is not evaluated there), so move it to the "
+        "node's input: (${input.DB_PASSWORD}) or have the host supply it"
+    ) in str(error)
+    line = text.splitlines().index(f"      DB_PASSWORD: {_SECRET}") + 1
+    assert _only_range(error).start_line == line
+
+
+def test_a_literal_secret_in_flow_env_is_rejected():
+    text = _flow_env_flow("region: eu", f"OPENAI_API_KEY: {_SECRET}")
+    error = _env_error(text)
+
+    assert "flow env 'OPENAI_API_KEY' is a secret name" in str(error)
+    line = text.splitlines().index(f"  OPENAI_API_KEY: {_SECRET}") + 1
+    assert _only_range(error).start_line == line
+
+
+def test_a_nested_literal_secret_in_env_is_rejected():
+    message = str(_env_error(_node_env_flow("db:", f"  password: {_SECRET}")))
+
+    assert "node 'fetch': env 'db' has key 'password' (a secret name)" in message
+
+
+def test_a_literal_secret_in_multi_node_def_env_is_rejected():
+    text = (
+        "id: f\nname: f\n"
+        "defs:\n  g:\n    env:\n"
+        f"      secret: {_SECRET}\n"
+        "    nodes:\n      run:\n        kind: code\n        output: str\n"
+        "        code: |\n          return 'x'\n"
+        "    output: ${run.output}\n"
+        "nodes:\n  b:\n    kind: call\n    call: g\n"
+        "output: ${b.output}\n"
+    )
+    message = str(_env_error(text))
+
+    assert "defs entry 'g': env 'secret' is a secret name" in message
+    assert message.count("defs entry 'g'") == 1
+
+
+def test_a_literal_secret_in_single_node_def_env_is_rejected():
+    text = (
+        "id: f\nname: f\n"
+        "defs:\n  g:\n    kind: code\n    env:\n"
+        f"      password: {_SECRET}\n"
+        "    output: str\n    code: |\n      return 'x'\n"
+        "nodes:\n  b:\n    kind: call\n    call: g\n"
+        "output: ${b.output}\n"
+    )
+
+    assert "env 'password' is a secret name" in str(_env_error(text))
+
+
+def test_a_literal_secret_in_compact_flow_env_is_rejected():
+    text = (
+        "id: f\nname: f\nkind: code\nenv:\n"
+        f"  password: {_SECRET}\n"
+        "output: str\ncode: |\n  return 'x'\n"
+    )
+
+    assert "env 'password' is a secret name" in str(_env_error(text))
+
+
+@pytest.mark.parametrize(
+    "lines",
+    [
+        ("region: eu", "max_tool_iterations: 5"),
+        ("API_KEY: null",),
+        ("API_KEY: ${input.k}",),
+    ],
+)
+def test_env_without_a_literal_secret_loads(lines):
+    load_flow(_node_env_flow(*lines))
+    load_flow(_flow_env_flow(*lines))

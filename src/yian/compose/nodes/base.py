@@ -34,6 +34,7 @@ from yian.typesys.types import TypeRegistry
 from yian.compile.model import Edge
 from yian.compose.helpers.types import read_type
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
+from yian.compose.helpers.secret_literals import check_env_secrets
 from yian.compose.source import SourceCursor
 from yian.diagnostics import DiagnosticFrame, OriginRef, SourceRange
 
@@ -338,6 +339,10 @@ class NodeDescriptor:
                     range=cursor.range_of("env"),
                 )
             kwargs["env"] = cursor.mapping("env")
+            # The plain copy, since the body's read-only view nests views, not dicts.
+            check_env_secrets(
+                kwargs["env"], f"node {node_id!r}: env", cursor.child("env"), diagnostics
+            )
             rng = cursor.range_of("env")
             if rng is not None:
                 ranges[("field", "env")] = rng

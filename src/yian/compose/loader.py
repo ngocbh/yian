@@ -61,6 +61,7 @@ from yian.compose.build.pipeline import _assemble, ComposedFlow
 from yian.compose.desugar.inline_bodies import INLINE_FLOW_PREFIX
 from yian.compose.nodes.resolver import ChildResolver
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
+from yian.compose.helpers.secret_literals import check_env_secrets
 from yian.compose.helpers.memory import parse_memory_declarations
 from yian.compose.helpers.uses import parse_uses_ref
 from yian.compose.helpers.source import _boundary_field_ranges
@@ -690,7 +691,13 @@ def _validate_authored_llm_config(
 def _validate_flow_env(
     env: dict[str, Any], *, diagnostics: LoadDiagnostics, cursor: SourceCursor,
 ) -> None:
-    """Refuse a flow `env:` default that every AGENT node would reject when it runs."""
+    """Refuse a flow `env:` default that every AGENT node would reject when it runs.
+
+    A literal secret is refused first, since the later checks quote the value.
+    """
+    check_env_secrets(
+        env, "flow env", cursor.child("env") if cursor.has("env") else None, diagnostics
+    )
     if "max_tool_iterations" in env and not is_max_tool_iterations(env["max_tool_iterations"]):
         raise diagnostics.error(
             "flow `env.max_tool_iterations` must be a positive int or -1 (no cap), "
@@ -1204,6 +1211,13 @@ def _load_def(
         raise diagnostics.error(
             f"defs entry {name!r}: `env:` must be a mapping with string keys",
             range=(def_cursor.range_of("env") if def_cursor is not None else None),
+        )
+    if def_env is not None:
+        check_env_secrets(
+            def_env,
+            f"defs entry {name!r}: env",
+            _source_child(def_cursor, "env"),
+            diagnostics,
         )
     nodes_cursor = _def_assembly_cursor(def_cursor, body["nodes"])
     try:

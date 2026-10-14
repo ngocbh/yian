@@ -5,17 +5,21 @@ in the flow file. Under a name `yian.secret_names.is_secret_name` accepts, a val
 be a binding (`${...}` text) or `null`. Containers under other names are walked, so a
 secret key nested in a literal mapping or list is found too. The message builders name
 the slot and the fix and never include the value, so every slot that applies the rule
-reports it the same way.
+reports it the same way. `check_env_secrets` applies the rule to an `env:` mapping.
 """
 
 from __future__ import annotations
 
 import re
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Mapping
 
+from yian.compose.helpers.errors import LoadDiagnostics
 from yian.expr import ExpressionError, scan_template
 from yian.expr.template import Span
 from yian.secret_names import is_secret_name, normalize_name
+
+if TYPE_CHECKING:
+    from yian.compose.source import SourceCursor
 
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _NON_IDENTIFIER_CHAR = re.compile(r"[^A-Za-z0-9_]")
@@ -165,3 +169,42 @@ def secret_literal_message(
         f"{prefix}{slot} has key {path[-1]!r} (a secret name){where} with a literal "
         f"value; pass the value as an input{ref} or from the host"
     )
+
+
+def check_env_secrets(
+    env: Mapping[str, Any],
+    where: str,
+    env_cursor: "SourceCursor | None",
+    diagnostics: LoadDiagnostics,
+) -> None:
+    """Reject an `env:` entry that holds a literal value under a secret name.
+
+    Args:
+        env (`Mapping[str, Any]`): The authored `env:` mapping.
+        where (`str`): The label before an entry's key, e.g. `"node 'fetch': env"`,
+            `"flow env"` or `"defs entry 'x': env"`.
+        env_cursor (`SourceCursor | None`): The `env:` mapping's cursor, used to
+            locate the offending key; `None` leaves the error unlocated.
+        diagnostics (`LoadDiagnostics`): Factory for located load errors.
+
+    Raises:
+        `LoadError`: Raised at the key of the first entry, in authored order, whose
+            value is or holds a literal under a secret name.
+    """
+    for key, value in env.items():
+        path = secret_literal_path(key, value)
+        if path is None:
+            continue
+        if not path:
+            head = f"{where} {key!r} is a secret name"
+        else:
+            at = f" at {render_path(key, path)}" if len(path) > 1 else ""
+            head = f"{where} {key!r} has key {path[-1]!r} (a secret name){at}"
+        # A flow or def env reaches every node, so its fix names no particular node.
+        target = "the node's" if where.startswith("node ") else "a node's"
+        raise diagnostics.error(
+            f"{head}; env holds static config written in the flow file (`${{...}}` is "
+            f"not evaluated there), so move it to {target} input: ({input_ref(key)}) "
+            "or have the host supply it",
+            range=env_cursor.key_range_of(key) if env_cursor is not None else None,
+        )

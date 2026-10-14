@@ -232,7 +232,7 @@ code: tests.engine._compose_codefns:echo_x
     assert binding.origin is None
 
 
-def test_inline_call_rewrite_keeps_host_site_and_generated_call_originless():
+def test_inline_call_rewrite_keeps_host_site_and_generated_call_shares_it():
     text = """id: rewritten-input-origin
 name: rewritten-input-origin
 defs:
@@ -261,20 +261,23 @@ output: ${consumer.output}
     )
 
     host = loaded.compiled.nodes["consumer"]
+    host_binding = loaded.compiled.wiring["consumer"]["x"]
     _assert_input_site(
         loaded.origin_resolver,
         host,
-        loaded.compiled.wiring["consumer"]["x"],
+        host_binding,
         "x",
         host_cursor,
         source="${__call_0.output}",
     )
 
+    # The generated call and its argument sit inside the host's binding, so they share it.
     generated = loaded.compiled.nodes["__call_0"]
     generated_binding = loaded.compiled.wiring["__call_0"]["x"]
     assert _parameter(generated, "x").origin is None
     assert generated_binding.source == 3
-    assert generated_binding.origin is None
+    assert generated_binding.origin == host_binding.origin
+    assert generated.origin == host_binding.origin
 
 
 def test_virtual_input_entries_remain_originless():

@@ -317,3 +317,235 @@ output: ${n.output}
     assert result.failure.message == (
         "node 'n' input 'a' call(child) argument 'y': non-finite number inf is not a yian value"
     )
+
+
+_CHILD_DEFS = """
+defs:
+  child:
+    input:
+      y: !float
+    nodes:
+      c:
+        kind: code
+        code: "return inputs['y']"
+        input:
+          y: ${input.y}
+        output: float
+    output: ${c.output}
+  check:
+    input:
+      y: !float
+    nodes:
+      c:
+        kind: code
+        code: "return True"
+        input:
+          y: ${input.y}
+        output: bool
+    output: ${c.output}
+  lister:
+    input:
+      n: !float
+    nodes:
+      c:
+        kind: code
+        code: "return [inputs['n']]"
+        input:
+          n: ${input.n}
+        output: list(float)
+    output: ${c.output}
+"""
+
+_BAD_ARG = "${input.x * 10}"
+
+
+def _call_flow(body: str, inputs: str = "  x: !float\n") -> str:
+    """Return a flow with the `child`, `check`, and `lister` defs and the given body."""
+    header = "id: f\nname: f\n" + (f"input:\n{inputs}" if inputs else "")
+    return header + _CHILD_DEFS + body
+
+
+def _argument_failure_key(result) -> str:
+    """Assert `result` failed evaluating a call argument and return its last trace key."""
+    assert result.status == "failed"
+    assert result.failure.code == "binding.evaluate"
+    assert result.failure.trace
+    return result.failure.trace[-1].key
+
+
+def test_a_node_input_call_argument_failure_points_at_the_input():
+    text = _call_flow(f"""
+nodes:
+  n:
+    kind: code
+    code: "return inputs['a']"
+    input:
+      a: call(child, y={_BAD_ARG})
+    output: float
+output: ${{n.output}}
+""")
+    result = run_flow(load_flow(text), {"x": 1e308})
+
+    assert _argument_failure_key(result) == "/s:root/s:node/s:n/s:input/s:a/s:binding"
+
+
+def test_a_value_entry_call_argument_failure_points_at_the_entry():
+    text = _call_flow(f"""
+nodes:
+  v: !float call(child, y={_BAD_ARG})
+output: ${{v.output}}
+""")
+    result = run_flow(load_flow(text), {"x": 1e308})
+
+    assert _argument_failure_key(result) == "/s:root/s:node/s:v/s:input/s:v/s:binding"
+
+
+def test_a_single_flow_output_call_argument_failure_points_at_the_output():
+    text = _call_flow(f"""
+nodes:
+  n: {{kind: code, code: "return 1"}}
+output: call(child, y={_BAD_ARG})
+""")
+    result = run_flow(load_flow(text), {"x": 1e308})
+
+    assert _argument_failure_key(result) == "/s:root/s:output/i:0/s:binding"
+
+
+def test_a_record_flow_output_call_argument_failure_points_at_the_field():
+    text = _call_flow(f"""
+nodes:
+  n: {{kind: code, code: "return 1"}}
+output:
+  q: ${{n.output}}
+  r: call(child, y={_BAD_ARG})
+""")
+    result = run_flow(load_flow(text), {"x": 1e308})
+
+    assert _argument_failure_key(result) == "/s:root/s:output/i:1/s:binding"
+
+
+def test_a_nested_call_argument_failure_points_at_the_enclosing_binding():
+    text = _call_flow(f"""
+nodes:
+  n:
+    kind: code
+    code: "return inputs['a']"
+    input:
+      a: call(child, y=call(child, y={_BAD_ARG}))
+    output: float
+output: ${{n.output}}
+""")
+    result = run_flow(load_flow(text), {"x": 1e308})
+
+    assert _argument_failure_key(result) == "/s:root/s:node/s:n/s:input/s:a/s:binding"
+
+
+def _case_call_flow(branches: str, readers: str = "", output: str = "${g.output}") -> str:
+    """Return a flow whose CASE `g` routes on `input.flag` with the given branches."""
+    return _call_flow(
+        f"""
+nodes:
+  g:
+    kind: case
+    on: ${{input.flag}}
+{branches}
+  b: !float 1.0
+{readers}output: {output}
+""",
+        inputs="  x: !float\n  flag: !bool\n",
+    )
+
+
+def test_a_case_else_call_argument_failure_points_at_the_else_field():
+    text = _case_call_flow(f"""    cases:
+      - when: true
+        then: b
+    else: call(child, y={_BAD_ARG})""")
+    result = run_flow(load_flow(text), {"x": 1e308, "flag": False})
+
+    assert _argument_failure_key(result).endswith("/s:node/s:g/s:field/s:else")
+
+
+def test_a_case_then_call_argument_failure_points_at_the_then_field():
+    text = _case_call_flow(f"""    cases:
+      - when: true
+        then: call(child, y={_BAD_ARG})
+    else: b""")
+    result = run_flow(load_flow(text), {"x": 1e308, "flag": True})
+
+    assert _argument_failure_key(result).endswith("/s:node/s:g/s:case/i:0/s:then")
+
+
+def test_a_read_case_else_call_argument_failure_points_at_the_else_field():
+    readers = """  r:
+    kind: code
+    code: "return inputs['v']"
+    input:
+      v: ${g.output}
+    output: float
+"""
+    text = _case_call_flow(
+        f"""    cases:
+      - when: true
+        then: b
+    else: call(child, y={_BAD_ARG})""",
+        readers=readers,
+    )
+    result = run_flow(load_flow(text), {"x": 1e308, "flag": False})
+
+    assert _argument_failure_key(result).endswith("/s:node/s:g/s:field/s:else")
+
+
+def test_a_flow_assert_call_argument_failure_points_at_the_assert():
+    text = _call_flow(f"""
+nodes:
+  n: {{kind: code, code: "return 1"}}
+output: ${{n.output}}
+asserts:
+  - call(check, y={_BAD_ARG})
+""")
+    result = run_flow(load_flow(text), {"x": 1e308})
+
+    assert _argument_failure_key(result) == "/s:root/s:assert/i:0"
+
+
+def test_a_map_over_call_argument_failure_points_at_the_over_field():
+    text = _call_flow(f"""
+nodes:
+  m:
+    kind: map
+    call: child
+    over: call(lister, n={_BAD_ARG})
+    input:
+      y: ${{item}}
+output: ${{m.output}}
+""")
+    result = run_flow(load_flow(text), {"x": 1e308})
+
+    assert _argument_failure_key(result) == "/s:root/s:node/s:m/s:reserved/s:over/s:binding"
+
+
+def test_a_child_rejection_of_a_call_argument_has_the_authored_outer_frame():
+    text = _call_flow(
+        """
+nodes:
+  m:
+    kind: code
+    code: return "x"
+  n:
+    kind: code
+    code: "return inputs['a']"
+    input:
+      a: call(child, y=${m.output})
+    output: float
+output: ${n.output}
+""",
+        inputs="",
+    )
+    result = run_flow(load_flow(text), {})
+
+    assert result.status == "failed"
+    assert result.failure.code == "contract.input"
+    assert result.failure.node_id == "__call_0/__start__"
+    assert result.failure.trace[0].key == "/s:root/s:node/s:n/s:input/s:a/s:binding"
+    assert result.failure.trace[-1].key == "/s:def/s:child/s:input/s:y/s:contract/s:type/s:root"

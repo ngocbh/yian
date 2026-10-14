@@ -132,7 +132,7 @@ output: ${invoke.output}
     )
 
 
-def test_synthesized_boundary_and_inline_call_nodes_are_originless():
+def test_boundary_nodes_are_originless_and_an_inline_call_shares_its_binding():
     text = """id: generated-origins
 name: generated-origins
 input:
@@ -153,12 +153,15 @@ nodes:
     output: str
 output: ${consumer.output}
 """
-    nodes = load_flow(text).compiled.nodes
+    compiled = load_flow(text).compiled
+    nodes = compiled.nodes
 
     assert nodes[START_ID].origin is None
     assert nodes[END_ID].origin is None
-    assert nodes["__call_0"].origin is None
     assert isinstance(nodes["consumer"].origin, OriginRef)
+    host_binding_origin = compiled.wiring["consumer"]["topic"].origin
+    assert isinstance(host_binding_origin, OriginRef)
+    assert nodes["__call_0"].origin == host_binding_origin
 
 
 def test_deepcopy_reuses_immutable_origin_resolver():

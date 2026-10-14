@@ -549,7 +549,8 @@ def _stamp_binding_labels(build_results: dict[str, BuildResult]) -> None:
     """Copy the load-error names desugars gave generated params into each node's ``binding_labels``.
 
     A CASE ``on:`` or ``cases[i].when`` param takes its ``wiring_labels`` site name; a
-    value entry's input takes its ``field_labels`` phrase. Other params keep the plain
+    value entry's input, an inline ``call(...)`` argument, and an adaptive composer's
+    copied input take their ``field_labels`` phrase. Other params keep the plain
     ``input '<param>'`` wording.
 
     Args:
@@ -1217,6 +1218,123 @@ def _stamp_flow_output_origins(
             )
         )
     return stamped
+
+
+def _stamp_inline_call_origins(
+    descriptors: dict[str, NodeDescriptor],
+    nodes_cursor: SourceCursor,
+    nodes: dict[str, Node],
+    flow_wiring: dict[str, dict],
+    flow_outputs: list[FlowOutput],
+    flow_asserts: list[Assertion] | None,
+    *,
+    owner: tuple[str, ...],
+    catalog_builder: _SourceCatalogBuilder,
+    diagnostics: LoadDiagnostics,
+) -> None:
+    """Locate each inline ``call(...)`` node and its arguments at the binding it was written in.
+
+    A synth call node has no authored entry of its own, so its argument bindings and the
+    node itself take the origin of the authored binding named by its ``call_site``: a
+    failing argument then points at that binding, and the child flow's failures get it as
+    their outer frame. A node input, MAP ``over:``, flow output, or flow assert already owns
+    an origin, which the call shares rather than registering a second site, because the
+    argument sits inside that authored scalar. A CASE ``then:``/``else:`` target owns no
+    binding origin, so its site is registered once here; a nested call reuses it. An
+    argument or node that already has an origin keeps it.
+
+    Args:
+        descriptors (`dict[str, NodeDescriptor]`):
+            Final descriptors keyed by node id after every graph desugar.
+        nodes_cursor (`SourceCursor`):
+            Retained source view of the flow's authored node mapping.
+        nodes (`dict[str, Node]`):
+            Built runtime nodes keyed by final descriptor id; a synth call node's
+            ``origin`` is set in place.
+        flow_wiring (`dict[str, dict]`):
+            Mutable final binding maps keyed by node id and wiring key, with the
+            authored node bindings already originated.
+        flow_outputs (`list[FlowOutput]`):
+            Final output carriers, with their authored origins already stamped.
+        flow_asserts (`list[Assertion] | None`):
+            The flow's ``asserts:`` carriers in authored order, or ``None``.
+        owner (`tuple[str, ...]`):
+            Complete lexical owner path used to namespace catalog sites.
+        catalog_builder (`_SourceCatalogBuilder`):
+            File-owned origin catalog builder shared by all lexical children.
+        diagnostics (`LoadDiagnostics`):
+            Factory for located load errors.
+
+    Raises:
+        `LoadError`:
+            Raised when a retained source cursor cannot be traversed or a catalog site
+            collides with another registration.
+    """
+
+    def wiring_origin(host: str, key: str) -> OriginRef | None:
+        source = flow_wiring.get(host, {}).get(key)
+        return None if source is None else as_binding(source).origin
+
+    def branch_origin(address: tuple) -> OriginRef | None:
+        case_id = address[1]
+        if not nodes_cursor.has(case_id):
+            return None
+        cursor = normalize_node_signature_cursor(nodes_cursor.child(case_id))
+        if address[0] == "else":
+            if not cursor.has("else"):
+                return None
+            path = (*owner, "node", case_id, "field", "else")
+            cursor = cursor.child("else")
+        else:
+            index = address[2]
+            if not cursor.has("cases"):
+                return None
+            item = cursor.child("cases").child(index)
+            if not item.has("then"):
+                return None
+            path = (*owner, "node", case_id, "case", index, "then")
+            cursor = item.child("then")
+        return catalog_builder.register(path, cursor)
+
+    def site_origin(address: tuple) -> OriginRef | None:
+        kind = address[0]
+        if kind in ("input", "field"):
+            return wiring_origin(address[1], address[2])
+        if kind == "output":
+            name = _SINGLE_OUTPUT_NAME if address[1] is None else address[1]
+            for flow_output in flow_outputs:
+                if flow_output.name == name:
+                    return flow_output.binding.origin
+            return None
+        if kind == "assert":
+            index = address[1]
+            if flow_asserts is None or index >= len(flow_asserts):
+                return None
+            return flow_asserts[index].origin
+        return branch_origin(address)
+
+    # The calls of one branch share its address; registering it twice would collide.
+    origins: dict[tuple, OriginRef | None] = {}
+    for call_id, descriptor in descriptors.items():
+        if not isinstance(descriptor, CallDescriptor) or descriptor.call_site is None:
+            continue
+        address = descriptor.call_site
+        if address not in origins:
+            try:
+                origins[address] = site_origin(address)
+            except SourceAccessError as exc:
+                raise diagnostics.error(str(exc), range=exc.range) from exc
+        origin = origins[address]
+        if origin is None:
+            continue
+        wiring = flow_wiring.get(call_id, {})
+        for key, source in wiring.items():
+            binding = as_binding(source)
+            if binding.origin is None:
+                wiring[key] = replace(binding, origin=origin)
+        node = nodes.get(call_id)
+        if node is not None and node.origin is None:
+            node.origin = origin
 
 
 def _site_range(
@@ -2325,6 +2443,17 @@ def _assemble(
         catalog_builder=catalog_builder,
         diagnostics=diagnostics,
     )
+    _stamp_inline_call_origins(
+        descriptors,
+        nodes_cursor,
+        nodes_built,
+        flow_wiring,
+        flow_outputs,
+        asserts_section,
+        owner=owner,
+        catalog_builder=catalog_builder,
+        diagnostics=diagnostics,
+    )
     flow_outputs = [
         replace(output, binding=replace(output.binding, contract=output_types[output.name]))
         if output.name in output_types
@@ -2413,7 +2542,8 @@ def _assemble(
         nid: d.range for nid, d in descriptors.items() if getattr(d, "range", None)
     }
     # A synth node whose text all lives under its host (it has `field_labels`) is reported
-    # as that host, unless the cycle runs through an author's read of it.
+    # as that host only when its generated wire into the host alone closes the cycle (an
+    # adaptive composer); otherwise, as for an inline call, a note names its host.
     synth_hosts = {
         nid: d.host
         for nid, d in descriptors.items()

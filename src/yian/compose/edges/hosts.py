@@ -21,9 +21,9 @@ wiring, so a gate never feeds a value.
 A producer is *family* when it is the lifted node, one of its hosts, or a node lifted out of one
 of those hosts. A group whose only producer is family gives no gate: siblings lifted from the
 same host don't wait on each other. A required group read from one family node is instead looked
-through: the lifted node gets that node's own data gates (unless the lifted node itself
-requires that node as an input, so its inputs already gate the lifted node). Each ancestor host is visited the same way, so
-transitive lifts gate on every host up the chain.
+through: the lifted node gets that node's own data gates (unless the lifted node itself requires
+that node as an input, so its inputs already gate the lifted node). Each ancestor host is
+visited the same way, so transitive lifts gate on every host up the chain.
 
 A gate group is dropped as redundant when the lifted node already depends on all its producers
 and either the gate is optional or one of the lifted node's required groups lies inside it, so

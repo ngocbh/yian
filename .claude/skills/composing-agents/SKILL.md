@@ -891,9 +891,10 @@ most once; nesting is allowed (`call(a, x=call(b, y=1))`). The synth node runs o
 the node it is written in (its host) can: it carries the host's `case` routes,
 `depends_on:`, and `runs_after:` (a nested branch call's inner calls carry the branch), and
 waits for the host's other inputs, skipping whenever a skipped input skips the host (a
-`:-`-defaulted input only makes it wait). Calls in the same node don't wait on each other,
-but a nested call also carries its outer call's other arguments (in
-`call(f, x=call(g), y=${a.output})`, `g` waits for `a` and is skipped with it). A call in
+`:-`-defaulted input only makes it wait). Calls in the same node don't wait on each other
+unless one reads the other, and a nested call also carries its outer call's other
+arguments (in `call(f, x=call(g), y=${a.output})`, `g` waits for `a` and is skipped with
+it). A call in
 the flow `output:`/`asserts:` has no host. An **unquoted** value whose trimmed text starts
 with `call(` must be **exactly one** well-formed directive, else a load
 error names the problem (unbalanced parens, trailing text after `)`, flow id not a bare name

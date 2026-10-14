@@ -2066,12 +2066,12 @@ Rules:
   skipped, and waits for the host's `runs_after:` nodes. It also waits for the host's
   other inputs and is skipped whenever a skipped input skips the host; an input with a
   default (`${x.output :- "none"}`) doesn't skip the host, so the call only waits for
-  `x`. Calls written in the same node don't wait on each other, but a nested call also
-  carries its outer call's other arguments: in `call(f, x=call(g), y=${a.output})`, `g`
-  waits for `a` and is skipped when `a` is. A call in the flow `output:` or `asserts:`
-  has no host. A node that reads the call's output by id (`${__call_0.output}`) is
-  skipped with it, and if the host also reads that node or names it in `depends_on:` or
-  `runs_after:`, the flow has a cycle (a load error).
+  `x`. Calls written in the same node don't wait on each other unless one reads the
+  other, and a nested call also carries its outer call's other arguments: in
+  `call(f, x=call(g), y=${a.output})`, `g` waits for `a` and is skipped when `a` is. A
+  call in the flow `output:` or `asserts:` has no host. A node that reads the call's output by
+  id (`${__call_0.output}`) is skipped with it, and if the host also reads that node or
+  names it in `depends_on:` or `runs_after:`, the flow has a cycle (a load error).
 - **In a flow `asserts:` item** a value starting with `call(` follows the same rule,
   quoted or not: an assert is an expression, so quoting it does not make it text.
 - **A flow call inside `${...}` is retired.** The old `${flow(args)}` form (a flow

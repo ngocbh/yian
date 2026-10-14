@@ -112,8 +112,9 @@ and LOOP carried-record seeds. Nesting is allowed (`call(a, x=call(b, y=1))`). T
 node runs only when its host node can: it carries the host's `case` routes, `depends_on:`,
 and `runs_after:` (inner calls of a nested branch call carry the branch), and waits for the
 host's other inputs, skipping whenever a skipped input skips the host (a `:-` default only
-waits). Calls in the same node don't wait on each other, but a nested call also carries its
-outer call's other arguments (in `call(f, x=call(g), y=${a.output})`, `g` waits for `a`).
+waits). Calls in the same node don't wait on each other unless one reads the other, and a
+nested call also carries its outer call's other arguments (in
+`call(f, x=call(g), y=${a.output})`, `g` waits for `a`).
 An **unquoted** value starting with `call(` must be exactly one well-formed
 directive, else a load error names the problem (unbalanced parens, trailing text,
 missing comma, positional or repeated keyword, a keyword without a name). A

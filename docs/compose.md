@@ -416,8 +416,9 @@ that input's group), so the runtime join applies the host's co-skip rule: it is 
 those inputs skip the host and otherwise only waits. Nodes lifted out of the same host are
 left out, so they don't wait on each other; a required input read from one of them is looked
 through to that node's own inputs, and each host up the chain is visited the same way. One
-case is not exact: a lifted id an author reads in a coalesce or defaulted host input only
-makes it wait (see `compose/edges/hosts.py`). A branch target itself (a `then: call(...)`, a
+case is not exact: when an author reads a lifted id in a coalesce or defaulted host input,
+that input's other producers only make the lifted node wait, so it may run while the host is
+skipped (see `compose/edges/hosts.py`). A branch target itself (a `then: call(...)`, a
 `__value_N`), a `__case_<id>` result node, and a call in the flow `output:`/`asserts:` have
 no host. The synthetic nodes remain origin-free because no authored node header corresponds
 to them; authored nodes inside retained inline bodies are stamped normally.

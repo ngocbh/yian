@@ -12,9 +12,8 @@ needed), stamps `output_contract`, and enforces the two halves of the type contr
   `LoadError` on a same-names/different-TYPES mismatch (needs the assembled
   producers/flow-input types).
 
-Separately, `check_call_map_types` checks each untyped seed that reads no reference
-against a named body's declared input: a literal by value, a reference-free `${...}` or
-template by its inferred type.
+Separately, `check_call_map_types` checks every seed against the body's declared input as
+it checks a CALL argument.
 """
 
 import pytest
@@ -1489,3 +1488,167 @@ nodes:
     call: bump
 output: ${loop.output}
 """)
+
+
+# `_SEEDED` with flow inputs for reference seeds, and the carried `extra` seed as a slot.
+_SEEDED_INPUTS = _SEEDED.replace(
+    "name: p\n", "name: p\ninput:\n  s: !str\n  m: !Optional(int)\n  i: !int\n", 1
+).replace('extra: "abc"', "extra: {extra}")
+
+
+def _seeded_inputs(
+    n_type: str, seed: str, driver: str = "times: 1", extra: str = '"abc"'
+) -> str:
+    return _SEEDED_INPUTS.format(n_type=n_type, seed=seed, driver=driver, extra=extra)
+
+
+@pytest.mark.parametrize(
+    "n_type, seed, message",
+    [
+        ("int", "${input.s}", "child expects 'int', source is 'str'"),
+        ("int", '!str "abc"', "child expects 'int', source is 'str'"),
+        # An `Optional` source does not fit a strict input, as for a CALL argument.
+        ("int", "${input.m}", "child expects 'int', source is 'Optional(int)'"),
+        (
+            "int",
+            "!Optional(int) ${input.m}",
+            "child expects 'int', source is 'Optional(int)'",
+        ),
+        ("int", "${input.s :- 0}", "child expects 'int', source is 'str'"),
+        ("int", "${input.m :- null}", "child expects 'int', but the default null does not fit"),
+    ],
+)
+def test_reference_or_typed_seed_that_cannot_fill_the_body_input_is_a_load_error(
+    n_type, seed, message
+):
+    text = _seeded_inputs(n_type, seed)
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    assert f"loop node 'loop': binding 'n' — {message}" in str(caught.value)
+    input_mapping_start = text.splitlines().index(f"      n: {seed}") + 1
+    assert caught.value.diagnostic.frames[-1].range.start_line == input_mapping_start
+
+
+def test_reference_seed_is_checked_even_when_a_while_loop_never_runs():
+    with pytest.raises(
+        LoadError, match="loop node 'loop': binding 'n' — child expects 'int', source is 'str'"
+    ):
+        load_flow(_seeded_inputs("int", "${input.s}", driver="while: k > 5"))
+
+
+@pytest.mark.parametrize(
+    "n_type, seed, n",
+    [
+        ("int", "${input.i}", 2),
+        ("float", "${input.i}", 2),
+        ("Optional(int)", "${input.m}", 3),
+        # A typed binding accepts the narrowing and checks it when the body starts.
+        ("int", "!int ${input.m}", 3),
+        ("int", "${input.m :- 0}", 3),
+        ("int", "${input.m | 0}", 3),
+        ("str", '"x${input.i}"', "x2"),
+        ("int", "!Optional(int) 5", 5),
+    ],
+)
+def test_reference_or_typed_seed_that_fits_the_body_input_loads_and_runs(n_type, seed, n):
+    result = run_flow(load_flow(_seeded_inputs(n_type, seed)), {"s": "x", "m": 3, "i": 2})
+    assert result.status == "succeeded", result.failure
+    assert result.output == {"n": n, "k": 1, "extra": "abc"}
+
+
+def test_carried_field_the_body_does_not_read_is_not_checked():
+    flow = load_flow(_seeded_inputs("int", "1", extra="${input.m}"))
+    result = run_flow(flow, {"s": "x", "m": 3, "i": 2})
+    assert result.status == "succeeded", result.failure
+    assert result.output == {"n": 1, "k": 1, "extra": 3}
+
+
+def test_inline_body_reference_seed_fits_its_generated_parameter():
+    flow = load_flow("""id: p
+name: p
+input:
+  m: !Optional(int)
+nodes:
+  loop:
+    kind: loop
+    times: 1
+    input:
+      n: ${input.m}
+    nodes:
+      step:
+        kind: code
+        input:
+          n: ${input.n}
+        output:
+          n: Optional(int)
+        code: return dict(n=inputs["n"])
+    output: ${step.output}
+output: ${loop.output}
+""")
+    assert run_flow(flow, {"m": 3}).output == {"n": 3}
+
+
+# A LOOP routed by a `case` on a `Union(Buy, Hold)` producer, seeding the whole record into
+# a body that takes a `Buy`. The `{then}`/`{other}` slots pick the branch the LOOP is on.
+_NARROWED = """id: p
+name: p
+typedefs:
+  Buy: {{kind: 'Literal(buy)', qty: int}}
+  Hold: {{kind: 'Literal(hold)', note: str}}
+input:
+  s: !str
+defs:
+  body:
+    input:
+      order: !Buy
+      k: !int
+    nodes:
+      step:
+        kind: code
+        input:
+          order: ${{input.order}}
+          k: ${{input.k}}
+        output:
+          k: int
+        code: return dict(k=inputs["k"] + inputs["order"]["qty"])
+    output: ${{step.output}}
+nodes:
+  d:
+    kind: code
+    input:
+      s: ${{input.s}}
+    output: Union(Buy, Hold)
+    code: |
+      return dict(kind="buy", qty=2) if inputs["s"] == "b" else dict(kind="hold", note="n")
+  route:
+    kind: case
+    on: ${{d.output.kind}}
+    cases:
+      - when: buy
+        then: {then}
+    else: {other}
+  loop:
+    kind: loop
+    times: 1
+    input:
+      order: ${{d.output}}
+      k: 0
+    call: body
+  e:
+    kind: code
+    code: return 1
+output: ${{loop.output.k}}
+"""
+
+
+def test_loop_seed_reads_the_case_narrowed_type():
+    # Under `when: buy` the seed is narrowed to `Buy`, as a CALL argument would be.
+    result = run_flow(load_flow(_NARROWED.format(then="loop", other="e")), {"s": "b"})
+    assert result.status == "succeeded", result.failure
+    assert result.output == 2
+
+    with pytest.raises(LoadError) as caught:
+        load_flow(_NARROWED.format(then="e", other="loop"))
+    message = str(caught.value)
+    assert "loop node 'loop': binding 'order' — child expects" in message
+    assert """source is '{"kind":Literal(hold)""" in message

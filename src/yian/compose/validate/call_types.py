@@ -1,16 +1,15 @@
-"""Graph-stage: the cross-flow TYPE check for `call`/`map` bindings and constant `loop` seeds.
+"""Graph-stage: the cross-flow TYPE check for `call`/`map` bindings and `loop` seeds.
 
 A loader post-build pass (run after the flow's leaves + child signatures are assembled).
 Each binding's SOURCE contract is resolved from its reference over the PARENT producer +
 flow-input contracts (a MAP's `${item...}` from the element type of `over:`), then its
 `Type` is checked with `types_compatible` against the CHILD input's declared `Type` (a
-LOOP's body input for a seed). Only a LOOP's untyped seeds that read no reference are
-checked. A literal, a constant operand of a `:-`/`|` escape, or each element of a literal
-`over:` list read through `${item...}`, is validated by value instead, as the child's
-start validates it: a CALL/MAP/LOOP edge is not a flow boundary, so text is never
-converted to a number or bool across it. Its range anchor comes from the call, map, or
-loop node's transient Compose `BuildResult.field_ranges[("field", "inputs")]` (the coarse
-`input:` mapping span).
+LOOP's body input for a seed). A literal, a constant operand of a `:-`/`|` escape, or
+each element of a literal `over:` list read through `${item...}`, is validated by value
+instead, as the child's start validates it: a CALL/MAP/LOOP edge is not a flow boundary,
+so text is never converted to a number or bool across it. Its range anchor comes from
+the call, map, or loop node's transient Compose
+`BuildResult.field_ranges[("field", "inputs")]` (the coarse `input:` mapping span).
 
 Imports flow down only: `compile.validation` (the type comparator), `expr` (the binding-null
 analysis and escape parsing), `compose.helpers` (shared output-contract inference and load
@@ -53,7 +52,6 @@ from yian.expr import (
     binding_co_skips,
     eval_expr,
     expr_refs,
-    expr_refs_of,
     scan_template,
 )
 from yian.expr.template import Span
@@ -65,7 +63,6 @@ from yian.nodes.contracts import (
     PartialRecordContract,
     ValueContract,
     binding_source,
-    iter_source_strings,
 )
 from yian.typesys import Type, TypeCheckError, build_value_as, canonical_type_label
 
@@ -80,7 +77,7 @@ def check_call_map_types(
     type_fn: TypeFn | None = None,
     diagnostics: LoadDiagnostics | None = None,
 ) -> None:
-    """Cross-flow type check for every `call`/`map` binding (a loader post-build pass).
+    """Cross-flow type check for every `call`/`map` binding and `loop` seed (a loader pass).
 
     Each binding must fit the CHILD input's declared `Type`, read over the PARENT
     producer + flow-input contracts as the node's `narrowing` view sees them when given:
@@ -91,10 +88,8 @@ def check_call_map_types(
     `over` key), stays lenient (skipped). Loud + located at the node's Compose-owned
     `input:` mapping range, else its authored node range. Iterates the WIRING (not the
     params) so a mis-named binding still surfaces here when its child decl is absent
-    rather than being silently skipped. A LOOP's untyped seeds that read no reference
-    are checked the same way against its body's inputs; its typed and reference seeds
-    are not checked against the body's inputs. ``type_fn`` types a `T(...)` constructor
-    source as `T`."""
+    rather than being silently skipped. A LOOP's seeds are checked the same way against
+    its body's inputs. ``type_fn`` types a `T(...)` constructor source as `T`."""
     diagnostics = diagnostics or LoadDiagnostics()
     for label, contracts in (
         ("output producer", producers),
@@ -119,10 +114,8 @@ def check_call_map_types(
     for nid, result in build_results.items():
         node = result.node
         # CALL/MAP/LOOP carry `child_inputs` to type-check against. A LOOP's seeds fill its
-        # body's START like CALL arguments, but only an untyped seed that reads no reference
-        # is checked here. Checking reference and typed seeds would bring CALL's `Optional`
-        # rule to LOOP, a separate change; check_loop_type_contract checks returned fields
-        # against the body output.
+        # body's START like CALL arguments, so they get the same checks;
+        # check_loop_type_contract also checks returned fields against the body output.
         # A leaf has no `child_inputs` attr, and a zero-input child gives [] (falsy), so skip.
         if not getattr(node, "child_inputs", None):
             continue
@@ -143,8 +136,6 @@ def check_call_map_types(
             decl = child_decls.get(param)
             if decl is None or decl.contract is None:
                 continue  # `over`/name-caught-in-build/opaque child input -> lenient
-            if node.is_loop and not _constant_seed(src):
-                continue
             message = _binding_mismatch(src, decl, scope)
             if message is not None:
                 rng: Optional[SourceRange] = (
@@ -260,19 +251,6 @@ def _lone_span(source: Any) -> Tree | Token | None:
     if not (len(segments) == 1 and isinstance(segments[0], Span)):
         return None
     return segments[0].tree
-
-
-def _constant_seed(src: Any) -> bool:
-    """Return whether a binding is untyped and reads no reference.
-
-    Each string nested in a value template counts as a read of its own.
-    """
-    if isinstance(src, Binding) and src.contract is not None:
-        return False
-    try:
-        return not any(expr_refs_of(text) for _, text in iter_source_strings(src))
-    except ExpressionError:
-        return False  # malformed text is reported by reference validation
 
 
 def _operand_path(node: Tree | Token) -> str | None:

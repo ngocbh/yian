@@ -144,12 +144,14 @@ output: ${{each.output}}
 # --- LOOP ------------------------------------------------------------------ #
 
 
-def _loop_flow(seed: str, *, producer: str) -> str:
-    """Return a flow whose LOOP seeds `n` as `seed` into a named body returning `n: int`.
+def _loop_flow(seed: str, *, producer: str, body_input: str = "!int") -> str:
+    """Return a flow whose LOOP seeds `n` as `seed` into a named body that returns `n: int`.
 
     Args:
         seed (`str`): The value of the LOOP node's `n:` seed.
         producer (`str`): The YAML of the parent producer nodes, indented under `nodes:`.
+        body_input (`str`, *optional*, defaults to `"!int"`): The body's declared `n:`
+            input type tag, which may differ from its `int` output.
     """
     return f"""
 id: downstream-loop
@@ -157,7 +159,7 @@ name: downstream_loop
 defs:
   bump:
     input:
-      n: !int
+      n: {body_input}
     nodes:
       step:
         kind: code
@@ -197,11 +199,21 @@ def test_declared_seed_type_is_compared_with_the_returned_field():
     """A seed declared `str` cannot carry a field the body returns as `int`.
 
     The producer is untyped, so only the declaration gives the seed a type: the same
-    seed written without one loads.
+    seed written without one loads. The body takes `n: str`, so the seed fits its input.
     """
-    load_flow(_loop_flow("${opaque.output}", producer=_opaque("1")))
+    load_flow(_loop_flow("${opaque.output}", producer=_opaque("1"), body_input="!str"))
 
     with pytest.raises(LoadError, match="carried field 'n'.*carried source is 'str'"):
+        load_flow(
+            _loop_flow("!str ${opaque.output}", producer=_opaque("1"), body_input="!str")
+        )
+
+
+def test_declared_seed_type_is_checked_against_the_body_input():
+    """A seed declared `str` cannot fill the body's `int` input, as a CALL argument can't."""
+    with pytest.raises(
+        LoadError, match="loop node 'loop': binding 'n' — child expects 'int', source is 'str'"
+    ):
         load_flow(_loop_flow("!str ${opaque.output}", producer=_opaque("1")))
 
 

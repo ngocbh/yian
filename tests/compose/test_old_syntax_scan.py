@@ -338,7 +338,7 @@ def test_load_messages_suggest_no_old_type_form():
 
 
 # A bracket `Literal["a"]` or a parenthesized `Literal("a","b")` with no space after
-# the comma: the spellings a type label printed before labels read `Literal(a, b)`.
+# the comma: the spellings type labels used before they printed `Literal(a, b)`.
 _OLD_LITERAL_LABEL = re.compile(r'Literal\["|Literal\("(?:[^"\\]|\\.)*","')
 _PYTHON_FENCE = re.compile(r"^[ \t]*```python.*?^[ \t]*```", re.MULTILINE | re.DOTALL)
 

@@ -479,16 +479,33 @@ def _native_carrier_error(response: dict) -> BaseException | None:
 
 
 def _reject_deep_carrier(response: Any, schema: type[BaseModel], typ: Type) -> None:
-    """Raise `TypeCheckError` if a native carrier's parsed value nests past the value limit.
+    """Reject a native carrier whose reply nests past the value limit, before it is stored.
 
-    A carrier that is malformed or holds a parsing error is left alone. The raw reply
-    carries the value, so this runs before memory stores it: a value past the limit may be
-    too deep for memory, and the non-finite walk of the raw reply recurses.
+    A parsed value past the limit raises `TypeCheckError`. A carrier holding a parsing
+    error whose raw reply is past the limit raises that parsing error, so the retry and
+    the exhausted error's origin match a run without memory. A malformed carrier is left
+    alone. The raw reply carries the value, so a reply past the limit may be too deep
+    for memory, and the non-finite walk of the raw reply recurses.
     """
     if type(response) is not dict or set(response) != {"raw", "parsed", "parsing_error"}:
         return
-    if response["parsing_error"] is None and isinstance(response["parsed"], schema):
-        reject_deep_nesting(_unwrap(response["parsed"], typ), "structured output")
+    if response["parsing_error"] is None:
+        if isinstance(response["parsed"], schema):
+            reject_deep_nesting(_unwrap(response["parsed"], typ), "structured output")
+        return
+    # The raw message wraps the value a few levels deeper, so this can also catch a value
+    # just under the limit. Only a reply that already missed the schema is checked here;
+    # it is retried either way, and the check only keeps memory from storing it.
+    try:
+        reject_deep_nesting(response.get("raw"), "model reply")
+    except TypeCheckError:
+        pass
+    else:
+        return
+    # Raised outside the handler so the provider's error gains no `__context__`.
+    error = _native_carrier_error(response)
+    if error is not None:
+        raise error
 
 
 def _reject_nonfinite_carrier(response: Any) -> None:

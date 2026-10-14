@@ -468,12 +468,13 @@ generation checks the unwrapped value (`structured output at ...`), which
 self-corrects under `retries:`. On the native path with a transcript the structured
 check also runs in `check_reply`, on the carrier's parsed value, so a deeper value is
 observed `failed` and never stored (its raw reply could exceed memory's 128-level
-bound, and the raw non-finite walk recurses). Live success admission
-(`prepare_node_succeeded`) checks a node output whole and fails `contract.output` at
-the field path with the declared field's origin. A record built around a value is
-one level deeper, so a record flow output wrapping a 100-level value fails at
-`__end__`, and a MAP whose children return 100-level values fails at its fan-in END
-(`<map>/__end__`). A node with the `commits_input_record` trait (START)
+bound, and the raw non-finite walk recurses); a carrier with a parsing error whose raw
+reply is deeper raises that parsing error there instead, as for NaN. Live success
+admission (`prepare_node_succeeded`) checks a node output whole and fails
+`contract.output` at the field path with the declared field's origin. A record built
+around a value is one level deeper, so a record flow output wrapping a 100-level value
+fails at `__end__`, and a MAP whose children return 100-level values fails at its
+fan-in END (`<map>/__end__`). A node with the `commits_input_record` trait (START)
 passes `enclosing_levels=-1`, since its record wraps input values already checked.
 Replay validation does not re-apply the limit, so logs recorded before it still
 replay, and the run-log codecs never apply it; they see only values these entry

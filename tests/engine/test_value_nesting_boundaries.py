@@ -516,6 +516,9 @@ def test_a_structured_agent_over_the_limit_self_corrects_under_retries(monkeypat
     assert result.status == "succeeded" and result.output == {"k": 1}
     _assert_reply_too_deep(_correction(model), "structured output")
     assert "provider error (" not in _correction(model)
+    if session and not native:
+        # A JSON-text reply is text, so memory keeps it.
+        assert [effect.status for effect in _view(memory["session"]).effects] == ["completed", "completed"]
 
 
 def test_a_native_session_value_at_the_limit_is_stored(monkeypatch):
@@ -542,6 +545,71 @@ def test_a_native_session_value_over_the_limit_is_not_stored_and_self_corrects(m
     assert [effect.status for effect in _view(memory["session"]).effects] == ["failed", "completed"]
     _assert_reply_too_deep(_correction(model), "structured output")
     assert "provider error (" not in _correction(model)
+
+
+class _RecordCarrier:
+    """A native model that honours `include_raw`, sending each of `replies` as the raw
+    tool call's arguments for a record output."""
+
+    def __init__(self, replies):
+        self.replies = iter(replies)
+        self.calls = []
+
+    def with_structured_output(self, schema, *, include_raw=False):
+        outer = self
+
+        class Bound:
+            def invoke(self, messages):
+                outer.calls.append(list(messages))
+                args = next(outer.replies)
+                if not include_raw:
+                    return schema.model_validate(args)
+                raw = AIMessage(content="", tool_calls=[
+                    {"name": schema.__name__, "args": args, "id": "format-id"}])
+                try:
+                    parsed = schema.model_validate(args)
+                except Exception as error:
+                    return {"raw": raw, "parsed": None, "parsing_error": error}
+                return {"raw": raw, "parsed": parsed, "parsing_error": None}
+
+        return Bound()
+
+
+def _schema_miss(levels: int) -> dict:
+    """Return a `{t: object, n: int}` reply nesting `levels` levels under `t`, with a bad `n`."""
+    return {"t": _nest_dict(levels), "n": "notint"}
+
+
+@pytest.mark.parametrize("levels", [125, 1500])
+@pytest.mark.parametrize("session", [True, False])
+def test_a_deep_native_reply_that_misses_the_schema_retries_on_the_schema_error(
+    monkeypatch, session, levels
+):
+    model = _RecordCarrier([_schema_miss(levels), {"t": {}, "n": 1}])
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _: model)
+    flow, memory = _structured_flow("{t: object, n: int}", native=True, session=session, retries=1)
+
+    result = run_flow(flow, {"question": "q"}, memory=memory)
+
+    assert result.status == "succeeded" and result.output == {"t": {}, "n": 1}
+    correction = _correction(model)
+    assert "n\n  Input should be a valid integer" in correction
+    assert "recursion" not in correction and "provider error (" not in correction
+    if session:
+        assert [effect.status for effect in _view(memory["session"]).effects] == ["failed", "completed"]
+
+
+@pytest.mark.parametrize("levels", [125, 1500])
+@pytest.mark.parametrize("session", [True, False])
+def test_an_exhausted_deep_native_schema_miss_is_located_at_the_field(monkeypatch, session, levels):
+    model = _RecordCarrier([_schema_miss(levels)])
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _: model)
+    flow, memory = _structured_flow("{t: object, n: int}", native=True, session=session, retries=0)
+
+    result = run_flow(flow, {"question": "q"}, memory=memory)
+
+    assert result.status == "failed" and result.failure.code == "node.execute"
+    assert result.failure.trace[-1].key.endswith("/s:path/s:n")
 
 
 @pytest.mark.parametrize("levels", [101, 1500])

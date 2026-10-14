@@ -1160,10 +1160,10 @@ def test_assertion_manifest_rejects_unknown_fields_and_raw_bypass() -> None:
         flow_manifest(_manifest_assertions(["true"]))
 
 
-def test_wrapped_credential_wiring_keeps_redaction_and_source_identity() -> None:
-    """Projecting a carrier must retain credential secrecy and ref identity."""
-    first_source = '${input.primary_token:-"first-secret"}'
-    second_source = '${input.backup_token:-"second-secret"}'
+def test_wrapped_wiring_keeps_its_source_text_and_identity() -> None:
+    """Projecting a carrier keeps its authored source and drops only its origin."""
+    first_source = '${input.primary_token:-"first-value"}'
+    second_source = '${input.backup_token:-"second-value"}'
     raw = _manifest_fragment(first_source, key="authorization")
     wrapped = _manifest_fragment(
         Binding(first_source, _origin("credential")),
@@ -1180,6 +1180,6 @@ def test_wrapped_credential_wiring_keeps_redaction_and_source_identity() -> None
 
     assert wrapped_manifest == raw_manifest
     assert flow_fingerprint(wrapped) == flow_fingerprint(raw)
-    assert "first-secret" not in rendered
+    assert first_source in rendered
     assert "credential" not in rendered
     assert flow_fingerprint(changed) != flow_fingerprint(wrapped)

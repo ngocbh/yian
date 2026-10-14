@@ -600,24 +600,24 @@ def test_policy_config_keeps_public_behavior_options() -> None:
     assert "semantic-continuation-marker" in rendered
 
 
-def test_manifest_redaction_remains_defense_in_depth_for_forged_policy() -> None:
+def test_manifest_keeps_every_value_of_a_forged_policy_config() -> None:
     policy = MemoryDecl("reflective", "reflective", {}, DeclSite((), ("root",), None))
     flow = CompiledFlow({}, [], memories=(policy,))
     private = MemorySnapshotEnvelope(
         "opaque",
-        {"nested": {"api_key": "must-not-appear"}},
+        {"nested": {"api_token": "first-forged-value"}},
     )
     object.__setattr__(policy, "_config", private._snapshot)
 
     first_manifest = flow_manifest(flow)
     rendered = json.dumps(first_manifest, sort_keys=True)
-    assert "must-not-appear" not in rendered
+    assert "first-forged-value" in rendered
     replacement = MemorySnapshotEnvelope(
         "opaque",
-        {"nested": {"api_key": "different-secret"}},
+        {"nested": {"api_token": "second-forged-value"}},
     )
     object.__setattr__(policy, "_config", replacement._snapshot)
-    assert flow_manifest(flow) == first_manifest
+    assert flow_manifest(flow) != first_manifest
 
 
 def test_expansion_digest_excludes_flow_id_and_agent_memory() -> None:

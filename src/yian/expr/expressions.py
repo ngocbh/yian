@@ -23,6 +23,7 @@ from typing import Any, Callable
 from lark import Token, Tree
 
 import yian.json_codec as json_codec
+from yian.expr import percent_format
 from yian.expr.lineage import ResolvedValue, SourceRef, TracedValue, ValueRoute
 from yian.typesys.pool import VariablePool
 from yian.typesys.types import BUILTIN_TYPE_NAMES
@@ -164,6 +165,22 @@ def _operand_repr(value: Any) -> str:
     except ValueError:
         # repr of an int past Python's str-digit limit raises, at any nesting depth.
         return f"<{type(value).__name__} too large to display>"
+
+
+def _apply_binop(op: Callable[[Any, Any], Any], symbol: str, lhs: Any, rhs: Any) -> Any:
+    """Return `op(lhs, rhs)`, formatting text with `%` for ints of any size."""
+    try:
+        return op(lhs, rhs)
+    except ValueError:
+        if symbol != "%" or not isinstance(lhs, str) or json_codec.displayable(rhs) is rhs:
+            raise
+    # Python's `%` refused because the right side holds an int past the digit limit.
+    return percent_format.format_text(lhs, rhs)
+
+
+def _is_digit_limit(exc: ValueError) -> bool:
+    """Return whether `exc` is Python's int/str digit-limit error."""
+    return "set_int_max_str_digits" in str(exc)
 
 
 def _eval_comparison(op: str, lhs: Any, rhs: Any) -> bool:
@@ -1079,7 +1096,7 @@ class _EvalExpr:
                 If Python raises; the message names the operator and both values.
         """
         try:
-            return _ARITH_STEPS[symbol](lhs, rhs)
+            return _apply_binop(_ARITH_STEPS[symbol], symbol, lhs, rhs)
         except ZeroDivisionError as exc:
             l, r = _operand_repr(lhs), _operand_repr(rhs)
             raise ExpressionError(f"division by zero: {l} {symbol} {r}") from exc
@@ -1096,7 +1113,10 @@ class _EvalExpr:
             raise ExpressionError(f"cannot compute {l} {symbol} {r}: missing key {exc}") from exc
         except ValueError as exc:
             l, r = _operand_repr(lhs), _operand_repr(rhs)
-            raise ExpressionError(f"cannot compute {l} {symbol} {r}: {exc}") from exc
+            # Python's digit-limit message suggests raising a process-wide limit
+            # that yian never changes.
+            detail = "an int too long to format" if _is_digit_limit(exc) else exc
+            raise ExpressionError(f"cannot compute {l} {symbol} {r}: {detail}") from exc
 
     def _do_sum(self, node: Tree) -> Any:
         """A `+ -` or `* / %` chain, folded left to right.

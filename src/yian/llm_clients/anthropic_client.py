@@ -7,8 +7,7 @@ from typing import Any, Optional
 
 import anthropic
 from anthropic.resources.messages import Messages
-from langchain_anthropic import ChatAnthropic
-from langchain_anthropic.chat_models import convert_to_anthropic_tool
+from langchain_anthropic import ChatAnthropic, convert_to_anthropic_tool
 from langchain_core.exceptions import OutputParserException
 from langchain_core.output_parsers.openai_tools import (
     JsonOutputKeyToolsParser,
@@ -133,7 +132,8 @@ class NormalizedChatAnthropic(ChatAnthropic):
                 Whether to return ``{"raw", "parsed", "parsing_error"}`` instead of the
                 parsed output.
             **kwargs:
-                Passed to `ChatAnthropic.with_structured_output`.
+                Passed to `ChatAnthropic.with_structured_output`; ignored on the
+                unforced-tool path, as langchain ignores them too.
 
         Returns:
             `Runnable`:
@@ -156,7 +156,9 @@ class NormalizedChatAnthropic(ChatAnthropic):
         reply raises `OutputParserException` naming the tool, which a caller's retry can
         send back as a correction; with `include_raw` it comes back as
         ``parsing_error`` instead. This mirrors langchain-anthropic's own thinking path
-        without its warning, which it emits on every binding.
+        without its warning, which it emits on every binding. The guard matches calls by
+        the tool's name, stricter than langchain's check for any call, and passes the
+        parser only those calls.
 
         Args:
             schema (`dict` or `type`):
@@ -179,9 +181,10 @@ class NormalizedChatAnthropic(ChatAnthropic):
         )
 
         def require_tool_call(message):
-            if not any(call["name"] == name for call in message.tool_calls):
+            calls = [call for call in message.tool_calls if call["name"] == name]
+            if not calls:
                 raise OutputParserException(f"Call the {name} tool with the answer.")
-            return message
+            return message.model_copy(update={"tool_calls": calls})
 
         if isinstance(schema, type) and is_basemodel_subclass(schema):
             parser = PydanticToolsParser(tools=[schema], first_tool_only=True)
@@ -190,6 +193,7 @@ class NormalizedChatAnthropic(ChatAnthropic):
         parse = RunnableLambda(require_tool_call) | parser
         if not include_raw:
             return llm | parse
+        # Kept in step with `ChatAnthropic.with_structured_output`'s include_raw assembly.
         parser_assign = RunnablePassthrough.assign(
             parsed=itemgetter("raw") | parse, parsing_error=lambda _: None
         )

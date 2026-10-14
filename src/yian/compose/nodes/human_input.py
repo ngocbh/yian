@@ -3,7 +3,7 @@
 One of the two-axis `compose/nodes/<kind>.py` modules: it owns the `human_input` node's
 frozen `HumanInputDescriptor`. It wraps the template `parse` from `NodeDescriptor` (which
 records each field's `SourceRange`) to reject the removed `adaptive_questions.mode:` key and
-any other `adaptive_questions:` key it does not read, and to record one
+any `adaptive_questions:` key the adaptive desugar does not read, and to record one
 `("text", "questions[i]...")` range per question string and a
 `("text", "adaptive_questions.prompt")` range for the adaptive brief, overrides the
 `_validate_fields` hook to enforce the one-of-three question-surface legality, and overrides
@@ -86,7 +86,7 @@ class HumanInputDescriptor(NodeDescriptor):
 
     @classmethod
     def parse(cls, node_id: str, cursor: SourceCursor) -> "HumanInputDescriptor":
-        """Reject unknown `adaptive_questions:` keys and non-text brief or question text; range text.
+        """Reject unknown `adaptive_questions:` keys and a non-text brief or question; range text.
 
         After the template `parse`, rejects the first `question`/`header`/option `label`/
         `description` in a literal `questions:` list that is present but not a string, at that

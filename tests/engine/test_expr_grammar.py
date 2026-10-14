@@ -47,7 +47,7 @@ def test_lone_expr_not_coalesce_wrapped():
     # node: the top of a lone ref is the ref itself, and arithmetic stays bare.
     assert _tree("a").data == "refcall"
     assert _tree("a").data != "coalesce"
-    assert _tree("1 + 2").data == "add"
+    assert _tree("1 + 2").data == "sum"
     assert _tree("1 + 2").data != "coalesce"
 
 
@@ -288,7 +288,7 @@ def test_coalesce_below_arithmetic():
     coalesce = next(n for n in tree.iter_subtrees() if n.data == "coalesce")
     assert len(coalesce.children) == 2
     kinds_rhs = _kinds(coalesce.children[1]) if isinstance(coalesce.children[1], Tree) else set()
-    assert "add" in kinds_rhs
+    assert "sum" in kinds_rhs
 
 
 # --------------------------------------------------------------------------- #
@@ -325,9 +325,9 @@ def test_name_terminal_excludes_hyphen_for_subtraction():
     """`a - b` -> subtraction of two refs, NOT one identifier `a-b`.
 
     The trap: if `-` is in the shared NAME terminal, `a - b` lexes as a single
-    ident and this fails. Two refcalls under a `sub` node proves the split.
+    ident and this fails. Two refcalls under a `sum` node proves the split.
     """
     tree = _tree("a - b")
-    assert "sub" in _kinds(tree)
+    assert "sum" in _kinds(tree)
     refcalls = [n for n in tree.iter_subtrees() if n.data == "refcall"]
     assert len(refcalls) == 2

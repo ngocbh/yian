@@ -9,7 +9,10 @@ Evaluation deliberately lives in `expr.expressions`.
 - References: bare `a`, dotted `a.b.c`, and — for the runtime graph-expansion
   separators — segments containing `#` / `/` (`node#0.output`, `def/child.output`).
 - Arithmetic (`+ - * / %` and `**`), unary minus, comparisons
-  (`== != < <= > >=`), `and` / `or` / `not`, `in` / `not in`.
+  (`== != < <= > >=`), `and` / `or` / `not`, `in` / `not in`. A chain of
+  same-precedence arithmetic operators is one flat node, like `and` / `or`:
+  `a + b - c` is one `sum`, `a * b / c` one `product`, `a ** b ** c` one `power`,
+  each holding its operator tokens between the operands.
 - List literals (`[1, "x"]`) and parenthesised sub-expressions.
 - Pure builtin calls (`upper(name)`, `join(items, ", ")`), with dotted access on
   the result (`fn(x).field`) — mirroring the prompt call form.
@@ -70,8 +73,8 @@ from yian.expr.expressions import ISINSTANCE, ExpressionError
 
 # The unified grammar. Precedence, lowest to highest:
 #   coalesce (`|`) -> default/required (`:-`/`:?`) -> or -> and -> not
-#   -> comparison (incl. in / not in) -> sum -> product -> unary minus
-#   -> power (`**`, right-assoc) -> atom.
+#   -> comparison (incl. in / not in) -> sum (`+ -`) -> product (`* / %`)
+#   -> unary minus -> power (`**`, folded right to left) -> atom.
 # `?rule` inlines a single-child parse to keep the tree flat (Lark convention).
 _GRAMMAR = r"""
 ?start: coalesce
@@ -96,19 +99,20 @@ _GRAMMAR = r"""
            | sum IN sum        -> compare_in
            | sum NOT_IN sum    -> compare_notin
 
-?sum: product
-    | sum "+" product   -> add
-    | sum "-" product   -> sub
-?product: unary
-        | product "*" unary   -> mul
-        | product "/" unary   -> div
-        | product "%" unary   -> mod
+// A chain of same-precedence operators is ONE flat node, like `and` / `or`:
+// `a + b - c` is `sum[a, +, b, -, c]`, with the operator tokens kept between the operands.
+// The evaluator folds `sum` and `product` left to right and `power` right to left, so a
+// long chain needs no recursion per operator.
+?sum: product (ADD_OP product)*
+?product: unary (MUL_OP unary)*
 // unary minus binds looser than `**` (Python: `-x ** 2` == `-(x ** 2)`).
 ?unary: power
       | "-" unary   -> neg
-// `**` is right-associative and binds tighter than unary minus.
-?power: atom
-      | atom "**" unary   -> power
+// `**` binds tighter than unary minus, yet its right operand may be negated
+// (`2 ** -a ** b` == `2 ** (-(a ** b))`). Only the last operand can be, so the rule
+// stays free of LALR conflicts.
+?power: atom (POW_OP atom)* (POW_OP neg_tail)?
+?neg_tail: "-" unary   -> neg
 
 ?atom: refcall
      | NUMBER | STRING | BOOL | NULL
@@ -129,6 +133,9 @@ arg: [NAME "="] coalesce
 // list literal: elements are full expressions (refs / literals / arithmetic).
 list_lit: "[" [coalesce ("," coalesce)*] "]"
 
+ADD_OP: "+" | "-"
+MUL_OP: "*" | "/" | "%"
+POW_OP: "**"
 COMP_OP: "==" | "!=" | "<=" | ">=" | "<" | ">"
 STRING: /"[^"]*"/ | /'[^']*'/
 NUMBER: /\d+(\.\d+)?/
@@ -439,10 +446,12 @@ def parse_expr(text: str) -> Tree | Token:
             The Lark parse tree. Its shape is the grammar above: `refcall` for a
             ref-or-call, `call_suffix` marking a call, `coalesce` (present ONLY
             when a `|` actually appears) / `default_expr` / `required_expr` at the
-            top, and the arithmetic/boolean chain below. A LONE literal — a bare
-            `NUMBER`, `STRING`, `BOOL`, or `NULL` — inlines all the way up and comes
-            back as a top-level `Token` (no wrapper node), since no spurious
-            one-child `coalesce` is inserted.
+            top, and the boolean chains below. An arithmetic chain is one flat
+            `sum`, `product` or `power` node whose operands alternate with their
+            `ADD_OP` / `MUL_OP` / `POW_OP` tokens. A LONE literal — a bare `NUMBER`,
+            `STRING`, `BOOL`, or `NULL` — inlines all the way up and comes back as a
+            top-level `Token` (no wrapper node), since no spurious one-child
+            `coalesce` is inserted.
 
     Raises:
         `ExpressionError`:

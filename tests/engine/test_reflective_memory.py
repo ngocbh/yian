@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 from langchain_core.exceptions import OutputParserException
 
+from yian.llm_clients.auth import ApiKeyCredentials, AuthStore
 from yian.memory.contracts import (
     LearnContext,
     Memory,
@@ -649,6 +650,51 @@ def test_learn_provider_failure_is_retryable_and_sanitized(
     assert exc.value.retryable is True
     assert "provider-secret" not in str(exc.value)
     assert exc.value.__cause__ is failure
+
+
+def test_learn_errors_scrub_the_key_variable_and_saved_login(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("YIAN_AUTH_FILE", str(tmp_path / "auth.json"))
+    for name in ("YIAN_DEFAULT_PROVIDER", "YIAN_DEFAULT_MODEL", "VLLM_API_KEY", "VLLM_BASE_URL"):
+        monkeypatch.delenv(name, raising=False)
+
+    def use_variable(key: str) -> None:
+        monkeypatch.setenv("VLLM_API_KEY", key)
+
+    def use_login(key: str) -> None:
+        monkeypatch.delenv("VLLM_API_KEY")
+        AuthStore().save("vllm", ApiKeyCredentials(key), "m")
+
+    for key, connect in (
+        ("sk-variable-reflect-hgtw", use_variable),
+        ("sk-login-reflect-bmrc", use_login),
+    ):
+        connect(key)
+        echo = f"Incorrect API key provided: {key[:8]}****{key[-4:]} ({key})"
+
+        def refuse(config: dict[str, object], echo: str = echo) -> None:
+            raise ValueError(echo)
+
+        for code, install in (
+            (
+                "reflective.model_construction",
+                lambda: monkeypatch.setattr(reflective, "model_from_config", refuse),
+            ),
+            (
+                "reflective.provider",
+                lambda: _install_model(monkeypatch, error=RuntimeError(echo)),
+            ),
+        ):
+            install()
+            memory = ReflectiveMemory({"provider": "vllm", "model": "m"})
+            with memory.open_run() as session:
+                with pytest.raises(MemoryOperationError) as exc:
+                    session.learn(_context())
+            cause = str(exc.value.__cause__)
+            assert exc.value.code == code
+            assert "[REDACTED]" in cause
+            assert key[:8] not in cause and key[-4:] not in cause
 
 
 def test_structured_output_parser_failure_is_a_final_contract_error(

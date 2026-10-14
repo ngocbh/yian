@@ -7,6 +7,7 @@ import json
 from langchain_core.messages import AIMessage
 import pytest
 
+from yian.llm_clients.auth import ApiKeyCredentials, AuthStore
 import yian.memory.profile as profile
 from yian.memory import (
     LearnContext,
@@ -403,6 +404,42 @@ def test_learner_errors_chain_a_cause_without_the_key(tmp_path, monkeypatch) -> 
         assert caught.value.code == code
         assert str(cause) == "Incorrect API key provided: [REDACTED] ([REDACTED])"
         assert key[:8] not in str(cause) and key[-4:] not in str(cause)
+
+
+def test_learner_errors_scrub_the_key_variable_and_saved_login(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("YIAN_AUTH_FILE", str(tmp_path / "auth.json"))
+    for name in ("YIAN_DEFAULT_PROVIDER", "YIAN_DEFAULT_MODEL", "VLLM_API_KEY", "VLLM_BASE_URL"):
+        monkeypatch.delenv(name, raising=False)
+    store = FileMarkdownStore(tmp_path / "ada.md")
+    store.write("# Ada\n", base_version=store.read()[1])
+    memory = ProfileMemory(store, llm_config={"provider": "vllm", "model": "profiler"})
+
+    def use_variable(key):
+        monkeypatch.setenv("VLLM_API_KEY", key)
+
+    def use_login(key):
+        monkeypatch.delenv("VLLM_API_KEY")
+        AuthStore().save("vllm", ApiKeyCredentials(key), "profiler")
+
+    for key, connect in (("sk-variable-profile-hgtw", use_variable), ("sk-login-profile-bmrc", use_login)):
+        connect(key)
+        echo = f"Incorrect API key provided: {key[:8]}****{key[-4:]} ({key})"
+
+        def refuse(config, echo=echo):
+            raise ValueError(echo)
+
+        for code, install in (
+            ("profile.provider", lambda: _install(monkeypatch, RuntimeError(echo))),
+            ("profile.model_construction", lambda: monkeypatch.setattr(profile, "model_from_config", refuse)),
+        ):
+            install()
+            with memory.open_run() as session:
+                with pytest.raises(MemoryOperationError) as caught:
+                    session.learn(LearnContext("run-1", "profile", (), _feedback("x")))
+            cause = caught.value.__cause__
+            assert caught.value.code == code
+            assert str(cause) == "Incorrect API key provided: [REDACTED] ([REDACTED])"
+            assert key[:8] not in str(cause) and key[-4:] not in str(cause)
 
 
 def test_session_recalls_and_learns_the_whole_document(tmp_path, monkeypatch) -> None:

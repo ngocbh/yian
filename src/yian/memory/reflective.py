@@ -22,7 +22,12 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 import yian.json_codec as json_codec
-from yian.llm_clients.connection import legacy_connection_config, resolve_model_config, split_model_config
+from yian.llm_clients.connection import (
+    legacy_connection_config,
+    resolve_model_config,
+    scrub_call_credentials,
+    split_model_config,
+)
 from yian.llm_clients import LLMConfig, model_from_config
 from yian.llm_clients.config import RETIRED_LLM_CONFIG_KEYS
 from yian.memory.contracts import (
@@ -1462,9 +1467,12 @@ class _ReflectiveSession:
             )
         )
         human = HumanMessage(content=prompt)
+        call_config = legacy_connection_config(llm_config)
         try:
-            model = model_from_config(legacy_connection_config(llm_config))
+            model = model_from_config(call_config)
         except Exception as exc:
+            # Providers may echo any credential the call sent; the chained cause must not carry it.
+            scrub_call_credentials(exc, call_config)
             raise _operation_error(
                 "learn",
                 "reflective.model_construction",
@@ -1475,6 +1483,7 @@ class _ReflectiveSession:
         try:
             structured = model.with_structured_output(_ReflectionResponse)
         except Exception as exc:
+            scrub_call_credentials(exc, call_config)
             raise _operation_error(
                 "learn",
                 "reflective.structured_output",
@@ -1487,6 +1496,7 @@ class _ReflectiveSession:
             if not callable(invoke):
                 raise TypeError("structured model must provide invoke()")
         except Exception as exc:
+            scrub_call_credentials(exc, call_config)
             raise _operation_error(
                 "learn",
                 "reflective.structured_output",
@@ -1497,6 +1507,7 @@ class _ReflectiveSession:
         try:
             raw_response = invoke([system, human])
         except (OutputParserException, ValidationError) as exc:
+            scrub_call_credentials(exc, call_config)
             raise _operation_error(
                 "learn",
                 "reflective.contract",
@@ -1504,6 +1515,7 @@ class _ReflectiveSession:
                 retryable=False,
             ) from exc
         except Exception as exc:
+            scrub_call_credentials(exc, call_config)
             raise _operation_error(
                 "learn",
                 "reflective.provider",

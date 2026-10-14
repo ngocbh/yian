@@ -1,7 +1,8 @@
 """Runtime binding errors name a desugared param the way load errors name it.
 
-A CASE `on:` reads as `node '<id>' on:`, and a value entry's one input reads as
-`value entry '<id>'` (template paths add `at <path>`), and an inline call's argument reads
+A CASE `on:` reads as `node '<id>' on:`, a value entry's one input reads as
+`value entry '<id>'`, and a flow output reads as `flow output` (a record field as
+`flow output '<name>'`); template paths add `at <path>`. An inline call's argument reads
 as `<site> call(<callee>) argument '<p>'`. An ordinary node input keeps `input '<p>'`.
 """
 
@@ -11,9 +12,8 @@ from yian import load_flow, run_flow
 from yian.compose import LoadError
 
 
-def _case_flow() -> str:
-    """Return a flow whose CASE `g` routes on `input.x * 10`."""
-    return """
+def test_a_case_on_failure_names_the_on_field():
+    flow = load_flow("""
 id: f
 name: f
 input:
@@ -28,11 +28,8 @@ nodes:
     else: a
   a: !str hi
 output: ${g.output}
-"""
-
-
-def test_a_case_on_failure_names_the_on_field():
-    result = run_flow(load_flow(_case_flow()), {"x": 1e308})
+""")
+    result = run_flow(flow, {"x": 1e308})
 
     assert result.status == "failed"
     assert result.failure.code == "binding.evaluate"
@@ -75,6 +72,7 @@ output: ${invoke.output}
 
     assert result.status == "failed"
     assert result.failure.code == "binding.evaluate"
+    assert result.failure.node_id == "invoke/g"
     assert result.failure.message == (
         "node 'g' on: non-finite number inf is not a yian value"
     )
@@ -115,6 +113,7 @@ output: ${v.output}
     result = run_flow(flow, {"x": 1.0, "z": 0.0})
 
     assert result.status == "failed"
+    assert result.failure.code == "binding.evaluate"
     assert result.failure.node_id == "v"
     assert result.failure.message == "value entry 'v' at a: division by zero: 1.0 / 0.0"
 
@@ -145,23 +144,26 @@ id: f
 name: f
 input:
   x: !float
-  z: !float
+  flag: !bool
 nodes:
   g:
     kind: case
-    on: ${input.x}
+    on: ${input.flag}
     cases:
-      - when: 1.0
+      - when: true
         then: a
     else: a
-  a: !float ${input.x / input.z}
+  a: !float ${input.x * 10}
 output: ${g.output}
 """)
-    result = run_flow(flow, {"x": 1.0, "z": 0.0})
+    result = run_flow(flow, {"x": 1e308, "flag": True})
 
     assert result.status == "failed"
     assert result.failure.code == "binding.evaluate"
     assert result.failure.node_id == "a"
+    assert result.failure.message == (
+        "value entry 'a': non-finite number inf is not a yian value"
+    )
     assert result.failure.trace[-1].key == "/s:root/s:node/s:a/s:input/s:a/s:binding"
 
 

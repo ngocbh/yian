@@ -294,6 +294,12 @@ def test_python_built_flow_output_mis_calling_a_builtin_fails_before_the_run(tmp
     _run_raises(flow, rf"^flow output: {_UPPER_RUN}", tmp_path)
 
 
+def test_python_built_record_flow_output_names_the_field(tmp_path):
+    flow = load_flow(_fill(_CODE, **{**_GOOD_CODE, "out": "{a: '${x.output}'}"}))
+    flow.compiled.wiring["__end__"]["a"] = Binding("${upper(x.output, 1)}")
+    _run_raises(flow, rf"^flow output 'a': {_UPPER_RUN}", tmp_path)
+
+
 def test_python_built_child_flow_output_names_its_owner(tmp_path):
     flow = load_flow(_fill(_BODY, inner="${input.w}", w="${input.v}"))
     flow.compiled.nodes["c"].child.wiring["__end__"]["result"] = Binding("${upper(s.output, 1)}")

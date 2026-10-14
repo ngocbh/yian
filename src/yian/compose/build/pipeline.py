@@ -546,7 +546,7 @@ def _register_assertion_origin(
 
 
 def _stamp_binding_labels(build_results: dict[str, BuildResult]) -> None:
-    """Give each param a desugar named for load errors the same phrase for runtime errors.
+    """Copy the load-error names desugars gave generated params into each node's ``binding_labels``.
 
     A CASE ``on:`` or ``cases[i].when`` param takes its ``wiring_labels`` site name; a
     value entry's input takes its ``field_labels`` phrase. Other params keep the plain

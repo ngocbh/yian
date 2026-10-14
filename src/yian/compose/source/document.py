@@ -24,6 +24,7 @@ from yian.compose.source.common import (
     _SequenceDef,
 )
 from yian.compose.source.cursor import SourceCursor
+from yian.compose.source.scalars import _FlowLoader
 from yian.diagnostics import SourceRange
 
 
@@ -118,8 +119,8 @@ def _pair_summary_frontier(
             yield current.pairs[index]
 
 
-class _DocumentLoader(yaml.SafeLoader):
-    """SafeLoader that retains raw merge topology and exact constructed values."""
+class _DocumentLoader(_FlowLoader):
+    """Flow loader that retains raw merge topology and exact constructed values."""
 
     def __init__(self, stream: str):
         self._source_values: dict[int, Any] = {}

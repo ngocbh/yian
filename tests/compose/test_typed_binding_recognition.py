@@ -55,7 +55,8 @@ def _error(value, *, label="qty") -> LoadError:
         ("str = Hi ${name}", "str", "Hi ${name}"),
         ("Size = ${s.output}", "Size", "${s.output}"),
         ("int =  ${x}", "int", "${x}"),
-        ("bool = yes", "bool", True),
+        ("bool = true", "bool", True),
+        ("str = yes", "str", "yes"),
         ("Optional[int] = null", "Optional[int]", None),
         ('str = "${a} = 2"', "str", "${a} = 2"),
         ("str = '${a}'", "str", "${a}"),
@@ -224,13 +225,18 @@ _QUOTE_HINT = "; quote it to keep it as text: "
 _BOOLEAN_NOTE = " (YAML reads unquoted yes/no/on/off/true/false as booleans)"
 
 
-def test_unquoted_no_for_str_suggests_quoting_and_explains_booleans():
-    assert str(_error("str = no")) == (
-        "binding 'qty': `no` is not a valid str"
+def test_unquoted_false_for_str_suggests_quoting_and_explains_booleans():
+    assert str(_error("str = false")) == (
+        "binding 'qty': `false` is not a valid str"
         + _QUOTE_HINT
-        + '`qty: str = "no"`'
+        + '`qty: str = "false"`'
         + _BOOLEAN_NOTE
     )
+
+
+@pytest.mark.parametrize("word", ["no", "yes"])
+def test_unquoted_yes_or_no_for_str_is_text(word):
+    assert _split(f"str = {word}") == TypedBindingText(type_text="str", value=word)
 
 
 @pytest.mark.parametrize(
@@ -238,7 +244,7 @@ def test_unquoted_no_for_str_suggests_quoting_and_explains_booleans():
     [
         ("str = 0x1F", "0x1F", "str"),
         ("str = 017", "017", "str"),
-        ("str = 1_000", "1_000", "str"),
+        ("str = 1e3", "1e3", "str"),
         ("str = 30", "30", "str"),
         ("date = 2026-01-01", "2026-01-01", "date"),
         (

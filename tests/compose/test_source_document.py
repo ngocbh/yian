@@ -7,6 +7,7 @@ import yaml
 
 from yian.compose.source import document as document_module
 from yian.compose.source import SourceDocument, SourceSyntaxError
+from yian.compose.source.scalars import _FlowLoader
 from yian.diagnostics import SourceRange
 
 
@@ -14,7 +15,7 @@ def test_document_has_private_retained_slots():
     text = "count: 30\nflag: yes\n"
     document = SourceDocument.parse(text, label="flow.yaml")
 
-    assert document._value == {"count": 30, "flag": True}
+    assert document._value == {"count": 30, "flag": "yes"}
     assert document._root_node is not None
     assert document._definitions
     assert document._root_definition == 0
@@ -150,7 +151,7 @@ base: &base
 target:
   <<: *base
   1: integer-wins
-  =: explicit-value-key
+  !!value =: explicit-value-key
 """,
         """\
 target:
@@ -163,7 +164,7 @@ target:
     ids=["sequence", "multiple-merge-keys", "keys", "inline-anchor"],
 )
 def test_merge_construction_matches_safe_loader_without_mutating_nodes(text):
-    expected = yaml.safe_load(text)
+    expected = yaml.load(text, Loader=_FlowLoader)
     document = SourceDocument.parse(text)
 
     assert document.root.value == expected
@@ -191,7 +192,7 @@ def test_recursive_self_merge_matches_safe_loader():
 
     document = SourceDocument.parse(text)
 
-    assert document.root.value == yaml.safe_load(text)
+    assert document.root.value == yaml.load(text, Loader=_FlowLoader)
     assert [item.value for item in document.root.child("root").mapping_occurrences()] == [
         "local",
         "local",
@@ -200,17 +201,17 @@ def test_recursive_self_merge_matches_safe_loader():
 
 def test_value_tag_key_alias_is_constructed_as_a_string_everywhere():
     text = (
-        "first: &equals =\n"
+        "first: &equals !!value =\n"
         "? *equals\n"
         ": aliased-key\n"
     )
 
-    assert SourceDocument.parse(text).root.value == yaml.safe_load(text)
+    assert SourceDocument.parse(text).root.value == yaml.load(text, Loader=_FlowLoader)
 
 
 def test_value_tag_alias_in_a_later_nested_mapping_keeps_safe_loader_error():
     text = (
-        "first: &equals =\n"
+        "first: &equals !!value =\n"
         "nested: {*equals: aliased-key}\n"
     )
 
@@ -221,17 +222,17 @@ def test_value_tag_alias_in_a_later_nested_mapping_keeps_safe_loader_error():
 def test_syntactic_only_custom_tagged_merge_source_is_not_constructed():
     text = "target: {<<: !mystery {value: inherited}}\n"
 
-    assert SourceDocument.parse(text).root.value == yaml.safe_load(text)
+    assert SourceDocument.parse(text).root.value == yaml.load(text, Loader=_FlowLoader)
 
 
 def test_custom_tagged_merge_source_can_force_a_value_tag_alias():
     text = (
         "target:\n"
-        "  first: &equals =\n"
+        "  first: &equals !!value =\n"
         "  <<: !mystery {*equals: inherited}\n"
     )
 
-    assert SourceDocument.parse(text).root.value == yaml.safe_load(text)
+    assert SourceDocument.parse(text).root.value == yaml.load(text, Loader=_FlowLoader)
 
 
 @pytest.mark.parametrize(

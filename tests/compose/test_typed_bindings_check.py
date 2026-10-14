@@ -189,13 +189,21 @@ def test_number_literal_for_str_suggests_quoting():
     )
 
 
-def test_yes_literal_for_str_explains_yaml_booleans():
-    error = _load_error(_flow("str = yes"))
+def test_true_literal_for_str_explains_yaml_booleans():
+    error = _load_error(_flow("str = true"))
 
     message = str(error.diagnostic.message)
-    assert message.startswith("binding 'x': `yes` is not a valid str")
-    assert '`x: str = "yes"`' in message
+    assert message.startswith("binding 'x': `true` is not a valid str")
+    assert '`x: str = "true"`' in message
     assert "yes/no/on/off/true/false as booleans" in message
+
+
+@pytest.mark.parametrize("word", ["yes", "no"])
+def test_unquoted_yes_or_no_literal_for_str_is_text(word):
+    result = run_flow(load_flow(_flow(f"str = {word}")), {})
+
+    assert result.status == "succeeded", result.failure
+    assert result.output == word
 
 
 def test_null_literal_for_a_record_output_field_fails_at_its_line():

@@ -13,7 +13,9 @@ phases populate the package-private catalog builder; a package-private lookup ma
 resolve an already-registered site for a load failure without copying or freezing
 the table. The loader alone consumes the final frozen snapshot, and parser objects
 stay private. Isolated location-free literals may be parsed separately without
-creating a document.
+creating a document. Plain scalars read with YAML 1.2 core-schema rules plus
+unquoted timestamps and ``<<`` merge keys, from one loader table shared by
+documents and isolated literals.
 
 Knows about:   PyYAML and the source-neutral contracts in ``diagnostics``;
                Compose imports ``SourceRange`` directly from that leaf.

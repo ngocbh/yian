@@ -137,8 +137,6 @@ def test_case_parse_matches_descriptor_and_records_ranges():
     reader = _reader_for(_FLOW, "route")
     desc = CaseDescriptor.parse("route", reader)
 
-    # The bare `on:` key is coerced to `True` by YAML 1.1; parse maps it back to the
-    # `on` field (the source cursor still resolves the range via the raw key text).
     assert desc == CaseDescriptor(
         id="route",
         on="${score.output}",
@@ -159,15 +157,15 @@ def test_case_parse_requires_cases():
 
 
 def test_case_with_both_on_spellings_is_a_located_error():
-    # Plain `on:` (YAML 1.1 True) and quoted `"on":` are the same field; keep neither silently.
+    # Plain `on:` and quoted `"on":` are the same text key: a repeated key.
     flow = (
         "id: c\nname: c\nnodes:\n  route:\n    kind: case\n    on: ${x.output}\n"
         '    "on": ${y.output}\n    cases:\n      - when: a\n        then: hot\n'
     )
-    with pytest.raises(LoadError, match='key `on` and key `"on"` both mean') as exc:
+    with pytest.raises(LoadError, match=r"duplicate key 'on' \(first at line 6\)") as exc:
         load_flow(flow)
 
-    assert exc.value.diagnostic.frames[-1].range == SourceRange(6, 5, 6, 7)
+    assert exc.value.diagnostic.frames[-1].range == SourceRange(7, 5, 7, 9)
 
 
 def test_case_build_lowers_to_case_node_with_edges():

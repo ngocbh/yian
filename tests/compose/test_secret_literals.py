@@ -434,3 +434,106 @@ def test_a_literal_secret_in_a_case_call_target_has_a_clean_label():
 
     assert "case node 'c' then: call(...) argument 'password' is a secret name" in message
     assert "::" not in message
+
+
+def _input_flow(*declarations: str) -> str:
+    """Return a one-node flow whose `input:` has the given declaration lines."""
+    return (
+        "id: f\nname: f\ninput:\n"
+        + "\n".join(f"  {line}" for line in declarations)
+        + "\nnodes:\n  fetch:\n    kind: code\n    output: str\n"
+        "    code: |\n      return 'x'\n"
+        "output: ${fetch.output}\n"
+    )
+
+
+def _default_error(text: str) -> str:
+    """Load `text`, asserting a secret default error that does not echo the value."""
+    with pytest.raises(LoadError) as exc_info:
+        load_flow(text)
+    message = str(exc_info.value)
+    assert "secret name" in message, message
+    assert _SECRET not in message, message
+    return message
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        f"password: str = '{_SECRET}'",
+        f"password: str = {_SECRET}",
+        f"password: \"str = '{_SECRET}\"",
+        "password: int = 1234",
+        "password: str = ''",
+        f"api_key: list[str] = [{_SECRET}]",
+    ],
+)
+def test_a_secret_named_input_default_is_rejected(declaration):
+    name = declaration.split(":", 1)[0]
+    message = _default_error(_input_flow(declaration))
+
+    assert (
+        f"input '{name}': a secret name can't have a default value in the flow file; "
+        "drop the default and pass the value when the flow runs"
+    ) in message
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        "api_key: Optional[str] = null",
+        "api_key: Optional[str] = ~",
+        "primary_password: str",
+        "password: Optional[str]",
+        "password: str = ${input.other}",
+    ],
+)
+def test_a_secret_named_input_without_a_literal_default_loads(declaration):
+    load_flow(_input_flow(declaration))
+
+
+def test_a_nested_secret_key_in_an_input_default_is_rejected():
+    message = _default_error(
+        _input_flow(f"conn: 'dict[str, str] = {{\"password\": \"{_SECRET}\"}}'")
+    )
+
+    assert "input 'conn': default has key 'password' (a secret name)" in message
+    assert "${input.conn}" in message
+
+
+def test_the_secret_default_error_is_located_at_its_declaration():
+    text = _input_flow("keep: str", f"password: str = {_SECRET}")
+    with pytest.raises(LoadError) as exc_info:
+        load_flow(text)
+    line = text.splitlines().index(f"  password: str = {_SECRET}") + 1
+
+    assert exc_info.value.diagnostic.frames[-1].range.start_line == line
+
+
+def test_a_secret_named_def_input_default_is_rejected():
+    text = (
+        "id: f\nname: f\n"
+        "defs:\n  g:\n    input:\n"
+        f"      password: str = {_SECRET}\n"
+        "    nodes:\n      run:\n        kind: code\n        output: str\n"
+        "        code: |\n          return 'x'\n"
+        "    output: ${run.output}\n"
+        "nodes:\n  b:\n    kind: call\n    call: g\n"
+        "output: ${b.output}\n"
+    )
+
+    assert "input 'password': a secret name can't have a default" in _default_error(text)
+
+
+def test_a_secret_named_agent_variable_is_rejected():
+    text = (
+        "id: f\nname: f\nnodes:\n  writer:\n    kind: agent\n"
+        f"    variables:\n      password: str = {_SECRET}\n"
+        "    prompt: hi\n    output: str\n"
+        "output: ${writer.output}\n"
+    )
+
+    assert (
+        "variable 'password': a secret name can't be a variable, whose value is written "
+        "in the flow file; pass it as a node input (${input.password}) instead"
+    ) in _default_error(text)

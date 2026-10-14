@@ -24,6 +24,12 @@ from yian.typesys.values import ValueKind
 from yian.typesys.types import TypeRegistry, encodes_as_utf8
 
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
+from yian.compose.helpers.secret_literals import (
+    input_ref,
+    is_binding_text,
+    secret_literal_message,
+    secret_literal_path,
+)
 from yian.compose.helpers.yaml_words import former_boolean_fix
 from yian.diagnostics import SourceRange
 from yian.compose.source import (
@@ -33,6 +39,7 @@ from yian.compose.source import (
     parse_yaml_literal,
 )
 from yian.diagnostics import OriginRef
+from yian.secret_names import is_secret_name
 
 if TYPE_CHECKING:
     from yian.compose.source.catalog import _SourceCatalogBuilder
@@ -279,7 +286,11 @@ def _read_flow_parameter(
     declaration_label: str = "input",
     require_default: bool = False,
 ) -> Parameter:
-    """Read one typed declaration using an injected compiler and default policy."""
+    """Read one typed declaration using an injected compiler and default policy.
+
+    A default is part of the flow file, so under a secret name it must be `null` or
+    `${...}` text, and no default may hold a literal under a nested secret key.
+    """
     if isinstance(value, str):
         type_part, default_part = _split_default(value)
         contract = read_contract(type_part)
@@ -292,12 +303,31 @@ def _read_flow_parameter(
         default: Any = None
         if has_default:
             assert default_part is not None
+            # Checked before the default is read or type-checked, since those errors
+            # quote it.
+            secret = is_secret_name(name)
             try:
                 default = parse_yaml_literal(default_part)
             except SourceSyntaxError as exc:
+                if secret:
+                    raise _secret_default_error(
+                        name, declaration_label, diagnostics
+                    ) from None
                 raise diagnostics.error(
                     f"{declaration_label} {name!r}: bad default {default_part!r}: {exc}"
                 ) from exc
+            if secret and default is not None and not is_binding_text(default):
+                raise _secret_default_error(name, declaration_label, diagnostics)
+            path = secret_literal_path(None, default)
+            if path is not None:
+                raise diagnostics.error(
+                    secret_literal_message(
+                        "default",
+                        name,
+                        path,
+                        owner=f"{declaration_label} {name!r}",
+                    )
+                )
             try:
                 build_value_as(typ, default)
             except ValueError as exc:
@@ -332,6 +362,31 @@ def _read_flow_parameter(
     raise diagnostics.error(
         f"{declaration_label} {name!r}: declaration must be {form}, "
         f"got {type(value).__name__}"
+    )
+
+
+def _secret_default_error(
+    name: str, declaration_label: str, diagnostics: LoadDiagnostics
+) -> LoadError:
+    """Word the error for a literal default under a secret name; it omits the value.
+
+    Args:
+        name (`str`): The declaration's name.
+        declaration_label (`str`): What the declaration is, `"input"` or `"variable"`.
+        diagnostics (`LoadDiagnostics`): Factory for load errors.
+
+    Returns:
+        `LoadError`: The error to raise.
+    """
+    if declaration_label == "variable":
+        return diagnostics.error(
+            f"variable {name!r}: a secret name can't be a variable, whose value is "
+            f"written in the flow file; pass it as a node input ({input_ref(name)}) "
+            "instead"
+        )
+    return diagnostics.error(
+        f"{declaration_label} {name!r}: a secret name can't have a default value in "
+        "the flow file; drop the default and pass the value when the flow runs"
     )
 
 

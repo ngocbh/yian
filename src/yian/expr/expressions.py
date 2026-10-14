@@ -85,6 +85,15 @@ def _parse_literal(token: str) -> Any:
     raise ExpressionError(f"cannot parse literal {token!r}")
 
 
+def _operand_repr(value: Any) -> str:
+    """Return `repr(value)`, or a placeholder naming its type when it can't be rendered."""
+    try:
+        return repr(value)
+    except ValueError:
+        # repr of an int past Python's str-digit limit raises, at any nesting depth.
+        return f"<{type(value).__name__} too large to display>"
+
+
 def _eval_comparison(op: str, lhs: Any, rhs: Any) -> bool:
     try:
         if op == "==":
@@ -109,7 +118,9 @@ def _eval_comparison(op: str, lhs: Any, rhs: Any) -> bool:
         if op == ">=":
             return lhs >= rhs
     except TypeError as exc:
-        raise ExpressionError(f"type error evaluating {lhs!r} {op} {rhs!r}: {exc}") from exc
+        raise ExpressionError(
+            f"type error evaluating {_operand_repr(lhs)} {op} {_operand_repr(rhs)}: {exc}"
+        ) from exc
     raise ExpressionError(f"unsupported operator: {op!r}")
 
 
@@ -228,9 +239,9 @@ def evaluate_when(
 
     Raises:
         `ExpressionError`:
-            If the expression is malformed, references an invalid path, mixes
-            incompatible types (e.g. arithmetic over a non-number), or names a type
-            absent from `types`.
+            If the expression is malformed, references an invalid path, applies an
+            operator Python rejects for its operand types (e.g. `"a" + 1`) or can't
+            complete (overflow), or names a type absent from `types`.
 
     Example:
         ```python
@@ -676,9 +687,22 @@ class _EvalExpr:
         try:
             value = op(lhs, rhs)
         except ZeroDivisionError as exc:
-            raise ExpressionError(f"division by zero: {lhs!r} {symbol} {rhs!r}") from exc
+            l, r = _operand_repr(lhs), _operand_repr(rhs)
+            raise ExpressionError(f"division by zero: {l} {symbol} {r}") from exc
         except TypeError as exc:
-            raise ExpressionError(f"type error evaluating {lhs!r} {symbol} {rhs!r}: {exc}") from exc
+            l, r = _operand_repr(lhs), _operand_repr(rhs)
+            raise ExpressionError(f"type error evaluating {l} {symbol} {r}: {exc}") from exc
+        except OverflowError as exc:
+            l, r = _operand_repr(lhs), _operand_repr(rhs)
+            # Float `**` overflow carries an (errno, message) pair; args[-1] is the message.
+            detail = exc.args[-1] if exc.args else exc
+            raise ExpressionError(f"cannot compute {l} {symbol} {r}: {detail}") from exc
+        except KeyError as exc:
+            l, r = _operand_repr(lhs), _operand_repr(rhs)
+            raise ExpressionError(f"cannot compute {l} {symbol} {r}: missing key {exc}") from exc
+        except ValueError as exc:
+            l, r = _operand_repr(lhs), _operand_repr(rhs)
+            raise ExpressionError(f"cannot compute {l} {symbol} {r}: {exc}") from exc
         if self._trace and symbol == "+" and type(lhs) is list and type(rhs) is list:
             self._frames[-1].route = ValueRoute(
                 "concat", children=tuple(self._frames[-1].children),
@@ -721,7 +745,9 @@ class _EvalExpr:
         try:
             return -v
         except TypeError as exc:
-            raise ExpressionError(f"unary minus on non-number {v!r}: {exc}") from exc
+            raise ExpressionError(f"unary minus on non-number {_operand_repr(v)}: {exc}") from exc
+        except (ValueError, OverflowError) as exc:
+            raise ExpressionError(f"cannot compute -{_operand_repr(v)}: {exc}") from exc
 
     def _do_list_lit(self, node: Tree) -> Any:
         value = [self._as_value(self._walk(c)) for c in node.children]
@@ -750,7 +776,8 @@ def eval_expr(
     `${}`-wrapped / `item`-scoped), arithmetic and comparisons over VALUES (so
     `str+str` concatenates and `list+list` extends), boolean combinators, list
     literals, coalesce / default / required, pure builtin calls, and the
-    `isinstance(x, T)` type test.
+    `isinstance(x, T)` type test. The operators are Python's (`%` formats text, a
+    bool counts as 0/1).
 
     Three semantics support a CASE's `else:` routing:
     a missing reference is `None` (in the non-strict modes); arithmetic over that
@@ -792,8 +819,9 @@ def eval_expr(
     Raises:
         `ExpressionError`:
             On an unsupported node, an unknown builtin, a builtin failure, arithmetic
-            over an incompatible operand (incl. `None`), a strict-mode miss, or an
-            `isinstance` type name absent from `types`.
+            over an incompatible operand (incl. `None`), an operator Python can't
+            complete (overflow, a repetition count too large, a missing `%(key)s`), a
+            strict-mode miss, or an `isinstance` type name absent from `types`.
         `RequiredError`:
             When a `head :? message` required atom's head misses / is None.
         `TypeError`:

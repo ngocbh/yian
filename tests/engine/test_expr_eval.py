@@ -8,6 +8,8 @@ VALUES, the three missing-ref-by-mode behaviors, and the load-bearing semantics
 `else:` routing depends on.
 """
 
+import sys
+
 import pytest
 
 from yian.expr.expressions import (
@@ -17,6 +19,11 @@ from yian.expr.expressions import (
     eval_expr,
 )
 from yian.expr.grammar import parse_expr
+
+# Python 3.10.0-3.10.6 has no int-to-str digit limit, so a huge int's repr works there.
+needs_digit_limit = pytest.mark.skipif(
+    not hasattr(sys, "get_int_max_str_digits"), reason="no int-to-str digit limit"
+)
 
 
 def _eval(text, resolve=None, item=None, mode=ResolveMode.BINDING_NONE):
@@ -72,6 +79,88 @@ def test_subtraction_and_product_and_div():
 
 def test_unary_minus():
     assert _eval("-x", _from({"x": 5})) == -5
+
+
+# --------------------------------------------------------------------------- #
+# Errors Python raises while computing an operator become ExpressionError
+# --------------------------------------------------------------------------- #
+
+
+class _Boom:
+    """A resolved value whose negation raises the given exception."""
+
+    def __init__(self, exc):
+        self.exc = exc
+
+    def __neg__(self):
+        raise self.exc
+
+
+def test_float_power_overflow_is_an_expression_error():
+    with pytest.raises(ExpressionError, match=r"\*\*") as info:
+        _eval("2.0 ** n", _from({"n": 5000}))
+    assert "Result too large" in str(info.value)
+    assert "(34" not in str(info.value)
+
+
+def test_int_too_large_for_float_division_is_an_expression_error():
+    with pytest.raises(ExpressionError):
+        _eval("n / 3", _from({"n": 10**400}))
+
+
+def test_string_repetition_overflow_is_an_expression_error():
+    with pytest.raises(ExpressionError):
+        _eval('"a" * n', _from({"n": 10**20}))
+
+
+def test_bad_format_directive_is_an_expression_error():
+    with pytest.raises(ExpressionError):
+        _eval('"%z" % 1')
+
+
+def test_missing_format_key_is_an_expression_error():
+    with pytest.raises(ExpressionError, match="missing key 'k'"):
+        _eval('"%(k)s" % r', _from({"r": {"j": 1}}))
+
+
+@needs_digit_limit
+def test_type_error_with_a_huge_int_names_the_operand_type():
+    with pytest.raises(ExpressionError, match="<int too large to display>"):
+        _eval('n + "a"', _from({"n": 10**5000}))
+
+
+@needs_digit_limit
+def test_division_by_zero_with_a_huge_int():
+    with pytest.raises(ExpressionError, match="division by zero: <int too large to display>"):
+        _eval("n / 0", _from({"n": 10**5000}))
+
+
+@needs_digit_limit
+def test_comparison_type_error_with_a_huge_int():
+    with pytest.raises(ExpressionError, match="<int too large to display>"):
+        _eval('n < "a"', _from({"n": 10**5000}))
+
+
+@needs_digit_limit
+def test_unary_minus_on_a_list_holding_a_huge_int():
+    with pytest.raises(ExpressionError, match="unary minus on non-number <list too large"):
+        _eval("-xs", _from({"xs": [10**5000]}))
+
+
+@pytest.mark.parametrize("exc", [OverflowError("boom"), ValueError("boom")])
+def test_unary_minus_errors_are_expression_errors(exc):
+    with pytest.raises(ExpressionError, match="boom"):
+        _eval("-x", lambda p: _Boom(exc) if p == "x" else None)
+
+
+def test_division_by_zero_message_is_unchanged():
+    with pytest.raises(ExpressionError, match="division by zero"):
+        _eval("1 / 0")
+
+
+def test_type_error_message_is_unchanged():
+    with pytest.raises(ExpressionError, match=r"type error evaluating 1 \+ 'a'"):
+        _eval('1 + "a"')
 
 
 # --------------------------------------------------------------------------- #

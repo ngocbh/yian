@@ -87,15 +87,47 @@ non-strict, so an embedded null contributes an empty string.
 
 **Two safety rules:** dotted access is dict-key lookup only, never `getattr` (so
 `${x.__class__}` is just a missing key); builtin calls dispatch through `TEMPLATE_FNS` only
-(no arbitrary callable is reachable). Arithmetic runs on the resolved *values* with Python
-semantics — `str + str` concatenates, `list + list` extends (`${xs + [item]}`).
+(no arbitrary callable is reachable).
+
+### Arithmetic follows Python
+
+Operators run on the resolved *values* with Python semantics:
+
+| Expression | Result | Rule |
+|------------|--------|------|
+| `${7 + 2}`, `${"a" + "b"}`, `${xs + [item]}` | `9`, `"ab"`, `xs` with `item` appended | `+` adds numbers and concatenates text and lists |
+| `${"ab" * 3}`, `${[0] * 3}` | `"ababab"`, `[0, 0, 0]` | `*` repeats text and lists by an int |
+| `${"%.2f" % price}`, `${"%(k)s" % record}` | `"3.14"`, the `k` field as text | `%` with text on the left is printf-style formatting |
+| `${7 % 3}` | `1` | `%` with a number on the left is the remainder |
+| `${true + 1}`, `${true > 0}`, `${true == 1}` | `2`, `true`, `true` | a bool counts as 0/1 in arithmetic, ordering and equality |
+
+Equality in a CASE's `on:` form is stricter: a bool never equals a number there.
+
+There are no cost limits. A huge `**` or repetition takes whatever time and memory
+Python needs.
+
+Float `+`, `-`, `*` and `/` that overflow give `inf`, which the
+[non-finite rule](#non-finite-results) catches at the binding. A result Python refuses to
+compute fails like any other expression error:
+
+- `**` overflow: `${2.0 ** 5000}`;
+- an int too large to mix with a float: `${10 ** 400 * 1.0}`;
+- a repetition count too large: `${"a" * 10 ** 20}`;
+- a missing `%(key)s`: `${"%(k)s" % record}` when `record` has no `k`;
+- a value holding an int too long to render as text (past Python's limit, 4300 digits
+  by default), embedded in text or anywhere in a prompt: `"v=${10 ** 5000}"`.
+
+The failure is `binding.evaluate` in a binding, `node.execute` at the CASE node in a
+searched `when:`, `assertion.failed` in a node or flow `asserts:`, and `node.execute` at the
+AGENT or HUMAN_INPUT node whose prompt can't render.
 
 ### Non-finite results
 
-NaN and infinity are not yian values. Float arithmetic that overflows gives `inf`
-(`${input.x * 10}` with `x` = `1e308`), and a binding whose final value holds NaN or
-infinity at any depth fails its node with `binding.evaluate`, naming the input and
-path (`input 'y' at a[1]: non-finite number inf is not a yian value`). A temporary
+NaN and infinity are not yian values. Float `+`, `-`, `*` and `/` that overflow give
+`inf` (`${input.x * 10}` with `x` = `1e308`; `**` and int-to-float overflow fail instead,
+see [Arithmetic follows Python](#arithmetic-follows-python)), and a binding whose final
+value holds NaN or infinity at any depth fails its node with `binding.evaluate`, naming
+the input and path (`input 'y' at a[1]: non-finite number inf is not a yian value`). A temporary
 inside an expression is fine: only the binding's final value is checked, so the
 embedded template `"v=${x * 10}"` is the text `v=inf`. Flows that used to pass an
 infinite value along now fail. To fix one, keep the value in range before it reaches

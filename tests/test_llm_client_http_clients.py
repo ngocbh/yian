@@ -84,7 +84,8 @@ def test_google_sends_every_request_through_the_host_clients(clean_env, gemini):
 def test_google_does_not_close_the_host_clients(clean_env, gemini):
     _, sync, async_ = gemini
     chat = _google(http_client=sync, http_async_client=async_)
-    # Close the genai client directly: aclose() is new in 4.3.7; both cleanup paths make these calls.
+    # ChatGoogleGenerativeAI.aclose() first appears in 4.3.7, so make the two genai calls it
+    # makes, then let GC run the model's finalizer, the cleanup yian relies on.
     chat.client.close()
     asyncio.run(chat.client.aio.aclose())
     del chat

@@ -492,7 +492,8 @@ class AgentNode(Node):
         Raises:
             `TypeError`: Context, feedback, captured fields, or response channels are malformed.
             `ValueError`: Feedback shape, required capture, or response JSON is invalid.
-                Model and host exceptions propagate to the existing driver boundary.
+                Model and host exceptions propagate to the existing driver boundary,
+                model errors with every credential the call sent scrubbed.
 
         Examples:
             `node.backward(recorded_context, ())` returns empty channels without

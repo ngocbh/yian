@@ -330,7 +330,7 @@ def _model_answers(
     except ImportError as error:
         return str(error)
     except Exception as error:
-        # Besides the key, an Azure client also sends AZURE_OPENAI_AD_TOKEN. A
+        # Besides the key, an SDK may send a token variable (AZURE_OPENAI_AD_TOKEN). A
         # keyless check sends no saved or ambient key, so none is looked up.
         secrets = () if key is None else call_credentials({"provider": provider, "api_key": key})
         scrub_keys(error, secrets)

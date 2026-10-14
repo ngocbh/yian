@@ -224,13 +224,14 @@ call sends, listed by `llm_clients.connection.call_credentials`: the host key;
 else a `store` connection's saved login (an API key, or OpenAI subscription
 access and refresh tokens, read without refresh); else the first set key
 variable of the provider (its own, then `GEMINI_API_KEY` for google or
-`OPENAI_API_KEY` for azure); plus `AZURE_OPENAI_AD_TOKEN` for azure when set.
+`OPENAI_API_KEY` for azure); plus, when set, the token variable an SDK may send
+beside any key (`AZURE_OPENAI_AD_TOKEN`, `ANTHROPIC_AUTH_TOKEN`).
 `AgentNode` forward and AGENT backward remove them and their masked fragments
 (`llm_clients.redact.scrub_keys`) before the kind-blind runtime records the
 failure, so the run log, results, events, and CLI output never carry them.
 `ProfileMemory.learn` and `ReflectiveMemory.learn` scrub the chained cause of
 their errors the same way, and `yian auth`'s model check scrubs the key it sends
-(and, for azure, `AZURE_OPENAI_AD_TOKEN`). Authored layers cannot set `api_key` or `_host_key`,
+and that token variable. Authored layers cannot set `api_key` or `_host_key`,
 because they reach the recorded effective map; the loader rejects a flow- or
 def-level `api_key`. The loader checks flow- and def-level `llm_config:` against
 `LLMConfig` as it does a node's, and the cascade rejects unknown keys in the host

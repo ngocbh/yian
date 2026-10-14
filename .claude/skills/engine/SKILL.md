@@ -791,13 +791,13 @@ Most are just the functional model (above) made enforceable:
   `llm_clients.connection.scrub_call_credentials`, which removes every
   credential the call sends (`call_credentials`: the host key, else a `store`
   connection's saved login read without refresh, else the provider's first set
-  key variable, plus `AZURE_OPENAI_AD_TOKEN` for azure) and masked echoes of
+  key variable, plus `AZURE_OPENAI_AD_TOKEN`/`ANTHROPIC_AUTH_TOKEN` when set) and masked echoes of
   each before the runtime records a failure. Learners scrub the chained cause
   of their fixed-message errors; `yian auth`'s model check scrubs the key it
-  sends and, for azure, `AZURE_OPENAI_AD_TOKEN`. Authored layers reject `api_key` and
+  sends and that token variable. Authored layers reject `api_key` and
   `_host_key` (flow and def levels at load); `ProfileMemory` needs `provider`
-  with its key; `ReflectiveMemory` rejects `api_key` and always uses environment
-  credentials. A run-layer `llm_config.base_url` is where the key goes: it is
+  with its key; `ReflectiveMemory` rejects `api_key` and always uses the saved login or
+  environment credentials. A run-layer `llm_config.base_url` is where the key goes: it is
   accepted only beside `api_key` and `provider` (`pop_host_credentials`), must be
   `https` (`http` only for local hosts), is checked as the exact stored string
   (`validate_base_url`: printable ASCII, valid port, ≤2048 chars), and is

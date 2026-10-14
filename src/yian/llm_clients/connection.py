@@ -69,8 +69,9 @@ _HOST_KEY_MISSING = (
 # Key variables a provider SDK reads after the provider's own, and only when yian
 # passes it no key.
 _KEY_ENV_FALLBACKS = {"google": ("GEMINI_API_KEY",), "azure": ("OPENAI_API_KEY",)}
-# Variables a provider SDK reads and sends whatever key yian passes it.
-_ALWAYS_SENT_ENV = {"azure": ("AZURE_OPENAI_AD_TOKEN",)}
+# Token variables a provider SDK may read and send whatever key yian passes it
+# (older Anthropic SDKs send ANTHROPIC_AUTH_TOKEN beside the key).
+_ALWAYS_SENT_ENV = {"azure": ("AZURE_OPENAI_AD_TOKEN",), "anthropic": ("ANTHROPIC_AUTH_TOKEN",)}
 
 
 def missing_model_message(
@@ -726,8 +727,8 @@ def call_credentials(config: dict[str, Any] | LLMConfig | None) -> tuple[str, ..
     without refresh, so expired subscription tokens count too. Otherwise (an
     ``environment`` or ``legacy_environment`` connection, or none) the client
     reads the first set variable of the provider's key variable, then the SDK
-    fallbacks. An ``azure`` call also sends ``AZURE_OPENAI_AD_TOKEN`` when it is
-    set. A config without connection metadata is resolved first, as
+    fallbacks. An ``azure`` or ``anthropic`` call may also send
+    ``AZURE_OPENAI_AD_TOKEN`` or ``ANTHROPIC_AUTH_TOKEN`` when set. A config without connection metadata is resolved first, as
     `model_from_config` does; `None` resolves like ``{}``. Each step is guarded,
     so a failing one still leaves the others' credentials.
 

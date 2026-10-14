@@ -109,8 +109,10 @@ def test_always_sent_variables(monkeypatch):
     assert set(call_credentials(hosted)) == {"sk-host", "ad-token-secret"}
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-env-anthropic")
-    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "auth-token-unused")
-    assert call_credentials(_resolved("anthropic", "claude-x")) == ("sk-env-anthropic",)
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "auth-token-secret")
+    assert set(call_credentials(_resolved("anthropic", "claude-x"))) == {
+        "sk-env-anthropic", "auth-token-secret",
+    }
 
 
 def test_unresolved_config_is_resolved_first():

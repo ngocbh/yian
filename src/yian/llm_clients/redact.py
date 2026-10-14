@@ -186,7 +186,9 @@ def _rewrite(exc: BaseException, plains: tuple[str, ...]) -> None:
         pass
     notes = getattr(exc, "__notes__", None)
     if isinstance(notes, list):
-        notes[:] = [_redact_plains(note, plains) if isinstance(note, str) else note for note in notes]
+        notes[:] = [
+            _redact_plains(note, plains) if isinstance(note, str) else note for note in notes
+        ]
 
 
 def _linked(exc: BaseException) -> list[BaseException]:

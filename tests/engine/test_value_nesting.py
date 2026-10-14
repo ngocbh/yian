@@ -138,13 +138,15 @@ def test_first_offender_depth_first_in_order():
     value = {"ok": 1, "deep": _nest(101), "deeper": _nest(150)}
     with pytest.raises(TypeCheckError) as exc_info:
         reject_deep_nesting(value, "output")
-    assert exc_info.value.path[0] == "deep"
-    assert len(exc_info.value.path) == 100
+    assert exc_info.value.path == ("deep",) + ("a",) * 99
 
 
-def test_very_deep_value_does_not_recurse():
+def test_very_deep_value_does_not_recurse(monkeypatch):
+    deep = _nest(100_000, _as_list)
     with pytest.raises(TypeCheckError):
-        reject_deep_nesting(_nest(100_000, _as_list), "output")
+        reject_deep_nesting(deep, "output")
+    monkeypatch.setattr(values, "MAX_VALUE_NESTING", 200_000)
+    reject_deep_nesting(deep, "output")
 
 
 def test_cycles_are_not_reported_as_too_deep():

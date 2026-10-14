@@ -361,7 +361,9 @@ loader/desugar-synthesized nodes remain so. Clones preserve an existing origin.
 ancestry for nested failure traces; it is empty on direct/static nodes and is
 neither enumerated nor rewritten as local authored provenance. Both fields are
 diagnostic-only and excluded from manifests, fingerprints, and expansion
-digests. A semantic `Node` carries no YAML `range`, `field_ranges`, or aligned
+digests. `AgentNode.llm_config_label` is a render-only, author-facing name for a
+synthesized agent's `llm_config` (such as `node 'ask' adaptive_questions.llm_config`);
+run-start messages use it, and it is excluded the same way. A semantic `Node` carries no YAML `range`, `field_ranges`, or aligned
 assertion-range lists. Compose retains concrete locations on cursors,
 descriptors, and `BuildResult` only until its validators finish, then discards
 them before constructing `CompiledFlow`.
@@ -800,7 +802,8 @@ for the built node to Compose-only `BuildResult.node_range` / `field_ranges`, an
 its `field_labels` (author-facing names a desugar sets for a synth node's fields and inputs) to
 `BuildResult.field_labels`. Post-build validators
 consume that metadata, and assembly drops it before `CompiledFlow`; the semantic
-node receives only the opaque origins. No phase reparses text or touches parser
+node receives only the opaque origins and, for a synthesized AGENT, its render-only
+`llm_config_label`. No phase reparses text or touches parser
 objects.
 For an unchanged source-backed string, `SourceCursor.scalar_source` returns immutable
 `ScalarSource` metadata: the whole scalar range and exact zero-based constructed-line

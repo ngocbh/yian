@@ -2142,7 +2142,9 @@ composer runs only when the gate can: it carries the gate's `case` routes,
 `depends_on:`, and `runs_after:`, and waits for the gate's other inputs, so no LLM call
 happens on a branch the gate isn't on or when a skipped input skips the gate. So a node
 that reads `${<node>__compose.output}` can't also be read by the gate or be in its
-`depends_on:` or `runs_after:`: that is a cycle.
+`depends_on:` or `runs_after:`: that is a cycle. That cycle error names
+`<node>__compose`, with a note that it is generated from the gate
+(`ask__compose is generated from node 'ask'`).
 The input name `__questions` is reserved for that generated wire and cannot be
 authored on an adaptive gate.
 The brief reads the gate's `input:` names, bare, and is checked at load like an AGENT
@@ -2150,7 +2152,12 @@ prompt. An error names the gate and points at the brief:
 `node 'ask' adaptive_questions.prompt: ${nope} is not a declared input or variable`.
 An `llm_config:` error names `node 'ask' adaptive_questions.llm_config` and points at
 the `llm_config:` value. An error in the gate's `input:` is reported once, on the gate,
-as `node 'ask' input 'ctx' ...` at that input.
+as `node 'ask' input 'ctx' ...` at that input. Any other cycle through the gate
+names the gate, not its composer: if `ask`'s input `proj` reads `${ask.output}`, the
+error is `flow has a cycle involving ['ask']`, with the note
+`ask depends on ask (ask.input.proj)`. A model-config error found when a run starts
+names `node 'ask' adaptive_questions.llm_config`, followed by ` in '<call>'` when the
+gate is inside a child flow.
 
 ```yaml
 ask:
@@ -2172,6 +2179,9 @@ the gate's `prompt:` line, or at the node when the gate had no `prompt:`. An
 `llm_config:` error and an input error also used to name `ask__compose`, the
 `llm_config:` one at the gate's first line, and a bad input was listed twice, once on
 `ask__compose` and once on `ask`. An unknown key in the block used to load and be ignored.
+A cycle through the gate used to list `ask__compose` and add a note for the generated
+`ask.input.__questions` wire, and a model-config error at run start used to name
+`Agent 'ask__compose'`.
 
 **Upstream questions** — read the list from an author-written upstream node:
 

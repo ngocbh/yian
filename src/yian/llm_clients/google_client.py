@@ -1,13 +1,76 @@
+import builtins
 import copy
+import typing
 from typing import Any, Optional
 
+import pydantic
 from google.genai.types import HttpOptions
 from langchain_google_genai import ChatGoogleGenerativeAI
-from pydantic import Field
+from pydantic import Field, model_validator
 
-from .base_client import BaseLLMClient, normalize_content
+from .base_client import BaseLLMClient, check_no_redirects, normalize_content
 from .provider_blocks import merge_request_body
 from .validators import validate_model
+
+_HTTP_CLIENT_KWARGS = ("http_client", "http_async_client")
+
+
+def _class_name(cls: type) -> str:
+    """Return `cls` as written in an error message.
+
+    Args:
+        cls (`type`):
+            The class to name.
+
+    Returns:
+        `str`:
+            The bare name for a builtin class (`object`), else the top-level module and
+            qualified name (`httpx.Client`).
+    """
+    if cls.__module__ == builtins.__name__:
+        return cls.__qualname__
+    return f"{cls.__module__.split('.')[0]}.{cls.__qualname__}"
+
+
+def _annotation_classes(annotation: Any) -> list[type]:
+    """Return the classes in a type annotation, flattening unions and dropping `None`.
+
+    Args:
+        annotation (`Any`):
+            A pydantic field annotation, such as `Optional[Union[httpx.Client, httpx2.Client]]`.
+
+    Returns:
+        `list[type]`:
+            The classes it allows, in order.
+    """
+    args = typing.get_args(annotation)
+    if not args:
+        return [] if annotation is type(None) else [annotation]
+    return [cls for arg in args for cls in _annotation_classes(arg)]
+
+
+def _check_http_client_type(name: str, value: Any) -> None:
+    """Reject a caller's HTTP client that google-genai does not take.
+
+    Args:
+        name (`str`):
+            The keyword the client came in (``http_client`` or ``http_async_client``).
+        value (`Any`):
+            The caller's client.
+
+    Raises:
+        `TypeError`:
+            Raised when `value` is not one of the httpx client classes google-genai
+            accepts for that slot.
+    """
+    field = "httpx_async_client" if name == "http_async_client" else "httpx_client"
+    try:
+        HttpOptions(**{field: value})
+    except pydantic.ValidationError:
+        # google-genai adds httpx2's classes to the annotation only when httpx2 imports.
+        accepted = _annotation_classes(HttpOptions.model_fields[field].annotation)
+        expected = " or ".join(_class_name(cls) for cls in accepted)
+        raise TypeError(f"{name} must be an {expected}, got {_class_name(type(value))}") from None
 
 
 class NormalizedChatGoogleGenerativeAI(ChatGoogleGenerativeAI):
@@ -21,9 +84,39 @@ class NormalizedChatGoogleGenerativeAI(ChatGoogleGenerativeAI):
             The ``google`` block, shaped like the REST ``generateContent`` request body
             (camelCase names, REST enum spellings). It is deep-merged into every request
             body as written. Empty sends nothing extra.
+        http_client (`Any`, *optional*, defaults to `None`):
+            The SDK's sync httpx client, used in place of its default one. `None` uses the
+            SDK default.
+        http_async_client (`Any`, *optional*, defaults to `None`):
+            The SDK's async httpx client, used in place of its default one. `None` uses the
+            SDK default.
     """
 
     block: dict[str, Any] = Field(default_factory=dict, exclude=True, repr=False)
+    http_client: Any = Field(default=None, exclude=True, repr=False)
+    http_async_client: Any = Field(default=None, exclude=True, repr=False)
+
+    @model_validator(mode="after")
+    def _use_http_clients(self) -> "NormalizedChatGoogleGenerativeAI":
+        """Hand the given httpx clients to the genai client langchain built.
+
+        Returns:
+            `NormalizedChatGoogleGenerativeAI`:
+                This model, its genai client now sending through the given clients.
+        """
+        # langchain builds the genai client itself and has no slot for an httpx client;
+        # these are the attributes google-genai sets from `HttpOptions.httpx_client` /
+        # `httpx_async_client`. Keeping them in `_http_options` stops the SDK from closing
+        # the caller's client and from sending async calls through aiohttp. The default
+        # clients the SDK already built are left to their own `__del__`.
+        api = self.client._api_client
+        if self.http_client is not None:
+            api._http_options.httpx_client = self.http_client
+            api._httpx_client = self.http_client
+        if self.http_async_client is not None:
+            api._http_options.httpx_async_client = self.http_async_client
+            api._async_httpx_client = self.http_async_client
+        return self
 
     def _prepare_request(self, messages, **kwargs):
         """Return langchain's request with `block` added to the request's ``extra_body``.
@@ -69,14 +162,27 @@ class GoogleClient(BaseLLMClient):
     """Client for Google Gemini models.
 
     With a ``base_url``, the model's httpx client does not follow redirects, so the
-    key goes only to that URL.
+    key goes only to that URL. ``http_client`` / ``http_async_client`` replace the SDK's
+    httpx clients; beside a ``base_url`` they must not follow redirects.
     """
 
     def __init__(self, model: str, base_url: Optional[str] = None, **kwargs):
         super().__init__(model, base_url, **kwargs)
 
     def get_llm(self) -> Any:
-        """Return configured ChatGoogleGenerativeAI instance."""
+        """Return configured ChatGoogleGenerativeAI instance.
+
+        Returns:
+            `NormalizedChatGoogleGenerativeAI`:
+                The chat model for `self.model`, on the given ``base_url`` and host clients.
+
+        Raises:
+            `TypeError`:
+                Raised when a given ``http_client`` / ``http_async_client`` is not an httpx
+                client the SDK takes.
+            `ValueError`:
+                Raised when a given client follows redirects beside a ``base_url``.
+        """
         self.warn_if_unknown_model()
         llm_kwargs: dict[str, Any] = {"model": self.model}
 
@@ -86,9 +192,17 @@ class GoogleClient(BaseLLMClient):
             # cross-origin redirect.
             llm_kwargs["client_args"] = {"follow_redirects": False}
 
-        for key in ("timeout", "max_retries", "callbacks", "http_client", "http_async_client"):
+        for key in ("timeout", "max_retries", "callbacks"):
             if key in self.kwargs:
                 llm_kwargs[key] = self.kwargs[key]
+        for key in _HTTP_CLIENT_KWARGS:
+            value = self.kwargs.get(key)
+            if value is None:
+                continue
+            _check_http_client_type(key, value)
+            if self.base_url:
+                check_no_redirects(key, value)
+            llm_kwargs[key] = value
         # langchain-google-genai sends temperature=0.7 unless it is None; a temperature
         # comes only from the block's generationConfig.
         llm_kwargs["temperature"] = None

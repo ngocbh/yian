@@ -30,6 +30,28 @@ def normalize_content(response):
     return response
 
 
+def check_no_redirects(name: str, http_client: Any) -> None:
+    """Reject a caller's HTTP client that follows redirects.
+
+    Args:
+        name (`str`):
+            The keyword the client came in, for the message.
+        http_client (`Any`):
+            The caller's httpx client.
+
+    Raises:
+        `ValueError`:
+            Raised when the client follows redirects.
+    """
+    # The SDKs that use this send the key in a custom header, which httpx re-sends on a
+    # cross-origin redirect.
+    if getattr(http_client, "follow_redirects", False):
+        raise ValueError(
+            f"{name} follows redirects, which would send the API key past base_url; "
+            "build it with follow_redirects=False"
+        )
+
+
 class BaseLLMClient(ABC):
     """
     Abstract base for provider-specific LLM clients.

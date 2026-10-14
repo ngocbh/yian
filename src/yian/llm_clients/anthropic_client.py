@@ -9,7 +9,7 @@ from anthropic.resources.messages import Messages
 from langchain_anthropic import ChatAnthropic
 from pydantic import Field
 
-from .base_client import BaseLLMClient, normalize_content
+from .base_client import BaseLLMClient, check_no_redirects, normalize_content
 from .provider_blocks import merge_request_body
 from .validators import validate_model
 
@@ -37,27 +37,6 @@ def _call_keywords() -> frozenset[str]:
 
 # The raw responses opened by the `_stream` call running in this context.
 _OPENED_STREAMS: ContextVar[Optional[list]] = ContextVar("anthropic_opened_streams", default=None)
-
-
-def _check_no_redirects(name: str, http_client: Any) -> None:
-    """Reject a caller's HTTP client that follows redirects.
-
-    Args:
-        name (`str`):
-            The keyword the client came in, for the message.
-        http_client (`Any`):
-            The caller's httpx client.
-
-    Raises:
-        `ValueError`:
-            Raised when the client follows redirects.
-    """
-    # The key travels in x-api-key, which httpx re-sends on a cross-origin redirect.
-    if getattr(http_client, "follow_redirects", False):
-        raise ValueError(
-            f"{name} follows redirects, which would send the API key past base_url; "
-            "build it with follow_redirects=False"
-        )
 
 
 class NormalizedChatAnthropic(ChatAnthropic):
@@ -95,7 +74,7 @@ class NormalizedChatAnthropic(ChatAnthropic):
         client = super()._client
         if self.http_client is not None:
             if not self.follow_redirects:
-                _check_no_redirects("http_client", self.http_client)
+                check_no_redirects("http_client", self.http_client)
             return client.with_options(http_client=self.http_client)
         if self.follow_redirects:
             return client
@@ -106,7 +85,7 @@ class NormalizedChatAnthropic(ChatAnthropic):
         client = super()._async_client
         if self.http_async_client is not None:
             if not self.follow_redirects:
-                _check_no_redirects("http_async_client", self.http_async_client)
+                check_no_redirects("http_async_client", self.http_async_client)
             return client.with_options(http_client=self.http_async_client)
         if self.follow_redirects:
             return client

@@ -1,10 +1,12 @@
 """`LLMConfig.base_url`: a host endpoint bound to the key and provider beside it."""
 
+import asyncio
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import httpx
+import openai
 import pytest
 from langchain_core.messages import HumanMessage
 from pydantic import ValidationError
@@ -16,7 +18,7 @@ from yian.llm_clients.connection import (
     resolve_model_config,
     split_model_config,
 )
-from yian.llm_clients.factory import model_from_config
+from yian.llm_clients.factory import create_llm_client, model_from_config
 from yian.llm_clients.openai_client import OpenAIClient
 from tests.fixtures.openai_responses import ResponsesServer
 
@@ -216,6 +218,8 @@ _ENV = (
     "OPENAI_API_KEY", "OPENAI_BASE_URL", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY",
     "VLLM_API_KEY", "VLLM_BASE_URL", "DEEPSEEK_API_KEY", "OPENROUTER_API_KEY",
     "YIAN_DEFAULT_PROVIDER", "YIAN_DEFAULT_MODEL",
+    # AzureChatOpenAI sends this token instead of the configured `api-key` when it is set.
+    "AZURE_OPENAI_AD_TOKEN",
 )
 
 
@@ -410,3 +414,43 @@ def test_dedicated_clients_do_not_follow_a_redirect_with_the_key(
         model.invoke("hi")
     assert [(p, h[header]) for p, h in configured.requests] == [(path, SENTINEL)]
     assert elsewhere.requests == []
+
+
+@pytest.mark.parametrize(
+    "key, factory",
+    [
+        (None, None),
+        ("http_client", lambda: httpx.Client(follow_redirects=True)),
+        ("http_client", openai.DefaultHttpxClient),
+        ("http_async_client", lambda: httpx.AsyncClient(follow_redirects=True)),
+    ],
+    ids=["sdk-default", "httpx-follow-redirects", "openai-DefaultHttpxClient", "async"],
+)
+def test_azure_does_not_send_its_key_past_a_redirect(clean_env, endpoints, key, factory):
+    # Azure's key travels in `api-key`, which httpx itself keeps on a cross-origin redirect;
+    # openai >= 3.4.0 drops it, for its own client and a host's.
+    clean_env.setenv("OPENAI_API_VERSION", "2025-03-01-preview")
+    elsewhere = endpoints()
+    configured = endpoints(redirect_to=elsewhere.url)
+    is_async = key == "http_async_client"
+    client = factory() if factory else None
+    kwargs = {key: client} if key else {}
+    try:
+        chat = create_llm_client(
+            "azure", "dep", base_url=configured.url, api_key=SENTINEL, max_retries=0, **kwargs
+        ).get_llm()
+        with pytest.raises(Exception):
+            if is_async:
+                asyncio.run(chat.ainvoke("hi"))
+            else:
+                chat.invoke("hi")
+    finally:
+        if is_async:
+            asyncio.run(client.aclose())
+        elif client is not None:
+            client.close()
+    assert [h.get("api-key") for _, h in configured.requests] == [SENTINEL]
+    assert len(elsewhere.requests) == 1  # the redirect was followed ...
+    assert "api-key" not in elsewhere.requests[0][1]  # ... without the key
+    if client is not None:
+        assert getattr(chat, "root_async_client" if is_async else "root_client")._client is client

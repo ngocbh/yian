@@ -286,10 +286,9 @@ def template_contract(
     """Infer a value template's contract from its structure.
 
     A mapping is a closed record of its fields' contracts: exact when every field is
-    exact, else partial, and unproven when a key is empty. A list is a list of its
-    items' joined type when every item is exact and the items are equal up to
-    `Optional` (or become equal once literal refinements are widened); otherwise, and
-    for an empty list, it is unproven. A
+    exact, else partial. A list is a list of its items' joined type when every item
+    is exact and the items are equal up to `Optional` (or become equal once literal
+    refinements are widened); otherwise, and for an empty list, it is unproven. A
     nested typed binding has its declared contract, a template string the contract
     `string_contract` gives it, and a literal (including a string with no `${...}`
     span) its kind, as a top-level literal would leave it open to change.
@@ -320,9 +319,6 @@ def _tree_contract(
             return node.contract
         return _tree_contract(node.source, string_contract, exact_literals)
     if type(node) is dict:
-        # No record field can be named "", so such a mapping's shape stays unproven.
-        if "" in node:
-            return None
         return combine_output_contracts(
             {
                 key: _tree_contract(item, string_contract, exact_literals)
@@ -357,16 +353,15 @@ def literal_contract(value: Any) -> OutputContract | None:
 
     Returns:
         `OutputContract | None`: The exact or partial contract, or `None` when the
-            value's shape is unproven (an empty key, a non-text key, which only a
-            programmatic caller can pass, a non-finite number, a list whose items
-            don't join).
+            value's shape is unproven (a non-text key, which only a programmatic
+            caller can pass, a non-finite number, a list whose items don't join).
     """
     # Not `_tree_contract`: it would undo `$$` escapes a second time and read a `${...}`
     # left by an escape as a span, but this value's strings are final text.
     if type(value) is dict:
-        # No record field can be named "" or by a non-text key; a loaded flow's keys are
-        # text, so the second serves programmatic callers.
-        if any(type(key) is not str or not key for key in value):
+        # A loaded flow's mapping keys are text; this serves programmatic callers, whose
+        # mapping may have another key that no record field could name.
+        if any(type(key) is not str for key in value):
             return None
         return combine_output_contracts(
             {key: literal_contract(item) for key, item in value.items()}

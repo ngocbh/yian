@@ -738,10 +738,10 @@ compares exactly: `when: 1` doesn't match the text `"1"`. Two `when:`s with the 
 value (`when: 1` and `when: 1.0`; not `1`, `true` and `"1"`) are a load error at the
 later one.
 
-**Branches.** A `case` only routes. A `then:`/`else:` is a sibling node (an unquoted
-word) or a child call (an unquoted `call(...)` as the whole value). Any node name works
-as a target, including `default` and a value entry. For a fixed or computed result,
-route to a value entry:
+**Branches.** A `case` only routes. A `then:`/`else:` is a sibling node (an untagged
+unquoted word) or a child call (an unquoted `call(...)` as the whole value). Any node
+name works as a target, including `default` and a value entry. For a fixed or computed
+result, route to a value entry:
 ```yaml
 exited: !Turn                  # a value entry: the exit record itself
   transcript: ${input.transcript}
@@ -754,15 +754,16 @@ route:
       then: exited
   else: call(respond, transcript=${input.transcript}, message=${ask.output})
 ```
-A value in a branch (quoted text, a number, a bool, `null` or an empty `else:`, a date,
-a mapping, a list, unquoted text with `${`) is a load error that shows the rewrite
-(``case node 'route' then: a branch names a node or calls a flow; put the value in its
-own entry in `nodes:` and name it: `route_then_0: !str approve` and
-`then: route_then_0` ``). An unquoted word that names no node suggests the nearest node
-and a value entry (``Did you mean `reply`? For the text, add a value entry and name it:
-`replyy_text: !str replyy` ``). A `case` has no `output:` (a load error: tag the result
-where you read it). `${route.output}` reads whichever branch ran; type it with a tag
-where you read it (`output: !Turn ${route.output}`). A CASE read through
+A value in a branch (a tagged value such as `!str reply`, quoted text, a number, a bool,
+`null` or an empty `else:`, a date, a mapping, a list, unquoted text with `${`) is a load
+error that shows the rewrite (``case node 'route' then: a branch names a node or calls a
+flow; put the value in its own entry in `nodes:` and name it:
+`route_then_0: !str approve` and `then: route_then_0` ``). An unquoted word that names
+no node suggests the nearest node and a value entry (``Did you mean `reply`? For the
+text, add a value entry and name it: `replyy_text: !str replyy` ``). A `case` has no
+`output:` (a load error: tag the result where you read it). `${route.output}` reads
+whichever branch ran; type it with a tag where you read it
+(`output: !Turn ${route.output}`). A CASE read through
 `${case.output}` (or routed to by one) needs `else:` or an `on:` Literal with every tag
 listed, or a non-nullable `bool` with `when: true` and `when: false`. `${case.output}`
 works as a whole binding or inside text, not in a coalesce, `:-` default, expression,

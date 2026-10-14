@@ -909,6 +909,12 @@ flow has unresolved references:
 - A nested tagged `!object` stays open.
 - `!object ${x.output}`, and any `object` from outside (a flow input, an AGENT, a tool),
   stays unchecked.
+- A record field can't be named `""`, so an empty key in the record is a load error at
+  its mapping. `r: !object {"": 1, a: 2}` fails:
+
+  ```text
+  'r': a record key can't be empty; a written-out `!object` keeps its keys as record fields
+  ```
 
 ### How a value entry runs
 
@@ -939,6 +945,8 @@ Other errors:
 - An entry that reads itself, or entries that read each other, are a cycle:
   `node build dependency cycle: x -> y -> x`.
 - A tag with no value: ``value entry 'x' needs a value after its tag, e.g. `x: !int ...` ``.
+- A number that is not finite, at any depth, fails at its line:
+  `x: !float .inf` gives `'x': numbers must be finite (got .inf)`.
 - Reserved node ids, such as `input`, apply to value entries too.
 
 ## Per-node configuration — `env:`
@@ -2000,21 +2008,24 @@ case node 'route' then: a branch names a node or calls a flow; put the value in 
 
 That covers quoted text (`then: "reply"` too, even when a node is named `reply`), `null`
 and an empty `else:`, numbers, bools, dates, mappings, lists, unquoted text holding `${`,
-and a tagged value. The entry keeps a tagged branch's tag (`then: !int 3` gives
-`!int 3`). Otherwise it is tagged with the `case`'s old `output:` type when a tag can
-spell it and the value fits it, else with the type of a lone `${input.x}` or
-`${node.output}`, else with a tag that fits the value (`!int 3`, `!Optional(str) null`,
-`!object {...}`, `!list(list(int)) [[1], [2]]`). A lone span of another type shows
-`!<type>` for you to fill in, and so does a list of mixed items, which no tag holds.
+and a tagged value (`then: !str reply` is the text `reply`, as in a value entry). The
+entry keeps a tagged branch's tag (`then: !int 3` gives `!int 3`). Otherwise it is
+tagged with the `case`'s old `output:` type when a tag can spell it and the value fits
+it (a lone `${input.x}` or `${node.output}` fits when its type does), else with the type
+of that lone reference, else with a tag that fits the value (`!int 3`,
+`!Optional(str) null`, `!object {...}`, `!list(list(Optional(int))) [[1], [null]]`). A
+lone span of another type shows `!<type>` for you to fill in, and so does a list of
+mixed items, which no tag holds.
 
 A value no entry can hold is its own error at the branch: a number that is not finite, a
-value that contains itself through a YAML alias, a `call(...)` nested in a mapping or
-list, a flow call inside `${...}` (call the flow as the branch instead:
-`then: call(take, ...)`), a malformed span, and a span reading the case itself. A quoted
-`call(...)` holding `${...}` gets its own error too: drop the quotes to call the flow.
+value that contains itself through a YAML alias, a mapping with an empty key that would
+be a written-out `!object`, a `call(...)` nested in a mapping or list, a flow call inside
+`${...}` (call the flow as the branch instead: `then: call(take, ...)`), a malformed
+span, and a span reading the case itself. A quoted `call(...)` holding `${...}` gets its
+own error too: drop the quotes to call the flow.
 
-An unquoted word always names a node. A word that names no node is a load error that
-suggests the nearest node and a value entry for the text:
+An untagged unquoted word always names a node. A word that names no node is a load error
+that suggests the nearest node and a value entry for the text:
 
 ```text
 case node 'route' then: `replyy` names no node. Did you mean `reply`? For the text, add a value entry and name it: `replyy_text: !str replyy`

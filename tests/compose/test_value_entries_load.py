@@ -5,13 +5,14 @@ named after it, so the tag is checked like a typed binding's: a span-free litera
 checked while the entry is read, a span's inferred type must not be disjoint from the
 tag, and a nested tag checks its own value. A tag never fills in a missing field. These
 tests cover the located errors (a tag without a value, a mistyped literal, a spaced or
-unknown tag, a nested mismatch, a disjoint span or flow call, a span reading the entry
-itself, a flow call inside `${...}`), secret literals, which are rejected before any
-check could echo them, and the flow fingerprint.
+unknown tag, a nested mismatch, a number that is not finite, a disjoint span or flow
+call, a span reading the entry itself, a flow call inside `${...}`), secret literals,
+which are rejected before any check could echo them, and the flow fingerprint.
 
 A bare `!object` over a written-out mapping keeps the record the mapping spells: reading
-a field it lacks is a load error, a `${...}` field has its producer's type, and a nested
-tagged `!object` stays opaque. `!object ${x.output}` stays `object`.
+a field it lacks is a load error, a `${...}` field has its producer's type, a nested
+tagged `!object` stays opaque, and an empty key in the record is a load error, since no
+record field can be named "". `!object ${x.output}` stays `object`.
 """
 
 import pytest
@@ -449,16 +450,64 @@ def test_an_object_entry_not_over_a_bare_object_mapping_keeps_its_tag(entry):
     load_flow(text)
 
 
+_EMPTY_KEY = (
+    "a record key can't be empty; a written-out `!object` keeps its keys as record "
+    "fields"
+)
+
+
+@pytest.mark.parametrize(
+    ("entry", "label", "needle"),
+    [
+        ('  r: !object {"": 1, a: 2}\n', "r", "  r: !object"),
+        ('  r: !object {"": "${input.n}"}\n', "r", "  r: !object"),
+        ('  r: !object {a: {"": 1}}\n', "r.a", "  r: !object"),
+        ('  r: !object {a: [1, {"": 1}]}\n', "r.a[1]", "  r: !object"),
+        ('  r: !object\n    a:\n      "": 1\n', "r.a", '      "": 1'),
+    ],
+)
+def test_an_object_entry_with_an_empty_key_is_rejected(entry, label, needle):
+    # No record field can be named "", and the read must not quietly go unchecked.
+    text = _record_flow(entry, "${r.output.b}")
+
+    error = _load_error(text)
+
+    assert str(error) == f"{label!r}: {_EMPTY_KEY}"
+    assert _error_line(error) == _line_of(text, needle)
+
+
 @pytest.mark.parametrize(
     ("entry", "value"),
     [
-        ('  r: !object {"": a}\n', {"": "a"}),
-        ('  r: !object {"": "${input.n}"}\n', {"": 3}),
-        ('  r: !object {a: {"": 1}}\n', {"a": {"": 1}}),
+        ('  r: !Optional(object) {"": 1}\n', {"": 1}),
+        ('  r: !list(object) [{"": 1}]\n', [{"": 1}]),
+        ('  r: !object {a: !object {"": 1}}\n', {"a": {"": 1}}),
     ],
 )
-def test_an_object_entry_with_an_empty_key_stays_object(entry, value):
-    # No record field can be named "", so the entry keeps its `object` tag.
+def test_an_empty_key_outside_a_written_out_record_loads(entry, value):
     flow = load_flow(_record_flow(entry, "${r.output}"))
 
     assert run_flow(flow, {"n": 3}).output == value
+
+
+@pytest.mark.parametrize(
+    ("entry", "label", "shown", "needle"),
+    [
+        ("  x: !float .inf\n", "x", ".inf", "  x: !float"),
+        ("  x: !float -.inf\n", "x", "-.inf", "  x: !float"),
+        ("  x: !object {a: .nan}\n", "x.a", ".nan", "  x: !object"),
+        ("  x: !object\n    a: .inf\n", "x.a", ".inf", "    a: .inf"),
+        ("  x: !list(float) [1.0, .nan]\n", "x[1]", ".nan", "  x: !list"),
+        ("  x: !object {a: !float .inf}\n", "x.a", ".inf", "  x: !object"),
+        ('  x: !object {a: "${input.t}", b: .inf}\n', "x.b", ".inf", "  x: !object"),
+    ],
+)
+def test_a_number_that_is_not_finite_is_rejected_at_the_entry(
+    entry, label, shown, needle
+):
+    text = _flow(entry)
+
+    error = _load_error(text)
+
+    assert str(error) == f"{label!r}: numbers must be finite (got {shown})"
+    assert _error_line(error) == _line_of(text, needle)

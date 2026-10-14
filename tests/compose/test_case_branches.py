@@ -1,16 +1,18 @@
 """A CASE routes only: a branch names a node or calls a flow, and a CASE has no `output:`.
 
-An unquoted word names a node and an unquoted whole-value `call(...)` calls a flow.
-Every other branch is a value: a tagged value, quoted text, `null` or an empty `else:`, a
-number, a bool, a date, a mapping, a list, or unquoted text holding `${`. A value branch
-is a located load error that shows the value entry to write and the branch naming it,
-and each suggested entry loads when applied. The entry keeps the branch's own tag, else
-takes the CASE's former `output:` type when a tag spells it and the value fits it, else
-the type of a lone reference or a tag guessed from the YAML value, else a `!<type>`
+An untagged unquoted word names a node and an unquoted whole-value `call(...)` calls a
+flow. Every other branch is a value: a tagged value (even a word naming a node), quoted
+text, `null` or an empty `else:`, a number, a bool, a date, a mapping, a list, or
+unquoted text holding `${`. A value branch is a located load error that shows the value
+entry to write and the branch naming it, and each suggested entry loads when applied.
+The entry keeps the branch's own tag, else takes the CASE's former `output:` type when a
+tag spells it and the value fits it (a lone reference fits when its type does), else the
+type of a lone reference or a tag guessed from the YAML value, else a `!<type>`
 placeholder. A value no entry can hold (a number that is not finite, a value containing
-itself, a nested `call(...)`, a flow call or malformed span in `${...}`, a span reading
-the case) is its own located error. An unquoted word that names no node suggests the
-nearest node and the value entry for the text. A CASE `output:`, tagged or not, is a
+itself, a written-out record with an empty key, a nested `call(...)`, a flow call or
+malformed span in `${...}`, a span reading the case) is its own located error. An
+unquoted word that names no node suggests the nearest node and the value entry for the
+text, which loads too. A CASE `output:`, tagged or not, is a
 load error at the `output:` that says to tag the result where it is read. A secret in a
 value branch is reported as a secret literal, never echoed. `${route.output}` reads the
 taken branch.
@@ -29,6 +31,11 @@ _INPUTS_N = "  cmd: !str\n  n: !int\n"
 # The value entry and branch a value-branch message suggests.
 _REWRITE = re.compile(
     r"name it: `(?P<entry>[^`]+)`(?: \(.*\))? and `(?P<label>then|else): (?P<id>\w+)`$"
+)
+# The text entry a branch that names no node, or is broken call text, suggests.
+_TEXT_ENTRY = re.compile(
+    r"^case node 'route' (?P<label>then|else): .*"
+    r" name it: `(?P<entry>(?P<id>\w+): [^`]+)`$"
 )
 
 
@@ -104,9 +111,9 @@ def _rewritten(
     """Return the `_on` flow with the value entry and branch an error suggests applied.
 
     The CASE keeps `when: a` and `reply` for its other branch, and has no `output:`.
-    `type_text` fills a `!<type>` placeholder.
+    A text entry's branch names the entry. `type_text` fills a `!<type>` placeholder.
     """
-    found = _REWRITE.search(str(error))
+    found = _REWRITE.search(str(error)) or _TEXT_ENTRY.search(str(error))
     assert found is not None, str(error)
     entry = found["entry"]
     if type_text is not None:
@@ -205,11 +212,18 @@ def test_former_reserved_prefixes_name_authored_nodes(node_id):
         ),
         ("{a: 1, b: [2.5]}", "!object {a: 1, b: [2.5]}", "then: {a: 1", {"a": 1, "b": [2.5]}),
         ("{a: 2026-01-02}", '!object {a: "2026-01-02"}', "then: {a: 2026", {"a": "2026-01-02"}),
-        ('{"": x}', '!object {"": x}', 'then: {"": x}', {"": "x"}),
+        ('[{"": x}]', '!list(object) [{"": x}]', 'then: [{"": x}]', [{"": "x"}]),
         ('[a, "${input.cmd}"]', '!list(str) [a, "${input.cmd}"]', "then: [a", ["a", "a"]),
         ("[2026-01-02]", '!list(date) ["2026-01-02"]', "then: [2026", ["2026-01-02"]),
         ("[[1, 2], [3]]", "!list(list(int)) [[1, 2], [3]]", "then: [[1", [[1, 2], [3]]),
         ("[null, 1]", "!list(Optional(int)) [null, 1]", "then: [null", [None, 1]),
+        (
+            "[[1], [null]]",
+            "!list(list(Optional(int))) [[1], [null]]",
+            "then: [[1]",
+            [[1], [None]],
+        ),
+        ("[[], [1]]", "!list(list(int)) [[], [1]]", "then: [[]", [[], [1]]),
         ("[1, 2.5]", "!list(float) [1, 2.5]", "then: [1, 2.5]", [1.0, 2.5]),
         ("[{a: 1}, {b: 2}]", "!list(object) [{a: 1}, {b: 2}]", "then: [{a", [{"a": 1}, {"b": 2}]),
         ("hi ${input.cmd}", "!str hi ${input.cmd}", "then: hi", "hi a"),
@@ -302,6 +316,28 @@ def test_a_lone_reference_is_tagged_with_its_type(then, shown, value):
     count = "  count: !int 7\n"
     text = _flow(_on(then), inputs=_INPUTS_N, extra_nodes=count)
     error = _load_error(text, _value_branch("then", "route_then_0", shown))
+    assert _error_line(error) == _line_of(text, f"then: {then}")
+    assert _taken(_rewritten(error, inputs=_INPUTS_N, extra_nodes=count), n=3) == value
+
+
+@pytest.mark.parametrize(
+    ("then", "output", "shown", "value"),
+    [
+        ("${input.n}", "Optional(int)", "!Optional(int) ${input.n}", 3),
+        ("${input.cmd}", "int", "!str ${input.cmd}", "a"),
+        ("${input.n}", "str", "!int ${input.n}", 3),
+        ("${count.output}", "str", "!int ${count.output}", 7),
+    ],
+)
+def test_a_lone_reference_takes_the_former_output_type_only_when_it_fits(
+    then, output, shown, value
+):
+    count = "  count: !int 7\n"
+    text = _flow(
+        _on(then, output=f"    output: {output}\n"), inputs=_INPUTS_N, extra_nodes=count
+    )
+    error = _load_error(text, _value_branch("then", "route_then_0", shown))
+    assert _error_line(error) == _line_of(text, f"then: {then}")
     assert _taken(_rewritten(error, inputs=_INPUTS_N, extra_nodes=count), n=3) == value
 
 
@@ -373,11 +409,13 @@ def test_a_number_that_is_not_finite_is_rejected(then, shown):
         ("!Optional(int) null", "!Optional(int) null", None),
         ("!Buy {side: buy}", "!Buy {side: buy}", {"side": "buy"}),
         ("!list(int)\n          - 1\n          - 2", "!list(int) [1, 2]", [1, 2]),
+        ("!str reply", "!str reply", "reply"),
     ],
 )
 def test_a_tagged_value_keeps_its_tag(then, shown, value):
     head = "typedefs:\n  Buy:\n    side: str\n"
-    # The branch's own tag wins over the former `output:` type.
+    # The branch's own tag wins over the former `output:` type, and a tagged word that
+    # names a node is text, as in a value entry.
     text = _flow(_on(then, output="    output: str\n"), head=head, inputs=_INPUTS_N)
     error = _load_error(text, _value_branch("then", "route_then_0", shown))
     assert _error_line(error) == _line_of(text, f"then: {then.splitlines()[0]}")
@@ -444,6 +482,25 @@ def test_a_value_branch_under_an_unspellable_output_guesses_its_tag():
     text = _flow(_on('"approve"', output="    output: Union(int, str)\n"))
     error = _load_error(text, _value_branch("then", "route_then_0", "!str approve"))
     assert _error_line(error) == _line_of(text, 'then: "approve"')
+    assert _taken(_rewritten(error)) == "approve"
+
+
+@pytest.mark.parametrize(
+    ("then", "needle"),
+    [
+        ('{"": x}', 'then: {"": x}'),
+        ('{a: {"": 1}}', "then: {a:"),
+        ('!object {"": x}', "then: !object"),
+    ],
+)
+def test_a_mapping_with_an_empty_key_is_rejected(then, needle):
+    text = _flow(_on(then))
+    error = _load_error(
+        text,
+        "case node 'route' then: a record key can't be empty; a written-out `!object` "
+        "keeps its keys as record fields",
+    )
+    assert _error_line(error) == _line_of(text, needle)
 
 
 def test_a_quoted_call_holding_a_span_is_its_own_error():
@@ -531,6 +588,7 @@ def test_an_unknown_then_word_suggests_the_nearest_node_and_its_text_entry():
         "text, add a value entry and name it: `replyy_text: !str replyy`",
     )
     assert _error_line(error) == _line_of(text, "then: replyy")
+    assert _taken(_rewritten(error)) == "replyy"
 
 
 def test_an_unknown_else_word_suggests_the_nearest_node_and_its_text_entry():
@@ -541,15 +599,18 @@ def test_an_unknown_else_word_suggests_the_nearest_node_and_its_text_entry():
         "text, add a value entry and name it: `replyy_text: !str replyy`",
     )
     assert _error_line(error) == _line_of(text, "else: replyy")
+    assert _taken(_rewritten(error), cmd="b") == "replyy"
 
 
 def test_an_unknown_sentence_gets_no_suggestion_and_an_entry_named_after_the_branch():
     text = _flow(_on("The user declined"))
-    _load_error(
+    error = _load_error(
         text,
         "case node 'route' then: `The user declined` names no node. For the text, add a "
         "value entry and name it: `route_then_0: !str The user declined`",
     )
+    assert _error_line(error) == _line_of(text, "then: The user declined")
+    assert _taken(_rewritten(error)) == "The user declined"
 
 
 @pytest.mark.parametrize("output", ["", "    output: bool\n"])
@@ -561,36 +622,55 @@ def test_an_unknown_yes_gets_the_same_text_entry(output):
         "and name it: `yes_text: !str yes`",
     )
     assert _error_line(error) == _line_of(text, "else: yes")
+    assert _taken(_rewritten(error), cmd="b") == "yes"
 
 
 def test_an_unknown_word_entry_id_skips_an_id_already_taken():
-    text = _flow(_on("nope"), extra_nodes="  nope_text: !str taken\n")
-    _load_error(
+    taken = "  nope_text: !str taken\n"
+    text = _flow(_on("nope"), extra_nodes=taken)
+    error = _load_error(
         text,
         "case node 'route' then: `nope` names no node. Did you mean `nope_text`? For the "
         "text, add a value entry and name it: `nope_text_2: !str nope`",
     )
+    assert _error_line(error) == _line_of(text, "then: nope")
+    assert _taken(_rewritten(error, extra_nodes=taken)) == "nope"
 
 
 @pytest.mark.parametrize(
-    ("then", "else_", "label", "entry", "needle"),
+    ("then", "else_", "message", "needle", "cmd", "value"),
     [
-        ("call(child, x=1) | x", "reply", "then", "route_then_0", "then: call("),
-        ("reply", "call(child, x=1) | y", "else", "route_else", "else: call("),
+        (
+            "call(child, x=1) | x",
+            "reply",
+            "case node 'route' then: a branch target must be a node id or a single "
+            "call: text follows the closing `)`: '| x'; a call(...) must be the whole "
+            "value. For the text, add a value entry and name it: "
+            '`route_then_0: !str "call(child, x=1) | x"`',
+            "then: call(",
+            "a",
+            "call(child, x=1) | x",
+        ),
+        (
+            "reply",
+            "call(child, x=1) | y",
+            "case node 'route' else: a branch target must be a node id or a single "
+            "call: text follows the closing `)`: '| y'; a call(...) must be the whole "
+            "value. For the text, add a value entry and name it: "
+            '`route_else: !str "call(child, x=1) | y"`',
+            "else: call(",
+            "b",
+            "call(child, x=1) | y",
+        ),
     ],
 )
 def test_unquoted_call_that_is_not_one_directive_is_rejected(
-    then, else_, label, entry, needle
+    then, else_, message, needle, cmd, value
 ):
     text = _flow(_on(then, else_))
-    tail, rest = (then, "x") if label == "then" else (else_, "y")
-    error = _load_error(
-        text,
-        f"case node 'route' {label}: a branch target must be a node id or a single call: "
-        f"text follows the closing `)`: '| {rest}'; a call(...) must be the whole value. "
-        f'For the text, add a value entry and name it: `{entry}: !str "{tail}"`',
-    )
+    error = _load_error(text, message)
     assert _error_line(error) == _line_of(text, needle)
+    assert _taken(_rewritten(error), cmd=cmd) == value
 
 
 # --------------------------------------------------------------------------- #

@@ -4,9 +4,10 @@
 among the nodes, and rejects an untagged entry that has no `kind:` with a located error
 saying to add `kind:` for a node or a tag for a value. The error for an untagged scalar,
 list or date shows the tag to write (with `...` for a value written over several
-lines), except under a secret name, where the value is never echoed. An untagged
-`${...}` or `call(...)` value is not a literal, so it gets no example. Reserved node ids
-apply to value entries too.
+lines), and the example loads when pasted in. There is no example under a secret name,
+where the value is never echoed, or for a value no tag can hold (one that contains
+itself or holds a number that is not finite). An untagged `${...}` or `call(...)` value
+is not a literal, so it gets no example. Reserved node ids apply to value entries too.
 """
 
 import re
@@ -17,6 +18,7 @@ from yian.compose import LoadError, load_flow
 from yian.compose.nodes.code import CodeDescriptor
 from yian.compose.parse.nodes import parse_nodes
 from yian.compose.source import SourceDocument
+from yian.run import run_flow
 
 _NODE_OR_VALUE = (
     "node 'x': an entry in `nodes:` is a node or a value; add `kind:` for a node, "
@@ -79,6 +81,8 @@ def test_untagged_mapping_without_kind_says_add_kind_or_a_tag():
         ("  x: [[1, 2], [3]]\n", "`x: !list(list(int)) [[1, 2], [3]]`"),
         ("  x: [null, 1]\n", "`x: !list(Optional(int)) [null, 1]`"),
         ("  x: [1, 2.5]\n", "`x: !list(float) [1, 2.5]`"),
+        ("  x: [[1], [null]]\n", "`x: !list(list(Optional(int))) [[1], [null]]`"),
+        ("  x: [[], [1]]\n", "`x: !list(list(int)) [[], [1]]`"),
         (
             "  x: [1, a]\n",
             "`x: !<type> [1, a]` (no tag holds a list of mixed items; give its items "
@@ -99,7 +103,31 @@ def test_untagged_scalar_or_list_shows_the_tag_to_write(entry, example):
     assert _error_line(info.value) == _line_of(text, "  x:")
 
 
-@pytest.mark.parametrize("entry", ["  x: &R [*R]\n", "  x: .inf\n"])
+@pytest.mark.parametrize(
+    ("entry", "value"),
+    [
+        ("  x: [null, 1]\n", [None, 1]),
+        ("  x: [1, 2.5]\n", [1.0, 2.5]),
+        ("  x: [[1], [null]]\n", [[1], [None]]),
+        ("  x: [[], [1]]\n", [[], [1]]),
+        ("  x: [null, [1]]\n", [None, [1]]),
+    ],
+)
+def test_the_example_entry_loads(entry, value):
+    with pytest.raises(LoadError) as info:
+        load_flow(_flow(entry))
+    found = re.search(r", e\.g\. `([^`]+)`$", str(info.value.diagnostic.message))
+    assert found is not None, str(info.value)
+
+    text = f"id: f\nname: f\nnodes:\n  {found[1]}\noutput: ${{x.output}}\n"
+
+    assert run_flow(load_flow(text), {}).output == value
+
+
+@pytest.mark.parametrize(
+    "entry",
+    ["  x: &R [*R]\n", "  x: &R [{a: *R}]\n", "  x: .inf\n", "  x: [{a: .nan}]\n"],
+)
 def test_an_untagged_value_no_tag_can_hold_gets_no_example(entry):
     text = _flow(entry)
 

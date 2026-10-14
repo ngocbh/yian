@@ -61,6 +61,8 @@ MIXED_LIST_NOTE = "no tag holds a list of mixed items; give its items one type"
 # Item types a list of numbers joins to `float`.
 _INT = Type(kind=ValueKind.INTEGER)
 _FLOAT = Type(kind=ValueKind.NUMBER)
+# A null while list items are joined: its type is the other items' type, made optional.
+_NULL = Type(kind=ValueKind.NONE, nullable=True)
 
 
 def is_identifier(name: object) -> bool:
@@ -251,10 +253,12 @@ def _reject_untagged_value(
             secret_literal_message(f"value entry {node_id!r}", node_id, path),
             range=rng,
         )
+    if not _writable(value):
+        raise diagnostics.error(message, range=rng)
     typ = example_type(value)
     if typ is not None:
         message += f", e.g. {suggest_tag(node_id, typ, _example_text(value, cursor))}"
-    elif isinstance(value, list) and _writable(value):
+    elif isinstance(value, list):
         message += (
             f", e.g. `{node_id}: !<type> {_example_text(value, cursor)}` "
             f"({MIXED_LIST_NOTE})"
@@ -276,23 +280,26 @@ def example_type(value: Any) -> Type | None:
     """Return the widened type of a value to tag it with in an example.
 
     Args:
-        value (`Any`): An authored YAML value.
+        value (`Any`): An authored YAML value that does not contain itself.
 
     Returns:
         `Type | None`: `Optional(str)` for null, `date` or `datetime` for an unquoted
-            date, `object` for a mapping, a list of its items' joined type (`list(int)`
-            for `[1, 2]`, `list(list(int))` for `[[1], [2]]`, `list(Optional(int))` for
-            `[null, 1]`), else the widened type of the value; `None` for a list whose
-            items share no type or that contains itself, a number that is not finite,
-            or a value no type holds.
+            date, `object` for a mapping, a list of its items' joined type, else the
+            widened type of the value; `None` for a list whose items share no type, a
+            number that is not finite, or a value no type holds. Items join
+            recursively: a null makes the type optional, ints and floats join to
+            `float`, and an empty list joins any list, so `[[1], [null]]` is
+            `list(list(Optional(int)))` and `[[], [1]]` is `list(list(int))`. A list
+            of nulls only is `list(Optional(str))`.
     """
-    return _example_type(value, active=frozenset())
+    typ = _item_type(value)
+    return None if typ is None else _settled(typ)
 
 
-def _example_type(value: Any, *, active: frozenset[int]) -> Type | None:
-    """Return `example_type(value)`; `active` holds the `id()`s of enclosing lists."""
+def _item_type(value: Any) -> Type | None:
+    """Return `example_type(value)`, but with `_NULL` for a null left to be joined."""
     if value is None:
-        return Type(kind=ValueKind.STRING, nullable=True)
+        return _NULL
     # YAML reads an unquoted `2024-01-01` as a date, which no value type holds.
     if isinstance(value, datetime.datetime):
         return Type(kind=ValueKind.DATETIME)
@@ -300,38 +307,61 @@ def _example_type(value: Any, *, active: frozenset[int]) -> Type | None:
         return Type(kind=ValueKind.DATE)
     if isinstance(value, dict):
         return Type(kind=ValueKind.OBJECT)
-    if isinstance(value, float) and not math.isfinite(value):
-        return None
     if isinstance(value, list) and value:
-        if id(value) in active:
-            return None
-        return _list_type(value, active=active | {id(value)})
+        element = _item_type(value[0])
+        for item in value[1:]:
+            typ = _item_type(item)
+            if element is None or typ is None:
+                return None
+            element = _joined(element, typ)
+        return None if element is None else _list_of(element)
     try:
+        # An empty list is `list(Any)` with no element type, which joins any list.
         return Type.scalar(build_value(value).kind)
     except TypeCheckError:
         return None
 
 
-def _list_type(items: list, *, active: frozenset[int]) -> Type | None:
-    """Return the type of a non-empty list from its items' types, or `None`."""
-    present = []
-    for item in items:
-        if item is None:
-            continue
-        typ = _example_type(item, active=active)
-        if typ is None:
-            return None
-        present.append(typ)
-    if not present:
-        element = Type(kind=ValueKind.STRING)
-    elif all(typ == present[0] for typ in present):
-        element = present[0]
-    elif all(typ in (_INT, _FLOAT) for typ in present):
-        element = _FLOAT
+def _joined(first: Type, second: Type) -> Type | None:
+    """Return the one type two item types widen to, or `None` when there is none."""
+    if first.kind is ValueKind.NONE:
+        return dataclasses.replace(second, nullable=True)
+    if second.kind is ValueKind.NONE:
+        return dataclasses.replace(first, nullable=True)
+    nullable = first.nullable or second.nullable
+    first = dataclasses.replace(first, nullable=False)
+    second = dataclasses.replace(second, nullable=False)
+    if first == second:
+        joined = first
+    elif first in (_INT, _FLOAT) and second in (_INT, _FLOAT):
+        joined = _FLOAT
+    elif first.kind.is_list() and second.kind.is_list():
+        if first.element is None or second.element is None:
+            joined = second if first.element is None else first
+        else:
+            element = _joined(first.element, second.element)
+            if element is None:
+                return None
+            joined = _list_of(element)
     else:
         return None
-    if len(present) < len(items):
-        element = dataclasses.replace(element, nullable=True)
+    return dataclasses.replace(joined, nullable=True) if nullable else joined
+
+
+def _settled(typ: Type) -> Type:
+    """Return `typ` with each `_NULL` left in it read as `Optional(str)`."""
+    if typ.kind is ValueKind.NONE:
+        return Type(kind=ValueKind.STRING, nullable=True)
+    if typ.element is None:
+        return typ
+    element = _settled(typ.element)
+    return dataclasses.replace(
+        typ, kind=list_kind_for_element(element), element=element
+    )
+
+
+def _list_of(element: Type) -> Type:
+    """Return the list type of an element type."""
     return Type(kind=list_kind_for_element(element), element=element)
 
 

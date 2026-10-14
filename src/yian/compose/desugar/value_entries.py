@@ -10,25 +10,74 @@ tagged node input. The tag only checks the value; it never fills in a field.
 The node's output contract is its tag, except that a bare `!object` over a written-out
 mapping keeps the record the mapping spells, so reading a field it doesn't have is a
 load error. `!object ${x.output}`, a value from elsewhere, stays `object`.
+
+Two values are load errors at the entry: a number that is not finite, which no run can
+hold, and an empty key in the record a bare `!object` keeps, since no record field can
+be named "" and dropping the record would quietly stop checking its reads.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.helpers.output_contracts import literal_contract
-from yian.compose.helpers.tags import read_tagged_value, suggest_tag
+from yian.compose.helpers.tags import path_label, read_tagged_value, suggest_tag
 from yian.compose.nodes.base import BuildContext
 from yian.compose.nodes.code import CodeDescriptor
 from yian.compose.source import SourceCursor
-from yian.nodes.contracts import OutputContract, ValueContract, ValueTemplate
+from yian.nodes.contracts import OutputContract, ValueContract, ValuePath, ValueTemplate
 from yian.typesys.types import TypeRegistry
-from yian.typesys.values import ValueKind
+from yian.typesys.values import Type, ValueKind
 
 if TYPE_CHECKING:
     from yian.compose.source.catalog import _SourceCatalogBuilder
+
+# Why a written-out `!object` can't hold a mapping with an empty key.
+EMPTY_RECORD_KEY = (
+    "a record key can't be empty; a written-out `!object` keeps its keys as record "
+    "fields"
+)
+
+
+def non_finite_text(number: float) -> str:
+    """Spell a number that is not finite as YAML does: `.inf`, `-.inf`, or `.nan`."""
+    if math.isnan(number):
+        return ".nan"
+    return ".inf" if number > 0 else "-.inf"
+
+
+def non_finite_reason(number: float) -> str:
+    """Return why a number that is not finite can't be a value.
+
+    Args:
+        number (`float`): `inf`, `-inf`, or `nan`.
+
+    Returns:
+        `str`: Such as `numbers must be finite (got .inf)`.
+    """
+    return f"numbers must be finite (got {non_finite_text(number)})"
+
+
+def infers_record(tag: Type, value: Any) -> bool:
+    """Report whether a value entry keeps the record its written-out mapping spells.
+
+    Args:
+        tag (`Type`): The entry's tag type.
+        value (`Any`): The entry's value, unwrapped from any `ValueTemplate`.
+
+    Returns:
+        `bool`: True when the tag is a bare, non-optional `object` and the value is a
+            mapping.
+    """
+    return (
+        tag.kind is ValueKind.OBJECT
+        and tag.fields is None
+        and not tag.nullable
+        and type(value) is dict
+    )
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -93,13 +142,10 @@ class ValueEntryDescriptor(CodeDescriptor):
 
     def _infers_record(self) -> bool:
         """Report whether the tag is a bare `object` over a written-out mapping."""
-        tag = self.tag.type
-        if tag.kind is not ValueKind.OBJECT or tag.fields is not None or tag.nullable:
-            return False
         value = self.inputs[self.id]
         if isinstance(value, ValueTemplate):
             value = value.value
-        return type(value) is dict
+        return infers_record(self.tag.type, value)
 
 
 def read_value_entry(
@@ -137,8 +183,9 @@ def read_value_entry(
         `LoadError`: A tag is malformed or names no type, a space splits a tag from
             its arguments, nothing follows the entry's tag or a nested tag, a
             template has a non-string record key, a nested string starts with
-            `call(`, a span-free tagged literal does not fit its tag, or the value
-            can't be walked (a recursive alias).
+            `call(`, a span-free tagged literal does not fit its tag, the value
+            can't be walked (a recursive alias), a number in it is not finite, or
+            the record a bare `!object` keeps has an empty key.
     """
     slot = read_tagged_value(
         cursor,
@@ -158,6 +205,12 @@ def read_value_entry(
             f"value entry {node_id!r} needs a value after its tag, e.g. {spelled}",
             range=cursor.range or cursor.key_range,
         )
+    _reject_unholdable(
+        node_id,
+        cursor,
+        record=infers_record(slot.contract.type, cursor.value),
+        diagnostics=diagnostics,
+    )
     value_range = cursor.range
     field_ranges = (
         {("input", node_id): value_range, ("field", "inputs"): value_range}
@@ -175,3 +228,55 @@ def read_value_entry(
         field_ranges=field_ranges,
         field_labels={f"input {node_id!r}": f"value entry {node_id!r}"},
     )
+
+
+def _reject_unholdable(
+    node_id: str,
+    cursor: SourceCursor,
+    *,
+    record: bool,
+    diagnostics: LoadDiagnostics,
+    path: ValuePath = (),
+) -> None:
+    """Reject a number that is not finite, or an empty key in a kept record.
+
+    Args:
+        node_id (`str`): The entry id.
+        cursor (`SourceCursor`): The entry's value, or a part of it, which does not
+            contain itself.
+        record (`bool`): Whether a mapping here is kept as a record: the written-out
+            mapping of a bare `!object` entry, or a mapping or list inside it outside
+            any nested tag.
+        diagnostics (`LoadDiagnostics`): Factory for located load errors.
+        path (`ValuePath`, *optional*, defaults to `()`): Where `cursor` sits in the
+            entry's value.
+
+    Raises:
+        `LoadError`: At the number or the mapping, named `'<id>'` or
+            `'<id>.<path>'`.
+    """
+    value = cursor.value
+    if isinstance(value, float) and not math.isfinite(value):
+        raise diagnostics.error(
+            f"{path_label(node_id, path)!r}: {non_finite_reason(value)}",
+            range=cursor.range,
+        )
+    if type(value) is dict:
+        if record and "" in value:
+            raise diagnostics.error(
+                f"{path_label(node_id, path)!r}: {EMPTY_RECORD_KEY}", range=cursor.range
+            )
+        keys: list[Any] = list(value)
+    elif type(value) is list:
+        keys = list(range(len(value)))
+    else:
+        return
+    for key in keys:
+        child = cursor.child(key)
+        _reject_unholdable(
+            node_id,
+            child,
+            record=record and child.tag is None,
+            diagnostics=diagnostics,
+            path=(*path, key),
+        )

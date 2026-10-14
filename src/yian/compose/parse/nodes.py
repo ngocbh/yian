@@ -34,6 +34,7 @@ from yian.compose.helpers.directives import CALL_HEAD
 from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.helpers.source import one_line_text
 from yian.compose.helpers.tags import QUOTED_STYLES, suggest_tag, tag_text, yaml_quoted
+from yian.compose.helpers.value_nesting import check_written_value
 from yian.compose.nodes import KINDS, REMOVED_KINDS
 from yian.compose.nodes.base import not_text_error
 from yian.compose.source import (
@@ -249,10 +250,14 @@ def _reject_untagged_value(
         diagnostics (`LoadDiagnostics`): Factory for located load errors.
 
     Raises:
-        `LoadError`: Always, at the entry.
+        `LoadError`: Always, at the entry; one nested deeper than a yian value may
+            reports the nesting limit instead.
     """
     value = cursor.value
     rng = cursor.range or cursor.key_range
+    # First: the checks below walk the value recursively, and one past the limit
+    # couldn't load as the suggested entry either.
+    check_written_value(value, f"value entry {node_id!r}", rng, diagnostics)
     message = _NODE_OR_VALUE.format(node_id=node_id)
     if _is_reference(value, cursor.scalar_style):
         raise diagnostics.error(message, range=rng)

@@ -122,9 +122,9 @@ load error; quote it to keep it as text.
 A flow file's YAML nests at most 200 levels; each mapping and list is a level, counting
 the file's top level. A deeper file is a load error at the first mapping or list past
 the limit (`invalid YAML: this list nests deeper than 200 levels, the limit for a YAML
-document ...`). A value written out where the flow reads a value (a node input,
-default, value entry, or flow output) nests at most 100 levels; a deeper one is a load
-error at that value (see [Operators inside `${...}`](#operators-inside) and
+document ...`). A value written out where the flow reads a value (a node input, MAP
+`over:`, WAIT `until:`, CASE value, default, value entry, or flow output) nests at most
+100 levels; a deeper one is a load error at that value (see [Operators inside `${...}`](#operators-inside) and
 [Types → Nesting limit](typing.md#nesting-limit)).
 
 Changed: a file nested deeper than about 330 (mappings) to 490 (lists) levels used to

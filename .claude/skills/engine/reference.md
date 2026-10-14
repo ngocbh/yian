@@ -889,14 +889,15 @@ Compose rejects a value written out in a flow file past the limit at load, with 
 counting the run-time check applies to it:
 `compose.helpers.value_nesting.check_written_value` runs `reject_deep_nesting` and
 raises its message as a `LoadError` at the value's range. It runs before any
-recursive load walker reads the value (the tag read, the span
-check), so a value made deep by YAML aliases while the text stays shallow is a
+recursive load walker reads the value (the tag read, the span check), so a value
+made deep by YAML aliases while the text stays shallow is a
 located error, not a `RecursionError`. Sites: input defaults and AGENT
 variable defaults in `helpers/types.py`, MAP `over:` and WAIT `until:` in their
-descriptors' `_validate_fields`, value entries in the pipeline's `read_value`, and
-node inputs (LOOP seeds and MAP per-item inputs included), CASE value branches, and
-flow outputs in `compose/validate/value_nesting.py`, a pre-pass before
-`check_authored_bindings` (a record output's fields pass `enclosing_levels=1`).
+descriptors' `_validate_fields`, value entries in the pipeline's `read_value` (an
+untagged entry in `parse/nodes.py`), and node inputs (LOOP seeds and MAP per-item
+inputs included), CASE value branches, and flow outputs in
+`compose/validate/value_nesting.py`, a pre-pass before the tagged splits and the
+case-branch check (a record output's fields pass `enclosing_levels=1`).
 `${...}` text counts as a scalar, so the run-time checks still cover computed values
 and flows built in Python. WAIT `until:` has no run-time counterpart.
 

@@ -344,6 +344,25 @@ def test_issue_repro_alias_chain_is_a_located_load_error() -> None:
     _assert_limit_error(text, "node 'use' input 'topic' at ", "      topic:")
 
 
+def _untagged_value_entry_flow(header: str, value: str) -> str:
+    """Return a flow whose untagged list entry `v` sits beside a node `use`."""
+    return (
+        f"id: f\nname: f\n{header}nodes:\n  v: {value}\n  use:\n{_ECHO}"
+        "    input:\n      topic: x\noutput: ${use.output}\n"
+    )
+
+
+# An untagged list entry is always a load error that suggests a tag, so there is no
+# loading case at the limit; past it, the limit is reported instead.
+@pytest.mark.parametrize(
+    ("form", "levels"),
+    [(_list, MAX_VALUE_NESTING + 1), (_list_alias, MAX_VALUE_NESTING + 1), (_list_alias, 1000)],
+    ids=["text-101", "alias-101", "alias-1000"],
+)
+def test_untagged_value_entry_past_the_limit_reports_the_limit(form: _Form, levels: int) -> None:
+    _assert_limit_error(_untagged_value_entry_flow(*form(levels)), "value entry 'v' at ", "  v:")
+
+
 # --------------------------------------------------------------------------- #
 # CASE value branches
 # --------------------------------------------------------------------------- #

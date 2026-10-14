@@ -36,8 +36,8 @@ The shape of `output:` sets what the flow returns:
   returns `{}`. A caller reads a field by name, as in `${child.output.order}`.
 - No `output:`, or `output: null`, returns `None`.
 
-A record field name must be a string. YAML reads an unquoted `true`, `null`, or `1`
-key as a bool, null, or number, so loading fails at that key; quote it
+A record field name is a key, and every key must be text (see
+[YAML values](#yaml-values)), so quote a `true`, `null`, or `1` field name
 (`'true': ${x}`). A scalar YAML literal in place of a binding (`output: 5`, or a
 field `x: 5`) is returned as written.
 
@@ -105,11 +105,30 @@ timestamp is a date, and a `<<:` merge key merges a mapping. Quoted and block (`
 | `1:30`, `1_000`, `0b101` | text |
 | `2026-10-14`, `2026-10-14T10:00:00Z` | date, datetime |
 
-The same rules apply to keys (CASE's `on:` is the text `on`), to input and output
-defaults, and to the literal after ` = ` in a typed binding. A `yes`/`no`/`on`/`off`
-where a `bool` is expected fails with the fix, such as "`yes` is text; write `true`":
-in a typed binding or default, a call input, a `case` value, `steerable:`, or
-`llm_config` `inherit:`, including inside a list or record.
+The same rules apply to keys, to input and output defaults, and to the literal after
+` = ` in a typed binding. A `yes`/`no`/`on`/`off` where a `bool` is expected fails with
+the fix, such as "`yes` is text; write `true`": in a typed binding or default, a call
+input, a `case` value, `steerable:`, or `llm_config` `inherit:`, including inside a list
+or record.
+
+Every mapping key in a flow file must be text after YAML reads it: node ids, input
+and output names, typedef names and fields, keys in a written-out record value, and
+keys in `x-*` blocks alike, as in JSON. An unquoted `true`, `1`, `1.5`, `null`, or date
+key is a load error at that key:
+
+```
+the key `True` was read by YAML as a boolean, but names in a flow must be text. Quote it ("True") or choose another name.
+```
+
+After quoting, the usual name rules apply: `"True"` is a valid node id, while `"1"`
+still fails as a node id because it isn't an identifier. A `yes`, `no`, `on`, or `off`
+key is already text (CASE's `on:` is the text `on`).
+
+Changed: a non-text key used to fail differently depending on where it was (a
+site-specific error in some places, a raw `TypeError` or a silently renamed name in
+others); every such key now fails at the key with the error above. Keys that used to
+load, such as `1:` in an `x-*` block or in a written-out record value, now fail too;
+quote them.
 
 Changed: yian used to read values with YAML 1.1's rules: an unquoted `yes`, `no`,
 `on`, or `off` was a boolean, `1:30` was the number 90, `1_000` was 1000, and `017`

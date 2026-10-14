@@ -361,28 +361,28 @@ def test_root_feedback_on_a_one_field_record_reaches_its_producer():
 
 
 @pytest.mark.parametrize(
-    ("section", "key_line", "kind"),
+    ("section", "key_line", "read_as"),
     [
-        ("output:\n  1: ${step.output}\n", "  1: ${step.output}", "int"),
-        ("output:\n  true: ${step.output}\n", "  true: ${step.output}", "bool"),
-        ("output:\n  null: ${step.output}\n", "  null: ${step.output}", "NoneType"),
+        ("output:\n  1: ${step.output}\n", "  1: ${step.output}", "an integer"),
+        ("output:\n  true: ${step.output}\n", "  true: ${step.output}", "a boolean"),
+        ("output:\n  null: ${step.output}\n", "  null: ${step.output}", "null"),
         (
             "output:\n  '1': ${step.output}\n  1: ${step.output}\n",
             "  1: ${step.output}",
-            "int",
+            "an integer",
         ),
     ],
     ids=["int", "true", "null", "int-beside-quoted"],
 )
-def test_a_non_string_flow_output_name_is_a_load_error_at_its_key(section, key_line, kind):
+def test_a_non_string_flow_output_name_is_a_load_error_at_its_key(section, key_line, read_as):
     text = _FLOW % section
     with pytest.raises(LoadError) as info:
         load_flow(text)
 
     message = info.value.diagnostic.message
-    assert f"({kind}), not a string" in message
     authored = key_line.split(":")[0].strip()
-    assert f"quote the key: `'{authored}':`" in message
+    assert f"the key `{authored}` was read by YAML as {read_as}" in message
+    assert f'Quote it ("{authored}")' in message
     frames = info.value.diagnostic.frames
     assert frames and frames[0].range.start_line == text.splitlines().index(key_line) + 1
 
@@ -397,7 +397,7 @@ def test_a_non_string_output_name_in_a_def_is_a_load_error():
         "  c:\n    kind: call\n    call: child\n",
         "${c.output}",
     )
-    with pytest.raises(LoadError, match="not a string"):
+    with pytest.raises(LoadError, match="names in a flow must be text"):
         load_flow(text)
 
 

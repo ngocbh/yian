@@ -425,9 +425,9 @@ that change; a field it omits keeps its value. This is the shape
 - **`output: {...}` always returns a record.** `output: ${x}` returns the value
   as is; `output: {order: ${x}}` returns `{order: x}` (a caller reads
   `${child.output.order}`), and `output: {}` returns `{}`. No `output:` returns
-  `None`. Field names must be strings: an unquoted `true`, `null`, or `1` key
-  is a load error, so quote it (`'true': ${x}`). A scalar literal (`output: 5`,
-  `x: 5`) is returned as written.
+  `None`. Every key in a flow must be text, field names included: an unquoted
+  `true`, `null`, `1`, or date key is a load error, so quote it (`'true': ${x}`).
+  A scalar literal (`output: 5`, `x: 5`) is returned as written.
 - **`call:` resolves defs-first, else a `uses:` alias** (a sibling file by name on
   the search path). `alias@v1` adds a version guard.
 - **No `kind: model`** — removed; serve ML inference behind a host tool and call it

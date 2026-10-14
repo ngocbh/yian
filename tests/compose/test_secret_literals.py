@@ -170,12 +170,13 @@ def test_a_nested_reference_under_a_secret_key_loads():
     load_flow(_flow("conn:", "  password: ${input.pw}"))
 
 
-def test_a_mapping_with_an_int_key_loads():
-    load_flow(_flow("conn:", "  1: x"))
+def test_a_mapping_with_an_int_key_is_a_non_text_key_error():
+    with pytest.raises(LoadError, match="the key `1` was read by YAML as an integer"):
+        load_flow(_flow("conn:", "  1: x"))
 
 
-def test_an_int_mapping_key_on_the_path_is_shown_as_a_key():
-    message = str(_secret_error(_flow("conn:", "  1:", f"    password: {_SECRET}")))
+def test_a_numeric_text_mapping_key_on_the_path_is_shown_as_a_key():
+    message = str(_secret_error(_flow("conn:", "  '1':", f"    password: {_SECRET}")))
 
     assert "conn.1.password" in message
 

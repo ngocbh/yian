@@ -991,8 +991,11 @@ def test_flow_fingerprint_distinguishes_yaml_literal_types(first, second):
 def test_flow_fingerprint_supports_binary_nonfinite_and_non_string_mapping_keys():
     binary = _compiled_with_env_literal("!!binary aGVsbG8=")
     nonfinite = _compiled_with_env_literal(".nan")
-    ordered = _compiled_with_env_literal("{1: one, 2: two}")
-    reordered = _compiled_with_env_literal("{2: two, 1: one}")
+    # A flow file can't hold a non-text key, so set those mappings directly.
+    ordered = _compiled()
+    reordered = copy.deepcopy(ordered)
+    ordered.nodes["step"].env["value"] = {1: "one", 2: "two"}
+    reordered.nodes["step"].env["value"] = {2: "two", 1: "one"}
 
     assert flow_fingerprint(binary) == flow_fingerprint(
         _compiled_with_env_literal("!!binary aGVsbG8=")

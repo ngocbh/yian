@@ -625,8 +625,10 @@ def test_reading_a_lifted_node_in_the_hosts_runs_after_is_a_cycle():
     output: int
     code: return len(inputs["q"])
 """
-    with pytest.raises(LoadError, match="cycle"):
+    with pytest.raises(LoadError, match="cycle") as caught:
         load_flow(_flow(nodes, output="  r: ${router.output}\n"))
+    assert "ask__compose" in str(caught.value)
+    assert "ask__compose is generated from node 'ask'" in caught.value.diagnostic.notes
 
 
 # --------------------------------------------------------------------------- #

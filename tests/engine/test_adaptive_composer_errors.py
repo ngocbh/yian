@@ -282,3 +282,199 @@ output: ${run.output}
     assert "node 'ask' input 'proj' from: " in lines[0]
     assert "ask__compose" not in message
     assert _line(error) == 13
+
+
+# --------------------------------------------------------------------------- #
+# cycles: the gate is named, not its composer, unless an author reads the composer.
+# --------------------------------------------------------------------------- #
+
+_CYCLE_MESSAGE = "flow has a cycle involving {}; flows must be acyclic"
+_GENERATED = "ask__compose is generated from node 'ask'"
+
+_SELF_READING = """\
+id: f
+name: f
+input: {proj: !str }
+nodes:
+  ask:
+    kind: human_input
+    input: {proj: '${ask.output}'}
+    adaptive_questions: {prompt: "Q ${proj}"}
+"""
+
+
+def _line_of(text: str, needle: str) -> int:
+    """Return the 1-based line of the first line of `text` that starts with `needle`."""
+    for number, line in enumerate(text.splitlines(), start=1):
+        if line.startswith(needle):
+            return number
+    raise AssertionError(f"{needle!r} not in flow")
+
+
+def _frame_lines(error: LoadError) -> list[int]:
+    return [frame.range.start_line for frame in error.diagnostic.frames]
+
+
+def test_self_reading_gate_cycle_names_only_the_gate():
+    text = _SELF_READING + "output: ${ask.output}\n"
+    error = _load_error(text)
+    message = str(error)
+    assert message.startswith(_CYCLE_MESSAGE.format(["ask"]))
+    assert "ask__compose" not in message
+    assert _frame_lines(error) == [_line_of(text, "  ask:")]
+    assert error.diagnostic.notes == ("ask depends on ask (ask.input.proj)",)
+
+
+_THROUGH_B = """\
+id: f
+name: f
+input: {{proj: !str }}
+nodes:
+  b:
+    kind: agent
+    input: {{a: '${{{b_reads}}}'}}
+    prompt: "x ${{a}}"
+  ask:
+    kind: human_input
+{gate_extra}    input: {{proj: '${{{gate_reads}}}'}}
+    adaptive_questions: {{prompt: "Q ${{proj}}"}}
+output: ${{ask.output}}
+"""
+
+
+def test_cycle_through_a_gate_names_only_authored_nodes():
+    text = _THROUGH_B.format(b_reads="ask.output", gate_extra="", gate_reads="b.output")
+    error = _load_error(text)
+    message = str(error)
+    assert message.startswith(_CYCLE_MESSAGE.format(["ask", "b"]))
+    assert _frame_lines(error) == [_line_of(text, "  b:"), _line_of(text, "  ask:")]
+    assert error.diagnostic.notes == (
+        "ask depends on b (ask.input.proj)",
+        "b depends on ask (b.input.a)",
+    )
+    assert "ask__compose" not in message
+    assert all("ask__compose" not in note for note in error.diagnostic.notes)
+
+
+def test_ordering_cycle_through_a_gate_names_only_authored_nodes():
+    text = _THROUGH_B.format(
+        b_reads="ask.output", gate_extra="    depends_on: [b]\n", gate_reads="input.proj"
+    )
+    error = _load_error(text)
+    assert str(error).startswith(_CYCLE_MESSAGE.format(["ask", "b"]))
+    assert error.diagnostic.notes == (
+        "ask depends on b (ordering)",
+        "b depends on ask (b.input.a)",
+    )
+
+
+def test_cycle_through_a_direct_composer_reader_keeps_the_id():
+    text = _THROUGH_B.format(
+        b_reads="ask__compose.output", gate_extra="", gate_reads="b.output"
+    )
+    error = _load_error(text)
+    assert str(error).startswith(_CYCLE_MESSAGE.format(["ask__compose", "b"]))
+    assert "b depends on ask__compose (b.input.a)" in error.diagnostic.notes
+    assert _GENERATED in error.diagnostic.notes
+
+
+def test_composer_read_outside_the_cycle_still_names_only_the_gate():
+    text = (
+        _SELF_READING
+        + """\
+  log:
+    kind: code
+    input:
+      q: ${ask__compose.output}
+    output: int
+    code: return len(inputs["q"])
+output: {a: '${ask.output}', q: '${ask__compose.output}'}
+"""
+    )
+    error = _load_error(text)
+    assert str(error).startswith(_CYCLE_MESSAGE.format(["ask"]))
+    assert _frame_lines(error) == [_line_of(text, "  ask:")]
+    assert error.diagnostic.notes == ("ask depends on ask (ask.input.proj)",)
+
+
+def test_two_self_reading_gates_each_name_only_the_gate():
+    text = (
+        _SELF_READING
+        + """\
+  ask2:
+    kind: human_input
+    input: {proj: '${ask2.output}'}
+    adaptive_questions: {prompt: "Q ${proj}"}
+output: {a: '${ask.output}', b: '${ask2.output}'}
+"""
+    )
+    error = _load_error(text)
+    message = str(error)
+    assert message.startswith(_CYCLE_MESSAGE.format(["ask", "ask2"]))
+    assert "__compose" not in message
+    assert _frame_lines(error) == [_line_of(text, "  ask:"), _line_of(text, "  ask2:")]
+    assert error.diagnostic.notes == (
+        "ask depends on ask (ask.input.proj)",
+        "ask2 depends on ask2 (ask2.input.proj)",
+    )
+
+
+def test_gate_reading_its_own_composer_keeps_the_id():
+    # The composer copies the gate's `x`, so it reads itself: the cycle is its self-edge.
+    error = _load_error(
+        """\
+id: f
+name: f
+input: {proj: !str }
+nodes:
+  ask:
+    kind: human_input
+    input: {proj: '${input.proj}', x: '${ask__compose.output}'}
+    adaptive_questions: {prompt: "Q ${proj} ${x}"}
+output: ${ask.output}
+"""
+    )
+    assert str(error).startswith(_CYCLE_MESSAGE.format(["ask__compose"]))
+    assert error.diagnostic.notes == (
+        "ask__compose depends on ask__compose (ask__compose.input.x)",
+        _GENERATED,
+    )
+
+
+def test_defs_child_cycle_names_only_the_gate():
+    text = """\
+id: f
+name: f
+input:
+  topic: !str
+defs:
+  pick:
+    input:
+      topic: !str
+    nodes:
+      ask:
+        kind: human_input
+        input:
+          proj: ${ask.output}
+        adaptive_questions:
+          prompt: "Q ${proj}"
+    output: ${ask.output}
+nodes:
+  run:
+    kind: call
+    call: pick
+    input:
+      topic: ${input.topic}
+output: ${run.output}
+"""
+    error = _load_error(text)
+    message = str(error)
+    assert message.startswith(
+        "defs entry 'pick': " + _CYCLE_MESSAGE.format(["ask"])
+    )
+    assert "ask__compose" not in message
+    # The defs entry's frame is its body, which starts on the line after `pick:`.
+    assert _frame_lines(error) == [
+        _line_of(text, "  pick:") + 1,
+        _line_of(text, "      ask:"),
+    ]

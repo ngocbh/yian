@@ -90,7 +90,7 @@ from yian.compose.helpers.tags import (
     suggest_tag,
     yaml_quoted,
 )
-from yian.compose.desugar.adaptive_questions import desugar_adaptive_questions
+from yian.compose.desugar.adaptive_questions import QPARAM, desugar_adaptive_questions
 from yian.compose.desugar.case_targets import desugar_case_call_targets
 from yian.compose.desugar.case_values import desugar_case_values
 from yian.compose.validate.case_exhaustive import (
@@ -2334,12 +2334,26 @@ def _assemble(
     node_ranges = {
         nid: d.range for nid, d in descriptors.items() if getattr(d, "range", None)
     }
+    # A synth node whose text all lives under its host (it has `field_labels`) is reported
+    # as that host, unless the cycle runs through an author's read of it.
+    synth_hosts = {
+        nid: d.host
+        for nid, d in descriptors.items()
+        if d.host is not None and d.field_labels
+    }
+    synth_wires = frozenset(
+        e.id
+        for e in edges
+        if synth_hosts.get(e.from_) == e.to and e.input_group == QPARAM
+    )
     reject_cycles(
         edges,
         node_ids,
         node_ranges=node_ranges,
         diagnostics=diagnostics,
         gate_ids=frozenset(e.id for e in host_edges if e.input_group),
+        synth_hosts=synth_hosts,
+        synth_wires=synth_wires,
     )
     check_case_handles(nodes, edges, diagnostics=diagnostics)
 

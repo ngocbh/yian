@@ -214,8 +214,9 @@ constructor 'lst' in 'lst(str)'`), and its `path` is `(typedef, field)` so the l
 point at that field.
 
 `Union(...)` members are records. `resolve_type` flattens nested unions and aliases, drops
-repeated members, and orders the members canonically (by tag, else by
-`canonical_type_label`), so authored order is not identity. A union with one distinct
+repeated members, and orders the members canonically (by tag, else by the canonical
+label in the older bracket spelling, `Optional[int]` where `canonical_type_label` prints
+`Optional(int)`), so authored order is not identity. A union with one distinct
 member is that member. The members must be told apart by the data alone:
 
 - **Tagged.** A tag field is one every member requires as a non-nullable single-value

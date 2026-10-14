@@ -550,7 +550,8 @@ follows the same rule: the source tags must be a subset of the sink's, and an
 untagged source cannot fill an enum sink.
 
 A union is `Type(kind=OBJECT, variants=(member, ...))`: two or more non-nullable record
-members in canonical order (by tag, else by canonical label), deduplicated by equality
+members in canonical order (by tag, else by the canonical label in the older bracket
+spelling, `Optional[int]` rather than the printed `Optional(int)`), deduplicated by equality
 because `Type` holds dicts and is unhashable. `Optional(Union(...))` sets `nullable` on
 the union, never on a member. Tag fields are derived (`union_tag_fields`), not stored. A
 tagged union's value check picks the member by the first tag field; an untagged one, whose

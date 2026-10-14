@@ -55,7 +55,8 @@ One expression grammar, everywhere `${...}` appears:
 
 Arithmetic is Python's: `+` concatenates text and lists, `*` repeats them, `%` formats text
 (`${"%.2f" % p}`), a bool is 0/1 (but a CASE `on:` never equates a bool with a number). No
-cost limits; an operator Python can't complete (overflow) fails like an expression error.
+cost limits; an operator Python can't complete (overflow), or a value holding an int too long
+to render as text, fails like an expression error.
 
 `and`, `or`, `not`, and `in` are reserved operators, so none can be the root
 name of a reference. A dotted field may use those names (`${record.output.in}`).

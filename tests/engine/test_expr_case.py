@@ -117,7 +117,7 @@ def test_first_failing_assert_three_spellings():
     assert first_failing_assert(["${a.output < 5}"], pool) == "${a.output < 5}"
 
 
-# --- arithmetic in when:/asserts: (numbers only) ---------------------------- #
+# --- arithmetic in when:/asserts: ------------------------------------------- #
 
 
 def test_when_arithmetic_basic_and_precedence():

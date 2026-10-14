@@ -111,14 +111,14 @@ Float `+`, `-`, `*` and `/` that overflow give `inf`, which the
 compute fails like any other expression error:
 
 - `**` overflow: `${2.0 ** 5000}`;
-- an int too large to mix with a float: `${10 ** 400 / 3}`;
+- an int too large to mix with a float: `${10 ** 400 * 1.0}`;
 - a repetition count too large: `${"a" * 10 ** 20}`;
 - a missing `%(key)s`: `${"%(k)s" % record}` when `record` has no `k`;
 - a value holding an int too long to render as text (past Python's limit, 4300 digits
   by default), embedded in text or anywhere in a prompt: `"v=${10 ** 5000}"`.
 
 The failure is `binding.evaluate` in a binding, `node.execute` at the CASE node in a
-searched `when:`, `assertion.failed` in a flow `asserts:`, and `node.execute` at the
+searched `when:`, `assertion.failed` in a node or flow `asserts:`, and `node.execute` at the
 AGENT or HUMAN_INPUT node whose prompt can't render.
 
 ### Non-finite results

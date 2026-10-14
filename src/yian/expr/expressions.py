@@ -695,7 +695,8 @@ class _EvalExpr:
         except OverflowError as exc:
             l, r = _operand_repr(lhs), _operand_repr(rhs)
             # Float `**` overflow carries an (errno, message) pair; args[-1] is the message.
-            raise ExpressionError(f"cannot compute {l} {symbol} {r}: {exc.args[-1]}") from exc
+            detail = exc.args[-1] if exc.args else exc
+            raise ExpressionError(f"cannot compute {l} {symbol} {r}: {detail}") from exc
         except KeyError as exc:
             l, r = _operand_repr(lhs), _operand_repr(rhs)
             raise ExpressionError(f"cannot compute {l} {symbol} {r}: missing key {exc}") from exc

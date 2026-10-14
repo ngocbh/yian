@@ -102,9 +102,15 @@ def test_value_repr_names_the_type_of_a_value_too_long_to_display():
         (),
         f"{PLACEHOLDER} is outside inclusive int bounds (0, 10)",
     ),
+    (
+        Type(kind=ValueKind.INTEGER, bounds=(None, 10)),
+        BIG,
+        (),
+        f"{PLACEHOLDER} is above the inclusive int maximum 10",
+    ),
 ], ids=[
     "scalar", "list-in-scalar", "list-element", "not-a-list", "variant", "record",
-    "record-list", "untagged-union", "union-tag", "bounds",
+    "record-list", "untagged-union", "union-tag", "bounds", "one-sided-bounds",
 ])
 def test_a_type_mismatch_holding_a_huge_int_raises_a_located_type_error(
     typ, value, path, message

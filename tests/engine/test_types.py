@@ -212,7 +212,7 @@ def test_numeric_bounds_reject_nonliteral_or_malformed_endpoints(expression):
     (ValueKind.INTEGER, [1, 2]), (ValueKind.INTEGER, (1,)),
     (ValueKind.INTEGER, (1, 2, 3)), (ValueKind.INTEGER, (True, 2)),
     (ValueKind.INTEGER, (1, 2.0)), (ValueKind.INTEGER, (2, 1)),
-    (ValueKind.NUMBER, (0, False)), (ValueKind.NUMBER, (None, 1)),
+    (ValueKind.NUMBER, (0, False)), (ValueKind.NUMBER, (None, None)),
     (ValueKind.NUMBER, (float("nan"), 1)), (ValueKind.NUMBER, (0, float("inf"))),
     (ValueKind.STRING, (1, 2)), (ValueKind.LIST_INTEGER, (1, 2)),
     (ValueKind.OBJECT, (1, 2)),

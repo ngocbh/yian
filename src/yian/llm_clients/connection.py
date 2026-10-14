@@ -19,7 +19,12 @@ from pydantic import ValidationError
 
 from yian._settings import DEFAULT_PROVIDER, PROVIDER_DEFAULT_MODELS
 from .auth import ApiKeyCredentials, AuthError, AuthStore, OAuthCredentials, OpenAIAuth
-from .config import AZURE_NEEDS_BASE_URL, LLMConfig, SUPPORTED_LLM_PROVIDERS
+from .config import (
+    AZURE_NEEDS_BASE_URL,
+    RETIRED_LLM_CONFIG_KEYS,
+    LLMConfig,
+    SUPPORTED_LLM_PROVIDERS,
+)
 from .provider_blocks import block_schema
 
 _API_ENDPOINT = "https://api.openai.com/v1"
@@ -264,16 +269,6 @@ def check_model_config(
     validated, connection = split_model_config(config)
     if validated.provider == "azure" and validated.base_url is None:
         raise ValueError(AZURE_NEEDS_BASE_URL)
-    if (
-        validated.api_key is None
-        and connection is not None
-        and connection["method"] == "subscription"
-        and validated.temperature is not None
-    ):
-        raise ValueError(
-            "OpenAI subscription connections do not accept temperature; remove "
-            "temperature from the llm_config that sets it (flow, def, node, or host)"
-        )
     if validated.provider is not None:
         _check_block(validated, connection)
     return validated, connection
@@ -343,12 +338,16 @@ def resolve_model_config(
 def legacy_connection_config(config: dict[str, Any]) -> dict[str, Any]:
     """Pin old OpenAI records to their original API-key route without I/O."""
     result = copy.deepcopy(config)
-    # Old reflective snapshots serialized every optional public field, including
-    # these empty retired defaults. They carried no native execution behavior.
+    # Old records serialized every optional public field, including these empty
+    # retired defaults (sandbox/cwd, and the keys now written in provider blocks).
+    # As nulls they configured nothing; a set one still fails validation.
     if result.get("provider") != "codex":
         for field in ("sandbox", "cwd"):
             if field in result and result[field] is None:
                 del result[field]
+    for field in RETIRED_LLM_CONFIG_KEYS:
+        if field in result and result[field] is None:
+            del result[field]
     if result.get("provider") == "openai" and "_connection" not in result:
         result["_connection"] = {
             "method": "api_key",

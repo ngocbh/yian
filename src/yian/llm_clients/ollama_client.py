@@ -28,7 +28,7 @@ _DEFAULT_BASE_URL = "http://localhost:11434"
 # ChatOllama accepts a focused set of generation knobs; forward only these so a
 # stray kwarg from the shared `model_from_config` path (e.g. `max_retries`,
 # which ChatOllama doesn't take) doesn't blow up construction.
-_PASSTHROUGH_KWARGS = ("temperature", "num_ctx", "num_predict", "top_p", "seed")
+_PASSTHROUGH_KWARGS = ("num_ctx", "num_predict", "top_p", "seed")
 
 
 def _resolve_base_url(explicit: Optional[str]) -> str:

@@ -168,10 +168,6 @@ def test_snapshot_contains_only_public_pinned_model_configuration() -> None:
     assert set(llm_config) == {
         "provider",
         "model",
-        "anthropic_effort",
-        "openai_reasoning_effort",
-        "google_thinking_level",
-        "temperature",
         "ollama",
     }
     assert not {"api_key", "backend_token", "tenant_id"} & set(llm_config)
@@ -193,12 +189,8 @@ def test_defaults_are_read_once_and_recorded_snapshot_never_rereads_them(
         snapshot = session.snapshot
     assert calls == ["snapshot"]
     assert snapshot["llm_config"] == {
-        "anthropic_effort": None,
-        "google_thinking_level": None,
         "model": "qwen",
-        "openai_reasoning_effort": None,
         "provider": "ollama",
-        "temperature": None,
         "ollama": {"options": {"temperature": 0.2}},
     }
 

@@ -31,7 +31,9 @@ from yian.llm_clients.connection import (
     HOST_KEY_MARKER,
     check_model_config,
     connection_snapshot,
+    legacy_connection_config,
     legacy_connection_map,
+    split_model_config,
 )
 from yian.compile.execution_layout import apply_execution_layout, resolve_execution_layout
 from yian.compile.expand import build_grow
@@ -781,6 +783,7 @@ def _resume_flow_controlled(
         _check_conditions(flow.compiled)
         _check_tool_types(flow.compiled, run_tools)
         skills = _check_skills(flow.compiled, skills)
+        _check_recorded_llm_fields(state.effective_llm_by_static_path)
         if check_llm_configs is not None:
             check_llm_configs(legacy_connection_map(state.effective_llm_by_static_path))
 
@@ -1009,6 +1012,31 @@ def _binding_label(typ: Type) -> str:
             value = value[: _LITERAL_LABEL_WIDTH - 3] + "..."
         return f'"{value}" (str)'
     return canonical_type_label(typ)
+
+
+def _check_recorded_llm_fields(effective: Mapping[str, Mapping[str, Any]]) -> None:
+    """Check the public fields of each recorded agent config before a resume appends.
+
+    A record written before a key was retired may carry it set; resuming would then
+    run with a config the current carrier refuses. No key is required here, so the
+    host-key marker is left out, and with it the base_url bound to that key (replay
+    has already checked the URL; the model call checks it against its connection).
+
+    Args:
+        effective (`Mapping[str, Mapping[str, Any]]`):
+            The recorded effective model map, keyed by static agent path.
+
+    Raises:
+        `ValueError`: A config has an invalid or retired field; the message names its
+            agent path and never echoes values.
+    """
+    for path, config in effective.items():
+        host_only = (HOST_KEY_MARKER, "base_url") if HOST_KEY_MARKER in config else ()
+        public = {key: value for key, value in config.items() if key not in host_only}
+        try:
+            split_model_config(legacy_connection_config(public))
+        except ValueError as exc:
+            raise ValueError(f"Agent {path!r}: {exc}") from exc
 
 
 def _check_skills(

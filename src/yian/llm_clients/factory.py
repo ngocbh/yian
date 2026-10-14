@@ -9,7 +9,8 @@ from .base_client import BaseLLMClient
 # providers (qwen/glm/minimax) expose separate international and China
 # endpoints — see _PROVIDER_BASE_URL.
 # Ollama is intentionally NOT here: it routes to its own native client
-# (ollama_client.OllamaClient) so thinking can be disabled — see that module.
+# (ollama_client.OllamaClient), which sends the `ollama` block (think, options,
+# keep_alive, ...) to /api/chat as written — see that module.
 _OPENAI_COMPATIBLE = (
     "openai", "xai", "deepseek",
     "qwen", "qwen-cn",
@@ -157,10 +158,9 @@ def model_from_config(config) -> BaseChatModel:
     which needs that key, replaces the provider's default endpoint. For `azure`,
     `base_url` is the required resource endpoint and `model` the deployment name.
 
-    Provider-specific reasoning knobs apply only to the selected provider. The block
-    named after the provider is passed to its client as ``block``, and every client
-    sends it into the request body as written. The returned model supports ordinary tool binding,
-    structured output, and invocation.
+    The block named after the provider is passed to its client as ``block``, and every
+    client sends it into the request body as written. The returned model supports
+    ordinary tool binding, structured output, and invocation.
 
     Args:
         config (`LLMConfig` or `dict`):
@@ -195,19 +195,10 @@ def model_from_config(config) -> BaseChatModel:
 
         return create_subscription_model(
             model, access_source=access_source,
-            reasoning_effort=config.openai_reasoning_effort,
             block=config.block_for("openai"),
         )
 
     kwargs: dict[str, Any] = {"block": config.block_for(provider)}
-    if provider == "anthropic" and config.anthropic_effort:
-        kwargs["effort"] = config.anthropic_effort
-    elif provider == "openai" and config.openai_reasoning_effort:
-        kwargs["reasoning_effort"] = config.openai_reasoning_effort
-    elif provider == "google" and config.google_thinking_level:
-        kwargs["thinking_level"] = config.google_thinking_level
-    if config.temperature is not None:
-        kwargs["temperature"] = config.temperature
 
     # Parallel nodes fan out at once; a low-TPM deployment rate-limits easily,
     # so lean on the provider SDK's exponential backoff (notably on HTTP 429).

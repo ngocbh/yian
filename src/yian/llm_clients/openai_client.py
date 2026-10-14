@@ -249,8 +249,8 @@ class MinimaxChatOpenAI(NormalizedChatOpenAI):
 
 # Kwargs forwarded from user config to ChatOpenAI
 _PASSTHROUGH_KWARGS = (
-    "timeout", "max_retries", "reasoning_effort", "temperature",
-    "api_key", "callbacks", "http_client", "http_async_client",
+    "timeout", "max_retries", "api_key", "callbacks", "http_client",
+    "http_async_client",
 )
 
 # Self-hosted runtimes whose API key is optional: vLLM runs keyless by default
@@ -280,7 +280,7 @@ class OpenAIClient(BaseLLMClient):
     vLLM, …). Ollama has its own native client (see ollama_client).
 
     For native OpenAI models, uses the Responses API (/v1/responses) which
-    supports reasoning_effort with function tools across all model families
+    supports reasoning with function tools across all model families
     (GPT-4.1, GPT-5). Third-party compatible providers (xAI, OpenRouter,
     vLLM) use standard Chat Completions.
     """

@@ -207,7 +207,6 @@ def test_nontext_system_content_is_rejected_before_http():
     [
         {"store": True},
         {"previous_response_id": "old-response"},
-        {"max_output_tokens": 50},
         {"extra_body": {"store": True}},
         {"extra_body": {"previous_response_id": "old-response"}},
         {"extra_body": {"include": []}},

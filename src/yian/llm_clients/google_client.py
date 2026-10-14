@@ -86,32 +86,17 @@ class GoogleClient(BaseLLMClient):
             # cross-origin redirect.
             llm_kwargs["client_args"] = {"follow_redirects": False}
 
-        for key in ("timeout", "max_retries", "temperature", "callbacks", "http_client", "http_async_client"):
+        for key in ("timeout", "max_retries", "callbacks", "http_client", "http_async_client"):
             if key in self.kwargs:
                 llm_kwargs[key] = self.kwargs[key]
-        # An explicit None keeps langchain-google-genai from sending its 0.7 default.
-        llm_kwargs.setdefault("temperature", None)
+        # langchain-google-genai sends temperature=0.7 unless it is None; a temperature
+        # comes only from the block's generationConfig.
+        llm_kwargs["temperature"] = None
 
         # Unified api_key maps to provider-specific google_api_key
         google_api_key = self.kwargs.get("api_key") or self.kwargs.get("google_api_key")
         if google_api_key:
             llm_kwargs["google_api_key"] = google_api_key
-
-        # Map thinking_level to appropriate API param based on model
-        # Gemini 3 Pro: low, high
-        # Gemini 3 Flash: minimal, low, medium, high
-        # Gemini 2.5: thinking_budget (0=disable, -1=dynamic)
-        thinking_level = self.kwargs.get("thinking_level")
-        if thinking_level:
-            model_lower = self.model.lower()
-            if "gemini-3" in model_lower:
-                # Gemini 3 Pro doesn't support "minimal", use "low" instead
-                if "pro" in model_lower and thinking_level == "minimal":
-                    thinking_level = "low"
-                llm_kwargs["thinking_level"] = thinking_level
-            else:
-                # Gemini 2.5: map to thinking_budget
-                llm_kwargs["thinking_budget"] = -1 if thinking_level == "high" else 0
 
         return NormalizedChatGoogleGenerativeAI(**llm_kwargs, block=self.kwargs.get("block") or {})
 

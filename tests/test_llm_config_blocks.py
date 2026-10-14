@@ -33,10 +33,6 @@ def test_llm_config_keys_are_spelled_as_authored():
             "model",
             "api_key",
             "base_url",
-            "anthropic_effort",
-            "openai_reasoning_effort",
-            "google_thinking_level",
-            "temperature",
             *SUPPORTED_LLM_PROVIDERS,
         }
     )
@@ -119,8 +115,9 @@ def test_dump_round_trips():
         {
             "provider": "google",
             "model": "gemini-3-pro",
-            "temperature": 0.5,
-            "google": {"generationConfig": {"thinkingConfig": {"thinkingLevel": "HIGH"}}},
+            "google": {
+                "generationConfig": {"temperature": 0.5, "thinkingConfig": {"thinkingLevel": "HIGH"}}
+            },
             "minimax-cn": {"thinking": {"type": "adaptive"}},
             "ollama": {"think": True},
         }

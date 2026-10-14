@@ -1,14 +1,12 @@
 """Coverage for the llm_clients provider features ported from TradingAgents.
 
 Construction-only (no network): builds clients with dummy keys and asserts the
-new capability table, Anthropic effort gating, temperature passthrough (which was
-silently dropped for anthropic/google/azure), and the dual-region providers.
+capability table, client construction, and the dual-region providers.
 """
 
 import pytest
 
 from yian.llm_clients import create_llm_client
-from yian.llm_clients.anthropic_client import _supports_effort
 from yian.llm_clients.api_key_env import get_api_key_env
 from yian.llm_clients.capabilities import get_capabilities
 from yian.llm_clients.config import LLMConfig, SUPPORTED_LLM_PROVIDERS
@@ -48,47 +46,22 @@ def test_capabilities_forward_compat_pattern():
     assert get_capabilities("deepseek-v5-pro").supports_tool_choice is False
 
 
-# --- anthropic effort gating ------------------------------------------------ #
+# --- google: no langchain temperature default ------------------------------ #
 
 
-@pytest.mark.parametrize("model", ["claude-opus-4-5", "claude-sonnet-4-5", "claude-opus-9-9"])
-def test_supports_effort_true_for_opus_sonnet(model):
-    assert _supports_effort(model) is True
-
-
-@pytest.mark.parametrize("model", ["claude-haiku-4-5", "claude-3-5-haiku", "gpt-4o"])
-def test_supports_effort_false_for_haiku_and_others(model):
-    assert _supports_effort(model) is False
-
-
-def test_anthropic_get_llm_drops_effort_for_haiku_keeps_for_opus():
-    opus = create_llm_client("anthropic", "claude-opus-4-5", api_key="x", effort="high").get_llm()
-    haiku = create_llm_client("anthropic", "claude-haiku-4-5", api_key="x", effort="high").get_llm()
-    assert opus.effort == "high"
-    assert getattr(haiku, "effort", None) is None
-
-
-# --- temperature passthrough (was silently dropped) ------------------------- #
-
-
-def test_anthropic_temperature_passthrough():
-    m = create_llm_client("anthropic", "claude-opus-4-5", api_key="x", temperature=0.3).get_llm()
-    assert m.temperature == 0.3
-
-
-def test_google_temperature_passthrough():
+def test_google_model_never_carries_a_temperature():
+    # A temperature comes only from the google block's generationConfig.
     m = create_llm_client("google", "gemini-2.5-flash", api_key="x", temperature=0.4).get_llm()
-    assert m.temperature == 0.4
+    assert m.temperature is None
 
 
-def test_azure_temperature_passthrough_and_endpoint_base_stripping(monkeypatch):
+def test_azure_endpoint_base_stripping(monkeypatch):
     monkeypatch.setenv("AZURE_OPENAI_API_KEY", "x")
     monkeypatch.setenv("OPENAI_API_VERSION", "2024-02-01")
     # A portal's v1 surface is stripped back to the base resource URL.
     m = create_llm_client(
-        "azure", "gpt-4o", base_url="https://res.openai.azure.com/openai/v1", temperature=0.1
+        "azure", "gpt-4o", base_url="https://res.openai.azure.com/openai/v1"
     ).get_llm()
-    assert m.temperature == 0.1
     assert str(m.azure_endpoint) == "https://res.openai.azure.com"
 
 
@@ -189,10 +162,9 @@ def test_factory_routes_ollama_to_native_client():
 def test_ollama_get_llm_sets_no_thinking_default_and_strips_v1(monkeypatch):
     # an OpenAI-style base URL (with /v1) must be normalized to the native one
     monkeypatch.setenv("OLLAMA_BASE_URL", "http://gpu-box:11434/v1")
-    m = create_llm_client("ollama", "qwen3.5:35b", temperature=0.0).get_llm()
+    m = create_llm_client("ollama", "qwen3.5:35b").get_llm()
     assert m.reasoning is None  # no default: `think` is sent only from the ollama block
     assert str(m.base_url) == "http://gpu-box:11434"
-    assert m.temperature == 0.0
 
 
 def test_ollama_drops_unsupported_kwargs():

@@ -125,11 +125,6 @@ class _SubscriptionChatOpenAI(RequestBlockMixin, ChatOpenAI):
             raise ValueError(
                 "OpenAI subscription requests require the full conversation"
             )
-        for option in ("temperature", "max_output_tokens"):
-            if payload.get(option) is not None:
-                raise ValueError(
-                    f"OpenAI subscription requests do not support {option}"
-                )
         payload["include"] = list(
             dict.fromkeys(
                 [
@@ -208,7 +203,6 @@ def create_subscription_model(
     check_stopped: Callable[[], None] | None = None,
     http_client: httpx.Client | None = None,
     http_async_client: httpx.AsyncClient | None = None,
-    reasoning_effort: str | None = None,
     block: Mapping | None = None,
     timeout: float = 60.0,
     max_retries: int = 2,
@@ -223,7 +217,6 @@ def create_subscription_model(
         http_client (`httpx.Client | None`): Optional caller-owned sync transport.
         http_async_client (`httpx.AsyncClient | None`): Optional caller-owned async
             transport. Omitted clients use the SDK's standard client lifecycle.
-        reasoning_effort (`str | None`): Optional provider reasoning setting.
         block (`Mapping | None`): Optional ``openai`` block, shaped like a Responses
             request body and already checked against `OpenAISubscriptionBlock`;
             merged into every request body as written. Defaults to None (nothing extra).
@@ -254,7 +247,6 @@ def create_subscription_model(
         include=["reasoning.encrypted_content"],
         http_client=http_client,
         http_async_client=http_async_client,
-        reasoning_effort=reasoning_effort,
         block=dict(block or {}),
         block_provider="openai",
         block_api="responses",

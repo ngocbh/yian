@@ -324,14 +324,6 @@ def test_run_rejects_unsupported_default_provider_before_any_node(monkeypatch):
     assert events == []
 
 
-def test_check_model_config_rejects_subscription_temperature():
-    subscription()
-    with pytest.raises(ValueError, match="subscription connections do not accept temperature"):
-        check_model_config(resolve_model_config({"temperature": 0.2}))
-    with pytest.raises(ValueError, match="subscription connections do not accept temperature"):
-        model_from_config(resolve_model_config({"temperature": 0.2}))
-
-
 @pytest.mark.parametrize("block", [{"temperature": 0.2}, {"max_output_tokens": 100}])
 def test_check_model_config_checks_the_openai_block_against_the_subscription_endpoint(block):
     subscription()
@@ -384,7 +376,9 @@ def test_run_rejects_a_subscription_openai_block_before_any_node():
 def test_run_rejects_subscription_temperature_before_any_node():
     subscription()
     events = []
-    flow = load_flow(_SLOW_THEN_AGENT.replace("{extra}", "llm_config:\n  temperature: 0.2\n"))
-    with pytest.raises(ValueError, match=r"Agent 'w'.*do not accept temperature"):
+    flow = load_flow(_SLOW_THEN_AGENT.replace(
+        "{extra}", "llm_config:\n  openai:\n    temperature: 0.2\n"
+    ))
+    with pytest.raises(ValueError, match=r"Agent 'w'.*`openai\.temperature`.*ChatGPT subscription"):
         run_flow(flow, {"topic": "x"}, on_event=events.append)
     assert events == []

@@ -99,9 +99,11 @@ class LLMConfig(BaseModel):
     LLM selection for an AGENT node.
 
     Every field is optional: an unset `provider`/`model` falls back to the package's
-    snapshotted provider defaults, and the reasoning knobs apply only when they match the selected
-    provider. `extra="forbid"` makes a mistyped `llm_config:` key loud at load time. Validation
-    errors never echo the input values, so a rejected config cannot leak `api_key`.
+    snapshotted provider defaults, and only the block named by the selected provider is
+    sent. `extra="forbid"` makes a mistyped `llm_config:` key loud at load time, and a
+    retired key (`temperature`, `anthropic_effort`, ...) fails with its new form (see
+    `retired_key_error`). Validation errors never echo the input values, so a rejected
+    config cannot leak `api_key`.
 
     Attributes:
         provider (`str`, *optional*, defaults to `None`):
@@ -110,15 +112,6 @@ class LLMConfig(BaseModel):
             `google`, or `azure`. `None` inherits the global default provider.
         model (`str`, *optional*, defaults to `None`):
             Provider-specific model id. `None` inherits that provider's default model.
-        anthropic_effort (`str`, *optional*, defaults to `None`):
-            Anthropic reasoning effort (`high`/`medium`/`low`); ignored for other providers.
-        openai_reasoning_effort (`str`, *optional*, defaults to `None`):
-            OpenAI reasoning effort (`high`/`medium`/`low`); ignored for other providers.
-        google_thinking_level (`str`, *optional*, defaults to `None`):
-            Google thinking level; ignored for other providers.
-        temperature (`float`, *optional*, defaults to `None`):
-            Sampling temperature, which must be finite; `None` leaves the provider
-            default.
         api_key (`SecretStr`, *optional*, defaults to `None`):
             Provider API key supplied by the host. It takes precedence over the provider's
             key environment variable and saved OpenAI connection. It is masked in `repr`
@@ -168,10 +161,6 @@ class LLMConfig(BaseModel):
 
     provider: Optional[LLMProvider] = None
     model: Optional[str] = None
-    anthropic_effort: Optional[Literal["high", "medium", "low"]] = None
-    openai_reasoning_effort: Optional[Literal["high", "medium", "low"]] = None
-    google_thinking_level: Optional[str] = None
-    temperature: Optional[float] = None
     # Excluded from dumps so the key never reaches a record, and so configs without
     # a key dump exactly as they did before the field existed.
     api_key: Optional[SecretStr] = Field(default=None, exclude=True)
@@ -192,8 +181,8 @@ class LLMConfig(BaseModel):
     google: Optional[GeminiGenerateContentBlock] = None
     azure: Optional[AzureChatBlock] = None
     # `model` is a regular field here; don't warn on the model_ namespace.
-    # extra="forbid" makes typo'd llm_config: keys (e.g. `temparature` instead of
-    # `temperature`) loud at LOAD time, not silent. hide_input_in_errors keeps
+    # extra="forbid" makes typo'd llm_config: keys (e.g. `porvider` instead of
+    # `provider`) loud at LOAD time, not silent. hide_input_in_errors keeps
     # config values, including the key, out of validation error messages. Keys are
     # read and dumped as authored, so the dash blocks are `qwen-cn`, not `qwen_cn`.
     model_config = ConfigDict(
@@ -219,6 +208,15 @@ class LLMConfig(BaseModel):
                 "use provider: openai, and remove sandbox/cwd. Yian tools are "
                 "granted explicitly and run on the host."
             )
+        return value
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_retired_keys(cls, value):
+        """Point a retired reasoning or temperature key at its provider-block form."""
+        message = retired_key_error(value)
+        if message is not None:
+            raise ValueError(message)
         return value
 
     @model_validator(mode="before")
@@ -311,6 +309,68 @@ _BLOCK_ATTRIBUTES: dict[str, str] = {
 LLM_CONFIG_KEYS: frozenset[str] = frozenset(
     field.alias or name for name, field in LLMConfig.model_fields.items()
 )
+
+
+# Keys removed from `llm_config` -> the message showing their provider-block form.
+# Recorded runs may still carry them as null (see `RETIRED_LLM_CONFIG_KEYS`).
+_RETIRED_KEY_MESSAGES: dict[str, str] = {
+    "anthropic_effort": (
+        "`anthropic_effort` was removed; write `anthropic: {output_config: {effort: <level>}}`"
+    ),
+    "openai_reasoning_effort": (
+        "`openai_reasoning_effort` was removed; write `openai: {reasoning: {effort: <level>}}`"
+    ),
+    "google_thinking_level": (
+        "`google_thinking_level` was removed; write "
+        "`google: {generationConfig: {thinkingConfig: {thinkingLevel: <LEVEL>}}}`"
+    ),
+}
+# Where `temperature` lives inside each block whose API does not take it top-level.
+_TEMPERATURE_FORMS = {
+    "google": "`google: {generationConfig: {temperature: <value>}}`",
+    "ollama": "`ollama: {options: {temperature: <value>}}`",
+}
+
+RETIRED_LLM_CONFIG_KEYS: frozenset[str] = frozenset({*_RETIRED_KEY_MESSAGES, "temperature"})
+
+
+def retired_key_error(config: Any) -> Optional[str]:
+    """Return the migration message for the first retired key in an ``llm_config`` layer.
+
+    The retired keys are ``anthropic_effort``, ``openai_reasoning_effort``,
+    ``google_thinking_level`` and top-level ``temperature``; each now lives in a
+    provider block. A key counts whatever its value, and the message never echoes it.
+
+    Args:
+        config (`Any`): One ``llm_config`` layer; a non-mapping has no retired key.
+
+    Returns:
+        `str | None`: A message showing the provider-block form of the key, naming the
+            layer's ``provider`` when it is a supported one, or `None`.
+
+    Example:
+        ```python
+        retired_key_error({"provider": "ollama", "temperature": 0.2})
+        # "`temperature` moved into the provider block: write
+        #  `ollama: {options: {temperature: <value>}}`"
+        ```
+    """
+    if not isinstance(config, Mapping):
+        return None
+    for key, message in _RETIRED_KEY_MESSAGES.items():
+        if key in config:
+            return message
+    if "temperature" not in config:
+        return None
+    provider = config.get("provider")
+    if isinstance(provider, str) and provider in SUPPORTED_LLM_PROVIDERS:
+        form = _TEMPERATURE_FORMS.get(provider, f"`{provider}: {{temperature: <value>}}`")
+        return f"`temperature` moved into the provider block: write {form}"
+    return (
+        "`temperature` moved into the provider block: write "
+        "`<provider>: {temperature: <value>}` (google: `generationConfig.temperature`; "
+        "ollama: `options.temperature`)"
+    )
 
 
 def validate_base_url(value: Any) -> str:

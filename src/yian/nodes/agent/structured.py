@@ -118,7 +118,9 @@ def _non_null_py_type(typ: Type, *, closed: bool, position: str) -> Any:
             item = _py_type(elem, closed=closed, position=_nested(position, "item"))
             return List[item]  # type: ignore[misc]
         scalar = seg.element_kind
-        return List[_scalar_annotation(scalar, None)] if scalar in _SCALAR_PY else list  # type: ignore[misc]
+        if scalar not in _SCALAR_PY:
+            return list
+        return List[_scalar_annotation(scalar, None)]  # type: ignore[misc]
     raise ValueError(f"type_to_schema: no structured mapping for segment type {seg!r}")
 
 
@@ -305,9 +307,10 @@ def generate_structured(
 
     Either way a deviation (schema rejection, unparseable JSON, a NaN or infinity in the
     reply) appends a corrective `HumanMessage` naming the error and retries, up to
-    `max_retries` extra attempts (`max_retries + 1` total invocations). The last error is re-raised once the cap is spent.
-    Session corrections expose only the type of a provider-side error; diagnostics
-    raised once the reply surfaced stay intact. Session cancellation never retries.
+    `max_retries` extra attempts (`max_retries + 1` total invocations). The last error is
+    re-raised once the cap is spent. Session corrections expose only the type of a
+    provider-side error; diagnostics raised once the reply surfaced stay intact. Session
+    cancellation never retries.
 
     Args:
         model (`Any`): Configured provider model, optionally supporting native binding.
@@ -483,9 +486,13 @@ def _reject_nonfinite_carrier(response: Any) -> None:
     try:
         reject_nonfinite(response.get("raw"), "model reply")
     except TypeCheckError:
-        error = _native_carrier_error(response)
-        if error is not None:
-            raise error
+        pass
+    else:
+        return
+    # Raised outside the handler so the provider's error gains no `__context__`.
+    error = _native_carrier_error(response)
+    if error is not None:
+        raise error
 
 
 def _generate_fallback(

@@ -21,7 +21,6 @@ from yian.typesys.types import read_typedefs, type_for
 from yian.typesys.values import Type, TypeCheckError, ValueKind
 from tests.engine._session_fakes import harness, request
 from tests.engine.test_agent_session import _FLOW, _Model, _view
-from tests.engine.test_agent_session_structured import _Native
 from tests.engine.test_agent_session_tools import _TOOL_FLOW, _Chat, _Tool
 from tests.engine.test_agent_steering import Inbox, _flow as _steer_flow, _recorder
 
@@ -288,7 +287,7 @@ def test_a_nonfinite_freeform_value_is_retried_and_located():
 
 
 def test_a_nonfinite_native_session_reply_is_retried_with_the_full_error(monkeypatch):
-    model = _Native([math.nan, 2])
+    model = _Carrier([math.nan, 2])
     monkeypatch.setattr(llm_clients, "model_from_config", lambda _: model)
     flow, memory = _structured_flow("float", native=True, session=True)
     assert run_flow(flow, {"question": "q"}, memory=memory).output == 2.0
@@ -316,6 +315,18 @@ def test_nonfinite_session_metadata_fails_after_every_retry(monkeypatch):
     assert "model reply at response_metadata.logprobs.content[0].logprob" in result.failure.message
     assert len(model.calls) == 3
     assert "provider error (" not in _correction(model)
+
+
+def test_a_nonfinite_native_session_freeform_value_is_retried_with_the_full_error():
+    model = _Carrier([{"k": math.nan}, {"k": 1}])
+    memory = SessionMemory()
+    with harness(memory) as opened:
+        with opened.frame.open_turn(request(), check_stopped=lambda: None) as turn:
+            value = generate_structured(model, [HumanMessage(content="q")], Type(kind=ValueKind.OBJECT),
+                                        llm_config=_NATIVE, memory_context=MemoryContext(transcript=turn))
+    assert value == {"k": 1}
+    assert "model reply at tool_calls[0].args.value.k: non-finite number" in _correction(model)
+    assert [effect.status for effect in _view(memory).effects] == ["failed", "completed"]
 
 
 def test_a_malformed_native_carrier_holding_nan_stays_a_capability_fault():

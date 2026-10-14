@@ -252,10 +252,56 @@ def test_resume_checks_other_providers_by_env_var(monkeypatch, tmp_path):
     result = _resume(flow, log)
 
     assert result.exit_code == 1, result.output
-    output = _plain(result.output)
-    assert "ANTHROPIC_API_KEY" in output
-    assert "resume again" in output
+    assert (
+        "provider 'anthropic' needs an API key but $ANTHROPIC_API_KEY is not set; "
+        "set it and resume again" in _plain(result.output)
+    )
     assert log.read_bytes() == before
+
+
+def test_resume_on_a_saved_api_key_login_needs_no_environment_key(monkeypatch, tmp_path):
+    flow = _flow_file(tmp_path)
+    AuthStore().save("openai", ApiKeyCredentials("saved-key"), "gpt-5.5")
+    log = _unfinished_log(monkeypatch, flow, env_var=None)
+    _fake_model(monkeypatch)
+
+    def no_prompt(request):
+        raise AssertionError("a saved login must not prompt")
+
+    monkeypatch.setattr(run_cli, "_prompt_request", no_prompt)
+    result = _resume(flow, log)
+
+    assert result.exit_code == 0, result.output
+    assert "written offline" in result.stdout
+
+
+def test_agents_sharing_one_connection_get_one_prompt(monkeypatch, tmp_path):
+    flow = tmp_path / "flow.yaml"
+    flow.write_text(
+        _FLOW.replace("PROVIDER", "openai").replace(
+            "output: ${write.output}",
+            "  again:\n"
+            "    kind: agent\n"
+            "    input:\n"
+            "      text: ${write.output}\n"
+            '    prompt: "Rewrite ${text}"\n'
+            "    output: str\n"
+            "output: ${again.output}",
+        )
+    )
+    log = _unfinished_log(monkeypatch, flow)
+    _fake_model(monkeypatch)
+    prompts = []
+
+    def answer():
+        prompts.append(None)
+        return "sk-fake"
+
+    result = _resume_on_a_tty(monkeypatch, flow, log, answer)
+
+    assert result.exit_code == 0, result.output
+    assert "written offline" in result.stdout
+    assert len(prompts) == 1
 
 
 def test_resume_relays_a_reconnected_store_credential(monkeypatch, tmp_path):

@@ -1354,15 +1354,34 @@ def _resume_env_key(
 ) -> None:
     """Require ``env_var`` to hold the key a recorded run started with.
 
-    ``identity`` is the recorded SHA-256 of that key, or `None` when the record
-    has none, in which case any non-empty key passes. Only a missing key prompts;
-    a typed key that passes is exported to ``env_var``.
+    Only a missing key prompts; a typed key that passes is exported to
+    ``env_var``, as a fresh run exports its prompted key.
+
+    Args:
+        provider (`str`):
+            The provider name shown in prompts and errors.
+        env_var (`str`):
+            The environment variable that holds the provider's key.
+        identity (`str | None`):
+            The recorded `key_identity` of the key, or `None` when the record
+            has none, in which case any non-empty key passes.
+        ask_secret (`Callable[[str], Any]`):
+            Asks one hidden question and returns the answer, or `None` when the
+            user declines.
+        prompt_available (`bool`):
+            Whether a missing key may be prompted for.
+
+    Raises:
+        `_ResumeKeyError`:
+            The key is set but differs from the recorded one, is missing with no
+            prompt available, is declined or left empty `MAX_KEY_PROMPTS` times,
+            or a typed key differs from the recorded one.
     """
-    from yian.llm_clients.connection import _key_identity
+    from yian.llm_clients.connection import key_identity
 
     existing = os.environ.get(env_var)
     if existing:
-        if identity is not None and _key_identity(existing) != identity:
+        if identity is not None and key_identity(existing) != identity:
             raise _ResumeKeyError(
                 f"${env_var} is not the key this run started with; "
                 "set it to that key and resume again"
@@ -1373,19 +1392,19 @@ def _resume_env_key(
             f"provider {provider!r} needs an API key but ${env_var} is not set; "
             "set it and resume again"
         )
-    from yian.cli.utils import _MAX_KEY_PROMPTS
+    from yian.cli.utils import MAX_KEY_PROMPTS
 
     cancelled = (
         f"no API key provided for {provider!r} (${env_var}); set it and resume again"
     )
-    for _ in range(_MAX_KEY_PROMPTS):
+    for _ in range(MAX_KEY_PROMPTS):
         answer = ask_secret(f"Enter {env_var} for provider {provider!r}:")
         if answer is None:
             raise _ResumeKeyError(cancelled)
         key = str(answer).strip()
         if not key:
             continue
-        if identity is not None and _key_identity(key) != identity:
+        if identity is not None and key_identity(key) != identity:
             raise _ResumeKeyError(
                 "the key entered is not the one this run started with; "
                 f"set ${env_var} to that key and resume again"
@@ -1403,9 +1422,9 @@ def _check_resume_credentials(
 ) -> None:
     """Check that the recorded model configs of a resumed run can authenticate.
 
-    Mirrors the fresh-run preflight: an environment key must be set, and an
-    OpenAI environment key must be the one the run started with. Only a missing
-    key prompts. Every OpenAI connection then resolves its credentials, so a
+    Checks what a fresh run's preflight checks, an environment key for each
+    provider, plus that an OpenAI environment key is the one the run started
+    with. Only a missing key prompts. Every OpenAI connection then resolves its credentials, so a
     replaced saved credential fails here instead of at the first model call.
     Checks run once per distinct OpenAI connection and once per other provider;
     providers without a key variable are skipped.
@@ -1422,9 +1441,10 @@ def _check_resume_credentials(
             Whether a missing key may be prompted for.
 
     Raises:
-        `_ResumeKeyError`: A key is missing, differs from the recorded one, was
-            not provided at the prompt, belongs to a Python host, or a recorded
-            OpenAI connection can no longer resolve its credentials.
+        `_ResumeKeyError`:
+            A key is missing, differs from the recorded one, was not provided
+            at the prompt, belongs to a Python host, or a recorded OpenAI
+            connection can no longer resolve its credentials.
     """
     from yian.llm_clients.api_key_env import get_api_key_env
     from yian.llm_clients.auth import AuthError
@@ -1776,7 +1796,7 @@ def run(
         err_console.print("[yellow]run cancelled[/yellow]")
         raise typer.Exit(code=1)
     except _ResumeKeyError as exc:
-        err_console.print(f"[red]{exc}[/red]")
+        err_console.print(Text(str(exc), style="red"))
         raise typer.Exit(code=1)
     except (OSError, TypeError, ValueError, MemoryOperationError) as exc:
         action = "resume" if resume is not None else "run"

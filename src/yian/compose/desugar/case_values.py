@@ -48,7 +48,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import Any, Optional
 
-from yian.compose.desugar.inline_calls import _SYNTH_PREFIX, desugar_call_directives
+from yian.compose.desugar.inline_calls import (
+    _SYNTH_PREFIX,
+    SecretArgumentError,
+    desugar_call_directives,
+)
 from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.helpers.typed_bindings import CALL_HEAD, QUOTED_STYLES, yaml_quoted
 from yian.compose.helpers.yaml_words import former_boolean_fix
@@ -310,6 +314,8 @@ def _is_value(
         # Checked here, where the style is known; lifted by `desugar_case_call_targets`.
         try:
             desugar_call_directives(value, lambda: "__check")
+        except SecretArgumentError as exc:
+            raise diagnostics.error(exc.message_for(host), range=rng) from exc
         except ExpressionError as exc:
             # Quoting a call that holds a span is its own error, so no quoting fix then.
             hint = (

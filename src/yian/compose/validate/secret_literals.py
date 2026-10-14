@@ -1,16 +1,22 @@
-"""Reject a literal value under a secret name in node bindings and flow outputs.
+"""Reject a literal value under a secret name in node bindings, case values and outputs.
 
 Runs on the authored values, before typed bindings are split or anything is desugared,
 because those later passes may echo a value in their own errors. In a binding position a
 whole-value `call(...)` directive also counts as a binding, and a typed binding
-(`Type = value`) is checked on its right side.
+(`Type = value`) is checked on its right side. A directive's own keyword arguments are
+held to the same rule (`SecretArgumentError`), so a directive under a secret name that
+passes a literal secret is reported as that argument. A `case` value branch has no name
+of its own, so only secret keys nested in a mapping or list branch are checked.
 """
 
 from __future__ import annotations
 
 from typing import Any, Callable
 
-from yian.compose.desugar.inline_calls import desugar_call_directives
+from yian.compose.desugar.inline_calls import (
+    SecretArgumentError,
+    desugar_call_directives,
+)
 from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.helpers.secret_literals import (
     is_binding_text,
@@ -24,6 +30,7 @@ from yian.compose.helpers.typed_bindings import (
     typed_binding_parts,
 )
 from yian.compose.nodes import BINDING_FIELDS
+from yian.compose.nodes.case import CaseDescriptor
 from yian.compose.source import SourceSyntaxError
 from yian.diagnostics import SourceRange
 from yian.expr import ExpressionError
@@ -42,7 +49,7 @@ def check_authored_bindings(
     output_range: Callable[[Any], SourceRange | None],
     diagnostics: LoadDiagnostics,
 ) -> None:
-    """Reject a literal value under a secret name in any node binding or flow output.
+    """Reject a literal under a secret name in a node binding, case value or flow output.
 
     Args:
         descriptors (`dict[str, Any]`): Authored node descriptors keyed by node id.
@@ -58,24 +65,32 @@ def check_authored_bindings(
         diagnostics (`LoadDiagnostics`): Factory for located load errors.
 
     Raises:
-        `LoadError`: Raised at the offending binding or output for the first literal
-            value under a secret name, in authored order.
+        `LoadError`: Raised at the offending binding, branch or output for the first
+            literal value under a secret name, in authored order.
     """
     for node_id, desc in descriptors.items():
         owner = f"node {node_id!r}"
         for field in BINDING_FIELDS.get(desc.kind, ()):
             current = getattr(desc, field, None)
             if isinstance(current, dict):
+                is_input = field == _TYPED_FIELD
                 for key, value in current.items():
+                    site = (
+                        (desc.field_ranges.get(("input", key)) if is_input else None)
+                        or desc.field_ranges.get(("field", field))
+                        or desc.range
+                    )
                     path = _binding_path(
                         key,
                         value,
                         binding_style_at(node_id, field, key),
-                        typed=field == _TYPED_FIELD,
+                        typed=is_input,
+                        owner=owner,
+                        range=site,
+                        diagnostics=diagnostics,
                     )
                     if path is None:
                         continue
-                    is_input = field == _TYPED_FIELD
                     raise diagnostics.error(
                         secret_literal_message(
                             f"{'input' if is_input else field} {str(key)!r}",
@@ -83,25 +98,40 @@ def check_authored_bindings(
                             path,
                             owner=owner,
                         ),
-                        range=(desc.field_ranges.get(("input", key)) if is_input else None)
-                        or desc.field_ranges.get(("field", field))
-                        or desc.range,
+                        range=site,
                     )
             elif current is not None:
+                site = desc.field_ranges.get(("field", field)) or desc.range
                 path = _binding_path(
-                    field, current, binding_style_at(node_id, field, field), typed=False
+                    field,
+                    current,
+                    binding_style_at(node_id, field, field),
+                    typed=False,
+                    owner=owner,
+                    range=site,
+                    diagnostics=diagnostics,
                 )
                 if path is not None:
                     raise diagnostics.error(
                         secret_literal_message(
                             f"field {field!r}", field, path, owner=owner
                         ),
-                        range=desc.field_ranges.get(("field", field)) or desc.range,
+                        range=site,
                     )
+        if isinstance(desc, CaseDescriptor):
+            _check_case_values(desc, owner=owner, diagnostics=diagnostics)
     if not isinstance(outputs_section, dict):
         return
     for key, value in outputs_section.items():
-        path = _binding_path(key, value, output_style_at(key), typed=True)
+        path = _binding_path(
+            key,
+            value,
+            output_style_at(key),
+            typed=True,
+            owner="flow outputs",
+            range=output_range(key),
+            diagnostics=diagnostics,
+        )
         if path is not None:
             raise diagnostics.error(
                 secret_literal_message(f"flow output {str(key)!r}", str(key), path),
@@ -109,8 +139,51 @@ def check_authored_bindings(
             )
 
 
+def _check_case_values(
+    desc: CaseDescriptor, *, owner: str, diagnostics: LoadDiagnostics
+) -> None:
+    """Reject a secret key with a literal value nested in a case's value branches.
+
+    Args:
+        desc (`CaseDescriptor`): The authored case.
+        owner (`str`): The case as messages name it, e.g. `"node 'pick'"`.
+        diagnostics (`LoadDiagnostics`): Factory for located load errors.
+
+    Raises:
+        `LoadError`: Raised at the branch for the first such key, `then:` branches in
+            order and then `else:`.
+    """
+    branches = [
+        (
+            f"then[{index}] value",
+            case["then"],
+            desc.then_ranges[index] if index < len(desc.then_ranges) else None,
+        )
+        for index, case in enumerate(desc.cases)
+        if isinstance(case, dict) and "then" in case
+    ]
+    if desc.has_else:
+        branches.append(
+            ("else value", desc.else_, desc.field_ranges.get(("field", "else")))
+        )
+    for slot, value, site in branches:
+        path = secret_literal_path(None, value)
+        if path is not None:
+            raise diagnostics.error(
+                secret_literal_message(slot, None, path, owner=owner),
+                range=site or desc.range,
+            )
+
+
 def _binding_path(
-    name: Any, value: Any, style: str | None, *, typed: bool
+    name: Any,
+    value: Any,
+    style: str | None,
+    *,
+    typed: bool,
+    owner: str,
+    range: SourceRange | None,
+    diagnostics: LoadDiagnostics,
 ) -> tuple[str | int, ...] | None:
     """Locate a literal under a secret name in one binding, as `secret_literal_path`.
 
@@ -119,10 +192,27 @@ def _binding_path(
         value (`Any`): The authored binding value.
         style (`str | None`): The value's YAML scalar style, `None` when unknown.
         typed (`bool`): Whether this position accepts a typed binding.
+        owner (`str`): The binding's host as messages name it, e.g. `"node 'b'"`.
+        range (`SourceRange | None`): The binding's location.
+        diagnostics (`LoadDiagnostics`): Factory for located load errors.
 
     Returns:
         `tuple[str | int, ...] | None`: The offending position, or `None`.
+
+    Raises:
+        `LoadError`: A `call(...)` directive under a secret name passes a literal
+            value under a secret keyword.
     """
+    try:
+        return _authored_path(name, value, style, typed=typed)
+    except SecretArgumentError as exc:
+        raise diagnostics.error(exc.message_for(owner), range=range) from exc
+
+
+def _authored_path(
+    name: Any, value: Any, style: str | None, *, typed: bool
+) -> tuple[str | int, ...] | None:
+    """The body of `_binding_path`, letting `SecretArgumentError` propagate."""
     parts = typed_binding_parts(value, style) if typed else None
     if parts is None:
         return secret_literal_path(
@@ -147,6 +237,9 @@ def _is_binding(value: Any, style: str | None) -> bool:
     Returns:
         `bool`: `True` for template text with a span, or an unquoted whole-value
             `call(...)` directive that parses.
+
+    Raises:
+        `SecretArgumentError`: The directive passes a literal under a secret keyword.
     """
     if is_binding_text(value):
         return True
@@ -156,6 +249,8 @@ def _is_binding(value: Any, style: str | None) -> bool:
         return False
     try:
         desugar_call_directives(value, lambda: "_")
+    except SecretArgumentError:
+        raise  # a literal secret argument is reported as such, not as the slot's value
     except ExpressionError:
         return False
     return True

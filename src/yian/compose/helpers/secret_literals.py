@@ -114,31 +114,37 @@ def input_ref(name: str) -> str:
     return "${input." + name + "}"
 
 
-def render_path(name: str, path: tuple[str | int, ...]) -> str:
+def render_path(name: str | None, path: tuple[str | int, ...]) -> str:
     """Render a nested position as `name.key[0].key`.
 
     Args:
-        name (`str`): The slot's name.
+        name (`str | None`): The slot's name, or `None` for a slot without one.
         path (`tuple[str | int, ...]`): Keys and list indexes below the slot.
 
     Returns:
-        `str`: The dotted path, with list indexes in brackets.
+        `str`: The dotted path, with list indexes in brackets; without a name it
+            starts at the first key or index.
     """
-    text = name
+    text = name or ""
     for step in path:
         text += f"[{step}]" if isinstance(step, int) else f".{step}"
-    return text
+    return text if name else text.removeprefix(".")
 
 
 def secret_literal_message(
-    slot: str, name: str, path: tuple[str | int, ...], *, owner: str | None = None
+    slot: str,
+    name: str | None,
+    path: tuple[str | int, ...],
+    *,
+    owner: str | None = None,
 ) -> str:
     """Word the load error for a literal value under a secret name.
 
     Args:
         slot (`str`): The slot as the message names it, e.g. `"input 'password'"`.
-        name (`str`): The slot's name, used for the suggested input reference and
-            the nested path.
+        name (`str | None`): The slot's name, used for the suggested input reference
+            and the nested path. `None` for a slot without a name (a case value
+            branch), whose message suggests no reference.
         path (`tuple[str | int, ...]`): The result of `secret_literal_path`: `()`
             for the slot itself, else the position of the nested secret key.
         owner (`str | None`, *optional*, defaults to `None`): The slot's owner, e.g.
@@ -148,14 +154,14 @@ def secret_literal_message(
         `str`: The message. It never includes the value.
     """
     prefix = f"{owner}: " if owner else ""
-    ref = input_ref(name)
+    ref = f" ({input_ref(name)})" if name is not None else ""
     if not path:
         return (
             f"{prefix}{slot} is a secret name, so its value can't be written in the "
-            f"flow file; pass it as an input ({ref}) or from the host"
+            f"flow file; pass it as an input{ref} or from the host"
         )
     where = f" at {render_path(name, path)}" if len(path) > 1 else ""
     return (
         f"{prefix}{slot} has key {path[-1]!r} (a secret name){where} with a literal "
-        f"value; pass the value as an input ({ref}) or from the host"
+        f"value; pass the value as an input{ref} or from the host"
     )

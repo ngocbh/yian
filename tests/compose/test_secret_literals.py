@@ -280,3 +280,157 @@ def test_a_uses_library_with_a_literal_secret_fails_when_imported(tmp_path):
     )
 
     _secret_error(parent, search_paths=[tmp_path])
+
+
+_CASE_FLOW = """\
+id: f
+name: f
+input:
+  pw: str
+  score: float
+nodes:
+  pick:
+    kind: case
+    output: dict[str, str]
+    cases:
+      - when: "${{input.score}} >= 0.5"
+        then:
+          password: {then}
+    else:
+      password: {else_}
+output: ${{pick.output}}
+"""
+
+
+def _case_flow(then: str = "${input.pw}", else_: str = "${input.pw}") -> str:
+    """Return a flow whose typed `pick` case has mapping value branches."""
+    return _CASE_FLOW.format(then=then, else_=else_)
+
+
+def test_a_literal_secret_in_a_case_then_value_is_rejected():
+    text = _case_flow(then=_SECRET)
+    error = _secret_error(text)
+    message = str(error)
+
+    assert (
+        "node 'pick': then[0] value has key 'password' (a secret name) with a literal "
+        "value; pass the value as an input or from the host"
+    ) in message
+    # The branch value's own range: a block mapping starts at its first key.
+    line = text.splitlines().index(f"          password: {_SECRET}") + 1
+    assert _only_range(error).start_line == line
+
+
+def test_a_literal_secret_in_a_case_else_value_is_rejected():
+    text = _case_flow(else_=_SECRET)
+    error = _secret_error(text)
+
+    assert "node 'pick': else value has key 'password'" in str(error)
+    line = text.splitlines().index(f"      password: {_SECRET}") + 1
+    assert _only_range(error).start_line == line
+
+
+def test_a_reference_in_a_case_value_under_a_secret_key_loads():
+    load_flow(_case_flow())
+
+
+_G_DEF = """\
+defs:
+  g:
+    input:
+      password: Optional[str] = null
+      api_key: Optional[str] = null
+      x: Optional[int] = null
+    nodes:
+      run:
+        kind: code
+        output: str
+        code: |
+          return "x"
+    output: ${run.output}
+"""
+
+
+def _call_flow(binding: str) -> str:
+    """Return a flow whose `b` node binds input `x` to `binding`."""
+    return (
+        "id: f\nname: f\ninput:\n  pw: str\n" + _G_DEF + "nodes:\n  b:\n    kind: code\n"
+        f"    input:\n      x: {binding}\n    output: str\n"
+        "    code: |\n      return 'x'\n"
+        "output: ${b.output}\n"
+    )
+
+
+def test_a_literal_secret_call_argument_is_rejected():
+    message = str(_secret_error(_call_flow(f"call(g, password='{_SECRET}')")))
+
+    assert (
+        "node 'b': call(...) argument 'password' is a secret name, so its value can't "
+        "be written in the flow file; pass it as an input (${input.password}) or from "
+        "the host"
+    ) in message
+    assert "__call_" not in message
+    assert "quote" not in message
+
+
+@pytest.mark.parametrize(
+    "binding",
+    [
+        "call(g, password=${input.pw})",
+        "call(g, password='${input.pw}')",
+        "call(g, password=null)",
+        "call(g, x=1, password=call(g, x=2))",
+    ],
+)
+def test_a_binding_call_argument_under_a_secret_name_loads(binding):
+    load_flow(_call_flow(binding))
+
+
+@pytest.mark.parametrize(
+    "binding",
+    [
+        f"call(g, password={_SECRET} x=1)",
+        f"call(g, x=1 password={_SECRET})",
+        f"call(g, x=call(g, password={_SECRET}))",
+        f"call(g, password=1, password={_SECRET})",
+    ],
+)
+def test_malformed_calls_with_a_literal_secret_argument_do_not_echo_it(binding):
+    message = str(_secret_error(_call_flow(binding)))
+
+    assert "call(...) argument 'password' is a secret name" in message
+
+
+def test_a_secret_argument_inside_a_secret_named_call_is_the_argument_error():
+    text = _flow(f"password: call(g, password='{_SECRET}')").replace(
+        "nodes:\n", _G_DEF + "nodes:\n", 1
+    )
+    message = str(_secret_error(text))
+
+    assert "node 'fetch': call(...) argument 'password' is a secret name" in message
+
+
+def test_a_literal_secret_call_argument_in_a_flow_output_is_rejected():
+    text = (
+        "id: f\nname: f\n" + _G_DEF + "nodes:\n  fetch:\n    kind: code\n"
+        "    output: str\n    code: |\n      return 'x'\n"
+        f"output:\n  r: call(g, api_key='{_SECRET}')\n"
+    )
+    message = str(_secret_error(text))
+
+    assert "flow outputs: call(...) argument 'api_key' is a secret name" in message
+
+
+def test_a_literal_secret_in_a_case_call_target_has_a_clean_label():
+    text = (
+        "id: f\nname: f\ninput:\n  score: float\n" + _G_DEF + "nodes:\n"
+        "  c:\n    kind: case\n    cases:\n"
+        '      - when: "${input.score} >= 0.5"\n'
+        f"        then: call(g, password='{_SECRET}')\n"
+        "    else: call(g, x=1)\n"
+        "output: ${c.output}\n"
+    )
+    message = str(_secret_error(text))
+
+    assert "case node 'c' then: call(...) argument 'password' is a secret name" in message
+    assert "::" not in message

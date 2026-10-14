@@ -50,10 +50,14 @@ node header — and owns an empty `field_ranges`, so a bad ref inside the direct
 directive rather than a host input that shares its param name. The flow `output:`/`asserts:`
 sections have no descriptor, so their inline calls use a supplied section/item range.
 
+A keyword argument under a secret name (`yian.secret_names`) must be a binding or
+`null`; a literal there raises `SecretArgumentError`, which every host formats with its
+own label and without echoing the value.
+
 Imports flow DOWN/peer only: `compose.parse.file` (descriptors), `compose.nodes.bindings` (the
-kind-blind binding-field walk) + `compose.helpers` (errors, YAML style and quoting; peers),
-`expr` (the ref-walk + the span flow-call detector), `diagnostics` (SourceRange). Only the
-loader imports this back.
+kind-blind binding-field walk) + `compose.helpers` (errors, secret literals, YAML style and
+quoting; peers), `expr` (the ref-walk + the span flow-call detector), `diagnostics`
+(SourceRange), `secret_names`. Only the loader imports this back.
 """
 
 from __future__ import annotations
@@ -79,18 +83,58 @@ from yian.expr.template import (
 from yian.compose.nodes.bindings import map_binding_strings
 from yian.compose.desugar.inline_bodies import INLINE_FLOW_PREFIX
 from yian.compose.helpers.errors import LoadDiagnostics
+from yian.compose.helpers.secret_literals import (
+    secret_literal_message,
+    secret_literal_path,
+)
 from yian.compose.helpers.typed_bindings import CALL_HEAD, QUOTED_STYLES, yaml_quoted
 from yian.compose.parse.file import (
     CallDescriptor,
     NodeDescriptor,
 )
+from yian.secret_names import is_secret_name
 
 # The reserved id prefix for synthesized inline-call nodes. A monotonic counter per
 # flow/def keeps them unique; the collision guard reserves the namespace from users.
 _SYNTH_PREFIX = "__call_"
 _FLOW_ID = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
 # Text before a lone `=` that ends in a separate word: `1 b` in `a=1 b=2`, a missing comma.
-_WORD_BEFORE_EQUALS = re.compile(r"\s[A-Za-z_][A-Za-z0-9_-]*\s*$")
+_WORD_BEFORE_EQUALS = re.compile(r"\s([A-Za-z_][A-Za-z0-9_-]*)\s*$")
+
+
+class SecretArgumentError(ExpressionError):
+    """A `call(...)` keyword argument under a secret name holds a literal value.
+
+    Its message never includes the value. A host formats it with `message_for`,
+    which names the host and offers no quoting fix: quoting keeps the value literal.
+
+    Args:
+        name (`str`): The keyword argument's name.
+        path (`tuple[str | int, ...]`, *optional*, defaults to `()`): The position
+            of the literal, as `secret_literal_path` returns it.
+    """
+
+    def __init__(self, name: str, path: tuple[str | int, ...] = ()):
+        self.name = name
+        self.path = path
+        super().__init__(secret_literal_message(self._slot(), name, path))
+
+    def message_for(self, host: str) -> str:
+        """Return the message prefixed with `host`, without a trailing `:` of its own.
+
+        Args:
+            host (`str`): The host label, e.g. `"node 'b'"` or `"case node 'c' then:"`.
+
+        Returns:
+            `str`: The located message, e.g. `"node 'b': call(...) argument ..."`.
+        """
+        return secret_literal_message(
+            self._slot(), self.name, self.path, owner=host.rstrip(": ")
+        )
+
+    def _slot(self) -> str:
+        """The argument as the message names it."""
+        return f"call(...) argument {self.name!r}"
 
 
 def _synth_id_gen() -> Callable[[], str]:
@@ -291,6 +335,7 @@ def _desugar_descriptor(
             style=style_at(field, key) if style_at is not None else None,
             # Quoting a typed binding would drop its type, so no quoting fix is offered.
             quotable=not (field == "inputs" and key in desc.input_types),
+            owner=f"node {host!r}",
             diagnostics=diagnostics,
         )
         for c in calls[before:]:
@@ -311,6 +356,7 @@ def _desugar_value(
     style: Optional[str] = None,
     quotable: bool = True,
     expression: bool = False,
+    owner: Optional[str] = None,
     diagnostics: LoadDiagnostics | None = None,
 ) -> str:
     """Desugar one binding string. A WHOLE-VALUE `call(<flow-id>, kw=...)` directive lifts
@@ -325,7 +371,8 @@ def _desugar_value(
     make it text. A malformed directive's error suggests quoting only when that gives
     the text: not for an assert, a span-bearing value, or a ``quotable=False`` (typed)
     binding. Maps `ExpressionError` (a malformed directive or an unparseable span) to a
-    located `LoadError` at ``range``."""
+    located `LoadError` at ``range``; a literal secret argument (`SecretArgumentError`)
+    is prefixed with ``owner`` (default ``host``) and gets no quoting fix."""
     diagnostics = diagnostics or LoadDiagnostics()
     quoted = not expression and style in QUOTED_STYLES
     is_call = CALL_HEAD.match(value.strip()) is not None
@@ -338,6 +385,8 @@ def _desugar_value(
     if is_call and not quoted:
         try:
             new_value, found = desugar_call_directives(value, mint)
+        except SecretArgumentError as exc:
+            raise diagnostics.error(exc.message_for(owner or host), range=range) from exc
         except ExpressionError as exc:
             hint = (
                 f". If you meant the text, quote the whole value: "
@@ -385,7 +434,8 @@ def desugar_call_directives(value: str, mint: Callable[[], str]) -> tuple:
     `call(` is not one directive: unbalanced parentheses, text after the close paren, a
     first arg that is not a bare flow id, a positional arg after the flow id (message
     mentions "keyword"), an unquoted `=` inside a keyword value (a missing comma), or a
-    keyword passed more than once."""
+    keyword passed more than once. A keyword under a secret name whose value is a literal
+    raises `SecretArgumentError`, before any check that would echo the value."""
     match = _match_directive(value)
     if match is None:
         return value, []
@@ -408,7 +458,13 @@ def desugar_call_directives(value: str, mint: Callable[[], str]) -> tuple:
                 f"`=`; {'add the missing comma' if name else 'write the keyword name'}"
             )
         arg_value = "=".join(parts[1:])
-        if _looks_like_two_keywords(parts[1:]):
+        _check_secret_argument(name, arg_value)
+        inner_names = _inner_keyword_names(parts[1:])
+        if inner_names:
+            for inner_name in inner_names:
+                if is_secret_name(inner_name):
+                    # The would-be keyword's value is unknown, so it is treated as literal.
+                    raise SecretArgumentError(inner_name)
             raise ExpressionError(
                 f"call({flow_id}, ...) keyword {name!r} value {arg_value.strip()!r} looks "
                 "like two keywords; add the missing comma, or quote the value"
@@ -427,8 +483,26 @@ def desugar_call_directives(value: str, mint: Callable[[], str]) -> tuple:
     return "${" + cid + ".output}", calls
 
 
-def _looks_like_two_keywords(parts: list[str]) -> bool:
-    """Whether a keyword value, split on its top-level `=`, holds `... name=...`.
+def _check_secret_argument(name: str, arg_value: str) -> None:
+    """Reject a literal keyword value under a secret name.
+
+    Args:
+        name (`str`): The keyword's name.
+        arg_value (`str`): Its raw value text.
+
+    Raises:
+        `SecretArgumentError`: `name` is a secret name and the value, read as the
+            directive reads it, is neither a binding nor `null`.
+    """
+    if CALL_HEAD.match(arg_value.strip()):
+        return  # a nested directive is a binding; its own arguments are checked in turn
+    path = secret_literal_path(name, _arg_source(arg_value))
+    if path is not None:
+        raise SecretArgumentError(name, path)
+
+
+def _inner_keyword_names(parts: list[str]) -> list[str]:
+    """The names a keyword value, split on its top-level `=`, holds as `... name=...`.
 
     Only a lone `=` after a separate word counts (`1 b=2`); `==`, `!=`, `<=`, `>=`, and a
     glued `a=b` stay part of the value's text.
@@ -437,14 +511,16 @@ def _looks_like_two_keywords(parts: list[str]) -> bool:
         parts (`list[str]`): The value split on each top-level `=`.
 
     Returns:
-        `bool`: True when some lone `=` follows a whitespace-separated word.
+        `list[str]`: The word before each such `=`; empty when there is none.
     """
+    names = []
     for left, right in zip(parts, parts[1:]):
         if not left or not right or left[-1] in "!<>":
             continue
-        if _WORD_BEFORE_EQUALS.search(left):
-            return True
-    return False
+        match = _WORD_BEFORE_EQUALS.search(left)
+        if match:
+            names.append(match.group(1))
+    return names
 
 
 def _match_directive(value: str) -> Optional[tuple]:

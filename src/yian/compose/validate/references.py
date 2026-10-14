@@ -362,9 +362,9 @@ def validate_references(
         """Parse one rendered template and name-check each ref against `declared`.
 
         A malformed span, unknown builtin, builtin called with arguments it doesn't take, or
-        nested `${...}` is one error at `where`; each
-        ref whose head is not in `declared` is another, with the pool-ref hint (ending in
-        `hint_tail`) when the head is a pool-style head or a node id."""
+        nested `${...}` is one error at `where`; each ref whose head is not in `declared` is
+        another, with the pool-ref hint (ending in `hint_tail`) when the head is a pool-style
+        head or a node id."""
         try:
             refs = prompt_refs(template)
         except ExpressionError as exc:

@@ -170,8 +170,7 @@ class AgentNode(Node):
             `ExpressionError`:
                 Raised when a template's `${...}` span doesn't parse, calls `isinstance` or
                 a function that isn't a builtin, or calls a builtin with arguments it doesn't
-                take;
-                the message names the node and the field.
+                take; the message names the node and the field.
         """
         for field, text in (("prompt", self.prompt), ("system_prompt", self.system_prompt)):
             if isinstance(text, str):

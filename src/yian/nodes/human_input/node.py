@@ -106,8 +106,7 @@ class HumanInputNode(Node):
             `ExpressionError`:
                 Raised when a template's `${...}` span doesn't parse, calls `isinstance` or
                 a function that isn't a builtin, or calls a builtin with arguments it doesn't
-                take;
-                the message names the node and the site.
+                take; the message names the node and the site.
         """
         for site_path, text in template_sites(self.prompt, self.questions):
             _check_named_prompt(text, f"node {(path or self.id)!r} {site_label(site_path)}")

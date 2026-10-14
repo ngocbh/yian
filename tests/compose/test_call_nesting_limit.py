@@ -35,6 +35,15 @@ _LEAF = (
     "        output: str\n"
     "    output: ${step.output}\n"
 )
+_ROOT_LEAF = (
+    "  step:\n"
+    "    kind: code\n"
+    "    code: tests.engine._compose_codefns:echo\n"
+    "    input:\n"
+    "      topic: ${input.x}\n"
+    "    output: str\n"
+    "output: ${step.output}\n"
+)
 
 
 def _calling(target: str) -> str:
@@ -126,9 +135,12 @@ def _assert_no_recursion_error(error: LoadError) -> None:
 
 @contextmanager
 def _stack_headroom():
-    """Allow 650 frames past the current stack depth, restoring the limit after."""
+    """Pin the recursion limit to 650 frames past the current stack depth, restoring it after.
+
+    This usually lowers the limit, so an at-limit chain is shown to fit in that headroom.
+    """
     old = sys.getrecursionlimit()
-    sys.setrecursionlimit(len(inspect.stack()) + 650)
+    sys.setrecursionlimit(len(inspect.stack(0)) + 650)
     try:
         yield
     finally:
@@ -173,7 +185,7 @@ def test_chain_past_the_limit_is_located_at_the_root_call() -> None:
 
 
 @pytest.mark.parametrize("n", [97, 1000])
-def test_issue_chain_fails_at_the_first_call_past_the_limit(n: int) -> None:
+def test_long_chain_fails_at_the_first_call_past_the_limit(n: int) -> None:
     text = _defs_chain(n)
 
     with pytest.raises(LoadError) as caught:
@@ -245,16 +257,7 @@ def test_imports_load_before_defs(tmp_path: Path) -> None:
     # A one-level file's uncalled defs nest 50 on their own, not under the importer.
     legal = tmp_path / "legal"
     legal.mkdir()
-    lib = _defs_chain(51, prefix="k").split("nodes:\n  top:\n")[0] + (
-        "nodes:\n"
-        "  step:\n"
-        "    kind: code\n"
-        "    code: tests.engine._compose_codefns:echo\n"
-        "    input:\n"
-        "      topic: ${input.x}\n"
-        "    output: str\n"
-        "output: ${step.output}\n"
-    )
+    lib = _defs_chain(51, prefix="k").split("nodes:\n  top:\n")[0] + "nodes:\n" + _ROOT_LEAF
     (legal / "lib.yaml").write_text(lib)
     with _stack_headroom():
         load_flow(
@@ -306,31 +309,11 @@ output: ${{invoke.output}}
 
 def test_alias_collision_wins_over_a_broken_target() -> None:
     text = (
-        "id: f\nname: f\ninput:\n  x: !str\n"
-        "uses:\n  a: hub:x/y@1\n"
-        "nodes:\n"
-        "  a:\n"
-        "    kind: code\n"
-        "    code: tests.engine._compose_codefns:echo\n"
-        "    input:\n"
-        "      topic: ${input.x}\n"
-        "    output: str\n"
-        "output: ${a.output}\n"
+        "id: f\nname: f\ninput:\n  x: !str\nuses:\n  step: hub:x/y@1\nnodes:\n" + _ROOT_LEAF
     )
 
-    with pytest.raises(LoadError, match=r"uses: alias \['a'\] collides with a node id"):
+    with pytest.raises(LoadError, match=r"uses: alias \['step'\] collides with a node id"):
         load_flow(text)
-
-
-_EXT_LEAF = (
-    "  step:\n"
-    "    kind: code\n"
-    "    code: tests.engine._compose_codefns:echo\n"
-    "    input:\n"
-    "      topic: ${input.x}\n"
-    "    output: str\n"
-    "output: ${step.output}\n"
-)
 
 
 @pytest.mark.parametrize(
@@ -346,7 +329,7 @@ _EXT_LEAF = (
         "  top:\n    kind: call\n    call: ext\n    input:\n      x: ${input.x}\n"
         "output: ${top.output}\n",
         # Nothing calls the alias.
-        "id: f\nname: f\ninput:\n  x: !str\nuses:\n  ext: child\nnodes:\n" + _EXT_LEAF,
+        "id: f\nname: f\ninput:\n  x: !str\nuses:\n  ext: child\nnodes:\n" + _ROOT_LEAF,
     ],
     ids=["def-calls", "root-calls", "uncalled"],
 )

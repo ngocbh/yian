@@ -212,6 +212,9 @@ def call_nesting_scope() -> Iterator[None]:
 
     Each file counts its own calls; a call into another file is checked against the
     built callee's depth instead.
+
+    Yields:
+        `None`: Control to the file's load.
     """
     token = _ACTIVE_CALLS.set(0)
     try:

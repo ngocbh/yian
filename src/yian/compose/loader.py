@@ -1144,23 +1144,20 @@ class _CallableScope:
                         f"callable {flow_id!r} (uses: {self._uses[flow_id]!r}) needs a search "
                         f"path or child_resolver to resolve (load with search_paths=[...])"
                     )
-                child = self._external(ref.path, ref.version)
+                try:
+                    child = self._external(ref.path, ref.version)
+                except LoadError:
+                    raise
+                except Exception as exc:  # a custom resolver's own failure is a load error
+                    raise self._diagnostics.error(
+                        f"callable {flow_id!r} (uses: {self._uses[flow_id]!r}): could not "
+                        f"resolve: {exc}"
+                    ) from exc
                 loaded = _rebase_external_child(flow_id, child)
             except LoadError as exc:
                 alias_cursor = _source_child(self._uses_cursor, flow_id)
                 raise self._diagnostics.prepend(
                     exc,
-                    range=(alias_cursor.range if alias_cursor is not None else None),
-                    note=f"uses alias {flow_id!r}",
-                ) from exc
-            except Exception as exc:  # a custom resolver's own failure is a load error
-                alias_cursor = _source_child(self._uses_cursor, flow_id)
-                error = self._diagnostics.error(
-                    f"callable {flow_id!r} (uses: {self._uses[flow_id]!r}): could not "
-                    f"resolve: {exc}"
-                )
-                raise self._diagnostics.prepend(
-                    error,
                     range=(alias_cursor.range if alias_cursor is not None else None),
                     note=f"uses alias {flow_id!r}",
                 ) from exc

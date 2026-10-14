@@ -1148,7 +1148,7 @@ class _CallableScope:
                     child = self._external(ref.path, ref.version)
                 except LoadError:
                     raise
-                except Exception as exc:  # a custom resolver's own failure is a load error
+                except Exception as exc:  # a resolver's own failure is a load error
                     raise self._diagnostics.error(
                         f"callable {flow_id!r} (uses: {self._uses[flow_id]!r}): could not "
                         f"resolve: {exc}"

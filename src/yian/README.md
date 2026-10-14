@@ -583,8 +583,9 @@ that count reaches the limit, so the loader never recurses deeper; this message 
 once), which catches a callee built earlier: a cached def, a def written before its
 caller, or an imported file. Each file load resolves its `uses:` aliases in source
 order before its `defs:`, so an imported file loads at its importer's base stack, not
-at the bottom of a def chain. A broken alias is reported at the alias, and a custom
-`child_resolver` that raises anything but `LoadError` becomes a load error there.
+at the bottom of a def chain. A broken alias is reported at the alias, and a resolver
+(the file resolver or a custom `child_resolver`) that raises anything but `LoadError`
+becomes a load error there.
 This load rule is unrelated to runtime growth depth (`state.depth`, stamped through
 `grow_depth_delta`; LOOP adds 0), which has no cap.
 

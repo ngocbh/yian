@@ -2590,8 +2590,9 @@ limit.
 Changed: a chain deeper than about 95 levels used to crash at load with a
 `RecursionError` or "could not resolve callable ...: maximum recursion depth exceeded".
 A chain of 51 to 95 levels used to load; it now fails at load. A broken `uses:` import
-is now reported at its alias before any def loads; it used to be reported inside the
-`defs:` entry that called it, if any.
+is now reported at its alias before any def or node is checked; it used to be reported
+inside the `defs:` entry that called it, if any, or after errors in the flow's own
+`nodes:`.
 
 #### Inline child bodies — skip a one-off `defs:` entry
 

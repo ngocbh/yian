@@ -30,7 +30,7 @@ Imports flow down/peer only: `diagnostics` (SourceRange), `expr` (ref scan),
 `nodes.contracts` (the output-contract sum), `typesys` (Type and the strict value check),
 and the compose peers `helpers.output_contracts`, `helpers.errors`, `helpers.typed_bindings`,
 `helpers.yaml_words`, `nodes.case`,
-`source.literals`, `parse.file`, `validate.narrowing`, and `validate.typed_bindings`.
+`source`, `parse.file`, `validate.narrowing`, and `validate.typed_bindings`.
 Nothing in the engine imports this back.
 """
 
@@ -57,7 +57,7 @@ from yian.compose.helpers.typed_bindings import yaml_quoted
 from yian.compose.helpers.yaml_words import former_boolean_fix
 from yian.compose.nodes.case import on_match_key, on_match_value
 from yian.compose.parse.file import CaseDescriptor, NodeDescriptor
-from yian.compose.source.literals import parse_yaml_literal
+from yian.compose.source import SourceSyntaxError, parse_yaml_literal
 from yian.compose.validate.narrowing import Narrowing
 from yian.compose.validate.typed_bindings import shown_literal
 
@@ -385,9 +385,7 @@ def _yaml_reading(text: str) -> bool | int | float | None:
     """
     try:
         reading = parse_yaml_literal(text)
-    except ValueError:
-        # SourceSyntaxError is a ValueError, and PyYAML raises a plain ValueError for
-        # date-shaped text that is not a date (`2026-13-01`).
+    except SourceSyntaxError:
         return None
     if isinstance(reading, (bool, int)):
         return reading
@@ -400,7 +398,7 @@ def _text_shown(text: str) -> str:
     """Return `text` bare when YAML reads it back as the same text, else YAML-quoted."""
     try:
         reads_back = parse_yaml_literal(text) == text
-    except ValueError:
+    except SourceSyntaxError:
         reads_back = False
     return text if reads_back else yaml_quoted(text)
 

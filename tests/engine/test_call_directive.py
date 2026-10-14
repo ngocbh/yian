@@ -476,6 +476,8 @@ def test_an_unreadable_keyword_value_is_a_located_load_error(node):
     with pytest.raises(LoadError) as caught:
         load_flow(_g_flow(node("call(g, d=2026-13-45)")))
     message = str(caught.value)
+    assert "not a valid date: month must be in 1..12" in message
+    assert message.count("quote it") == 1
     assert "keyword 'd'" in message
     assert "quote it to keep it as text" in message
     assert "2026-13-45" not in message

@@ -118,7 +118,7 @@ def test_x_keys_ignored():
 def test_asserts_and_typedefs_optional():
     text = _MINIMAL + (
         "asserts:\n"
-        '  - "${input.topic} != \\"\\""\n'
+        '  - "input.topic != \\"\\""\n'
         "typedefs:\n"
         "  Rating:\n"
         "    category: str\n"

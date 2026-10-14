@@ -83,8 +83,8 @@ nodes:
     output: int
 output: ${worker.output}
 asserts:
-  - ${input.n} >= 0
-  - ${worker.output} >= 0
+  - input.n >= 0
+  - worker.output >= 0
 """
 
     loaded = load_flow(text)

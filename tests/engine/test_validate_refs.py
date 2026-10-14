@@ -197,7 +197,7 @@ nodes:
   route:
     kind: case
     cases:
-      - when: ${system.today.year} == "2026"
+      - when: system.today.year == "2026"
         then: done
     else: done
   done:
@@ -381,7 +381,7 @@ def test_case_dangling_data_ref_is_loud():
     # a searched case whose when: reads ${typo.output} (no such node) -> the desugared
     # __r0 source is the dangling ref; validation fires on the flow.wiring source.
     nodes, flow_wiring = _desugared_case_nodes(
-        {"cases": [{"when": "${typo.output} >= 0.5", "then": "yes"}], "else_": "no"}
+        {"cases": [{"when": "typo.output >= 0.5", "then": "yes"}], "else_": "no"}
     )
     with pytest.raises(LoadError) as exc:
         validate_references(nodes, set(), {}, None, flow_wiring)

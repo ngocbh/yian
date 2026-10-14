@@ -173,9 +173,9 @@ def test_dotted_access_dict_key():
 
 
 def test_dotted_access_never_getattr():
-    # `${obj.__class__}` must MISS (dict has no key "__class__") — never reach the
+    # `obj.__class__` must MISS (dict has no key "__class__") — never reach the
     # Python attribute. Proves dotted access is dict-key lookup only.
-    assert _eval("${obj.__class__}", _from({"obj": {"a": 1}})) is None
+    assert _eval("obj.__class__", _from({"obj": {"a": 1}})) is None
 
 
 # --------------------------------------------------------------------------- #

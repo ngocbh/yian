@@ -1119,13 +1119,13 @@ def test_manifest_rejects_raw_values_that_bypass_construction(site: str) -> None
 
 def test_assertion_identity_uses_expression_and_display_but_ignores_origin() -> None:
     """All identity surfaces retain behavior/presentation and exclude provenance only."""
-    base = Assertion("${output} > 0", "output must be positive", _origin("first"))
+    base = Assertion("output > 0", "output must be positive", _origin("first"))
     other_origin = Assertion(
         base.expression,
         base.display,
         _origin("second"),
     )
-    changed_expression = Assertion("${output} >= 0", base.display, base.origin)
+    changed_expression = Assertion("output >= 0", base.display, base.origin)
     changed_display = Assertion(base.expression, "nonnegative output", base.origin)
 
     same = [_manifest_assertions([base]), _manifest_assertions([other_origin])]

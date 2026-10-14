@@ -444,7 +444,7 @@ def test_control_edges_join_by_union_and_an_edge_without_facts_unconstrains():
         _node("d"),
         _node("z"),
         _case("c", "${d.output.action}", [("buy", "x"), ("sell", "x"), ("hold", "y")]),
-        _case("g", None, [("${z.output} > 0", "y")]),
+        _case("g", None, [("z.output > 0", "y")]),
         _node("x"),
         _node("y"),
     ]

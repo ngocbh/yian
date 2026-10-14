@@ -430,8 +430,8 @@ nodes:
       topic: ${input.topic}
     output: int
     asserts:
-      - ${output} >= 0
-      - ${output} <= 10
+      - output >= 0
+      - output <= 10
 output: ${score.output}
 """
 

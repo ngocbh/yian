@@ -46,7 +46,7 @@ def test_compiled_loop_origin_is_self():
 def test_run_grows_iteration_zero_with_next_driver_when_continue():
     child = _child_flow()
     node = LoopNode("chat_loop", flow_id="ct", child=child, predicate_kind="while",
-                    predicate="not ${exited}", max_iters=1000)
+                    predicate="not exited", max_iters=1000)
     node.params = child.nodes[child.start_id].params
     seed = {"messages": [], "exited": False}
     result = node.run(dict(seed))
@@ -68,7 +68,7 @@ def test_run_commits_seed_when_while_predicate_false():
 def test_clone_driver_self_prunes_previous_body_and_self():
     child = _child_flow()
     node = LoopNode("chat_loop", flow_id="ct", child=child, predicate_kind="while",
-                    predicate="not ${exited}", max_iters=1000)
+                    predicate="not exited", max_iters=1000)
     node.params = child.nodes[child.start_id].params
     clone = node.respawn(1)                            # L~1, iteration 1, origin chat_loop
     clone.params = node.params
@@ -93,7 +93,7 @@ def test_respawn_preserves_assertion_carriers():
         max_iters=3,
     )
     origin = OriginRef("nodes/loop/asserts/0")
-    node.pre_asserts = [Assertion("${x} > 0", "x must be positive", origin)]
+    node.pre_asserts = [Assertion("x > 0", "x must be positive", origin)]
 
     clone = node.respawn(1)
 
@@ -213,7 +213,7 @@ def test_total_respawn_keeps_params():
 def test_until_do_while_continues_on_iteration_zero():
     child = _child_flow()
     node = LoopNode("lp", flow_id="f", child=child, predicate_kind="until",
-                    predicate="${x} <= 0", max_iters=10)
+                    predicate="x <= 0", max_iters=10)
     node.params = child.nodes[child.start_id].params
     result = node.run({"x": 5})                        # until stops on TRUE post-check; k==0 continues
     assert isinstance(result, Grow)

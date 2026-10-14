@@ -392,7 +392,7 @@ gate:
   input:
     x: ${score.output}
   cases:
-    - when: "${score.output} >= 0.5"
+    - when: "score.output >= 0.5"
       then: a
   else: b
 """
@@ -424,10 +424,10 @@ x:
     n: ${input.v}
   output: int
   asserts:
-    - "${output} >= 0"
+    - "output >= 0"
 """
     )["x"]
-    assert node.asserts == ["${output} >= 0"]
+    assert node.asserts == ["output >= 0"]
 
 
 def test_node_asserts_rejected_on_case():
@@ -437,10 +437,10 @@ def test_node_asserts_rejected_on_case():
 gate:
   kind: case
   cases:
-    - when: "${s.output} > 0"
+    - when: "s.output > 0"
       then: a
   asserts:
-    - "${output} >= 0"
+    - "output >= 0"
 """
         )
 

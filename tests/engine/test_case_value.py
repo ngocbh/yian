@@ -36,7 +36,7 @@ from yian.diagnostics import SourceRange
 
 def _gate(then="pro", else_="caut"):
     return CaseDescriptor(
-        id="gate", cases=[{"when": "${s.output} >= 0.5", "then": then}], else_=else_
+        id="gate", cases=[{"when": "s.output >= 0.5", "then": then}], else_=else_
     )
 
 
@@ -210,7 +210,7 @@ def test_case_ref_in_assert_is_located():
         expand_case_outputs(
             descs,
             None,
-            ['${gate.output} != ""'],
+            ['gate.output != ""'],
             assertion_range_at=lambda _index: assertion_range,
             diagnostics=diagnostics,
         )
@@ -220,7 +220,7 @@ def test_case_ref_in_assert_is_located():
 def test_case_ref_in_condition_is_loud():
     # another case whose when: reads ${gate.output} (a case value) -> rejected.
     other = CaseDescriptor(
-        id="other", cases=[{"when": "${gate.output} == 1", "then": "z"}]
+        id="other", cases=[{"when": "gate.output == 1", "then": "z"}]
     )
     descs = {"gate": _gate(), "other": other}
     with pytest.raises(LoadError, match="condition"):
@@ -230,7 +230,7 @@ def test_case_ref_in_condition_is_loud():
 def test_case_ref_in_assert_is_loud():
     descs = {"gate": _gate()}
     with pytest.raises(LoadError, match="assert"):
-        expand_case_outputs(descs, None, ['${gate.output} != ""'])
+        expand_case_outputs(descs, None, ['gate.output != ""'])
 
 
 def test_case_ref_in_bare_condition_is_loud():
@@ -284,7 +284,7 @@ nodes:
   gate:
     kind: case
     cases:
-      - when: "${s.output} >= 0.5"
+      - when: "s.output >= 0.5"
         then: pro
     else: caut
   pro:
@@ -335,7 +335,7 @@ nodes:
   gate:
     kind: case
     cases:
-      - when: "${s.output} >= 0.5"
+      - when: "s.output >= 0.5"
         then: pro
     else: caut
   pro:
@@ -389,13 +389,13 @@ nodes:
   outer:
     kind: case
     cases:
-      - when: "${input.a} >= 0.5"
+      - when: "input.a >= 0.5"
         then: inner
     else: x
   inner:
     kind: case
     cases:
-      - when: "${input.b} >= 0.5"
+      - when: "input.b >= 0.5"
         then: hi
     else: lo
   hi:
@@ -459,7 +459,7 @@ nodes:
   gate:
     kind: case
     cases:
-      - when: "${s.output} >= 0.5"
+      - when: "s.output >= 0.5"
         then: pro
     else: caut
   pro:
@@ -512,7 +512,7 @@ nodes:
   gate:
     kind: case
     cases:
-      - when: "${s.output} >= 0.5"
+      - when: "s.output >= 0.5"
         then: a
     else: b
   a:

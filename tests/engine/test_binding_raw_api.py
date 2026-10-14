@@ -84,8 +84,8 @@ def test_expr_refs_of_literal_text_contributes_nothing():
 
 
 def test_expr_refs_of_embedded_and_default_and_arith():
-    # embedded span + nested-default ref + arithmetic operands all collected.
-    assert expr_refs_of("n=${a :- ${b}} m=${x + y}") == ["a", "b", "x", "y"]
+    # embedded span + default ref + arithmetic operands all collected.
+    assert expr_refs_of("n=${a :- b} m=${x + y}") == ["a", "b", "x", "y"]
 
 
 def test_expr_refs_of_item_is_collected():

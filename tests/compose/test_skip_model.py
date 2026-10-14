@@ -242,7 +242,7 @@ _AB = Type(kind=ValueKind.STRING, tags=frozenset({"a", "b"}))
 
 def test_case_is_exhaustive():
     """`else:`, or `on:` over a non-nullable Literal with every tag listed."""
-    searched = CaseDescriptor(id="s", cases=[{"when": "${cls.output} == 'a'", "then": "na"}])
+    searched = CaseDescriptor(id="s", cases=[{"when": "cls.output == 'a'", "then": "na"}])
     string = Type.scalar(ValueKind.STRING)
     nullable = Type(kind=ValueKind.STRING, tags=frozenset({"a", "b"}), nullable=True)
     assert case_is_exhaustive(_on_case(else_="other"), _cls(string))
@@ -256,7 +256,7 @@ def test_case_is_exhaustive():
 
 def test_exhaustive_cases():
     """Only the exhaustive CASE descriptors are returned."""
-    searched = CaseDescriptor(id="s", cases=[{"when": "${cls.output} == 'a'", "then": "na"}])
+    searched = CaseDescriptor(id="s", cases=[{"when": "cls.output == 'a'", "then": "na"}])
     descriptors = {"route": _on_case(), "s": searched}
     assert exhaustive_cases(descriptors, _cls(_AB)) == {"route"}
 

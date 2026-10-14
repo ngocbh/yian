@@ -22,7 +22,7 @@ nodes:
   gate:
     kind: case
     cases:
-      - when: "${input.score} >= 0.5"
+      - when: "input.score >= 0.5"
         then: pro
     else: con
   pro:

@@ -340,7 +340,7 @@ def test_a_node_routed_by_two_narrowing_cases_on_different_bases_is_not_narrowed
 def test_a_node_routed_by_a_narrowing_case_and_a_searched_case_is_not_narrowed():
     msg = _load_error(_flow(
         _case("route", _ON, [("buy", "b")], else_="e"),
-        _case("gate", None, [("${input.s} == 'x'", "b")], else_="e"),
+        _case("gate", None, [("input.s == 'x'", "b")], else_="e"),
         _code("b", {"l": "${d.output.limit}"}),
         _code("e"),
     ))

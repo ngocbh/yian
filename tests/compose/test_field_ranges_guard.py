@@ -44,7 +44,7 @@ nodes:
   gate:
     kind: case
     cases:
-      - when: ${missing.output} > 0
+      - when: missing.output > 0
         then: done
     else: done
 """

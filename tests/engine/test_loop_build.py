@@ -23,9 +23,16 @@ from yian.run import run_flow
 from yian.typesys.values import ValueKind
 
 
+
+def _swap(src: str, old: str, new: str) -> str:
+    """Replace `old` in a fixture, failing if it is absent (a stale needle)."""
+    assert old in src, old
+    return src.replace(old, new)
+
+
 # A good loop: the body `bump` reads a subset of the carried record and returns the
 # WHOLE next carried record ({n, exited}); `chat_loop` carries {n, exited}, loops
-# while `not ${exited}`, capped at max: 5.
+# while `not exited`, capped at max: 5.
 GOOD = """
 id: loop-good
 name: loop_good
@@ -52,7 +59,7 @@ nodes:
     input:
       n: 0
       exited: false
-    while: not ${exited}
+    while: not exited
     max: 5
 output: ${chat_loop.output}
 """
@@ -121,7 +128,7 @@ nodes:
     input:
       n: 0
       exited: false
-    while: not ${exited}
+    while: not exited
     max: 5
 output: ${chat_loop.output}
 """
@@ -160,7 +167,7 @@ nodes:
     input:
       n: ${input.n0}
       exited: false
-    while: not ${exited}
+    while: not exited
     max: 5
 output: ${chat_loop.output}
 """
@@ -222,19 +229,19 @@ output: ${chat_loop.output}
 
 # `until:` is a POST-check (do-while) predicate — same carried-record scope as `while:`,
 # `max:` optional. `times: N` is a fixed count — no predicate, `max:` redundant.
-UNTIL_GOOD = GOOD.replace("    while: not ${exited}\n", "    until: ${exited}\n")
-TIMES_GOOD = GOOD.replace("    while: not ${exited}\n    max: 5\n", "    times: 3\n")
+UNTIL_GOOD = _swap(GOOD, "    while: not exited\n", "    until: ${exited}\n")
+TIMES_GOOD = _swap(GOOD, "    while: not exited\n    max: 5\n", "    times: 3\n")
 # Exactly one of while:/until:/times: — both-set and neither-set are illegal.
-BOTH = GOOD.replace("    while: not ${exited}\n", "    while: not ${exited}\n    until: ${exited}\n")
-NEITHER = GOOD.replace("    while: not ${exited}\n", "")
+BOTH = _swap(GOOD, "    while: not exited\n", "    while: not exited\n    until: ${exited}\n")
+NEITHER = _swap(GOOD, "    while: not exited\n", "")
 # `times:` with `max:` is redundant (times bounds the count) -> rejected, not lenient-ignored.
-TIMES_WITH_MAX = GOOD.replace("    while: not ${exited}\n", "    times: 3\n")  # keeps max: 5
+TIMES_WITH_MAX = _swap(GOOD, "    while: not exited\n", "    times: 3\n")  # keeps max: 5
 # A fixed count must permit at least one run: `times: 0` is nonsensical.
-TIMES_BAD_COUNT = GOOD.replace("    while: not ${exited}\n    max: 5\n", "    times: 0\n")
+TIMES_BAD_COUNT = _swap(GOOD, "    while: not exited\n    max: 5\n", "    times: 0\n")
 # Without `max:` (or with `max: null`) a predicate loop has no iteration limit.
-NO_MAX = GOOD.replace("    max: 5\n", "")
-UNTIL_NO_MAX = UNTIL_GOOD.replace("    max: 5\n", "")
-NULL_MAX = GOOD.replace("    max: 5\n", "    max: null\n")
+NO_MAX = _swap(GOOD, "    max: 5\n", "")
+UNTIL_NO_MAX = _swap(UNTIL_GOOD, "    max: 5\n", "")
+NULL_MAX = _swap(GOOD, "    max: 5\n", "    max: null\n")
 
 
 @pytest.mark.parametrize(
@@ -254,7 +261,7 @@ def test_predicate_loop_with_max_keeps_its_limit():
 
 def test_times_with_null_max_builds():
     node = load_flow(
-        TIMES_GOOD.replace("    times: 3\n", "    times: 3\n    max: null\n")
+        _swap(TIMES_GOOD, "    times: 3\n", "    times: 3\n    max: null\n")
     ).compiled.nodes["chat_loop"]
     assert node.times == 3 and node.max_iters == 3
 
@@ -308,7 +315,7 @@ nodes:
     input:
       n: 0
       exited: false
-    while: not ${exited}
+    while: not exited
     max: 5
 output: ${chat_loop.output}
 """
@@ -339,7 +346,7 @@ nodes:
     input:
       n: 0
       exited: false
-    while: not ${exited}
+    while: not exited
     max: 5
 output: ${chat_loop.output}
 """
@@ -423,7 +430,7 @@ output: ${chat_loop.output}
 )
 def test_body_returning_no_carried_field_is_rejected(output):
     with pytest.raises(LoadError) as e:
-        load_flow(REJECTED_BODY.replace("<output>", output))
+        load_flow(_swap(REJECTED_BODY, "<output>", output))
     assert (
         "loop node 'chat_loop': body callable 'bump' must return a record with at least one "
         "carried field (a subset of the carried record ['n']); write `output: {field: ...}` "
@@ -537,12 +544,12 @@ def test_merged_contract_types_omitted_field_from_its_seed():
 
     with pytest.raises(LoadError, match="unknown field 'missing'"):
         load_flow(
-            CHAT.replace("${chat.output.person.name}", "${chat.output.person.missing}")
+            _swap(CHAT, "${chat.output.person.name}", "${chat.output.person.missing}")
         )
 
 
-KEEP_LITERAL = SUBSET_BODY.replace(
-    "      exited: false\n    while:", "      exited: false\n      keep: 3\n    while:"
+KEEP_LITERAL = _swap(
+    SUBSET_BODY, "      exited: false\n    while:", "      exited: false\n      keep: 3\n    while:"
 )
 
 
@@ -690,7 +697,7 @@ nodes:
     input:
       n: ${input.n0}
       exited: false
-    while: not ${exited}
+    while: not exited
     max: 5
 output: ${chat_loop.output}
 """
@@ -814,7 +821,7 @@ nodes:
     input:
       transcript: ${input.opening}
       exited: false
-    while: not ${exited}
+    while: not exited
     max: 5
 output: ${chat_loop.output.transcript}
 """
@@ -855,20 +862,20 @@ def test_multi_segment_template_output_types_as_str():
 
 # A runaway guard below 1 (`max: 0`) is nonsensical — the guard bounds the iteration
 # count, so it must permit at least one body run. Rejected at build.
-BAD_MAX = GOOD.replace("    max: 5\n", "    max: 0\n")
+BAD_MAX = _swap(GOOD, "    max: 5\n", "    max: 0\n")
 
 
 # A `while:` predicate that references a name NOT in the carried record ({n, exited}) — here a
 # typo `exted` for `exited`. Record-scoped eval would resolve it falsy and spin the loop (forever
 # without `max:`), so it must be rejected loudly at build.
-BAD_PREDICATE_NAME = GOOD.replace("    while: not ${exited}\n", "    while: not ${exted}\n")
+BAD_PREDICATE_NAME = _swap(GOOD, "    while: not exited\n", "    while: not exted\n")
 
 # `max:` must be a plain integer. The descriptor is a bare dataclass (its `Optional[int]`
 # annotation isn't enforced), so these non-int YAML types reach `LoopDescriptor.build`:
 # a quoted string, a float, and a bool (an int subclass that would silently read as 0/1).
-BAD_MAX_STR = GOOD.replace("    max: 5\n", '    max: "5"\n')
-BAD_MAX_FLOAT = GOOD.replace("    max: 5\n", "    max: 2.5\n")
-BAD_MAX_BOOL = GOOD.replace("    max: 5\n", "    max: true\n")
+BAD_MAX_STR = _swap(GOOD, "    max: 5\n", '    max: "5"\n')
+BAD_MAX_FLOAT = _swap(GOOD, "    max: 5\n", "    max: 2.5\n")
+BAD_MAX_BOOL = _swap(GOOD, "    max: 5\n", "    max: true\n")
 
 
 def test_until_loop_builds():
@@ -917,12 +924,12 @@ def test_while_predicate_unknown_name_is_rejected():
 
 
 # The predicate's carried-name heads are extracted by PARSING the whole `while:` value
-# (via `condition_refs`), so the three condition spellings must all build and all catch a
-# dangling carried name — not just the mixed `not ${exited}` form GOOD uses.
-WHILE_BARE = GOOD.replace("    while: not ${exited}\n", "    while: not exited\n")
-WHILE_WHOLE = GOOD.replace("    while: not ${exited}\n", "    while: ${not exited}\n")
-WHILE_BARE_BAD = GOOD.replace("    while: not ${exited}\n", "    while: not exted\n")
-WHILE_WHOLE_BAD = GOOD.replace("    while: not ${exited}\n", "    while: ${not exted}\n")
+# (via `condition_refs`), so both condition spellings must build and catch a
+# dangling carried name. GOOD uses the bare form.
+WHILE_BARE = GOOD
+WHILE_WHOLE = _swap(GOOD, "    while: not exited\n", "    while: ${not exited}\n")
+WHILE_BARE_BAD = _swap(GOOD, "    while: not exited\n", "    while: not exted\n")
+WHILE_WHOLE_BAD = _swap(GOOD, "    while: not exited\n", "    while: ${not exted}\n")
 
 
 @pytest.mark.parametrize("src", [WHILE_BARE, WHILE_WHOLE])
@@ -983,9 +990,9 @@ def test_loop_whose_condition_reads_only_unreturned_fields_is_a_load_error():
 
 
 def test_while_loop_whose_condition_reads_only_unreturned_fields_is_a_load_error():
-    # SUBSET_BODY returns only `n`; `while: not ${exited}` reads only `exited`.
-    with pytest.raises(LoadError, match=r"this loop can never end: `while: not \$\{exited\}`"):
-        load_flow(SUBSET_BODY.replace("    max: 5\n", ""))
+    # SUBSET_BODY returns only `n`; `while: not exited` reads only `exited`.
+    with pytest.raises(LoadError, match=r"this loop can never end: `while: not exited`"):
+        load_flow(_swap(SUBSET_BODY, "    max: 5\n", ""))
 
 
 def test_never_ending_error_names_every_unreturned_field_read():
@@ -1022,28 +1029,28 @@ output: ${wait.output}
 def test_inline_body_loop_whose_condition_never_changes_is_a_load_error():
     # INLINE_SUBSET's body returns only `n`; `until: exited` reads only `exited`.
     with pytest.raises(LoadError, match="this loop can never end: `until: exited`"):
-        load_flow(INLINE_SUBSET.replace("    times: 2\n", "    until: exited\n"))
+        load_flow(_swap(INLINE_SUBSET, "    times: 2\n", "    until: exited\n"))
 
 
 @pytest.mark.parametrize(
     "pred", ["done", "${done}", "${not done}", "not done"],
 )
 def test_never_ending_check_reads_every_condition_spelling(pred):
-    src = NEVER_ENDS.replace("    until: done\n", f'    until: "{pred}"\n')
+    src = _swap(NEVER_ENDS, "    until: done\n", f'    until: "{pred}"\n')
     assert src != NEVER_ENDS
     with pytest.raises(LoadError, match="reads `done`, which the body never updates"):
         load_flow(src)
 
 
 def test_null_max_still_gets_the_never_ending_error():
-    src = NEVER_ENDS.replace("    until: done\n", "    until: done\n    max: null\n")
+    src = _swap(NEVER_ENDS, "    until: done\n", "    until: done\n    max: null\n")
     assert src != NEVER_ENDS
     with pytest.raises(LoadError, match="this loop can never end"):
         load_flow(src)
 
 
 def test_dotted_condition_ref_names_the_carried_field():
-    src = NEVER_ENDS.replace("      done: false\n", "      st: {ok: false}\n").replace(
+    src = _swap(NEVER_ENDS, "      done: false\n", "      st: {ok: false}\n").replace(
         "      done: bool\n", "      st: Any\n"
     ).replace("    until: done\n", "    until: st.ok\n")
     with pytest.raises(LoadError, match="reads `st`.*return `st` from the body"):
@@ -1054,15 +1061,15 @@ def test_dotted_condition_ref_names_the_carried_field():
     "src",
     [
         # two drivers: only the driver-count error
-        NEVER_ENDS.replace("    until: done\n", "    until: done\n    while: not done\n"),
+        _swap(NEVER_ENDS, "    until: done\n", "    until: done\n    while: not done\n"),
         # times + while: only the driver-count error
-        NEVER_ENDS.replace("    until: done\n", "    times: 2\n    while: not done\n"),
+        _swap(NEVER_ENDS, "    until: done\n", "    times: 2\n    while: not done\n"),
         # unknown name: only the unknown-name error
-        NEVER_ENDS.replace("    until: done\n", "    until: done or nope\n"),
+        _swap(NEVER_ENDS, "    until: done\n", "    until: done or nope\n"),
         # invalid max: only the max error
-        NEVER_ENDS.replace("    until: done\n", "    until: done\n    max: 0\n"),
+        _swap(NEVER_ENDS, "    until: done\n", "    until: done\n    max: 0\n"),
         # parse error: only the parse error (no heads)
-        NEVER_ENDS.replace("    until: done\n", '    until: "done and"\n'),
+        _swap(NEVER_ENDS, "    until: done\n", '    until: "done and"\n'),
     ],
     ids=["two-drivers", "times-and-while", "unknown-name", "bad-max", "parse-error"],
 )
@@ -1074,7 +1081,7 @@ def test_never_ending_error_does_not_stack_on_other_loop_errors(src):
 
 def test_never_changing_condition_with_max_loads():
     node = load_flow(
-        NEVER_ENDS.replace("    until: done\n", "    until: done\n    max: 3\n")
+        _swap(NEVER_ENDS, "    until: done\n", "    until: done\n    max: 3\n")
     ).compiled.nodes["wait"]
     assert node.max_iters == 3
     assert node.returned_fields == ("attempts",)
@@ -1083,12 +1090,12 @@ def test_never_changing_condition_with_max_loads():
 def test_condition_reading_one_returned_field_loads():
     # `done` is never returned, but `attempts` is, so the condition can change.
     node = load_flow(
-        NEVER_ENDS.replace("    until: done\n", "    until: done or attempts >= 3\n")
+        _swap(NEVER_ENDS, "    until: done\n", "    until: done or attempts >= 3\n")
     ).compiled.nodes["wait"]
     assert node.max_iters is None
 
 
-UNTYPED_BODY = NEVER_ENDS.replace(
+UNTYPED_BODY = _swap(NEVER_ENDS, 
     "    nodes: {}\n    output:\n      attempts: ${input.attempts + 1}\n",
     "    nodes:\n"
     "      step:\n"
@@ -1144,7 +1151,7 @@ output: ${repeat.output}
     ["while: state.count < 3", "until: state.count >= 3", "while: ${state.count} < 3"],
 )
 def test_predicate_nested_field_read_builds(pred):
-    flow = load_flow(NESTED_STATE.replace("PRED", pred))
+    flow = load_flow(_swap(NESTED_STATE, "PRED", pred))
     assert run_flow(flow, {}).output == {"state": {"count": 3}}
 
 
@@ -1154,7 +1161,7 @@ def test_predicate_nested_field_read_builds(pred):
 )
 def test_predicate_unknown_nested_field_is_rejected(pred):
     with pytest.raises(LoadError) as e:
-        load_flow(NESTED_STATE.replace("PRED", pred))
+        load_flow(_swap(NESTED_STATE, "PRED", pred))
     message = str(e.value)
     assert f"`{pred.split(':', 1)[0]}:`" in message
     assert "reads unknown field 'cuont' on record" in message
@@ -1162,7 +1169,7 @@ def test_predicate_unknown_nested_field_is_rejected(pred):
 
 
 def test_predicate_field_read_on_scalar_is_rejected():
-    src = GOOD.replace("    while: not ${exited}\n", "    while: n.value < 3\n")
+    src = _swap(GOOD, "    while: not exited\n", "    while: n.value < 3\n")
     with pytest.raises(LoadError) as e:
         load_flow(src)
     assert "reads field 'value' on type int, which has no fields" in str(e.value)
@@ -1197,20 +1204,20 @@ output: ${repeat.output}
 
 
 def test_predicate_unknown_field_on_omitted_typed_seed_is_rejected():
-    src = OMITTED_SEED.replace("PRED", "while: n < cfg.limt").replace("SEED", "${input.cfg}")
+    src = _swap(OMITTED_SEED, "PRED", "while: n < cfg.limt").replace("SEED", "${input.cfg}")
     with pytest.raises(LoadError) as e:
         load_flow(src)
     assert "reads unknown field 'limt' on record" in str(e.value)
 
 
 def test_predicate_field_on_omitted_typed_seed_builds():
-    src = OMITTED_SEED.replace("PRED", "while: n < cfg.limit").replace("SEED", "${input.cfg}")
+    src = _swap(OMITTED_SEED, "PRED", "while: n < cfg.limit").replace("SEED", "${input.cfg}")
     result = run_flow(load_flow(src), {"cfg": {"limit": 2}})
     assert result.output == {"n": 2, "cfg": {"limit": 2}}
 
 
 def test_predicate_field_on_omitted_literal_seed_is_not_checked():
-    src = OMITTED_SEED.replace("PRED", "while: n < cfg.other\n    max: 3").replace(
+    src = _swap(OMITTED_SEED, "PRED", "while: n < cfg.other\n    max: 3").replace(
         "SEED", "{limit: 2}"
     )
     load_flow(src)
@@ -1257,7 +1264,7 @@ output: ${ask.output}
     ],
 )
 def test_predicate_member_field_read_guarded_by_isinstance_builds(pred):
-    flow = load_flow(UNION_STATE.replace("PRED", pred))
+    flow = load_flow(_swap(UNION_STATE, "PRED", pred))
     result = run_flow(flow, {})
     assert result.status == "succeeded", result.failure
     assert result.output == {"n": 3, "r": {"answer": "ok"}}
@@ -1276,7 +1283,7 @@ def test_predicate_member_field_read_guarded_by_isinstance_builds(pred):
 )
 def test_predicate_unguarded_member_field_read_is_rejected(pred):
     with pytest.raises(LoadError) as e:
-        load_flow(UNION_STATE.replace("PRED", pred))
+        load_flow(_swap(UNION_STATE, "PRED", pred))
     message = str(e.value)
     assert "reads field 'answer', which only 1 of 2 union members have" in message
     assert "check the member first with `isinstance(r, <Type>) and ...`" in message
@@ -1286,12 +1293,12 @@ def test_predicate_unguarded_member_field_read_is_rejected(pred):
 def test_predicate_read_of_a_field_the_checked_member_lacks_is_rejected():
     pred = "until: isinstance(r, More) and r.answer == 'ok'"
     with pytest.raises(LoadError, match="reads unknown field 'answer' on record"):
-        load_flow(UNION_STATE.replace("PRED", pred))
+        load_flow(_swap(UNION_STATE, "PRED", pred))
 
 
 def test_predicate_tagged_member_field_error_points_at_isinstance():
     src = (
-        UNION_STATE.replace(
+        _swap(UNION_STATE, 
             "  Done: {answer: str}\n  More: {hint: str}\n",
             "  Done: {kind: 'Literal[done]', answer: str}\n"
             "  More: {kind: 'Literal[more]', hint: str}\n",
@@ -1311,7 +1318,7 @@ def test_predicate_tagged_member_field_error_points_at_isinstance():
 
 
 def test_predicate_isinstance_check_on_an_object_field_checks_reads_on_the_type():
-    src = UNION_STATE.replace('r: Step = {"hint":"start"}', 'r: object = {"hint":"start"}').replace(
+    src = _swap(UNION_STATE, 'r: Step = {"hint":"start"}', 'r: object = {"hint":"start"}').replace(
         "          r: Step\n", "          r: object\n"
     )
     with pytest.raises(LoadError, match="reads unknown field 'answr' on record"):
@@ -1324,7 +1331,7 @@ def test_predicate_isinstance_check_with_an_unknown_type_reports_the_type():
     # A typo in the checked type is reported as that typo, not as an unguarded read.
     pred = "until: isinstance(r, Dnoe) and r.answer == 'ok'"
     with pytest.raises(LoadError) as e:
-        load_flow(UNION_STATE.replace("PRED", pred))
+        load_flow(_swap(UNION_STATE, "PRED", pred))
     message = str(e.value)
     assert "unknown type 'Dnoe'" in message
     assert "union members" not in message

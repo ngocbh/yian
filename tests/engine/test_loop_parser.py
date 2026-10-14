@@ -24,9 +24,15 @@ nodes:
     input:
       messages: ${input.history}
       exited: false
-    while: not ${exited}
+    while: not exited
     max: 1000
 """
+
+
+def _swap(src: str, old: str, new: str) -> str:
+    """Replace `old` in a fixture, failing if it is absent (a stale needle)."""
+    assert old in src, old
+    return src.replace(old, new)
 
 
 def _parse_nodes(text: str):
@@ -40,7 +46,7 @@ def _parse_nodes(text: str):
 def test_parser_reads_loop_node():
     desc = _parse_nodes(LOOP_YAML)["chat_loop"]
     assert desc.call == "chat_turn"
-    assert desc.while_ == "not ${exited}"
+    assert desc.while_ == "not exited"
     assert desc.max == 1000
     assert desc.inputs["exited"] is False
 
@@ -58,17 +64,17 @@ nodes:
     call: body
     input:
       n: 3
-    until: ${n} <= 0
+    until: n <= 0
     max: 5
 """
 
 
 def test_parser_accepts_until_and_times_keys():
     desc = _parse_nodes(UNTIL_TIMES_YAML)["L"]
-    assert desc.until_ == "${n} <= 0"
+    assert desc.until_ == "n <= 0"
     # `times:` is also an accepted loop key. `LoopDescriptor.build`, not parsing, enforces
     # exactly one termination form.
     times_desc = _parse_nodes(
-        UNTIL_TIMES_YAML.replace("until: ${n} <= 0", "times: 4")
+        _swap(UNTIL_TIMES_YAML, "until: n <= 0", "times: 4")
     )["L"]
     assert times_desc.times == 4

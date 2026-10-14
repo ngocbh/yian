@@ -81,7 +81,7 @@ def test_inline_call_error_uses_binding_range():
     text = (
         "id: f\nname: f\nnodes:\n"
         "  writer:\n    kind: code\n    code: m:f\n"
-        "    input:\n      x: ${helper(topic=${input.topic})}\n    output: str\n"
+        "    input:\n      x: ${helper(topic=input.topic)}\n    output: str\n"
     )
     nodes_cursor = _nodes_reader(text)
     descriptors = parse_nodes(nodes_cursor)
@@ -159,7 +159,7 @@ def test_inline_map_scalar_over_does_not_use_input_named_over_range():
         id="mapped",
         call="child",
         inputs={"over": "${input.seed}"},
-        over="${helper(topic=${item})}",
+        over="${helper(topic=item)}",
         field_ranges={
             ("input", "over"): input_range,
             ("field", "over"): scalar_range,
@@ -309,7 +309,7 @@ def test_case_assert_error_uses_positional_range():
         expand_case_outputs(
             {"gate": _case_gate()},
             None,
-            ["true", "${gate.output} == 1"],
+            ["true", "gate.output == 1"],
             assertion_range_at=assertion_ranges.__getitem__,
             diagnostics=_diagnostics(),
         )
@@ -346,7 +346,7 @@ def test_desugar_case_values_lifts_a_record_value_to_a_code_node():
     then_range = SourceRange(12, 15, 12, 40)
     gate = CaseDescriptor(
         id="gate",
-        cases=[{"when": "${s.output} > 1", "then": {"a": 1, "b": "${x.output}"}}],
+        cases=[{"when": "s.output > 1", "then": {"a": 1, "b": "${x.output}"}}],
         outputs="object",
         then_ranges=[then_range],
     )
@@ -365,7 +365,7 @@ def test_desugar_case_values_lifts_a_record_value_to_a_code_node():
     assert synth.node_name == "gate then[0]"
     assert synth.range == then_range
     assert synth.field_ranges == {("input", "v0"): then_range}
-    assert new["gate"].cases == [{"when": "${s.output} > 1", "then": "__value_0"}]
+    assert new["gate"].cases == [{"when": "s.output > 1", "then": "__value_0"}]
     assert new["gate"].value_branches == {"__value_0": {"a": 1, "b": "${x.output}"}}
     assert new["s"] is descriptors["s"] and new["x"] is descriptors["x"]
 
@@ -376,9 +376,9 @@ def test_desugar_case_values_writes_scalars_as_python_literals():
     gate = CaseDescriptor(
         id="gate",
         cases=[
-            {"when": "${s.output} > 1", "then": -1.5},
-            {"when": "${s.output} > 2", "then": datetime.date(2026, 1, 2)},
-            {"when": "${s.output} > 3", "then": ["costs $$5", None, True]},
+            {"when": "s.output > 1", "then": -1.5},
+            {"when": "s.output > 2", "then": datetime.date(2026, 1, 2)},
+            {"when": "s.output > 3", "then": ["costs $$5", None, True]},
         ],
         else_=0,
         outputs="object",
@@ -401,7 +401,7 @@ def test_desugar_case_values_writes_scalars_as_python_literals():
 def test_desugar_case_values_rejects_non_finite_numbers(number):
     gate = CaseDescriptor(
         id="gate",
-        cases=[{"when": "${s.output} > 1", "then": {"a": [number]}}],
+        cases=[{"when": "s.output > 1", "then": {"a": [number]}}],
         outputs="object",
     )
     with pytest.raises(LoadError, match="case node 'gate' then: numbers must be finite"):

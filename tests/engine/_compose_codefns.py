@@ -111,7 +111,7 @@ def chat_fold_list(inputs: dict) -> dict:
 
 def loop_countdown(inputs: dict) -> dict:
     # decrements the carried n. Drives a loop whose `while:` predicate divides by n
-    # (`10 / ${n} > 0`), so the predicate RAISES (division by zero) once n reaches 0 on
+    # (`10 / n > 0`), so the predicate RAISES (division by zero) once n reaches 0 on
     # a later iteration — the engine must convert that predicate error into a failed run,
     # not let it escape run() uncaught.
     return {"n": inputs["n"] - 1}

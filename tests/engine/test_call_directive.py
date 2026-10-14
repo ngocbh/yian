@@ -306,7 +306,7 @@ def test_shared_minter_yields_distinct_ids_across_bindings():
 def test_old_form_rejected_new_form_desugars():
     # the OLD-form `${flow(args)}` is now a hard-break LoadError; the NEW-form `call(...)`
     # desugars via the directive path.
-    old_only = {"old": _code("old", {"topic": "${ enrich(topic=${input.topic}) }"})}
+    old_only = {"old": _code("old", {"topic": "${ enrich(topic=input.topic) }"})}
     with pytest.raises(LoadError, match="call\\("):
         desugar_inline_calls(old_only, None, next_id=_ids())
     new_only = {"new": _code("new", {"topic": "call(summarize, messages=${messages})"})}
@@ -378,7 +378,7 @@ def test_directive_rewrite_preserves_existing_assertion_presentation():
 
 def test_raw_duplicate_flow_assertions_become_distinct_ordered_carriers():
     """The front-end boundary retains occurrence identity even for equal YAML text."""
-    text = "${input.score} > 0"
+    text = "input.score > 0"
 
     _, _, assertions = desugar_inline_calls(
         {}, None, asserts_section=[text, text], next_id=_ids()
@@ -396,19 +396,19 @@ def test_raw_duplicate_flow_assertions_become_distinct_ordered_carriers():
 
 
 def test_whole_value_flow_call_in_span_is_loud():
-    descriptors = {"use": _code("use", {"topic": "${summarize(messages=${messages})}"})}
+    descriptors = {"use": _code("use", {"topic": "${summarize(messages=messages)}"})}
     with pytest.raises(LoadError, match="call\\("):
         desugar_inline_calls(descriptors, None, next_id=_ids())
 
 
 def test_embedded_flow_call_in_comparison_is_loud():
-    descriptors = {"use": _code("use", {"topic": "${score_one(t=${input.t})} >= -1"})}
+    descriptors = {"use": _code("use", {"topic": "${score_one(t=input.t)} >= -1"})}
     with pytest.raises(LoadError, match="call\\("):
         desugar_inline_calls(descriptors, None, next_id=_ids())
 
 
 def test_embedded_flow_call_in_text_is_loud():
-    descriptors = {"use": _code("use", {"topic": "pe=${relevance(t=${input.t})}"})}
+    descriptors = {"use": _code("use", {"topic": "pe=${relevance(t=input.t)}"})}
     with pytest.raises(LoadError, match="call\\("):
         desugar_inline_calls(descriptors, None, next_id=_ids())
 
@@ -421,15 +421,15 @@ def test_coalesce_of_flow_calls_in_span_is_loud():
 
 def test_flow_call_in_outputs_span_is_loud():
     with pytest.raises(LoadError, match="call\\("):
-        desugar_inline_calls({}, {"result": "${summarize(m=${m})}"}, next_id=_ids())
+        desugar_inline_calls({}, {"result": "${summarize(m=m)}"}, next_id=_ids())
 
 
 def test_pure_builtin_in_span_still_allowed():
     # `upper` is a TEMPLATE_FNS builtin — a call to it inside `${...}` is NOT a flow call,
     # so it passes through untouched (no synth node, no raise).
-    descriptors = {"use": _code("use", {"topic": "${upper(${input.t})}"})}
+    descriptors = {"use": _code("use", {"topic": "${upper(input.t)}"})}
     new_descriptors, _, _ = desugar_inline_calls(descriptors, None, next_id=_ids())
-    assert new_descriptors["use"].inputs["topic"] == "${upper(${input.t})}"
+    assert new_descriptors["use"].inputs["topic"] == "${upper(input.t)}"
     assert not any(nid.startswith("__call_") for nid in new_descriptors)
 
 

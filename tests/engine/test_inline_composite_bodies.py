@@ -2219,7 +2219,7 @@ nodes:
     input:
       value: ${item}
     asserts:
-      - ${output} != null
+      - output != null
     nodes:
       echo:
         kind: code
@@ -2336,7 +2336,7 @@ nodes:
     [
         """    kind: call
     asserts:
-      - ${output} == 999
+      - output == 999
     nodes:
       inner:
         kind: code
@@ -2351,7 +2351,7 @@ nodes:
       n: 0
       exited: false
     asserts:
-      - ${output.n} == 999
+      - output.n == 999
     nodes:
       inner:
         kind: code

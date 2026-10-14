@@ -31,7 +31,7 @@ nodes:
   gate:
     kind: case
     cases:
-      - when: "${input.n} > 5"
+      - when: "input.n > 5"
         then: default
     else: small
   default: {kind: code, code: "return 'big'", output: str}
@@ -47,7 +47,7 @@ nodes:
   gate:
     kind: case
     cases:
-      - when: "${input.n} > 5"
+      - when: "input.n > 5"
         then: default
   default: {kind: code, code: "return 'big'", output: str}
 output: ${default.output :- "none"}
@@ -78,7 +78,7 @@ nodes:
   gate:
     kind: case
     cases:
-      - when: "${input.n} > 5"
+      - when: "input.n > 5"
         then: big
   big: {kind: code, code: "return 'big'", output: str}
 output: ${big.output :- "none"}

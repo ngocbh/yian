@@ -48,21 +48,21 @@ def test_resolve_reference_structured():
 
 def test_when_numeric_and_boolean_logic():
     pool = _pool_with(score=0.8)
-    assert evaluate_when("${score.output} > 0.5", pool) is True
-    assert evaluate_when("${score.output} > 0.5 and ${score.output} < 1", pool) is True
-    assert evaluate_when("${score.output} > 0.9 or ${score.output} == 0.8", pool) is True
-    assert evaluate_when("not ${score.output} > 0.9", pool) is True
+    assert evaluate_when("score.output > 0.5", pool) is True
+    assert evaluate_when("score.output > 0.5 and score.output < 1", pool) is True
+    assert evaluate_when("score.output > 0.9 or score.output == 0.8", pool) is True
+    assert evaluate_when("not score.output > 0.9", pool) is True
 
 
 def test_when_string_and_in():
     pool = _pool_with(label="approve")
-    assert evaluate_when("${label.output} == 'approve'", pool) is True
-    assert evaluate_when("${label.output} in 'approve/reject'", pool) is True
+    assert evaluate_when("label.output == 'approve'", pool) is True
+    assert evaluate_when("label.output in 'approve/reject'", pool) is True
 
 
 def test_when_missing_reference_is_falsy_not_error():
     pool = VariablePool()
-    assert evaluate_when("${ghost.output} > 5", pool) is False
+    assert evaluate_when("ghost.output > 5", pool) is False
 
 
 def test_when_bare_reference_is_truthiness():
@@ -122,41 +122,41 @@ def test_first_failing_assert_three_spellings():
 
 def test_when_arithmetic_basic_and_precedence():
     pool = _pool_with(a=3, b=2)
-    assert evaluate_when("${a.output} + ${b.output} == 5", pool) is True
+    assert evaluate_when("a.output + b.output == 5", pool) is True
     # precedence: * before +
-    assert evaluate_when("${a.output} + ${b.output} * 2 == 7", pool) is True
+    assert evaluate_when("a.output + b.output * 2 == 7", pool) is True
     # parens override
-    assert evaluate_when("(${a.output} + ${b.output}) * 2 == 10", pool) is True
+    assert evaluate_when("(a.output + b.output) * 2 == 10", pool) is True
 
 
 def test_when_arithmetic_div_mod_unary():
     pool = _pool_with(n=6, d=4)
-    assert evaluate_when("${n.output} / 3 == 2", pool) is True
-    assert evaluate_when("${d.output} % 2 == 0", pool) is True
-    assert evaluate_when("-${n.output} < 0", pool) is True
+    assert evaluate_when("n.output / 3 == 2", pool) is True
+    assert evaluate_when("d.output % 2 == 0", pool) is True
+    assert evaluate_when("-n.output < 0", pool) is True
     # arithmetic on both sides of the comparison
-    assert evaluate_when("${n.output} - 1 >= ${d.output} + 1", pool) is True
+    assert evaluate_when("n.output - 1 >= d.output + 1", pool) is True
 
 
 def test_when_arithmetic_non_numeric_raises():
     pool = _pool_with(s="x")
     with pytest.raises(ExpressionError):
-        evaluate_when("${s.output} + 1 == 2", pool)
+        evaluate_when("s.output + 1 == 2", pool)
 
 
 def test_when_arithmetic_in_record_path():
     # the same grammar serves the strict-CASE record path
     from yian.expr.expressions import evaluate_when_record
 
-    assert evaluate_when_record("${a} * ${b} >= 10", {"a": 4, "b": 3}) is True
-    assert evaluate_when_record("${a} % 2 == 1", {"a": 5}) is True
+    assert evaluate_when_record("a * b >= 10", {"a": 4, "b": 3}) is True
+    assert evaluate_when_record("a % 2 == 1", {"a": 5}) is True
 
 
 def test_when_string_equality_and_membership():
     # String equality and membership share the expression grammar with arithmetic.
     pool = _pool_with(label="approve")
-    assert evaluate_when("${label.output} == 'approve'", pool) is True
-    assert evaluate_when("${label.output} in 'approve/reject'", pool) is True
+    assert evaluate_when("label.output == 'approve'", pool) is True
+    assert evaluate_when("label.output in 'approve/reject'", pool) is True
 
 
 # --- list literals in when:/asserts: (the `in [...]` / `!= []` RHS) ---------- #
@@ -165,10 +165,10 @@ def test_when_string_equality_and_membership():
 def test_when_list_literal_membership_and_equality():
     # seeds 05/10 use list literals on the RHS of `in` / `!=` / `==`.
     pool = _pool_with(style="relevance", bundle=["ACME", "BETA"], empty=[])
-    assert evaluate_when('${style.output} in ["relevance", "value"]', pool) is True
-    assert evaluate_when('${style.output} not in ["value", "quality"]', pool) is True
-    assert evaluate_when("${bundle.output} != []", pool) is True
-    assert evaluate_when("${empty.output} == []", pool) is True
+    assert evaluate_when('style.output in ["relevance", "value"]', pool) is True
+    assert evaluate_when('style.output not in ["value", "quality"]', pool) is True
+    assert evaluate_when("bundle.output != []", pool) is True
+    assert evaluate_when("empty.output == []", pool) is True
     # numeric + nested-arithmetic elements also resolve as values
     assert evaluate_when("2 in [1, 2, 3]", pool) is True
     assert evaluate_when("5 in [2 + 3, 10]", pool) is True
@@ -177,18 +177,18 @@ def test_when_list_literal_membership_and_equality():
 def test_condition_context_treats_missing_reference_as_falsy():
     # Template rendering is strict, while condition evaluation treats a miss as falsy.
     pool = VariablePool()
-    assert evaluate_when("${ghost.output} > 5", pool) is False
+    assert evaluate_when("ghost.output > 5", pool) is False
 
 
 def test_record_condition_compares_a_miss_as_null():
     # A miss is None compared as a plain value: `==` is false and `!=` is true.
-    assert evaluate_when_record('${x} == "done"', {}) is False
-    assert evaluate_when_record('${x} != "done"', {}) is True
-    assert evaluate_when_record('${x} != "done"', {"x": None}) is True
+    assert evaluate_when_record('x == "done"', {}) is False
+    assert evaluate_when_record('x != "done"', {}) is True
+    assert evaluate_when_record('x != "done"', {"x": None}) is True
     assert evaluate_when_record("${x}", {}) is False
     # A None left-hand side of `in` is just a value that isn't in the container; only a
     # None right-hand side (the container itself) raises.
-    assert evaluate_when_record('${x} in ["a"]', {}) is False
+    assert evaluate_when_record('x in ["a"]', {}) is False
     with pytest.raises(ExpressionError):
         evaluate_when_record('"a" in ${x}', {})
 
@@ -240,17 +240,17 @@ def test_evaluate_when_record_resolves_declared_inputs():
     from yian.expr.expressions import evaluate_when_record
 
     rec = {"label": "POSITIVE", "rating": {"value": 0.8}}
-    assert evaluate_when_record("${label} == 'POSITIVE'", rec) is True
-    assert evaluate_when_record("${rating.value} > 0.7", rec) is True
-    assert evaluate_when_record("${label} == 'NEGATIVE'", rec) is False
+    assert evaluate_when_record("label == 'POSITIVE'", rec) is True
+    assert evaluate_when_record("rating.value > 0.7", rec) is True
+    assert evaluate_when_record("label == 'NEGATIVE'", rec) is False
 
 
 def test_evaluate_when_record_missing_is_falsy_not_raise():
     # A declared-but-None input or dotted miss is falsy rather than an error.
     from yian.expr.expressions import evaluate_when_record
 
-    assert evaluate_when_record("${label} == 'POSITIVE'", {"label": None}) is False
-    assert evaluate_when_record("${rating.value} > 0.7", {"rating": None}) is False
+    assert evaluate_when_record("label == 'POSITIVE'", {"label": None}) is False
+    assert evaluate_when_record("rating.value > 0.7", {"rating": None}) is False
 
 
 def test_evaluate_when_record_in_with_none_operand_raises():
@@ -262,7 +262,7 @@ def test_evaluate_when_record_in_with_none_operand_raises():
     with pytest.raises(ExpressionError):
         evaluate_when_record("'x' in ${opts}", {"opts": None})   # None RHS
     with pytest.raises(ExpressionError):
-        evaluate_when_record("${x} in 'abc'", {})                # None LHS (missing input)
+        evaluate_when_record("x in 'abc'", {})                # None LHS (missing input)
     with pytest.raises(ExpressionError):
         evaluate_when_record("${x} not in 'abc'", {})
 
@@ -298,13 +298,13 @@ def _branch_graph(cases):
 
 
 def test_case_when_routes_high():
-    g, log = _branch_graph([Case(handle="is_high", when="${score} >= 0.7")])
+    g, log = _branch_graph([Case(handle="is_high", when="score >= 0.7")])
     list(_engine(g).run())
     assert log == ["high"]
 
 
 def test_case_when_routes_default():
-    g, log = _branch_graph([Case(handle="is_high", when="${score} >= 0.9")])
+    g, log = _branch_graph([Case(handle="is_high", when="score >= 0.9")])
     list(_engine(g).run())
     assert log == ["low"]
 
@@ -313,7 +313,7 @@ def test_case_string_equality_routes():
     # The canonical pattern: an upstream node writes a label; the router declares it as
     # an input and does a pure string comparison on the bare `${label}`.
     log: list = []
-    cond = CaseNode("cond", [Case(handle="is_high", when="${label} == 'POSITIVE'")])
+    cond = CaseNode("cond", [Case(handle="is_high", when="label == 'POSITIVE'")])
     stamp_reads(cond, {"label": "${label.output}"})
     nodes = [
         FuncNode("label", lambda p: "POSITIVE"),

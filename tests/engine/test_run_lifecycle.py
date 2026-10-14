@@ -218,7 +218,7 @@ nodes:
   gate:
     kind: case
     cases:
-      - when: "${input.score} >= 1.0"
+      - when: "input.score >= 1.0"
         then: selected
   selected:
     kind: code

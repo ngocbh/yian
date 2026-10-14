@@ -26,7 +26,7 @@ nodes:
   gate:
     kind: case
     cases:
-      - when: "${input.score} >= 0.5"
+      - when: "input.score >= 0.5"
         then: warm
   warm:
     kind: code
@@ -97,7 +97,7 @@ nodes:
   gate:
     kind: case
     cases:
-      - when: "${{input.score}} >= 0.5"
+      - when: "input.score >= 0.5"
         then: pro{else_line}
   pro:
     kind: code{branch_dep}

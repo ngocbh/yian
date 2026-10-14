@@ -45,11 +45,11 @@ nodes:
   gate:
     kind: case
     cases:
-      - when: "${zero.output} > 0"
+      - when: "zero.output > 0"
         then: positive
-      - when: "1 / ${zero.output} > 0"
+      - when: "1 / zero.output > 0"
         then: broken
-      - when: "${zero.output} > 0"
+      - when: "zero.output > 0"
         then: duplicate
     else: negative
   positive:
@@ -108,9 +108,9 @@ nodes:
   gate:
     kind: case
     cases:
-      - when: "${zero.output} > 0"
+      - when: "zero.output > 0"
         then: positive
-      - when: "1 / ${zero.output} > 0"
+      - when: "1 / zero.output > 0"
         then: broken
     else: negative
   positive:
@@ -284,7 +284,7 @@ def test_source_free_case_build_keeps_predicates_and_wiring_origin_free():
     """Direct descriptor builds retain their historical raw wiring shape."""
     descriptor = CaseDescriptor(
         id="gate",
-        cases=[{"when": "${score.output} > 0", "then": "positive"}],
+        cases=[{"when": "score.output > 0", "then": "positive"}],
     )
 
     result = descriptor.build(BuildContext({}))
@@ -523,18 +523,18 @@ def test_case_parse_keeps_then_styles_aligned_with_cases():
         """\
         kind: case
         cases:
-          - when: "${a.output} == 1"
+          - when: "a.output == 1"
             then: reply
-          - when: "${a.output} == 2"
+          - when: "a.output == 2"
             then: "reply"
-          - when: "${a.output} == 3"
+          - when: "a.output == 3"
             then: 'r'
-          - when: "${a.output} == 4"
+          - when: "a.output == 4"
             then: |
               some text
-          - when: "${a.output} == 5"
+          - when: "a.output == 5"
             then: 3
-          - when: "${a.output} == 6"
+          - when: "a.output == 6"
             then:
               a: 1
         """
@@ -654,7 +654,7 @@ _SHAPE_TAIL = (
     ("body", "message", "line"),
     [
         (
-            '    cases: {when: "${input.n} > 1", then: done}\n',
+            '    cases: {when: "input.n > 1", then: done}\n',
             r"`cases:` must be a list of \{when:, then:\} mappings \(got \{'when'",
             8,
         ),

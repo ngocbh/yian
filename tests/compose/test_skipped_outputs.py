@@ -99,7 +99,7 @@ def test_other_defaults_stay_untyped() -> None:
     )
     assert (
         resolve_output_binding_contract(
-            "${(a.output :- ${b.output}) :- null}", producers, {}
+            "${(a.output :- b.output) :- null}", producers, {}
         )
         is None
     )

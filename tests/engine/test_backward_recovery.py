@@ -648,6 +648,12 @@ output: ${input.payload}
     before = path.read_bytes()
     first = result.backward("First review.")
     assert first.failure.stage == "learn" and first.failure.code == "memory.invalid_context"
+    # START's episode output is the first material past the bound.
+    assert (first.failure.node_id, first.failure.node_started_seq) == ("__start__", 1)
+    assert first.failure.message.startswith(
+        "memory learn context could not be constructed for node '__start__': "
+    )
+    assert "memory limit of 10 levels" in first.failure.message
     assert first.feedback == BackwardResult({"payload": ("First review.",)})
     assert first.learning.status == "failed" and first.learning.policies[0].status == "unrequested"
     assert path.read_bytes().startswith(before)
@@ -658,7 +664,7 @@ output: ${input.payload}
     assert (inspected.input, inspected.status, inspected.output, inspected.failure) == forward[:4]
     assert path.read_bytes() == before and len(backend.open_snapshots) == 2
     second = inspected.backward("Second review.")
-    assert second.failure.code == first.failure.code and second.failure.memory == first.failure.memory
+    assert second.failure == first.failure
     assert second.feedback == BackwardResult({"payload": ("Second review.",)})
     assert backend.learn_contexts == backend.commit_calls == []
     records = _records(path)

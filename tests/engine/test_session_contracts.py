@@ -1077,7 +1077,7 @@ def test_wire_nesting_is_checked_before_fold_and_encoder_return(depth):
         assert conversation_checkpoint_from_json(wire) == event
         if depth == 125:
             # A request can fit while its future admission baseline cannot.
-            with pytest.raises(ValueError, match="nesting"):
+            with pytest.raises(ValueError, match="nests deeper than the memory limit"):
                 advance_conversation(before, event)
             assert before.revision == 1 and not before.items
         else:
@@ -1150,7 +1150,7 @@ def test_view_codec_reserves_the_next_admission_baseline_wrapper(direction):
     ]
     wire["applied"][-1]["event_digest"] = candidate.applied[-1].event_digest
     wire["applied"][-1]["after_digest"] = candidate.applied[-1].after_digest
-    with pytest.raises(ValueError, match="nesting"):
+    with pytest.raises(ValueError, match="nests deeper than the memory limit"):
         if direction == "encode":
             conversation_view_to_json(candidate)
         else:

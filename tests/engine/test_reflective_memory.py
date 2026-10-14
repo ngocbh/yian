@@ -383,6 +383,9 @@ def test_snapshot_rejects_excessive_nesting_as_typed_invalid_snapshot() -> None:
     with pytest.raises(MemoryOperationError) as exc:
         ReflectiveMemory().open_run(snapshot=snapshot)
     assert exc.value.code == "reflective.invalid_snapshot"
+    cause = str(exc.value.__cause__)
+    assert cause.endswith("nests deeper than the memory limit of 128 levels")
+    assert "wire-safe" not in cause
 
 
 def test_snapshot_rejects_malformed_foreign_and_extra_lesson_sources() -> None:

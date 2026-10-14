@@ -150,15 +150,23 @@ def _drive_opened_backward(state: RunState, log: RunLog, memory: MemoryRuntime |
         proposals = memory.propose_learning(contexts) if memory is not None else ()
     except (OwnerContextError, _LearningProposalError) as exc:
         _raise_host_error(exc)
+        key, context = exc.memory, None
         if type(exc) is OwnerContextError:
             _raise_host_error(exc.original)
-            cause = MemoryOperationFailure(
-                "learn", "memory.invalid_context", "memory learn context could not be constructed", False,
-            )
+            context = exc.context
+            message = "memory learn context could not be constructed"
+            if context is not None:
+                message += f" for node {context.node_id!r}"
+            cause = MemoryOperationFailure("learn", "memory.invalid_context", f"{message}: {exc.original}", False)
         else:
             cause = exc.failure
-        key = exc.memory
-        failure = BackwardFailure("learn", cause.code, cause.message, memory=key, cause=cause)
+        if context is None:
+            failure = BackwardFailure("learn", cause.code, cause.message, memory=key, cause=cause)
+        else:
+            failure = BackwardFailure(
+                "learn", cause.code, cause.message, context.scope, context.run_id, context.node_id,
+                context.node_started_seq, memory=key, cause=cause,
+            )
         learning = _prefix_learning(state.backward_state, learner_failure=LearningFailure(
             key, "learn", cause,
         ))

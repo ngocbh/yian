@@ -133,7 +133,9 @@ def _copy_json(
     if value_type not in (list, dict):
         raise TypeError(f"{name} must contain exact JSON values")
     if nesting >= _MAX_JSON_NESTING:
-        raise ValueError(f"{name} JSON nesting is too deep")
+        raise ValueError(
+            f"{name} nests deeper than the memory limit of {_MAX_JSON_NESTING} levels"
+        )
     active = set() if active is None else active
     identity = id(value)
     if identity in active:

@@ -173,8 +173,7 @@ def _copy_json(
         raise TypeError(f"{name} must contain exact JSON values")
     if nesting >= _MAX_JSON_NESTING:
         raise ValueError(
-            f"{name} JSON nesting exceeds the conservative wire-safe limit "
-            f"of {_MAX_JSON_NESTING}"
+            f"{name} nests deeper than the memory limit of {_MAX_JSON_NESTING} levels"
         )
 
     active = set() if active is None else active

@@ -202,6 +202,21 @@ def test_snapshot_format_is_strict(mutate: Any) -> None:
     assert exc.value.retryable is False
 
 
+def test_snapshot_rejects_nesting_beyond_the_memory_limit() -> None:
+    with EpisodicMemory().open_run() as session:
+        snapshot = session.snapshot
+    malformed = json.loads(json.dumps(snapshot))
+    nested: dict[str, object] = {}
+    for _ in range(200):
+        nested = {"nested": nested}
+    malformed["config"]["extra"] = nested
+    with pytest.raises(MemoryOperationError) as exc:
+        EpisodicMemory().open_run(snapshot=malformed)
+    assert exc.value.code == "episodic.invalid_snapshot"
+    cause = str(exc.value.__cause__)
+    assert cause.endswith("nests deeper than the memory limit of 128 levels")
+
+
 def test_empty_commit_idempotency_collision_and_staleness() -> None:
     memory = EpisodicMemory()
     session = memory.open_run()

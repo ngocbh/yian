@@ -3,17 +3,20 @@
 from asyncio import CancelledError as AsyncCancelledError
 from concurrent.futures import CancelledError as FutureCancelledError
 import copy
+from dataclasses import replace
 
 import pytest
 
 from yian.compile.model import START_ID, FlowOutput
+from yian.expr.lineage import SourceRef
 from yian.memory import (
-    DeclSite, LearnContext, MemoryMutation, MemoryOperationError, MemoryScope,
+    DeclSite, LearnContext, LearningFailure, MemoryMutation, MemoryOperationError, MemoryScope,
     MemorySnapshotEnvelope, MemorySpec, MemoryStack,
 )
 from yian.nodes.base import BackwardResult, _CapabilityFault
 import yian.runtime.backward as backward_module
-from yian.runtime.contracts import MemoryProposal
+from yian.runtime.contracts import BackwardOutcome, MemoryProposal
+from yian.runtime.learning import _prefix_learning
 from yian.runtime.log import (
     BackwardFinishedRecord, BackwardReadyRecord, BackwardStartedRecord,
     MemoryCommitFailedRecord, MemoryCommitRequestedRecord, MemoryCommitSucceededRecord,
@@ -258,13 +261,68 @@ def test_context_depth_failure_keeps_completed_backward_without_calling_learners
     engine, node = _terminal(value=value)
     memory = _Memory()
     outcome = _drive(engine, {"A": memory})
-    assert outcome.failure.stage == "learn" and outcome.failure.code == "memory.invalid_context"
-    assert outcome.failure.message == "memory learn context could not be constructed"
-    assert outcome.failure.memory == engine.state.memories[0].key
+    failure = outcome.failure
+    assert failure.stage == "learn" and failure.code == "memory.invalid_context"
+    assert failure.memory == engine.state.memories[0].key
+    # Every node is scoped, so START's episode (seq 1) is the first to exceed the bound.
+    context = engine.state.trace.backward_context(SourceRef(engine.state.run_id, 1))
+    assert (failure.run_id, failure.node_id, failure.node_started_seq, failure.scope) == (
+        engine.state.run_id, context.node_id, 1, context.scope,
+    )
+    assert failure.message.startswith(
+        f"memory learn context could not be constructed for node {context.node_id!r}: "
+    )
+    assert "memory limit of 10 levels" in failure.message
+    assert failure.cause.message == failure.message
     assert outcome.feedback.input_feedback == {"topic": ("review",)}
     assert len(engine.state.backward_state.finished.attributed_results) == 3
     assert len(node.calls) == 1 and not memory.learn_contexts and not memory.commit_calls
     assert memory.close_count == 1 and engine.state.backward_state.can_start
+
+
+def _context_failure_retry(engine, failure):
+    """Return a Finished record for a fresh attempt that ends with ``failure``."""
+    first = engine.state.backward_state.finished
+    commit_prepared(engine.log, engine.state, prepare_record(engine.state, BackwardStartedRecord(2, "review")))
+    learning = _prefix_learning(engine.state.backward_state, learner_failure=LearningFailure(
+        failure.memory, "learn", failure.cause,
+    ))
+    return BackwardFinishedRecord(
+        2, BackwardOutcome("failed", first.outcome.feedback, failure, learning), first.attributed_results,
+    )
+
+
+@pytest.mark.parametrize("change", [None, "node", "source", "memory_scope", "scope", "run", "code"])
+def test_replayed_context_failure_must_name_an_accepted_receiving_occurrence(change, monkeypatch):
+    monkeypatch.setattr("yian.memory.contracts._MAX_JSON_NESTING", 10)
+    value = "leaf"
+    for _ in range(20):
+        value = [value]
+    engine, _ = _terminal(("A", "B"), value=value)
+    failure = _drive(engine, {"A": _Memory(), "B": _Memory()}).failure
+    assert failure.node_started_seq == 1
+    if change == "node":
+        failure = replace(failure, node_id="other")
+    elif change == "source":
+        # Seq 2 is START's success record, not an accepted occurrence start.
+        failure = replace(failure, node_started_seq=2)
+    elif change == "memory_scope":
+        # Every node's memory scope holds only "A".
+        failure = replace(failure, memory="B")
+    elif change == "scope":
+        later = engine.state.trace.backward_context(SourceRef(engine.state.run_id, 3))
+        failure = replace(failure, scope=later.scope)
+    elif change == "run":
+        failure = replace(failure, run_id="other")
+    elif change == "code":
+        cause = replace(failure.cause, code="learn.failed")
+        failure = replace(failure, code=cause.code, cause=cause)
+    record = _context_failure_retry(engine, failure)
+    if change is None:
+        prepare_record(engine.state, record)
+        return
+    with pytest.raises(ValueError):
+        prepare_record(engine.state, record)
 
 
 @pytest.mark.parametrize("invalid_result", [False, True])

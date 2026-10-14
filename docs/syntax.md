@@ -750,9 +750,8 @@ fingerprint. It now fails at load with the error above. Move the value to a flow
 or have the host supply it. The fingerprint also used to leave out or mask values it
 guessed were credentials; it now covers every value written in the flow. Flows the
 old guess touched get a new fingerprint, so their earlier runs can't be resumed or
-replayed: a flow with any input, wiring key, `env:` key, or `llm_config:` or memory
-config key named like a credential (`token`, `signature`, `auth`, `secret`, and
-similar), even with no literal value; any `${...}` under such a name; and any literal
+replayed: a flow with any input, wiring key, or `env:` key named like a credential
+(`token`, `signature`, `auth`, `secret`, and similar), even with no literal value; any `${...}` under such a name; and any literal
 or mapping key holding URL userinfo (`https://user:pass@host`), credential-like query
 values (`key=`, `user=`, `sig=`, `*_token=`), or `host=… user=…`, `;`-separated, or
 JDBC connection text. Other flows keep their fingerprints.

@@ -2815,7 +2815,8 @@ returns the whole carried record.
   `note: !Optional(str) "start"`. With a named body that takes `note: !str`, it asks
   you to make the input `Optional(str)`, or to tag the seed to leave the check to
   runtime. A named body that returns an `Any` field into a typed input is a load
-  error that asks you to narrow it with `isinstance` in a `case`; any other mismatch,
+  error that asks you to narrow it with `isinstance` in a `case` or declare its
+  producer's type; any other mismatch,
   such as a `float` into an `int` input, asks you to make the body's input and output
   types agree, tagged seed or not.
 - **Omitted is not null.** An omitted field keeps its value. A returned null sets the

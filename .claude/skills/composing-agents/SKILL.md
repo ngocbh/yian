@@ -979,8 +979,9 @@ keeps its declared type. Every seed must fit the body's input like a CALL argume
 body with a tag where a strict value is needed.
 A named body's returned field must fit the body's own input, since the next iteration
 binds it there: returning `Optional(int)` into `n: !int` is a load error that asks you to
-make the input `Optional(int)` or tag the seed (`n: !int ${input.z}`) to leave the
-null check to runtime; an `Any` field needs `isinstance` narrowing in a `case`, and any
+make the input `Optional(int)` or tag the seed (`n: !int ${input.m}`) to leave the
+null check to runtime; an `Any` field needs `isinstance` narrowing in a `case` or a typed
+producer, and any
 other mismatch (`float` into `int`) needs the body's input and output types to agree.
 `loop` accepts the same inline `nodes:` + `output:` form instead of `call:`; its
 generated parameters are the carried `input:` fields, so the same `'a -> 'a`

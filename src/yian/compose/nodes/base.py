@@ -15,8 +15,9 @@ corresponding authored fields continue to reject them.
 
 Like `nodes/base.py`, this base imports only the dependencies its contract needs —
 `typesys` (TypeRegistry), `nodes.contracts` (OutputContract/Parameter/ValueContract),
-`compose.helpers.types` (read_type), `compose.helpers.errors` (LoadError) and
-`compose.source` (SourceCursor) for parse navigation, `diagnostics` (SourceRange) — all
+`compose.helpers.types` (read_type), `compose.helpers.errors` (LoadError),
+`compose.helpers.secret_literals` (check_env_secrets), and `compose.source`
+(SourceCursor) for parse navigation, `diagnostics` (SourceRange) — all
 earlier layers on the ladder, so it stays a leaf of the nodes package: it never imports any
 sibling kind or `nodes/__init__`. Every kind module imports it at module top level without
 cycling; `parse/file.py` re-exports it as the descriptor base type for its importers.

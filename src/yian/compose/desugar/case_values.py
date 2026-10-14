@@ -52,6 +52,7 @@ from yian.compose.desugar.inline_calls import (
     _SYNTH_PREFIX,
     SecretArgumentError,
     desugar_call_directives,
+    holds_secret_keyword,
 )
 from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.helpers.typed_bindings import CALL_HEAD, QUOTED_STYLES, yaml_quoted
@@ -317,10 +318,11 @@ def _is_value(
         except SecretArgumentError as exc:
             raise diagnostics.error(exc.message_for(host), range=rng) from exc
         except ExpressionError as exc:
-            # Quoting a call that holds a span is its own error, so no quoting fix then.
+            # Quoting a call that holds a span is its own error, so no quoting fix then;
+            # nor for one with a secret keyword, whose text must not be echoed.
             hint = (
                 f". If you meant the text, quote it: `{label} {yaml_quoted(stripped)}`"
-                if "${" not in value
+                if "${" not in value and not holds_secret_keyword(value)
                 else ""
             )
             raise diagnostics.error(

@@ -440,6 +440,100 @@ def test_a_literal_secret_in_a_case_call_target_has_a_clean_label():
     assert "::" not in message
 
 
+@pytest.mark.parametrize(
+    "binding",
+    [
+        f"call(g, password=call(g, x=1) {_SECRET})",
+        f"call(g, password=call(g x=1, y={_SECRET}))",
+    ],
+)
+def test_a_nested_call_under_a_secret_keyword_that_does_not_parse_is_rejected(binding):
+    message = str(_secret_error(_call_flow(binding)))
+
+    assert "call(...) argument 'password' is a secret name" in message
+
+
+def _node_assert_flow(assertion: str) -> str:
+    """Return a flow whose `b` node has one node-local assert."""
+    return (
+        "id: f\nname: f\ninput:\n  pw: str\n" + _G_DEF + "nodes:\n  b:\n    kind: code\n"
+        "    output: str\n    code: |\n      return 'x'\n"
+        f"    asserts:\n      - {assertion}\n"
+        "output: ${b.output}\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "assertion", [f"call(g, password={_SECRET})", f"call(g, password='{_SECRET}')"]
+)
+def test_a_literal_secret_call_argument_in_a_node_assert_is_rejected(assertion):
+    message = str(_secret_error(_node_assert_flow(assertion)))
+
+    assert "node 'b' assert: call(...) argument 'password' is a secret name" in message
+
+
+def test_a_malformed_call_in_a_node_assert_with_a_secret_keyword_is_not_echoed():
+    with pytest.raises(LoadError) as exc_info:
+        load_flow(_node_assert_flow(f"call(g password={_SECRET})"))
+    message = str(exc_info.value)
+
+    assert "an inline call is not allowed in a node-local assert" in message
+    assert _SECRET not in message, message
+
+
+def _syntax_error(text: str) -> str:
+    """Load `text`, asserting a load error that is not the secret-name error and does
+    not echo the secret."""
+    with pytest.raises(LoadError) as exc_info:
+        load_flow(text)
+    message = str(exc_info.value)
+    assert "secret name" not in message, message
+    assert _SECRET not in message, message
+    assert "quote the whole value" not in message, message
+    return message
+
+
+@pytest.mark.parametrize(
+    ("binding", "problem"),
+    [
+        (
+            f"call(g password={_SECRET})",
+            "a call(...) must start with a flow id (a bare name) and a comma",
+        ),
+        (f"call(g, 30 password={_SECRET})", "needs one name before `=`"),
+        (f"call(g, my password={_SECRET})", "needs one name before `=`"),
+        (f"call(g, password={_SECRET}", "`call(` is never closed"),
+        (f"call(g, x=1) password={_SECRET}", "text follows the closing `)`"),
+        (f"call(g, password=call(g, x=1 {_SECRET})", "`call(` is never closed"),
+    ],
+)
+def test_a_malformed_call_with_a_secret_keyword_does_not_quote_its_text(
+    binding, problem
+):
+    assert problem in _syntax_error(_call_flow(binding))
+
+
+def test_a_malformed_case_call_with_a_secret_keyword_does_not_quote_its_text():
+    text = (
+        "id: f\nname: f\ninput:\n  score: float\n" + _G_DEF + "nodes:\n"
+        "  c:\n    kind: case\n    cases:\n"
+        '      - when: "${input.score} >= 0.5"\n'
+        f"        then: call(g password={_SECRET})\n"
+        "    else: call(g, x=1)\n"
+        "output: ${c.output}\n"
+    )
+    message = _syntax_error(text)
+
+    assert "a branch target must be a node id or a single call" in message
+    assert "quote it" not in message
+
+
+def test_a_missing_comma_before_a_secret_binding_is_the_two_keywords_error():
+    message = _syntax_error(_call_flow("call(g, x=1 password=${input.pw})"))
+
+    assert "keyword 'x' value looks like two keywords; add the missing comma" in message
+
+
 def _input_flow(*declarations: str) -> str:
     """Return a one-node flow whose `input:` has the given declaration lines."""
     return (

@@ -100,6 +100,29 @@ _SYNTH_PREFIX = "__call_"
 _FLOW_ID = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
 # Text before a lone `=` that ends in a separate word: `1 b` in `a=1 b=2`, a missing comma.
 _WORD_BEFORE_EQUALS = re.compile(r"\s([A-Za-z_][A-Za-z0-9_-]*)\s*$")
+# A name directly before `=`, anywhere in a directive's raw text.
+_NAME_BEFORE_EQUALS = re.compile(r"([A-Za-z_][A-Za-z0-9_-]*)\s*=")
+
+
+def holds_secret_keyword(text: str) -> bool:
+    """Return whether `text` writes a name under a secret name directly before `=`.
+
+    A malformed `call(...)` whose text holds such a keyword may hold a credential in a
+    part the parse never reached, so its error must not quote the text.
+
+    Args:
+        text (`str`): The raw directive text.
+
+    Returns:
+        `bool`: `True` when some `name=` in `text` has a secret name.
+    """
+    return any(is_secret_name(m.group(1)) for m in _NAME_BEFORE_EQUALS.finditer(text))
+
+
+def _quoted(part: str, text: str, lead: str = " ") -> str:
+    """Return `part` quoted after `lead` for an error message, or `""` when `text`
+    holds a secret keyword."""
+    return "" if holds_secret_keyword(text) else f"{lead}{part!r}"
 
 
 class SecretArgumentError(ExpressionError):
@@ -391,7 +414,10 @@ def _desugar_value(
             hint = (
                 f". If you meant the text, quote the whole value: "
                 f"`{yaml_quoted(value.strip())}`"
-                if quotable and not expression and "${" not in value
+                if quotable
+                and not expression
+                and "${" not in value
+                and not holds_secret_keyword(value)
                 else ""
             )
             raise diagnostics.error(f"{host}: {exc}{hint}", range=range) from exc
@@ -435,7 +461,9 @@ def desugar_call_directives(value: str, mint: Callable[[], str]) -> tuple:
     first arg that is not a bare flow id, a positional arg after the flow id (message
     mentions "keyword"), an unquoted `=` inside a keyword value (a missing comma), or a
     keyword passed more than once. A keyword under a secret name whose value is a literal
-    raises `SecretArgumentError`, before any check that would echo the value."""
+    raises `SecretArgumentError`, before any check that would echo the value. When the
+    text holds a keyword under a secret name (`holds_secret_keyword`), a malformed
+    directive's message does not quote any part of it."""
     match = _match_directive(value)
     if match is None:
         return value, []
@@ -448,25 +476,28 @@ def desugar_call_directives(value: str, mint: Callable[[], str]) -> tuple:
         parts = _split_calls_aware(pair, "=")
         if len(parts) < 2:
             raise ExpressionError(
-                f"call({flow_id}, ...) passes a positional argument {pair.strip()!r}; "
+                f"call({flow_id}, ...) passes a positional argument"
+                f"{_quoted(pair.strip(), value)}; "
                 "every argument after the flow id must be a keyword (name=value)"
             )
         name = parts[0].strip()
         if not name or any(ch.isspace() for ch in name):
             raise ExpressionError(
-                f"call({flow_id}, ...) argument {pair.strip()!r} needs one name before "
+                f"call({flow_id}, ...) argument{_quoted(pair.strip(), value)} needs one "
+                "name before "
                 f"`=`; {'add the missing comma' if name else 'write the keyword name'}"
             )
         arg_value = "=".join(parts[1:])
         _check_secret_argument(name, arg_value)
-        inner_names = _inner_keyword_names(parts[1:])
-        if inner_names:
-            for inner_name in inner_names:
+        inner_keywords = _inner_keywords(parts[1:])
+        if inner_keywords:
+            for inner_name, inner_value in inner_keywords:
                 if is_secret_name(inner_name):
-                    # The would-be keyword's value is unknown, so it is treated as literal.
-                    raise SecretArgumentError(inner_name)
+                    # Read as the comma had been there; a binding falls to the error below.
+                    _check_secret_argument(inner_name, inner_value)
             raise ExpressionError(
-                f"call({flow_id}, ...) keyword {name!r} value {arg_value.strip()!r} looks "
+                f"call({flow_id}, ...) keyword {name!r} value"
+                f"{_quoted(arg_value.strip(), value)} looks "
                 "like two keywords; add the missing comma, or quote the value"
             )
         new_value, inner = desugar_call_directives(
@@ -492,17 +523,26 @@ def _check_secret_argument(name: str, arg_value: str) -> None:
 
     Raises:
         `SecretArgumentError`: `name` is a secret name and the value, read as the
-            directive reads it, is neither a binding nor `null`.
+            directive reads it, is neither a binding nor `null`. A nested directive is
+            a binding only if it parses: its parse error could quote the value.
     """
     if CALL_HEAD.match(arg_value.strip()):
-        return  # a nested directive is a binding; its own arguments are checked in turn
+        if is_secret_name(name):
+            try:
+                desugar_call_directives(arg_value, lambda: "_")
+            except SecretArgumentError:
+                raise
+            except ExpressionError:
+                raise SecretArgumentError(name) from None
+        return  # its own arguments are checked when it is desugared
     path = secret_literal_path(name, _arg_source(arg_value))
     if path is not None:
         raise SecretArgumentError(name, path)
 
 
-def _inner_keyword_names(parts: list[str]) -> list[str]:
-    """The names a keyword value, split on its top-level `=`, holds as `... name=...`.
+def _inner_keywords(parts: list[str]) -> list[tuple[str, str]]:
+    """The would-be keywords a keyword value, split on its top-level `=`, holds as
+    `... name=...`.
 
     Only a lone `=` after a separate word counts (`1 b=2`); `==`, `!=`, `<=`, `>=`, and a
     glued `a=b` stay part of the value's text.
@@ -511,16 +551,17 @@ def _inner_keyword_names(parts: list[str]) -> list[str]:
         parts (`list[str]`): The value split on each top-level `=`.
 
     Returns:
-        `list[str]`: The word before each such `=`; empty when there is none.
+        `list[tuple[str, str]]`: The word before each such `=` and the text after that
+            `=` to the end of the value; empty when there is none.
     """
-    names = []
-    for left, right in zip(parts, parts[1:]):
+    keywords = []
+    for index, (left, right) in enumerate(zip(parts, parts[1:])):
         if not left or not right or left[-1] in "!<>":
             continue
         match = _WORD_BEFORE_EQUALS.search(left)
         if match:
-            names.append(match.group(1))
-    return names
+            keywords.append((match.group(1), "=".join(parts[index + 1 :])))
+    return keywords
 
 
 def _match_directive(value: str) -> Optional[tuple]:
@@ -530,7 +571,8 @@ def _match_directive(value: str) -> Optional[tuple]:
     Returns `remaining_args_str` = the raw args substring AFTER the flow id's comma
     (empty when `call(f)` has no kwargs); `desugar_call_directives` checks those args.
     Raises `ExpressionError` when the value starts with `call(` but its parens are
-    unbalanced, text follows the close paren, or the first arg is not a bare flow id."""
+    unbalanced, text follows the close paren, or the first arg is not a bare flow id;
+    the message quotes no part of a value that `holds_secret_keyword`."""
     s = value.strip()
     m = CALL_HEAD.match(s)
     if m is None:
@@ -544,15 +586,15 @@ def _match_directive(value: str) -> Optional[tuple]:
     trailing = s[close_idx + 1 :].strip()
     if trailing:
         raise ExpressionError(
-            f"text follows the closing `)`: {trailing!r}; a call(...) must be the "
-            "whole value"
+            f"text follows the closing `)`{_quoted(trailing, s, ': ')}; a call(...) "
+            "must be the whole value"
         )
     args_str = s[open_idx + 1 : close_idx]
     first = _split_calls_aware(args_str, ",")[0].strip()
     if not _FLOW_ID.fullmatch(first):
         raise ExpressionError(
-            "a call(...) must start with a flow id (a bare name) and a comma, "
-            f"got {first!r}"
+            "a call(...) must start with a flow id (a bare name) and a comma"
+            f"{_quoted(first, s, ', got ')}"
         )
     # everything after the first comma is the remaining (keyword) args; the loop over
     # this substring never re-sees the positional flow id, so a positional arg among

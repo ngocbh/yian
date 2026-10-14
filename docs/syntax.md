@@ -1373,7 +1373,7 @@ A `case` node routes — it has no `input:`. It takes one branch; the other targ
 are skipped, and so is every node that plainly reads a skipped node or names it in
 `depends_on`. A node the loader lifted out of a skipped node (an inline `call(...)` in
 its `input:`, an adaptive composer) is skipped too, whether that node is a target on an
-untaken branch or is skipped because one of its inputs is. A node that names the
+untaken branch or is skipped through its inputs or `depends_on`. A node that names the
 `case` itself in `depends_on:` or `runs_after:` is not on a branch: it runs whichever
 branch the `case` takes, and is skipped only when the `case` is. Read its result with
 `${case.output}`. A routing-only `case` may take
@@ -1795,7 +1795,7 @@ ask:
 `list[Question]`) wired into the gate; the runtime gate never calls an LLM. The
 composer runs only when the gate can: it carries the gate's `case` routes,
 `depends_on:`, and `runs_after:`, and waits for the gate's other inputs, so no LLM call
-happens on a branch the gate isn't on or when a gate input it needs is skipped. So a node
+happens on a branch the gate isn't on or when a skipped input skips the gate. So a node
 that reads `${<node>__compose.output}` can't also be read by the gate or be in its
 `depends_on:` or `runs_after:`: that is a cycle.
 The input name `__questions` is reserved for that generated wire and cannot be
@@ -2061,17 +2061,17 @@ Rules:
   (`x="call(g)"`) is text. Each keyword appears at most once.
 - **Nesting is allowed** — `call(outer, x=call(inner, y=1))`. An unquoted arg that
   starts with `call(` follows the same whole-value rule.
-- **Runs only when its host can.** The call runs only on the `case` branches that
-  reach the node it is written in (its host), is skipped when a host `depends_on:` node
-  is skipped, and waits for the host's `runs_after:` nodes. It also waits for the host's
-  other inputs and is skipped whenever a skipped input skips the host; an input with
-  a default (`${x.output :- "none"}`) doesn't skip the host, so the call
-  only waits for `x`. Calls written in the same node don't wait on each other unless one
-  reads the other (`call(f, x=call(g), y=${a.output})` skips `g` too when `a` is
-  skipped). A call in the flow `output:` or `asserts:` has no host. A node that reads the
-  call's output by id (`${__call_0.output}`) is skipped with it, and if the host also
-  reads that node or names it in `depends_on:` or `runs_after:`, the flow has a cycle (a
-  load error).
+- **Runs only when its host can.** The call runs only on the `case` branches that reach
+  the node it is written in (its host), is skipped when a host `depends_on:` node is
+  skipped, and waits for the host's `runs_after:` nodes. It also waits for the host's
+  other inputs and is skipped whenever a skipped input skips the host; an input with a
+  default (`${x.output :- "none"}`) doesn't skip the host, so the call only waits for
+  `x`. Calls written in the same node don't wait on each other, but a nested call also
+  carries its outer call's other arguments: in `call(f, x=call(g), y=${a.output})`, `g`
+  waits for `a` and is skipped when `a` is. A call in the flow `output:` or `asserts:`
+  has no host. A node that reads the call's output by id (`${__call_0.output}`) is
+  skipped with it, and if the host also reads that node or names it in `depends_on:` or
+  `runs_after:`, the flow has a cycle (a load error).
 - **In a flow `asserts:` item** a value starting with `call(` follows the same rule,
   quoted or not: an assert is an expression, so quoting it does not make it text.
 - **A flow call inside `${...}` is retired.** The old `${flow(args)}` form (a flow

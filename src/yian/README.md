@@ -587,10 +587,12 @@ inline `call(...)` in its binding, an inner call of a nested branch call, an ada
 composer) records that node as its `host`, and `compose/edges/hosts.py` copies the host's
 CASE route edges and `depends_on`/`runs_after` ordering edges onto it, so it runs only on
 the host's branches and in the host's order. It also gets data gates: data edges from the
-producers of the host's other inputs, grouped like the host's input (`<host>.<param>`), so
-the runtime join skips it exactly when those inputs skip the host and otherwise only makes
-it wait. Nodes lifted out of the same host don't gate each other. Inline child bodies and LOOP seeds are typed while nodes build, before the pass, so they
-see unnarrowed types. Runtime routing is unchanged.
+producers of the host's other inputs, grouped like the host's input (group
+`<node>.<group>`), so the runtime join skips it when those inputs skip the host and
+otherwise only makes it wait. Nodes lifted out of the same host don't gate each other, but
+a nested call is gated on its outer call's other arguments. Inline child bodies and LOOP
+seeds are typed while nodes build, before the pass, so they see unnarrowed types. Runtime
+routing is unchanged.
 
 Physical Compose declarations derive exact `ValueContract`s. Output binding derivation,
 builders, child signatures, producer maps, and validators retain the complete

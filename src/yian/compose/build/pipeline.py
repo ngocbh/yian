@@ -3,7 +3,8 @@
 `_assemble` is the pipeline shared by the top-level flow AND every in-file `defs:`
 callable:
 
-  flow parameters + authored parameter/contract/default origins -> build every node
+  flow parameters + authored parameter/contract/default origins -> parse nodes, lowering
+  each tagged `nodes:` entry to a CODE node -> build every node
   kind-blind (`desc.build(ctx)`; physical node-output contracts compile at their
   existing leaf-owned build position; a case lowers
   in its own build) -> cross-flow type check + case exhaustiveness -> infer data
@@ -71,6 +72,7 @@ from yian.compose.desugar.inline_bodies import (
 )
 from yian.compose.desugar.inline_calls import _synth_id_gen, desugar_inline_calls
 from yian.compose.desugar.case_outputs import case_output_reads, expand_case_outputs
+from yian.compose.desugar.value_entries import ValueEntryDescriptor, read_value_entry
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
 from yian.compose.helpers.isinstance_types import (
     collect_constructor_names,
@@ -107,7 +109,10 @@ from yian.compose.edges.hosts import host_control_edges
 from yian.compose.edges.ordering import infer_ordering_edges
 from yian.compose.validate.call_types import check_call_map_types
 from yian.compose.validate.references import validate_references
-from yian.compose.validate.secret_literals import check_authored_bindings
+from yian.compose.validate.secret_literals import (
+    check_authored_bindings,
+    check_value_entry,
+)
 from yian.compose.validate.skips import (
     SkipModel,
     check_skipped_arithmetic,
@@ -556,7 +561,8 @@ def _stamp_node_wiring_origins(
     Desugaring has already produced each final binding source, while
     ``nodes_cursor`` still retains the original occurrence. Each ordinary input
     entry contributes two meanings: its key owns the formal ``Parameter`` and
-    its value owns the flow ``Binding``. A reserved MAP ``over`` or WAIT
+    its value owns the flow ``Binding``; a value entry's one input is the entry
+    itself, so a runtime type failure points at it. A reserved MAP ``over`` or WAIT
     ``until`` field contributes only a flow-owned ``Binding`` origin. For names
     absent from the retained cursor, Compose mints no origin and preserves any
     existing carrier origin.
@@ -588,44 +594,45 @@ def _stamp_node_wiring_origins(
         try:
             if not nodes_cursor.has(node_id):
                 continue
-            node_cursor = normalize_node_signature_cursor(
-                nodes_cursor.child(node_id)
-            )
-
-            for key in sorted(node.reserved_wiring_keys()):
-                if key not in wiring or not node_cursor.has(key):
-                    continue
-                binding_origin = catalog_builder.register(
-                    (*owner, "node", node_id, "reserved", key, "binding"),
-                    node_cursor.child(key),
+            if isinstance(descriptor, ValueEntryDescriptor):
+                input_cursors = {node_id: nodes_cursor.child(node_id)}
+            else:
+                node_cursor = normalize_node_signature_cursor(
+                    nodes_cursor.child(node_id)
                 )
-                if binding_origin is not None:
-                    wiring[key] = replace(
-                        as_binding(wiring[key]),
-                        origin=binding_origin,
-                    )
 
-            if (
-                not descriptor.inputs
-                or node.params is None
-                or not node_cursor.has("inputs")
-            ):
+                for key in sorted(node.reserved_wiring_keys()):
+                    if key not in wiring or not node_cursor.has(key):
+                        continue
+                    binding_origin = catalog_builder.register(
+                        (*owner, "node", node_id, "reserved", key, "binding"),
+                        node_cursor.child(key),
+                    )
+                    if binding_origin is not None:
+                        wiring[key] = replace(
+                            as_binding(wiring[key]),
+                            origin=binding_origin,
+                        )
+
+                if not descriptor.inputs or not node_cursor.has("inputs"):
+                    continue
+                inputs_cursor = node_cursor.child("inputs")
+                input_cursors = {
+                    name: inputs_cursor.child(name)
+                    for name in descriptor.inputs
+                    if inputs_cursor.has(name)
+                }
+            if node.params is None:
                 continue
-            inputs_cursor = node_cursor.child("inputs")
             parameter_indexes = {
                 parameter.name: index
                 for index, parameter in enumerate(node.params)
             }
             parameters = list(node.params)
             parameters_changed = False
-            for name in descriptor.inputs:
-                if (
-                    name not in parameter_indexes
-                    or name not in wiring
-                    or not inputs_cursor.has(name)
-                ):
+            for name, entry_cursor in input_cursors.items():
+                if name not in parameter_indexes or name not in wiring:
                     continue
-                entry_cursor = inputs_cursor.child(name)
                 parameter_origin = catalog_builder.register(
                     (*owner, "node", node_id, "input", name, "parameter"),
                     entry_cursor,
@@ -774,7 +781,8 @@ def _split_typed_inputs(
         diagnostics (`LoadDiagnostics`): Factory for located load errors.
 
     Returns:
-        `dict[str, NodeDescriptor]`: The descriptors, with typed inputs split.
+        `dict[str, NodeDescriptor]`: The descriptors, with typed inputs split; a value
+            entry, already read through its tag, is returned unchanged.
 
     Raises:
         `LoadError`: Raised when a typed binding's type or value is malformed, a
@@ -783,7 +791,8 @@ def _split_typed_inputs(
     """
     split: dict[str, NodeDescriptor] = {}
     for node_id, descriptor in descriptors.items():
-        if not descriptor.inputs:
+        # A value entry's one input was read through its tag when it was parsed.
+        if not descriptor.inputs or isinstance(descriptor, ValueEntryDescriptor):
             split[node_id] = descriptor
             continue
         try:
@@ -832,15 +841,19 @@ def _binding_style(
     field: str,
     key: str,
     *,
+    value_entries: frozenset[str],
     diagnostics: LoadDiagnostics,
 ) -> str | None:
     """Return the authored YAML scalar style of one node binding.
+
+    A value entry's one binding is the entry itself, so its style is the entry's.
 
     Args:
         nodes_cursor (`SourceCursor`): Retained view of the flow's node mapping.
         node_id (`str`): The node that owns the binding.
         field (`str`): The binding field (`inputs`, or a scalar field such as `over`).
         key (`str`): The binding name in a mapping field; equals `field` for a scalar one.
+        value_entries (`frozenset[str]`): The ids of the flow's value entries.
         diagnostics (`LoadDiagnostics`): Factory for located load errors.
 
     Returns:
@@ -852,6 +865,10 @@ def _binding_style(
     try:
         if not nodes_cursor.has(node_id):
             return None
+        if node_id in value_entries:
+            if (field, key) != ("inputs", node_id):
+                return None
+            return nodes_cursor.child(node_id).scalar_style
         cursor = normalize_node_signature_cursor(nodes_cursor.child(node_id))
         if not cursor.has(field):
             return None
@@ -1422,7 +1439,8 @@ def _assemble(
     """Assemble parsed sections into a `ComposedFlow` — the post-parse pipeline shared by
     the top-level flow and every in-file def:
 
-      flow parameters -> split tagged node inputs and flow outputs
+      flow parameters -> parse nodes (a tagged entry lowers to a CODE node returning its
+      value, after a secret-literal check) -> split tagged node inputs and flow outputs
       into value + declared contract -> desugar (case value branches to synth CODE nodes,
       inline calls, adaptive questions, case call targets, `${case.output}` with one synth
       result node per typed case) -> build
@@ -1537,7 +1555,7 @@ def _assemble(
     ) -> tuple[OriginRef | None, SourceRange | None] | None:
         """Return the origin and range from one authored assertion cursor."""
         try:
-            if not authored_nodes_cursor.has(node_id):
+            if node_id in value_entries or not authored_nodes_cursor.has(node_id):
                 return None
             node_cursor = normalize_node_signature_cursor(
                 authored_nodes_cursor.child(node_id)
@@ -1574,7 +1592,7 @@ def _assemble(
             `LoadError`: Raised when source traversal or type compilation fails.
         """
         try:
-            if not nodes_cursor.has(node_id):
+            if node_id in value_entries or not nodes_cursor.has(node_id):
                 return None
             node_cursor = normalize_node_signature_cursor(nodes_cursor.child(node_id))
             if not node_cursor.has("outputs"):
@@ -1598,7 +1616,7 @@ def _assemble(
     ) -> list[Parameter] | None:
         """Compile one physical node's variables through its normalized cursor."""
         try:
-            if not nodes_cursor.has(node_id):
+            if node_id in value_entries or not nodes_cursor.has(node_id):
                 return None
             node_cursor = normalize_node_signature_cursor(nodes_cursor.child(node_id))
             if not node_cursor.has("variables"):
@@ -1667,7 +1685,27 @@ def _assemble(
     # Static inference types a `T(...)` constructor by this flow's own typedefs.
     constructor_type = constructor_type_fn(registry)
     flow_inputs = {parameter.name for parameter in inputs}
-    descriptors = parse_nodes(nodes_cursor)
+
+    def read_value(node_id: str, cursor: SourceCursor) -> ValueEntryDescriptor:
+        """Lower one tagged `nodes:` entry, after rejecting a secret literal in it."""
+        check_value_entry(node_id, cursor, diagnostics)
+        return read_value_entry(
+            node_id,
+            cursor,
+            registry=registry,
+            owner=owner,
+            catalog_builder=catalog_builder,
+            diagnostics=diagnostics,
+        )
+
+    descriptors = parse_nodes(nodes_cursor, read_value=read_value)
+    # Value entries have no node body, so every pass below that re-reads a node's body
+    # from `nodes_cursor` skips them or reads the entry itself.
+    value_entries = frozenset(
+        node_id
+        for node_id, descriptor in descriptors.items()
+        if isinstance(descriptor, ValueEntryDescriptor)
+    )
     try:
         located_descriptors: dict[str, NodeDescriptor] = {}
         for node_id, descriptor in descriptors.items():
@@ -1681,6 +1719,9 @@ def _assemble(
                     anchor="key",
                 ),
             )
+            if node_id in value_entries:
+                located_descriptors[node_id] = located
+                continue
             located_descriptors[node_id] = located.with_source_origins(
                 normalize_node_signature_cursor(authored_cursor),
                 site_path=node_path,
@@ -1718,7 +1759,12 @@ def _assemble(
         descriptors,
         outputs_section,
         binding_style_at=lambda node_id, field, key: _binding_style(
-            nodes_cursor, node_id, field, key, diagnostics=diagnostics
+            nodes_cursor,
+            node_id,
+            field,
+            key,
+            value_entries=value_entries,
+            diagnostics=diagnostics,
         ),
         output_style_at=lambda key: _output_style(
             outputs_cursor, key, diagnostics=diagnostics
@@ -1731,7 +1777,7 @@ def _assemble(
     # declaration with nothing after its tag reads as no output at all.
     try:
         for node_id in descriptors:
-            if nodes_cursor.has(node_id):
+            if node_id not in value_entries and nodes_cursor.has(node_id):
                 node_cursor = normalize_node_signature_cursor(nodes_cursor.child(node_id))
                 if node_cursor.has("outputs"):
                     reject_tagged_output(node_cursor.child("outputs"), diagnostics)
@@ -1791,7 +1837,12 @@ def _assemble(
         assertion_range_at=flow_assertion_range_at,
         assertion_origin_at=flow_assertion_origin_at,
         binding_style_at=lambda node_id, field, key: _binding_style(
-            nodes_cursor, node_id, field, key, diagnostics=diagnostics
+            nodes_cursor,
+            node_id,
+            field,
+            key,
+            value_entries=value_entries,
+            diagnostics=diagnostics,
         ),
         output_style_at=lambda key: _output_style(
             outputs_cursor, key, diagnostics=diagnostics

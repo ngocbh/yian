@@ -5,6 +5,10 @@ sections) and rewrites them into ordinary descriptors + bindings that the build
 loop then sees as author-written — pure load-time sugar, no new runtime kind. The
 passes:
 
+- `value_entries` — a tagged `nodes:` entry (`total: !int ${a.output + b.output}`) is a
+  value, read at parse time through the reader `parse_nodes` is given: it lowers to a CODE
+  node with the entry's id whose one input, named after the entry, holds the value typed
+  by its tag, so the typed-binding checks, edges, and origins apply to it unchanged.
 - `inline_bodies` — occurrence-local located overlays isolate YAML aliases and
   merged mappings, then retain and mask inline CALL/MAP/LOOP child bodies without
   editing authored anchors or values. The retained child output keeps its source cursor so
@@ -34,7 +38,8 @@ inner calls of a nested branch call, the adaptive composer) records that node as
 descriptor's `host`; after the build, `compose.edges.hosts.host_control_edges` gives every
 lifted node its host's CASE routes, `depends_on`/`runs_after` edges, and data gates on the
 host's other inputs in one place. A branch target (`then: call(...)`, `__value_<n>`), a
-`__case_<id>` result node, and a flow `output:`/`asserts:` call have no host.
+`__case_<id>` result node, a value entry, and a flow `output:`/`asserts:` call have no
+host.
 
 Ladder position: desugar imports DOWN/peer only — `helpers`, `nodes`, `parse`,
 `source`, and the engine core (`expr`, `events`, `compile`, `nodes.*`). It NEVER

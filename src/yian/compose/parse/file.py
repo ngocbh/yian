@@ -112,7 +112,8 @@ def _reject_nested_legacy_keys(cursor: SourceCursor, diagnostics: LoadDiagnostic
 
     Walks the same `nodes:`/`defs:` nesting that `_back_map_to_plural` projects. The
     check reads the authored source because the projection would merge `inputs:` with
-    a renamed `input:` and keep only one of them.
+    a renamed `input:` and keep only one of them. A tagged `nodes:` entry is a value,
+    not a node body, so it is skipped.
 
     Args:
         cursor (`SourceCursor`):
@@ -137,6 +138,9 @@ def _reject_nested_legacy_keys(cursor: SourceCursor, diagnostics: LoadDiagnostic
             if not isinstance(entry, Mapping):
                 continue
             entry_cursor = section_cursor.child(name)
+            # A tagged `nodes:` entry is a value, whose keys mean nothing to yian.
+            if section == "nodes" and entry_cursor.tag is not None:
+                continue
             for legacy, new in (("inputs", "input"), ("outputs", "output")):
                 if legacy in entry:
                     raise diagnostics.error(

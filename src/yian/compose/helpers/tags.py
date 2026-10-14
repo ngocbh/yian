@@ -927,8 +927,9 @@ def reject_unread_tags(
 ) -> None:
     """Reject the first tag in `document` that no slot reader consumed.
 
-    A tag types a flow input, a binding, a flow output, an agent variable, or a
-    value inside one; anywhere else it would be silently ignored. Tags reached
+    A tag types a flow input, a binding, a flow output, an agent variable, a value
+    entry in `nodes:`, or a value inside one; anywhere else it would be silently
+    ignored. Tags reached
     only through top-level `x-*` keys are exempt. Tags under `typedefs:` and on
     mapping keys get their own messages. Keys are spelled as written, so `on:`
     stays `on:` although YAML reads it as `True`.
@@ -966,7 +967,8 @@ def reject_unread_tags(
         where = f"`{key}:`" if key is not None else "the document root"
         raise diagnostics.error(
             "a tag types a value — a flow input, a binding, a flow output, an agent "
-            f"variable, or a value inside one; {where} is not one",
+            f"variable, a value entry in `nodes:`, or a value inside one; {where} is "
+            "not one",
             range=node.range,
         )
 

@@ -22,7 +22,7 @@ def _generic(key: str) -> str:
     """Return the message for a tag at `key:`, which is not a typed slot."""
     return (
         "a tag types a value — a flow input, a binding, a flow output, an agent "
-        f"variable, or a value inside one; `{key}:` is not one"
+        f"variable, a value entry in `nodes:`, or a value inside one; `{key}:` is not one"
     )
 
 

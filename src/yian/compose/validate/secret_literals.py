@@ -1,4 +1,5 @@
-"""Reject a literal value under a secret name in node bindings, case values and outputs.
+"""Reject a literal value under a secret name in node bindings, value entries, case values
+and outputs.
 
 Runs on the authored values, before tagged bindings are read or anything is desugared,
 because those later passes may echo a value in their own errors. A tag is not part of
@@ -7,7 +8,9 @@ tag. In a binding position a whole-value `call(...)` directive also counts as a 
 A directive's own keyword arguments are
 held to the same rule (`SecretArgumentError`), so a directive under a secret name that
 passes a literal secret is reported as that argument. A `case` value branch has no name
-of its own, so only secret keys nested in a mapping or list branch are checked.
+of its own, so only secret keys nested in a mapping or list branch are checked. A value
+entry in `nodes:` (`api_key: !str ...`) is held to the binding rule under its id, before
+its value is read.
 """
 
 from __future__ import annotations
@@ -19,6 +22,7 @@ from yian.compose.desugar.inline_calls import (
     SecretArgumentError,
     desugar_call_directives,
 )
+from yian.compose.desugar.value_entries import ValueEntryDescriptor
 from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.helpers.secret_literals import (
     is_binding_text,
@@ -29,6 +33,7 @@ from yian.compose.helpers.directives import CALL_HEAD
 from yian.compose.helpers.tags import QUOTED_STYLES
 from yian.compose.nodes import BINDING_FIELDS
 from yian.compose.nodes.case import CaseDescriptor
+from yian.compose.source import SourceCursor
 from yian.diagnostics import SourceRange
 from yian.expr import ExpressionError
 
@@ -65,6 +70,8 @@ def check_authored_bindings(
             literal value under a secret name, in authored order.
     """
     for node_id, desc in descriptors.items():
+        if isinstance(desc, ValueEntryDescriptor):
+            continue  # checked by `check_value_entry` before its value was read
         owner = f"node {node_id!r}"
         for field in BINDING_FIELDS.get(desc.kind, ()):
             current = getattr(desc, field, None)
@@ -128,6 +135,42 @@ def check_authored_bindings(
                 secret_literal_message(f"flow output {str(key)!r}", str(key), path),
                 range=output_range(key),
             )
+
+
+def check_value_entry(
+    node_id: str, cursor: SourceCursor, diagnostics: LoadDiagnostics
+) -> None:
+    """Reject a literal under a secret name in one tagged `nodes:` entry.
+
+    The entry is held to the node-input binding rule, with its id as the binding's
+    name: under a secret id the value must be a `${...}` binding, an unquoted
+    `call(...)` directive, or null, and a secret key nested in its value must hold a
+    binding. Runs on the authored value, before the tag is read, because reading it
+    may echo the value in an error.
+
+    Args:
+        node_id (`str`): The entry id.
+        cursor (`SourceCursor`): The entry's tagged value.
+        diagnostics (`LoadDiagnostics`): Factory for located load errors.
+
+    Raises:
+        `LoadError`: Raised at the entry for the first literal under a secret name,
+            or a `call(...)` passing a literal under a secret keyword.
+    """
+    slot = f"value entry {node_id!r}"
+    site = cursor.range or cursor.key_range
+    path = _binding_path(
+        node_id,
+        cursor.value,
+        cursor.scalar_style,
+        owner=slot,
+        range=site,
+        diagnostics=diagnostics,
+    )
+    if path is not None:
+        raise diagnostics.error(
+            secret_literal_message(slot, node_id, path), range=site
+        )
 
 
 def _check_case_values(

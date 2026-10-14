@@ -1,11 +1,14 @@
 """Graph-stage: parse the `nodes:` mapping into typed per-kind descriptors.
 
 The first cross-node assembly pass. Consumes a source cursor over the flow's
-`nodes:` mapping and dispatches each node body to its kind's `parse` via the
-`KINDS` table.
+`nodes:` mapping and classifies each entry by its YAML tag: a tagged entry is a value
+(`total: !int ${a.output + b.output}`) handed to the caller's `read_value` reader, and an
+untagged mapping with `kind:` is a node body dispatched to its kind's `parse` via the
+`KINDS` table. Any other entry is a located error that says to add `kind:` for a node or
+a tag for a value.
 
-Only the generic, kind-independent pre-checks live here (body-is-mapping, node id shape and
-reserved ids, the `input:`/`output:` -> plural back-map, `kind:` resolution); each kind's own
+Only the generic, kind-independent pre-checks live here (node id shape and reserved ids,
+entry classification, the `input:`/`output:` -> plural back-map, `kind:` resolution); each kind's own
 `parse` owns its field legality (allowed/required/asserts/env) and its descriptor-local
 `SourceRange` recording (each field tagged `("field", name)`). Two kind-blind enrichments
 run after every kind parse: each `input:` binding's own range is stamped into the
@@ -21,13 +24,20 @@ from __future__ import annotations
 import dataclasses
 import re
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Callable
 
 from yian.compile.model import END_ID, START_ID
 from yian.compose.helpers.errors import LoadDiagnostics
+from yian.compose.helpers.secret_literals import (
+    secret_literal_message,
+    secret_literal_path,
+)
+from yian.compose.helpers.tags import suggest_tag, yaml_quoted
 from yian.compose.nodes import KINDS, REMOVED_KINDS
 from yian.compose.source import SourceAccessError, SourceCursor
 from yian.expr.grammar import EXPRESSION_KEYWORDS
+from yian.typesys import TypeCheckError, build_value
+from yian.typesys.values import Type, ValueKind
 
 # Singular source keys are projected onto the descriptor dataclasses' plural
 # field names while retaining their original child sources.
@@ -69,12 +79,40 @@ def identifier_suggestion(name: str) -> str:
     return suggestion
 
 
-def parse_nodes(nodes_cursor: SourceCursor) -> dict[str, Any]:
-    """Parse one source cursor into typed per-kind descriptors.
+# Reads one tagged `nodes:` entry: `(entry id, entry cursor) -> descriptor`.
+ValueReader = Callable[[str, SourceCursor], Any]
+
+
+def parse_nodes(
+    nodes_cursor: SourceCursor,
+    *,
+    read_value: ValueReader | None = None,
+) -> dict[str, Any]:
+    """Parse one `nodes:` source cursor into typed per-kind descriptors.
 
     The source is physical for a full graph, source-aligned for compact/def
-    projections, or virtual for a programmatic/test mapping. Returns descriptors
-    in source order with Compose-only ranges whenever an authored source exists.
+    projections, or virtual for a programmatic/test mapping. A tagged entry is a
+    value and is read by `read_value`; every other entry must be a node body with
+    `kind:`.
+
+    Args:
+        nodes_cursor (`SourceCursor`):
+            Cursor over the `nodes:` mapping. A non-mapping value parses to no nodes.
+        read_value (`ValueReader | None`, *optional*, defaults to `None`):
+            Reads one tagged entry, given its id and cursor, into its descriptor.
+            `None` is only valid for a mapping with no tagged entry.
+
+    Returns:
+        `dict[str, Any]`:
+            The descriptors keyed by entry id, in source order, each anchored on its
+            entry's key line whenever an authored source exists.
+
+    Raises:
+        `LoadError`:
+            Raised at the entry for a bad or reserved id, an untagged entry that is
+            not a node body, or a node body that fails its kind's parse.
+        `TypeError`:
+            Raised when a tagged entry is found and `read_value` is `None`.
     """
     diagnostics = LoadDiagnostics.from_cursor(nodes_cursor)
     out: dict[str, Any] = {}
@@ -83,7 +121,7 @@ def parse_nodes(nodes_cursor: SourceCursor) -> dict[str, Any]:
         if not isinstance(nodes, Mapping):
             return out
         for node_id in list(nodes):
-            desc = _parse_node(node_id, nodes_cursor.child(node_id))
+            desc = _parse_node(node_id, nodes_cursor.child(node_id), read_value)
             # Anchor the descriptor's node-level `.range` on the node's HEADER line (its
             # `key:` token), not its body/value block. The header is the node-level
             # diagnostic anchor a cycle, an unresolved ref, or a namespaced runtime failure
@@ -97,23 +135,34 @@ def parse_nodes(nodes_cursor: SourceCursor) -> dict[str, Any]:
     return out
 
 
-def _parse_node(node_id: str, cursor: SourceCursor) -> Any:
-    """Read one keyed-map node body into its typed per-kind descriptor (located)."""
+def _parse_node(
+    node_id: str, cursor: SourceCursor, read_value: ValueReader | None
+) -> Any:
+    """Read one `nodes:` entry into its descriptor (located).
+
+    A tagged entry goes to `read_value`; an untagged one must be a node body with
+    `kind:` and is dispatched to its kind's `parse`.
+    """
     diagnostics = LoadDiagnostics.from_cursor(cursor)
+    _reject_reserved_node_id(node_id, cursor)
+    # A tag makes the entry a value even when its mapping has a `kind:` key.
+    if cursor.tag is not None:
+        if read_value is None:
+            raise TypeError(
+                f"node {node_id!r} is a tagged value entry; parse_nodes needs "
+                "read_value to read it"
+            )
+        return read_value(node_id, cursor)
     body = cursor._value_view()
     if not isinstance(body, Mapping):
-        raise diagnostics.error(
-            f"node {node_id!r}: body must be a mapping, got {type(body).__name__}",
-            range=cursor.range,
-        )
-    _reject_reserved_node_id(node_id, cursor)
+        _reject_untagged_value(node_id, cursor, diagnostics)
     cursor = normalize_node_signature_cursor(cursor)
 
     kind = cursor.get("kind")
     if kind is None:
         raise diagnostics.error(
-            f"node {node_id!r}: missing `kind`",
-            range=cursor.range,
+            _NODE_OR_VALUE.format(node_id=node_id),
+            range=cursor.range or cursor.key_range,
         )
     if kind in REMOVED_KINDS:
         raise diagnostics.error(
@@ -154,6 +203,74 @@ def _parse_node(node_id: str, cursor: SourceCursor) -> Any:
     if isinstance(assert_ranges, list):
         assert_ranges.extend(cursor.item_range_list("asserts"))
     return desc
+
+
+_NODE_OR_VALUE = (
+    "node {node_id!r}: an entry in `nodes:` is a node or a value; add `kind:` for a "
+    "node, or a tag (`!object`, `!Buy`, ...) for a value"
+)
+
+
+def _reject_untagged_value(
+    node_id: str, cursor: SourceCursor, diagnostics: LoadDiagnostics
+) -> None:
+    """Reject an untagged scalar, list, or null entry, showing the tag to write.
+
+    Under a secret name the value is rejected as a secret literal instead, so the
+    suggested spelling never echoes it.
+
+    Args:
+        node_id (`str`): The entry id.
+        cursor (`SourceCursor`): The entry's value.
+        diagnostics (`LoadDiagnostics`): Factory for located load errors.
+
+    Raises:
+        `LoadError`: Always, at the entry.
+    """
+    value = cursor.value
+    rng = cursor.range or cursor.key_range
+    path = secret_literal_path(node_id, value)
+    if path is not None:
+        raise diagnostics.error(
+            secret_literal_message(f"value entry {node_id!r}", node_id, path),
+            range=rng,
+        )
+    message = _NODE_OR_VALUE.format(node_id=node_id)
+    typ = _example_type(value)
+    if typ is not None:
+        message += f", e.g. {suggest_tag(node_id, typ, _example_text(value, cursor))}"
+    raise diagnostics.error(message, range=rng)
+
+
+def _example_type(value: Any) -> Type | None:
+    """Return the widened type of an untagged entry's value, or `None` for none."""
+    if value is None:
+        return Type(kind=ValueKind.STRING, nullable=True)
+    try:
+        return Type.scalar(build_value(value).kind)
+    except TypeCheckError:
+        return None
+
+
+def _example_text(value: Any, cursor: SourceCursor) -> str | None:
+    """Spell an untagged entry's value as written, or `None` to leave it out.
+
+    A block list keeps its lines under the tagged key, so only a value written on
+    one line is shown.
+    """
+    if value is None:
+        return "null"
+    if isinstance(value, str):
+        return cursor.scalar_text if cursor.scalar_style == "plain" else yaml_quoted(value)
+    text = cursor.scalar_text
+    if text is not None:
+        return text
+    rng = cursor.range
+    document = cursor.document
+    if rng is None or document is None or rng.start_line != rng.end_line:
+        return None
+    line = document.text.splitlines()[rng.start_line - 1]
+    return line[rng.start_col - 1 : rng.end_col - 1]
 
 
 def _reject_reserved_node_id(node_id: str, cursor: SourceCursor) -> None:

@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional, Union
 
 from yian.expr import grammar
 from yian.expr.builtins import TEMPLATE_FNS
@@ -44,6 +44,7 @@ from yian.expr.expressions import (
     ISINSTANCE,
     ExpressionError,
     ResolveMode,
+    _check_calls,
     _value_args,
     conversion_hint,
     eval_expr,
@@ -599,12 +600,14 @@ def prompt_refs(text: str) -> list[str]:
     plain-span path plus each builtin-call argument path (literals contribute nothing), in
     source order (not deduped). Also rejects an unknown builtin callee — the loader relies
     on this compile-time check so a prompt naming a non-existent `TEMPLATE_FNS` formatter
-    fails at load, not at render — and `isinstance`, which a prompt has no type table
-    for. Raises `ExpressionError` on a malformed / unparseable span too."""
+    fails at load, not at render — `isinstance`, which a prompt has no type table
+    for, and a builtin called with arguments it doesn't take. Raises `ExpressionError`
+    on a malformed / unparseable span too."""
     segments = scan_template(text)
     for seg in segments:
         if isinstance(seg, Span):
             _reject_unknown_prompt_builtin(seg.tree)
+            _check_calls(seg.tree)
     return template_refs(segments)
 
 
@@ -771,6 +774,31 @@ def flow_call_callees_in_spans(text: str, type_names: frozenset[str] = frozenset
                 if callee not in type_names
             )
     return out
+
+
+def check_template_calls(text: str, types: "Mapping[str, Any] | None" = None) -> None:
+    """Require every builtin call in `text`'s `${...}` spans to pass arguments it takes.
+
+    The loader runs this on every binding and flow output; a prompt gets the same check
+    through `prompt_refs`. Any other callee except `isinstance` is a `T(...)` constructor:
+    with `types` it must name a type in it; without, its name is left to the caller.
+
+    Args:
+        text (`str`):
+            A binding or template value: literal text with `${...}` spans.
+        types (`Mapping[str, Any] | None`, *optional*, defaults to `None`):
+            The type table constructor names must be in, or `None` to leave them to the
+            caller.
+
+    Raises:
+        `ExpressionError`:
+            Raised when a span doesn't parse, calls a builtin with arguments it doesn't
+            take, or, with `types`, calls a function that is neither a builtin nor a type
+            in `types`.
+    """
+    for seg in scan_template(text):
+        if isinstance(seg, Span):
+            _check_calls(seg.tree, types)
 
 
 def eval_template(

@@ -96,9 +96,9 @@ One `${...}` grammar; the context decides what happens to the result:
 
 | Context | Where | What it does |
 |---------|-------|--------------|
-| **Bindings** | `input:` / `output:` values | **evaluated** to a typed value — refs, literals, arithmetic, lists, `:-` / `:?` / `\|`, pure builtins. Child-flow call = `call(...)` directive. A tag (`name: !T value`) declares the type; nested `${...}` in mappings and lists is evaluated. |
+| **Bindings** | `input:` / `output:` values | **evaluated** to a typed value — refs, literals, arithmetic, lists, `:-` / `:?` / `\|`, pure builtins. Child-flow call = `call(...)` directive. A tag (`name: !T value`) declares the type; nested `${...}` in mappings and lists is evaluated. A builtin called with arguments it doesn't take is a load error. |
 | **Conditions** | `when:` / `asserts:` | **tested** as a boolean: `== != < <= > >=`, `in`/`not in`, `and`/`or`/`not`, parens, arithmetic operands. Canonical **bare** form (no `${}`); one whole `${...}` loads and evaluates identically; a `${...}` inside the expression is a load error, as is a call to a function other than a builtin, `isinstance`, or a `typedefs:` constructor `T(...)`, or to a builtin with arguments it doesn't take. |
-| **Prompts** | `prompt:` text | free text with embedded `${...}` spans (each stringified) |
+| **Prompts** | `prompt:` text | free text with embedded `${...}` spans (each stringified); a builtin called with arguments it doesn't take is a load error |
 
 > Bindings wire, conditions test, nodes compute. A heavy transform still belongs
 > in a `code` node — but simple arithmetic/coalesce in a binding is fine.

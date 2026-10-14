@@ -235,6 +235,9 @@ this model whenever you design anything:
   `run_flow` and `resume_flow` (unfinished run) raise `ExpressionError` before any
   record is written, and `Node.run` raises it from setup validation before the body.
   The same holds for a CASE `when` and a LOOP `while`/`until` set in Python.
+  A binding, flow output, or prompt set in Python gets the same check from `run_flow`
+  and `resume_flow` before any record is written (`Node.validate_prompts` checks a
+  node's prompts), but not from `Node.run`.
   Do not add another assertion text/origin map or positional range list.
 - Compiled `Node.params` has one shape: ordered exact `Parameter` carriers. The
   flow owns their `Binding` sources; parameter contracts/default presence/

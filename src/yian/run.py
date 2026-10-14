@@ -60,6 +60,7 @@ from yian.events import (
     RunSucceeded,
     StreamChunk,
 )
+from yian.expr import ExpressionError, check_template_calls
 from yian.expr.lineage import FeedbackValue
 from yian.memory import (
     LearningResult,
@@ -71,7 +72,7 @@ from yian.memory import (
 from yian.memory_host import MemoryRegistry
 from yian.nodes.base import Steering
 from yian.nodes.binding import coerce_inputs
-from yian.nodes.contracts import HostToolCall
+from yian.nodes.contracts import HostToolCall, iter_source_strings
 from yian.runtime.engine import FlowEngine
 from yian.runtime.eval_node import require_steering
 from yian.runtime.backward import drive_backward
@@ -433,8 +434,12 @@ def run_flow(
             names and types its tool declares (an input the tool does not take,
             a missing required input, or a type that can never fit), an
             AGENT grants skills while `skills` is `None` or lacks a listed
-            skill, or a node assertion, CASE `when`, or LOOP `while`/`until`
-            set in Python is not a valid boolean expression.
+            skill, a node assertion, CASE `when`, or LOOP `while`/`until`
+            set in Python is not a valid boolean expression, or a binding, flow
+            output, or prompt set in Python has a `${...}` span that doesn't
+            parse or calls a function it can't (a builtin with arguments it
+            doesn't take, a name outside the node's type table, or in a prompt
+            any non-builtin).
         `MemorySetupError`:
             Memory is enabled without a required memory implementation, cannot
             open an exact run snapshot, or has an invalid configuration.
@@ -504,6 +509,7 @@ def _run_flow_controlled(
     run_tools = ToolSet(tools)
     _check_tool_grants(flow.compiled, run_tools)
     _check_conditions(flow.compiled)
+    _check_templates(flow.compiled)
     _check_tool_types(flow.compiled, run_tools)
     skills = _check_skills(flow.compiled, skills)
     require_steering(steering)
@@ -715,7 +721,11 @@ def resume_flow(
             a listed skill, an unfinished run's TOOL node's inputs or
             `output:` do not match the names and types its tool declares, or
             an unfinished run's node assertion, CASE `when`, or LOOP
-            `while`/`until` set in Python is not a valid boolean expression.
+            `while`/`until` set in Python is not a valid boolean expression, or
+            an unfinished run's binding, flow output, or prompt set in Python
+            has a `${...}` span that doesn't parse or calls a function it can't
+            (a builtin with arguments it doesn't take, a name outside the node's
+            type table, or in a prompt any non-builtin).
         `MemorySetupError`:
             The recorded run needs memory but its mapping is absent, incomplete,
             or cannot reproduce the exact recorded snapshots.
@@ -781,6 +791,7 @@ def _resume_flow_controlled(
                                                               locator=retained_locator, api_key=api_key))
         _check_tool_grants(flow.compiled, run_tools)
         _check_conditions(flow.compiled)
+        _check_templates(flow.compiled)
         _check_tool_types(flow.compiled, run_tools)
         skills = _check_skills(flow.compiled, skills)
         _check_recorded_llm_fields(state.effective_llm_by_static_path)
@@ -879,6 +890,56 @@ def _check_conditions(flow: CompiledFlow) -> None:
     """
     for node_path, node in _static_nodes(flow):
         node.validate_conditions(path=node_path)
+
+
+def _check_templates(flow: Any, path: tuple[str, ...] = ()) -> None:
+    """Reject a binding or prompt span that can't run, before any record is written.
+
+    Checks every static flow level: each template string of a wiring source (END's is
+    the flow's output) must parse, pass each builtin arguments it takes, and name only
+    constructors in the type table the binder evaluates it with (the reading node's; none
+    for a reserved key such as WAIT `until` or MAP `over`); each node checks its prompts.
+    A YAML flow can't hold such a span (Compose rejects it at load); this catches values
+    set in Python.
+
+    Args:
+        flow (`Any`):
+            A compiled flow or a static child flow.
+        path (`tuple[str, ...]`, *optional*, defaults to `()`):
+            The static path of the node that owns `flow`; empty for the top level.
+
+    Raises:
+        `ExpressionError`:
+            Raised when a span can't run; the message names the node and binding, the flow
+            output, or the prompt field.
+    """
+    owner = f"node {'/'.join(path)!r} " if path else ""
+    for node_id, node in flow.nodes.items():
+        node_path = "/".join((*path, node_id))
+        reserved = node.reserved_wiring_keys()
+        for key, binding in flow.wiring.get(node_id, {}).items():
+            if node_id == flow.end_id:
+                subject = f"{owner}flow output {key!r}"
+            elif key in reserved:
+                subject = f"node {node_path!r} {node.kind.value} {key}"
+            elif node.binds_per_item:
+                subject = f"node {node_path!r} map input {key!r}"
+            else:
+                subject = f"node {node_path!r} {node.wiring_ref_label(key).rstrip(':')}"
+            # The binder resolves a reserved key with no type table.
+            _check_template_source(binding, subject, {} if key in reserved else node.types)
+        node.validate_prompts(path=node_path)
+        for child in node.origin_children():
+            _check_templates(child, (*path, node_id))
+
+
+def _check_template_source(binding: Any, subject: str, types: Mapping[str, Any]) -> None:
+    """Check each template string of one wiring source, prefixing an error with `subject`."""
+    for _, text in iter_source_strings(binding):
+        try:
+            check_template_calls(text, types)
+        except ExpressionError as exc:
+            raise ExpressionError(f"{subject}: {exc}") from exc
 
 
 def _check_tool_types(flow: CompiledFlow, tools: ToolSet) -> None:

@@ -27,7 +27,7 @@ from math import isfinite
 from typing import Any, Callable, ClassVar, Iterator, Optional, Protocol, Union, runtime_checkable
 
 from yian.diagnostics import Failure, OriginRef
-from yian.expr import ExpressionError
+from yian.expr import ExpressionError, prompt_refs
 from yian.expr.expressions import evaluate_when_record, parse_condition
 from yian.expr.lineage import FeedbackValue, has_feedback, validate_feedback
 from yian.memory.contracts import MemoryScope
@@ -246,6 +246,14 @@ def _parse_named_condition(
         parse_condition(expression, types or {})
     except ExpressionError as exc:
         raise ExpressionError(f"{subject} is not a valid boolean expression: {exc}") from exc
+
+
+def _check_named_prompt(text: str, subject: str) -> None:
+    """Check one prompt template's `${...}` spans, prefixing an error with `subject`."""
+    try:
+        prompt_refs(text)
+    except ExpressionError as exc:
+        raise ExpressionError(f"{subject}: {exc}") from exc
 
 
 def _validate_input_output_paths(data: dict[str, Any], input_names: tuple[str, ...]) -> None:
@@ -975,6 +983,20 @@ class Node(ABC):
             self._parse_assertion("pre-assert", assertion, path)
         for assertion in self.post_asserts:
             self._parse_assertion("post-assert", assertion, path)
+
+    def validate_prompts(self, *, path: str | None = None) -> None:
+        """Check every prompt template this node renders.
+
+        The base renders none; AGENT and HUMAN_INPUT override this. An override raises
+        `ExpressionError` when a template's `${...}` span doesn't parse, calls `isinstance`
+        or a function that isn't a builtin, or calls a builtin with arguments it doesn't
+        take; the message names the node and the field.
+
+        Args:
+            path (`str`, *optional*, defaults to `None`):
+                The static node path to name in the error instead of the node's id,
+                used by a pre-run check over a whole flow.
+        """
 
     def _parse_assertion(self, label: str, assertion: Assertion, where: str | None = None) -> None:
         """Parse one assertion's expression, naming the node and assertion when it doesn't parse."""

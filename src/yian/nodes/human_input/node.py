@@ -8,7 +8,7 @@ tool through the trusted metadata path, and returns the handler's answer as its 
 from typing import Any, Optional
 
 from yian.expr.template import render_template_record
-from yian.nodes.base import Node, NodeKind, Output
+from yian.nodes.base import Node, NodeKind, Output, _check_named_prompt
 from yian.nodes.human_input.questions import parse_questions
 from yian.tools import ToolSet
 
@@ -93,6 +93,23 @@ class HumanInputNode(Node):
             },
         )
         return Output(answer)
+
+    def validate_prompts(self, *, path: str | None = None) -> None:
+        """Check the prompt and each literal question's text templates.
+
+        Args:
+            path (`str`, *optional*, defaults to `None`):
+                The static node path to name in the error instead of the node's id,
+                used by a pre-run check over a whole flow.
+
+        Raises:
+            `ExpressionError`:
+                Raised when a template's `${...}` span doesn't parse, calls `isinstance` or
+                a function that isn't a builtin, or calls a builtin with arguments it doesn't
+                take; the message names the node and the site.
+        """
+        for site_path, text in template_sites(self.prompt, self.questions):
+            _check_named_prompt(text, f"node {(path or self.id)!r} {site_label(site_path)}")
 
     def _render_question(self, question: dict, inputs: dict) -> dict:
         """Render `${...}` spans in a literal question's human-facing strings.

@@ -12,7 +12,8 @@ The engine is three layers, all pool-agnostic (they take a `resolve` callable):
   (`isinstance_subject`), and pool resolution (`resolve_reference`).
 - `template` — the binding/prompt scanner: splits a value into text + `${...}`
   spans, then drives the engine per span (`eval_binding`, `eval_template`,
-  `expr_refs_of`, `prompt_refs`, `render_template_record`, `scan_template`). It also
+  `expr_refs_of`, `prompt_refs`, `render_template_record`, `scan_template`), and
+  checks every builtin call in those spans (`check_template_calls`). It also
   lists each reference a condition reads with the `:-` / `:?` / `|` escape around it
   and whether that escape co-skips as a binding (`condition_reads`, `ConditionRead`),
   and renames those references by occurrence (`rewrite_condition_reads`).
@@ -55,6 +56,7 @@ from yian.expr.lineage import FeedbackValue, has_feedback, validate_feedback
 from yian.expr.template import (
     ConditionRead,
     binding_co_skips,
+    check_template_calls,
     condition_reads,
     eval_binding,
     eval_template,
@@ -73,6 +75,7 @@ __all__ = [
     "FeedbackValue",
     "RequiredError",
     "binding_co_skips",
+    "check_template_calls",
     "condition_reads",
     "condition_refs",
     "constructor_names",

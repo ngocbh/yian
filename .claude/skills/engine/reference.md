@@ -769,8 +769,8 @@ unread join input `${p1.output | p2.output}` over a co-skipping escape's produce
 binding of each escape would. The `when:` stays lazy. `check_skipped_arithmetic` also
 checks each searched `when:` with the case as consumer, and reference validation skips a
 searched case's join input (its references are checked at the reads that introduced
-it). Desugaring may replace `Binding.source` but retains that value origin. Without a retained
-source occurrence, Compose mints no origin and preserves any explicit programmatic origin;
+it). Desugaring may replace `Binding.source` but retains that value origin. Without a
+retained source occurrence, Compose mints no origin and preserves any explicit programmatic origin;
 source-backed projections inherit their backing site.
 Source-backed bare/mapped root, multi-node-definition, and inline-child
 output values stamp the final `FlowOutput.binding` after rewrites, and the synthesized END

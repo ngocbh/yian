@@ -379,8 +379,8 @@ per distinct read: a reference `${path}`, a node-output reference inside a
 co-skipping escape, an unread join input `${p1.output | p2.output}` over its
 producers (a required group). The binding co-skip rule then gives each edge, so the
 gate skips as a binding of each escape would; the `when:` itself stays lazy.
-`CaseNode.exception_origin()` locates its own active `forward` frame by code-object and node identity, then selects
-the active `Case` by identity. Failures outside predicate evaluation fall back
+`CaseNode.exception_origin()` locates its own active `forward` frame by
+code-object and node identity, then selects the active `Case` by identity. Failures outside predicate evaluation fall back
 to `Node.origin`. These origins participate in ordinary traversal and rebasing,
 but remain diagnostic-only and manifest-neutral.
 

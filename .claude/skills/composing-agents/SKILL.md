@@ -619,8 +619,8 @@ goes through a host tool (`kind: tool`); `kind: model` was removed.
 ### `case` — branching (no `input:`)
 It takes one branch; the other targets skip, and so does every node that plainly
 reads (or `depends_on`) a skipped one. A searched `case` that reads a node only under
-a default that keeps a binding running (`(a.output :- 0)`, not `(a.output :- b.output)`)
-runs when that node is skipped, like the binding would. Read the taken branch's result
+a default that keeps a binding running (`(a.output :- 0)`) runs when that node is
+skipped, like the binding would; `(a.output :- b.output)` skips it only when both are. Read the taken branch's result
 with `${route.output}` (or `${route.output.field}`). A routing-only `case` (no `output:`,
 no value branch, never read via `${route.output}`) may take none when no `when:`
 matches and there is no `else:`; over a `Literal` node output or flow input it still

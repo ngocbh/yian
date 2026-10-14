@@ -1520,8 +1520,8 @@ untaken branch or is skipped through its inputs or `depends_on`. A node that nam
 `case` itself in `depends_on:` or `runs_after:` is not on a branch: it runs whichever
 branch the `case` takes, and is skipped only when the `case` is. A searched `case`
 that reads a node only under a default that keeps a binding running, such as
-`(a.output :- 0)`, is not skipped with it (see the [searched form](#searched-form)). Read its result with
-`${case.output}`. A routing-only `case` may take
+`(a.output :- 0)`, is not skipped with it (see the [searched form](#searched-form)).
+Read its result with `${case.output}`. A routing-only `case` may take
 none when no `when:` matches and there is no `else:` (see
 [Exhaustiveness](#exhaustiveness)); a flow output that reads a skipped node returns
 null (see [Skipped branches and flow outputs](#skipped-branches-and-flow-outputs)).

@@ -703,8 +703,8 @@ def _observe_failure(turn, ordinal, operation, primary, check_stopped):
     """Record a sanitized external-effect failure; a pending stop wins over an ordinary error.
 
     With a stop pending, the effect is recorded `interrupted` and the stop is
-    raised, with `primary` as its context. Otherwise, and always for a host fault
-    (`_CapabilityFault`), the caller re-raises `primary`.
+    raised, with `primary` in its `__context__` chain. Otherwise, and always for a
+    host fault (`_CapabilityFault`), the caller re-raises `primary`.
     """
     interrupted = isinstance(
         primary, (_HostStop, AsyncCancelledError, FutureCancelledError)

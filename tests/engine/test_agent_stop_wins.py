@@ -1,6 +1,8 @@
 """A stop pending when a model or tool call fails stops the run cleanly."""
 
+import math
 from threading import Event
+from types import SimpleNamespace
 
 from langchain_core.messages import AIMessage, HumanMessage
 import pytest
@@ -8,11 +10,15 @@ import pytest
 from yian.events import ModelCallStarted
 import yian.llm_clients as llm_clients
 import yian.tools as tools
+from yian.memory import MemoryContext
 from yian.memory.session import SessionMemory
 from yian.nodes.agent.memory import invoke_model, invoke_tool_effect
+from yian.nodes.agent.structured import generate_structured
 from yian.nodes.base import _HostStop
 from yian.run import _run_flow_controlled
-from tests.engine.test_agent_nonfinite_replies import _flow, _setup
+from yian.typesys.values import Type, ValueKind
+from tests.engine._session_fakes import harness, request
+from tests.engine.test_agent_nonfinite_replies import _NATIVE, _flow, _setup
 from tests.engine.test_agent_session import _Model, _view
 from tests.engine.test_agent_session_structured import _typed_flow
 from tests.engine.test_agent_session_tools import _Chat, _Tool, _call
@@ -145,6 +151,64 @@ def test_a_stop_raised_while_observing_a_failure_wins(call, observed):
         note.startswith("Conversation observation failed")
         for note in getattr(primary, "__notes__", ())
     )
+
+
+@pytest.mark.parametrize("call", ["model", "tool"])
+@pytest.mark.parametrize("initiating", [True, False])
+def test_a_stop_failing_a_call_yields_to_an_observed_stop_only_if_derived(call, initiating):
+    """A stop `observe` raises replaces a derived stop failing the call, not an initiating one."""
+    turn = _StopOnObserve()
+    primary = _HostStop(primary=initiating)
+
+    def stop():
+        raise primary
+
+    with pytest.raises(_HostStop) as caught:
+        if call == "model":
+            invoke_model(turn, stop, new_messages=[HumanMessage("q")], check_stopped=lambda: None)
+        else:
+            invoke_tool_effect(
+                turn, stop, name="lookup", arguments={}, model_exchange_id="e", call_index=0,
+                tool_call_id="t", check_stopped=lambda: None,
+            )
+    assert turn.observed == ["interrupted"]
+    assert caught.value is (primary if initiating else turn.stop)
+
+
+@pytest.mark.parametrize("session", [True, False])
+def test_a_stop_wins_over_a_malformed_native_carrier(session):
+    """A malformed NaN carrier, a host fault, returned while a stop is pending stops the call."""
+    stop = Event()
+
+    def check():
+        if stop.is_set():
+            raise _HostStop(primary=False)
+
+    class Model:
+        def with_structured_output(self, schema, *, include_raw=False):
+            def invoke(messages):
+                stop.set()
+                raw = AIMessage(content="", tool_calls=[
+                    {"name": schema.__name__, "args": {"value": math.nan}, "id": "f"}])
+                return {"raw": raw, "parsed": None, "parsing_error": None, "extra": 1}
+            return SimpleNamespace(invoke=invoke)
+
+    def generate(memory_context):
+        generate_structured(Model(), [], Type.scalar(ValueKind.NUMBER), llm_config=_NATIVE,
+                            memory_context=memory_context, check_stopped=check)
+
+    memory = SessionMemory()
+    with pytest.raises(_HostStop):
+        if session:
+            with harness(memory) as opened:
+                with opened.frame.open_turn(request(), check_stopped=check) as turn:
+                    generate(MemoryContext(transcript=turn))
+        else:
+            generate(MemoryContext())
+    if session:
+        effects = _view(memory).effects
+        assert [effect.status for effect in effects] == ["interrupted"]
+        assert effects[0].failure.code == "api.model.interrupted"
 
 
 @pytest.mark.parametrize("session", [True, False])

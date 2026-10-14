@@ -392,7 +392,8 @@ id: llm
 name: LLM
 llm_config:
   provider: openai
-  temperature: 0.2
+  openai:
+    temperature: 0.2
 nodes:
   ask:
     kind: agent
@@ -407,7 +408,7 @@ output: ${ask.output}
     baseline = flow_fingerprint(original)
 
     flow_layer = copy.deepcopy(original)
-    flow_layer.flow_llm_config["temperature"] = 0.7
+    flow_layer.flow_llm_config["openai"]["temperature"] = 0.7
 
     own_layer = copy.deepcopy(original)
     own_layer.nodes["ask"].own_llm_config["model"] = "gpt-5.5-pro"
@@ -1244,7 +1245,7 @@ def test_expansion_digest_is_stable_across_canonical_mapping_order():
 def test_expansion_digest_applies_topology_only_policy_to_recursive_children():
     original = _parent_with_child('return inputs["x"] + 1')
     changed = copy.deepcopy(original)
-    changed.nodes["invoke"].child.flow_llm_config["temperature"] = 0.7
+    changed.nodes["invoke"].child.flow_llm_config["openai"] = {"temperature": 0.7}
 
     assert expansion_digest(changed) == expansion_digest(original)
 

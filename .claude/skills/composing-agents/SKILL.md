@@ -410,8 +410,8 @@ A node may pin its model via `llm_config:`; otherwise the process defaults captu
 once when the run initializes apply. `inherit: false` skips authored flow/parent/CLI
 layers but still receives those provider/model defaults.
 Node, `defs:`, and flow `llm_config:` are all checked at load against the same
-fields; `inherit:` is node-only. A non-finite number (`temperature: .nan`) is a
-load error.
+fields; `inherit:` is node-only. A non-finite number (`anthropic: {temperature: .nan}`)
+is a load error.
 OpenAI subscription and API-key connections both use `provider: openai`;
 select the method and default model with `yian auth openai`.
 Never put `api_key` in a flow's `llm_config:`, nor `base_url` except beside

@@ -49,7 +49,9 @@ def test_compiled_flow_llm_config_defaults_empty():
     assert load_flow(text).compiled.flow_llm_config == {}
 
 
-_TYPO_CONFIGS = ["{modle: gpt-5}", "{temperature: hot}", "{provider: anthropc}", "{inherit: false}"]
+_TYPO_CONFIGS = [
+    "{modle: gpt-5}", "{openai: {temperature: hot}}", "{provider: anthropc}", "{inherit: false}"
+]
 
 
 @pytest.mark.parametrize("config", _TYPO_CONFIGS)

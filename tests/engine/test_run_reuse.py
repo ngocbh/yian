@@ -17,7 +17,7 @@ from yian.run import resume_flow, run_flow
 _RECURSIVE_FLOW = """
 id: reusable
 name: reusable
-llm_config: {temperature: 0.2}
+llm_config: {openai: {temperature: 0.2}}
 input:
   topics: list[str]
 defs:
@@ -162,7 +162,7 @@ def test_loaded_recursive_flow_can_be_run_twice_without_graph_or_llm_leaks(monke
     first = run_flow(
         loaded,
         {"topics": ["alpha", "beta"]},
-        llm_config={"provider": "openai", "openai_reasoning_effort": "low"},
+        llm_config={"provider": "openai", "openai": {"reasoning": {"effort": "low"}}},
     )
     assert first.status == "succeeded", first.failure
     assert _graph_snapshot(loaded.compiled) == static
@@ -172,7 +172,10 @@ def test_loaded_recursive_flow_can_be_run_twice_without_graph_or_llm_leaks(monke
     second = run_flow(
         loaded,
         {"topics": ["alpha", "beta"]},
-        llm_config={"provider": "google", "google_thinking_level": "high"},
+        llm_config={
+            "provider": "google",
+            "google": {"generationConfig": {"thinkingConfig": {"thinkingLevel": "HIGH"}}},
+        },
     )
     assert second.status == "succeeded", second.failure
     assert second.output == first.output
@@ -180,12 +183,14 @@ def test_loaded_recursive_flow_can_be_run_twice_without_graph_or_llm_leaks(monke
 
     assert first_configs
     assert all(
-        config["provider"] == "openai" and config["openai_reasoning_effort"] == "low"
+        config["provider"] == "openai"
+        and config["openai"] == {"temperature": 0.2, "reasoning": {"effort": "low"}}
         for config in first_configs
     )
     assert seen
     assert all(
-        config["provider"] == "google" and config["google_thinking_level"] == "high"
+        config["provider"] == "google"
+        and config["google"] == {"generationConfig": {"thinkingConfig": {"thinkingLevel": "HIGH"}}}
         for config in seen
     )
 

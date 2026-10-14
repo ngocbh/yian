@@ -15,7 +15,8 @@ x-agent-defaults: &agent_defaults    # parked under x- so the strict schema igno
   output: str
   llm_config:
     provider: anthropic
-    temperature: 0.2
+    anthropic:
+      temperature: 0.2
 
 input:
   topic: str

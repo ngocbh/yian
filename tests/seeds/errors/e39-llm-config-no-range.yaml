@@ -25,7 +25,8 @@ nodes:
     kind: agent
     llm_config:
       provider: bogus_provider       # L27 — THE ERROR (not a known provider)
-      temperature: 0.3
+      anthropic:
+        temperature: 0.3
     input:
       topic: ${input.topic}
     output: str

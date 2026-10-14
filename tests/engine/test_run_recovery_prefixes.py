@@ -276,7 +276,7 @@ def _agent_growth_history():
     private_flow = copy.deepcopy(loaded.compiled)
     effective = resolve_llm_cascade(
         private_flow,
-        {"temperature": 0.25},
+        {"openai": {"temperature": 0.25}},
         defaults={"provider": "openai", "model": "recorded-model"},
     )
     state, log = _started_state(

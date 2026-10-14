@@ -25,12 +25,16 @@ def clean_env(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
 
 
+# A block takes JSON numbers as written, so the string "inf" is refused as a non-number
+# rather than read as infinity.
 @pytest.mark.parametrize(
-    "temperature", [math.nan, math.inf, "inf"], ids=["nan", "inf", "inf-string"]
+    ("temperature", "message"),
+    [(math.nan, "finite"), (math.inf, "finite"), ("inf", "valid number")],
+    ids=["nan", "inf", "inf-string"],
 )
-def test_llm_config_rejects_a_nonfinite_temperature(temperature):
-    with pytest.raises(ValidationError, match="finite"):
-        LLMConfig(temperature=temperature)
+def test_llm_config_rejects_a_nonfinite_temperature(temperature, message):
+    with pytest.raises(ValidationError, match=message):
+        LLMConfig(openai={"temperature": temperature})
 
 
 _AGENT_LLM_CONFIG = """
@@ -39,7 +43,7 @@ name: nonfinite
 nodes:
   writer:
     kind: agent
-    llm_config: {provider: ollama, model: test, temperature: .nan}
+    llm_config: {provider: ollama, model: test, ollama: {options: {temperature: .nan}}}
     prompt: go
 output: ${writer.output}
 """
@@ -47,7 +51,7 @@ output: ${writer.output}
 _FLOW_LLM_CONFIG = """
 id: nonfinite
 name: nonfinite
-llm_config: {provider: ollama, model: test, temperature: .inf}
+llm_config: {provider: ollama, model: test, ollama: {options: {temperature: .inf}}}
 nodes:
   writer:
     kind: agent
@@ -60,7 +64,7 @@ id: nonfinite
 name: nonfinite
 defs:
   body:
-    llm_config: {provider: ollama, model: test, temperature: -.inf}
+    llm_config: {provider: ollama, model: test, ollama: {options: {temperature: -.inf}}}
     nodes:
       writer:
         kind: agent
@@ -108,7 +112,11 @@ output: ${writer.output}
         run_flow(
             flow,
             {},
-            llm_config={"provider": "openai", "model": "gpt-test", "temperature": math.inf},
+            llm_config={
+                "provider": "openai",
+                "model": "gpt-test",
+                "openai": {"temperature": math.inf},
+            },
             log=log,
         )
 

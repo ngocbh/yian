@@ -46,7 +46,7 @@ def test_the_key_field_does_not_change_dumps_of_configs_without_it():
 @pytest.mark.parametrize(
     "fields",
     [
-        {"temperature": "hot"},
+        {"openai": {"temperature": "hot"}},
         {"temparature": 0.2},
         {"provider": "nope"},
         {"api_key": 123},
@@ -58,7 +58,8 @@ def test_validation_errors_do_not_echo_config_values(fields):
     assert SENTINEL not in str(caught.value)
     assert SENTINEL not in repr(caught.value)
     for value in fields.values():
-        assert str(value) not in str(caught.value).replace("temparature", "")
+        for leaf in value.values() if isinstance(value, dict) else [value]:
+            assert str(leaf) not in str(caught.value).replace("temparature", "")
 
 
 @pytest.mark.parametrize("empty", ["", SecretStr("")])

@@ -519,7 +519,7 @@ static tree is resolved up front, so later environment changes do not alter the
 effective selection. See [`llm-config-cascade.yaml`](templates/llm-config-cascade.yaml).
 
 ```yaml
-llm_config: {provider: anthropic, temperature: 0.2}   # flow layer
+llm_config: {provider: anthropic, anthropic: {temperature: 0.2}}   # flow layer
 nodes:
   a: {kind: agent, prompt: hi, llm_config: {model: claude-opus-4-8}}        # fills `model`
   b: {kind: agent, prompt: hi, llm_config: {provider: openai, model: gpt-5.5, inherit: false}}

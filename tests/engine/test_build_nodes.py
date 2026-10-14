@@ -131,7 +131,7 @@ def test_agent_node_knobs():
     assert isinstance(node.llm_config, dict)
     assert node.llm_config["provider"] == "anthropic"
     assert node.llm_config["model"] == "claude-opus-4-8"
-    assert node.llm_config["temperature"] == 0.3
+    assert node.llm_config["anthropic"] == {"temperature": 0.3}
     assert node.prompt.startswith("Research ${topic}")
     assert node.output_contract.type.fields["confidence"].kind == ValueKind.NUMBER
 

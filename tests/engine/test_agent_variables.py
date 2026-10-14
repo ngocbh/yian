@@ -27,7 +27,7 @@ def _retained_agent(node, inputs=None, **engine_options):
 
 def test_retained_agent_captures_actual_render_locals_once(monkeypatch):
     node = AgentNode("writer", prompt="${instruction}: ${topic}; ${count}/${count}",
-                     llm_config={"provider": "test", "model": "chosen", "temperature": 0.8},
+                     llm_config={"provider": "openai", "model": "chosen", "openai": {"temperature": 0.8}},
                      variables=read_variables({
                          "count": "float[0,4] = 4", "instruction": "str = ${input.topic}",
                      }, {}))
@@ -52,7 +52,7 @@ def test_retained_agent_captures_actual_render_locals_once(monkeypatch):
         "variables": {"count": 4, "instruction": "${input.topic}"},
         "variable_domains": {"count": "float[0,4]", "instruction": "str"},
         "rendered_prompt": "${input.topic}: reefs; 4/4",
-        "effective_llm_config": {"provider": "test", "model": "chosen", "temperature": 0.8},
+        "effective_llm_config": {"provider": "openai", "model": "chosen", "openai": {"temperature": 0.8}},
     }
     assert len(resolutions) == len(renders) == 1
     assert type(data["variables"]["count"]) is int
@@ -344,7 +344,7 @@ def test_temperature_variable_renders_independently_of_effective_model_configura
     loaded = load_flow("""id: variable_temperature
 name: variable_temperature
 input: {topic: str}
-llm_config: {provider: ollama, model: test, temperature: 0.8}
+llm_config: {provider: ollama, model: test, ollama: {options: {temperature: 0.8}}}
 nodes:
   writer:
     kind: agent
@@ -378,7 +378,9 @@ output: ${writer.output}
 
     assert result.status == "succeeded" and result.output == "answer"
     assert result.learning is None
-    assert configurations == [{"provider": "ollama", "model": "test", "temperature": 0.8}]
+    assert configurations == [
+        {"provider": "ollama", "model": "test", "ollama": {"options": {"temperature": 0.8}}}
+    ]
     assert messages[-1].content == "reefs: 0.4"
     assert chat.calls == 1 and scopes == [(None, None)]
     writer = loaded.compiled.nodes["writer"]

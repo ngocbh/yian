@@ -296,7 +296,7 @@ def test_agent_knobs_parse():
     assert node.llm_config == {
         "provider": "anthropic",
         "model": "claude-opus-4-8",
-        "temperature": 0.3,
+        "anthropic": {"temperature": 0.3},
     }
     assert node.outputs == {"claim": "str", "confidence": "float"}
 

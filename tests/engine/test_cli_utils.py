@@ -184,6 +184,7 @@ def _hello_agent():
 
 
 def _connection_sources(loaded, cli_cfg):
+    """Return each distinct agent connection as ``(provider, source)``."""
     return [
         (provider, connection["source"])
         for provider, connection in climod._agent_connections(loaded, cli_cfg)
@@ -235,9 +236,10 @@ def test_saved_login_needs_no_key_prompt(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     fake = _FakeQuestionary("typed")
     monkeypatch.setitem(sys.modules, "questionary", fake)
+    _tty(monkeypatch, True)
     AuthStore().save("anthropic", ApiKeyCredentials("saved-k"), "m", make_default=False)
 
-    assert utils.ensure_api_key("anthropic", interactive=False) == "saved-k"
+    assert utils.ensure_api_key("anthropic") == "saved-k"
     assert fake.prompts == []
 
 

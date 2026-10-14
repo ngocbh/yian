@@ -2,10 +2,13 @@
 
 These are the integration points the `llm_clients` modules point at by name:
 
-- `ensure_api_key` / `ensure_env_key` — the saved-login lookup and the
-  interactive key prompt referenced by `llm_clients/api_key_env.py`. Called
-  pre-flight by `yian run` (see `cli/run.py`) so a missing key surfaces as an
-  upfront prompt instead of a cryptic failure on the first API call.
+- `ensure_env_key` — the interactive key prompt referenced by
+  `llm_clients/api_key_env.py`. `yian run` and `yian chat` call it pre-flight
+  (see `cli/run.py`) for agents without a saved login, so a missing key
+  surfaces as an upfront prompt instead of a cryptic failure on the first API
+  call.
+- `ensure_api_key` — resolves a provider's saved login first, then falls back
+  to `ensure_env_key`.
 - `confirm_ollama_endpoint` — referenced by `llm_clients/model_catalog.py`
   as the step that surfaces the resolved Ollama endpoint right after provider
   selection; the future provider-selection wizard is its caller.

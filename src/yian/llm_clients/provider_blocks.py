@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import typing
 from collections.abc import Collection, Mapping
-from typing import Any, ClassVar, Dict, Literal, Optional
+from typing import Any, ClassVar, Dict, List, Literal, Optional, Union
 
 from pydantic import (
     BaseModel,
@@ -160,7 +160,7 @@ class OpenAIResponsesBlock(_OpenAIResponsesShared):
 
     Mirrors ``POST /v1/responses``
     (https://platform.openai.com/docs/api-reference/responses/create), checked
-    2026-10-14 against that reference and the ``openai`` SDK's
+    2026-10-13 against that reference and the ``openai`` SDK's
     ``openai.types.responses.response_create_params``.
 
     Example:
@@ -191,8 +191,476 @@ class OpenAISubscriptionBlock(_OpenAIResponsesShared):
     )
 
 
+# Chat Completions body fields every vendor below reserves, with what yian builds there.
+_CHAT_RESERVED: Dict[str, str] = {
+    "model": "llm_config.model",
+    "messages": "messages",
+    "tools": "tools",
+    "tool_choice": "tools",
+    "parallel_tool_calls": "tools",
+    "response_format": "structured output",
+    "stream": "streaming",
+    "stream_options": "streaming",
+    "n": "one choice per call",
+}
+
+_Stop4 = Union[str, Annotated[List[str], Field(max_length=4)]]
+_Metadata = Annotated[Dict[_MetadataKey, _MetadataValue], Field(max_length=16)]
+
+
+class _ChatSampling(_Block):
+    """``temperature`` in [0, 2] and ``top_p`` in [0, 1], as most vendors take them."""
+
+    temperature: Optional[float] = Field(default=None, ge=0, le=2)
+    top_p: Optional[float] = Field(default=None, ge=0, le=1)
+
+
+class _ChatPenalties(_Block):
+    """``frequency_penalty`` and ``presence_penalty``, each in [-2, 2]."""
+
+    frequency_penalty: Optional[float] = Field(default=None, ge=-2, le=2)
+    presence_penalty: Optional[float] = Field(default=None, ge=-2, le=2)
+
+
+class _ChatLength(_Block):
+    """``max_tokens`` (older) and ``max_completion_tokens`` output limits, each at least 1."""
+
+    max_completion_tokens: Optional[int] = Field(default=None, ge=1)
+    max_tokens: Optional[int] = Field(default=None, ge=1)
+
+
+class _ChatLogprobs(_Block):
+    """``logprobs`` and ``top_logprobs`` in [0, 20]."""
+
+    logprobs: Optional[bool] = None
+    top_logprobs: Optional[int] = Field(default=None, ge=0, le=20)
+
+
+class XAIChatBlock(_ChatSampling, _ChatPenalties, _ChatLength):
+    """The ``xai`` block: the request body of the xAI Chat Completions API.
+
+    Mirrors ``POST /v1/chat/completions``
+    (https://docs.x.ai/developers/rest-api-reference/inference/chat-completions), checked
+    2026-10-13. ``logit_bias`` is left out because the reference marks it unsupported, and
+    ``reasoning_effort`` is any string because the accepted values depend on the model.
+
+    Example:
+        ```yaml
+        xai:
+          reasoning_effort: high
+          max_completion_tokens: 8192
+        ```
+    """
+
+    default_block: ClassVar[str] = "xai"
+    api: ClassVar[str] = "is not a field of the xAI Chat Completions request"
+    reserved: ClassVar[Dict[str, str]] = {
+        **_CHAT_RESERVED,
+        "deferred": "request lifecycle",
+        "search_parameters": "tools: server-side search",
+        "web_search_options": "tools: server-side search",
+    }
+
+    logprobs: Optional[bool] = None
+    prompt_cache_key: Optional[str] = None
+    reasoning_effort: Optional[str] = None
+    safety_identifier: Optional[str] = None
+    seed: Optional[int] = None
+    service_tier: Optional[Literal["default", "priority", "fast"]] = None
+    stop: Optional[Annotated[List[str], Field(max_length=4)]] = None
+    top_logprobs: Optional[int] = Field(default=None, ge=0, le=8)
+    user: Optional[str] = None
+
+
+class GLMThinking(_Block):
+    """The ``thinking`` object of a Z.AI GLM chat request."""
+
+    type: Optional[Literal["enabled", "disabled"]] = None
+    clear_thinking: Optional[bool] = None
+
+
+class GLMChatBlock(_Block):
+    """The ``glm`` and ``glm-cn`` blocks: the request body of the Z.AI GLM Chat Completion API.
+
+    Mirrors ``POST /api/paas/v4/chat/completions``
+    (https://docs.z.ai/api-reference/llm/chat-completion), checked 2026-10-13.
+
+    Example:
+        ```yaml
+        glm:
+          thinking: {type: enabled}
+          reasoning_effort: high
+          temperature: 0.6
+        ```
+    """
+
+    default_block: ClassVar[str] = "glm"
+    api: ClassVar[str] = "is not a field of the Z.AI GLM Chat Completion request"
+    reserved: ClassVar[Dict[str, str]] = {**_CHAT_RESERVED, "tool_stream": "streaming"}
+
+    do_sample: Optional[bool] = None
+    max_tokens: Optional[int] = Field(default=None, ge=1, le=131072)
+    reasoning_effort: Optional[
+        Literal["max", "xhigh", "high", "medium", "low", "minimal", "none"]
+    ] = None
+    request_id: Optional[str] = Field(default=None, min_length=6, max_length=64)
+    stop: Optional[Annotated[List[str], Field(max_length=4)]] = None
+    temperature: Optional[float] = Field(default=None, ge=0, le=1)
+    thinking: Optional[GLMThinking] = None
+    top_p: Optional[float] = Field(default=None, ge=0.01, le=1)
+    user_id: Optional[str] = Field(default=None, min_length=6, max_length=128)
+
+
+class MiniMaxThinking(_Block):
+    """The ``thinking`` object of a MiniMax chat request."""
+
+    type: Optional[Literal["disabled", "adaptive"]] = None
+
+
+class MiniMaxChatBlock(_ChatSampling, _ChatLength):
+    """The ``minimax`` and ``minimax-cn`` blocks: the body of MiniMax's OpenAI-compatible API.
+
+    Mirrors the Chat Completions parameters MiniMax lists
+    (https://platform.minimax.io/docs/api-reference/text-openai-api), checked 2026-10-13.
+    MiniMax ignores the other OpenAI parameters, so they are not fields here.
+
+    Example:
+        ```yaml
+        minimax:
+          thinking: {type: adaptive}
+          reasoning_effort: high
+        ```
+    """
+
+    default_block: ClassVar[str] = "minimax"
+    api: ClassVar[str] = "is not a field of the MiniMax Chat Completions request"
+    reserved: ClassVar[Dict[str, str]] = {
+        **_CHAT_RESERVED,
+        "reasoning_split": "keeps reasoning out of the message content",
+    }
+
+    reasoning_effort: Optional[Literal["low", "medium", "high", "xhigh", "max"]] = None
+    service_tier: Optional[Literal["standard", "priority"]] = None
+    thinking: Optional[MiniMaxThinking] = None
+
+
+class DeepSeekThinking(_Block):
+    """The ``thinking`` object of a DeepSeek chat request."""
+
+    type: Optional[Literal["enabled", "disabled"]] = None
+
+
+class DeepSeekChatBlock(_ChatLogprobs):
+    """The ``deepseek`` block: the request body of the DeepSeek Chat Completion API.
+
+    Mirrors ``POST /chat/completions``
+    (https://api-docs.deepseek.com/api/create-chat-completion), checked 2026-10-13.
+    ``frequency_penalty`` and ``presence_penalty`` are left out because the reference
+    says they no longer take effect.
+
+    Example:
+        ```yaml
+        deepseek:
+          thinking: {type: enabled}
+          reasoning_effort: max
+        ```
+    """
+
+    default_block: ClassVar[str] = "deepseek"
+    api: ClassVar[str] = "is not a field of the DeepSeek Chat Completion request"
+    reserved: ClassVar[Dict[str, str]] = dict(_CHAT_RESERVED)
+
+    max_tokens: Optional[int] = Field(default=None, ge=1, le=393216)
+    reasoning_effort: Optional[Literal["none", "low", "high", "max"]] = None
+    stop: Optional[Union[str, Annotated[List[str], Field(max_length=16)]]] = None
+    temperature: Optional[float] = Field(default=None, ge=0, le=2)
+    thinking: Optional[DeepSeekThinking] = None
+    top_p: Optional[float] = Field(default=None, gt=0, le=1)
+    user_id: Optional[
+        Annotated[str, StringConstraints(max_length=512, pattern=r"^[a-zA-Z0-9_-]+$")]
+    ] = None
+
+
+class QwenSearchOptions(_Block):
+    """The ``search_options`` object of a Qwen chat request."""
+
+    enable_search_extension: Optional[bool] = None
+    forced_search: Optional[bool] = None
+    search_strategy: Optional[Literal["turbo", "max", "agent"]] = None
+
+
+class QwenChatBlock(_ChatLength):
+    """The ``qwen`` and ``qwen-cn`` blocks: the body of Model Studio's OpenAI-compatible chat.
+
+    Mirrors Alibaba Cloud Model Studio's OpenAI-compatible Chat Completions request
+    (https://www.alibabacloud.com/help/en/model-studio/qwen-api-via-openai-chat-completions),
+    checked 2026-10-13. ``thinking`` and ``clear_thinking`` are for the MiniMax and GLM
+    models Model Studio also serves.
+
+    Example:
+        ```yaml
+        qwen:
+          enable_thinking: true
+          thinking_budget: 4096
+          top_k: 20
+        ```
+    """
+
+    default_block: ClassVar[str] = "qwen"
+    api: ClassVar[str] = "is not a field of the Model Studio Chat Completions request"
+    reserved: ClassVar[Dict[str, str]] = {
+        **_CHAT_RESERVED,
+        "tool_stream": "streaming",
+        "modalities": "output format",
+        "audio": "output format",
+        "enable_code_interpreter": "tools: server-side code interpreter",
+    }
+
+    clear_thinking: Optional[bool] = None
+    enable_search: Optional[bool] = None
+    enable_thinking: Optional[bool] = None
+    logprobs: Optional[bool] = None
+    preserve_thinking: Optional[bool] = None
+    presence_penalty: Optional[float] = Field(default=None, ge=-2, le=2)
+    reasoning_effort: Optional[
+        Literal["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
+    ] = None
+    repetition_penalty: Optional[float] = Field(default=None, gt=0)
+    search_options: Optional[QwenSearchOptions] = None
+    seed: Optional[int] = Field(default=None, ge=0, le=2**31 - 1)
+    # A stop list holds strings or token ids, never both.
+    stop: Optional[Union[str, List[str], List[int]]] = None
+    temperature: Optional[float] = Field(default=None, ge=0, lt=2)
+    thinking: Optional[MiniMaxThinking] = None
+    thinking_budget: Optional[int] = Field(default=None, ge=1)
+    top_k: Optional[int] = Field(default=None, ge=0)
+    top_logprobs: Optional[int] = Field(default=None, ge=0, le=5)
+    top_p: Optional[float] = Field(default=None, gt=0, le=1)
+    use_multichannel: Optional[bool] = None
+    vl_high_resolution_images: Optional[bool] = None
+
+
+class OpenRouterReasoning(_Block):
+    """The ``reasoning`` object of an OpenRouter chat request."""
+
+    effort: Optional[Literal["max", "xhigh", "high", "medium", "low", "minimal", "none"]] = None
+    enabled: Optional[bool] = None
+    exclude: Optional[bool] = None
+    max_tokens: Optional[int] = Field(default=None, ge=0)
+    summary: Optional[Literal["auto", "concise", "detailed"]] = None
+
+
+class OpenRouterCacheControl(_Block):
+    """The top-level ``cache_control`` object of an OpenRouter chat request."""
+
+    type: Optional[Literal["ephemeral"]] = None
+    ttl: Optional[Literal["5m", "1h"]] = None
+
+
+class OpenRouterPromptCacheOptions(_Block):
+    """The ``prompt_cache_options`` object of an OpenRouter chat request."""
+
+    mode: Optional[Literal["explicit"]] = None
+    ttl: Optional[str] = None
+
+
+class ChatTextPart(_Block):
+    """A text content part of a Chat Completions ``prediction``."""
+
+    type: Literal["text"]
+    text: str
+
+
+class ChatPrediction(_Block):
+    """The ``prediction`` object of a Chat Completions request: predicted output content."""
+
+    type: Literal["content"]
+    content: Union[str, List[ChatTextPart]]
+
+
+class OpenRouterChatBlock(_ChatSampling, _ChatPenalties, _ChatLength, _ChatLogprobs):
+    """The ``openrouter`` block: the request body of the OpenRouter Chat Completions API.
+
+    Mirrors ``POST /api/v1/chat/completions``
+    (https://openrouter.ai/docs/api/api-reference/chat/create-a-chat-completion), with
+    bounds from https://openrouter.ai/docs/api/reference/parameters and the ``reasoning``
+    fields from https://openrouter.ai/docs/guides/best-practices/reasoning-tokens,
+    checked 2026-10-13. ``provider`` (routing preferences) and ``trace`` are passed
+    through as written.
+
+    Example:
+        ```yaml
+        openrouter:
+          reasoning: {effort: high}
+          provider: {order: [anthropic], allow_fallbacks: false}
+        ```
+    """
+
+    default_block: ClassVar[str] = "openrouter"
+    api: ClassVar[str] = "is not a field of the OpenRouter Chat Completions request"
+    reserved: ClassVar[Dict[str, str]] = {
+        **_CHAT_RESERVED,
+        "plugins": "tools",
+        "web_search_options": "tools: server-side search",
+        "stop_server_tools_when": "tools",
+        "deferred_tools": "tools",
+        "structured_outputs": "structured output",
+        "modalities": "output format",
+        "image_config": "output format",
+        "debug": "streaming",
+    }
+
+    cache_control: Optional[OpenRouterCacheControl] = None
+    logit_bias: Optional[Dict[str, Annotated[float, Field(ge=-100, le=100)]]] = None
+    metadata: Optional[_Metadata] = None
+    min_p: Optional[float] = Field(default=None, ge=0, le=1)
+    models: Optional[List[str]] = None
+    prediction: Optional[ChatPrediction] = None
+    prompt_cache_key: Optional[str] = None
+    prompt_cache_options: Optional[OpenRouterPromptCacheOptions] = None
+    provider: Optional[Dict[str, Any]] = None
+    reasoning: Optional[OpenRouterReasoning] = None
+    reasoning_effort: Optional[
+        Literal["max", "xhigh", "high", "medium", "low", "minimal", "none"]
+    ] = None
+    repetition_penalty: Optional[float] = Field(default=None, ge=0, le=2)
+    seed: Optional[int] = None
+    service_tier: Optional[
+        Literal["auto", "default", "fast", "flex", "priority", "scale", "ultrafast"]
+    ] = None
+    session_id: Optional[str] = Field(default=None, max_length=256)
+    stop: Optional[_Stop4] = None
+    top_a: Optional[float] = Field(default=None, ge=0, le=1)
+    top_k: Optional[int] = Field(default=None, ge=0)
+    trace: Optional[Dict[str, Any]] = None
+    user: Optional[str] = None
+    verbosity: Optional[Literal["low", "medium", "high", "xhigh", "max"]] = None
+
+
+class VLLMChatBlock(_ChatPenalties, _ChatLength, _ChatLogprobs):
+    """The ``vllm`` block: the request body of a vLLM server's Chat Completions API.
+
+    Mirrors vLLM's ``ChatCompletionRequest`` with its extra sampling parameters
+    (https://docs.vllm.ai/en/latest/serving/online_serving/), with bounds from vLLM's
+    ``SamplingParams`` checks, checked 2026-10-13. ``top_logprobs`` is capped at 20,
+    the server's default ``max_logprobs``.
+
+    Example:
+        ```yaml
+        vllm:
+          top_k: 20
+          min_p: 0.05
+          chat_template_kwargs: {enable_thinking: false}
+        ```
+    """
+
+    default_block: ClassVar[str] = "vllm"
+    api: ClassVar[str] = "is not a field of the vLLM Chat Completions request"
+    reserved: ClassVar[Dict[str, str]] = {
+        **_CHAT_RESERVED,
+        "guided_json": "structured output",
+        "guided_regex": "structured output",
+        "guided_choice": "structured output",
+        "guided_grammar": "structured output",
+        "guided_decoding_backend": "structured output",
+        "structured_outputs": "structured output",
+        "chat_template": "messages",
+        "add_generation_prompt": "messages",
+        "continue_final_message": "messages",
+        "echo": "messages",
+    }
+
+    chat_template_kwargs: Optional[Dict[str, Any]] = None
+    ignore_eos: Optional[bool] = None
+    include_stop_str_in_output: Optional[bool] = None
+    length_penalty: Optional[float] = None
+    logit_bias: Optional[Dict[str, float]] = None
+    min_p: Optional[float] = Field(default=None, ge=0, le=1)
+    min_tokens: Optional[int] = Field(default=None, ge=0)
+    priority: Optional[int] = None
+    reasoning_effort: Optional[
+        Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+    ] = None
+    repetition_penalty: Optional[float] = Field(default=None, gt=0)
+    seed: Optional[int] = Field(default=None, ge=-(2**63), le=2**63 - 1)
+    skip_special_tokens: Optional[bool] = None
+    spaces_between_special_tokens: Optional[bool] = None
+    stop: Optional[Union[str, List[str]]] = None
+    stop_token_ids: Optional[List[int]] = None
+    temperature: Optional[float] = Field(default=None, ge=0, le=2)
+    # -1 means no limit.
+    thinking_token_budget: Optional[int] = Field(default=None, ge=-1)
+    # -1 and 0 both turn top-k off.
+    top_k: Optional[int] = Field(default=None, ge=-1)
+    top_p: Optional[float] = Field(default=None, gt=0, le=1)
+    user: Optional[str] = None
+
+
+class AzureUserSecurityContext(_Block):
+    """The ``user_security_context`` object of an Azure OpenAI chat request."""
+
+    application_name: Optional[str] = None
+    end_user_id: Optional[str] = None
+    end_user_tenant_id: Optional[str] = None
+    source_ip: Optional[str] = None
+
+
+class AzureChatBlock(_ChatSampling, _ChatPenalties, _ChatLength, _ChatLogprobs):
+    """The ``azure`` block: the request body of the Azure OpenAI Chat Completions API.
+
+    Mirrors the chat completions request in the Azure OpenAI reference
+    (https://learn.microsoft.com/azure/ai-foundry/openai/latest) and the matching
+    ``openai.types.chat.completion_create_params`` fields, checked 2026-10-13.
+
+    Example:
+        ```yaml
+        azure:
+          reasoning_effort: low
+          max_completion_tokens: 4096
+        ```
+    """
+
+    default_block: ClassVar[str] = "azure"
+    api: ClassVar[str] = "is not a field of the Azure OpenAI Chat Completions request"
+    reserved: ClassVar[Dict[str, str]] = {
+        **_CHAT_RESERVED,
+        "data_sources": "tools: On Your Data retrieval",
+        "functions": "tools",
+        "function_call": "tools",
+        "modalities": "output format",
+        "audio": "output format",
+    }
+
+    logit_bias: Optional[Dict[str, Annotated[int, Field(ge=-100, le=100)]]] = None
+    metadata: Optional[_Metadata] = None
+    prediction: Optional[ChatPrediction] = None
+    prompt_cache_key: Optional[str] = None
+    prompt_cache_retention: Optional[Literal["in_memory", "24h"]] = None
+    reasoning_effort: Optional[
+        Literal["none", "minimal", "low", "medium", "high", "xhigh"]
+    ] = None
+    safety_identifier: Optional[str] = Field(default=None, max_length=64)
+    seed: Optional[int] = None
+    stop: Optional[_Stop4] = None
+    store: Optional[bool] = None
+    user: Optional[str] = None
+    user_security_context: Optional[AzureUserSecurityContext] = None
+    verbosity: Optional[Literal["low", "medium", "high"]] = None
+
+
 PROVIDER_BLOCKS: Dict[str, type[_Block]] = {
     "openai": OpenAIResponsesBlock,
+    "azure": AzureChatBlock,
+    "xai": XAIChatBlock,
+    "deepseek": DeepSeekChatBlock,
+    "qwen": QwenChatBlock,
+    "qwen-cn": QwenChatBlock,
+    "glm": GLMChatBlock,
+    "glm-cn": GLMChatBlock,
+    "minimax": MiniMaxChatBlock,
+    "minimax-cn": MiniMaxChatBlock,
+    "openrouter": OpenRouterChatBlock,
+    "vllm": VLLMChatBlock,
 }
 
 

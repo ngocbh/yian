@@ -311,7 +311,7 @@ def _relate_bounds(inferred: Type, declared: Type) -> TypeRelation:
     if inferred.kind is ValueKind.INTEGER:
         # An int interval overlaps only if a whole number lies in the shared range.
         # Only finite ends are rounded: math.ceil/floor raise OverflowError on
-        # infinity (and math.isfinite on an int too large for a float).
+        # infinity; `math.isfinite` is not used because it overflows on huge ints.
         if shared_low != -math.inf:
             shared_low = math.ceil(shared_low)
         if shared_high != math.inf:

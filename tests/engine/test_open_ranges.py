@@ -29,6 +29,7 @@ def test_one_open_end_is_a_valid_shape(kind, bounds):
 
 @pytest.mark.parametrize("kind,bounds,error", [
     (INT, (None, None), ValueError),
+    (NUM, (None, None), ValueError),
     (INT, (None, 1.0), TypeError),
     (NUM, (None, float("inf")), ValueError),
     (NUM, (10**400, None), ValueError),

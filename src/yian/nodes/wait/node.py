@@ -18,6 +18,7 @@ from yian.nodes.binding import (
 from yian.nodes.contracts import binding_source
 from yian.typesys.pool import VariablePool
 from yian.typesys.temporal import parse_date_or_datetime
+from yian.typesys.values import value_repr
 
 
 def resolve_until(
@@ -49,7 +50,7 @@ def _normalize_until(until_src: Any, value: Any) -> str:
     else:
         raise BindingError(
             f"wait `until` ({display_source!r}) did not resolve to a date/datetime: "
-            f"{value!r}",
+            f"{value_repr(value)}",
             failure_code="contract.input",
             origin=origin,
         )

@@ -28,6 +28,7 @@ from yian.typesys import (
     union_field,
     union_tag_fields,
 )
+from yian.typesys.values import value_repr
 
 
 ValuePath: TypeAlias = tuple[str | int, ...]
@@ -650,7 +651,7 @@ def validate_output_contract(
     assert type(contract) is PartialRecordContract
     if not isinstance(value, dict):
         raise TypeCheckError(
-            f"{value!r} is not an object for a partial record contract"
+            f"{value_repr(value)} is not an object for a partial record contract"
         )
 
     expected = set(contract.names)

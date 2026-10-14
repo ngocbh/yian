@@ -1,6 +1,6 @@
-"""The `case` kind handle: parsing records the `on`/`cases`/`else` field ranges and
-survives YAML 1.1's `on:` -> True key coercion; build LOWERS the case to a strict `CaseNode`
-plus its data + control edges (the case's lowering is its own `.build(ctx)`, no leaf Node).
+"""The `case` kind handle: parsing records the `on`/`cases`/`else` field ranges and reads
+`on:` as a plain text key; build LOWERS the case to a strict `CaseNode` plus its data +
+control edges (the case's lowering is its own `.build(ctx)`, no leaf Node).
 """
 
 import textwrap
@@ -168,6 +168,42 @@ def test_case_with_both_on_spellings_is_a_located_error():
     assert exc.value.diagnostic.frames[-1].range == SourceRange(7, 5, 7, 9)
 
 
+def test_case_keeps_no_key_normalization():
+    """CASE reads its keys as written, so it needs no cursor projection."""
+    assert "_normalize_cursor" not in CaseDescriptor.__dict__
+
+
+def test_case_rejects_boolean_key_at_its_location():
+    # `true:` is the boolean True under YAML 1.2, not a spelling of `on:`.
+    flow = textwrap.dedent(
+        """\
+        id: c
+        name: c
+        nodes:
+          s:
+            kind: code
+            code: 'return "a"'
+            output: str
+          route:
+            kind: case
+            true: ${s.output}
+            cases:
+              - when: "${s.output} == 'a'"
+                then: hot
+            else: hot
+          hot:
+            kind: code
+            code: return 1
+            output: int
+        output: ${hot.output}
+        """
+    )
+    with pytest.raises(LoadError, match="field True is not allowed") as exc:
+        load_flow(flow)
+
+    assert exc.value.diagnostic.frames[-1].range.start_line == 10
+
+
 def test_case_build_lowers_to_case_node_with_edges():
     reader = _reader_for(_FLOW, "route")
     desc = CaseDescriptor.parse("route", reader)
@@ -223,9 +259,7 @@ def test_on_case_preserves_predicate_and_generated_binding_origins():
     """The synthetic `__on` binding belongs to `on:`, not to a case predicate."""
     label = "on-case.yaml"
     document = SourceDocument.parse(_ON_ORIGIN_FLOW, label=label)
-    route_cursor = CaseDescriptor._normalize_cursor(
-        document.root.child("nodes").child("route")
-    )
+    route_cursor = document.root.child("nodes").child("route")
     flow = load_flow(_ON_ORIGIN_FLOW, source_label=label)
     node = flow.compiled.nodes["route"]
     resolver = flow.origin_resolver

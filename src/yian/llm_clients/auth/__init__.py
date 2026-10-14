@@ -7,7 +7,8 @@ agent loop, conversation, CLI prompt, or native Codex process.
 The stdlib HTTP transport guards connected response parsing with the request
 deadline and cancellation, owns socket cleanup, and never follows redirects.
 
-Knows about: the standard library and injected HTTP, clock, and host callbacks.
+Knows about: the standard library, the stdlib-only yian.defaults, and injected
+HTTP, clock, and host callbacks.
 Never imports: provider SDKs, settings, nodes, memory, compile, runtime, or CLI.
 """
 

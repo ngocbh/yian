@@ -115,7 +115,7 @@ def _request(
 ):
     """Read one response without leaking credentials through redirects or logs.
 
-    ``body_limit`` caps the bytes read from the body; `None` means
+    `body_limit` caps the bytes read from the body; `None` means
     `current().max_auth_response_bytes`.
     """
     if body_limit is None:

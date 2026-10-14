@@ -45,7 +45,10 @@ def _serve_once(body: bytes):
                 connection.settimeout(2)
                 request = bytearray()
                 while b"\r\n\r\n" not in request:
-                    request.extend(connection.recv(4096))
+                    chunk = connection.recv(4096)
+                    if not chunk:
+                        raise ConnectionError("client closed before sending headers")
+                    request.extend(chunk)
                 connection.sendall(
                     f"HTTP/1.1 200 OK\r\nContent-Length: {len(body)}\r\n"
                     "Connection: close\r\n\r\n".encode() + body
@@ -55,7 +58,7 @@ def _serve_once(body: bytes):
         finally:
             server.close()
 
-    thread = threading.Thread(target=serve)
+    thread = threading.Thread(target=serve, daemon=True)
     thread.start()
     return server.getsockname()[1], thread, errors
 
@@ -163,6 +166,7 @@ def test_auth_response_cap(no_proxy, set_defaults, limit):
                 _request("GET", f"http://127.0.0.1:{port}", headers={}, timeout=2)
     finally:
         thread.join(3)
+    assert not thread.is_alive()
     assert not errors
 
 
@@ -181,39 +185,44 @@ def test_model_list_cap(no_proxy, set_defaults, limit):
                 list_models("ollama", None, base_url=base_url, timeout=2)
     finally:
         thread.join(3)
+    assert not thread.is_alive()
     assert not errors
 
 
 def test_oauth_callback_cap(set_defaults):
     set_defaults(MAX_OAUTH_CALLBACK_BYTES=20)
     replies = []
+    errors = []
     threads = []
 
     def open_url(url):
         state = parse_qs(urlparse(url).query)["state"][0]
 
         def send():
-            with socket.create_connection(("127.0.0.1", 1455), timeout=2) as connection:
-                connection.sendall(
-                    f"GET /auth/callback?code=code&state={state} HTTP/1.1\r\n"
-                    "Host: localhost:1455\r\n\r\n".encode()
-                )
-                replies.append(connection.recv(4096))
+            try:
+                with socket.create_connection(("127.0.0.1", 1455), timeout=2) as connection:
+                    connection.sendall(
+                        f"GET /auth/callback?code=code&state={state} HTTP/1.1\r\n"
+                        "Host: localhost:1455\r\n\r\n".encode()
+                    )
+                    replies.append(connection.recv(4096))
+            except Exception as error:
+                errors.append(error)
 
         thread = threading.Thread(target=send)
         threads.append(thread)
         thread.start()
 
-    class _NoHttp:
-        def __call__(self, *args, **kwargs):
-            raise AssertionError("no token exchange expected")
+    def no_http(*args, **kwargs):
+        raise AssertionError("no token exchange expected")
 
     try:
         with pytest.raises(AuthError, match="timed out"):
-            OpenAIAuth(request=_NoHttp()).browser_login(open_url, timeout=0.5)
+            OpenAIAuth(request=no_http).browser_login(open_url, timeout=0.5)
     finally:
         for thread in threads:
             thread.join(3)
+    assert not errors
     assert replies and replies[0].startswith(b"HTTP/1.1 400")
 
 

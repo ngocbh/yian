@@ -243,7 +243,7 @@ ENTRIES: tuple[Entry, ...] = (
     Entry(
         "MAX_AUTH_STORE_BYTES",
         default=1024 * 1024,
-        description="Largest auth store file read",
+        description="Largest auth store file read or written",
         group="input cap",
         minimum=1,
         maximum=None,

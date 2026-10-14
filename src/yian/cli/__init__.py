@@ -24,7 +24,7 @@ drain. Storage paths stay host-only. A terminal resume never opens memory.
 Knows about: compose; compile metadata and LLM-cascade helpers; the package-root run
 boundary; the package-root memory host; memory contracts and built-in backends;
 events; node host-stop signals; typed values; tools; LLM API-key metadata;
-the default snapshot in ``llm_clients.connection``; `yian.defaults`; and peer CLI
+the default snapshot in ``llm_clients.connection``; ``yian.defaults``; and peer CLI
 modules. Never imports runtime scheduling internals or provider SDKs; owns no
 graph mutation.
 """

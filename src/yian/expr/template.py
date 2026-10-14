@@ -686,8 +686,9 @@ def eval_template(
 
     Raises:
         `ExpressionError`:
-            On any error `eval_expr` raises for a span interior, or when a span's final
-            value is `None` in `STRICT_RAISE` mode.
+            On any error `eval_expr` raises for a span interior, when a span's final
+            value is `None` in `STRICT_RAISE` mode, or when an embedded value can't be
+            rendered as text (an int past Python's digit limit).
         `RequiredError`:
             When a span's `head :? message` required atom misses / is None.
         `TypeError`:

@@ -239,8 +239,21 @@ Arithmetic on a value that is null when a `case` skips its node is a load error 
 asks for a `:-` default, such as `${(order.output.qty :- 0) + 1}` (see
 [Skipped branches and flow outputs](#skipped-branches-and-flow-outputs)).
 
+Arithmetic is Python's. `+` concatenates text and lists (`${xs + [item]}`), `*` repeats
+them (`${"ab" * 3}`), and `%` with text on the left formats (`${"%.2f" % price}`). A bool
+counts as 0/1 (`${true + 1}` is `2`), but a CASE's `on:` never equates a bool with a
+number. There are no cost limits. Float overflow in `+ - * /` gives `inf`; an operator
+Python can't complete (`**` overflow, a repetition count too large, a missing
+`%(key)s`) fails like any other expression error. See
+[Expressions → Arithmetic follows Python](expressions.md#arithmetic-follows-python).
+
 A whole-string `${expr}` resolves to the **typed value** (a number stays a
-number, a list a list); embedded in surrounding text it is stringified.
+number, a list a list); embedded in surrounding text it is stringified. An int too
+long to render as text (past 4300 digits by default) fails like any other expression
+error: a binding fails with `binding.evaluate`, and a prompt fails its node.
+
+Changed: an operator Python can't complete, or an embedded value too long to render,
+used to raise out of `run_flow`; now the run fails like any other expression error.
 
 NaN and infinity are not yian values. A binding whose value is NaN or infinity at
 any depth, whether an expression result, a literal, or a default, fails its node with `binding.evaluate`. The message names the

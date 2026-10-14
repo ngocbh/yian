@@ -239,9 +239,9 @@ def evaluate_when(
 
     Raises:
         `ExpressionError`:
-            If the expression is malformed, references an invalid path, mixes
-            incompatible types (e.g. arithmetic over a non-number), or names a type
-            absent from `types`.
+            If the expression is malformed, references an invalid path, applies an
+            operator Python rejects for its operand types (e.g. `"a" + 1`) or can't
+            complete (overflow), or names a type absent from `types`.
 
     Example:
         ```python
@@ -775,7 +775,8 @@ def eval_expr(
     `${}`-wrapped / `item`-scoped), arithmetic and comparisons over VALUES (so
     `str+str` concatenates and `list+list` extends), boolean combinators, list
     literals, coalesce / default / required, pure builtin calls, and the
-    `isinstance(x, T)` type test.
+    `isinstance(x, T)` type test. The operators are Python's (`%` formats text, a
+    bool counts as 0/1).
 
     Three semantics support a CASE's `else:` routing:
     a missing reference is `None` (in the non-strict modes); arithmetic over that
@@ -817,8 +818,9 @@ def eval_expr(
     Raises:
         `ExpressionError`:
             On an unsupported node, an unknown builtin, a builtin failure, arithmetic
-            over an incompatible operand (incl. `None`), a strict-mode miss, or an
-            `isinstance` type name absent from `types`.
+            over an incompatible operand (incl. `None`), an operator Python can't
+            complete (overflow, a repetition count too large, a missing `%(key)s`), a
+            strict-mode miss, or an `isinstance` type name absent from `types`.
         `RequiredError`:
             When a `head :? message` required atom's head misses / is None.
         `TypeError`:

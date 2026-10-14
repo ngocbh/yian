@@ -363,6 +363,8 @@ def test_traced_chains_match_the_old_binary_steps():
     [
         ("1", "+", 3000),
         ("1", "*", 1),
+        ("2", "*", 2**3000),
+        ("-1", "*", 1),
         ("1", "-", 2 - 3000),
         ("1", "**", 1),
         ("'a'", "+", "a" * 3000),
@@ -373,6 +375,12 @@ def test_traced_chains_match_the_old_binary_steps():
 def test_long_chains_evaluate(term, op, expected):
     text = f" {op} ".join([term] * 3000)
     assert _eval(text, _from({"x": 2})) == expected
+
+
+def test_a_long_power_chain_folds_from_the_right():
+    # 2 ** (3 ** (1 ** ... ** 1)) is 8; a left fold or a dropped operand would differ.
+    text = "2 ** 3 ** " + " ** ".join(["1"] * 2998)
+    assert _eval(text, _from({})) == 8
 
 
 @pytest.mark.parametrize(

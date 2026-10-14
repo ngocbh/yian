@@ -20,7 +20,7 @@ Never imports: any other yian subpackage — it is a leaf (peer of state /
 """
 
 from yian.llm_clients.base_client import BaseLLMClient
-from yian.llm_clients.config import LLMConfig
+from yian.llm_clients.config import LLM_CONFIG_KEYS, LLMConfig
 from yian.llm_clients.factory import (
     create_llm_client,
     model_from_config,
@@ -29,6 +29,7 @@ from yian.llm_clients.model_list import ModelListError, list_models
 
 __all__ = [
     "BaseLLMClient",
+    "LLM_CONFIG_KEYS",
     "LLMConfig",
     "ModelListError",
     "create_llm_client",

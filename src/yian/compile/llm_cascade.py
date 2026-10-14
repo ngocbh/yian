@@ -22,6 +22,7 @@ from typing import Any
 from pydantic import SecretStr
 
 from yian.llm_clients.config import (
+    LLM_CONFIG_KEYS,
     LLMConfig,
     host_only_field_error,
     merge_llm_config,
@@ -294,12 +295,13 @@ def _validate_layer(config: dict[str, Any]) -> None:
         LLMConfig(**config)
     # The loader checks authored values; a host layer is checked here only for
     # unknown keys, which would otherwise be recorded and silently ignored. Its
-    # values are checked when the model client is built.
-    unknown = sorted(set(config) - set(LLMConfig.model_fields) - {"_connection"})
+    # values, including block contents, are checked against the effective config
+    # before the run starts (`check_model_config`) and when the model client is built.
+    unknown = sorted(set(config) - LLM_CONFIG_KEYS - {"_connection"})
     if unknown:
         raise ValueError(
             f"llm_config has unknown field(s) {unknown} "
-            f"(allowed: {', '.join(sorted(LLMConfig.model_fields))})"
+            f"(allowed: {', '.join(sorted(LLM_CONFIG_KEYS))})"
         )
     if "_connection" in config:
         if config.get("provider") != "openai":

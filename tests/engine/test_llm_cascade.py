@@ -510,7 +510,10 @@ def test_replay_uses_logged_map_after_environment_changes(monkeypatch):
     assert right.nodes["agent"].llm_config["provider"] == "anthropic"
 
 
-@pytest.mark.parametrize("layer", [{"modle": "x"}, {"provider": "openai", "inherit": False}])
+@pytest.mark.parametrize(
+    "layer",
+    [{"modle": "x"}, {"provider": "openai", "inherit": False}, {"qwen_cn": {"top_k": 4}}],
+)
 def test_host_layer_rejects_unknown_fields(layer):
     loaded = load_flow("""
 id: f
@@ -521,3 +524,25 @@ output: ${a.output}
 """)
     with pytest.raises(ValueError, match=r"llm_config has unknown field\(s\)"):
         resolve_llm_cascade(loaded.compiled, layer, defaults=_DEFAULTS, provider_models=_PROVIDER_MODELS)
+
+
+def test_host_layer_block_merges_per_field_with_authored_blocks():
+    loaded = load_flow("""
+id: f
+name: f
+llm_config:
+  qwen-cn: {enable_thinking: true}
+nodes:
+  a:
+    kind: agent
+    prompt: hi
+    llm_config: {qwen-cn: {top_k: 4}}
+output: ${a.output}
+""")
+    effective = resolve_llm_cascade(
+        loaded.compiled,
+        {"provider": "qwen-cn", "model": "qwen3-max", "qwen-cn": {"top_k": 1, "seed": 7}},
+        defaults=_DEFAULTS,
+        provider_models=_PROVIDER_MODELS,
+    )
+    assert effective["a"]["qwen-cn"] == {"enable_thinking": True, "top_k": 4, "seed": 7}

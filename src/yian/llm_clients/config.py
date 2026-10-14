@@ -22,6 +22,25 @@ from pydantic import (
     model_validator,
 )
 
+from yian.llm_clients.provider_blocks import (
+    PROVIDER_BLOCKS,
+    AnthropicMessagesBlock,
+    AzureChatBlock,
+    DeepSeekChatBlock,
+    GeminiGenerateContentBlock,
+    GLMChatBlock,
+    GLMCNChatBlock,
+    MiniMaxChatBlock,
+    MiniMaxCNChatBlock,
+    OllamaChatBlock,
+    OpenAIResponsesBlock,
+    OpenRouterChatBlock,
+    QwenChatBlock,
+    QwenCNChatBlock,
+    VLLMChatBlock,
+    XAIChatBlock,
+)
+
 
 # One provider vocabulary shared by the validated config carrier and the factory that
 # consumes it. Keep routing subsets in factory.py; its import-time census verifies that
@@ -122,6 +141,15 @@ class LLMConfig(BaseModel):
             is called; it needs no `api_key`, since the key may come from
             `AZURE_OPENAI_API_KEY`, and a flow file may set it beside
             `provider: azure`. Unlike the key, it appears in `model_dump` when set.
+        <provider> (block class, *optional*, defaults to `None`):
+            One block per provider in `SUPPORTED_LLM_PROVIDERS` (`openai`, `qwen-cn`,
+            `anthropic`, ...), named after it: request-body fields for the API that
+            provider's calls reach, checked by that provider's class in `PROVIDER_BLOCKS`
+            (e.g. `AnthropicMessagesBlock` for `anthropic`). Every block is checked, but
+            only the one named by the resolved `provider` is used. The dash names are
+            written with their dash; the Python attributes are `qwen_cn`, `glm_cn`, and
+            `minimax_cn`. An unset block is left out of every `model_dump`, and a set one
+            dumps without its unset fields (see `block_for`).
 
     Example:
         ```python
@@ -134,6 +162,7 @@ class LLMConfig(BaseModel):
             base_url="https://<resource>.openai.azure.com/openai/v1/",
             api_key=key,
         )
+        LLMConfig(**{"provider": "qwen-cn", "qwen-cn": {"enable_thinking": True}})
         ```
     """
 
@@ -147,15 +176,34 @@ class LLMConfig(BaseModel):
     # a key dump exactly as they did before the field existed.
     api_key: Optional[SecretStr] = Field(default=None, exclude=True)
     base_url: Optional[str] = None
+    openai: Optional[OpenAIResponsesBlock] = None
+    xai: Optional[XAIChatBlock] = None
+    deepseek: Optional[DeepSeekChatBlock] = None
+    qwen: Optional[QwenChatBlock] = None
+    qwen_cn: Optional[QwenCNChatBlock] = Field(default=None, alias="qwen-cn")
+    glm: Optional[GLMChatBlock] = None
+    glm_cn: Optional[GLMCNChatBlock] = Field(default=None, alias="glm-cn")
+    minimax: Optional[MiniMaxChatBlock] = None
+    minimax_cn: Optional[MiniMaxCNChatBlock] = Field(default=None, alias="minimax-cn")
+    openrouter: Optional[OpenRouterChatBlock] = None
+    vllm: Optional[VLLMChatBlock] = None
+    ollama: Optional[OllamaChatBlock] = None
+    anthropic: Optional[AnthropicMessagesBlock] = None
+    google: Optional[GeminiGenerateContentBlock] = None
+    azure: Optional[AzureChatBlock] = None
     # `model` is a regular field here; don't warn on the model_ namespace.
     # extra="forbid" makes typo'd llm_config: keys (e.g. `temparature` instead of
     # `temperature`) loud at LOAD time, not silent. hide_input_in_errors keeps
-    # config values, including the key, out of validation error messages.
+    # config values, including the key, out of validation error messages. Keys are
+    # read and dumped as authored, so the dash blocks are `qwen-cn`, not `qwen_cn`.
     model_config = ConfigDict(
         protected_namespaces=(),
         extra="forbid",
         hide_input_in_errors=True,
         allow_inf_nan=False,
+        validate_by_alias=True,
+        validate_by_name=False,
+        serialize_by_alias=True,
     )
 
     @model_validator(mode="before")
@@ -171,6 +219,16 @@ class LLMConfig(BaseModel):
                 "use provider: openai, and remove sandbox/cwd. Yian tools are "
                 "granted explicitly and run on the host."
             )
+        return value
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_python_block_names(cls, value):
+        """Point a Python spelling of a dash block, such as ``qwen_cn``, at ``qwen-cn``."""
+        if isinstance(value, Mapping):
+            for key, name in _BLOCK_ATTRIBUTES.items():
+                if key != name and name in value:
+                    raise ValueError(f"`{name}` is not an llm_config key; write `{key}`")
         return value
 
     @field_validator("api_key")
@@ -206,11 +264,53 @@ class LLMConfig(BaseModel):
 
     @model_serializer(mode="wrap")
     def _omit_unset_base_url(self, handler):
-        """Dump an unset base_url as absent, so existing recorded dumps stay identical."""
+        """Dump an unset base_url or block as absent, so existing recorded dumps stay identical."""
         data = handler(self)
-        if self.base_url is None and isinstance(data, dict):
+        if not isinstance(data, dict):
+            return data
+        if self.base_url is None:
             data.pop("base_url", None)
+        for key, name in _BLOCK_ATTRIBUTES.items():
+            if getattr(self, name) is None:
+                data.pop(key, None)
+                data.pop(name, None)
         return data
+
+    def block_for(self, provider: str) -> dict[str, Any]:
+        """Return the block named ``provider`` as a plain dict.
+
+        Args:
+            provider (`str`):
+                A provider name as written in ``llm_config``, e.g. ``"qwen-cn"``.
+
+        Returns:
+            `dict[str, Any]`:
+                A fresh dump of the block without unset fields; ``{}`` when the block is
+                unset.
+
+        Raises:
+            `KeyError`:
+                Raised when ``provider`` has no block.
+
+        Example:
+            ```python
+            LLMConfig(**{"glm-cn": {"do_sample": False}}).block_for("glm-cn")
+            # {"do_sample": False}
+            ```
+        """
+        block = getattr(self, _BLOCK_ATTRIBUTES[provider])
+        return {} if block is None else block.model_dump()
+
+
+# Block name as written -> `LLMConfig` attribute, e.g. "qwen-cn" -> "qwen_cn".
+_BLOCK_ATTRIBUTES: dict[str, str] = {
+    provider: provider.replace("-", "_") for provider in PROVIDER_BLOCKS
+}
+
+# Every top-level `llm_config` key, spelled as authored.
+LLM_CONFIG_KEYS: frozenset[str] = frozenset(
+    field.alias or name for name, field in LLMConfig.model_fields.items()
+)
 
 
 def validate_base_url(value: Any) -> str:
@@ -378,11 +478,53 @@ def merge_llm_config(specific: dict, base: dict) -> dict:
 
     A non-``None`` value in ``specific`` wins; ``base`` fills every remaining field.
     Explicit ``None`` has the same meaning as omission at every layer, matching the
-    optional ``LLMConfig`` fields' fallback behavior. Filtering both operands keeps the
-    merge associative, so a cascade can be grouped without changing its result.
+    optional ``LLMConfig`` fields' fallback behavior. A provider block (a key of
+    `PROVIDER_BLOCKS`, e.g. ``openai``) merges per block field when both layers set it
+    to a mapping: ``specific``'s non-``None`` fields win, ``base`` fills the rest, and a
+    value inside a field (e.g. ``thinking: {...}``) is replaced whole. A block that is
+    not a mapping is kept over the other layer's block, whichever layer sets it, so it
+    reaches validation instead of being hidden. Every other key, including
+    ``_connection``, is replaced whole. Filtering ``None`` keeps the merge associative,
+    so a cascade can be grouped without changing its result.
+
+    Args:
+        specific (`dict`):
+            The higher-precedence layer, e.g. a node's own ``llm_config``.
+        base (`dict`):
+            The layer that fills its gaps, e.g. the enclosing flow's.
+
+    Returns:
+        `dict`:
+            A new merged layer. Block mappings are new dicts; other values are shared
+            with the inputs.
+
+    Example:
+        ```python
+        merge_llm_config(
+            {"anthropic": {"temperature": 0.2}},
+            {"provider": "anthropic", "anthropic": {"max_tokens": 8000, "temperature": 1}},
+        )
+        # {"provider": "anthropic", "anthropic": {"max_tokens": 8000, "temperature": 0.2}}
+        ```
     """
-    out = {key: value for key, value in base.items() if value is not None}
-    out.update(
-        (key, value) for key, value in specific.items() if value is not None
-    )
+    out = {key: _unset_dropped(key, value) for key, value in base.items() if value is not None}
+    for key, value in specific.items():
+        if value is None:
+            continue
+        current = out.get(key)
+        if key in PROVIDER_BLOCKS and current is not None:
+            if not isinstance(value, Mapping):
+                out[key] = value
+            elif isinstance(current, Mapping):
+                out[key] = {**current, **_unset_dropped(key, value)}
+            # Otherwise the base block is not a mapping and stays for validation to refuse.
+        else:
+            out[key] = _unset_dropped(key, value)
     return out
+
+
+def _unset_dropped(key: str, value: Any) -> Any:
+    """Return a provider block mapping without its ``None`` fields; other values unchanged."""
+    if key in PROVIDER_BLOCKS and isinstance(value, Mapping):
+        return {field: item for field, item in value.items() if item is not None}
+    return value

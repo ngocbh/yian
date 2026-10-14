@@ -44,7 +44,7 @@ RESPONSES_SAMPLE = {
     "prompt_cache_key": "flow-a",
     "prompt_cache_options": {"mode": "explicit", "ttl": "30m"},
     "prompt_cache_retention": "24h",
-    "reasoning": {"effort": "high", "summary": "auto"},
+    "reasoning": {"context": "all_turns", "effort": "high", "mode": "pro", "summary": "auto"},
     "safety_identifier": "user-hash",
     "service_tier": "flex",
     "temperature": 0.2,
@@ -114,7 +114,7 @@ def test_nested_typo_names_full_path_and_nested_allowed_keys():
     message = _error(OpenAIResponsesBlock, {"reasoning": {"efort": "high"}})
     expected = "`openai.reasoning.efort` is not a supported field of the OpenAI Responses API"
     assert f"{expected} request" in message
-    assert "allowed: effort, summary" in message
+    assert "allowed: context, effort, mode, summary" in message
 
     message = _error(OpenAIResponsesBlock, {"text": {"verbose": "low"}})
     assert "`openai.text.verbose`" in message
@@ -136,6 +136,8 @@ def test_every_problem_is_reported():
         {"max_output_tokens": True},
         {"reasoning": {"effort": "hgih"}},
         {"reasoning": {"summary": "brief"}},
+        {"reasoning": {"context": "every_turn"}},
+        {"reasoning": {"mode": "turbo"}},
         {"reasoning": "high"},
         {"text": {"verbosity": "loud"}},
         {"temperature": 3},

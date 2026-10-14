@@ -172,7 +172,10 @@ def _by_type(*variants: type[_Block]) -> Any:
 class OpenAIReasoning(_Block):
     """The ``reasoning`` object of an OpenAI Responses API request."""
 
+    context: Optional[Literal["auto", "current_turn", "all_turns"]] = None
     effort: Optional[Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]] = None
+    # The SDK also types `mode` as any string; these are the values it documents.
+    mode: Optional[Literal["standard", "pro"]] = None
     summary: Optional[Literal["auto", "concise", "detailed"]] = None
 
 

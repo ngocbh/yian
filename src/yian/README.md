@@ -739,18 +739,19 @@ One loader class (`compose/source/scalars.py`) reads plain scalars with YAML 1.2
 core-schema rules plus unquoted timestamps and `<<` merge keys, for documents,
 for isolated literals (`parse_yaml_literal`), and for one bare plain scalar
 (`read_plain_scalar`, which reads an inline `call(...)` argument), without
-touching PyYAML's global resolver or constructor tables. Root text and each
-uncached external file are constructed once as `SourceDocument`s, whose public
-cursor interface is immutable and defensive. They retain the original text and
-label while keeping PyYAML's composed/constructed graph private. YAML aliases
-and merge mappings are interpreted without mutating that graph. Persistent
-pair/arc ropes keep merge topology compact, and completed mapping summaries
-bound repeated merge-DAG traversal. Public value snapshots use a stack-safe
-iterative copier that preserves shared and recursive aliases. Within one
-successful file-import graph, the loader's resolved-path cache also ensures that
-each external physical file is read, parsed, and compiled once; aliases and
-diamond imports reuse that canonical `ComposedFlow` as the source for their
-lexically rebased views.
+touching PyYAML's global resolver or constructor tables. A plain scalar its tag
+can't build, such as `2026-13-45`, is a located YAML error that says to quote
+it. Root text and each uncached external file are constructed once as
+`SourceDocument`s, whose public cursor interface is immutable and defensive.
+They retain the original text and label while keeping PyYAML's
+composed/constructed graph private. YAML aliases and merge mappings are
+interpreted without mutating that graph. Persistent pair/arc ropes keep merge
+topology compact, and completed mapping summaries bound repeated merge-DAG
+traversal. Public value snapshots use a stack-safe iterative copier that
+preserves shared and recursive aliases. Within one successful file-import graph,
+the loader's resolved-path cache also ensures that each external physical file
+is read, parsed, and compiled once; aliases and diamond imports reuse that
+canonical `ComposedFlow` as the source for their lexically rebased views.
 
 Source-aware parsing and inline extraction navigate stable `SourceCursor` values.
 A physical cursor combines a definition range with an occurrence path (and a

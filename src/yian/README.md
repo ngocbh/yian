@@ -38,7 +38,7 @@ know the shape of it:
 
 ```
 diagnostics.py semantic failures, resolved presentation, origins/resolver routing [leaf]
-json_codec.py JSON text for values holding ints of any size; stdlib only     [leaf]
+json_codec.py JSON and plain text for values holding ints of any size; stdlib only [leaf]
 typesys/      typed value system (values) + variable pool                 [leaf]
 events.py     transient run/node observer vocabulary; imports diagnostics
 expr/         one ${...} grammar: parse -> AST -> evaluate / infer type / ref-walk
@@ -491,17 +491,20 @@ growth rejection (`contract.growth`). Nothing is recorded as null in its place. 
 top-level complex returned by a CODE node fails `contract.output` like NaN. An int
 too large for a float in a `float` slot fails the type check at its path.
 
-Ints of any size are values (an int literal in the YAML keeps Python's digit limit,
-a located load error past it). Run-log JSON goes through `yian.json_codec`, which
+Ints of any size are values. Run-log JSON goes through `yian.json_codec`, which
 writes and reads ints of any size without changing Python's process-wide
 `sys.set_int_max_str_digits`; yian never calls it. Value bytes decode through
 `runtime.log.decode_typed_json`: pydantic's strict JSON path first, and the codec for
-a document with an int past the digit limit. Converting a long int costs time
-quadratic in its digits (about 0.2 s each way at 100,000 digits). Type-check messages
-show such an int as `<int too large to display>`. Rendering one as text (template
-interpolation, prompt text) still fails like any other expression error, as does an
-operator Python can't complete (`binding.evaluate` in a binding, `node.execute` for a
-prompt).
+a document with an int past the digit limit. `json_codec.as_text` renders values as
+text (template interpolation, prompt text, `join`), and `%` retries through the
+size-safe formatter in `expr/percent_format.py` when Python's `%` refuses a long int.
+The YAML loader and `int(lo..hi)` range ends read long int literals through
+`json_codec.parse_int`. Manifests, fingerprints, and canonical type labels stay exact.
+Converting a long int costs time quadratic in its digits (about 0.2 s each way at
+100,000 digits). Messages show such an int as `<int too large to display>`
+(`typesys.values.value_repr`), and load errors show a long digit run echoed from the
+source the same way. An operator Python can't complete fails like any other
+expression error (`binding.evaluate` in a binding, `node.execute` for a prompt).
 
 An AGENT checks what the model sends back. `run_agent` passes `invoke_model` a
 `check_reply` that rejects a tool call whose arguments hold a NaN or infinity, before any call of

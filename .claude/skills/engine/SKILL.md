@@ -78,7 +78,7 @@ this model whenever you design anything:
   `yian.json_codec` (run log, pool, lineage, memory, manifests, CLI) and decode
   typed value bytes with `runtime.log.decode_typed_json`; never call
   `sys.set_int_max_str_digits` in source. Show a long int in a message with
-  `typesys.values.value_repr`. Rendering one as text stays an expression error.
+  `typesys.values.value_repr`. Render values as text with `json_codec.as_text`.
 - A yian value nests at most `typesys.values.MAX_VALUE_NESTING` (100) levels,
   counting itself; each dict, list, tuple, model, or dataclass is a level and a
   `TypedValue` adds none. `reject_deep_nesting(value, where, *,

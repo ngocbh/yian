@@ -844,9 +844,12 @@ through `yian.json_codec`, which converts long ints itself; yian source never ca
 codec when pydantic reports invalid JSON (as it does for an int past the digit
 limit). Converting a long int costs time quadratic in its digits (about 0.2 s each
 way at 100,000 digits); there is no cost limit.
-Type-check messages show one as `<int too large to display>`
-(`typesys.values.value_repr`). Rendering one as text (template interpolation,
-prompt text) still fails as an expression error.
+Render values as text with `json_codec.as_text` (template interpolation, prompt
+text, `join`); `%` retries through `expr/percent_format.py` when Python's `%`
+refuses a long int. The YAML loader and `int(lo..hi)` range ends read long int
+literals with `json_codec.parse_int`. Show a long int in a message with
+`typesys.values.value_repr`, which writes `<int too large to display>`; load errors
+show a long digit run echoed from the source the same way.
 
 A yian value nests at most `typesys.values.MAX_VALUE_NESTING` (100) levels, counting
 itself. `reject_deep_nesting(value, where, *, enclosing_levels=0)` counts each dict,
@@ -1215,9 +1218,11 @@ boolean/arithmetic, prompt builtin-call) are unified. Three modules, one pipelin
   rewrites, and inference (`bool`) skip `T`; the traced path records one opaque route over
   `x`. `RequiredError` (a `${x:?"msg"}` over an unbound ref) lives here, its
   natural home now that the evaluator raises it. Operators apply Python semantics to
-  resolved values; `ValueError`, `OverflowError` and `KeyError` from an operator, and a
-  `ValueError` rendering a value as text (an embedded span, or a whole prompt; `_as_text`
-  in `template.py`), become `ExpressionError`, so the run fails instead of raising.
+  resolved values; `ValueError`, `OverflowError` and `KeyError` from an operator become
+  `ExpressionError`, so the run fails instead of raising. A `%` that Python refuses for a
+  long int retries through `percent_format.format_text`. `_as_text` in `template.py`
+  renders an embedded span or a whole prompt with `json_codec.as_text`, writing every
+  digit of a long int.
 - **`template.py` — the string surface.** `scan_template` splits literal text from
   `${...}` spans; `eval_binding` renders a binding value; `render_template_record`
   renders a strict prompt; `$$` is the scanner's universal escape (a prompt `$$`

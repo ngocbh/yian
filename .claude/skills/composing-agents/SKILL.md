@@ -197,8 +197,7 @@ with `isinstance(r, <Type>) and ...`.
 
 Arithmetic is Python's: `+` concatenates text and lists, `*` repeats them, `%` formats text
 (`${"%.2f" % p}`), a bool is 0/1 (but a CASE `on:` never equates a bool with a number). No
-cost limits; an operator Python can't complete (overflow), or a value holding an int too long
-to render as text, fails like an expression error.
+cost limits; an operator Python can't complete (overflow) fails like an expression error.
 
 `and`, `or`, `not`, and `in` are reserved operators, so none can be the root
 name of a reference. A dotted field may use those names (`${record.output.in}`).
@@ -245,9 +244,8 @@ overflowing `${x * 10}`, or `${(0 - 8) ** 0.5}`) fails its node with
 or return null explicitly (a `case` routed to a value entry
 `no_value: !Optional(float) null`, or a `code` node returning `None`). An `int` computed by an
 expression or node, or supplied as an input, may have any number of digits and is
-recorded exactly. An int literal written in the YAML may have at most Python's limit
-(4300 digits by default), else it is a load error; rendering an int that long as
-text (in a template or a prompt) fails.
+recorded exactly. So may an int literal in the YAML, and text (a template, a prompt,
+`join`, `%`) writes every digit.
 
 A value nests at most 100 levels (each record and list is one): a binding, MAP
 `over` list, or node output nested deeper fails its node, and wrapping a 100-level

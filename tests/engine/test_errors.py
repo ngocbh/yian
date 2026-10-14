@@ -313,10 +313,11 @@ def test_inline_code_construction_errors_carry_ranges(filename, line):
         # `int` input fails BEFORE any node runs (no LLM creds needed).
         ("e08-input-type-mismatch.yaml", {"topic": "X", "window": "soon"}, "int"),
         # inline CODE runtime failures — a raise, a wrong-typed return (write boundary),
-        # and a nested non-serializable return (the node's deep serialize-once check).
+        # and a return with a nested non-JSON member (`contract.output` at the node,
+        # traced to its `output:` contract).
         ("e27-inline-code-raises.yaml", {"topic": "X"}, "intentional inline failure"),
         ("e28-inline-wrong-type.yaml", {"topic": "X"}, "int"),
-        ("e29-inline-nonserializable.yaml", {"topic": "X"}, "non-serializable"),
+        ("e29-inline-nonserializable.yaml", {"topic": "X"}, "is not a JSON value"),
     ],
 )
 def test_runtime_error_gallery(filename, inputs, substr):

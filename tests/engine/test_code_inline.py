@@ -235,12 +235,13 @@ def test_inline_non_owned_failure_uses_whole_code_origin():
     whole = OriginRef("code")
     node = CodeNode(
         "n",
-        code="return object()",
+        code="return 0",
         code_origin=whole,
         code_line_origins=(OriginRef("line:0"),),
     )
 
-    assert _failure_origin(node, {}) is whole
+    # Raised outside the node: no traceback, so no frame of the authored code.
+    assert node.exception_origin(RuntimeError("outside")) is whole
 
 
 def test_reference_failure_uses_code_then_node_fallback():
@@ -278,23 +279,14 @@ def test_reference_failure_does_not_inspect_origin_truthiness(code_origin):
     assert _failure_origin(node, {}) is code_origin
 
 
-# --- deep serialize-once check (fails AT the node) -------------------------------------- #
+# --- the output boundary, not the node, checks the returned value ---------------------- #
 
 
-def test_nested_non_serializable_return_fails_at_node():
-    with pytest.raises(TypeError, match="non-serializable"):
-        _run("return {'ok': 1, 'bad': object()}", {})
-
-
-def test_top_level_non_serializable_return_fails_at_node():
-    with pytest.raises(TypeError, match="non-serializable"):
-        _run("return object()", {})
-
-
-def test_serializable_returns_pass_including_coerced_set():
-    # a nested set is coerced to a list by the canonical typed-value serializer — OK.
-    assert _run("return {'xs': {1, 2, 3}}", {}).value == {"xs": {1, 2, 3}}
-    assert _run("return [1, 'a', {'k': 2.5}]", {}).value == [1, "a", {"k": 2.5}]
+def test_inline_return_comes_back_unchecked():
+    value = _run("return {'ok': 1, 'bad': object()}", {}).value
+    assert value.keys() == {"ok", "bad"}
+    assert value["ok"] == 1
+    assert type(value["bad"]) is object
 
 
 # --- reference mode is untouched -------------------------------------------------------- #

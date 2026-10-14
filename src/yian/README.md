@@ -400,8 +400,8 @@ retains its recursive module/function/lambda/comprehension code-object tree.
 `CodeNode.exception_origin()` walks an exception traceback outer-to-inner and
 selects the deepest frame whose code object is owned by identity (`is`), never by
 filename, equality, or hash membership. Wrapper line `n` selects authored slot
-`n - 2`; an unavailable slot, wrapper-only frame, or post-body serialization
-failure falls back to `code_origin`, then `Node.origin`. Reference mode uses the
+`n - 2`; an unavailable slot, wrapper-only frame, or failure outside the authored
+body falls back to `code_origin`, then `Node.origin`. Reference mode uses the
 whole `code_origin` as its invocation site, then the node fallback. Compose applies
 the same line selector to load-time
 `SyntaxError.lineno` and reports `SyntaxError.msg`.
@@ -610,6 +610,10 @@ manifests, and HUMAN_INPUT `answer_schema` types (`"Any"` for an `Any` answer).
 values). `ValueKind.ANY` is type-only: `build_value_as` stores an `Any` value under its
 natural kind, and checks that `object` values, `list(object)` items, and `LIST_ANY`
 items are JSON values, failing with the path of a non-text key or a non-JSON value.
+`canonical_typed` checks an untyped node output, and each untyped field of a partial
+record output, with the same walk (`reject_non_json(value, "output", files=True)`),
+which also accepts `FileRef` leaves at any depth; it fails `contract.output` with
+`output at <path>: ...`. An already-built `TypedValue` (a replayed record) is not walked.
 Load doesn't check field reads on an `Any` value. In wiring, an `Any` source fits only
 `Any` and `Optional(Any)`; a tagged slot treats it as narrower than any other type except
 `None` and a type whose every value holds a `file` (both disjoint), and checks it at

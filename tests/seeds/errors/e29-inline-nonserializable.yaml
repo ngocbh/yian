@@ -1,8 +1,7 @@
-# e29 — an inline CODE body returns a value with a NON-serializable member nested inside
-# (a bare object in a dict). RUNTIME: the node's deep serialize-once check fails AT THE
-# NODE (naming it), rather than letting the value slip the top-level write boundary and
-# detonate later at a checkpoint. The one guarantee carried over from the deleted
-# subprocess wire (which forced this via json.dump).
+# e29 — an inline CODE body returns a value with a non-JSON member nested inside (a bare
+# object in a dict). RUNTIME: the output boundary rejects it, as it does for any node
+# output, before the value is recorded: `contract.output` at `bad`, traced to its
+# `output:` contract.
 id: err-inline-nonserializable
 name: err_inline_nonserializable
 input:

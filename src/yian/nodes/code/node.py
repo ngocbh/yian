@@ -30,8 +30,9 @@ privileges, loading a flow from an untrusted or agent-generated source is remote
 execution. No opt-in load-time gate exists because there is no untrusted-source loader. The
 current runtime executes inline code **in-process** with no isolation — a runaway body
 cannot be killed, only interrupted with the run; there is no killable subprocess runtime or
-security sandbox. A per-node `run()` **deep serialize-once check** makes a non-serializable
-inline return fail *inside CODE*, before the dispatcher prepares its durable success record.
+security sandbox. The returned value is checked at the output boundary, like any node
+output: a value that doesn't match its declared `output:` type, or, untyped, isn't made of
+JSON values and files, fails `contract.output`.
 """
 
 import ast
@@ -44,13 +45,6 @@ from typing import Callable, Iterator, Optional, cast
 from yian.diagnostics import OriginRef
 from yian.nodes.base import Node, NodeKind, Output
 from yian.nodes.contracts import _map_origin, _validate_optional_origin
-from yian.typesys.values import (
-    ANY_VALUE_ADAPTER,
-    TypeCheckError,
-    build_value,
-    reject_deep_nesting,
-    reject_nonfinite,
-)
 
 # A reference is a single dotted module path + one colon + a function identifier:
 # `pkg.mod:func`, `mymod:myfunc`. Anchored (fullmatch): real source never matches.
@@ -304,7 +298,7 @@ class CodeNode(Node):
         Traceback filenames and code-object equality are deliberately ignored:
         separately compiled code can share both. Reference mode attributes the
         invocation to its whole ``code:`` scalar. Inline failures outside authored
-        code, including the serialize-once check, use that same scalar fallback.
+        code use that same scalar fallback.
 
         Args:
             exception (`Exception`): Original node-body exception.
@@ -353,32 +347,4 @@ class CodeNode(Node):
         ns: dict = {}
         exec(self._code, ns)  # binds `main`
         result = ns["main"](inputs)
-        self._assert_serializable(result)
         return Output(value=result)
-
-    def _assert_serializable(self, value) -> None:
-        """Fail *at the node* if an inline return can't survive the typed, serializable pool.
-
-        The generic write-boundary validates the top-level shape only; a nested
-        non-serializable value (e.g. a bare object inside a returned dict) would otherwise
-        reach canonical success-record encoding before it fails. Running the typed-value
-        serializer once here surfaces the error inside this CODE invocation. `None` is left
-        to the declared-`output:` check, and a value nested past the value limit or holding
-        a NaN or infinity to the output boundary.
-        """
-        if value is None:
-            return
-        try:
-            reject_deep_nesting(value, "output")  # first: the non-finite walk recurses
-            reject_nonfinite(value, "output")
-        except TypeCheckError:
-            # The output-contract boundary rejects it with its path and the declared field's
-            # origin; serializing it here could fail with an opaque recursion error.
-            return
-        try:
-            typed = build_value(value)  # top-level: raises if the value can't be wrapped
-            ANY_VALUE_ADAPTER.dump_json(typed)  # nested: raises on a non-serializable member
-        except TypeCheckError as exc:
-            raise TypeError(f"inline `code:` returned a non-serializable value: {exc}") from exc
-        except Exception as exc:  # a pool serialization failure (nested unknown type)
-            raise TypeError(f"inline `code:` returned a non-serializable value: {exc}") from exc

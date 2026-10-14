@@ -1117,7 +1117,7 @@ def test_canonical_helpers_reject_unordered_containers():
         canonical_seed({"values": {"alpha", "beta"}})
     with pytest.raises(ValueError, match="unordered container"):
         canonical_seed(Box({"alpha", "beta"}))
-    with pytest.raises(ValueError, match="unordered container"):
+    with pytest.raises(ValueError, match="is not a JSON value"):
         canonical_typed({"values": {"alpha", "beta"}}, ValueKind.OBJECT)
 
 
@@ -1132,7 +1132,7 @@ def test_canonical_helpers_reject_cyclic_node_data():
 
     with pytest.raises(ValueError, match="cyclic container"):
         canonical_seed(cyclic)
-    with pytest.raises(ValueError, match="cyclic container"):
+    with pytest.raises(ValueError, match="value contains itself"):
         canonical_typed(cyclic, None)
 
 

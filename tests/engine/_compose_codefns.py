@@ -157,3 +157,15 @@ def deep_tree(inputs: dict) -> dict:
     for _ in range(inputs["n"]):
         tree = {"a": tree}
     return {"tree": tree}
+
+
+class _UnreadableList(list):
+    """A list whose iteration raises."""
+
+    def __iter__(self):
+        raise RuntimeError("cannot iterate")
+
+
+def unreadable_list(inputs: dict) -> list:
+    # a list subclass whose `__iter__` raises (no `output:` declared).
+    return _UnreadableList([1])

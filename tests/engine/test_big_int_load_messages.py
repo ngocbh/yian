@@ -9,6 +9,7 @@ import pytest
 
 import yian.json_codec as json_codec
 from yian.compose import LoadError, load_flow
+from yian.compose.helpers.errors import LoadDiagnostics
 
 
 BIG = 10**4999 + 12345  # 5000 digits, past Python's default 4300-digit limit
@@ -121,3 +122,83 @@ _NODE_FIELD_ROWS = {
 @pytest.mark.parametrize("text", _NODE_FIELD_ROWS.values(), ids=_NODE_FIELD_ROWS.keys())
 def test_a_node_field_message_shows_a_long_int_as_a_placeholder(text):
     assert_load_message(text)
+
+
+# --- validate ----------------------------------------------------------------
+
+
+def _child(slot: str) -> str:
+    return (
+        f"defs:\n  child:\n    input:\n      n: {slot}\n    nodes:\n      c:\n"
+        "        kind: code\n        input:\n          n: ${input.n}\n"
+        "        code: |\n          return inputs['n']\n    output: ${c.output}\n"
+    )
+
+
+def _call_node(child_slot: str, value: str) -> str:
+    return _child(child_slot) + _flow(
+        f"  c:\n    kind: call\n    call: child\n    input:\n      n: {value}\n"
+    )
+
+
+def _case_on(on_type: str, whens: list[str]) -> str:
+    body = "".join(f"      - when: {w}\n        then: big\n" for w in whens)
+    return _flow(
+        f"  g:\n    kind: case\n    on: ${{input.x}}\n    cases:\n{body}    else: other\n"
+        "  big: !str big\n  other: !str other\n",
+        head=f"input:\n  x: {on_type}\n",
+        output="${g.output}",
+    )
+
+
+def _value_branch(then: str) -> str:
+    return _flow(
+        f"  g:\n    kind: case\n    on: ${{input.x}}\n    cases:\n      - when: 1\n"
+        f"        then: {then}\n    else: other\n  other: !str other\n",
+        head="input:\n  x: !int\n",
+        output="${g.output}",
+    )
+
+
+_VALIDATE_ROWS = {
+    "typed_binding_str": _flow(_code(f"!str {D}")),
+    "value_entry_str": _flow(f"  v: !str {D}\n" + _code("${v.output}")),
+    "inline_call_str": _child("!str") + _flow(_code(f"call(child, n={D})")),
+    "inline_call_bool": _child("!bool") + _flow(_code(f"call(child, n={D})")),
+    "inline_call_range": _child("!int(0..5)") + _flow(_code(f"call(child, n={D})")),
+    "call_node_str": _call_node("!str", D),
+    "call_node_bool": _call_node("!bool", D),
+    "call_node_range": _call_node("!int(0..5)", D),
+    "case_value_branch_list": _value_branch(f"[{D}]"),
+    "case_value_branch_map": _value_branch(f"{{k: {D}}}"),
+    "loop_seed_into_str": _flow(
+        f"  c:\n    kind: loop\n    times: 1\n    input:\n      n: {D}\n    nodes:\n"
+        "      bump:\n        kind: code\n        input:\n          n: ${input.n}\n"
+        "        output:\n          n: str\n        code: |\n          return {'n': 'x'}\n"
+        "    output: ${bump.output}\n"
+    ),
+    "int_range_reversed": _flow(_code("${input.x}"), head=f"input:\n  x: !int({D}..0)\n"),
+    "case_duplicate_when": _case_on("!int", [D, D]),
+    "case_quoted_when_vs_int": _case_on("!int", [f'"{D}"']),
+    "typed_binding_quoted_int": _flow(_code(f'!int "{D}"')),
+}
+
+
+@pytest.mark.parametrize("text", _VALIDATE_ROWS.values(), ids=_VALIDATE_ROWS.keys())
+def test_a_validate_message_shows_a_long_int_as_a_placeholder(text):
+    assert_load_message(text)
+
+
+def test_a_quoted_long_int_passed_to_an_int_child_fails_with_a_message_not_a_crash():
+    assert_load_message(_child("!int") + _flow(_code(f'call(child, n="{D}")')))
+
+
+def test_load_diagnostics_elide_a_digit_run_past_the_limit():
+    error = LoadDiagnostics().error("x " + D + " y", notes=["n " + D])
+    assert str(error) == "x " + PLACEHOLDER + " y"
+    assert error.diagnostic.notes == ("n " + PLACEHOLDER,)
+
+
+def test_load_diagnostics_keep_a_digit_run_within_the_limit():
+    kept = "1" * 4300
+    assert str(LoadDiagnostics().error("x " + kept + " y")) == "x " + kept + " y"

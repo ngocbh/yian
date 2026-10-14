@@ -93,7 +93,7 @@ from yian.expr.grammar import whole_span_interior
 from yian.expr.template import expr_refs_of, flow_call_callees_in_spans
 from yian.typesys import BUILTIN_TYPE_NAMES, TypeCheckError, build_value_as
 from yian.typesys.types import TypeRegistry
-from yian.typesys.values import Type
+from yian.typesys.values import Type, value_repr
 
 # A value longer than this is cut in a message; the author writes it as a block.
 _SHOWN_LIMIT = 60
@@ -787,7 +787,10 @@ def _scalar_text(value: Any, *, flow: bool) -> str:
         return "true" if value else "false"
     if isinstance(value, float) and not math.isfinite(value):
         return non_finite_text(value)
-    if isinstance(value, (int, float)):
+    if isinstance(value, int):
+        # A placeholder for an int too long to render: the hint is a message.
+        return value_repr(value)
+    if isinstance(value, float):
         return repr(value)
     if isinstance(value, (datetime.date, datetime.datetime)):
         return yaml_quoted(value.isoformat())

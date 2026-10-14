@@ -46,7 +46,7 @@ from yian.nodes.contracts import (
 )
 from yian.typesys import canonical_type_label
 from yian.typesys.types import TypeRegistry
-from yian.typesys.values import Type
+from yian.typesys.values import Type, value_repr
 
 
 def check_loop_type_contract(
@@ -285,7 +285,11 @@ def _seed_text(value: Any) -> str:
     if isinstance(value, ValueTemplate):
         value = _untyped_tree(value.value)
     # JSON is YAML flow style, and a quoted string stays literal text.
-    return json.dumps(value, default=str)
+    try:
+        return json.dumps(value, default=str)
+    except ValueError:
+        # An int past Python's digit limit can't be written; the hint is a message.
+        return value_repr(value)
 
 
 def _untyped_tree(node: Any) -> Any:

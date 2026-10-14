@@ -51,7 +51,7 @@ from yian.typesys import (
     type_for,
 )
 from yian.typesys.types import EnumExpr, format_type_expr, legacy_respelling, parse_type
-from yian.typesys.values import Type, canonical_type_label
+from yian.typesys.values import Type, canonical_type_label, value_repr
 
 if TYPE_CHECKING:
     from yian.compose.source.catalog import _SourceCatalogBuilder
@@ -886,7 +886,7 @@ def _mismatch_reason(error: TypeCheckError, value: Any) -> str | None:
         `str | None`: The reason, or `None` when the error only says the value does
             not match.
     """
-    head = f"{value!r} does not match declared type "
+    head = f"{value_repr(value)} does not match declared type "
     text = str(error)
     if not text.startswith(head):
         return None

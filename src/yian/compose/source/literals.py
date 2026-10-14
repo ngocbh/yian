@@ -5,7 +5,7 @@ from typing import Any
 import yaml
 
 from yian.compose.source.common import SourceSyntaxError
-from yian.compose.source.scalars import _MERGE_TAG, _FlowLoader
+from yian.compose.source.scalars import _MERGE_TAG, ScalarValueError, _FlowLoader
 
 
 def parse_yaml_literal(text: str) -> Any:
@@ -54,7 +54,8 @@ def read_plain_scalar(text: str) -> Any:
     Raises:
         `SourceSyntaxError`:
             Raised when the resolved tag cannot construct the text, such as an
-            impossible date.
+            impossible date; the message is the reason, without the text or the
+            quoting fix.
     """
 
     if "\n" in text:
@@ -65,5 +66,7 @@ def read_plain_scalar(text: str) -> Any:
         return text  # `<<` merges only as a mapping key; as a value it is text
     try:
         return loader.construct_object(yaml.ScalarNode(tag, text))
-    except (yaml.YAMLError, ValueError) as exc:
+    except ScalarValueError as exc:
+        raise SourceSyntaxError(exc.reason) from exc  # the caller adds the quoting fix
+    except yaml.YAMLError as exc:
         raise SourceSyntaxError(str(exc)) from exc

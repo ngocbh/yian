@@ -223,7 +223,8 @@ def test_read_plain_scalar_rejects_an_unbuildable_form():
     with pytest.raises(SourceSyntaxError) as caught:
         read_plain_scalar("2026-13-45")
 
-    assert "2026-13-45" not in str(caught.value)
+    # The inline-call error adds the quoting fix and must not echo the value.
+    assert str(caught.value) == "not a valid date: month must be in 1..12"
 
 
 _RESOLVER_TAGS = (
@@ -267,3 +268,75 @@ def test_pyyaml_globals_are_untouched():
         yaml.SafeLoader.yaml_constructors["tag:yaml.org,2002:int"]
         is yaml.constructor.SafeConstructor.construct_yaml_int
     )
+    assert (
+        yaml.SafeLoader.yaml_constructors["tag:yaml.org,2002:timestamp"]
+        is yaml.constructor.SafeConstructor.construct_yaml_timestamp
+    )
+
+
+_BAD_DATES = [
+    ("2026-13-45", "month must be in 1..12"),
+    ("2026-02-30", "day is out of range for month"),
+    ("0000-01-01", "year 0 is out of range"),
+    ("2026-01-01T25:00:00", "hour must be in 0..23"),
+    ("2026-01-01 10:00:00 +99:00", "UTC offset must be under 24:00"),
+]
+
+
+@ENTRY_POINTS
+@pytest.mark.parametrize(("text", "reason"), _BAD_DATES)
+def test_an_unbuildable_date_is_a_located_syntax_error_with_the_fix(read, text, reason):
+    with pytest.raises(SourceSyntaxError) as caught:
+        read(f"value: {text}\n")
+
+    message = str(caught.value)
+    kind = "datetime" if ":" in text else "date"
+    assert f"not a valid {kind}: {reason}" in message
+    assert "quote it to keep it as text" in message
+    if read is _document_value:
+        assert caught.value.range is not None
+        assert (caught.value.range.start_line, caught.value.range.start_col) == (1, 8)
+
+
+@pytest.mark.parametrize(
+    ("text", "line", "column"),
+    [("[1, 2026-13-45]\n", 1, 5), ("a:\n  2026-13-45: 1\n", 2, 3)],
+    ids=["in-a-list", "as-a-key"],
+)
+def test_an_unbuildable_date_in_a_list_or_key_is_located(text, line, column):
+    with pytest.raises(SourceSyntaxError, match="not a valid date") as caught:
+        SourceDocument.parse(text)
+
+    assert (caught.value.range.start_line, caught.value.range.start_col) == (line, column)
+
+
+@ENTRY_POINTS
+def test_an_explicit_timestamp_tag_on_non_date_text_names_the_text(read):
+    with pytest.raises(SourceSyntaxError) as caught:
+        read("value: !!timestamp hello\n")
+
+    message = str(caught.value)
+    assert "expected a date or timestamp, but found 'hello'" in message
+    assert "quote it" not in message
+
+
+@ENTRY_POINTS
+def test_a_quoted_unbuildable_date_under_an_explicit_tag_gets_no_quoting_fix(read):
+    with pytest.raises(SourceSyntaxError) as caught:
+        read('value: !!timestamp "2026-13-45"\n')
+
+    message = str(caught.value)
+    assert "not a valid date: month must be in 1..12" in message
+    assert "quote it" not in message
+
+
+@pytest.mark.parametrize(
+    "tag", sorted(tag for tag in _FlowLoader.yaml_constructors if tag is not None)
+)
+@pytest.mark.parametrize("text", ["hello", "2026-13-45", "''"])
+def test_no_constructor_raises_a_non_yaml_error(tag, text):
+    # Consumers turn only YAML errors into located load errors.
+    try:
+        yaml.load(f"value: !<{tag}> {text}\n", Loader=_FlowLoader)
+    except yaml.YAMLError:
+        pass

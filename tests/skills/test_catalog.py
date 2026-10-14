@@ -53,6 +53,7 @@ def test_frontmatter_reads_yes_and_no_as_text(tmp_path: Path) -> None:
         ("---\nname: a\n---\nbody\n", "non-empty `description`"),
         ("---\nname: Bad_Name\ndescription: d\n---\n", "invalid skill name"),
         ("---\nname: a--b\ndescription: d\n---\n", "invalid skill name"),
+        ("---\nname: a\ndescription: d\ndate: 2026-13-45\n---\nbody\n", "not a valid date"),
     ],
 )
 def test_bad_skill_files_name_the_file(tmp_path: Path, content: str, message: str) -> None:

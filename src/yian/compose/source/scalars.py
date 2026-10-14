@@ -5,7 +5,9 @@ PyYAML resolves plain scalars with YAML 1.1 rules, where ``yes``/``no``/``on``/
 sexagesimal integer. ``_FlowLoader`` keeps PyYAML as the parser and swaps only its
 own implicit-resolver table and the ``int``/``float``/``bool`` constructors for the
 YAML 1.2 core schema, keeping two YAML 1.1 extensions: unquoted timestamps and
-``<<`` merge keys. PyYAML's global ``SafeLoader`` tables are never modified.
+``<<`` merge keys. A date-shaped plain scalar that is not a real date is a located
+``ConstructorError`` that says to quote it. PyYAML's global ``SafeLoader`` tables
+are never modified.
 
 Knows about:   PyYAML.
 Never imports: compose helpers or phases, nodes, compile, runtime, the run
@@ -15,6 +17,7 @@ Never imports: compose helpers or phases, nodes, compile, runtime, the run
 from __future__ import annotations
 
 import re
+from datetime import date, datetime
 
 import yaml
 from yaml.constructor import ConstructorError
@@ -54,6 +57,40 @@ def _pyyaml_timestamp_regex() -> re.Pattern[str]:
             if tag == _TIMESTAMP_TAG:
                 return regexp
     raise AssertionError("PyYAML has no implicit timestamp resolver")
+
+
+def _date_problem(error: ValueError) -> str:
+    """Return why a date-shaped text is not a date, from `datetime`'s error.
+
+    Args:
+        error (`ValueError`):
+            The error `datetime` or `timezone` raised.
+
+    Returns:
+        `str`:
+            The error's text, or ``UTC offset must be under 24:00`` for the
+            ``timedelta`` repr `timezone` gives for an offset of 24 hours or more.
+    """
+
+    text = str(error)
+    if text.startswith("offset must be a timedelta"):
+        return "UTC offset must be under 24:00"
+    return text
+
+
+class ScalarValueError(ConstructorError):
+    """A plain scalar's resolved tag can't build its text; quoting keeps it as text.
+
+    Args:
+        reason (`str`):
+            Why the text can't be built, without the text itself.
+        mark (`yaml.Mark | None`):
+            Where the scalar starts.
+    """
+
+    def __init__(self, reason: str, mark: yaml.Mark | None):
+        super().__init__(None, None, f"{reason}; quote it to keep it as text", mark)
+        self.reason = reason
 
 
 class _FlowLoader(yaml.SafeLoader):
@@ -144,6 +181,48 @@ class _FlowLoader(yaml.SafeLoader):
             return float("nan")
         return float(text)
 
+    def construct_yaml_timestamp(self, node: yaml.Node) -> date | datetime:
+        """Construct a date or datetime, or raise a located error when it can't be built.
+
+        The quoting fix is given for any unquoted text, including a plain
+        ``!!timestamp 2026-13-45``, since the node does not record an explicit tag.
+
+        Args:
+            node (`yaml.Node`):
+                Scalar node tagged ``timestamp``.
+
+        Returns:
+            `date | datetime`:
+                The date, or the datetime for text with a time.
+
+        Raises:
+            `ScalarValueError`:
+                Raised when an unquoted date-shaped text is not a real date, such as
+                ``2026-13-45``.
+            `ConstructorError`:
+                Raised when an explicitly tagged text is not date-shaped, or is quoted
+                and not a real date.
+        """
+
+        text = self.construct_scalar(node)
+        match = self.timestamp_regexp.match(text)
+        if match is None:
+            raise ConstructorError(
+                None,
+                None,
+                f"expected a date or timestamp, but found {text!r}",
+                node.start_mark,
+            )
+        try:
+            return super().construct_yaml_timestamp(node)
+        except ValueError as exc:
+            kind = "date" if match.group("hour") is None else "datetime"
+            reason = f"not a valid {kind}: {_date_problem(exc)}"
+            if node.style is None:
+                raise ScalarValueError(reason, node.start_mark) from None
+            # Quoted text under an explicit tag: quoting can't be the fix.
+            raise ConstructorError(None, None, reason, node.start_mark) from None
+
     def _core_text(self, node: yaml.Node, pattern: re.Pattern[str], kind: str) -> str:
         """Return a scalar's text after checking it is a core-schema form.
 
@@ -192,3 +271,4 @@ _FlowLoader.add_implicit_resolver(
 _FlowLoader.add_constructor(_BOOL_TAG, _FlowLoader.construct_yaml_bool)
 _FlowLoader.add_constructor(_INT_TAG, _FlowLoader.construct_yaml_int)
 _FlowLoader.add_constructor(_FLOAT_TAG, _FlowLoader.construct_yaml_float)
+_FlowLoader.add_constructor(_TIMESTAMP_TAG, _FlowLoader.construct_yaml_timestamp)

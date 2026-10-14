@@ -928,3 +928,19 @@ def test_run_flow_tool_reports_an_unknown_tool_grant_as_failed(tmp_path, monkeyp
 
     assert result.startswith("FAILED: AGENT node 'agent'")
     assert "chat_missing_tool" in result
+
+
+def test_chat_without_model_exits_cleanly(monkeypatch):
+    """A chat flow whose agent no layer gives a model exits 1 before any log exists."""
+    monkeypatch.delenv("YIAN_DEFAULT_PROVIDER", raising=False)
+    monkeypatch.delenv("YIAN_DEFAULT_MODEL", raising=False)
+
+    result = runner.invoke(app, ["chat", str(EXAMPLE_CHAT)], input="")
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    output = re.sub(r"\s+", " ", _ANSI_SGR.sub("", result.output))
+    assert "has no provider or model" in output
+    assert "yian auth <provider>" in output
+    assert "Traceback" not in output
+    assert _chat_logs() == []

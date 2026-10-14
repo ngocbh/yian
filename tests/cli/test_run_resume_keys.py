@@ -393,3 +393,57 @@ def test_terminal_resume_of_an_agent_run_skips_the_key_check(monkeypatch, tmp_pa
     assert result.exit_code == 0, result.output
     assert "written offline" in result.stdout
     assert log.read_bytes() == before
+
+
+def test_resume_checks_saved_login_of_non_openai_provider(monkeypatch, tmp_path):
+    AuthStore().save("anthropic", ApiKeyCredentials("saved-ant"), "m", make_default=False)
+    first = tmp_path / "first"
+    first.mkdir()
+    flow = _flow_file(first, provider="anthropic")
+    log = _unfinished_log(monkeypatch, flow, env_var=None)
+    _fake_model(monkeypatch)
+
+    result = _resume(flow, log)
+
+    assert result.exit_code == 0, result.output
+    assert "written offline" in result.stdout
+
+    second = tmp_path / "second"
+    second.mkdir()
+    flow = _flow_file(second, provider="anthropic")
+    log = _unfinished_log(monkeypatch, flow, env_var=None)
+    # A reconnect mints a new credential id, so the pinned one is gone.
+    AuthStore().save("anthropic", ApiKeyCredentials("saved-ant"), "m", make_default=False)
+    before = log.read_bytes()
+    _no_model(monkeypatch)
+
+    result = _resume(flow, log)
+
+    assert result.exit_code == 1, result.output
+    assert "yian auth anthropic" in _plain(result.output)
+    assert log.read_bytes() == before
+
+    AuthStore().remove("anthropic")
+    third = tmp_path / "third"
+    third.mkdir()
+    flow = _flow_file(third, provider="anthropic")
+    log = _unfinished_log(monkeypatch, flow, env_var="ANTHROPIC_API_KEY", key="sk-ant")
+    before = log.read_bytes()
+
+    result = _resume(flow, log)
+
+    assert result.exit_code == 1, result.output
+    assert "$ANTHROPIC_API_KEY is not set" in _plain(result.output)
+    assert log.read_bytes() == before
+
+
+def test_resume_of_keyless_vllm_run_needs_no_key(monkeypatch, tmp_path):
+    monkeypatch.delenv("VLLM_API_KEY", raising=False)
+    flow = _flow_file(tmp_path, provider="vllm")
+    log = _unfinished_log(monkeypatch, flow, env_var=None)
+    _fake_model(monkeypatch)
+
+    result = _resume(flow, log)
+
+    assert result.exit_code == 0, result.output
+    assert "written offline" in result.stdout

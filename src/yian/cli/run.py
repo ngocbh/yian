@@ -1283,28 +1283,33 @@ def _prompt_request(request: PromptRequest) -> Any:
     )
 
 
-def _agent_providers(loaded, cli_cfg: Dict[str, Any]) -> List[str]:
-    """Collect the distinct effective LLM providers of every agent node in `loaded`.
+def _agent_connections(
+    loaded, cli_cfg: Dict[str, Any]
+) -> List[tuple[str, Optional[Dict[str, Any]]]]:
+    """Collect the distinct provider and connection of every agent node in `loaded`.
 
-    Snapshots the process provider/model defaults once each, then resolves the
-    `llm_config` cascade (with `cli_cfg` as the outermost gap-fill layer) on a throwaway
-    copy of the compiled flow. The returned effective map covers the whole static call
-    tree, and every provider in it is concrete.
+    Snapshots the process provider/model defaults and connections once, resolves
+    the `llm_config` cascade (with `cli_cfg` as the outermost gap-fill layer) on a
+    throwaway copy of the compiled flow, and binds each agent's connection as a
+    fresh run would. The effective map covers the whole static call tree, and
+    every provider in it is concrete.
 
     Args:
         loaded (`ComposedFlow`):
-            The compiled flow whose agent providers to enumerate.
+            The compiled flow whose agents to enumerate.
         cli_cfg (`dict[str, Any]`):
             The `--provider`/`--model` CLI layer (may be empty) — the cascade's
             outermost authored gap-fill layer.
 
     Returns:
-        `List[str]`:
-            The distinct provider names, in first-seen order.
+        `List[tuple[str, Optional[dict[str, Any]]]]`:
+            The distinct `(provider, connection)` pairs, in first-seen order. The
+            connection is `None` for a provider without one (`ollama`).
 
     Raises:
         `ValueError`:
-            No layer gives an agent a provider and model.
+            No layer gives an agent a provider and model, or the saved logins or
+            default-provider environment are invalid.
     """
     import copy
 
@@ -1321,33 +1326,48 @@ def _agent_providers(loaded, cli_cfg: Dict[str, Any]) -> List[str]:
         stray_model=snapshot.stray_model,
     )
 
-    seen: List[str] = []
-    for config in effective.values():
-        provider = config["provider"]
-        if provider not in seen:
-            seen.append(provider)
+    seen: List[tuple[str, Optional[Dict[str, Any]]]] = []
+    for config in snapshot.bind(effective).values():
+        pair = (config["provider"], config.get("_connection"))
+        if pair not in seen:
+            seen.append(pair)
     return seen
 
 
 def _ensure_provider_keys(loaded, cli_cfg: Dict[str, Any]) -> None:
-    """Prompt for any API key the flow's agents will need, before the run starts.
+    """Check every key the flow's agents will need before the run starts, prompting if missing.
 
-    Turns a cryptic mid-run "missing key" API failure into an upfront interactive
-    prompt. Saved OpenAI connections resolve their selected credentials without an
-    API-key prompt. Keyless (`ollama`) and unknown providers are skipped inside
-    [`ensure_api_key`][yian.cli.utils.ensure_api_key]; a required-but-missing
-    key with no TTY re-raises the `RuntimeError` for `run` to surface cleanly.
+    Turns a cryptic mid-run "missing key" API failure into an upfront check. Each
+    distinct agent connection is checked once: a saved login of any provider
+    resolves its stored credential without a prompt; any other agent needs its
+    provider's key environment variable, via
+    [`ensure_env_key`][yian.cli.utils.ensure_env_key], which skips keyless,
+    unknown, and optional-key providers. An Azure agent whose `base_url` names
+    another resource than the saved login needs `AZURE_OPENAI_API_KEY`.
 
     Args:
         loaded (`ComposedFlow`):
-            The compiled flow whose agents' providers determine the keys to check.
+            The compiled flow whose agents' connections determine the keys to check.
         cli_cfg (`dict[str, Any]`):
             The `--provider`/`--model` CLI layer, threaded into provider resolution.
-    """
-    from yian.cli.utils import ensure_api_key
 
-    for provider in _agent_providers(loaded, cli_cfg):
-        ensure_api_key(provider)
+    Raises:
+        `RuntimeError`:
+            A saved login cannot be resolved (an `AuthError` naming
+            `yian auth <provider>`), or a required key is missing and cannot be
+            prompted for.
+        `ValueError`:
+            No layer gives an agent a provider and model, or the saved logins or
+            default-provider environment are invalid.
+    """
+    from yian.cli.utils import ensure_env_key
+    from yian.llm_clients.connection import connection_credentials
+
+    for provider, connection in _agent_connections(loaded, cli_cfg):
+        if connection is not None and connection["source"] == "store":
+            connection_credentials(connection, provider)
+        else:
+            ensure_env_key(provider)
 
 
 class _ResumeKeyError(RuntimeError):
@@ -1432,13 +1452,15 @@ def _check_resume_credentials(
 ) -> None:
     """Check that the recorded model configs of a resumed run can authenticate.
 
-    Like a fresh run's preflight, it requires each provider's environment key;
-    it also requires an OpenAI environment key to be the one the run started
-    with. Only a missing key prompts. Every OpenAI connection then resolves its
-    credentials, so a replaced saved credential fails here instead of at the
-    first model call.
-    Checks run once per distinct OpenAI connection and once per other provider;
-    providers without a key variable are skipped.
+    Like a fresh run's preflight, it requires each provider's environment key
+    unless the agent recorded a saved login; it also requires an OpenAI
+    environment key to be the one the run started with. Only a missing key
+    prompts. Every saved login (any provider) and every OpenAI connection then
+    resolves its credentials, so a replaced saved credential fails here instead
+    of at the first model call.
+    Checks run once per distinct saved or OpenAI connection and once per other
+    provider; providers without a key variable, and optional-key providers
+    (`vllm`) whose variable is unset, are skipped.
 
     Args:
         effective (`dict[str, dict[str, Any]]`):
@@ -1454,14 +1476,14 @@ def _check_resume_credentials(
     Raises:
         `_ResumeKeyError`:
             A key is missing, differs from the recorded one, was not provided
-            at the prompt, belongs to a Python host, or a recorded OpenAI
-            connection can no longer resolve its credentials.
+            at the prompt, belongs to a Python host, or a recorded saved or
+            OpenAI connection can no longer resolve its credentials.
     """
-    from yian.llm_clients.api_key_env import get_api_key_env
+    from yian.llm_clients.api_key_env import OPTIONAL_API_KEY_PROVIDERS, get_api_key_env
     from yian.llm_clients.auth import AuthError
     from yian.llm_clients.connection import HOST_KEY_MARKER, connection_credentials
 
-    connections: List[Dict[str, Any]] = []
+    connections: List[tuple[str, Dict[str, Any]]] = []
     providers: List[str] = []
     for config in effective.values():
         provider = config["provider"]
@@ -1474,14 +1496,19 @@ def _check_resume_credentials(
                 "llm_config.api_key, which the CLI cannot supply; resume it from "
                 "Python with resume_flow(api_key=...)"
             )
-        if provider == "openai" and connection is not None:
-            if connection not in connections:
-                connections.append(connection)
+        if connection is not None and (
+            provider == "openai" or connection.get("source") == "store"
+        ):
+            if (provider, connection) not in connections:
+                connections.append((provider, connection))
         elif provider not in providers:
             providers.append(provider)
 
-    for connection in connections:
-        if connection.get("source") in ("environment", "legacy_environment"):
+    for provider, connection in connections:
+        if provider == "openai" and connection.get("source") in (
+            "environment",
+            "legacy_environment",
+        ):
             _resume_env_key(
                 "openai",
                 "OPENAI_API_KEY",
@@ -1489,21 +1516,24 @@ def _check_resume_credentials(
                 ask_secret=ask_secret,
                 prompt_available=prompt_available,
             )
-    for connection in connections:
+    for provider, connection in connections:
         try:
-            connection_credentials(connection)
+            connection_credentials(connection, provider)
         except AuthError as exc:
             raise _ResumeKeyError(str(exc)) from exc
     for provider in providers:
         env_var = get_api_key_env(provider)
-        if env_var is not None:
-            _resume_env_key(
-                provider,
-                env_var,
-                None,
-                ask_secret=ask_secret,
-                prompt_available=prompt_available,
-            )
+        if env_var is None or (
+            provider in OPTIONAL_API_KEY_PROVIDERS and not os.environ.get(env_var)
+        ):
+            continue
+        _resume_env_key(
+            provider,
+            env_var,
+            None,
+            ask_secret=ask_secret,
+            prompt_available=prompt_available,
+        )
 
 
 def _validate_run_log_options(

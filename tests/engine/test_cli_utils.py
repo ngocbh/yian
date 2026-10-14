@@ -2,9 +2,9 @@
 
 `ensure_api_key` / `confirm_ollama_endpoint` are exercised with a fake `questionary`
 and a monkeypatched `sys.stdin.isatty` so both the interactive-prompt and the
-non-interactive fallback paths are observable without a real TTY. `_agent_providers`
+non-interactive fallback paths are observable without a real TTY. `_agent_connections`
 / `_ensure_provider_keys` are checked against a compiled flow to confirm the
-cascade-resolved provider set drives which keys get ensured.
+cascade-resolved providers and their connections drive which keys get ensured.
 """
 
 import sys
@@ -178,33 +178,43 @@ def test_confirm_ollama_endpoint_interactive_prompts_and_exports(monkeypatch):
     assert os.environ["OLLAMA_BASE_URL"] == "http://h200:11434"
 
 
-# --- _agent_providers / _ensure_provider_keys pre-flight --------------------- #
+# --- _agent_connections / _ensure_provider_keys pre-flight ------------------- #
 def _hello_agent():
     return load_flow((_SEEDS / "00-hello-agent.yaml").read_text(), search_paths=[_SEEDS])
 
 
-def test_agent_providers_fails_when_nothing_sets_a_provider(monkeypatch):
+def _connection_sources(loaded, cli_cfg):
+    return [
+        (provider, connection["source"])
+        for provider, connection in climod._agent_connections(loaded, cli_cfg)
+    ]
+
+
+def test_agent_connections_fails_when_nothing_sets_a_provider(monkeypatch):
     monkeypatch.delenv("YIAN_DEFAULT_PROVIDER", raising=False)
     monkeypatch.delenv("YIAN_DEFAULT_MODEL", raising=False)
     with pytest.raises(ValueError, match=r"Agent 'note' has no provider or model; .*--provider/--model"):
-        climod._agent_providers(_hello_agent(), {})
+        climod._agent_connections(_hello_agent(), {})
 
 
-def test_agent_providers_uses_the_environment_then_the_saved_provider(monkeypatch):
+def test_agent_connections_use_the_environment_then_the_saved_provider(monkeypatch):
     from yian.llm_clients.auth import ApiKeyCredentials, AuthStore
 
     monkeypatch.setenv("YIAN_DEFAULT_PROVIDER", "anthropic")
     monkeypatch.setenv("YIAN_DEFAULT_MODEL", "env-model")
-    assert climod._agent_providers(_hello_agent(), {}) == ["anthropic"]
+    assert _connection_sources(_hello_agent(), {}) == [("anthropic", "environment")]
     monkeypatch.delenv("YIAN_DEFAULT_PROVIDER")
     monkeypatch.delenv("YIAN_DEFAULT_MODEL")
     AuthStore().save("xai", ApiKeyCredentials("key"), "saved-model")
-    assert climod._agent_providers(_hello_agent(), {}) == ["xai"]
+    assert _connection_sources(_hello_agent(), {}) == [("xai", "store")]
 
 
-def test_agent_providers_cli_override_fills_gap():
+def test_agent_connections_cli_override_fills_gap(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-present")
     # The agent sets no provider, so the CLI layer fills it.
-    assert climod._agent_providers(_hello_agent(), {"provider": "openai"}) == ["openai"]
+    assert _connection_sources(_hello_agent(), {"provider": "openai"}) == [
+        ("openai", "environment")
+    ]
 
 
 def test_ensure_provider_keys_ok_when_present(monkeypatch):
@@ -217,3 +227,28 @@ def test_ensure_provider_keys_raises_when_missing(monkeypatch):
     _tty(monkeypatch, False)
     with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
         climod._ensure_provider_keys(_hello_agent(), {})
+
+
+def test_saved_login_needs_no_key_prompt(monkeypatch):
+    from yian.llm_clients.auth import ApiKeyCredentials, AuthStore
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    fake = _FakeQuestionary("typed")
+    monkeypatch.setitem(sys.modules, "questionary", fake)
+    AuthStore().save("anthropic", ApiKeyCredentials("saved-k"), "m", make_default=False)
+
+    assert utils.ensure_api_key("anthropic", interactive=False) == "saved-k"
+    assert fake.prompts == []
+
+
+def test_ensure_env_key_suggests_a_saved_login(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    with pytest.raises(RuntimeError, match=r"ANTHROPIC_API_KEY.*run 'yian auth anthropic'"):
+        utils.ensure_env_key("anthropic", interactive=False)
+
+
+def test_ensure_env_key_skips_an_unset_optional_key(monkeypatch):
+    monkeypatch.delenv("VLLM_API_KEY", raising=False)
+    assert utils.ensure_env_key("vllm", interactive=False) is None
+    monkeypatch.setenv("VLLM_API_KEY", "sk-vllm")
+    assert utils.ensure_env_key("vllm", interactive=False) == "sk-vllm"

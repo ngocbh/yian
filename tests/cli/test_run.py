@@ -661,3 +661,120 @@ def test_undeclared_inputs_json_key_is_a_bad_parameter(tmp_path: Path):
     result = runner.invoke(app, ["run", str(flow), "--inputs", str(inputs)])
     assert result.exit_code == 2
     assert "unknown input 'topik'" in _plain(result.output)
+
+
+AGENT_FLOW = """\
+id: cli_agent
+name: cli_agent
+input:
+  topic: str
+nodes:
+  write:
+    kind: agent
+    input:
+      topic: ${input.topic}
+    prompt: "Write about ${topic}"
+    output: str
+output: ${write.output}
+"""
+
+
+def _agent_flow(dir_: Path, llm_config: str = "") -> Path:
+    """Write the one-agent flow, with ``llm_config`` as a flow-level YAML mapping if given."""
+    body = AGENT_FLOW + (f"llm_config: {llm_config}\n" if llm_config else "")
+    return _write_flow(dir_, body)
+
+
+def _fake_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Answer every AGENT locally."""
+    from langchain_core.messages import AIMessage
+    import yian.llm_clients as llm_clients
+
+    class _Model:
+        def invoke(self, messages):
+            return AIMessage(content="written offline")
+
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda config: _Model())
+
+
+def _run_logs(home: Path) -> list[Path]:
+    """Return the run logs written under the isolated home."""
+    return sorted((home / ".yian" / "runs").glob("**/*.jsonl"))
+
+
+def test_run_without_any_model_prints_run_start_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    isolated_cli_home: Path,
+) -> None:
+    """A flow whose agent no layer gives a model fails before any log exists."""
+    monkeypatch.delenv("YIAN_DEFAULT_PROVIDER", raising=False)
+    monkeypatch.delenv("YIAN_DEFAULT_MODEL", raising=False)
+    flow = _agent_flow(tmp_path)
+
+    result = runner.invoke(app, ["run", str(flow), "-q", "--input", "topic=x"])
+
+    assert result.exit_code == 1, result.output
+    output = re.sub(r"\s+", " ", _plain(result.output))
+    assert "has no provider or model" in output
+    assert "yian auth <provider>" in output
+    assert "Traceback" not in output
+    assert _run_logs(isolated_cli_home) == []
+
+
+def test_azure_agent_on_other_endpoint_needs_env_key(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    isolated_cli_home: Path,
+) -> None:
+    """The saved Azure key covers only its own resource; another one needs the env key."""
+    from yian.llm_clients.auth import ApiKeyCredentials, AuthStore
+
+    monkeypatch.delenv("AZURE_OPENAI_API_KEY", raising=False)
+    AuthStore().save(
+        "azure",
+        ApiKeyCredentials("az"),
+        "dep",
+        endpoint="https://r.openai.azure.com/",
+        make_default=False,
+    )
+    other = tmp_path / "other"
+    other.mkdir()
+    flow = _agent_flow(
+        other,
+        "{provider: azure, model: dep, base_url: 'https://other.openai.azure.com/'}",
+    )
+
+    result = runner.invoke(app, ["run", str(flow), "-q", "--input", "topic=x"])
+
+    assert result.exit_code == 1, result.output
+    assert "AZURE_OPENAI_API_KEY" in re.sub(r"\s+", " ", _plain(result.output))
+    assert _run_logs(isolated_cli_home) == []
+
+    _fake_model(monkeypatch)
+    saved = tmp_path / "saved"
+    saved.mkdir()
+    flow = _agent_flow(saved, "{provider: azure, model: dep}")
+
+    result = runner.invoke(app, ["run", str(flow), "-q", "--input", "topic=x"])
+
+    assert result.exit_code == 0, result.output
+    assert "written offline" in result.stdout
+
+
+def test_keyless_vllm_login_runs_off_a_terminal(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A vLLM login saved without a key runs with no VLLM_API_KEY and no terminal."""
+    from yian.llm_clients.auth import AuthStore
+
+    monkeypatch.delenv("VLLM_API_KEY", raising=False)
+    AuthStore().save("vllm", None, "v", make_default=False)
+    _fake_model(monkeypatch)
+    flow = _agent_flow(tmp_path, "{provider: vllm, model: v}")
+
+    result = runner.invoke(app, ["run", str(flow), "-q", "--input", "topic=x"])
+
+    assert result.exit_code == 0, result.output
+    assert "written offline" in result.stdout

@@ -438,10 +438,10 @@ def _run_with_terminal_controller(
     ``eof_value`` optionally normalizes prompt EOF to a caller-owned value; omitted
     EOF keeps the broker's exception policy. While it runs, the helper's own handler
     is the process SIGINT handler (on the main thread, when the caller's handler is a
-    Python callable). A Ctrl-C while the controller launches, after the run stopped
-    or completed, or during cleanup is recorded, and one recorded Ctrl-C is replayed
-    through the caller's handler once cleanup ends; any other Ctrl-C reaches the
-    caller's handler directly.
+    Python callable). A Ctrl-C while the controller launches is replayed through the
+    caller's handler once it has started. One after the run stopped or completed, or
+    during cleanup, is recorded, and one such Ctrl-C is replayed once cleanup ends.
+    Any other Ctrl-C reaches the caller's handler directly.
     """
 
     broker: TerminalBroker

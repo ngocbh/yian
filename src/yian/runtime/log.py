@@ -1429,8 +1429,9 @@ def canonical_typed(
         `TypeCheckError`:
             The live value does not satisfy ``declared``, contains a NaN, infinity, or
             complex number, or, with no ``declared`` type, is not made of JSON values
-            and `FileRef`s; ``path`` locates the rejected value. Without ``declared``
-            the message reads ``output[ at <path>]: <reason>``.
+            and `FileRef`s (``output[ at <path>]: <reason>``) or mixes ints and floats
+            in a list with an int too large for a float; ``path`` locates the rejected
+            value.
         `ValueError`:
             The typed value contains data that cannot be represented as canonical JSON.
     """

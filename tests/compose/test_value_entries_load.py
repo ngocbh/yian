@@ -266,6 +266,30 @@ def test_a_nested_secret_literal_is_rejected_before_the_value_is_read():
     assert "abc" not in str(error)
 
 
+def test_a_secret_call_argument_names_the_value_entry():
+    text = _flow(
+        '  x: !str call(g, api_key="abc")\n',
+        head=(
+            "defs:\n"
+            "  g:\n"
+            "    input:\n"
+            "      api_key: !str\n"
+            "    nodes:\n"
+            "      r: !str ok\n"
+            "    output: ${r.output}\n"
+        ),
+    )
+
+    error = _load_error(text)
+
+    assert str(error) == (
+        "value entry 'x': call(...) argument 'api_key' is a secret name, so its value "
+        "can't be written in the flow file; pass it as an input (${input.api_key}) or "
+        "from the host"
+    )
+    assert _error_line(error) == _line_of(text, "  x: !str")
+
+
 def test_a_nested_secret_binding_loads():
     load_flow(
         _flow("  cfg: !object\n    access_token: ${input.t}\n", output="${cfg.output}")

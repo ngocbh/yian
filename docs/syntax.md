@@ -943,7 +943,9 @@ Other errors:
   ```
 
 - An entry that reads itself, or entries that read each other, are a cycle:
-  `node build dependency cycle: x -> y -> x`.
+  `flow has a cycle involving ['x', 'y']; flows must be acyclic`. When a written-out
+  `!object` entry is on the cycle, its record is typed from the others first, so the
+  message is `node build dependency cycle: x -> y -> x`.
 - A tag with no value: ``value entry 'x' needs a value after its tag, e.g. `x: !int ...` ``.
 - A number that is not finite, at any depth, fails at its line:
   `x: !float .inf` gives `'x': numbers must be finite (got .inf)`.
@@ -2215,7 +2217,9 @@ place_buy:
 - A nested `on:` over a field of the narrowed member narrows again, and its exhaustiveness
   counts only that member's tags.
 - A value entry a branch routes to sees the narrowed type like any routed node: under
-  `when: buy` its spans may read `${decide.output.qty}`.
+  `when: buy` its spans may read `${decide.output.qty}`. The record a written-out
+  `!object` entry keeps is typed without that narrowing, so such a field is open to its
+  readers; tag the field (`qty: !int ${decide.output.qty}`) to type it.
 - A `call` target can pass the narrowed value to a child whose input is the member
   (`order: !Buy`). An inline child body's inputs are typed before narrowing, so a member
   field bound there fails with `cannot infer type for inline binding`. An inline

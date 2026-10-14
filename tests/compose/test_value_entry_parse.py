@@ -111,6 +111,8 @@ def test_untagged_scalar_or_list_shows_the_tag_to_write(entry, example):
         ("  x: [[1], [null]]\n", [[1], [None]]),
         ("  x: [[], [1]]\n", [[], [1]]),
         ("  x: [null, [1]]\n", [None, [1]]),
+        ("  x: !!str 3\n", "3"),
+        ("  x: !!str true\n", "true"),
     ],
 )
 def test_the_example_entry_loads(entry, value):

@@ -40,7 +40,12 @@ from yian.compose.helpers.secret_literals import (
 from yian.compose.helpers.source import one_line_text
 from yian.compose.helpers.tags import QUOTED_STYLES, suggest_tag, yaml_quoted
 from yian.compose.nodes import KINDS, REMOVED_KINDS
-from yian.compose.source import SourceAccessError, SourceCursor
+from yian.compose.source import (
+    SourceAccessError,
+    SourceCursor,
+    SourceSyntaxError,
+    parse_yaml_literal,
+)
 from yian.expr.grammar import EXPRESSION_KEYWORDS
 from yian.typesys import TypeCheckError, build_value
 from yian.typesys.values import Type, ValueKind, list_kind_for_element
@@ -413,18 +418,30 @@ def _example_text(value: Any, cursor: SourceCursor) -> str:
     """Spell an untagged entry's value for its example.
 
     A value written over several lines (a block list) is shown as `...`. A date is
-    quoted, since a tag reads only a quoted date.
+    quoted, since a tag reads only a quoted date, and so is text that YAML would not
+    read back as the same text (`!!str 3` is shown as `"3"`).
     """
     if value is None:
         return "null"
     if isinstance(value, str):
-        return cursor.scalar_text if cursor.scalar_style == "plain" else yaml_quoted(value)
+        text = cursor.scalar_text
+        if cursor.scalar_style == "plain" and text is not None and _reads_as(text, value):
+            return text
+        return yaml_quoted(value)
     text = cursor.scalar_text
     if isinstance(value, datetime.date) and text is not None:
         return yaml_quoted(text)
     if text is not None:
         return text
     return one_line_text(cursor.document, cursor.range) or "..."
+
+
+def _reads_as(text: str, value: str) -> bool:
+    """Report whether the plain scalar `text` reads back as the string `value`."""
+    try:
+        return parse_yaml_literal(text) == value
+    except SourceSyntaxError:
+        return False
 
 
 def _reject_reserved_node_id(node_id: str, cursor: SourceCursor) -> None:

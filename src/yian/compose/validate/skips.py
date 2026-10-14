@@ -30,7 +30,7 @@ Never imports: runtime.
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Iterable, Mapping, Set
+from collections.abc import Iterable, Mapping, Sequence, Set
 from dataclasses import dataclass, field, replace
 from typing import Any, Optional
 
@@ -42,10 +42,16 @@ from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.helpers.output_contracts import direct_reference_parts, direct_reference_path
 from yian.compose.nodes.base import BuildResult
 from yian.compose.validate.typed_bindings import ResolveOrigin, _located_error
-from yian.diagnostics import SourceRange
-from yian.expr import ExpressionError, binding_co_skips, expr_refs, scan_template
+from yian.diagnostics import OriginRef, SourceRange
+from yian.expr import (
+    ExpressionError,
+    binding_co_skips,
+    expr_refs,
+    parse_condition,
+    scan_template,
+)
 from yian.expr.template import Span
-from yian.nodes.contracts import as_binding, binding_source
+from yian.nodes.contracts import Binding, as_binding, binding_source
 
 _WORLD_LIMIT = 10_000
 
@@ -364,6 +370,10 @@ def check_skipped_arithmetic(
     outputs_range: Optional[SourceRange] = None,
     resolve_origin: ResolveOrigin | None = None,
     diagnostics: LoadDiagnostics | None = None,
+    searched_whens: Mapping[
+        str, Sequence[tuple[int, Any, OriginRef | None, SourceRange | None]]
+    ]
+    | None = None,
 ) -> None:
     """Reject arithmetic over a value that may be null because CASE routing skipped it.
 
@@ -371,7 +381,9 @@ def check_skipped_arithmetic(
     node's output, or a `|` / `:-` group of them, and every producer of one of its null
     alternatives is skipped. That is an error when some routing skips them while the binding's
     node still runs; a flow output's END always runs. Any other operand (a call, a nested
-    operator, a literal) is never null from a skip here.
+    operator, a literal) is never null from a skip here. A searched CASE's authored `when:`
+    is checked the same way with the CASE as the reader, since a reference under `:-`, `|`
+    or `:?` there does not skip the CASE with its producer.
 
     Args:
         flow_wiring (`Mapping[str, Mapping[str, Any]]`):
@@ -390,10 +402,13 @@ def check_skipped_arithmetic(
             Resolves a binding's registered origin to its source frame, the preferred location.
         diagnostics (`LoadDiagnostics | None`, *optional*, defaults to `None`):
             Factory for located load errors.
+        searched_whens (`Mapping[str, Sequence[tuple[int, Any, OriginRef | None, SourceRange | None]]] | None`, *optional*, defaults to `None`):
+            Each searched CASE's id mapped to one `(case index, authored when, origin,
+            range)` per case: the origin is the preferred location, the range the fallback.
 
     Raises:
         `LoadError`:
-            At the first such binding, naming it, the operand and its producers, and asking
+            At the first such binding or `when:`, naming it, the operand and its producers, and asking
             for a `:-` default.
     """
     if not model.has_cases:
@@ -424,6 +439,25 @@ def check_skipped_arithmetic(
                 f"node {node_id!r} {label.rstrip(':')}: {_arithmetic_message(binding, *found)}",
                 as_binding(binding),
                 fallback,
+                resolve_origin,
+                diagnostics,
+            )
+    for node_id, whens in (searched_whens or {}).items():
+        for index, when, origin, when_range in whens:
+            if not isinstance(when, str):
+                continue
+            try:
+                tree = parse_condition(when)
+            except ExpressionError:
+                continue  # the CASE build reports a malformed condition
+            found = _skipped_operand_in(tree, model, node_id, known)
+            if found is None:
+                continue
+            raise _located_error(
+                f"node {node_id!r} cases[{index}].when: "
+                f"{_arithmetic_text(when.strip(), *found)}",
+                Binding(when, origin=origin),
+                when_range,
                 resolve_origin,
                 diagnostics,
             )
@@ -469,16 +503,44 @@ def _skipped_operand(
     except ExpressionError:
         return None  # reference validation reports a malformed source
     for segment in segments:
-        if not isinstance(segment, Span) or not isinstance(segment.tree, Tree):
-            continue  # a lone token has no operator
-        for tree in segment.tree.iter_subtrees_topdown():
-            if tree.data not in _ARITHMETIC:
-                continue
-            for operand in tree.children:
-                for group in _null_groups(operand, known):
-                    if group and model.may_skip_while_running(group, consumer):
-                        producers = (_ref_producer(ref) for ref in expr_refs(operand))
-                        return operand, [p for p in dict.fromkeys(producers) if p in group]
+        if not isinstance(segment, Span):
+            continue
+        found = _skipped_operand_in(segment.tree, model, consumer, known)
+        if found is not None:
+            return found
+    return None
+
+
+def _skipped_operand_in(
+    expression: Tree | Token, model: SkipModel, consumer: str | None, known: Set[str]
+) -> tuple[Tree | Token, list[str]] | None:
+    """Return the first arithmetic operand of a parsed expression that may be null from a skip.
+
+    Args:
+        expression (`Tree | Token`):
+            A parsed expression.
+        model (`SkipModel`):
+            The level's skip model.
+        consumer (`str | None`):
+            The node that evaluates the expression, or `None` for END.
+        known (`Set[str]`):
+            The level's node ids.
+
+    Returns:
+        `tuple[Tree | Token, list[str]] | None`:
+            The operand and the producers whose skip makes it null (in source order), or
+            `None` when no operand may be null while `consumer` runs.
+    """
+    if not isinstance(expression, Tree):
+        return None  # a lone token has no operator
+    for tree in expression.iter_subtrees_topdown():
+        if tree.data not in _ARITHMETIC:
+            continue
+        for operand in tree.children:
+            for group in _null_groups(operand, known):
+                if group and model.may_skip_while_running(group, consumer):
+                    producers = (_ref_producer(ref) for ref in expr_refs(operand))
+                    return operand, [p for p in dict.fromkeys(producers) if p in group]
     return None
 
 
@@ -547,6 +609,24 @@ def _arithmetic_message(
         `str`:
             The message, without the binding's name.
     """
+    return _arithmetic_text(binding_source(binding), operand, producers)
+
+
+def _arithmetic_text(source: str, operand: Tree | Token, producers: list[str]) -> str:
+    """Return the error text for arithmetic in `source` on an operand that may be null.
+
+    Args:
+        source (`str`):
+            The authored text that does the arithmetic, shown as written.
+        operand (`Tree | Token`):
+            The operand that may be null.
+        producers (`list[str]`):
+            The nodes whose skip makes it null.
+
+    Returns:
+        `str`:
+            The message, without the reader's name.
+    """
     text = _operand_text(operand)
     hint = _default_hint(operand)
     quoted = [repr(p) for p in producers]
@@ -555,7 +635,7 @@ def _arithmetic_message(
     else:
         who = f"nodes {', '.join(quoted[:-1])} and {quoted[-1]} are"
     return (
-        f"{binding_source(binding)} does arithmetic on {text}, which is null when {who} "
+        f"{source} does arithmetic on {text}, which is null when {who} "
         f"skipped; give it a default with :-, e.g. {hint}"
     )
 

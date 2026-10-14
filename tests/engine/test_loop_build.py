@@ -1590,6 +1590,59 @@ output: ${loop.output}
     assert run_flow(flow, {"m": 3}).output == {"n": 3}
 
 
+# Pagination: `while:` keeps a null cursor out of the body, which takes `cursor: {cursor}`.
+_PAGES = """id: p
+name: p
+input:
+  start: !Optional(str)
+defs:
+  page:
+    input:
+      cursor: !{cursor}
+      seen: !int
+    nodes:
+      step:
+        kind: code
+        input:
+          cursor: !str ${{input.cursor}}
+          seen: ${{input.seen}}
+        output:
+          cursor: Optional(str)
+          seen: int
+        code: return dict(cursor=None, seen=inputs["seen"] + 1)
+    output: ${{step.output}}
+nodes:
+  loop:
+    kind: loop
+    while: cursor != null
+    max: 10
+    input:
+      cursor: ${{input.start}}
+      seen: 0
+    call: page
+output: ${{loop.output}}
+"""
+
+
+def test_while_guarded_optional_seed_needs_an_optional_body_input():
+    # Like a CALL argument, an `Optional` seed can't fill a strict input even when the
+    # `while:` would keep its null out of the body.
+    with pytest.raises(
+        LoadError,
+        match="loop node 'loop': binding 'cursor' — "
+        r"child expects 'str', source is 'Optional\(str\)'",
+    ):
+        load_flow(_PAGES.format(cursor="str"))
+
+    # An `Optional` body input, tagged `str` inside the body, runs with a cursor and
+    # without one.
+    flow = load_flow(_PAGES.format(cursor="Optional(str)"))
+    for start, seen in (("c1", 1), (None, 0)):
+        result = run_flow(flow, {"start": start})
+        assert result.status == "succeeded", result.failure
+        assert result.output == {"cursor": None, "seen": seen}
+
+
 # A LOOP routed by a `case` on a `Union(Buy, Hold)` producer, seeding the whole record into
 # a body that takes a `Buy`. The `{then}`/`{other}` slots pick the branch the LOOP is on.
 _NARROWED = """id: p

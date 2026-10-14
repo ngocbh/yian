@@ -373,13 +373,14 @@ follows the same rules:
 | JSON Schema | yian type |
 | --- | --- |
 | `string`, `integer`, `number`, `boolean`, `null` | `str`, `int`, `float`, `bool`, `None` |
-| a number bound on both ends | `int(a..b)` / `float(a..b)`; a one-sided bound is dropped |
+| `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum` | a range: `int(a..b)`, or one-sided `int(a..)` / `int(..b)` when only one end is given; an exclusive end becomes the nearest inclusive `int`, or the same value made inclusive for `float` (wider); a `float` end that isn't an exact double is dropped |
 | string `enum` or `const` | `Literal(...)` |
 | `format` (`date`, `uri`, …) | `str` |
 | `array` with `items` | `list(...)`; tuples give `list(Any)` |
 | `object` with `properties` | input: `object`, unless `additionalProperties: false` makes it a record; output: a record, unless it allows extra keys |
 | `anyOf`/`oneOf` with `null` | `Optional(...)` |
 | `anyOf`/`oneOf` of records | `Union(...)` |
+| `anyOf`/`oneOf` of `integer`s (or of `number`s) with different limits | one range covering all of them |
 | other unions, or anything untranslatable | not checked |
 
 An input with a pydantic function validator (`mode="before"`, `"wrap"`, or
@@ -387,6 +388,14 @@ An input with a pydantic function validator (`mode="before"`, `"wrap"`, or
 its JSON Schema is not checked. A pydantic v1 schema gets only
 the name and required-input checks. A tool with a raw JSON Schema `args_schema`
 (a dict) is checked, but a TOOL node can't invoke it yet.
+
+Changed: a limit on only one end (pydantic `Field(ge=0)`, JSON Schema `minimum`
+alone) and an exclusive `number` limit used to be dropped. They are now kept, so a
+binding that can never fit, such as a literal `-1` into a `Field(ge=0)` input, raises
+`ValueError` at run start instead of failing inside the tool call. A union of
+`integer`s (or of `number`s) with different limits, such as pydantic
+`Union[conint(le=3), conint(ge=5)]`, used to be unchecked; it is now checked
+against one range covering all its members.
 
 The return type is read from the annotation of the function behind the tool: a
 function passed in `tools=` or in a group, one registered with `register_tool`,

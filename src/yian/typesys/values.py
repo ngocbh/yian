@@ -203,16 +203,43 @@ def reject_deep_nesting(value: Any, where: str, *, enclosing_levels: int = 0) ->
     limit = MAX_VALUE_NESTING
     while isinstance(value, TypedValue):
         value = value.to_object()
+    if 1 + enclosing_levels > limit and _nesting_children(value) is not None:
+        raise _too_deep(where, (), limit)
+    for stack, key, descends in _walk_nesting(value):
+        if descends and len(stack) + 1 + enclosing_levels > limit:
+            path = _frame_path(stack) + (_nesting_segment(stack[-1][1], key),)
+            raise _too_deep(where, path, limit)
+
+
+_Frame = tuple[Iterator[tuple[Any, Any]], Any, Any]
+"""A walk frame: the container's children iterator, the container, and its key in the parent."""
+
+
+def _walk_nesting(value: Any) -> Iterator[tuple[list[_Frame], Any, bool]]:
+    """Yield each entry of a value's containers, depth-first and in order.
+
+    Unwraps a `TypedValue` wherever it sits. Each yield is ``(stack, key, descends)``:
+    the frames of the containers on the current path, root first, with the entry's
+    container last; the entry's key in that container; and whether the walk goes into
+    the entry next, which it does for a container not already on the path. A caller
+    reads the stack before resuming the walk, which changes it.
+
+    Args:
+        value (`Any`):
+            The value to walk; a leaf yields nothing.
+
+    Yields:
+        `tuple[list[_Frame], Any, bool]`: The frame stack, the entry's key, and
+            whether the walk descends into the entry.
+    """
+    while isinstance(value, TypedValue):
+        value = value.to_object()
     children = _nesting_children(value)
     if children is None:
         return
-    if 1 + enclosing_levels > limit:
-        raise _too_deep(where, (), limit)
     # An explicit stack, not recursion, so the walk does not depend on the caller's stack
     # depth or the configured recursion limit.
-    # Each frame holds its children iterator, the container, and its key in the parent;
-    # the path is built only when rejecting.
-    stack: list[tuple[Iterator[tuple[Any, Any]], Any, Any]] = [(iter(children), value, None)]
+    stack: list[_Frame] = [(iter(children), value, None)]
     active = {id(value)}
     while stack:
         iterator, container, _ = stack[-1]
@@ -222,23 +249,24 @@ def reject_deep_nesting(value: Any, where: str, *, enclosing_levels: int = 0) ->
             active.discard(id(container))
             continue
         key, child = entry
-        if child is None or type(child) in _NESTING_SCALARS:
-            continue
-        while isinstance(child, TypedValue):
-            child = child.to_object()
-        if id(child) in active:
-            continue
-        grandchildren = _nesting_children(child)
-        if grandchildren is None:
-            continue
-        if len(stack) + 1 + enclosing_levels > limit:
-            path = tuple(
-                _nesting_segment(parent, frame_key)
-                for (_, parent, _), (_, _, frame_key) in zip(stack, stack[1:])
-            ) + (_nesting_segment(container, key),)
-            raise _too_deep(where, path, limit)
-        stack.append((iter(grandchildren), child, key))
-        active.add(id(child))
+        grandchildren = None
+        if child is not None and type(child) not in _NESTING_SCALARS:
+            while isinstance(child, TypedValue):
+                child = child.to_object()
+            if id(child) not in active:
+                grandchildren = _nesting_children(child)
+        yield stack, key, grandchildren is not None
+        if grandchildren is not None:
+            stack.append((iter(grandchildren), child, key))
+            active.add(id(child))
+
+
+def _frame_path(stack: list[_Frame]) -> tuple[str | int, ...]:
+    """Return the path from the root to the last frame's container."""
+    return tuple(
+        _nesting_segment(parent, frame_key)
+        for (_, parent, _), (_, _, frame_key) in zip(stack, stack[1:])
+    )
 
 
 _NESTING_SCALARS = frozenset({str, int, float, bool})
@@ -285,42 +313,14 @@ def reject_non_text_keys(value: Any, where: str) -> None:
             A mapping has a non-text key; ``path`` locates the mapping and the message
             reads ``<where>[ at <path>]: object keys must be text, got <repr>``.
     """
-    while isinstance(value, TypedValue):
-        value = value.to_object()
-    children = _nesting_children(value)
-    if children is None:
-        return
-    # An explicit stack, as in `reject_deep_nesting`, so deep values don't recurse.
-    stack: list[tuple[Iterator[tuple[Any, Any]], Any, Any]] = [(iter(children), value, None)]
-    active = {id(value)}
-    while stack:
-        iterator, container, _ = stack[-1]
-        entry = next(iterator, None)
-        if entry is None:
-            stack.pop()
-            active.discard(id(container))
-            continue
-        key, child = entry
+    for stack, key, _ in _walk_nesting(value):
+        container = stack[-1][1]
         if isinstance(container, dict) and not isinstance(key, str):
-            path = tuple(
-                _nesting_segment(parent, frame_key)
-                for (_, parent, _), (_, _, frame_key) in zip(stack, stack[1:])
-            )
+            path = _frame_path(stack)
             location = f"{where} at {_render_value_path(path)}" if path else where
             raise TypeCheckError(
                 f"{location}: object keys must be text, got {value_repr(key)}", path=path
             )
-        if child is None or type(child) in _NESTING_SCALARS:
-            continue
-        while isinstance(child, TypedValue):
-            child = child.to_object()
-        if id(child) in active:
-            continue
-        grandchildren = _nesting_children(child)
-        if grandchildren is None:
-            continue
-        stack.append((iter(grandchildren), child, key))
-        active.add(id(child))
 
 
 def _too_deep(where: str, path: tuple[str | int, ...], limit: int) -> TypeCheckError:

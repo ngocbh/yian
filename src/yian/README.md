@@ -482,7 +482,8 @@ complex). The first boundary that sees one rejects it. The binder checks each re
 (`input 'y' at a[1]: non-finite number inf is not a yian value`); temporaries inside
 an expression are not checked. MAP checks its `over` list the same way, and an AGENT
 variable default fails `node.execute` at the default. `run_flow` raises `ValueError` for
-a run input before the log exists. `LLMConfig` rejects a non-finite value, so authored
+a run input before the log exists. `run_flow` also rejects a run input holding a mapping
+with a non-text key (`input 'o': object keys must be text, got 1`). `LLMConfig` rejects a non-finite value, so authored
 config is a load error and host config fails before the run starts. Every run-log codec
 (`canonical_typed`, `canonical_seed`, `encode_pool`) rejects one with a path; there is
 no opt-in. So a node output fails `contract.output` at the field path (`output at

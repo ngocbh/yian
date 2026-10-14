@@ -427,8 +427,8 @@ def run_flow(
         `ValueError`:
             An `inputs` key names no declared input, an `inputs` value nests
             deeper than `MAX_VALUE_NESTING` levels, holds a NaN, infinity, or
-            complex number at any depth, or has a mapping key that is not text,
-            or identity, worker count,
+            complex number at any depth, or holds a mapping with a non-text key;
+            identity, worker count,
             model configuration, or prepared run state violates its contract,
             an AGENT has no provider or model (no layer, environment default,
             or saved login sets one; there is no built-in default),

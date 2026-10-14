@@ -291,6 +291,7 @@ def test_the_same_untagged_wiring_outside_the_branch_is_a_load_error():
     text = _narrowed(_call("${mk.output}", node_id="go") + _call("${mk.output}", node_id="c2"))
     message = str(_load_error(text))
     assert "child expects 'str', source is 'Any'" in message
+    assert "`x: !str ${...}`" in message
     assert "isinstance" in message
 
 
@@ -402,6 +403,8 @@ def test_a_typed_loop_seed_accepts_an_optional_any_body_field():
 def test_a_null_from_an_optional_any_body_field_fails_the_next_turn():
     result = run_flow(load_flow(_inline_loop("!Any 0", "Optional(Any)", "None")), {})
     assert result.status == "failed"
+    assert result.failure.code == "contract.input"
+    assert result.failure.message == "input 'acc': None does not match declared type Any"
 
 
 def test_an_untyped_seed_into_an_any_body_input_rejects_an_optional_any_body_field():
@@ -509,6 +512,7 @@ def test_a_typed_any_literal_loads_and_runs(binding, value):
 def test_a_null_any_literal_is_a_load_error():
     text = _literal("!Any null")
     error = _load_error(text)
+    assert "is not a valid Any" in str(error)
     assert _error_line(error) == _line_of(text, "x: !Any null")
 
 

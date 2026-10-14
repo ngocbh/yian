@@ -8,9 +8,11 @@ from yian.typesys import values
 from yian.typesys.values import (
     MAX_VALUE_NESTING,
     FileRef,
+    ObjectValue,
     TypeCheckError,
     build_value,
     reject_deep_nesting,
+    reject_non_text_keys,
 )
 
 
@@ -175,3 +177,44 @@ def test_empty_path_message_has_no_location():
         "output: value nests deeper than 100 levels, "
         "the limit for a yian value (each record and list is a level)"
     )
+
+
+def _key_error(value: Any) -> TypeCheckError:
+    """Return the error `reject_non_text_keys` raises for `value` at `input 'v'`."""
+    with pytest.raises(TypeCheckError) as exc_info:
+        reject_non_text_keys(value, "input 'v'")
+    return exc_info.value
+
+
+def test_text_keys_in_a_cyclic_value_pass():
+    d: dict = {"a": [1, "b"]}
+    d["self"] = d
+    reject_non_text_keys(d, "input 'v'")
+
+
+def test_a_top_level_non_text_key_has_no_location():
+    error = _key_error({1: "a"})
+    assert error.path == ()
+    assert str(error) == "input 'v': object keys must be text, got 1"
+
+
+@pytest.mark.parametrize("wrap", [_Box, lambda v: _Model(value=v)])
+def test_a_non_text_key_inside_a_dataclass_or_model_names_its_path(wrap):
+    error = _key_error({"m": wrap({2: "b"})})
+    assert error.path == ("m", "value")
+    assert str(error) == "input 'v' at m.value: object keys must be text, got 2"
+
+
+def test_a_typed_value_is_unwrapped_for_the_key_check():
+    # `model_construct` skips validation, which would reject the key.
+    bad = ObjectValue.model_construct(value={1: "a"})
+    assert _key_error(bad).path == ()
+    error = _key_error({"x": bad})
+    assert error.path == ("x",)
+    assert str(error) == "input 'v' at x: object keys must be text, got 1"
+
+
+def test_a_non_identifier_parent_key_renders_quoted():
+    error = _key_error({"a b": {True: 1}})
+    assert error.path == ("a b",)
+    assert str(error) == "input 'v' at ['a b']: object keys must be text, got True"

@@ -1378,7 +1378,7 @@ def _fill_type_tables(
         reserved = node.reserved_wiring_keys()
         for param, source in flow_wiring.get(nid, {}).items():
             if node.kind is NodeKind.END:  # END's wiring carries the flow outputs
-                where = f"flow output {param!r}"
+                where = node.binding_labels.get(param, f"flow output {param!r}")
                 rng = output_range(param)
             else:
                 # A synthesized param's label may end in ':' (`on:`); the message adds one.

@@ -5,7 +5,10 @@ A CASE `on:` reads as `node '<id>' on:`, and a value entry's one input reads as
 `input '<p>'`.
 """
 
+import pytest
+
 from yian import load_flow, run_flow
+from yian.compose import LoadError
 
 
 def _case_flow() -> str:
@@ -183,3 +186,96 @@ output: ${n.output}
     assert result.failure.code == "binding.evaluate"
     assert result.failure.node_id == "n"
     assert result.failure.message == "input 'y': non-finite number inf is not a yian value"
+
+
+def _code_and(output: str, inputs: str = "  x: !float\n") -> str:
+    """Return a flow with a trivial CODE node `c` and the given `output:` text."""
+    return f"""
+id: f
+name: f
+input:
+{inputs}nodes:
+  c:
+    kind: code
+    code: |
+      return 1
+output: {output}
+"""
+
+
+def _mismatch_flow(output: str) -> str:
+    """Return a flow whose CODE `m` returns "x" and the given `output:` text."""
+    return f"""
+id: f
+name: f
+nodes:
+  m:
+    kind: code
+    code: |
+      return "x"
+output: {output}
+"""
+
+
+def _assert_end_fails(result, code: str, message: str) -> None:
+    """Assert `result` failed at END's binding with `code` and `message`."""
+    assert result.status == "failed"
+    assert result.failure.code == code
+    assert result.failure.node_id == "__end__"
+    assert result.failure.message == message
+
+
+def test_a_single_flow_output_failure_names_the_flow_output():
+    result = run_flow(load_flow(_code_and("${input.x * 10}")), {"x": 1e308})
+
+    _assert_end_fails(
+        result, "binding.evaluate", "flow output: non-finite number inf is not a yian value"
+    )
+    assert result.failure.trace[-1].key == "/s:root/s:output/i:0/s:binding"
+
+
+def test_a_record_flow_output_failure_names_the_field():
+    result = run_flow(load_flow(_code_and("\n  r: ${input.x * 10}")), {"x": 1e308})
+
+    _assert_end_fails(
+        result, "binding.evaluate", "flow output 'r': non-finite number inf is not a yian value"
+    )
+
+
+def test_a_single_flow_output_type_failure_names_the_flow_output():
+    result = run_flow(load_flow(_mismatch_flow("!int ${m.output}")), {})
+
+    _assert_end_fails(
+        result, "binding.type", "flow output: 'x' does not match declared type int"
+    )
+
+
+def test_a_record_flow_output_type_failure_names_the_field():
+    result = run_flow(load_flow(_mismatch_flow("\n  r: !int ${m.output}")), {})
+
+    _assert_end_fails(
+        result, "binding.type", "flow output 'r': 'x' does not match declared type int"
+    )
+
+
+def test_a_templated_flow_output_failure_names_the_path():
+    flow = load_flow(_code_and('!object {a: "${input.x / input.z}"}', "  x: !float\n  z: !float\n"))
+    result = run_flow(flow, {"x": 1.0, "z": 0.0})
+
+    _assert_end_fails(
+        result, "binding.evaluate", "flow output at a: division by zero: 1.0 / 0.0"
+    )
+
+
+def test_an_unknown_type_in_a_single_flow_output_names_the_flow_output():
+    with pytest.raises(LoadError) as caught:
+        load_flow(_code_and("${isinstance(input.s, Nope)}", "  s: !str\n"))
+
+    assert "flow output: unknown type 'Nope'" in str(caught.value)
+
+
+def test_an_unknown_type_in_a_record_flow_output_names_the_field():
+    with pytest.raises(LoadError) as caught:
+        load_flow(_code_and("\n  r: ${isinstance(input.s, Nope)}", "  s: !str\n"))
+
+    assert "flow output 'r': unknown type 'Nope'" in str(caught.value)

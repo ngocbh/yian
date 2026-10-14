@@ -291,13 +291,13 @@ def test_python_built_binding_mis_calling_a_builtin_fails_before_the_run(tmp_pat
 def test_python_built_flow_output_mis_calling_a_builtin_fails_before_the_run(tmp_path):
     flow = load_flow(_fill(_CODE, **_GOOD_CODE))
     flow.compiled.wiring["__end__"]["result"] = Binding("${upper(x.output, 1)}")
-    _run_raises(flow, rf"^flow output 'result': {_UPPER_RUN}", tmp_path)
+    _run_raises(flow, rf"^flow output: {_UPPER_RUN}", tmp_path)
 
 
 def test_python_built_child_flow_output_names_its_owner(tmp_path):
     flow = load_flow(_fill(_BODY, inner="${input.w}", w="${input.v}"))
     flow.compiled.nodes["c"].child.wiring["__end__"]["result"] = Binding("${upper(s.output, 1)}")
-    _run_raises(flow, rf"^node 'c' flow output 'result': {_UPPER_RUN}", tmp_path)
+    _run_raises(flow, rf"^node 'c' flow output: {_UPPER_RUN}", tmp_path)
 
 
 def test_python_built_child_binding_names_its_static_path(tmp_path):

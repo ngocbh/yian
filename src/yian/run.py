@@ -940,7 +940,7 @@ def _check_templates(flow: Any, path: tuple[str, ...] = ()) -> None:
         reserved = node.reserved_wiring_keys()
         for key, binding in flow.wiring.get(node_id, {}).items():
             if node_id == flow.end_id:
-                subject = f"{owner}flow output {key!r}"
+                subject = f"{owner}{node.binding_labels.get(key, f'flow output {key!r}')}"
             elif key in reserved:
                 subject = f"node {node_path!r} {node.kind.value} {key}"
             elif node.binds_per_item:

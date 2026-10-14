@@ -99,7 +99,7 @@ Unquoted values follow YAML 1.2's core rules plus unquoted dates and `<<:` merge
 only `true`/`false` are booleans, so `yes`/`no`/`on`/`off` are text (CASE's `on:`
 key too); `017` is 17 (octal is `0o17`); `1e3` is a float; `1:30` and `1_000` are
 text; `2026-10-14` is a date. An unquoted date-shaped value that is not a real
-date (`2026-13-45`, or an offset such as `+05:99`) is a load error at the value;
+date (`2026-13-45`, `2026-01-01T10:00:00+05:99`) is a load error at the value;
 quote it to keep it as text. A bare `call(...)` argument reads the same way, as
 one scalar (`x=None` is text; write `x=null`). A `yes` in a tagged binding or
 default, a call input, a `case` value, `steerable:`, or `inherit:` that needs a

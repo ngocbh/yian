@@ -13,8 +13,9 @@ object — plus a reserved `FILE` placeholder that is never auto-inferred and no
 yet exposed to flow authors (so adding real file handling later is additive,
 not a schema migration).
 
-This module's only package-internal dependency is the stdlib-only date/datetime grammar
-in `yian.typesys.temporal`; otherwise it is the leaf.
+This module's only package-internal dependencies are the stdlib-only date/datetime
+grammar in `yian.typesys.temporal` and the stdlib-only `yian.json_codec`; otherwise it
+is the leaf.
 """
 
 import json
@@ -28,6 +29,7 @@ from typing import Annotated, Any, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
 
+import yian.json_codec as json_codec
 from yian.typesys.temporal import parse_date, parse_datetime
 
 
@@ -835,7 +837,7 @@ def _canonical_nonnullable_label(typ: Type) -> tuple[str, str]:
     if typ.bounds is not None:
         _validate_numeric_bounds(typ.kind, typ.bounds)
         # An open end renders empty in the label (`int(0..)`) and as null in the key.
-        key_ends = [json.dumps(value, allow_nan=False) for value in typ.bounds]
+        key_ends = [json_codec.dumps(value, allow_nan=False) for value in typ.bounds]
         label_ends = ["" if value is None else end for value, end in zip(typ.bounds, key_ends)]
         return (
             f"{typ.kind.value}({'..'.join(label_ends)})",
@@ -1473,7 +1475,8 @@ def _build_for_type(
         if _scalar_matches(typ.kind, value) and not low <= value <= high:
             kind = typ.kind.value
             if None not in typ.bounds:
-                message = f"is outside inclusive {kind} bounds {typ.bounds!r}"
+                low_text, high_text = (value_repr(end) for end in typ.bounds)
+                message = f"is outside inclusive {kind} bounds ({low_text}, {high_text})"
             elif value < low:
                 message = f"is below the inclusive {kind} minimum {value_repr(low)}"
             elif value > high:

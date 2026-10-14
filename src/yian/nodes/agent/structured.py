@@ -26,7 +26,6 @@ Layer: nodes — imports memory contracts, the message adapter, `typesys` and
 from __future__ import annotations
 
 from concurrent.futures import CancelledError as FutureCancelledError
-import json
 from typing import Annotated, Any, Callable, List, Literal, Optional, Union
 from uuid import uuid4
 
@@ -537,6 +536,21 @@ def _reject_nonfinite_carrier(response: Any) -> None:
         raise error
 
 
+def _fallback_instruction(schema: type[BaseModel]) -> str:
+    """Return the prompt text asking for a JSON reply that matches `schema`.
+
+    Args:
+        schema (`type[BaseModel]`): The pydantic model the reply must validate against.
+
+    Returns:
+        `str`: The instruction, with the model's JSON schema written in full.
+    """
+    return (
+        "Respond with ONLY a JSON object matching this JSON schema (no prose, no code "
+        f"fences):\n{json_codec.dumps(schema.model_json_schema())}"
+    )
+
+
 def _generate_fallback(
     model: Any,
     messages: list,
@@ -553,12 +567,7 @@ def _generate_fallback(
     matching the schema, parse + validate the free-text reply, capped self-correction retry.
     A wrapping ```json … ``` code fence is stripped before parsing (`_strip_code_fence`) so a
     fenced-but-valid reply doesn't burn a retry."""
-    instruction = HumanMessage(
-        content=(
-            "Respond with ONLY a JSON object matching this JSON schema (no prose, no code "
-            f"fences):\n{json.dumps(schema.model_json_schema())}"
-        )
-    )
+    instruction = HumanMessage(content=_fallback_instruction(schema))
     msgs = list(messages) + [instruction]
     pending_messages = list(messages if new_messages is None else new_messages) + [instruction]
     last_err: Optional[Exception] = None

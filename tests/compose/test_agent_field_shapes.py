@@ -1,5 +1,4 @@
-"""AGENT `tools:`, `retries:`, and `llm_config.inherit` shapes are checked at load; and the
-message for a text field YAML read as non-text."""
+"""AGENT `tools:`, `retries:`, and `llm_config.inherit` shapes are checked at load."""
 
 from __future__ import annotations
 
@@ -7,7 +6,6 @@ import pytest
 
 from yian.compose import load_flow
 from yian.compose.helpers.errors import LoadError
-from yian.compose.nodes.agent import not_text_error
 
 
 def _flow(field_line: str) -> str:
@@ -83,14 +81,3 @@ output: ${ask.output}
         load_flow(text)
     assert caught.value.diagnostic.frames[-1].range.start_line == 7
 
-
-def test_not_text_error_names_the_field():
-    assert not_text_error("prompt", 5) == (
-        "`prompt:` must be text, but YAML read it as an integer; put it in quotes"
-    )
-    assert not_text_error("questions[0].question", [1]) == (
-        "`questions[0].question:` must be text, but YAML read it as a list; put it in quotes"
-    )
-    assert not_text_error("questions[0].header", None) == (
-        "`questions[0].header:` must be text, but it is empty; write the text"
-    )

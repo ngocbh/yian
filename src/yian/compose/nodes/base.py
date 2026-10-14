@@ -16,11 +16,14 @@ corresponding authored fields continue to reject them.
 Like `nodes/base.py`, this base imports only the dependencies its contract needs —
 `typesys` (TypeRegistry), `nodes.contracts` (OutputContract/Parameter/ValueContract),
 `compose.helpers.types` (read_type), `compose.helpers.errors` (LoadError),
-`compose.helpers.tags` (has_span), and `compose.source` (SourceCursor) for parse
-navigation, `diagnostics` (SourceRange) — all
+`compose.helpers.tags` (has_span), `compose.helpers.yaml_words` (yaml_read_as), and
+`compose.source` (SourceCursor) for parse navigation, `diagnostics` (SourceRange) — all
 earlier layers on the ladder, so it stays a leaf of the nodes package: it never imports any
 sibling kind or `nodes/__init__`. Every kind module imports it at module top level without
 cycling; `parse/file.py` re-exports it as the descriptor base type for its importers.
+
+It also owns the shared message for a text field whose value YAML read as non-text, so every
+kind reports that mistake in the same words.
 """
 
 from __future__ import annotations
@@ -37,6 +40,7 @@ from yian.compile.model import Edge
 from yian.compose.helpers.types import read_type
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
 from yian.compose.helpers.tags import has_span
+from yian.compose.helpers.yaml_words import yaml_read_as
 from yian.compose.source import SourceCursor
 from yian.diagnostics import DiagnosticFrame, OriginRef, SourceRange
 
@@ -71,6 +75,75 @@ def reject_container_spans(
         raise diagnostics.error(
             f"{kind} node {node_id!r} {key}: a value holding ${{...}} can't be a list or "
             "mapping; write the list as an expression, e.g. `${[a.output, b.output]}`",
+            range=range,
+        )
+
+
+def not_text_error(field: str, value: Any, fix: str | None = None) -> str:
+    """Return the load error message for a text field whose value YAML read as non-text.
+
+    Args:
+        field (`str`):
+            The field's path as authored, such as `prompt` or `questions[0].header`.
+        value (`Any`):
+            The field's value as YAML read it.
+        fix (`str`, *optional*, defaults to `None`):
+            What the author should write instead. `None` uses "write the text" for an empty
+            value and "put it in quotes" otherwise.
+
+    Returns:
+        `str`:
+            The message, naming what YAML read the value as and the fix.
+
+    Example:
+        `not_text_error("prompt", 5)` is
+        ``"`prompt:` must be text, but YAML read it as an integer; put it in quotes"``;
+        `not_text_error("questions[0].header", None)` is
+        ``"`questions[0].header:` must be text, but it is empty; write the text"``;
+        `not_text_error("kind", [1], fix="write one of a, b")` is
+        ``"`kind:` must be text, but YAML read it as a list; write one of a, b"``.
+    """
+    if value is None:
+        return f"`{field}:` must be text, but it is empty; {fix or 'write the text'}"
+    return (
+        f"`{field}:` must be text, but YAML read it as {yaml_read_as(value)}; "
+        f"{fix or 'put it in quotes'}"
+    )
+
+
+def reject_non_text(
+    kind: str,
+    node_id: str,
+    key: str,
+    value: Any,
+    range: Optional[SourceRange],
+    diagnostics: LoadDiagnostics,
+    *,
+    required: bool = False,
+    fix: str | None = None,
+) -> None:
+    """Reject a text or expression field whose value YAML read as non-text.
+
+    Args:
+        kind (`str`): The node kind, for the message.
+        node_id (`str`): The node id, for the message.
+        key (`str`): The authored field name.
+        value (`Any`): The field's authored value.
+        range (`SourceRange | None`): Where the error points.
+        diagnostics (`LoadDiagnostics`): Factory for located load errors.
+        required (`bool`, *optional*, defaults to `False`):
+            Whether the field needs a value. `False` lets `None` through as an absent field;
+            `True` rejects it as empty.
+        fix (`str`, *optional*, defaults to `None`):
+            What the author should write instead; `None` uses `not_text_error`'s default.
+
+    Raises:
+        `LoadError`: Raised when `value` is not a `str` and is not `None`, or is `None` while
+            `required` is set.
+    """
+    if not isinstance(value, str) and (value is not None or required):
+        raise diagnostics.error(
+            f"node {node_id!r} (kind={kind}): " + not_text_error(key, value, fix),
             range=range,
         )
 

@@ -26,8 +26,8 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Optional
 
 from yian.compose.helpers.errors import LoadDiagnostics
-from yian.compose.nodes.agent import MODE_REMOVED_FIX, not_text_error, retries_error
-from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
+from yian.compose.nodes.agent import MODE_REMOVED_FIX, retries_error
+from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor, not_text_error
 from yian.compose.source import SourceAccessError, SourceCursor
 from yian.diagnostics import SourceRange
 from yian.expr import ExpressionError

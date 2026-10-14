@@ -18,6 +18,7 @@ This is the supported way to model tagged data (a discriminant record + `case â€
 <field>`); the old `kind: match` + payload-union design (and its e04/e05 seeds) was dropped.
 """
 
+import re
 from pathlib import Path
 
 import pytest
@@ -117,21 +118,21 @@ def test_negative_fixtures_are_located(filename, line):
 # the discriminant-record routing that replaced the dropped `kind: match` design.
 # --------------------------------------------------------------------------- #
 
-# classify produces a Literal["pro","con","flat"] enum; route covers only pro/con
+# classify produces a Literal(pro, con, flat) enum; route covers only pro/con
 # with NO else: -> the `flat` tag is uncovered -> non-exhaustive.
 _E04_NONEXHAUSTIVE = """
 id: e04-constructed
 name: e04_constructed
 
 input:
-  topic: str
+  topic: !str
 
 nodes:
   classify:
     kind: agent
     input:
       topic: ${input.topic}
-    output: Literal["pro", "con", "flat"]
+    output: Literal(pro, con, flat)
     prompt: "Classify ${topic}."
   route:
     kind: case
@@ -221,13 +222,13 @@ _SINGLE_NODE_DEF_MODEL = """
 id: def-model
 name: def_model
 input:
-  topic: str
+  topic: !str
 defs:
   score:
     kind: model
     model_id: x
     input:
-      topic: str
+      topic: !str
     output: float
 nodes:
   rank:
@@ -264,7 +265,7 @@ def test_single_node_def_model_kind_is_removed():
         ("e42-removed-model-kind.yaml", "kind 'model' was removed", 8),  # the `kind:` line
         ("e11-field-not-allowed.yaml", "field 'prompt' is not allowed", 13),  # the stray field
         ("e12-missing-required-field.yaml", "missing required field 'code'", 8),  # the node body
-        ("e13-bad-type-expression.yaml", "bad type expression 'list['", 11),
+        ("e13-bad-type-expression.yaml", "bad type expression 'list('", 11),
         ("e14-unknown-system-ambient.yaml", "bogus", 11),
         ("e15-prompt-undeclared-input.yaml", "is not a declared input", 12),
         ("e16-bad-typedef-name.yaml", "shadows", 5),
@@ -341,7 +342,7 @@ def test_invalid_authored_default_carries_input_range():
     source = """id: invalid-default
 name: invalid_default
 input:
-  value: int = null
+  value: !int null
 nodes:
   echo:
     kind: code
@@ -352,7 +353,7 @@ nodes:
 output: ${echo.output}
 """
 
-    with pytest.raises(LoadError, match="default") as caught:
+    with pytest.raises(LoadError, match=re.escape("'value': `null` is not a valid int")) as caught:
         load_flow(source)
 
     assert _only_error_range(caught.value).start_line == 4

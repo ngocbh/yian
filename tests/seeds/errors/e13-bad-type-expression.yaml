@@ -1,13 +1,13 @@
-# e13 — a malformed type expression in `output:`. COMPILE: "bad type expression 'list['".
+# e13 — a malformed type expression in `output:`. COMPILE: "bad type expression 'list('".
 id: err-bad-type-expr
 name: err_bad_type_expr
 input:
-  topic: str
+  topic: !str
 nodes:
   calc:
     kind: code
     input:
       topic: ${input.topic}
-    output: "list["         # ERROR: not a parseable type
+    output: "list("         # ERROR: not a parseable type
     code: tests.seeds.fns:echo_value
 output: ${calc.output}

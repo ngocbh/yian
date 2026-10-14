@@ -89,7 +89,7 @@ class CallDescriptor(NodeDescriptor):
         in `wiring`. A MAP's reserved `over:` iteration source rides the wiring under the `"over"`
         key (over-then-input order); a single call's wiring is just its authored `input:`. Resolves the callable
         via `ctx.resolver`, derives its `ChildSignature`, stamps `output_contract` (call re-exports
-        the codomain carrier; map wraps an exact type in `list[U]` and retains its default
+        the codomain carrier; map wraps an exact type in `list(U)` and retains its default
         origin, while a partial/opaque child remains unenforced),
         name/arity-checks the params, and BAKES the child's
         compiled flow onto the node. The call/map discriminator is the descriptor class
@@ -178,7 +178,7 @@ class CallDescriptor(NodeDescriptor):
 
 
 def _list_of(element: Type) -> Type:
-    """`element` -> a `list[element]` Type (the MAP codomain). Mirrors `resolve_type`'s
+    """`element` -> a `list(element)` Type (the MAP codomain). Mirrors `resolve_type`'s
     list-seg rule: a record or union element -> LIST_OBJECT, a `Literal` element ->
     LIST_STRING; else by scalar.
     """

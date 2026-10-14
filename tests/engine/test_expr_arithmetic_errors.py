@@ -40,28 +40,28 @@ def _failed(decl: str, value: str, inputs: dict):
 
 
 def test_a_float_power_overflow_fails_the_run():
-    failure = _failed("n: int", "${2.0 ** input.n}", {"n": 5000})
+    failure = _failed("n: !int", "${2.0 ** input.n}", {"n": 5000})
     assert "cannot compute" in failure.message and "**" in failure.message
 
 
 def test_an_int_too_large_for_float_division_fails_the_run():
-    _failed("n: int", "${input.n / 3}", {"n": 10**400})
+    _failed("n: !int", "${input.n / 3}", {"n": 10**400})
 
 
 @needs_digit_limit
 def test_a_type_error_on_a_huge_int_fails_the_run():
-    failure = _failed("n: int", '${10 ** input.n + "a"}', {"n": 5000})
+    failure = _failed("n: !int", '${10 ** input.n + "a"}', {"n": 5000})
     assert "type error" in failure.message
 
 
 @needs_digit_limit
 def test_an_embedded_int_too_large_for_text_fails_the_run():
-    failure = _failed("n: int", "'x=${10 ** input.n}'", {"n": 5000})
+    failure = _failed("n: !int", "'x=${10 ** input.n}'", {"n": 5000})
     assert "as text" in failure.message
 
 
 def test_a_missing_format_key_fails_the_run():
-    failure = _failed("r: object", '${"%(k)s" % input.r}', {"r": {"j": 1}})
+    failure = _failed("r: !object", '${"%(k)s" % input.r}', {"r": {"j": 1}})
     assert "cannot compute" in failure.message
 
 
@@ -70,7 +70,7 @@ def test_an_int_to_float_overflow_fails_the_node_naming_the_binding():
 id: arith
 name: arith
 input:
-  x: int
+  x: !int
 nodes:
   c:
     kind: code
@@ -93,7 +93,7 @@ def test_an_overflow_in_a_flow_assert_fails_the_run():
 id: arith
 name: arith
 input:
-  n: int
+  n: !int
 asserts:
   - 2.0 ** input.n > 0
 nodes:

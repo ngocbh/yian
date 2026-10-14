@@ -16,8 +16,8 @@ _FLOW = """
 id: coskip
 name: coskip
 input:
-  score: float
-  topic: str
+  score: !float
+  topic: !str
 nodes:
   gate:
     kind: case

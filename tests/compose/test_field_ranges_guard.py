@@ -11,7 +11,7 @@ _FLOW = """
 id: ranges
 name: ranges
 input:
-  topic: str
+  topic: !str
 nodes:
   n:
     kind: code

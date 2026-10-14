@@ -31,7 +31,7 @@ name: skipped_call
 defs:
   broken:
     input:
-      topic: str
+      topic: !str
     nodes:
       gate:
         kind: case
@@ -68,7 +68,7 @@ name: skipped_map
 defs:
   broken:
     input:
-      topic: str
+      topic: !str
     nodes:
       gate:
         kind: case
@@ -106,7 +106,7 @@ name: skipped_loop
 defs:
   broken_turn:
     input:
-      n: int
+      n: !int
     nodes:
       gate:
         kind: case
@@ -146,7 +146,7 @@ name: skipped_nested_loop
 defs:
   broken_turn:
     input:
-      n: int
+      n: !int
     nodes:
       gate:
         kind: case
@@ -171,7 +171,7 @@ defs:
     output: ${dead.output}
   wrapped:
     input:
-      n: int
+      n: !int
     nodes:
       repeat:
         kind: loop

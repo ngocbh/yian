@@ -9,8 +9,8 @@ description: Turn a (rating, rationale) pair into a one-line verdict string.
 version: v1
 
 input:
-  rating: float
-  rationale: str
+  rating: !float
+  rationale: !str
 
 nodes:
   v:

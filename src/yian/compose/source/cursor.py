@@ -21,6 +21,7 @@ from yian.compose.source.common import (
     _ScalarDef,
     _SeqStep,
     _SequenceDef,
+    _occurrence_key_token,
     _read_only,
     _snapshot_safe_value,
 )
@@ -40,6 +41,44 @@ _SCALAR_STYLES = {
     "|": "literal",
     ">": "folded",
 }
+
+
+def _same_value(left: Any, right: Any) -> bool:
+    """Compare two SafeLoader values deeply, with exact types at every depth.
+
+    Recursive aliases compare once per container pair, so cyclic values end.
+    """
+
+    stack = [(left, right)]
+    seen: set[tuple[int, int]] = set()
+    while stack:
+        first, second = stack.pop()
+        if first is second:
+            continue
+        if type(first) is not type(second):
+            return False
+        if type(first) is dict:
+            if (id(first), id(second)) in seen:
+                continue
+            seen.add((id(first), id(second)))
+            first_keys = {_occurrence_key_token(key): key for key in first}
+            second_keys = {_occurrence_key_token(key): key for key in second}
+            if first_keys.keys() != second_keys.keys():
+                return False
+            stack.extend(
+                (first[key], second[second_keys[token]])
+                for token, key in first_keys.items()
+            )
+        elif type(first) in (list, tuple):
+            if (id(first), id(second)) in seen:
+                continue
+            seen.add((id(first), id(second)))
+            if len(first) != len(second):
+                return False
+            stack.extend(zip(first, second))
+        elif first != second:
+            return False
+    return True
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -239,16 +278,126 @@ class SourceCursor:
                 whose value differs from the retained scalar return ``None``.
         """
 
-        definition = self._source_scalar_definition()
-        if (
-            definition is None
-            or definition.raw is None
-            or type(self._value) is not type(definition.value)
-            # The identity check keeps an unchanged NaN scalar.
-            or (self._value is not definition.value and self._value != definition.value)
-        ):
+        definition = self._unchanged_scalar_definition()
+        if definition is None:
             return None
         return _SCALAR_STYLES.get(definition.style)
+
+    @property
+    def tag(self) -> str | None:
+        """Return the local YAML tag of an unchanged source value.
+
+        Projections and overlays keep the tag while their value still has the
+        retained value's type and deeply equals it.
+
+        Examples:
+            >>> from yian.compose.source import SourceDocument
+            >>> cursor = SourceDocument.parse("a: !int 5\\n").root.child("a")
+            >>> cursor.tag
+            'int'
+            >>> cursor.with_value("${input.a}").tag is None
+            True
+
+        Returns:
+            `str | None`:
+                The tag text without the leading ``!``, e.g. ``"list(str)"``.
+                Untagged and core-tagged values, virtual values, and cursors
+                whose value differs from the retained value return ``None``.
+        """
+
+        if self._document is None or self._definition is None:
+            return None
+        definition = self._document._definitions[self._definition]
+        if definition.tag is None or not _same_value(self._value, definition.value):
+            return None
+        return definition.tag
+
+    @property
+    def tag_definition_id(self) -> int | None:
+        """Return the document-local id of the tagged definition this cursor reads.
+
+        The id equals the matching ``TaggedNode.definition_id`` from
+        ``SourceDocument.tagged_nodes()``, so a reader can record which tags it
+        consumed. Aliases of one tagged node share the id.
+
+        Returns:
+            `int | None`:
+                The definition id, or ``None`` whenever ``tag`` is ``None``.
+        """
+
+        if self.tag is None:
+            return None
+        return self._definition
+
+    @property
+    def scalar_text(self) -> str | None:
+        """Return the authored text of an unchanged source scalar.
+
+        The text is the scalar before YAML resolves its type, so a plain ``yes``
+        reads ``"yes"`` although its value is ``True``. For a quoted or block
+        scalar it is the text after quotes are removed, escapes are processed,
+        and lines are folded, which is the string value itself. The value gate
+        matches ``scalar_style``.
+
+        Examples:
+            >>> from yian.compose.source import SourceDocument
+            >>> SourceDocument.parse("a: !str yes\\n").root.child("a").scalar_text
+            'yes'
+
+        Returns:
+            `str | None`:
+                The authored text. Mappings, sequences, virtual values, and
+                cursors whose value differs from the retained scalar return
+                ``None``.
+        """
+
+        definition = self._unchanged_scalar_definition()
+        if definition is None:
+            return None
+        return definition.raw
+
+    @property
+    def key_text(self) -> str | None:
+        """Return the authored text of the mapping key selecting this occurrence.
+
+        Examples:
+            >>> from yian.compose.source import SourceDocument
+            >>> SourceDocument.parse("{yes: 1}\\n").root.child(True).key_text
+            'yes'
+
+        Returns:
+            `str | None`:
+                The key's scalar text before YAML resolves its type, or ``None``
+                for roots, sequence items, source-free cursors, and non-scalar
+                keys.
+        """
+
+        return self._source_key_text()
+
+    @property
+    def has_value(self) -> bool:
+        """Return whether the source wrote a value, not just a tag.
+
+        Examples:
+            >>> from yian.compose.source import SourceDocument
+            >>> SourceDocument.parse("a: !int\\n").root.child("a").has_value
+            False
+            >>> SourceDocument.parse("a: !int null\\n").root.child("a").has_value
+            True
+
+        Returns:
+            `bool`:
+                ``False`` only for an unchanged empty plain scalar that carries
+                a tag, such as ``a: !int``; ``True`` otherwise.
+        """
+
+        definition = self._source_scalar_definition()
+        return not (
+            definition is not None
+            and definition.raw == ""
+            and definition.style is None
+            and self.tag is not None
+        )
 
     @property
     def key_range(self) -> SourceRange | None:
@@ -274,6 +423,22 @@ class SourceCursor:
         """
 
         return _snapshot_safe_value(self._value)
+
+    def holds(self, value: Any) -> bool:
+        """Return whether this cursor's value is exactly `value`.
+
+        Types are compared exactly at every depth, so `1` does not match `True`,
+        and a recursive alias compares once per container pair, so the check ends
+        where `==` on two copies of a cyclic value would recurse forever.
+
+        Args:
+            value (`Any`): The value to compare with.
+
+        Returns:
+            `bool`: True when `value` equals this cursor's value with exact types.
+        """
+
+        return _same_value(self._value, value)
 
     def _value_view(self) -> Any:
         """Return an identity-preserving recursive read-only value view."""
@@ -968,6 +1133,20 @@ class SourceCursor:
             return None
         definition = self._document._definitions[self._definition]
         return definition if isinstance(definition, _ScalarDef) else None
+
+    def _unchanged_scalar_definition(self) -> _ScalarDef | None:
+        """Return the retained scalar definition while this cursor's value still equals it."""
+
+        definition = self._source_scalar_definition()
+        if (
+            definition is None
+            or definition.raw is None
+            or type(self._value) is not type(definition.value)
+            # The identity check keeps an unchanged NaN scalar.
+            or (self._value is not definition.value and self._value != definition.value)
+        ):
+            return None
+        return definition
 
     def _source_key_text(self) -> str | None:
         """Return the authored scalar text of this cursor's selecting key."""

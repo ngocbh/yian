@@ -462,7 +462,7 @@ _EXTERNAL_FAILING_CHILD = """\
 id: failing-child
 name: failing_child
 input:
-  n: int
+  n: !int
 nodes:
   fail:
     kind: code

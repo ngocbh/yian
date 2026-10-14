@@ -5,7 +5,7 @@
 id: err-inline-raises
 name: err_inline_raises
 input:
-  topic: str
+  topic: !str
 nodes:
   boom:
     kind: code

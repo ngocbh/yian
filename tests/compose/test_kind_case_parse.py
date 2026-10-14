@@ -643,7 +643,7 @@ def test_case_parse_on_form_keeps_output_and_styles():
     assert desc.else_style == "single"
 
 
-_SHAPE_HEAD = "id: f\nname: f\ninput:\n  n: int\nnodes:\n  gate:\n    kind: case\n"
+_SHAPE_HEAD = "id: f\nname: f\ninput:\n  n: !int\nnodes:\n  gate:\n    kind: case\n"
 _SHAPE_TAIL = (
     "  done:\n    kind: code\n    code: return 1\n    output: int\n"
     "output: ${done.output}\n"

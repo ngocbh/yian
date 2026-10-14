@@ -20,7 +20,7 @@ name: debate
 description: Frame a question, argue for and against in parallel, then recommend.
 
 input:
-  question: str
+  question: !str
 
 nodes:
   frame:

@@ -35,8 +35,9 @@ def iter_flow_origins(flow: Flow) -> Iterator[OriginRef]:
     Traversal follows wiring and outputs, then nodes and their baked children in
     deterministic structural order. Flow, node, and frozen-carrier identities are
     visited once, so shared children and deliberate object cycles terminate. Equal
-    origins in distinct carriers remain distinct occurrences. Binding sources,
-    parameter defaults, node environments, and render metadata stay opaque.
+    origins in distinct carriers remain distinct occurrences. Binding sources
+    other than value templates, parameter defaults, node environments, and render
+    metadata stay opaque.
 
     Args:
         flow (`Flow`):

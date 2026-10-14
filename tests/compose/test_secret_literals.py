@@ -17,10 +17,10 @@ _FLOW = """\
 id: f
 name: f
 input:
-  pw: str
-  k: str
-  s: str
-  x: str
+  pw: !str
+  k: !str
+  s: !str
+  x: !str
 nodes:
   fetch:
     kind: code
@@ -41,7 +41,7 @@ def _flow(*input_lines: str) -> str:
 def _output_flow(*output_lines: str) -> str:
     """Return a one-node flow whose `output:` mapping has the given lines."""
     return (
-        "id: f\nname: f\ninput:\n  pw: str\n"
+        "id: f\nname: f\ninput:\n  pw: !str\n"
         "nodes:\n  fetch:\n    kind: code\n    output: str\n"
         "    code: |\n      return 'x'\n"
         "output:\n" + "\n".join(f"  {line}" for line in output_lines) + "\n"
@@ -194,19 +194,19 @@ def test_a_recursive_alias_holding_a_secret_key_is_rejected():
 
 @pytest.mark.parametrize("type_text", ["int", "str"])
 def test_a_typed_literal_under_a_secret_name_is_rejected(type_text):
-    _secret_error(_flow(f"password: {type_text} = {_SECRET}"))
+    _secret_error(_flow(f"password: !{type_text} {_SECRET}"))
 
 
 def test_a_typed_literal_with_a_bad_type_is_the_secret_error():
-    _secret_error(_flow(f"password: foo = {_SECRET}"))
+    _secret_error(_flow(f"password: !foo {_SECRET}"))
 
 
 def test_a_typed_reference_under_a_secret_name_loads():
-    load_flow(_flow("password: str = ${input.pw}"))
+    load_flow(_flow("password: !str ${input.pw}"))
 
 
 def test_a_typed_collection_holding_a_secret_key_is_rejected():
-    message = str(_secret_error(_flow(f'conn: dict[str, str] = {{"password":"{_SECRET}"}}')))
+    message = str(_secret_error(_flow(f'conn: !object {{"password": "{_SECRET}"}}')))
 
     assert "input 'conn' has key 'password'" in message
 
@@ -225,7 +225,7 @@ def test_a_literal_map_over_holding_a_secret_key_is_rejected(over):
         "id: p\nname: p\n"
         "defs:\n"
         "  leaf:\n"
-        "    input:\n      x: object\n"
+        "    input:\n      x: !object\n"
         "    nodes:\n"
         "      up:\n"
         "        kind: code\n"
@@ -247,7 +247,7 @@ def test_a_literal_map_over_holding_a_secret_key_is_rejected(over):
 
 
 @pytest.mark.parametrize(
-    "line", [f"password: {_SECRET}", f"password: str = {_SECRET}"]
+    "line", [f"password: {_SECRET}", f"password: !str {_SECRET}"]
 )
 def test_a_literal_flow_output_under_a_secret_name_is_rejected(line):
     message = str(_secret_error(_output_flow(line)))
@@ -286,7 +286,7 @@ def test_a_uses_library_with_a_literal_secret_fails_when_imported(tmp_path):
         "    input:\n"
         "      pw: ${input.pw}\n      k: ${input.pw}\n"
         "      s: ${input.pw}\n      x: ${input.pw}\n"
-        "input:\n  pw: str\n"
+        "input:\n  pw: !str\n"
         "output: ${run.output}\n"
     )
 
@@ -297,12 +297,12 @@ _CASE_FLOW = """\
 id: f
 name: f
 input:
-  pw: str
-  score: float
+  pw: !str
+  score: !float
 nodes:
   pick:
     kind: case
-    output: dict[str, str]
+    output: dict(str, str)
     cases:
       - when: input.score >= 0.5
         then:
@@ -349,9 +349,9 @@ _G_DEF = """\
 defs:
   g:
     input:
-      password: Optional[str] = null
-      api_key: Optional[str] = null
-      x: Optional[int] = null
+      password: !Optional(str) null
+      api_key: !Optional(str) null
+      x: !Optional(int) null
     nodes:
       run:
         kind: code
@@ -365,7 +365,7 @@ defs:
 def _call_flow(binding: str) -> str:
     """Return a flow whose `b` node binds input `x` to `binding`."""
     return (
-        "id: f\nname: f\ninput:\n  pw: str\n" + _G_DEF + "nodes:\n  b:\n    kind: code\n"
+        "id: f\nname: f\ninput:\n  pw: !str\n" + _G_DEF + "nodes:\n  b:\n    kind: code\n"
         f"    input:\n      x: {binding}\n    output: str\n"
         "    code: |\n      return 'x'\n"
         "output: ${b.output}\n"
@@ -468,7 +468,7 @@ def test_a_literal_secret_call_argument_in_a_flow_output_is_rejected():
 
 def test_a_literal_secret_in_a_case_call_target_has_a_clean_label():
     text = (
-        "id: f\nname: f\ninput:\n  score: float\n" + _G_DEF + "nodes:\n"
+        "id: f\nname: f\ninput:\n  score: !float\n" + _G_DEF + "nodes:\n"
         "  c:\n    kind: case\n    cases:\n"
         '      - when: "${input.score} >= 0.5"\n'
         f"        then: call(g, password='{_SECRET}')\n"
@@ -497,7 +497,7 @@ def test_a_nested_call_under_a_secret_keyword_that_does_not_parse_is_rejected(bi
 def _node_assert_flow(assertion: str) -> str:
     """Return a flow whose `b` node has one node-local assert."""
     return (
-        "id: f\nname: f\ninput:\n  pw: str\n" + _G_DEF + "nodes:\n  b:\n    kind: code\n"
+        "id: f\nname: f\ninput:\n  pw: !str\n" + _G_DEF + "nodes:\n  b:\n    kind: code\n"
         "    output: str\n    code: |\n      return 'x'\n"
         f"    asserts:\n      - {assertion}\n"
         "output: ${b.output}\n"
@@ -556,7 +556,7 @@ def test_a_malformed_call_with_a_secret_keyword_does_not_quote_its_text(
 
 def test_a_malformed_case_call_with_a_secret_keyword_does_not_quote_its_text():
     text = (
-        "id: f\nname: f\ninput:\n  score: float\n" + _G_DEF + "nodes:\n"
+        "id: f\nname: f\ninput:\n  score: !float\n" + _G_DEF + "nodes:\n"
         "  c:\n    kind: case\n    cases:\n"
         '      - when: "${input.score} >= 0.5"\n'
         f"        then: call(g password={_SECRET})\n"
@@ -599,12 +599,12 @@ def _default_error(text: str) -> str:
 @pytest.mark.parametrize(
     "declaration",
     [
-        f"password: str = '{_SECRET}'",
-        f"password: str = {_SECRET}",
-        f"password: \"str = '{_SECRET}\"",
-        "password: int = 1234",
-        "password: str = ''",
-        f"api_key: list[str] = [{_SECRET}]",
+        f"password: !str '{_SECRET}'",
+        f"password: !str {_SECRET}",
+        f'password: !str "{_SECRET}"',
+        "password: !int 1234",
+        "password: !str ''",
+        f"api_key: !list(str) [{_SECRET}]",
     ],
 )
 def test_a_secret_named_input_default_is_rejected(declaration):
@@ -620,11 +620,11 @@ def test_a_secret_named_input_default_is_rejected(declaration):
 @pytest.mark.parametrize(
     "declaration",
     [
-        "api_key: Optional[str] = null",
-        "api_key: Optional[str] = ~",
-        "primary_password: str",
-        "password: Optional[str]",
-        "password: str = ${input.other}",
+        "api_key: !Optional(str) null",
+        "api_key: !Optional(str) ~",
+        "primary_password: !str",
+        "password: !Optional(str)",
+        "password: !str ${input.other}",
     ],
 )
 def test_a_secret_named_input_without_a_literal_default_loads(declaration):
@@ -633,7 +633,7 @@ def test_a_secret_named_input_without_a_literal_default_loads(declaration):
 
 def test_a_nested_secret_key_in_an_input_default_is_rejected():
     message = _default_error(
-        _input_flow(f"conn: 'dict[str, str] = {{\"password\": \"{_SECRET}\"}}'")
+        _input_flow(f'conn: !object {{"password": "{_SECRET}"}}')
     )
 
     assert "input 'conn': default has key 'password' (a secret name)" in message
@@ -641,10 +641,10 @@ def test_a_nested_secret_key_in_an_input_default_is_rejected():
 
 
 def test_the_secret_default_error_is_located_at_its_declaration():
-    text = _input_flow("keep: str", f"password: str = {_SECRET}")
+    text = _input_flow("keep: !str", f"password: !str {_SECRET}")
     with pytest.raises(LoadError) as exc_info:
         load_flow(text)
-    line = text.splitlines().index(f"  password: str = {_SECRET}") + 1
+    line = text.splitlines().index(f"  password: !str {_SECRET}") + 1
 
     assert exc_info.value.diagnostic.frames[-1].range.start_line == line
 
@@ -653,7 +653,7 @@ def test_a_secret_named_def_input_default_is_rejected():
     text = (
         "id: f\nname: f\n"
         "defs:\n  g:\n    input:\n"
-        f"      password: str = {_SECRET}\n"
+        f"      password: !str {_SECRET}\n"
         "    nodes:\n      run:\n        kind: code\n        output: str\n"
         "        code: |\n          return 'x'\n"
         "    output: ${run.output}\n"
@@ -667,7 +667,7 @@ def test_a_secret_named_def_input_default_is_rejected():
 def test_a_secret_named_agent_variable_is_rejected():
     text = (
         "id: f\nname: f\nnodes:\n  writer:\n    kind: agent\n"
-        f"    variables:\n      password: str = {_SECRET}\n"
+        f"    variables:\n      password: !str {_SECRET}\n"
         "    prompt: hi\n    output: str\n"
         "output: ${writer.output}\n"
     )

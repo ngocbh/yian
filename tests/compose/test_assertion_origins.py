@@ -40,7 +40,7 @@ def test_root_flow_assertions_keep_indexed_sites_through_rewrites():
     text = """id: root-assertion-origins
 name: root-assertion-origins
 input:
-  n: int
+  n: !int
 defs:
   truthy:
     kind: code
@@ -99,7 +99,7 @@ def test_alias_occurrences_mint_distinct_node_and_flow_assertion_origins():
     text = """id: aliased-assertion-origins
 name: aliased-assertion-origins
 input:
-  n: int
+  n: !int
 nodes:
   first: &shared_node
     kind: code
@@ -353,7 +353,7 @@ name: nested-assertion-origins
 defs:
   child:
     input:
-      n: int
+      n: !int
     nodes:
       worker:
         kind: code

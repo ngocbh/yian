@@ -2,7 +2,7 @@
 id: err-unknown-system-ambient
 name: err_unknown_system_ambient
 input:
-  topic: str
+  topic: !str
 nodes:
   note:
     kind: agent

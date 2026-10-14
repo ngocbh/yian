@@ -15,7 +15,7 @@ def test_scalar():
 
 
 def test_list():
-    sh = read_type("list[str]", {})
+    sh = read_type("list(str)", {})
     assert sh.kind == ValueKind.LIST_STRING
     assert sh.element is not None and sh.element.kind == ValueKind.STRING
 
@@ -47,7 +47,7 @@ def test_list_of_single_key_maps():
 
 
 def test_optional_field_excluded_from_required():
-    sh = read_type({"score": "float", "note": "Optional[str]"}, {})
+    sh = read_type({"score": "float", "note": "Optional(str)"}, {})
     assert sh.fields["note"].nullable is True
     assert sh.fields["score"].nullable is False
     assert sh.required == frozenset({"score"})
@@ -63,5 +63,5 @@ def test_registry_name():
 
 def test_malformed_leaf_raises():
     with pytest.raises(LoadError) as exc:
-        read_type("list[", {})
-    assert "list[" in str(exc.value)
+        read_type("list(", {})
+    assert "list(" in str(exc.value)

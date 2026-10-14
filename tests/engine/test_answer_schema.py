@@ -21,24 +21,24 @@ def test_scalar():
 
 
 def test_nullable_scalar_is_optional():
-    assert _schema("Optional[str]") == [{"name": "answer", "type": "str", "required": False}]
+    assert _schema("Optional(str)") == [{"name": "answer", "type": "str", "required": False}]
 
 
 def test_literal_enum_carries_values():
-    assert _schema("Literal[approve, reject]") == [
+    assert _schema("Literal(approve, reject)") == [
         {"name": "answer", "type": "str", "required": True, "enum": ["approve", "reject"]}
     ]
 
 
 def test_list_of_enum_keeps_the_element_enum():
     # The regression the review flagged: a list output dropped its element enum.
-    schema = _schema("list[Literal[approve, reject]]")
+    schema = _schema("list(Literal(approve, reject))")
     assert schema[0]["name"] == "answer"
     assert schema[0]["enum"] == ["approve", "reject"]
 
 
 def test_record_expands_per_field_with_required():
-    schema = _schema({"rating": "float", "note": "Optional[str]"})
+    schema = _schema({"rating": "float", "note": "Optional(str)"})
     by_name = {e["name"]: e for e in schema}
     assert by_name["rating"] == {"name": "rating", "type": "float", "required": True}
     assert by_name["note"] == {"name": "note", "type": "str", "required": False}

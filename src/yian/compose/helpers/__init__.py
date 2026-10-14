@@ -7,6 +7,10 @@ here so the layering is legible: `helpers` imports the engine core (`typesys` / 
 down into it.
 
 Modules:
+  - `directives`  `CALL_HEAD` and `match_call_directive`: recognizes a whole-value
+                  `call(...)` directive in binding text, rejecting malformed text that
+                  starts with `call(`; `holds_secret_keyword` / `quoted_unless_secret`
+                  keep a secret keyword's text out of messages.
   - `errors`      the document-owned diagnostic factory plus `LoadError`, whose one
                   canonical `Diagnostic` is ready for direct boundary rendering.
   - `isinstance_types` the type names `isinstance(x, T)` calls name in a binding or
@@ -21,17 +25,28 @@ Modules:
   - `source`      parse-free boundary-input range projection over an existing
                   `SourceCursor`; compatibility metadata, never a YAML parser. Assertion
                   origin/range pairs come from one retained item cursor in the build
-                  conductor, not a helper-side map.
-  - `typed_bindings` `split_typed_binding`: recognizes plain-style `Type = value`
-                  binding text, resolving the type and reading the value (a literal
-                  value is checked against the type); quoted and block scalars stay
-                  plain text. `typed_binding_parts` and `read_typed_value` are its
-                  purely syntactic steps.
+                  conductor, not a helper-side map. `is_extension_key` is the one
+                  rule for the top-level `x-*` keys a load ignores.
+  - `tags`        a slot's type and value through its YAML tags: `read_tag_type` (tag
+                  text -> `Type`, with the strict YAML 1.2 character rule and a
+                  close-match hint), `read_tagged_value` (a slot cursor -> `TaggedSlot`:
+                  a binding source or literal, with nested tags as typed `Binding`s in a
+                  `ValueTemplate`, consumed tags recorded in a ledger), `suggest_tag`
+                  (the one place that spells a tagged slot for messages),
+                  `reject_unread_tags` / `reject_tagged_output` (a tag outside a typed
+                  slot is a located load error),
+                  `old_typed_text` / `resolve_type_text` / `spell_type_text` /
+                  `old_form_suggestion` (recognize the old `Type = value` and bare
+                  type text, now load errors, and spell the tag to write),
+                  `QUOTED_STYLES`, and `yaml_quoted`.
+                  A tag only checks; it never fills in a field.
   - `types`       one recursive type-shape reader: `read_type`, `read_flow_inputs`,
-                  and `read_variables` are source-free; `read_value_contract` and
-                  `read_source_parameters` compile retained input/variable cursors into
-                  `Parameter` / `ValueContract` carriers containing only opaque origins.
-                  Local variables reuse the default reader with a mandatory-default policy.
+                  and `read_variables` are source-free (type text only, no defaults);
+                  `read_value_contract` and `read_source_parameters` compile retained
+                  cursors into `Parameter` / `ValueContract` carriers containing only
+                  opaque origins; a declaration (`qty: !int`, `n: !int(1..12) 4`) is
+                  read through `tags.read_tagged_value`, and an untagged one is an
+                  error that shows the tag. Local variables need a default.
   - `uses`        `UsesRef` / `parse_uses_ref`: the `uses:` child-flow reference parser.
   - `yaml_words`  `former_boolean_fix`: the boolean a YAML 1.1 boolean spelling (`yes`,
                   `off`) meant, and the fix a load error shows when one reaches a `bool`

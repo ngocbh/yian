@@ -106,7 +106,7 @@ def test_other_defaults_stay_untyped() -> None:
 
 
 def test_null_default_over_a_flow_input_is_optional() -> None:
-    """`${input.x :- null}` over a str flow input types as Optional[str]."""
+    """`${input.x :- null}` over a str flow input types as Optional(str)."""
     resolved = resolve_output_binding_contract(
         "${input.x :- null}", {}, {"x": ValueContract(STR)}
     )
@@ -121,7 +121,7 @@ name: f
 nodes:
   cls:
     kind: code
-    output: Literal[a, b, c]
+    output: Literal(a, b, c)
     code: |
       return "a"
   route:

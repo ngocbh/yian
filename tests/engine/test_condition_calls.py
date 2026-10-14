@@ -1,4 +1,4 @@
-"""A condition may call only a builtin, with arguments the builtin takes."""
+"""A condition may call only a builtin, with arguments it takes, or a typedef constructor."""
 
 import pytest
 
@@ -8,6 +8,7 @@ from yian.expr.builtins import TEMPLATE_FNS
 from yian.expr.expressions import parse_condition
 from yian.nodes.contracts import Assertion
 from yian.run import run_flow
+from yian.typesys.types import read_typedefs, type_for
 
 
 @pytest.mark.parametrize(
@@ -16,7 +17,21 @@ from yian.run import run_flow
 )
 def test_unknown_function_does_not_parse_as_a_condition(condition):
     with pytest.raises(ExpressionError, match=r"^unknown expression function 'nosuchfn'$"):
-        parse_condition(condition)
+        parse_condition(condition, {})
+
+
+def test_a_constructor_parses_when_its_type_is_known_or_left_to_compose():
+    buy = type_for("Buy", read_typedefs({"Buy": {"qty": "int"}}))
+    parse_condition("Buy(d).qty > 0", {"Buy": buy})
+    # Without a type table, compose resolves the name against the flow's typedefs.
+    parse_condition("Buy(d).qty > 0")
+    with pytest.raises(ExpressionError, match=r"^unknown expression function 'Buy'$"):
+        parse_condition("Buy(d).qty > 0", {})
+
+
+def test_a_builtin_type_name_called_in_a_condition_gets_the_conversion_hint():
+    with pytest.raises(ExpressionError, match=r"`int\(\.\.\.\)` is not a conversion"):
+        parse_condition("int(x) > 0", {})
 
 
 @pytest.mark.parametrize(
@@ -66,7 +81,7 @@ def test_a_registered_builtin_is_accepted(monkeypatch):
 
 def test_a_repeated_keyword_does_not_parse():
     with pytest.raises(
-        ExpressionError, match=r"^expression function 'upper' got keyword 's' twice$"
+        ExpressionError, match=r"^upper\(\.\.\.\) repeats the keyword 's'$"
     ):
         parse_condition("upper(s=a, s=b) == 'A'")
 
@@ -87,7 +102,7 @@ _NODE_ASSERT = """
 id: f
 name: f
 input:
-  v: int
+  v: !int
 nodes:
   x:
     kind: code
@@ -104,7 +119,7 @@ _FLOW_ASSERT = """
 id: f
 name: f
 input:
-  v: int
+  v: !int
 asserts:
   - "<cond>"
 nodes:
@@ -121,7 +136,7 @@ _CASE = """
 id: f
 name: f
 input:
-  v: int
+  v: !int
 nodes:
   gate:
     kind: case
@@ -139,7 +154,7 @@ id: f
 name: f
 defs:
   step:
-    input: {n: int, exited: bool}
+    input: {n: !int , exited: !bool }
     nodes:
       s:
         kind: code
@@ -236,3 +251,18 @@ def test_python_built_case_when_with_the_wrong_arguments_fails_before_the_run(tm
     ):
         run_flow(flow, {"v": 1}, log=path)
     assert not path.exists()
+
+
+_TYPEDEF_CASE = _CASE.replace("name: f\n", "name: f\ntypedefs:\n  Small: int(0..9)\n")
+
+
+def test_a_typedef_constructor_in_a_condition_loads_and_runs():
+    flow = load_flow(_TYPEDEF_CASE.replace("<cond>", "Small(input.v) > 4"))
+    assert flow.compiled.nodes["gate"].types == {"Small": type_for("int(0..9)", {})}
+    assert run_flow(flow, {"v": 7}).output == "hot"
+    assert run_flow(flow, {"v": 2}).output == "cold"
+
+
+def test_a_constructor_naming_no_typedef_in_a_condition_fails_to_load():
+    error = _load_error(_TYPEDEF_CASE.replace("<cond>", "Nope(input.v) > 4"))
+    assert "unknown expression function 'Nope'" in str(error)

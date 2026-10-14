@@ -1,6 +1,6 @@
 """Compose type declarations -> source-neutral runtime contracts.
 
-A node here is a leaf type string (`"float"`, `"list[str]"`, a registry name), a
+A node here is a leaf type string (`"float"`, `"list(str)"`, a registry name), a
 map of field -> node (a record, nested natively), or a list of single-key maps
 (the list-of-fields style). Resolution of leaf strings and nested records is the
 type layer's job (`type_for` recurses over aliases/lists/Optional); this reader
@@ -10,8 +10,9 @@ over a retained cursor and compiles authored root/nested sites into opaque
 ``ContractOrigins`` without leaking YAML concepts below Compose.
 """
 
+import re
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Callable, Optional
+from typing import TYPE_CHECKING, Any
 
 from yian.nodes.contracts import (
     ContractOrigins,
@@ -19,9 +20,9 @@ from yian.nodes.contracts import (
     ValueContract,
     ValuePath,
 )
-from yian.typesys import TypeCheckError, Type, build_value_as, type_for
+from yian.typesys import TypeCheckError, Type, type_for
 from yian.typesys.values import ValueKind
-from yian.typesys.types import TypeRegistry, encodes_as_utf8
+from yian.typesys.types import BUILTIN_TYPE_NAMES, TypeRegistry, encodes_as_utf8
 
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
 from yian.compose.helpers.secret_literals import (
@@ -30,7 +31,16 @@ from yian.compose.helpers.secret_literals import (
     secret_literal_message,
     secret_literal_path,
 )
-from yian.compose.helpers.yaml_words import former_boolean_fix
+from yian.compose.helpers.tags import (
+    close_type_name,
+    old_form_suggestion,
+    read_tagged_value,
+    resolve_type_text,
+    spell_type_text,
+    split_typed_text,
+    suggest_tag,
+    yaml_quoted,
+)
 from yian.diagnostics import SourceRange
 from yian.compose.source import (
     SourceAccessError,
@@ -44,8 +54,9 @@ from yian.secret_names import is_secret_name
 if TYPE_CHECKING:
     from yian.compose.source.catalog import _SourceCatalogBuilder
 
-
-_ContractReader = Callable[[Any], ValueContract]
+_HEAD_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# Text this plain is safe to show unquoted after a tag, once it reads back as text.
+_PLAIN_TEXT = re.compile(r"[A-Za-z][A-Za-z0-9 _.,'-]*")
 
 
 def _path_sort_key(path: ValuePath) -> tuple[tuple[int, str | int], ...]:
@@ -230,138 +241,42 @@ def read_value_contract(
 # ---------- flow `input:` declarations ----------
 
 
-def _split_default(spec: str) -> tuple[str, Optional[str]]:
-    """Split a `TYPE = default` spec on the FIRST top-level `=` (outside []/{}/quotes).
-
-    Returns `(type_part, default_part)`; `default_part` is None when there is no `=`
-    (a bare type). A `==`/`>=`/`<=`/`!=` is not a default assignment and is skipped.
-    """
-    depth = 0
-    quote: Optional[str] = None
-    for i, ch in enumerate(spec):
-        if quote is not None:
-            if ch == quote:
-                quote = None
-            continue
-        if ch in "\"'":
-            quote = ch
-        elif ch in "[{(":
-            depth += 1
-        elif ch in "]})":
-            depth -= 1
-        elif ch == "=" and depth == 0:
-            prev = spec[i - 1] if i else ""
-            nxt = spec[i + 1] if i + 1 < len(spec) else ""
-            if prev in "=<>!" or nxt == "=":
-                continue  # part of ==/<=/>=/!=, not a default assignment
-            return spec[:i].strip(), spec[i + 1 :].strip()
-    return spec.strip(), None
+_SOURCE_FREE_DEFAULT = (
+    "source-free declarations take a type only; write defaults in YAML with a tag"
+)
 
 
-def _former_boolean_hint(declared: Type, default: Any) -> str:
-    """Return the fix for a YAML 1.1 boolean spelling default a boolean would fill, else `""`.
-
-    Args:
-        declared (`Type`):
-            The declaration's type.
-        default (`Any`):
-            The default as YAML read it.
-
-    Returns:
-        `str`:
-            `"; "` and the fix, such as ``"; `no` is text; write `false`"``, or `""`.
-    """
-    fix = former_boolean_fix(default, declared)
-    return "" if fix is None else f"; {fix[1]}"
-
-
-def _read_flow_parameter(
+def _read_type_only(
     name: str,
     value: Any,
+    registry: TypeRegistry,
     *,
-    read_contract: _ContractReader,
-    parameter_origin: OriginRef | None = None,
-    default_origin: Callable[[], OriginRef | None] | None = None,
     diagnostics: LoadDiagnostics,
-    declaration_label: str = "input",
-    require_default: bool = False,
 ) -> Parameter:
-    """Read one typed declaration using an injected compiler and default policy.
+    """Read one source-free input declaration, which is type text with no default.
 
-    A default is part of the flow file, so under a secret name it must be `null` or
-    `${...}` text, and no default may hold a literal under a nested secret key.
+    Raises:
+        `LoadError`: The value is not text, or holds a default (`T = default`) or is
+            not a type.
     """
-    if isinstance(value, str):
-        type_part, default_part = _split_default(value)
-        contract = read_contract(type_part)
-        typ = contract.type
-        has_default = default_part is not None
-        if require_default and not has_default:
-            raise diagnostics.error(f"{declaration_label} {name!r}: a default is required")
-        if has_default and default_part == "":
-            raise diagnostics.error(f"{declaration_label} {name!r}: default cannot be empty")
-        default: Any = None
-        if has_default:
-            assert default_part is not None
-            # Checked before the default is read or type-checked, since those errors
-            # quote it.
-            secret = is_secret_name(name)
-            try:
-                default = parse_yaml_literal(default_part)
-            except SourceSyntaxError as exc:
-                if secret:
-                    raise _secret_default_error(
-                        name, declaration_label, diagnostics
-                    ) from None
-                raise diagnostics.error(
-                    f"{declaration_label} {name!r}: bad default {default_part!r}: {exc}"
-                ) from exc
-            if secret and default is not None and not is_binding_text(default):
-                raise _secret_default_error(name, declaration_label, diagnostics)
-            path = secret_literal_path(None, default)
-            if path is not None:
-                raise diagnostics.error(
-                    secret_literal_message(
-                        "default",
-                        name,
-                        path,
-                        owner=f"{declaration_label} {name!r}",
-                    )
-                )
-            try:
-                build_value_as(typ, default)
-            except ValueError as exc:
-                raise diagnostics.error(
-                    f"{declaration_label} {name!r}: default {default!r} does not satisfy "
-                    f"the declared type: {exc}{_former_boolean_hint(typ, default)}"
-                ) from exc
-        return Parameter(
-            name=name,
-            contract=contract,
-            required=not typ.nullable and not has_default,
-            has_default=has_default,
-            default=default,
-            coerce_strings=True,
-            origin=parameter_origin,
-            default_origin=(
-                default_origin() if has_default and default_origin is not None else None
-            ),
+    if not isinstance(value, str):
+        raise diagnostics.error(
+            f"input {name!r}: a source-free declaration is type text, "
+            f"got {type(value).__name__}"
         )
-
-    if isinstance(value, dict) and not require_default:
-        contract = read_contract(value)
-        return Parameter(
-            name=name,
-            contract=contract,
-            required=not contract.type.nullable,
-            coerce_strings=True,
-            origin=parameter_origin,
-        )
-
-    form = "a TYPE = default string" if require_default else "a type string or a record map"
-    raise diagnostics.error(
-        f"{declaration_label} {name!r}: declaration must be {form}, "
-        f"got {type(value).__name__}"
+    try:
+        typ = type_for(value, registry)
+    except TypeCheckError as exc:
+        if "=" in value:
+            raise diagnostics.error(f"input {name!r}: {_SOURCE_FREE_DEFAULT}") from None
+        raise diagnostics.error(
+            f"input {name!r}: bad type expression {value!r}: {exc}"
+        ) from exc
+    return Parameter(
+        name=name,
+        contract=ValueContract(typ),
+        required=not typ.nullable,
+        coerce_strings=True,
     )
 
 
@@ -397,13 +312,13 @@ def read_flow_inputs(
     *,
     diagnostics: LoadDiagnostics | None = None,
 ) -> list[Parameter]:
-    """Read Compose ``input:`` directly into canonical semantic parameters.
+    """Read source-free `input:` declarations, each a type text such as `Optional(int)`.
 
-    A `str` value is the `TYPE [= default]` / `Optional[X]` form; a mapping is a
-    record type (resolved via `read_type`, no default — the `{type:, default:}`
-    escape-hatch map is intentionally not supported). Authored defaults must
-    already satisfy their declared type; only supplied boundary strings are
-    coercible. This source-free entry point deliberately emits no origins.
+    A source-free declaration has no default: defaults are written in YAML after a
+    tag. This entry point deliberately emits no origins.
+
+    Raises:
+        `LoadError`: A declaration is not type text or holds a default.
     """
     diagnostics = diagnostics or LoadDiagnostics()
     parameters: list[Parameter] = []
@@ -411,14 +326,7 @@ def read_flow_inputs(
         source_range = None if ranges is None else ranges.get(name)
         try:
             parameters.append(
-                _read_flow_parameter(
-                    name,
-                    value,
-                    read_contract=lambda type_node: ValueContract(
-                        read_type(type_node, registry, diagnostics=diagnostics)
-                    ),
-                    diagnostics=diagnostics,
-                )
+                _read_type_only(name, value, registry, diagnostics=diagnostics)
             )
         except LoadError as exc:
             if exc.diagnostic.frames or source_range is None:
@@ -436,27 +344,36 @@ def read_variables(
     *,
     diagnostics: LoadDiagnostics | None = None,
 ) -> list[Parameter]:
-    """Read source-free local declarations, each requiring a typed literal default."""
+    """Read source-free local declarations: only an empty mapping succeeds.
+
+    A variable needs a default, and a source-free declaration can't carry one;
+    defaults are written in YAML after a tag (`n: !int 4`) and read by
+    `read_source_parameters`.
+
+    Args:
+        mapping (`Any`): The `variables:` section.
+        registry (`TypeRegistry`): The flow's typedefs; unused, since no declaration
+            is read.
+        diagnostics (`LoadDiagnostics | None`, *optional*, defaults to `None`): Factory
+            for load errors.
+
+    Returns:
+        `list[Parameter]`: Always empty.
+
+    Raises:
+        `LoadError`: `mapping` is not a mapping, a name is not a non-empty string, or
+            it declares any variable.
+    """
     diagnostics = diagnostics or LoadDiagnostics()
     if not isinstance(mapping, Mapping):
         raise diagnostics.error("variables must be a mapping")
-    parameters: list[Parameter] = []
-    for name, value in mapping.items():
+    for name in mapping:
         if type(name) is not str or not name:
             raise diagnostics.error("variable names must be non-empty strings")
-        parameters.append(
-            _read_flow_parameter(
-                name,
-                value,
-                read_contract=lambda type_node: ValueContract(
-                    read_type(type_node, registry, diagnostics=diagnostics)
-                ),
-                diagnostics=diagnostics,
-                declaration_label="variable",
-                require_default=True,
-            )
+        raise diagnostics.error(
+            f"variable {name!r}: a variable needs a default; {_SOURCE_FREE_DEFAULT}"
         )
-    return parameters
+    return []
 
 
 def read_source_flow_inputs(
@@ -477,6 +394,196 @@ def read_source_flow_inputs(
     )
 
 
+def _read_tagged_parameter(
+    name: str,
+    cursor: SourceCursor,
+    registry: TypeRegistry,
+    *,
+    parameter_path: tuple[str | int, ...],
+    parameter_origin: OriginRef | None,
+    catalog_builder: "_SourceCatalogBuilder",
+    diagnostics: LoadDiagnostics,
+    declaration_label: str,
+    require_default: bool,
+) -> Parameter:
+    """Read one tagged declaration: the tag is its type, a value after it its default.
+
+    A declaration with no value after the tag (`qty: !int`) has no default and is
+    required unless its type is nullable. A default is part of the flow file, so
+    under a secret name it must be `null` or `${...}` text, and no default may hold
+    a literal under a nested secret key.
+    """
+    if cursor.has_value:
+        # Checked before the default is read or type-checked, since those errors
+        # quote it.
+        default = cursor.value
+        if is_secret_name(name) and default is not None and not is_binding_text(default):
+            raise _secret_default_error(name, declaration_label, diagnostics)
+        path = secret_literal_path(None, default)
+        if path is not None:
+            raise diagnostics.error(
+                secret_literal_message(
+                    "default", name, path, owner=f"{declaration_label} {name!r}"
+                )
+            )
+    slot = read_tagged_value(
+        cursor,
+        registry,
+        label=name,
+        # The same contract prefix an untagged declaration's type registers under.
+        site_path=(*parameter_path, "contract"),
+        catalog_builder=catalog_builder,
+        diagnostics=diagnostics,
+        ledger=catalog_builder.consumed_tags,
+        literal_only=True,
+    )
+    contract = slot.contract
+    assert contract is not None
+    if require_default and not slot.has_value:
+        spelled = suggest_tag(name, contract.type, "<default>", type_text=cursor.tag)
+        raise diagnostics.error(
+            f"{declaration_label} {name!r}: a {declaration_label} needs a default: "
+            f"{spelled}",
+            range=cursor.range,
+        )
+    return Parameter(
+        name=name,
+        contract=contract,
+        required=not contract.type.nullable and not slot.has_value,
+        has_default=slot.has_value,
+        default=slot.value,
+        coerce_strings=True,
+        origin=parameter_origin,
+        default_origin=(
+            catalog_builder.register((*parameter_path, "default"), cursor)
+            if slot.has_value
+            else None
+        ),
+    )
+
+
+def _untagged_declaration_error(
+    name: str,
+    value: Any,
+    registry: TypeRegistry,
+    *,
+    declaration_label: str,
+    require_default: bool,
+) -> str:
+    """Explain how to write an untagged input or variable declaration with a tag.
+
+    Args:
+        name (`str`): The declared name.
+        value (`Any`): The untagged value: old `T` or `T = default` text, a record
+            map, or anything else.
+        registry (`TypeRegistry`): The flow's typedefs the old type text resolves
+            against.
+        declaration_label (`str`): `"input"` or `"variable"`.
+        require_default (`bool`): Whether the declaration needs a default.
+
+    Returns:
+        `str`: The error message.
+    """
+    noun = "flow input" if declaration_label == "input" else declaration_label
+    head = f"{noun} {name!r}"
+    if isinstance(value, dict):
+        record = "".join(part[:1].upper() + part[1:] for part in name.split("_"))
+        return (
+            f"{head}: name the record in `typedefs:` and tag the {declaration_label} "
+            f"with it, e.g. `{name}: !{record or 'Record'}`"
+        )
+    if isinstance(value, str):
+        # The whole text first: a type such as `Literal("a = b")` may hold ` = `.
+        split = split_typed_text(value)
+        candidates = [(value.strip(), "")] + ([split] if split is not None else [])
+        for type_text, default in candidates:
+            type_text = _type_text_with_known_head(type_text, registry)
+            if type_text is None:
+                continue  # value text, not a type
+            resolved = resolve_type_text(type_text, registry)
+            # Text whose leading name is a type but whose arguments name none still
+            # gets its tag, so pasting it back reaches the tag reader's unknown-type
+            # error.
+            if resolved is not None:
+                typ, spelled = resolved
+            else:
+                typ, spelled = None, spell_type_text(type_text)
+            if spelled is not None:
+                suggestion = old_form_suggestion(
+                    name,
+                    typ,
+                    spelled,
+                    default,
+                    registry=registry,
+                    placeholder="<default>" if require_default else None,
+                )
+                return f"{head}: write the type as a tag: {suggestion}"
+    tag, example = _example_default(value)
+    if require_default:
+        return (
+            f"{head}: a {declaration_label} is a tag with a default, "
+            f"e.g. `{name}: !{tag} {example}`"
+        )
+    return (
+        f"{head}: an {declaration_label} is a tag with an optional default, "
+        f"e.g. `{name}: !{tag}` or `{name}: !{tag} {example}`"
+    )
+
+
+def _type_text_with_known_head(text: str, registry: TypeRegistry) -> str | None:
+    """Return type text whose leading name is a type name, else `None`.
+
+    A leading name close to a builtin or typedef name is replaced with that name
+    (`strr` gives `str`); text whose leading name is neither is a value.
+
+    Args:
+        text (`str`): Authored text that may be a type.
+        registry (`TypeRegistry`): The flow's typedefs, offered with the builtins.
+
+    Returns:
+        `str | None`: The text with a type name in front, or `None`.
+    """
+    text = text.strip()
+    head = _HEAD_NAME.match(text)
+    if head is None:
+        return None
+    if head.group() in BUILTIN_TYPE_NAMES or head.group() in registry:
+        return text
+    close = close_type_name(text, registry)
+    return None if close is None else close + text[head.end():]
+
+
+def _example_default(value: Any) -> tuple[str, str]:
+    """Spell a tag and a default for an untagged value, as in `!str hello`.
+
+    Args:
+        value (`Any`): The untagged value.
+
+    Returns:
+        `tuple[str, str]`: The tag's type and the default written after it: the
+            value itself when it is text or a scalar, else `int` and `30`.
+    """
+    if isinstance(value, bool):
+        return "bool", "true" if value else "false"
+    if isinstance(value, int):
+        return "int", str(value)
+    if isinstance(value, float):
+        return "float", repr(value)
+    if isinstance(value, str) and value.strip():
+        return "str", value if _reads_as_text(value) else yaml_quoted(value)
+    return "int", "30"
+
+
+def _reads_as_text(text: str) -> bool:
+    """Whether `text` written unquoted after a tag reads back as exactly that text."""
+    if not _PLAIN_TEXT.fullmatch(text):
+        return False
+    try:
+        return parse_yaml_literal(text) == text
+    except SourceSyntaxError:
+        return False
+
+
 def read_source_parameters(
     cursor: SourceCursor,
     registry: TypeRegistry,
@@ -490,6 +597,9 @@ def read_source_parameters(
 ) -> list[Parameter]:
     """Compile authored input or variable declarations into located parameters.
 
+    A declaration takes its type from its tag and its default from the value after
+    it (`n: !int(1..12) 4`); with no value (`qty: !int`) it has no default. An
+    untagged declaration is an error that shows the tagged spelling.
     ``site_path`` identifies the containing owner; ``field_name`` its section.
     ``declaration_label`` names individual errors, and ``require_default``
     selects declarations whose values must include a typed literal default.
@@ -522,32 +632,26 @@ def read_source_parameters(
                 anchor="key",
             )
 
-            def contract_reader(type_node: Any) -> ValueContract:
-                """Compile this declaration's type-only view at its value site."""
-                contract_cursor = (
-                    declaration_cursor.with_value(type_node)
-                    if isinstance(value, str)
-                    else declaration_cursor
-                )
-                return read_value_contract(
-                    contract_cursor,
-                    registry,
-                    site_path=(*parameter_path, "contract"),
-                    catalog_builder=catalog_builder,
-                    diagnostics=diagnostics,
-                )
-
             try:
-                parameters.append(
-                    _read_flow_parameter(
-                        name,
-                        value,
-                        read_contract=contract_reader,
-                        parameter_origin=parameter_origin,
-                        default_origin=lambda: catalog_builder.register(
-                            (*parameter_path, "default"),
-                            declaration_cursor,
+                if declaration_cursor.tag is None:
+                    raise diagnostics.error(
+                        _untagged_declaration_error(
+                            name,
+                            value,
+                            registry,
+                            declaration_label=declaration_label,
+                            require_default=require_default,
                         ),
+                        range=declaration_cursor.range,
+                    )
+                parameters.append(
+                    _read_tagged_parameter(
+                        name,
+                        declaration_cursor,
+                        registry,
+                        parameter_path=parameter_path,
+                        parameter_origin=parameter_origin,
+                        catalog_builder=catalog_builder,
                         diagnostics=diagnostics,
                         declaration_label=declaration_label,
                         require_default=require_default,

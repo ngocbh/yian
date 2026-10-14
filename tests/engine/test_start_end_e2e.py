@@ -102,8 +102,8 @@ _DEFAULTED = """
 id: defaulted
 name: defaulted
 input:
-  topic: str
-  window: int = 30
+  topic: !str
+  window: !int 30
 nodes:
   emit:
     kind: code

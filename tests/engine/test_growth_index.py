@@ -15,7 +15,7 @@ name: deferred-side
 defs:
   echo:
     input:
-      n: int
+      n: !int
     nodes:
       step:
         kind: code
@@ -27,7 +27,7 @@ defs:
     output: ${step.output}
   body:
     input:
-      n: int
+      n: !int
     nodes:
       bump:
         kind: code
@@ -74,7 +74,7 @@ _MAP_OVER_LOOP_OVER_CALL = """
 id: map-over-loop-over-call
 name: map-over-loop-over-call
 input:
-  xs: list[int]
+  xs: !list(int)
 nodes:
   each:
     kind: map

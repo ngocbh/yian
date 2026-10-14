@@ -14,12 +14,13 @@ output: ${ask.output}
 _REF = """
 id: f
 name: f
-input: {seed: str}
+input:
+  seed: !str
 nodes:
   src:
     kind: code
     input: {seed: "${input.seed}"}
-    output: list[object]
+    output: list(object)
     code: tests.seeds.fns:questions_seed   # returns a questions list
   ask:
     kind: human_input

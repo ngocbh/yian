@@ -12,7 +12,7 @@ name: tool_news
 description: Pull recent news for a topic via a registered tool, then summarize neutrally.
 
 input:
-  topic: str
+  topic: !str
 
 nodes:
   news:

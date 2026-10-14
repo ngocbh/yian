@@ -16,10 +16,10 @@ def test_parse_scalars():
 
 
 def test_parse_lists_and_topics():
-    assert parse_type("List[float]") == ListExpr(ScalarExpr("float"))
-    assert parse_type("list[str]") == ListExpr(ScalarExpr("str"))
+    assert parse_type("List(float)") == ListExpr(ScalarExpr("float"))
+    assert parse_type("list(str)") == ListExpr(ScalarExpr("str"))
     assert parse_type("topics") == ListExpr(ScalarExpr("str"))
-    assert parse_type("List[Rating]") == ListExpr(RefExpr("Rating"))
+    assert parse_type("List(Rating)") == ListExpr(RefExpr("Rating"))
 
 
 def test_parse_ref():
@@ -30,8 +30,8 @@ def test_parse_ref():
 def test_parse_optional():
     from yian.typesys.types import OptionalExpr
 
-    assert parse_type("Optional[str]") == OptionalExpr(ScalarExpr("str"))
-    assert parse_type("Optional[Rating]") == OptionalExpr(RefExpr("Rating"))
+    assert parse_type("Optional(str)") == OptionalExpr(ScalarExpr("str"))
+    assert parse_type("Optional(Rating)") == OptionalExpr(RefExpr("Rating"))
 
 
 def test_resolve_optional_is_nullable():
@@ -42,7 +42,7 @@ def test_resolve_optional_is_nullable():
 
 
 def test_record_optional_field_excluded_from_required():
-    reg = {"Sig": RecordDef(fields={"score": "float", "note": "Optional[str]"})}
+    reg = {"Sig": RecordDef(fields={"score": "float", "note": "Optional(str)"})}
     sh = type_for("Sig", reg)
     assert sh.required == frozenset({"score"})  # note is Optional -> not required
     assert sh.fields["note"].nullable is True
@@ -65,18 +65,18 @@ def test_parse_python_scalar_names():
 def test_parse_python_generics():
     from yian.typesys.types import OptionalExpr
 
-    assert parse_type("list[str]") == ListExpr(ScalarExpr("str"))
-    assert parse_type("List[int]") == ListExpr(ScalarExpr("int"))
-    assert parse_type("Optional[date]") == OptionalExpr(ScalarExpr("date"))
-    assert parse_type("list[Rating]") == ListExpr(RefExpr("Rating"))
+    assert parse_type("list(str)") == ListExpr(ScalarExpr("str"))
+    assert parse_type("List(int)") == ListExpr(ScalarExpr("int"))
+    assert parse_type("Optional(date)") == OptionalExpr(ScalarExpr("date"))
+    assert parse_type("list(Rating)") == ListExpr(RefExpr("Rating"))
 
 
 def test_parse_literal_quoted_and_unquoted():
     from yian.typesys.types import EnumExpr
 
-    assert parse_type("Literal[pro, con, mixed]") == EnumExpr(("pro", "con", "mixed"))
-    assert parse_type('Literal["pro", "con"]') == EnumExpr(("pro", "con"))
-    assert parse_type("Literal[defer]") == EnumExpr(("defer",))  # single member
+    assert parse_type("Literal(pro, con, mixed)") == EnumExpr(("pro", "con", "mixed"))
+    assert parse_type('Literal("pro", "con")') == EnumExpr(("pro", "con"))
+    assert parse_type("Literal(defer)") == EnumExpr(("defer",))  # single member
 
 
 def test_legacy_engine_names_no_longer_resolve():
@@ -90,8 +90,8 @@ def test_legacy_engine_names_no_longer_resolve():
         with pytest.raises(_SE):
             type_for(legacy, {})
     with pytest.raises(_SE):
-        type_for("list[string]", {})
-    # topics stays a domain alias -> list[str]
+        type_for("list(string)", {})
+    # topics stays a domain alias -> list(str)
     assert parse_type("topics") == ListExpr(ScalarExpr("str"))
 
 
@@ -99,15 +99,15 @@ def test_union_of_scalars_rejected():
     from yian.typesys.values import TypeCheckError as _SE
 
     with pytest.raises(_SE) as ei:
-        type_for("Union[int, str]", {})
-    assert "Union[int, str]: member 'int' is not a record" in str(ei.value)
+        type_for("Union(int, str)", {})
+    assert "Union(int, str): member 'int' is not a record" in str(ei.value)
 
 
 def test_parse_malformed_raises():
     from yian.typesys.values import TypeCheckError as _SE
 
     with pytest.raises(_SE):
-        parse_type("list[")
+        parse_type("list(")
     with pytest.raises(_SE):
         parse_type("123")  # a number literal is not a type
 
@@ -142,7 +142,7 @@ from yian.typesys.types import (  # noqa: E402
 REG = {
     "Rating": RecordDef(fields={"value": "float", "confidence": "float"}),
     "Action": VariantDef(tags=("Approve", "Reject", "Defer")),
-    "Prices": RecordDef(fields={"closes": "List[float]", "last": "float"}),
+    "Prices": RecordDef(fields={"closes": "List(float)", "last": "float"}),
 }
 
 
@@ -150,12 +150,12 @@ def test_resolve_scalar_and_list():
     assert type_for("str", REG).kind == ValueKind.STRING
     assert type_for("date", REG).kind == ValueKind.DATE
     assert type_for("datetime", REG).kind == ValueKind.DATETIME
-    assert type_for("List[float]", REG).kind == ValueKind.LIST_NUMBER
+    assert type_for("List(float)", REG).kind == ValueKind.LIST_NUMBER
 
 
 @pytest.mark.parametrize("expression,bounds,accepted,rejected", [
-    ("int[1, 12]", (1, 12), (1, 4, 12), (0, 13, True, 1.5, "4")),
-    ("float[-0.5, 1.0]", (-0.5, 1.0), (-0.5, 0, 1.0), (-0.6, 1.1, True, "0")),
+    ("int(1..12)", (1, 12), (1, 4, 12), (0, 13, True, 1.5, "4")),
+    ("float(-0.5..1.0)", (-0.5, 1.0), (-0.5, 0, 1.0), (-0.6, 1.1, True, "0")),
 ])
 def test_bounded_numeric_types_validate_inclusive_values(expression, bounds, accepted, rejected):
     typ = type_for(expression, {})
@@ -169,10 +169,10 @@ def test_bounded_numeric_types_validate_inclusive_values(expression, bounds, acc
 
 
 @pytest.mark.parametrize("expression,accepted,rejected", [
-    ("int[-12, -1]", (-12, -4, -1), (-13, 0)),
-    ("int[+4, 4]", (4,), (3, 5)),
-    ("float[-0.25, +0.25]", (-0.25, 0, 0.25), (-0.251, 0.251)),
-    ("float[2, 2]", (2, 2.0), (1.9, 2.1)),
+    ("int(-12..-1)", (-12, -4, -1), (-13, 0)),
+    ("int(+4..4)", (4,), (3, 5)),
+    ("float(-0.25..+0.25)", (-0.25, 0, 0.25), (-0.251, 0.251)),
+    ("float(2..2)", (2, 2.0), (1.9, 2.1)),
 ])
 def test_bounded_numeric_signed_and_equal_endpoints(expression, accepted, rejected):
     typ = type_for(expression, {})
@@ -185,7 +185,7 @@ def test_bounded_numeric_signed_and_equal_endpoints(expression, accepted, reject
 
 def test_large_integer_bounds_remain_exact():
     large = 10 ** 400
-    typ = type_for(f"int[{-large}, {large}]", {})
+    typ = type_for(f"int({-large}..{large})", {})
     typ.validate_shape()
     assert typ.bounds == (-large, large)
     for value in (-large, 0, large):
@@ -195,13 +195,13 @@ def test_large_integer_bounds_remain_exact():
 
 
 @pytest.mark.parametrize("expression", [
-    "int[]", "int[1]", "int[1, 2, 3]", "float[0]", "float[0, 1, 2]",
-    "int[2, 1]", "float[2.0, 1.0]", "int[True, 2]", "int[0, False]",
-    "float[False, 1]", "float[0, True]", "int[1.0, 2]", "int[1, 2.0]",
-    "float[0, 1e999]", "float[-1e999, 0]", "float[nan, 1]", "float[0, inf]",
-    "int['1', 2]", "float[0, None]", "int[1 + 1, 3]", "int[-(1 + 1), 3]",
-    "float[0, float('inf')]", "int[lo, hi]", "int[1:2]", "int[[1, 2]]",
-    "int[--1, 2]", "float[0j, 1]", "bool[0, 1]", "str[1, 2]",
+    "int()", "int(1)", "int(1..2..3)", "float(0)", "float(0..1..2)",
+    "int(2..1)", "float(2.0..1.0)", "int(True..2)", "int(0..False)",
+    "float(False..1)", "float(0..True)", "int(1.0..2)", "int(1..2.0)",
+    "float(0..1e999)", "float(-1e999..0)", "float(nan..1)", "float(0..inf)",
+    "int('1'..2)", "float(0..None)", "int(1 + 1..3)", "int(-(1 + 1)..3)",
+    "float(0..float('inf'))", "int(lo..hi)", "int(1:2)", "int((1..2))",
+    "int(--1..2)", "float(0j..1)", "bool(0..1)", "str(1..2)",
 ])
 def test_numeric_bounds_reject_nonliteral_or_malformed_endpoints(expression):
     with pytest.raises(TypeCheckError):
@@ -234,30 +234,30 @@ def test_numeric_bounds_do_not_combine_with_incompatible_refinements():
 
 def test_bounded_type_defaults_preserve_compatible_integer_payloads():
     from yian.compose.helpers.errors import LoadError
-    from yian.compose.helpers.types import read_flow_inputs
     from yian.nodes.binding import apply_defaults
+    from tests.compose._declarations import parameters_from_yaml
 
-    params = read_flow_inputs({"score": "float[0, 1] = 1"}, {})
+    params = parameters_from_yaml("input:\n  score: !float(0..1) 1\n", {})
     resolved = apply_defaults(params, {})
     assert resolved == {"score": 1} and type(resolved["score"]) is int
-    for declaration in ("int[1, 12] = 13", "float[0, 1] = 1.01", "int[0, 1] = true"):
+    for declaration in ("!int(1..12) 13", "!float(0..1) 1.01", "!int(0..1) true"):
         with pytest.raises(LoadError):
-            read_flow_inputs({"score": declaration}, {})
+            parameters_from_yaml(f"input:\n  score: {declaration}\n", {})
 
 
 def test_bounded_numeric_labels_include_nested_domains():
     from yian.typesys.values import canonical_type_label
 
-    assert canonical_type_label(type_for("int[ -2, +4 ]", {})) == "int[-2,4]"
-    assert canonical_type_label(type_for("list[Optional[float[0.0, 1.5]]]", {})) == (
-        "list[Optional[float[0.0,1.5]]]"
+    assert canonical_type_label(type_for("int( -2 .. +4 )", {})) == "int(-2..4)"
+    assert canonical_type_label(type_for("list(Optional(float(0.0..1.5)))", {})) == (
+        "list(Optional(float(0.0..1.5)))"
     )
 
 
 @pytest.mark.parametrize("endpoint", [10**400, -(10**400), 2**53 + 1, -(2**53 + 1)])
 def test_float_domain_rejects_endpoints_without_lossless_finite_representation(endpoint):
     with pytest.raises(TypeCheckError, match="finite|lossless"):
-        type_for(f"float[{endpoint}, {endpoint}]", {})
+        type_for(f"float({endpoint}..{endpoint})", {})
     with pytest.raises(ValueError, match="finite|lossless") as caught:
         Type(ValueKind.NUMBER, bounds=(endpoint, endpoint)).validate_shape()
     assert type(caught.value) is not TypeCheckError
@@ -266,8 +266,8 @@ def test_float_domain_rejects_endpoints_without_lossless_finite_representation(e
 def test_bounded_typed_write_preserves_the_previous_value_on_nested_rejection():
     from yian.typesys.pool import VariablePool
 
-    typ = type_for("list[Score]", {
-        "Score": RecordDef(fields={"value": "float[0, 1]"}),
+    typ = type_for("list(Score)", {
+        "Score": RecordDef(fields={"value": "float(0..1)"}),
     })
     pool = VariablePool()
     pool.set("scores", [{"value": 1}], typ)
@@ -280,7 +280,7 @@ def test_bounded_typed_write_preserves_the_previous_value_on_nested_rejection():
 
 def test_float_slot_widens_at_any_depth():
     reg = {
-        "Point": RecordDef(fields={"x": "float", "xs": "list[float]"}),
+        "Point": RecordDef(fields={"x": "float", "xs": "list(float)"}),
         "Wrap": RecordDef(fields={"inner": "Point"}),
     }
     assert build_value_as(type_for("float", reg), 1).to_object() == 1.0
@@ -289,27 +289,27 @@ def test_float_slot_widens_at_any_depth():
     assert type(point["x"]) is float and all(type(x) is float for x in point["xs"])
     nested = build_value_as(type_for("Wrap", reg), {"inner": {"x": 1, "xs": []}}).to_object()
     assert type(nested["inner"]["x"]) is float
-    items = build_value_as(type_for("list[Point]", reg), [{"x": 1, "xs": [2]}]).to_object()
+    items = build_value_as(type_for("list(Point)", reg), [{"x": 1, "xs": [2]}]).to_object()
     assert items == [{"x": 1.0, "xs": [2.0]}]
     assert type(items[0]["x"]) is float and type(items[0]["xs"][0]) is float
 
 
 def test_record_stores_a_tuple_field_as_a_list():
-    reg = {"Point": RecordDef(fields={"x": "float", "xs": "list[float]"})}
+    reg = {"Point": RecordDef(fields={"x": "float", "xs": "list(float)"})}
     point = build_value_as(type_for("Point", reg), {"x": 1.5, "xs": (1, 2)}).to_object()
     assert point["xs"] == [1.0, 2.0] and type(point["xs"]) is list
 
 
 def test_union_member_value_widens_its_float_fields():
     reg = read_typedefs({
-        "Buy": {"action": "Literal[buy]", "qty": "int"},
-        "Sell": {"action": "Literal[sell]", "price": "float"},
+        "Buy": {"action": "Literal(buy)", "qty": "int"},
+        "Sell": {"action": "Literal(sell)", "price": "float"},
         "Count": {"n": "int"},
         "Score": {"n": "float", "label": "str"},
     })
-    tagged = build_value_as(type_for("Union[Buy, Sell]", reg), {"action": "sell", "price": 3})
+    tagged = build_value_as(type_for("Union(Buy, Sell)", reg), {"action": "sell", "price": 3})
     assert type(tagged.to_object()["price"]) is float
-    untagged = build_value_as(type_for("Union[Count, Score]", reg), {"n": 3, "label": "x"})
+    untagged = build_value_as(type_for("Union(Count, Score)", reg), {"n": 3, "label": "x"})
     assert type(untagged.to_object()["n"]) is float
 
 
@@ -325,8 +325,8 @@ def test_resolve_inline_literal_is_enum():
 
 
 def test_resolve_dict_is_lenient_object_placeholder():
-    # dict[K,V] parses and resolves to a lenient object placeholder.
-    sh = type_for("dict[str, int]", REG)
+    # dict(K,V) parses and resolves to a lenient object placeholder.
+    sh = type_for("dict(str, int)", REG)
     assert sh.kind == ValueKind.OBJECT
 
 
@@ -338,7 +338,7 @@ def test_resolve_record_and_variant():
 
 
 def test_resolve_list_of_record():
-    s = type_for("List[Rating]", REG)
+    s = type_for("List(Rating)", REG)
     assert s.kind == ValueKind.LIST_OBJECT and s.element.fields is not None
 
 
@@ -366,13 +366,13 @@ def test_runtime_type_shape_accepts_resolved_and_shared_graphs():
     ).validate_shape()
     for expression in (
         "str",
-        "Optional[str]",
+        "Optional(str)",
         "Action",
         "Rating",
-        "List[Action]",
-        "List[Rating]",
-        "List[date]",
-        "List[List[int]]",
+        "List(Action)",
+        "List(Rating)",
+        "List(date)",
+        "List(List(int))",
     ):
         type_for(expression, REG).validate_shape()
 
@@ -492,7 +492,7 @@ def test_end_to_end_write_boundary():
         ObjectValue,
     )
     assert isinstance(
-        build_value_as(type_for("List[Rating]", REG), [{"value": 0.1, "confidence": 0.2}]),
+        build_value_as(type_for("List(Rating)", REG), [{"value": 0.1, "confidence": 0.2}]),
         ListObjectValue,
     )
     assert isinstance(
@@ -514,3 +514,191 @@ def test_public_exports():
         "VariantDef",
     ):
         assert hasattr(state, name), f"missing export: {name}"
+
+
+# ---------- parenthesized type syntax ----------
+
+import re  # noqa: E402
+
+from yian.typesys import canonical_type_label, canonical_union_order  # noqa: E402
+from yian.typesys.types import (  # noqa: E402
+    DictExpr,
+    EnumExpr,
+    OptionalExpr,
+    UnionExpr,
+    format_type_expr,
+)
+
+
+@pytest.mark.parametrize("text, expr", [
+    ("Optional(str)", OptionalExpr(ScalarExpr("str"))),
+    ("list(Buy)", ListExpr(RefExpr("Buy"))),
+    ("List(str)", ListExpr(ScalarExpr("str"))),
+    ("Optional(list(Buy))", OptionalExpr(ListExpr(RefExpr("Buy")))),
+    ("Union(Buy, Sell)", UnionExpr((RefExpr("Buy"), RefExpr("Sell")))),
+    ("Union(Buy)", UnionExpr((RefExpr("Buy"),))),
+    ("Literal(approve, reject)", EnumExpr(("approve", "reject"))),
+    ('Literal("a b")', EnumExpr(("a b",))),
+    ("Literal('x', y)", EnumExpr(("x", "y"))),
+    ("int(1..12)", ScalarExpr("int", (1, 12))),
+    ("int(0..1)", ScalarExpr("int", (0, 1))),
+    ("int(-5..5)", ScalarExpr("int", (-5, 5))),
+    ("int( 1 .. 12 )", ScalarExpr("int", (1, 12))),
+    ("float(0.0..1.0)", ScalarExpr("float", (0.0, 1.0))),
+    ("float(1e-3..2)", ScalarExpr("float", (0.001, 2))),
+    ("dict(str, int)", DictExpr()),
+    ("Dict(str, Buy)", DictExpr()),
+    ("Any", ScalarExpr("object")),
+    ("None", ScalarExpr("None")),
+    ("Optional(None)", OptionalExpr(ScalarExpr("None"))),
+    ("topics", ListExpr(ScalarExpr("str"))),
+])
+def test_paren_syntax(text, expr):
+    assert parse_type(text) == expr
+
+
+@pytest.mark.parametrize("text, fragment", [
+    ("int(1..)", "both ends"),
+    ("int(..3)", "both ends"),
+    ("int(1, 12)", "int(1..12)"),
+    ("int(3..1)", "invalid bounds"),
+    ("Buy | Sell", "Union(Buy, Sell)"),
+    ("Union(Buy, None)", "Optional(Union(...))"),
+    ("Optional(str", "quote it or use block style"),
+    ("Optional(str))", "unbalanced parentheses"),
+    ("int(1.5..2)", "exact numeric endpoints"),
+    ("Literal(True)", "invalid Literal member"),
+    ("Literal(None)", "invalid Literal member"),
+    ('Literal("")', "empty Literal member"),
+    ("Literal()", "malformed type expression"),
+    ("Union()", "malformed type expression"),
+    ("Optional(str, int)", "malformed type expression"),
+    ("dict(str)", "malformed type expression"),
+    ("Foo(int)", "unknown type constructor 'Foo'"),
+    ("", "malformed type expression"),
+    ("int(1..2) str", "malformed type expression"),
+    ("float(1e999..2)", "invalid bounds"),
+])
+def test_paren_syntax_errors(text, fragment):
+    with pytest.raises(TypeCheckError, match=re.escape(fragment)):
+        parse_type(text)
+
+
+def test_paren_syntax_rejects_a_surrogate():
+    with pytest.raises(TypeCheckError, match=re.escape("Unicode surrogate")):
+        parse_type('Literal("\ud800")')
+
+
+@pytest.mark.parametrize(
+    "text, spelled",
+    [
+        ("Optional[list[Buy]]", "Optional(list(Buy))"),
+        ("int[1, 12]", "int(1..12)"),
+        ("Optional[Union[Buy, Sell]]", "Optional(Union(Buy, Sell))"),
+        ("dict[str, int]", "object"),
+        ('Literal["a b", c]', 'Literal("a b", c)'),
+    ],
+)
+def test_bracket_types_are_an_error_showing_the_parenthesized_spelling(text, spelled):
+    with pytest.raises(TypeCheckError, match=re.escape(f"types use parentheses: `{spelled}`")):
+        parse_type(text)
+
+
+def test_bracket_text_that_is_no_type_still_says_types_use_parentheses():
+    with pytest.raises(
+        TypeCheckError,
+        match=re.escape("types use parentheses, not brackets (malformed type expression 'list['"),
+    ):
+        parse_type("list[")
+
+
+def test_bracket_inside_a_quoted_literal_member_is_text():
+    assert parse_type('Literal("a[0]")') == EnumExpr(("a[0]",))
+
+
+def test_format_round_trips():
+    for text in ["Optional(list(Buy))", "Union(Buy, Sell)", "Literal(a, b)", "int(1..12)",
+                 "float(0.0..1.0)", "int(-5..5)"]:
+        assert format_type_expr(parse_type(text)) == text
+
+
+def test_labels_use_parentheses():
+    assert canonical_type_label(type_for("Optional(int(1..12))", {})) == "Optional(int(1..12))"
+    assert canonical_type_label(type_for("list(str)", {})) == "list(str)"
+    assert canonical_type_label(type_for("Literal(b, a)", {})) == 'Literal("a","b")'
+    assert canonical_type_label(type_for("float(0.5..1.5)", {})) == "float(0.5..1.5)"
+
+
+def test_label_of_a_list_without_an_element_type():
+    from yian.typesys.values import ValueKind
+
+    assert canonical_type_label(Type(kind=ValueKind.LIST_STRING)) == "list(str)"
+    assert canonical_type_label(Type(kind=ValueKind.LIST_ANY)) == "list(Any)"
+
+
+def test_union_member_order_follows_the_bracket_labels():
+    # By the parenthesized labels `{"a":int(1..2)}` sorts first; by the bracket labels
+    # `{"a":int,"b":str}` does. Keeping the bracket order keeps manifests stable.
+    reg = read_typedefs({"A": {"a": "int(1..2)"}, "B": {"a": "int", "b": "str"}})
+    union = type_for("Union(A, B)", reg)
+    first, second = union.variants
+    assert first.fields.keys() == {"a", "b"}
+    assert canonical_union_order((second, first)) == (first, second)
+    assert canonical_type_label(union) == 'Union({"a":int,"b":str},{"a":int(1..2)})'
+
+
+@pytest.mark.parametrize("text, tags", [
+    ('Literal("a[b")', ("a[b",)),
+    ('Literal("x", "[")', ("x", "[")),
+    ("Literal('a]b', c)", ("a]b", "c")),
+])
+def test_brackets_inside_quoted_literal_members_stay_parenthesized(text, tags):
+    assert parse_type(text) == EnumExpr(tags)
+
+
+def test_deep_nesting_is_a_type_error():
+    with pytest.raises(TypeCheckError, match=re.escape("type nested too deeply")):
+        parse_type("Optional(" * 300 + "str" + ")" * 300)
+    with pytest.raises(TypeCheckError, match=re.escape("types use parentheses, not brackets")):
+        parse_type("Optional[" * 300 + "str" + "]" * 300)
+
+
+def test_moderate_nesting_parses():
+    text = "Optional(" * 30 + "str" + ")" * 30
+    assert format_type_expr(parse_type(text)) == text
+
+
+@pytest.mark.parametrize("text", [
+    "Optional(", "list(", "Union(A, ", "int(1", "int(1..", "Literal(", 'Literal("a',
+    'Union(A, Literal("x', "Optional(Literal('x",
+])
+def test_input_ending_inside_parentheses_hints_unbalanced(text):
+    with pytest.raises(TypeCheckError, match=re.escape("unbalanced parentheses")):
+        parse_type(text)
+
+
+@pytest.mark.parametrize("text, fragment", [
+    ("int(١..٣)", "malformed type expression"),
+    ("int(1..12, 3)", "a range takes one lo..hi"),
+    ("int(1..2..3)", "a range takes one lo..hi"),
+    ("Literal(a,)", "trailing comma"),
+    ("Union(A,)", "trailing comma"),
+    ("list(str,)", "trailing comma"),
+    ('"abc', "malformed type expression"),
+])
+def test_more_paren_syntax_errors(text, fragment):
+    with pytest.raises(TypeCheckError, match=re.escape(fragment)):
+        parse_type(text)
+
+
+def test_two_argument_range_hint_suggests_only_a_valid_range():
+    with pytest.raises(TypeCheckError) as caught:
+        parse_type("int(1.0, 2)")
+    assert "write a range: int(1..12)" in str(caught.value)
+    with pytest.raises(TypeCheckError, match=re.escape("write a range: float(0.5..2)")):
+        parse_type("float(0.5, 2)")
+
+
+def test_bracket_single_endpoint_hint_uses_the_range_spelling():
+    with pytest.raises(TypeCheckError, match=re.escape("needs both ends, e.g. int(1..12)")):
+        parse_type("int[1]")

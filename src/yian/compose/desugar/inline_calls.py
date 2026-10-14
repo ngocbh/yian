@@ -26,7 +26,9 @@ bindings, AND each flow
 `asserts:` expression (a whole-value `call(...)` lifts to a synth node so the assert reads
 its output). NOT `when:`/`on:` (the case condition grammar) and NOT a node-local
 `asserts:` (those stay node-local — no inline call). A `case` descriptor carries no walked
-bindings, so it is untouched.
+bindings, so it is untouched. Each leaf string of a value template is checked for the
+retired span form, but only a whole binding lifts a `call(...)`: a leaf written as one is
+a located `LoadError`.
 
 This is also the flow-assert carrier boundary. Raw entries become one ordered
 `Assertion` per source position; assembly injects an origin lookup by authored index.
@@ -70,25 +72,38 @@ from dataclasses import replace
 from typing import Any, Callable, Collection, Optional
 
 from yian.diagnostics import OriginRef, SourceRange
-from yian.nodes.contracts import Assertion
+from yian.nodes.contracts import (
+    Assertion,
+    Binding,
+    ValueTemplate,
+    iter_source_strings,
+    map_source_strings,
+)
 from yian.expr import (
     ExpressionError,
     expr_refs_of,
 )
+from yian.expr.expressions import unknown_function_message
 from yian.expr.template import (
     InlineCall,
-    _find_paren_end,
     _split_calls_aware,
     flow_call_callees_in_spans,
 )
-from yian.compose.nodes.bindings import map_binding_strings
+from yian.compose.nodes.bindings import map_binding_sources
 from yian.compose.desugar.inline_bodies import INLINE_FLOW_PREFIX
+from yian.compose.helpers.directives import (
+    CALL_HEAD,
+    holds_secret_keyword,
+    match_call_directive,
+    quoted_unless_secret as _quoted,
+)
 from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.helpers.secret_literals import (
     secret_literal_message,
     secret_literal_path,
 )
-from yian.compose.helpers.typed_bindings import CALL_HEAD, QUOTED_STYLES, yaml_quoted
+from yian.compose.helpers.tags import QUOTED_STYLES, yaml_quoted
+from yian.typesys.types import BUILTIN_TYPE_NAMES
 from yian.compose.parse.file import (
     CallDescriptor,
     NodeDescriptor,
@@ -99,32 +114,8 @@ from yian.secret_names import is_secret_name
 # The reserved id prefix for synthesized inline-call nodes. A monotonic counter per
 # flow/def keeps them unique; the collision guard reserves the namespace from users.
 _SYNTH_PREFIX = "__call_"
-_FLOW_ID = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
 # Text before a lone `=` that ends in a separate word: `1 b` in `a=1 b=2`, a missing comma.
 _WORD_BEFORE_EQUALS = re.compile(r"\s([A-Za-z_][A-Za-z0-9_-]*)\s*$")
-# A name directly before `=`, anywhere in a directive's raw text.
-_NAME_BEFORE_EQUALS = re.compile(r"([A-Za-z_][A-Za-z0-9_-]*)\s*=")
-
-
-def holds_secret_keyword(text: str) -> bool:
-    """Return whether `text` writes a name under a secret name directly before `=`.
-
-    A malformed `call(...)` whose text holds such a keyword may hold a credential in a
-    part the parse never reached, so its error must not quote the text.
-
-    Args:
-        text (`str`): The raw directive text.
-
-    Returns:
-        `bool`: `True` when some `name=` in `text` has a secret name.
-    """
-    return any(is_secret_name(m.group(1)) for m in _NAME_BEFORE_EQUALS.finditer(text))
-
-
-def _quoted(part: str, text: str, lead: str = " ") -> str:
-    """Return `part` quoted after `lead` for an error message, or `""` when `text`
-    holds a secret keyword."""
-    return "" if holds_secret_keyword(text) else f"{lead}{part!r}"
 
 
 class SecretArgumentError(ExpressionError):
@@ -198,6 +189,7 @@ def desugar_inline_calls(
     output_style_at: Optional[Callable[[Any], Optional[str]]] = None,
     typed_outputs: Collection[Any] = (),
     next_id: Optional[Callable[[], str]] = None,
+    type_names: frozenset[str] = frozenset(),
     diagnostics: LoadDiagnostics | None = None,
 ) -> tuple:
     """Desugar every inline call in a flow's binding sites into synth `call` nodes.
@@ -219,8 +211,11 @@ def desugar_inline_calls(
     single output) return a binding's YAML scalar style; a quoted value is text, so it is
     never a directive. A missing lookup or a `None` style reads as plain. An assert is an
     expression, so its quoting never makes it text. ``typed_outputs`` names the outputs
-    written `Type = value` (`None` for a single output); like a typed node input, a
+    declared with a type (`None` for a single output); like a typed node input, a
     malformed directive there gets no quoting fix, since quoting would drop the type.
+
+    A call inside `${...}` to a name in ``type_names`` (the flow's `typedefs:` names) is a
+    `T(...)` constructor, not a flow call.
 
     Raises `LoadError` on a malformed inline call (any unquoted value starting with
     `call(` that is not exactly one directive), a quoted `call(...)` holding a span, a
@@ -254,6 +249,7 @@ def desugar_inline_calls(
                 if binding_style_at is not None
                 else None
             ),
+            type_names=type_names,
             diagnostics=diagnostics,
         )
         new_descriptors[nid] = new_desc
@@ -275,6 +271,7 @@ def desugar_inline_calls(
         range=outputs_range,
         style_at=output_style_at,
         typed=typed_outputs,
+        type_names=type_names,
         diagnostics=diagnostics,
     )
     for call in out_calls:
@@ -290,6 +287,7 @@ def desugar_inline_calls(
         mint,
         assertion_range_at=assertion_range_at,
         assertion_origin_at=assertion_origin_at,
+        type_names=type_names,
         diagnostics=diagnostics,
     )
     for call in assert_calls:
@@ -308,24 +306,41 @@ def desugar_inline_calls(
 # --------------------------------------------------------------------------- #
 # The flow `output:` binding walk (used by this pass AND the case-value
 # expansion in `compose.desugar.case_outputs`). Descriptor binding fields go through the
-# kind-blind `compose.nodes.bindings.map_binding_strings` instead.
+# kind-blind `compose.nodes.bindings.map_binding_sources` instead.
 # --------------------------------------------------------------------------- #
 
 
-def map_outputs_strings(outputs: Any, fn: Callable[[str], Any]) -> Any:
-    """Apply `fn` to each STRING binding in the flow `output:` section (a name→binding
-    map, a bare binding string, or `None`)."""
-    return map_output_bindings(outputs, lambda _key, value: fn(value))
+def map_outputs_sources(outputs: Any, fn: Callable[[Any], Any]) -> Any:
+    """Apply `fn` to each template-bearing binding in the flow `output:` section.
+
+    The section is a name→binding map, a bare binding, a tagged single output's
+    `Binding` carrier, or `None`. A source is a string or a `ValueTemplate`; any other
+    value is left as is, and a carrier keeps its contract around the new source."""
+    return map_output_sources(outputs, lambda _key, source: fn(source))
 
 
-def map_output_bindings(outputs: Any, fn: Callable[[Any, str], Any]) -> Any:
-    """Apply `fn(key, value)` to each STRING binding in the flow `output:` section; `key`
-    is the record field name, or `None` for a bare single output."""
+def map_output_sources(outputs: Any, fn: Callable[[Any, Any], Any]) -> Any:
+    """Apply `fn(key, source)` to each template-bearing binding in the flow `output:`
+    section, as `map_outputs_sources` does; `key` is the record field name, or `None`
+    for a single output."""
     if isinstance(outputs, dict):
-        return {k: (fn(k, v) if isinstance(v, str) else v) for k, v in outputs.items()}
-    if isinstance(outputs, str):
+        return {
+            k: (fn(k, v) if isinstance(v, (str, ValueTemplate)) else v)
+            for k, v in outputs.items()
+        }
+    if isinstance(outputs, (str, ValueTemplate)):
         return fn(None, outputs)
+    if isinstance(outputs, Binding) and isinstance(outputs.source, (str, ValueTemplate)):
+        return replace(outputs, source=fn(None, outputs.source))
     return outputs
+
+
+def map_outputs_strings(outputs: Any, fn: Callable[[str], Any]) -> Any:
+    """Apply `fn` to each template string in the flow `output:` section.
+
+    Walks the same sources as `map_outputs_sources`; a `ValueTemplate` supplies each of
+    its leaf strings."""
+    return map_outputs_sources(outputs, lambda source: map_source_strings(source, fn))
 
 
 def _binding_origin(
@@ -354,11 +369,12 @@ def _desugar_descriptor(
     range: Optional[SourceRange],
     field_ranges: Optional[dict],
     style_at: Optional[Callable[[str, str], Optional[str]]],
+    type_names: frozenset[str],
     diagnostics: LoadDiagnostics,
 ) -> tuple:
     """Desugar a descriptor's binding fields, returning `(new_desc, calls, origins)`.
 
-    Walks the binding fields via `map_binding_strings`; each inline call is tagged in
+    Walks the binding fields via `map_binding_sources`; each inline call is tagged in
     `origins` with the SOURCE RANGE of the binding it was found in (via `_binding_origin`),
     so its synth node locates at its own `call(...)` directive rather than the host header.
     Nested inner-first calls share their enclosing binding's origin. ``style_at(field,
@@ -366,11 +382,11 @@ def _desugar_descriptor(
     calls: list = []
     origins: dict[str, Optional[SourceRange]] = {}
 
-    def mapper(field: str, key: str, value: str) -> str:
+    def mapper(field: str, key: str, source: Any) -> Any:
         origin = _binding_origin(field, key, field_ranges, range)
         before = len(calls)
-        new_value = _desugar_value(
-            value,
+        new_source = _desugar_source(
+            source,
             mint,
             calls,
             host,
@@ -379,14 +395,66 @@ def _desugar_descriptor(
             # Quoting a typed binding would drop its type, so no quoting fix is offered.
             quotable=not (field == "inputs" and key in desc.input_types),
             owner=f"node {host!r}",
+            type_names=type_names,
             diagnostics=diagnostics,
         )
         for c in calls[before:]:
             origins[c.id] = origin
-        return new_value
+        return new_source
 
-    new_desc = map_binding_strings(desc, mapper)
+    new_desc = map_binding_sources(desc, mapper)
     return new_desc, calls, origins
+
+
+def _desugar_source(
+    source: Any,
+    mint: Callable[[], str],
+    calls: list,
+    host: str,
+    *,
+    range: Optional[SourceRange] = None,
+    style: Optional[str] = None,
+    quotable: bool = True,
+    owner: Optional[str] = None,
+    type_names: frozenset[str] = frozenset(),
+    diagnostics: LoadDiagnostics,
+) -> Any:
+    """Desugar one binding source: a string as in `_desugar_value`, or each leaf string
+    of a `ValueTemplate`. Only a whole binding lifts a `call(...)` directive, so a leaf
+    string starting with `call(` is a located `LoadError`."""
+    if not isinstance(source, ValueTemplate):
+        return _desugar_value(
+            source,
+            mint,
+            calls,
+            host,
+            range=range,
+            style=style,
+            quotable=quotable,
+            owner=owner,
+            type_names=type_names,
+            diagnostics=diagnostics,
+        )
+    for _, text in iter_source_strings(source):
+        if CALL_HEAD.match(text.strip()):
+            raise diagnostics.error(
+                f"{host}: a `call(...)` inside a value isn't supported; bind it at the "
+                "top level",
+                range=range,
+            )
+    return map_source_strings(
+        source,
+        lambda text: _desugar_value(
+            text,
+            mint,
+            calls,
+            host,
+            range=range,
+            owner=owner,
+            type_names=type_names,
+            diagnostics=diagnostics,
+        ),
+    )
 
 
 def _desugar_value(
@@ -400,13 +468,16 @@ def _desugar_value(
     quotable: bool = True,
     expression: bool = False,
     owner: Optional[str] = None,
+    type_names: frozenset[str] = frozenset(),
     diagnostics: LoadDiagnostics | None = None,
 ) -> str:
     """Desugar one binding string. A WHOLE-VALUE `call(<flow-id>, kw=...)` directive lifts
     to a synth call node (accumulated in `calls`, the value rewritten to `${<synth>.output}`).
     A flow call embedded INSIDE a `${...}` span is the retired `${flow(args)}` form — a
-    located `LoadError` pointing at the `call(...)` directive. Any other value (plain refs,
-    pure builtins, literals) is returned unchanged.
+    located `LoadError` pointing at the `call(...)` directive. A builtin type name called
+    like a function (`${int(x)}`) is a located `LoadError` explaining that constructors are
+    `typedefs:` names. Any other value (plain refs, pure builtins, constructors named in
+    ``type_names``, literals) is returned unchanged.
 
     ``style`` is the value's YAML scalar style. A quoted value is text: it is never a
     directive, and a quoted `call(...)` holding a span is a load error (its author most
@@ -446,7 +517,7 @@ def _desugar_value(
         calls.extend(found)
         return new_value
     try:
-        flow_callees = flow_call_callees_in_spans(value)
+        flow_callees = flow_call_callees_in_spans(value, type_names)
     except ExpressionError as exc:
         raise diagnostics.error(
             f"{host}: {exc}",
@@ -454,6 +525,8 @@ def _desugar_value(
         ) from exc
     if flow_callees:
         callee = flow_callees[0]
+        if callee in BUILTIN_TYPE_NAMES:
+            raise diagnostics.error(f"{host}: {unknown_function_message(callee)}", range=range)
         raise diagnostics.error(
             f"{host}: a flow call {callee!r} inside ${{...}} is not supported — write it "
             f"as the whole value with the call(...) directive: call({callee}, ...)",
@@ -488,7 +561,7 @@ def desugar_call_directives(value: str, mint: Callable[[], str]) -> tuple:
     text holds a keyword under a secret name (`holds_secret_keyword`), a malformed
     directive's message does not quote any part of it. A bare keyword value the flow's
     YAML rules can't build (an impossible date) raises `ArgumentValueError`."""
-    match = _match_directive(value)
+    match = match_call_directive(value)
     if match is None:
         return value, []
     flow_id, args_str = match
@@ -629,46 +702,6 @@ def _inner_keywords(parts: list[str]) -> list[tuple[str, str]]:
     return keywords
 
 
-def _match_directive(value: str) -> Optional[tuple]:
-    """`value` -> `(flow_id, remaining_args_str)` if it is a whole-value `call(...)`
-    directive, or None when its trimmed text does not start with `call(`.
-
-    Returns `remaining_args_str` = the raw args substring AFTER the flow id's comma
-    (empty when `call(f)` has no kwargs); `desugar_call_directives` checks those args.
-    Raises `ExpressionError` when the value starts with `call(` but its parens are
-    unbalanced, text follows the close paren, or the first arg is not a bare flow id;
-    the message quotes no part of a value that `holds_secret_keyword`."""
-    s = value.strip()
-    m = CALL_HEAD.match(s)
-    if m is None:
-        return None
-    open_idx = m.end() - 1
-    close_idx = _find_paren_end(s, open_idx + 1)
-    if close_idx is None:
-        raise ExpressionError(
-            "`call(` is never closed (check its parentheses and quotes)"
-        )
-    trailing = s[close_idx + 1 :].strip()
-    if trailing:
-        raise ExpressionError(
-            f"text follows the closing `)`{_quoted(trailing, s, ': ')}; a call(...) "
-            "must be the whole value"
-        )
-    args_str = s[open_idx + 1 : close_idx]
-    first = _split_calls_aware(args_str, ",")[0].strip()
-    if not _FLOW_ID.fullmatch(first):
-        raise ExpressionError(
-            "a call(...) must start with a flow id (a bare name) and a comma"
-            f"{_quoted(first, s, ', got ')}"
-        )
-    # everything after the first comma is the remaining (keyword) args; the loop over
-    # this substring never re-sees the positional flow id, so a positional arg among
-    # the REMAINING args (e.g. `call(f, 30)`) fails loudly there.
-    comma = args_str.find(",")
-    remaining = args_str[comma + 1 :] if comma != -1 else ""
-    return first, remaining
-
-
 def _desugar_outputs(
     outputs: Any,
     mint: Callable[[], str],
@@ -676,23 +709,25 @@ def _desugar_outputs(
     range: Optional[SourceRange] = None,
     style_at: Optional[Callable[[Any], Optional[str]]] = None,
     typed: Collection[Any] = (),
+    type_names: frozenset[str] = frozenset(),
     diagnostics: LoadDiagnostics,
 ) -> tuple:
     """Desugar the flow `output:` section, returning `(new_outputs, inline_calls)`.
     ``range`` is the `output:` section source range; ``style_at(key)`` gives an output's
     YAML scalar style (`key` is None for a single output; plain when absent), and
-    ``typed`` names the outputs written `Type = value`."""
+    ``typed`` names the outputs declared with a type."""
     calls: list = []
-    new_outputs = map_output_bindings(
+    new_outputs = map_output_sources(
         outputs,
-        lambda key, value: _desugar_value(
-            value,
+        lambda key, source: _desugar_source(
+            source,
             mint,
             calls,
             "flow outputs",
             range=range,
             style=style_at(key) if style_at is not None else None,
             quotable=key not in typed,
+            type_names=type_names,
             diagnostics=diagnostics,
         ),
     )
@@ -705,6 +740,7 @@ def _desugar_asserts(
     *,
     assertion_range_at: Optional[Callable[[int], Optional[SourceRange]]] = None,
     assertion_origin_at: Optional[Callable[[int], OriginRef | None]] = None,
+    type_names: frozenset[str] = frozenset(),
     diagnostics: LoadDiagnostics,
 ) -> tuple:
     """Cross raw flow asserts into semantic carriers and desugar inline calls.
@@ -755,6 +791,7 @@ def _desugar_asserts(
             "assert",
             range=assertion_range,
             expression=True,
+            type_names=type_names,
             diagnostics=diagnostics,
         )
         for call in calls[before:]:

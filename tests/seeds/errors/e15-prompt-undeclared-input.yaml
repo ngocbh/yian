@@ -2,7 +2,7 @@
 id: err-prompt-undeclared
 name: err_prompt_undeclared
 input:
-  topic: str
+  topic: !str
 nodes:
   note:
     kind: agent

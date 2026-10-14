@@ -283,13 +283,20 @@ class SourceCatalog:
 
 
 class _SourceCatalogBuilder:
-    """Mutable registration boundary that freezes immutable catalog snapshots."""
+    """Mutable registration boundary that freezes immutable catalog snapshots.
 
-    __slots__ = ("_sites",)
+    One builder serves one load of one document, so it also carries that load's
+    tag ledger: ``consumed_tags`` holds the ``TaggedNode.definition_id`` of every
+    tag a slot reader has read. The loader compares it with
+    ``SourceDocument.tagged_nodes()`` to reject tags that type nothing.
+    """
+
+    __slots__ = ("_sites", "consumed_tags")
 
     def __init__(self) -> None:
-        """Create an empty local source-site registry."""
+        """Create an empty local source-site registry and tag ledger."""
         self._sites: dict[str, _SourceSite] = {}
+        self.consumed_tags: set[int] = set()
 
     def register(
         self,
@@ -446,7 +453,7 @@ class _SourceCatalogBuilder:
 
     @contextmanager
     def transaction(self) -> Iterator[None]:
-        """Roll back registrations made by a failed construction attempt.
+        """Roll back registrations and consumed tags of a failed construction attempt.
 
         Callable compilation is success-cached and may be retried after an
         error. A failed attempt must therefore leave the catalog at the same
@@ -457,11 +464,14 @@ class _SourceCatalogBuilder:
             `None`: Control to the construction attempt.
         """
         checkpoint = len(self._sites)
+        consumed = set(self.consumed_tags)
         try:
             yield
         except BaseException:
             while len(self._sites) > checkpoint:
                 self._sites.popitem()
+            # Readers hold the ledger itself, so it is restored in place.
+            self.consumed_tags.intersection_update(consumed)
             raise
 
     def freeze(self) -> SourceCatalog:

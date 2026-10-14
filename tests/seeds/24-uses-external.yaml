@@ -15,8 +15,8 @@ name: uses_external
 description: "Call an external (sibling-file) flow via uses: — the F demo."
 
 input:
-  rating: float
-  rationale: str
+  rating: !float
+  rationale: !str
 
 uses:
   verdict: lib_verdict@v1       # external flow on the search path; @v1 = version guard

@@ -454,6 +454,9 @@ class AgentDescriptor(NodeDescriptor):
                             "variable declaration reader must return a list of exact Parameters or None"
                         )
                     return variables
+            # Only a node with no authored source gets here; a variable needs a
+            # default, which only a tagged YAML declaration carries, so any
+            # declaration fails.
             return read_variables(self.variables, ctx.registry, diagnostics=ctx.diagnostics)
         except LoadError as exc:
             if exc.diagnostic.frames:

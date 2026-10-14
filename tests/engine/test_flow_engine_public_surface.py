@@ -172,7 +172,7 @@ _STATIC_FLOW = """
 id: direct-static
 name: direct_static
 input:
-  x: int
+  x: !int
 nodes:
   twice:
     kind: code
@@ -198,7 +198,7 @@ _CHILD_FLOW = """
 id: direct-child
 name: direct_child
 input:
-  topic: str
+  topic: !str
 nodes:
   echo:
     kind: code
@@ -213,7 +213,7 @@ _CALL_FLOW = """
 id: direct-call
 name: direct_call
 input:
-  topic: str
+  topic: !str
 uses:
   direct-child: direct-child
 nodes:
@@ -229,7 +229,7 @@ _MAP_FLOW = """
 id: direct-map
 name: direct_map
 input:
-  topics: list[str]
+  topics: !list(str)
 uses:
   direct-child: direct-child
 nodes:
@@ -248,8 +248,8 @@ name: direct_loop
 defs:
   bump:
     input:
-      n: int
-      exited: bool
+      n: !int
+      exited: !bool
     nodes:
       step:
         kind: code

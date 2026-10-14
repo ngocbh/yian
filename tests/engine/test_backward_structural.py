@@ -356,15 +356,16 @@ def test_custom_run_uses_its_existing_pre_run_capture_boundary():
 
 def test_agent_capture_keeps_variable_inventory_separate_from_delivered_inputs(monkeypatch):
     import yian.nodes.agent.node as agent_module
-    from yian.compose.helpers.types import read_variables
+    from tests.compose._declarations import parameters_from_yaml
     from yian.nodes.agent import AgentNode
     from yian.nodes.base import Output
     from yian.runtime.eval_node import eval_node
     from yian.typesys.pool import VariablePool
 
-    node = AgentNode("writer", prompt="${topic}: ${instruction}", variables=read_variables({
-        "instruction": "str = Summarize clearly",
-    }, {}))
+    node = AgentNode("writer", prompt="${topic}: ${instruction}", variables=parameters_from_yaml(
+        "variables:\n  instruction: !str Summarize clearly\n", {},
+        field="variables", require_default=True,
+    ))
     node.params = [Parameter("topic")]
     monkeypatch.setattr(agent_module, "run_agent", lambda ctx: Output(ctx.prompt))
     evaluated = eval_node(node, None, VariablePool(), wiring_override={"topic": "reefs"}, capture_bindings=True)

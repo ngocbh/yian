@@ -13,15 +13,15 @@ name: research_pipeline
 description: Fan out reviewers, synthesize a typed stance, route to a stance-specific note.
 
 typedefs:
-  Stance: Literal[positive, negative, neutral]
+  Stance: Literal(positive, negative, neutral)
   View:
     stance: Stance
     claim: str
     confidence: float            # in [0, 1] (checked in asserts:)
 
 input:
-  topic: str
-  as_of: Optional[date]          # omitted -> null; the reviewers default it to today
+  topic: !str
+  as_of: !Optional(date)          # omitted -> null; the reviewers default it to today
 
 nodes:
   # --- fan-out: three independent reviewers (no edges between them) ---

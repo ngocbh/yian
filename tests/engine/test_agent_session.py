@@ -20,7 +20,7 @@ _FLOW = """id: plain-session
 name: plain_session
 llm_config: {provider: openai, model: test-model}
 input:
-  question: str
+  question: !str
 nodes:
   agent:
     kind: agent

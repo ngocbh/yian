@@ -5,8 +5,9 @@ them apart, so every branch is classified first:
 
 - an unquoted (plain, or source-free) string is a node name unless it is a `call(...)`
   (a whole-value directive is left for `desugar_case_call_targets`; any other text starting
-  with `call(` is a load error naming the problem), holds ` = ` (a load error: the case's `output:`
-  gives the type, so `then: int = ${x}` is a mistake; quoting keeps the text), or holds a
+  with `call(` is a load error naming the problem), holds ` = ` after text that names a type
+  (a load error: the case's `output:` gives the type, so `then: int = ${x}` is a mistake;
+  quoting keeps the text), or holds a
   `${...}` span (a template value). A bare word that names no node is a load error that
   suggests the nearest node name and the quoted form, and for a YAML 1.1 boolean word
   (`yes`, `off`) the `true`/`false` to write when the case's type takes a boolean;
@@ -56,12 +57,14 @@ from yian.compose.desugar.inline_calls import (
     holds_secret_keyword,
 )
 from yian.compose.helpers.errors import LoadDiagnostics
-from yian.compose.helpers.typed_bindings import CALL_HEAD, QUOTED_STYLES, yaml_quoted
+from yian.compose.helpers.directives import CALL_HEAD
+from yian.compose.helpers.tags import QUOTED_STYLES, old_typed_text, yaml_quoted
 from yian.compose.helpers.yaml_words import former_boolean_fix
 from yian.compose.parse.file import CaseDescriptor, CodeDescriptor
 from yian.diagnostics import SourceRange
 from yian.expr import ExpressionError, eval_binding, expr_refs_of
 from yian.nodes.contracts import ValueContract
+from yian.typesys.types import TypeRegistry
 from yian.typesys.values import Type
 
 VALUE_PREFIX = "__value_"
@@ -74,6 +77,7 @@ def desugar_case_values(
     descriptors: dict,
     *,
     case_types: Mapping[str, ValueContract] | None = None,
+    registry: TypeRegistry | None = None,
     diagnostics: LoadDiagnostics | None = None,
 ) -> dict:
     """Classify every `case` branch and lift each value branch to a synth CODE node.
@@ -84,6 +88,9 @@ def desugar_case_values(
             The contract of each typed case's `output:`, keyed by case id; a bare
             YAML 1.1 boolean word (`yes`) that names no node is offered the boolean to
             write only when it fits this type. `None` offers it nowhere.
+        registry (`TypeRegistry | None`, *optional*, defaults to `None`): The flow's
+            typedefs; an unquoted branch whose text before ` = ` names a type is an
+            error. `None` knows the builtin types only.
         diagnostics (`LoadDiagnostics | None`, *optional*, defaults to `None`): Source
             ownership for located errors; a fresh range-only owner when `None`.
 
@@ -93,10 +100,10 @@ def desugar_case_values(
 
     Raises:
         `LoadError`: An authored node id uses a reserved prefix; a bare word names no node;
-            an unquoted branch holds ` = `; a quoted `call(...)` holds a span; a value
-            branch sits on a case without `output:`; a value holds a key that is not a
-            string, an unsupported scalar, a nested span-bearing `call(...)`, or a span
-            that reads the case itself.
+            an unquoted branch is the old `Type = value` text; a quoted `call(...)`
+            holds a span; a value branch sits on a case without `output:`; a value
+            holds a key that is not a string, an unsupported scalar, a nested
+            span-bearing `call(...)`, or a span that reads the case itself.
 
     Example:
         A `then: {a: 1, b: ${x.output}}` branch on a case with `output:` becomes a CODE node
@@ -105,6 +112,7 @@ def desugar_case_values(
     """
     diagnostics = diagnostics or LoadDiagnostics()
     case_types = case_types or {}
+    registry = registry or {}
     for nid, desc in descriptors.items():
         for prefix in _RESERVED_PREFIXES:
             if nid.startswith(prefix):
@@ -144,6 +152,7 @@ def desugar_case_values(
                 rng=rng,
                 descriptors=descriptors,
                 suggestable=suggestable,
+                registry=registry,
                 counter=counter,
                 synth=synth,
                 value_branches=value_branches,
@@ -163,6 +172,7 @@ def desugar_case_values(
                 rng=desc.field_ranges.get(("field", "else")) or desc.range,
                 descriptors=descriptors,
                 suggestable=suggestable,
+                registry=registry,
                 counter=counter,
                 synth=synth,
                 value_branches=value_branches,
@@ -194,6 +204,7 @@ def _branch_target(
     rng: Optional[SourceRange],
     descriptors: dict,
     suggestable: list[str],
+    registry: TypeRegistry,
     counter: itertools.count,
     synth: dict,
     value_branches: dict,
@@ -212,6 +223,7 @@ def _branch_target(
         rng (`Optional[SourceRange]`): The branch's source range.
         descriptors (`dict`): The flow's descriptors; a bare word must name one.
         suggestable (`list[str]`): Authored node ids offered as close matches.
+        registry (`TypeRegistry`): The flow's typedefs, for the old `Type = value` text.
         counter (`itertools.count`): The synth-id counter of this pass.
         synth (`dict`): Collects synth value nodes by id.
         value_branches (`dict`): Collects synth id -> authored value for `desc`.
@@ -232,6 +244,7 @@ def _branch_target(
         label=label,
         descriptors=descriptors,
         suggestable=suggestable,
+        registry=registry,
         rng=rng,
         diagnostics=diagnostics,
     ):
@@ -239,7 +252,7 @@ def _branch_target(
     if desc.outputs is None:
         if value is None:
             raise diagnostics.error(
-                f"{host} is empty; name a node, or add `output: Optional[...]` for a null "
+                f"{host} is empty; name a node, or add `output: Optional(...)` for a null "
                 "value",
                 range=rng,
             )
@@ -275,6 +288,7 @@ def _is_value(
     label: str,
     descriptors: dict,
     suggestable: list[str],
+    registry: TypeRegistry,
     rng: Optional[SourceRange],
     diagnostics: LoadDiagnostics,
 ) -> bool:
@@ -289,6 +303,7 @@ def _is_value(
         label (`str`): `"then:"` or `"else:"`, for the quoted form a message suggests.
         descriptors (`dict`): The flow's descriptors; a bare word must name one.
         suggestable (`list[str]`): Authored node ids offered as close matches.
+        registry (`TypeRegistry`): The flow's typedefs, for the old `Type = value` text.
         rng (`Optional[SourceRange]`): The branch's source range.
         diagnostics (`LoadDiagnostics`): Source ownership for located errors.
 
@@ -297,8 +312,8 @@ def _is_value(
 
     Raises:
         `LoadError`: An unquoted branch starts with `call(` but is not exactly one
-            well-formed directive, holds ` = `, or names no node; a quoted `call(...)`
-            holds a span.
+            well-formed directive, is the old `Type = value` text, or names no node; a
+            quoted `call(...)` holds a span.
     """
     if not isinstance(value, str):
         return True
@@ -337,10 +352,13 @@ def _is_value(
                 range=rng,
             ) from exc
         return False
-    if " = " in value or value.endswith(" ="):
+    old = old_typed_text(value, registry)
+    if old is not None:
+        rewrite = f", so write `{label} {old[2]}`" if old[2] else ""
         raise diagnostics.error(
-            f"{host} `{value}` is not a branch; the case's `output:` gives the type. "
-            f"If you meant the text, quote it: `{label} {yaml_quoted(value)}`",
+            f"{host} `{value}` is not a branch; the case's `output:` gives the "
+            f"type{rewrite}. If you meant the text, quote it: "
+            f"`{label} {yaml_quoted(value)}`",
             range=rng,
         )
     if "${" in value:

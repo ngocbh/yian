@@ -13,7 +13,7 @@ uses:
   summarize: child-summarize       # binds child-summarize.yaml on the search path
 
 input:
-  article: str
+  article: !str
 
 nodes:
   one:

@@ -14,7 +14,7 @@ LOOP_YAML = """
 id: chat
 name: chat
 input:
-  history: list
+  history: !list
 output:
   messages: list
 nodes:
@@ -55,7 +55,7 @@ UNTIL_TIMES_YAML = """
 id: p
 name: p
 input:
-  n: int
+  n: !int
 output:
   n: int
 nodes:

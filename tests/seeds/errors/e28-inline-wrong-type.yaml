@@ -4,7 +4,7 @@
 id: err-inline-wrong-type
 name: err_inline_wrong_type
 input:
-  topic: str
+  topic: !str
 nodes:
   calc:
     kind: code

@@ -29,6 +29,7 @@ from yian.nodes.contracts import (
     Parameter,
     PartialRecordContract,
     ValueContract,
+    ValueTemplate,
 )
 from yian.nodes.call import CallNode
 from yian.nodes.end import EndNode
@@ -1280,6 +1281,27 @@ def test_growth_rejects_a_binding_wrapped_unknown_reference_before_digesting():
     assert log.next_sequence == 4
 
 
+def test_growth_rejects_an_unknown_reference_nested_in_a_template():
+    """A value template cannot hide a bad reference in one of its leaf strings."""
+    state, log = _initialized_spawner()
+    fragment = _unknown_reference_fragment("spawn")
+    fragment.wiring[fragment.end_id]["value"] = Binding(
+        ValueTemplate({"ok": "fine", "bad": ["${absent.output}"]})
+    )
+    before = _snapshot(state)
+
+    with pytest.raises(GrowthRejected, match="unknown namespace"):
+        prepare_expanded(
+            state,
+            "spawn",
+            Grow(seed={}),
+            lambda _spawner, _seed: fragment,
+        )
+
+    assert _snapshot(state) == before
+    assert log.next_sequence == 4
+
+
 @pytest.mark.parametrize(
     ("grow", "builder", "error", "original_type"),
     [
@@ -1674,6 +1696,37 @@ def test_growth_rejects_a_binding_wrapped_dependency_on_a_pruned_node():
     assert type(caught.value.original) is ValueError
     assert _snapshot(state) == before
     assert log.next_sequence == 4
+
+
+def test_growth_rejects_a_template_dependency_on_a_pruned_node():
+    """A reference nested in a value template keeps its producer from being pruned."""
+    state, log = _initialized_spawner()
+    old_id = _install_settled_overlay(state)[0]
+    state.flow.wiring[END_ID] = {
+        "value": Binding(ValueTemplate({"seen": [f"${{{old_id}.output}}"]}))
+    }
+    before = _snapshot(state)
+
+    with pytest.raises(GrowthRejected, match="wiring depends on pruned node"):
+        prepare_expanded(
+            state,
+            "spawn",
+            Grow(seed={}, prune=frozenset({old_id})),
+            lambda node, _seed: _fragment(node.id),
+        )
+
+    assert _snapshot(state) == before
+    assert log.next_sequence == 4
+
+
+def test_read_ids_include_references_nested_in_a_template():
+    state, _log = _initialized_spawner()
+    old_id = _install_settled_overlay(state)[0]
+    state.flow.wiring[END_ID] = {
+        "value": Binding(ValueTemplate({"seen": f"saw ${{{old_id}.output}}"}))
+    }
+
+    assert old_id in state_module._read_ids(state, END_ID)
 
 
 def test_growth_prune_scan_rejects_malformed_surviving_wiring_as_raw_invariant(

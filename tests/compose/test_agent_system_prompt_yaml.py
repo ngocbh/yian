@@ -17,15 +17,15 @@ def _flow(system_line: str) -> str:
 id: chat
 name: chat
 input:
-  name: str
-  title: str
-  message: str
+  name: !str
+  title: !str
+  message: !str
 nodes:
   reply:
     kind: agent
     input: {{name: "${{input.name}}", title: "${{input.title}}", message: "${{input.message}}"}}
     variables:
-      tone: str = warm
+      tone: !str warm
 {system_line}
     prompt: ${{message}}
     output: str
@@ -38,9 +38,9 @@ def _compact(system_line: str) -> str:
 id: reply
 name: reply
 input:
-  name: str
-  title: str
-  message: str
+  name: !str
+  title: !str
+  message: !str
 output: str
 kind: agent
 {system_line}

@@ -160,6 +160,7 @@ class LoopNode(Node):
             _parse_named_condition(
                 self.predicate,
                 f"node {(path or self.id)!r} `{self.predicate_kind}:` {self.predicate!r}",
+                self.types,
             )
 
     def forward(self, inputs: dict[str, Any], **caps: Any):

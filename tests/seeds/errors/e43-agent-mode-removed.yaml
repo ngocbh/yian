@@ -6,7 +6,7 @@
 id: err-agent-mode-removed
 name: err_agent_mode_removed
 input:
-  topic: str
+  topic: !str
 nodes:
   note:
     kind: agent

@@ -226,16 +226,244 @@ class Binding:
             raise TypeError("binding contract must be a ValueContract or None")
 
     def map_origins(self, mapper: _OriginMapper) -> Binding:
-        """Return this binding with its origin and contract origins transformed by ``mapper``."""
+        """Return this binding with every origin transformed by ``mapper``.
+
+        That covers its own origin, its contract's origins, and, for a
+        ``ValueTemplate`` source, the template's origins and nested bindings.
+        Any other source is retained by identity.
+        """
         origin = _map_origin(self.origin, mapper)
         contract = (
             self.contract.map_origins(mapper) if self.contract is not None else None
         )
-        return Binding(source=self.source, origin=origin, contract=contract)
+        source = (
+            self.source.map_origins(mapper)
+            if isinstance(self.source, ValueTemplate)
+            else self.source
+        )
+        return Binding(source=source, origin=origin, contract=contract)
 
     def iter_origins(self) -> Iterator[OriginRef]:
-        """Yield this binding's present origin, then its contract's origins."""
+        """Yield this binding's present origin, then its contract's origins.
+
+        For a ``ValueTemplate`` source, the template's origins follow, then each
+        nested binding's origin and contract origins, in tree order.
+        """
         yield from _iter_origin_carrier(self, set())
+
+
+@dataclass(frozen=True)
+class ValueTemplate:
+    """An authored mapping or list whose leaf strings are binding templates.
+
+    The binder evaluates every leaf string as a template (a whole `${...}` keeps
+    its type, an embedded one is stringified, `$$` is unescaped) and every nested
+    typed ``Binding`` against its own contract. A plain ``dict`` or ``list``
+    binding source, by contrast, is always a literal.
+
+    A nested ``Binding`` sits at its position without adding a path segment; its
+    source is part of the same tree (a template string or a nested container).
+
+    Attributes:
+        value (`Any`): The tree, a ``dict`` or ``list``; retained by identity.
+        origins (`tuple[tuple[ValuePath, OriginRef], ...]`): Authored sites of
+            leaf strings, keyed by their path in ``value``, for diagnostics.
+    """
+
+    value: Any
+    origins: tuple[tuple[ValuePath, OriginRef], ...] = ()
+
+    def __post_init__(self) -> None:
+        """Require a container tree and well-formed origin entries."""
+        if type(self.value) not in (dict, list):
+            raise TypeError(
+                "value template must hold a dict or list, "
+                f"got {type(self.value).__name__}"
+            )
+        if type(self.origins) is not tuple:
+            raise TypeError("value template origins must be a tuple")
+        for entry in self.origins:
+            if type(entry) is not tuple or len(entry) != 2:
+                raise TypeError("each value template origin must be a (path, origin) tuple")
+            path, origin = entry
+            _validate_path(path, field_name="value template origin")
+            if not isinstance(origin, OriginRef):
+                raise TypeError("value template origin must be an OriginRef")
+        _validate_tree_keys(self.value)
+
+    def origin_at(self, path: ValuePath) -> OriginRef | None:
+        """Return the authored site registered for ``path``, if any."""
+        for entry_path, origin in self.origins:
+            if entry_path == path:
+                return origin
+        return None
+
+    def map_origins(self, mapper: _OriginMapper) -> ValueTemplate:
+        """Return this template with its origins and nested bindings' origins mapped."""
+        return ValueTemplate(
+            _map_tree(self.value, lambda text: text, mapper),
+            tuple(
+                (path, cast(OriginRef, _map_origin(origin, mapper)))
+                for path, origin in self.origins
+            ),
+        )
+
+
+def _validate_tree_keys(node: Any) -> None:
+    """Require exact string mapping keys throughout a template tree.
+
+    Keys become record route names, input-group path segments, and manifest
+    mapping keys, all of which assume strings.
+    """
+    if isinstance(node, Binding):
+        _validate_tree_keys(node.source)
+    elif type(node) is dict:
+        for key, item in node.items():
+            if type(key) is not str:
+                raise TypeError(
+                    "value template mapping keys must be strings, "
+                    f"got {type(key).__name__}"
+                )
+            _validate_tree_keys(item)
+    elif type(node) is list:
+        for item in node:
+            _validate_tree_keys(item)
+
+
+def _tree_bindings(node: Any) -> Iterator[Binding]:
+    """Yield every binding nested in a template tree, each before those in its source."""
+    if isinstance(node, Binding):
+        yield node
+        yield from _tree_bindings(node.source)
+    elif type(node) is dict:
+        for item in node.values():
+            yield from _tree_bindings(item)
+    elif type(node) is list:
+        for item in node:
+            yield from _tree_bindings(item)
+
+
+def _tree_strings(node: Any, path: ValuePath) -> Iterator[tuple[ValuePath, str]]:
+    """Yield a template tree's leaf strings, looking through nested bindings."""
+    if isinstance(node, Binding):
+        yield from _tree_strings(node.source, path)
+    elif isinstance(node, str):
+        yield path, node
+    elif type(node) is dict:
+        for key, item in node.items():
+            yield from _tree_strings(item, (*path, key))
+    elif type(node) is list:
+        for index, item in enumerate(node):
+            yield from _tree_strings(item, (*path, index))
+
+
+def _map_tree(
+    node: Any,
+    fn: Callable[[str], Any],
+    mapper: _OriginMapper | None = None,
+) -> Any:
+    """Rebuild a template tree with ``fn`` applied to each leaf string.
+
+    Nested bindings keep their contracts; with ``mapper`` their origins are
+    transformed too.
+    """
+    if isinstance(node, Binding):
+        return Binding(
+            source=_map_tree(node.source, fn, mapper),
+            origin=node.origin if mapper is None else _map_origin(node.origin, mapper),
+            contract=(
+                node.contract
+                if mapper is None or node.contract is None
+                else node.contract.map_origins(mapper)
+            ),
+        )
+    if isinstance(node, str):
+        return fn(node)
+    if type(node) is dict:
+        return {key: _map_tree(item, fn, mapper) for key, item in node.items()}
+    if type(node) is list:
+        return [_map_tree(item, fn, mapper) for item in node]
+    return node
+
+
+def iter_source_strings(source: Any) -> Iterator[tuple[ValuePath, str]]:
+    """Yield the template strings of one binding source with their paths.
+
+    Exactly one ``Binding`` layer is unwrapped. A plain string yields itself at
+    the empty path; a ``ValueTemplate`` yields each leaf string, looking through
+    nested bindings. Any other literal, including a plain ``dict`` or ``list``,
+    yields nothing.
+
+    Args:
+        source (`Any`): A binding or its raw source.
+
+    Returns:
+        `Iterator[tuple[ValuePath, str]]`: ``(path, text)`` pairs in tree order.
+    """
+    value = binding_source(source)
+    if isinstance(value, str):
+        yield (), value
+    elif isinstance(value, ValueTemplate):
+        yield from _tree_strings(value.value, ())
+
+
+def map_source_strings(source: Any, fn: Callable[[str], Any]) -> Any:
+    """Rebuild one binding source with ``fn`` applied to each template string.
+
+    The strings are those ``iter_source_strings`` yields. Bindings, templates,
+    origins, and contracts are rebuilt around the new strings; a source with no
+    template strings is returned unchanged.
+
+    Args:
+        source (`Any`): A binding or its raw source.
+        fn (`Callable[[str], Any]`): Maps one template string to its replacement.
+
+    Returns:
+        `Any`: The rebuilt source, of the same carrier shape.
+    """
+    if isinstance(source, Binding):
+        value = source.source
+        if not isinstance(value, (str, ValueTemplate)):
+            return source
+        return Binding(
+            source=map_source_strings(value, fn),
+            origin=source.origin,
+            contract=source.contract,
+        )
+    if isinstance(source, str):
+        return fn(source)
+    if isinstance(source, ValueTemplate):
+        return ValueTemplate(_map_tree(source.value, fn), source.origins)
+    return source
+
+
+def _escape_group_segment(segment: str | int) -> str:
+    """Escape one path segment as a JSON-pointer reference token."""
+    return str(segment).replace("~", "~0").replace("/", "~1")
+
+
+def binding_input_groups(param: str, source: Any) -> list[tuple[str, str]]:
+    """Return the input group and template string for each string in a source.
+
+    A plain string source is one group named ``param``. Each leaf string of a
+    ``ValueTemplate`` is its own group, named ``param`` followed by its path as
+    a JSON pointer (``~`` as ``~0``, ``/`` as ``~1``, list indices in decimal),
+    so group names never collide. A source with no template strings has none.
+
+    Args:
+        param (`str`): The bound parameter's name.
+        source (`Any`): The parameter's binding or raw source.
+
+    Returns:
+        `list[tuple[str, str]]`: ``(group, text)`` pairs in tree order.
+    """
+    return [
+        (
+            param + "".join("/" + _escape_group_segment(part) for part in path),
+            text,
+        )
+        for path, text in iter_source_strings(source)
+    ]
 
 
 @dataclass(frozen=True)
@@ -786,6 +1014,7 @@ class Parameter:
 
 _OriginCarrier: TypeAlias = (
     Binding
+    | ValueTemplate
     | Assertion
     | ContractOrigins
     | ValueContract
@@ -810,6 +1039,16 @@ def _iter_origin_carrier(
             yield carrier.origin
         if carrier.contract is not None:
             yield from _iter_origin_carrier(carrier.contract, seen)
+        if isinstance(carrier.source, ValueTemplate):
+            yield from _iter_origin_carrier(carrier.source, seen)
+        return
+    if isinstance(carrier, ValueTemplate):
+        for _, origin in carrier.origins:
+            if not isinstance(origin, OriginRef):
+                raise TypeError("value template origin must be an OriginRef")
+            yield origin
+        for binding in _tree_bindings(carrier.value):
+            yield from _iter_origin_carrier(binding, seen)
         return
     if isinstance(carrier, Assertion):
         _validate_optional_origin(carrier.origin, "assertion origin")
@@ -867,6 +1106,19 @@ def _rewrite_origin_carrier(
         )
         if carrier.contract is not None:
             _rewrite_origin_carrier(carrier.contract, mapper, seen)
+        if isinstance(carrier.source, ValueTemplate):
+            _rewrite_origin_carrier(carrier.source, mapper, seen)
+    elif isinstance(carrier, ValueTemplate):
+        object.__setattr__(
+            carrier,
+            "origins",
+            tuple(
+                (path, cast(OriginRef, _map_origin(origin, mapper)))
+                for path, origin in carrier.origins
+            ),
+        )
+        for binding in _tree_bindings(carrier.value):
+            _rewrite_origin_carrier(binding, mapper, seen)
     elif isinstance(carrier, Assertion):
         object.__setattr__(
             carrier,
@@ -933,8 +1185,12 @@ __all__ = [
     "SeedConnection",
     "ValueContract",
     "ValuePath",
+    "ValueTemplate",
     "as_binding",
+    "binding_input_groups",
     "binding_source",
+    "iter_source_strings",
+    "map_source_strings",
     "output_contract_field_error",
     "output_contract_origin",
     "output_contract_type",

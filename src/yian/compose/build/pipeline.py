@@ -39,6 +39,7 @@ from yian.diagnostics import (
 from yian.nodes.base import Node, NodeKind
 from yian.nodes.contracts import (
     Assertion,
+    Binding,
     OutputContract,
     Parameter,
     PartialRecordContract,
@@ -54,6 +55,7 @@ from yian.compose.validate.asserts import lower_flow_asserts
 from yian.compose.build.boundary import synthesize_boundary_graph
 from yian.compose.build.inline_inputs import (
     canonicalize_inline_type,
+    explicit_type_hint,
     infer_inline_binding_type,
 )
 from yian.compose.edges.data import infer_data_edges
@@ -71,11 +73,23 @@ from yian.compose.desugar.inline_calls import _synth_id_gen, desugar_inline_call
 from yian.compose.desugar.case_outputs import case_output_reads, expand_case_outputs
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
 from yian.compose.helpers.isinstance_types import (
+    collect_constructor_names,
     collect_isinstance_names,
+    constructor_type_fn,
+    expression_trees,
+    resolve_constructor_type,
     resolve_isinstance_type,
 )
 from yian.compose.helpers.output_contracts import resolve_output_binding_contract
-from yian.compose.helpers.typed_bindings import split_typed_binding
+from yian.compose.helpers.tags import (
+    QUOTED_STYLES,
+    old_form_suggestion,
+    old_typed_text,
+    read_tagged_value,
+    reject_tagged_output,
+    suggest_tag,
+    yaml_quoted,
+)
 from yian.compose.desugar.adaptive_questions import desugar_adaptive_questions
 from yian.compose.desugar.case_targets import desugar_case_call_targets
 from yian.compose.desugar.case_values import desugar_case_values
@@ -117,13 +131,13 @@ from yian.compose.helpers.types import (
 )
 from yian.compose.validate.handles import check_case_handles
 from yian.compose.validate.asserts import validate_node_asserts
+from yian.compose.validate.constructors import constructor_errors
 
 # Name for the single output of a bare whole-string `output:` binding. The value-mode
 # EndNode returns the bare resolved value, so the name only labels the carrier.
 _SINGLE_OUTPUT_NAME = "result"
 
 _PRESENTATION_UNAVAILABLE_NOTE = "Source presentation was unavailable."
-
 
 @dataclass(frozen=True)
 class BuildRequest:
@@ -649,51 +663,90 @@ def _split_typed_value(
     registry,
     catalog_builder: _SourceCatalogBuilder,
     diagnostics: LoadDiagnostics,
-) -> tuple[Any, ValueContract] | None:
-    """Split one binding value written `Type = value` into its value and contract.
+) -> tuple[Any, ValueContract | None] | None:
+    """Split one binding value into its value and declared contract.
 
-    The cursor's YAML style decides recognition (quoted and block values stay plain
-    text) and locates both errors and the contract origin; without a cursor the plain
-    rule applies and the contract carries no origin.
+    A tagged value (`!int ${size.output.qty}`) is read through its tag. Untagged
+    plain text in the old `Type = value` form is an error that shows the tag; a
+    quoted or block value is text. Every authored value is read with the spans and
+    tags inside it, so a container holding them comes back as a `ValueTemplate`,
+    typed or not.
 
     Args:
         value (`Any`): The authored binding value.
         cursor (`SourceCursor | None`): Retained view of the value, or `None` for a
             value with no authored occurrence.
         binding_label (`str`): The binding's key name, used in error messages.
-        site_path (`tuple[str | int, ...]`): Catalog site prefix for the contract.
+        site_path (`tuple[str | int, ...]`): Catalog site prefix for this binding.
         registry (`TypeRegistry`): The file's typedefs the type text resolves against.
         catalog_builder (`_SourceCatalogBuilder`): File-owned origin catalog builder.
         diagnostics (`LoadDiagnostics`): Factory for located load errors.
 
     Returns:
-        `tuple[Any, ValueContract] | None`: The binding value and its declared
-            contract, or `None` when the value is plain.
+        `tuple[Any, ValueContract | None] | None`: The binding value and its declared
+            contract (`None` for an untyped mapping or list), or `None` when the
+            value is untyped and kept as it is: not a mapping or list, or not the
+            value its cursor shows.
 
     Raises:
-        `LoadError`: Raised when the type or value is malformed.
+        `LoadError`: Raised when a tag is malformed, has no value after it, or does
+            not fit its tagged literal, or the value is in the old `Type = value`
+            form.
     """
-    typed = split_typed_binding(
-        value,
-        style=cursor.scalar_style if cursor is not None else None,
-        registry=registry,
-        binding_label=binding_label,
-        diagnostics=diagnostics,
-        range=cursor.range if cursor is not None else None,
-    )
-    if typed is None:
-        return None
-    if cursor is None:
-        return typed.value, ValueContract(
-            read_type(typed.type_text, registry, diagnostics=diagnostics)
+    if cursor is not None and cursor.tag is not None:
+        slot = read_tagged_value(
+            cursor,
+            registry,
+            label=binding_label,
+            site_path=site_path,
+            catalog_builder=catalog_builder,
+            diagnostics=diagnostics,
+            ledger=catalog_builder.consumed_tags,
         )
-    return typed.value, read_value_contract(
-        cursor.with_value(typed.type_text),
+        assert slot.contract is not None
+        if not slot.has_value:
+            spelled = suggest_tag(
+                binding_label,
+                slot.contract.type,
+                "${...}",
+                registry=registry,
+                type_text=cursor.tag,
+            )
+            raise diagnostics.error(
+                f"{binding_label!r}: a binding needs a value: {spelled}",
+                range=cursor.range,
+            )
+        return slot.value, slot.contract
+    style = cursor.scalar_style if cursor is not None else None
+    old = old_typed_text(value, registry) if style not in QUOTED_STYLES else None
+    if old is not None:
+        typ, spelled, right = old
+        suggestion = old_form_suggestion(
+            binding_label, typ, spelled, right, registry=registry, placeholder="${...}"
+        )
+        # Builtin names such as `date` or `file` are also words, so the text may be
+        # meant literally.
+        raise diagnostics.error(
+            f"binding {binding_label!r}: write the type as a tag: {suggestion}. "
+            f"If you meant the text, quote it: "
+            f"`{binding_label}: {yaml_quoted(value.strip())}`",
+            range=cursor.range if cursor is not None else None,
+        )
+    # Only an authored mapping or list can hold nested spans or tags; a string
+    # stays as written, and a carrier or a value replaced after parsing is not
+    # what the cursor shows, so it is kept as given.
+    if cursor is None or type(value) not in (dict, list) or not cursor.holds(value):
+        return None
+    slot = read_tagged_value(
+        cursor,
         registry,
+        label=binding_label,
         site_path=site_path,
         catalog_builder=catalog_builder,
         diagnostics=diagnostics,
+        ledger=catalog_builder.consumed_tags,
     )
+    return slot.value, None
 
 
 def _split_typed_inputs(
@@ -707,10 +760,9 @@ def _split_typed_inputs(
 ) -> dict[str, NodeDescriptor]:
     """Split each typed `input:` binding into its value and declared contract.
 
-    A binding written `qty: int = ${size.output.qty}` keeps `${size.output.qty}` as
+    A binding tagged `qty: !int ${size.output.qty}` keeps `${size.output.qty}` as
     its value, and the compiled `int` contract lands in the descriptor's
-    `input_types` under the parameter name. The retained cursor decides recognition
-    by YAML style (quoted and block values stay plain text) and locates both errors
+    `input_types` under the parameter name; the retained cursor locates both errors
     and the contract origin.
 
     Args:
@@ -725,8 +777,9 @@ def _split_typed_inputs(
         `dict[str, NodeDescriptor]`: The descriptors, with typed inputs split.
 
     Raises:
-        `LoadError`: Raised when a typed binding's type or value is malformed, or a
-            retained cursor cannot be traversed.
+        `LoadError`: Raised when a typed binding's type or value is malformed, a
+            binding is in the old `Type = value` form, or a retained cursor cannot be
+            traversed.
     """
     split: dict[str, NodeDescriptor] = {}
     for node_id, descriptor in descriptors.items():
@@ -752,14 +805,16 @@ def _split_typed_inputs(
                     value,
                     cursor,
                     binding_label=name,
-                    site_path=(*owner, "node", node_id, "input", name, "type"),
+                    site_path=(*owner, "node", node_id, "input", name),
                     registry=registry,
                     catalog_builder=catalog_builder,
                     diagnostics=diagnostics,
                 )
                 if typed is None:
                     continue
-                inputs[name], input_types[name] = typed
+                inputs[name], contract = typed
+                if contract is not None:
+                    input_types[name] = contract
                 changed = True
         except SourceAccessError as exc:
             raise diagnostics.error(str(exc), range=exc.range) from exc
@@ -918,10 +973,13 @@ def _split_typed_outputs(
 ) -> tuple[Any, dict[str, ValueContract]]:
     """Split each typed flow output into its value and declared contract.
 
-    A record field written `decision: Decision = ${d.output}` keeps `${d.output}` as
-    its value; a bare `output: Size = ${size.output}` is the single output named
-    `result`. Recognition and locations follow the retained cursor exactly as for
-    node inputs; a generated section has no cursor and follows the plain rule.
+    A record field written `decision: !Decision ${d.output}` keeps `${d.output}`
+    as its value; a bare
+    `output: !Size ${size.output}` is the single output named `result`. A tagged
+    whole section is that single output even when its value is a mapping
+    (`output: !T {a: 1}`), so it comes back as a `Binding` carrier rather than a
+    dict. Recognition and locations follow the retained cursor exactly as for node
+    inputs.
 
     Args:
         outputs_section (`dict | object | None`): The raw `output:` section.
@@ -933,36 +991,46 @@ def _split_typed_outputs(
         diagnostics (`LoadDiagnostics`): Factory for located load errors.
 
     Returns:
-        `tuple[Any, dict[str, ValueContract]]`: The section with typed values split,
-            and the declared contracts keyed by output name.
+        `tuple[Any, dict[str, ValueContract]]`: The section with typed values split
+            (a `Binding` for a tagged whole section), and the declared contracts
+            keyed by output name.
 
     Raises:
         `LoadError`: Raised when a record field name is not a string, a typed output's
             type or value is malformed, or the retained cursor cannot be traversed.
     """
-    if outputs_section is None:
-        return None, {}
-    if isinstance(outputs_section, dict):
-        _check_output_names(outputs_section, outputs_cursor, diagnostics=diagnostics)
-
     def split_one(value, cursor, binding_label: str, index: int):
         """Split one output value at its positional catalog site."""
         return _split_typed_value(
             value,
             cursor,
             binding_label=binding_label,
-            site_path=(*owner, "output", index, "type"),
+            site_path=(*owner, "output", index),
             registry=registry,
             catalog_builder=catalog_builder,
             diagnostics=diagnostics,
         )
 
     try:
+        if outputs_cursor is not None and outputs_cursor.tag is not None:
+            # A tagged whole section is one typed value, even a mapping: the carrier
+            # is not a dict, so every later pass takes it as the single output.
+            typed = split_one(outputs_section, outputs_cursor, "output", 0)
+            assert typed is not None and typed[1] is not None
+            value, contract = typed
+            carrier = Binding(source=value, contract=contract)
+            return carrier, {_SINGLE_OUTPUT_NAME: contract}
+        if outputs_section is None:
+            return None, {}
         if not isinstance(outputs_section, dict):
             typed = split_one(outputs_section, outputs_cursor, "output", 0)
             if typed is None:
                 return outputs_section, {}
-            return typed[0], {_SINGLE_OUTPUT_NAME: typed[1]}
+            value, contract = typed
+            if contract is None:
+                return value, {}
+            return value, {_SINGLE_OUTPUT_NAME: contract}
+        _check_output_names(outputs_section, outputs_cursor, diagnostics=diagnostics)
         split = dict(outputs_section)
         output_types: dict[str, ValueContract] = {}
         for index, (key, value) in enumerate(outputs_section.items()):
@@ -972,8 +1040,11 @@ def _split_typed_outputs(
                 else None
             )
             typed = split_one(value, cursor, str(key), index)
-            if typed is not None:
-                split[key], output_types[str(key)] = typed
+            if typed is None:
+                continue
+            split[key], contract = typed
+            if contract is not None:
+                output_types[str(key)] = contract
     except SourceAccessError as exc:
         raise diagnostics.error(str(exc), range=exc.range) from exc
     return split, output_types
@@ -984,14 +1055,14 @@ def _flow_outputs(outputs) -> list[FlowOutput]:
 
     A name -> binding map becomes one `FlowOutput` per entry (a record-mode
     END returns a dict keyed by every name, `{}` for an empty map); a bare
-    whole-string binding (`${note.output}`) is one output named `result` (a
-    value-mode END returns the bare value). A `None` section -> no declared
-    outputs (a value-mode END returns `None`).
+    whole-string binding (`${note.output}`) or a tagged section's `Binding` carrier
+    is one output named `result` (a value-mode END returns the bare value). A
+    `None` section -> no declared outputs (a value-mode END returns `None`).
 
     Args:
-        outputs (`dict | str | None`):
+        outputs (`dict | str | Binding | None`):
             The raw `output:` section: a name -> binding map, a single binding string,
-            or `None`.
+            a tagged single output's `Binding`, or `None`.
     """
     if outputs is None:
         return []
@@ -1111,6 +1182,10 @@ def _nth_range(ranges: list[SourceRange | None], index: int) -> SourceRange | No
     return ranges[index] if index < len(ranges) else None
 
 
+# The `isinstance` type names and the constructor names one expression site uses.
+TypeNames = tuple[list[str], list[str]]
+
+
 def _fill_type_tables(
     nodes: dict[str, Node],
     flow_wiring: dict[str, dict[str, Any]],
@@ -1123,10 +1198,11 @@ def _fill_type_tables(
     registry: TypeRegistry,
     diagnostics: LoadDiagnostics,
 ) -> None:
-    """Set each node's `types` to the `isinstance` type names its expressions use.
+    """Set each node's `types` to the type names its `isinstance` calls and constructors use.
 
     A node evaluates its wiring sources, its asserts, a CASE's `when:`s and a LOOP's
-    predicate with its own table. Names resolve against this flow's `registry`.
+    predicate with its own table. Names resolve against this flow's `registry`; a
+    constructor name must be a `typedefs:` name.
 
     Args:
         nodes (`dict[str, Node]`):
@@ -1152,20 +1228,29 @@ def _fill_type_tables(
 
     Raises:
         `LoadError`:
-            Raised at the offending site for an unknown type name, or for `isinstance`
-            in a reserved wiring key (WAIT `until:`, MAP `over:`).
+            Raised at the offending site for an unknown type or constructor name, or
+            for `isinstance` or a constructor in a reserved wiring key (WAIT `until:`,
+            MAP `over:`).
     """
     resolved: dict[str, Type] = {}
 
-    def table(names: list[str], where: str, rng: SourceRange | None) -> dict[str, Type]:
+    def table(names: TypeNames, where: str, rng: SourceRange | None) -> dict[str, Type]:
         """Resolve `names`, raising at `rng` for an unknown one."""
-        for name in names:
+        isinstance_names, constructors = names
+        for name in isinstance_names:
             if name not in resolved:
                 try:
                     resolved[name] = resolve_isinstance_type(name, registry)
                 except TypeCheckError as exc:
                     raise diagnostics.error(f"{where}: {exc}", range=rng) from exc
-        return {name: resolved[name] for name in names}
+        for name in constructors:
+            if name in resolved and name in registry:
+                continue  # a typedef name resolves the same for isinstance and constructors
+            try:
+                resolved[name] = resolve_constructor_type(name, registry)
+            except TypeCheckError as exc:
+                raise diagnostics.error(f"{where}: {exc}", range=rng) from exc
+        return {name: resolved[name] for name in (*isinstance_names, *constructors)}
 
     def output_range(name: str) -> SourceRange | None:
         """One flow output's authored range, else the whole `output:` range."""
@@ -1176,19 +1261,51 @@ def _fill_type_tables(
             pass  # a bare `output:` value has no named children
         return outputs_range
 
-    def names_in(source: Any, *, condition: bool = False) -> list[str]:
-        """The type names `source` uses; earlier passes report a source that won't parse."""
+    def checked(
+        names: TypeNames,
+        source: Any,
+        where: str,
+        rng: SourceRange | None,
+        *,
+        condition: bool = False,
+    ) -> dict[str, Type]:
+        """Resolve `names` as `table` does, then reject a constructor call in `source`
+        that can never succeed whatever the references hold.
+
+        Only for condition sites: `validate_references` already checked every binding's
+        constructor calls, with the references typed."""
+        resolved_names = table(names, where, rng)
+        if names[1]:
+            for tree in expression_trees(source, condition=condition):
+                problems = constructor_errors(tree, registry)
+                if problems:
+                    raise diagnostics.error(f"{where}: {problems[0]}", range=rng)
+        return resolved_names
+
+    def names_in(source: Any, *, condition: bool = False) -> TypeNames:
+        """The `isinstance` and constructor names `source` uses.
+
+        Earlier passes report a source that won't parse."""
         try:
-            return collect_isinstance_names(source, condition=condition)
+            return (
+                collect_isinstance_names(source, condition=condition),
+                collect_constructor_names(source, condition=condition),
+            )
         except ExpressionError:
-            return []
+            return [], []
 
     # Authored flow asserts first, so an unknown name is located at its own assert. The
     # lowered START/END asserts below use the same names.
     for index, assertion in enumerate(flow_asserts):
         where = f"flow assert {assertion.display!r}"
         rng = flow_assertion_ranges[index]
-        table(names_in(assertion.expression, condition=True), where, rng)
+        checked(
+            names_in(assertion.expression, condition=True),
+            assertion.expression,
+            where,
+            rng,
+            condition=True,
+        )
 
     for nid, node in nodes.items():
         result = build_results.get(nid)
@@ -1210,9 +1327,10 @@ def _fill_type_tables(
                 key = ("field", param) if param in reserved else ("input", param)
                 rng = _site_range(franges.get(key), franges, "inputs", node_range)
             names = names_in(source)
-            if names and param in reserved:
+            if param in reserved and (names[0] or names[1]):
+                used = "isinstance" if names[0] else f"{names[1][0]}(...)"
                 raise diagnostics.error(
-                    f"node {nid!r}: isinstance is not supported in a {node.kind.value} "
+                    f"node {nid!r}: {used} is not supported in a {node.kind.value} "
                     f"node's {param}:",
                     range=rng,
                 )
@@ -1222,7 +1340,8 @@ def _fill_type_tables(
         for index, expression in enumerate(authored):
             where = f"node {nid!r} assert {expression!r}"
             rng = _site_range(_nth_range(assert_ranges, index), franges, "asserts", node_range)
-            types.update(table(names_in(expression, condition=True), where, rng))
+            names = names_in(expression, condition=True)
+            types.update(checked(names, expression, where, rng, condition=True))
         if node.kind in (NodeKind.START, NodeKind.END):
             # START/END evaluate the lowered flow asserts, whose names were located above.
             for assertion in [*node.pre_asserts, *node.post_asserts]:
@@ -1232,13 +1351,15 @@ def _fill_type_tables(
         for index, case in enumerate(getattr(node, "cases", None) or ()):
             where = f"case node {nid!r} cases[{index}].when"
             rng = _site_range(_nth_range(when_ranges, index), franges, "cases", node_range)
-            types.update(table(names_in(case.when, condition=True), where, rng))
+            names = names_in(case.when, condition=True)
+            types.update(checked(names, case.when, where, rng, condition=True))
         predicate = getattr(node, "predicate", None)
         if isinstance(predicate, str):
             keyword = getattr(node, "predicate_kind", "while")
             where = f"loop node {nid!r} {keyword}"
             rng = _site_range(None, franges, keyword, node_range)
-            types.update(table(names_in(predicate, condition=True), where, rng))
+            names = names_in(predicate, condition=True)
+            types.update(checked(names, predicate, where, rng, condition=True))
         node.types = types
 
 
@@ -1301,7 +1422,7 @@ def _assemble(
     """Assemble parsed sections into a `ComposedFlow` — the post-parse pipeline shared by
     the top-level flow and every in-file def:
 
-      flow parameters -> split typed `name: Type = value` node inputs and flow outputs
+      flow parameters -> split tagged node inputs and flow outputs
       into value + declared contract -> desugar (case value branches to synth CODE nodes,
       inline calls, adaptive questions, case call targets, `${case.output}` with one synth
       result node per typed case) -> build
@@ -1543,6 +1664,8 @@ def _assemble(
     flow_input_types = {
         name: contract.type for name, contract in flow_input_contracts.items()
     }
+    # Static inference types a `T(...)` constructor by this flow's own typedefs.
+    constructor_type = constructor_type_fn(registry)
     flow_inputs = {parameter.name for parameter in inputs}
     descriptors = parse_nodes(nodes_cursor)
     try:
@@ -1590,7 +1713,7 @@ def _assemble(
         return outputs_range
 
     # Reject a literal under a secret name while values are still as authored: the
-    # typed split and the desugars below may echo a value in their own errors.
+    # tagged split and the desugars below may echo a value in their own errors.
     check_authored_bindings(
         descriptors,
         outputs_section,
@@ -1604,9 +1727,20 @@ def _assemble(
         diagnostics=diagnostics,
     )
 
-    # Split `name: Type = value` input and output bindings before any desugar reads
-    # their values, so an inline `call(...)` or `${case.output}` on the right side
-    # desugars as usual.
+    # A node's `output:` is a type declaration; a tag there is rejected before a
+    # declaration with nothing after its tag reads as no output at all.
+    try:
+        for node_id in descriptors:
+            if nodes_cursor.has(node_id):
+                node_cursor = normalize_node_signature_cursor(nodes_cursor.child(node_id))
+                if node_cursor.has("outputs"):
+                    reject_tagged_output(node_cursor.child("outputs"), diagnostics)
+    except SourceAccessError as exc:
+        raise diagnostics.error(str(exc), range=exc.range) from exc
+
+    # Split tagged (`name: !Type value`) input and output bindings before any
+    # desugar reads their values, so an inline `call(...)` or
+    # `${case.output}` in the value desugars as usual.
     descriptors = _split_typed_inputs(
         descriptors,
         nodes_cursor,
@@ -1641,7 +1775,7 @@ def _assemble(
     # BEFORE the inline-call desugar so a value's `${...}` input bindings are walked by it
     # and by the `${case.output}` expansion like any authored CODE input.
     descriptors = desugar_case_values(
-        descriptors, case_types=case_types, diagnostics=diagnostics
+        descriptors, case_types=case_types, registry=registry, diagnostics=diagnostics
     )
 
     # Desugar inline `${ f(...) }` call expressions: each becomes a synth `call`
@@ -1668,6 +1802,7 @@ def _assemble(
         if output_types
         else (),
         next_id=mint,
+        type_names=frozenset(registry),
         diagnostics=diagnostics,
     )
 
@@ -1725,9 +1860,8 @@ def _assemble(
             def unavailable_type() -> LoadError:
                 return diagnostics.error(
                     f"cannot infer type for inline binding {binding_label!r}: "
-                    f"producer {producer_id!r} has no available static type; declare "
-                    "its type with a typed binding (`name: Type = value`) or use an "
-                    "explicitly typed named `defs:` body",
+                    f"producer {producer_id!r} has no available static type; "
+                    + explicit_type_hint(binding_label),
                     range=binding_range,
                 )
 
@@ -1771,6 +1905,7 @@ def _assemble(
                     descriptor.over,
                     parent_input_types=flow_input_types,
                     producer_type=producer_type,
+                    type_fn=constructor_type,
                     binding_label=binding_label,
                     binding_range=binding_range,
                     diagnostics=diagnostics,
@@ -1778,9 +1913,8 @@ def _assemble(
                 if not over_type.kind.is_list() or over_type.element is None:
                     raise diagnostics.error(
                         f"cannot infer type for inline binding {binding_label!r}: "
-                        "MAP `over:` must have a proven list element type; declare its "
-                        "type with a typed binding (`name: Type = value`) or use an "
-                        "explicitly typed named `defs:` body",
+                        "MAP `over:` must have a proven list element type; "
+                        + explicit_type_hint(binding_label),
                         range=binding_range,
                     )
                 cached_item_type = over_type.element
@@ -1802,6 +1936,7 @@ def _assemble(
                     value,
                     parent_input_types=flow_input_types,
                     producer_type=producer_type,
+                    type_fn=constructor_type,
                     item_type=item_type,
                     binding_label=binding_label,
                     binding_range=binding_range,
@@ -1862,6 +1997,7 @@ def _assemble(
             binding,
             producers,
             flow_input_contracts,
+            type_fn=constructor_type,
         )
 
     descriptors = _register_inline_bodies(
@@ -1980,6 +2116,8 @@ def _assemble(
         flow_input_contracts,
         build_results,
         narrowing=narrowing,
+        type_fn=constructor_type,
+        registry=registry,
         resolve_origin=catalog_builder.resolve_registered,
         diagnostics=diagnostics,
     )
@@ -1990,6 +2128,7 @@ def _assemble(
         flow_input_contracts,
         build_results,
         narrowing=narrowing,
+        type_fn=constructor_type,
     )
     # cross-flow type check: each `call` binding's source type vs the callable
     # input type (needs producers, so it runs after all nodes are built).
@@ -1999,6 +2138,7 @@ def _assemble(
         flow_input_contracts,
         flow_wiring,
         narrowing=narrowing,
+        type_fn=constructor_type,
         diagnostics=diagnostics,
     )
     # loop `'a -> 'a` type contract (types): each field the body returns is compared with
@@ -2016,6 +2156,7 @@ def _assemble(
             if isinstance(descriptor, LoopDescriptor)
             and descriptor.child_label is not None
         },
+        registry=registry,
         diagnostics=diagnostics,
     )
     # Case `on:` enum exhaustiveness needs the assembled producer types, so it runs after
@@ -2052,6 +2193,8 @@ def _assemble(
         input_contracts=flow_input_contracts,
         outputs_range=outputs_range,
         narrowing=narrowing,
+        registry=registry,
+        resolve_origin=catalog_builder.resolve_registered,
         diagnostics=diagnostics,
     )
     # human_input gates: structurally check a literal `questions:` list at load, and
@@ -2066,6 +2209,7 @@ def _assemble(
         nodes_built,
         descriptors,
         assertion_site_at=node_assertion_site_at,
+        type_names=frozenset(registry),
         diagnostics=diagnostics,
     )
     # Lower the flow-level `asserts:` into node-local asserts stamped on the synthesized
@@ -2153,6 +2297,8 @@ def _assemble(
         flow_input_contracts,
         value_mode=value_mode,
         outputs_range=outputs_range,
+        type_fn=constructor_type,
+        registry=registry,
         resolve_origin=catalog_builder.resolve_registered,
         diagnostics=diagnostics,
     )

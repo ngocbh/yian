@@ -46,7 +46,7 @@ _CHILD = """
 id: child-one
 name: child_one
 input:
-  topic: str
+  topic: !str
 nodes:
   emit:
     kind: code
@@ -65,7 +65,7 @@ _MAP = """
 id: map-parent
 name: map_parent
 input:
-  topics: list[str]
+  topics: !list(str)
 uses:
   child-one: child-one
 nodes:

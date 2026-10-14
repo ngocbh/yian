@@ -3,7 +3,7 @@
 id: err-unknown-top-key
 name: err_unknown_top_key
 input:
-  topic: str
+  topic: !str
 nodes:
   note:
     kind: agent

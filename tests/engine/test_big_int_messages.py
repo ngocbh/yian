@@ -68,13 +68,13 @@ def test_value_repr_names_the_type_of_a_value_too_long_to_display():
         Type.scalar(ValueKind.LIST_STRING),
         [BIG],
         (0,),
-        f"list element {PLACEHOLDER} is not str (declared list[str])",
+        f"list element {PLACEHOLDER} is not str (declared list(str))",
     ),
     (
         Type.scalar(ValueKind.LIST_STRING),
         BIG,
         (),
-        f"{PLACEHOLDER} is not a list for declared list[str]",
+        f"{PLACEHOLDER} is not a list for declared list(str)",
     ),
     (lit("a", "b"), BIG, (), f"{PLACEHOLDER} is not a member of variant ['a', 'b']"),
     (rec(a=INT), BIG, (), f"{PLACEHOLDER} is not an object for a record type"),
@@ -82,7 +82,7 @@ def test_value_repr_names_the_type_of_a_value_too_long_to_display():
         Type(kind=ValueKind.LIST_OBJECT, element=rec(a=INT)),
         BIG,
         (),
-        f"{PLACEHOLDER} is not a list for declared list[object]",
+        f"{PLACEHOLDER} is not a list for declared list(object)",
     ),
     (
         union(rec(a=INT), rec(b=INT)),
@@ -198,7 +198,7 @@ def test_a_huge_int_input_name_is_reported_as_unknown():
 id: big
 name: big
 input:
-  x: int
+  x: !int
 nodes:
   n:
     kind: code

@@ -23,7 +23,8 @@ from tests.engine._memory_fakes import _Memory
 _FLOW = """id: execution-session
 name: execution_session
 llm_config: {provider: openai, model: fake-model}
-input: {question: str}
+input:
+  question: !str
 nodes:
   answer:
     kind: agent
@@ -286,7 +287,8 @@ name: session_loop
 llm_config: {provider: openai, model: fake-model}
 defs:
   body:
-    input: {question: str}
+    input:
+      question: !str
     nodes:
       answer:
         kind: agent
@@ -330,10 +332,12 @@ def test_parallel_map_shares_authored_history_without_changing_result_order():
     flow = load_flow("""id: session-map
 name: session_map
 llm_config: {provider: openai, model: fake-model}
-input: {questions: "list[str]"}
+input:
+  questions: !list(str)
 defs:
   body:
-    input: {question: str}
+    input:
+      question: !str
     nodes:
       answer:
         kind: agent
@@ -378,7 +382,8 @@ name: session_calls
 llm_config: {provider: openai, model: fake-model}
 defs:
   body:
-    input: {question: str}
+    input:
+      question: !str
     nodes:
       answer:
         kind: agent

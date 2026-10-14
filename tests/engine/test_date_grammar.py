@@ -223,5 +223,5 @@ def test_scalar_matches_uses_the_grammar(kind, value, expected):
 
 def test_flow_default_outside_the_grammar_fails_at_load():
     with pytest.raises(LoadError) as exc:
-        load_flow('id: f\nname: f\ninput:\n  at: datetime = "20200101T000000"\nnodes: {}\n')
+        load_flow('id: f\nname: f\ninput:\n  at: !datetime "20200101T000000"\nnodes: {}\n')
     assert DATETIME_MSG in str(exc.value)

@@ -14,8 +14,12 @@ Compose-owned `BuildResult`; the runtime node receives only the descriptor's opa
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any, Optional
 
+from yian.compose.helpers.errors import LoadDiagnostics
+from yian.compose.nodes.base import reject_container_spans
 from yian.compose.nodes.call import CallDescriptor
+from yian.diagnostics import SourceRange
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -33,3 +37,23 @@ class MapDescriptor(CallDescriptor):
     kind = "map"
     allowed = CallDescriptor.allow("over", "parallel")
     required = CallDescriptor.require("over")
+
+    @classmethod
+    def _validate_fields(
+        cls,
+        node_id: str,
+        kwargs: dict[str, Any],
+        ranges: dict[tuple[str, str], SourceRange],
+        own_range: Optional[SourceRange],
+        diagnostics: LoadDiagnostics,
+    ) -> None:
+        """Reject a list or mapping holding `${...}` under `over:`, then run the base checks."""
+        reject_container_spans(
+            cls.kind,
+            node_id,
+            "over",
+            kwargs.get("over"),
+            ranges.get(("field", "over")) or own_range,
+            diagnostics,
+        )
+        super()._validate_fields(node_id, kwargs, ranges, own_range, diagnostics)

@@ -41,8 +41,13 @@ this model whenever you design anything:
 - Source-neutral semantic operations live in `nodes/contracts.py`: `Binding`,
   `Parameter`, `Assertion`, `ValueContract`, and `PartialRecordContract` carry
   optional opaque origins; `Binding` also carries an optional declared
-  `ValueContract` for a typed binding (`name: Type = value`), whose origins travel
-  with the binding's and whose type is manifest-backed;
+  `ValueContract` for a tagged slot (`qty: !int ${size.output.qty}`), whose origins
+  travel with the binding's and whose type is manifest-backed. `ValueTemplate` is
+  the one container source the binder evaluates: an authored mapping or list whose
+  leaf strings are templates and which may hold nested typed `Binding`s; each leaf
+  string is its own input group (`<param>/<JSON pointer>`), so edges, skips, and
+  co-skip stances treat each nested span as its own input. A plain dict or list
+  source stays a literal;
   `iter_origins()` and `map_origins()` touch only declared provenance slots, and
   `typesys.Type` remains provenance-free while arbitrary payloads stay opaque.
 - Numeric `Type.bounds` is one optional inclusive pair on INTEGER/NUMBER.
@@ -119,8 +124,8 @@ this model whenever you design anything:
   a predicate exception by its own `forward` frame and active `Case` identity,
   with node fallback outside predicate evaluation. Extend CASE's local origin
   traversal/rewrite for these carriers; they remain manifest-neutral.
-- AGENT node schema selection leaves only an untagged `str` on the free-text path. A tagged
-  string (`Literal[...]`) uses the generated scalar `value` wrapper, structured retries,
+- AGENT node schema selection leaves only a plain `str` on the free-text path. An enum
+  string (`Literal(...)`) uses the generated scalar `value` wrapper, structured retries,
   and unwrapping to the bare tag. Structured-output failures reuse
   `Node.output_contract.origins`; do not add another carrier. On retry exhaustion, accept
   a Pydantic location (including an immediate native-parser cause, but no deeper cause
@@ -237,7 +242,7 @@ this model whenever you design anything:
   `compose/helpers/types.py` is the one source-aware recursive type compiler. For
   authored root/definition flow inputs, the declaration key owns `Parameter.origin`,
   the type value and authored nested record fields own `ContractOrigins`,
-  and a packed default owns `default_origin`; START reuses those exact carriers.
+  and the default after the tag owns `default_origin`; START reuses those exact carriers.
   Scalar alias/list type expressions fall back to the contract root. Python/source-free
   declarations and inferred inline parameters stay source-free, while external aliases
   use ordinary lexical rebasing. Keep that separate from ordinary node-input wiring:
@@ -916,8 +921,8 @@ for whole-scalar fallback. One builder is
 shared by a physical document's root, definitions, and inline bodies.
 `compose/helpers/types.py` owns the sole source-aware recursive type compiler. For
 retained root/definition flow inputs it stamps the key on `Parameter.origin`, the type
-value and authored nested record fields on `ContractOrigins`, and a packed
-default on `default_origin`; START reuses those carriers. Scalar alias/list expressions fall back
+value and authored nested record fields on `ContractOrigins`, and the default written
+after the tag (`lookback: !int 30`) on `default_origin`; START reuses those carriers. Scalar alias/list expressions fall back
 to the root. Python/source-free and inferred inline parameters remain source-free.
 Assembly also supplies a Compose-owned output-contract reader through the optional
 `BuildContext` seam. The descriptor calls it only from the leaf's existing contract step;
@@ -959,6 +964,23 @@ CASE uses the hook to register each indexed `cases[N].when` and optional `on:`
 value. Lowering transfers predicate origins to ordered `Case` carriers and transfers
 the first owning predicate (or `on:`) origin to generated input `Binding` carriers;
 generated `Parameter` values remain source-free.
+
+Tags are read once, in Compose. `compose/source` records each local YAML tag and
+constructs the node as if untagged (YAML 1.2 core values plus dates; `!!` tags keep their YAML
+meaning); `SourceCursor.tag`, `tag_definition_id`, `has_value`, and `scalar_text` expose
+it. `compose/helpers/tags.py` is the one slot reader (`read_tag_type`,
+`read_tagged_value` -> `TaggedSlot`, `suggest_tag` for every message spelling). Every
+slot reads through it, and each read records the tag in a ledger so a tag outside a
+slot is a load error (`x-*` keys excepted). A tag only checks and narrows (load:
+`type_relation`; run time: `build_value_as`, `binding.type`); never add a fill-in or
+conversion path. Nested `${...}` stays a `ValueTemplate` evaluated by the binder; do not
+lift it into synthetic nodes, which would run on an untaken CASE branch and could not
+read MAP's `${item}`. Load-time walkers reach nested strings through
+`iter_source_strings` / `map_source_strings` / `binding_input_groups` in
+`nodes/contracts.py`, never a private tree walk. Constructors `${T(...)}` (typedef
+names only) resolve into `Node.types` like `isinstance`. Authored types use the
+parenthesized grammar in `typesys/types.py` (`Optional(str)`, `int(1..12)`); bracket
+spellings are migration errors, while `ValueKind` wire names (`"list[str]"`) stay.
 
 Inline extraction intentionally takes one graph-wide nodes snapshot before
 projection so unchanged aliases retain sharing; field navigation uses cursors or

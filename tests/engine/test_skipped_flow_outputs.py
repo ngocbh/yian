@@ -13,10 +13,17 @@ from yian.run import resume_flow, run_flow
 from yian.typesys.values import ValueKind
 
 
-def _flow(nodes: str, output: str, *, inputs: str = "approve: bool", defs: str = "") -> str:
-    """Return a flow text with the given `input:`, `defs:`, `nodes:` and `output:` blocks."""
+def _flow(
+    nodes: str,
+    output: str,
+    *,
+    inputs: str = "approve: !bool",
+    defs: str = "",
+    typedefs: str = "",
+) -> str:
+    """Return a flow text with the given `typedefs:`, `input:`, `defs:`, `nodes:` and `output:` blocks."""
     return (
-        f"id: f\nname: f\ninput:\n  {inputs}\n{defs}nodes:\n{nodes}output:{output}\n"
+        f"id: f\nname: f\n{typedefs}input:\n  {inputs}\n{defs}nodes:\n{nodes}output:{output}\n"
     )
 
 
@@ -47,7 +54,7 @@ _R2 = (
     + _code("a", '"A"')
     + _code("b", '"B"')
 )
-_R2_INPUTS = "approve: bool\n  other: bool"
+_R2_INPUTS = "approve: !bool\n  other: !bool"
 
 
 def _run(text: str, inputs: dict, **kw):
@@ -88,7 +95,7 @@ def test_nested_case_target_is_null_when_either_case_skips_it():
         + _code("hold", '"held"')
         + _code("rejected", '"no"')
     )
-    text = _flow(nodes, "\n  order: ${order.output}", inputs="approve: bool\n  inner: bool")
+    text = _flow(nodes, "\n  order: ${order.output}", inputs="approve: !bool\n  inner: !bool")
     assert _run(text, {"approve": True, "inner": False}) == {"order": None}
     assert _run(text, {"approve": False, "inner": True}) == {"order": None}
     assert _run(text, {"approve": True, "inner": True}) == {"order": "filled"}
@@ -142,7 +149,7 @@ def test_depends_on_a_case_runs_on_every_branch():
 _TAKE = """defs:
   take:
     input:
-      stance: str
+      stance: !str
     nodes:
       x:
         kind: code
@@ -164,7 +171,7 @@ def test_then_call_target_is_null():
         + _gate('call(take, stance="pro")', 'call(take, stance="con")', name="inner", when="inner")
     )
     text = _flow(
-        nodes, "\n  v: ${inner.output}", inputs="approve: bool\n  inner: bool", defs=_TAKE
+        nodes, "\n  v: ${inner.output}", inputs="approve: !bool\n  inner: !bool", defs=_TAKE
     )
     assert _run(text, {"approve": False, "inner": True}) == {"v": None}
     assert _run(text, {"approve": True, "inner": True}) == {"v": "pro"}
@@ -186,7 +193,7 @@ def test_call_node_target_is_null():
 _BUMP = """defs:
   bump:
     input:
-      n: int
+      n: !int
     nodes:
       step:
         kind: code
@@ -221,7 +228,7 @@ def test_map_node_target_is_null():
         "    input:\n      stance: ${item}\n"
         + _code("rejected", '"no"')
     )
-    text = _flow(nodes, "\n  v: ${m.output}", inputs="approve: bool\n  xs: list[str]", defs=_TAKE)
+    text = _flow(nodes, "\n  v: ${m.output}", inputs="approve: !bool\n  xs: !list(str)", defs=_TAKE)
     assert _run(text, {"approve": False, "xs": ["p"]}) == {"v": None}
     assert _run(text, {"approve": True, "xs": ["p"]}) == {"v": ["p"]}
 
@@ -229,7 +236,7 @@ def test_map_node_target_is_null():
 def test_defs_child_returns_null_to_its_caller():
     """A `defs:` child whose output reads a node behind its own CASE returns null."""
     defs = (
-        "defs:\n  child:\n    input:\n      approve: bool\n    nodes:\n"
+        "defs:\n  child:\n    input:\n      approve: !bool\n    nodes:\n"
         "      gate:\n        kind: case\n        cases:\n"
         "          - when: ${input.approve}\n            then: order\n"
         "      order:\n        kind: code\n        output: str\n"
@@ -350,7 +357,7 @@ def test_comparison_is_unchanged():
 def test_on_over_a_nullable_literal_may_match_nothing(tag, expected):
     """A null `on:` value matches no tag, so the targets' join may be skipped."""
     nodes = (
-        _code("cls", tag or "None", output="Optional[Literal[a, b]]")
+        _code("cls", tag or "None", output="Optional(Literal(a, b))")
         + "  route:\n    kind: case\n    on: ${cls.output}\n    cases:\n"
         "      - when: a\n        then: na\n      - when: b\n        then: nb\n"
         + _code("na", '"A"')
@@ -362,7 +369,7 @@ def test_on_over_a_nullable_literal_may_match_nothing(tag, expected):
 
 
 def _child_defs(
-    nodes: str, output: str, name: str = "child", inputs: str = "approve: bool"
+    nodes: str, output: str, name: str = "child", inputs: str = "approve: !bool"
 ) -> str:
     """Return a `defs:` block with one child taking `inputs` (one per line) over `nodes`."""
     return (
@@ -377,25 +384,25 @@ _CALL_C1 = "  c1:\n    kind: call\n    call: child\n    input:\n      approve: $
 def _call_field_type(nodes: str, output: str, field: str, *, other: bool = False):
     """Return the type of `field` in the output contract of a CALL to a child flow.
 
-    With `other`, the child also takes `other: bool` and the CALL passes `false`.
+    With `other`, the child also takes `other: !bool` and the CALL passes `false`.
     """
-    call, inputs = _CALL_C1, "approve: bool"
+    call, inputs = _CALL_C1, "approve: !bool"
     if other:
-        call, inputs = call + "      other: false\n", inputs + "\nother: bool"
+        call, inputs = call + "      other: false\n", inputs + "\nother: !bool"
     text = _flow(call, " ${c1.output}", defs=_child_defs(nodes, output, inputs=inputs))
     contract = load_flow(text).compiled.nodes["c1"].output_contract
     return contract.type.fields[field]
 
 
 def test_call_output_of_a_skipped_branch_is_optional():
-    """A CALL to a child whose output reads a CASE target sees `Optional[str]`."""
+    """A CALL to a child whose output reads a CASE target sees `Optional(str)`."""
     field = _call_field_type(_R1, "\n  order: ${order.output}", "order")
     assert field.kind is ValueKind.STRING
     assert field.nullable
 
 
 def test_call_output_of_a_coalesce_over_a_routing_only_case_is_optional():
-    """A coalesce of `str` targets of a CASE that may match nothing is `Optional[str]`."""
+    """A coalesce of `str` targets of a CASE that may match nothing is `Optional(str)`."""
     field = _call_field_type(_R2, "\n  v: ${a.output | b.output}", "v", other=True)
     assert field.kind is ValueKind.STRING
     assert field.nullable
@@ -414,8 +421,8 @@ def test_call_output_of_a_dotted_skipped_read_is_optional():
 
 
 def test_typed_output_over_a_skipped_branch_fails_at_runtime():
-    """`order: str = ${order.output}` loads; a skip fails the declared type at runtime."""
-    text = _flow(_R1, "\n  order: str = ${order.output}")
+    """`order: !str ${order.output}` loads; a skip fails the declared type at runtime."""
+    text = _flow(_R1, "\n  order: !str ${order.output}")
     assert _run(text, {"approve": True}) == {"order": "filled"}
     result = run_flow(load_flow(text), {"approve": False})
     assert result.status == "failed"
@@ -423,15 +430,15 @@ def test_typed_output_over_a_skipped_branch_fails_at_runtime():
 
 
 def test_optional_typed_output_over_a_skipped_branch_is_null():
-    """`order: Optional[str] = ${order.output}` returns null when skipped."""
-    text = _flow(_R1, "\n  order: Optional[str] = ${order.output}")
+    """`order: !Optional(str) ${order.output}` returns null when skipped."""
+    text = _flow(_R1, "\n  order: !Optional(str) ${order.output}")
     assert _run(text, {"approve": False}) == {"order": None}
     assert _run(text, {"approve": True}) == {"order": "filled"}
 
 
 _USE_STR = """  use:
     input:
-      s: str
+      s: !str
     nodes:
       x:
         kind: code
@@ -452,14 +459,14 @@ def _pass_on(binding: str) -> str:
 
 
 def test_passing_a_skipped_child_output_to_a_str_input_is_a_load_error():
-    """An untyped argument passing an `Optional[str]` child output to `str` is rejected."""
-    with pytest.raises(LoadError, match=r"Optional\[str\]"):
+    """An untyped argument passing an `Optional(str)` child output to `str` is rejected."""
+    with pytest.raises(LoadError, match=r"Optional\(str\)"):
         load_flow(_pass_on("s: ${c1.output.order}"))
 
 
 def test_typed_argument_narrows_a_skipped_child_output_at_runtime():
-    """`s: str = ${c1.output.order}` loads; a skip fails the declared type at runtime."""
-    text = _pass_on("s: str = ${c1.output.order}")
+    """`s: !str ${c1.output.order}` loads; a skip fails the declared type at runtime."""
+    text = _pass_on("s: !str ${c1.output.order}")
     assert _run(text, {"approve": True}) == "filled"
     result = run_flow(load_flow(text), {"approve": False})
     assert result.status == "failed"
@@ -495,40 +502,40 @@ def _inline_loop(note_seed: str, times: int) -> str:
         f"{textwrap.indent(_FLIP_BODY, '  ')}"
         "    output:\n      n: ${bump.output}\n      note: ${mk.output}\n"
     )
-    return _flow(nodes, " ${repeat.output}", inputs="flip: bool")
+    return _flow(nodes, " ${repeat.output}", inputs="flip: !bool")
 
 
 def test_inline_loop_over_an_untyped_seed_asks_for_its_type():
-    """The body field is `Optional[str]`, so an untyped `"start"` seed must be typed."""
+    """The body field is `Optional(str)`, so an untyped `"start"` seed must be typed."""
     with pytest.raises(LoadError, match="declare the seed's type"):
         load_flow(_inline_loop('"start"', 1))
 
 
 def test_inline_loop_sets_a_skipped_field_to_null():
     """A skipped body field sets the carried field to null, not its previous value."""
-    text = _inline_loop('str = "start"', 1)
+    text = _inline_loop('!str "start"', 1)
     assert _run(text, {"flip": False}) == {"n": 1, "note": None, "flip": False}
 
 
 def test_inline_loop_over_a_typed_str_seed_rejects_the_null_next_iteration():
     """Over a typed `str` seed, the null fails the next iteration's parameter check."""
-    result = run_flow(load_flow(_inline_loop('str = "start"', 2)), {"flip": False})
+    result = run_flow(load_flow(_inline_loop('!str "start"', 2)), {"flip": False})
     assert result.status == "failed"
     assert result.failure.code == "contract.input"
 
 
 @pytest.mark.parametrize(("flip", "note"), [(False, None), (True, "made")])
 def test_inline_loop_over_an_optional_seed_carries_the_null(flip, note):
-    """Over an `Optional[str]` seed the null is carried; a taken branch gives its value."""
-    text = _inline_loop('Optional[str] = "start"', 2)
+    """Over an `Optional(str)` seed the null is carried; a taken branch gives its value."""
+    text = _inline_loop('!Optional(str) "start"', 2)
     assert _run(text, {"flip": flip}) == {"n": 2, "note": note, "flip": flip}
 
 
 def test_named_loop_body_sets_a_skipped_field_to_null():
     """A `defs:` LOOP body returning a skipped node's output carries null."""
     defs = (
-        "defs:\n  body:\n    input:\n      n: int\n      note: Optional[str]\n"
-        "      flip: bool\n    nodes:\n"
+        "defs:\n  body:\n    input:\n      n: !int\n      note: !Optional(str)\n"
+        "      flip: !bool\n    nodes:\n"
         f"{_FLIP_BODY}"
         "    output:\n      n: ${bump.output}\n      note: ${mk.output}\n"
     )
@@ -536,7 +543,7 @@ def test_named_loop_body_sets_a_skipped_field_to_null():
         "  repeat:\n    kind: loop\n    call: body\n    times: 2\n    input:\n"
         '      n: 0\n      note: "start"\n      flip: ${input.flip}\n'
     )
-    text = _flow(nodes, " ${repeat.output}", inputs="flip: bool", defs=defs)
+    text = _flow(nodes, " ${repeat.output}", inputs="flip: !bool", defs=defs)
     assert _run(text, {"flip": False}) == {"n": 2, "note": None, "flip": False}
 
 
@@ -551,7 +558,7 @@ def test_map_inline_body_returns_null_per_skipped_element():
         '        code: |\n          return "made"\n'
         "    output: ${mk.output}\n"
     )
-    text = _flow(nodes, " ${each.output}", inputs="approve: bool")
+    text = _flow(nodes, " ${each.output}", inputs="approve: !bool")
     assert _run(text, {"approve": True}) == ["made", None]
 
 
@@ -731,7 +738,7 @@ def test_arithmetic_on_an_exhaustive_join_loads():
 
 def test_arithmetic_on_an_input_loads():
     """A flow input is never skipped."""
-    text = _flow(_QTY, "\n  v: ${input.x + 1}", inputs="approve: bool\n  x: int")
+    text = _flow(_QTY, "\n  v: ${input.x + 1}", inputs="approve: !bool\n  x: !int")
     assert _run(text, {"approve": False, "x": 1}) == {"v": 2}
 
 
@@ -828,11 +835,11 @@ def test_plain_arithmetic_in_a_searched_when_loads():
 _UNION_FLOW = """id: f
 name: f
 typedefs:
-  Buy: {action: 'Literal[buy]', qty: int}
-  Sell: {action: 'Literal[sell]', qty: int}
-  Decision: Union[Buy, Sell]
+  Buy: {action: 'Literal(buy)', qty: int}
+  Sell: {action: 'Literal(sell)', qty: int}
+  Decision: Union(Buy, Sell)
 input:
-  approve: bool
+  approve: !bool
 nodes:
   gate:
     kind: case
@@ -882,14 +889,14 @@ def test_isinstance_guard_in_a_searched_when_over_a_skippable_union_routes():
 
 
 _CHILD = (
-    "defs:\n  child:\n    input:\n      n: int\n    nodes:\n      k:\n        kind: code\n"
+    "defs:\n  child:\n    input:\n      n: !int\n    nodes:\n      k:\n        kind: code\n"
     "        input:\n          n: ${input.n}\n        output: int\n        code: |\n"
     "          return inputs['n']\n    output: ${k.output}\n"
 )
 # then: order / else: rejected, where `order` returns a list field and a str field
 _ITEMS = (
     _gate("order", "rejected")
-    + _code("order", '{"items": [1], "s": "2020"}', output="\n      items: list[int]\n      s: str")
+    + _code("order", '{"items": [1], "s": "2020"}', output="\n      items: list(int)\n      s: str")
     + _code("rejected", '"no"')
 )
 
@@ -920,6 +927,10 @@ def test_arithmetic_in_a_default_is_checked_as_if_it_always_runs():
     assert "does arithmetic on b.output" in str(error)
 
 
+# The Literal input type `_on_input` routes on; a two-member Literal can't sit in a tag.
+_K = "typedefs:\n  K: Literal(x, y)\n"
+
+
 def _on_input(tags: str = "x y") -> str:
     """Return a CASE routing on `input.k` to `a`/`b` for each tag in `tags`."""
     cases = "".join(
@@ -936,11 +947,11 @@ def _on_input(tags: str = "x y") -> str:
 @pytest.mark.parametrize(
     ("tags", "inputs", "source", "expected"),
     [
-        ("x y", "k: Literal[x, y]", "${a.output | b.output}", "${a.output | b.output}"),
-        ("x", "k: str", "${a.output}", "${a.output:-null}"),
+        ("x y", "k: !K", "${a.output | b.output}", "${a.output | b.output}"),
+        ("x", "k: !str", "${a.output}", "${a.output:-null}"),
         (
             "x y",
-            "k: Optional[Literal[x, y]]",
+            "k: !Optional(K)",
             "${a.output | b.output}",
             "${(a.output | b.output) :- null}",
         ),
@@ -949,14 +960,16 @@ def _on_input(tags: str = "x y") -> str:
 def test_on_over_a_literal_input(tags, inputs, source, expected):
     """A fully listed non-nullable Literal input always takes a branch; a `str` or nullable
     input may not, so its join defaults to null."""
-    text = _flow(_on_input(tags), f"\n  v: {source}", inputs=inputs)
+    text = _flow(_on_input(tags), f"\n  v: {source}", inputs=inputs, typedefs=_K)
     assert _sources(text) == [expected]
     assert _run(text, {"k": "x"}) == {"v": 1}
 
 
 def test_arithmetic_on_a_join_over_a_literal_input_loads():
     """The join of a fully listed Literal input is never null from a skip."""
-    text = _flow(_on_input(), "\n  v: ${(a.output | b.output) + 1}", inputs="k: Literal[x, y]")
+    text = _flow(
+        _on_input(), "\n  v: ${(a.output | b.output) + 1}", inputs="k: !K", typedefs=_K
+    )
     assert _run(text, {"k": "y"}) == {"v": 3}
 
 
@@ -968,12 +981,12 @@ def test_child_routing_on_a_literal_input_passes_to_a_str_input():
         + _code("a", '"A"')
         + _code("b", '"B"')
     )
-    defs = _child_defs(nodes, " ${sw.output}", inputs="k: Literal[x, y]") + _USE_STR
+    defs = _child_defs(nodes, " ${sw.output}", inputs="k: !K") + _USE_STR
     calls = (
         "  c1:\n    kind: call\n    call: child\n    input:\n      k: y\n"
         "  c2:\n    kind: call\n    call: use\n    input:\n      s: ${c1.output}\n"
     )
-    assert _run(_flow(calls, " ${c2.output}", defs=defs), {"approve": True}) == "B"
+    assert _run(_flow(calls, " ${c2.output}", defs=defs, typedefs=_K), {"approve": True}) == "B"
 
 
 def test_map_body_routing_on_a_literal_item_is_not_rewritten():
@@ -985,7 +998,8 @@ def test_map_body_routing_on_a_literal_item_is_not_rewritten():
             "  each:\n    kind: map\n    over: ${input.ks}\n    input:\n      k: ${item}\n"
             f"    nodes:\n{body}    output: {output}\n",
             " ${each.output}",
-            inputs="ks: list[Literal[x, y]]",
+            inputs="ks: !list(K)",
+            typedefs=_K,
         )
 
     child = load_flow(each("${a.output | b.output}")).compiled.nodes["each"].child

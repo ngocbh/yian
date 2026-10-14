@@ -29,8 +29,8 @@ typedefs:
     reply: str
     exited: bool
 input:
-  cmd: str
-  text: str
+  cmd: !str
+  text: !str
 nodes:
   route:
     kind: case
@@ -60,7 +60,7 @@ typedefs:
     reply: str
     exited: bool
 input:
-  text: str
+  text: !str
 nodes:
   ask:
     kind: human_input

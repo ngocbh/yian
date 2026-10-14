@@ -9,21 +9,22 @@ from yian import LoadError, load_flow, run_flow
 _CALL = """id: p
 name: p
 input:
-  m: Optional[str]
-  n: Optional[int]
-  s: str
-  xs: list[int]
-  ds: list[str]
-  rs: list[R]
-  os: list[Optional[str]]
-  d: Optional[date]
+  m: !Optional(str)
+  n: !Optional(int)
+  s: !str
+  xs: !list(int)
+  ds: !list(str)
+  rs: !list(R)
+  os: !list(Optional(str))
+  d: !Optional(date)
 typedefs:
   R:
     a: int
+  AB: Literal(a, b)
 defs:
   child:
     input:
-      t: {child}
+      t: !{child}
     nodes:
       n:
         kind: code
@@ -61,22 +62,22 @@ def _flow(child: str, binding: str, *, over: str | None = None) -> str:
         ("str", "${item}", "${input.xs}", "child expects 'str', source is 'int'"),
         ("str", "${item.a}", "${input.rs}", "child expects 'str', source is 'int'"),
         ("date", "${item}", "${input.ds}", "child expects 'date', source is 'str'"),
-        ("str", "${item}", "${input.os}", "child expects 'str', source is 'Optional[str]'"),
+        ("str", "${item}", "${input.os}", "child expects 'str', source is 'Optional(str)'"),
         ("str", "5", None, "child expects 'str', but the value 5 does not fit; quote it to keep it as text: \"5\""),
         ("int", '"3"', None, "child expects 'int', but the value \"3\" does not fit; text is not converted between flows, so write 3 without quotes"),
         ("float", '"5"', None, "child expects 'float', but the value \"5\" does not fit; text is not converted between flows, so write 5.0 without quotes"),
         ("bool", '"yes"', None, "child expects 'bool', but the value \"yes\" does not fit; `yes` is text; write `true`"),
         ("bool", "yes", None, "child expects 'bool', but the value \"yes\" does not fit; `yes` is text; write `true`"),
         ("bool", "yes", "[1, 2]", "child expects 'bool', but the value \"yes\" does not fit; `yes` is text; write `true`"),
-        ("list[bool]", "[true, no]", None, "child expects 'list[bool]', but the value [true, \"no\"] does not fit ('no' does not match declared type bool); `no` is text; write `false`"),
-        ("Optional[bool]", "Off", None, "child expects 'Optional[bool]', but the value \"Off\" does not fit; `Off` is text; write `false`"),
+        ("list(bool)", "[true, no]", None, "child expects 'list(bool)', but the value [true, \"no\"] does not fit ('no' does not match declared type bool); `no` is text; write `false`"),
+        ("Optional(bool)", "Off", None, "child expects 'Optional(bool)', but the value \"Off\" does not fit; `Off` is text; write `false`"),
         ("bool", '"true"', None, "child expects 'bool', but the value \"true\" does not fit; text is not converted between flows, so write true without quotes"),
         ("date", "2026-01-01", None, "child expects 'date', but the value 2026-01-01 does not fit; quote it to keep it as text: \"2026-01-01\""),
         ("datetime", "2026-01-01T10:00:00", None, "child expects 'datetime', but the value 2026-01-01T10:00:00 does not fit; quote it to keep it as text: \"2026-01-01T10:00:00\""),
         ("str", "true", None, "child expects 'str', but the value true does not fit; quote it to keep it as text (YAML reads unquoted true/false as booleans)"),
         ("int", '${input.n:-"3"}', None, "child expects 'int', but the default \"3\" does not fit; text is not converted between flows, so write 3 without quotes"),
         ("int", '"abc"', None, "child expects 'int', but the value \"abc\" does not fit"),
-        ("int[1, 3]", "9", None, "child expects 'int[1,3]', but the value 9 does not fit"),
+        ("int(1..3)", "9", None, "child expects 'int(1..3)', but the value 9 does not fit"),
         ("str", "null", None, "child expects 'str', but the value null does not fit"),
         ("str", "${input.m:-5}", None, "child expects 'str', but the default 5 does not fit; quote it to keep it as text: \"5\""),
         ("str", "${input.n:-\"x\"}", None, "child expects 'str', source is 'int'"),
@@ -84,15 +85,15 @@ def _flow(child: str, binding: str, *, over: str | None = None) -> str:
         ("str", "${input.m:-null}", None, "child expects 'str', but the default null does not fit"),
         ("date", '${input.m:-"2026-01-01"}', None, "child expects 'date', source is 'str'"),
         ("date", '${input.d:-"today"}', None, "child expects 'date', but the default \"today\" does not fit"),
-        ("str", "${input.m:-input.n}", None, "child expects 'str', source is 'Optional[int]'"),
+        ("str", "${input.m:-input.n}", None, "child expects 'str', source is 'Optional(int)'"),
         ("str", "${item:-5}", "${input.os}", "child expects 'str', but the default 5 does not fit; quote it to keep it as text: \"5\""),
         ("int", "${item}", '["1", "2"]', "child expects 'int', but the element \"1\" does not fit; text is not converted between flows, so write 1 without quotes"),
         ("int", "${item.a}", '[{a: 2}, {a: "3"}]', "child expects 'int', but the element \"3\" does not fit; text is not converted between flows, so write 3 without quotes"),
         ("int", "${item:-3}", '[null, "1"]', "child expects 'int', but the element \"1\" does not fit"),
         ("int", '${input.n | "3"}', None, "child expects 'int', but the default \"3\" does not fit; text is not converted between flows, so write 3 without quotes"),
-        ("int", "${input.n :- input.m}", None, "child expects 'int', source is 'Optional[str]'"),
+        ("int", "${input.n :- input.m}", None, "child expects 'int', source is 'Optional(str)'"),
         ("str", "2026-01-01", None, "child expects 'str', but the value 2026-01-01 does not fit; quote it to keep it as text: \"2026-01-01\""),
-        ("list[date]", "[2026-01-01]", None, "child expects 'list[date]', but the value [2026-01-01] does not fit (datetime.date(2026, 1, 1) does not match declared type date); quote each date to keep it as text"),
+        ("list(date)", "[2026-01-01]", None, "child expects 'list(date)', but the value [2026-01-01] does not fit (datetime.date(2026, 1, 1) does not match declared type date); quote each date to keep it as text"),
         ("str", "${input.m:-1.50}", None, "child expects 'str', but the default 1.50 does not fit; quote it to keep it as text: \"1.50\""),
     ],
 )
@@ -109,7 +110,7 @@ def test_unprovable_fit_is_a_load_error(child, binding, over, message):
         ("str", "${input.m:-2026-01-01}", "child expects 'str', but the default 2024 does not fit"),
         ("str", "${input.m:-true}", "child expects 'str', but the default true does not fit; quote it to keep it as text"),
         ("int", "yes", "child expects 'int', but the value \"yes\" does not fit"),
-        ("Literal[a, b]", "no", "child expects 'Literal[\"a\",\"b\"]', but the value \"no\" does not fit"),
+        ("AB", "no", "child expects 'Literal(\"a\",\"b\")', but the value \"no\" does not fit"),
     ],
 )
 def test_no_rewrite_hint_when_rewriting_cannot_help(child, binding, message):
@@ -142,12 +143,12 @@ def test_inline_call_with_a_former_boolean_word_names_the_boolean_to_write():
         ("float", "5", None, "5.0"),
         ("date", '${input.d:-"2026-01-01"}', None, "'2026-01-01'"),
         ("date", '"2026-01-01"', None, "'2026-01-01'"),
-        ("int[1, 3]", "2", None, "2"),
-        ("Optional[str]", "null", None, "None"),
+        ("int(1..3)", "2", None, "2"),
+        ("Optional(str)", "null", None, "None"),
         ("str", '${input.m:-"z"}', None, "'z'"),
         ("int", "${input.n:-5}", None, "5"),
         ("str", "${input.m:-input.s}", None, "'x'"),
-        ("Optional[str]", "${input.m:-null}", None, "None"),
+        ("Optional(str)", "${input.m:-null}", None, "None"),
         ("str", "${item:-\"z\"}", "${input.os}", ["'x'"]),
         ("date", "${item}", '["2026-01-01"]', ["'2026-01-01'"]),
         ("int", "${item:-3}", "[null, 1]", ["3", "1"]),
@@ -165,7 +166,7 @@ name: p
 defs:
   child:
     input:
-      t: int
+      t: !int
     nodes:
       n:
         kind: code
@@ -197,15 +198,15 @@ def test_text_from_an_unproven_source_is_not_converted_at_the_child_start():
 _TOP_LEVEL = """id: p
 name: p
 input:
-  n: int
-  f: float
-  b: bool
+  n: !int
+  f: !float
+  b: !bool
 defs:
   child:
     input:
-      n: int
-      f: float
-      b: bool
+      n: !int
+      f: !float
+      b: !bool
     nodes:
       e:
         kind: code

@@ -21,7 +21,7 @@
 id: err-synth-inherits-host-ranges
 name: err_synth_inherits_host_ranges
 input:
-  topic: str
+  topic: !str
 nodes:
   summary:
     kind: agent
@@ -33,7 +33,7 @@ nodes:
 defs:
   enrich:
     input:
-      topic: str
+      topic: !str
     nodes:
       fetch:
         kind: code
@@ -41,7 +41,7 @@ defs:
         input:
           topic: ${input.topic}
         output:
-          values: list[float]
-          news: list[str]
+          values: list(float)
+          news: list(str)
     output: ${fetch.output.news}
 output: ${summary.output}

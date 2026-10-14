@@ -9,9 +9,22 @@ absent: the build conductor derives both from one retained item cursor.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import Any
 
 from yian.compose.source import SourceAccessError, SourceCursor
 from yian.diagnostics import SourceRange
+
+
+def is_extension_key(key: Any) -> bool:
+    """Return whether a top-level key is an `x-*` extension key, which a load ignores.
+
+    Args:
+        key (`Any`): A top-level key as YAML constructed it.
+
+    Returns:
+        `bool`: True when the key's text starts with `x-`.
+    """
+    return str(key).startswith("x-")
 
 
 def _boundary_field_ranges(

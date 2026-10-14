@@ -2,7 +2,7 @@
 id: err-field-not-allowed
 name: err_field_not_allowed
 input:
-  topic: str
+  topic: !str
 nodes:
   calc:
     kind: code

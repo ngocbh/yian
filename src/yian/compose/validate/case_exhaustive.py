@@ -28,7 +28,7 @@ the validate phase, alongside the other cross-node checks.
 
 Imports flow down/peer only: `diagnostics` (SourceRange), `expr` (ref scan),
 `nodes.contracts` (the output-contract sum), `typesys` (Type and the strict value check),
-and the compose peers `helpers.output_contracts`, `helpers.errors`, `helpers.typed_bindings`,
+and the compose peers `helpers.output_contracts`, `helpers.errors`, `helpers.tags`,
 `helpers.yaml_words`, `nodes.case`,
 `source`, `parse.file`, `validate.narrowing`, and `validate.typed_bindings`.
 Nothing in the engine imports this back.
@@ -53,7 +53,7 @@ from yian.nodes.contracts import (
 from yian.typesys import TypeCheckError, build_value_as
 from yian.typesys.values import Type, ValueKind, canonical_type_label
 from yian.compose.helpers.errors import LoadDiagnostics, source_text
-from yian.compose.helpers.typed_bindings import yaml_quoted
+from yian.compose.helpers.tags import yaml_quoted
 from yian.compose.helpers.yaml_words import former_boolean_fix
 from yian.compose.nodes.case import on_match_key, on_match_value
 from yian.compose.parse.file import CaseDescriptor, NodeDescriptor

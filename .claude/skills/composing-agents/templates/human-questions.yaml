@@ -11,7 +11,7 @@ name: human_questions
 description: Ask a person a set of questions (static + LLM-composed), keyed by header.
 
 input:
-  proj: str
+  proj: !str
 
 nodes:
   # STATIC — a literal questions list, with ${proj} templated into the text.
@@ -32,7 +32,7 @@ nodes:
 
   # ADAPTIVE — an LLM composes the questions from context. This block
   # DESUGARS at load into a synthetic composer AGENT node (ask_adaptive__compose, output
-  # list[Question]) wired into the gate; the runtime gate never calls an LLM. The composer
+  # list(Question)) wired into the gate; the runtime gate never calls an LLM. The composer
   # carries the gate's case routes, depends_on, and runs_after, and waits for its other inputs.
   ask_adaptive:
     kind: human_input
@@ -43,7 +43,7 @@ nodes:
       retries: 3                   # optional — self-correction attempts
 
   # UPSTREAM QUESTIONS: write your own composer node and wire its output
-  #   input: { qs: ${composer.output} }   # composer.output is a list[Question]
+  #   input: { qs: ${composer.output} }   # composer.output is a list(Question)
   #   questions: ${qs}
 
 # Both gate answers are object records keyed by header. Coalesce as the result.

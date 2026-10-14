@@ -292,7 +292,7 @@ def test_validate_references_diag_case_then_call_locates_at_then_line():
         "    else: s\n"
         "output: ${gate.output}\n"
         "defs:\n"
-        "  helper:\n    input:\n      x: int\n"
+        "  helper:\n    input:\n      x: !int\n"
         "    nodes:\n      h:\n        kind: code\n        code: \"return {'output': 1}\"\n"
         "        input:\n          x: ${input.x}\n        output: int\n"
         "    output: ${h.output}\n"
@@ -513,7 +513,7 @@ nodes:
     output: int
     code: tests.seeds.fns:const_one
 input:
-  data: str
+  data: !str
 output: ${n.output}
 """
 

@@ -9,11 +9,11 @@ _HEAD = """
 id: narrow
 name: narrow
 typedefs:
-  Buy: {action: 'Literal[buy]', qty: int}
-  Sell: {action: 'Literal[sell]', qty: int, price: float}
-  Decision: Union[Buy, Sell]
+  Buy: {action: 'Literal(buy)', qty: int}
+  Sell: {action: 'Literal(sell)', qty: int, price: float}
+  Decision: Union(Buy, Sell)
 input:
-  decision: object
+  decision: !object
 """
 
 _NODE_FLOW = _HEAD + """
@@ -27,7 +27,7 @@ nodes:
   place:
     kind: code
     input:
-      buy: Buy = ${decide.output}
+      buy: !Buy ${decide.output}
     code: return 'buy ' + str(inputs['buy']['qty'])
     output: str
 output: ${place.output}
@@ -37,7 +37,7 @@ _CALL_FLOW = _HEAD + """
 defs:
   pick:
     input:
-      decision: object
+      decision: !object
     nodes:
       decide:
         kind: code
@@ -45,7 +45,7 @@ defs:
           decision: ${input.decision}
         code: return inputs['decision']
         output: Decision
-    output: Buy = ${decide.output}
+    output: !Buy ${decide.output}
 nodes:
   picked:
     kind: call
@@ -55,7 +55,7 @@ nodes:
   widen:
     kind: code
     input:
-      d: Decision = ${picked.output}
+      d: !Decision ${picked.output}
     code: return inputs['d']['qty']
     output: int
 output: ${widen.output}

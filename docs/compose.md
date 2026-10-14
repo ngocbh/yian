@@ -18,14 +18,18 @@ One function, `load_flow()`, drives a fixed pipeline. Read it like a compiler:
   ├─ root SourceCursor     → occurrence-aware values, paths, ranges, and scalar provenance
   ├─ parse_file            → the strict top-level ComposeFile
   ├─ read_typedefs         → the type registry (typedefs:)
-  ├─ read_flow_inputs      → canonical Parameter values + recursive authored
-  │                          contract origins for root/def input:
+  ├─ read_source_flow_inputs → canonical Parameter values + recursive authored
+  │                          contract origins for root/def input: (each entry is a
+  │                          tag with an optional default, `qty: !int` or
+  │                          `lookback: !int 30`; read_flow_inputs is the
+  │                          source-free form: type text only, no defaults)
   ├─ parse_nodes           → one frozen DESCRIPTOR per node (per-kind, source-ordered)
   ├─ stamp authored headers → optional Node origins in one document-local catalog
   ├─ stamp kind-owned sites → descriptor hook; CODE scalar/lines + CASE predicates/`on:`
-  ├─ split typed bindings  → each unquoted `name: Type = value` node input and flow
-  │                          output becomes its value + a declared ValueContract
-  │                          (YAML scalar style decides; quoted/block is plain text)
+  ├─ read tagged slots     → each node input and flow output is read through
+  │                          compose/helpers/tags.py: its tag becomes a declared
+  │                          ValueContract; nested `${...}` or nested tags make a
+  │                          ValueTemplate; a tag anywhere else is a load error
   │
   ├─ desugar_case_values         ┐  rewrite author sugar into core nodes and
   ├─ desugar_inline_calls        │  carrierize flow assertions by source order.
@@ -143,9 +147,9 @@ document's root, `defs:`, and inline bodies. Assembly registers authored node he
 root/def flow-input keys and recursive type values, physical node-output contract roots and
 nested fields, ordinary node-input keys and values, source-backed reserved MAP/WAIT wiring
 values, CODE source fields, indexed CASE predicates and `on:`, and source-backed
-flow-output values on the canonical carriers themselves. A packed
-flow-input default receives its own semantic key, even though it resolves to the same scalar
-range as the contract root. After the common header is stamped, assembly also calls each
+flow-output values on the canonical carriers themselves. A flow-input default (the
+value after the tag) receives its own semantic key, even though it resolves to the same
+value range as the contract root. After the common header is stamped, assembly also calls each
 descriptor's immutable
 `with_source_origins(...)` hook. The default is a no-op; CODE registers its whole `code:`
 scalar and every available exact literal constructed line, then carries only those opaque
@@ -300,7 +304,7 @@ normalized `output:` cursor and the shared recursive type reader returns one
 multi-node and flat `defs:`, and inline children all reach that path through their retained
 or projected cursors. External `uses:` views rebase the resulting carrier with the rest of
 the child graph. A virtual/generated declaration or a direct Python descriptor falls back
-to the source-free reader. Scalar aliases and scalar `list[...]` expressions expose only
+to the source-free reader. Scalar aliases and scalar `list(...)` expressions expose only
 the contract root.
 
 After all descriptor desugars and builds, the conductor pairs each source-backed ordinary
@@ -323,9 +327,10 @@ folded code has no exact line sites and therefore selects the whole scalar.
 The source-aware flow-input reader separately compiles each root/def input declaration.
 The selecting key becomes `Parameter.origin`; the type value becomes the contract-root
 origin; and recursively authored record fields become nested
-contract origins. A packed default receives a distinct `default_origin` key at that same scalar
-range. Boundary failures select an exact contract path, then an authored ancestor, the
-contract root, and finally the parameter key. Scalar aliases and scalar `list[...]`
+contract origins. A default written after the tag (`lookback: !int 30`) receives a
+distinct `default_origin` key at the same value range. Boundary failures select an exact
+contract path, then an authored ancestor, the contract root, and finally the parameter
+key. Scalar aliases and scalar `list(...)`
 spellings expose only a root site. Generated or Python-built contracts and inferred inline
 signatures stay source-free, while external aliases use the existing origin-rebasing path.
 Physical node `output:` declarations use that same recursive compiler at their existing
@@ -364,11 +369,60 @@ The two differ by the YAML shape of `output:`, not by the carrier name: `output:
 {result: ${x}}` still returns `{result: x}`. No `output:` gives a value-mode END with
 no input, which returns `None`.
 
-A typed output (`output: Size = ${x}`, or a typed field) carries its declared
-`ValueContract` on `FlowOutput.binding.contract`. END's `output_contract` comes from
+A tagged output (`output: !Size ${x}`, or a tagged field) carries its declared
+`ValueContract` on `FlowOutput.binding.contract`. A tagged mapping (`output: !Buy {...}`)
+is one typed value named `result`, not a record of fields. END's `output_contract` comes from
 those: a value END takes its one declared contract, and a record END takes an exact
 record when every field is typed, else a partial record whose untyped fields stay
 opaque. END's commit and replay check it like any node output.
+
+### Tagged slots and nested values
+
+A slot's type is a YAML tag on its value (see
+[Typed slots](syntax.md#typed-slots-yaml-tags)). `compose/source` records the local tag
+of each YAML node and builds the node as if it had no tag, so values keep the flow's YAML
+value rules (YAML 1.2 core values plus unquoted dates and merge keys); `!!` tags keep their YAML meaning. `SourceCursor.tag` gives the tag text,
+`SourceCursor.has_value` tells `qty: !int` (no value) from `qty: !int null`, and
+`SourceCursor.scalar_text` gives the text before YAML resolves it, for the "quote it"
+hints.
+
+`compose/helpers/tags.py` is the one tag reader. Every slot reads through it: flow inputs,
+agent variables, node `input:` bindings (LOOP seeds, HUMAN_INPUT context, CALL/MAP and
+inline-body arguments), and flow outputs.
+
+- `read_tag_type` turns tag text into a `Type`. It explains each way a tag goes wrong: a
+  bracket or brace (strict YAML 1.2 forbids them), a tag cut short at a space, a comma
+  (a multi-argument type must be named in `typedefs:`), or a name that is not a type.
+- `read_tagged_value` reads one slot into a `TaggedSlot`: the value, the top-level
+  tag's `ValueContract`, and `has_value`. A tag nested inside a mapping or list becomes
+  a typed `Binding` at its position. A container that holds such a binding, or a string
+  with a `${...}` span, becomes a `ValueTemplate`; any other container stays a plain
+  literal. A span-free tagged literal is checked here. A nested string that starts with
+  `call(` is a load error.
+- `suggest_tag` spells a tagged slot for every error message, including the migration
+  errors for the old `name: T = value` forms.
+- Each reader records the tags it reads in a ledger. A tag no slot read is a load error,
+  except under `x-*` keys.
+
+A tag only checks and narrows. It never adds a field or converts a value. At load, a
+disjoint inferred type is an error and a narrower one is left to the runtime check;
+`check typed inputs` and `check typed outputs` run that comparison. At run time the binder
+checks the value with `build_value_as` and fails with `binding.type`.
+
+Nested `${...}` spans are evaluated by the binder, not lifted into synthetic nodes: a
+lifted node would run even when its consumer's CASE branch is not taken, and it could not
+read MAP's per-item `${item}`. Each leaf string of a `ValueTemplate` is its own input
+group, named `<param>/<JSON pointer>` (`nodes.contracts.binding_input_groups`). Edges,
+skips, and co-skip stances therefore treat each nested span as if it were its own input.
+The load-time walkers use the shared helpers `iter_source_strings` and
+`map_source_strings`, so a check or rewrite that reads binding strings sees nested strings
+too. The inferred output contract of a nested value is structural: each field keeps its
+type.
+
+A constructor `${Buy(...)}` names a typedef. Compose resolves it into the node's type
+table (`Node.types`), the same table `isinstance` uses. The keyword form builds a record
+from exactly the given fields and checks it; the positional form `${Buy(x)}` checks and
+narrows `x`, like `!Buy ${x}`. See [Constructors](expressions.md#constructors-t).
 
 ---
 
@@ -481,5 +535,8 @@ Compose phases.
 | physical, virtual, or projected source navigation | `compose/source/cursor.py` (`SourceCursor`) |
 | opaque Compose origin resolution | `compose/source/catalog.py` (`SourceCatalog`) |
 | strict top-level section parsing | `parse/file.py` (`parse_file`) |
+| reading a slot's tag and its nested values | `compose/helpers/tags.py` |
+| the type grammar (`Optional(str)`, `int(1..12)`) | `typesys/types.py` (`parse_type`) |
+| evaluating a `ValueTemplate` at run time | `nodes/binding.py` |
 | the pipeline wiring itself | `build/pipeline.py` (`_assemble`), driven by `loader.py` |
 | running the compiled flow | [engine.md](engine.md) |

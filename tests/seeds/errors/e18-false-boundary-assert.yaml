@@ -3,7 +3,7 @@
 id: err-false-boundary-assert
 name: err_false_boundary_assert
 input:
-  window: int
+  window: !int
 nodes:
   calc:
     kind: code

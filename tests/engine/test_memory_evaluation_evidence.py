@@ -361,12 +361,15 @@ def test_scope_free_model_evidence_is_accepted_with_forward_capture(monkeypatch)
 
 @pytest.mark.parametrize("stage", ["recall", "factory", "model", "success"])
 def test_actual_render_capture_survives_later_failures_without_fabricating_evidence(monkeypatch, stage):
-    from yian.compose.helpers.types import read_variables
     from yian.memory import MemoryRecallError, MemorySection
+    from tests.compose._declarations import parameters_from_yaml
 
-    node = AgentNode("work", prompt="${instruction}: ${topic}", variables=read_variables({
-        "instruction": "str = Summarize clearly",
-    }, {}), llm_config={"provider": "test", "model": "chosen"})
+    variables = parameters_from_yaml(
+        "variables:\n  instruction: !str Summarize clearly\n", {},
+        field="variables", require_default=True,
+    )
+    node = AgentNode("work", prompt="${instruction}: ${topic}", variables=variables,
+                     llm_config={"provider": "test", "model": "chosen"})
     node.params = [Parameter("topic")]
     node.memory_scope = _scope(node.id)
     section = MemorySection(node.memory_scope.memories[0], "Relevant memory.")

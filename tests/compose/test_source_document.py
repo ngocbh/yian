@@ -220,17 +220,19 @@ def test_value_tag_alias_in_a_later_nested_mapping_keeps_safe_loader_error():
         SourceDocument.parse(text)
 
 
-def test_syntactic_only_custom_tagged_merge_source_is_not_constructed():
+def test_local_tag_on_a_merge_source_is_an_error():
     text = "target: {<<: !mystery {value: inherited}}\n"
 
-    assert SourceDocument.parse(text).root.value == yaml.load(text, Loader=_FlowLoader)
+    with pytest.raises(SourceSyntaxError, match="checks nothing") as info:
+        SourceDocument.parse(text)
+    assert info.value.range == SourceRange(1, 14, 1, 41)
 
 
-def test_custom_tagged_merge_source_can_force_a_value_tag_alias():
+def test_merge_source_can_force_a_value_tag_alias():
     text = (
         "target:\n"
         "  first: &equals !!value =\n"
-        "  <<: !mystery {*equals: inherited}\n"
+        "  <<: {*equals: inherited}\n"
     )
 
     assert SourceDocument.parse(text).root.value == yaml.load(text, Loader=_FlowLoader)

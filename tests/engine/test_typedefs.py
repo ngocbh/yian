@@ -18,8 +18,8 @@ def test_record_enum_alias_build():
     reg = read_typedefs({
         "Topic": "str",
         "Amount": "float",
-        "Category": "Literal[pro, con, mixed]",
-        "Rating": {"category": "Category", "score": "float", "note": "Optional[str]"},
+        "Category": "Literal(pro, con, mixed)",
+        "Rating": {"category": "Category", "score": "float", "note": "Optional(str)"},
     })
     assert isinstance(reg["Topic"], AliasDef)
     assert isinstance(reg["Amount"], AliasDef)
@@ -28,7 +28,7 @@ def test_record_enum_alias_build():
 
 
 def test_alias_composes_alias():
-    reg = read_typedefs({"Topic": "str", "Bundle": "list[Topic]"})
+    reg = read_typedefs({"Topic": "str", "Bundle": "list(Topic)"})
     assert type_for("Bundle", reg).kind == ValueKind.LIST_STRING
 
 
@@ -36,9 +36,9 @@ def test_bounded_aliases_preserve_nullable_and_nested_value_paths():
     from yian.typesys.values import build_value_as
 
     registry = read_typedefs({
-        "Score": "float[0, 1]", "MaybeScore": "Optional[Score]",
-        "Rating": {"scores": "list[MaybeScore]", "count": "int[1, 12]"},
-        "Ratings": "list[Rating]",
+        "Score": "float(0..1)", "MaybeScore": "Optional(Score)",
+        "Rating": {"scores": "list(MaybeScore)", "count": "int(1..12)"},
+        "Ratings": "list(Rating)",
     })
     typ = type_for("Ratings", registry)
     typ.validate_shape()
@@ -56,8 +56,8 @@ def test_bounded_aliases_preserve_nullable_and_nested_value_paths():
 
 def test_record_resolves_with_enum_and_optional():
     reg = read_typedefs({
-        "Category": "Literal[pro, con]",
-        "Rating": {"category": "Category", "score": "float", "note": "Optional[str]"},
+        "Category": "Literal(pro, con)",
+        "Rating": {"category": "Category", "score": "float", "note": "Optional(str)"},
     })
     sh = type_for("Rating", reg)
     assert sh.required == frozenset({"category", "score"})  # note (Optional) is not required
@@ -66,7 +66,7 @@ def test_record_resolves_with_enum_and_optional():
 
 
 def test_all_bare_tags_sequence_rejected_e05():
-    # e05 mechanism: a tag-only union must be Literal[...], not a sequence.
+    # e05 mechanism: a tag-only union must be Literal(...), not a sequence.
     with pytest.raises(TypeCheckError) as ei:
         read_typedefs({"Category": ["pro", "con"]})
     assert "Literal" in str(ei.value)
@@ -75,7 +75,7 @@ def test_all_bare_tags_sequence_rejected_e05():
 def test_payload_union_sequence_rejected():
     with pytest.raises(TypeCheckError) as ei:
         read_typedefs({"Choice": ["defer", {"approve": {"count": "int"}}]})
-    assert "Choice: Union[" in str(ei.value)
+    assert "Choice: Union(" in str(ei.value)
 
 
 def test_alias_cycle_rejected_eagerly():
@@ -93,7 +93,7 @@ def test_recursive_record_rejected_eagerly():
 
 def test_unused_record_with_unknown_constructor_rejected():
     with pytest.raises(TypeCheckError) as ei:
-        read_typedefs({"Bad": {"x": "lst[int]"}})
+        read_typedefs({"Bad": {"x": "lst(int)"}})
     assert "typedef 'Bad' field 'x': unknown type constructor 'lst'" in str(ei.value)
     assert ei.value.path == ("Bad", "x")
 
@@ -106,7 +106,7 @@ def test_unused_record_with_unknown_name_rejected():
 
 def test_unused_record_with_bad_bounds_rejected():
     with pytest.raises(TypeCheckError) as ei:
-        read_typedefs({"Order": {"qty": "int[5, 1]"}})
+        read_typedefs({"Order": {"qty": "int(5..1)"}})
     assert "typedef 'Order' field 'qty':" in str(ei.value)
 
 
@@ -128,7 +128,7 @@ def test_error_names_the_broken_typedef_not_its_user():
     with pytest.raises(TypeCheckError) as ei:
         read_typedefs({
             "Wrapper": {"signal": "Signal"},
-            "Signal": {"score": "float", "tags": "lst[str]"},
+            "Signal": {"score": "float", "tags": "lst(str)"},
         })
     assert "typedef 'Signal' field 'tags'" in str(ei.value)
     assert ei.value.path == ("Signal", "tags")
@@ -136,8 +136,8 @@ def test_error_names_the_broken_typedef_not_its_user():
 
 def test_record_resolves_through_other_typedefs():
     reg = read_typedefs({
-        "Wrapper": {"signal": "Signal", "all": "list[Signal]"},
-        "Signal": {"score": "float", "tags": "list[str]"},
+        "Wrapper": {"signal": "Signal", "all": "list(Signal)"},
+        "Signal": {"score": "float", "tags": "list(str)"},
     })
     assert type_for("Wrapper", reg).fields["signal"].fields["tags"].kind == ValueKind.LIST_STRING
 
@@ -178,8 +178,8 @@ def test_record_field_name_rejected(fields, message):
 @pytest.mark.parametrize(
     ("expr", "message"),
     [
-        ('Literal["", fast]', "empty Literal member"),
-        ('Literal["\ud800", fast]', "contains a Unicode surrogate"),
+        ('Literal("", fast)', "empty Literal member"),
+        ('Literal("\ud800", fast)', "contains a Unicode surrogate"),
     ],
 )
 def test_enum_tag_rejected(expr, message):

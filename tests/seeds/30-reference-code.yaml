@@ -10,8 +10,8 @@ name: reference_code
 description: Reference `code:` source — a `module:function` imported and called in-process.
 
 input:
-  rating: float
-  label: str
+  rating: !float
+  label: !str
 
 nodes:
   verdict:

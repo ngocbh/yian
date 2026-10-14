@@ -112,7 +112,7 @@ _OPTIONAL_EDGE_FLOW = """
 id: opt
 name: opt
 input:
-  seed: float
+  seed: !float
 nodes:
   a:
     kind: code
@@ -149,7 +149,7 @@ _CASE_ESCAPE_FLOW = """
 id: ce
 name: ce
 input:
-  seed: float
+  seed: !float
 nodes:
   a:
     kind: code
@@ -242,11 +242,11 @@ _BRANCH_GATE_FLOW = """
 id: bg
 name: bg
 typedefs:
-  Buy: {action: 'Literal[buy]', limit: float}
-  Sell: {action: 'Literal[sell]'}
-  Decision: Union[Buy, Sell]
+  Buy: {action: 'Literal(buy)', limit: float}
+  Sell: {action: 'Literal(sell)'}
+  Decision: Union(Buy, Sell)
 input:
-  s: str
+  s: !str
 nodes:
   d:
     kind: code
@@ -406,7 +406,7 @@ _COSKIP_STANCE_FLOW = """
 id: coskip_stance
 name: coskip_stance
 input:
-  seed: float
+  seed: !float
 nodes:
   a:
     kind: code

@@ -25,9 +25,9 @@ def _tool_flow(binding: str) -> str:
 id: stamped
 name: stamped
 input:
-  n: int
-  a: str
-  b: str
+  n: !int
+  a: !str
+  b: !str
 nodes:
   c:
     kind: code
@@ -48,14 +48,14 @@ output: ${{t.output}}
     [
         ("${input.n}", "int"),
         ('"${input.a}-${input.b}"', "str"),
-        ("5", "int[5,5]"),
+        ("5", "int(5..5)"),
         ("true", "bool"),
-        ('"x"', 'Literal["x"]'),
-        ("[1, 2]", "list[int]"),
-        ("float = ${input.n}", "float"),
+        ('"x"', 'Literal("x")'),
+        ("[1, 2]", "list(int)"),
+        ("!float ${input.n}", "float"),
         ('""', "str"),
-        ('"$${x}"', 'Literal["${x}"]'),
-        ("1.5", "float[1.5,1.5]"),
+        ('"$${x}"', 'Literal("${x}")'),
+        ("1.5", "float(1.5..1.5)"),
         ("null", "None"),
     ],
 )
@@ -83,11 +83,11 @@ def test_a_tool_in_a_child_flow_is_stamped():
 id: outer
 name: outer
 input:
-  n: int
+  n: !int
 defs:
   sub:
     input:
-      m: int
+      m: !int
     nodes:
       t:
         kind: tool
@@ -115,11 +115,11 @@ def test_a_case_narrowed_input_is_stamped_with_the_member_record():
 id: narrowed
 name: narrowed
 typedefs:
-  Buy: {action: 'Literal[buy]', qty: int}
-  Sell: {action: 'Literal[sell]', qty: int, price: float}
-  Decision: Union[Buy, Sell]
+  Buy: {action: 'Literal(buy)', qty: int}
+  Sell: {action: 'Literal(sell)', qty: int, price: float}
+  Decision: Union(Buy, Sell)
 input:
-  decision: object
+  decision: !object
 nodes:
   d:
     kind: code
@@ -160,7 +160,7 @@ def test_a_map_body_tool_reads_the_element_type():
 id: batch
 name: batch
 input:
-  xs: list[int]
+  xs: !list(int)
 nodes:
   each:
     kind: map

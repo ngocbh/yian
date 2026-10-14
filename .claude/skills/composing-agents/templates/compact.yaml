@@ -16,7 +16,7 @@ name: greet
 description: A one-node flow written inline — a name in, a greeting out.
 
 input:
-  name: str                  # auto-wired into the node as ${input.name}
+  name: !str                  # auto-wired into the node as ${input.name}
 output: str                  # the node's output TYPE; constrained types -> structured generation
 kind: agent
 prompt: |-

@@ -26,7 +26,8 @@ from yian.runtime.state import commit_prepared, prepare_node_routed
 _SEARCHED_FLOW = """
 id: f
 name: f
-input: {n: int}
+input:
+  n: !int
 nodes:
   gate:
     kind: case
@@ -42,7 +43,8 @@ output: ${default.output | small.output}
 _NO_ELSE_FLOW = """
 id: f
 name: f
-input: {n: int}
+input:
+  n: !int
 nodes:
   gate:
     kind: case
@@ -56,7 +58,8 @@ output: ${default.output :- "none"}
 _ON_FLOW = """
 id: f
 name: f
-input: {s: str}
+input:
+  s: !str
 nodes:
   gate:
     kind: case
@@ -73,7 +76,8 @@ output: ${default.output | other.output}
 _ELSE_LESS_FLOW = """
 id: f
 name: f
-input: {n: int}
+input:
+  n: !int
 nodes:
   gate:
     kind: case

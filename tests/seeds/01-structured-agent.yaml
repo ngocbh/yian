@@ -10,7 +10,7 @@ name: structured_agent
 description: Score a topic into {rating, rationale}, then format a one-line verdict.
 
 input:
-  topic: str
+  topic: !str
 
 nodes:
   score:

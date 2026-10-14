@@ -2,13 +2,13 @@
 id: err-case-nonexhaustive
 name: err_case_nonexhaustive
 input:
-  topic: str
+  topic: !str
 nodes:
   classify:
     kind: agent
     input:
       topic: ${input.topic}
-    output: Literal["pro", "con", "flat"]
+    output: Literal(pro, con, flat)
     prompt: "Classify ${topic}."
   route:
     kind: case

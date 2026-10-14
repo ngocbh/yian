@@ -24,7 +24,7 @@ edges with `depends_on:` or `runs_after:` when no value passes between nodes.
 id: debate
 name: debate
 input:
-  question: str
+  question: !str
 nodes:
   frame:
     kind: agent

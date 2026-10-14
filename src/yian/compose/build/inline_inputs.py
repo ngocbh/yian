@@ -3,8 +3,9 @@
 Inline composite bodies become private child flows, so every outer binding must
 produce a concrete child-parameter type. This module infers only types that the
 Compose source proves structurally; it never falls back to the runtime value
-builder's lenient ``Any`` behavior. Top-level strings retain binding-template
-semantics, while strings nested in literal containers remain ordinary strings.
+builder's lenient ``Any`` behavior. Top-level strings and the leaf strings of a
+value template are binding templates; a span-free literal container's strings are
+ordinary strings.
 
 Knows about: ``expr`` template syntax, node-owned semantic binding/output-contract
 carriers, ``typesys`` structural types, and Compose source ranges/errors.
@@ -17,30 +18,51 @@ from collections.abc import Callable, Mapping
 from dataclasses import replace
 from typing import Any
 
-from lark import Token
+from lark import Token, Tree
 
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
 from yian.compose.helpers.output_contracts import (
+    TypeFn,
     direct_reference_parts,
     output_contract_path_error,
     project_output_contract,
 )
 from yian.diagnostics import SourceRange
-from yian.expr.expressions import ExpressionError
+from yian.expr.builtins import TEMPLATE_FNS
+from yian.expr.expressions import ISINSTANCE, ExpressionError
 from yian.expr.template import Span, scan_template
 from yian.nodes.contracts import (
+    Binding,
     OutputContract,
     PartialRecordContract,
     ValueContract,
+    ValueTemplate,
     binding_source,
 )
-from yian.typesys.values import Type, ValueKind, union_field
-
-
-_EXPLICIT_TYPE_HINT = (
-    "declare its type with a typed binding (`name: Type = value`) or use an "
-    "explicitly typed named `defs:` body"
+from yian.typesys.values import (
+    Type,
+    ValueKind,
+    canonical_type_label,
+    list_kind_for_element,
+    union_field,
 )
+
+
+def explicit_type_hint(binding_label: str) -> str:
+    """Return the advice for an inline binding whose type can't be proven.
+
+    Args:
+        binding_label (`str`): The binding's node/input path, such as
+            ``"each.input.text"``; its last segment names the slot.
+
+    Returns:
+        `str`: Advice to tag the value with its type or use a typed named body.
+    """
+    name = binding_label.rsplit(".", 1)[-1]
+    return (
+        f"declare its type with a tag (`{name}: !<type> ...`) or use an "
+        "explicitly typed named `defs:` body"
+    )
 
 ProducerType = Callable[[str, str, SourceRange | None], Type | OutputContract]
 ItemType = Callable[[str, SourceRange | None], Type]
@@ -66,6 +88,7 @@ def infer_inline_binding_type(
     parent_input_types: Mapping[str, Type],
     producer_type: ProducerType,
     item_type: ItemType | None = None,
+    type_fn: TypeFn | None = None,
     binding_label: str,
     binding_range: SourceRange | None = None,
     diagnostics: LoadDiagnostics | None = None,
@@ -73,11 +96,14 @@ def infer_inline_binding_type(
     """Infer one generated child parameter's strict structural type.
 
     ``binding_label`` names the outer binding for diagnostics, such as
-    ``"each.input.text"``. Only a string passed directly as ``value`` is scanned
-    as a binding template. Recursive mapping/list values are literals, so nested
-    strings containing ``${...}`` or ``$$`` infer as ``str`` without scanning. A
-    lone direct reference obtains its root type from the parent signature or an
-    injected producer/MAP-item provider, then strictly walks record fields.
+    ``"each.input.text"``. A string passed directly as ``value`` and each leaf
+    string of a ``ValueTemplate`` are scanned as binding templates; a typed binding
+    nested in a template gives its declared type. A plain mapping/list value is a
+    literal, so its strings infer as ``str`` without scanning. A lone direct
+    reference obtains its root type from the parent signature or an injected
+    producer/MAP-item provider, then strictly walks record fields. A whole-value
+    `T(...)` constructor has type `T` (``type_fn`` resolves it), with field reads on
+    the result walked the same way.
 
     Examples:
         ```python
@@ -102,6 +128,9 @@ def infer_inline_binding_type(
         item_type (`ItemType | None`, *optional*, defaults to `None`):
             Lazily supplies a MAP element type for a direct ``${item...}`` read.
             ``None`` rejects item references outside an outer MAP input.
+        type_fn (`TypeFn | None`, *optional*, defaults to `None`):
+            Resolves a constructor name to its type; ``None`` leaves constructors
+            unproven.
         binding_label (`str`):
             The author-facing node/input path included in inference errors.
         binding_range (`SourceRange | None`):
@@ -123,8 +152,21 @@ def infer_inline_binding_type(
             parent_input_types=parent_input_types,
             producer_type=producer_type,
             item_type=item_type,
+            type_fn=type_fn,
             binding_label=binding_label,
             binding_range=binding_range,
+            diagnostics=diagnostics,
+        )
+    elif isinstance(value, ValueTemplate):
+        inferred = _infer_template(
+            value.value,
+            parent_input_types=parent_input_types,
+            producer_type=producer_type,
+            item_type=item_type,
+            type_fn=type_fn,
+            binding_label=binding_label,
+            binding_range=binding_range,
+            path=binding_label,
             diagnostics=diagnostics,
         )
     else:
@@ -214,7 +256,7 @@ def require_proven_type(
             raise _inference_error(
                 binding_label,
                 binding_range,
-                f"list type {typ.kind.value!r} has no proven element type",
+                f"list type {canonical_type_label(typ)!r} has no proven element type",
                 diagnostics,
             )
         require_proven_type(
@@ -282,6 +324,7 @@ def _infer_binding_string(
     parent_input_types: Mapping[str, Type],
     producer_type: ProducerType,
     item_type: ItemType | None,
+    type_fn: TypeFn | None,
     binding_label: str,
     binding_range: SourceRange | None,
     diagnostics: LoadDiagnostics,
@@ -313,6 +356,18 @@ def _infer_binding_string(
             diagnostics=diagnostics,
         )
 
+    constructed = _constructor_type(expression, type_fn)
+    if constructed is not None:
+        typ, name, fields = constructed
+        return _walk_record_type(
+            typ,
+            fields,
+            path=".".join((f"{name}(...)", *fields)),
+            binding_label=binding_label,
+            binding_range=binding_range,
+            diagnostics=diagnostics,
+        )
+
     if not isinstance(expression, Token):
         raise _inference_error(
             binding_label,
@@ -334,6 +389,27 @@ def _infer_binding_string(
         "a whole-value expression has no supported static scalar type",
         diagnostics,
     )
+
+
+def _constructor_type(
+    expression: Any, type_fn: TypeFn | None
+) -> tuple[Type, str, tuple[str, ...]] | None:
+    """Return `(T, name, fields)` for a whole-value `T(...)` or `T(...).f`, else `None`."""
+    if type_fn is None or not isinstance(expression, Tree) or expression.data != "refcall":
+        return None
+    children = expression.children
+    if not any(isinstance(c, Tree) and c.data == "call_suffix" for c in children):
+        return None
+    name = str(children[0])
+    if name == ISINSTANCE or name in TEMPLATE_FNS:
+        return None
+    typ = type_fn(name)
+    if typ is None:
+        return None
+    fields = tuple(
+        str(c.children[0]) for c in children if isinstance(c, Tree) and c.data == "trailer"
+    )
+    return typ, name, fields
 
 
 def _infer_direct_reference(
@@ -495,6 +571,78 @@ def _walk_record_type(
     return replace(current, nullable=path_nullable)
 
 
+def _infer_template(
+    node: Any,
+    *,
+    parent_input_types: Mapping[str, Type],
+    producer_type: ProducerType,
+    item_type: ItemType | None,
+    type_fn: TypeFn | None,
+    binding_label: str,
+    binding_range: SourceRange | None,
+    path: str,
+    diagnostics: LoadDiagnostics,
+) -> Type:
+    """Infer one node of a value template: strings are templates, typed bindings declared."""
+    if isinstance(node, Binding):
+        if node.contract is not None:
+            return node.contract.type
+        node = node.source
+    if isinstance(node, str):
+        return _infer_binding_string(
+            node,
+            parent_input_types=parent_input_types,
+            producer_type=producer_type,
+            item_type=item_type,
+            type_fn=type_fn,
+            binding_label=binding_label,
+            binding_range=binding_range,
+            diagnostics=diagnostics,
+        )
+
+    def infer(child: Any, child_path: str) -> Type:
+        return _infer_template(
+            child,
+            parent_input_types=parent_input_types,
+            producer_type=producer_type,
+            item_type=item_type,
+            type_fn=type_fn,
+            binding_label=binding_label,
+            binding_range=binding_range,
+            path=child_path,
+            diagnostics=diagnostics,
+        )
+
+    if type(node) is dict:
+        fields = {key: infer(node[key], f"{path}[{key!r}]") for key in sorted(node)}
+        return Type(kind=ValueKind.OBJECT, fields=fields, required=frozenset(fields))
+    if type(node) is list:
+        if not node:
+            raise _inference_error(
+                binding_label,
+                binding_range,
+                f"empty literal list at {path} has no provable element type",
+                diagnostics,
+            )
+        element = _common_element_type(
+            [infer(item, f"{path}[{index}]") for index, item in enumerate(node)],
+            binding_label=binding_label,
+            binding_range=binding_range,
+            path=path,
+            noun="list",
+            diagnostics=diagnostics,
+        )
+        return Type(kind=list_kind_for_element(element), element=element)
+    return _infer_literal(
+        node,
+        binding_label=binding_label,
+        binding_range=binding_range,
+        path=path,
+        active_containers=set(),
+        diagnostics=diagnostics,
+    )
+
+
 def _infer_literal(
     value: Any,
     *,
@@ -650,12 +798,15 @@ def _common_element_type(
     binding_label: str,
     binding_range: SourceRange | None,
     path: str,
+    noun: str = "literal list",
     diagnostics: LoadDiagnostics,
 ) -> Type:
-    """Return the exact common type, or the scalar numeric widening, for a list."""
-    first = element_types[0]
-    if all(element == first for element in element_types[1:]):
-        return first
+    """Return the common type up to `Optional`, or the scalar numeric widening, for a list."""
+    # A generated parameter must have one concrete type, so unlike a template's
+    # output contract (left unproven) a list with no common type fails the load.
+    bare = [replace(element, nullable=False) for element in element_types]
+    if all(element == bare[0] for element in bare[1:]):
+        return replace(bare[0], nullable=any(e.nullable for e in element_types))
 
     integer = Type.scalar(ValueKind.INTEGER)
     number = Type.scalar(ValueKind.NUMBER)
@@ -665,7 +816,7 @@ def _common_element_type(
     raise _inference_error(
         binding_label,
         binding_range,
-        f"literal list at {path} has heterogeneous element types",
+        f"{noun} at {path} has heterogeneous element types",
         diagnostics,
     )
 
@@ -701,7 +852,7 @@ def _inference_error(
     """Create the one located error shape used by strict inline inference."""
     return diagnostics.error(
         f"cannot infer type for inline binding {binding_label!r}: "
-        f"{reason}; {_EXPLICIT_TYPE_HINT}",
+        f"{reason}; {explicit_type_hint(binding_label)}",
         range=binding_range,
     )
 
@@ -710,6 +861,7 @@ __all__ = [
     "ItemType",
     "ProducerType",
     "canonicalize_inline_type",
+    "explicit_type_hint",
     "infer_inline_binding_type",
     "require_proven_type",
 ]

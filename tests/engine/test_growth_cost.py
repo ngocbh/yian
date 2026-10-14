@@ -10,7 +10,7 @@ _MAP_OVER_CALL = """
 id: map-over-call
 name: map-over-call
 input:
-  xs: list[int]
+  xs: !list(int)
 nodes:
   each:
     kind: map
@@ -38,7 +38,7 @@ _LOOP_AFTER_MAP = """
 id: loop-after-map
 name: loop-after-map
 input:
-  xs: list[int]
+  xs: !list(int)
 nodes:
   each:
     kind: map
@@ -76,7 +76,7 @@ _MAP_OVER_LOOP = """
 id: map-over-loop
 name: map-over-loop
 input:
-  xs: list[int]
+  xs: !list(int)
 nodes:
   each:
     kind: map

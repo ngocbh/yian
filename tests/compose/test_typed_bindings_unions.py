@@ -11,16 +11,18 @@ from yian.typesys.types import read_typedefs
 
 _TYPEDEFS = """
 typedefs:
-  Buy: {action: 'Literal[buy]', qty: int}
-  Sell: {action: 'Literal[sell]', qty: int, price: float}
-  Hold: {action: 'Literal[hold]', note: str}
-  Decision: Union[Buy, Sell, Hold]
+  Buy: {action: 'Literal(buy)', qty: int}
+  Sell: {action: 'Literal(sell)', qty: int, price: float}
+  Hold: {action: 'Literal(hold)', note: str}
+  Decision: Union(Buy, Sell, Hold)
+  BuyOrSell: Union(Buy, Sell)
 """
 _REGISTRY = read_typedefs({
-    "Buy": {"action": "Literal[buy]", "qty": "int"},
-    "Sell": {"action": "Literal[sell]", "qty": "int", "price": "float"},
-    "Hold": {"action": "Literal[hold]", "note": "str"},
-    "Decision": "Union[Buy, Sell, Hold]",
+    "Buy": {"action": "Literal(buy)", "qty": "int"},
+    "Sell": {"action": "Literal(sell)", "qty": "int", "price": "float"},
+    "Hold": {"action": "Literal(hold)", "note": "str"},
+    "Decision": "Union(Buy, Sell, Hold)",
+    "BuyOrSell": "Union(Buy, Sell)",
 })
 
 
@@ -34,7 +36,7 @@ def _flow(nodes: str, output: str = "${decide.output.action}") -> str:
     return (
         "id: unions\nname: unions\n"
         + _TYPEDEFS
-        + "input:\n  decision: object\n"
+        + "input:\n  decision: !object\n"
         + "nodes:\n"
         + "  decide:\n"
         + "    kind: code\n"
@@ -71,7 +73,7 @@ def _load_error(text: str) -> str:
 
 
 def test_a_member_over_the_union_loads():
-    loaded = load_flow(_flow(_consumer("use", "buy: Buy = ${decide.output}")))
+    loaded = load_flow(_flow(_consumer("use", "buy: !Buy ${decide.output}")))
 
     binding = loaded.compiled.wiring["use"]["buy"]
     assert binding.contract.type == type_for("Buy", _REGISTRY)
@@ -79,13 +81,13 @@ def test_a_member_over_the_union_loads():
 
 def test_a_declared_union_accepts_one_member():
     load_flow(_flow(
-        _consumer("b", "buy: Buy = ${decide.output}")
-        + _consumer("use", "d: Decision = ${b.output}", output="Buy")
+        _consumer("b", "buy: !Buy ${decide.output}")
+        + _consumer("use", "d: !Decision ${b.output}", output="Buy")
     ))
 
 
 def test_a_union_disjoint_from_the_declared_type_fails():
-    message = _load_error(_flow(_consumer("use", "n: int = ${decide.output}")))
+    message = _load_error(_flow(_consumer("use", "n: !int ${decide.output}")))
 
     assert "node 'use' input 'n': declared int, but the value is" in message
 
@@ -93,13 +95,13 @@ def test_a_union_disjoint_from_the_declared_type_fails():
 def test_a_member_over_another_branchs_member_fails_in_that_branch():
     message = _load_error(_flow(
         _route()
-        + _consumer("on_buy", "buy: Buy = ${decide.output}")
-        + _consumer("on_sell", "buy: Buy = ${decide.output}")
-        + _consumer("on_hold", "note: str = ${decide.output.note}")
+        + _consumer("on_buy", "buy: !Buy ${decide.output}")
+        + _consumer("on_sell", "buy: !Buy ${decide.output}")
+        + _consumer("on_hold", "note: !str ${decide.output.note}")
     ))
 
     assert message.endswith(
-        f"node 'on_sell' input 'buy': declared {_label('Buy')}, "
+        "node 'on_sell' input 'buy': declared Buy, "
         f"but the value is {_label('Sell')}"
     )
 
@@ -107,13 +109,13 @@ def test_a_member_over_another_branchs_member_fails_in_that_branch():
 def test_the_else_branch_reads_the_unlisted_members():
     message = _load_error(_flow(
         _route()
-        + _consumer("on_buy", "buy: Buy = ${decide.output}")
-        + _consumer("on_sell", "sell: Sell = ${decide.output}")
-        + _consumer("on_hold", "trade: Union[Buy, Sell] = ${decide.output}")
+        + _consumer("on_buy", "buy: !Buy ${decide.output}")
+        + _consumer("on_sell", "sell: !Sell ${decide.output}")
+        + _consumer("on_hold", "trade: !BuyOrSell ${decide.output}")
     ))
 
     assert message.endswith(
-        f"node 'on_hold' input 'trade': declared {_label('Union[Buy, Sell]')}, "
+        "node 'on_hold' input 'trade': declared BuyOrSell, "
         f"but the value is {_label('Hold')}"
     )
 
@@ -121,9 +123,9 @@ def test_the_else_branch_reads_the_unlisted_members():
 def test_each_branch_may_name_its_own_member():
     load_flow(_flow(
         _route()
-        + _consumer("on_buy", "buy: Buy = ${decide.output}")
-        + _consumer("on_sell", "sell: Sell = ${decide.output}")
-        + _consumer("on_hold", "hold: Hold = ${decide.output}")
+        + _consumer("on_buy", "buy: !Buy ${decide.output}")
+        + _consumer("on_sell", "sell: !Sell ${decide.output}")
+        + _consumer("on_hold", "hold: !Hold ${decide.output}")
     ))
 
 
@@ -133,14 +135,14 @@ def test_a_flow_output_narrows_to_a_member_and_a_call_parent_sees_it():
         + _TYPEDEFS
         + "defs:\n"
         + "  pick:\n"
-        + "    input:\n      decision: object\n"
+        + "    input:\n      decision: !object\n"
         + "    nodes:\n"
         + "      decide:\n"
         + "        kind: code\n"
         + "        input:\n          decision: ${input.decision}\n"
         + "        code: return inputs['decision']\n"
         + "        output: Decision\n"
-        + "    output: Buy = ${decide.output}\n"
+        + "    output: !Buy ${decide.output}\n"
         + "nodes:\n"
         + "  use:\n    kind: call\n    call: pick\n"
         + "    input:\n      decision: {action: buy, qty: 1}\n"
@@ -159,11 +161,11 @@ def test_an_isinstance_branch_narrows_the_typed_binding_too():
         "  route:\n    kind: case\n    cases:\n"
         "      - when: isinstance(decide.output, Buy)\n        then: on_buy\n"
         "    else: other\n"
-        + _consumer("on_buy", "sell: Sell = ${decide.output}")
-        + _consumer("other", "sell: Sell = ${decide.output}")
+        + _consumer("on_buy", "sell: !Sell ${decide.output}")
+        + _consumer("other", "sell: !Sell ${decide.output}")
     ))
 
     assert message.endswith(
-        f"node 'on_buy' input 'sell': declared {_label('Sell')}, "
+        "node 'on_buy' input 'sell': declared Sell, "
         f"but the value is {_label('Buy')}"
     )

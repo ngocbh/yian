@@ -86,12 +86,12 @@ FLOW = """
 id: t
 name: t
 input:
-  seed: str
+  seed: !str
 defs:
   body:
     input:
-      transcript: str
-      exited: bool
+      transcript: !str
+      exited: !bool
     nodes:
       reply:
         kind: agent

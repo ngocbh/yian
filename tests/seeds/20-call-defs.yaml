@@ -12,12 +12,12 @@ name: call_defs
 description: Call an in-file multi-node `defs:` callable to enrich one topic.
 
 input:
-  topic: str
+  topic: !str
 
 defs:
   enrich:                      # an in-file callable — a 2-node sub-flow
     input:
-      topic: str
+      topic: !str
     nodes:
       fetch:
         kind: code
@@ -25,8 +25,8 @@ defs:
         input:
           topic: ${input.topic}
         output:               # the callee's intermediate record
-          values: list[float]
-          news: list[str]
+          values: list(float)
+          news: list(str)
       summarize:
         kind: agent
         input:

@@ -6,19 +6,20 @@ from yian.compose import LoadError, load_flow
 
 _TYPEDEFS = (
     "typedefs:\n"
-    "  Limit: {type: 'Literal[limit]', price: float}\n"
-    "  Market: {type: 'Literal[market]'}\n"
-    "  Leg: Union[Limit, Market]\n"
-    "  Buy: {action: 'Literal[buy]', qty: int, limit: float, leg: Leg}\n"
-    "  Hold: {action: 'Literal[hold]', note: str}\n"
-    "  Sell: {action: 'Literal[sell]', qty: int, price: float, note: str}\n"
-    "  Decision: Union[Buy, Hold, Sell]\n"
-    "  HoldOrSell: Union[Hold, Sell]\n"
+    "  Limit: {type: 'Literal(limit)', price: float}\n"
+    "  Market: {type: 'Literal(market)'}\n"
+    "  Leg: Union(Limit, Market)\n"
+    "  Buy: {action: 'Literal(buy)', qty: int, limit: float, leg: Leg}\n"
+    "  Hold: {action: 'Literal(hold)', note: str}\n"
+    "  Sell: {action: 'Literal(sell)', qty: int, price: float, note: str}\n"
+    "  Decision: Union(Buy, Hold, Sell)\n"
+    "  HoldOrSell: Union(Hold, Sell)\n"
     "  Wrap: {decision: Decision}\n"
-    "  BuyOrSell: Union[Buy, Sell]\n"
+    "  BuyOrSell: Union(Buy, Sell)\n"
     "  Text: {text: str}\n"
     "  Num: {num: int}\n"
-    "  Reply: Union[Text, Num]\n"
+    "  Reply: Union(Text, Num)\n"
+    "  Mode: Literal(a, b)\n"
 )
 
 # Fields: `qty` (buy, sell), `limit` and `leg` (buy), `price` (sell), `note` (hold, sell).
@@ -34,31 +35,31 @@ _LIMIT_ERROR = (
 _DEFS = (
     "defs:\n"
     "  place:\n"
-    "    input:\n      order: Buy\n"
+    "    input:\n      order: !Buy\n"
     "    nodes:\n"
     "      p:\n        kind: code\n        input:\n          o: ${input.order}\n"
     "        code: return 1\n"
     "    output: ${p.output}\n"
     "  place_rest:\n"
-    "    input:\n      order: HoldOrSell\n"
+    "    input:\n      order: !HoldOrSell\n"
     "    nodes:\n"
     "      p:\n        kind: code\n        input:\n          o: ${input.order}\n"
     "        code: return 1\n"
     "    output: ${p.output}\n"
     "  place_maybe_rest:\n"
-    "    input:\n      order: Optional[HoldOrSell]\n"
+    "    input:\n      order: !Optional(HoldOrSell)\n"
     "    nodes:\n"
     "      p:\n        kind: code\n        input:\n          o: ${input.order}\n"
     "        code: return 1\n"
     "    output: ${p.output}\n"
     "  outer:\n"
-    "    input:\n      x: int\n"
+    "    input:\n      x: !int\n"
     "    nodes:\n"
     "      p:\n        kind: code\n        input:\n          x: ${input.x}\n"
     "        code: return 1\n"
     "    output: ${p.output}\n"
     "  inner:\n"
-    "    input:\n      y: int\n"
+    "    input:\n      y: !int\n"
     "    nodes:\n"
     "      p:\n        kind: code\n        input:\n          y: ${input.y}\n"
     "        code: return 1\n"
@@ -111,7 +112,7 @@ def _flow(
     *nodes: str,
     output: str = "${d.output.action}",
     d_type: str = "Decision",
-    inputs: str = "  s: str\n",
+    inputs: str = "  s: !str\n",
 ) -> str:
     """A flow with producer `d` typed `d_type`, then `nodes`, the defs, and `output`."""
     return (
@@ -178,7 +179,7 @@ def test_a_call_target_under_sell_fails_the_call_type_check():
         _code("e"),
     ))
     assert "binding 'order' — child expects" in msg
-    assert """source is '{"action":Literal["sell"]""" in msg
+    assert """source is '{"action":Literal("sell")""" in msg
 
 
 def test_an_unrouted_call_of_the_whole_union_still_fails():
@@ -307,19 +308,19 @@ def test_a_nullable_union_else_target_sees_an_optional_union():
         return _flow(
             _case("route", _ON, [("buy", "b")], else_=f"call({callee}, order=${{d.output}})"),
             _code("b"),
-            d_type="Optional[Decision]",
+            d_type="Optional(Decision)",
         )
 
     _loads(flow("place_maybe_rest"))
     msg = _load_error(flow("place_rest"))
-    assert "binding 'order' — child expects" in msg and "Optional[" in msg
+    assert "binding 'order' — child expects" in msg and "Optional(" in msg
 
 
 def test_a_nullable_union_narrows_to_a_non_nullable_member_under_when():
     _loads(_flow(
         _case("route", _ON, [("buy", "call(place, order=${d.output})")], else_="e"),
         _code("e"),
-        d_type="Optional[Decision]",
+        d_type="Optional(Decision)",
     ))
 
 
@@ -394,7 +395,7 @@ def test_an_inner_on_case_over_a_flow_input_is_exhaustive_over_its_narrowed_tag(
         _case("inner", "${input.d.action}", [("buy", "t")]),
         _code("t", {"l": "${input.d.limit}"}),
         _code("e"),
-        inputs="  s: str\n  d: Decision\n",
+        inputs="  s: !str\n  d: !Decision\n",
     ))
 
 
@@ -408,7 +409,7 @@ def test_a_flow_input_base_narrows():
             _code("b", {"l": "${input.d.limit}"}),
             _code("e", {"n": "${input.d.note}"}),
             *extra,
-            inputs="  s: str\n  d: Decision\n",
+            inputs="  s: !str\n  d: !Decision\n",
         )
 
     _loads(flow())
@@ -429,7 +430,7 @@ def test_a_path_base_narrows():
 def test_a_path_base_through_an_optional_record_keeps_nullability_in_else():
     def flow(callee: str) -> str:
         return _flow(
-            _producer("r", "Optional[Wrap]"),
+            _producer("r", "Optional(Wrap)"),
             _case(
                 "route",
                 "${r.output.decision.action}",
@@ -441,7 +442,7 @@ def test_a_path_base_through_an_optional_record_keeps_nullability_in_else():
 
     _loads(flow("place_maybe_rest"))
     msg = _load_error(flow("place_rest"))
-    assert "binding 'order' — child expects" in msg and "Optional[" in msg
+    assert "binding 'order' — child expects" in msg and "Optional(" in msg
 
 
 # --- not narrowed --- #
@@ -553,7 +554,7 @@ def test_a_nullable_union_defensive_else_sees_none():
             else_="call(place_rest, order=${d.output})",
         ),
         _code("b"),
-        d_type="Optional[Decision]",
+        d_type="Optional(Decision)",
     ))
     assert "binding 'order' — child expects" in msg
     assert msg.endswith("source is 'None'")
@@ -602,7 +603,7 @@ def test_a_non_exhaustive_on_over_a_literal_input_errors():
     msg = _load_error(_flow(
         _case("route", "${input.mode}", [("a", "b")]),
         _code("b"),
-        inputs="  s: str\n  mode: Literal[a, b]\n",
+        inputs="  s: !str\n  mode: !Mode\n",
     ))
     assert "enum tag(s) ['b'] not covered" in msg
 
@@ -798,7 +799,7 @@ def test_isinstance_narrows_an_opaque_object_to_the_checked_type():
     _loads(flow("isinstance(x.output, Buy)"))
     msg = _load_error(flow("isinstance(x.output, Sell)"))
     assert "binding 'order' — child expects" in msg
-    assert """source is '{"action":Literal["sell"]""" in msg
+    assert """source is '{"action":Literal("sell")""" in msg
 
 
 def test_isinstance_cases_on_unrelated_types_into_one_target_do_not_narrow():
@@ -863,7 +864,7 @@ def test_an_isinstance_branch_narrows_a_nullable_base_to_the_member():
     _loads(_flow(
         _searched(("isinstance(d.output, Buy)", "call(place, order=${d.output})")),
         _code("e"),
-        d_type="Optional[Decision]",
+        d_type="Optional(Decision)",
     ))
 
 
@@ -872,7 +873,7 @@ def test_isinstance_on_a_flow_input_narrows():
         _searched(("isinstance(input.d, Buy)", "b")),
         _code("b", {"l": "${input.d.limit}"}),
         _code("e"),
-        inputs="  s: str\n  d: Decision\n",
+        inputs="  s: !str\n  d: !Decision\n",
     ))
 
 

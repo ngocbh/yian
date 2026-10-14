@@ -20,7 +20,7 @@ _CALL = """
 id: seed-call
 name: seed_call
 input:
-  text: str
+  text: !str
 nodes:
   probe:
     kind: code
@@ -105,7 +105,7 @@ nodes:
       return "SECRET"
   mk:
     kind: code
-    output: list[str]
+    output: list(str)
     code: |
       return ["a ${probe.output}", "${probe.output}", "plain"]
   each:
@@ -169,8 +169,8 @@ def test_clone_child_mints_no_edge_for_a_dollar_brace_seed():
 id: seed-clone
 name: seed_clone
 input:
-  text: str
-  other: str
+  text: !str
+  other: !str
 nodes:
   inner:
     kind: code

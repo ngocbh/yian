@@ -22,7 +22,7 @@ name: ask_user_clarify
 description: An agent that asks the user a clarifying question only when the request is ambiguous.
 
 input:
-  request: str
+  request: !str
 
 nodes:
   assistant:

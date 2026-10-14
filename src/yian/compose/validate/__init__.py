@@ -7,7 +7,7 @@ reject an ill-formed flow before it is compiled:
 
 - `secret_literals.py` — `check_authored_bindings`: no node binding, flow output, or
   case value holds a literal value under a secret name; runs on authored values, before the
-  typed split and desugars that may echo a value.
+  tagged-binding read and desugars that may echo a value.
 - `references.py` — `validate_references`: every `${...}` ref resolves to a real
   producer/input + a valid record field.
 - `cycles.py` — `reject_cycles`: the graph is acyclic.
@@ -39,6 +39,10 @@ reject an ill-formed flow before it is compiled:
   input or flow output can fit its declared type (literal text exactly; a reference
   unless its inferred type is disjoint, leaving a narrower one to the runtime check);
   `infer_binding_type` returns the type one binding is proven to produce.
+- `constructors.py` — `constructor_errors`: a `${T(...)}` constructor call that can never
+  succeed (mixed keyword and positional arguments or several positional ones, a field
+  `T` doesn't have, a missing required field, or an argument whose inferred type is
+  disjoint from the declared one).
 - `skips.py` — `SkipModel`: which nodes of a flow level the CASE routing may skip, and
   whether a set of them may skip together; `null_skipped_outputs` gives a flow output whose
   producers may all be skipped the explicit null default; `check_skipped_arithmetic` rejects

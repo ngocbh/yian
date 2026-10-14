@@ -16,11 +16,11 @@ name: effects_human_wait
 description: Propose an action, get human approval, wait until settle, then confirm.
 
 typedefs:
-  Approval: Literal[approve, reject]    # the typed human answer (a tag-only enum)
+  Approval: Literal(approve, reject)    # the typed human answer (a tag-only enum)
 
 input:
-  topic: str
-  settle_at: date                       # when to confirm
+  topic: !str
+  settle_at: !date                       # when to confirm
 
 nodes:
   propose:

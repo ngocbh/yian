@@ -9,10 +9,10 @@ name: human_in_loop
 description: Draft, gate on a human approve/revise decision, then finalize.
 
 typedefs:
-  Decision: Literal[approve, revise]
+  Decision: Literal(approve, revise)
 
 input:
-  topic: str
+  topic: !str
 
 nodes:
   draft:

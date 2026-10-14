@@ -304,11 +304,11 @@ ORDER_FLOW = """
 id: orders
 name: orders
 typedefs:
-  Buy: {action: 'Literal[buy]', qty: int}
-  Sell: {action: 'Literal[sell]', price: float}
-  Order: Union[Buy, Sell]
+  Buy: {action: 'Literal(buy)', qty: int}
+  Sell: {action: 'Literal(sell)', price: float}
+  Order: Union(Buy, Sell)
 input:
-  order: object
+  order: !object
 nodes:
   d:
     kind: code
@@ -384,11 +384,11 @@ ASSERT_FLOW = """
 id: asserted
 name: asserted
 typedefs:
-  Buy: {action: 'Literal[buy]', qty: int}
-  Sell: {action: 'Literal[sell]', price: float}
-  Order: Union[Buy, Sell]
+  Buy: {action: 'Literal(buy)', qty: int}
+  Sell: {action: 'Literal(sell)', price: float}
+  Order: Union(Buy, Sell)
 input:
-  order: object
+  order: !object
 nodes:
   step:
     kind: code
@@ -417,12 +417,12 @@ LOOP_FLOW = """
 id: counter
 name: counter
 typedefs:
-  Running: Literal[running]
+  Running: Literal(running)
 defs:
   bump:
     input:
-      n: int
-      status: str
+      n: !int
+      status: !str
     nodes:
       step:
         kind: code
@@ -497,11 +497,11 @@ GUARDED_FLOW = """
 id: guarded
 name: guarded
 typedefs:
-  Buy: {action: 'Literal[buy]', qty: int, limit: float}
-  Hold: {action: 'Literal[hold]', note: str}
-  Decision: Union[Buy, Hold]
+  Buy: {action: 'Literal(buy)', qty: int, limit: float}
+  Hold: {action: 'Literal(hold)', note: str}
+  Decision: Union(Buy, Hold)
 input:
-  decision: object
+  decision: !object
 nodes:
   d:
     kind: code
@@ -545,11 +545,11 @@ NARROWED_DEFAULT_FLOW = """
 id: narrowed-default
 name: narrowed_default
 typedefs:
-  Buy: {action: 'Literal[buy]', qty: int}
-  Hold: {action: 'Literal[hold]', note: str}
-  Decision: Union[Buy, Hold]
+  Buy: {action: 'Literal(buy)', qty: int}
+  Hold: {action: 'Literal(hold)', note: str}
+  Decision: Union(Buy, Hold)
 input:
-  decision: object
+  decision: !object
 nodes:
   d:
     kind: code

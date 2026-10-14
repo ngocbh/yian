@@ -58,7 +58,10 @@ from yian.compose.desugar.inline_calls import (
     desugar_call_directives,
     holds_secret_keyword,
 )
-from yian.compose.helpers.isinstance_types import collect_isinstance_names
+from yian.compose.helpers.isinstance_types import (
+    collect_constructor_names,
+    collect_isinstance_names,
+)
 from yian.compose.helpers.output_contracts import output_contract_path_error
 from yian.nodes.base import Node, NodeKind
 from yian.nodes.contracts import (
@@ -296,6 +299,7 @@ def validate_node_asserts(
         [str, int],
         tuple[OriginRef | None, SourceRange | None] | None,
     ] | None = None,
+    type_names: frozenset[str] = frozenset(),
     diagnostics: LoadDiagnostics | None = None,
 ) -> None:
     """Validate + classify + stamp each node's `asserts:` — the per-node contract.
@@ -305,8 +309,11 @@ def validate_node_asserts(
     semantic type; partial records enforce their closed root field set and walk any
     independently proven field contract.
     Rejected (located `LoadError`): a pool head (`${outputs/inputs/system/item.X}`), an inline
-    `${call}`, `${output.field}` on a non-record output, a declared input named `output`, and
-    any node assert on a mapped call (a `MapNode`, `kind: map` — the per-node hook has no `${item}` scope).
+    `${call}`, `${output.field}` on a non-record output, a declared input named `output`,
+    `isinstance` or a constructor on a CALL/MAP/LOOP node (its asserts run in the child
+    flow), and any node assert on a mapped call (a `MapNode`, `kind: map` — the per-node
+    hook has no `${item}` scope). A call inside `${...}` to a name in ``type_names`` (the
+    flow's `typedefs:` names) is a constructor, not an inline call.
     Classifies each PRE (no `${output}`) or POST (reads `${output}`) and stamps
     `node.pre_asserts` / `node.post_asserts`. ``assertion_site_at`` optionally supplies each
     carrier's opaque origin and validation range from the same authored occurrence, keyed by
@@ -365,7 +372,7 @@ def validate_node_asserts(
             # or the retired `${flow(args)}` span) belongs in a flow-level assert, not here.
             try:
                 _, directive_calls = desugar_call_directives(a, lambda: "__a")
-                span_callees = flow_call_callees_in_spans(a)
+                span_callees = flow_call_callees_in_spans(a, type_names)
             except SecretArgumentError as exc:
                 errors.append((exc.message_for(f"node {nid!r} assert"), error_range))
                 continue
@@ -383,17 +390,22 @@ def validate_node_asserts(
                 )
                 continue
             # A spawner's asserts are lowered onto the child's END, which resolves
-            # `isinstance` types in the child flow, not here.
+            # `isinstance` and constructor types in the child flow, not here.
             kind = getattr(node, "kind", None)
             if kind in _SPAWNER_KINDS:
                 try:
-                    type_test = bool(collect_isinstance_names(a, condition=True))
+                    used = (
+                        "isinstance" if collect_isinstance_names(a, condition=True) else None
+                    )
+                    constructors = collect_constructor_names(a, condition=True)
+                    if used is None and constructors:
+                        used = f"{constructors[0]}(...)"
                 except ExpressionError:
-                    type_test = False
-                if type_test:
+                    used = None
+                if used is not None:
                     errors.append(
                         (
-                            f"node {nid!r} assert {a!r}: isinstance in a {kind.value} "
+                            f"node {nid!r} assert {a!r}: {used} in a {kind.value} "
                             f"node's asserts is not supported; assert inside the child flow",
                             error_range,
                         )

@@ -37,7 +37,7 @@ def _context(**overrides):
         "node_data": {
             "prompt_template": "${topic}: ${tone}",
             "variables": {"tone": "concise"},
-            "variable_domains": {"tone": 'Literal["concise","detailed"]'},
+            "variable_domains": {"tone": 'Literal("concise","detailed")'},
             "rendered_prompt": "reefs: concise",
             "effective_llm_config": {
                 "provider": "anthropic", "model": "recorded", "anthropic": {"temperature": 0.4},
@@ -58,13 +58,18 @@ def _reply(**overrides):
 
 def _retained_engine(monkeypatch):
     from yian.compile.model import START_ID, FlowOutput
-    from yian.compose.helpers.types import read_variables
     from yian.nodes.contracts import Parameter
+    from yian.typesys.types import read_typedefs
+    from tests.compose._declarations import parameters_from_yaml
     from tests.engine._graph_builder import _engine, _graph
 
     node = AgentNode("writer", prompt="${topic}: ${tone}",
                      llm_config={"provider": "test", "model": "recorded"},
-                     variables=read_variables({"tone": "Literal[concise,detailed] = concise"}, {}))
+                     variables=parameters_from_yaml(
+                         "variables:\n  tone: !Tone concise\n",
+                         read_typedefs({"Tone": "Literal(concise, detailed)"}),
+                         field="variables", require_default=True,
+                     ))
     node.params = [Parameter("topic"), Parameter("tags")]
     flow = _graph([node], [(START_ID, "writer")],
                   wiring={"writer": {"topic": "${input.topic}", "tags": "${input.tags}"}},

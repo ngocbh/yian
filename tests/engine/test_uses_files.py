@@ -20,7 +20,7 @@ def _flow(flow_id, *, call=None, uses=None, system=None, version=None):
     lines = [f"id: {flow_id}", f"name: {flow_id}"]
     if version is not None:
         lines.append(f'version: "{version}"')  # quote: a bare 2.0/yes/null parses non-str
-    lines += ["input: {x: str}", "nodes:"]
+    lines += ["input:", "  x: !str", "nodes:"]
     if call:
         lines.append(f'  a: {{kind: call, call: {call}, input: {{x: "${{input.x}}"}}}}')
     else:
@@ -144,7 +144,7 @@ def test_diamond_conflicting_version_pins_is_loud(tmp_path):
     _write(tmp_path, "m2", "m2", call="c", uses={"c": "child@v2"})
     parent = (tmp_path / "p.yaml")
     parent.write_text(
-        "id: p\nname: p\ninput: {x: str}\nnodes:\n"
+        "id: p\nname: p\ninput:\n  x: !str\nnodes:\n"
         '  a: {kind: call, call: a1, input: {x: "${input.x}"}}\n'
         '  b: {kind: call, call: a2, input: {x: "${a.output}"}}\n'
         'output: {y: "${b.output}"}\nuses:\n  a1: m1\n  a2: m2\n'
@@ -254,7 +254,7 @@ def test_two_aliases_of_one_file_read_and_parse_once(tmp_path, monkeypatch):
     child = _write(tmp_path, "child", "child")
     parent = tmp_path / "parent.yaml"
     parent.write_text(
-        "id: parent\nname: parent\ninput: {x: str}\nnodes:\n"
+        "id: parent\nname: parent\ninput:\n  x: !str\nnodes:\n"
         '  a: {kind: call, call: first, input: {x: "${input.x}"}}\n'
         '  b: {kind: call, call: second, input: {x: "${a.output}"}}\n'
         'output: {y: "${b.output}"}\n'
@@ -287,7 +287,7 @@ def test_repeated_calls_through_one_alias_reuse_one_rebased_child(
     child = _write(tmp_path, "child", "child")
     parent = tmp_path / "parent.yaml"
     parent.write_text(
-        "id: parent\nname: parent\ninput: {x: str}\nnodes:\n"
+        "id: parent\nname: parent\ninput:\n  x: !str\nnodes:\n"
         '  a: {kind: call, call: child_view, input: {x: "${input.x}"}}\n'
         '  b: {kind: call, call: child_view, input: {x: "${a.output}"}}\n'
         'output: {y: "${b.output}"}\n'
@@ -350,7 +350,7 @@ def test_diamond_reuse_reads_and_parses_each_path_once(tmp_path, monkeypatch):
     mid2 = _write(tmp_path, "mid2", "mid2", call="l", uses={"l": "leaf"})
     parent = (tmp_path / "p.yaml")
     parent.write_text(
-        "id: p\nname: p\ninput: {x: str}\nnodes:\n"
+        "id: p\nname: p\ninput:\n  x: !str\nnodes:\n"
         '  a: {kind: call, call: m1, input: {x: "${input.x}"}}\n'
         '  b: {kind: call, call: m2, input: {x: "${a.output}"}}\n'
         'output: {y: "${b.output}"}\nuses:\n  m1: mid1\n  m2: mid2\n'

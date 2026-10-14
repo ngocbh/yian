@@ -267,8 +267,8 @@ _CASE_VALUE_FLOW = """
 id: cv
 name: case_value
 input:
-  seed: float
-  topic: str
+  seed: !float
+  topic: !str
 nodes:
   s:
     kind: code
@@ -318,8 +318,8 @@ _CASE_VALUE_CONSUMER = """
 id: cvc
 name: case_value_consumer
 input:
-  seed: float
-  topic: str
+  seed: !float
+  topic: !str
 nodes:
   s:
     kind: code
@@ -378,8 +378,8 @@ _CASE_OF_CASE_FLOW = """
 id: coc
 name: coc
 input:
-  a: float
-  b: float
+  a: !float
+  b: !float
 nodes:
   outer:
     kind: case
@@ -430,12 +430,12 @@ _INLINE_INTO_CASE = """
 id: cvi
 name: case_value_into_inline
 input:
-  seed: float
-  topic: str
+  seed: !float
+  topic: !str
 defs:
   passthru:
     input:
-      v: str
+      v: !str
     nodes:
       x:
         kind: code
@@ -496,7 +496,7 @@ def test_case_value_in_coalesce_position_rejected_e2e():
 id: cv_bad
 name: cv_bad
 input:
-  seed: float
+  seed: !float
 nodes:
   s:
     kind: code

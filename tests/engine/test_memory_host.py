@@ -273,7 +273,7 @@ def test_flow_without_memory_builds_an_empty_registry() -> None:
 def _import_flow(tmp_path: Path):
     (tmp_path / "lib.yaml").write_text(
         "id: lib\nname: lib\nlong_term_memory: {notes: episodic}\n"
-        "input: {x: str}\nnodes:\n"
+        "input:\n  x: !str\nnodes:\n"
         '  a: {kind: code, code: tests.engine._compose_codefns:echo_x, '
         'input: {x: "${input.x}"}, output: str}\n'
         'output: {y: "${a.output}"}\n'
@@ -281,7 +281,7 @@ def _import_flow(tmp_path: Path):
     return load_flow(
         "id: app\nname: app\n"
         "long_term_memory: {notes: episodic, about: profile}\n"
-        "input: {x: str}\nnodes:\n"
+        "input:\n  x: !str\nnodes:\n"
         '  a: {kind: call, call: lib, input: {x: "${input.x}"}}\n'
         'output: {y: "${input.x}"}\n'
         "uses:\n  lib: lib\n",

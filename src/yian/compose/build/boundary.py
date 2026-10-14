@@ -14,7 +14,7 @@ from typing import Any, Optional
 from yian.compile.model import END_ID, START_ID, Edge, FlowOutput
 from yian.expr import binding_co_skips
 from yian.nodes.base import Node
-from yian.nodes.contracts import OutputContract, Parameter, binding_source
+from yian.nodes.contracts import OutputContract, Parameter, binding_input_groups
 from yian.nodes.end import EndNode
 from yian.nodes.start import StartNode
 from yian.compose.edges.producers import _binding_producers
@@ -55,9 +55,10 @@ def synthesize_boundary_graph(
     - `boundary_nodes`: `{START_ID: StartNode, END_ID: EndNode}` — a RECORD-mode END when
       `record` is true, a VALUE-mode END (at most one output) when it is false.
     - `edges`: the END_ID producer edges (one per producer per declared output, `input_group`
-      = the output name, `optional = not binding_co_skips` so a coalesce/`:-`/`:?` output
-      never co-skips) + the lowered-assert synth END edges (one per producer per synthesized
-      END input, same numbering scheme so ids never collide) + the START_ID root edges (a bare
+      = the output name, or `<name>/<pointer>` per string nested in a value template,
+      `optional = not binding_co_skips` so a coalesce/`:-`/`:?` output never co-skips)
+      + the lowered-assert synth END edges (one per producer per synthesized END input,
+      same numbering scheme so ids never collide) + the START_ID root edges (a bare
       `START_ID->nid` for every body node with no incoming of any kind, over the FULL set
       incl. the END_ID producer AND synth edges) + a bare `START_ID->END_ID` root edge for a
       0-output END_ID with no synth edges (so it runs: a value END with no output commits
@@ -70,7 +71,7 @@ def synthesize_boundary_graph(
     The START_ID-side `${input.X}`-producer DATA edges + the demote-input-reader-from-root
     rule live here too (every input read resolves through the START_ID namespace).
 
-    END's `output_contract` comes from the outputs' declared types (`name: Type = value`),
+    END's `output_contract` comes from the outputs' declared types (`name: !Type value`),
     so a commit and a replay of END's value both re-check them; see
     `_declared_output_contract`.
 
@@ -92,12 +93,14 @@ def synthesize_boundary_graph(
     end_edges: list[Edge] = []
     counts: dict[tuple[str, str], int] = {}
     for o in outputs:
-        optional = not binding_co_skips(binding_source(o.binding))
-        for producer in _binding_producers(o.binding):
-            i = counts.get((producer, END_ID), 0)
-            counts[(producer, END_ID)] = i + 1
-            end_edges.append(Edge(id=f"{producer}->{END_ID}#{i}", from_=producer, to=END_ID,
-                                  input_group=o.name, optional=optional))
+        # Each string nested in a value template is its own group (`<name>/<pointer>`).
+        for group, text in binding_input_groups(o.name, o.binding):
+            optional = not binding_co_skips(text)
+            for producer in _binding_producers(text):
+                i = counts.get((producer, END_ID), 0)
+                counts[(producer, END_ID)] = i + 1
+                end_edges.append(Edge(id=f"{producer}->{END_ID}#{i}", from_=producer,
+                                      to=END_ID, input_group=group, optional=optional))
 
     # Stamp the lowered flow-level asserts onto the boundary nodes (Node is not frozen —
     # validate_node_asserts mutates the assert slots the same way).
@@ -123,12 +126,13 @@ def synthesize_boundary_graph(
         # edge; START always runs). A `${pid.output:-null}` synth -> binding_co_skips False ->
         # optional=True: END waits for the producer to settle, binding None if it was skipped.
         for synth_name, src in lowered.synth_wiring.items():
-            optional = not binding_co_skips(binding_source(src))
-            for producer in _binding_producers(src):
-                i = counts.get((producer, END_ID), 0)
-                counts[(producer, END_ID)] = i + 1
-                end_edges.append(Edge(id=f"{producer}->{END_ID}#{i}", from_=producer, to=END_ID,
-                                      input_group=synth_name, optional=optional))
+            for group, text in binding_input_groups(synth_name, src):
+                optional = not binding_co_skips(text)
+                for producer in _binding_producers(text):
+                    i = counts.get((producer, END_ID), 0)
+                    counts[(producer, END_ID)] = i + 1
+                    end_edges.append(Edge(id=f"{producer}->{END_ID}#{i}", from_=producer,
+                                          to=END_ID, input_group=group, optional=optional))
     # START_ID root edges over the FULL set (body + END_ID producer edges): a body node with no
     # incoming of any kind is a bare root. A 0-output END_ID (no producer edge) is itself a root.
     full = body_edges + end_edges

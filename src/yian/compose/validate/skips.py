@@ -30,7 +30,7 @@ Never imports: runtime.
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Iterable, Mapping, Sequence, Set
+from collections.abc import Iterable, Iterator, Mapping, Sequence, Set
 from dataclasses import dataclass, field, replace
 from typing import Any, Optional
 
@@ -51,7 +51,14 @@ from yian.expr import (
     scan_template,
 )
 from yian.expr.template import Span
-from yian.nodes.contracts import Binding, as_binding, binding_source
+from yian.nodes.contracts import (
+    Binding,
+    ValueTemplate,
+    as_binding,
+    binding_source,
+    iter_source_strings,
+    map_source_strings,
+)
 
 _WORLD_LIMIT = 10_000
 
@@ -331,7 +338,8 @@ def null_skipped_outputs(
         `list[FlowOutput]`:
             The outputs in order. A co-skipping source `${E}` whose producers may all be
             skipped becomes `${E:-null}` when `E` is one reference, else `${(E) :- null}`; its
-            origin and declared contract are kept. Every other output is returned as is.
+            origin and declared contract are kept. Each string nested in a value template is
+            rewritten on its own the same way. Every other source is kept as is.
 
     Example:
         >>> edges = [Edge(id="t", from_="c", to="a", source_handle="then")]
@@ -341,23 +349,20 @@ def null_skipped_outputs(
     """
     if not model.has_cases:
         return list(flow_outputs)
-    rewritten = []
-    for output in flow_outputs:
-        source = binding_source(output.binding)
-        if (
-            isinstance(source, str)
-            and binding_co_skips(source)
-            and model.may_all_skip(_binding_producers(output.binding))
-        ):
-            # A co-skipping source is exactly one whole `${...}` span.
-            interior = source[2:-1]
-            if direct_reference_path(source) is not None:
-                new = "${" + interior + ":-null}"
-            else:
-                new = "${(" + interior + ") :- null}"
-            output = replace(output, binding=replace(output.binding, source=new))
-        rewritten.append(output)
-    return rewritten
+
+    def null_default(text: str) -> str:
+        if not (binding_co_skips(text) and model.may_all_skip(_binding_producers(text))):
+            return text
+        # A co-skipping source is exactly one whole `${...}` span.
+        interior = text[2:-1]
+        if direct_reference_path(text) is not None:
+            return "${" + interior + ":-null}"
+        return "${(" + interior + ") :- null}"
+
+    return [
+        replace(output, binding=map_source_strings(output.binding, null_default))
+        for output in flow_outputs
+    ]
 
 
 def check_skipped_arithmetic(
@@ -381,9 +386,10 @@ def check_skipped_arithmetic(
     node's output, or a `|` / `:-` group of them, and every producer of one of its null
     alternatives is skipped. That is an error when some routing skips them while the binding's
     node still runs; a flow output's END always runs. Any other operand (a call, a nested
-    operator, a literal) is never null from a skip here. A searched CASE's authored `when:`
-    is checked the same way with the CASE as the reader, since a reference under `:-`, `|`
-    or `:?` there does not skip the CASE with its producer.
+    operator, a literal) is never null from a skip here. Each string nested in a value
+    template is checked on its own and located at its own site. A searched CASE's authored
+    `when:` is checked the same way with the CASE as the reader, since a reference under
+    `:-`, `|` or `:?` there does not skip the CASE with its producer.
 
     Args:
         flow_wiring (`Mapping[str, Mapping[str, Any]]`):
@@ -425,6 +431,7 @@ def check_skipped_arithmetic(
             found = _skipped_operand(binding, model, node_id, known)
             if found is None:
                 continue
+            site, operand, producers = found
             where, fallback = f"node {node_id!r} input {param!r}", None
             if result is not None:
                 if param in reserved:
@@ -441,8 +448,8 @@ def check_skipped_arithmetic(
                 # message adds one.
                 where = result.site_name(node_id, label.rstrip(":"))
             raise _located_error(
-                f"{where}: {_arithmetic_message(binding, *found)}",
-                as_binding(binding),
+                f"{where}: {_arithmetic_message(site, operand, producers)}",
+                site,
                 fallback,
                 resolve_origin,
                 diagnostics,
@@ -470,24 +477,39 @@ def check_skipped_arithmetic(
         found = _skipped_operand(output.binding, model, None, known)
         if found is None:
             continue
+        site, operand, producers = found
         label = "output" if value_mode else f"output {output.name!r}"
         raise _located_error(
-            f"{label}: {_arithmetic_message(output.binding, *found)}",
-            output.binding,
+            f"{label}: {_arithmetic_message(site, operand, producers)}",
+            site,
             outputs_range,
             resolve_origin,
             diagnostics,
         )
 
 
+def _string_sites(binding: Any) -> Iterator[Binding]:
+    """Yield each template string of `binding` as a binding located at its own site.
+
+    A string nested in a value template takes its registered origin, else the
+    outer binding's.
+    """
+    outer = as_binding(binding)
+    for path, text in iter_source_strings(outer):
+        origin = None
+        if isinstance(outer.source, ValueTemplate):
+            origin = outer.source.origin_at(path)
+        yield Binding(source=text, origin=origin or outer.origin)
+
+
 def _skipped_operand(
     binding: Any, model: SkipModel, consumer: str | None, known: Set[str]
-) -> tuple[Tree | Token, list[str]] | None:
+) -> tuple[Binding, Tree | Token, list[str]] | None:
     """Return the first arithmetic operand of `binding` that may be null from a skip.
 
     Args:
         binding (`Any`):
-            A wiring or output binding; only a string source has expressions.
+            A wiring or output binding; each of its template strings is scanned.
         model (`SkipModel`):
             The level's skip model.
         consumer (`str | None`):
@@ -496,23 +518,22 @@ def _skipped_operand(
             The level's node ids.
 
     Returns:
-        `tuple[Tree | Token, list[str]] | None`:
-            The operand and the producers whose skip makes it null (in source order), or
-            `None` when no operand may be null while `consumer` runs.
+        `tuple[Binding, Tree | Token, list[str]] | None`:
+            The string that does the arithmetic (as a binding located at its own site), the
+            operand, and the producers whose skip makes it null (in source order), or `None`
+            when no operand may be null while `consumer` runs.
     """
-    source = binding_source(binding)
-    if not isinstance(source, str):
-        return None
-    try:
-        segments = scan_template(source)
-    except ExpressionError:
-        return None  # reference validation reports a malformed source
-    for segment in segments:
-        if not isinstance(segment, Span):
-            continue
-        found = _skipped_operand_in(segment.tree, model, consumer, known)
-        if found is not None:
-            return found
+    for site in _string_sites(binding):
+        try:
+            segments = scan_template(site.source)
+        except ExpressionError:
+            continue  # reference validation reports a malformed source
+        for segment in segments:
+            if not isinstance(segment, Span):
+                continue
+            found = _skipped_operand_in(segment.tree, model, consumer, known)
+            if found is not None:
+                return (site, *found)
     return None
 
 

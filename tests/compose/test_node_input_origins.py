@@ -187,7 +187,7 @@ defs:
     kind: code
     code: tests.engine._compose_codefns:echo_x
     input:
-      x: str
+      x: !str
     output: str
 nodes:
   invoke:
@@ -218,7 +218,7 @@ def test_compact_root_generated_binding_remains_originless():
     text = """id: compact_root_input_origin
 name: compact_root_input_origin
 input:
-  x: str
+  x: !str
 output: str
 kind: code
 code: tests.engine._compose_codefns:echo_x
@@ -240,7 +240,7 @@ defs:
     kind: code
     code: tests.engine._compose_codefns:echo_x
     input:
-      x: int
+      x: !int
     output: int
 nodes:
   consumer:
@@ -308,7 +308,7 @@ def test_adaptive_generated_inputs_remain_originless():
     text = """id: adaptive-input-origins
 name: adaptive-input-origins
 input:
-  topic: str
+  topic: !str
 nodes:
   ask:
     kind: human_input
@@ -374,12 +374,12 @@ def test_map_over_and_wait_until_resolve_exact_value_sites_without_parameters():
     text = """id: reserved-input-origins
 name: reserved-input-origins
 input:
-  items: list[str]
-  deadline: str
+  items: !list(str)
+  deadline: !str
 defs:
   echo:
     input:
-      x: str
+      x: !str
     nodes:
       worker:
         kind: code
@@ -440,11 +440,11 @@ def test_desugared_map_over_keeps_authored_value_site_with_final_source():
     text = """id: rewritten-reserved-origin
 name: rewritten-reserved-origin
 input:
-  items: list[str]
+  items: !list(str)
 defs:
   echo:
     input:
-      x: str
+      x: !str
     nodes:
       worker:
         kind: code
@@ -455,14 +455,14 @@ defs:
     output: ${worker.output}
   produce:
     input:
-      x: list[str]
+      x: !list(str)
     nodes:
       worker:
         kind: code
         code: tests.engine._compose_codefns:echo_x
         input:
           x: ${input.x}
-        output: list[str]
+        output: list(str)
     output: ${worker.output}
 nodes:
   mapping:
@@ -587,7 +587,7 @@ def test_virtual_reserved_wiring_does_not_mint_or_erase_origins():
         """id: echo
 name: echo
 input:
-  x: str
+  x: !str
 nodes:
   worker:
     kind: code
@@ -618,7 +618,7 @@ output: ${worker.output}
         }
     )
     loaded = _assemble(
-        inputs_section={"items": "list[str]", "deadline": "str"},
+        inputs_section={"items": "list(str)", "deadline": "str"},
         nodes_cursor=nodes_cursor,
         outputs_section="${mapping.output}",
         asserts_section=[],

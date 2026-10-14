@@ -488,8 +488,8 @@ def test_case_control_and_unselected_branch_do_not_receive_feedback():
 
 
 def test_agent_inventory_is_recorded_and_empty_feedback_does_no_backward_work(monkeypatch):
-    from yian.compose.helpers.types import read_variables
     from yian.nodes.agent import AgentNode
+    from tests.compose._declarations import parameters_from_yaml
     from yian.nodes.base import Output
     from yian.runtime.backward import compute_backward
 
@@ -501,7 +501,8 @@ def test_agent_inventory_is_recorded_and_empty_feedback_does_no_backward_work(mo
         return BackwardResult({"topic": feedback}, self_feedback=("agent note",), variable_feedback={"instruction": ("local note",)})
 
     monkeypatch.setattr(AgentNode, "backward", backward)
-    node = AgentNode("agent", prompt="${topic}", variables=read_variables({"instruction": "str = concise"}, {}))
+    node = AgentNode("agent", prompt="${topic}", variables=parameters_from_yaml(
+        "variables:\n  instruction: !str concise\n", {}, field="variables", require_default=True))
     node.params = [Parameter("topic")]
     engine = _engine(_graph([node], [(START_ID, "agent")], outputs=[FlowOutput("result", "${agent.output}")],
                             wiring={"agent": {"topic": "${input.topic}"}}), {"topic": "reefs"}, learnable=True)
@@ -684,11 +685,13 @@ def test_loop_carried_routes_use_the_same_fold_after_live_pruning(monkeypatch):
     monkeypatch.setattr(CodeNode, "backward", backward)
     flow = load_flow("""id: carried
 name: carried
-input: {n: int}
+input:
+  n: !int
 defs:
   body:
     long_term_memory: body_notes
-    input: {n: int}
+    input:
+      n: !int
     nodes:
       work:
         kind: code
@@ -867,10 +870,13 @@ def test_map_bounded_projected_file_lists_compose_before_stopping(operator, monk
 _PASSTHROUGH_FLOWS = {
     "loop-output": ("""id: passthrough
 name: passthrough
-input: {{n: int, tag: str}}
+input:
+  n: !int
+  tag: !str
 defs:
   body:
-    input: {{n: int}}
+    input:
+      n: !int
     nodes:
       work:
         kind: code
@@ -888,10 +894,14 @@ output: ${{loop.output}}
 """, {"tag": "review tag"}, {"tag": ("review tag",)}),
     "chat-shaped": ("""id: passthrough
 name: passthrough
-input: {{n: int, tag: str}}
+input:
+  n: !int
+  tag: !str
 defs:
   body:
-    input: {{n: int, tag: str}}
+    input:
+      n: !int
+      tag: !str
     nodes:
       work:
         kind: code
@@ -909,10 +919,13 @@ output: ${{loop.output}}
 """, {"seen": "review seen"}, {"tag": ("review seen",)}),
     "nested-call": ("""id: passthrough
 name: passthrough
-input: {{n: int, tag: str}}
+input:
+  n: !int
+  tag: !str
 defs:
   dec:
-    input: {{n: int}}
+    input:
+      n: !int
     nodes:
       work:
         kind: code
@@ -921,7 +934,8 @@ defs:
         output: {{n: int}}
     output: ${{work.output}}
   body:
-    input: {{n: int}}
+    input:
+      n: !int
     nodes:
       inner:
         kind: call

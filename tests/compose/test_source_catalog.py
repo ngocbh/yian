@@ -355,6 +355,21 @@ def test_failed_builder_transaction_releases_registered_site_keys():
     assert builder.freeze().resolve(retried) is not None
 
 
+def test_failed_builder_transaction_restores_consumed_tags():
+    """Tags read by a failed construction are not counted as consumed."""
+    builder = _SourceCatalogBuilder()
+    ledger = builder.consumed_tags
+    ledger.add(1)
+
+    with pytest.raises(RuntimeError, match="construction failed"):
+        with builder.transaction():
+            ledger.add(2)
+            raise RuntimeError("construction failed")
+
+    assert builder.consumed_tags is ledger
+    assert ledger == {1}
+
+
 def test_resolution_does_not_reparse_source(monkeypatch):
     parse_count = 0
     original_init = source_document_module._DocumentLoader.__init__

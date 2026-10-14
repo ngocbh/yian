@@ -29,7 +29,7 @@ _COMPACT_CODE = """
 id: echo_one
 name: echo_one
 input:
-  topic: str
+  topic: !str
 output: str
 kind: code
 code: tests.engine._compose_codefns:echo
@@ -80,7 +80,7 @@ _COMPACT_RECORD = """
 id: plan
 name: plan
 input:
-  topic: str
+  topic: !str
 output:
   rating: str
   score: float
@@ -101,7 +101,7 @@ _COMPACT_NON_LEAF = """
 id: router
 name: router
 input:
-  x: str
+  x: !str
 kind: case
 on: ${input.x}
 cases:
@@ -123,7 +123,7 @@ _COMPACT_MODEL = """
 id: rank
 name: rank
 input:
-  topic: str
+  topic: !str
 output: float
 kind: model
 model_id: x
@@ -142,7 +142,7 @@ def test_compact_model_kind_is_removed():
 _COMPACT_NO_ID = """
 name: noid
 input:
-  topic: str
+  topic: !str
 kind: code
 code: tests.engine._compose_codefns:echo
 """
@@ -181,7 +181,8 @@ def test_compact_invalid_input_has_value_range():
 _COMPACT_HYPHEN_ID = """
 id: hello-agent
 name: hello
-input: {topic: str}
+input:
+  topic: !str
 output: str
 kind: code
 code: tests.engine._compose_codefns:echo
@@ -210,7 +211,8 @@ def test_full_form_flow_id_may_keep_hyphens():
         """
 id: hello-agent
 name: hello
-input: {topic: str}
+input:
+  topic: !str
 nodes:
   greet:
     kind: code

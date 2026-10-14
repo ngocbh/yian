@@ -137,7 +137,7 @@ The closed codes are `binding.evaluate`, `binding.type`, `contract.input`,
 `contract.route`, `contract.growth`, and `graph.terminal_unreachable`. They cover
 expected flow-owned rejection. `EvaluationFailure` owns exactly one `Failure`. The
 evaluator assigns its first six codes by
-operation stage: expression/default/required binding, typed-binding checks,
+operation stage: expression/default/required binding, tagged-binding checks,
 supplied-input contracts, base-wrapper assertions, node execution, and result
 validation. Each producer
 passes its best operation origin, if any, through `Node.failure_trace()`; the
@@ -305,6 +305,7 @@ one responsibility:
 | Carrier | Meaning |
 | --- | --- |
 | `Binding` | one flow-owned input or output expression/literal, with an optional declared `ValueContract` |
+| `ValueTemplate` | an authored mapping or list source whose leaf strings are templates, with nested typed `Binding`s |
 | `Parameter` | one formal input, its optional contract, and default/coercion policy |
 | `Assertion` | one executable expression plus stable author-facing display text |
 | `ValueContract` | one recursive semantic `Type` plus nested origin selection |
@@ -331,11 +332,25 @@ every direct `flow.wiring[node_id][parameter]` value and every
 `FlowOutput.binding` is canonical `Binding`, while raw Python-authored values are
 accepted and wrapped origin-free. Expansion rewrites only `Binding.source` and
 retains `Binding.origin` and `Binding.contract`; pre-IR Compose dictionaries and
-runtime-only overrides remain raw. `Binding.contract` is set only for a typed binding
-(`name: Type = value`); its contract origins are traversed and rebased with the
+runtime-only overrides remain raw. `Binding.contract` is set only for a tagged slot
+(`qty: !int ${size.output.qty}`); its contract origins are traversed and rebased with the
 binding's own origin. Declared binding types are part of the manifest: wiring types
 in a separate `binding_types` map and output types under a `type` key, so untyped
-flows keep their fingerprints. `FlowOutput.from_` is a temporary read-only source view during the
+flows keep their fingerprints. A `ValueTemplate` source is the one container the binder
+evaluates: each leaf string is a template at its position, each nested `Binding`
+checks its value against its own contract without converting it, and the captured
+route is a record or list of the parts' routes. A plain dict or list source is
+always a literal. Its leaf-string origins and nested bindings are traversed and
+rebased with the outer binding; `iter_source_strings`, `map_source_strings` and
+`binding_input_groups` walk its strings, one input group per string
+(`<param>/<JSON pointer>`). Edges, skips, and co-skip stances therefore treat each
+nested span as its own input: a node whose nested whole-value read's producer was
+skipped is skipped, and a flow output gets null at that nested position. The binder
+evaluates nested spans in place rather than lifting them into synthetic nodes, which
+would run on an untaken CASE branch and could not read MAP's `${item}`. The inferred
+contract of a template is structural: each part keeps its type. The manifest encodes it as `value_template` (nested
+bindings as `binding`), apart from every authored literal; in a credential-named
+slot each leaf string keeps only its binding marker. `FlowOutput.from_` is a temporary read-only source view during the
 remaining migration.
 
 `Node.origin` is the same source-neutral provenance shape for an authored node
@@ -508,6 +523,16 @@ Replay validation does not re-apply the limit, so logs recorded before it still
 replay, and the run-log codecs never apply it; they see only values these entry
 checks bounded.
 
+Authored types use one parenthesized grammar: `Optional(str)`, `list(Buy)`,
+`dict(str, int)`, `Literal(a, b)`, `Union(Buy, Sell)`, and inclusive ranges
+`int(1..12)` / `float(0.0..1.0)` with both ends. `typesys/types.py` parses it with a
+hand-written tokenizer and recursive-descent parser (`0..1` reads as a range) into the
+unchanged `TypeExpr` AST, so resolution does not depend on the spelling. Canonical labels
+and messages print this spelling. The bracket spelling (`Optional[str]`, `int[1, 12]`) is
+a load error that shows the new one; a private legacy reader exists only to spell that
+fix. Wire values are not authored syntax and keep their names: `ValueKind` values such as
+`"list[str]"` in run records and manifests, and HUMAN_INPUT `answer_schema` types.
+
 Numeric `Type` values may retain an inclusive `bounds` pair for INTEGER or
 NUMBER. Shape validation rejects malformed, reversed, or incompatible
 refinements; integer endpoints remain arbitrary precision, and NUMBER endpoints
@@ -521,7 +546,7 @@ untagged source cannot fill an enum sink.
 
 A union is `Type(kind=OBJECT, variants=(member, ...))`: two or more non-nullable record
 members in canonical order (by tag, else by canonical label), deduplicated by equality
-because `Type` holds dicts and is unhashable. `Optional[Union[...]]` sets `nullable` on
+because `Type` holds dicts and is unhashable. `Optional(Union(...))` sets `nullable` on
 the union, never on a member. Tag fields are derived (`union_tag_fields`), not stored. A
 tagged union's value check picks the member by the first tag field; an untagged one, whose
 members `types_overlap` proved disjoint at resolution, checks the one member the value
@@ -529,10 +554,16 @@ satisfies. Compatibility, labels, inline type copying, structured-output schemas
 manifests (`"union": [...]`, only when present) all walk the arm. `union_field` and
 `restrict_union` are the read and narrowing helpers.
 
-`Node.types` is the node's `isinstance` type table, `dict[str, Type]`, empty by default.
+`Node.types` is the node's type table for `isinstance` and constructors, `dict[str, Type]`,
+empty by default.
 Compose fills it after the START/END boundary is synthesized, from the names the node's
 wiring sources, asserts, CASE `when:`s, and LOOP predicate use, resolved against the
-owning flow's `typedefs:`. Every evaluation entry point takes `types=None`; `eval_node`
+owning flow's `typedefs:`. A constructor `${Buy(...)}` names a typedef and reads the same
+table: the keyword form builds a record from exactly the given fields and checks it with
+`build_value_as`; the positional form `${Buy(x)}` checks `x` and returns it unchanged,
+like `!Buy ${x}`. Neither fills a field or converts a value. A builtin type name
+(`${int(x)}`) is not a constructor, and prompts reject constructors as they reject
+`isinstance`. Every evaluation entry point takes `types=None`; `eval_node`
 (binding), node asserts, CASE routing, and the LOOP predicate pass `self.types`, and
 `LoopNode.respawn` copies it. Manifests emit `types` only when non-empty, so nodes
 without `isinstance` keep their fingerprints.
@@ -567,7 +598,7 @@ keep their fingerprints.
 indices. A supplied-value rejection resolves that path through `ContractOrigins`
 (exact, nearest ancestor, then default) before falling back to the parameter
 origin. An invalid authored default remains `binding.evaluate` and uses its
-default origin rather than the value-contract site. A typed binding whose value
+default origin rather than the value-contract site. A tagged binding whose value
 misses its declared type fails `binding.type`, located at the declared type's
 origin for the failing path, then the binding's origin, then the parameter's.
 Parameter/default/contract origins do not affect manifest identity. Compose
@@ -576,7 +607,8 @@ and START reuse the same carriers without a parallel front-end declaration type.
 `compose/helpers/types.py` is the one source-aware recursive type compiler. For
 each authored root or `defs:` flow input, its key owns `Parameter.origin`, its type
 value owns the `ContractOrigins` root and authored nested record fields,
-and a packed `TYPE = default` owns `default_origin`. Scalar alias and list
+and a default written after the tag (`lookback: !int 30`) owns `default_origin`.
+Scalar alias and list
 type expressions have no interior YAML occurrence, so nested failures fall back to
 the contract root. Python/source-free declarations and inferred inline-child
 parameters keep empty origins; external aliases use ordinary lexical graph rebasing.
@@ -605,7 +637,7 @@ their recursive contracts, and opaque fields retain presence without pretending 
 type is `None`. Runtime success and replay validate the effective commit target through
 this same sum. Exact contracts also drive node-owned structured generation. For
 an AGENT node,
-only an untagged `str` opts out to free text; a tagged string (`Literal[...]`) uses the
+only a plain `str` opts out to free text; an enum string (`Literal(...)`) uses the
 generated scalar `value` wrapper and is unwrapped back to its bare tag. A live type
 rejection resolves its contract-relative structural path through the matching exact or
 field-local origins. The path is consumed before `Failure` construction and is not part
@@ -678,7 +710,7 @@ opaque; with no typed output it stays `None`. END commits and replays through it
 parents see a child's declared output type and recorded outputs are re-checked on
 resume. A LOOP's contract is the merged carried
 record: each field the body returns comes from the body's contract, and each omitted
-field comes from its seed binding (a literal seed stays opaque). MAP derives `list[U]`
+field comes from its seed binding (a literal seed stays opaque). MAP derives `list(U)`
 only from an exact child contract because the output-contract sum has no partial-list
 arm. Strict inline input inference remains separate: it accepts literals, direct
 exact references, and proven fields projected from partial records, while rejecting
@@ -692,7 +724,7 @@ canonical contract with its declaration root and each authored nested record fie
 preserves kind-owned validation order without a parallel source map or second type walk.
 Full and compact roots, multi-node and flat definitions, and inline children retain or
 project the needed cursor. External aliases use ordinary lexical graph rebasing. Scalar
-aliases and scalar `list[...]` expressions have no interior declaration, so a nested
+aliases and scalar `list(...)` expressions have no interior declaration, so a nested
 failure falls back to the contract root. Generated declarations and Python-authored nodes
 remain source-free.
 
@@ -776,6 +808,29 @@ provenance. `SourceCursor.scalar_style` likewise reports an unchanged scalar's
 authored YAML style (`"plain"`, `"single"`, `"double"`, `"literal"`, or `"folded"`),
 also through projections, and `None` otherwise.
 
+A local YAML tag (`!int`, `!list(Buy)`) is recorded on its definition and the node is
+constructed as if untagged, so values keep the flow's YAML value rules (YAML 1.2 core values plus unquoted
+dates and merge keys) and `!!` tags keep their YAML meaning. `SourceCursor.tag` returns the tag text of an unchanged value, gated like
+`scalar_style`; `tag_definition_id` names the tagged definition so a reader can record that
+it consumed the tag; `has_value` is false only for a tag with nothing after it
+(`qty: !int`, an empty tagged scalar, not null); and `scalar_text` returns the authored
+text before YAML resolves it (`30` for `!str 30`). `SourceDocument.tagged_nodes()` lists
+every tagged definition.
+
+`compose/helpers/tags.py` is the one tag reader. Flow inputs, agent variables, node
+`input:` bindings (including LOOP seeds, HUMAN_INPUT context, and CALL/MAP/inline-body
+arguments), and flow outputs all read through it. `read_tag_type` turns tag text into a
+`Type` and explains a bracket or brace, a tag cut short at a space, a comma (a
+multi-argument type is named in `typedefs:`), or an unknown name. `read_tagged_value`
+returns a `TaggedSlot` (value, top-level `ValueContract`, `has_value`); a tag nested inside
+a mapping or list becomes a typed `Binding` at its position, and a container holding one,
+or holding a string with a `${...}` span, becomes a `ValueTemplate`. `suggest_tag` spells a
+tagged slot for every message, including the migration errors for the old
+`name: T = value` forms. Each read records the tag's definition id in a ledger; a tag no
+slot consumed is a load error, except under `x-*` keys. A tag only checks and narrows:
+`type_relation` at load (disjoint fails, narrower is left to runtime), `build_value_as` at
+run time (`binding.type`). It never fills in a field.
+
 `SourceCatalog` is Compose's immutable document-local `OriginResolver`. Its private
 builder maps typed semantic paths to opaque origins while retaining the physical
 document occurrence and a key/value anchor or semantic constructed-line index.
@@ -799,7 +854,7 @@ lowering-generated `Binding` values.
 `compose/helpers/types.py` owns the sole source-aware recursive type compiler.
 Final assembly uses it for retained root/definition flow inputs: declaration keys
 stamp `Parameter.origin`, type values and authored nested record fields
-populate `ContractOrigins`, and packed defaults stamp `default_origin`. START reuses
+populate `ContractOrigins`, and the default after a tag stamps `default_origin`. START reuses
 those carriers. Scalar alias/list type expressions fall back to the contract root;
 Python/source-free declarations and inferred inline parameters remain source-free.
 At each output-authoring leaf's established build position, an injected Compose reader
@@ -868,7 +923,8 @@ Generated child parameters come from the enclosing composite's `input:`
 bindings. Their types are proved structurally; parent producer descriptors are
 themselves built on demand through one success cache, and a MAP's `over:` element
 is proved and cached only if a lone whole-value `${item...}` binding requests it.
-Nested literal container strings are deliberately not scanned as references.
+A nested argument value is a `ValueTemplate`: its spans are wiring like any other
+binding string, and its parameter type is the structural type of its parts.
 
 The result is an ordinary compiled child baked onto the existing CallNode,
 MapNode, or LoopNode. No private resolver state reaches execution, no runtime
@@ -1701,7 +1757,7 @@ each predicate origin. Thus source formatting, origin rebasing, and Python objec
 identity cannot change program or expansion identity. Because every authored value is
 identity, compose rejects a literal value under a secret name at load:
 `compose/validate/secret_literals.py` checks node bindings, case values, and flow
-outputs before typed bindings are split, `compose/helpers/secret_literals.py` holds the
+outputs before tagged bindings are read, `compose/helpers/secret_literals.py` holds the
 walker and messages that defaults, `env:`, and `call(...)` arguments share, and the one
 list of secret names is the stdlib-only leaf `secret_names.py`. `resolve_llm_cascade` returns a
 complete map keyed by slash-separated paths of static AGENT nodes. The run boundary reads

@@ -27,7 +27,7 @@ typedefs:
   Fact: {text: str, source: str}
 
 input:
-  subject: str
+  subject: !str
 
 nodes:
   facts:
@@ -36,7 +36,7 @@ nodes:
     input:                         # each value is a ${...} ref or a literal
       query: ${input.subject}
       limit: 5
-    output: list[Fact]
+    output: list(Fact)
 
   summary:
     kind: agent

@@ -7,7 +7,7 @@ name: summarize
 description: Summarize a block of text into one clear sentence.
 
 input:
-  text: str
+  text: !str
 
 nodes:
   summary:

@@ -19,7 +19,7 @@
 id: err-llm-config-no-range
 name: err_llm_config_no_range
 input:
-  topic: str
+  topic: !str
 nodes:
   note:
     kind: agent

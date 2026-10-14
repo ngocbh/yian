@@ -20,8 +20,8 @@ name: binding_stances
 description: One flow exercising every input-binding stance (required / optional / join / fail-loud / co-skip).
 
 input:
-  topic: str
-  as_of: Optional[date]            # optional param — omitted -> null
+  topic: !str
+  as_of: !Optional(date)            # optional param — omitted -> null
 
 nodes:
   # --- roots: read only flow inputs, so they always run ---

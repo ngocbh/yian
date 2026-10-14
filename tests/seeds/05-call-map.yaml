@@ -4,7 +4,7 @@
 # parallel), collect the reports as a list, then an AGENT compares them. Shows: a mapped
 # call (kind: map with `over:` + `${item}`), parallel element runs, the map node's value
 # IS the collected list, fan-in by consuming ${<call>.output}, a defaulted list param +
-# an Optional[date] param, the `:-` default operator, a top-level `asserts:` check, an
+# an Optional(date) param, the `:-` default operator, a top-level `asserts:` check, an
 # optional `node_name:`, and a multi-output return.
 
 id: call-map
@@ -12,8 +12,8 @@ name: call_map
 description: Research a bundle of topics (mapped call) and compose a neutral comparison.
 
 input:
-  topics: list[str] = ["ACME", "BETA"]   # the bundle, defaulted (dataclass-style)
-  as_of: Optional[date]                    # optional param (omitted -> null)
+  topics: !list(str) ["ACME", "BETA"]   # the bundle, defaulted (dataclass-style)
+  as_of: !Optional(date)                    # optional param (omitted -> null)
 
 uses:
   research-one: 03-research-one   # external sibling flow, resolved by filename on the search path
@@ -22,19 +22,19 @@ nodes:
   research_each:
     kind: map
     node_name: Research each topic     # optional human label
-    over: ${input.topics}     # a list[T]; each ${item} is one element (a str)
+    over: ${input.topics}     # a list(T); each ${item} is one element (a str)
     call: research-one          # resolves via the uses: alias above, applied once per topic
     input:                     # sink: per-element call args; ${item} in scope here
       topic: ${item}
       as_of:  ${input.as_of:-"2026-01-01"}  # default operator: the optional param, else a literal date
     parallel: true
-    # research_each's value IS the list of callee returns -> list[{report, asof}].
+    # research_each's value IS the list of callee returns -> list of {report, asof} records.
     # Reference the whole list as ${research_each.output}.
 
   compare:
     kind: agent
     input:
-      briefs: ${research_each.output}        # the list[{report, asof}] — fan-in
+      briefs: ${research_each.output}        # the list of {report, asof} records — fan-in
     output: str
     prompt: |-
       You are a neutral editor given a list of research briefs (one per company):

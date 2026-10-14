@@ -286,7 +286,7 @@ name: backward_recovery
 long_term_memory: test
 llm_config: {provider: ollama, model: local-test}
 input:
-  topic: str
+  topic: !str
 nodes:
   first:
     kind: agent
@@ -413,10 +413,10 @@ def test_recorded_backward_history_admits_a_later_attempt_at_every_boundary(
 
 @pytest.mark.parametrize("failed,value,output_type,feedback", [
     (False, {"items": [1, 2]}, "object", {"items": [None]}),
-    (False, [[1], [2, 3]], "list[list[int]]", [None, [None]]),
-    (False, [[1], [2, 3]], "list[list[int]]", [None, [None, None, None]]),
+    (False, [[1], [2, 3]], "list(list(int))", [None, [None]]),
+    (False, [[1], [2, 3]], "list(list(int))", [None, [None, None, None]]),
     (False, {"known": 1}, "object", {"missing": None}),
-    (False, [1, 2], "list[int]", {"0": "Review."}),
+    (False, [1, 2], "list(int)", {"0": "Review."}),
     (True, 0, "int", {}),
     (True, 0, "int", []),
 ])
@@ -629,7 +629,7 @@ def test_unmaterializable_owner_context_is_a_complete_known_failure_on_each_expl
 name: deep_owner_context
 long_term_memory: test
 input:
-  payload: object
+  payload: !object
 nodes: {}
 output: ${input.payload}
 """)

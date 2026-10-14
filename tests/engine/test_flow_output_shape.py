@@ -133,7 +133,7 @@ _MAP_NODES = """  each:
 
 
 def _map_parent(def_output):
-    return "input:\n  items: list[str]\n" + _parent(def_output, _MAP_NODES, "${each.output}")
+    return "input:\n  items: !list(str)\n" + _parent(def_output, _MAP_NODES, "${each.output}")
 
 
 def test_map_over_a_one_field_record_def_returns_a_list_of_records():
@@ -198,7 +198,7 @@ def test_case_then_call_over_a_one_field_record_def_returns_the_record():
         then: call(child)
     else: fallback
 """
-    text = "input:\n  go: bool\n" + _parent(_ONE_FIELD_DEF_OUTPUT, nodes, "${route.output.order}")
+    text = "input:\n  go: !bool\n" + _parent(_ONE_FIELD_DEF_OUTPUT, nodes, "${route.output.order}")
 
     assert _run(text, {"go": True}) == "filled"
 

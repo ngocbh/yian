@@ -11,7 +11,7 @@ from yian.compose import LoadError, load_flow
 _FLOW = """\
 id: f
 name: f
-input: {{proj: str}}
+input: {{proj: !str }}
 nodes:
   ask:
     kind: human_input
@@ -89,7 +89,7 @@ def test_compact_flow_brief_error_names_the_flow_node():
         """\
 id: f
 name: f
-input: {proj: str}
+input: {proj: !str }
 kind: human_input
 adaptive_questions:
   prompt: "Q ${nope}"
@@ -106,7 +106,7 @@ def test_aliased_brief_shares_the_anchor_line():
         """\
 id: f
 name: f
-input: {proj: str}
+input: {proj: !str }
 nodes:
   ask:
     kind: human_input
@@ -128,11 +128,11 @@ def test_defs_body_brief_error():
 id: f
 name: f
 input:
-  topic: str
+  topic: !str
 defs:
   pick:
     input:
-      topic: str
+      topic: !str
     nodes:
       ask:
         kind: human_input

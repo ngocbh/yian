@@ -232,7 +232,7 @@ missing. The widget follows its resolved type:
 - a required non-nullable `bool` → a yes/no confirm,
 - any other `bool` → one select containing omit/default when allowed, `Set null`
   when nullable, and `True` / `False`,
-- a `Literal[...]` → one select containing its tags plus omit/default and
+- a `Literal(...)` → one select containing its tags plus omit/default and
   `Set null` when applicable; explicit tags in a nullable/omittable select are
   labelled `Set value: ...`,
 - a null-only `None` → omit/default when allowed plus `Set null`, with no value
@@ -265,7 +265,7 @@ Any explicit typed answer follows ordinary run-boundary coercion and validation.
 
 Each prompt's label carries the input's canonical resolved **type**, a required
 (`*`) / `optional` mark, and any **default** — e.g. `topic (str) *`,
-`as_of (Optional[date]) [optional]`, `window (int) [default: 30]`. For the
+`as_of (Optional(date)) [optional]`, `window (int) [default: 30]`. For the
 `date` / `datetime` scalars — whose accepted string form isn't obvious
 ([accepted forms](typing.md#valuekind-the-closed-vocabulary)) — a label with no
 default also shows an **example** value (`e.g. 2026-05-21`,
@@ -410,7 +410,7 @@ $ yian run tests/seeds/errors/e02-cycle.yaml
 ╭─ e02-cycle.yaml:12,18 ───────────────────────────────────────────────────────────────────────────╮
 │    7                                                                                             │
 │    8 input:                                                                                      │
-│    9   seed: str                                                                                 │
+│    9   seed: !str                                                                                │
 │   10                                                                                             │
 │   11 nodes:                                                                                      │
 │ ❱ 12   a:                                                                                        │

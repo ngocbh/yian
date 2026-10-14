@@ -45,6 +45,7 @@ from yian.expr.expressions import (
     ExpressionError,
     ResolveMode,
     _value_args,
+    conversion_hint,
     eval_expr,
     expr_refs,
     rewrite_expr_refs,
@@ -329,11 +330,12 @@ def binding_co_skips(source: Any) -> bool:
 def _operand_co_skips(node: "Tree | Token") -> bool:
     """Does one parsed-expression operand co-skip (a pure ref / ref-default group)?
 
-    True for: a bare reference (`refcall` with no `call_suffix`), a `coalesce` whose EVERY
-    operand co-skips, and a `default_expr` whose fallback is itself a co-skipping operand
-    (`:-b.output`). False for a
-    literal token, a builtin-call `refcall`, a `required_expr` (`:?`), and any computed node
-    (arithmetic / comparison / boolean / list) — none of which are a pure ref dependency.
+    True for: a bare reference (`refcall` with no `call_suffix`), a positional constructor
+    `T(x)` whose `x` co-skips, a `coalesce` whose EVERY operand co-skips, and a
+    `default_expr` whose fallback is itself a co-skipping operand (`:-b.output`). False for
+    a literal token, a builtin-call `refcall`, a keyword constructor, a `required_expr`
+    (`:?`), and any computed node (arithmetic / comparison / boolean / list) — none of
+    which are a pure ref dependency.
     """
     from lark import Tree as _Tree
 
@@ -341,7 +343,20 @@ def _operand_co_skips(node: "Tree | Token") -> bool:
         return False  # a literal token
     if node.data == "refcall":
         # a reference co-skips; a builtin call (has a `call_suffix`) is a computed value.
-        return not any(isinstance(c, _Tree) and c.data == "call_suffix" for c in node.children)
+        call_suffix = next(
+            (c for c in node.children if isinstance(c, _Tree) and c.data == "call_suffix"),
+            None,
+        )
+        if call_suffix is None:
+            return True
+        # `T(x)` is `!T ${x}`, so it co-skips exactly when `x` does.
+        args = call_suffix.children
+        return (
+            _is_constructor_callee(str(node.children[0]))
+            and len(args) == 1
+            and len(args[0].children) == 1
+            and _operand_co_skips(args[0].children[0])
+        )
     if node.data == "coalesce":
         return all(_operand_co_skips(c) for c in node.children)
     if node.data == "default_expr":  # `head :- fallback` — fallback must be a ref too
@@ -593,6 +608,11 @@ def prompt_refs(text: str) -> list[str]:
     return template_refs(segments)
 
 
+def _is_constructor_callee(callee: str) -> bool:
+    """Whether a call to `callee` can be a `${T(...)}` constructor (no builtin, no `isinstance`)."""
+    return callee not in TEMPLATE_FNS and callee != ISINSTANCE
+
+
 def _call_suffix_callees_absent_from_builtins(tree: "Tree | Token") -> list[str]:
     """Every callee named by a builtin-CALL inside a parsed `${...}` span `tree` whose
     name is NOT a `TEMPLATE_FNS` builtin or `isinstance` — i.e. a FLOW call embedded in a
@@ -624,15 +644,21 @@ def _reject_unknown_prompt_builtin(tree: Tree | Token) -> None:
     absent from `TEMPLATE_FNS`. Walks the parse tree for `refcall`s carrying a `call_suffix`
     (a call); a bare reference (no suffix) names no builtin and is skipped. This is the
     compile-time mirror of the render-time `unknown expression function` raise, so the
-    loader can reject an unknown prompt builtin without evaluating. `isinstance` is
-    rejected too: prompt builtins only format, and a prompt has no type table."""
+    loader can reject an unknown prompt builtin without evaluating. `isinstance` and
+    `T(...)` constructors are rejected too: prompt builtins only format, and a prompt
+    has no type table."""
     if ISINSTANCE in _call_callees(tree):
         raise ExpressionError(
             "isinstance is not a prompt function; compute it in an input binding"
         )
     bad = _call_suffix_callees_absent_from_builtins(tree)
     if bad:
-        raise ExpressionError(f"unknown prompt function {bad[0]!r}")
+        hint = conversion_hint(bad[0]) or (
+            f"; prompts call only formatting builtins ({', '.join(sorted(TEMPLATE_FNS))}); "
+            "build or check a typed value with a `typedefs:` constructor `T(...)` in an "
+            "input binding"
+        )
+        raise ExpressionError(f"unknown prompt function {bad[0]!r}{hint}")
 
 
 # --------------------------------------------------------------------------- #
@@ -725,20 +751,25 @@ def scan_template(text: str) -> list[TypedValue]:
     return segments
 
 
-def flow_call_callees_in_spans(text: str) -> list[str]:
+def flow_call_callees_in_spans(text: str, type_names: frozenset[str] = frozenset()) -> list[str]:
     """Every FLOW callee (a callee absent from `TEMPLATE_FNS`) named by a call inside a
     `${...}` span of `text`. The loader uses this to REJECT the retired inline
     `${ flow(args) }` form: a flow call belongs in the whole-value `call(...)` directive,
-    not inside a `${...}` expression. Pure builtins (`upper`, `join`, …) and the
-    `isinstance(x, T)` type test return nothing — they stay legal inside `${...}`.
-    Returns [] when no span names a flow callee.
+    not inside a `${...}` expression. Pure builtins (`upper`, `join`, …), the
+    `isinstance(x, T)` type test, and a `T(...)` constructor whose name is in
+    `type_names` (the flow's `typedefs:` names) return nothing — they stay legal inside
+    `${...}`. Returns [] when no span names a flow callee.
 
     Raises `ExpressionError` if a span interior does not parse (the same parse the
     downstream template evaluator performs)."""
     out: list[str] = []
     for seg in scan_template(text):
         if isinstance(seg, Span):
-            out.extend(_call_suffix_callees_absent_from_builtins(seg.tree))
+            out.extend(
+                callee
+                for callee in _call_suffix_callees_absent_from_builtins(seg.tree)
+                if callee not in type_names
+            )
     return out
 
 

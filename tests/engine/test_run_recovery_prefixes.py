@@ -84,7 +84,7 @@ _LINEAR = """
 id: recovery-linear
 name: recovery_linear
 input:
-  x: str
+  x: !str
 nodes:
   n:
     kind: code

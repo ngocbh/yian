@@ -34,7 +34,8 @@ from yian.compose.parse.file import (
     parse_file,
 )
 from yian.compose.parse.nodes import parse_nodes
-from yian.compose.helpers.types import read_flow_inputs
+from yian.compose.helpers.types import read_source_flow_inputs
+from yian.compose.source.catalog import _SourceCatalogBuilder
 from yian.compose.source import SourceDocument
 from yian.compose.validate.references import validate_references
 from yian.diagnostics import SourceRange
@@ -79,7 +80,15 @@ def _load(seed: str):
             result = d.build(BuildContext(producers))
             build_results[nid] = result
             flow_wiring[nid] = result.wiring
-    flow_inputs = {decl.name for decl in read_flow_inputs(f.inputs, {})}
+    flow_inputs = {
+        decl.name
+        for decl in read_source_flow_inputs(
+            document.root.child("input"),
+            {},
+            site_path=("flow",),
+            catalog_builder=_SourceCatalogBuilder(),
+        )
+    }
     return build_results, flow_inputs, producers, f.outputs, flow_wiring
 
 
@@ -115,7 +124,7 @@ _WAIT_REFERENCE_FLOW = """\
 id: wait_refs
 name: wait_refs
 input:
-  deadline: datetime
+  deadline: !datetime
 nodes:
   clock:
     kind: code

@@ -22,13 +22,13 @@ from yian.typesys.types import read_typedefs
 
 _TYPEDEFS = (
     "typedefs:\n"
-    "  Buy: {action: 'Literal[buy]', qty: int, note: str}\n"
-    "  Hold: {action: 'Literal[hold]', note: str}\n"
-    "  Sell: {action: 'Literal[sell]', qty: int, price: float, note: str}\n"
-    "  Decision: Union[Buy, Hold, Sell]\n"
+    "  Buy: {action: 'Literal(buy)', qty: int, note: str}\n"
+    "  Hold: {action: 'Literal(hold)', note: str}\n"
+    "  Sell: {action: 'Literal(sell)', qty: int, price: float, note: str}\n"
+    "  Decision: Union(Buy, Hold, Sell)\n"
     "  Text: {text: str}\n"
     "  Num: {num: int}\n"
-    "  Reply: Union[Text, Num]\n"
+    "  Reply: Union(Text, Num)\n"
 )
 
 _TAGGED_QTY = (
@@ -42,7 +42,7 @@ def _flow(rest: str, *, output: str = "Decision", typedefs: str = _TYPEDEFS) -> 
     return (
         "id: p\nname: p\n"
         + typedefs
-        + "input:\n  s: str\n"
+        + "input:\n  s: !str\n"
         "nodes:\n"
         "  d:\n"
         "    kind: code\n"
@@ -103,8 +103,8 @@ def test_shared_field_of_one_type_reads_as_that_type():
 
 def test_shared_field_optional_in_one_member_reads_as_optional():
     typedefs = _TYPEDEFS.replace(
-        "{action: 'Literal[hold]', note: str}",
-        "{action: 'Literal[hold]', note: 'Optional[str]'}",
+        "{action: 'Literal(hold)', note: str}",
+        "{action: 'Literal(hold)', note: 'Optional(str)'}",
     )
     contract = _output_field(
         _flow("output:\n  n: ${d.output.note}\n", typedefs=typedefs), "n"
@@ -114,7 +114,7 @@ def test_shared_field_optional_in_one_member_reads_as_optional():
 
 def test_shared_field_through_an_optional_union_reads_as_optional():
     contract = _output_field(
-        _flow("output:\n  n: ${d.output.note}\n", output="Optional[Decision]"), "n"
+        _flow("output:\n  n: ${d.output.note}\n", output="Optional(Decision)"), "n"
     )
     assert contract.type == Type(kind=ValueKind.STRING, nullable=True)
 
@@ -144,9 +144,9 @@ def test_shared_field_one_member_does_not_require_reads_as_optional():
 def test_shared_field_of_differing_types_is_untyped_and_loads():
     typedefs = (
         "typedefs:\n"
-        "  A: {kind: 'Literal[a]', v: int}\n"
-        "  B: {kind: 'Literal[b]', v: str}\n"
-        "  AB: Union[A, B]\n"
+        "  A: {kind: 'Literal(a)', v: int}\n"
+        "  B: {kind: 'Literal(b)', v: str}\n"
+        "  AB: Union(A, B)\n"
     )
     text = _flow("output:\n  v: ${d.output.v}\n", output="AB", typedefs=typedefs)
     assert _output_field(text, "v") is None
@@ -205,7 +205,7 @@ def test_member_only_field_of_a_typed_flow_input_is_a_load_error():
     text = (
         "id: p\nname: p\n"
         + _TYPEDEFS
-        + "input:\n  d: Decision\n"
+        + "input:\n  d: !Decision\n"
         "nodes:\n"
         "  step:\n"
         "    kind: code\n"
@@ -223,7 +223,7 @@ def test_member_only_field_of_a_typed_flow_input_is_a_load_error():
 _EACH_DEFS = (
     "defs:\n"
     "  each:\n"
-    "    input:\n      v: int\n"
+    "    input:\n      v: !int\n"
     "    nodes:\n"
     "      inner:\n"
     "        kind: code\n"
@@ -238,7 +238,7 @@ def test_member_only_field_of_a_map_item_is_a_load_error():
     text = (
         "id: p\nname: p\n"
         + _TYPEDEFS
-        + "input:\n  xs: list[Decision]\n"
+        + "input:\n  xs: !list(Decision)\n"
         + _EACH_DEFS
         + "nodes:\n"
         "  m:\n"
@@ -313,9 +313,9 @@ def test_shared_field_in_an_inline_child_body_loads():
 def _decision() -> Type:
     registry = read_typedefs(
         {
-            "Buy": {"action": "Literal[buy]", "qty": "int"},
-            "Sell": {"action": "Literal[sell]", "price": "float"},
-            "Decision": "Union[Buy, Sell]",
+            "Buy": {"action": "Literal(buy)", "qty": "int"},
+            "Sell": {"action": "Literal(sell)", "price": "float"},
+            "Decision": "Union(Buy, Sell)",
         }
     )
     return read_type("Decision", registry)
@@ -361,10 +361,10 @@ def test_map_over_a_union_output_gives_a_list_of_objects():
     text = (
         "id: p\nname: p\n"
         + _TYPEDEFS
-        + "input:\n  xs: list[str]\n"
+        + "input:\n  xs: !list(str)\n"
         "defs:\n"
         "  each:\n"
-        "    input:\n      v: str\n"
+        "    input:\n      v: !str\n"
         "    nodes:\n"
         "      inner:\n"
         "        kind: code\n"
@@ -395,7 +395,7 @@ def test_loop_carrying_a_union_keeps_the_non_record_error():
     text = (
         "id: p\nname: p\n"
         + _TYPEDEFS
-        + "input:\n  s: str\n"
+        + "input:\n  s: !str\n"
         "nodes:\n"
         "  drive:\n"
         "    kind: loop\n"

@@ -11,8 +11,16 @@ and retains concrete ranges on the Compose-owned `BuildResult`. Registered into
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any, Optional
 
-from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
+from yian.compose.helpers.errors import LoadDiagnostics
+from yian.compose.nodes.base import (
+    BuildContext,
+    BuildResult,
+    NodeDescriptor,
+    reject_container_spans,
+)
+from yian.diagnostics import SourceRange
 from yian.nodes.wait import WaitNode
 
 
@@ -36,6 +44,26 @@ class WaitDescriptor(NodeDescriptor):
     binding_fields = ()
 
     until: str
+
+    @classmethod
+    def _validate_fields(
+        cls,
+        node_id: str,
+        kwargs: dict[str, Any],
+        ranges: dict[tuple[str, str], SourceRange],
+        own_range: Optional[SourceRange],
+        diagnostics: LoadDiagnostics,
+    ) -> None:
+        """Reject a list or mapping holding `${...}` under `until:`, then run the base checks."""
+        reject_container_spans(
+            cls.kind,
+            node_id,
+            "until",
+            kwargs.get("until"),
+            ranges.get(("field", "until")) or own_range,
+            diagnostics,
+        )
+        super()._validate_fields(node_id, kwargs, ranges, own_range, diagnostics)
 
     def build(self, ctx: BuildContext) -> BuildResult:
         """Construct the runtime `WaitNode` (+ wiring) for this `WaitDescriptor`.

@@ -11,7 +11,7 @@ name: hello
 description: Greet someone with a short, friendly one-liner.
 
 input:
-  name: str
+  name: !str
 output: str
 kind: agent
 prompt: |-

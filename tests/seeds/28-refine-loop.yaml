@@ -18,13 +18,13 @@ name: refine_loop
 description: A loop that re-refines a draft until its score clears a bar (until + max drivers).
 
 input:
-  seed: str                        # the initial draft
+  seed: !str                        # the initial draft
 
 defs:
   refine_turn:                     # the body flow ('a -> 'a over {draft, score})
     input:
-      draft: str                   # reads a SUBSET of the carried names
-      score: float
+      draft: !str                   # reads a SUBSET of the carried names
+      score: !float
     nodes:
       critic:
         kind: agent

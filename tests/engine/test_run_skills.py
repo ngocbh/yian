@@ -49,7 +49,7 @@ FLOW = """\
 id: skills-e2e
 name: skills-e2e
 input:
-  change: str
+  change: !str
 nodes:
   review:
     kind: agent

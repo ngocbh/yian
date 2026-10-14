@@ -2,16 +2,16 @@
 #
 # One AGENT brief that exercises the ${...} operator forms: required (:?), a coalesce
 # chain (|), the $$ escape, and the ${system.X} host-ambient namespace.
-# Optional[date] params feed the coalesce chain.
+# Optional(date) params feed the coalesce chain.
 
 id: interpolation-ops
 name: interpolation_ops
 description: Showcase ${...} operator forms — required, default-chain, $$ escape, system.
 
 input:
-  topic: str
-  as_of: Optional[date]         # optional (omitted -> null)
-  fallback_date: Optional[date]
+  topic: !str
+  as_of: !Optional(date)         # optional (omitted -> null)
+  fallback_date: !Optional(date)
 
 nodes:
   brief:

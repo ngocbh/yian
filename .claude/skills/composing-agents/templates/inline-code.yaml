@@ -12,8 +12,8 @@ name: inline_code_demo
 description: Classify a numeric rating with an inline `code:` node (no external module).
 
 input:
-  rating: float
-  label: str
+  rating: !float
+  label: !str
 
 nodes:
   verdict:

@@ -6,7 +6,7 @@ id: err-cycle
 name: err_cycle
 
 input:
-  seed: str
+  seed: !str
 
 nodes:
   a:

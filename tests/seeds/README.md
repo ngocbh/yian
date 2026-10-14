@@ -23,14 +23,14 @@ nodes, no per-node `id:`, no body wrappers.
 id: …            # metadata
 name: …
 description: …
-input:  { … }   # the flow's parameters   — source types (+ default/optional)
+input:  { … }   # the flow's parameters   — tagged types (+ default/optional)
 nodes:   { … }   # the body — a MAP keyed by node id
 output: { … }   # the flow's return       — sink bindings
 asserts: [ … ]   # optional — boolean checks over ${input.X}/${node.output}
 x-…:             # optional — extension keys, ignored by the engine
 ```
 
-- **`input:`** is the parameter signature (source side — types). **`output:`** is the return
+- **`input:`** is the parameter signature (source side — each entry a tag, `topic: !str`). **`output:`** is the return
   (sink side — bindings). Because `output:` can bind from several nodes, multi-output flows are
   natural (the flow returns one object); there is no single-terminal rule. `output: ${x}`
   returns that value as is; `output: { … }` returns an object keyed by name, even with one
@@ -66,7 +66,7 @@ nodes:
     depends_on: [warmup]       # optional — explicit ordering edge(s)
     input:                    # sink bindings (consumed)
       topic: ${input.topic}
-    output: float             # source type (produced) — Python typing
+    output: float             # source type (produced) — a plain type, no tag
     prompt: "…"                # ← kind field, flat on the node
 ```
 
@@ -82,24 +82,25 @@ Keyword args only; each arg value is a full binding (a `${…}` ref/coalesce, el
 literal); a nested `call(g, …)` arg desugars inner-first. It cannot capture `${item}` (the synth
 node has no map-element scope — use a named `map` node with `over:`). Seed 21.
 
-## Declarations are native YAML — source side = types, sink side = bindings
+## Declarations are native YAML — types are written as types, slots are tagged
 
-The YAML *value* of a declared field is read as-is, recursively:
+The YAML *value* of a declared field is read as-is, recursively. A type definition is written
+as a type; a slot's type is a YAML tag on its value (`name: !T value`):
 
 | Where | Side | The value is a … |
 |---|---|---|
-| `node.output:` | source (produced) | **type** (Python annotation) |
-| top-level `input:` | source (parameters) | **type** (`Optional[X]` = nullable; `TYPE = default`) |
-| `node.input:` | sink (consumed) | **binding** |
-| top-level `output:` | sink (returned) | **binding** |
-| `call:` `input:` | sink (call args) | **binding** |
+| `node.output:` | source (produced) | **type** (plain, no tag) |
+| top-level `input:` | source (parameters) | **tag** with an optional default (`topic: !str`, `window: !int 30`) |
+| `node.input:` | sink (consumed) | **binding**, optionally tagged (`qty: !int ${size.output.qty}`) |
+| top-level `output:` | sink (returned) | **binding**, optionally tagged |
+| `call:` `input:` | sink (call args) | **binding**, optionally tagged |
 
-**Types** (source side) — annotations are **Python `typing`**. A string leaf is a scalar/generic; a
-map is a record (a dataclass — fields recurse):
+**Types** (source side) — the vocabulary is Python `typing`, spelled with parentheses. A string
+leaf is a scalar/generic; a map is a record (a dataclass — fields recurse):
 ```yaml
 output: str                              # scalar: str / int / float / bool / date (Any = opaque)
-output: list[str]                        # generic: list[X], dict[K, V], Optional[X]
-output: { decision: str, why: str }      # record (inline — OK: no [ ] or ${…} inside)
+output: list(str)                        # generic: list(X), dict(K, V), Optional(X)
+output: { decision: str, why: str }      # record (inline — OK: no , or ${…} inside a type)
 output:                                  # record (block style — identical)
   decision: str
   why: str
@@ -113,24 +114,26 @@ of a field the record doesn't declare is a compile error. Only
 "more checking".
 
 **Bindings** (sink side) — a reference, a literal, an operator form, or a coalesce (see below).
+A tag only checks the value and declares its type; it never converts or fills it in. See
+[typed slots](../../docs/syntax.md#typed-slots-yaml-tags).
 
 ## User-defined types (`typedefs:`)
 
 A top-level `typedefs:` section lets a flow **name and compose** types, **Python-typing style** — a
-record is a *dataclass*, annotations use `typing`:
+record is a *dataclass*, and types use parentheses (`list(X)`, `Optional(X)`):
 
 ```yaml
 typedefs:
   Topic: str                          # STRING = alias (any type expression)
-  Bundle: list[Topic]                 #   aliases compose -> list[str]
+  Bundle: list(Topic)                 #   aliases compose -> list(str)
   Amount: float
-  Category: Literal[pro, con, mixed]  # enum
-  Choice: Union[Approve, Reject]      # union of records, told apart by the `decision` tag
+  Category: Literal(pro, con, mixed)  # enum
+  Choice: Union(Approve, Reject)      # union of records, told apart by the `decision` tag
   Approve:
-    decision: Literal[approve]
+    decision: Literal(approve)
     count: int
   Reject:
-    decision: Literal[reject]
+    decision: Literal(reject)
     info: RejectInfo
   RejectInfo:                         # MAP = record (a dataclass — field: annotation)
     count: int
@@ -138,19 +141,19 @@ typedefs:
   Rating:
     category: Category
     score: float
-    note: Optional[str]               # nullable field
+    note: Optional(str)               # nullable field
   Plan:
     rating: Rating
-    history: list[Rating]             # list over a user type
+    history: list(Rating)             # list over a user type
 ```
 
-Use a type name anywhere a type is expected (`input:`, a node `output:`); dotted access into a
+Use a type name anywhere a type is expected (a tag such as `!Rating`, a node `output:`); dotted access into a
 named record is **type-checked at compile time** (`${analyze.output.rating.category}`). Rules:
 
 - **Scalars** are Python: `str`/`int`/`float`/`bool`, plus `date`; opaque = `Any`. **Generics**:
-  `list[X]`, `Optional[X]`, `dict[K, V]`.
-- **Enums** are `Literal[a, b, c]` (tag-only) — routed by `case … on`.
-- **Unions** are `Union[A, B, ...]` of records. Members are told apart by a tag field every member
+  `list(X)`, `Optional(X)`, `dict(K, V)`. Numeric ranges are inclusive: `int(1..12)`.
+- **Enums** are `Literal(a, b, c)` (tag-only) — routed by `case … on`.
+- **Unions** are `Union(A, B, ...)` of records. Members are told apart by a tag field every member
   declares as a single-value `Literal` with distinct values, or by shapes that can't overlap;
   otherwise the typedef is a load error. Route on the tag with `case … on`. `A | B`, payload-union
   sequences, and the retired `kind: match` form are not supported.
@@ -158,8 +161,10 @@ named record is **type-checked at compile time** (`${analyze.output.rating.categ
   (`Any`/`Optional`/`Literal`/`Union`/`List`/`Dict`).
 - **Equivalence** across call/map boundaries is **structural** and recursive through records and
   lists; recursive or alias-cycle definitions are rejected.
-- *Status:* the Compose loader resolves scalars, `list[X]`, `Optional[X]`, records, `Literal` enums,
-  `Union[...]` of records, and aliases. `dict[K, V]` currently resolves to a lenient object
+- **Tags take one-argument types only.** A tag can't contain `,`, so a multi-argument type
+  (`Union`, a multi-value `Literal`, `dict(K, V)`) is named here and tagged by name (`!Choice`).
+- *Status:* the Compose loader resolves scalars, `list(X)`, `Optional(X)`, records, `Literal` enums,
+  `Union(...)` of records, and aliases. `dict(K, V)` currently resolves to a lenient object
   placeholder; structural key/value checking remains unsupported.
 
 ## References & interpolation
@@ -199,9 +204,10 @@ Rule of thumb: `:-` for *value-or-default*, `|` for *whichever-ran*.
 ## Bindings must be block form (not inline)
 
 Bindings are **unquoted, one per line**. They must **not** sit in an inline flow-mapping
-(`input: { topic: ${…} }`) — there the `}` in `${…}` (or a `[` from `list[…]`/`Literal[…]`/
-`Union[…]`/`dict[…]`) would break the map. Always use block form for `input:`/`output:`/`call`
-maps, and for any record/payload with a generic-typed field. (Quoted values — an AGENT
+(`input: { topic: ${…} }`) — there the `}` in `${…}` would break the map, a `,` splits an unquoted
+multi-argument type such as `Literal(a, b)`, and a tag needs a space before the next `,` or `}`.
+Always use block form for `input:`/`output:`/`call` maps, and for any record/payload with a
+multi-argument type. (Quoted values — an AGENT
 `prompt:`, a `case` `when:` — *may* stay inline; their quotes protect the `}`.)
 
 ## Three expression contexts
@@ -246,39 +252,39 @@ case's branch targets (= the taken branch's value; seed 22).
 
 ## Defaults / optionality
 
-`Optional[X]` (nullable — *type-level*) and `= default` (omission-fill —
-*parameter-level*) are **orthogonal**, not a choice. A top-level param is:
+`Optional(X)` (nullable — *type-level*) and a default value (omission-fill —
+*parameter-level*) are **orthogonal**, not a choice. A top-level param is a tag with an
+optional default value:
 
-- **required** ⇔ its type is **not** `Optional` **and** it has **no** `= default` (`topic: str`).
+- **required** ⇔ its type is **not** `Optional` **and** it has **no** default (`topic: !str`).
   Omitting it is a hard missing-input error.
-- **`Optional[date]`** (no default) → omitted yields **null**.
-- **`window: int = 30`** → omitted yields **30** (the RHS is always a YAML literal, never a type ref).
-- **`Optional[int] = null`** has an explicit null default, distinct from no `=`.
-- **`Optional[date] = "2026-01-01"`** → omitted yields that ISO date string; an
+- **`as_of: !Optional(date)`** (no default) → omitted yields **null**.
+- **`window: !int 30`** → omitted yields **30** (the default is always a YAML literal, never a
+  `${…}` expression).
+- **`note: !Optional(int) null`** has an explicit null default, distinct from no default.
+- **`as_of: !Optional(date) "2026-01-01"`** → omitted yields that ISO date string; an
   explicitly supplied null shadows the default and is allowed by the nullable type.
 
-The default RHS is validated against its declared type while the flow loads. It
-cannot be empty and is never string-coerced: `int = "30"` is invalid, while
-`int = 30` is valid. Compatible values retain their authored payload, so
-`float = 30` keeps the integer `30`. Only supplied boundary strings may be
-coerced.
+The default is checked against its declared type while the flow loads. It is never
+string-coerced: `!int "30"` is invalid, while `!int 30` is valid. Compatible values keep
+their authored payload, so `!float 30` keeps the integer `30`. Only supplied boundary
+strings may be coerced.
 
-A flow input is a string annotation (`TYPE`, `TYPE = literal`, or
-`Optional[TYPE]`) or a mapping that directly declares a record type. A mapping is
-not a `{type:, default:}` wrapper. Quote the whole annotation when a structured
-default contains YAML mapping syntax:
+A flow input is always a tag; an untagged entry (`topic: str`) is a load error that shows
+`topic: !str`. A record input names its record in `typedefs:` and tags it (`prior: !Rating`);
+`!object` is an unstructured mapping. A structured default is ordinary YAML after the tag:
 
 ```yaml
 input:
-  budget: Amount = 1000.0
-  bundle: Bundle = ["ACME"]
-  prior: 'Rating = {category: pro, score: 0.0, rationale: neutral}'
+  budget: !Amount 1000.0
+  bundle: !Bundle ["ACME"]
+  prior: !Rating {category: pro, score: 0.0, rationale: neutral}
 ```
 
 Applied at every flow boundary (top-level run plus a call/map child seeding its own parameters). Defaults live
 on flow `input:` only — internal nodes never declare defaults; a sink that may be absent uses
 `${X:-default}` or a coalesce `${a | b}` (e.g. to pick whichever `case` branch ran). *(Distinct layers:
-`= default` sets a **parameter's** default in the signature; `${X:-default}` is a
+`window: !int 30` sets a **parameter's** default in the signature; `${X:-default}` is a
 **use-site** fallback for a possibly-null reference.)*
 
 ## Constraints — the `asserts:` section
@@ -326,7 +332,7 @@ nodes:
 | `10-asserts-arithmetic.yaml` | arithmetic + `and`/`or`/`not`/`in` in `when:`/`asserts:` |
 | `11-reuse-anchors.yaml` | `x-*` extension keys + YAML anchor (`&`/`*`/`<<:`) reuse + `llm_config` |
 | `12-depends-on.yaml` | run-ordering edges — `depends_on` (co-skip) / `runs_after` (pure order); a side-effect node, no data binding, + `bool` output |
-| `13-types-objects.yaml` | the type grammar — Python scalars, `list[X]`, inline/block/nested objects (records), deep dotted access |
+| `13-types-objects.yaml` | the type grammar — Python scalars, `list(X)`, inline/block/nested objects (records), deep dotted access |
 | `14-agent-tools.yaml` | AGENT knobs — ordinary `tools` including `ask_user` / `llm_config` + structured output |
 | `17-effects-human-wait.yaml` | effects — blocking `HUMAN_INPUT` (typed answer) + absolute UTC `WAIT` (`until:`) + `case` on the answer + a `depends_on` side-effect |
 | `18-research-pipeline.yaml` | realistic end-to-end — fan-out reviewers → typed-`View` synth → `case … on` stance → multi-output + `asserts:` |
@@ -343,7 +349,7 @@ nodes:
 Every node kind (AGENT/CODE/TOOL/call/map/case/loop/HUMAN_INPUT/WAIT) and every supported
 convention appears in at least one seed. Seed 17 pins blocking HUMAN_INPUT and WAIT's
 absolute UTC deadline surface. Tagged data is modelled as records with a `Literal` tag field, alone
-or in a `Union[...]`, routed by `case … on <field>` — the `kind: match` + payload-union sequence
+or in a `Union(...)`, routed by `case … on <field>` — the `kind: match` + payload-union sequence
 design was dropped.
 
 ## Negative gallery — `errors/`
@@ -368,6 +374,7 @@ The supported contract uses Compose-style top-level
 `input:`/`nodes:`/`output:`/`asserts:`; no `edges:`/`__start__`/`__end__`; keyed `nodes:` map
 with flat bodies; `case`/`when`/`then`/`else`/`on`; references `${…}` with `:-`/`:?`/`|`
 and `$$` escape; unquoted block-form bindings; strict schema + `x-*` + YAML anchors; and a
-**Python-typing** type system (`str`/`int`/`float`/`bool`, `list[X]`/`Optional[X]`, dataclass
-records, `Literal` enums, unions of records (`Union[...]`), inline `TYPE = default`) —
-`typedefs:` registry.
+**Python-typing** type system spelled with parentheses (`str`/`int`/`float`/`bool`,
+`list(X)`/`Optional(X)`, dataclass records, `Literal` enums, unions of records (`Union(...)`)),
+slots typed with YAML tags (`window: !int 30`, `qty: !int ${size.output.qty}`) — `typedefs:`
+registry.

@@ -25,7 +25,7 @@ from tests.engine._memory_fakes import _Memory, _Session
 _IDENTITY = """id: identity
 name: identity
 input:
-  text: str
+  text: !str
 nodes: {}
 output: ${input.text}
 """
@@ -366,7 +366,7 @@ def test_failed_snapshot_restoration_keeps_interrupted_prefix_and_observation(tm
 
 @pytest.mark.parametrize("durable", [False, True])
 def test_delayed_backward_uses_private_program_and_canonical_values(tmp_path, durable):
-    flow = load_flow(_IDENTITY.replace("text: str", "text: object"))
+    flow = load_flow(_IDENTITY.replace("text: !str", "text: !object"))
     supplied = {"text": {"items": [1, 2]}}
     result = run_flow(flow, supplied, learnable=True, log=tmp_path / "private.jsonl" if durable else None)
     supplied["text"]["items"].append(3)

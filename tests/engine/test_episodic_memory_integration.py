@@ -13,7 +13,7 @@ from yian.nodes.base import Output
 _FLOW = """id: episodic-history
 name: episodic_history
 input:
-  topic: str
+  topic: !str
 nodes:
   answer:
     kind: agent

@@ -643,7 +643,7 @@ _FORMAT_EXAMPLE: Dict[Any, str] = {
 def _format_hint(typ: Any) -> Optional[str]:
     """An `e.g. <value>` example for an input whose string format isn't obvious, or
     `None` when none is needed. Keyed off the typ's scalar `kind`, so it fires for
-    `Optional[date]` too (the resolved typ stays `DATE`, just nullable)."""
+    `Optional(date)` too (the resolved typ stays `DATE`, just nullable)."""
     example = _FORMAT_EXAMPLE.get(getattr(typ, "kind", None))
     return f"e.g. {example}" if example else None
 
@@ -656,8 +656,8 @@ def _input_label(decl: Any) -> str:
     (a default already shows the format, so the example is dropped there). So an author at
     the prompt sees what is expected without reading the `.yaml`. Examples:
         `topic (str) *`                                      (required)
-        `as_of (Optional[date]) [optional] e.g. 2026-05-21`  (date: example shown)
-        `as_of (Optional[date]) [default: 2026-05-21]`       (default shows the format)
+        `as_of (Optional(date)) [optional] e.g. 2026-05-21`  (date: example shown)
+        `as_of (Optional(date)) [default: 2026-05-21]`       (default shows the format)
         `window (int) [default: 30]`                         (optional, has a default)
     """
     parts = [decl.name]

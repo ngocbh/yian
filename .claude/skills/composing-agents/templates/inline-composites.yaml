@@ -12,8 +12,8 @@ name: inline_composites
 description: Define one-off CALL, MAP, and LOOP child bodies in place.
 
 input:
-  seed: int
-  items: list[int]
+  seed: !int
+  items: !list(int)
 
 nodes:
   call_once:

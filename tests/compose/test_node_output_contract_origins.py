@@ -526,7 +526,7 @@ id: invalid_compact_output
 name: invalid_compact_output
 kind: code
 code: return 7
-output: list[
+output: list(
 """
     document = SourceDocument.parse(text, label="invalid-compact.yaml")
 
@@ -544,7 +544,7 @@ def test_adaptive_generated_output_contracts_remain_source_free():
 id: adaptive-output-contracts
 name: adaptive-output-contracts
 input:
-  topic: str
+  topic: !str
 nodes:
   ask:
     kind: human_input
@@ -746,7 +746,7 @@ nodes:
     kind: code
     code: |-
       return [{"age": "bad"}]
-    output: list[Profile]
+    output: list(Profile)
 output: ${emit.output}
 """
     document = SourceDocument.parse(text, label="scalar-list.yaml")

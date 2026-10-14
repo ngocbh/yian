@@ -436,11 +436,11 @@ def _g_flow(node: str, d_type: str = "str") -> str:
     return f"""id: f
 name: f
 input:
-  cmd: str
+  cmd: !str
 defs:
   g:
     input:
-      d: {d_type}
+      d: !{d_type}
     nodes:
       run:
         kind: code
@@ -665,7 +665,7 @@ name: spaced
 defs:
   f:
     input:
-      topic: str
+      topic: !str
     nodes:
       e:
         kind: code
@@ -719,14 +719,17 @@ def test_missing_comma_or_name_in_keywords_is_loud(value, problem):
 
 
 def test_no_quote_hint_when_quoting_would_not_give_text():
-    # quoting a span-bearing call is its own error, and quoting a typed binding drops the type.
+    # quoting a span-bearing call is its own error.
     span = {"use": _code("use", {"topic": "call(f, topic=${input.x}"})}
     with pytest.raises(LoadError) as caught:
         desugar_inline_calls(span, None, next_id=_ids())
     assert "If you meant the text" not in str(caught.value)
+
+
+def test_typed_text_holding_a_call_is_the_old_form_error():
     with pytest.raises(LoadError) as caught:
         load_flow(_echo_flow("str = call(f"))
-    assert "If you meant the text" not in str(caught.value)
+    assert "binding 'topic': write the type as a tag: `topic: !str call(f`" in str(caught.value)
     with pytest.raises(LoadError) as caught:
         load_flow(_echo_flow("hi", output="str = call(f"))
-    assert "If you meant the text" not in str(caught.value)
+    assert "write the type as a tag: `output: !str call(f`" in str(caught.value)

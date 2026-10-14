@@ -13,7 +13,7 @@ name: case_value
 description: Route a topic to a positive or cautious take; return the taken branch's value.
 
 input:
-  topic: str
+  topic: !str
 
 nodes:
   score:

@@ -2,18 +2,20 @@
 
 from __future__ import annotations
 
-from collections.abc import Hashable, Iterator
+import re
+from collections.abc import Callable, Hashable, Iterator
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, TypeAlias
 
 import yaml
 from yaml.constructor import ConstructorError
-from yaml.nodes import MappingNode, SequenceNode
+from yaml.nodes import MappingNode, ScalarNode, SequenceNode
 from yaml.tokens import ScalarToken
 
 from yian.compose.source.common import (
     OccurrencePath,
     SourceSyntaxError,
+    TaggedNode,
     _ArcSequence,
     _Definition,
     _KeyIndex,
@@ -29,6 +31,21 @@ from yian.diagnostics import SourceRange
 
 
 _MISSING = object()
+
+_CORE_TAG_PREFIX = "tag:yaml.org,2002:"
+_STR_TAG = _CORE_TAG_PREFIX + "str"
+_SEQ_TAG = _CORE_TAG_PREFIX + "seq"
+_MAP_TAG = _CORE_TAG_PREFIX + "map"
+# Keys that YAML resolves to these tags only mean something as untagged keys.
+_KEY_ONLY_TAGS = frozenset((_CORE_TAG_PREFIX + "merge", _CORE_TAG_PREFIX + "value"))
+
+_LINE_SPLIT = re.compile("\r\n|[\r\n\x85\u2028\u2029]")
+# A tag directly followed by `,`, `}` or `]` inside a flow collection.
+_FLOW_TAG = re.compile(r"(?:^|[\s\[{,])![^\s,{}\[\]]*[,}\]]")
+_FLOW_TAG_HINT = (
+    "hint: after a tag inside `{...}` or `[...]`, put a space before `,`, `}` or "
+    "`]`, or use block style"
+)
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -129,6 +146,7 @@ class _DocumentLoader(_FlowLoader):
         self._sequence_values: dict[_PairSequence, dict[Any, Any]] = {}
         self._forced_string_nodes: set[yaml.Node] = set()
         self._block_scalar_tokens: dict[int, ScalarToken] = {}
+        self._local_tags: dict[int, str] = {}
         super().__init__(stream)
 
     def scan_block_scalar(self, style: str) -> ScalarToken:
@@ -142,16 +160,62 @@ class _DocumentLoader(_FlowLoader):
         self._block_scalar_tokens[token.end_mark.index] = token
         return token
 
-    def construct_object(self, node: yaml.Node, deep: bool = False) -> Any:
-        """Construct normally while retaining a temporary node/value identity map."""
+    def parse_node(
+        self,
+        block: bool = False,
+        indentless_sequence: bool = False,
+    ) -> yaml.Event:
+        """Parse one node event, rejecting a bare ``!`` before YAML resolves it away.
 
+        The parser is a state machine, so this check adds no frame per nesting
+        level, unlike the recursive compose step.
+        """
+
+        event = super().parse_node(block, indentless_sequence)
+        if getattr(event, "tag", None) == "!":
+            raise SourceSyntaxError(
+                "a tag names a type, e.g. `!int`",
+                _marks_to_range(event.start_mark, event.end_mark),
+            )
+        return event
+
+    def construct_object(self, node: yaml.Node, deep: bool = False) -> Any:
+        """Construct normally while retaining a temporary node/value identity map.
+
+        A local tag (``!...``) is recorded and the node is constructed as if it
+        were untagged; YAML core tags (``!!...``) keep their YAML meaning.
+        """
+
+        tag = node.tag
         if node in self._forced_string_nodes and node not in self.constructed_objects:
             value = self.construct_scalar(node)
             self.constructed_objects[node] = value
+        elif tag.startswith("!"):
+            self._local_tags[id(node)] = tag[1:]
+            node.tag = self._untagged_tag(node)
+            try:
+                value = super().construct_object(node, deep=deep)
+            finally:
+                node.tag = tag
+        elif not tag.startswith(_CORE_TAG_PREFIX):
+            raise _unknown_tag_error(node)
         else:
             value = super().construct_object(node, deep=deep)
         self._source_values[id(node)] = value
         return value
+
+    def _untagged_tag(self, node: yaml.Node) -> str:
+        """Return the core tag YAML would give ``node`` if it had no tag."""
+
+        if isinstance(node, SequenceNode):
+            return _SEQ_TAG
+        if isinstance(node, MappingNode):
+            return _MAP_TAG
+        if node.style is None:
+            resolved = self.resolve(ScalarNode, node.value, (True, False))
+            if resolved not in _KEY_ONLY_TAGS:
+                return resolved
+        return _STR_TAG
 
     def _construct_key(self, node: yaml.Node, *, deep: bool) -> Any:
         """Construct a mapping key without mutating YAML's special value tag."""
@@ -224,6 +288,10 @@ class _DocumentLoader(_FlowLoader):
                 key_node, value_node = frame.state.pairs[frame.index]
                 if key_node.tag == "tag:yaml.org,2002:merge":
                     del frame.state.pairs[frame.index]
+                    _reject_merge_source_tag(value_node, key_node)
+                    if isinstance(value_node, SequenceNode):
+                        for source_node in value_node.value:
+                            _reject_merge_source_tag(source_node, key_node)
                     if isinstance(value_node, MappingNode):
                         frame.pending_sources = (value_node,)
                     elif isinstance(value_node, SequenceNode):
@@ -318,17 +386,55 @@ class _DocumentLoader(_FlowLoader):
         return result
 
 
+def _unknown_tag_error(node: yaml.Node) -> SourceSyntaxError:
+    """Return the error for a tag that is neither local nor a YAML core tag."""
+
+    return SourceSyntaxError(
+        f"unknown YAML tag {node.tag!r}; a type tag is local, e.g. `!int`",
+        _mark_to_range(node),
+    )
+
+
+def _reject_merge_source_tag(node: yaml.Node, merge_key: yaml.Node) -> None:
+    """Reject a non-core tag written at a ``<<:`` merge site.
+
+    YAML never constructs a merge source, so a type tag written on the merge
+    value, its list, or a list item would check nothing. A node reached
+    through an alias is skipped: its tag sits at its anchor and checks the
+    value there.
+    """
+
+    # An anchor always precedes its aliases, so an aliased node starts before
+    # the merge key ends; a node written at the merge site starts after it.
+    if node.start_mark.index < merge_key.end_mark.index:
+        return
+    if node.tag.startswith("!"):
+        raise SourceSyntaxError(
+            "a tag on a `<<:` merge source checks nothing; tag the mapping that "
+            "merges it",
+            _mark_to_range(node),
+        )
+    if not node.tag.startswith(_CORE_TAG_PREFIX):
+        raise _unknown_tag_error(node)
+
+
+def _marks_to_range(start: yaml.Mark, end: yaml.Mark) -> SourceRange:
+    """Convert one pair of half-open PyYAML marks to 1-based coordinates."""
+
+    return SourceRange(
+        start.line + 1,
+        start.column + 1,
+        end.line + 1,
+        end.column + 1,
+    )
+
+
 def _mark_to_range(node: yaml.Node | None) -> SourceRange | None:
     """Convert one composed node's half-open marks to 1-based coordinates."""
 
     if node is None:
         return None
-    return SourceRange(
-        node.start_mark.line + 1,
-        node.start_mark.column + 1,
-        node.end_mark.line + 1,
-        node.end_mark.column + 1,
-    )
+    return _marks_to_range(node.start_mark, node.end_mark)
 
 
 def _first_repeated_key(
@@ -540,6 +646,7 @@ def _build_definitions(
     block_scalar_tokens: dict[int, ScalarToken],
     mapping_values: dict[int, dict[Any, Any]] | None = None,
     pair_sequences: dict[int, _PairSequence] | None = None,
+    local_tags: dict[int, str] | None = None,
 ) -> tuple[tuple[_Definition, ...], int]:
     """Intern every reachable YAML node once into a frozen definition DAG.
 
@@ -561,6 +668,9 @@ def _build_definitions(
         pair_sequences (`dict[int, _PairSequence] | None`, *optional*):
             Compact flattened merge plans retained by the document loader,
             keyed by mapping-node identity.
+        local_tags (`dict[int, str] | None`, *optional*):
+            Local tag text without the leading ``!``, keyed by YAML-node
+            identity. Untagged nodes are absent.
 
     Returns:
         `tuple[tuple[_Definition, ...], int]`:
@@ -569,6 +679,8 @@ def _build_definitions(
 
     if root_node is None:
         return (_ScalarDef(root_value, None, None, None),), 0
+    if local_tags is None:
+        local_tags = {}
 
     definitions: list[_Definition | None] = []
     ids: dict[int, int] = {}
@@ -697,6 +809,7 @@ def _build_definitions(
         if value is _MISSING:
             raise TypeError("constructed value missing for retained YAML node")
         source_range = _mark_to_range(node)
+        tag = local_tags.get(identity)
 
         if isinstance(node, MappingNode):
             sequence = (
@@ -712,6 +825,7 @@ def _build_definitions(
                 range=source_range,
                 pair_sequence=pair_sequence,
                 effective_index=effective_sequence(pair_sequence),
+                tag=tag,
             )
         elif isinstance(node, yaml.SequenceNode):
             item_definitions: list[int] = []
@@ -724,6 +838,7 @@ def _build_definitions(
                 value=value,
                 range=source_range,
                 item_definitions=tuple(item_definitions),
+                tag=tag,
             )
         else:
             definitions[definition_id] = _ScalarDef(
@@ -736,6 +851,7 @@ def _build_definitions(
                     value,
                 ),
                 style=(node.style if isinstance(node, yaml.ScalarNode) else None),
+                tag=tag,
             )
         return definition_id
 
@@ -791,6 +907,41 @@ def _problem_range(
     return SourceRange(line, column, line, column + 1)
 
 
+def _flow_tag_hint(error: yaml.YAMLError, text: str) -> str | None:
+    """Return a hint when a YAML error's lines hold a tag glued to `,`/`}`/`]`."""
+
+    marks = [
+        mark
+        for mark in (
+            getattr(error, "context_mark", None),
+            getattr(error, "problem_mark", None),
+        )
+        if mark is not None
+    ]
+    if not marks:
+        return None
+    lines = _LINE_SPLIT.split(text)
+    first = min(mark.line for mark in marks)
+    last = max(mark.line for mark in marks)
+    if any(_FLOW_TAG.search(line) for line in lines[first : last + 1]):
+        return _FLOW_TAG_HINT
+    return None
+
+
+# One authored key path step linked to its parent: a key's text, or an item index.
+_KeyLink: TypeAlias = "tuple[_KeyLink, str | int | None] | None"
+
+
+def _spell_key_link(link: _KeyLink) -> tuple[str | int | None, ...]:
+    """Spell a linked authored key path out from the root."""
+
+    steps: list[str | int | None] = []
+    while link is not None:
+        link, step = link
+        steps.append(step)
+    return tuple(reversed(steps))
+
+
 @dataclass(frozen=True, slots=True)
 class SourceDocument:
     """One safely constructed YAML document with its source graph kept private.
@@ -841,6 +992,122 @@ class SourceDocument:
 
         return self._non_text_key
 
+    def tagged_nodes(
+        self, *, skip_top_level: Callable[[Any], bool] | None = None
+    ) -> tuple[TaggedNode, ...]:
+        """Return every node that carries a local tag, in document order.
+
+        An aliased node is listed once, with the first occurrence path that
+        reaches it.
+
+        Examples:
+            >>> doc = SourceDocument.parse("a: !int 1\\nb: [!str x]\\n")
+            >>> [node.tag for node in doc.tagged_nodes()]
+            ['int', 'str']
+
+        Args:
+            skip_top_level (`Callable[[Any], bool] | None`, *optional*, defaults to `None`):
+                Picks top-level keys whose pairs are not walked. A node reached
+                only through them is not listed; a node also reached elsewhere is
+                listed with its first path outside them.
+
+        Returns:
+            `tuple[TaggedNode, ...]`:
+                Tagged nodes ordered by source position; empty when the
+                document has no local tags.
+        """
+
+        if not any(definition.tag is not None for definition in self._definitions):
+            return ()
+        first_paths: dict[int, OccurrencePath] = {}
+        # Authored key paths are linked `(parent, step)` pairs, spelled out only
+        # for tagged nodes, so the walk stays linear in the document size.
+        key_links: dict[int, _KeyLink] = {}
+        key_ids: set[int] = set()
+        walked_parts: set[_ArcSequence] = set()
+        stack: list[tuple[SourceCursor, int | None, _KeyLink]] = [
+            (self.root, None, None)
+        ]
+        while stack:
+            cursor, key_definition, link = stack.pop()
+            path: OccurrencePath | None = None
+            if key_definition is not None and key_definition not in first_paths:
+                path = cursor.path
+                first_paths[key_definition] = path
+                key_links[key_definition] = link
+                key_ids.add(key_definition)
+            definition_id = cursor._definition
+            assert definition_id is not None
+            if definition_id in first_paths:
+                continue
+            first_paths[definition_id] = cursor.path if path is None else path
+            key_links[definition_id] = link
+            definition = self._definitions[definition_id]
+            children: list[tuple[SourceCursor, int | None, _KeyLink]] = []
+            skip = (
+                skip_top_level
+                if definition_id == self._root_definition
+                else None
+            )
+            if isinstance(definition, _MappingDef):
+                # A rope part shared by several mappings (a `<<:` source) is
+                # walked once per document: the first walk already reached
+                # every node in it, so merge-heavy documents stay linear.
+                parts = [(definition.pair_sequence, 0)]
+                while parts:
+                    part, base = parts.pop()
+                    # The root is walked once; with skipped keys, its parts stay
+                    # unmarked so another mapping sharing them walks every pair.
+                    if skip is None:
+                        if part in walked_parts:
+                            continue
+                        walked_parts.add(part)
+                    for index in range(len(part.parts) - 1, -1, -1):
+                        parts.append(
+                            (part.parts[index], base + part.part_offsets[index])
+                        )
+                    for index, arc in enumerate(part.arcs):
+                        if skip is not None and skip(arc.constructed_key):
+                            continue
+                        occurrence = _MapOccurrence(arc, base + index)
+                        child = cursor._descend_mapping_occurrence(occurrence)
+                        children.append(
+                            (child, arc.key_definition, (link, child.key_text))
+                        )
+            elif isinstance(definition, _SequenceDef):
+                for index, item in enumerate(definition.item_definitions):
+                    children.append(
+                        (
+                            cursor._descend_sequence_item(index, item),
+                            None,
+                            (link, index),
+                        )
+                    )
+            stack.extend(reversed(children))
+
+        tagged = [
+            TaggedNode(
+                definition_id=definition_id,
+                tag=definition.tag,
+                range=definition.range,
+                path=first_paths.get(definition_id, ()),
+                is_key=definition_id in key_ids,
+                key_path=_spell_key_link(key_links.get(definition_id)),
+            )
+            for definition_id, definition in enumerate(self._definitions)
+            if definition.tag is not None
+            and (skip_top_level is None or definition_id in first_paths)
+        ]
+        tagged.sort(
+            key=lambda node: (
+                (0, node.range.start_line, node.range.start_col)
+                if node.range is not None
+                else (1, 0, 0),
+                node.definition_id,
+            )
+        )
+        return tuple(tagged)
+
     def _resolve_occurrence(self, path: OccurrencePath) -> SourceCursor:
         """Replay one finite physical occurrence path through the definition DAG."""
 
@@ -877,11 +1144,16 @@ class SourceDocument:
                     for node, state in loader._mapping_states.items()
                     if isinstance(state, _PairSequence)
                 },
+                local_tags=loader._local_tags,
             )
             repeated_key = _first_repeated_key(root_node, loader._source_values)
             non_text_key = _first_non_text_key(root_node, loader._source_values)
         except (yaml.YAMLError, yaml.reader.ReaderError) as exc:
-            raise SourceSyntaxError(str(exc), _problem_range(exc, text)) from exc
+            message = str(exc)
+            hint = _flow_tag_hint(exc, text)
+            if hint is not None:
+                message = f"{message}\n{hint}"
+            raise SourceSyntaxError(message, _problem_range(exc, text)) from exc
         finally:
             if loader is not None:
                 loader._source_values = {}
@@ -890,6 +1162,7 @@ class SourceDocument:
                 loader._sequence_values = {}
                 loader._forced_string_nodes = set()
                 loader._block_scalar_tokens = {}
+                loader._local_tags = {}
                 loader.dispose()
 
         return cls(

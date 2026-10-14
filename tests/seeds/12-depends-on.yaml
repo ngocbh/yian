@@ -15,7 +15,7 @@ name: depends_on_demo
 description: Run a cache-priming side-effect node before fetch via depends_on (no data binding).
 
 input:
-  topic: str
+  topic: !str
 
 nodes:
   warm_cache:
@@ -31,7 +31,7 @@ nodes:
     input:                      #   not consume its output (it primed a shared cache)
       topic: ${input.topic}
     output:
-      values: list[float]
+      values: list(float)
     code: tests.seeds.fns:fetch_facts
 
   note:

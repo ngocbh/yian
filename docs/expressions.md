@@ -143,7 +143,7 @@ is fine: only the binding's final value is checked, so the embedded template
 now fail. To fix one, keep the value in range before it reaches the binding (guard it
 with a `case`, such as checking the base is not negative before `**`, or compute it in
 a `code` node), or return null explicitly: a `case` value branch `then: null` (with
-`output: Optional[...]`), or a `code` node that returns `None`.
+`output: Optional(...)`), or a `code` node that returns `None`.
 
 A list literal adds a level of nesting (`${[x]}` is one level deeper than `x`), and
 a binding whose final value nests deeper than 100 levels fails its node
@@ -176,6 +176,12 @@ expression). `$$` escapes a literal `$`. Evaluation then follows one rule:
 - a span **embedded** in surrounding text is **stringified** into it;
 - text with no span is a plain literal.
 
+The same rule applies to every string nested in a record or list value of a slot: the
+binder evaluates each nested string as its own template, so `{n: ${a.output}}` gives a
+record whose `n` is the typed value. `$$` is the escape at any depth, and a nested
+`call(...)` is a load error (see
+[Flow syntax → Nested values](syntax.md#nested-values)).
+
 Compile-time output typing mirrors this: a lone direct-reference span preserves the
 producer's exact or partial contract (including provenance), and a known field selected
 from a partial record is an exact typed passthrough. A statically proven computed span gets its result type
@@ -191,9 +197,11 @@ sink, including recursively inside lists, matching runtime coercion. This lets a
 compute a carried boolean directly, for example
 `exited: ${ask.output == "/exit"}`.
 
-A [typed binding](syntax.md#typed-bindings-name-type-value) (`name: Type = value`)
-replaces the inferred type with its declared one. The loader rejects it only when
-the two are disjoint; the binder checks the value at runtime.
+A nested record or list value is typed structurally: each field takes the type of its
+own value. A [tag](syntax.md#typed-slots-yaml-tags) on a slot (`name: !T value`) replaces
+the inferred type with its declared one. The loader rejects it only when the two are
+disjoint; the binder checks the value at runtime. A tag never fills in or converts a
+value.
 
 A **prompt** is the strict context: it reads local inputs as bare `${name}`;
 AGENT prompts also read their own declared variables. It renders in
@@ -223,7 +231,9 @@ calls one.
 
 In a condition every call is checked before it runs: an unknown function, or
 arguments the builtin doesn't take, is a load error (for a condition set in Python,
-`run_flow` raises `ExpressionError` before the run).
+`run_flow` raises `ExpressionError` before the run). A `typedefs:` constructor
+`T(...)` is not an unknown function; set in Python, its name must be in the node's
+type table.
 
 ## `isinstance` — the type test
 
@@ -236,8 +246,8 @@ input:
 
 It is a special form, not a `TEMPLATE_FNS` builtin. `T` is a bare type name, never a
 reference: a `typedefs:` name, or one of `str`, `int`, `float`, `bool`, `date`,
-`datetime`, `object`. The grammar has no `[...]` in an expression, so give `list[...]` or
-`Optional[...]` an alias first. Each flow resolves the names against its own `typedefs:`
+`datetime`, `object`. `list(...)` or `Optional(...)` would read as a call, so give it an
+alias in `typedefs:` first. Each flow resolves the names against its own `typedefs:`
 (a `uses:` child against its own, and a parent can't name a child's type). An unknown name
 is a located load error: `unknown type 'list'; isinstance takes a typedefs: name or one of
 str, int, float, bool, date, datetime, object`. The call must be exactly
@@ -247,7 +257,7 @@ result.
 The check is the pool's write-boundary check (`build_value_as`), so a value passes exactly
 when it could be written to a slot of type `T` (an `int` passes `float`). A missing `x` is
 checked as `None` in the non-strict modes, so it fails a record and passes an
-`Optional[...]` alias. Load-time inference types the result `bool`, and the ref-walk and
+`Optional(...)` alias. Load-time inference types the result `bool`, and the ref-walk and
 rewrites skip `T`.
 
 Compose gives each node a type table (`Node.types`) of the names its expressions use, and
@@ -271,6 +281,39 @@ It is a load error in:
 
 An inline child body can't take a whole-value `${isinstance(...)}` argument (`cannot infer
 type for inline binding`); declare the input in a `defs:` flow instead.
+
+## Constructors — `T(...)`
+
+There are no YAML tags inside `${...}`, so a typedef name works as a constructor there.
+It builds or checks a typed value:
+
+```yaml
+typedefs:
+  Buy:
+    action: Literal(buy)
+    conviction: float
+nodes:
+  order:
+    kind: tool
+    tool_id: place_order
+    input:
+      decision: ${Buy(action="buy", conviction=score.output)}   # build
+      checked: ${Buy(pick.output)}                               # check and narrow
+```
+
+- **Keyword form.** `Buy(action="buy", conviction=score.output)` builds a record from
+  exactly the given fields and checks it against `Buy`. Nothing is filled in: leaving out
+  `action` fails the check, and the error names the field.
+- **Positional form.** `Buy(x)` checks `x` against `Buy` and narrows it, exactly like
+  `!Buy ${x}` on a slot. A value that is not a valid `Buy` fails the evaluation.
+- Only `typedefs:` names are constructors. yian never converts a value, so `${int(x)}` is
+  an unknown function, not a conversion.
+- `isinstance(x, Buy)` stays the boolean test: it returns `false` where `Buy(x)` fails.
+
+Compose resolves the name at load into the node's type table (`Node.types`), as for
+`isinstance`, and load-time inference types the result as the typedef. A constructor is
+allowed where `isinstance` is, and is a load error where `isinstance` is, including in
+prompts.
 
 ## Retained expression routes
 

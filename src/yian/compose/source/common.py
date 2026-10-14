@@ -82,6 +82,36 @@ class ScalarSource:
 
 
 @dataclass(frozen=True, slots=True)
+class TaggedNode:
+    """One YAML node that carries a local tag.
+
+    Attributes:
+        definition_id (`int`):
+            Document-local id of the tagged definition; aliases share it.
+        tag (`str`):
+            Tag text without the leading ``!``, e.g. ``"list(str)"``.
+        range (`SourceRange | None`):
+            Range of the tagged node.
+        path (`OccurrencePath`):
+            First occurrence path that reaches the node from the document root.
+            For a tagged mapping key, the path of the pair the key selects.
+        is_key (`bool`):
+            Whether that first occurrence is a mapping key.
+        key_path (`tuple[str | int | None, ...]`):
+            ``path`` as authored: each mapping key's text before YAML resolves
+            it (``"on"``, not ``True``; ``None`` for a non-scalar key) and each
+            sequence item's index.
+    """
+
+    definition_id: int
+    tag: str
+    range: SourceRange | None
+    path: OccurrencePath
+    is_key: bool = False
+    key_path: tuple[str | int | None, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class _PathLink:
     """One lazily materialized occurrence-path link."""
 
@@ -159,6 +189,8 @@ class _ScalarDef:
 
     ``style`` is the PyYAML scalar style: ``None`` for plain, ``"'"``, ``'"'``,
     ``"|"``, or ``">"``; it is ``None`` as well when ``raw`` is ``None``.
+    ``tag`` is the local tag text without the leading ``!``; ``None`` when the
+    scalar is untagged or carries a YAML core tag.
     """
 
     value: Any = field(repr=False, compare=False)
@@ -166,25 +198,36 @@ class _ScalarDef:
     raw: str | None
     constructed_line_ranges: tuple[SourceRange, ...] | None
     style: str | None = None
+    tag: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class _MappingDef:
-    """One mapping definition backed by a compact persistent pair sequence."""
+    """One mapping definition backed by a compact persistent pair sequence.
+
+    ``tag`` is the local tag text without the leading ``!``; ``None`` when the
+    mapping is untagged or carries a YAML core tag.
+    """
 
     value: Any = field(repr=False, compare=False)
     range: SourceRange | None
     pair_sequence: _ArcSequence
     effective_index: _KeyIndex = field(repr=False, compare=False)
+    tag: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class _SequenceDef:
-    """One sequence-shaped YAML definition and its item definitions."""
+    """One sequence-shaped YAML definition and its item definitions.
+
+    ``tag`` is the local tag text without the leading ``!``; ``None`` when the
+    sequence is untagged or carries a YAML core tag.
+    """
 
     value: Any = field(repr=False, compare=False)
     range: SourceRange | None
     item_definitions: tuple[int, ...]
+    tag: str | None = None
 
 
 _Definition: TypeAlias = _ScalarDef | _MappingDef | _SequenceDef

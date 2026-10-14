@@ -24,7 +24,7 @@
 id: err-input-named-like-field
 name: err_input_named_like_field
 input:
-  topic: str
+  topic: !str
 nodes:
   calc:
     kind: code

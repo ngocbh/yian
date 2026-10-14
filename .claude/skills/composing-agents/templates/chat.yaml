@@ -13,7 +13,7 @@ name: chat
 description: A turn-by-turn assistant (AGENT node without tools, deterministic transcript).
 
 input:
-  opening: str            # seed transcript; `yian chat` passes "" (empty)
+  opening: !str            # seed transcript; `yian chat` passes "" (empty)
 
 typedefs:
   Turn:                   # the carried record, and each turn's result
@@ -23,8 +23,8 @@ typedefs:
 defs:
   respond:                # a CASE result is the routed node's output, so the reply chain is a def
     input:
-      transcript: str
-      message: str
+      transcript: !str
+      message: !str
     nodes:
       reply:
         kind: agent
@@ -57,8 +57,8 @@ defs:
 
   turn:                   # body: 'a -> 'a over {transcript, exited}
     input:
-      transcript: str
-      exited: bool
+      transcript: !str
+      exited: !bool
     nodes:
       ask:
         kind: human_input       # blocks a worker until the broker returns the message

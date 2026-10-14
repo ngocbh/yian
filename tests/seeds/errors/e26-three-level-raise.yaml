@@ -8,12 +8,12 @@
 id: err-three-level-raise
 name: err_three_level_raise
 input:
-  topic: str
+  topic: !str
 
 defs:
   deep:
     input:
-      topic: str
+      topic: !str
     nodes:
       boom:
         kind: code
@@ -24,7 +24,7 @@ defs:
     output: ${boom.output}
   middle:
     input:
-      topic: str
+      topic: !str
     nodes:
       via:
         kind: call

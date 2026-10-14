@@ -45,7 +45,7 @@ from yian.compose.desugar.case_values import CASE_PREFIX
 from yian.compose.desugar.inline_calls import map_outputs_strings
 from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.parse.file import CaseDescriptor, CodeDescriptor
-from yian.nodes.contracts import Assertion, ValueContract
+from yian.nodes.contracts import Assertion, ValueContract, iter_source_strings
 
 
 # A clean whole-span case-output ref INTERIOR. Singular only:
@@ -456,14 +456,8 @@ def _reject_case_refs(
     positions where the value-case is not supported. With `condition`, each string is
     a condition (bare or one whole `${...}`); otherwise it is a binding template."""
     for value in strings:
-        s = value.expression if isinstance(value, Assertion) else value
-        if not isinstance(s, str):
-            continue
-        try:
-            refs = condition_refs(s) if condition else expr_refs_of(s)
-        except ExpressionError:
-            continue  # malformed -> surfaced (located) by the relevant downstream pass
-        for ref in refs:
+        source = value.expression if isinstance(value, Assertion) else value
+        for ref in _source_refs(source, condition=condition):
             parts = ref.split(".")
             # Singular only: a case-id in head position of `<id>.output`.
             case_id = None
@@ -476,6 +470,26 @@ def _reject_case_refs(
                     f"read it as a whole binding or inside text",
                     range=range,
                 )
+
+
+def _source_refs(source: Any, *, condition: bool = False) -> list[str]:
+    """Every reference path the template strings of `source` read, malformed ones skipped
+    (the relevant downstream pass reports those, located). With `condition`, a string
+    `source` is a condition (bare or one whole `${...}`)."""
+    if condition:
+        if not isinstance(source, str):
+            return []
+        try:
+            return condition_refs(source)
+        except ExpressionError:
+            return []
+    refs: list[str] = []
+    for _, text in iter_source_strings(source):
+        try:
+            refs.extend(expr_refs_of(text))
+        except ExpressionError:
+            continue
+    return refs
 
 
 def _case_leaf_targets(descriptors: dict, case_ids: set, case_types: dict) -> dict:

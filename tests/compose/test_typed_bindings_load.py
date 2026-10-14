@@ -1,14 +1,13 @@
-"""Loading typed node input bindings: `name: Type = value` splits at load."""
+"""Loading typed node input bindings: `name: !Type value` carries a contract."""
 
 from __future__ import annotations
 
 import pytest
 
 from yian.compile.manifest import flow_fingerprint
-from yian.compose.helpers.errors import LoadError
 from yian.compose.loader import load_flow
 from yian.diagnostics import Failure
-from yian.nodes.contracts import Binding
+from yian.nodes.contracts import Binding, binding_source
 from yian.run import run_flow
 from yian.typesys import TypeRegistry, type_for
 
@@ -32,7 +31,7 @@ def _typed_flow(binding: str) -> str:
 id: typed
 name: typed
 input:
-  n: int
+  n: !int
 nodes:
   size:
     kind: code
@@ -51,8 +50,8 @@ output: ${{use.output}}
 """
 
 
-def test_typed_ref_binding_splits_and_carries_its_contract():
-    loaded = load_flow(_typed_flow("int = ${size.output.qty}"))
+def test_typed_ref_binding_carries_its_contract():
+    loaded = load_flow(_typed_flow("!int ${size.output.qty}"))
 
     binding = _binding(loaded.compiled, "use", "qty")
     assert binding.source == "${size.output.qty}"
@@ -61,7 +60,7 @@ def test_typed_ref_binding_splits_and_carries_its_contract():
 
 
 def test_typed_ref_binding_infers_the_same_edges_as_the_plain_binding():
-    typed = load_flow(_typed_flow("int = ${size.output.qty}"))
+    typed = load_flow(_typed_flow("!int ${size.output.qty}"))
     plain = load_flow(_typed_flow("${size.output.qty}"))
 
     def edges_from_size(loaded):
@@ -80,14 +79,14 @@ def test_plain_binding_has_no_contract():
 
 
 def test_typed_binding_changes_the_flow_fingerprint():
-    typed = load_flow(_typed_flow("int = ${size.output.qty}"))
+    typed = load_flow(_typed_flow("!int ${size.output.qty}"))
     plain = load_flow(_typed_flow("${size.output.qty}"))
 
     assert flow_fingerprint(typed.compiled) != flow_fingerprint(plain.compiled)
 
 
 def test_typed_literal_binding_reads_the_right_side_as_yaml():
-    loaded = load_flow(_typed_flow("int = 0"))
+    loaded = load_flow(_typed_flow("!int 0"))
 
     binding = _binding(loaded.compiled, "use", "qty")
     assert binding.source == 0
@@ -96,13 +95,13 @@ def test_typed_literal_binding_reads_the_right_side_as_yaml():
 
 
 def test_contract_origin_points_at_the_typed_binding_line():
-    text = _typed_flow("int = ${size.output.qty}")
+    text = _typed_flow("!int ${size.output.qty}")
     loaded = load_flow(text)
     contract = _binding(loaded.compiled, "use", "qty").contract
     line = next(
         index
         for index, row in enumerate(text.splitlines(), start=1)
-        if "qty: int = " in row
+        if "qty: !int " in row
     )
 
     diagnostic = loaded.diagnose(
@@ -126,7 +125,7 @@ name: typed_call
 defs:
   f:
     input:
-      a: int
+      a: !int
     nodes:
       x:
         kind: code
@@ -140,7 +139,7 @@ nodes:
     kind: code
     code: tests.engine._compose_codefns:echo
     input:
-      x: int = call(f, a=1)
+      x: !int call(f, a=1)
     output: int
 output: ${use.output}
 """
@@ -158,9 +157,9 @@ def test_typed_case_output_binding_expands_and_keeps_its_contract():
 id: typed_case
 name: typed_case
 typedefs:
-  Decision: Literal[go, stop]
+  Decision: Literal(go, stop)
 input:
-  flag: bool
+  flag: !bool
 nodes:
   route:
     kind: case
@@ -184,7 +183,7 @@ nodes:
     kind: code
     code: tests.engine._compose_codefns:echo
     input:
-      x: Decision = ${route.output}
+      x: !Decision ${route.output}
     output: str
 output: ${use.output}
 """
@@ -229,7 +228,7 @@ def _value_flow(binding: str) -> str:
 id: value
 name: value
 input:
-  a: int
+  a: !int
 nodes:
   use:
     kind: code
@@ -244,9 +243,9 @@ output: ${{use.output}}
 @pytest.mark.parametrize(
     ("binding", "expected"),
     [
-        ('str = "${input.a} = 2"', "1 = 2"),
-        ("str = 'n=${input.a}'", "n=1"),
-        ('list[str] = ["${input.a}"]', ["${input.a}"]),
+        ('!str "${input.a} = 2"', "1 = 2"),
+        ("!str 'n=${input.a}'", "n=1"),
+        ('!list(str) ["$${input.a}"]', ["${input.a}"]),
     ],
     ids=["quoted-template", "single-quoted-template", "literal-list"],
 )
@@ -257,10 +256,10 @@ def test_quoted_or_bracketed_right_side_is_read_as_yaml_first(binding, expected)
     assert result.output == expected
 
 
-def test_plain_value_whose_left_side_is_not_a_type_fails_at_its_line():
+def test_plain_value_whose_left_side_is_not_a_type_is_text():
     text = """
-id: bad
-name: bad
+id: plain
+name: plain
 nodes:
   use:
     kind: code
@@ -270,16 +269,10 @@ nodes:
     output: str
 output: ${use.output}
 """
-    with pytest.raises(LoadError) as info:
-        load_flow(text)
+    binding = load_flow(text).compiled.wiring["use"]["note"]
 
-    assert str(info.value.diagnostic.message).startswith(
-        "`a` in `note: a = b` is not a type"
-    )
-    frames = info.value.diagnostic.frames
-    assert frames
-    line = text.splitlines().index("      note: a = b") + 1
-    assert frames[0].range.start_line == line
+    assert binding_source(binding) == "a = b"
+    assert getattr(binding, "contract", None) is None
 
 
 def test_typed_inputs_inside_a_multi_node_def_carry_contracts():
@@ -290,13 +283,13 @@ name: typed_def
 defs:
   f:
     input:
-      a: int
+      a: !int
     nodes:
       x:
         kind: code
         code: tests.engine._compose_codefns:echo
         input:
-          topic: int = ${input.a}
+          topic: !int ${input.a}
         output: int
     output: ${x.output}
 nodes:
@@ -321,7 +314,7 @@ def test_typed_inputs_inside_an_inline_call_body_carry_contracts():
 id: typed_inline_call
 name: typed_inline_call
 input:
-  n: int
+  n: !int
 nodes:
   wrapper:
     kind: call
@@ -332,7 +325,7 @@ nodes:
         kind: code
         code: tests.engine._compose_codefns:echo
         input:
-          value: int = ${input.n}
+          value: !int ${input.n}
         output: int
     output: ${echo.output}
 output: ${wrapper.output}
@@ -362,7 +355,7 @@ nodes:
         code: |
           return inputs["value"]
         input:
-          value: int = ${input.x}
+          value: !int ${input.x}
         output: int
     output: ${echo.output}
 output: ${each.output}
@@ -385,7 +378,7 @@ defs:
     kind: code
     code: tests.engine._compose_codefns:echo
     input:
-      p: int = 3
+      p: !int 3
     output: int
 nodes:
   use:

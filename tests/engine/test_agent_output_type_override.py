@@ -1,7 +1,7 @@
 """`AgentDescriptor.build(ctx)` honors `AgentDescriptor.output_contract_override`.
 
 The adaptive_questions desugar pass synthesizes an AGENT whose structured
-output is a code-built `list[Question]` Type (it has no surface type-string).
+output is a code-built `list(Question)` Type (it has no surface type-string).
 The override lets its canonical contract win over the surface-derived one.
 """
 

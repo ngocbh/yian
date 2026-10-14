@@ -16,7 +16,7 @@ in-loader by the same `_assemble`) or a `uses:` alias resolved through the injec
 `child_resolver` (`(flow_id, version) -> ComposedFlow`). `_CallableScope`
 composes the two (and rejects recursive/mutual defs). `call` nodes are resolved-and-baked
 at load: the loader derives the callable's signature (a plain call re-exports the exact
-or partial codomain contract; a mapped call derives `list[<codomain>]` only from an exact
+or partial codomain contract; a mapped call derives `list(<codomain>)` only from an exact
 contract; bindings
 are name/arity- and type-checked against it) AND bakes the callable's compiled flow onto the built
 `CallNode` so `run` drives the embedded child. A flow whose `call`s are all
@@ -63,6 +63,7 @@ from yian.compose.nodes.resolver import ChildResolver
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
 from yian.compose.helpers.secret_literals import check_env_secrets
 from yian.compose.helpers.memory import parse_memory_declarations
+from yian.compose.helpers.tags import reject_unread_tags
 from yian.compose.helpers.uses import parse_uses_ref
 from yian.compose.helpers.source import _boundary_field_ranges
 from yian.compose.parse.file import (
@@ -748,6 +749,8 @@ def _load_flow(
         root.child("system") if root.has("system") else None,
     )
 
+    # Typedefs are read as plain values, so a tag in them is rejected before they are.
+    reject_unread_tags(document, set(), diagnostics, typedefs_only=True)
     try:
         registry = read_typedefs(f.typedefs)
     except TypeCheckError as exc:
@@ -833,6 +836,11 @@ def _load_flow(
             if root.has("nodes") and root.has("long_term_memory")
             else None
         ),
+    )
+    # Defs, inline bodies, and the root are assembled now, so every slot has read
+    # its tags; a `uses:` child checks its own document in its own load.
+    reject_unread_tags(
+        document, callable_scope.catalog_builder.consumed_tags, diagnostics
     )
     return callable_scope.finalize(staged)
 
@@ -1297,7 +1305,8 @@ def _load_single_node_def(
             def_cursor, "inputs"
         )
         raise diagnostics.error(
-            f"defs entry {name!r}: single-node `input:` must be a param map (name: TYPE)",
+            f"defs entry {name!r}: single-node `input:` must be a param map "
+            "(`name: !TYPE`, e.g. `topic: !str`)",
             range=(
                 input_cursor.range
                 if input_cursor is not None

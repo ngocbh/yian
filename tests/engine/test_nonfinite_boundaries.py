@@ -67,7 +67,7 @@ def test_a_run_input_too_large_for_float_fails_at_start():
 id: overflow
 name: overflow
 input:
-  x: float
+  x: !float
 nodes:
   n:
     kind: code
@@ -178,7 +178,7 @@ _SCALED_BINDING_FLOW = """
 id: nonfinite
 name: nonfinite
 input:
-  x: float
+  x: !float
 nodes:
   c:
     kind: code
@@ -230,11 +230,11 @@ def _call_flow(declared: str) -> str:
 id: nonfinite
 name: nonfinite
 input:
-  x: float
+  x: !float
 defs:
   body:
     input:
-      y: {declared}
+      y: !{declared}
     nodes:
       inner:
         kind: code
@@ -287,7 +287,7 @@ def test_a_nonfinite_start_default_fails_start():
 id: nonfinite
 name: nonfinite
 input:
-  x: float = .inf
+  x: !float .inf
 nodes:
   c:
     kind: code
@@ -310,13 +310,13 @@ def _map_flow(over: str, item_binding: str) -> str:
 id: nonfinite
 name: nonfinite
 input:
-  x: float
+  x: !float
 nodes:
   m:
     kind: map
     over: "{over}"
     input:
-      y: float = {item_binding}
+      y: !float {item_binding}
     nodes:
       work:
         kind: code
@@ -351,7 +351,7 @@ def test_a_nonfinite_flow_output_binding_fails_the_end_binding():
 id: nonfinite
 name: nonfinite
 input:
-  x: float
+  x: !float
 nodes:
   c:
     kind: code
@@ -371,7 +371,7 @@ def test_a_nonfinite_temporary_inside_a_template_is_allowed():
 id: nonfinite
 name: nonfinite
 input:
-  x: float
+  x: !float
 nodes:
   c:
     kind: code
@@ -415,7 +415,8 @@ llm_config: {provider: ollama, model: test}
 nodes:
   writer:
     kind: agent
-    variables: {t: 'float = .inf'}
+    variables:
+      t: !float .inf
     prompt: 'go ${t}'
     output: str
 output: ${writer.output}
@@ -436,7 +437,7 @@ def _input_flow(declared: str) -> str:
 id: nonfinite
 name: nonfinite
 input:
-  x: {declared}
+  x: !{declared}
 nodes:
   c:
     kind: code

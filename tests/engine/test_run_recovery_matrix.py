@@ -337,7 +337,7 @@ name: recovery_matrix_growth
 defs:
   echo_one:
     input:
-      value: int
+      value: !int
     nodes:
       echo:
         kind: code
@@ -348,8 +348,8 @@ defs:
     output: ${echo.output}
   bump_once:
     input:
-      n: int
-      exited: bool
+      n: !int
+      exited: !bool
     nodes:
       bump:
         kind: code
@@ -514,7 +514,7 @@ name: recovery_nested_human_call
 defs:
   gate:
     input:
-      token: str
+      token: !str
     nodes:
       ask:
         kind: human_input
@@ -535,7 +535,7 @@ name: recovery_nested_human_map
 defs:
   gate:
     input:
-      token: str
+      token: !str
     nodes:
       ask:
         kind: human_input
@@ -559,7 +559,7 @@ name: recovery_loop_body_spawners
 defs:
   echo_one:
     input:
-      value: int
+      value: !int
     nodes:
       echo:
         kind: code
@@ -570,8 +570,8 @@ defs:
     output: ${echo.output}
   turn:
     input:
-      n: int
-      exited: bool
+      n: !int
+      exited: !bool
     nodes:
       nested_call:
         kind: call
@@ -612,7 +612,7 @@ name: recovery_loop_body_nested_loop_case
 defs:
   echo_one:
     input:
-      value: int
+      value: !int
     nodes:
       echo:
         kind: code
@@ -623,7 +623,7 @@ defs:
     output: ${echo.output}
   inc:
     input:
-      n: int
+      n: !int
     nodes:
       c:
         kind: call
@@ -634,8 +634,8 @@ defs:
       n: ${c.output}
   turn:
     input:
-      n: int
-      exited: bool
+      n: !int
+      exited: !bool
     nodes:
       inner:
         kind: loop
@@ -678,7 +678,7 @@ name: recovery_partial_loop
 defs:
   bump:
     input:
-      n: int
+      n: !int
     nodes:
       step:
         kind: code

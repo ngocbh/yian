@@ -3,7 +3,8 @@ from yian.compose import load_flow
 _AUTO = """
 id: f
 name: f
-input: {ctx: str}
+input:
+  ctx: !str
 nodes:
   ask:
     kind: human_input

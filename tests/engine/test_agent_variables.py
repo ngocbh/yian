@@ -3,11 +3,22 @@
 import pytest
 
 import yian.nodes.agent.node as agent_module
-from yian.compose.helpers.types import read_variables
+from tests.compose._declarations import parameters_from_yaml
 from yian.expr import ExpressionError
 from yian.nodes.agent import AgentNode
 from yian.nodes.base import Node, Output
 from yian.nodes.contracts import Parameter
+from yian.typesys.types import read_typedefs
+
+
+def _variables(body, registry=None):
+    """Read an agent's `variables:` declarations from their YAML body."""
+    return parameters_from_yaml(
+        "variables:\n" + "".join(f"  {line}\n" for line in body.splitlines()),
+        registry or {},
+        field="variables",
+        require_default=True,
+    )
 
 
 def _retained_agent(node, inputs=None, **engine_options):
@@ -28,9 +39,7 @@ def _retained_agent(node, inputs=None, **engine_options):
 def test_retained_agent_captures_actual_render_locals_once(monkeypatch):
     node = AgentNode("writer", prompt="${instruction}: ${topic}; ${count}/${count}",
                      llm_config={"provider": "openai", "model": "chosen", "openai": {"temperature": 0.8}},
-                     variables=read_variables({
-                         "count": "float[0,4] = 4", "instruction": "str = ${input.topic}",
-                     }, {}))
+                     variables=_variables("count: !float(0..4) 4\ninstruction: !str ${input.topic}\n"))
     resolve, render = agent_module.apply_defaults, agent_module.render_template_record
     resolutions, renders = [], []
 
@@ -50,7 +59,7 @@ def test_retained_agent_captures_actual_render_locals_once(monkeypatch):
     assert data == {
         "prompt_template": "${instruction}: ${topic}; ${count}/${count}",
         "variables": {"count": 4, "instruction": "${input.topic}"},
-        "variable_domains": {"count": "float[0,4]", "instruction": "str"},
+        "variable_domains": {"count": "float(0..4)", "instruction": "str"},
         "rendered_prompt": "${input.topic}: reefs; 4/4",
         "effective_llm_config": {"provider": "openai", "model": "chosen", "openai": {"temperature": 0.8}},
     }
@@ -63,7 +72,7 @@ def test_retained_agent_captures_actual_render_locals_once(monkeypatch):
 def test_retained_render_locals_are_detached_before_render_and_model_callbacks(monkeypatch):
     node = AgentNode("writer", prompt="${settings}",
                      llm_config={"provider": "test", "model": "original"},
-                     variables=read_variables({"settings": "object = {items: [original]}"}, {}))
+                     variables=_variables("settings: !object {items: [original]}\n"))
     render = agent_module.render_template_record
 
     def mutating_render(template, values):
@@ -94,7 +103,7 @@ def test_retained_agent_distinguishes_partial_and_empty_render_locals(monkeypatc
     from yian.runtime.log import NodeFailedRecord
 
     node = AgentNode("writer", prompt="" if stage == "empty" else "${note}",
-                     variables=[] if stage == "empty" else read_variables({"note": "Optional[str] = null"}, {}))
+                     variables=[] if stage == "empty" else _variables("note: !Optional(str) null\n"))
     calls = []
     monkeypatch.setattr(agent_module, "run_agent", lambda ctx: calls.append(ctx.prompt) or Output(ctx.prompt))
     if stage == "resolve":
@@ -104,7 +113,7 @@ def test_retained_agent_distinguishes_partial_and_empty_render_locals(monkeypatc
     _, record = _retained_agent(node)
     data = record.forward_capture.node_data
     assert data["prompt_template"] == node.prompt
-    assert data["variable_domains"] == ({} if stage == "empty" else {"note": "Optional[str]"})
+    assert data["variable_domains"] == ({} if stage == "empty" else {"note": "Optional(str)"})
     assert data["variables"] == (None if stage == "resolve" else {} if stage == "empty" else {"note": None})
     assert data["rendered_prompt"] == ("" if stage == "empty" else None)
     assert record.forward_capture.bound_inputs == {}
@@ -170,9 +179,7 @@ def test_render_capture_preparation_faults_escape_with_original_host_identity(mo
     from yian.typesys import VariablePool
 
     expected = MemoryError("capture preparation failed")
-    node = AgentNode("writer", prompt="${settings}", variables=read_variables({
-        "settings": "object = {items: [1]}",
-    }, {}))
+    node = AgentNode("writer", prompt="${settings}", variables=_variables("settings: !object {items: [1]}\n"))
     copy = agent_module.deepcopy
     calls = []
 
@@ -199,7 +206,7 @@ def test_retained_agent_keeps_early_binding_unavailable_and_capture_off_dormant(
     from yian.runtime.eval_node import EvaluationFailure, eval_node
     from yian.typesys import VariablePool
 
-    node = AgentNode("writer", prompt="${topic}", variables=read_variables({"tone": "str = concise"}, {}))
+    node = AgentNode("writer", prompt="${topic}", variables=_variables("tone: !str concise\n"))
     node.params = [Parameter("topic", required=True)]
     calls = []
     monkeypatch.setattr(node, "_resolve_variables", lambda: calls.append("resolve") or {"tone": "concise"})
@@ -219,7 +226,7 @@ def test_retained_agent_keeps_early_binding_unavailable_and_capture_off_dormant(
 
 
 def test_declared_variable_inventory_preserves_canonical_declarations():
-    declarations = read_variables({"tone": "str = concise", "count": "int[1,12] = 4"}, {})
+    declarations = _variables("tone: !str concise\ncount: !int(1..12) 4\n")
     node = AgentNode("writer", variables=declarations)
 
     inventory = node.declared_variables()
@@ -235,11 +242,12 @@ def test_agent_renders_inputs_and_variable_defaults_without_execution_or_memory_
     calls = []
     monkeypatch.setattr(agent_module, "run_agent", lambda ctx: calls.append(ctx) or Output(ctx.prompt))
     node = AgentNode("writer", prompt="${instruction}: ${topic}, ${num_sentences} sentences, ${tone}.",
-                     variables=read_variables({
-                         "num_sentences": "int[1,12] = 4",
-                         "tone": "Literal[concise,detailed,technical] = concise",
-                         "instruction": 'str = "Summarize clearly"',
-                     }, {}))
+                     variables=_variables(
+                         "num_sentences: !int(1..12) 4\n"
+                         "tone: !Tone concise\n"
+                         'instruction: !str "Summarize clearly"\n',
+                         registry=read_typedefs({"Tone": "Literal(concise, detailed, technical)"}),
+                     ))
     node.params = [Parameter("topic")]
     assert node.execution_scope is None and node.memory_scope is None
     assert node.forward({"topic": "coral reefs"}).value == "Summarize clearly: coral reefs, 4 sentences, concise."
@@ -248,11 +256,11 @@ def test_agent_renders_inputs_and_variable_defaults_without_execution_or_memory_
 
 def test_agent_resolves_and_renders_once_with_repeated_literal_default_references(monkeypatch):
     node = AgentNode("writer", prompt="${count}/${count}: ${instruction}/${empty}",
-                     variables=read_variables({
-                         "count": "float[0,4] = 4",
-                         "instruction": "str = ${input.topic}",
-                         "empty": 'str = ""',
-                     }, {}))
+                     variables=_variables(
+                         "count: !float(0..4) 4\n"
+                         "instruction: !str ${input.topic}\n"
+                         'empty: !str ""\n'
+                     ))
     defaults = agent_module.apply_defaults
     render = agent_module.render_template_record
     resolutions, records = [], []
@@ -275,9 +283,7 @@ def test_agent_resolves_and_renders_once_with_repeated_literal_default_reference
 
 
 def test_mutable_variable_defaults_are_detached_between_invocations(monkeypatch):
-    node = AgentNode("writer", prompt="${settings}", variables=read_variables({
-        "settings": "object = {nested: {items: [a, b]}}",
-    }, {}))
+    node = AgentNode("writer", prompt="${settings}", variables=_variables("settings: !object {nested: {items: [a, b]}}\n"))
     default = node.variables[0].default
     records = []
     render = agent_module.render_template_record
@@ -299,7 +305,7 @@ def test_mutable_variable_defaults_are_detached_between_invocations(monkeypatch)
 
 def test_nullable_variable_defaults_follow_existing_strict_prompt_rules(monkeypatch):
     node = AgentNode("writer", prompt="${null | 'fallback'}",
-                     variables=read_variables({"note": "Optional[str] = null"}, {}))
+                     variables=_variables("note: !Optional(str) null\n"))
     calls, records = [], []
     render = agent_module.render_template_record
 
@@ -323,7 +329,7 @@ def test_nullable_variable_defaults_follow_existing_strict_prompt_rules(monkeypa
 @pytest.mark.parametrize("declared,inputs", [([], {"tone": "input"}), ([Parameter("tone")], {})])
 def test_direct_variable_input_overlap_is_rejected_before_render_or_run(monkeypatch, declared, inputs):
     node = AgentNode("writer", prompt="${tone}",
-                     variables=read_variables({"tone": "str = concise"}, {}))
+                     variables=_variables("tone: !str concise\n"))
     node.params = declared
     calls = []
     monkeypatch.setattr(agent_module, "render_template_record", lambda *_args: calls.append("render"))
@@ -343,13 +349,14 @@ def test_temperature_variable_renders_independently_of_effective_model_configura
 
     loaded = load_flow("""id: variable_temperature
 name: variable_temperature
-input: {topic: str}
+input: {topic: !str }
 llm_config: {provider: ollama, model: test, ollama: {options: {temperature: 0.8}}}
 nodes:
   writer:
     kind: agent
     input: {topic: '${input.topic}'}
-    variables: {temperature: 'float[0,1] = 0.4'}
+    variables:
+      temperature: !float(0..1) 0.4
     prompt: '${topic}: ${temperature}'
     output: str
 output: ${writer.output}
@@ -394,14 +401,15 @@ def test_ordinary_run_keeps_variables_out_of_wiring_and_pool_and_backward_dorman
 
     flow = load_flow("""id: local_render
 name: local_render
-input: {topic: str}
+input:
+  topic: !str
 nodes:
   writer:
     kind: agent
     input: {topic: '${input.topic}'}
     variables:
-      instruction: str = ${absent.output}
-      tone: str = concise
+      instruction: !str ${absent.output}
+      tone: !str concise
     prompt: '${topic}: ${tone}, ${instruction}'
     output: str
 output: ${writer.output}

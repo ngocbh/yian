@@ -35,12 +35,12 @@ _RANGE_FLOW = """
 id: f
 name: f
 input:
-  settle_at: date
+  settle_at: !date
 nodes:
   settle:
     kind: human_input
     prompt: "continue?"
-    output: Optional[str]
+    output: Optional(str)
   done:
     kind: code
     depends_on: [settle]

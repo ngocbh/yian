@@ -7,12 +7,11 @@ import pytest
 
 from yian.compose import loader as compose_loader
 from yian.compose.helpers.errors import LoadError
-from yian.compose.helpers import types as compose_types
 from yian.compose.parse.file import (
     parse_file,
     parse_source_document,
 )
-from yian.compose.source import SourceDocument, parse_yaml_literal
+from yian.compose.source import SourceDocument
 from yian.compose.source import document as source_document
 
 
@@ -129,7 +128,7 @@ name: owned_defs
 defs:
   echo_child:
     input:
-      value: str
+      value: !str
     nodes:
       echo:
         kind: code
@@ -244,29 +243,3 @@ output: ${echo.output}
 
     with pytest.raises(LoadError):
         compose_loader.load_flow(source)
-
-
-def test_input_default_uses_literal_parser_not_document_loader(monkeypatch):
-    literal_calls = []
-
-    def track_literal(text):
-        literal_calls.append(text)
-        return parse_yaml_literal(text)
-
-    def reject_document_loader(*args, **kwargs):
-        raise AssertionError("input defaults must not create a source document")
-
-    monkeypatch.setattr(compose_types, "parse_yaml_literal", track_literal)
-    monkeypatch.setattr(
-        source_document._DocumentLoader,
-        "__init__",
-        reject_document_loader,
-    )
-
-    decl = compose_types.read_flow_inputs(
-        {"items": 'list[str] = ["one", "two"]'},
-        {},
-    )[0]
-
-    assert literal_calls == ['["one", "two"]']
-    assert decl.default == ["one", "two"]

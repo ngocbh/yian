@@ -10,6 +10,10 @@ Type-checking consumes an optional resolved `ValueContract`; untyped parameters
 accept any resolved Python value. A typed `Binding` additionally checks its resolved
 value against the binding's own declared contract, without converting it.
 
+A `ValueTemplate` source is an authored container: each leaf string is evaluated as a
+template at its position and each nested typed `Binding` is checked against its own
+contract. A plain dict or list source is always a literal.
+
 A MAP body binds a per-element `item` scope: `${item}` / `${item.path}` resolve from the current
 element passed via the `item=` kwarg (a body-local scope, NOT a pool head). The default (`item`
 unset) is the ordinary non-MAP bind path.
@@ -32,6 +36,7 @@ from typing import Any, Callable, Literal, TypeAlias
 import yian.json_codec as json_codec
 from yian.diagnostics import OriginRef
 from yian.expr import (
+    ConstructorTypeError,
     ExpressionError,
     RequiredError,
     eval_binding,
@@ -39,7 +44,14 @@ from yian.expr import (
 )
 from yian.expr.lineage import ResolvedValue, ValueRoute
 from yian.expr.template import Span, eval_template, scan_template
-from yian.nodes.contracts import Binding, Parameter, ValueContract, binding_source
+from yian.nodes.contracts import (
+    Binding,
+    Parameter,
+    ValueContract,
+    ValuePath,
+    ValueTemplate,
+    binding_source,
+)
 from yian.typesys import TypeCheckError, ValueKind, build_value_as
 from yian.typesys.pool import VariablePool
 from yian.typesys.values import Type, reject_deep_nesting, reject_nonfinite, value_repr
@@ -321,6 +333,141 @@ def apply_defaults(
     return output
 
 
+def _path_label(name: str, path: ValuePath) -> str:
+    """Spell a parameter name and a path inside its value, as in ``p.b[0]``."""
+    return name + "".join(
+        f".{part}" if isinstance(part, str) else f"[{part}]" for part in path
+    )
+
+
+class _SourceReader:
+    """Evaluate template strings for one parameter, with or without route capture."""
+
+    def __init__(
+        self,
+        pool: VariablePool,
+        item: Any,
+        *,
+        trace: bool,
+        source_resolver: SourceResolver | None,
+        types: dict[str, Type] | None,
+    ) -> None:
+        self.pool = pool
+        self.item = item
+        self.trace = trace
+        self.source_resolver = source_resolver
+        self.types = types
+
+    def string(self, text: str) -> tuple[Any, ValueRoute | None, bool]:
+        """Return a template string's value, its route, and whether it had spans.
+
+        The route and the spans flag are computed only when tracing; otherwise
+        they are ``None`` and ``False``.
+
+        Raises:
+            RequiredError, ExpressionError: The template does not parse or evaluate.
+        """
+        if not self.trace:
+            value = eval_binding(
+                text,
+                lambda path: resolve_reference(path, self.pool),
+                self.item,
+                types=self.types,
+            )
+            return value, None, False
+
+        def resolve(path: str) -> ResolvedValue:
+            if self.source_resolver is not None:
+                return self.source_resolver(path)
+            value = resolve_reference(path, self.pool)
+            return ResolvedValue(value, value is not None)
+
+        segments = scan_template(text)
+        result = eval_template(segments, resolve, self.item, trace=True, types=self.types)
+        return result.value, result.route, any(isinstance(seg, Span) for seg in segments)
+
+    def tree(
+        self,
+        node: Any,
+        path: ValuePath,
+        name: str,
+        template: ValueTemplate,
+        origin: OriginRef | None,
+    ) -> tuple[Any, ValueRoute | None, bool]:
+        """Evaluate one node of a template tree at ``path``.
+
+        Each leaf string is a template; a nested typed ``Binding`` evaluates its
+        source in place, then checks the result against its contract without
+        converting it. Other leaves are literals.
+
+        Raises:
+            BindingError: A leaf fails to evaluate (located at its registered
+                origin, else the nearest enclosing binding's origin, else
+                ``origin``) or a nested binding's value violates its contract.
+        """
+        if isinstance(node, Binding):
+            value, route, evaluated = self.tree(
+                node.source, path, name, template, node.origin or origin
+            )
+            if node.contract is not None:
+                try:
+                    _check_binding_type(_path_label(name, path), node, node.contract, value)
+                except BindingError as exc:
+                    if exc.origin is None:
+                        exc.origin = template.origin_at(path) or origin
+                    raise
+            return value, route, evaluated
+        if isinstance(node, str):
+            try:
+                return self.string(node)
+            except (RequiredError, ExpressionError) as exc:
+                raise BindingError(
+                    f"binding {_path_label(name, path)!r}: {exc}",
+                    failure_code=_failure_code(exc),
+                    origin=template.origin_at(path) or origin,
+                ) from exc
+        if type(node) is dict:
+            values: dict[Any, Any] = {}
+            fields: list[tuple[str, ValueRoute]] = []
+            any_evaluated = False
+            for key, child in node.items():
+                value, route, evaluated = self.tree(
+                    child, (*path, key), name, template, origin
+                )
+                values[key] = value
+                if route is not None:
+                    fields.append((key, route))
+                any_evaluated = any_evaluated or evaluated
+            return (
+                values,
+                ValueRoute.record(fields) if self.trace else None,
+                any_evaluated,
+            )
+        if type(node) is list:
+            items: list[Any] = []
+            routes: list[ValueRoute] = []
+            any_evaluated = False
+            for index, child in enumerate(node):
+                value, route, evaluated = self.tree(
+                    child, (*path, index), name, template, origin
+                )
+                items.append(value)
+                if route is not None:
+                    routes.append(route)
+                any_evaluated = any_evaluated or evaluated
+            list_route = (
+                ValueRoute(
+                    "list",
+                    children=tuple(routes),
+                    expression="[" + ", ".join(r.expression for r in routes) + "]",
+                )
+                if self.trace
+                else None
+            )
+            return items, list_route, any_evaluated
+        return node, ValueRoute.literal(node) if self.trace else None, False
+
+
 def _resolve_source(
     source: Any,
     pool: VariablePool,
@@ -334,53 +481,62 @@ def _resolve_source(
     """Resolve one raw or carrier-wrapped source via the template language.
 
     Exactly one semantic ``Binding`` layer is removed at this read boundary; a
-    nested ``Binding`` remains an ordinary literal payload. A value that is
+    ``Binding`` directly inside it remains an ordinary literal payload. A value that is
     exactly one `${...}` yields the **typed** value of that reference
     (type preserved); a `${...}` embedded in surrounding text is **stringified** into
     it; a value with no `${...}` is a plain literal (after `$$` -> `$`). The interior
     is one expression of the unified grammar (refs, literals, operators, `|` coalesce,
     `:-` default, `:?` required). `${item}` / `${item.path}` resolve from the
-    MAP-body-local scope. A non-string `source` is a literal.
+    MAP-body-local scope. A ``ValueTemplate`` evaluates each leaf string the same way at
+    its position and checks each nested typed ``Binding``; its route is a record or list
+    of the parts' routes. Any other non-string `source`, including a plain dict or list,
+    is a literal.
 
     Parse/eval errors (a malformed ref, a `${...}` inside the expression, an unbound `:?`)
     surface as `BindingError` — `expr`'s `ExpressionError`/`RequiredError` never leak
     across the `nodes <- expr` boundary. ``collector`` optionally retains the selected route
     under ``name``; ``source_resolver`` pairs values with accepted producer identities
     in one read. Without that injected resolver, capture records no producer identity.
-    ``types`` is the table an ``isinstance(x, T)`` looks ``T`` up in (``None`` means no types).
+    ``types`` is the table an ``isinstance(x, T)`` or a ``T(...)`` constructor looks ``T``
+    up in (``None`` means no types); a failed constructor check is a ``binding.type``
+    failure.
     """
     origin = _source_origin(source)
     source_value = binding_source(source)
-    if not isinstance(source_value, str):
+    if not isinstance(source_value, (str, ValueTemplate)):
         if collector is not None:
             collector._record_source(name, ValueRoute.literal(source_value), False)
         return source_value
-    try:
-        if collector is not None:
-            def resolve(path: str) -> ResolvedValue:
-                if source_resolver is not None:
-                    return source_resolver(path)
-                value = resolve_reference(path, pool)
-                return ResolvedValue(value, value is not None)
-
-            segments = scan_template(source_value)
-            result = eval_template(segments, resolve, item, trace=True, types=types)
-            collector._record_source(
-                name, result.route, any(isinstance(seg, Span) for seg in segments)
-            )
-            return result.value
-        return eval_binding(
-            source_value,
-            lambda path: resolve_reference(path, pool),
-            item,
-            types=types,
+    reader = _SourceReader(
+        pool,
+        item,
+        trace=collector is not None,
+        source_resolver=source_resolver,
+        types=types,
+    )
+    if isinstance(source_value, ValueTemplate):
+        value, route, evaluated = reader.tree(
+            source_value.value, (), name, source_value, origin
         )
-    except (RequiredError, ExpressionError) as exc:
-        raise BindingError(
-            str(exc),
-            failure_code="binding.evaluate",
-            origin=origin,
-        ) from exc
+    else:
+        try:
+            value, route, evaluated = reader.string(source_value)
+        except (RequiredError, ExpressionError) as exc:
+            raise BindingError(
+                str(exc),
+                failure_code=_failure_code(exc),
+                origin=origin,
+            ) from exc
+    if collector is not None:
+        if route is None:
+            raise RuntimeError(f"traced binding {name!r} produced no source route")
+        collector._record_source(name, route, evaluated)
+    return value
+
+
+def _failure_code(exc: ExpressionError) -> BindingFailureCode:
+    """Classify a source evaluation error: a failed `${T(...)}` check is a type error."""
+    return "binding.type" if isinstance(exc, ConstructorTypeError) else "binding.evaluate"
 
 
 def _check_binding_type(

@@ -2,7 +2,7 @@
 
 A `map` node (`kind: map` with `over:`) runs its baked child once per element of
 `over:`, binding `${item}` per element, collecting each child's single value into
-`list[U]`. `parallel` overlaps the element runs but preserves order. These drive real
+`list(U)`. `parallel` overlaps the element runs but preserves order. These drive real
 CODE-only children via `run_flow`.
 """
 
@@ -20,7 +20,7 @@ _ECHO_CHILD = """
 id: echo-one
 name: echo_one
 input:
-  topic: str
+  topic: !str
 nodes:
   emit:
     kind: code
@@ -35,7 +35,7 @@ _BOOM_CHILD = """
 id: boom-child
 name: boom_child
 input:
-  topic: str
+  topic: !str
 nodes:
   emit:
     kind: code
@@ -53,7 +53,7 @@ def _map_flow(child_id, parallel):
 id: map-parent
 name: map_parent
 input:
-  topics: list[str]
+  topics: !list(str)
 uses:
   {child_id}: {child_id}
 nodes:
@@ -91,11 +91,11 @@ _OPAQUE_OUTPUT_MAP = """
 id: opaque-output-map
 name: opaque_output_map
 input:
-  values: list[int]
+  values: !list(int)
 defs:
   increment:
     input:
-      value: int
+      value: !int
     nodes: {}
     output: ${input.value + 1}
 nodes:
@@ -159,8 +159,8 @@ _MAP_OVER_COALESCE = """
 id: map-coalesce-over
 name: map_coalesce_over
 input:
-  topics: Optional[list[str]]
-  alt: list[str]
+  topics: !Optional(list(str))
+  alt: !list(str)
 uses:
   echo-one: echo-one
 nodes:

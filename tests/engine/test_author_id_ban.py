@@ -6,7 +6,7 @@ _HASH = """
 id: f
 name: f
 input:
-  x: str
+  x: !str
 nodes:
   bad#id:
     kind: code
@@ -21,7 +21,7 @@ _SLASH = """
 id: f
 name: f
 input:
-  x: str
+  x: !str
 nodes:
   bad/id:
     kind: code
@@ -44,5 +44,5 @@ def test_author_id_with_slash_is_loud():
 
 
 def test_ordinary_author_id_still_loads():
-    ok = "id: f\nname: f\ninput:\n  x: str\nnodes:\n  good_id:\n    kind: code\n    input:\n      x: ${input.x}\n    output: str\n    code: m:f\noutput: ${good_id.output}\n"
+    ok = "id: f\nname: f\ninput:\n  x: !str\nnodes:\n  good_id:\n    kind: code\n    input:\n      x: ${input.x}\n    output: str\n    code: m:f\noutput: ${good_id.output}\n"
     load_flow(ok)   # no LoadError

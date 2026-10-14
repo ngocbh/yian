@@ -136,12 +136,13 @@ def test_synthesized_boundary_and_inline_call_nodes_are_originless():
     text = """id: generated-origins
 name: generated-origins
 input:
-  topic: str
+  topic: !str
 defs:
   echo:
     kind: code
     code: tests.engine._compose_codefns:echo
-    input: {topic: str}
+    input:
+      topic: !str
     output: str
 nodes:
   consumer:
@@ -259,6 +260,41 @@ nodes: {}
     assert retried.origin_resolver is None
     assert catalog.resolve(outer_node.origin) is not None
     assert catalog.resolve(inner_node.origin) is not None
+
+
+def test_a_mapping_output_replaced_after_parsing_is_kept_as_given():
+    """A retried callable reads its current output mapping, not the stale source."""
+    text = """id: retry-mapping
+name: retry-mapping
+defs:
+  outer:
+    nodes:
+      worker:
+        kind: code
+        code: return 1
+        output: int
+    output:
+      r: {a: '${missing.output}'}
+nodes: {}
+"""
+    document = SourceDocument.parse(text)
+    parsed = parse_file(document)
+    scope = _CallableScope(
+        parsed.defs,
+        {},
+        None,
+        parsed.uses,
+        document.root.child("defs"),
+    )
+
+    with pytest.raises(LoadError):
+        scope.resolve("outer")
+
+    parsed.defs["outer"]["outputs"] = {"r": {"a": "${worker.output}"}}
+    retried = scope.resolve("outer")
+
+    (output,) = retried.compiled.outputs
+    assert output.binding.source == {"a": "${worker.output}"}
 
 
 def test_failed_def_build_discards_inline_builder_closures_before_retry():

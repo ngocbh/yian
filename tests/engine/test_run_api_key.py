@@ -586,11 +586,11 @@ def test_a_profile_learner_401_records_no_part_of_the_key(tmp_path, monkeypatch)
 _MAP_FLOW = """id: fan
 name: fan
 input:
-  values: list[str]
+  values: !list(str)
 defs:
   body:
     input:
-      value: str
+      value: !str
     nodes:
       inner:
         kind: agent
@@ -613,7 +613,7 @@ name: turns
 defs:
   body:
     input:
-      text: str
+      text: !str
     nodes:
       inner:
         kind: agent

@@ -8,7 +8,7 @@ name: composer_chat
 description: An assistant that can discover, read, validate, run, and author Yian flows.
 
 input:
-  opening: str
+  opening: !str
 
 typedefs:
   Turn:
@@ -18,8 +18,8 @@ typedefs:
 defs:
   respond:                # a CASE result is the routed node's output, so the reply chain is a def
     input:
-      transcript: str
-      message: str
+      transcript: !str
+      message: !str
     nodes:
       reply:
         kind: agent
@@ -59,8 +59,8 @@ defs:
 
   turn:
     input:
-      transcript: str
-      exited: bool
+      transcript: !str
+      exited: !bool
     nodes:
       ask:
         kind: human_input

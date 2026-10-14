@@ -22,7 +22,8 @@ long_term_memory:
     config: {recall_limit: 3}
 uses:
   lib: notes-lib
-input: {question: str}
+input:
+  question: !str
 nodes:
   ask:
     kind: agent
@@ -43,7 +44,8 @@ output:
 _LIB_FLOW = """id: notes-lib
 name: notes_lib
 long_term_memory: {notes: episodic}
-input: {topic: str}
+input:
+  topic: !str
 nodes:
   summarize:
     kind: agent

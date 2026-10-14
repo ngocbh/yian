@@ -14,7 +14,8 @@ from yian.runtime.log import decode_record
 _FLOW = """id: cli-session-restart
 name: cli_session_restart
 llm_config: {provider: openai, model: offline-model}
-input: {question: str}
+input:
+  question: !str
 nodes:
   answer:
     kind: agent

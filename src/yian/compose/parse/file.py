@@ -30,6 +30,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
 from yian.compose.helpers.yaml_words import yaml_read_as
+from yian.compose.helpers.source import is_extension_key
 from yian.compose.nodes import REMOVED_KINDS
 from yian.compose.parse.nodes import IDENTIFIER_RULE, identifier_suggestion, is_identifier
 from yian.compose.source import (
@@ -289,7 +290,8 @@ def _desugar_compact(body: dict, root: SourceCursor) -> dict:
     params = body.get("input") or {}
     if not isinstance(params, dict):
         raise diagnostics.error(
-            "compact (single-node) flow: `input:` must be a param map (name: TYPE)",
+            "compact (single-node) flow: `input:` must be a param map "
+            "(`name: !TYPE`, e.g. `topic: !str`)",
             range=root.range_of("input"),
         )
 
@@ -473,7 +475,7 @@ def parse_file(source: str | SourceDocument) -> ComposeFile:
             range=root.range,
         )
 
-    body = {key: root.get(key) for key in raw if not str(key).startswith("x-")}
+    body = {key: root.get(key) for key in raw if not is_extension_key(key)}
     _normalize_section_keys(
         body,
         diagnostics=diagnostics,

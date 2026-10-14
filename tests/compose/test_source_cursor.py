@@ -83,6 +83,16 @@ def test_value_copy_preserves_alias_identity_and_recursive_alias():
     assert copied["root"]["self"] is copied["root"]
 
 
+def test_holds_compares_exactly_and_ends_on_a_recursive_alias():
+    cursor = SourceDocument.parse("p: &a [1, *a]\nq: [1, true]\n").root
+    recursive = cursor.child("p")
+
+    assert recursive.holds(recursive.value)
+    assert not recursive.holds([1, [1]])
+    assert cursor.child("q").holds([1, True])
+    assert not cursor.child("q").holds([1, 1])
+
+
 def test_value_copy_is_stack_safe_for_deep_alias_dag():
     levels = 2_000
     copied = _binary_alias_document(levels).root.child("root").value
@@ -1347,7 +1357,7 @@ def test_scalar_style_survives_node_signature_normalization():
         "  step:\n"
         "    kind: tool\n"
         "    input:\n"
-        "      plain: int = 3\n"
+        "      plain: !int 3\n"
         "      quoted: 'int = 3'\n"
     ).root.child("nodes")
 
@@ -1402,7 +1412,7 @@ def test_scalar_style_of_a_def_node_input():
         "      step:\n"
         "        kind: tool\n"
         "        input:\n"
-        "          plain: int = 3\n"
+        "          plain: !int 3\n"
         "          quoted: 'int = 3'\n"
     ).root
 

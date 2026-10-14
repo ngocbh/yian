@@ -124,7 +124,7 @@ def test_agent_variable_owners_are_authored_callsites_and_survive_call_cloning()
 
     source = _REPEATED_DEFINITION.replace(
         "kind: code\n        code: |\n          return 1\n        output: int",
-        "kind: agent\n        variables: {instruction: 'str = Summarize clearly'}\n"
+        "kind: agent\n        variables: {instruction: !str Summarize clearly}\n"
         "        prompt: ${instruction}\n        output: str",
     )
     flow = load_flow(source).compiled
@@ -173,17 +173,20 @@ def test_map_items_and_loop_iterations_share_the_authored_agent_variable_owner()
 name: variable_owners
 defs:
   body:
-    input: {n: int}
+    input:
+      n: !int
     nodes:
       writer:
         kind: agent
         input: {n: '${input.n}'}
-        variables: {instruction: 'str = Summarize clearly'}
+        variables:
+          instruction: !str Summarize clearly
         prompt: '${instruction}: ${n}'
         output: {n: int}
     output: ${writer.output}
   repeated:
-    input: {n: int}
+    input:
+      n: !int
     nodes:
       repeat:
         kind: loop

@@ -30,9 +30,9 @@ def test_scalar_int_gets_schema():
 
 
 @pytest.mark.parametrize("expression,lower,upper,inside,outside", [
-    ("int[1, 12]", 1, 12, 4, 13),
-    ("float[-0.5, 1]", -0.5, 1, 0.4, 1.1),
-    ("int[4, 4]", 4, 4, 4, 3),
+    ("int(1..12)", 1, 12, 4, 13),
+    ("float(-0.5..1)", -0.5, 1, 0.4, 1.1),
+    ("int(4..4)", 4, 4, 4, 3),
 ])
 def test_bounded_scalar_schema_exposes_and_enforces_inclusive_limits(
     expression, lower, upper, inside, outside,
@@ -52,10 +52,10 @@ def test_bounded_numeric_schemas_preserve_nested_lists_records_and_nullable_fiel
     from yian.typesys.types import read_typedefs, type_for
 
     registry = read_typedefs({"Rating": {
-        "count": "int[1, 12]", "scores": "list[list[float[0, 1]]]",
-        "confidence": "Optional[float[0, 1]]",
+        "count": "int(1..12)", "scores": "list(list(float(0..1)))",
+        "confidence": "Optional(float(0..1))",
     }})
-    model = type_to_schema(type_for("list[Rating]", registry))
+    model = type_to_schema(type_for("list(Rating)", registry))
     schema = model.model_json_schema()
     record_name = schema["properties"]["items"]["items"]["$ref"].rsplit("/", 1)[-1]
     fields = schema["$defs"][record_name]["properties"]
@@ -73,7 +73,7 @@ def test_bounded_numeric_schemas_preserve_nested_lists_records_and_nullable_fiel
 def test_nullable_bounded_scalars_keep_explicit_null_in_schema():
     from yian.typesys.types import type_for
 
-    model = type_to_schema(type_for("list[Optional[int[1, 12]]]", {}))
+    model = type_to_schema(type_for("list(Optional(int(1..12)))", {}))
     items_schema = model.model_json_schema()["properties"]["items"]["items"]
     numeric = next(arm for arm in items_schema["anyOf"] if arm["type"] == "integer")
     assert numeric["minimum"] == 1 and numeric["maximum"] == 12
@@ -89,7 +89,7 @@ def test_large_numeric_schema_bounds_match_resolved_type(kind, lower, upper, out
     from yian.typesys.types import type_for
     from yian.typesys.values import TypeCheckError, build_value_as
 
-    typ = type_for(f"{kind}[{lower}, {upper}]", {})
+    typ = type_for(f"{kind}({lower}..{upper})", {})
     typ.validate_shape()
     model = type_to_schema(typ)
     value_schema = model.model_json_schema()["properties"]["value"]
@@ -106,7 +106,7 @@ def test_large_numeric_schema_bounds_match_resolved_type(kind, lower, upper, out
 def test_generic_list_schema_honors_existing_unbounded_element_refinements():
     from yian.typesys.types import type_for
 
-    model = type_to_schema(type_for("list[list[int]]", {}))
+    model = type_to_schema(type_for("list(list(int))", {}))
     scalar_schema = model.model_json_schema()["properties"]["items"]["items"]["items"]
     assert scalar_schema == {"type": "integer"}
     assert model.model_validate({"items": [[1], [2]]}).items == [[1], [2]]
@@ -151,8 +151,8 @@ def test_list_of_records():
 
 
 _TRADES = {
-    "Buy": {"action": "Literal[buy]", "qty": "int"},
-    "Sell": {"action": "Literal[sell]", "price": "float"},
+    "Buy": {"action": "Literal(buy)", "qty": "int"},
+    "Sell": {"action": "Literal(sell)", "price": "float"},
     "Text": {"text": "str"},
     "Call": {"name": "str", "input": "object"},
 }
@@ -186,7 +186,7 @@ def _assert_member_defs(schema, members, size):
 def test_tagged_union_schema_is_any_of_closed_members_with_const_tags():
     from yian.typesys.types import read_typedefs, type_for
 
-    union = type_for("Union[Buy, Sell]", read_typedefs(_TRADES))
+    union = type_for("Union(Buy, Sell)", read_typedefs(_TRADES))
     model = type_to_schema(union)
     assert model.__name__ == "ScalarWrapper"
     schema = model.model_json_schema()
@@ -200,10 +200,10 @@ def test_union_members_with_non_identifier_tags_are_numbered():
     from yian.typesys.types import read_typedefs, type_for
 
     registry = read_typedefs({
-        "Now": {"when": "Literal['right now']"},
-        "Later": {"when": "Literal[later]"},
+        "Now": {"when": "Literal('right now')"},
+        "Later": {"when": "Literal(later)"},
     })
-    schema = type_to_schema(type_for("Union[Now, Later]", registry)).model_json_schema()
+    schema = type_to_schema(type_for("Union(Now, Later)", registry)).model_json_schema()
     members = _union_arms(schema, schema["properties"]["value"])
     assert [member["title"] for member in members] == ["Member1", "Member2"]
 
@@ -214,10 +214,10 @@ def test_union_nested_in_a_member_gets_position_named_defs():
     registry = read_typedefs({
         **_TRADES,
         "Limit": {"px": "float"},
-        "Ticket": {"kind": "Literal[ticket]", "trade": "Union[Buy, Sell]", "limit": "Limit"},
-        "Skip": {"kind": "Literal[skip]", "trade": "Union[Buy, Sell]"},
+        "Ticket": {"kind": "Literal(ticket)", "trade": "Union(Buy, Sell)", "limit": "Limit"},
+        "Skip": {"kind": "Literal(skip)", "trade": "Union(Buy, Sell)"},
     })
-    schema = type_to_schema(type_for("list[Union[Ticket, Skip]]", registry)).model_json_schema()
+    schema = type_to_schema(type_for("list(Union(Ticket, Skip))", registry)).model_json_schema()
     defs = schema["$defs"]
     assert not [key for key in defs if "__" in key]
     assert len({definition["title"] for definition in defs.values()}) == len(defs)
@@ -230,7 +230,7 @@ def test_union_nested_in_a_member_gets_position_named_defs():
 def test_untagged_union_schema_is_any_of_closed_members():
     from yian.typesys.types import read_typedefs, type_for
 
-    model = type_to_schema(type_for("Union[Text, Call]", read_typedefs(_TRADES)))
+    model = type_to_schema(type_for("Union(Text, Call)", read_typedefs(_TRADES)))
     schema = model.model_json_schema()
     members = _union_arms(schema, schema["properties"]["value"])
     _assert_member_defs(schema, members, 2)
@@ -242,7 +242,7 @@ def test_untagged_union_schema_is_any_of_closed_members():
 def test_record_field_of_union_type_gets_member_schemas():
     from yian.typesys.types import read_typedefs, type_for
 
-    registry = read_typedefs({**_TRADES, "Order": {"trade": "Union[Buy, Sell]", "note": "str"}})
+    registry = read_typedefs({**_TRADES, "Order": {"trade": "Union(Buy, Sell)", "note": "str"}})
     model = type_to_schema(type_for("Order", registry))
     schema = model.model_json_schema()
     members = _union_arms(schema, schema["properties"]["trade"])
@@ -253,7 +253,7 @@ def test_record_field_of_union_type_gets_member_schemas():
 def test_list_of_union_schema_gets_member_schemas():
     from yian.typesys.types import read_typedefs, type_for
 
-    model = type_to_schema(type_for("list[Union[Buy, Sell]]", read_typedefs(_TRADES)))
+    model = type_to_schema(type_for("list(Union(Buy, Sell))", read_typedefs(_TRADES)))
     assert model.__name__ == "ListWrapper"
     schema = model.model_json_schema()
     members = _union_arms(schema, schema["properties"]["items"]["items"])
@@ -264,7 +264,7 @@ def test_union_members_reject_unknown_fields_and_unwrap_to_the_member_dict():
     from yian.nodes.agent.structured import _unwrap
     from yian.typesys.types import read_typedefs, type_for
 
-    union = type_for("Union[Buy, Sell]", read_typedefs(_TRADES))
+    union = type_for("Union(Buy, Sell)", read_typedefs(_TRADES))
     model = type_to_schema(union)
     reply = model.model_validate({"value": {"action": "sell", "price": 1.5}})
     assert _unwrap(reply, union) == {"action": "sell", "price": 1.5}
@@ -277,20 +277,20 @@ def test_records_nested_in_union_members_reject_unknown_fields():
 
     registry = read_typedefs({
         "Limit": {"px": "float"},
-        "Buy": {"action": "Literal[buy]", "limit": "Limit"},
-        "Sell": {"action": "Literal[sell]"},
+        "Buy": {"action": "Literal(buy)", "limit": "Limit"},
+        "Sell": {"action": "Literal(sell)"},
     })
-    model = type_to_schema(type_for("Union[Buy, Sell]", registry))
+    model = type_to_schema(type_for("Union(Buy, Sell)", registry))
     with pytest.raises(ValidationError):
         model.model_validate({"value": {"action": "buy", "limit": {"px": 1.0, "zzz": 1}}})
 
 
 @pytest.mark.parametrize("expression,value", [
-    ("Optional[int]", 4),
-    ("Optional[bool]", True),
-    ("Optional[Literal[a, b]]", "a"),
-    ("Optional[object]", {"k": 1}),
-    ("Optional[list[int]]", [1]),
+    ("Optional(int)", 4),
+    ("Optional(bool)", True),
+    ("Optional(Literal(a, b))", "a"),
+    ("Optional(object)", {"k": 1}),
+    ("Optional(list(int))", [1]),
 ])
 def test_nullable_root_schema_accepts_null(expression, value):
     from yian.nodes.agent.structured import _unwrap
@@ -306,7 +306,7 @@ def test_nullable_root_schema_accepts_null(expression, value):
 def test_non_nullable_root_schema_rejects_null():
     from yian.typesys.types import type_for
 
-    for expression in ("int", "Literal[a, b]", "list[int]"):
+    for expression in ("int", "Literal(a, b)", "list(int)"):
         typ = type_for(expression, {})
         field = "items" if typ.kind.is_list() else "value"
         with pytest.raises(ValidationError):
@@ -318,14 +318,14 @@ def test_nullable_list_elements_accept_null_items():
 
     registry = read_typedefs({"Point": {"x": "int"}})
     for expression, items in (
-        ("list[Optional[int]]", [1, None]),
-        ("list[Optional[Literal[a, b]]]", ["a", None]),
-        ("list[Optional[Point]]", [{"x": 1}, None]),
+        ("list(Optional(int))", [1, None]),
+        ("list(Optional(Literal(a, b)))", ["a", None]),
+        ("list(Optional(Point))", [{"x": 1}, None]),
     ):
         model = type_to_schema(type_for(expression, registry))
         assert model.model_validate({"items": items}).model_dump()["items"] == items
     with pytest.raises(ValidationError):
-        type_to_schema(type_for("list[int]", {})).model_validate({"items": [1, None]})
+        type_to_schema(type_for("list(int)", {})).model_validate({"items": [1, None]})
 
 
 def test_nullable_record_root_is_wrapped_so_it_can_be_null():
@@ -333,7 +333,7 @@ def test_nullable_record_root_is_wrapped_so_it_can_be_null():
     from yian.typesys.types import read_typedefs, type_for
 
     registry = read_typedefs({"Point": {"x": "int"}})
-    typ = type_for("Optional[Point]", registry)
+    typ = type_for("Optional(Point)", registry)
     model = type_to_schema(typ)
     assert _unwrap(model.model_validate({"value": None}), typ) is None
     assert _unwrap(model.model_validate({"value": {"x": 1}}), typ) == {"x": 1}

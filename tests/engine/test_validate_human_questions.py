@@ -26,9 +26,10 @@ _POOL_REF_IN_FIELD = """
 id: f
 name: f
 nodes:
-  a: {kind: code, output: list[object], code: tests.seeds.fns:questions_seed, input: {seed: "${input.s}"}}
+  a: {kind: code, output: list(object), code: tests.seeds.fns:questions_seed, input: {seed: "${input.s}"}}
   ask: {kind: human_input, questions: "${a.output}"}
-input: {s: str}
+input:
+  s: !str
 output: ${ask.output}
 """
 

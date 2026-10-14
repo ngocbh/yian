@@ -245,11 +245,11 @@ _LOOP_FLOW = """
 id: big-loop
 name: big_loop
 input:
-  x: int
+  x: !int
 defs:
   step:
     input:
-      n: int
+      n: !int
     nodes:
       s:
         kind: code
@@ -274,11 +274,11 @@ _MAP_FLOW = """
 id: big-map
 name: big_map
 input:
-  items: list[int]
+  items: !list(int)
 defs:
   double:
     input:
-      item: int
+      item: !int
     nodes:
       c:
         kind: code
@@ -301,11 +301,11 @@ _CALL_FLOW = """
 id: big-call
 name: big_call
 input:
-  x: int
+  x: !int
 defs:
   inc:
     input:
-      y: int
+      y: !int
     nodes:
       c:
         kind: code

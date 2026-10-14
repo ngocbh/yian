@@ -2,7 +2,7 @@
 id: err-unknown-tool
 name: err_unknown_tool
 input:
-  topic: str
+  topic: !str
 nodes:
   fetch:
     kind: tool

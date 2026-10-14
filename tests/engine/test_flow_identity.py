@@ -52,7 +52,7 @@ _INLINE_FLOW = """
 id: stable
 name: Stable
 input:
-  x: int = 1
+  x: !int 1
 env:
   beta: 2
   alpha: 1
@@ -78,7 +78,7 @@ _INLINE_FLOW_WITH_COMMENTS = """
 id: stable
 name: Stable
 input:
-  x: int = 1
+  x: !int 1
 env:
   alpha: 1
   beta: 2  # mapping presentation is not program identity
@@ -112,7 +112,7 @@ _INLINE_COMPOSITE_IDENTITY = """
 id: inline-identity
 name: inline_identity
 input:
-  value: int
+  value: !int
 nodes:
   wrapper:
     kind: call
@@ -206,9 +206,9 @@ name: inline_manifest_structural_input
 typedefs:
   Row:
     z: int
-    a: Optional[str]
+    a: Optional(str)
 input:
-  row: Row
+  row: !Row
 nodes:
   wrapper:
     kind: call
@@ -331,7 +331,7 @@ def test_flow_fingerprint_changes_with_wiring_types_asserts_and_env():
 
     output_type = _compiled(_INLINE_FLOW.replace("output: int", "output: float"))
 
-    input_type = _compiled(_INLINE_FLOW.replace("x: int = 1", "x: float = 1"))
+    input_type = _compiled(_INLINE_FLOW.replace("x: !int 1", "x: !float 1"))
 
     asserts = copy.deepcopy(original)
     asserts.nodes["step"].pre_asserts = list(reversed(asserts.nodes["step"].pre_asserts))
@@ -655,9 +655,9 @@ _GOLDEN_FLOW = """
 id: golden
 name: golden
 input:
-  topic: str
-  limit: int = 3
-  mode: str = 'fast'
+  topic: !str
+  limit: !int 3
+  mode: !str 'fast'
 llm_config:
   provider: openai
   model: gpt-4o
@@ -802,7 +802,7 @@ def _flow_with_declaration_default(name: str, value: str):
 id: literal-default
 name: literal_default
 input:
-  {name}: "str = {value!r}"
+  {name}: !str {value!r}
 nodes:
   step:
     kind: code
@@ -888,9 +888,9 @@ def _flow_with_template(name: str, source: str):
 id: template-input
 name: template_input
 input:
-  a: str
-  b: str
-  t: str
+  a: !str
+  b: !str
+  t: !str
 nodes:
   step:
     kind: code
@@ -979,10 +979,10 @@ def test_manifest_has_no_redaction_markers():
 id: no-markers
 name: no_markers
 input:
-  t: str
-  token: str
-  signature: str = 'q -> a'
-  connection_string: str = 'Server=a;User=alice'
+  t: !str
+  token: !str
+  signature: !str 'q -> a'
+  connection_string: !str 'Server=a;User=alice'
 env:
   AUTH_TOKEN: a
   region_url: https://x?key=a
@@ -1021,7 +1021,7 @@ def test_credential_named_parameter_without_default_has_the_null_default():
 id: no-default
 name: no_default
 input:
-  token: str
+  token: !str
 nodes:
   step:
     kind: code
@@ -1189,11 +1189,11 @@ def _parent_with_child(child_body: str):
 id: recursive
 name: Recursive
 input:
-  x: int
+  x: !int
 defs:
   child:
     input:
-      x: int
+      x: !int
     nodes:
       inner:
         kind: code
@@ -1476,7 +1476,7 @@ name: total_loop
 defs:
   bump:
     input:
-      n: int
+      n: !int
     nodes:
       step:
         kind: code
@@ -1790,14 +1790,14 @@ def test_numeric_bounds_remain_in_nested_parameter_contract_identity():
 
     first = _fragment()
     first.nodes["body"].params = [Parameter(
-        "scores", ValueContract(type_for("list[Optional[float[0, 1]]]", {})),
+        "scores", ValueContract(type_for("list(Optional(float(0..1)))", {})),
         has_default=True, default=[0.5],
     )]
     first.wiring["body"] = {}
     second = copy.deepcopy(first)
     second.nodes["body"].params[0] = replace(
         second.nodes["body"].params[0],
-        contract=ValueContract(type_for("list[Optional[float[0, 2]]]", {})),
+        contract=ValueContract(type_for("list(Optional(float(0..2)))", {})),
     )
     nested = flow_manifest(first)["nodes"]["body"]["params"][0]["contract"]["type"]["element"]
     assert nested["bounds"] == [0, 1] and nested["nullable"] is True

@@ -47,7 +47,7 @@ name: typedefs
 typedefs:
 {typedefs}
 input:
-  n: int
+  n: !int
 output: int
 kind: code
 code: |
@@ -58,8 +58,8 @@ code: |
 @pytest.mark.parametrize(
     ("typedefs", "message"),
     [
-        ("  Bad:\n    x: lst[int]", "typedef 'Bad' field 'x': unknown type constructor 'lst'"),
-        ("  Tree:\n    kids: list[Tree]", "typedef 'Tree' field 'kids': recursive type reference"),
+        ("  Bad:\n    x: lst(int)", "typedef 'Bad' field 'x': unknown type constructor 'lst'"),
+        ("  Tree:\n    kids: list(Tree)", "typedef 'Tree' field 'kids': recursive type reference"),
         ("  Al: Nope", "typedef 'Al': unknown type 'Nope'"),
     ],
 )
@@ -77,9 +77,9 @@ name: signal
 typedefs:
   Signal:
     score: float
-    tags: lst[str]
+    tags: lst(str)
 input:
-  s: Signal
+  s: !Signal
 output: float
 kind: code
 code: |

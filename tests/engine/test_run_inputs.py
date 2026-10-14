@@ -12,7 +12,7 @@ FLOW = """\
 id: hello
 name: hello
 input:
-  topic: str = "world"
+  topic: !str "world"
 nodes:
   greet:
     kind: code
@@ -34,7 +34,7 @@ def test_undeclared_input_is_rejected_before_the_log(tmp_path) -> None:
 
 
 def test_flow_without_inputs_names_none_declared() -> None:
-    flow = load_flow(FLOW.replace('input:\n  topic: str = "world"\n', "").replace(
+    flow = load_flow(FLOW.replace('input:\n  topic: !str "world"\n', "").replace(
         "${input.topic}", "x"
     ))
     with pytest.raises(ValueError, match=r"unknown inputs 'a', 'b'; declared inputs: \(none\)"):

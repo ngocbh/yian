@@ -10,7 +10,7 @@ name: case_on_category
 description: Classify a topic's market category, then route to a category-specific note.
 
 input:
-  topic: str
+  topic: !str
 
 nodes:
   classify:

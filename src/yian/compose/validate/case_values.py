@@ -48,7 +48,7 @@ from yian.compose.desugar.case_values import ValuePath, prepared_literal, value_
 from yian.compose.desugar.inline_calls import _SYNTH_PREFIX
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError, source_text
 from yian.compose.helpers.output_contracts import resolve_output_binding_contract
-from yian.compose.helpers.typed_bindings import yaml_quoted
+from yian.compose.helpers.tags import yaml_quoted
 from yian.compose.helpers.yaml_words import former_boolean_fix
 from yian.compose.parse.file import CallDescriptor, CaseDescriptor
 from yian.compose.validate.narrowing import Narrowing
@@ -236,7 +236,7 @@ class _Checker:
                     branch,
                     "null needs an Optional output; the case declares "
                     f"{canonical_type_label(expected)} (write "
-                    f"`output: Optional[{_authored_type(desc, expected)}]`)",
+                    f"`output: Optional({_authored_type(desc, expected)})`)",
                 ) from None
             message = (
                 f"the value {_shown(value)} is not a valid {canonical_type_label(expected)}"

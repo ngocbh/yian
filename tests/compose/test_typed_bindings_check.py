@@ -1,7 +1,7 @@
 """Checking typed bindings at load: literals exactly, references by inferred type.
 
 A typed binding whose value can never fit its declared type is a load error located
-at the binding. A literal right side is fully known, so it is checked exactly; a
+at the binding. A literal value is fully known, so it is checked exactly; a
 reference or expression is rejected only when its inferred type is disjoint from the
 declared one, while a narrower inferred type loads and is checked at runtime.
 """
@@ -65,14 +65,14 @@ def _line_of(text: str, line: str) -> int:
 
 
 def test_disjoint_node_input_fails_at_its_line():
-    text = _flow("int = ${note.output}", producers=_producer("note", '"hi"', "str"))
+    text = _flow("!int ${note.output}", producers=_producer("note", '"hi"', "str"))
 
     error = _load_error(text)
 
     assert str(error.diagnostic.message).startswith(
         "node 'use' input 'x': declared int, but the value is str"
     )
-    assert _error_line(error) == _line_of(text, "      x: int = ${note.output}")
+    assert _error_line(error) == _line_of(text, "      x: !int ${note.output}")
 
 
 def test_disjoint_flow_output_field_fails_at_its_line():
@@ -86,14 +86,14 @@ nodes:
       return "hi"
     output: str
 output:
-  x: int = ${note.output}
+  x: !int ${note.output}
 """
     error = _load_error(text)
 
     assert str(error.diagnostic.message).startswith(
         "output 'x': declared int, but the value is str"
     )
-    assert _error_line(error) == _line_of(text, "  x: int = ${note.output}")
+    assert _error_line(error) == _line_of(text, "  x: !int ${note.output}")
 
 
 def test_disjoint_single_flow_output_fails():
@@ -106,14 +106,14 @@ nodes:
     code: |
       return "hi"
     output: str
-output: int = ${note.output}
+output: !int ${note.output}
 """
     error = _load_error(text)
 
     assert str(error.diagnostic.message).startswith(
         "output: declared int, but the value is str"
     )
-    assert _error_line(error) == _line_of(text, "output: int = ${note.output}")
+    assert _error_line(error) == _line_of(text, "output: !int ${note.output}")
 
 
 def test_record_flow_output_field_named_result_keeps_its_name():
@@ -127,7 +127,7 @@ nodes:
       return "hi"
     output: str
 output:
-  result: int = ${note.output}
+  result: !int ${note.output}
 """
     error = _load_error(text)
 
@@ -137,7 +137,7 @@ output:
 
 
 def test_embedded_template_is_text_and_disjoint_from_int():
-    text = _flow("int = n=${a.output}", producers=_producer("a", "1", "int"))
+    text = _flow("!int n=${a.output}", producers=_producer("a", "1", "int"))
 
     error = _load_error(text)
 
@@ -155,7 +155,7 @@ def test_record_with_an_extra_required_field_is_disjoint_from_a_smaller_record()
     a: int
 """
     text = _flow(
-        "Small = ${big.output}",
+        "!Small ${big.output}",
         producers=_producer("big", '{"a": 1, "b": "x"}', "Big"),
         typedefs=typedefs,
     )
@@ -163,58 +163,99 @@ def test_record_with_an_extra_required_field_is_disjoint_from_a_smaller_record()
     error = _load_error(text)
 
     assert str(error.diagnostic.message) == (
-        "node 'use' input 'x': declared {\"a\":int}, "
+        "node 'use' input 'x': declared Small, "
         'but the value is {"a":int,"b":str}'
     )
+
+
+def test_record_missing_a_required_field_names_the_field():
+    typedefs = """typedefs:
+  Buy:
+    action: Literal(buy)
+    conviction: float
+  Conv:
+    conviction: float
+"""
+    text = _flow(
+        "!Buy ${d.output}",
+        producers=_producer("d", '{"conviction": 0.5}', "Conv"),
+        typedefs=typedefs,
+    )
+
+    error = _load_error(text)
+
+    assert str(error.diagnostic.message) == (
+        "node 'use' input 'x': declared Buy, "
+        'but the value is {"conviction":float} (missing required `action`)'
+    )
+
+
+def test_missing_field_is_not_named_when_another_field_mismatches():
+    typedefs = """typedefs:
+  Buy:
+    action: Literal(buy)
+    conviction: float
+  Conv:
+    conviction: str
+"""
+    text = _flow(
+        "!Buy ${d.output}",
+        producers=_producer("d", '{"conviction": "x"}', "Conv"),
+        typedefs=typedefs,
+    )
+
+    error = _load_error(text)
+
+    assert "missing" not in str(error.diagnostic.message)
 
 
 # --- literals ------------------------------------------------------------ #
 
 
 def test_text_literal_for_int_fails_at_its_line():
-    text = _flow("int = abc")
+    text = _flow("!int abc")
 
     error = _load_error(text)
 
-    assert str(error.diagnostic.message) == "binding 'x': `abc` is not a valid int"
-    assert _error_line(error) == _line_of(text, "      x: int = abc")
+    assert str(error.diagnostic.message) == "'x': `abc` is not a valid int"
+    assert _error_line(error) == _line_of(text, "      x: !int abc")
 
 
 def test_number_literal_for_str_suggests_quoting():
-    error = _load_error(_flow("str = 30"))
+    error = _load_error(_flow("!str 30"))
 
     assert str(error.diagnostic.message) == (
-        "binding 'x': `30` is not a valid str; quote it to keep it as text: "
-        '`x: str = "30"`'
+        "'x': `30` is not a valid str; quote it to keep it as text: "
+        '`x: !str "30"`'
     )
 
 
 def test_true_literal_for_str_explains_yaml_booleans():
-    error = _load_error(_flow("str = true"))
+    error = _load_error(_flow("!str true"))
 
     message = str(error.diagnostic.message)
-    assert message.startswith("binding 'x': `true` is not a valid str")
-    assert '`x: str = "true"`' in message
+    assert message.startswith("'x': `true` is not a valid str")
+    assert '`x: !str "true"`' in message
     assert "(YAML reads unquoted true/false as booleans)" in message
 
 
 @pytest.mark.parametrize("word", ["yes", "no"])
 def test_unquoted_yes_or_no_literal_for_str_is_text(word):
-    result = run_flow(load_flow(_flow(f"str = {word}")), {})
+    result = run_flow(load_flow(_flow(f"!str {word}")), {})
 
     assert result.status == "succeeded", result.failure
     assert result.output == word
 
 
 def test_former_boolean_word_for_bool_names_the_boolean_to_write():
-    text = _flow("bool = yes")
+    text = _flow("!bool yes")
 
     error = _load_error(text)
 
     assert str(error.diagnostic.message) == (
-        "binding 'x': `yes` is not a valid bool; `yes` is text; write `true`"
+        "'x': `yes` is not a valid bool; `yes` is text; write `true`"
     )
-    assert _error_line(error) == _line_of(text, "      x: bool = yes")
+    assert _error_line(error) == _line_of(text, "      x: !bool yes")
 
 
 def test_former_boolean_word_for_a_bool_output_names_the_boolean_to_write():
@@ -223,14 +264,14 @@ id: checked
 name: checked
 nodes: {}
 output:
-  ok: bool = n
+  ok: !bool n
 """
     error = _load_error(text)
 
     assert str(error.diagnostic.message) == (
-        "binding 'ok': `n` is not a valid bool; `n` is text; write `false`"
+        "'ok': `n` is not a valid bool; `n` is text; write `false`"
     )
-    assert _error_line(error) == _line_of(text, "  ok: bool = n")
+    assert _error_line(error) == _line_of(text, "  ok: !bool n")
 
 
 def test_former_boolean_word_in_a_list_literal_names_the_boolean_to_write():
@@ -239,13 +280,13 @@ id: checked
 name: checked
 nodes: {}
 output:
-  ok: list[bool] = [true, Off]
+  ok: !list(bool) [true, Off]
 """
     error = _load_error(text)
 
     assert str(error.diagnostic.message) == (
-        "binding 'ok': `[true, Off]` is not a valid list[bool] "
-        "('Off' does not match declared type bool); `Off` is text; write `false`"
+        "'ok': the value is not a valid list(bool): 'Off' does not match declared "
+        "type bool (at `ok[1]`); `Off` is text; write `false`"
     )
 
 
@@ -255,34 +296,34 @@ id: checked
 name: checked
 nodes: {}
 output:
-  x: int = null
+  x: !int null
 """
     error = _load_error(text)
 
-    assert str(error.diagnostic.message) == "binding 'x': `null` is not a valid int"
-    assert _error_line(error) == _line_of(text, "  x: int = null")
+    assert str(error.diagnostic.message) == "'x': `null` is not a valid int"
+    assert _error_line(error) == _line_of(text, "  x: !int null")
 
 
 def test_escaped_template_is_text_and_does_not_fit_int():
-    text = _flow("int = $${x}")
+    text = _flow("!int $${x}")
 
     error = _load_error(text)
 
     assert str(error.diagnostic.message) == (
-        "node 'use' input 'x': declared int, but the value \"${x}\" does not fit"
+        "'x': `$${x}` is not a valid int"
     )
-    assert _error_line(error) == _line_of(text, "      x: int = $${x}")
+    assert _error_line(error) == _line_of(text, "      x: !int $${x}")
 
 
 @pytest.mark.parametrize(
     "binding",
     [
-        "Optional[int] = null",
-        "int = 3",
-        "list[str] = []",
-        "float = 3",
-        "str = abc",
-        "str = $${x}",
+        "!Optional(int) null",
+        "!int 3",
+        "!list(str) []",
+        "!float 3",
+        "!str abc",
+        "!str $${x}",
     ],
 )
 def test_fitting_literals_load(binding):
@@ -290,7 +331,7 @@ def test_fitting_literals_load(binding):
 
 
 def test_escaped_template_binds_its_text():
-    result = run_flow(load_flow(_flow("str = $${x}")), {})
+    result = run_flow(load_flow(_flow("!str $${x}")), {})
 
     assert result.status == "succeeded", result.failure
     assert result.output == "${x}"
@@ -301,7 +342,7 @@ def test_escaped_template_binds_its_text():
 
 def test_optional_into_non_optional_loads_and_fails_at_runtime():
     text = _flow(
-        "int = ${maybe.output}", producers=_producer("maybe", "None", "Optional[int]")
+        "!int ${maybe.output}", producers=_producer("maybe", "None", "Optional(int)")
     )
     loaded = load_flow(text)
 
@@ -313,19 +354,25 @@ def test_optional_into_non_optional_loads_and_fails_at_runtime():
 
 
 def test_str_into_literal_loads():
-    load_flow(_flow("Literal[a, b] = ${s.output}", producers=_producer("s", '"a"', "str")))
+    load_flow(
+        _flow(
+            "!AB ${s.output}",
+            producers=_producer("s", '"a"', "str"),
+            typedefs="typedefs:\n  AB: Literal(a, b)\n",
+        )
+    )
 
 
 def test_int_into_float_loads():
-    load_flow(_flow("float = ${i.output}", producers=_producer("i", "1", "int")))
+    load_flow(_flow("!float ${i.output}", producers=_producer("i", "1", "int")))
 
 
 @pytest.mark.parametrize(
     ("binding", "producers"),
     [
-        ("int = ${a.output + 1}", _producer("a", "1", None)),
-        ("int = ${p.output}", _producer("p", "1", None)),
-        ("str = ${system.run_id}", ""),
+        ("!int ${a.output + 1}", _producer("a", "1", None)),
+        ("!int ${p.output}", _producer("p", "1", None)),
+        ("!str ${system.run_id}", ""),
     ],
 )
 def test_unproven_sources_load(binding, producers):
@@ -339,7 +386,7 @@ _STR_CHILD = """
 defs:
   shout:
     input:
-      y: str
+      y: !str
     nodes:
       up:
         kind: code
@@ -361,7 +408,7 @@ name: checked
     kind: code
     code: tests.engine._compose_codefns:echo_x
     input:
-      x: int = call(shout, y=hi)
+      x: !int call(shout, y=hi)
 output: ${{use.output}}
 """
     error = _load_error(text)
@@ -369,7 +416,7 @@ output: ${{use.output}}
     assert str(error.diagnostic.message).startswith(
         "node 'use' input 'x': declared int, but the value is str"
     )
-    assert _error_line(error) == _line_of(text, "      x: int = call(shout, y=hi)")
+    assert _error_line(error) == _line_of(text, "      x: !int call(shout, y=hi)")
 
 
 def test_disjoint_binding_inside_a_defs_body_names_the_body():
@@ -388,7 +435,7 @@ defs:
         kind: code
         code: tests.engine._compose_codefns:echo_x
         input:
-          x: int = ${note.output}
+          x: !int ${note.output}
     output: ${use.output}
 nodes:
   run:
@@ -403,7 +450,7 @@ output: ${run.output}
     )
     # The first frame is the enclosing definition; the last is the binding.
     frames = error.diagnostic.frames
-    assert frames[-1].range.start_line == _line_of(text, "          x: int = ${note.output}")
+    assert frames[-1].range.start_line == _line_of(text, "          x: !int ${note.output}")
 
 
 def test_disjoint_binding_into_an_inline_body_fails():
@@ -419,7 +466,7 @@ nodes:
   wrap:
     kind: call
     input:
-      n: int = ${note.output}
+      n: !int ${note.output}
     nodes:
       twice:
         kind: code
@@ -436,14 +483,14 @@ output: ${wrap.output}
     assert str(error.diagnostic.message).startswith(
         "node 'wrap' input 'n': declared int, but the value is str"
     )
-    assert _error_line(error) == _line_of(text, "      n: int = ${note.output}")
+    assert _error_line(error) == _line_of(text, "      n: !int ${note.output}")
 
 
 def _loop_flow(seed: str) -> str:
     """Return a flow whose LOOP seeds `n` as `seed` into a body returning `n: int`.
 
     Args:
-        seed (`str`): The right side of the LOOP node's `n:` seed.
+        seed (`str`): The value of the LOOP node's `n:` seed.
     """
     return f"""
 id: checked
@@ -451,7 +498,7 @@ name: checked
 defs:
   bump:
     input:
-      n: int
+      n: !int
     nodes:
       step:
         kind: code
@@ -479,7 +526,7 @@ output: ${{loop.output}}
 
 
 def test_disjoint_loop_seed_fails():
-    error = _load_error(_loop_flow("int = ${note.output}"))
+    error = _load_error(_loop_flow("!int ${note.output}"))
 
     assert str(error.diagnostic.message).startswith(
         "node 'loop' input 'n': declared int, but the value is str"
@@ -493,7 +540,7 @@ def _call_str_child(binding: str) -> str:
     """Return a flow that calls `shout` (taking `y: str`) with `y` bound as `binding`.
 
     Args:
-        binding (`str`): The right side of the CALL node's `y:` binding.
+        binding (`str`): The value of the CALL node's `y:` binding.
     """
     return f"""
 id: checked
@@ -514,7 +561,7 @@ output: ${{run.output}}
 
 
 def test_disjoint_reference_into_a_call_reports_the_binding_not_the_child():
-    error = _load_error(_call_str_child("int = ${a.output}"))
+    error = _load_error(_call_str_child("!int ${a.output}"))
 
     assert str(error.diagnostic.message).startswith(
         "node 'run' input 'y': declared int, but the value is str"
@@ -522,15 +569,15 @@ def test_disjoint_reference_into_a_call_reports_the_binding_not_the_child():
 
 
 def test_bad_literal_into_a_call_reports_the_binding_not_the_child():
-    error = _load_error(_call_str_child("int = abc"))
+    error = _load_error(_call_str_child("!int abc"))
 
-    assert str(error.diagnostic.message) == "binding 'y': `abc` is not a valid int"
+    assert str(error.diagnostic.message) == "'y': `abc` is not a valid int"
 
 
 def test_bad_literal_loop_seed_reports_the_binding_not_the_carried_type():
-    error = _load_error(_loop_flow("str = 5"))
+    error = _load_error(_loop_flow("!str 5"))
 
-    assert str(error.diagnostic.message).startswith("binding 'n': `5` is not a valid str")
+    assert str(error.diagnostic.message).startswith("'n': `5` is not a valid str")
 
 
 # --- MAP item bindings ----------------------------------------------------- #
@@ -540,7 +587,7 @@ def _named_map_flow(binding: str, *, over: str, param_type: str, typedefs: str =
     """Return a flow that maps the named `child` over `over`, binding `t` as `binding`.
 
     Args:
-        binding (`str`): The right side of the MAP node's `t:` binding.
+        binding (`str`): The value of the MAP node's `t:` binding.
         over (`str`): The MAP node's `over:` source.
         param_type (`str`): The type the `child` body declares for `t`.
         typedefs (`str`, *optional*, defaults to `""`): A `typedefs:` section.
@@ -549,7 +596,7 @@ def _named_map_flow(binding: str, *, over: str, param_type: str, typedefs: str =
 id: checked
 name: checked
 {typedefs}input:
-  words: list[int]
+  words: !list(int)
 defs:
   child:
     input:
@@ -577,14 +624,14 @@ output: ${{m.output}}
 
 
 def test_disjoint_item_binding_on_a_named_map_fails_at_its_line():
-    text = _named_map_flow("str = ${item}", over="${input.words}", param_type="str")
+    text = _named_map_flow("!str ${item}", over="${input.words}", param_type="!str")
 
     error = _load_error(text)
 
     assert str(error.diagnostic.message).startswith(
         "node 'm' input 't': declared str, but the value is int"
     )
-    assert _error_line(error) == _line_of(text, "      t: str = ${item}")
+    assert _error_line(error) == _line_of(text, "      t: !str ${item}")
 
 
 def test_disjoint_item_binding_on_an_inline_map_fails():
@@ -592,13 +639,13 @@ def test_disjoint_item_binding_on_an_inline_map_fails():
 id: checked
 name: checked
 input:
-  words: list[int]
+  words: !list(int)
 nodes:
   m:
     kind: map
     over: ${input.words}
     input:
-      t: str = ${item}
+      t: !str ${item}
     nodes:
       echo:
         kind: code
@@ -616,7 +663,7 @@ output: ${m.output}
 
 
 def test_fitting_item_binding_loads():
-    load_flow(_named_map_flow("int = ${item}", over="${input.words}", param_type="int"))
+    load_flow(_named_map_flow("!int ${item}", over="${input.words}", param_type="!int"))
 
 
 def test_disjoint_item_field_binding_fails():
@@ -625,11 +672,11 @@ def test_disjoint_item_field_binding_fails():
     name: str
 """
     text = _named_map_flow(
-        "int = ${item.name}",
+        "!int ${item.name}",
         over="${input.recs}",
-        param_type="int",
+        param_type="!int",
         typedefs=typedefs,
-    ).replace("input:\n  words: list[int]\n", "input:\n  recs: list[Rec]\n", 1)
+    ).replace("input:\n  words: !list(int)\n", "input:\n  recs: !list(Rec)\n", 1)
 
     error = _load_error(text)
 
@@ -639,4 +686,4 @@ def test_disjoint_item_field_binding_fails():
 
 
 def test_item_binding_over_an_untyped_list_loads():
-    load_flow(_named_map_flow("str = ${item}", over="${opaque.output}", param_type="str"))
+    load_flow(_named_map_flow("!str ${item}", over="${opaque.output}", param_type="!str"))

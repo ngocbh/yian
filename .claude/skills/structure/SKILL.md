@@ -252,9 +252,17 @@ One package-private catalog builder is shared across a physical document's root,
 definitions, and inline bodies. `compose/helpers/types.py` owns the one source-aware
 recursive type compiler. For retained root/definition flow inputs, declaration keys
 stamp `Parameter.origin`, type values and authored nested record fields
-populate `ContractOrigins`, and packed defaults stamp `default_origin`; START reuses
-those carriers. Scalar alias/list type expressions fall back to the contract root.
-Python/source-free declarations and inferred inline parameters remain source-free.
+populate `ContractOrigins`, and the default written after the tag stamps
+`default_origin`; START reuses those carriers. Scalar alias/list type expressions fall
+back to the contract root. Python/source-free declarations and inferred inline
+parameters remain source-free.
+`compose/source` records each local YAML tag and constructs the node as if untagged;
+`compose/helpers/tags.py` is the one reader every slot uses (`read_tag_type`,
+`read_tagged_value`, `suggest_tag`, and the ledger that makes a tag outside a slot a load
+error). Nested tags and nested `${...}` become a `ValueTemplate`, the carrier
+`nodes/contracts.py` owns with its shared string walkers (`iter_source_strings`,
+`map_source_strings`, `binding_input_groups`); `nodes/binding.py` evaluates it.
+`typesys/types.py` owns the parenthesized type grammar.
 `compose/helpers/output_contracts.py` separately owns source-neutral binding-template
 result contracts: exact-or-partial direct-reference projection/provenance, proven
 computed types, and exact-or-partial closed-record assembly. Node resolution, inline

@@ -13,7 +13,7 @@ exists. This pass carries a range anchor from
 For an inline body, whose parameters are generated from the seeds, each proven returned
 field must also fit its generated parameter; that error points at the seed binding.
 A literal seed stays lenient here (its contract is not inferred); `check_call_map_types`
-checks it by value against a named body's declared input.
+checks every seed against the body's declared input.
 
 Imports flow down only: `compile.validation` (the type comparator) and
 `compose.helpers` (shared output-contract inference and load diagnostics). Only
@@ -74,8 +74,8 @@ def check_loop_type_contract(
     partially typed record reads its independently proven field contracts. A field outside
     the node's `returned_fields` (omitted by the body, so carried over unchanged) is
     skipped. A literal/coalesce/opaque seed source, or an opaque body output field,
-    stays lenient (skipped); `check_call_map_types` checks a literal seed by value
-    against a named body's input.
+    stays lenient (skipped); `check_call_map_types` checks every seed against the
+    body's declared input.
     Loud + located at the loop node's `input:` mapping range
     (else the Compose-owned node range) on a
     same-names/different-TYPES mismatch.

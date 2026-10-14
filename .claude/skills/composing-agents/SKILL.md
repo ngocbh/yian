@@ -376,14 +376,14 @@ output:
   the binding. A committed output widens an int in any typed `float` slot (the
   whole value, a list item, a record field); an untyped record field stays as given.
 - **Downstream sees the declared type** — this is how an opaque value becomes
-  typed. CALL/MAP/LOOP parents see a child's declared output type; a CALL checks a
-  typed argument against the child's parameter; an inline body's parameter takes
-  the declared type (so arithmetic or `[]` needs no `defs:` body); a LOOP field the
-  body omits keeps the seed's declared type, and a typed seed checks the starting
-  value.
-- **Optional:** an untyped nullable source into a strict child parameter is still a
-  load error (also a child output that is `Optional` because a `case` may skip its
-  node); `x: !int ${maybe.output}` accepts it with a runtime check.
+  typed. CALL/MAP/LOOP parents see a child's declared output type; a CALL or LOOP
+  checks a tagged argument or seed against the child's or body's parameter; an inline
+  body's parameter takes the declared type (so arithmetic or `[]` needs no `defs:`
+  body); a LOOP field the body omits keeps the seed's declared type, and a typed seed
+  checks the starting value.
+- **Optional:** an untyped nullable source into a strict child or LOOP body
+  parameter is still a load error (also a child output that is `Optional` because a
+  `case` may skip its node); `x: !int ${maybe.output}` accepts it with a runtime check.
 - **Replay:** declared types are in the flow fingerprint, so a run can't resume
   after a type changes; recorded flow outputs are re-validated on resume.
 
@@ -895,8 +895,7 @@ is coerced across it: `"3"` does not fit `int` (write `3`), an unquoted `2026-01
 source into an `int` input fails at the child's start (`contract.input`). A `str`
 reference does not fit an `int` or `date` input: type the source (`list(date)`), or
 tag the binding (`t: !int ${input.n}`) for a value narrower than the input.
-A LOOP's untyped literal or `${null}` seed is checked the same way against a named body's
-input.
+A LOOP seed is checked the same way against its body's input.
 
 For a one-off child, replace `call:` with a non-empty `nodes:` body and add the
 required `output:` key:
@@ -956,8 +955,11 @@ turn:
   while: not exited            # pre-check over the carried record
 ```
 A tagged seed (`n: !int 0`) checks the starting value; a field the body omits
-keeps its declared type. An untagged literal seed must fit the body's input
-(`n: "1"` into `int` fails; write `1`).
+keeps its declared type. Every seed must fit the body's input like a CALL argument
+(`n: "1"` into `int` fails; write `1`). Tag an `Optional` reference that is always set
+(`n: !int ${input.m}`); a seed that may be null, such as a cursor a
+`while: cursor != null` guards, needs an `Optional` body input, narrowed inside the
+body with a tag where a strict value is needed.
 `loop` accepts the same inline `nodes:` + `output:` form instead of `call:`; its
 generated parameters are the carried `input:` fields, so the same `'a -> 'a`
 contract still applies. Those parameters are typed from the seeds, and each returned

@@ -62,10 +62,12 @@ def assert_load_message(text: str, *, placeholder: bool = True) -> str:
 
 
 def _flow(nodes: str, *, head: str = "", output: str = "${c.output}") -> str:
+    """Return a flow `p` with the given `nodes:` body, top-level `head` and `output`."""
     return f"id: p\nname: p\n{head}nodes:\n{nodes}output: {output}\n"
 
 
 def _code(binding: str) -> str:
+    """Return a code node `c` whose input `n` is `binding`."""
     return (
         f"  c:\n    kind: code\n    input:\n      n: {binding}\n"
         "    code: |\n      return inputs['n']\n"
@@ -73,10 +75,12 @@ def _code(binding: str) -> str:
 
 
 def _agent(extra: str) -> str:
+    """Return a flow with one agent node `c` carrying the `extra` field lines."""
     return _flow(f"  c:\n    kind: agent\n    prompt: hi\n{extra}")
 
 
 def _loop(head: str) -> str:
+    """Return a flow with one loop node `c` whose header lines are `head`."""
     return _flow(
         f"  c:\n    kind: loop\n{head}    input:\n      n: 1\n    nodes:\n"
         "      b:\n        kind: code\n        input:\n          n: ${input.n}\n"
@@ -85,6 +89,7 @@ def _loop(head: str) -> str:
 
 
 def _case(cases: str) -> str:
+    """Return a flow with one case node `g` on an int input, with `cases:` set to `cases`."""
     return _flow(
         f"  g:\n    kind: case\n    on: ${{input.x}}\n    cases: {cases}\n",
         head="input:\n  x: !int\n",
@@ -95,42 +100,58 @@ def _case(cases: str) -> str:
 # --- node fields -------------------------------------------------------------
 
 _NODE_FIELD_ROWS = {
-    "retries": _agent(f"    retries: -{D}\n"),
-    "agent_env_max_tool_iterations": _agent(f"    env: {{max_tool_iterations: -{D}}}\n"),
-    "flow_env_max_tool_iterations": _flow(
-        _code("1"), head=f"env: {{max_tool_iterations: -{D}}}\n"
+    "retries": (_agent(f"    retries: -{D}\n"), "`retries:` must be a non-negative integer"),
+    "agent_env_max_tool_iterations": (
+        _agent(f"    env: {{max_tool_iterations: -{D}}}\n"),
+        "node 'c': `env.max_tool_iterations` must be",
     ),
-    "llm_config_inherit": _agent(f"    llm_config: {{inherit: {D}}}\n"),
-    "depends_on": _agent(f"    depends_on: {D}\n"),
-    "runs_after": _agent(f"    runs_after: {D}\n"),
-    "loop_while": _loop(f"    while: {D}\n"),
-    "loop_until": _loop(f"    until: {D}\n"),
-    "loop_times": _loop(f"    times: -{D}\n"),
-    "loop_max": _loop(f"    max: -{D}\n    while: ${{true}}\n"),
-    "case_cases": _case(D),
-    "case_cases_item": _case(f"[{D}]"),
-    "human_input_questions": _flow(
-        f"  c:\n    kind: human_input\n    prompt: hi\n    questions: {D}\n"
+    "flow_env_max_tool_iterations": (
+        _flow(_code("1"), head=f"env: {{max_tool_iterations: -{D}}}\n"),
+        "flow `env.max_tool_iterations` must be",
     ),
-    "call_target": _flow(f"  c:\n    kind: call\n    call: {D}\n"),
-    "kind": _flow(f"  c:\n    kind: {D}\n"),
-    "node_output": _flow(f"  c:\n    kind: code\n    output: {D}\n    code: |\n      return 1\n"),
-    "node_output_item": _flow(
-        f"  c:\n    kind: code\n    output: [{D}]\n    code: |\n      return 1\n"
+    "llm_config_inherit": (
+        _agent(f"    llm_config: {{inherit: {D}}}\n"),
+        "llm_config `inherit:` must be true or false",
     ),
-    "flow_input_untagged": _flow(_code("${input.n}"), head=f"input:\n  n: {D}\n"),
+    "depends_on": (_agent(f"    depends_on: {D}\n"), "`depends_on:` must be a list of node ids"),
+    "runs_after": (_agent(f"    runs_after: {D}\n"), "`runs_after:` must be a list of node ids"),
+    "loop_while": (_loop(f"    while: {D}\n"), "`while:` must be an expression string"),
+    "loop_until": (_loop(f"    until: {D}\n"), "`until:` must be an expression string"),
+    "loop_times": (_loop(f"    times: -{D}\n"), "`times:` must be >= 1"),
+    "loop_max": (_loop(f"    max: -{D}\n    while: ${{true}}\n"), "`max:` must be >= 1"),
+    "case_cases": (_case(D), "`cases:` must be a list"),
+    "case_cases_item": (_case(f"[{D}]"), "`cases[0]` must be a {when:, then:} mapping"),
+    "human_input_questions": (
+        _flow(f"  c:\n    kind: human_input\n    prompt: hi\n    questions: {D}\n"),
+        "`questions:` must be a list of questions",
+    ),
+    "call_target": (_flow(f"  c:\n    kind: call\n    call: {D}\n"), "could not resolve callable"),
+    "kind": (_flow(f"  c:\n    kind: {D}\n"), "unknown kind"),
+    "node_output": (
+        _flow(f"  c:\n    kind: code\n    output: {D}\n    code: |\n      return 1\n"),
+        "cannot read type from",
+    ),
+    "node_output_item": (
+        _flow(f"  c:\n    kind: code\n    output: [{D}]\n    code: |\n      return 1\n"),
+        "a list of fields must hold single-key maps",
+    ),
+    "flow_input_untagged": (
+        _flow(_code("${input.n}"), head=f"input:\n  n: {D}\n"),
+        "an input is a tag with an optional default",
+    ),
 }
 
 
-@pytest.mark.parametrize("text", _NODE_FIELD_ROWS.values(), ids=_NODE_FIELD_ROWS.keys())
-def test_a_node_field_message_shows_a_long_int_as_a_placeholder(text):
-    assert_load_message(text)
+@pytest.mark.parametrize("text, phrase", _NODE_FIELD_ROWS.values(), ids=_NODE_FIELD_ROWS.keys())
+def test_a_node_field_message_shows_a_long_int_as_a_placeholder(text, phrase):
+    assert phrase in assert_load_message(text)
 
 
 # --- validate ----------------------------------------------------------------
 
 
 def _child(slot: str) -> str:
+    """Return a `defs:` block with a flow `child` whose input `n` is typed `slot`."""
     return (
         f"defs:\n  child:\n    input:\n      n: {slot}\n    nodes:\n      c:\n"
         "        kind: code\n        input:\n          n: ${input.n}\n"
@@ -139,12 +160,14 @@ def _child(slot: str) -> str:
 
 
 def _call_node(child_slot: str, value: str) -> str:
+    """Return a flow whose call node `c` binds `value` to a child input typed `child_slot`."""
     return _child(child_slot) + _flow(
         f"  c:\n    kind: call\n    call: child\n    input:\n      n: {value}\n"
     )
 
 
 def _case_on(on_type: str, whens: list[str]) -> str:
+    """Return a flow whose case node `g` is on an input typed `on_type`, one branch per `whens`."""
     body = "".join(f"      - when: {w}\n        then: big\n" for w in whens)
     return _flow(
         f"  g:\n    kind: case\n    on: ${{input.x}}\n    cases:\n{body}    else: other\n"
@@ -155,6 +178,7 @@ def _case_on(on_type: str, whens: list[str]) -> str:
 
 
 def _value_branch(then: str) -> str:
+    """Return a flow whose case node `g` has a branch with `then: <then>`."""
     return _flow(
         f"  g:\n    kind: case\n    on: ${{input.x}}\n    cases:\n      - when: 1\n"
         f"        then: {then}\n    else: other\n  other: !str other\n",
@@ -164,32 +188,47 @@ def _value_branch(then: str) -> str:
 
 
 _VALIDATE_ROWS = {
-    "typed_binding_str": _flow(_code(f"!str {D}")),
-    "value_entry_str": _flow(f"  v: !str {D}\n" + _code("${v.output}")),
-    "inline_call_str": _child("!str") + _flow(_code(f"call(child, n={D})")),
-    "inline_call_bool": _child("!bool") + _flow(_code(f"call(child, n={D})")),
-    "inline_call_range": _child("!int(0..5)") + _flow(_code(f"call(child, n={D})")),
-    "call_node_str": _call_node("!str", D),
-    "call_node_bool": _call_node("!bool", D),
-    "call_node_range": _call_node("!int(0..5)", D),
-    "case_value_branch_list": _value_branch(f"[{D}]"),
-    "case_value_branch_map": _value_branch(f"{{k: {D}}}"),
-    "loop_seed_into_str": _flow(
-        f"  c:\n    kind: loop\n    times: 1\n    input:\n      n: {D}\n    nodes:\n"
-        "      bump:\n        kind: code\n        input:\n          n: ${input.n}\n"
-        "        output:\n          n: str\n        code: |\n          return {'n': 'x'}\n"
-        "    output: ${bump.output}\n"
+    "typed_binding_str": (_flow(_code(f"!str {D}")), "is not a valid str"),
+    "value_entry_str": (_flow(f"  v: !str {D}\n" + _code("${v.output}")), "is not a valid str"),
+    "inline_call_str": (
+        _child("!str") + _flow(_code(f"call(child, n={D})")),
+        "child expects 'str'",
     ),
-    "int_range_reversed": _flow(_code("${input.x}"), head=f"input:\n  x: !int({D}..0)\n"),
-    "case_duplicate_when": _case_on("!int", [D, D]),
-    "case_quoted_when_vs_int": _case_on("!int", [f'"{D}"']),
-    "typed_binding_quoted_int": _flow(_code(f'!int "{D}"')),
+    "inline_call_bool": (
+        _child("!bool") + _flow(_code(f"call(child, n={D})")),
+        "child expects 'bool'",
+    ),
+    "inline_call_range": (
+        _child("!int(0..5)") + _flow(_code(f"call(child, n={D})")),
+        "child expects 'int(0..5)'",
+    ),
+    "call_node_str": (_call_node("!str", D), "binding 'n' — child expects 'str'"),
+    "call_node_bool": (_call_node("!bool", D), "binding 'n' — child expects 'bool'"),
+    "call_node_range": (_call_node("!int(0..5)", D), "binding 'n' — child expects 'int(0..5)'"),
+    "case_value_branch_list": (_value_branch(f"[{D}]"), "!list(int) ["),
+    "case_value_branch_map": (_value_branch(f"{{k: {D}}}"), "!object {k: "),
+    "loop_seed_into_str": (
+        _flow(
+            f"  c:\n    kind: loop\n    times: 1\n    input:\n      n: {D}\n    nodes:\n"
+            "      bump:\n        kind: code\n        input:\n          n: ${input.n}\n"
+            "        output:\n          n: str\n        code: |\n          return {'n': 'x'}\n"
+            "    output: ${bump.output}\n"
+        ),
+        "declare the seed's type",
+    ),
+    "int_range_reversed": (
+        _flow(_code("${input.x}"), head=f"input:\n  x: !int({D}..0)\n"),
+        "type bounds must be ordered",
+    ),
+    "case_duplicate_when": (_case_on("!int", [D, D]), "so it never matches"),
+    "case_quoted_when_vs_int": (_case_on("!int", [f'"{D}"']), "drop the quotes"),
+    "typed_binding_quoted_int": (_flow(_code(f'!int "{D}"')), "is not a valid int"),
 }
 
 
-@pytest.mark.parametrize("text", _VALIDATE_ROWS.values(), ids=_VALIDATE_ROWS.keys())
-def test_a_validate_message_shows_a_long_int_as_a_placeholder(text):
-    assert_load_message(text)
+@pytest.mark.parametrize("text, phrase", _VALIDATE_ROWS.values(), ids=_VALIDATE_ROWS.keys())
+def test_a_validate_message_shows_a_long_int_as_a_placeholder(text, phrase):
+    assert phrase in assert_load_message(text)
 
 
 def test_a_quoted_long_int_passed_to_an_int_child_fails_with_a_message_not_a_crash():
@@ -207,10 +246,26 @@ def test_load_diagnostics_keep_a_digit_run_within_the_limit():
     assert str(LoadDiagnostics().error("x " + kept + " y")) == "x " + kept + " y"
 
 
+def test_load_diagnostics_keep_every_digit_run_when_the_limit_is_off():
+    sys.set_int_max_str_digits(0)
+    try:
+        assert str(LoadDiagnostics().error("x " + D + " y")) == "x " + D + " y"
+    finally:
+        sys.set_int_max_str_digits(4300)  # the fixture checks the limit is back
+
+
+def test_load_diagnostics_count_only_the_digits_of_an_underscored_run():
+    within = "1_" * 2500 + "1"  # 2501 digits, 5001 characters
+    past = "1_" * 4300 + "1"  # 4301 digits
+    assert str(LoadDiagnostics().error("x " + within + " y")) == "x " + within + " y"
+    assert str(LoadDiagnostics().error("x " + past + " y")) == "x " + PLACEHOLDER + " y"
+
+
 # --- run and memory ----------------------------------------------------------
 
 
 def _episodic(max_episodes: str) -> str:
+    """Return a flow whose agent has an episodic memory with `max_episodes` set."""
     return _agent(
         "    long_term_memory:\n"
         f"      e: {{type: episodic, config: {{max_episodes: {max_episodes}}}}}\n"
@@ -250,7 +305,6 @@ def test_a_tool_binding_label_shows_a_long_int_as_a_placeholder():
     assert "set_int_max_str_digits" not in msg
     assert re.search(r"[0-9]{600}", msg) is None
     assert msg.endswith("but the binding is " + PLACEHOLDER + " (int)")
-
 
 
 def test_an_unknown_long_int_tool_id_shows_a_placeholder():
@@ -294,6 +348,7 @@ output: ${invoke.output}
 
 
 def _memory_keys(child: str, agent: str) -> str:
+    """Return a flow declaring memory `inner` twice, with limits `child` and `agent`."""
     return _MEMORY_KEYS.replace("CHILD", child).replace("AGENT", agent)
 
 

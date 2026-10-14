@@ -15,16 +15,12 @@ if TYPE_CHECKING:
 
 # A digit run, with single `_` separators as YAML and Python allow in int literals.
 _DIGIT_RUN = re.compile(r"[0-9]+(?:_[0-9]+)*")
+# The same text `typesys.values.value_repr` gives for an int too long to print.
 _TOO_LARGE = "<int too large to display>"
 
 
 def _elide_long_ints(text: str) -> str:
     """Replace each digit run longer than Python's int/str digit limit by a placeholder.
-
-    Load messages echo authored text (a type spelling, a tag, a hint quoting the
-    source), and an int literal there may be longer than Python can render. Eliding
-    it here, where every load message is built, matches how `value_repr` shows such
-    an int, so a message never prints an int one place and a placeholder another.
 
     Args:
         text (`str`): A message or note.
@@ -43,6 +39,10 @@ def _elide_long_ints(text: str) -> str:
         digits = len(run) - run.count("_")
         return _TOO_LARGE if digits > limit else run
 
+    # Load messages echo authored text (a type spelling, a tag, a hint quoting the
+    # source), and an int literal there may be longer than Python can render. Eliding
+    # it here, where every load message is built, matches how `value_repr` shows such
+    # an int, so a message never prints an int one place and a placeholder another.
     return _DIGIT_RUN.sub(elide, text)
 
 

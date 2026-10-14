@@ -239,11 +239,10 @@ assertion, case handle, or predicate keyword), before the log is created;
   `provider: azure` without a key, and an Azure `api_key` here needs one beside it,
   so a host key never goes to an endpoint a flow names. A redirect from it does not
   carry the key on: the `anthropic` and `google` clients do not follow redirects
-  from a `base_url` (a host's `http_client` beside one must not either), the
-  `azure` client drops its `api-key` header on a redirect to another origin, and
-  the OpenAI-compatible clients drop their `Authorization` header on one. It is not
-  secret: the log records it on the agents marked for the key, and an `openai`
-  agent's host connection uses it as its endpoint. `resume_flow` and
+  from a `base_url`, the `azure` client drops its `api-key` header on a redirect to
+  another origin, and the OpenAI-compatible clients drop their `Authorization`
+  header on one. It is not secret: the log records it on the agents marked for the
+  key, and an `openai` agent's host connection uses it as its endpoint. `resume_flow` and
   `result.backward` send the re-supplied key to that recorded URL; neither the
   provider's endpoint variable nor `OPENAI_BASE_URL` changes it. `ProfileMemory`
   takes one beside its own key; `ReflectiveMemory` rejects one except an Azure

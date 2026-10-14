@@ -2562,6 +2562,34 @@ pagination cursor that `while: cursor != null` keeps out of the body, needs an
 value is needed. A tag on the seed doesn't help there: the seed is evaluated even when
 the loop runs zero times, so a null fails the tag.
 
+#### Call nesting limit
+
+Each CALL, MAP, or LOOP body is one level, whether it is a `defs:` entry, an inline
+`nodes:` body, a [`call(...)`](#inline-call-a-flow-call-as-a-bindings-whole-value)
+directive, or a `uses:` flow. A flow's bodies nest at most 50 levels, counting through
+imported files. A deeper chain is a load error at the `call:` field of the call that
+crosses the limit, or at the node for an inline body:
+
+```text
+call node 'top': calling callable 'c0' nests calls 51 levels deep, past the call nesting limit of 50 (each call, map, or loop body is a level); flatten the chain
+call node 'step': calling callable 'c51' nests calls more than 50 levels deep, past the call nesting limit of 50 (each call, map, or loop body is a level); flatten the chain
+```
+
+The first form counts the whole chain under the call. The second form fires on a longer
+chain before the loader goes any deeper, so it can't give the full depth. When the call
+that crosses the limit sits inside nested defs, the message starts with one
+`defs entry 'name': ` per enclosing def, and its last location is that `call:`. Which
+call reports depends on the chain's length and the order the defs are written. To fix
+it, flatten the chain: inline a short body into its caller, or run the deep part as
+separate steps. The limit exists because loading, run setup, and replay walk nested
+bodies recursively; 50 levels stays well inside Python's default recursion limit.
+
+Changed: a chain deeper than about 95 levels used to crash at load with a
+`RecursionError` or "could not resolve callable ...: maximum recursion depth exceeded".
+A chain of 51 to 95 levels used to load; it now fails at load. A broken `uses:` import
+is now reported at its alias before any def loads; it used to be reported inside the
+first `defs:` entry that called it.
+
 #### Inline child bodies — skip a one-off `defs:` entry
 
 When a CALL, MAP, or LOOP body is used only once, put the child graph directly
@@ -2794,7 +2822,8 @@ returns the whole carried record.
   the body when it is null still needs an `Optional` body input; tag it inside the body
   where a strict value is needed.
 - **`call:` / `nodes:`** names a reusable body or defines a one-off body inline.
-  The body's `output:` returns a **subset** of the carried record: at least one
+  The body is one level toward the [call nesting limit](#call-nesting-limit), however
+  many iterations run. The body's `output:` returns a **subset** of the carried record: at least one
   carried field, and any number of them. Each field the body omits keeps its value
   from the previous iteration; there is nothing to declare. A body output field
   that is not a carried field is a load error (`body output field(s) [...] are not

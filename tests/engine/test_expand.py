@@ -307,8 +307,9 @@ _DEEP_OUTPUT = [[[["go"]]]]
 
 @pytest.mark.parametrize("num_workers", [0, 4])
 def test_deep_static_call_map_chain_loads_and_succeeds(num_workers):
-    # Nesting depth is static (the loader rejects recursion), so a chain deeper than any
-    # fixed cap runs to completion; the growth core still stamps each level's depth.
+    # Nesting depth is static (the loader rejects recursion), so an 8-level chain, well
+    # under the call nesting limit, runs to completion; the growth core still stamps each
+    # level's depth.
     loaded = load_flow(_mixed_chain_source(_DEEP_LEVELS))
     eng = _engine(
         loaded.compiled,

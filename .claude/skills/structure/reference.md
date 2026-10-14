@@ -231,9 +231,10 @@ The loader owns two intentionally separate caches:
 - `_CallableScope._built` is keyed by file-local callable name and memoizes every
   successful compiler-private child, authored `defs:` flow, and resolved `uses:`
   alias view. A `uses:` view is a rebased copy; repeated calls through that alias
-  reuse it without mutating the path cache. Defs load eagerly before the parent,
-  and uses resolve eagerly during assembly; only compiler-private builders stay
-  lazy. `_in_progress` rejects
+  reuse it without mutating the path cache. Each file load resolves its uses in
+  source order first, then loads its defs, both before the parent, so a def that
+  calls an alias hits the cache; only compiler-private builders stay lazy.
+  `_in_progress` rejects
   recursive private/def construction, while `_LoadCtx.loading` guards recursive
   external-file resolution. A failed callable attempt removes every private builder,
   nested cache entry, and catalog site added by that attempt before it can be retried.

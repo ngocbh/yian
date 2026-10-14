@@ -265,6 +265,9 @@ An expression nests at most 100 levels too (each call, list, unary operator, com
 a deeper one is a load error, so split it into smaller bindings.
 A flow file's YAML nests at most 200 levels (each mapping and list is one); deeper is a
 located load error.
+Calls nest at most 50 levels (each CALL, MAP, or LOOP body is one, `defs:`, inline,
+`call(...)`, or `uses:`); a deeper chain is a load error at the `call:` that crosses
+the limit, so flatten the chain.
 
 Only values supplied to the top-level flow (CLI, JSON inputs, `run_flow`) may undergo
 string coercion; a `call`, `map`, or `loop` edge is not a flow boundary.

@@ -5,7 +5,7 @@ from langchain_openai import AzureChatOpenAI
 from .base_client import BaseLLMClient, normalize_content
 from .capabilities import has_open_schema
 from .config import AZURE_NEEDS_BASE_URL, azure_resource_endpoint
-from .openai_client import RequestBlockMixin
+from .openai_client import RequestBlockMixin, _strict_false_for_open_schema
 from .validators import validate_model
 
 _PASSTHROUGH_KWARGS = (
@@ -28,10 +28,11 @@ class NormalizedAzureChatOpenAI(RequestBlockMixin, AzureChatOpenAI):
         """Bind `schema` for structured output, as a non-strict function tool when it is open.
 
         Azure's default (``json_schema``, strict) rejects a schema with an open part
-        (`has_open_schema`), so such a schema goes as a forced function tool without
-        ``strict`` instead; on a deployment langchain routes to the Responses API, where
-        function tools default to strict, ``strict=False`` is sent. Any other schema, and
-        an explicit ``method`` or ``strict``, reach langchain unchanged.
+        (`has_open_schema`), so without an explicit ``method`` such a schema goes as a
+        forced function tool without ``strict`` instead. When an open schema is bound as
+        a function tool on a deployment langchain routes to the Responses API, where
+        function tools default to strict, ``strict=False`` is sent unless the caller gave
+        ``strict``. Any other schema or method reaches langchain unchanged.
 
         Args:
             schema (`dict | type | None`, *optional*, defaults to `None`):
@@ -47,10 +48,7 @@ class NormalizedAzureChatOpenAI(RequestBlockMixin, AzureChatOpenAI):
         """
         if method is None and has_open_schema(schema):
             method = "function_calling"
-            # Routing for this request depends on the model's own fields and name, not
-            # on per-call kwargs, so an empty payload answers it.
-            if self._use_responses_api({}) and "strict" not in kwargs:
-                kwargs["strict"] = False
+        _strict_false_for_open_schema(self, schema, method, kwargs)
         if method is not None:
             kwargs["method"] = method
         return super().with_structured_output(schema, **kwargs)

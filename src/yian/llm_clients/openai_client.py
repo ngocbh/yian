@@ -41,6 +41,33 @@ def _sdk_body_keywords(responses: bool) -> frozenset[str]:
     return frozenset(names - _TRANSPORT_KEYWORDS)
 
 
+def _strict_false_for_open_schema(
+    llm: BaseChatOpenAI, schema: Any, method: Optional[str], kwargs: dict[str, Any]
+) -> None:
+    """Set ``kwargs["strict"] = False`` for an open schema bound as a Responses function tool.
+
+    Responses function tools default to strict, which rejects a schema with an open part
+    (`has_open_schema`). Chat Completions tools are non-strict unless asked, and an
+    explicit ``strict`` is the caller's choice, so both are left alone.
+
+    Args:
+        llm (`BaseChatOpenAI`):
+            The model the schema is bound to.
+        schema (`Any`):
+            The schema given to ``with_structured_output``.
+        method (`str`, *optional*):
+            The resolved structured-output method.
+        kwargs (`dict[str, Any]`):
+            The remaining ``with_structured_output`` keyword arguments; updated in place.
+    """
+    if method != "function_calling" or "strict" in kwargs or not has_open_schema(schema):
+        return
+    # langchain routes by the model's own fields and name plus any Responses-only
+    # argument in the call, so the call's own arguments are what it is asked about.
+    if llm._use_responses_api(kwargs):
+        kwargs["strict"] = False
+
+
 class RequestBlockMixin(BaseChatOpenAI):
     """Send a provider block into every request body an OpenAI-family chat model builds.
 
@@ -168,15 +195,7 @@ class NormalizedChatOpenAI(RequestBlockMixin, ChatOpenAI):
         # DeepSeek's official tool-calling examples do.
         if method == "function_calling" and not caps.supports_tool_choice:
             kwargs.setdefault("tool_choice", None)
-        # Routing depends on the model's own fields and name, not on per-call kwargs,
-        # so an empty payload answers it.
-        if (
-            method == "function_calling"
-            and "strict" not in kwargs
-            and self._use_responses_api({})
-            and has_open_schema(schema)
-        ):
-            kwargs["strict"] = False
+        _strict_false_for_open_schema(self, schema, method, kwargs)
         return super().with_structured_output(schema, method=method, **kwargs)
 
 

@@ -1,13 +1,13 @@
 """Open AGENT output schemas (`object`, `Any`, elementless lists) under strict structured output."""
 
 import json
+from typing import TypedDict
 
 import httpx
 import pytest
 from langchain_core.messages import HumanMessage
 from langchain_core.runnables import RunnableBinding, RunnableParallel, RunnableSequence
 from langchain_openai import AzureChatOpenAI, ChatOpenAI
-from openai.lib._parsing._completions import type_to_response_format_param
 
 from yian.llm_clients.azure_client import AzureOpenAIClient
 from yian.llm_clients.capabilities import has_open_schema
@@ -63,6 +63,15 @@ def test_dict_schemas_are_read_as_given(schema, expected):
     assert has_open_schema(schema) is expected
 
 
+class _Answer(TypedDict):
+    value: dict
+
+
+@pytest.mark.parametrize("schema", [_Answer, None])
+def test_other_inputs_have_no_open_schema(schema):
+    assert has_open_schema(schema) is False
+
+
 _AZURE_ENDPOINT = "https://x.openai.azure.com/"
 
 
@@ -78,6 +87,7 @@ def _azure(deployment="gpt-4o", **kwargs):
 
 def _binding(runnable):
     """Return the `RunnableBinding` holding the model call inside a structured runnable."""
+    # Walks langchain's runnable internals, as built by the pinned langchain version.
     stack = [runnable]
     while stack:
         node = stack.pop()
@@ -134,7 +144,6 @@ def test_azure_closed_schema_payload_is_unchanged(azure_env, text):
     payload = _payload(llm, llm.with_structured_output(schema))
     assert payload == _payload(llm, AzureChatOpenAI.with_structured_output(llm, schema))
     assert payload["response_format"] is schema
-    assert type_to_response_format_param(schema)["json_schema"]["strict"] is True
     assert "tools" not in payload
 
 
@@ -154,6 +163,22 @@ def test_azure_responses_deployment_sends_strict_false_for_an_open_schema(azure_
     assert tool["type"] == "function"
     assert tool["strict"] is False
     assert has_open_schema(tool["parameters"])
+
+
+def test_azure_responses_deployment_explicit_function_calling_sends_strict_false(azure_env):
+    llm = _azure("gpt-5-codex")
+    runnable = llm.with_structured_output(_schema("object"), method="function_calling")
+    (tool,) = _payload(llm, runnable)["tools"]
+    assert tool["type"] == "function"
+    assert tool["strict"] is False
+
+
+def test_azure_json_mode_without_a_schema_keeps_langchain_behavior(azure_env):
+    llm = _azure()
+    payload = _payload(llm, llm.with_structured_output(None, method="json_mode"))
+    expected = _payload(llm, AzureChatOpenAI.with_structured_output(llm, None, method="json_mode"))
+    assert payload == expected
+    assert payload["response_format"] == {"type": "json_object"}
 
 
 def test_azure_responses_deployment_closed_schema_payload_is_unchanged(azure_env):
@@ -224,7 +249,7 @@ def _subscription():
 
 
 def _today(llm, schema):
-    """The payload a function-calling request for `schema` had before open schemas were told apart."""
+    """Return langchain's own function-calling request payload for `schema` on `llm`."""
     return _payload(llm, ChatOpenAI.with_structured_output(llm, schema, method="function_calling"))
 
 

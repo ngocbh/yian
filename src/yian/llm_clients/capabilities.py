@@ -171,10 +171,11 @@ _SUBSCHEMA_LIST_KEYS = ("anyOf", "oneOf", "allOf")
 def has_open_schema(schema: Any) -> bool:
     """Whether the JSON schema sent for `schema` has an open part.
 
-    A part is open when it sets ``additionalProperties: true`` or is an empty subschema
-    (``{}``, any value) anywhere, ``$defs`` included. That is what an ``object``, ``Any``
-    or elementless-list AGENT output produces, and what strict structured-output modes
-    (OpenAI and Azure strict, Responses ``strict: true``) reject. It lives beside the
+    It recognizes the open shapes `type_to_schema` emits for an ``object``, ``Any`` or
+    elementless-list AGENT output: ``additionalProperties: true`` or an empty ``{}``
+    subschema (any value), anywhere, ``$defs`` included. Other JSON-schema constructs
+    are not inspected. Strict structured-output modes (OpenAI and Azure strict,
+    Responses ``strict: true``) reject these shapes. It lives beside the
     capability table because, like the table, it decides which structured-output method
     and options a client sends.
 

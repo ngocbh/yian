@@ -17,8 +17,7 @@ from langchain_core.messages import ChatMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from pydantic import Field
 
-from .capabilities import has_open_schema
-from .openai_client import RequestBlockMixin
+from .openai_client import RequestBlockMixin, _strict_false_for_open_schema
 
 _BASE_URL = "https://chatgpt.com/backend-api/codex"
 _ACCESS_ARGUMENT = "_composer_subscription_access"
@@ -112,8 +111,7 @@ class _SubscriptionChatOpenAI(RequestBlockMixin, ChatOpenAI):
                 The structured-output runnable langchain builds.
         """
         method = method or "function_calling"
-        if method == "function_calling" and "strict" not in kwargs and has_open_schema(schema):
-            kwargs["strict"] = False
+        _strict_false_for_open_schema(self, schema, method, kwargs)
         return super().with_structured_output(schema, method=method, **kwargs)
 
     def _get_request_payload(self, input_, *, stop=None, **kwargs) -> dict:

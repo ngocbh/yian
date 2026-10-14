@@ -308,7 +308,8 @@ def test_a_directly_built_model_rejects_a_redirecting_client_beside_a_base_url()
 
 def test_a_redirecting_host_client_is_allowed_without_a_base_url(clean_env):
     with anthropic.DefaultHttpxClient() as client:
-        AnthropicClient("claude-sonnet-4-5", api_key="k", http_client=client).get_llm()
+        chat = AnthropicClient("claude-sonnet-4-5", api_key="k", http_client=client).get_llm()
+        assert chat._client._client is client
 
 
 def test_a_proxy_beside_a_host_client_is_rejected(clean_env, host_clients):

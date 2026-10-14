@@ -13,10 +13,8 @@ from .base_client import BaseLLMClient, normalize_content
 from .provider_blocks import merge_request_body
 from .validators import validate_model
 
-_PASSTHROUGH_KWARGS = (
-    "timeout", "max_retries", "api_key", "callbacks", "http_client", "http_async_client",
-)
 _HTTP_CLIENT_KWARGS = ("http_client", "http_async_client")
+_PASSTHROUGH_KWARGS = ("timeout", "max_retries", "api_key", "callbacks", *_HTTP_CLIENT_KWARGS)
 
 
 # langchain-anthropic takes these as call options and moves them into ``extra_body`` itself

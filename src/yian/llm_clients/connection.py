@@ -649,25 +649,48 @@ def legacy_connection_map(
 
 
 def connection_credentials(
-    connection: dict[str, Any],
+    connection: dict[str, Any], provider: str = "openai"
 ) -> ApiKeyCredentials | OAuthCredentials:
-    """Resolve fresh credentials while enforcing the recorded connection identity."""
-    connection = validate_connection(connection)
+    """Resolve fresh credentials while enforcing the recorded connection identity.
+
+    A ``store`` connection resolves the saved login it was pinned to, so a later
+    login or removal fails instead of switching accounts. OpenAI also resolves
+    its environment key, checking that it is the recorded one. Another provider's
+    ``environment`` connection resolves nothing here: its client reads the key
+    variable itself.
+
+    Args:
+        connection (`dict[str, Any]`): The recorded connection metadata.
+        provider (`str`, *optional*, defaults to ``"openai"``): The provider of
+            the config that carries it.
+
+    Returns:
+        `ApiKeyCredentials | OAuthCredentials`: The credentials to send.
+
+    Raises:
+        `AuthError`: The pinned login changed, was removed, or cannot be read; or
+            an OpenAI key is missing or changed.
+        `ValueError`: The metadata is invalid for ``provider``, or it is a
+            non-OpenAI ``environment`` connection.
+    """
+    connection = validate_connection(connection, provider)
     source = connection["source"]
     if source == "store":
         try:
             credentials = AuthStore(connection["store_path"]).credentials(
-                "openai",
+                provider,
                 connection["credential_id"],
-                refresh=OpenAIAuth().refresh,
+                refresh=OpenAIAuth().refresh if provider == "openai" else None,
             )
         except AuthError as exc:
-            raise AuthError(f"{exc}. Run 'yian auth openai' and start a new run") from exc
+            raise AuthError(f"{exc}. Run 'yian auth {provider}' and start a new run") from exc
         if credentials.method != connection["method"]:
             raise AuthError(
-                "The saved connection method changed; run 'yian auth openai' and start a new run"
+                f"The saved connection method changed; run 'yian auth {provider}' and start a new run"
             )
         return credentials
+    if provider != "openai":
+        raise ValueError(f"A {provider} environment connection is read by the provider's client")
     if source == "host":
         raise AuthError(_HOST_KEY_MISSING.format(provider="openai"))
     if source == "missing":

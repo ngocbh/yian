@@ -1,6 +1,7 @@
 from typing import Any, Optional
 
 from langchain_core.language_models import BaseChatModel
+from pydantic import SecretStr
 
 from .config import LLMConfig, SUPPORTED_LLM_PROVIDERS
 from .base_client import BaseLLMClient
@@ -158,13 +159,17 @@ def model_from_config(config) -> BaseChatModel:
     chat-side carrier (an `LLMConfig` instance from `chat/assistant.py`) work end-to-end.
     Public fields are validated through `LLMConfig`; host-owned connection metadata
     is validated separately. Unset provider/model use one saved/environment selection
-    snapshot. Recorded connections use their pinned method and identity, resolving
-    fresh credentials per request without changing accounts after a reconnect.
+    snapshot. Recorded connections use their pinned method and identity, so a later
+    login or removal fails the model instead of changing accounts: OpenAI resolves
+    fresh credentials per request, and every other provider's saved key is resolved
+    once per model build.
 
-    A config `api_key` authenticates the request in place of the provider's key
-    environment variable and any saved OpenAI connection. A config `base_url`,
-    which needs that key, replaces the provider's default endpoint. For `azure`,
-    `base_url` is the required resource endpoint and `model` the deployment name.
+    A config `api_key` authenticates the request in place of any saved login and
+    the provider's key environment variable. Otherwise a saved login's key is sent,
+    else the provider's client reads its key environment variable. A config
+    `base_url`, which needs that key, replaces the provider's default endpoint. For
+    `azure`, `base_url` is the required resource endpoint (a saved login supplies
+    it when unset) and `model` the deployment name.
 
     The block named after the provider is passed to its client as ``block``, and every
     client sends it into the request body as written. The returned model supports
@@ -181,6 +186,7 @@ def model_from_config(config) -> BaseChatModel:
     Raises:
         ValueError: If the provider is unsupported, or `check_model_config` rejects the
             config (e.g. a block the API it reaches refuses).
+        AuthError: If the config's pinned saved login changed or was removed.
         ImportError: If the resolved provider's optional dependency extra is not installed.
     """
     from .connection import check_model_config, connection_credentials, resolve_model_config
@@ -222,6 +228,10 @@ def model_from_config(config) -> BaseChatModel:
         # model instance to a different account between tool iterations.
         kwargs["api_key"] = lambda: connection_credentials(connection).api_key
         kwargs["base_url"] = connection["endpoint"]
+    elif connection is not None and connection["source"] == "store":
+        # Anthropic and Google SDKs take no key callable, so the saved key is
+        # resolved once per model; the credential id still pins the login.
+        kwargs["api_key"] = SecretStr(connection_credentials(connection, provider).api_key)
     if config.base_url is not None:
         # Validation ties a base_url to the config's key, or makes it the Azure
         # resource endpoint, so it is where this request goes.

@@ -351,3 +351,101 @@ def test_run_records_connections(monkeypatch, tmp_path):
     assert recorded["a"]["_connection"] == _store_connection(saved)
     assert recorded["g"]["_connection"] == ENVIRONMENT
     assert b"saved-secret" not in log.read_bytes()
+
+
+def _capture_clients(monkeypatch):
+    """Record each client's provider, model, and kwargs instead of building it."""
+    captured = []
+    model = object()
+
+    class _Client:
+        def get_llm(self):
+            return model
+
+    def fake_client(provider, model, **kwargs):
+        captured.append((provider, model, kwargs))
+        return _Client()
+
+    monkeypatch.setattr(factory, "create_llm_client", fake_client)
+    return captured, model
+
+
+def _plain(key):
+    return key.get_secret_value() if hasattr(key, "get_secret_value") else key
+
+
+def test_saved_key_reaches_the_client(monkeypatch):
+    AuthStore().save("anthropic", ApiKeyCredentials("saved-anth-key"), "claude-x", make_default=False)
+    captured, model = _capture_clients(monkeypatch)
+
+    assert factory.model_from_config({"provider": "anthropic", "model": "claude-x"}) is model
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "env-key")
+    factory.model_from_config({"provider": "anthropic", "model": "claude-x"})
+
+    for provider, name, kwargs in captured:
+        assert (provider, name) == ("anthropic", "claude-x")
+        assert _plain(kwargs["api_key"]) == "saved-anth-key"
+        assert "base_url" not in kwargs
+
+
+def test_env_key_used_without_saved_login(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "env-key")
+    captured, _ = _capture_clients(monkeypatch)
+
+    factory.model_from_config({"provider": "anthropic", "model": "claude-x"})
+
+    assert "api_key" not in captured[0][2]
+
+
+def test_host_key_beats_saved_login_and_sets_no_endpoint(monkeypatch):
+    AuthStore().save("anthropic", ApiKeyCredentials("saved-anth-key"), "m", make_default=False)
+    captured, _ = _capture_clients(monkeypatch)
+
+    factory.model_from_config({"provider": "anthropic", "model": "m", "api_key": "host"})
+    recorded = legacy_connection_config(
+        {"provider": "anthropic", "model": "m", HOST_KEY_MARKER: True}
+    )
+    factory.model_from_config({**recorded, "api_key": "host"})
+
+    for _, _, kwargs in captured:
+        assert _plain(kwargs["api_key"]) == "host"
+        assert "base_url" not in kwargs
+
+
+def test_azure_saved_login_reaches_client(monkeypatch):
+    AuthStore().save(
+        "azure", ApiKeyCredentials("az-key"), "dep",
+        endpoint="https://r.openai.azure.com/", make_default=False,
+    )
+    captured, _ = _capture_clients(monkeypatch)
+
+    factory.model_from_config({"provider": "azure"})
+    factory.model_from_config(
+        {"provider": "azure", "model": "dep", "base_url": "https://other.openai.azure.com/"}
+    )
+
+    provider, model, kwargs = captured[0]
+    assert (provider, model) == ("azure", "dep")
+    assert _plain(kwargs["api_key"]) == "az-key"
+    assert kwargs["base_url"] == "https://r.openai.azure.com/"
+    assert "api_key" not in captured[1][2]
+    assert captured[1][2]["base_url"] == "https://other.openai.azure.com/"
+
+
+def test_connection_credentials_per_provider():
+    from yian.llm_clients.auth import AuthError
+    from yian.llm_clients.connection import connection_credentials
+
+    saved = AuthStore().save("anthropic", ApiKeyCredentials("saved-anth-key"), "m", make_default=False)
+    pinned = _store_connection(saved)
+
+    assert connection_credentials(pinned, "anthropic").api_key == "saved-anth-key"
+
+    AuthStore().save("anthropic", ApiKeyCredentials("other-key"), "m", make_default=False)
+    with pytest.raises(AuthError, match="yian auth anthropic"):
+        connection_credentials(pinned, "anthropic")
+    AuthStore().remove("anthropic")
+    with pytest.raises(AuthError, match="yian auth anthropic"):
+        connection_credentials(pinned, "anthropic")
+    with pytest.raises(ValueError, match="read by the provider's client"):
+        connection_credentials(ENVIRONMENT, "anthropic")

@@ -519,8 +519,8 @@ class NodeDescriptor:
         The tail helper every `build` ends with — the ONE place source metadata stamps live, so
         they cannot drift across the per-kind builds: copies this descriptor's opaque `origin`
         onto the semantic node and retains its YAML ranges and a copy of its `field_labels` only
-        in the transient `BuildResult`. `edges` defaults to `()` (leaf/call/loop own no edges); `case` passes its
-        data+control edges.
+        in the transient `BuildResult`. `edges` defaults to `()` (leaf/call/loop own no edges);
+        `case` passes its data+control edges.
         """
         if self.origin is not None and not isinstance(self.origin, OriginRef):
             raise TypeError("node descriptor origin must be an OriginRef or None")

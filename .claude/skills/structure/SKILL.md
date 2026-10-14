@@ -107,7 +107,9 @@ record that in its charter's "Knows / Never imports".
 
 Feedback contracts follow the same ladder. `expr/lineage.py` owns ordinary
 feedback validation, immutable source/composition routes, and route transfer;
-it imports only the standard library and `json_codec`. `nodes/binding.py` owns
+it imports only the standard library and `json_codec`, as does `expr/percent_format.py`,
+which `%` uses when Python's own formatting hits the int/str digit limit.
+`nodes/binding.py` owns
 transient binding capture and never imports `nodes/base.py` back. `nodes/base.py` owns
 `BackwardContext`, `BackwardResult`, and node-facing validation, while
 `nodes/contracts.py` owns source-neutral execution scopes, positions, input

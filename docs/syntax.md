@@ -360,9 +360,9 @@ may hold an int of any size, and the run records every digit. Embedded in text o
 a prompt, such a value is written in full. An int literal in the YAML may have any
 number of digits.
 
-Changed: an int literal longer than Python's digit limit (4300 digits by default) used
-to be a load error, and embedding, `join`ing, or `%`-formatting such an int as text
-used to fail. All of these work now.
+Changed: an int literal or an `int(lo..hi)` range end longer than Python's digit limit
+(4300 digits by default) used to be a load error, and embedding, `join`ing, or
+`%`-formatting such an int as text used to fail. All of these work now.
 
 Changed: an operator Python can't complete in a binding or an `asserts:` used to raise
 out of `run_flow`; now the run fails like any other expression error. In a prompt or a
@@ -426,7 +426,8 @@ end may be left open: `int(0..)` (0 or more), `int(..100)` (at most 100), `float
 `int(..)` is an error; write `int`. The lower end must not exceed the upper. The parser
 reads `0..1` as a range, not as `0.` and `.1`. Integer ends are exact, at any size.
 Float ends must be finite; integer ends used in a float range must convert without
-rounding. Booleans and computed end expressions are invalid. Ranges work inside aliases, records, lists, and `Optional(...)`.
+rounding. Booleans and computed end expressions are invalid. Ranges work inside aliases,
+records, lists, and `Optional(...)`.
 Defaults and supplied values must satisfy them. Cross-flow wiring requires the
 source range to fit inside the destination range; an unbounded source cannot
 establish that guarantee for a bounded destination. An open end counts as unbounded on
@@ -1812,7 +1813,9 @@ Inline notes:
   *their* code as *you* (remote code execution). Keep flow YAML operator-authored and
   version-controlled. A runaway body is not killed; interrupt the run to stop it. A killable,
   sandboxed runtime (and an opt-in gate for untrusted sources) is planned.
-- **The body is Python**, so its literals follow Python's rules, not the YAML's.
+- **The body is Python**, so its literals follow Python's rules, not the YAML's: a decimal
+  int literal longer than Python's digit limit in `code:` is a load error (Python's syntax
+  error); write it in hex or compute it.
 - **Output must be JSON-representable** (`str` / `int` / `float` / `bool` / `list` /
   `object` / typedefs); a non-serializable return — even nested — fails at the node.
 - **Imports** resolve against the process `sys.path` (cwd + `PYTHONPATH`), same as the

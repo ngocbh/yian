@@ -137,9 +137,10 @@ compute fails like any other expression error:
 
 An int of any size is a value: a whole-string `${10 ** 5000}` binds the int, and the
 run log, outputs, and `resume_flow` keep every digit. Embedding it in text or a prompt
-(`"v=${10 ** 5000}"`), `join`, and every `%` conversion (`${"%d" % big}`) write all its
-digits, and so does `render_as_json`. An int literal in the YAML may have any number of
-digits.
+(`"v=${10 ** 5000}"`), `join`, and the `%` conversions `%s`, `%r`, `%a`, `%d`, `%i` and `%u`
+(`${"%d" % big}`) write all its digits, and so does `render_as_json`. `%e`, `%f`, `%g`
+and `%c` need a float or a character, so an int too large for one fails like
+`${10 ** 400 * 1.0}`. An int literal in the YAML may have any number of digits.
 
 The failure is `binding.evaluate` in a binding, `node.execute` at the CASE node in a
 searched `when:`, `assertion.failed` in a node or flow `asserts:`, and `node.execute` at the

@@ -1190,7 +1190,8 @@ shape; live growth and replay keep using the kind-blind injected `build_grow` pa
 Bindings, conditions, and prompts share ONE expression grammar — the three
 divergent dialects the engine grew (binding coalesce/default, `when:`
 boolean/arithmetic, prompt builtin-call) are unified. Three modules, one pipeline
-(parse → AST → evaluate / infer type / ref-walk):
+(parse → AST → evaluate / infer type / ref-walk), plus `percent_format.py`, the `%`
+formatter for ints past Python's digit limit:
 
 - **`grammar.py` — parse only.** `parse_expr` compiles a span into a Lark tree
   (arithmetic `+ - * / % **`, comparisons, `and`/`or`/`not`, `in`/`not in`, list

@@ -245,7 +245,7 @@ or return null explicitly (a `case` routed to a value entry
 `no_value: !Optional(float) null`, or a `code` node returning `None`). An `int` computed by an
 expression or node, or supplied as an input, may have any number of digits and is
 recorded exactly. So may an int literal in the YAML, and text (a template, a prompt,
-`join`, `%`) writes every digit.
+`join`, `%s`/`%d` and the other text and integer `%` conversions) writes every digit.
 
 A value nests at most 100 levels (each record and list is one): a binding, MAP
 `over` list, or node output nested deeper fails its node, and wrapping a 100-level

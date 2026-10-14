@@ -292,7 +292,9 @@ a temporary inside an expression is fine. Keep the value in range or return null
 explicitly: a `case` routed to a value entry `no_value: !Optional(float) null`, or a
 `code` node returning `None`. An int of any size is a value and is recorded
 exactly; an int literal in the YAML may have any number of digits, and text (a
-template, a prompt, `join`, `%`) writes every digit.
+template, a prompt, `join`, `%s`/`%d` and the other text and integer `%` conversions)
+writes every digit; `%e`/`%f`/`%g`/`%c` on an int too large for a float or character
+fail as in Python.
 
 A value nests at most 100 levels, counting each record and list. A binding or MAP
 `over` list nested deeper fails `binding.evaluate` and a node output fails

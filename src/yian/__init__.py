@@ -7,6 +7,7 @@ ordinary outputs. See the project README for status.
 
 Layers, leaf-to-root (a package imports only DOWN/leftward — never up, never in a cycle):
 
+    json_codec                                      (stdlib only; below every package)
     diagnostics  <-  events
           ^
           └────────  nodes  <-  compile  <-  compose
@@ -19,7 +20,9 @@ Layers, leaf-to-root (a package imports only DOWN/leftward — never up, never i
     compose + compile.expand + runtime  <-  run.py
     compile + compose + memory  <-  memory_host.py  <-  run.py, cli
 
-`diagnostics.py` is the dependency-free source-neutral value spine and owns
+`json_codec.py` imports only the standard library and converts values holding ints of
+any size to and from JSON text without changing `sys.set_int_max_str_digits`; any layer
+may import it. `diagnostics.py` is the dependency-free source-neutral value spine and owns
 `SourceRange`; `events` imports semantic failures from it but does not re-export
 that Compose-facing coordinate type. `secret_names.py` is the stdlib-only list of
 names whose literal value is a credential a flow file must not hold, kept in one

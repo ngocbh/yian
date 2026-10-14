@@ -29,6 +29,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Callable, Literal, TypeAlias
 
+import yian.json_codec as json_codec
 from yian.diagnostics import OriginRef
 from yian.expr import (
     ExpressionError,
@@ -41,7 +42,7 @@ from yian.expr.template import Span, eval_template, scan_template
 from yian.nodes.contracts import Binding, Parameter, ValueContract, binding_source
 from yian.typesys import TypeCheckError, ValueKind, build_value_as
 from yian.typesys.pool import VariablePool
-from yian.typesys.values import Type, reject_nonfinite
+from yian.typesys.values import Type, reject_nonfinite, value_repr
 
 
 BindingFailureCode: TypeAlias = Literal[
@@ -181,7 +182,7 @@ def _source_origin(source: Any) -> OriginRef | None:
 
 
 def _reject_nonfinite_binding(value: Any, where: str, origin: OriginRef | None) -> None:
-    """Raise a ``binding.evaluate`` `BindingError` if ``value`` holds a NaN or infinity."""
+    """Raise a ``binding.evaluate`` `BindingError` if ``value`` holds NaN, infinity, or complex."""
     try:
         reject_nonfinite(value, where)
     except TypeCheckError as exc:
@@ -224,7 +225,7 @@ def coerce_param(parameter: Parameter, value: Any) -> Any:
     raw = value.strip()
     try:
         if parameter.contract.type.kind is ValueKind.INTEGER:
-            return int(raw)
+            return json_codec.parse_int(raw)
         if parameter.contract.type.kind is ValueKind.NUMBER:
             return float(raw)
         if parameter.contract.type.kind is ValueKind.BOOLEAN:
@@ -253,7 +254,7 @@ def check_input_names(params: list[Parameter], raw: Mapping[str, Any]) -> None:
             f"inputs must be a mapping of input names to values, got {type(raw).__name__}"
         )
     declared = [parameter.name for parameter in params]
-    unknown = sorted(repr(name) for name in raw if name not in declared)
+    unknown = sorted(value_repr(name) for name in raw if name not in declared)
     if unknown:
         noun = "input" if len(unknown) == 1 else "inputs"
         raise ValueError(
@@ -288,7 +289,8 @@ def apply_defaults(
 
     Raises:
         `BindingError`: With ``failure_code="binding.evaluate"`` when a default holds a
-            NaN or infinity at any depth or violates its parameter's contract.
+            NaN, infinity, or complex number at any depth or violates its parameter's
+            contract.
     """
     _validate_parameters(params)
     output = dict(inputs)
@@ -450,7 +452,7 @@ def bind_params(
 
     Raises:
         `BindingError`: On expression/default/required evaluation failure, a resolved value
-            or filled default holding a NaN or infinity at any depth, typed binding
+            or filled default holding a NaN, infinity, or complex number at any depth, typed binding
             rejection, or supplied input contract rejection; ``failure_code`` identifies
             the stage.
     """

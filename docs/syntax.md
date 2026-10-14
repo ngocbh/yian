@@ -308,21 +308,26 @@ other expression error. See
 [Expressions → Arithmetic follows Python](expressions.md#arithmetic-follows-python).
 
 A whole-string `${expr}` resolves to the **typed value** (a number stays a
-number, a list a list); embedded in surrounding text it is stringified. A value holding
-an int too long to render as text (past 4300 digits by default) fails like any other
-expression error: a binding fails with `binding.evaluate`, and a prompt fails its node.
+number, a list a list); embedded in surrounding text it is stringified. A typed value
+may hold an int of any size, and the run records every digit. Rendering it as text
+is limited: embedded in text or in a prompt, a value holding an int too long to
+render (past 4300 digits by default) fails like any other expression error: a binding
+fails with `binding.evaluate`, and a prompt fails its node. An int literal written in
+the YAML has the same limit; a longer one is a load error.
 
 Changed: an operator Python can't complete, or a value too long to render as text, in a
 binding or an `asserts:` used to raise out of `run_flow`; now the run fails like any
 other expression error. In a prompt or a CASE `when:` the node already failed; the
 message now names the operator or value.
 
-NaN and infinity are not yian values. A binding whose value is NaN or infinity at
-any depth, whether an expression result, a literal, or a default, fails its node with `binding.evaluate`. The message names the
-input and the path, like `input 'y' at a[1]: non-finite number inf is not a yian
-value`; a default reads `default for 'x': ...`. A temporary inside an expression is
-fine: the embedded template `"v=${x * 10}"` is the text `v=inf`. Only a binding's
-final value is checked. See [Expressions → Non-finite results](expressions.md#non-finite-results).
+NaN, infinity, and complex numbers are not yian values. A binding whose value is
+NaN, infinity, or complex at any depth, whether an expression result, a literal, or a
+default, fails its node with `binding.evaluate`. The message names the input and the
+path, like `input 'y' at a[1]: non-finite number inf is not a yian value`; a default
+reads `default for 'x': ...`. A negative base to a fractional power is complex:
+`v: ${(0 - 8) ** 0.5}` fails with `input 'v': complex number (…) is not a yian value`.
+A temporary inside an expression is fine: the embedded template `"v=${x * 10}"` is
+the text `v=inf`. Only a binding's final value is checked. See [Expressions → Non-finite results](expressions.md#non-finite-results).
 
 !!! note "Flow calls are not expressions"
     A `${...}` computes over values — it does **not** invoke a flow. To call a
@@ -339,8 +344,8 @@ The type vocabulary is Python typing. Scalars: `str`, `int`, `float`, `bool`,
 
 Numeric domains may add inclusive bounds: `int[1, 12]` or `float[0.0, 1.0]`.
 Both endpoints are required and the lower endpoint must not exceed the upper.
-Integer bounds can be any size. Float bounds must be finite; integer endpoints
-used in a float domain must convert without rounding. Booleans and computed
+Integer bounds are exact, up to Python's digit limit (4300 digits by default).
+Float bounds must be finite; integer endpoints used in a float domain must convert without rounding. Booleans and computed
 endpoint expressions are invalid. Bounds work inside aliases, records, lists,
 and `Optional[...]`.
 Defaults and supplied values must satisfy them. Cross-flow wiring requires the

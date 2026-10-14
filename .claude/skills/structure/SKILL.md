@@ -60,6 +60,7 @@ Before adding a package, place it on the dependency ladder. The engine reads
 (leaf → root):
 
 ```
+json_codec                                  (stdlib only; below every package)
 diagnostics  <-  events
       ^
       └────────  nodes  <-  compile  <-  compose
@@ -82,6 +83,11 @@ package-root leaf: the one short list of credential names that compose (and
 later memory) checks, importing only the standard library;
 `test_secret_names_leaf_imports_only_stdlib` ratchets that.
 
+`json_codec.py` is a stdlib-only leaf beside `diagnostics`: it writes and reads
+JSON text for values holding ints of any size without changing
+`sys.set_int_max_str_digits`, and every layer that encodes or decodes value JSON
+imports it (`import yian.json_codec as json_codec`).
+
 The package-root run boundary is the composition root: it may import compose,
 compile's concrete builders, and runtime. Lower layers never import it. **Arrows
 never reverse.** In particular, nodes return canonical growth seeds and never
@@ -100,8 +106,8 @@ record that in its charter's "Knows / Never imports".
 
 Feedback contracts follow the same ladder. `expr/lineage.py` owns ordinary
 feedback validation, immutable source/composition routes, and route transfer;
-it imports only the standard library. `nodes/binding.py` owns transient binding
-capture and never imports `nodes/base.py` back. `nodes/base.py` owns
+it imports only the standard library and `json_codec`. `nodes/binding.py` owns
+transient binding capture and never imports `nodes/base.py` back. `nodes/base.py` owns
 `BackwardContext`, `BackwardResult`, and node-facing validation, while
 `nodes/contracts.py` owns source-neutral execution scopes, positions, input
 connections, and child boundaries within its existing restricted import set.

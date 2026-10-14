@@ -12,9 +12,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from hashlib import sha256
-import json
 from typing import Any
 
+import yian.json_codec as json_codec
 from yian.diagnostics import Failure
 from yian.expr.lineage import FeedbackValue, RouteContext, SourceRef, has_feedback, route_feedback, validate_feedback
 from yian.memory import (
@@ -882,7 +882,7 @@ def memory_commit_id(
             raise TypeError("mutations items must be MemoryMutation values")
         MemoryMutation(mutation.mutation_id, mutation.payload)
         batch.append([mutation.mutation_id, mutation.payload])
-    encoded = json.dumps(
+    encoded = json_codec.dumps(
         [run_id, attempt_id, memory, batch],
         ensure_ascii=False,
         allow_nan=False,

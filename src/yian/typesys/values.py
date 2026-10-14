@@ -62,12 +62,30 @@ class TypeCheckError(ValueError):
         self.path = path
 
 
+def value_repr(value: Any) -> str:
+    """Return `repr(value)`, or a placeholder naming its type when it can't be rendered.
+
+    Args:
+        value (`Any`):
+            The value to show in a message.
+
+    Returns:
+        `str`: ``repr(value)``, or ``<{type} too large to display>``.
+    """
+    try:
+        return repr(value)
+    except ValueError:
+        # repr of an int past Python's str-digit limit raises, at any nesting depth.
+        return f"<{type(value).__name__} too large to display>"
+
+
 def reject_nonfinite(value: Any, where: str) -> None:
-    """Raise if a value contains a NaN or infinity at any depth.
+    """Raise if a value contains a number that is not a yian value: NaN, infinity, or complex.
 
     Walks `dict` values, `list`/`tuple` items, `TypedValue` payloads, pydantic
     models, and dataclass instances, depth-first and in order. It walks declared
-    fields and extras only; a non-str key renders as its repr. A container
+    fields and extras only; a non-str key renders as its repr, or a
+    ``<type too large to display>`` placeholder. A container
     already on the current path is skipped; the canonical codecs reject cycles.
 
     Args:
@@ -78,28 +96,29 @@ def reject_nonfinite(value: Any, where: str) -> None:
 
     Raises:
         `TypeCheckError`:
-            A non-finite float was found; ``path`` locates it and the message reads
-            ``<where>[ at <path>]: non-finite number <repr> is not a yian value``.
+            Such a number was found; ``path`` locates it and the message reads
+            ``<where>[ at <path>]: non-finite number <repr> is not a yian value``, or
+            ``... complex number <repr> ...`` for a complex.
     """
     found = _find_nonfinite(value, (), set())
     if found is None:
         return
     path, number = found
     location = f"{where} at {_render_value_path(path)}" if path else where
-    raise TypeCheckError(
-        f"{location}: non-finite number {number!r} is not a yian value",
-        path=path,
-    )
+    label = "complex number" if isinstance(number, complex) else "non-finite number"
+    raise TypeCheckError(f"{location}: {label} {number!r} is not a yian value", path=path)
 
 
 def _find_nonfinite(
     value: Any,
     path: tuple[str | int, ...],
     active: set[int],
-) -> tuple[tuple[str | int, ...], float] | None:
-    """Return the path to and value of the first non-finite float, or `None`."""
+) -> tuple[tuple[str | int, ...], float | complex] | None:
+    """Return the path to and value of the first NaN, infinity, or complex, or `None`."""
     if isinstance(value, float):
         return None if isfinite(value) else (path, value)
+    if isinstance(value, complex):
+        return (path, value)
     if id(value) in active:
         return None
     # `TypedValue` subclasses `BaseModel`; unwrap it first so paths gain no `value` segment.
@@ -111,7 +130,7 @@ def _find_nonfinite(
     elif isinstance(value, dict):
         # `TypeCheckError` paths hold exact `str` segments, so a `str` subclass key is unwrapped.
         children = [
-            (item, path + (str.__str__(key) if isinstance(key, str) else repr(key),))
+            (item, path + (str.__str__(key) if isinstance(key, str) else value_repr(key),))
             for key, item in value.items()
         ]
     elif isinstance(value, (list, tuple)):
@@ -1240,7 +1259,8 @@ def _build_for_type(
         _validate_numeric_bounds(typ.kind, typ.bounds)
         if _scalar_matches(typ.kind, value) and not typ.bounds[0] <= value <= typ.bounds[1]:
             raise TypeCheckError(
-                f"{value!r} is outside inclusive {typ.kind.value} bounds {typ.bounds!r}",
+                f"{value_repr(value)} is outside inclusive {typ.kind.value} "
+                f"bounds {typ.bounds!r}",
                 path=path,
             )
 
@@ -1255,7 +1275,7 @@ def _build_for_type(
     if typ.tags is not None:
         if not isinstance(value, str) or value not in typ.tags:
             raise TypeCheckError(
-                f"{value!r} is not a member of variant {sorted(typ.tags)}",
+                f"{value_repr(value)} is not a member of variant {sorted(typ.tags)}",
                 path=path,
             )
         return StringValue(value=value)
@@ -1264,7 +1284,7 @@ def _build_for_type(
     if typ.fields is not None:
         if not isinstance(value, dict):
             raise TypeCheckError(
-                f"{value!r} is not an object for a record type",
+                f"{value_repr(value)} is not an object for a record type",
                 path=path,
             )
         required = typ.required or frozenset()
@@ -1283,15 +1303,16 @@ def _build_for_type(
             except TypeError:
                 ordered_unknown = sorted(
                     unknown,
-                    key=lambda name: (type(name).__qualname__, repr(name)),
+                    key=lambda name: (type(name).__qualname__, value_repr(name)),
                 )
             unknown_path = (
                 path + (ordered_unknown[0],)
                 if all_string_keys
                 else path
             )
+            shown = ", ".join(value_repr(name) for name in ordered_unknown)
             raise TypeCheckError(
-                f"record has unknown fields: {ordered_unknown}",
+                f"record has unknown fields: [{shown}]",
                 path=unknown_path,
             )
         # Key by the declared name: an equal `str` subclass key must not leak into
@@ -1313,7 +1334,7 @@ def _build_for_type(
     if typ.kind.is_list() and typ.element is not None:
         if not isinstance(value, (list, tuple)):
             raise TypeCheckError(
-                f"{value!r} is not a list for declared {typ.kind.value}",
+                f"{value_repr(value)} is not a list for declared {typ.kind.value}",
                 path=path,
             )
         items = [
@@ -1354,7 +1375,9 @@ def _build_for_union(
             unknown, or it fails the selected member (or every member).
     """
     if not isinstance(value, dict):
-        raise TypeCheckError(f"{value!r} is not an object for a union type", path=path)
+        raise TypeCheckError(
+            f"{value_repr(value)} is not an object for a union type", path=path
+        )
     members = typ.variants
     tag_fields = _members_tag_fields(members)
     if tag_fields:
@@ -1367,7 +1390,7 @@ def _build_for_union(
         member = _member_with_tag(members, field, value[field])
         if member is None:
             raise TypeCheckError(
-                f"{value[field]!r} is not a tag of the union "
+                f"{value_repr(value[field])} is not a tag of the union "
                 f"(expected one of {_tag_values(members, field)})",
                 path=path + (field,),
             )
@@ -1433,7 +1456,7 @@ def _build_scalar_or_list(
     if declared.is_list():
         if not isinstance(value, (list, tuple)):
             raise TypeCheckError(
-                f"{value!r} is not a list for declared {declared.value}",
+                f"{value_repr(value)} is not a list for declared {declared.value}",
                 path=path,
             )
         items = list(value)
@@ -1442,7 +1465,7 @@ def _build_scalar_or_list(
             for index, item in enumerate(items):
                 if not _scalar_matches(element, item):
                     raise TypeCheckError(
-                        f"list element {item!r} is not {element.value} "
+                        f"list element {value_repr(item)} is not {element.value} "
                         f"(declared {declared.value})",
                         path=path + (index,),
                     )
@@ -1453,7 +1476,7 @@ def _build_scalar_or_list(
         return _LIST_VALUE_CLASS[declared](value=items)
 
     if not _scalar_matches(declared, value):
-        message = f"{value!r} does not match declared type {declared.value}"
+        message = f"{value_repr(value)} does not match declared type {declared.value}"
         if declared in _TEMPORAL_PARSERS and isinstance(value, str):
             message += f": {_temporal_error(declared, value)}"
         raise TypeCheckError(message, path=path)

@@ -1,4 +1,4 @@
-"""Interactive CLI helpers for provider credentials and endpoints.
+"""Interactive CLI helpers for provider credentials and endpoints, and for printing values.
 
 These are the integration points the `llm_clients` modules point at by name:
 
@@ -10,17 +10,22 @@ These are the integration points the `llm_clients` modules point at by name:
   as the step that surfaces the resolved Ollama endpoint right after provider
   selection; the future provider-selection wizard is its caller.
 
-Both are TTY-aware: they prompt only when attached to an interactive terminal
-and otherwise fall back (return the ambient value, or raise for a hard-missing
-required key) so non-interactive runs stay scriptable.
+`ensure_api_key` and `confirm_ollama_endpoint` are TTY-aware: they prompt only
+when attached to an interactive terminal and otherwise fall back (return the
+ambient value, or raise for a hard-missing required key) so non-interactive
+runs stay scriptable.
+
+`displayable` lets `yian run` and `yian chat` print values that hold ints too
+long for `repr`.
 """
 
 from __future__ import annotations
 
 import os
 import sys
-from typing import Optional
+from typing import Any, Optional
 
+import yian.json_codec as json_codec
 from yian.llm_clients.api_key_env import get_api_key_env
 
 # Mirror of `ollama_client._DEFAULT_BASE_URL`. Duplicated (not imported) so this
@@ -34,6 +39,49 @@ _OLLAMA_DEFAULT_BASE_URL = "http://localhost:11434"
 # non-interactive-but-TTY caller feeding empty forever can't hang. 3 mirrors sudo's
 # `passwd_tries` default — the most familiar credential prompt on Linux.
 MAX_KEY_PROMPTS = 3
+
+# Ints up to 2000 bits are always below Python's int/str digit limit, so `repr`
+# prints them; longer ones may exceed it and are spelled by `json_codec`.
+_SHORT_INT_BITS = 2000
+
+
+class _IntDigits:
+    """Stands in for a long int when printing; its `repr` is the int's digits."""
+
+    def __init__(self, value: int) -> None:
+        self._text = json_codec.int_text(value)
+
+    def __repr__(self) -> str:
+        return self._text
+
+
+def displayable(value: Any) -> Any:
+    """Return `value` with every long int swapped for an object whose `repr` is its digits.
+
+    `repr` and `str` of an int past Python's process-wide digit limit raise
+    `ValueError`; the returned value prints instead. Dicts, lists and tuples are
+    walked (and rebuilt only when they hold a long int); any other value is
+    returned unchanged.
+
+    Args:
+        value (`Any`): The value to print.
+
+    Returns:
+        `Any`: `value` itself, or a copy whose long ints print as their digits.
+    """
+    if isinstance(value, int) and not isinstance(value, bool):
+        return _IntDigits(value) if value.bit_length() > _SHORT_INT_BITS else value
+    if isinstance(value, dict):
+        items = {key: displayable(item) for key, item in value.items()}
+        if all(items[key] is item for key, item in value.items()):
+            return value
+        return items
+    if isinstance(value, (list, tuple)):
+        items = [displayable(item) for item in value]
+        if all(new is old for new, old in zip(items, value)):
+            return value
+        return items if isinstance(value, list) else tuple(items)
+    return value
 
 
 def ensure_api_key(provider: str, *, interactive: bool = True) -> Optional[str]:

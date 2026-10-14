@@ -83,6 +83,7 @@ from yian.runtime.log import (
     canonical_typed,
     decode_pool,
     decode_record,
+    decode_typed_json,
     encode_pool,
     encode_record,
 )
@@ -1336,10 +1337,7 @@ def _prepare_success_transition(
         delta=delta,
         terminal=terminal,
     )
-    observer_value = ANY_VALUE_ADAPTER.validate_json(
-        delta.value_bytes,
-        strict=True,
-    ).to_object()
+    observer_value = decode_typed_json(delta.value_bytes).to_object()
     observer = NodeSucceeded(
         node_id=delta.node_id,
         output=observer_value,
@@ -4512,11 +4510,8 @@ def _apply_run_started(state: RunState, apply: _RunStartedApply) -> None:
 
 def _materialize_success(plan: _SuccessPlan) -> _SuccessApply:
     """Decode independent pool, observer, and terminal copies before append."""
-    value = ANY_VALUE_ADAPTER.validate_json(plan.delta.value_bytes, strict=True)
-    observer_value = ANY_VALUE_ADAPTER.validate_json(
-        plan.delta.value_bytes,
-        strict=True,
-    ).to_object()
+    value = decode_typed_json(plan.delta.value_bytes)
+    observer_value = decode_typed_json(plan.delta.value_bytes).to_object()
     terminal = (
         _materialize_terminal(plan.terminal)
         if plan.terminal is not None
@@ -4560,10 +4555,7 @@ def _terminal_observer(delta: _TerminalDelta) -> RunSucceeded | RunFailed:
             raise ValueError("successful terminal delta requires typed output bytes")
         if delta.failure is not None:
             raise ValueError("successful terminal delta cannot carry a failure")
-        output = ANY_VALUE_ADAPTER.validate_json(
-            delta.output_bytes,
-            strict=True,
-        ).to_object()
+        output = decode_typed_json(delta.output_bytes).to_object()
         return RunSucceeded(output=output)
     if delta.output_bytes is not None:
         raise ValueError("failed terminal delta cannot carry output bytes")

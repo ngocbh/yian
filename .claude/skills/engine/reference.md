@@ -640,6 +640,7 @@ model made enforceable.
 ## Layer ladder (where code goes)
 
 ```
+json_codec                                  (stdlib only; below every package)
 diagnostics  <-  events
       ^
       └────────  nodes  <-  compile  <-  compose
@@ -655,7 +656,8 @@ resolved `DiagnosticFrame` and `Diagnostic` presentation values, the
 `OriginResolver` protocol, and immutable exact-route `ResolverTable`. It imports
 only the standard library. `events.py` imports the semantic diagnostics it uses
 but does not re-export `SourceRange`; Compose imports that coordinate directly
-from `diagnostics`.
+from `diagnostics`. `json_codec.py` also imports only the standard library; every
+layer that writes or reads value JSON imports it.
 
 Arrows never reverse: a package imports only lower-level or peer packages. See the
 `structure` skill. An upward import means the code is in the wrong package (extract
@@ -790,10 +792,11 @@ generated numeric schemas carry `minimum`/`maximum` recursively through lists
 and records. Canonical labels and manifests include present bounds; absent bounds
 remain omitted from manifests to preserve unbounded identities.
 
-NaN and infinity are not yian values. `typesys.values.reject_nonfinite(value, where)`
-walks dicts, lists, tuples, `TypedValue` payloads, pydantic models, and dataclasses
-and raises `TypeCheckError` with the path of the first one
-(`<where> at <path>: non-finite number inf is not a yian value`). The first boundary
+NaN, infinity, and complex numbers are not yian values.
+`typesys.values.reject_nonfinite(value, where)` walks dicts, lists, tuples,
+`TypedValue` payloads, pydantic models, and dataclasses and raises `TypeCheckError`
+with the path of the first one (`<where> at <path>: non-finite number inf is not a
+yian value`, or `complex number <repr>` for a complex). The first boundary
 rejects it: the binder fails a resolved value, filled default, or MAP
 `over` list with `binding.evaluate` at the binding or default origin (temporaries
 inside an expression are not checked); an AGENT variable default fails
@@ -801,6 +804,7 @@ inside an expression are not checked); an AGENT variable default fails
 exists; `LLMConfig` sets `allow_inf_nan=False`. `canonical_typed`, `canonical_seed`,
 and `encode_pool` always reject one, so a node output fails `contract.output` at the
 field path and a growth seed fails `contract.growth`; nothing is recorded as null.
+A top-level complex returned by a CODE node fails `contract.output` too.
 Widening an int too large for a float raises `TypeCheckError` at its path.
 A model reply is checked too. A tool call whose arguments hold one fails the AGENT
 with `node.execute` before any call of the reply runs (`tool call 'lookup' arguments
@@ -812,6 +816,18 @@ native path with session memory). With session memory, `invoke_model`
 rejects a raw reply holding one anywhere, provider metadata included, before storing
 it; the model effect is observed `failed` and the reply is not kept. Without memory,
 metadata is not checked.
+
+Ints of any size are values. Run-log JSON, `VariablePool.loads`, lineage,
+`render_as_json`, memory storage, manifest fingerprints, and CLI input and output go
+through `yian.json_codec`, which converts long ints itself; yian source never calls
+`sys.set_int_max_str_digits` (tests may pin it). Value bytes decode through
+`runtime.log.decode_typed_json`: pydantic's strict `validate_json` first, then the
+codec when pydantic reports invalid JSON (as it does for an int past the digit
+limit). Converting a long int costs time quadratic in its digits (about 0.2 s each
+way at 100,000 digits); there is no cost limit.
+Type-check messages show one as `<int too large to display>`
+(`typesys.values.value_repr`). Rendering one as text (template interpolation,
+prompt text) still fails as an expression error.
 
 `Type.variants` refines OBJECT into a union: a tuple of two or more non-nullable record
 members, in canonical order (by tag, else by `canonical_type_label`) and deduplicated by

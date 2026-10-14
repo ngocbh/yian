@@ -273,6 +273,7 @@ def test_module_imports_only_stdlib_and_lower_memory_modules() -> None:
         "types",
         "typing",
         "uuid",
+        "yian.json_codec",
         "yian.memory.contracts",
         "yian.memory.storage",
     }

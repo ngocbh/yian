@@ -11,13 +11,13 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass
 import hashlib
-import json
 import os
 from threading import RLock
 from types import TracebackType
 from typing import Iterator, cast
 from uuid import uuid4
 
+import yian.json_codec as json_codec
 from yian.memory.contracts import (
     JsonObject,
     JsonValue,
@@ -167,7 +167,7 @@ def _copy_object(value: object, name: str) -> JsonObject:
 
 def _canonical_json(value: JsonValue) -> str:
     """Return one stable compact JSON encoding."""
-    return json.dumps(
+    return json_codec.dumps(
         value,
         ensure_ascii=False,
         allow_nan=False,

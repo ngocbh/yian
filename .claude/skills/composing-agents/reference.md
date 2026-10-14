@@ -268,10 +268,13 @@ inferred type is disjoint from the declared one; narrower or unknown types are
 checked at runtime, without conversion, failing the consumer (END for a flow output)
 with `binding.type`. Declared types are in the flow fingerprint.
 
-NaN and infinity are not yian values. A binding whose value holds one at any
-depth fails its node with `binding.evaluate`; a temporary inside an expression is
-fine. Keep the value in range or return null explicitly: a `case` value branch
-`then: null` under `output: Optional[...]`, or a `code` node returning `None`.
+NaN, infinity, and complex numbers (`${(0 - 8) ** 0.5}`) are not yian values. A
+binding whose value holds one at any depth fails its node with `binding.evaluate`;
+a temporary inside an expression is fine. Keep the value in range or return null
+explicitly: a `case` value branch `then: null` under `output: Optional[...]`, or a
+`code` node returning `None`. An int of any size is a value and is recorded
+exactly; rendering one past Python's digit limit as text still fails, and an int
+literal written in the YAML past that limit is a load error.
 
 Bounds require two ordered numeric literals and exclude booleans. Integer bounds
 retain arbitrary precision. Float bounds must be finite; integer endpoints used

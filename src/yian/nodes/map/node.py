@@ -118,7 +118,8 @@ class MapNode(Node):
         Returns `{"over": <list>}`: the `over` source rides `node_wiring["over"]`, evaluated
         against `pool`. A source that resolves to `None`/non-list raises a binder-owned
         ``BindingError`` classified as ``contract.input`` by the read seam; a list holding
-        a NaN or infinity at any depth raises one classified as ``binding.evaluate``."""
+        a NaN, infinity, or complex number at any depth raises one classified as
+        ``binding.evaluate``."""
         over_src = node_wiring["over"]
 
         def validate(items):

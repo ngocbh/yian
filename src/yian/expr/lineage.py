@@ -13,6 +13,8 @@ import json
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Literal, TypeAlias
 
+import yian.json_codec as json_codec
+
 FeedbackValue: TypeAlias = (
     str | dict[str, "FeedbackValue"] | list["FeedbackValue"] | None
 )
@@ -95,7 +97,7 @@ class ValueRoute:
         """
         if _uses_only_json_builtins(value):
             try:
-                encoded = json.dumps(value, ensure_ascii=False, allow_nan=False)
+                encoded = json_codec.dumps(value, ensure_ascii=False, allow_nan=False)
                 encoded.encode("utf-8")
             except (ValueError, RecursionError):
                 pass
@@ -208,7 +210,7 @@ class RouteContext:
         Partial container structure remains in `snapshot`. Source contexts keep
         the exact accepted value reference in `sources` instead of a JSON copy.
         """
-        return json.loads(self.result_json) if self.result_json is not None else None
+        return json_codec.loads(self.result_json) if self.result_json is not None else None
 
 
 @dataclass(frozen=True)
@@ -298,7 +300,7 @@ def _capture_literal(value: Any, active: set[int], depth: int = 0) -> ValueRoute
     )
     if value_type in (type(None), bool, int, float, str):
         try:
-            encoded = json.dumps(value, ensure_ascii=False, allow_nan=False)
+            encoded = json_codec.dumps(value, ensure_ascii=False, allow_nan=False)
             encoded.encode("utf-8")
         except (ValueError, RecursionError):
             return unavailable
@@ -371,7 +373,7 @@ def _route_value(route: ValueRoute, lookup: Callable[[SourceRef], Any]) -> Any:
         if route.snapshot is not None:
             return _route_value(route.snapshot, lookup)
         return (
-            json.loads(route.value_json)
+            json_codec.loads(route.value_json)
             if route.value_json is not None
             else _UNAVAILABLE_RESULT
         )

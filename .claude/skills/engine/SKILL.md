@@ -51,10 +51,10 @@ this model whenever you design anything:
   representation. Compatibility requires interval containment, and inline type
   copies, nested schemas, and labels retain the refinement. Omit absent bounds
   from manifests so unbounded declarations keep their identity.
-- NaN and infinity are not yian values. `typesys.values.reject_nonfinite(value,
-  where)` finds one at any depth and raises `TypeCheckError` with its path; the
-  first boundary rejects it. The binder fails a resolved value or filled default
-  with `binding.evaluate` (temporaries inside an expression are not
+- NaN, infinity, and complex numbers are not yian values.
+  `typesys.values.reject_nonfinite(value, where)` finds one at any depth and
+  raises `TypeCheckError` with its path; the first boundary rejects it. The
+  binder fails a resolved value or filled default with `binding.evaluate` (temporaries inside an expression are not
   checked); `run_flow` raises `ValueError` for a run input before the log exists;
   `LLMConfig` rejects a non-finite value. Every run-log codec (`canonical_typed`,
   `canonical_seed`, `encode_pool`) rejects one, with no opt-in, so a node output
@@ -67,6 +67,11 @@ this model whenever you design anything:
   reply self-corrects under `retries:`; with a transcript `invoke_model` rejects a
   non-finite raw reply (metadata included) before storing it and observes the
   effect `failed` instead of crashing the codec.
+- Ints of any size are values. Write and read value JSON through
+  `yian.json_codec` (run log, pool, lineage, memory, manifests, CLI) and decode
+  typed value bytes with `runtime.log.decode_typed_json`; never call
+  `sys.set_int_max_str_digits` in source. Show a long int in a message with
+  `typesys.values.value_repr`. Rendering one as text stays an expression error.
 - `AgentNode.variables` reuses ordered `Parameter` declarations, each with an
   exact contract and explicit typed default. Reject duplicate names and input
   collisions. Resolve a detached default record once per invocation, then render

@@ -30,7 +30,8 @@ from yian.runtime.contracts import BackwardCapture, ForwardCapture, _validate_so
 from yian.runtime.log import (
     NodeExpandedRecord, NodeFailedRecord, NodeRoutedRecord, NodeStartedRecord,
     NodeSucceededRecord, RecordEnvelope, RunResumedRecord, RunStartedRecord,
-    _decode_typed, _evidence_payload, canonical_seed, decode_pool, decode_record, encode_record,
+    _decode_typed, _evidence_payload, canonical_seed, decode_pool, decode_record,
+    decode_typed_json, encode_record,
 )
 from yian.typesys.values import ANY_VALUE_ADAPTER
 
@@ -78,7 +79,7 @@ class SourceEntry:
     @property
     def value(self) -> Any:
         """Decode a detached typed value with the same semantics as the pool."""
-        return ANY_VALUE_ADAPTER.validate_json(self._value_bytes, strict=True).to_object()
+        return decode_typed_json(self._value_bytes).to_object()
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,7 +102,7 @@ class TraceTerminal:
         if self.succeeded:
             if type(self.output_bytes) is not bytes or self.failure is not None:
                 raise ValueError("successful terminal requires output bytes and no failure")
-            ANY_VALUE_ADAPTER.validate_json(self.output_bytes, strict=True)
+            decode_typed_json(self.output_bytes)
         else:
             if self.output_bytes is not None or type(self.failure) is not Failure:
                 raise ValueError("failed terminal requires a failure and no output")
@@ -112,7 +113,7 @@ class TraceTerminal:
         """Return detached canonical output, or None when the terminal failed."""
         if not self.succeeded:
             return None
-        value = ANY_VALUE_ADAPTER.validate_json(self.output_bytes, strict=True).to_object()
+        value = decode_typed_json(self.output_bytes).to_object()
         return canonical_seed(value)[1]
 
 
@@ -348,7 +349,7 @@ class RetainedTrace:
             encoded = self._system.get(rest[0]) if rest else None
             if encoded is None:
                 return ResolvedValue(None, False)
-            value = ANY_VALUE_ADAPTER.validate_json(encoded, strict=True).to_object()
+            value = decode_typed_json(encoded).to_object()
             return ResolvedValue(value, True)
         else:
             return ResolvedValue(None, False)
@@ -565,9 +566,9 @@ def prepare_trace(
     if terminal_succeeded is not None:
         if terminal_succeeded:
             accepted_writer = root_writer or trace._root_writer
-            if accepted_writer is None or ANY_VALUE_ADAPTER.validate_json(
-                accepted_writer._value_bytes, strict=True,
-            ) != ANY_VALUE_ADAPTER.validate_json(terminal_output_bytes, strict=True):
+            if accepted_writer is None or decode_typed_json(
+                accepted_writer._value_bytes,
+            ) != decode_typed_json(terminal_output_bytes):
                 raise ValueError("terminal output disagrees with the accepted root writer")
             terminal_source = accepted_writer.source
         else:

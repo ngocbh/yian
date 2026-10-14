@@ -108,3 +108,27 @@ def test_an_inferred_float_list_with_a_huge_int_fails_at_its_index():
     assert caught.value.path == (1,)
     with pytest.raises(TypeCheckError, match="too large for float"):
         canonical_typed([0.5, 10**400], None)
+
+
+@pytest.mark.parametrize("value, path, message", [
+    (1j, (), "input 'x': complex number 1j is not a yian value"),
+    ({"a": [1, 2j]}, ("a", 1), "input 'x' at a[1]: complex number 2j is not a yian value"),
+    (ObjectValue(value={"k": 3j}), ("k",), "input 'x' at k: complex number 3j is not a yian value"),
+    ((0, {"b": 4j}), (1, "b"), "input 'x' at [1].b: complex number 4j is not a yian value"),
+    (_Box(5j), ("value",), "input 'x' at value: complex number 5j is not a yian value"),
+    (
+        [1j, math.nan],
+        (0,),
+        "input 'x' at [0]: complex number 1j is not a yian value",
+    ),
+    (
+        [math.nan, 1j],
+        (0,),
+        "input 'x' at [0]: non-finite number nan is not a yian value",
+    ),
+])
+def test_reject_nonfinite_reports_the_first_rejected_number(value, path, message):
+    with pytest.raises(TypeCheckError) as caught:
+        reject_nonfinite(value, "input 'x'")
+    assert str(caught.value) == message
+    assert caught.value.path == path

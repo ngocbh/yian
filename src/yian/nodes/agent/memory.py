@@ -41,6 +41,7 @@ from yian.memory import (
 from yian.memory.summary import admissions
 from yian.nodes.agent.interrupts import ReplyInterrupted
 from yian.nodes.base import _CapabilityFault, _HostStop
+from yian.typesys.values import reject_nonfinite
 
 MESSAGE_FORMAT = "yian.langchain-message.v1"
 HISTORY_PROJECTION = "yian.api-history.v2"
@@ -572,12 +573,15 @@ def invoke_model(
     exchange_id: str | None = None,
     purpose: str = "chat",
     raw_reply: Callable[[Any], BaseMessage] | None = None,
+    check_reply: Callable[[Any], None] | None = None,
 ) -> Any:
     """Persist request/reply deltas around exactly one external model invocation.
 
     New messages are the actual input delta, not the full provider context.
-    A surfaced reply is persisted before stop or caller-owned parsing. Request
-    and successful observation failures remain outside the provider-error catch.
+    A surfaced reply is persisted before stop or caller-owned parsing, unless
+    `check_reply` rejects it or it holds a non-finite number: such a reply is
+    recorded `failed` and is not persisted. Request and successful observation
+    failures remain outside the provider-error catch.
 
     Args:
         turn (`ConversationTurn | None`): Optional transcript to update. Without
@@ -590,6 +594,9 @@ def invoke_model(
         purpose (`str`): Request purpose; defaults to ordinary `chat` generation.
         raw_reply (`Callable | None`): Extract a raw message from a native structured
             carrier. Omission treats the returned value as the raw message.
+        check_reply (`Callable | None`): Called with the provider's return as soon
+            as it surfaces, with or without a transcript; it raises to reject the
+            reply before anything is persisted.
 
     Returns:
         `Any`: The actual provider return, before caller-owned parsing.
@@ -600,10 +607,15 @@ def invoke_model(
             also propagate unchanged, including when failure publication fails.
         `ReplyInterrupted`: A host interrupt cut the streamed reply; the effect is
             recorded `interrupted` with the partial reply first.
+        `TypeCheckError`: The stored reply would hold a NaN or infinity; the effect
+            is recorded `failed` and the reply is not stored. Errors from
+            `check_reply` are recorded the same way.
     """
     if turn is None:
         reply = invoke()
         check_stopped()
+        if check_reply is not None:
+            check_reply(reply)
         return reply
     exchange_id = exchange_id or uuid4().hex
     with _memory_boundary():
@@ -624,6 +636,22 @@ def invoke_model(
         raise
     with _memory_boundary():
         raw = reply if raw_reply is None else raw_reply(reply)
+    try:
+        if check_reply is not None:
+            check_reply(reply)
+        # Only finite JSON can be stored, so a non-finite number anywhere in the reply fails it.
+        reject_nonfinite(raw, "model reply")
+    except Exception as rejected:
+        # A stop that arrived during the call wins over the rejection. `turn.observe`
+        # itself raises a pending stop, which would wrap `rejected` as a host fault.
+        try:
+            check_stopped()
+        except BaseException as stop:
+            _observe_failure(turn, ordinal, "model", stop)
+            raise
+        _observe_failure(turn, ordinal, "model", rejected)
+        raise
+    with _memory_boundary():
         turn.observe(ordinal, "completed", items=(encode_message(raw, exchange_id),))
     check_stopped()
     return reply

@@ -976,8 +976,9 @@ One `${...}` grammar; the context decides what happens to the result:
 - **`when:` / `asserts:`**: **tested** as a boolean — `== != < <= > >=`,
   `in`/`not in`, `and`/`or`/`not`, parens, arithmetic operands. Bare, or one
   whole `${...}`, are equivalent; braces on a ref inside (`${a} > 5`) are a load
-  error, as is calling a function other than a builtin or `isinstance`, or a builtin
-  with arguments it doesn't take (even where `and`/`or` would skip it). A flow-level
+  error, as is calling a function other than a builtin, `isinstance`, or a `typedefs:`
+  constructor `T(...)`, or a builtin with arguments it doesn't take (even where
+  `and`/`or` would skip it). A flow-level
   `asserts:` reads `input.X` (boundary, before any node) or `node.output` (post,
   after the terminal). An exact unqualified flow-input name is shorthand (`age`
   means `input.age`) and wins over a same-named node; keep fields explicit as

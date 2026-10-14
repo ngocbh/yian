@@ -2714,9 +2714,10 @@ One `${...}` grammar serves every context — the difference is what each contex
   is a redundant no-op), but bare is the form used throughout the docs and seeds.
   Braces on a ref inside the expression (`${a.output} > 5`) are a `${...}` inside
   an expression: a load error that shows the rewrite. A condition may call a builtin
-  (see [Expressions → builtins](expressions.md#builtins-pure-expression-functions))
-  or `isinstance`; calling any other function, or a builtin with arguments it doesn't
-  take, is a load error at that condition, even where the call would never run.
+  (see [Expressions → builtins](expressions.md#builtins-pure-expression-functions)),
+  `isinstance`, or a `typedefs:` constructor `T(...)`; calling any other function, or a
+  builtin with arguments it doesn't take, is a load error at that condition, even where
+  the call would never run.
 - **Prompts**: free text with embedded `${...}` spans (each stringified into the
   text); spans may use the full grammar, but reference only the node's own declared
   inputs. `isinstance` and constructors are the exception: compute them in an input

@@ -231,7 +231,9 @@ calls one.
 
 In a condition every call is checked before it runs: an unknown function, or
 arguments the builtin doesn't take, is a load error (for a condition set in Python,
-`run_flow` raises `ExpressionError` before the run).
+`run_flow` raises `ExpressionError` before the run). A `typedefs:` constructor
+`T(...)` is not an unknown function; set in Python, its name must be in the node's
+type table.
 
 ## `isinstance` — the type test
 

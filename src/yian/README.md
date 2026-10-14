@@ -1259,7 +1259,9 @@ input and opaque-stop entries reconstruct context through the existing route
 interpreter; literal/default feedback remains local without a fabricated source.
 Defined JSON/materialization failure becomes a memory-attributed context failure
 before Ready; invalid record authority remains an error. Memory JSON allows 128
-levels, and run material at the value limit nests about 108, so it always fits. A
+levels, and run material at the value limit nests about 108, so it always fits;
+AGENT evidence (a structured model value or tool-call arguments) deeper than the value
+limit is not recorded. A
 context that still cannot be built (for example from a log recorded before the
 limit) raises `OwnerContextError` carrying the owner occurrence's `BackwardContext`;
 each occurrence's feedback is validated on its own so the failure is attributed to

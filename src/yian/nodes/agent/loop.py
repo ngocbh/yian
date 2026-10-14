@@ -48,7 +48,7 @@ from yian.nodes.agent.text import (
 from yian.nodes.agent.structured import generate_structured, type_to_schema
 from yian.nodes.base import Output
 from yian.skills.tool import LOAD_SKILL, invoke_load_skill, load_skill_tool
-from yian.typesys.values import reject_nonfinite
+from yian.typesys.values import reject_deep_nesting, reject_nonfinite
 
 # -1 means no bound; a positive per-node env value bounds model turns.
 MAX_TOOL_ITERATIONS = -1
@@ -207,10 +207,13 @@ def run_agent(ctx: AgentRunContext) -> Output:
             arguments = raw_arguments or {}
             if ctx.evaluation_trace is not None:
                 try:
+                    # Memory freezes evidence under its own JSON bound, but an episode
+                    # wraps it a few levels deeper; the value limit leaves that room.
+                    reject_deep_nesting(arguments, "tool arguments")
                     call_interaction = ToolCallInteraction(name, arguments)
                 except (TypeError, ValueError, RecursionError):
-                    # Evidence remains observational for malformed arguments; the
-                    # ordinary tool boundary below retains its established error.
+                    # Evidence remains observational for malformed or too-deep arguments;
+                    # the ordinary tool boundary below retains its established behavior.
                     pass
                 else:
                     ctx.evaluation_trace.record_interaction(call_interaction)

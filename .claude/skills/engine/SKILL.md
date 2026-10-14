@@ -522,7 +522,8 @@ Most are just the functional model (above) made enforceable:
   materialize transcript contexts. `RuntimeBackwardState` is the sole attempt
   authority. `project_owner_contexts` is the only episode projection; forward
   execution keeps no per-memory episode inventory. Memory JSON allows 128 levels,
-  so run material at the value limit fits; a context that still cannot be built
+  so run material at the value limit fits (AGENT evidence over the limit is not
+  recorded); a context that still cannot be built
   raises `OwnerContextError` with the owner's `BackwardContext`, and the driver
   records `memory.invalid_context` naming that occurrence and the cause (only
   root fallback feedback has no node). Rebuild a `LearnContext`; never deep-copy one.

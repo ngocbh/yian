@@ -47,6 +47,7 @@ from yian.typesys.values import (
     Type,
     TypeCheckError,
     ValueKind,
+    reject_deep_nesting,
     reject_nonfinite,
     union_tag_fields,
 )
@@ -435,6 +436,9 @@ def _generate_native(
         else:
             if evaluation_trace is not None:
                 try:
+                    # Memory freezes evidence under its own JSON bound, but an episode
+                    # wraps it a few levels deeper; the value limit leaves that room.
+                    reject_deep_nesting(value, "model value")
                     interaction = ModelValueInteraction(value)
                 except (TypeError, ValueError, RecursionError):
                     # Evidence is observational. A value the dispatcher will reject must

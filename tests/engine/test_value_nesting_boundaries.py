@@ -1,9 +1,12 @@
 """A value nesting deeper than 100 levels fails where it enters a run, naming the path."""
 
+import json
 import sys
 
 import pytest
+from langchain_core.messages import AIMessage
 
+import yian.llm_clients as llm_clients
 from yian import load_flow, run_flow
 from yian.memory_host import build_memories
 from yian.nodes.binding import BindingError, apply_defaults, bind_params
@@ -441,3 +444,97 @@ def test_value_at_the_limit_learns_from_a_record_output():
         _tree_body(99), output_line=_TREE_OUTPUT, flow_output="${deep.output.tree}",
     ))
     _assert_learns(flow, {}, {"a": "bad"})
+
+
+class _StructuredChat:
+    """Chat model whose structured reply is `value`, then an empty reflection."""
+
+    def __init__(self, value):
+        self.value = value
+
+    def invoke(self, _messages):
+        return AIMessage(content=json.dumps({"input_feedback": {}, "self_feedback": [], "variable_feedback": {}}))
+
+    def with_structured_output(self, schema, **_kwargs):
+        value = self.value
+
+        class Bound:
+            def invoke(self, _messages):
+                return schema.model_validate(value)
+
+        return Bound()
+
+    def bind_tools(self, *_args, **_kwargs):
+        return self
+
+
+def test_a_model_value_over_the_limit_fails_the_agent_and_backward_still_learns(monkeypatch):
+    # 126 levels is under memory's own JSON bound once frozen but over it once an
+    # episode wraps the evidence, so recording it would make backward raise.
+    chat = _StructuredChat({"t": _nest_dict(126)})
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _config: chat)
+    flow = _memory_flow("""
+id: nesting
+name: nesting
+llm_config: {provider: ollama, model: test}
+nodes:
+  w:
+    kind: agent
+    prompt: go
+    output: {t: object}
+output: ${w.output}
+""")
+    result = run_flow(flow, {}, memory=build_memories(flow), learnable=True)
+    _assert_too_deep(result, "w")
+
+    outcome = result.backward("good")
+
+    assert outcome.status == "succeeded"
+
+
+class _ToolCallChat:
+    """Chat model that calls `lookup` with `{"q": arguments}`, finishes, then reflects."""
+
+    def __init__(self, arguments):
+        self.replies = [
+            AIMessage(content="", tool_calls=[
+                {"name": "lookup", "args": {"q": arguments}, "id": "1", "type": "tool_call"},
+            ]),
+            AIMessage(content="finished"),
+            AIMessage(content=json.dumps({"input_feedback": {}, "self_feedback": [], "variable_feedback": {}})),
+        ]
+
+    def bind_tools(self, *_args, **_kwargs):
+        return self
+
+    def invoke(self, _messages):
+        return self.replies.pop(0)
+
+
+def _lookup(q: object) -> str:
+    """Look up `q`."""
+    return "ok"
+
+
+def test_tool_arguments_over_the_limit_run_and_backward_still_learns(monkeypatch):
+    chat = _ToolCallChat(_nest_dict(124))
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _config: chat)
+    flow = _memory_flow("""
+id: nesting
+name: nesting
+llm_config: {provider: ollama, model: test}
+nodes:
+  w:
+    kind: agent
+    prompt: go
+    tools: [lookup]
+    output: str
+output: ${w.output}
+""")
+    result = run_flow(flow, {}, memory=build_memories(flow), learnable=True, tools={"lookup": _lookup})
+    assert result.status == "succeeded"
+    assert result.output == "finished"
+
+    outcome = result.backward("good")
+
+    assert outcome.status == "succeeded"
